@@ -16,7 +16,9 @@ use hir::{
     lower::map_file_to_mod,
     span::LazySpan,
 };
-use trace_query::{ExplainLocalRequest, IntrospectionService, TraceIntrospectionService};
+use trace_query::{
+    ExplainLocalRequest, GasBreakdownRequest, IntrospectionService, TraceIntrospectionService,
+};
 use tracing::debug;
 
 use super::{
@@ -347,6 +349,15 @@ fn trace_hover_markdown<'db>(
         out.push_str(&format!(
             "\nZero-extends attributed to `{local}`: {}\n",
             report.zero_extends.len()
+        ));
+    }
+    if let Ok(gas) = trace_service.gas_breakdown(GasBreakdownRequest::default())
+        && gas.available
+        && let Some(total) = gas.total_gas
+    {
+        out.push_str(&format!(
+            "\nStatic gas estimate: `{total}` under `{}` schedule. This is opcode-table static gas, not runtime transaction gas.\n",
+            gas.schedule
         ));
     }
     Some(out)

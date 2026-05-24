@@ -5,7 +5,7 @@ use common::origin::OriginExportKey;
 use introspection_config::FeToolingConfig;
 use serde::{Deserialize, Serialize};
 use trace_facts::{
-    CompilerEventKind, InstructionCategory, InstructionFact, OriginEdgeLabel, StorageFact,
+    CompilerEventKind, GasKind, InstructionCategory, InstructionFact, OriginEdgeLabel, StorageFact,
     StorageLocation, TraceDataSource, TraceFact, TraceMetadata, TraceSnapshot,
 };
 
@@ -170,17 +170,32 @@ impl IntrospectionService for TraceIntrospectionService {
     }
 
     fn gas_breakdown(&self, request: GasBreakdownRequest) -> QueryResult<GasBreakdownReport> {
+        let index = TraceIndex::new(&self.snapshot);
+        let rows = index.gas_rows(&request.schedule);
+        let total_gas = rows.iter().map(|row| row.gas).sum::<u64>();
+        let available = !rows.is_empty();
         Ok(GasBreakdownReport {
             metadata: ReportMetadata::from_snapshot(&self.snapshot),
             schedule: request.schedule,
-            available: false,
-            total_gas: None,
-            rows: Vec::new(),
-            findings: vec![Insight::info(
-                "Static gas unavailable",
-                "opcode gas facts are not emitted yet; commit 21 wires the conservative static gas demo",
-            )],
-            confidence: Confidence::Unknown,
+            available,
+            total_gas: available.then_some(total_gas),
+            rows,
+            findings: if available {
+                vec![Insight::info(
+                    "Static gas estimate",
+                    "gas rows are static opcode-table estimates under the named EVM schedule",
+                )]
+            } else {
+                vec![Insight::info(
+                    "Static gas unavailable",
+                    "opcode gas facts are not present in this trace snapshot",
+                )]
+            },
+            confidence: if available {
+                Confidence::Medium
+            } else {
+                Confidence::Unknown
+            },
         })
     }
 }
@@ -349,6 +364,8 @@ pub struct GasBreakdownRow {
     pub subject: OriginExportKey,
     pub gas: u64,
     pub label: String,
+    pub confidence: String,
+    pub source: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -600,6 +617,31 @@ impl<'a> TraceIndex<'a> {
             .collect()
     }
 
+    fn gas_rows(&self, schedule: &str) -> Vec<GasBreakdownRow> {
+        self.snapshot
+            .facts()
+            .iter()
+            .filter_map(|fact| match fact {
+                TraceFact::GasCost(gas)
+                    if gas.schedule.as_str() == schedule
+                        && gas.gas_kind == GasKind::OpcodeStatic =>
+                {
+                    Some(GasBreakdownRow {
+                        subject: gas.subject.clone(),
+                        gas: gas.gas,
+                        label: self
+                            .instruction_row(&gas.subject)
+                            .map(|row| format!("pc[{}] {}", row.index, row.mnemonic))
+                            .unwrap_or_else(|| self.label(&gas.subject)),
+                        confidence: format!("{:?}", gas.confidence),
+                        source: format!("{:?}", gas.source),
+                    })
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     fn compiler_event_reason_for_output(&self, output: &OriginExportKey) -> Option<String> {
         self.snapshot.facts().iter().find_map(|fact| match fact {
             TraceFact::CompilerEvent(event)
@@ -703,10 +745,10 @@ mod tests {
     use common::origin::OriginExportKey;
     use trace_facts::{
         CategorySource, CompilerEventFact, CompilerEventKind, CompilerPhase, CompilerReason,
-        InstructionCategory, InstructionCategoryFact, InstructionFact, LoopDerivation,
-        LoopMembershipFact, OriginEdgeFact, OriginEdgeLabel, OriginNodeFact, OriginNodeKind,
-        StorageFact, StorageLocation, StorageReason, TraceBundle, TraceFact, TraceMetadata,
-        TraceSnapshot,
+        EvmSchedule, GasConfidence, GasCostFact, GasKind, GasSource, InstructionCategory,
+        InstructionCategoryFact, InstructionFact, LoopDerivation, LoopMembershipFact,
+        OriginEdgeFact, OriginEdgeLabel, OriginNodeFact, OriginNodeKind, StorageFact,
+        StorageLocation, StorageReason, TraceBundle, TraceFact, TraceMetadata, TraceSnapshot,
     };
 
     use super::{
@@ -782,7 +824,7 @@ mod tests {
                 LoopDerivation::BackendBlockMapping,
             )),
             TraceFact::OriginEdge(OriginEdgeFact::new(
-                inst,
+                inst.clone(),
                 local.clone(),
                 OriginEdgeLabel::LoadOf,
                 Some(CompilerPhase::Backend),
@@ -798,8 +840,24 @@ mod tests {
                 CompilerPhase::Backend,
                 CompilerEventKind::InsertIntegerZeroExtend,
                 vec![local],
-                vec![zext],
+                vec![zext.clone()],
                 Some(CompilerReason::new("test reason")),
+            )),
+            TraceFact::GasCost(GasCostFact::new(
+                inst.clone(),
+                GasKind::OpcodeStatic,
+                3,
+                EvmSchedule::new("cancun"),
+                GasConfidence::ConservativeStatic,
+                GasSource::OpcodeTable,
+            )),
+            TraceFact::GasCost(GasCostFact::new(
+                zext,
+                GasKind::OpcodeStatic,
+                3,
+                EvmSchedule::new("cancun"),
+                GasConfidence::ConservativeStatic,
+                GasSource::OpcodeTable,
             )),
         ];
         let snapshot = TraceSnapshot::new(TraceBundle::new(
@@ -845,5 +903,17 @@ mod tests {
         assert_eq!(report.storage_history.len(), 2);
         assert_eq!(report.related_instructions.len(), 2);
         assert_eq!(report.zero_extends.len(), 1);
+    }
+
+    #[test]
+    fn gas_breakdown_reports_static_opcode_rows() {
+        let report = demo_service()
+            .gas_breakdown(super::GasBreakdownRequest::default())
+            .unwrap();
+
+        assert!(report.available);
+        assert_eq!(report.total_gas, Some(6));
+        assert_eq!(report.schedule, "cancun");
+        assert_eq!(report.rows.len(), 2);
     }
 }

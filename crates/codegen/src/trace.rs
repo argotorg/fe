@@ -1,7 +1,8 @@
 use common::origin::OriginExportKey;
 use trace_facts::{
-    CategorySource, InstructionCategory, InstructionCategoryFact, InstructionFact, OriginNodeFact,
-    OriginNodeKind, TraceFact,
+    CategorySource, EvmSchedule, GasConfidence, GasCostFact, GasKind, GasSource,
+    InstructionCategory, InstructionCategoryFact, InstructionFact, OpcodeCategory, OpcodeFact,
+    OriginNodeFact, OriginNodeKind, TraceFact,
 };
 
 use crate::debug::BytecodeSourceMapEntry;
@@ -43,21 +44,40 @@ pub fn emit_bytecode_instruction_facts(
             OriginExportKey::try_from_raw_parts("bytecode.pc", owner_key, format!("pc:{pc}"))
                 .expect("codegen bytecode PC key must be valid");
         let mnemonic = evm_mnemonic(opcode).to_string();
+        let immediate_len = evm_push_immediate_len(opcode);
+        let immediate = (immediate_len > 0).then(|| {
+            let end = (pc + 1 + immediate_len).min(bytecode.len());
+            format!("0x{}", hex::encode(&bytecode[pc + 1..end]))
+        });
         facts.push(origin_node(instruction.clone(), "bytecode.pc"));
         facts.push(TraceFact::Instruction(InstructionFact::new(
             instruction.clone(),
             function.clone(),
             index,
-            mnemonic,
+            mnemonic.clone(),
         )));
         facts.push(TraceFact::InstructionCategory(
             InstructionCategoryFact::new(
-                instruction,
+                instruction.clone(),
                 evm_instruction_category(opcode),
                 CategorySource::BackendEmissionReason,
             ),
         ));
-        pc += 1 + evm_push_immediate_len(opcode);
+        facts.push(TraceFact::Opcode(OpcodeFact::new(
+            instruction.clone(),
+            mnemonic,
+            immediate,
+            evm_opcode_category(opcode),
+        )));
+        facts.push(TraceFact::GasCost(GasCostFact::new(
+            instruction,
+            GasKind::OpcodeStatic,
+            evm_static_gas(opcode),
+            EvmSchedule::new("cancun"),
+            GasConfidence::ConservativeStatic,
+            GasSource::OpcodeTable,
+        )));
+        pc += 1 + immediate_len;
         index += 1;
     }
     facts
@@ -124,6 +144,43 @@ fn evm_instruction_category(opcode: u8) -> InstructionCategory {
     }
 }
 
+fn evm_opcode_category(opcode: u8) -> OpcodeCategory {
+    match opcode {
+        0x01..=0x07 | 0x16..=0x1d => OpcodeCategory::Arithmetic,
+        0x10..=0x15 => OpcodeCategory::Comparison,
+        0x35..=0x37 => OpcodeCategory::CallData,
+        0x39 | 0x51..=0x53 => OpcodeCategory::Memory,
+        0x54 | 0x55 => OpcodeCategory::Storage,
+        0x56 | 0x57 | 0x5b => OpcodeCategory::ControlFlow,
+        0x5f..=0x7f => OpcodeCategory::Push,
+        0x80..=0x9f => OpcodeCategory::Stack,
+        0xf3 | 0xfd => OpcodeCategory::Return,
+        _ => OpcodeCategory::Unknown,
+    }
+}
+
+fn evm_static_gas(opcode: u8) -> u64 {
+    match opcode {
+        0x00 => 0,
+        0x01..=0x03 | 0x10..=0x19 | 0x1b..=0x1d => 3,
+        0x04..=0x07 => 5,
+        0x20 => 30,
+        0x35 | 0x36 => 3,
+        0x37 | 0x39 => 3,
+        0x51 | 0x52 | 0x53 => 3,
+        0x54 => 100,
+        0x55 => 100,
+        0x56 => 8,
+        0x57 => 10,
+        0x5b => 1,
+        0x5f..=0x7f => 3,
+        0x80..=0x8f => 3,
+        0x90..=0x9f => 3,
+        0xf3 | 0xfd => 0,
+        _ => 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use common::origin::OriginExportKey;
@@ -163,6 +220,14 @@ mod tests {
         assert!(facts.iter().any(|fact| matches!(
             fact,
             TraceFact::Instruction(instruction) if instruction.mnemonic == "ADD"
+        )));
+        assert!(facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::Opcode(opcode) if opcode.opcode == "PUSH"
+        )));
+        assert!(facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::GasCost(gas) if gas.gas > 0
         )));
     }
 }

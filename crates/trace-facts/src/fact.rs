@@ -14,6 +14,8 @@ pub enum TraceFact {
     InstructionCategory(InstructionCategoryFact),
     LoopMembership(LoopMembershipFact),
     InlineContext(InlineContextFact),
+    Opcode(OpcodeFact),
+    GasCost(GasCostFact),
 }
 
 impl TraceFact {
@@ -27,6 +29,8 @@ impl TraceFact {
             Self::InstructionCategory(_) => "instruction_category",
             Self::LoopMembership(_) => "loop_membership",
             Self::InlineContext(_) => "inline_context",
+            Self::Opcode(_) => "opcode",
+            Self::GasCost(_) => "gas_cost",
         }
     }
 }
@@ -386,6 +390,129 @@ pub struct InlineContextFact {
     pub caller_function: OriginExportKey,
     pub callee_function: OriginExportKey,
     pub callsite: OriginExportKey,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OpcodeFact {
+    pub pc: OriginExportKey,
+    pub opcode: String,
+    pub immediate: Option<String>,
+    pub category: OpcodeCategory,
+}
+
+impl OpcodeFact {
+    pub fn new(
+        pc: OriginExportKey,
+        opcode: impl Into<String>,
+        immediate: Option<String>,
+        category: OpcodeCategory,
+    ) -> Self {
+        Self {
+            pc,
+            opcode: opcode.into(),
+            immediate,
+            category,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpcodeCategory {
+    Arithmetic,
+    Comparison,
+    Memory,
+    Storage,
+    ControlFlow,
+    Stack,
+    Push,
+    CallData,
+    Return,
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GasCostFact {
+    pub subject: OriginExportKey,
+    pub gas_kind: GasKind,
+    pub gas: u64,
+    pub schedule: EvmSchedule,
+    pub confidence: GasConfidence,
+    pub source: GasSource,
+}
+
+impl GasCostFact {
+    pub fn new(
+        subject: OriginExportKey,
+        gas_kind: GasKind,
+        gas: u64,
+        schedule: EvmSchedule,
+        confidence: GasConfidence,
+        source: GasSource,
+    ) -> Self {
+        Self {
+            subject,
+            gas_kind,
+            gas,
+            schedule,
+            confidence,
+            source,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GasKind {
+    OpcodeStatic,
+    PcRangeStatic,
+    FunctionStatic,
+    RuntimeTrace,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct EvmSchedule(String);
+
+impl EvmSchedule {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self::try_new(value).unwrap_or_else(|err| panic!("invalid EVM schedule: {err}"))
+    }
+
+    pub fn try_new(value: impl Into<String>) -> Result<Self, TraceFactTextError> {
+        let value = value.into();
+        validate_trace_text("EVM schedule", &value)?;
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for EvmSchedule {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GasConfidence {
+    ExactStaticOpcode,
+    ConservativeStatic,
+    RuntimeMeasured,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GasSource {
+    OpcodeTable,
+    EvmTrace,
+    ManualFixture,
 }
 
 impl InlineContextFact {

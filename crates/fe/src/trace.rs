@@ -18,15 +18,15 @@ use trace_facts::{
     TraceValidator,
 };
 use trace_query::{
-    ExplainLocalReport, ExplainLocalRequest, IntrospectionService, LoopCostReport, LoopCostRequest,
-    TraceIntrospectionService,
+    ExplainLocalReport, ExplainLocalRequest, GasBreakdownReport, GasBreakdownRequest,
+    IntrospectionService, LoopCostReport, LoopCostRequest, TraceIntrospectionService,
 };
 use url::Url;
 
 use crate::{
-    DevCommand, DevTraceCommand, DevTraceEmitArgs, DevTraceExplainLocalArgs, DevTraceInputArgs,
-    DevTraceLiveCommand, DevTraceQueryCommand, TraceFixtureCommand, TraceFixtureEmitArgs,
-    TraceFixtureExplainLocalArgs, TraceFixtureLoopCostArgs,
+    DevCommand, DevTraceCommand, DevTraceEmitArgs, DevTraceExplainLocalArgs, DevTraceGasArgs,
+    DevTraceInputArgs, DevTraceLiveCommand, DevTraceQueryCommand, TraceFixtureCommand,
+    TraceFixtureEmitArgs, TraceFixtureExplainLocalArgs, TraceFixtureLoopCostArgs,
 };
 
 const FIB_OWNER: &str = "fixture:fib_demo";
@@ -103,6 +103,7 @@ fn run_trace_query_command(command: &DevTraceQueryCommand) -> Result<String, Str
     match command {
         DevTraceQueryCommand::LoopCost(args) => run_trace_loop_cost(args),
         DevTraceQueryCommand::ExplainLocal(args) => run_trace_explain_local(args),
+        DevTraceQueryCommand::GasBreakdown(args) => run_trace_gas_breakdown(args),
     }
 }
 
@@ -159,6 +160,13 @@ fn run_trace_explain_local(args: &DevTraceExplainLocalArgs) -> Result<String, St
     render_explain_local_snapshot(
         read_trace_snapshot_jsonl_from_path(&args.from)?,
         &args.local,
+    )
+}
+
+fn run_trace_gas_breakdown(args: &DevTraceGasArgs) -> Result<String, String> {
+    render_gas_breakdown_snapshot(
+        read_trace_snapshot_jsonl_from_path(&args.from)?,
+        &args.schedule,
     )
 }
 
@@ -589,6 +597,19 @@ fn render_explain_local_snapshot(
     Ok(render_explain_local_report(&report))
 }
 
+fn render_gas_breakdown_snapshot(
+    snapshot: TraceSnapshot,
+    schedule: &str,
+) -> Result<String, String> {
+    let service = TraceIntrospectionService::new(snapshot);
+    let report = service
+        .gas_breakdown(GasBreakdownRequest {
+            schedule: schedule.to_string(),
+        })
+        .map_err(|err| err.to_string())?;
+    Ok(render_gas_breakdown_report(&report))
+}
+
 fn render_loop_cost_report(report: &LoopCostReport) -> String {
     let mut out = String::new();
     out.push_str("Fe dev trace loop-cost\n\n");
@@ -784,6 +805,40 @@ fn render_explain_local_report(report: &ExplainLocalReport) -> String {
         out.push_str(&format!("  cause: {reason}\n"));
     }
 
+    out
+}
+
+fn render_gas_breakdown_report(report: &GasBreakdownReport) -> String {
+    let mut out = String::new();
+    out.push_str("Fe dev trace gas-breakdown\n\n");
+    out.push_str(&format!("Data source: {}\n", report.metadata.data_source));
+    out.push_str("Trace validation: passed\n");
+    out.push_str(&format!("Target: {}\n", report.metadata.target));
+    out.push_str(&format!("Input: {}\n", report.metadata.input_path));
+    out.push_str(&format!("Schedule: {}\n", report.schedule));
+    out.push_str(
+        "Mode: static opcode-table estimate; runtime gas depends on path and EVM state.\n\n",
+    );
+    if !report.available {
+        out.push_str("Gas breakdown unavailable from this trace.\n");
+        for finding in &report.findings {
+            out.push_str(&format!("  {}: {}\n", finding.title, finding.summary));
+        }
+        return out;
+    }
+    out.push_str(&format!(
+        "Total static opcode gas: {}\n",
+        report.total_gas.unwrap_or_default()
+    ));
+    out.push_str("Top opcode contributors:\n");
+    let mut rows = report.rows.clone();
+    rows.sort_by(|a, b| b.gas.cmp(&a.gas));
+    for row in rows.iter().take(12) {
+        out.push_str(&format!(
+            "  {:>4} gas  {:<24} {} ({})\n",
+            row.gas, row.label, row.confidence, row.source
+        ));
+    }
     out
 }
 

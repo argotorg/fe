@@ -535,6 +535,8 @@ pub enum DevTraceQueryCommand {
     LoopCost(DevTraceInputArgs),
     /// Explain one local from a validated trace snapshot.
     ExplainLocal(DevTraceExplainLocalArgs),
+    /// Summarize conservative static gas from opcode facts in a trace snapshot.
+    GasBreakdown(DevTraceGasArgs),
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -595,6 +597,16 @@ pub struct DevTraceExplainLocalArgs {
     /// Source local to explain.
     #[arg(long)]
     pub local: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DevTraceGasArgs {
+    /// Trace JSONL bundle to read.
+    #[arg(long = "from", value_name = "TRACE_JSONL")]
+    pub from: Utf8PathBuf,
+    /// Named EVM gas schedule.
+    #[arg(long, default_value = "cancun")]
+    pub schedule: String,
 }
 
 #[derive(Debug, Clone, Args)]

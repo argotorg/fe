@@ -5,8 +5,8 @@ use common::origin::OriginExportKey;
 
 use crate::fact::{
     CategorySource, CompilerEventFact, CompilerPhase, InlineContextFact, InstructionCategoryFact,
-    InstructionFact, LoopDerivation, LoopMembershipFact, OriginEdgeFact, OriginNodeFact,
-    StorageFact, StorageLocation, TraceFact,
+    InstructionFact, LoopDerivation, LoopMembershipFact, OpcodeFact, OriginEdgeFact,
+    OriginNodeFact, StorageFact, StorageLocation, TraceFact,
 };
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -115,6 +115,8 @@ impl TraceValidator {
         let mut loop_memberships = Vec::new();
         let mut inline_contexts = Vec::new();
         let mut compiler_events = Vec::new();
+        let mut opcodes = Vec::new();
+        let mut gas_costs = Vec::new();
 
         for fact in facts {
             match fact {
@@ -136,6 +138,8 @@ impl TraceValidator {
                 TraceFact::InstructionCategory(category) => instruction_categories.push(category),
                 TraceFact::LoopMembership(membership) => loop_memberships.push(membership),
                 TraceFact::InlineContext(context) => inline_contexts.push(context),
+                TraceFact::Opcode(opcode) => opcodes.push(opcode),
+                TraceFact::GasCost(gas_cost) => gas_costs.push(gas_cost),
             }
         }
 
@@ -213,6 +217,17 @@ impl TraceValidator {
         }
         for context in inline_contexts {
             validate_inline_context(context, &nodes, &mut diagnostics);
+        }
+        for opcode in opcodes {
+            validate_opcode(opcode, &nodes, &mut diagnostics);
+        }
+        for gas_cost in gas_costs {
+            require_node(
+                &nodes,
+                &gas_cost.subject,
+                "gas_cost.subject",
+                &mut diagnostics,
+            );
         }
 
         TraceValidationReport {
@@ -434,6 +449,22 @@ fn validate_inline_context(
     );
 }
 
+fn validate_opcode(
+    opcode: &OpcodeFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(nodes, &opcode.pc, "opcode.pc", diagnostics);
+    if opcode.opcode.trim().is_empty() {
+        push_error(
+            diagnostics,
+            TraceValidationError::EmptyOpcode {
+                pc: opcode.pc.clone(),
+            },
+        );
+    }
+}
+
 fn valid_storage_phase_location(phase: CompilerPhase, location: &StorageLocation) -> bool {
     match location {
         StorageLocation::SsaValue => matches!(
@@ -530,6 +561,9 @@ pub enum TraceValidationError {
         phase: CompilerPhase,
         location: StorageLocation,
     },
+    EmptyOpcode {
+        pc: OriginExportKey,
+    },
 }
 
 impl fmt::Display for TraceValidationError {
@@ -621,6 +655,13 @@ impl fmt::Display for TraceValidationError {
                 "storage fact for {} has invalid phase/location combination: {phase:?} with {location:?}",
                 subject.display_label()
             ),
+            Self::EmptyOpcode { pc } => {
+                write!(
+                    f,
+                    "opcode fact for {} has an empty opcode",
+                    pc.display_label()
+                )
+            }
         }
     }
 }
