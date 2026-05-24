@@ -4,10 +4,10 @@ use common::origin::OriginExportKey;
 use trace_facts::{
     BlockFact, CategorySource, CfgEdgeFact, CfgEdgeKind, CodeObjectFact, CodeObjectKind,
     CompilerPhase, EvmSchedule, FunctionFact, GasConfidence, GasCostFact, GasKind, GasSource,
-    InstructionBlockFact, InstructionCategory, InstructionCategoryFact, InstructionFact,
-    LoopBlockFact, LoopBlockRole, LoopConfidence, LoopDerivation, LoopFact, OpcodeCategory,
-    OpcodeFact, OriginEdgeFact, OriginEdgeLabel, OriginNodeFact, OriginNodeKind, StaticGasFact,
-    TraceFact,
+    InstructionBlockFact, InstructionCategory, InstructionCategoryFact, InstructionExtentFact,
+    InstructionFact, LoopBlockFact, LoopBlockRole, LoopConfidence, LoopDerivation, LoopFact,
+    OpcodeCategory, OpcodeFact, OriginEdgeFact, OriginEdgeLabel, OriginNodeFact, OriginNodeKind,
+    PcRange, StaticGasFact, TraceFact,
 };
 
 use crate::debug::BytecodeSourceMapEntry;
@@ -61,7 +61,7 @@ pub fn emit_bytecode_instruction_facts(
             Some(code_object.clone()),
         )),
         TraceFact::CodeObject(CodeObjectFact::new(
-            code_object,
+            code_object.clone(),
             CodeObjectKind::EvmRuntimeBytecode,
             Some(function.clone()),
             "evm/sonatina",
@@ -81,12 +81,19 @@ pub fn emit_bytecode_instruction_facts(
             let end = (pc + 1 + immediate_len).min(bytecode.len());
             format!("0x{}", hex::encode(&bytecode[pc + 1..end]))
         });
+        let byte_len = 1 + immediate_len.min(bytecode.len().saturating_sub(pc + 1));
         facts.push(origin_node(instruction.clone(), "bytecode.pc"));
         facts.push(TraceFact::Instruction(InstructionFact::new(
             instruction.clone(),
             function.clone(),
             index,
             mnemonic.clone(),
+        )));
+        facts.push(TraceFact::InstructionExtent(InstructionExtentFact::new(
+            instruction.clone(),
+            code_object.clone(),
+            PcRange::new(pc as u32, (pc + byte_len) as u32),
+            byte_len as u32,
         )));
         facts.push(TraceFact::InstructionCategory(
             InstructionCategoryFact::new(
@@ -115,7 +122,7 @@ pub fn emit_bytecode_instruction_facts(
             evm_static_gas(opcode),
             None,
         )));
-        pc += 1 + immediate_len;
+        pc += byte_len;
         index += 1;
     }
     facts
@@ -926,6 +933,21 @@ mod tests {
             fact,
             TraceFact::StaticGas(gas) if gas.base_cost > 0
         )));
+        let extents = facts
+            .iter()
+            .filter_map(|fact| match fact {
+                TraceFact::InstructionExtent(extent) => Some(extent),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(extents.len(), 3);
+        assert_eq!(extents.iter().map(|extent| extent.byte_len).sum::<u32>(), 4);
+        assert!(extents.iter().any(|extent| {
+            extent.instruction.local_key() == "pc:1"
+                && extent.pc_range.start == 1
+                && extent.pc_range.end == 3
+                && extent.byte_len == 2
+        }));
     }
 
     #[test]
