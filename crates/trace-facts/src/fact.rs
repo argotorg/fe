@@ -18,6 +18,16 @@ pub enum TraceFact {
     GasCost(GasCostFact),
     DisplayName(DisplayNameFact),
     ValueProperty(ValuePropertyFact),
+    SourceFile(SourceFileFact),
+    SourceSpan(SourceSpanFact),
+    CodeObject(CodeObjectFact),
+    Function(FunctionFact),
+    LexicalScope(LexicalScopeFact),
+    Type(TypeFact),
+    Variable(VariableFact),
+    LocationRange(LocationRangeFact),
+    StaticGas(StaticGasFact),
+    DynamicGasStep(DynamicGasStepFact),
 }
 
 impl TraceFact {
@@ -35,6 +45,16 @@ impl TraceFact {
             Self::GasCost(_) => "gas_cost",
             Self::DisplayName(_) => "display_name",
             Self::ValueProperty(_) => "value_property",
+            Self::SourceFile(_) => "source_file",
+            Self::SourceSpan(_) => "source_span",
+            Self::CodeObject(_) => "code_object",
+            Self::Function(_) => "function",
+            Self::LexicalScope(_) => "lexical_scope",
+            Self::Type(_) => "type",
+            Self::Variable(_) => "variable",
+            Self::LocationRange(_) => "location_range",
+            Self::StaticGas(_) => "static_gas",
+            Self::DynamicGasStep(_) => "dynamic_gas_step",
         }
     }
 }
@@ -668,6 +688,441 @@ pub enum ValueProperty {
     KnownUnsignedWidth { bits: u16 },
     ZeroExtended,
     LoopInvariantCandidate,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceFileFact {
+    pub file_key: OriginExportKey,
+    pub uri: String,
+    pub display_name: String,
+    pub content_hash: String,
+    pub source_id: Option<u32>,
+}
+
+impl SourceFileFact {
+    pub fn new(
+        file_key: OriginExportKey,
+        uri: impl Into<String>,
+        display_name: impl Into<String>,
+        content_hash: impl Into<String>,
+        source_id: Option<u32>,
+    ) -> Self {
+        Self {
+            file_key,
+            uri: uri.into(),
+            display_name: display_name.into(),
+            content_hash: content_hash.into(),
+            source_id,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceSpanFact {
+    pub origin: OriginExportKey,
+    pub file: OriginExportKey,
+    pub start_byte: u32,
+    pub end_byte: u32,
+    pub start_line: u32,
+    pub start_column: u32,
+    pub end_line: u32,
+    pub end_column: u32,
+}
+
+impl SourceSpanFact {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        origin: OriginExportKey,
+        file: OriginExportKey,
+        start_byte: u32,
+        end_byte: u32,
+        start_line: u32,
+        start_column: u32,
+        end_line: u32,
+        end_column: u32,
+    ) -> Self {
+        Self {
+            origin,
+            file,
+            start_byte,
+            end_byte,
+            start_line,
+            start_column,
+            end_line,
+            end_column,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodeObjectFact {
+    pub code_object: OriginExportKey,
+    pub kind: CodeObjectKind,
+    pub owner_function_or_contract: Option<OriginExportKey>,
+    pub target: String,
+    pub code_hash: Option<String>,
+}
+
+impl CodeObjectFact {
+    pub fn new(
+        code_object: OriginExportKey,
+        kind: CodeObjectKind,
+        owner_function_or_contract: Option<OriginExportKey>,
+        target: impl Into<String>,
+        code_hash: Option<String>,
+    ) -> Self {
+        Self {
+            code_object,
+            kind,
+            owner_function_or_contract,
+            target: target.into(),
+            code_hash,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodeObjectKind {
+    EvmRuntimeBytecode,
+    EvmCreationBytecode,
+    NativeObject,
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FunctionFact {
+    pub function: OriginExportKey,
+    pub name: String,
+    pub source_origin: Option<OriginExportKey>,
+    pub code_object: Option<OriginExportKey>,
+}
+
+impl FunctionFact {
+    pub fn new(
+        function: OriginExportKey,
+        name: impl Into<String>,
+        source_origin: Option<OriginExportKey>,
+        code_object: Option<OriginExportKey>,
+    ) -> Self {
+        Self {
+            function,
+            name: name.into(),
+            source_origin,
+            code_object,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LexicalScopeFact {
+    pub scope: OriginExportKey,
+    pub parent: Option<OriginExportKey>,
+    pub function: OriginExportKey,
+    pub source_origin: Option<OriginExportKey>,
+}
+
+impl LexicalScopeFact {
+    pub fn new(
+        scope: OriginExportKey,
+        parent: Option<OriginExportKey>,
+        function: OriginExportKey,
+        source_origin: Option<OriginExportKey>,
+    ) -> Self {
+        Self {
+            scope,
+            parent,
+            function,
+            source_origin,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TypeFact {
+    pub ty: OriginExportKey,
+    pub kind: TypeKind,
+    pub name: Option<String>,
+    pub bit_width: Option<u32>,
+    pub fields: Vec<TypeField>,
+}
+
+impl TypeFact {
+    pub fn new(
+        ty: OriginExportKey,
+        kind: TypeKind,
+        name: Option<String>,
+        bit_width: Option<u32>,
+        fields: Vec<TypeField>,
+    ) -> Self {
+        Self {
+            ty,
+            kind,
+            name,
+            bit_width,
+            fields,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TypeKind {
+    Bool,
+    UnsignedInteger,
+    SignedInteger,
+    Address,
+    Unit,
+    Tuple,
+    Array,
+    Struct,
+    Contract,
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TypeField {
+    pub name: String,
+    pub ty: OriginExportKey,
+    pub offset_bits: Option<u32>,
+    pub width_bits: Option<u32>,
+}
+
+impl TypeField {
+    pub fn new(
+        name: impl Into<String>,
+        ty: OriginExportKey,
+        offset_bits: Option<u32>,
+        width_bits: Option<u32>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            ty,
+            offset_bits,
+            width_bits,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VariableFact {
+    pub variable: OriginExportKey,
+    pub name: String,
+    pub ty: OriginExportKey,
+    pub declaration_origin: OriginExportKey,
+    pub scope: Option<OriginExportKey>,
+    pub storage_class: VariableStorageClass,
+}
+
+impl VariableFact {
+    pub fn new(
+        variable: OriginExportKey,
+        name: impl Into<String>,
+        ty: OriginExportKey,
+        declaration_origin: OriginExportKey,
+        scope: Option<OriginExportKey>,
+        storage_class: VariableStorageClass,
+    ) -> Self {
+        Self {
+            variable,
+            name: name.into(),
+            ty,
+            declaration_origin,
+            scope,
+            storage_class,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VariableStorageClass {
+    Local,
+    Parameter,
+    State,
+    Temporary,
+    ReturnValue,
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocationRangeFact {
+    pub subject: OriginExportKey,
+    pub code_object: OriginExportKey,
+    pub pc_range: PcRange,
+    pub location: ValueLocation,
+    pub reason: StorageReason,
+    pub confidence: LocationConfidence,
+}
+
+impl LocationRangeFact {
+    pub fn new(
+        subject: OriginExportKey,
+        code_object: OriginExportKey,
+        pc_range: PcRange,
+        location: ValueLocation,
+        reason: StorageReason,
+        confidence: LocationConfidence,
+    ) -> Self {
+        Self {
+            subject,
+            code_object,
+            pc_range,
+            location,
+            reason,
+            confidence,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PcRange {
+    pub start: u32,
+    pub end: u32,
+}
+
+impl PcRange {
+    pub const fn new(start: u32, end: u32) -> Self {
+        Self { start, end }
+    }
+
+    pub const fn is_valid(self) -> bool {
+        self.start < self.end
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ValueLocation {
+    SsaValue {
+        value: OriginExportKey,
+    },
+    MemoryPlace,
+    StackSlot {
+        offset: i64,
+    },
+    Register {
+        name: String,
+    },
+    EvmStack {
+        depth_from_top: u32,
+    },
+    EvmMemory {
+        offset: LocationExpr,
+        length: Option<LocationExpr>,
+    },
+    EvmStorage {
+        slot: LocationExpr,
+        offset_bits: Option<u16>,
+        width_bits: Option<u16>,
+    },
+    EvmCalldata {
+        offset: LocationExpr,
+        length: Option<LocationExpr>,
+    },
+    Unknown {
+        reason: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocationExpr {
+    Constant { value: i64 },
+    Origin { origin: OriginExportKey },
+    Unknown { reason: String },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocationConfidence {
+    Exact,
+    Conservative,
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StaticGasFact {
+    pub instruction: OriginExportKey,
+    pub schedule: EvmSchedule,
+    pub base_cost: u64,
+    pub dynamic_cost_kind: Option<DynamicGasKind>,
+}
+
+impl StaticGasFact {
+    pub fn new(
+        instruction: OriginExportKey,
+        schedule: EvmSchedule,
+        base_cost: u64,
+        dynamic_cost_kind: Option<DynamicGasKind>,
+    ) -> Self {
+        Self {
+            instruction,
+            schedule,
+            base_cost,
+            dynamic_cost_kind,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DynamicGasKind {
+    MemoryExpansion,
+    StorageAccess,
+    Call,
+    Copy,
+    Keccak,
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DynamicGasStepFact {
+    pub trace_id: String,
+    pub step_index: u64,
+    pub code_object: OriginExportKey,
+    pub pc: u32,
+    pub instruction: Option<OriginExportKey>,
+    pub gas_before: u64,
+    pub gas_after: u64,
+    pub gas_cost: u64,
+}
+
+impl DynamicGasStepFact {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        trace_id: impl Into<String>,
+        step_index: u64,
+        code_object: OriginExportKey,
+        pc: u32,
+        instruction: Option<OriginExportKey>,
+        gas_before: u64,
+        gas_after: u64,
+        gas_cost: u64,
+    ) -> Self {
+        Self {
+            trace_id: trace_id.into(),
+            step_index,
+            code_object,
+            pc,
+            instruction,
+            gas_before,
+            gas_after,
+            gas_cost,
+        }
+    }
 }
 
 impl InlineContextFact {

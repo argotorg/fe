@@ -4,12 +4,16 @@ pub mod snapshot;
 pub mod validate;
 
 pub use fact::{
-    CategorySource, CompilerEventFact, CompilerEventKind, CompilerPhase, CompilerReason,
-    DisplayNameFact, DisplayNameKind, EvmSchedule, GasConfidence, GasCostFact, GasKind, GasSource,
+    CategorySource, CodeObjectFact, CodeObjectKind, CompilerEventFact, CompilerEventKind,
+    CompilerPhase, CompilerReason, DisplayNameFact, DisplayNameKind, DynamicGasKind,
+    DynamicGasStepFact, EvmSchedule, FunctionFact, GasConfidence, GasCostFact, GasKind, GasSource,
     InlineContextFact, InstructionCategory, InstructionCategoryFact, InstructionFact,
-    LoopDerivation, LoopMembershipFact, OpcodeCategory, OpcodeFact, OriginEdgeFact,
-    OriginEdgeLabel, OriginNodeFact, OriginNodeKind, StorageFact, StorageLocation, StorageReason,
-    TraceFact, TraceFactTextError, ValueProperty, ValuePropertyFact,
+    LexicalScopeFact, LocationConfidence, LocationExpr, LocationRangeFact, LoopDerivation,
+    LoopMembershipFact, OpcodeCategory, OpcodeFact, OriginEdgeFact, OriginEdgeLabel,
+    OriginNodeFact, OriginNodeKind, PcRange, SourceFileFact, SourceSpanFact, StaticGasFact,
+    StorageFact, StorageLocation, StorageReason, TraceFact, TraceFactTextError, TypeFact,
+    TypeField, TypeKind, ValueLocation, ValueProperty, ValuePropertyFact, VariableFact,
+    VariableStorageClass,
 };
 pub use jsonl::{
     JsonlTraceReadError, JsonlTraceReader, JsonlTraceSink, TRACE_SCHEMA_VERSION, TraceBundle,

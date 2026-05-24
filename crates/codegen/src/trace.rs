@@ -1,8 +1,8 @@
 use common::origin::OriginExportKey;
 use trace_facts::{
-    CategorySource, EvmSchedule, GasConfidence, GasCostFact, GasKind, GasSource,
-    InstructionCategory, InstructionCategoryFact, InstructionFact, OpcodeCategory, OpcodeFact,
-    OriginNodeFact, OriginNodeKind, TraceFact,
+    CategorySource, CodeObjectFact, CodeObjectKind, EvmSchedule, GasConfidence, GasCostFact,
+    GasKind, GasSource, InstructionCategory, InstructionCategoryFact, InstructionFact,
+    OpcodeCategory, OpcodeFact, OriginNodeFact, OriginNodeKind, StaticGasFact, TraceFact,
 };
 
 use crate::debug::BytecodeSourceMapEntry;
@@ -35,7 +35,25 @@ pub fn emit_bytecode_instruction_facts(
     let function =
         OriginExportKey::try_from_raw_parts("bytecode.function", owner_key, function_local_key)
             .expect("codegen bytecode function key must be valid");
-    let mut facts = vec![origin_node(function.clone(), "bytecode.function")];
+    let code_object = OriginExportKey::try_from_raw_parts("code.object", owner_key, "runtime")
+        .expect("codegen bytecode code object key must be valid");
+    let mut facts = vec![
+        origin_node(function.clone(), "bytecode.function"),
+        origin_node(code_object.clone(), "code.object"),
+        TraceFact::Function(trace_facts::FunctionFact::new(
+            function.clone(),
+            function_local_key,
+            None,
+            Some(code_object.clone()),
+        )),
+        TraceFact::CodeObject(CodeObjectFact::new(
+            code_object,
+            CodeObjectKind::EvmRuntimeBytecode,
+            Some(function.clone()),
+            "evm/sonatina",
+            Some(bytecode_content_hash(bytecode)),
+        )),
+    ];
     let mut pc = 0;
     let mut index = 0;
     while pc < bytecode.len() {
@@ -70,12 +88,18 @@ pub fn emit_bytecode_instruction_facts(
             evm_opcode_category(opcode),
         )));
         facts.push(TraceFact::GasCost(GasCostFact::new(
-            instruction,
+            instruction.clone(),
             GasKind::OpcodeStatic,
             evm_static_gas(opcode),
             EvmSchedule::new("cancun"),
             GasConfidence::ConservativeStatic,
             GasSource::OpcodeTable,
+        )));
+        facts.push(TraceFact::StaticGas(StaticGasFact::new(
+            instruction,
+            EvmSchedule::new("cancun"),
+            evm_static_gas(opcode),
+            None,
         )));
         pc += 1 + immediate_len;
         index += 1;
@@ -93,6 +117,15 @@ pub fn bytecode_runtime_owner_key(
 
 fn origin_node(key: OriginExportKey, kind: &str) -> TraceFact {
     TraceFact::OriginNode(OriginNodeFact::new(key, OriginNodeKind::new(kind)))
+}
+
+fn bytecode_content_hash(bytecode: &[u8]) -> String {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytecode {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("fnv64:{hash:016x}")
 }
 
 fn evm_push_immediate_len(opcode: u8) -> usize {
@@ -236,6 +269,15 @@ mod tests {
         assert!(facts.iter().any(|fact| matches!(
             fact,
             TraceFact::GasCost(gas) if gas.gas > 0
+        )));
+        assert!(facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::CodeObject(code_object)
+                if code_object.code_object.kind() == "code.object"
+        )));
+        assert!(facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::StaticGas(gas) if gas.base_cost > 0
         )));
     }
 

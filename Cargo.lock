@@ -2170,6 +2170,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe-debug-export"
+version = "26.1.0"
+dependencies = [
+ "fe-common",
+ "fe-trace-facts",
+ "serde",
+]
+
+[[package]]
 name = "fe-driver"
 version = "26.1.0"
 dependencies = [

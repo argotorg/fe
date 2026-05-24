@@ -4,10 +4,12 @@ use std::fmt;
 use common::origin::OriginExportKey;
 
 use crate::fact::{
-    CategorySource, CompilerEventFact, CompilerPhase, DisplayNameFact, InlineContextFact,
-    InstructionCategoryFact, InstructionFact, LoopDerivation, LoopMembershipFact, OpcodeFact,
-    OriginEdgeFact, OriginNodeFact, StorageFact, StorageLocation, TraceFact, ValueProperty,
-    ValuePropertyFact,
+    CategorySource, CodeObjectFact, CompilerEventFact, CompilerPhase, DisplayNameFact,
+    DynamicGasStepFact, FunctionFact, InlineContextFact, InstructionCategoryFact, InstructionFact,
+    LexicalScopeFact, LocationExpr, LocationRangeFact, LoopDerivation, LoopMembershipFact,
+    OpcodeFact, OriginEdgeFact, OriginNodeFact, SourceFileFact, SourceSpanFact, StaticGasFact,
+    StorageFact, StorageLocation, TraceFact, TypeFact, ValueLocation, ValueProperty,
+    ValuePropertyFact, VariableFact,
 };
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -120,6 +122,16 @@ impl TraceValidator {
         let mut gas_costs = Vec::new();
         let mut display_names = Vec::new();
         let mut value_properties = Vec::new();
+        let mut source_files = Vec::new();
+        let mut source_spans = Vec::new();
+        let mut code_objects = Vec::new();
+        let mut functions = Vec::new();
+        let mut lexical_scopes = Vec::new();
+        let mut types = Vec::new();
+        let mut variables = Vec::new();
+        let mut location_ranges = Vec::new();
+        let mut static_gas = Vec::new();
+        let mut dynamic_gas_steps = Vec::new();
 
         for fact in facts {
             match fact {
@@ -145,6 +157,16 @@ impl TraceValidator {
                 TraceFact::GasCost(gas_cost) => gas_costs.push(gas_cost),
                 TraceFact::DisplayName(display_name) => display_names.push(display_name),
                 TraceFact::ValueProperty(value_property) => value_properties.push(value_property),
+                TraceFact::SourceFile(source_file) => source_files.push(source_file),
+                TraceFact::SourceSpan(source_span) => source_spans.push(source_span),
+                TraceFact::CodeObject(code_object) => code_objects.push(code_object),
+                TraceFact::Function(function) => functions.push(function),
+                TraceFact::LexicalScope(scope) => lexical_scopes.push(scope),
+                TraceFact::Type(ty) => types.push(ty),
+                TraceFact::Variable(variable) => variables.push(variable),
+                TraceFact::LocationRange(location_range) => location_ranges.push(location_range),
+                TraceFact::StaticGas(gas) => static_gas.push(gas),
+                TraceFact::DynamicGasStep(step) => dynamic_gas_steps.push(step),
             }
         }
 
@@ -259,6 +281,36 @@ impl TraceValidator {
         }
         for value_property in value_properties {
             validate_value_property(value_property, &nodes, &mut diagnostics);
+        }
+        for source_file in source_files {
+            validate_source_file(source_file, &nodes, &mut diagnostics);
+        }
+        for source_span in source_spans {
+            validate_source_span(source_span, &nodes, &mut diagnostics);
+        }
+        for code_object in code_objects {
+            validate_code_object(code_object, &nodes, &mut diagnostics);
+        }
+        for function in functions {
+            validate_function(function, &nodes, &mut diagnostics);
+        }
+        for scope in lexical_scopes {
+            validate_lexical_scope(scope, &nodes, &mut diagnostics);
+        }
+        for ty in types {
+            validate_type(ty, &nodes, &mut diagnostics);
+        }
+        for variable in variables {
+            validate_variable(variable, &nodes, &mut diagnostics);
+        }
+        for location_range in location_ranges {
+            validate_location_range(location_range, &nodes, &mut diagnostics);
+        }
+        for gas in static_gas {
+            validate_static_gas(gas, &nodes, &instruction_owners, &mut diagnostics);
+        }
+        for step in dynamic_gas_steps {
+            validate_dynamic_gas_step(step, &nodes, &mut diagnostics);
         }
 
         TraceValidationReport {
@@ -586,6 +638,392 @@ fn validate_value_property(
     }
 }
 
+fn validate_source_file(
+    source_file: &SourceFileFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(
+        nodes,
+        &source_file.file_key,
+        "source_file.file_key",
+        diagnostics,
+    );
+    if source_file.uri.trim().is_empty() {
+        push_error(
+            diagnostics,
+            TraceValidationError::EmptySourceFileField {
+                file: source_file.file_key.clone(),
+                field: "uri",
+            },
+        );
+    }
+    if source_file.display_name.trim().is_empty() {
+        push_error(
+            diagnostics,
+            TraceValidationError::EmptySourceFileField {
+                file: source_file.file_key.clone(),
+                field: "display_name",
+            },
+        );
+    }
+    if source_file.content_hash.trim().is_empty() {
+        push_error(
+            diagnostics,
+            TraceValidationError::EmptySourceFileField {
+                file: source_file.file_key.clone(),
+                field: "content_hash",
+            },
+        );
+    }
+}
+
+fn validate_source_span(
+    source_span: &SourceSpanFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(
+        nodes,
+        &source_span.origin,
+        "source_span.origin",
+        diagnostics,
+    );
+    require_node(nodes, &source_span.file, "source_span.file", diagnostics);
+    if source_span.start_byte > source_span.end_byte
+        || (source_span.start_line, source_span.start_column)
+            > (source_span.end_line, source_span.end_column)
+    {
+        push_error(
+            diagnostics,
+            TraceValidationError::InvalidSourceSpanRange {
+                origin: source_span.origin.clone(),
+            },
+        );
+    }
+}
+
+fn validate_code_object(
+    code_object: &CodeObjectFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(
+        nodes,
+        &code_object.code_object,
+        "code_object.code_object",
+        diagnostics,
+    );
+    if let Some(owner) = &code_object.owner_function_or_contract {
+        require_node(nodes, owner, "code_object.owner", diagnostics);
+    }
+    if code_object.target.trim().is_empty() {
+        push_error(
+            diagnostics,
+            TraceValidationError::EmptyCodeObjectTarget {
+                code_object: code_object.code_object.clone(),
+            },
+        );
+    }
+    if code_object
+        .code_hash
+        .as_deref()
+        .is_some_and(|hash| hash.trim().is_empty())
+    {
+        push_error(
+            diagnostics,
+            TraceValidationError::EmptyCodeObjectHash {
+                code_object: code_object.code_object.clone(),
+            },
+        );
+    }
+}
+
+fn validate_function(
+    function: &FunctionFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(nodes, &function.function, "function.function", diagnostics);
+    if function.name.trim().is_empty() {
+        push_error(
+            diagnostics,
+            TraceValidationError::EmptyFunctionName {
+                function: function.function.clone(),
+            },
+        );
+    }
+    if let Some(source_origin) = &function.source_origin {
+        require_node(nodes, source_origin, "function.source_origin", diagnostics);
+    }
+    if let Some(code_object) = &function.code_object {
+        require_node(nodes, code_object, "function.code_object", diagnostics);
+    }
+}
+
+fn validate_lexical_scope(
+    scope: &LexicalScopeFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(nodes, &scope.scope, "lexical_scope.scope", diagnostics);
+    if let Some(parent) = &scope.parent {
+        require_node(nodes, parent, "lexical_scope.parent", diagnostics);
+    }
+    require_node(
+        nodes,
+        &scope.function,
+        "lexical_scope.function",
+        diagnostics,
+    );
+    if let Some(source_origin) = &scope.source_origin {
+        require_node(
+            nodes,
+            source_origin,
+            "lexical_scope.source_origin",
+            diagnostics,
+        );
+    }
+}
+
+fn validate_type(
+    ty: &TypeFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(nodes, &ty.ty, "type.ty", diagnostics);
+    if ty
+        .name
+        .as_deref()
+        .is_some_and(|name| name.trim().is_empty())
+    {
+        push_error(
+            diagnostics,
+            TraceValidationError::EmptyTypeName { ty: ty.ty.clone() },
+        );
+    }
+    if ty.bit_width == Some(0) {
+        push_error(
+            diagnostics,
+            TraceValidationError::InvalidTypeBitWidth { ty: ty.ty.clone() },
+        );
+    }
+    for field in &ty.fields {
+        require_node(nodes, &field.ty, "type.field.ty", diagnostics);
+        if field.name.trim().is_empty() {
+            push_error(
+                diagnostics,
+                TraceValidationError::EmptyTypeFieldName { ty: ty.ty.clone() },
+            );
+        }
+    }
+}
+
+fn validate_variable(
+    variable: &VariableFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(nodes, &variable.variable, "variable.variable", diagnostics);
+    require_node(nodes, &variable.ty, "variable.ty", diagnostics);
+    require_node(
+        nodes,
+        &variable.declaration_origin,
+        "variable.declaration_origin",
+        diagnostics,
+    );
+    if let Some(scope) = &variable.scope {
+        require_node(nodes, scope, "variable.scope", diagnostics);
+    }
+    if variable.name.trim().is_empty() {
+        push_error(
+            diagnostics,
+            TraceValidationError::EmptyVariableName {
+                variable: variable.variable.clone(),
+            },
+        );
+    }
+}
+
+fn validate_location_range(
+    location_range: &LocationRangeFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(
+        nodes,
+        &location_range.subject,
+        "location_range.subject",
+        diagnostics,
+    );
+    require_node(
+        nodes,
+        &location_range.code_object,
+        "location_range.code_object",
+        diagnostics,
+    );
+    if !location_range.pc_range.is_valid() {
+        push_error(
+            diagnostics,
+            TraceValidationError::InvalidPcRange {
+                subject: location_range.subject.clone(),
+            },
+        );
+    }
+    validate_value_location(
+        &location_range.subject,
+        &location_range.location,
+        nodes,
+        diagnostics,
+    );
+}
+
+fn validate_static_gas(
+    gas: &StaticGasFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    instruction_owners: &BTreeMap<OriginExportKey, OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(
+        nodes,
+        &gas.instruction,
+        "static_gas.instruction",
+        diagnostics,
+    );
+    if !instruction_owners.contains_key(&gas.instruction) {
+        push_error(
+            diagnostics,
+            TraceValidationError::StaticGasWithoutInstruction {
+                instruction: gas.instruction.clone(),
+            },
+        );
+    }
+    if gas.schedule.as_str().trim().is_empty() {
+        push_error(
+            diagnostics,
+            TraceValidationError::EmptyGasSchedule {
+                subject: gas.instruction.clone(),
+            },
+        );
+    }
+}
+
+fn validate_dynamic_gas_step(
+    step: &DynamicGasStepFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(
+        nodes,
+        &step.code_object,
+        "dynamic_gas_step.code_object",
+        diagnostics,
+    );
+    if let Some(instruction) = &step.instruction {
+        require_node(
+            nodes,
+            instruction,
+            "dynamic_gas_step.instruction",
+            diagnostics,
+        );
+    }
+    if step.trace_id.trim().is_empty() {
+        push_error(
+            diagnostics,
+            TraceValidationError::EmptyDynamicGasTraceId {
+                code_object: step.code_object.clone(),
+            },
+        );
+    }
+    if step.gas_after > step.gas_before {
+        push_error(
+            diagnostics,
+            TraceValidationError::InvalidDynamicGasStep {
+                code_object: step.code_object.clone(),
+                reason: "gas_after must not exceed gas_before",
+            },
+        );
+    } else if step.gas_before - step.gas_after != step.gas_cost {
+        push_error(
+            diagnostics,
+            TraceValidationError::InvalidDynamicGasStep {
+                code_object: step.code_object.clone(),
+                reason: "gas_cost must equal gas_before - gas_after",
+            },
+        );
+    }
+}
+
+fn validate_value_location(
+    subject: &OriginExportKey,
+    location: &ValueLocation,
+    nodes: &BTreeSet<OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    match location {
+        ValueLocation::SsaValue { value } => {
+            require_node(
+                nodes,
+                value,
+                "location_range.location.ssa_value",
+                diagnostics,
+            );
+        }
+        ValueLocation::Register { name } if name.trim().is_empty() => {
+            push_error(
+                diagnostics,
+                TraceValidationError::EmptyLocationField {
+                    subject: subject.clone(),
+                    field: "register.name",
+                },
+            );
+        }
+        ValueLocation::EvmMemory { offset, length }
+        | ValueLocation::EvmCalldata { offset, length } => {
+            validate_location_expr(subject, offset, nodes, diagnostics);
+            if let Some(length) = length {
+                validate_location_expr(subject, length, nodes, diagnostics);
+            }
+        }
+        ValueLocation::EvmStorage { slot, .. } => {
+            validate_location_expr(subject, slot, nodes, diagnostics);
+        }
+        ValueLocation::Unknown { reason } if reason.trim().is_empty() => {
+            push_error(
+                diagnostics,
+                TraceValidationError::EmptyLocationField {
+                    subject: subject.clone(),
+                    field: "unknown.reason",
+                },
+            );
+        }
+        _ => {}
+    }
+}
+
+fn validate_location_expr(
+    subject: &OriginExportKey,
+    expr: &LocationExpr,
+    nodes: &BTreeSet<OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    match expr {
+        LocationExpr::Origin { origin } => {
+            require_node(nodes, origin, "location_expr.origin", diagnostics);
+        }
+        LocationExpr::Unknown { reason } if reason.trim().is_empty() => {
+            push_error(
+                diagnostics,
+                TraceValidationError::EmptyLocationField {
+                    subject: subject.clone(),
+                    field: "location_expr.unknown.reason",
+                },
+            );
+        }
+        _ => {}
+    }
+}
+
 fn valid_storage_phase_location(phase: CompilerPhase, location: &StorageLocation) -> bool {
     match location {
         StorageLocation::SsaValue => matches!(
@@ -712,6 +1150,51 @@ pub enum TraceValidationError {
     },
     EmptyValuePropertyReason {
         subject: OriginExportKey,
+    },
+    EmptySourceFileField {
+        file: OriginExportKey,
+        field: &'static str,
+    },
+    InvalidSourceSpanRange {
+        origin: OriginExportKey,
+    },
+    EmptyCodeObjectTarget {
+        code_object: OriginExportKey,
+    },
+    EmptyCodeObjectHash {
+        code_object: OriginExportKey,
+    },
+    EmptyFunctionName {
+        function: OriginExportKey,
+    },
+    EmptyTypeName {
+        ty: OriginExportKey,
+    },
+    InvalidTypeBitWidth {
+        ty: OriginExportKey,
+    },
+    EmptyTypeFieldName {
+        ty: OriginExportKey,
+    },
+    EmptyVariableName {
+        variable: OriginExportKey,
+    },
+    InvalidPcRange {
+        subject: OriginExportKey,
+    },
+    EmptyLocationField {
+        subject: OriginExportKey,
+        field: &'static str,
+    },
+    StaticGasWithoutInstruction {
+        instruction: OriginExportKey,
+    },
+    EmptyDynamicGasTraceId {
+        code_object: OriginExportKey,
+    },
+    InvalidDynamicGasStep {
+        code_object: OriginExportKey,
+        reason: &'static str,
     },
 }
 
@@ -856,6 +1339,69 @@ impl fmt::Display for TraceValidationError {
                 "value property for {} has an empty reason",
                 subject.display_label()
             ),
+            Self::EmptySourceFileField { file, field } => write!(
+                f,
+                "source file {} has an empty {field}",
+                file.display_label()
+            ),
+            Self::InvalidSourceSpanRange { origin } => write!(
+                f,
+                "source span for {} has an invalid range",
+                origin.display_label()
+            ),
+            Self::EmptyCodeObjectTarget { code_object } => write!(
+                f,
+                "code object {} has an empty target",
+                code_object.display_label()
+            ),
+            Self::EmptyCodeObjectHash { code_object } => write!(
+                f,
+                "code object {} has an empty code hash",
+                code_object.display_label()
+            ),
+            Self::EmptyFunctionName { function } => {
+                write!(f, "function {} has an empty name", function.display_label())
+            }
+            Self::EmptyTypeName { ty } => {
+                write!(f, "type {} has an empty name", ty.display_label())
+            }
+            Self::InvalidTypeBitWidth { ty } => {
+                write!(f, "type {} has an invalid bit width", ty.display_label())
+            }
+            Self::EmptyTypeFieldName { ty } => {
+                write!(f, "type {} has an empty field name", ty.display_label())
+            }
+            Self::EmptyVariableName { variable } => {
+                write!(f, "variable {} has an empty name", variable.display_label())
+            }
+            Self::InvalidPcRange { subject } => write!(
+                f,
+                "location range for {} has an invalid PC range",
+                subject.display_label()
+            ),
+            Self::EmptyLocationField { subject, field } => write!(
+                f,
+                "location range for {} has an empty {field}",
+                subject.display_label()
+            ),
+            Self::StaticGasWithoutInstruction { instruction } => write!(
+                f,
+                "static gas references {} but no instruction fact defines it",
+                instruction.display_label()
+            ),
+            Self::EmptyDynamicGasTraceId { code_object } => write!(
+                f,
+                "dynamic gas step for {} has an empty trace_id",
+                code_object.display_label()
+            ),
+            Self::InvalidDynamicGasStep {
+                code_object,
+                reason,
+            } => write!(
+                f,
+                "dynamic gas step for {} is invalid: {reason}",
+                code_object.display_label()
+            ),
         }
     }
 }
@@ -867,11 +1413,13 @@ mod tests {
     use common::origin::OriginExportKey;
 
     use crate::{
-        CategorySource, CompilerPhase, EvmSchedule, GasConfidence, GasCostFact, GasKind, GasSource,
-        InlineContextFact, InstructionCategory, InstructionCategoryFact, InstructionFact,
-        LoopDerivation, LoopMembershipFact, OpcodeCategory, OpcodeFact, OriginEdgeFact,
-        OriginEdgeLabel, OriginNodeFact, OriginNodeKind, StorageFact, StorageLocation,
-        StorageReason, TraceFact, TraceValidationError, TraceValidationLevel, TraceValidator,
+        CategorySource, CodeObjectFact, CodeObjectKind, CompilerPhase, EvmSchedule, FunctionFact,
+        GasConfidence, GasCostFact, GasKind, GasSource, InlineContextFact, InstructionCategory,
+        InstructionCategoryFact, InstructionFact, LoopDerivation, LoopMembershipFact,
+        OpcodeCategory, OpcodeFact, OriginEdgeFact, OriginEdgeLabel, OriginNodeFact,
+        OriginNodeKind, SourceFileFact, SourceSpanFact, StaticGasFact, StorageFact,
+        StorageLocation, StorageReason, TraceFact, TraceValidationError, TraceValidationLevel,
+        TraceValidator,
     };
 
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -1236,6 +1784,93 @@ mod tests {
             TraceValidator::validate(&facts),
             Err(TraceValidationError::EmptyGasSchedule {
                 subject: instruction,
+            })
+        );
+    }
+
+    #[test]
+    fn validator_accepts_debug_bundle_base_facts() {
+        let source_file = key("source.file", "fib", "fib_demo.fe");
+        let source_expr = key("hir.expr", "fib", "expr:while");
+        let code_object = key("code.object", "fib", "runtime");
+        let function = key("bytecode.function", "fib", "runtime");
+        let instruction = key("bytecode.pc", "fib", "pc:0");
+        let facts = vec![
+            node("source.file", "fib", "fib_demo.fe"),
+            node("hir.expr", "fib", "expr:while"),
+            node("code.object", "fib", "runtime"),
+            node("bytecode.function", "fib", "runtime"),
+            node("bytecode.pc", "fib", "pc:0"),
+            TraceFact::SourceFile(SourceFileFact::new(
+                source_file.clone(),
+                "file:///fib_demo.fe",
+                "fib_demo.fe",
+                "fnv64:abcd",
+                Some(0),
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                source_expr.clone(),
+                source_file,
+                0,
+                5,
+                1,
+                0,
+                1,
+                5,
+            )),
+            TraceFact::CodeObject(CodeObjectFact::new(
+                code_object.clone(),
+                CodeObjectKind::EvmRuntimeBytecode,
+                Some(function.clone()),
+                "evm/sonatina",
+                Some("fnv64:beef".to_string()),
+            )),
+            TraceFact::Function(FunctionFact::new(
+                function.clone(),
+                "runtime",
+                Some(source_expr),
+                Some(code_object),
+            )),
+            TraceFact::Instruction(InstructionFact::new(
+                instruction.clone(),
+                function,
+                0,
+                "STOP",
+            )),
+            TraceFact::StaticGas(StaticGasFact::new(
+                instruction,
+                EvmSchedule::new("cancun"),
+                0,
+                None,
+            )),
+        ];
+
+        assert!(TraceValidator::validate(&facts).is_ok());
+    }
+
+    #[test]
+    fn validator_rejects_invalid_source_span_ranges() {
+        let source_file = key("source.file", "fib", "fib_demo.fe");
+        let source_expr = key("hir.expr", "fib", "expr:while");
+        let facts = vec![
+            node("source.file", "fib", "fib_demo.fe"),
+            node("hir.expr", "fib", "expr:while"),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                source_expr.clone(),
+                source_file,
+                10,
+                5,
+                2,
+                0,
+                1,
+                0,
+            )),
+        ];
+
+        assert_eq!(
+            TraceValidator::validate(&facts),
+            Err(TraceValidationError::InvalidSourceSpanRange {
+                origin: source_expr,
             })
         );
     }
