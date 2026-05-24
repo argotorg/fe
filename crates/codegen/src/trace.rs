@@ -1,11 +1,25 @@
+use std::collections::BTreeSet;
+
 use common::origin::OriginExportKey;
 use trace_facts::{
-    CategorySource, CodeObjectFact, CodeObjectKind, EvmSchedule, GasConfidence, GasCostFact,
-    GasKind, GasSource, InstructionCategory, InstructionCategoryFact, InstructionFact,
-    OpcodeCategory, OpcodeFact, OriginNodeFact, OriginNodeKind, StaticGasFact, TraceFact,
+    BlockFact, CategorySource, CfgEdgeFact, CfgEdgeKind, CodeObjectFact, CodeObjectKind,
+    CompilerPhase, EvmSchedule, FunctionFact, GasConfidence, GasCostFact, GasKind, GasSource,
+    InstructionBlockFact, InstructionCategory, InstructionCategoryFact, InstructionFact,
+    LoopBlockFact, LoopBlockRole, LoopConfidence, LoopDerivation, LoopFact, OpcodeCategory,
+    OpcodeFact, OriginEdgeFact, OriginEdgeLabel, OriginNodeFact, OriginNodeKind, StaticGasFact,
+    TraceFact,
 };
 
 use crate::debug::BytecodeSourceMapEntry;
+
+pub const SONATINA_PREOPT_FUNCTION_KIND: &str = "sonatina.preopt.function";
+pub const SONATINA_PREOPT_BLOCK_KIND: &str = "sonatina.preopt.block";
+pub const SONATINA_PREOPT_INST_KIND: &str = "sonatina.preopt.inst";
+pub const SONATINA_PREOPT_LOOP_KIND: &str = "sonatina.preopt.loop";
+pub const SONATINA_POSTOPT_FUNCTION_KIND: &str = "sonatina.postopt.function";
+pub const SONATINA_POSTOPT_BLOCK_KIND: &str = "sonatina.postopt.block";
+pub const SONATINA_POSTOPT_INST_KIND: &str = "sonatina.postopt.inst";
+pub const SONATINA_POSTOPT_LOOP_KIND: &str = "sonatina.postopt.loop";
 
 /// Emit codegen-owned trace facts for bytecode/source-map records.
 ///
@@ -107,6 +121,235 @@ pub fn emit_bytecode_instruction_facts(
     facts
 }
 
+/// Emit Sonatina-owned CFG and lowering bridge facts from the runtime package.
+///
+/// This is intentionally a lowering-unit trace: it identifies which MIR
+/// statement or terminator each Sonatina pre-opt unit came from. Exact
+/// pass-level post-opt instruction preservation still needs Sonatina pass hooks,
+/// so post-opt facts are marked as snapshot-preserved projections instead of
+/// pretending to know optimizer rewrites.
+pub fn emit_sonatina_cfg_facts<'db>(
+    db: &'db dyn mir::MirDb,
+    package: mir::RuntimePackage<'db>,
+) -> Vec<TraceFact> {
+    let mut facts = Vec::new();
+    for function in package.functions(db) {
+        let instance = function.instance(db);
+        let body = instance.body(db);
+        let owner = mir::origin::RuntimeInstanceOwnerKey::for_instance(db, instance);
+        let pre_function = sonatina_key(SONATINA_PREOPT_FUNCTION_KIND, &owner, "function");
+        let post_function = sonatina_key(SONATINA_POSTOPT_FUNCTION_KIND, &owner, "function");
+        push_node(&mut facts, pre_function.clone());
+        push_node(&mut facts, post_function.clone());
+        facts.push(TraceFact::Function(FunctionFact::new(
+            pre_function.clone(),
+            function.symbol(db),
+            None,
+            None,
+        )));
+        facts.push(TraceFact::Function(FunctionFact::new(
+            post_function.clone(),
+            function.symbol(db),
+            None,
+            None,
+        )));
+        facts.push(TraceFact::OriginEdge(OriginEdgeFact::new(
+            post_function.clone(),
+            pre_function.clone(),
+            OriginEdgeLabel::PreservedSnapshotIdentity,
+            Some(CompilerPhase::SonatinaPostOpt),
+        )));
+
+        let cfg = runtime_cfg(&body);
+        let dominators = dominators(body.blocks.len(), &cfg.predecessors);
+        for (block_index, _) in body.blocks.iter().enumerate() {
+            let runtime_block = mir::RBlockId::from_u32(block_index as u32);
+            let runtime_block_key =
+                mir::RuntimeBlockOrigin::new(instance, runtime_block).export_key(&owner);
+            let pre_block = sonatina_block_key(SONATINA_PREOPT_BLOCK_KIND, &owner, block_index);
+            let post_block = sonatina_block_key(SONATINA_POSTOPT_BLOCK_KIND, &owner, block_index);
+            push_node(&mut facts, pre_block.clone());
+            push_node(&mut facts, post_block.clone());
+            facts.push(TraceFact::Block(BlockFact::new(
+                pre_block.clone(),
+                pre_function.clone(),
+                CompilerPhase::SonatinaPreOpt,
+                block_index as u32,
+                Some(format!("bb{block_index}")),
+            )));
+            facts.push(TraceFact::Block(BlockFact::new(
+                post_block.clone(),
+                post_function.clone(),
+                CompilerPhase::SonatinaPostOpt,
+                block_index as u32,
+                Some(format!("bb{block_index}")),
+            )));
+            facts.push(TraceFact::OriginEdge(OriginEdgeFact::new(
+                pre_block,
+                runtime_block_key,
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::SonatinaPreOpt),
+            )));
+            facts.push(TraceFact::OriginEdge(OriginEdgeFact::new(
+                post_block,
+                sonatina_block_key(SONATINA_PREOPT_BLOCK_KIND, &owner, block_index),
+                OriginEdgeLabel::PreservedSnapshotIdentity,
+                Some(CompilerPhase::SonatinaPostOpt),
+            )));
+        }
+
+        for edge in &cfg.edges {
+            let from = edge.from.as_u32() as usize;
+            let to = edge.to.as_u32() as usize;
+            if from >= body.blocks.len() || to >= body.blocks.len() {
+                continue;
+            }
+            let pre_kind = cfg_edge_kind(edge, &dominators);
+            facts.push(TraceFact::CfgEdge(CfgEdgeFact::new(
+                pre_function.clone(),
+                sonatina_block_key(SONATINA_PREOPT_BLOCK_KIND, &owner, from),
+                sonatina_block_key(SONATINA_PREOPT_BLOCK_KIND, &owner, to),
+                pre_kind,
+                None,
+            )));
+            facts.push(TraceFact::CfgEdge(CfgEdgeFact::new(
+                post_function.clone(),
+                sonatina_block_key(SONATINA_POSTOPT_BLOCK_KIND, &owner, from),
+                sonatina_block_key(SONATINA_POSTOPT_BLOCK_KIND, &owner, to),
+                pre_kind,
+                None,
+            )));
+        }
+
+        let cfg_hash = runtime_cfg_hash(body.blocks.len(), &cfg.edges);
+        for natural_loop in natural_loops(body.blocks.len(), &cfg.predecessors, &cfg.edges) {
+            let runtime_loop = mir::RuntimeLoopOrigin::new(
+                instance,
+                mir::RuntimeLoopSite::new(natural_loop.header, natural_loop.latch),
+            )
+            .export_key(&owner);
+            let pre_loop = sonatina_loop_key(
+                SONATINA_PREOPT_LOOP_KIND,
+                &owner,
+                natural_loop.header,
+                natural_loop.latch,
+            );
+            let post_loop = sonatina_loop_key(
+                SONATINA_POSTOPT_LOOP_KIND,
+                &owner,
+                natural_loop.header,
+                natural_loop.latch,
+            );
+            push_node(&mut facts, pre_loop.clone());
+            push_node(&mut facts, post_loop.clone());
+            let pre_header = sonatina_block_key(
+                SONATINA_PREOPT_BLOCK_KIND,
+                &owner,
+                natural_loop.header.as_u32() as usize,
+            );
+            let post_header = sonatina_block_key(
+                SONATINA_POSTOPT_BLOCK_KIND,
+                &owner,
+                natural_loop.header.as_u32() as usize,
+            );
+            facts.push(TraceFact::Loop(LoopFact::new(
+                pre_loop.clone(),
+                pre_function.clone(),
+                CompilerPhase::SonatinaPreOpt,
+                pre_header.clone(),
+                LoopDerivation::NaturalLoopAnalysis {
+                    cfg_hash: cfg_hash.clone(),
+                },
+                LoopConfidence::SonatinaCfg,
+            )));
+            facts.push(TraceFact::Loop(LoopFact::new(
+                post_loop.clone(),
+                post_function.clone(),
+                CompilerPhase::SonatinaPostOpt,
+                post_header.clone(),
+                LoopDerivation::NaturalLoopAnalysis {
+                    cfg_hash: cfg_hash.clone(),
+                },
+                LoopConfidence::SonatinaCfg,
+            )));
+            facts.push(TraceFact::OriginEdge(OriginEdgeFact::new(
+                pre_loop.clone(),
+                runtime_loop,
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::SonatinaPreOpt),
+            )));
+            facts.push(TraceFact::OriginEdge(OriginEdgeFact::new(
+                post_loop.clone(),
+                pre_loop.clone(),
+                OriginEdgeLabel::PreservedSnapshotIdentity,
+                Some(CompilerPhase::SonatinaPostOpt),
+            )));
+            push_loop_blocks(
+                &mut facts,
+                &owner,
+                &pre_loop,
+                SONATINA_PREOPT_BLOCK_KIND,
+                natural_loop.header,
+                natural_loop.latch,
+                &natural_loop.members,
+            );
+            push_loop_blocks(
+                &mut facts,
+                &owner,
+                &post_loop,
+                SONATINA_POSTOPT_BLOCK_KIND,
+                natural_loop.header,
+                natural_loop.latch,
+                &natural_loop.members,
+            );
+        }
+
+        let mut instruction_index = 0u32;
+        for (block_index, block) in body.blocks.iter().enumerate() {
+            for (stmt_index, stmt) in block.stmts.iter().enumerate() {
+                let runtime_stmt = mir::RuntimeStmtOrigin::new(
+                    instance,
+                    mir::RuntimeStmtSite::new(
+                        mir::RBlockId::from_u32(block_index as u32),
+                        mir::RuntimeStmtIndex::from_u32(stmt_index as u32),
+                    ),
+                )
+                .export_key(&owner);
+                push_sonatina_instruction_pair(
+                    &mut facts,
+                    &owner,
+                    &pre_function,
+                    &post_function,
+                    block_index,
+                    format!("stmt:{stmt_index}"),
+                    instruction_index,
+                    rmir_stmt_mnemonic(stmt),
+                    runtime_stmt,
+                );
+                instruction_index += 1;
+            }
+            let runtime_terminator = mir::RuntimeTerminatorOrigin::new(
+                instance,
+                mir::RuntimeTerminatorSite::new(mir::RBlockId::from_u32(block_index as u32)),
+            )
+            .export_key(&owner);
+            push_sonatina_instruction_pair(
+                &mut facts,
+                &owner,
+                &pre_function,
+                &post_function,
+                block_index,
+                "terminator".to_string(),
+                instruction_index,
+                rmir_terminator_mnemonic(&block.terminator),
+                runtime_terminator,
+            );
+            instruction_index += 1;
+        }
+    }
+    facts
+}
+
 pub fn bytecode_runtime_owner_key(
     package_key: &str,
     module_key: &str,
@@ -117,6 +360,405 @@ pub fn bytecode_runtime_owner_key(
 
 fn origin_node(key: OriginExportKey, kind: &str) -> TraceFact {
     TraceFact::OriginNode(OriginNodeFact::new(key, OriginNodeKind::new(kind)))
+}
+
+fn push_node(facts: &mut Vec<TraceFact>, key: OriginExportKey) {
+    facts.push(origin_node(key.clone(), key.kind()));
+}
+
+#[derive(Clone, Debug)]
+struct RuntimeCfg {
+    edges: Vec<RuntimeCfgEdge>,
+    predecessors: Vec<Vec<mir::RBlockId>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RuntimeCfgEdge {
+    from: mir::RBlockId,
+    to: mir::RBlockId,
+    kind: CfgEdgeKind,
+}
+
+#[derive(Clone, Debug)]
+struct NaturalLoop {
+    header: mir::RBlockId,
+    latch: mir::RBlockId,
+    members: Vec<mir::RBlockId>,
+}
+
+fn runtime_cfg(body: &mir::RuntimeBody<'_>) -> RuntimeCfg {
+    let mut edges = Vec::new();
+    let mut predecessors = vec![Vec::new(); body.blocks.len()];
+    for (block_index, block) in body.blocks.iter().enumerate() {
+        let from = mir::RBlockId::from_u32(block_index as u32);
+        for edge in terminator_edges(from, &block.terminator) {
+            if let Some(preds) = predecessors.get_mut(edge.to.as_u32() as usize) {
+                preds.push(edge.from);
+            }
+            edges.push(edge);
+        }
+    }
+    RuntimeCfg {
+        edges,
+        predecessors,
+    }
+}
+
+fn terminator_edges(from: mir::RBlockId, terminator: &mir::RTerminator<'_>) -> Vec<RuntimeCfgEdge> {
+    match terminator {
+        mir::RTerminator::Goto(to) => vec![RuntimeCfgEdge {
+            from,
+            to: *to,
+            kind: CfgEdgeKind::Jump,
+        }],
+        mir::RTerminator::Branch {
+            then_bb, else_bb, ..
+        } => vec![
+            RuntimeCfgEdge {
+                from,
+                to: *then_bb,
+                kind: CfgEdgeKind::BranchTrue,
+            },
+            RuntimeCfgEdge {
+                from,
+                to: *else_bb,
+                kind: CfgEdgeKind::BranchFalse,
+            },
+        ],
+        mir::RTerminator::SwitchScalar { cases, default, .. } => {
+            let mut edges = cases
+                .iter()
+                .map(|(_, to)| RuntimeCfgEdge {
+                    from,
+                    to: *to,
+                    kind: CfgEdgeKind::BranchTrue,
+                })
+                .collect::<Vec<_>>();
+            edges.push(RuntimeCfgEdge {
+                from,
+                to: *default,
+                kind: CfgEdgeKind::BranchFalse,
+            });
+            edges
+        }
+        mir::RTerminator::MatchEnumTag { cases, default, .. } => {
+            let mut edges = cases
+                .iter()
+                .map(|(_, to)| RuntimeCfgEdge {
+                    from,
+                    to: *to,
+                    kind: CfgEdgeKind::BranchTrue,
+                })
+                .collect::<Vec<_>>();
+            if let Some(default) = default {
+                edges.push(RuntimeCfgEdge {
+                    from,
+                    to: *default,
+                    kind: CfgEdgeKind::BranchFalse,
+                });
+            }
+            edges
+        }
+        mir::RTerminator::TerminalCall { .. }
+        | mir::RTerminator::ReturnData { .. }
+        | mir::RTerminator::Revert { .. }
+        | mir::RTerminator::SelfDestruct { .. }
+        | mir::RTerminator::Trap
+        | mir::RTerminator::Return(_)
+        | mir::RTerminator::Stop => Vec::new(),
+    }
+}
+
+fn cfg_edge_kind(edge: &RuntimeCfgEdge, dominators: &[BTreeSet<usize>]) -> CfgEdgeKind {
+    let from = edge.from.as_u32() as usize;
+    let to = edge.to.as_u32() as usize;
+    if dominators
+        .get(from)
+        .is_some_and(|dominator_set| dominator_set.contains(&to))
+    {
+        CfgEdgeKind::Backedge
+    } else {
+        edge.kind
+    }
+}
+
+fn natural_loops(
+    block_count: usize,
+    predecessors: &[Vec<mir::RBlockId>],
+    edges: &[RuntimeCfgEdge],
+) -> Vec<NaturalLoop> {
+    let dominators = dominators(block_count, predecessors);
+    let mut seen = BTreeSet::new();
+    let mut loops = Vec::new();
+    for edge in edges {
+        let from = edge.from.as_u32() as usize;
+        let to = edge.to.as_u32() as usize;
+        if from >= block_count || to >= block_count {
+            continue;
+        }
+        if !dominators[from].contains(&to) || !seen.insert((to, from)) {
+            continue;
+        }
+        loops.push(NaturalLoop {
+            header: edge.to,
+            latch: edge.from,
+            members: natural_loop_members(block_count, predecessors, edge.to, edge.from),
+        });
+    }
+    loops
+}
+
+fn natural_loop_members(
+    block_count: usize,
+    predecessors: &[Vec<mir::RBlockId>],
+    header: mir::RBlockId,
+    latch: mir::RBlockId,
+) -> Vec<mir::RBlockId> {
+    let header_index = header.as_u32() as usize;
+    let latch_index = latch.as_u32() as usize;
+    let mut members = BTreeSet::from([header_index, latch_index]);
+    let mut stack = vec![latch_index];
+    while let Some(block) = stack.pop() {
+        for predecessor in predecessors.get(block).into_iter().flatten() {
+            let predecessor = predecessor.as_u32() as usize;
+            if predecessor >= block_count || !members.insert(predecessor) {
+                continue;
+            }
+            if predecessor != header_index {
+                stack.push(predecessor);
+            }
+        }
+    }
+    members
+        .into_iter()
+        .map(|block| mir::RBlockId::from_u32(block as u32))
+        .collect()
+}
+
+fn dominators(block_count: usize, predecessors: &[Vec<mir::RBlockId>]) -> Vec<BTreeSet<usize>> {
+    if block_count == 0 {
+        return Vec::new();
+    }
+    let all_blocks = (0..block_count).collect::<BTreeSet<_>>();
+    let mut dominators = vec![all_blocks.clone(); block_count];
+    dominators[0] = BTreeSet::from([0]);
+
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for block in 1..block_count {
+            let preds = predecessors
+                .get(block)
+                .into_iter()
+                .flatten()
+                .map(|pred| pred.as_u32() as usize)
+                .filter(|pred| *pred < block_count)
+                .collect::<Vec<_>>();
+            let mut next = if let Some((first, rest)) = preds.split_first() {
+                let mut intersection = dominators[*first].clone();
+                for pred in rest {
+                    intersection = intersection
+                        .intersection(&dominators[*pred])
+                        .copied()
+                        .collect();
+                }
+                intersection
+            } else {
+                BTreeSet::new()
+            };
+            next.insert(block);
+            if next != dominators[block] {
+                dominators[block] = next;
+                changed = true;
+            }
+        }
+    }
+    dominators
+}
+
+fn runtime_cfg_hash(block_count: usize, edges: &[RuntimeCfgEdge]) -> String {
+    let mut hash = 0xcbf29ce484222325u64;
+    hash_u32(&mut hash, block_count as u32);
+    for edge in edges {
+        hash_u32(&mut hash, edge.from.as_u32());
+        hash_u32(&mut hash, edge.to.as_u32());
+        hash_bytes(&mut hash, cfg_edge_kind_name(edge.kind).as_bytes());
+    }
+    format!("fnv64:{hash:016x}")
+}
+
+fn cfg_edge_kind_name(kind: CfgEdgeKind) -> &'static str {
+    match kind {
+        CfgEdgeKind::Fallthrough => "fallthrough",
+        CfgEdgeKind::BranchTrue => "branch_true",
+        CfgEdgeKind::BranchFalse => "branch_false",
+        CfgEdgeKind::Jump => "jump",
+        CfgEdgeKind::Backedge => "backedge",
+        CfgEdgeKind::Return => "return",
+        CfgEdgeKind::Unwind => "unwind",
+        CfgEdgeKind::Unknown => "unknown",
+    }
+}
+
+fn push_loop_blocks(
+    facts: &mut Vec<TraceFact>,
+    owner: &mir::RuntimeInstanceOwnerKey,
+    loop_key: &OriginExportKey,
+    block_kind: &str,
+    header: mir::RBlockId,
+    latch: mir::RBlockId,
+    members: &[mir::RBlockId],
+) {
+    facts.push(TraceFact::LoopBlock(LoopBlockFact::new(
+        loop_key.clone(),
+        sonatina_block_key(block_kind, owner, header.as_u32() as usize),
+        LoopBlockRole::Header,
+    )));
+    for block in members {
+        if *block == header {
+            continue;
+        }
+        let role = if *block == latch {
+            LoopBlockRole::Latch
+        } else {
+            LoopBlockRole::Body
+        };
+        facts.push(TraceFact::LoopBlock(LoopBlockFact::new(
+            loop_key.clone(),
+            sonatina_block_key(block_kind, owner, block.as_u32() as usize),
+            role,
+        )));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_sonatina_instruction_pair(
+    facts: &mut Vec<TraceFact>,
+    owner: &mir::RuntimeInstanceOwnerKey,
+    pre_function: &OriginExportKey,
+    post_function: &OriginExportKey,
+    block_index: usize,
+    local_site: String,
+    index: u32,
+    mnemonic: &'static str,
+    runtime_origin: OriginExportKey,
+) {
+    let pre_inst = sonatina_key(
+        SONATINA_PREOPT_INST_KIND,
+        owner,
+        format!("block:{block_index}:{local_site}"),
+    );
+    let post_inst = sonatina_key(
+        SONATINA_POSTOPT_INST_KIND,
+        owner,
+        format!("block:{block_index}:{local_site}"),
+    );
+    let pre_block = sonatina_block_key(SONATINA_PREOPT_BLOCK_KIND, owner, block_index);
+    let post_block = sonatina_block_key(SONATINA_POSTOPT_BLOCK_KIND, owner, block_index);
+    push_node(facts, pre_inst.clone());
+    push_node(facts, post_inst.clone());
+    facts.push(TraceFact::Instruction(InstructionFact::new(
+        pre_inst.clone(),
+        pre_function.clone(),
+        index,
+        mnemonic,
+    )));
+    facts.push(TraceFact::Instruction(InstructionFact::new(
+        post_inst.clone(),
+        post_function.clone(),
+        index,
+        mnemonic,
+    )));
+    facts.push(TraceFact::InstructionBlock(InstructionBlockFact::new(
+        pre_inst.clone(),
+        pre_block,
+        CompilerPhase::SonatinaPreOpt,
+    )));
+    facts.push(TraceFact::InstructionBlock(InstructionBlockFact::new(
+        post_inst.clone(),
+        post_block,
+        CompilerPhase::SonatinaPostOpt,
+    )));
+    facts.push(TraceFact::OriginEdge(OriginEdgeFact::new(
+        pre_inst.clone(),
+        runtime_origin,
+        OriginEdgeLabel::LoweredFrom,
+        Some(CompilerPhase::SonatinaPreOpt),
+    )));
+    facts.push(TraceFact::OriginEdge(OriginEdgeFact::new(
+        post_inst,
+        pre_inst,
+        OriginEdgeLabel::PreservedSnapshotIdentity,
+        Some(CompilerPhase::SonatinaPostOpt),
+    )));
+}
+
+fn rmir_stmt_mnemonic(stmt: &mir::RStmt<'_>) -> &'static str {
+    match stmt {
+        mir::RStmt::Assign { .. } => "rmir.assign",
+        mir::RStmt::EnumAssertVariant { .. } => "rmir.enum_assert_variant",
+        mir::RStmt::Store { .. } => "rmir.store",
+        mir::RStmt::CopyInto { .. } => "rmir.copy_into",
+        mir::RStmt::EnumSetTag { .. } => "rmir.enum_set_tag",
+        mir::RStmt::EnumWriteVariant { .. } => "rmir.enum_write_variant",
+    }
+}
+
+fn rmir_terminator_mnemonic(terminator: &mir::RTerminator<'_>) -> &'static str {
+    match terminator {
+        mir::RTerminator::Goto(_) => "rmir.goto",
+        mir::RTerminator::Branch { .. } => "rmir.branch",
+        mir::RTerminator::SwitchScalar { .. } => "rmir.switch_scalar",
+        mir::RTerminator::MatchEnumTag { .. } => "rmir.match_enum_tag",
+        mir::RTerminator::TerminalCall { .. } => "rmir.terminal_call",
+        mir::RTerminator::ReturnData { .. } => "rmir.return_data",
+        mir::RTerminator::Revert { .. } => "rmir.revert",
+        mir::RTerminator::SelfDestruct { .. } => "rmir.self_destruct",
+        mir::RTerminator::Trap => "rmir.trap",
+        mir::RTerminator::Return(_) => "rmir.return",
+        mir::RTerminator::Stop => "rmir.stop",
+    }
+}
+
+fn sonatina_block_key(
+    kind: &str,
+    owner: &mir::RuntimeInstanceOwnerKey,
+    block_index: usize,
+) -> OriginExportKey {
+    sonatina_key(kind, owner, format!("block:{block_index}"))
+}
+
+fn sonatina_loop_key(
+    kind: &str,
+    owner: &mir::RuntimeInstanceOwnerKey,
+    header: mir::RBlockId,
+    latch: mir::RBlockId,
+) -> OriginExportKey {
+    sonatina_key(
+        kind,
+        owner,
+        format!("loop:header:{}:latch:{}", header.as_u32(), latch.as_u32()),
+    )
+}
+
+fn sonatina_key(
+    kind: &str,
+    owner: &mir::RuntimeInstanceOwnerKey,
+    local: impl AsRef<str>,
+) -> OriginExportKey {
+    OriginExportKey::try_from_raw_parts(kind, owner.as_str(), local.as_ref())
+        .expect("Sonatina trace key must be valid")
+}
+
+fn hash_u32(hash: &mut u64, value: u32) {
+    hash_bytes(hash, &value.to_le_bytes());
+}
+
+fn hash_bytes(hash: &mut u64, bytes: &[u8]) {
+    for byte in bytes {
+        *hash ^= u64::from(*byte);
+        *hash = hash.wrapping_mul(0x100000001b3);
+    }
 }
 
 fn bytecode_content_hash(bytecode: &[u8]) -> String {
@@ -224,12 +866,17 @@ fn evm_static_gas(opcode: u8) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use common::origin::OriginExportKey;
+    use common::{InputDb, origin::OriginExportKey};
+    use driver::DriverDataBase;
     use trace_facts::{TraceFact, TraceValidator};
+    use url::Url;
 
     use crate::{
         BytecodePcRange, BytecodeSourceMapEntry,
-        trace::{bytecode_runtime_owner_key, emit_bytecode_instruction_facts, emit_codegen_facts},
+        trace::{
+            bytecode_runtime_owner_key, emit_bytecode_instruction_facts, emit_codegen_facts,
+            emit_sonatina_cfg_facts,
+        },
     };
 
     #[test]
@@ -293,5 +940,60 @@ mod tests {
         assert!(first.contains("module:mod:fib"));
         assert!(first.contains("contract:Fib"));
         assert!(first.contains("section:runtime"));
+    }
+
+    #[test]
+    fn sonatina_trace_bridges_mir_loop_to_sonatina_loop() {
+        let mut db = DriverDataBase::default();
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///sonatina_trace_loop.fe").unwrap(),
+            Some(
+                r#"
+fn main() -> u32 {
+    let mut i: u32 = 0
+    while i < 4 {
+        i = i + 1
+    }
+    i
+}
+"#
+                .to_string(),
+            ),
+        );
+        let top_mod = db.top_mod(file);
+        let package = mir::build_runtime_package(&db, top_mod).expect("runtime package");
+        let mut facts = mir::trace::emit_mir_facts(&db, package);
+        facts.extend(emit_sonatina_cfg_facts(&db, package));
+
+        TraceValidator::validate(&facts).unwrap();
+        assert!(facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::Loop(loop_fact)
+                if loop_fact.phase == trace_facts::CompilerPhase::SonatinaPreOpt
+        )));
+        assert!(facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::Loop(loop_fact)
+                if loop_fact.phase == trace_facts::CompilerPhase::SonatinaPostOpt
+        )));
+        assert!(facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::OriginEdge(edge)
+                if edge.from.kind() == super::SONATINA_PREOPT_LOOP_KIND
+                    && edge.to.kind() == "runtime.loop"
+                    && edge.label == trace_facts::OriginEdgeLabel::LoweredFrom
+        )));
+        assert!(facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::InstructionBlock(block)
+                if block.phase == trace_facts::CompilerPhase::SonatinaPreOpt
+        )));
+        assert!(facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::OriginEdge(edge)
+                if edge.from.kind() == super::SONATINA_PREOPT_INST_KIND
+                    && matches!(edge.to.kind(), "runtime.stmt" | "runtime.terminator")
+        )));
     }
 }

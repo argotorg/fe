@@ -139,6 +139,7 @@ pub(super) fn emit_real_trace_bundle(
     let package = mir::build_runtime_package(&db, top_mod)
         .map_err(|err| format!("failed to build runtime package for trace: {err}"))?;
     let mut facts = mir::trace::emit_mir_facts(&db, package);
+    facts.extend(codegen::trace::emit_sonatina_cfg_facts(&db, package));
     let bytecode = codegen::emit_module_sonatina_bytecode(&db, top_mod, opt_level, None)
         .map_err(|err| format!("failed to compile bytecode for trace: {err}"))?;
     let module_key = top_mod.name(&db).data(&db).to_string();

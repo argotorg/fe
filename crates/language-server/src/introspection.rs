@@ -101,6 +101,7 @@ pub(crate) fn service_for_file(
     let package = mir::build_runtime_package(db, top_mod)
         .map_err(|err| format!("runtime package lowering for trace: {err}"))?;
     let mut facts = mir::trace::emit_mir_facts(db, package);
+    facts.extend(codegen::trace::emit_sonatina_cfg_facts(db, package));
     let bytecode = codegen::emit_module_sonatina_bytecode(db, top_mod, codegen::OptLevel::O1, None)
         .map_err(|err| format!("bytecode emission for trace: {err}"))?;
     let module_key = top_mod.name(db).data(db).to_string();
