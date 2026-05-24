@@ -15,10 +15,10 @@ pub use fact::{
     InlineContextFact, InstructionCategory, InstructionCategoryFact, InstructionFact,
     LexicalScopeFact, LocationConfidence, LocationExpr, LocationRangeFact, LoopDerivation,
     LoopMembershipFact, OpcodeCategory, OpcodeFact, OriginEdgeFact, OriginEdgeLabel,
-    OriginNodeFact, OriginNodeKind, PcRange, SourceFileFact, SourceSpanFact, StaticGasFact,
-    StorageFact, StorageLocation, StorageReason, TraceFact, TraceFactTextError, TypeFact,
-    TypeField, TypeKind, ValueLocation, ValueProperty, ValuePropertyFact, VariableFact,
-    VariableStorageClass,
+    OriginNodeFact, OriginNodeKind, PcRange, ShapeComponentHashFact, ShapeGraphHashFact,
+    ShapeNodeHashFact, ShapePolicyFact, SourceFileFact, SourceSpanFact, StaticGasFact, StorageFact,
+    StorageLocation, StorageReason, TraceFact, TraceFactTextError, TypeFact, TypeField, TypeKind,
+    ValueLocation, ValueProperty, ValuePropertyFact, VariableFact, VariableStorageClass,
 };
 pub use jsonl::{
     JsonlTraceReadError, JsonlTraceReader, JsonlTraceSink, TRACE_SCHEMA_VERSION, TraceBundle,

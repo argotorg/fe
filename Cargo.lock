@@ -2483,6 +2483,7 @@ name = "fe-trace-facts"
 version = "26.1.0"
 dependencies = [
  "fe-common",
+ "fe-shape-address",
  "serde",
  "serde_json",
 ]

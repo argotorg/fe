@@ -2,6 +2,10 @@ use std::fmt;
 
 use common::origin::{OriginExportKey, validate_origin_key_text};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use shape_address::{
+    DimensionDigests, ShapeCyclePolicy, ShapeDigestAlgorithm, ShapeDimension, ShapeGraphKey,
+    ShapeHashPolicy, ShapePolicyId, ShapeViewMode,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -28,6 +32,10 @@ pub enum TraceFact {
     LocationRange(LocationRangeFact),
     StaticGas(StaticGasFact),
     DynamicGasStep(DynamicGasStepFact),
+    ShapePolicy(ShapePolicyFact),
+    ShapeNodeHash(ShapeNodeHashFact),
+    ShapeComponentHash(ShapeComponentHashFact),
+    ShapeGraphHash(ShapeGraphHashFact),
 }
 
 impl TraceFact {
@@ -55,6 +63,10 @@ impl TraceFact {
             Self::LocationRange(_) => "location_range",
             Self::StaticGas(_) => "static_gas",
             Self::DynamicGasStep(_) => "dynamic_gas_step",
+            Self::ShapePolicy(_) => "shape_policy",
+            Self::ShapeNodeHash(_) => "shape_node_hash",
+            Self::ShapeComponentHash(_) => "shape_component_hash",
+            Self::ShapeGraphHash(_) => "shape_graph_hash",
         }
     }
 }
@@ -1121,6 +1133,129 @@ impl DynamicGasStepFact {
             gas_before,
             gas_after,
             gas_cost,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShapePolicyFact {
+    pub policy: ShapePolicyId,
+    pub schema_version: u32,
+    pub algorithm: ShapeDigestAlgorithm,
+    pub level: String,
+    pub dimensions: Vec<ShapeDimension>,
+    pub view_mode: ShapeViewMode,
+    pub cycle_policy: ShapeCyclePolicy,
+}
+
+impl ShapePolicyFact {
+    pub fn new(
+        policy: ShapePolicyId,
+        schema_version: u32,
+        algorithm: ShapeDigestAlgorithm,
+        level: impl Into<String>,
+        dimensions: Vec<ShapeDimension>,
+        view_mode: ShapeViewMode,
+        cycle_policy: ShapeCyclePolicy,
+    ) -> Self {
+        Self {
+            policy,
+            schema_version,
+            algorithm,
+            level: level.into(),
+            dimensions,
+            view_mode,
+            cycle_policy,
+        }
+    }
+
+    pub fn from_policy(policy: &ShapeHashPolicy) -> Self {
+        Self {
+            policy: policy.policy_id(),
+            schema_version: policy.schema_version,
+            algorithm: policy.algorithm,
+            level: policy.level.as_str().to_string(),
+            dimensions: policy.dimensions.iter().copied().collect(),
+            view_mode: policy.view_mode,
+            cycle_policy: policy.cycle_policy,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShapeNodeHashFact {
+    pub node: OriginExportKey,
+    pub graph: ShapeGraphKey,
+    pub policy: ShapePolicyId,
+    pub local: DimensionDigests,
+    pub tree: DimensionDigests,
+    pub component: Option<DimensionDigests>,
+}
+
+impl ShapeNodeHashFact {
+    pub fn new(
+        node: OriginExportKey,
+        graph: ShapeGraphKey,
+        policy: ShapePolicyId,
+        local: DimensionDigests,
+        tree: DimensionDigests,
+        component: Option<DimensionDigests>,
+    ) -> Self {
+        Self {
+            node,
+            graph,
+            policy,
+            local,
+            tree,
+            component,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShapeComponentHashFact {
+    pub graph: ShapeGraphKey,
+    pub policy: ShapePolicyId,
+    pub component_index: u32,
+    pub members: Vec<OriginExportKey>,
+    pub digests: DimensionDigests,
+}
+
+impl ShapeComponentHashFact {
+    pub fn new(
+        graph: ShapeGraphKey,
+        policy: ShapePolicyId,
+        component_index: u32,
+        members: Vec<OriginExportKey>,
+        digests: DimensionDigests,
+    ) -> Self {
+        Self {
+            graph,
+            policy,
+            component_index,
+            members,
+            digests,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShapeGraphHashFact {
+    pub graph: ShapeGraphKey,
+    pub policy: ShapePolicyId,
+    pub digests: DimensionDigests,
+}
+
+impl ShapeGraphHashFact {
+    pub fn new(graph: ShapeGraphKey, policy: ShapePolicyId, digests: DimensionDigests) -> Self {
+        Self {
+            graph,
+            policy,
+            digests,
         }
     }
 }

@@ -2,14 +2,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use common::origin::OriginExportKey;
+use shape_address::{DimensionDigests, ShapePolicyId};
 
 use crate::fact::{
     CategorySource, CodeObjectFact, CompilerEventFact, CompilerPhase, DisplayNameFact,
     DynamicGasStepFact, FunctionFact, InlineContextFact, InstructionCategoryFact, InstructionFact,
     LexicalScopeFact, LocationExpr, LocationRangeFact, LoopDerivation, LoopMembershipFact,
-    OpcodeFact, OriginEdgeFact, OriginNodeFact, SourceFileFact, SourceSpanFact, StaticGasFact,
-    StorageFact, StorageLocation, TraceFact, TypeFact, ValueLocation, ValueProperty,
-    ValuePropertyFact, VariableFact,
+    OpcodeFact, OriginEdgeFact, OriginNodeFact, ShapeComponentHashFact, ShapeGraphHashFact,
+    ShapeNodeHashFact, ShapePolicyFact, SourceFileFact, SourceSpanFact, StaticGasFact, StorageFact,
+    StorageLocation, TraceFact, TypeFact, ValueLocation, ValueProperty, ValuePropertyFact,
+    VariableFact,
 };
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -132,6 +134,10 @@ impl TraceValidator {
         let mut location_ranges = Vec::new();
         let mut static_gas = Vec::new();
         let mut dynamic_gas_steps = Vec::new();
+        let mut shape_policies = Vec::new();
+        let mut shape_node_hashes = Vec::new();
+        let mut shape_component_hashes = Vec::new();
+        let mut shape_graph_hashes = Vec::new();
 
         for fact in facts {
             match fact {
@@ -167,6 +173,10 @@ impl TraceValidator {
                 TraceFact::LocationRange(location_range) => location_ranges.push(location_range),
                 TraceFact::StaticGas(gas) => static_gas.push(gas),
                 TraceFact::DynamicGasStep(step) => dynamic_gas_steps.push(step),
+                TraceFact::ShapePolicy(policy) => shape_policies.push(policy),
+                TraceFact::ShapeNodeHash(hash) => shape_node_hashes.push(hash),
+                TraceFact::ShapeComponentHash(hash) => shape_component_hashes.push(hash),
+                TraceFact::ShapeGraphHash(hash) => shape_graph_hashes.push(hash),
             }
         }
 
@@ -311,6 +321,16 @@ impl TraceValidator {
         }
         for step in dynamic_gas_steps {
             validate_dynamic_gas_step(step, &nodes, &mut diagnostics);
+        }
+        let shape_policy_by_id = validate_shape_policies(shape_policies, &mut diagnostics);
+        for hash in shape_node_hashes {
+            validate_shape_node_hash(hash, &nodes, &shape_policy_by_id, &mut diagnostics);
+        }
+        for hash in shape_component_hashes {
+            validate_shape_component_hash(hash, &nodes, &shape_policy_by_id, &mut diagnostics);
+        }
+        for hash in shape_graph_hashes {
+            validate_shape_graph_hash(hash, &nodes, &shape_policy_by_id, &mut diagnostics);
         }
 
         TraceValidationReport {
@@ -954,6 +974,198 @@ fn validate_dynamic_gas_step(
     }
 }
 
+fn validate_shape_policies<'a>(
+    policies: Vec<&'a ShapePolicyFact>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) -> BTreeMap<ShapePolicyId, &'a ShapePolicyFact> {
+    let mut by_id = BTreeMap::new();
+    for policy in policies {
+        if policy.schema_version == 0 {
+            push_error(
+                diagnostics,
+                TraceValidationError::InvalidShapePolicy {
+                    policy: policy.policy.clone(),
+                    reason: "schema_version must be non-zero",
+                },
+            );
+        }
+        if policy.level.trim().is_empty() {
+            push_error(
+                diagnostics,
+                TraceValidationError::InvalidShapePolicy {
+                    policy: policy.policy.clone(),
+                    reason: "level must not be empty",
+                },
+            );
+        }
+        if policy.dimensions.is_empty() {
+            push_error(
+                diagnostics,
+                TraceValidationError::InvalidShapePolicy {
+                    policy: policy.policy.clone(),
+                    reason: "dimensions must not be empty",
+                },
+            );
+        }
+        let mut dimensions = BTreeSet::new();
+        for dimension in &policy.dimensions {
+            if !dimensions.insert(*dimension) {
+                push_error(
+                    diagnostics,
+                    TraceValidationError::InvalidShapePolicy {
+                        policy: policy.policy.clone(),
+                        reason: "dimensions must not contain duplicates",
+                    },
+                );
+            }
+        }
+        if let Some(existing) = by_id.insert(policy.policy.clone(), policy)
+            && existing != policy
+        {
+            push_error(
+                diagnostics,
+                TraceValidationError::InvalidShapePolicy {
+                    policy: policy.policy.clone(),
+                    reason: "policy id is reused for different policies",
+                },
+            );
+        }
+    }
+    by_id
+}
+
+fn validate_shape_node_hash(
+    hash: &ShapeNodeHashFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    policies: &BTreeMap<ShapePolicyId, &ShapePolicyFact>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(nodes, &hash.node, "shape_node_hash.node", diagnostics);
+    require_node(
+        nodes,
+        &hash.graph.owner,
+        "shape_node_hash.graph.owner",
+        diagnostics,
+    );
+    if let Some(policy) = require_shape_policy(&hash.policy, policies, diagnostics) {
+        validate_dimension_digests(policy, &hash.local, "shape_node_hash.local", diagnostics);
+        validate_dimension_digests(policy, &hash.tree, "shape_node_hash.tree", diagnostics);
+        if let Some(component) = &hash.component {
+            validate_dimension_digests(policy, component, "shape_node_hash.component", diagnostics);
+        }
+    }
+}
+
+fn validate_shape_component_hash(
+    hash: &ShapeComponentHashFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    policies: &BTreeMap<ShapePolicyId, &ShapePolicyFact>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(
+        nodes,
+        &hash.graph.owner,
+        "shape_component_hash.graph.owner",
+        diagnostics,
+    );
+    for member in &hash.members {
+        require_node(nodes, member, "shape_component_hash.member", diagnostics);
+    }
+    if let Some(policy) = require_shape_policy(&hash.policy, policies, diagnostics) {
+        validate_dimension_digests(
+            policy,
+            &hash.digests,
+            "shape_component_hash.digests",
+            diagnostics,
+        );
+    }
+}
+
+fn validate_shape_graph_hash(
+    hash: &ShapeGraphHashFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    policies: &BTreeMap<ShapePolicyId, &ShapePolicyFact>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(
+        nodes,
+        &hash.graph.owner,
+        "shape_graph_hash.graph.owner",
+        diagnostics,
+    );
+    if let Some(policy) = require_shape_policy(&hash.policy, policies, diagnostics) {
+        validate_dimension_digests(
+            policy,
+            &hash.digests,
+            "shape_graph_hash.digests",
+            diagnostics,
+        );
+    }
+}
+
+fn require_shape_policy<'a>(
+    policy: &ShapePolicyId,
+    policies: &'a BTreeMap<ShapePolicyId, &ShapePolicyFact>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) -> Option<&'a ShapePolicyFact> {
+    match policies.get(policy).copied() {
+        Some(policy) => Some(policy),
+        None => {
+            push_error(
+                diagnostics,
+                TraceValidationError::MissingShapePolicy {
+                    policy: policy.clone(),
+                },
+            );
+            None
+        }
+    }
+}
+
+fn validate_dimension_digests(
+    policy: &ShapePolicyFact,
+    digests: &DimensionDigests,
+    role: &'static str,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    if digests.values.is_empty() {
+        push_error(
+            diagnostics,
+            TraceValidationError::InvalidShapeDigestSet {
+                policy: policy.policy.clone(),
+                role,
+                reason: "digest set must not be empty",
+            },
+        );
+        return;
+    }
+    for dimension in &policy.dimensions {
+        if !digests.values.contains_key(dimension) {
+            push_error(
+                diagnostics,
+                TraceValidationError::InvalidShapeDigestSet {
+                    policy: policy.policy.clone(),
+                    role,
+                    reason: "digest set is missing a policy dimension",
+                },
+            );
+        }
+    }
+    let policy_dimensions = policy.dimensions.iter().copied().collect::<BTreeSet<_>>();
+    for dimension in digests.values.keys() {
+        if !policy_dimensions.contains(dimension) {
+            push_error(
+                diagnostics,
+                TraceValidationError::InvalidShapeDigestSet {
+                    policy: policy.policy.clone(),
+                    role,
+                    reason: "digest set contains a dimension outside the policy",
+                },
+            );
+        }
+    }
+}
+
 fn validate_value_location(
     subject: &OriginExportKey,
     location: &ValueLocation,
@@ -1196,6 +1408,18 @@ pub enum TraceValidationError {
         code_object: OriginExportKey,
         reason: &'static str,
     },
+    MissingShapePolicy {
+        policy: ShapePolicyId,
+    },
+    InvalidShapePolicy {
+        policy: ShapePolicyId,
+        reason: &'static str,
+    },
+    InvalidShapeDigestSet {
+        policy: ShapePolicyId,
+        role: &'static str,
+        reason: &'static str,
+    },
 }
 
 impl fmt::Display for TraceValidationError {
@@ -1402,6 +1626,22 @@ impl fmt::Display for TraceValidationError {
                 "dynamic gas step for {} is invalid: {reason}",
                 code_object.display_label()
             ),
+            Self::MissingShapePolicy { policy } => {
+                write!(f, "shape hash references unknown policy {policy}")
+            }
+            Self::InvalidShapePolicy { policy, reason } => {
+                write!(f, "shape policy {policy} is invalid: {reason}")
+            }
+            Self::InvalidShapeDigestSet {
+                policy,
+                role,
+                reason,
+            } => {
+                write!(
+                    f,
+                    "shape digest set {role} for policy {policy} is invalid: {reason}"
+                )
+            }
         }
     }
 }
@@ -1411,13 +1651,18 @@ impl std::error::Error for TraceValidationError {}
 #[cfg(test)]
 mod tests {
     use common::origin::OriginExportKey;
+    use shape_address::{
+        DimensionDigests, ShapeCyclePolicy, ShapeDigest, ShapeDimension, ShapeGraphKey,
+        ShapeHashPolicy, ShapeViewMode,
+    };
 
     use crate::{
         CategorySource, CodeObjectFact, CodeObjectKind, CompilerPhase, EvmSchedule, FunctionFact,
         GasConfidence, GasCostFact, GasKind, GasSource, InlineContextFact, InstructionCategory,
         InstructionCategoryFact, InstructionFact, LoopDerivation, LoopMembershipFact,
         OpcodeCategory, OpcodeFact, OriginEdgeFact, OriginEdgeLabel, OriginNodeFact,
-        OriginNodeKind, SourceFileFact, SourceSpanFact, StaticGasFact, StorageFact,
+        OriginNodeKind, ShapeComponentHashFact, ShapeGraphHashFact, ShapeNodeHashFact,
+        ShapePolicyFact, SourceFileFact, SourceSpanFact, StaticGasFact, StorageFact,
         StorageLocation, StorageReason, TraceFact, TraceValidationError, TraceValidationLevel,
         TraceValidator,
     };
@@ -1431,6 +1676,25 @@ mod tests {
             key(kind, owner, local),
             OriginNodeKind::new(kind),
         ))
+    }
+
+    fn shape_policy() -> ShapeHashPolicy {
+        ShapeHashPolicy::with_dimensions(
+            "hir",
+            [ShapeDimension::Structure],
+            ShapeViewMode::IdentityBound,
+            ShapeCyclePolicy::Reject,
+        )
+        .unwrap()
+    }
+
+    fn shape_digests(hex_digit: char) -> DimensionDigests {
+        let mut digests = DimensionDigests::default();
+        digests.insert(
+            ShapeDimension::Structure,
+            ShapeDigest::new(hex_digit.to_string().repeat(64)).unwrap(),
+        );
+        digests
     }
 
     #[test]
@@ -1872,6 +2136,93 @@ mod tests {
             Err(TraceValidationError::InvalidSourceSpanRange {
                 origin: source_expr,
             })
+        );
+    }
+
+    #[test]
+    fn validator_accepts_shape_hash_facts() {
+        let graph_owner = key("hir.body", "fib", "body:0");
+        let expr = key("hir.expr", "fib", "expr:0");
+        let policy = shape_policy();
+        let policy_id = policy.policy_id();
+        let graph = ShapeGraphKey::new(graph_owner.clone(), "hir-body-shape").unwrap();
+        let facts = vec![
+            node("hir.body", "fib", "body:0"),
+            node("hir.expr", "fib", "expr:0"),
+            TraceFact::ShapePolicy(ShapePolicyFact::from_policy(&policy)),
+            TraceFact::ShapeNodeHash(ShapeNodeHashFact::new(
+                expr.clone(),
+                graph.clone(),
+                policy_id.clone(),
+                shape_digests('a'),
+                shape_digests('b'),
+                None,
+            )),
+            TraceFact::ShapeComponentHash(ShapeComponentHashFact::new(
+                graph.clone(),
+                policy_id.clone(),
+                0,
+                vec![expr],
+                shape_digests('c'),
+            )),
+            TraceFact::ShapeGraphHash(ShapeGraphHashFact::new(
+                graph,
+                policy_id,
+                shape_digests('d'),
+            )),
+        ];
+
+        assert!(TraceValidator::validate(&facts).is_ok());
+    }
+
+    #[test]
+    fn validator_rejects_shape_hashes_for_unknown_nodes() {
+        let graph_owner = key("hir.body", "fib", "body:0");
+        let missing = key("hir.expr", "fib", "expr:0");
+        let policy = shape_policy();
+        let facts = vec![
+            node("hir.body", "fib", "body:0"),
+            TraceFact::ShapePolicy(ShapePolicyFact::from_policy(&policy)),
+            TraceFact::ShapeNodeHash(ShapeNodeHashFact::new(
+                missing.clone(),
+                ShapeGraphKey::new(graph_owner, "hir-body-shape").unwrap(),
+                policy.policy_id(),
+                shape_digests('a'),
+                shape_digests('b'),
+                None,
+            )),
+        ];
+
+        assert_eq!(
+            TraceValidator::validate(&facts),
+            Err(TraceValidationError::MissingOriginNode {
+                role: "shape_node_hash.node",
+                key: missing,
+            })
+        );
+    }
+
+    #[test]
+    fn validator_rejects_shape_hashes_without_declared_policy() {
+        let graph_owner = key("hir.body", "fib", "body:0");
+        let expr = key("hir.expr", "fib", "expr:0");
+        let policy_id = shape_policy().policy_id();
+        let facts = vec![
+            node("hir.body", "fib", "body:0"),
+            node("hir.expr", "fib", "expr:0"),
+            TraceFact::ShapeNodeHash(ShapeNodeHashFact::new(
+                expr,
+                ShapeGraphKey::new(graph_owner, "hir-body-shape").unwrap(),
+                policy_id.clone(),
+                shape_digests('a'),
+                shape_digests('b'),
+                None,
+            )),
+        ];
+
+        assert_eq!(
+            TraceValidator::validate(&facts),
+            Err(TraceValidationError::MissingShapePolicy { policy: policy_id })
         );
     }
 }

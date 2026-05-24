@@ -1,12 +1,14 @@
 use common::origin::OriginExportKey;
 use serde::{Deserialize, Serialize};
+use shape_address::{DimensionDigests, ShapeDimension};
 
 use crate::fact::{
     CodeObjectFact, CompilerEventFact, DisplayNameFact, DynamicGasStepFact, FunctionFact,
     GasCostFact, InlineContextFact, InstructionCategoryFact, InstructionFact, LexicalScopeFact,
     LocationRangeFact, LoopMembershipFact, OpcodeFact, OriginEdgeFact, OriginNodeFact,
-    SourceFileFact, SourceSpanFact, StaticGasFact, StorageFact, TraceFact, TypeFact,
-    ValuePropertyFact, VariableFact,
+    ShapeComponentHashFact, ShapeGraphHashFact, ShapeNodeHashFact, ShapePolicyFact, SourceFileFact,
+    SourceSpanFact, StaticGasFact, StorageFact, TraceFact, TypeFact, ValuePropertyFact,
+    VariableFact,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,6 +74,10 @@ impl TraceFact {
             Self::LocationRange(_) => LocationRangeFact::NAME,
             Self::StaticGas(_) => StaticGasFact::NAME,
             Self::DynamicGasStep(_) => DynamicGasStepFact::NAME,
+            Self::ShapePolicy(_) => ShapePolicyFact::NAME,
+            Self::ShapeNodeHash(_) => ShapeNodeHashFact::NAME,
+            Self::ShapeComponentHash(_) => ShapeComponentHashFact::NAME,
+            Self::ShapeGraphHash(_) => ShapeGraphHashFact::NAME,
         }
     }
 
@@ -99,6 +105,10 @@ impl TraceFact {
             Self::LocationRange(_) => LocationRangeFact::schema(),
             Self::StaticGas(_) => StaticGasFact::schema(),
             Self::DynamicGasStep(_) => DynamicGasStepFact::schema(),
+            Self::ShapePolicy(_) => ShapePolicyFact::schema(),
+            Self::ShapeNodeHash(_) => ShapeNodeHashFact::schema(),
+            Self::ShapeComponentHash(_) => ShapeComponentHashFact::schema(),
+            Self::ShapeGraphHash(_) => ShapeGraphHashFact::schema(),
         }
     }
 
@@ -126,6 +136,10 @@ impl TraceFact {
             Self::LocationRange(fact) => fact.row(),
             Self::StaticGas(fact) => fact.row(),
             Self::DynamicGasStep(fact) => fact.row(),
+            Self::ShapePolicy(fact) => fact.row(),
+            Self::ShapeNodeHash(fact) => fact.row(),
+            Self::ShapeComponentHash(fact) => fact.row(),
+            Self::ShapeGraphHash(fact) => fact.row(),
         }
     }
 }
@@ -764,6 +778,136 @@ impl TraceRelation for DynamicGasStepFact {
     }
 }
 
+impl TraceRelation for ShapePolicyFact {
+    const NAME: &'static str = "base_shape_policy";
+
+    fn schema() -> RelationSchema {
+        schema!(
+            Self::NAME,
+            [
+                "policy": Text,
+                "schema_version": U32,
+                "algorithm": Text,
+                "level": Text,
+                "dimensions": List,
+                "view_mode": Text,
+                "cycle_policy": Text,
+            ]
+        )
+    }
+
+    fn row(&self) -> RelationRow {
+        row!(
+            Self::NAME,
+            [
+                self.policy.as_str().to_string(),
+                self.schema_version.to_string(),
+                self.algorithm.as_str().to_string(),
+                self.level.clone(),
+                shape_dimensions(&self.dimensions),
+                self.view_mode.as_str().to_string(),
+                self.cycle_policy.as_str().to_string(),
+            ]
+        )
+    }
+}
+
+impl TraceRelation for ShapeNodeHashFact {
+    const NAME: &'static str = "base_shape_node_hash";
+
+    fn schema() -> RelationSchema {
+        schema!(
+            Self::NAME,
+            [
+                "node": Key,
+                "graph_owner": Key,
+                "graph_local": Text,
+                "policy": Text,
+                "local": Text,
+                "tree": Text,
+                "component": OptionalText,
+            ]
+        )
+    }
+
+    fn row(&self) -> RelationRow {
+        row!(
+            Self::NAME,
+            [
+                key(&self.node),
+                key(&self.graph.owner),
+                self.graph.local.as_str().to_string(),
+                self.policy.as_str().to_string(),
+                dimension_digests(&self.local),
+                dimension_digests(&self.tree),
+                self.component
+                    .as_ref()
+                    .map_or_else(String::new, dimension_digests),
+            ]
+        )
+    }
+}
+
+impl TraceRelation for ShapeComponentHashFact {
+    const NAME: &'static str = "base_shape_component_hash";
+
+    fn schema() -> RelationSchema {
+        schema!(
+            Self::NAME,
+            [
+                "graph_owner": Key,
+                "graph_local": Text,
+                "policy": Text,
+                "component_index": U32,
+                "members": List,
+                "digests": Text,
+            ]
+        )
+    }
+
+    fn row(&self) -> RelationRow {
+        row!(
+            Self::NAME,
+            [
+                key(&self.graph.owner),
+                self.graph.local.as_str().to_string(),
+                self.policy.as_str().to_string(),
+                self.component_index.to_string(),
+                key_list(&self.members),
+                dimension_digests(&self.digests),
+            ]
+        )
+    }
+}
+
+impl TraceRelation for ShapeGraphHashFact {
+    const NAME: &'static str = "base_shape_graph_hash";
+
+    fn schema() -> RelationSchema {
+        schema!(
+            Self::NAME,
+            [
+                "graph_owner": Key,
+                "graph_local": Text,
+                "policy": Text,
+                "digests": Text,
+            ]
+        )
+    }
+
+    fn row(&self) -> RelationRow {
+        row!(
+            Self::NAME,
+            [
+                key(&self.graph.owner),
+                self.graph.local.as_str().to_string(),
+                self.policy.as_str().to_string(),
+                dimension_digests(&self.digests),
+            ]
+        )
+    }
+}
+
 fn key(key: &OriginExportKey) -> String {
     key.canonical_storage_key()
 }
@@ -774,6 +918,22 @@ fn opt_key(key: Option<&OriginExportKey>) -> String {
 
 fn key_list(keys: &[OriginExportKey]) -> String {
     keys.iter().map(key).collect::<Vec<_>>().join("|")
+}
+
+fn shape_dimensions(dimensions: &[ShapeDimension]) -> String {
+    dimensions
+        .iter()
+        .map(|dimension| dimension.as_str())
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+fn dimension_digests(digests: &DimensionDigests) -> String {
+    digests
+        .iter()
+        .map(|(dimension, digest)| format!("{}={}", dimension.as_str(), digest.as_str()))
+        .collect::<Vec<_>>()
+        .join("|")
 }
 
 fn opt_value<T>(value: Option<&T>) -> String
