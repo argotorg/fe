@@ -2055,6 +2055,7 @@ dependencies = [
  "fe-solc-runner",
  "fe-test-utils",
  "fe-trace-facts",
+ "fe-trace-query",
  "fe-web",
  "glob",
  "hex",
@@ -2396,6 +2397,16 @@ dependencies = [
  "fe-common",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "fe-trace-query"
+version = "26.1.0"
+dependencies = [
+ "fe-common",
+ "fe-introspection-config",
+ "fe-trace-facts",
+ "serde",
 ]
 
 [[package]]

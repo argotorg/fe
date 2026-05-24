@@ -25,6 +25,7 @@ introspection-config.workspace = true
 rayon = "1"
 mir.workspace = true
 trace-facts.workspace = true
+trace-query.workspace = true
 cranelift-entity.workspace = true
 rustc-hash.workspace = true
 semantic-indexing.workspace = true

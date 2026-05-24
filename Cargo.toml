@@ -21,6 +21,7 @@ semantic-indexing = { path = "crates/semantic-indexing", package = "fe-semantic-
 language-server = { path = "crates/language-server", package = "fe-language-server" }
 mir = { path = "crates/mir", package = "fe-mir" }
 trace-facts = { path = "crates/trace-facts", package = "fe-trace-facts" }
+trace-query = { path = "crates/trace-query", package = "fe-trace-query" }
 cranelift-entity = "0.130"
 url = "2.5.4"
 camino = "1.1.9"

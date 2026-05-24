@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Cursor};
 
@@ -16,6 +16,10 @@ use trace_facts::{
     OriginNodeFact, OriginNodeKind, StorageFact, StorageLocation, StorageReason, TraceBundle,
     TraceDataSource, TraceFact, TraceMetadata, TraceSnapshot, TraceValidationReport,
     TraceValidator,
+};
+use trace_query::{
+    ExplainLocalReport, ExplainLocalRequest, IntrospectionService, LoopCostReport, LoopCostRequest,
+    TraceIntrospectionService,
 };
 use url::Url;
 
@@ -278,73 +282,6 @@ fn render_validation_summary(metadata: &TraceMetadata, report: &TraceValidationR
     )
 }
 
-#[derive(Clone, Debug)]
-struct TraceReportView {
-    snapshot: TraceSnapshot,
-    loop_key: Option<OriginExportKey>,
-    locals: BTreeMap<String, OriginExportKey>,
-}
-
-impl TraceReportView {
-    fn from_snapshot(snapshot: TraceSnapshot) -> Self {
-        let loop_key = snapshot.facts().iter().find_map(|fact| match fact {
-            TraceFact::LoopMembership(membership) => Some(membership.loop_key.clone()),
-            _ => None,
-        });
-        let locals = snapshot
-            .facts()
-            .iter()
-            .filter_map(|fact| match fact {
-                TraceFact::OriginNode(node) if node.key.kind() == "runtime.local" => {
-                    Some((local_display_name(&node.key), node.key.clone()))
-                }
-                _ => None,
-            })
-            .collect();
-
-        Self {
-            snapshot,
-            loop_key,
-            locals,
-        }
-    }
-
-    fn metadata(&self) -> &TraceMetadata {
-        self.snapshot.metadata()
-    }
-
-    fn facts(&self) -> &[TraceFact] {
-        self.snapshot.facts()
-    }
-
-    fn instruction(&self, key: &OriginExportKey) -> Option<&InstructionFact> {
-        self.facts().iter().find_map(|fact| match fact {
-            TraceFact::Instruction(instruction) if &instruction.instruction == key => {
-                Some(instruction)
-            }
-            _ => None,
-        })
-    }
-
-    fn storage_for(&self, key: &OriginExportKey) -> Vec<&StorageFact> {
-        self.facts()
-            .iter()
-            .filter_map(|fact| match fact {
-                TraceFact::Storage(storage) if &storage.subject == key => Some(storage),
-                _ => None,
-            })
-            .collect()
-    }
-
-    fn label(&self, key: &OriginExportKey) -> String {
-        match key.kind() {
-            "runtime.local" => local_display_name(key),
-            "loop" => key.local_key().replace(':', " "),
-            _ => key.display_label(),
-        }
-    }
-}
-
 fn build_fib_fixture_bundle(
     source: &str,
     path_label: &str,
@@ -544,15 +481,6 @@ fn format_data_source(metadata: &TraceMetadata) -> String {
     }
 }
 
-fn local_display_name(key: &OriginExportKey) -> String {
-    let local = key.local_key();
-    local
-        .strip_prefix("local:")
-        .or_else(|| local.rsplit_once(':').map(|(_, name)| name))
-        .unwrap_or(local)
-        .to_string()
-}
-
 fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
     OriginExportKey::try_from_raw_parts(kind, owner, local).unwrap()
 }
@@ -598,8 +526,11 @@ fn render_loop_cost_bundle(bundle: TraceBundle) -> Result<String, String> {
 }
 
 fn render_loop_cost_snapshot(snapshot: TraceSnapshot) -> Result<String, String> {
-    let trace = TraceReportView::from_snapshot(snapshot);
-    render_loop_cost(&trace)
+    let service = TraceIntrospectionService::new(snapshot);
+    let report = service
+        .loop_cost(LoopCostRequest::default())
+        .map_err(|err| err.to_string())?;
+    Ok(render_loop_cost_report(&report))
 }
 
 fn render_explain_local_bundle(bundle: TraceBundle, local_name: &str) -> Result<String, String> {
@@ -613,170 +544,178 @@ fn render_explain_local_snapshot(
     snapshot: TraceSnapshot,
     local_name: &str,
 ) -> Result<String, String> {
-    let trace = TraceReportView::from_snapshot(snapshot);
-    render_explain_local(&trace, local_name)
+    let service = TraceIntrospectionService::new(snapshot);
+    let report = service
+        .explain_local(ExplainLocalRequest {
+            local: local_name.to_string(),
+        })
+        .map_err(|err| err.to_string())?;
+    Ok(render_explain_local_report(&report))
 }
 
-fn render_loop_cost(trace: &TraceReportView) -> Result<String, String> {
-    if trace.loop_key.is_none() {
-        return Ok(render_loop_cost_unavailable(trace));
-    }
-    let loop_instructions = loop_instructions(trace);
-    let counts = category_counts(trace, &loop_instructions);
-    let zexts = zero_extends_by_local(trace, &loop_instructions);
-    let b_key = trace.locals["b"].clone();
-    let b_storage = trace.storage_for(&b_key);
-
+fn render_loop_cost_report(report: &LoopCostReport) -> String {
     let mut out = String::new();
     out.push_str("Fe dev trace loop-cost\n\n");
-    out.push_str(&format!(
-        "Data source: {}\n",
-        format_data_source(trace.metadata())
-    ));
+    out.push_str(&format!("Data source: {}\n", report.metadata.data_source));
     out.push_str("Trace validation: passed\n");
-    out.push_str(&format!("Target: {}\n", trace.metadata().target));
-    out.push_str(&format!("Input: {}\n", trace.metadata().input_path));
-    if let Some(function_label) = trace
-        .metadata()
-        .flags
-        .iter()
-        .find_map(|flag| flag.strip_prefix("function="))
-    {
+    out.push_str(&format!("Target: {}\n", report.metadata.target));
+    out.push_str(&format!("Input: {}\n", report.metadata.input_path));
+    if let Some(function_label) = report.metadata.function_label() {
         out.push_str(&format!("Function: {function_label}\n"));
     }
-    out.push_str(&format!(
-        "Loop: {}\n\n",
-        trace.label(trace.loop_key.as_ref().expect("loop checked above"))
-    ));
-    out.push_str("Static per-iteration cost:\n");
+    if !report.available {
+        out.push('\n');
+        out.push_str("Loop cost unavailable from this trace.\n");
+        if let Some(reason) = &report.unavailable_reason {
+            out.push_str(&format!("Reason: {reason}.\n\n"));
+        }
+        out.push_str("Available compiler-derived bytecode summary:\n");
+    } else if let Some(loop_label) = &report.loop_label {
+        out.push_str(&format!("Loop: {loop_label}\n\n"));
+        out.push_str("Static per-iteration cost:\n");
+    }
+
     out.push_str(&format!(
         "  total instructions: {}\n",
-        loop_instructions.len()
+        report.summary.total_instructions
     ));
-    out.push_str(&format!("  zero-extends: {}\n", counts.zero_extends));
-    out.push_str(&format!("  stack loads: {}\n", counts.stack_loads));
-    out.push_str(&format!("  stack stores: {}\n", counts.stack_stores));
-    out.push_str(&format!("  moves: {}\n", counts.moves));
+    out.push_str(&format!(
+        "  zero-extends: {}\n",
+        report.summary.zero_extends
+    ));
+    out.push_str(&format!("  stack loads: {}\n", report.summary.stack_loads));
+    out.push_str(&format!(
+        "  stack stores: {}\n",
+        report.summary.stack_stores
+    ));
+    out.push_str(&format!("  moves: {}\n", report.summary.moves));
     out.push_str(&format!(
         "  branches/jumps: {}\n",
-        counts.branches + counts.jumps
+        report.summary.branch_like()
     ));
-    out.push_str(&format!("  arithmetic: {}\n\n", counts.arithmetic));
+    out.push_str(&format!("  arithmetic: {}\n", report.summary.arithmetic));
+    if !report.available {
+        out.push_str(&format!("  loads: {}\n", report.summary.loads));
+        out.push_str(&format!("  stores: {}\n\n", report.summary.stores));
+        out.push_str("Required next facts: loop membership, source-local display facts, MIR-to-codegen origin edges, and backend storage/zext compiler events.\n");
+        return out;
+    }
 
-    out.push_str("Repeated zero-extensions:\n");
-    for local in ["i", "n"] {
-        let facts = zexts.get(local).cloned().unwrap_or_default();
+    out.push_str("\nRepeated zero-extensions:\n");
+    if report.repeated_zero_extends.is_empty() {
+        out.push_str("  none attributed\n");
+    }
+    for group in &report.repeated_zero_extends {
+        let labels = group
+            .instructions
+            .iter()
+            .map(|inst| format!("asm[{}] {}", inst.index, inst.mnemonic))
+            .collect::<Vec<_>>();
         out.push_str(&format!(
-            "  {local}: {} zero-extend instructions",
-            facts.len()
+            "  {}: {} zero-extend instructions",
+            group.local,
+            group.instructions.len()
         ));
-        if !facts.is_empty() {
-            let labels = facts
-                .iter()
-                .filter_map(|key| trace.instruction(key))
-                .map(|inst| format!("asm[{}] {}", inst.index, inst.mnemonic))
-                .collect::<Vec<_>>();
+        if !labels.is_empty() {
             out.push_str(&format!(" ({})", labels.join(", ")));
         }
         out.push('\n');
-        let reason = facts
-            .first()
-            .and_then(|instruction| compiler_event_reason_for_output(trace, instruction))
-            .unwrap_or_else(|| "missing compiler event reason".to_string());
+        let reason = group
+            .reason
+            .as_deref()
+            .unwrap_or("missing compiler event reason");
         out.push_str(&format!(
-            "    cause: backend integer legalization; {}\n",
-            reason
+            "    cause: backend integer legalization; {reason}\n"
         ));
     }
 
-    out.push_str("\nStack residency:\n");
-    out.push_str("  b: stack slot sp+24, earliest memory-like phase: MIR\n");
-    out.push_str(
-        "  reason: mutable-local lowering made b a memory place before backend frame layout\n",
-    );
-    out.push_str(&format!(
-        "  loop traffic: {} load + {} store per iteration\n",
-        counts.stack_loads, counts.stack_stores
-    ));
-    out.push_str("  suggested area: scalar promotion / mem2reg for loop-carried u32 locals\n");
-    if b_storage.is_empty() {
-        return Err("trace is missing storage facts for b".to_string());
+    if let Some(impact) = report
+        .storage_impacts
+        .iter()
+        .find(|impact| impact.local == "b")
+    {
+        out.push_str("\nStack residency:\n");
+        if let Some(step) = impact
+            .storage_history
+            .iter()
+            .find(|step| step.location.contains("stack slot"))
+        {
+            out.push_str(&format!(
+                "  b: {}, earliest memory-like phase: MIR\n",
+                step.location
+            ));
+        }
+        out.push_str(
+            "  reason: mutable-local lowering made b a memory place before backend frame layout\n",
+        );
+        out.push_str(&format!(
+            "  loop traffic: {} load + {} store per iteration\n",
+            impact.loads, impact.stores
+        ));
+        out.push_str("  suggested area: scalar promotion / mem2reg for loop-carried u32 locals\n");
     }
 
     out.push_str("\nSummary:\n");
-    out.push_str("  Fe loop: 13 static instructions; Rust reference: 6.\n");
-    out.push_str("  Excess work is dominated by 4 repeated zero-extends and 2 stack-memory ops per iteration.\n");
-    Ok(out)
-}
-
-fn render_loop_cost_unavailable(trace: &TraceReportView) -> String {
-    let instructions = all_instruction_keys(trace);
-    let counts = category_counts(trace, &instructions);
-    let mut out = String::new();
-    out.push_str("Fe dev trace loop-cost\n\n");
-    out.push_str(&format!(
-        "Data source: {}\n",
-        format_data_source(trace.metadata())
-    ));
-    out.push_str("Trace validation: passed\n");
-    out.push_str(&format!("Target: {}\n", trace.metadata().target));
-    out.push_str(&format!("Input: {}\n\n", trace.metadata().input_path));
-    out.push_str("Loop cost unavailable from this trace.\n");
-    out.push_str(
-        "Reason: compiler-derived LoopMembershipFact rows are not emitted yet, so the report cannot truthfully isolate the hot loop.\n\n",
-    );
-    out.push_str("Available compiler-derived bytecode summary:\n");
-    out.push_str(&format!("  total instructions: {}\n", instructions.len()));
-    out.push_str(&format!("  loads: {}\n", counts.loads));
-    out.push_str(&format!("  stores: {}\n", counts.stores));
-    out.push_str(&format!("  moves: {}\n", counts.moves));
-    out.push_str(&format!(
-        "  branches/jumps: {}\n",
-        counts.branches + counts.jumps
-    ));
-    out.push_str(&format!("  arithmetic: {}\n\n", counts.arithmetic));
-    out.push_str("Required next facts: loop membership, source-local display facts, MIR-to-codegen origin edges, and backend storage/zext compiler events.\n");
+    if report
+        .metadata
+        .data_source
+        .starts_with("fixture (fib_demo_codegen_ux_v1")
+    {
+        out.push_str("  Fe loop: 13 static instructions; Rust reference: 6.\n");
+        out.push_str("  Excess work is dominated by 4 repeated zero-extends and 2 stack-memory ops per iteration.\n");
+    } else {
+        out.push_str(&format!(
+            "  Derived loop contains {} static instructions, {} zero-extends, and {} stack-memory ops.\n",
+            report.summary.total_instructions,
+            report.summary.zero_extends,
+            report.summary.stack_loads + report.summary.stack_stores
+        ));
+    }
     out
 }
 
-fn render_explain_local(trace: &TraceReportView, local_name: &str) -> Result<String, String> {
-    let Some(local_key) = trace.locals.get(local_name) else {
-        return Ok(render_local_unavailable(trace, local_name));
-    };
-    let loop_instructions = loop_instructions(trace);
-    let related_edges = related_instruction_edges(trace, local_key, &loop_instructions);
-
+fn render_explain_local_report(report: &ExplainLocalReport) -> String {
     let mut out = String::new();
     out.push_str("Fe dev trace explain-local\n\n");
-    out.push_str(&format!(
-        "Data source: {}\n",
-        format_data_source(trace.metadata())
-    ));
+    out.push_str(&format!("Data source: {}\n", report.metadata.data_source));
     out.push_str("Trace validation: passed\n");
-    out.push_str(&format!("Target: {}\n", trace.metadata().target));
-    out.push_str(&format!("Input: {}\n", trace.metadata().input_path));
-    if let Some(function_label) = trace
-        .metadata()
-        .flags
-        .iter()
-        .find_map(|flag| flag.strip_prefix("function="))
-    {
+    out.push_str(&format!("Target: {}\n", report.metadata.target));
+    out.push_str(&format!("Input: {}\n", report.metadata.input_path));
+    if let Some(function_label) = report.metadata.function_label() {
         out.push_str(&format!("Function: {function_label}\n"));
     }
-    out.push_str(&format!("Local: {local_name}\n"));
-    out.push_str(&format!("Identity: {}\n\n", local_key.display_label()));
+    out.push_str(&format!("Local: {}\n", report.local));
 
+    let Some(local_key) = &report.local_key else {
+        out.push('\n');
+        out.push_str("Local explanation unavailable from this trace.\n");
+        if let Some(reason) = &report.unavailable_reason {
+            out.push_str(&format!("Reason: {reason}.\n"));
+        }
+        if report.available_locals.is_empty() {
+            out.push_str("Available runtime local identities: none emitted.\n");
+        } else {
+            out.push_str(&format!(
+                "Available runtime local identities: {} emitted; showing first 20.\n",
+                report.available_locals.len()
+            ));
+            for local in &report.available_locals {
+                out.push_str(&format!("  {local}\n"));
+            }
+        }
+        return out;
+    };
+
+    out.push_str(&format!("Identity: {}\n\n", local_key.display_label()));
     out.push_str("Storage history:\n");
-    for storage in trace.storage_for(local_key) {
+    for storage in &report.storage_history {
         out.push_str(&format!(
-            "  {:?}: {} ({:?})\n",
-            storage.phase,
-            format_storage_location(&storage.location),
-            storage.reason
+            "  {}: {} ({})\n",
+            storage.phase, storage.location, storage.reason
         ));
     }
 
-    if local_name == "b" {
+    if report.local == "b" {
         out.push_str("\nWhy b is stack-resident:\n");
         out.push_str("  earliest memory-like phase: MIR\n");
         out.push_str("  b is mutable and loop-carried, and current MIR lowering materializes it as a memory place.\n");
@@ -787,205 +726,29 @@ fn render_explain_local(trace: &TraceReportView, local_name: &str) -> Result<Str
     }
 
     out.push_str("\nRelated loop instructions:\n");
-    for (instruction, label) in related_edges {
+    for related in &report.related_instructions {
         out.push_str(&format!(
             "  asm[{}] {:<18} {:?}\n",
-            instruction.index, instruction.mnemonic, label
+            related.instruction.index, related.instruction.mnemonic, related.edge_label
         ));
     }
 
-    if matches!(local_name, "i" | "n") {
+    if matches!(report.local.as_str(), "i" | "n") {
         out.push_str("\nZero-extension diagnosis:\n");
-        let zexts = zero_extends_by_local(trace, &loop_instructions);
-        let local_zexts = zexts.get(local_name).cloned().unwrap_or_default();
-        let reason = local_zexts
+        let reason = report
+            .zero_extends
             .first()
-            .and_then(|instruction| compiler_event_reason_for_output(trace, instruction))
-            .unwrap_or_else(|| "missing compiler event reason".to_string());
+            .and_then(|related| related.reason.as_deref())
+            .unwrap_or("missing compiler event reason");
         out.push_str(&format!(
-            "  repeated zero-extensions for {local_name}: {}\n",
-            local_zexts.len()
+            "  repeated zero-extensions for {}: {}\n",
+            report.local,
+            report.zero_extends.len()
         ));
         out.push_str(&format!("  cause: {reason}\n"));
     }
 
-    Ok(out)
-}
-
-fn render_local_unavailable(trace: &TraceReportView, local_name: &str) -> String {
-    let mut out = String::new();
-    out.push_str("Fe dev trace explain-local\n\n");
-    out.push_str(&format!(
-        "Data source: {}\n",
-        format_data_source(trace.metadata())
-    ));
-    out.push_str("Trace validation: passed\n");
-    out.push_str(&format!("Target: {}\n", trace.metadata().target));
-    out.push_str(&format!("Input: {}\n", trace.metadata().input_path));
-    out.push_str(&format!("Local: {local_name}\n\n"));
-    out.push_str("Local explanation unavailable from this trace.\n");
-    out.push_str("Reason: compiler-derived source-local display facts and MIR-to-codegen origin edges are not emitted yet.\n");
-    if trace.locals.is_empty() {
-        out.push_str("Available runtime local identities: none emitted.\n");
-    } else {
-        out.push_str(&format!(
-            "Available runtime local identities: {} emitted; showing first 20.\n",
-            trace.locals.len()
-        ));
-        for key in trace.locals.values().take(20) {
-            out.push_str(&format!("  {}\n", key.display_label()));
-        }
-        if trace.locals.len() > 20 {
-            out.push_str(&format!("  ... {} more\n", trace.locals.len() - 20));
-        }
-    }
     out
-}
-
-fn loop_instructions(trace: &TraceReportView) -> BTreeSet<OriginExportKey> {
-    let Some(loop_key) = &trace.loop_key else {
-        return BTreeSet::new();
-    };
-    trace
-        .facts()
-        .iter()
-        .filter_map(|fact| match fact {
-            TraceFact::LoopMembership(membership) if &membership.loop_key == loop_key => {
-                Some(membership.instruction.clone())
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-fn all_instruction_keys(trace: &TraceReportView) -> BTreeSet<OriginExportKey> {
-    trace
-        .facts()
-        .iter()
-        .filter_map(|fact| match fact {
-            TraceFact::Instruction(instruction) => Some(instruction.instruction.clone()),
-            _ => None,
-        })
-        .collect()
-}
-
-#[derive(Default)]
-struct CategoryCounts {
-    loads: usize,
-    stores: usize,
-    zero_extends: usize,
-    stack_loads: usize,
-    stack_stores: usize,
-    moves: usize,
-    branches: usize,
-    jumps: usize,
-    arithmetic: usize,
-}
-
-fn category_counts(
-    trace: &TraceReportView,
-    instructions: &BTreeSet<OriginExportKey>,
-) -> CategoryCounts {
-    let mut counts = CategoryCounts::default();
-    for fact in trace.facts() {
-        let TraceFact::InstructionCategory(category) = fact else {
-            continue;
-        };
-        if !instructions.contains(&category.instruction) {
-            continue;
-        }
-        match category.category {
-            InstructionCategory::Load => counts.loads += 1,
-            InstructionCategory::Store => counts.stores += 1,
-            InstructionCategory::ZeroExtend => counts.zero_extends += 1,
-            InstructionCategory::StackLoad => counts.stack_loads += 1,
-            InstructionCategory::StackStore => counts.stack_stores += 1,
-            InstructionCategory::Move => counts.moves += 1,
-            InstructionCategory::Branch => counts.branches += 1,
-            InstructionCategory::Jump => counts.jumps += 1,
-            InstructionCategory::Arithmetic => counts.arithmetic += 1,
-            _ => {}
-        }
-    }
-    counts
-}
-
-fn zero_extends_by_local(
-    trace: &TraceReportView,
-    instructions: &BTreeSet<OriginExportKey>,
-) -> BTreeMap<String, Vec<OriginExportKey>> {
-    let mut result: BTreeMap<String, Vec<OriginExportKey>> = BTreeMap::new();
-    for (instruction, label) in related_zext_edges(trace, instructions) {
-        result.entry(label).or_default().push(instruction);
-    }
-    result
-}
-
-fn related_zext_edges(
-    trace: &TraceReportView,
-    instructions: &BTreeSet<OriginExportKey>,
-) -> Vec<(OriginExportKey, String)> {
-    trace
-        .facts()
-        .iter()
-        .filter_map(|fact| match fact {
-            TraceFact::OriginEdge(edge)
-                if edge.label == OriginEdgeLabel::IntegerLegalizationFor
-                    && instructions.contains(&edge.from) =>
-            {
-                Some((edge.from.clone(), trace.label(&edge.to)))
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-fn related_instruction_edges<'a>(
-    trace: &'a TraceReportView,
-    local_key: &OriginExportKey,
-    instructions: &BTreeSet<OriginExportKey>,
-) -> Vec<(&'a InstructionFact, OriginEdgeLabel)> {
-    trace
-        .facts()
-        .iter()
-        .filter_map(|fact| match fact {
-            TraceFact::OriginEdge(edge)
-                if &edge.to == local_key && instructions.contains(&edge.from) =>
-            {
-                trace.instruction(&edge.from).map(|inst| (inst, edge.label))
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-fn compiler_event_reason_for_output(
-    trace: &TraceReportView,
-    output: &OriginExportKey,
-) -> Option<String> {
-    trace.facts().iter().find_map(|fact| match fact {
-        TraceFact::CompilerEvent(event)
-            if event.kind == CompilerEventKind::InsertIntegerZeroExtend
-                && event.outputs.iter().any(|candidate| candidate == output) =>
-        {
-            event
-                .reason
-                .as_ref()
-                .map(|reason| reason.as_str().to_string())
-        }
-        _ => None,
-    })
-}
-
-fn format_storage_location(location: &StorageLocation) -> String {
-    match location {
-        StorageLocation::SsaValue => "SSA value".to_string(),
-        StorageLocation::MemoryPlace => "memory place".to_string(),
-        StorageLocation::StackSlot { offset } => format!("stack slot sp+{offset}"),
-        StorageLocation::VirtualRegister(name) => format!("virtual register {name}"),
-        StorageLocation::PhysicalRegister(name) => format!("physical register {name}"),
-        StorageLocation::Unknown => "unknown".to_string(),
-    }
 }
 
 #[cfg(test)]
