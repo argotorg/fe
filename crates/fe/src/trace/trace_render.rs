@@ -1,4 +1,5 @@
 use common::origin::OriginExportKey;
+use serde::Serialize;
 use trace_facts::{TraceBundle, TraceMetadata, TraceSnapshot, TraceValidationReport};
 use trace_query::{
     BytecodeSizeBySourceReport, BytecodeSizeBySourceRequest, Confidence, DynamicGasBySourceReport,
@@ -10,11 +11,39 @@ use trace_query::{
     TraceIntrospectionService, VariablesAtPcReport, VariablesAtPcRequest,
 };
 
+use crate::TraceReportFormat;
+
+#[allow(dead_code)]
 pub(super) fn render_validation_summary(
     metadata: &TraceMetadata,
     report: &TraceValidationReport,
 ) -> String {
-    format!(
+    render_validation_summary_with_format(metadata, report, TraceReportFormat::Text)
+        .expect("text validation summary rendering cannot fail")
+}
+
+pub(super) fn render_validation_summary_with_format(
+    metadata: &TraceMetadata,
+    report: &TraceValidationReport,
+    format: TraceReportFormat,
+) -> Result<String, String> {
+    if format == TraceReportFormat::Json {
+        return render_json(&serde_json::json!({
+            "metadata": metadata,
+            "summary": {
+                "fact_count": report.summary.fact_count,
+                "node_count": report.summary.node_count,
+                "edge_count": report.summary.edge_count,
+                "instruction_count": report.summary.instruction_count,
+            },
+            "diagnostics": {
+                "errors": report.error_count(),
+                "warnings": report.warning_count(),
+                "info": report.info_count(),
+            }
+        }));
+    }
+    Ok(format!(
         "Trace validation: passed\n\
          Data source: {}\n\
          Schema version: {}\n\
@@ -39,46 +68,77 @@ pub(super) fn render_validation_summary(
         report.error_count(),
         report.warning_count(),
         report.info_count()
-    )
+    ))
 }
 
+#[cfg(test)]
 pub(super) fn render_loop_cost_bundle(bundle: TraceBundle) -> Result<String, String> {
-    render_loop_cost_snapshot(
+    render_loop_cost_bundle_with_format(bundle, TraceReportFormat::Text)
+}
+
+pub(super) fn render_loop_cost_bundle_with_format(
+    bundle: TraceBundle,
+    format: TraceReportFormat,
+) -> Result<String, String> {
+    render_loop_cost_snapshot_with_format(
         TraceSnapshot::new(bundle).map_err(|err| format!("trace validation failed: {err}"))?,
+        format,
     )
 }
 
-pub(super) fn render_loop_cost_snapshot(snapshot: TraceSnapshot) -> Result<String, String> {
-    let service = TraceIntrospectionService::new(snapshot);
-    let report = service
-        .loop_cost(LoopCostRequest::default())
-        .map_err(|err| err.to_string())?;
-    Ok(render_loop_cost_report(&report))
-}
-
-pub(super) fn render_loop_contents_snapshot(snapshot: TraceSnapshot) -> Result<String, String> {
-    let service = TraceIntrospectionService::new(snapshot);
-    let report = service
-        .loop_contents(LoopContentsRequest::default())
-        .map_err(|err| err.to_string())?;
-    Ok(render_loop_contents_report(&report))
-}
-
+#[cfg(test)]
 pub(super) fn render_explain_local_bundle(
     bundle: TraceBundle,
     local_name: &str,
 ) -> Result<String, String> {
-    render_explain_local_snapshot(
+    render_explain_local_bundle_with_format(bundle, local_name, TraceReportFormat::Text)
+}
+
+pub(super) fn render_explain_local_bundle_with_format(
+    bundle: TraceBundle,
+    local_name: &str,
+    format: TraceReportFormat,
+) -> Result<String, String> {
+    render_explain_local_snapshot_with_format(
         TraceSnapshot::new(bundle).map_err(|err| format!("trace validation failed: {err}"))?,
         local_name,
         None,
+        format,
     )
 }
 
-pub(super) fn render_explain_local_snapshot(
+pub(super) fn render_loop_cost_snapshot_with_format(
+    snapshot: TraceSnapshot,
+    format: TraceReportFormat,
+) -> Result<String, String> {
+    let service = TraceIntrospectionService::new(snapshot);
+    let report = service
+        .loop_cost(LoopCostRequest::default())
+        .map_err(|err| err.to_string())?;
+    render_report(format, &report, render_loop_cost_report)
+}
+
+#[cfg(test)]
+pub(super) fn render_loop_contents_snapshot(snapshot: TraceSnapshot) -> Result<String, String> {
+    render_loop_contents_snapshot_with_format(snapshot, TraceReportFormat::Text)
+}
+
+pub(super) fn render_loop_contents_snapshot_with_format(
+    snapshot: TraceSnapshot,
+    format: TraceReportFormat,
+) -> Result<String, String> {
+    let service = TraceIntrospectionService::new(snapshot);
+    let report = service
+        .loop_contents(LoopContentsRequest::default())
+        .map_err(|err| err.to_string())?;
+    render_report(format, &report, render_loop_contents_report)
+}
+
+pub(super) fn render_explain_local_snapshot_with_format(
     snapshot: TraceSnapshot,
     local_name: &str,
     local_key_arg: Option<&str>,
+    format: TraceReportFormat,
 ) -> Result<String, String> {
     let local_key = local_key_arg
         .map(|key| resolve_origin_key_argument(&snapshot, key))
@@ -90,12 +150,13 @@ pub(super) fn render_explain_local_snapshot(
             local_key,
         })
         .map_err(|err| err.to_string())?;
-    Ok(render_explain_local_report(&report))
+    render_report(format, &report, render_explain_local_report)
 }
 
-pub(super) fn render_gas_breakdown_snapshot(
+pub(super) fn render_gas_breakdown_snapshot_with_format(
     snapshot: TraceSnapshot,
     schedule: &str,
+    format: TraceReportFormat,
 ) -> Result<String, String> {
     let service = TraceIntrospectionService::new(snapshot);
     let report = service
@@ -103,24 +164,35 @@ pub(super) fn render_gas_breakdown_snapshot(
             schedule: schedule.to_string(),
         })
         .map_err(|err| err.to_string())?;
-    Ok(render_gas_breakdown_report(&report))
+    render_report(format, &report, render_gas_breakdown_report)
 }
 
-pub(super) fn render_explain_pc_snapshot(
+pub(super) fn render_explain_pc_snapshot_with_format(
     snapshot: TraceSnapshot,
     pc: u32,
+    format: TraceReportFormat,
 ) -> Result<String, String> {
     let service = TraceIntrospectionService::new(snapshot);
     let report = service
         .explain_pc(ExplainPcRequest { pc })
         .map_err(|err| err.to_string())?;
-    Ok(render_explain_pc_report(&report))
+    render_report(format, &report, render_explain_pc_report)
 }
 
+#[cfg(test)]
 pub(super) fn render_gas_by_source_snapshot(
     snapshot: TraceSnapshot,
     schedule: &str,
     policy: &str,
+) -> Result<String, String> {
+    render_gas_by_source_snapshot_with_format(snapshot, schedule, policy, TraceReportFormat::Text)
+}
+
+pub(super) fn render_gas_by_source_snapshot_with_format(
+    snapshot: TraceSnapshot,
+    schedule: &str,
+    policy: &str,
+    format: TraceReportFormat,
 ) -> Result<String, String> {
     let service = TraceIntrospectionService::new(snapshot);
     let report = service
@@ -129,13 +201,14 @@ pub(super) fn render_gas_by_source_snapshot(
             policy: parse_gas_policy(policy)?,
         })
         .map_err(|err| err.to_string())?;
-    Ok(render_gas_by_source_report(&report))
+    render_report(format, &report, render_gas_by_source_report)
 }
 
-pub(super) fn render_dynamic_gas_by_source_snapshot(
+pub(super) fn render_dynamic_gas_by_source_snapshot_with_format(
     snapshot: TraceSnapshot,
     trace_id: Option<String>,
     policy: &str,
+    format: TraceReportFormat,
 ) -> Result<String, String> {
     let service = TraceIntrospectionService::new(snapshot);
     let report = service
@@ -144,12 +217,21 @@ pub(super) fn render_dynamic_gas_by_source_snapshot(
             policy: parse_gas_policy(policy)?,
         })
         .map_err(|err| err.to_string())?;
-    Ok(render_dynamic_gas_by_source_report(&report))
+    render_report(format, &report, render_dynamic_gas_by_source_report)
 }
 
+#[cfg(test)]
 pub(super) fn render_bytecode_size_by_source_snapshot(
     snapshot: TraceSnapshot,
     policy: &str,
+) -> Result<String, String> {
+    render_bytecode_size_by_source_snapshot_with_format(snapshot, policy, TraceReportFormat::Text)
+}
+
+pub(super) fn render_bytecode_size_by_source_snapshot_with_format(
+    snapshot: TraceSnapshot,
+    policy: &str,
+    format: TraceReportFormat,
 ) -> Result<String, String> {
     let service = TraceIntrospectionService::new(snapshot);
     let report = service
@@ -157,14 +239,15 @@ pub(super) fn render_bytecode_size_by_source_snapshot(
             policy: parse_gas_policy(policy)?,
         })
         .map_err(|err| err.to_string())?;
-    Ok(render_bytecode_size_by_source_report(&report))
+    render_report(format, &report, render_bytecode_size_by_source_report)
 }
 
-pub(super) fn render_gas_to_source_snapshot(
+pub(super) fn render_gas_to_source_snapshot_with_format(
     snapshot: TraceSnapshot,
     schedule: &str,
     trace_id: Option<String>,
     policy: &str,
+    format: TraceReportFormat,
 ) -> Result<String, String> {
     let service = TraceIntrospectionService::new(snapshot);
     let report = service
@@ -174,22 +257,24 @@ pub(super) fn render_gas_to_source_snapshot(
             policy: parse_gas_policy(policy)?,
         })
         .map_err(|err| err.to_string())?;
-    Ok(render_gas_to_source_report(&report))
+    render_report(format, &report, render_gas_to_source_report)
 }
 
-pub(super) fn render_optimized_code_honesty_snapshot(
+pub(super) fn render_optimized_code_honesty_snapshot_with_format(
     snapshot: TraceSnapshot,
+    format: TraceReportFormat,
 ) -> Result<String, String> {
     let service = TraceIntrospectionService::new(snapshot);
     let report = service
         .optimized_code_honesty(OptimizedCodeHonestyRequest::default())
         .map_err(|err| err.to_string())?;
-    Ok(render_optimized_code_honesty_report(&report))
+    render_report(format, &report, render_optimized_code_honesty_report)
 }
 
-pub(super) fn render_variables_at_pc_snapshot(
+pub(super) fn render_variables_at_pc_snapshot_with_format(
     snapshot: TraceSnapshot,
     pc: u32,
+    format: TraceReportFormat,
 ) -> Result<String, String> {
     let service = TraceIntrospectionService::new(snapshot);
     let report = service
@@ -198,7 +283,27 @@ pub(super) fn render_variables_at_pc_snapshot(
             code_object: None,
         })
         .map_err(|err| err.to_string())?;
-    Ok(render_variables_at_pc_report(&report))
+    render_report(format, &report, render_variables_at_pc_report)
+}
+
+fn render_report<T: Serialize>(
+    format: TraceReportFormat,
+    report: &T,
+    render_text: fn(&T) -> String,
+) -> Result<String, String> {
+    match format {
+        TraceReportFormat::Text => Ok(render_text(report)),
+        TraceReportFormat::Json => render_json(report),
+    }
+}
+
+fn render_json<T: Serialize>(value: &T) -> Result<String, String> {
+    serde_json::to_string_pretty(value)
+        .map(|mut json| {
+            json.push('\n');
+            json
+        })
+        .map_err(|err| format!("failed to render trace report JSON: {err}"))
 }
 
 fn render_loop_cost_report(report: &LoopCostReport) -> String {

@@ -28,14 +28,14 @@ pub(super) fn run_fixture_emit(args: &TraceFixtureEmitArgs) -> Result<String, St
 
 pub(super) fn run_fixture_loop_cost(args: &TraceFixtureLoopCostArgs) -> Result<String, String> {
     let bundle = build_and_roundtrip_fib_fixture_bundle(&args.path, &args.function)?;
-    super::trace_render::render_loop_cost_bundle(bundle)
+    super::trace_render::render_loop_cost_bundle_with_format(bundle, args.format)
 }
 
 pub(super) fn run_fixture_explain_local(
     args: &TraceFixtureExplainLocalArgs,
 ) -> Result<String, String> {
     let bundle = build_and_roundtrip_fib_fixture_bundle(&args.path, &args.function)?;
-    super::trace_render::render_explain_local_bundle(bundle, &args.local)
+    super::trace_render::render_explain_local_bundle_with_format(bundle, &args.local, args.format)
 }
 
 fn build_fib_fixture_bundle_from_path(

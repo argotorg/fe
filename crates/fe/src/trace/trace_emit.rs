@@ -37,90 +37,104 @@ pub(super) fn run_trace_emit(args: &DevTraceEmitArgs) -> Result<String, String> 
 
 pub(super) fn run_trace_validate(args: &DevTraceInputArgs) -> Result<String, String> {
     let snapshot = read_trace_snapshot_jsonl_from_path(&args.from)?;
-    Ok(super::trace_render::render_validation_summary(
+    super::trace_render::render_validation_summary_with_format(
         snapshot.metadata(),
         snapshot.validation(),
-    ))
+        args.format,
+    )
 }
 
 pub(super) fn run_trace_loop_cost(args: &DevTraceInputArgs) -> Result<String, String> {
-    super::trace_render::render_loop_cost_snapshot(read_trace_snapshot_jsonl_from_path(&args.from)?)
+    super::trace_render::render_loop_cost_snapshot_with_format(
+        read_trace_snapshot_jsonl_from_path(&args.from)?,
+        args.format,
+    )
 }
 
 pub(super) fn run_trace_loop_contents(args: &DevTraceInputArgs) -> Result<String, String> {
-    super::trace_render::render_loop_contents_snapshot(read_trace_snapshot_jsonl_from_path(
-        &args.from,
-    )?)
+    super::trace_render::render_loop_contents_snapshot_with_format(
+        read_trace_snapshot_jsonl_from_path(&args.from)?,
+        args.format,
+    )
 }
 
 pub(super) fn run_trace_explain_local(args: &DevTraceExplainLocalArgs) -> Result<String, String> {
-    super::trace_render::render_explain_local_snapshot(
+    super::trace_render::render_explain_local_snapshot_with_format(
         read_trace_snapshot_jsonl_from_path(&args.from)?,
         &args.local,
         args.local_key.as_deref(),
+        args.format,
     )
 }
 
 pub(super) fn run_trace_gas_breakdown(args: &DevTraceGasArgs) -> Result<String, String> {
-    super::trace_render::render_gas_breakdown_snapshot(
+    super::trace_render::render_gas_breakdown_snapshot_with_format(
         read_trace_snapshot_jsonl_from_path(&args.from)?,
         &args.schedule,
+        args.format,
     )
 }
 
 pub(super) fn run_trace_explain_pc(args: &DevTracePcArgs) -> Result<String, String> {
-    super::trace_render::render_explain_pc_snapshot(
+    super::trace_render::render_explain_pc_snapshot_with_format(
         read_trace_snapshot_jsonl_from_path(&args.from)?,
         args.pc,
+        args.format,
     )
 }
 
 pub(super) fn run_trace_gas_by_source(args: &DevTraceGasArgs) -> Result<String, String> {
-    super::trace_render::render_gas_by_source_snapshot(
+    super::trace_render::render_gas_by_source_snapshot_with_format(
         read_trace_snapshot_jsonl_from_path(&args.from)?,
         &args.schedule,
         &args.policy,
+        args.format,
     )
 }
 
 pub(super) fn run_trace_bytecode_size_by_source(
     args: &DevTraceAttributionArgs,
 ) -> Result<String, String> {
-    super::trace_render::render_bytecode_size_by_source_snapshot(
+    super::trace_render::render_bytecode_size_by_source_snapshot_with_format(
         read_trace_snapshot_jsonl_from_path(&args.from)?,
         &args.policy,
+        args.format,
     )
 }
 
 pub(super) fn run_trace_dynamic_gas_by_source(
     args: &DevTraceDynamicGasArgs,
 ) -> Result<String, String> {
-    super::trace_render::render_dynamic_gas_by_source_snapshot(
+    super::trace_render::render_dynamic_gas_by_source_snapshot_with_format(
         read_trace_snapshot_jsonl_from_path(&args.from)?,
         args.trace_id.clone(),
         &args.policy,
+        args.format,
     )
 }
 
 pub(super) fn run_trace_gas_to_source(args: &DevTraceGasToSourceArgs) -> Result<String, String> {
-    super::trace_render::render_gas_to_source_snapshot(
+    super::trace_render::render_gas_to_source_snapshot_with_format(
         read_trace_snapshot_jsonl_from_path(&args.from)?,
         &args.schedule,
         args.trace_id.clone(),
         &args.policy,
+        args.format,
     )
 }
 
 pub(super) fn run_trace_optimized_code_honesty(args: &DevTraceInputArgs) -> Result<String, String> {
-    super::trace_render::render_optimized_code_honesty_snapshot(
+    super::trace_render::render_optimized_code_honesty_snapshot_with_format(
         read_trace_snapshot_jsonl_from_path(&args.from)?,
+        args.format,
     )
 }
 
 pub(super) fn run_trace_variables_at_pc(args: &DevTracePcArgs) -> Result<String, String> {
-    super::trace_render::render_variables_at_pc_snapshot(
+    super::trace_render::render_variables_at_pc_snapshot_with_format(
         read_trace_snapshot_jsonl_from_path(&args.from)?,
         args.pc,
+        args.format,
     )
 }
 
