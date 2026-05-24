@@ -574,17 +574,28 @@ impl<'a> DebugFactIndex<'a> {
     }
 
     fn gas(&self) -> Vec<DebugGasRecord> {
-        let mut gas = Vec::new();
+        let mut records = BTreeMap::new();
+        let mut canonical_static_sites = BTreeSet::new();
         for fact in self.facts {
-            match fact {
-                TraceFact::StaticGas(static_gas) => gas.push(debug_static_gas(static_gas)),
-                TraceFact::GasCost(gas_cost) if gas_cost.gas_kind == GasKind::OpcodeStatic => {
-                    gas.push(debug_legacy_static_gas(gas_cost));
-                }
-                _ => {}
+            if let TraceFact::StaticGas(static_gas) = fact {
+                let site = static_gas_site(&static_gas.instruction, static_gas.schedule.as_str());
+                canonical_static_sites.insert(site.clone());
+                records.insert(site, debug_static_gas(static_gas));
             }
         }
-        gas
+        for fact in self.facts {
+            if let TraceFact::GasCost(gas_cost) = fact
+                && gas_cost.gas_kind == GasKind::OpcodeStatic
+            {
+                let site = static_gas_site(&gas_cost.subject, gas_cost.schedule.as_str());
+                if !canonical_static_sites.contains(&site) {
+                    records
+                        .entry(site)
+                        .or_insert_with(|| debug_legacy_static_gas(gas_cost));
+                }
+            }
+        }
+        records.into_values().collect()
     }
 }
 
@@ -622,7 +633,7 @@ fn debug_static_gas(static_gas: &StaticGasFact) -> DebugGasRecord {
         schedule: static_gas.schedule.to_string(),
         gas: static_gas.base_cost,
         kind: "opcode_static".to_string(),
-        confidence: "conservative_static".to_string(),
+        confidence: format!("{:?}", static_gas.confidence),
     }
 }
 
@@ -634,6 +645,10 @@ fn debug_legacy_static_gas(gas_cost: &GasCostFact) -> DebugGasRecord {
         kind: format!("{:?}", gas_cost.gas_kind),
         confidence: format!("{:?}", gas_cost.confidence),
     }
+}
+
+fn static_gas_site(instruction: &OriginExportKey, schedule: &str) -> (OriginExportKey, String) {
+    (instruction.clone(), schedule.to_string())
 }
 
 fn immediate_byte_len(opcode: &OpcodeFact) -> u32 {

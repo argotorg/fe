@@ -10,11 +10,11 @@ use sonatina_ir::{
 };
 use trace_facts::{
     BlockFact, CategorySource, CfgEdgeFact, CfgEdgeKind, CodeObjectFact, CodeObjectKind,
-    CompilerPhase, EvmSchedule, FunctionFact, GasConfidence, GasCostFact, GasKind, GasSource,
-    InstructionBlockFact, InstructionCategory, InstructionCategoryFact, InstructionExtentFact,
-    InstructionFact, LoopBlockFact, LoopBlockRole, LoopConfidence, LoopDerivation, LoopFact,
-    LoopMembershipFact, OpcodeCategory, OpcodeFact, OriginEdgeFact, OriginEdgeLabel,
-    OriginNodeFact, OriginNodeKind, PcRange, StaticGasFact, TraceFact,
+    CompilerPhase, EvmSchedule, FunctionFact, InstructionBlockFact, InstructionCategory,
+    InstructionCategoryFact, InstructionExtentFact, InstructionFact, LoopBlockFact, LoopBlockRole,
+    LoopConfidence, LoopDerivation, LoopFact, LoopMembershipFact, OpcodeCategory, OpcodeFact,
+    OriginEdgeFact, OriginEdgeLabel, OriginNodeFact, OriginNodeKind, PcRange, StaticGasFact,
+    TraceFact,
 };
 
 use crate::debug::BytecodeSourceMapEntry;
@@ -117,14 +117,6 @@ pub fn emit_bytecode_instruction_facts(
             mnemonic,
             immediate,
             evm_opcode_category(opcode),
-        )));
-        facts.push(TraceFact::GasCost(GasCostFact::new(
-            instruction.clone(),
-            GasKind::OpcodeStatic,
-            evm_static_gas(opcode),
-            EvmSchedule::new("cancun"),
-            GasConfidence::ConservativeStatic,
-            GasSource::OpcodeTable,
         )));
         facts.push(TraceFact::StaticGas(StaticGasFact::new(
             instruction,
@@ -1519,10 +1511,12 @@ mod tests {
             fact,
             TraceFact::Opcode(opcode) if opcode.opcode == "PUSH"
         )));
-        assert!(facts.iter().any(|fact| matches!(
-            fact,
-            TraceFact::GasCost(gas) if gas.gas > 0
-        )));
+        assert!(
+            !facts
+                .iter()
+                .any(|fact| matches!(fact, TraceFact::GasCost(_))),
+            "codegen emits StaticGasFact as the canonical static gas record"
+        );
         assert!(facts.iter().any(|fact| matches!(
             fact,
             TraceFact::CodeObject(code_object)

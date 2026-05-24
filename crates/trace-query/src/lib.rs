@@ -265,7 +265,7 @@ impl IntrospectionService for TraceIntrospectionService {
 
     fn gas_breakdown(&self, request: GasBreakdownRequest) -> QueryResult<GasBreakdownReport> {
         let index = TraceIndex::new(&self.snapshot);
-        let rows = index.gas_rows(&request.schedule);
+        let rows = index.static_gas_rows(&request.schedule);
         let total_gas = rows.iter().map(|row| row.gas).sum::<u64>();
         let available = !rows.is_empty();
         Ok(GasBreakdownReport {
@@ -1691,31 +1691,6 @@ impl<'a> TraceIndex<'a> {
             .collect()
     }
 
-    fn gas_rows(&self, schedule: &str) -> Vec<GasBreakdownRow> {
-        self.snapshot
-            .facts()
-            .iter()
-            .filter_map(|fact| match fact {
-                TraceFact::GasCost(gas)
-                    if gas.schedule.as_str() == schedule
-                        && gas.gas_kind == GasKind::OpcodeStatic =>
-                {
-                    Some(GasBreakdownRow {
-                        subject: gas.subject.clone(),
-                        gas: gas.gas,
-                        label: self
-                            .instruction_row(&gas.subject)
-                            .map(|row| format!("pc[{}] {}", row.index, row.mnemonic))
-                            .unwrap_or_else(|| self.label(&gas.subject)),
-                        confidence: format!("{:?}", gas.confidence),
-                        source: format!("{:?}", gas.source),
-                    })
-                }
-                _ => None,
-            })
-            .collect()
-    }
-
     fn static_gas_rows(&self, schedule: &str) -> Vec<GasBreakdownRow> {
         let mut rows = BTreeMap::new();
         for fact in self.snapshot.facts() {
@@ -1730,7 +1705,7 @@ impl<'a> TraceIndex<'a> {
                                 .instruction_row(&gas.instruction)
                                 .map(|row| format!("pc[{}] {}", row.index, row.mnemonic))
                                 .unwrap_or_else(|| self.label(&gas.instruction)),
-                            confidence: "ConservativeStatic".to_string(),
+                            confidence: format!("{:?}", gas.confidence),
                             source: "StaticGasFact".to_string(),
                         },
                     );
@@ -2750,6 +2725,21 @@ mod tests {
         assert_eq!(report.rows[0].label, "fib.fe:2:8-2:9");
         assert_eq!(report.rows[0].gas, 6);
         assert_eq!(report.rows[0].instruction_count, 2);
+    }
+
+    #[test]
+    fn gas_by_source_json_does_not_double_count_legacy_gas_view() {
+        let report = demo_service()
+            .gas_by_source(GasBySourceRequest::default())
+            .unwrap();
+        let json = serde_json::to_value(&report).unwrap();
+
+        assert_eq!(json["schedule"], "cancun");
+        assert_eq!(json["policy"], "exclusive-primary");
+        assert_eq!(json["total_gas"], 6);
+        assert_eq!(json["rows"][0]["label"], "fib.fe:2:8-2:9");
+        assert_eq!(json["rows"][0]["gas"], 6);
+        assert_eq!(json["rows"][0]["instruction_count"], 2);
     }
 
     #[test]

@@ -1265,6 +1265,8 @@ pub struct StaticGasFact {
     pub schedule: EvmSchedule,
     pub base_cost: u64,
     pub dynamic_cost_kind: Option<DynamicGasKind>,
+    #[serde(default = "default_static_gas_confidence")]
+    pub confidence: GasConfidence,
 }
 
 impl StaticGasFact {
@@ -1279,8 +1281,29 @@ impl StaticGasFact {
             schedule,
             base_cost,
             dynamic_cost_kind,
+            confidence: GasConfidence::ConservativeStatic,
         }
     }
+
+    pub fn with_confidence(
+        instruction: OriginExportKey,
+        schedule: EvmSchedule,
+        base_cost: u64,
+        dynamic_cost_kind: Option<DynamicGasKind>,
+        confidence: GasConfidence,
+    ) -> Self {
+        Self {
+            instruction,
+            schedule,
+            base_cost,
+            dynamic_cost_kind,
+            confidence,
+        }
+    }
+}
+
+fn default_static_gas_confidence() -> GasConfidence {
+    GasConfidence::ConservativeStatic
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

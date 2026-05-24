@@ -899,6 +899,7 @@ impl TraceRelation for StaticGasFact {
                 "schedule": Text,
                 "base_cost": U64,
                 "dynamic_cost_kind": OptionalText,
+                "confidence": Text,
             ]
         )
     }
@@ -911,6 +912,7 @@ impl TraceRelation for StaticGasFact {
                 self.schedule.to_string(),
                 self.base_cost.to_string(),
                 opt_value(self.dynamic_cost_kind.as_ref()),
+                value(&self.confidence),
             ]
         )
     }

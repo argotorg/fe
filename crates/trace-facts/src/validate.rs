@@ -97,6 +97,13 @@ pub enum TraceValidationWarning {
         first_name: String,
         second_name: String,
     },
+    DuplicateStaticGas {
+        instruction: OriginExportKey,
+        schedule: String,
+        dynamic_cost_kind: Option<String>,
+        first_base_cost: u64,
+        second_base_cost: u64,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -468,8 +475,26 @@ impl TraceValidator {
         for location_range in location_ranges {
             validate_location_range(location_range, &nodes, &mut diagnostics);
         }
+        let mut static_gas_sites = BTreeMap::new();
         for gas in static_gas {
             validate_static_gas(gas, &nodes, &instruction_owners, &mut diagnostics);
+            let dynamic_cost_kind = gas.dynamic_cost_kind.map(|kind| format!("{kind:?}"));
+            let site = (
+                gas.instruction.clone(),
+                gas.schedule.to_string(),
+                dynamic_cost_kind.clone(),
+            );
+            if let Some(first_base_cost) = static_gas_sites.insert(site.clone(), gas.base_cost) {
+                diagnostics.push(TraceValidationDiagnostic::Warning(
+                    TraceValidationWarning::DuplicateStaticGas {
+                        instruction: site.0,
+                        schedule: site.1,
+                        dynamic_cost_kind,
+                        first_base_cost,
+                        second_base_cost: gas.base_cost,
+                    },
+                ));
+            }
         }
         for step in dynamic_gas_steps {
             validate_dynamic_gas_step(step, &nodes, &mut diagnostics);
@@ -2968,6 +2993,48 @@ mod tests {
         ];
 
         assert!(TraceValidator::validate(&facts).is_ok());
+    }
+
+    #[test]
+    fn validator_warns_on_duplicate_static_gas_for_same_instruction_schedule_and_kind() {
+        let function = key("bytecode.function", "fib", "runtime");
+        let instruction = key("bytecode.pc", "fib", "pc:0");
+        let facts = vec![
+            node("bytecode.function", "fib", "runtime"),
+            node("bytecode.pc", "fib", "pc:0"),
+            TraceFact::Instruction(InstructionFact::new(
+                instruction.clone(),
+                function,
+                0,
+                "STOP",
+            )),
+            TraceFact::StaticGas(StaticGasFact::new(
+                instruction.clone(),
+                EvmSchedule::new("cancun"),
+                0,
+                None,
+            )),
+            TraceFact::StaticGas(StaticGasFact::new(
+                instruction.clone(),
+                EvmSchedule::new("cancun"),
+                1,
+                None,
+            )),
+        ];
+
+        let report = TraceValidator::check(&facts);
+        assert_eq!(report.error_count(), 0);
+        assert_eq!(report.warning_count(), 1);
+        assert_eq!(
+            report.diagnostics[0],
+            TraceValidationDiagnostic::Warning(TraceValidationWarning::DuplicateStaticGas {
+                instruction,
+                schedule: "cancun".to_string(),
+                dynamic_cost_kind: None,
+                first_base_cost: 0,
+                second_base_cost: 1,
+            })
+        );
     }
 
     #[test]
