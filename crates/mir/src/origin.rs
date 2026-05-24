@@ -1,7 +1,40 @@
-use common::origin::OriginKey;
+use common::origin::{
+    OriginExportKey, OriginExportLocalKey, OriginExportOwnerKey, OriginKey, OriginKeyTextError,
+    validate_origin_key_text,
+};
+use cranelift_entity::EntityRef;
 use salsa::Update;
 
 use crate::{RuntimeInstance, runtime::RBlockId};
+
+pub const RUNTIME_STMT_EXPORT_KIND: &str = "runtime.stmt";
+pub const RUNTIME_TERMINATOR_EXPORT_KIND: &str = "runtime.terminator";
+
+/// Stable export owner key for a runtime MIR instance.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+pub struct RuntimeInstanceOwnerKey(String);
+
+impl RuntimeInstanceOwnerKey {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self::try_new(value).unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    pub fn try_new(value: impl Into<String>) -> Result<Self, OriginKeyTextError> {
+        let value = value.into();
+        validate_origin_key_text("runtime instance owner key", &value)?;
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl OriginExportOwnerKey for RuntimeInstanceOwnerKey {
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 /// Statement index within a runtime MIR block.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
@@ -42,6 +75,12 @@ impl RuntimeStmtSite {
     }
 }
 
+impl OriginExportLocalKey for RuntimeStmtSite {
+    fn to_export_local_key(&self) -> String {
+        format!("block:{}:stmt:{}", self.block.index(), self.stmt.index())
+    }
+}
+
 /// Block-local terminator site in runtime MIR.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
 pub struct RuntimeTerminatorSite {
@@ -55,6 +94,12 @@ impl RuntimeTerminatorSite {
 
     pub const fn block(self) -> RBlockId {
         self.block
+    }
+}
+
+impl OriginExportLocalKey for RuntimeTerminatorSite {
+    fn to_export_local_key(&self) -> String {
+        format!("block:{}:terminator", self.block.index())
     }
 }
 
@@ -79,6 +124,10 @@ impl<'db> RuntimeStmtOrigin<'db> {
     pub fn site(self) -> RuntimeStmtSite {
         self.key.into_parts().1
     }
+
+    pub fn export_key(self, stable_instance_key: &RuntimeInstanceOwnerKey) -> OriginExportKey {
+        OriginExportKey::new(RUNTIME_STMT_EXPORT_KIND, stable_instance_key, &self.site())
+    }
 }
 
 /// Origin key for a runtime MIR terminator. Terminators are represented
@@ -101,5 +150,13 @@ impl<'db> RuntimeTerminatorOrigin<'db> {
 
     pub fn site(self) -> RuntimeTerminatorSite {
         self.key.into_parts().1
+    }
+
+    pub fn export_key(self, stable_instance_key: &RuntimeInstanceOwnerKey) -> OriginExportKey {
+        OriginExportKey::new(
+            RUNTIME_TERMINATOR_EXPORT_KIND,
+            stable_instance_key,
+            &self.site(),
+        )
     }
 }

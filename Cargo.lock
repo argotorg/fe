@@ -2129,10 +2129,13 @@ dependencies = [
  "rust-embed",
  "rustc-hash 2.1.1",
  "salsa",
+ "serde",
  "serde-semver",
+ "serde_json",
  "smol_str 0.1.24",
  "toml 0.8.23",
  "tracing",
+ "trybuild",
  "typed-path",
  "url",
 ]

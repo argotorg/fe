@@ -7,8 +7,8 @@ pub mod verify;
 pub use db::MirDb;
 pub use instance::{RuntimeInstance, RuntimeInstanceKey, get_or_build_runtime_instance};
 pub use origin::{
-    RuntimeStmtIndex, RuntimeStmtOrigin, RuntimeStmtSite, RuntimeTerminatorOrigin,
-    RuntimeTerminatorSite,
+    RuntimeInstanceOwnerKey, RuntimeStmtIndex, RuntimeStmtOrigin, RuntimeStmtSite,
+    RuntimeTerminatorOrigin, RuntimeTerminatorSite,
 };
 pub use runtime::{
     AddressSpaceKind, ArrayLayout, BorrowAccess, BorrowTransportSet, ConstNode, ConstRegion,
