@@ -13,7 +13,7 @@ pub use fact::{
 };
 pub use jsonl::{
     JsonlTraceReadError, JsonlTraceReader, JsonlTraceSink, TRACE_SCHEMA_VERSION, TraceBundle,
-    TraceDataSource, TraceJsonlRecord, TraceMetadata, read_trace_bundle_jsonl,
+    TraceDataSource, TraceJsonlRecord, TraceMetadata, TraceMetadataError, read_trace_bundle_jsonl,
     read_trace_facts_jsonl,
 };
 pub use snapshot::{TraceSnapshot, TraceSnapshotReadError};

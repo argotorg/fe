@@ -770,8 +770,8 @@ mod tests {
         let function = key("function", "demo", "recv");
         let loop_key = key("loop", "demo", "while:i<n");
         let local = key("runtime.local", "demo", "local:b");
-        let inst = key("asm.inst", "demo", "inst:0");
-        let zext = key("asm.inst", "demo", "inst:1");
+        let inst = key("bytecode.pc", "demo", "pc:0");
+        let zext = key("bytecode.pc", "demo", "pc:1");
         let event = key("compiler.event", "demo", "event:0");
         let facts = vec![
             node(function.clone()),

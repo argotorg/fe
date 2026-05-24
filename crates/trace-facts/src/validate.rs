@@ -209,8 +209,33 @@ impl TraceValidator {
         for event in compiler_events {
             validate_compiler_event(event, &nodes, &mut diagnostics);
         }
+        let mut instruction_categories_by_instruction = BTreeMap::new();
         for category in instruction_categories {
             validate_instruction_category(category, &nodes, &instruction_owners, &mut diagnostics);
+            match instruction_categories_by_instruction
+                .insert(category.instruction.clone(), category.category)
+            {
+                Some(existing) if existing == category.category => {
+                    push_error(
+                        &mut diagnostics,
+                        TraceValidationError::DuplicateInstructionCategory {
+                            instruction: category.instruction.clone(),
+                            category: category.category,
+                        },
+                    );
+                }
+                Some(existing) => {
+                    push_error(
+                        &mut diagnostics,
+                        TraceValidationError::AmbiguousInstructionCategory {
+                            instruction: category.instruction.clone(),
+                            first_category: existing,
+                            second_category: category.category,
+                        },
+                    );
+                }
+                None => {}
+            }
         }
         for membership in loop_memberships {
             validate_loop_membership(membership, &nodes, &instruction_owners, &mut diagnostics);
@@ -222,12 +247,7 @@ impl TraceValidator {
             validate_opcode(opcode, &nodes, &mut diagnostics);
         }
         for gas_cost in gas_costs {
-            require_node(
-                &nodes,
-                &gas_cost.subject,
-                "gas_cost.subject",
-                &mut diagnostics,
-            );
+            validate_gas_cost(gas_cost, &nodes, &mut diagnostics);
         }
 
         TraceValidationReport {
@@ -243,7 +263,7 @@ impl TraceValidator {
 }
 
 fn validate_origin_node(node: &OriginNodeFact, diagnostics: &mut Vec<TraceValidationDiagnostic>) {
-    if node.kind.as_str().trim().is_empty() {
+    if node.kind().trim().is_empty() {
         push_error(
             diagnostics,
             TraceValidationError::EmptyOriginNodeKind {
@@ -455,11 +475,45 @@ fn validate_opcode(
     diagnostics: &mut Vec<TraceValidationDiagnostic>,
 ) {
     require_node(nodes, &opcode.pc, "opcode.pc", diagnostics);
+    if opcode.pc.kind() != "bytecode.pc" {
+        push_error(
+            diagnostics,
+            TraceValidationError::InvalidOpcodeSubjectKind {
+                pc: opcode.pc.clone(),
+            },
+        );
+    }
     if opcode.opcode.trim().is_empty() {
         push_error(
             diagnostics,
             TraceValidationError::EmptyOpcode {
                 pc: opcode.pc.clone(),
+            },
+        );
+    }
+}
+
+fn validate_gas_cost(
+    gas_cost: &crate::fact::GasCostFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(nodes, &gas_cost.subject, "gas_cost.subject", diagnostics);
+    if gas_cost.schedule.as_str().trim().is_empty() {
+        push_error(
+            diagnostics,
+            TraceValidationError::EmptyGasSchedule {
+                subject: gas_cost.subject.clone(),
+            },
+        );
+    }
+    if gas_cost.gas_kind == crate::fact::GasKind::OpcodeStatic
+        && gas_cost.subject.kind() != "bytecode.pc"
+    {
+        push_error(
+            diagnostics,
+            TraceValidationError::InvalidOpcodeGasSubjectKind {
+                subject: gas_cost.subject.clone(),
             },
         );
     }
@@ -540,6 +594,15 @@ pub enum TraceValidationError {
     EmptyPosthocClassifierVersion {
         instruction: OriginExportKey,
     },
+    DuplicateInstructionCategory {
+        instruction: OriginExportKey,
+        category: crate::fact::InstructionCategory,
+    },
+    AmbiguousInstructionCategory {
+        instruction: OriginExportKey,
+        first_category: crate::fact::InstructionCategory,
+        second_category: crate::fact::InstructionCategory,
+    },
     InstructionCategoryWithoutInstruction {
         instruction: OriginExportKey,
     },
@@ -563,6 +626,15 @@ pub enum TraceValidationError {
     },
     EmptyOpcode {
         pc: OriginExportKey,
+    },
+    InvalidOpcodeSubjectKind {
+        pc: OriginExportKey,
+    },
+    EmptyGasSchedule {
+        subject: OriginExportKey,
+    },
+    InvalidOpcodeGasSubjectKind {
+        subject: OriginExportKey,
     },
 }
 
@@ -618,6 +690,23 @@ impl fmt::Display for TraceValidationError {
                 "instruction {} has an empty posthoc classifier version",
                 instruction.display_label()
             ),
+            Self::DuplicateInstructionCategory {
+                instruction,
+                category,
+            } => write!(
+                f,
+                "instruction {} has duplicate category {category:?}",
+                instruction.display_label()
+            ),
+            Self::AmbiguousInstructionCategory {
+                instruction,
+                first_category,
+                second_category,
+            } => write!(
+                f,
+                "instruction {} has ambiguous categories {first_category:?} and {second_category:?}",
+                instruction.display_label()
+            ),
             Self::InstructionCategoryWithoutInstruction { instruction } => write!(
                 f,
                 "instruction category references {} but no instruction fact defines it",
@@ -662,6 +751,21 @@ impl fmt::Display for TraceValidationError {
                     pc.display_label()
                 )
             }
+            Self::InvalidOpcodeSubjectKind { pc } => write!(
+                f,
+                "opcode fact subject {} is not a bytecode PC origin",
+                pc.display_label()
+            ),
+            Self::EmptyGasSchedule { subject } => write!(
+                f,
+                "gas cost for {} has an empty schedule",
+                subject.display_label()
+            ),
+            Self::InvalidOpcodeGasSubjectKind { subject } => write!(
+                f,
+                "opcode static gas subject {} is not a bytecode PC origin",
+                subject.display_label()
+            ),
         }
     }
 }
@@ -673,11 +777,11 @@ mod tests {
     use common::origin::OriginExportKey;
 
     use crate::{
-        CategorySource, CompilerPhase, InlineContextFact, InstructionCategory,
-        InstructionCategoryFact, InstructionFact, LoopDerivation, LoopMembershipFact,
-        OriginEdgeFact, OriginEdgeLabel, OriginNodeFact, OriginNodeKind, StorageFact,
-        StorageLocation, StorageReason, TraceFact, TraceValidationError, TraceValidationLevel,
-        TraceValidator,
+        CategorySource, CompilerPhase, EvmSchedule, GasConfidence, GasCostFact, GasKind, GasSource,
+        InlineContextFact, InstructionCategory, InstructionCategoryFact, InstructionFact,
+        LoopDerivation, LoopMembershipFact, OpcodeCategory, OpcodeFact, OriginEdgeFact,
+        OriginEdgeLabel, OriginNodeFact, OriginNodeKind, StorageFact, StorageLocation,
+        StorageReason, TraceFact, TraceValidationError, TraceValidationLevel, TraceValidator,
     };
 
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -866,6 +970,75 @@ mod tests {
     }
 
     #[test]
+    fn validator_rejects_duplicate_instruction_categories() {
+        let function = key("function", "fib", "recv");
+        let instruction = key("bytecode.pc", "fib", "pc:0");
+        let facts = vec![
+            node("function", "fib", "recv"),
+            node("bytecode.pc", "fib", "pc:0"),
+            TraceFact::Instruction(InstructionFact::new(
+                instruction.clone(),
+                function,
+                0,
+                "MLOAD",
+            )),
+            TraceFact::InstructionCategory(InstructionCategoryFact::new(
+                instruction.clone(),
+                InstructionCategory::Load,
+                CategorySource::BackendEmissionReason,
+            )),
+            TraceFact::InstructionCategory(InstructionCategoryFact::new(
+                instruction.clone(),
+                InstructionCategory::Load,
+                CategorySource::ManualAnnotation,
+            )),
+        ];
+
+        assert_eq!(
+            TraceValidator::validate(&facts),
+            Err(TraceValidationError::DuplicateInstructionCategory {
+                instruction,
+                category: InstructionCategory::Load,
+            })
+        );
+    }
+
+    #[test]
+    fn validator_rejects_ambiguous_instruction_categories() {
+        let function = key("function", "fib", "recv");
+        let instruction = key("bytecode.pc", "fib", "pc:0");
+        let facts = vec![
+            node("function", "fib", "recv"),
+            node("bytecode.pc", "fib", "pc:0"),
+            TraceFact::Instruction(InstructionFact::new(
+                instruction.clone(),
+                function,
+                0,
+                "MLOAD",
+            )),
+            TraceFact::InstructionCategory(InstructionCategoryFact::new(
+                instruction.clone(),
+                InstructionCategory::Load,
+                CategorySource::BackendEmissionReason,
+            )),
+            TraceFact::InstructionCategory(InstructionCategoryFact::new(
+                instruction.clone(),
+                InstructionCategory::Arithmetic,
+                CategorySource::ManualAnnotation,
+            )),
+        ];
+
+        assert_eq!(
+            TraceValidator::validate(&facts),
+            Err(TraceValidationError::AmbiguousInstructionCategory {
+                instruction,
+                first_category: InstructionCategory::Load,
+                second_category: InstructionCategory::Arithmetic,
+            })
+        );
+    }
+
+    #[test]
     fn validator_rejects_bad_storage_phase_location_pairs() {
         let local = key("runtime.local", "fib", "local:b");
         let facts = vec![
@@ -910,5 +1083,70 @@ mod tests {
         assert_eq!(report.warning_count(), 0);
         assert_eq!(report.info_count(), 1);
         assert_eq!(report.diagnostics[0].level(), TraceValidationLevel::Info);
+    }
+
+    #[test]
+    fn validator_rejects_opcode_facts_without_bytecode_pc_subjects() {
+        let instruction = key("asm.inst", "fib", "inst:0");
+        let facts = vec![
+            node("asm.inst", "fib", "inst:0"),
+            TraceFact::Opcode(OpcodeFact::new(
+                instruction.clone(),
+                "ADD",
+                None,
+                OpcodeCategory::Arithmetic,
+            )),
+        ];
+
+        assert_eq!(
+            TraceValidator::validate(&facts),
+            Err(TraceValidationError::InvalidOpcodeSubjectKind { pc: instruction })
+        );
+    }
+
+    #[test]
+    fn validator_rejects_opcode_static_gas_without_bytecode_pc_subjects() {
+        let instruction = key("asm.inst", "fib", "inst:0");
+        let facts = vec![
+            node("asm.inst", "fib", "inst:0"),
+            TraceFact::GasCost(GasCostFact::new(
+                instruction.clone(),
+                GasKind::OpcodeStatic,
+                3,
+                EvmSchedule::new("cancun"),
+                GasConfidence::ConservativeStatic,
+                GasSource::OpcodeTable,
+            )),
+        ];
+
+        assert_eq!(
+            TraceValidator::validate(&facts),
+            Err(TraceValidationError::InvalidOpcodeGasSubjectKind {
+                subject: instruction,
+            })
+        );
+    }
+
+    #[test]
+    fn validator_rejects_empty_gas_schedule() {
+        let instruction = key("bytecode.pc", "fib", "pc:0");
+        let facts = vec![
+            node("bytecode.pc", "fib", "pc:0"),
+            TraceFact::GasCost(GasCostFact::new(
+                instruction.clone(),
+                GasKind::OpcodeStatic,
+                3,
+                EvmSchedule::new(" "),
+                GasConfidence::ConservativeStatic,
+                GasSource::OpcodeTable,
+            )),
+        ];
+
+        assert_eq!(
+            TraceValidator::validate(&facts),
+            Err(TraceValidationError::EmptyGasSchedule {
+                subject: instruction,
+            })
+        );
     }
 }

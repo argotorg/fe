@@ -71,6 +71,39 @@ impl TraceMetadata {
             fixture_marker: None,
         }
     }
+
+    pub fn validate(&self) -> Result<(), TraceMetadataError> {
+        if self.schema_version != TRACE_SCHEMA_VERSION {
+            return Err(TraceMetadataError::UnsupportedSchemaVersion {
+                found: self.schema_version,
+                expected: TRACE_SCHEMA_VERSION,
+            });
+        }
+        validate_metadata_text("compiler_commit", &self.compiler_commit)?;
+        validate_metadata_text("target", &self.target)?;
+        validate_metadata_text("input_path", &self.input_path)?;
+        for (index, arg) in self.command.iter().enumerate() {
+            if arg.trim().is_empty() {
+                return Err(TraceMetadataError::EmptyCommandArg { index });
+            }
+        }
+        for (index, flag) in self.flags.iter().enumerate() {
+            if flag.trim().is_empty() {
+                return Err(TraceMetadataError::EmptyFlag { index });
+            }
+        }
+        match (self.data_source, self.fixture_marker.as_deref()) {
+            (TraceDataSource::Fixture, Some(marker)) if marker.trim().is_empty() => {
+                Err(TraceMetadataError::EmptyFixtureMarker)
+            }
+            (TraceDataSource::Fixture, Some(_)) => Ok(()),
+            (TraceDataSource::Fixture, None) => Err(TraceMetadataError::MissingFixtureMarker),
+            (TraceDataSource::CompilerEmitted, Some(_)) => {
+                Err(TraceMetadataError::UnexpectedFixtureMarker)
+            }
+            (TraceDataSource::CompilerEmitted, None) => Ok(()),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,6 +111,55 @@ impl TraceMetadata {
 pub enum TraceDataSource {
     Fixture,
     CompilerEmitted,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TraceMetadataError {
+    UnsupportedSchemaVersion { found: u32, expected: u32 },
+    EmptyField { field: &'static str },
+    EmptyCommandArg { index: usize },
+    EmptyFlag { index: usize },
+    MissingFixtureMarker,
+    EmptyFixtureMarker,
+    UnexpectedFixtureMarker,
+}
+
+impl fmt::Display for TraceMetadataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnsupportedSchemaVersion { found, expected } => write!(
+                f,
+                "unsupported trace schema version {found}; expected {expected}"
+            ),
+            Self::EmptyField { field } => write!(f, "trace metadata field {field} is empty"),
+            Self::EmptyCommandArg { index } => {
+                write!(f, "trace metadata command argument {index} is empty")
+            }
+            Self::EmptyFlag { index } => {
+                write!(f, "trace metadata flag {index} is empty")
+            }
+            Self::MissingFixtureMarker => {
+                write!(f, "fixture trace metadata is missing fixture_marker")
+            }
+            Self::EmptyFixtureMarker => {
+                write!(f, "fixture trace metadata has an empty fixture_marker")
+            }
+            Self::UnexpectedFixtureMarker => write!(
+                f,
+                "compiler-emitted trace metadata must not include fixture_marker"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for TraceMetadataError {}
+
+fn validate_metadata_text(field: &'static str, value: &str) -> Result<(), TraceMetadataError> {
+    if value.trim().is_empty() {
+        Err(TraceMetadataError::EmptyField { field })
+    } else {
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,6 +218,7 @@ pub enum JsonlTraceReadError {
         line: usize,
         source: serde_json::Error,
     },
+    InvalidMetadata(TraceMetadataError),
     MissingMetadata,
     DuplicateMetadata,
 }
@@ -147,6 +230,7 @@ impl fmt::Display for JsonlTraceReadError {
             Self::Json { line, source } => {
                 write!(f, "failed to parse trace JSONL line {line}: {source}")
             }
+            Self::InvalidMetadata(err) => write!(f, "invalid trace metadata: {err}"),
             Self::MissingMetadata => write!(f, "trace JSONL is missing metadata record"),
             Self::DuplicateMetadata => write!(f, "trace JSONL contains multiple metadata records"),
         }
@@ -158,6 +242,7 @@ impl std::error::Error for JsonlTraceReadError {
         match self {
             Self::Io(err) => Some(err),
             Self::Json { source, .. } => Some(source),
+            Self::InvalidMetadata(err) => Some(err),
             Self::MissingMetadata | Self::DuplicateMetadata => None,
         }
     }
@@ -195,6 +280,9 @@ where
             }
         }
         let metadata = metadata.ok_or(JsonlTraceReadError::MissingMetadata)?;
+        metadata
+            .validate()
+            .map_err(JsonlTraceReadError::InvalidMetadata)?;
         Ok(TraceBundle::new(metadata, facts))
     }
 
@@ -259,8 +347,9 @@ mod tests {
 
     use crate::{
         CompilerPhase, InstructionFact, JsonlTraceReader, JsonlTraceSink, OriginNodeFact,
-        OriginNodeKind, TraceBundle, TraceDataSource, TraceFact, TraceMetadata,
-        read_trace_bundle_jsonl, read_trace_facts_jsonl,
+        OriginNodeKind, TRACE_SCHEMA_VERSION, TraceBundle, TraceDataSource, TraceFact,
+        TraceJsonlRecord, TraceMetadata, TraceMetadataError, read_trace_bundle_jsonl,
+        read_trace_facts_jsonl,
     };
 
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -333,5 +422,53 @@ mod tests {
                 .as_deref(),
             Some("fib_demo_codegen_ux_v1")
         );
+    }
+
+    #[test]
+    fn jsonl_bundle_rejects_unsupported_schema_version() {
+        let mut metadata = TraceMetadata::compiler_emitted(
+            "abc123",
+            "evm/sonatina",
+            vec!["fe".to_string(), "dev".to_string(), "trace".to_string()],
+            "demo.fe",
+            Vec::new(),
+        );
+        metadata.schema_version = TRACE_SCHEMA_VERSION + 1;
+        let mut sink = JsonlTraceSink::new(Vec::new());
+        sink.write_record(&TraceJsonlRecord::Metadata(metadata))
+            .unwrap();
+        let output = String::from_utf8(sink.into_inner()).unwrap();
+
+        assert!(matches!(
+            read_trace_bundle_jsonl(Cursor::new(output)),
+            Err(super::JsonlTraceReadError::InvalidMetadata(
+                TraceMetadataError::UnsupportedSchemaVersion { .. }
+            ))
+        ));
+    }
+
+    #[test]
+    fn jsonl_bundle_rejects_inconsistent_fixture_metadata() {
+        let metadata = TraceMetadata {
+            schema_version: TRACE_SCHEMA_VERSION,
+            compiler_commit: "abc123".to_string(),
+            target: "evm/sonatina".to_string(),
+            command: vec!["fe".to_string(), "dev".to_string(), "trace".to_string()],
+            input_path: "demo.fe".to_string(),
+            flags: Vec::new(),
+            data_source: TraceDataSource::Fixture,
+            fixture_marker: None,
+        };
+        let mut sink = JsonlTraceSink::new(Vec::new());
+        sink.write_record(&TraceJsonlRecord::Metadata(metadata))
+            .unwrap();
+        let output = String::from_utf8(sink.into_inner()).unwrap();
+
+        assert!(matches!(
+            read_trace_bundle_jsonl(Cursor::new(output)),
+            Err(super::JsonlTraceReadError::InvalidMetadata(
+                TraceMetadataError::MissingFixtureMarker
+            ))
+        ));
     }
 }

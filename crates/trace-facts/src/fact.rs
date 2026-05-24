@@ -1,7 +1,7 @@
 use std::fmt;
 
 use common::origin::{OriginExportKey, validate_origin_key_text};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -35,8 +35,7 @@ impl TraceFact {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct OriginNodeKind(String);
 
 impl OriginNodeKind {
@@ -61,8 +60,25 @@ impl fmt::Display for OriginNodeKind {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
+impl Serialize for OriginNodeKind {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for OriginNodeKind {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::try_new(String::deserialize(deserializer)?).map_err(de::Error::custom)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CompilerReason(String);
 
 impl CompilerReason {
@@ -84,6 +100,24 @@ impl CompilerReason {
 impl fmt::Display for CompilerReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
+    }
+}
+
+impl Serialize for CompilerReason {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for CompilerReason {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::try_new(String::deserialize(deserializer)?).map_err(de::Error::custom)
     }
 }
 
@@ -118,16 +152,54 @@ fn validate_trace_text(kind: &'static str, value: &str) -> Result<(), TraceFactT
     })
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct OriginNodeFact {
     pub key: OriginExportKey,
-    pub kind: OriginNodeKind,
 }
 
 impl OriginNodeFact {
     pub fn new(key: OriginExportKey, kind: OriginNodeKind) -> Self {
-        Self { key, kind }
+        assert_eq!(
+            key.kind(),
+            kind.as_str(),
+            "origin node kind must match export key kind"
+        );
+        Self { key }
+    }
+
+    pub fn from_key(key: OriginExportKey) -> Self {
+        Self { key }
+    }
+
+    pub fn kind(&self) -> &str {
+        self.key.kind()
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OriginNodeFactSerde {
+    key: OriginExportKey,
+    #[serde(default)]
+    kind: Option<OriginNodeKind>,
+}
+
+impl<'de> Deserialize<'de> for OriginNodeFact {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = OriginNodeFactSerde::deserialize(deserializer)?;
+        if let Some(kind) = raw.kind
+            && raw.key.kind() != kind.as_str()
+        {
+            return Err(de::Error::custom(format!(
+                "origin node kind {} does not match key kind {}",
+                kind,
+                raw.key.kind()
+            )));
+        }
+        Ok(Self { key: raw.key })
     }
 }
 
@@ -328,7 +400,7 @@ impl InstructionCategoryFact {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InstructionCategory {
     Arithmetic,
@@ -472,8 +544,7 @@ pub enum GasKind {
     RuntimeTrace,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EvmSchedule(String);
 
 impl EvmSchedule {
@@ -495,6 +566,24 @@ impl EvmSchedule {
 impl fmt::Display for EvmSchedule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
+    }
+}
+
+impl Serialize for EvmSchedule {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for EvmSchedule {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::try_new(String::deserialize(deserializer)?).map_err(de::Error::custom)
     }
 }
 
@@ -565,5 +654,42 @@ mod tests {
                 kind: "origin node kind"
             })
         );
+    }
+
+    #[test]
+    fn extensible_text_newtypes_validate_deserialized_text() {
+        assert!(serde_json::from_str::<OriginNodeKind>("\"runtime.local\"").is_ok());
+        assert!(serde_json::from_str::<OriginNodeKind>("\"\"").is_err());
+        assert!(serde_json::from_str::<CompilerReason>("\"lowered integer width\"").is_ok());
+        assert!(serde_json::from_str::<CompilerReason>("\"\"").is_err());
+        assert!(serde_json::from_str::<EvmSchedule>("\"cancun\"").is_ok());
+        assert!(serde_json::from_str::<EvmSchedule>("\"\"").is_err());
+    }
+
+    #[test]
+    fn origin_node_fact_serializes_key_as_kind_authority() {
+        let fact = OriginNodeFact::new(
+            key("runtime.local", "fib", "local:b"),
+            OriginNodeKind::new("runtime.local"),
+        );
+        let json = serde_json::to_value(&fact).unwrap();
+
+        assert!(json.get("kind").is_none());
+        assert_eq!(json["key"]["kind"], "runtime.local");
+    }
+
+    #[test]
+    fn origin_node_fact_accepts_matching_legacy_kind_but_rejects_mismatch() {
+        let matching = r#"{
+            "key": {"kind": "runtime.local", "owner_key": "fib", "local_key": "local:b"},
+            "kind": "runtime.local"
+        }"#;
+        let mismatched = r#"{
+            "key": {"kind": "runtime.local", "owner_key": "fib", "local_key": "local:b"},
+            "kind": "hir.expr"
+        }"#;
+
+        assert!(serde_json::from_str::<OriginNodeFact>(matching).is_ok());
+        assert!(serde_json::from_str::<OriginNodeFact>(mismatched).is_err());
     }
 }
