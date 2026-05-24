@@ -3,6 +3,7 @@ pub mod debug;
 mod function_symbols;
 mod layout;
 mod runtime_package;
+pub mod shape;
 mod sonatina;
 mod test_output;
 pub mod trace;

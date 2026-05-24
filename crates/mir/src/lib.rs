@@ -2,6 +2,7 @@ pub mod db;
 pub mod instance;
 pub mod origin;
 pub mod runtime;
+pub mod shape;
 pub mod trace;
 pub mod verify;
 

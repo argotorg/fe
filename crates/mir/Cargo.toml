@@ -13,6 +13,7 @@ doctest = false
 common.workspace = true
 dataflow.workspace = true
 hir.workspace = true
+shape-address.workspace = true
 trace-facts.workspace = true
 cranelift-entity.workspace = true
 rustc-hash.workspace = true

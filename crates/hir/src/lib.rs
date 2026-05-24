@@ -10,6 +10,7 @@ pub mod core;
 pub mod diagnosable;
 pub mod origin;
 pub mod projection;
+pub mod shape;
 pub mod trace;
 pub use core::{hir_def, lower, print, semantic, span, visitor};
 

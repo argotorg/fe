@@ -8,6 +8,7 @@ driver = { path = "../driver", package = "fe-driver" }
 mir = { path = "../mir", package = "fe-mir" }
 hir.workspace = true
 common.workspace = true
+shape-address.workspace = true
 trace-facts.workspace = true
 hex = "0.4"
 num-bigint.workspace = true
