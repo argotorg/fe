@@ -129,7 +129,7 @@ fn render_loop_cost_report(report: &LoopCostReport) -> String {
     if !report.available {
         out.push_str(&format!("  loads: {}\n", report.summary.loads));
         out.push_str(&format!("  stores: {}\n\n", report.summary.stores));
-        out.push_str("Required next facts: loop membership, source-local display facts, MIR-to-codegen origin edges, and backend storage/zext compiler events.\n");
+        out.push_str("Required next facts: loop membership, MIR-to-codegen origin edges, backend storage allocation, and zext compiler events.\n");
         return out;
     }
 
@@ -248,13 +248,29 @@ fn render_explain_local_report(report: &ExplainLocalReport) -> String {
     }
 
     if report.local == "b" {
-        out.push_str("\nWhy b is stack-resident:\n");
-        out.push_str("  earliest memory-like phase: MIR\n");
-        out.push_str("  b is mutable and loop-carried, and current MIR lowering materializes it as a memory place.\n");
-        out.push_str(
-            "  Backend frame layout then assigns that memory place to stack slot sp+24.\n",
-        );
-        out.push_str("  This trace does not blame late register allocation; the first recorded memory decision is MIR mutable-local lowering.\n");
+        let has_stack_slot = report
+            .storage_history
+            .iter()
+            .any(|step| step.location.contains("stack slot"));
+        let has_memory_place = report
+            .storage_history
+            .iter()
+            .any(|step| step.location == "memory place");
+        if has_stack_slot {
+            out.push_str("\nWhy b is stack-resident:\n");
+            out.push_str("  earliest memory-like phase: MIR\n");
+            out.push_str("  b is mutable and loop-carried, and current MIR lowering materializes it as a memory place.\n");
+            out.push_str("  A backend storage fact assigns that memory place to a stack slot.\n");
+            out.push_str("  This trace does not blame late register allocation; the first recorded memory decision is MIR mutable-local lowering.\n");
+        } else if has_memory_place {
+            out.push_str("\nWhy b is memory-backed in MIR:\n");
+            out.push_str("  earliest memory-like phase: MIR\n");
+            out.push_str("  b is mutable in source, and current MIR lowering materializes it as a memory place.\n");
+            out.push_str("  No backend stack/register allocation fact is emitted yet, so this real trace stops at the MIR storage decision.\n");
+            out.push_str(
+                "  The fixture demo still shows the intended post-backend stack-slot story.\n",
+            );
+        }
     }
 
     out.push_str("\nRelated loop instructions:\n");

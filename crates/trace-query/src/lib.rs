@@ -146,6 +146,14 @@ impl IntrospectionService for TraceIntrospectionService {
                 "Stack-resident local",
                 "storage facts show this local was assigned a backend stack slot",
             ));
+        } else if storage_history
+            .iter()
+            .any(|step| step.location == "memory place")
+        {
+            findings.push(Insight::hint(
+                "MIR memory-backed local",
+                "storage facts show this local was materialized as a MIR memory place",
+            ));
         }
         if !zero_extends.is_empty() {
             findings.push(Insight::hint(

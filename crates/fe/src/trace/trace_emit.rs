@@ -191,9 +191,14 @@ mod tests {
         );
         assert!(summary.instruction_count > 0);
         assert!(
-            super::super::trace_render::render_loop_cost_bundle(bundle)
+            super::super::trace_render::render_loop_cost_bundle(bundle.clone())
                 .unwrap()
                 .contains("Loop cost unavailable from this trace")
         );
+
+        let explain = super::super::trace_render::render_explain_local_bundle(bundle, "b").unwrap();
+        assert!(explain.contains("Why b is memory-backed in MIR"));
+        assert!(explain.contains("Mir: memory place (MutableLocalLowering)"));
+        assert!(!explain.contains("stack slot sp+24"));
     }
 }

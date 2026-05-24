@@ -21,8 +21,9 @@ fn run_dev_trace_command(command: &DevTraceCommand) -> Result<String, String> {
     match command {
         DevTraceCommand::Status => Ok(
             "fe dev trace is reserved for compiler-derived validated trace JSONL.\n\
-             Current Fibonacci diagnostics are fixture-backed and live under fe dev trace-fixture.\n\
-             Real trace emission currently includes phase-owned MIR facts and actual EVM bytecode instruction facts; loop/storage/zext causality hooks are still incomplete.\n\
+             Fixture-backed Fibonacci diagnostics remain under fe dev trace-fixture.\n\
+             Real trace emission currently includes phase-owned MIR facts, source-local display names, MIR storage reasons, MIR lowering events, value properties, and actual EVM bytecode/gas facts.\n\
+             Loop membership, MIR-to-bytecode origin edges, backend storage allocation, and zext causality hooks are still incomplete.\n\
              zext-report is intentionally unavailable until InsertIntegerZeroExtend events and value properties are emitted by compiler phases.\n"
                 .to_string(),
         ),
