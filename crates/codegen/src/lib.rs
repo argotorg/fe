@@ -5,6 +5,7 @@ mod layout;
 mod runtime_package;
 mod sonatina;
 mod test_output;
+pub mod trace;
 
 pub use backend::{Backend, BackendError, BackendKind, BackendOutput, OptLevel, SonatinaBackend};
 pub use debug::{

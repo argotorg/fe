@@ -32,6 +32,7 @@ tracing.workspace = true
 tiny-keccak = { version = "2.0.2", features = ["keccak"] }
 
 common.workspace = true
+trace-facts.workspace = true
 dataflow.workspace = true
 parser.workspace = true
 test-utils.workspace = true

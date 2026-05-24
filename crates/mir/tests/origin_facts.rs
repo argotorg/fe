@@ -1,7 +1,11 @@
 use common::{InputDb, facts::OriginFactIndex};
 use driver::DriverDataBase;
-use fe_mir::{RuntimePackage, build_runtime_package, legacy_runtime_package_origin_facts};
+use fe_mir::{
+    RuntimePackage, build_runtime_package, legacy_runtime_package_origin_facts,
+    trace::emit_mir_facts,
+};
 use hir::hir_def::{Func, TopLevelMod};
+use trace_facts::TraceValidator;
 use url::Url;
 
 fn find_func<'db>(db: &'db DriverDataBase, top_mod: TopLevelMod<'db>, name: &str) -> Func<'db> {
@@ -63,4 +67,34 @@ fn main() -> u256 {
     );
     assert_eq!(index.node_count(), facts.origin_node_count());
     assert_eq!(facts.origin_link_count(), 0);
+}
+
+#[test]
+fn mir_trace_emitter_covers_statements_and_terminators() {
+    let mut db = DriverDataBase::default();
+    let file_url = Url::parse("file:///runtime_trace_facts.fe").unwrap();
+    let file = db.workspace().touch(
+        &mut db,
+        file_url,
+        Some(
+            r#"
+fn main() -> u256 {
+    let x: u256 = 1
+    x
+}
+"#
+            .to_string(),
+        ),
+    );
+    let top_mod = db.top_mod(file);
+    let _ = find_func(&db, top_mod, "main");
+    let package = build_runtime_package(&db, top_mod).expect("runtime package should build");
+    let facts = emit_mir_facts(&db, package);
+    let summary = TraceValidator::validate(&facts).unwrap();
+
+    assert_eq!(
+        summary.node_count,
+        package_statement_and_terminator_count(&db, package)
+    );
+    assert_eq!(summary.edge_count, 0);
 }

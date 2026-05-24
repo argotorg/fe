@@ -3,7 +3,9 @@ use fe_hir::{
     hir_def::{Body, ExprId, Func, StmtId, TopLevelMod},
     origin::{HirExprOrigin, HirOriginBodyOwnerKey, HirStmtOrigin},
     test_db::HirAnalysisTestDb,
+    trace::emit_hir_facts,
 };
+use trace_facts::{TraceFact, TraceValidator};
 
 fn origin_key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
     OriginExportKey::try_from_raw_parts(kind, owner, local).unwrap()
@@ -58,4 +60,38 @@ fn a() -> u256 {
 fn hir_origin_body_owner_key_rejects_invalid_text() {
     assert!(HirOriginBodyOwnerKey::try_new("").is_err());
     assert!(HirOriginBodyOwnerKey::try_new("body\u{1f}a").is_err());
+}
+
+#[test]
+fn hir_trace_emitter_emits_only_hir_origin_nodes() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "origin_trace_keys.fe".into(),
+        r#"
+fn a() -> u256 {
+    let x: u256 = 1
+    x
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+    let body = body_for(&db, top_mod, "a");
+    let owner_key = HirOriginBodyOwnerKey::new("body:a");
+
+    let facts = emit_hir_facts(
+        &owner_key,
+        [HirExprOrigin::new(body, ExprId::from_u32(7))],
+        [HirStmtOrigin::new(body, StmtId::from_u32(7))],
+    );
+
+    assert_eq!(TraceValidator::validate(&facts).unwrap().node_count, 2);
+    assert!(facts.iter().any(|fact| matches!(
+        fact,
+        TraceFact::OriginNode(node) if node.key == origin_key("hir.expr", "body:a", "7")
+    )));
+    assert!(facts.iter().any(|fact| matches!(
+        fact,
+        TraceFact::OriginNode(node) if node.key == origin_key("hir.stmt", "body:a", "7")
+    )));
 }
