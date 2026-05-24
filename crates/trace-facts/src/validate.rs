@@ -2,17 +2,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use common::origin::OriginExportKey;
-use shape_address::{DimensionDigests, ShapePolicyId};
+use shape_address::{DimensionDigests, ShapeHashPolicy, ShapeLevel, ShapePolicyId};
 
 use crate::fact::{
     BlockFact, CategorySource, CfgEdgeFact, CodeObjectFact, CompilerEventFact, CompilerPhase,
-    DisplayNameFact, DynamicGasStepFact, FunctionFact, InlineContextFact, InstructionBlockFact,
-    InstructionCategoryFact, InstructionExtentFact, InstructionFact, LexicalScopeFact,
-    LocationExpr, LocationRangeFact, LoopBlockFact, LoopBlockRole, LoopDerivation, LoopFact,
-    LoopMembershipFact, OpcodeFact, OriginEdgeFact, OriginNodeFact, ShapeComponentHashFact,
-    ShapeGraphHashFact, ShapeNodeHashFact, ShapePolicyFact, SourceFileFact, SourceSpanFact,
-    StaticGasFact, StorageFact, StorageLocation, TraceFact, TypeFact, ValueLocation, ValueProperty,
-    ValuePropertyFact, VariableFact,
+    DisplayNameFact, DisplayNameKind, DynamicGasStepFact, FunctionFact, InlineContextFact,
+    InstructionBlockFact, InstructionCategoryFact, InstructionExtentFact, InstructionFact,
+    LexicalScopeFact, LocationExpr, LocationRangeFact, LoopBlockFact, LoopBlockRole,
+    LoopDerivation, LoopFact, LoopMembershipFact, OpcodeFact, OriginEdgeFact, OriginNodeFact,
+    ShapeComponentHashFact, ShapeGraphHashFact, ShapeNodeHashFact, ShapePolicyFact, SourceFileFact,
+    SourceSpanFact, StaticGasFact, StorageFact, StorageLocation, TraceFact, TypeFact,
+    ValueLocation, ValueProperty, ValuePropertyFact, VariableFact,
 };
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -88,7 +88,15 @@ impl TraceValidationDiagnostic {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TraceValidationWarning {
-    UnknownInstructionCategory { instruction: OriginExportKey },
+    UnknownInstructionCategory {
+        instruction: OriginExportKey,
+    },
+    DuplicateDisplayName {
+        subject: OriginExportKey,
+        kind: DisplayNameKind,
+        first_name: String,
+        second_name: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -416,8 +424,22 @@ impl TraceValidator {
         for gas_cost in gas_costs {
             validate_gas_cost(gas_cost, &nodes, &mut diagnostics);
         }
+        let mut display_name_sites = BTreeMap::new();
         for display_name in display_names {
             validate_display_name(display_name, &nodes, &mut diagnostics);
+            let site = (display_name.subject.clone(), display_name.kind);
+            if let Some(first_name) =
+                display_name_sites.insert(site.clone(), display_name.name.clone())
+            {
+                diagnostics.push(TraceValidationDiagnostic::Warning(
+                    TraceValidationWarning::DuplicateDisplayName {
+                        subject: site.0,
+                        kind: site.1,
+                        first_name,
+                        second_name: display_name.name.clone(),
+                    },
+                ));
+            }
         }
         for value_property in value_properties {
             validate_value_property(value_property, &nodes, &mut diagnostics);
@@ -1408,6 +1430,27 @@ fn validate_shape_policies<'a>(
                 },
             );
         }
+        if !policy.level.trim().is_empty() {
+            let level = ShapeLevel::new(policy.level.clone(), "shape level")
+                .expect("non-empty shape level must be constructible");
+            let expected_policy = ShapeHashPolicy {
+                schema_version: policy.schema_version,
+                algorithm: policy.algorithm,
+                level,
+                dimensions: policy.dimensions.iter().copied().collect(),
+                view_mode: policy.view_mode,
+                cycle_policy: policy.cycle_policy,
+            };
+            if expected_policy.policy_id() != policy.policy {
+                push_error(
+                    diagnostics,
+                    TraceValidationError::InvalidShapePolicy {
+                        policy: policy.policy.clone(),
+                        reason: "policy id must match policy fields",
+                    },
+                );
+            }
+        }
     }
     by_id
 }
@@ -2190,14 +2233,15 @@ mod tests {
 
     use crate::{
         BlockFact, CategorySource, CfgEdgeFact, CfgEdgeKind, CodeObjectFact, CodeObjectKind,
-        CompilerPhase, EvmSchedule, FunctionFact, GasConfidence, GasCostFact, GasKind, GasSource,
-        InlineContextFact, InstructionBlockFact, InstructionCategory, InstructionCategoryFact,
-        InstructionExtentFact, InstructionFact, LoopBlockFact, LoopBlockRole, LoopConfidence,
-        LoopDerivation, LoopFact, LoopMembershipFact, OpcodeCategory, OpcodeFact, OriginEdgeFact,
-        OriginEdgeLabel, OriginNodeFact, OriginNodeKind, PcRange, ShapeComponentHashFact,
-        ShapeGraphHashFact, ShapeNodeHashFact, ShapePolicyFact, SourceFileFact, SourceSpanFact,
-        StaticGasFact, StorageFact, StorageLocation, StorageReason, TraceFact,
-        TraceValidationError, TraceValidationLevel, TraceValidator,
+        CompilerPhase, DisplayNameFact, DisplayNameKind, DynamicGasStepFact, EvmSchedule,
+        FunctionFact, GasConfidence, GasCostFact, GasKind, GasSource, InlineContextFact,
+        InstructionBlockFact, InstructionCategory, InstructionCategoryFact, InstructionExtentFact,
+        InstructionFact, LoopBlockFact, LoopBlockRole, LoopConfidence, LoopDerivation, LoopFact,
+        LoopMembershipFact, OpcodeCategory, OpcodeFact, OriginEdgeFact, OriginEdgeLabel,
+        OriginNodeFact, OriginNodeKind, PcRange, ShapeComponentHashFact, ShapeGraphHashFact,
+        ShapeNodeHashFact, ShapePolicyFact, SourceFileFact, SourceSpanFact, StaticGasFact,
+        StorageFact, StorageLocation, StorageReason, TraceFact, TraceValidationDiagnostic,
+        TraceValidationError, TraceValidationLevel, TraceValidationWarning, TraceValidator,
     };
 
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -2517,6 +2561,31 @@ mod tests {
     }
 
     #[test]
+    fn validator_rejects_bad_loop_membership_cfg_hash() {
+        let function = key("mir.function", "fib", "recv");
+        let loop_key = key("mir.loop", "fib", "loop:0");
+        let instruction = key("mir.inst", "fib", "inst:0");
+        let facts = vec![
+            node("mir.function", "fib", "recv"),
+            node("mir.loop", "fib", "loop:0"),
+            node("mir.inst", "fib", "inst:0"),
+            TraceFact::Instruction(InstructionFact::new(instruction.clone(), function, 0, "br")),
+            TraceFact::LoopMembership(LoopMembershipFact::new(
+                loop_key.clone(),
+                instruction,
+                LoopDerivation::NaturalLoopAnalysis {
+                    cfg_hash: String::new(),
+                },
+            )),
+        ];
+
+        assert_eq!(
+            TraceValidator::validate(&facts),
+            Err(TraceValidationError::EmptyLoopCfgHash { loop_key })
+        );
+    }
+
+    #[test]
     fn validator_rejects_edges_to_unknown_nodes() {
         let known = key("asm.inst", "fib", "inst:6");
         let missing = key("runtime.local", "fib", "local:b");
@@ -2746,6 +2815,37 @@ mod tests {
     }
 
     #[test]
+    fn validator_warns_on_duplicate_display_names() {
+        let local = key("runtime.local", "fib", "local:b");
+        let facts = vec![
+            node("runtime.local", "fib", "local:b"),
+            TraceFact::DisplayName(DisplayNameFact::new(
+                local.clone(),
+                DisplayNameKind::SourceLocal,
+                "b",
+            )),
+            TraceFact::DisplayName(DisplayNameFact::new(
+                local.clone(),
+                DisplayNameKind::SourceLocal,
+                "b2",
+            )),
+        ];
+
+        let report = TraceValidator::check(&facts);
+        assert_eq!(report.error_count(), 0);
+        assert_eq!(report.warning_count(), 1);
+        assert_eq!(
+            report.diagnostics[0],
+            TraceValidationDiagnostic::Warning(TraceValidationWarning::DuplicateDisplayName {
+                subject: local,
+                kind: DisplayNameKind::SourceLocal,
+                first_name: "b".to_string(),
+                second_name: "b2".to_string(),
+            })
+        );
+    }
+
+    #[test]
     fn validator_rejects_opcode_facts_without_bytecode_pc_subjects() {
         let instruction = key("asm.inst", "fib", "inst:0");
         let facts = vec![
@@ -2871,6 +2971,32 @@ mod tests {
     }
 
     #[test]
+    fn validator_rejects_bad_dynamic_gas_arithmetic() {
+        let code_object = key("code.object", "fib", "runtime");
+        let facts = vec![
+            node("code.object", "fib", "runtime"),
+            TraceFact::DynamicGasStep(DynamicGasStepFact::new(
+                "tx:1",
+                0,
+                code_object.clone(),
+                0,
+                None,
+                10,
+                6,
+                3,
+            )),
+        ];
+
+        assert_eq!(
+            TraceValidator::validate(&facts),
+            Err(TraceValidationError::InvalidDynamicGasStep {
+                code_object,
+                reason: "gas_cost must equal gas_before - gas_after",
+            })
+        );
+    }
+
+    #[test]
     fn validator_rejects_invalid_source_span_ranges() {
         let source_file = key("source.file", "fib", "fib_demo.fe");
         let source_expr = key("hir.expr", "fib", "expr:while");
@@ -2931,6 +3057,29 @@ mod tests {
         ];
 
         assert!(TraceValidator::validate(&facts).is_ok());
+    }
+
+    #[test]
+    fn validator_rejects_shape_policy_id_that_does_not_match_level() {
+        let policy = shape_policy();
+        let bad_policy_id = ShapeDigest::new("f".repeat(64)).unwrap();
+        let fact = ShapePolicyFact::new(
+            bad_policy_id.clone(),
+            policy.schema_version,
+            policy.algorithm,
+            "mir",
+            policy.dimensions.iter().copied().collect(),
+            policy.view_mode,
+            policy.cycle_policy,
+        );
+
+        assert_eq!(
+            TraceValidator::validate(&[TraceFact::ShapePolicy(fact)]),
+            Err(TraceValidationError::InvalidShapePolicy {
+                policy: bad_policy_id,
+                reason: "policy id must match policy fields",
+            })
+        );
     }
 
     #[test]
