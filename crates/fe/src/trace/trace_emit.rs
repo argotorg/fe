@@ -2,18 +2,21 @@ use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Cursor};
 
 use camino::Utf8PathBuf;
-use common::InputDb;
+use common::{InputDb, origin::OriginExportKey};
 use driver::{
     DriverDataBase,
     cli_target::{CliTarget, resolve_cli_target},
 };
 use salsa::Setter;
-use trace_facts::{JsonlTraceReader, JsonlTraceSink, TraceBundle, TraceSnapshot, TraceValidator};
+use trace_facts::{
+    JsonlTraceReader, JsonlTraceSink, OriginNodeFact, OriginNodeKind, SourceFileFact,
+    SourceSpanFact, TraceBundle, TraceFact, TraceSnapshot, TraceValidator,
+};
 use url::Url;
 
 use crate::{
-    DevTraceDynamicGasArgs, DevTraceEmitArgs, DevTraceExplainLocalArgs, DevTraceGasArgs,
-    DevTraceGasToSourceArgs, DevTraceInputArgs, DevTracePcArgs,
+    DevTraceAttributionArgs, DevTraceDynamicGasArgs, DevTraceEmitArgs, DevTraceExplainLocalArgs,
+    DevTraceGasArgs, DevTraceGasToSourceArgs, DevTraceInputArgs, DevTracePcArgs,
 };
 
 pub(super) fn run_trace_emit(args: &DevTraceEmitArgs) -> Result<String, String> {
@@ -73,6 +76,15 @@ pub(super) fn run_trace_gas_by_source(args: &DevTraceGasArgs) -> Result<String, 
     )
 }
 
+pub(super) fn run_trace_bytecode_size_by_source(
+    args: &DevTraceAttributionArgs,
+) -> Result<String, String> {
+    super::trace_render::render_bytecode_size_by_source_snapshot(
+        read_trace_snapshot_jsonl_from_path(&args.from)?,
+        &args.policy,
+    )
+}
+
 pub(super) fn run_trace_dynamic_gas_by_source(
     args: &DevTraceDynamicGasArgs,
 ) -> Result<String, String> {
@@ -116,17 +128,17 @@ pub(super) fn emit_real_trace_bundle(
         .set_profile(&mut db)
         .to(profile.into());
     let target = resolve_cli_target(&mut db, path, force_standalone)?;
-    let (top_mod, input_path) = match target {
+    let (top_mod, input_path, input_content) = match target {
         CliTarget::StandaloneFile(file_path) => {
             let (file_url, content) = standalone_file_input(&file_path)?;
             db.workspace()
-                .touch(&mut db, file_url.clone(), Some(content));
+                .touch(&mut db, file_url.clone(), Some(content.clone()));
             let file = db
                 .workspace()
                 .get(&db, &file_url)
                 .ok_or_else(|| format!("could not process trace input {file_path}"))?;
             let top_mod = db.top_mod(file);
-            (top_mod, file_path)
+            (top_mod, file_path, content)
         }
         CliTarget::Directory(_) => {
             return Err(
@@ -140,6 +152,12 @@ pub(super) fn emit_real_trace_bundle(
         .map_err(|err| format!("failed to build runtime package for trace: {err}"))?;
     let mut facts = mir::trace::emit_mir_facts(&db, package);
     facts.extend(codegen::trace::emit_sonatina_cfg_facts(&db, package));
+    let source_file = source_file_key(&input_path);
+    facts.extend(emit_standalone_source_file_facts(
+        &input_path,
+        &input_content,
+        &source_file,
+    ));
     let bytecode = codegen::emit_module_sonatina_bytecode(&db, top_mod, opt_level, None)
         .map_err(|err| format!("failed to compile bytecode for trace: {err}"))?;
     let module_key = top_mod.name(&db).data(&db).to_string();
@@ -154,6 +172,11 @@ pub(super) fn emit_real_trace_bundle(
             "function:runtime",
             &artifact.runtime,
         ));
+        let code_object = codegen::trace::bytecode_code_object_key(&owner_key);
+        if let Some(span) = whole_file_source_span(code_object, source_file.clone(), &input_content)
+        {
+            facts.push(TraceFact::SourceSpan(span));
+        }
     }
 
     let metadata = trace_facts::TraceMetadata::compiler_emitted(
@@ -172,6 +195,79 @@ pub(super) fn emit_real_trace_bundle(
         ],
     );
     Ok(TraceBundle::new(metadata, facts))
+}
+
+fn emit_standalone_source_file_facts(
+    input_path: &Utf8PathBuf,
+    content: &str,
+    source_file: &OriginExportKey,
+) -> Vec<TraceFact> {
+    vec![
+        TraceFact::OriginNode(OriginNodeFact::new(
+            source_file.clone(),
+            OriginNodeKind::new(source_file.kind()),
+        )),
+        TraceFact::SourceFile(SourceFileFact::new(
+            source_file.clone(),
+            input_path.as_str(),
+            input_path
+                .file_name()
+                .map_or_else(|| input_path.as_str(), |name| name)
+                .to_string(),
+            trace_content_hash(content.as_bytes()),
+            Some(0),
+        )),
+    ]
+}
+
+fn source_file_key(input_path: &Utf8PathBuf) -> OriginExportKey {
+    OriginExportKey::try_from_raw_parts("source.file", input_path.as_str(), "file:0")
+        .expect("trace source file key must be valid")
+}
+
+fn whole_file_source_span(
+    origin: OriginExportKey,
+    source_file: OriginExportKey,
+    content: &str,
+) -> Option<SourceSpanFact> {
+    let end_byte = u32::try_from(content.len()).ok()?;
+    if end_byte == 0 {
+        return None;
+    }
+    let (end_line, end_column) = source_end_position(content);
+    Some(SourceSpanFact::new(
+        origin,
+        source_file,
+        0,
+        end_byte,
+        1,
+        1,
+        end_line,
+        end_column,
+    ))
+}
+
+fn source_end_position(content: &str) -> (u32, u32) {
+    let mut line = 1u32;
+    let mut column = 1u32;
+    for ch in content.chars() {
+        if ch == '\n' {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+    }
+    (line, column)
+}
+
+fn trace_content_hash(bytes: &[u8]) -> String {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("fnv64:{hash:016x}")
 }
 
 fn standalone_file_input(file_path: &Utf8PathBuf) -> Result<(Url, String), String> {
@@ -256,6 +352,25 @@ mod tests {
         assert!(loop_cost.contains("Available compiler-derived bytecode summary"));
         assert!(loop_cost.contains("Required next facts: loop membership"));
         assert!(!loop_cost.contains("Static per-iteration cost"));
+
+        let gas_by_source = super::super::trace_render::render_gas_by_source_snapshot(
+            TraceSnapshot::new(bundle.clone()).unwrap(),
+            "cancun",
+            "exclusive-primary",
+        )
+        .unwrap();
+        assert!(gas_by_source.contains("fib_demo.fe"));
+        assert!(gas_by_source.contains("Attribution policy: exclusive-primary"));
+        assert!(!gas_by_source.contains("<unmapped>"));
+
+        let bytecode_size = super::super::trace_render::render_bytecode_size_by_source_snapshot(
+            TraceSnapshot::new(bundle.clone()).unwrap(),
+            "exclusive-primary",
+        )
+        .unwrap();
+        assert!(bytecode_size.contains("fib_demo.fe"));
+        assert!(bytecode_size.contains("Total emitted bytecode bytes"));
+        assert!(!bytecode_size.contains("<unmapped>"));
 
         let explain = super::super::trace_render::render_explain_local_bundle(bundle, "b").unwrap();
         assert!(explain.contains("Why b is memory-backed in MIR"));

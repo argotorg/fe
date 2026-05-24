@@ -48,6 +48,9 @@ fn run_trace_query_command(command: &DevTraceQueryCommand) -> Result<String, Str
         }
         DevTraceQueryCommand::ExplainPc(args) => super::trace_emit::run_trace_explain_pc(args),
         DevTraceQueryCommand::GasBySource(args) => super::trace_emit::run_trace_gas_by_source(args),
+        DevTraceQueryCommand::BytecodeSizeBySource(args) => {
+            super::trace_emit::run_trace_bytecode_size_by_source(args)
+        }
         DevTraceQueryCommand::DynamicGasBySource(args) => {
             super::trace_emit::run_trace_dynamic_gas_by_source(args)
         }

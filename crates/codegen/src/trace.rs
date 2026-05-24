@@ -46,11 +46,8 @@ pub fn emit_bytecode_instruction_facts(
     function_local_key: &str,
     bytecode: &[u8],
 ) -> Vec<TraceFact> {
-    let function =
-        OriginExportKey::try_from_raw_parts("bytecode.function", owner_key, function_local_key)
-            .expect("codegen bytecode function key must be valid");
-    let code_object = OriginExportKey::try_from_raw_parts("code.object", owner_key, "runtime")
-        .expect("codegen bytecode code object key must be valid");
+    let function = bytecode_function_key(owner_key, function_local_key);
+    let code_object = bytecode_code_object_key(owner_key);
     let mut facts = vec![
         origin_node(function.clone(), "bytecode.function"),
         origin_node(code_object.clone(), "code.object"),
@@ -94,6 +91,12 @@ pub fn emit_bytecode_instruction_facts(
             code_object.clone(),
             PcRange::new(pc as u32, (pc + byte_len) as u32),
             byte_len as u32,
+        )));
+        facts.push(TraceFact::OriginEdge(OriginEdgeFact::new(
+            instruction.clone(),
+            code_object.clone(),
+            OriginEdgeLabel::EmittedFrom,
+            Some(CompilerPhase::BytecodeEmission),
         )));
         facts.push(TraceFact::InstructionCategory(
             InstructionCategoryFact::new(
@@ -363,6 +366,16 @@ pub fn bytecode_runtime_owner_key(
     contract_name: &str,
 ) -> String {
     format!("package:{package_key}:module:{module_key}:contract:{contract_name}:section:runtime")
+}
+
+pub fn bytecode_function_key(owner_key: &str, function_local_key: &str) -> OriginExportKey {
+    OriginExportKey::try_from_raw_parts("bytecode.function", owner_key, function_local_key)
+        .expect("codegen bytecode function key must be valid")
+}
+
+pub fn bytecode_code_object_key(owner_key: &str) -> OriginExportKey {
+    OriginExportKey::try_from_raw_parts("code.object", owner_key, "runtime")
+        .expect("codegen bytecode code object key must be valid")
 }
 
 fn origin_node(key: OriginExportKey, kind: &str) -> TraceFact {
@@ -948,6 +961,14 @@ mod tests {
                 && extent.pc_range.end == 3
                 && extent.byte_len == 2
         }));
+        assert!(facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::OriginEdge(edge)
+                if edge.from.kind() == "bytecode.pc"
+                    && edge.to.kind() == "code.object"
+                    && edge.label == trace_facts::OriginEdgeLabel::EmittedFrom
+                    && edge.introduced_by == Some(trace_facts::CompilerPhase::BytecodeEmission)
+        )));
     }
 
     #[test]

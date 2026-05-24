@@ -22,6 +22,10 @@ pub trait IntrospectionService {
     fn gas_breakdown(&self, request: GasBreakdownRequest) -> QueryResult<GasBreakdownReport>;
     fn explain_pc(&self, request: ExplainPcRequest) -> QueryResult<ExplainPcReport>;
     fn gas_by_source(&self, request: GasBySourceRequest) -> QueryResult<GasBySourceReport>;
+    fn bytecode_size_by_source(
+        &self,
+        request: BytecodeSizeBySourceRequest,
+    ) -> QueryResult<BytecodeSizeBySourceReport>;
     fn dynamic_gas_by_source(
         &self,
         request: DynamicGasBySourceRequest,
@@ -286,17 +290,72 @@ impl IntrospectionService for TraceIntrospectionService {
 
         let mut rows = rows.into_values().collect::<Vec<_>>();
         rows.sort_by(|a, b| b.gas.cmp(&a.gas).then_with(|| a.label.cmp(&b.label)));
+        let confidence = if total_gas == 0 {
+            Confidence::Unknown
+        } else if rows
+            .iter()
+            .any(|row| matches!(row.confidence, Confidence::Low | Confidence::Unknown))
+        {
+            Confidence::Low
+        } else {
+            Confidence::Medium
+        };
         Ok(GasBySourceReport {
             metadata: ReportMetadata::from_snapshot(&self.snapshot),
             schedule: request.schedule,
             policy: request.policy.to_string(),
             total_gas,
             rows,
-            confidence: if total_gas > 0 {
-                Confidence::Medium
-            } else {
-                Confidence::Unknown
-            },
+            confidence,
+        })
+    }
+
+    fn bytecode_size_by_source(
+        &self,
+        request: BytecodeSizeBySourceRequest,
+    ) -> QueryResult<BytecodeSizeBySourceReport> {
+        let index = TraceIndex::new(&self.snapshot);
+        let mut rows: BTreeMap<String, BytecodeSizeBySourceRow> = BTreeMap::new();
+        let mut total_bytes = 0;
+
+        for extent in index.instruction_extents.values() {
+            total_bytes += u64::from(extent.byte_len);
+            for bucket in index.gas_attribution_buckets(&extent.instruction, request.policy) {
+                let row =
+                    rows.entry(bucket.key.clone())
+                        .or_insert_with(|| BytecodeSizeBySourceRow {
+                            label: bucket.label.clone(),
+                            source: bucket.source.clone(),
+                            bytes: 0,
+                            instruction_count: 0,
+                            confidence: bucket.confidence,
+                        });
+                row.bytes += u64::from(extent.byte_len);
+                row.instruction_count += 1;
+                if bucket.confidence == Confidence::Low {
+                    row.confidence = Confidence::Low;
+                }
+            }
+        }
+
+        let mut rows = rows.into_values().collect::<Vec<_>>();
+        rows.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.label.cmp(&b.label)));
+        let confidence = if total_bytes == 0 {
+            Confidence::Unknown
+        } else if rows
+            .iter()
+            .any(|row| matches!(row.confidence, Confidence::Low | Confidence::Unknown))
+        {
+            Confidence::Low
+        } else {
+            Confidence::Medium
+        };
+        Ok(BytecodeSizeBySourceReport {
+            metadata: ReportMetadata::from_snapshot(&self.snapshot),
+            policy: request.policy.to_string(),
+            total_bytes,
+            rows,
+            confidence,
         })
     }
 
@@ -546,6 +605,12 @@ pub struct DynamicGasBySourceRequest {
     pub policy: GasAttributionPolicy,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BytecodeSizeBySourceRequest {
+    #[serde(default)]
+    pub policy: GasAttributionPolicy,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GasToSourceRequest {
     pub schedule: String,
@@ -657,6 +722,10 @@ pub enum TraceQueryRequest {
         #[serde(default)]
         policy: GasAttributionPolicy,
     },
+    BytecodeSizeBySource {
+        #[serde(default)]
+        policy: GasAttributionPolicy,
+    },
     DynamicGasBySource {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         trace_id: Option<String>,
@@ -710,6 +779,12 @@ impl TraceQueryRequest {
         }
     }
 
+    pub fn bytecode_size_by_source() -> Self {
+        Self::BytecodeSizeBySource {
+            policy: GasAttributionPolicy::default(),
+        }
+    }
+
     pub fn dynamic_gas_by_source() -> Self {
         Self::DynamicGasBySource {
             trace_id: None,
@@ -757,6 +832,7 @@ pub enum TraceQueryReport {
     GasBreakdown(GasBreakdownReport),
     ExplainPc(ExplainPcReport),
     GasBySource(GasBySourceReport),
+    BytecodeSizeBySource(BytecodeSizeBySourceReport),
     DynamicGasBySource(DynamicGasBySourceReport),
     GasToSource(GasToSourceReport),
     OptimizedCodeHonesty(OptimizedCodeHonestyReport),
@@ -783,6 +859,9 @@ pub fn run_trace_query(
         TraceQueryRequest::GasBySource { schedule, policy } => service
             .gas_by_source(GasBySourceRequest { schedule, policy })
             .map(TraceQueryReport::GasBySource),
+        TraceQueryRequest::BytecodeSizeBySource { policy } => service
+            .bytecode_size_by_source(BytecodeSizeBySourceRequest { policy })
+            .map(TraceQueryReport::BytecodeSizeBySource),
         TraceQueryRequest::DynamicGasBySource { trace_id, policy } => service
             .dynamic_gas_by_source(DynamicGasBySourceRequest { trace_id, policy })
             .map(TraceQueryReport::DynamicGasBySource),
@@ -880,6 +959,24 @@ pub struct DynamicGasBySourceReport {
     pub total_gas: u64,
     pub unattributed_steps: usize,
     pub rows: Vec<GasBySourceRow>,
+    pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BytecodeSizeBySourceReport {
+    pub metadata: ReportMetadata,
+    pub policy: String,
+    pub total_bytes: u64,
+    pub rows: Vec<BytecodeSizeBySourceRow>,
+    pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BytecodeSizeBySourceRow {
+    pub source: Option<OriginExportKey>,
+    pub label: String,
+    pub bytes: u64,
+    pub instruction_count: usize,
     pub confidence: Confidence,
 }
 
@@ -1135,6 +1232,7 @@ struct TraceIndex<'a> {
     locals: BTreeMap<String, OriginExportKey>,
     display_names: BTreeMap<OriginExportKey, String>,
     instructions: BTreeMap<OriginExportKey, &'a InstructionFact>,
+    instruction_extents: BTreeMap<OriginExportKey, &'a trace_facts::InstructionExtentFact>,
     function_code_objects: BTreeMap<OriginExportKey, OriginExportKey>,
 }
 
@@ -1146,6 +1244,7 @@ impl<'a> TraceIndex<'a> {
         let mut locals = BTreeMap::new();
         let mut display_names = BTreeMap::new();
         let mut instructions = BTreeMap::new();
+        let mut instruction_extents = BTreeMap::new();
         let mut function_code_objects = BTreeMap::new();
 
         for fact in snapshot.facts() {
@@ -1175,6 +1274,9 @@ impl<'a> TraceIndex<'a> {
                 TraceFact::Instruction(instruction) => {
                     instructions.insert(instruction.instruction.clone(), instruction);
                 }
+                TraceFact::InstructionExtent(extent) => {
+                    instruction_extents.insert(extent.instruction.clone(), extent);
+                }
                 TraceFact::Function(function) => {
                     if let Some(code_object) = &function.code_object {
                         function_code_objects
@@ -1192,6 +1294,7 @@ impl<'a> TraceIndex<'a> {
             locals,
             display_names,
             instructions,
+            instruction_extents,
             function_code_objects,
         }
     }
@@ -1752,6 +1855,7 @@ impl GasAttributionBucket {
             source.label.clone()
         };
         let confidence = match policy {
+            _ if source.origin.kind() == "code.object" => Confidence::Low,
             GasAttributionPolicy::Inclusive | GasAttributionPolicy::CallInclusive => {
                 Confidence::Low
             }
@@ -1868,11 +1972,11 @@ mod tests {
     use trace_facts::{
         CategorySource, CodeObjectFact, CodeObjectKind, CompilerEventFact, CompilerEventKind,
         CompilerPhase, CompilerReason, DynamicGasStepFact, EvmSchedule, GasConfidence, GasCostFact,
-        GasKind, GasSource, InstructionCategory, InstructionCategoryFact, InstructionFact,
-        LocationConfidence, LocationRangeFact, LoopDerivation, LoopMembershipFact, OriginEdgeFact,
-        OriginEdgeLabel, OriginNodeFact, OriginNodeKind, PcRange, SourceFileFact, SourceSpanFact,
-        StaticGasFact, StorageFact, StorageLocation, StorageReason, TraceBundle, TraceFact,
-        TraceMetadata, TraceSnapshot, TypeFact, TypeKind, ValueLocation, VariableFact,
+        GasKind, GasSource, InstructionCategory, InstructionCategoryFact, InstructionExtentFact,
+        InstructionFact, LocationConfidence, LocationRangeFact, LoopDerivation, LoopMembershipFact,
+        OriginEdgeFact, OriginEdgeLabel, OriginNodeFact, OriginNodeKind, PcRange, SourceFileFact,
+        SourceSpanFact, StaticGasFact, StorageFact, StorageLocation, StorageReason, TraceBundle,
+        TraceFact, TraceMetadata, TraceSnapshot, TypeFact, TypeKind, ValueLocation, VariableFact,
         VariableStorageClass,
     };
 
@@ -2003,11 +2107,23 @@ mod tests {
                 0,
                 "lw",
             )),
+            TraceFact::InstructionExtent(InstructionExtentFact::new(
+                inst.clone(),
+                code_object.clone(),
+                PcRange::new(0, 1),
+                1,
+            )),
             TraceFact::Instruction(InstructionFact::new(
                 zext.clone(),
                 function.clone(),
                 1,
                 "slli",
+            )),
+            TraceFact::InstructionExtent(InstructionExtentFact::new(
+                zext.clone(),
+                code_object.clone(),
+                PcRange::new(1, 3),
+                2,
             )),
             TraceFact::Instruction(InstructionFact::new(
                 ambiguous.clone(),
@@ -2225,6 +2341,19 @@ mod tests {
     }
 
     #[test]
+    fn bytecode_size_by_source_groups_extents_by_source_span() {
+        let report = demo_service()
+            .bytecode_size_by_source(super::BytecodeSizeBySourceRequest::default())
+            .unwrap();
+
+        assert_eq!(report.total_bytes, 3);
+        assert_eq!(report.policy, "exclusive-primary");
+        assert_eq!(report.rows[0].label, "fib.fe:2:8-2:9");
+        assert_eq!(report.rows[0].bytes, 3);
+        assert_eq!(report.rows[0].instruction_count, 2);
+    }
+
+    #[test]
     fn dynamic_gas_by_source_joins_steps_to_instruction_sources() {
         let report = demo_service()
             .dynamic_gas_by_source(DynamicGasBySourceRequest {
@@ -2327,6 +2456,10 @@ mod tests {
         assert!(matches!(
             run_trace_query(&service, TraceQueryRequest::gas_by_source("cancun")).unwrap(),
             TraceQueryReport::GasBySource(_)
+        ));
+        assert!(matches!(
+            run_trace_query(&service, TraceQueryRequest::bytecode_size_by_source()).unwrap(),
+            TraceQueryReport::BytecodeSizeBySource(_)
         ));
         assert!(matches!(
             run_trace_query(&service, TraceQueryRequest::dynamic_gas_by_source()).unwrap(),

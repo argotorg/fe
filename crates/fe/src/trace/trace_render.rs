@@ -1,11 +1,12 @@
 use trace_facts::{TraceBundle, TraceMetadata, TraceSnapshot, TraceValidationReport};
 use trace_query::{
-    DynamicGasBySourceReport, DynamicGasBySourceRequest, ExplainLocalReport, ExplainLocalRequest,
-    ExplainPcReport, ExplainPcRequest, GasAttributionPolicy, GasBreakdownReport,
-    GasBreakdownRequest, GasBySourceReport, GasBySourceRequest, GasToSourceReport,
-    GasToSourceRequest, IntrospectionService, LoopCostReport, LoopCostRequest,
-    OptimizedCodeHonestyReport, OptimizedCodeHonestyRequest, SourceAttribution,
-    TraceIntrospectionService, VariablesAtPcReport, VariablesAtPcRequest,
+    BytecodeSizeBySourceReport, BytecodeSizeBySourceRequest, DynamicGasBySourceReport,
+    DynamicGasBySourceRequest, ExplainLocalReport, ExplainLocalRequest, ExplainPcReport,
+    ExplainPcRequest, GasAttributionPolicy, GasBreakdownReport, GasBreakdownRequest,
+    GasBySourceReport, GasBySourceRequest, GasToSourceReport, GasToSourceRequest,
+    IntrospectionService, LoopCostReport, LoopCostRequest, OptimizedCodeHonestyReport,
+    OptimizedCodeHonestyRequest, SourceAttribution, TraceIntrospectionService, VariablesAtPcReport,
+    VariablesAtPcRequest,
 };
 
 pub(super) fn render_validation_summary(
@@ -128,6 +129,19 @@ pub(super) fn render_dynamic_gas_by_source_snapshot(
         })
         .map_err(|err| err.to_string())?;
     Ok(render_dynamic_gas_by_source_report(&report))
+}
+
+pub(super) fn render_bytecode_size_by_source_snapshot(
+    snapshot: TraceSnapshot,
+    policy: &str,
+) -> Result<String, String> {
+    let service = TraceIntrospectionService::new(snapshot);
+    let report = service
+        .bytecode_size_by_source(BytecodeSizeBySourceRequest {
+            policy: parse_gas_policy(policy)?,
+        })
+        .map_err(|err| err.to_string())?;
+    Ok(render_bytecode_size_by_source_report(&report))
 }
 
 pub(super) fn render_gas_to_source_snapshot(
@@ -522,6 +536,35 @@ fn render_dynamic_gas_by_source_report(report: &DynamicGasBySourceReport) -> Str
         out.push_str(&format!(
             "  {:>4} gas  {:>3} steps  {:<8?} {}\n",
             row.gas, row.instruction_count, row.confidence, row.label
+        ));
+    }
+    out
+}
+
+fn render_bytecode_size_by_source_report(report: &BytecodeSizeBySourceReport) -> String {
+    let mut out = String::new();
+    out.push_str("Fe dev trace bytecode-size-by-source\n\n");
+    out.push_str(&format!("Data source: {}\n", report.metadata.data_source));
+    out.push_str("Trace validation: passed\n");
+    out.push_str(&format!("Target: {}\n", report.metadata.target));
+    out.push_str(&format!("Input: {}\n", report.metadata.input_path));
+    out.push_str(&format!("Attribution policy: {}\n", report.policy));
+    out.push_str(&format!("Confidence: {:?}\n\n", report.confidence));
+    out.push_str(&format!(
+        "Total emitted bytecode bytes: {}\n",
+        report.total_bytes
+    ));
+
+    if report.rows.is_empty() {
+        out.push_str("No instruction extent rows were present in this trace.\n");
+        return out;
+    }
+
+    out.push_str("Source contributors:\n");
+    for row in report.rows.iter().take(20) {
+        out.push_str(&format!(
+            "  {:>4} bytes  {:>3} inst  {:<8?} {}\n",
+            row.bytes, row.instruction_count, row.confidence, row.label
         ));
     }
     out
