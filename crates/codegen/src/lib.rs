@@ -1,4 +1,5 @@
 mod backend;
+pub mod debug;
 mod function_symbols;
 mod layout;
 mod runtime_package;
@@ -6,6 +7,9 @@ mod sonatina;
 mod test_output;
 
 pub use backend::{Backend, BackendError, BackendKind, BackendOutput, OptLevel, SonatinaBackend};
+pub use debug::{
+    BytecodeDebugError, BytecodePcRange, BytecodeSourceMapEntry, BytecodeSourceMapEntryKind,
+};
 pub use layout::{DISCRIMINANT_SIZE_BYTES, EVM_LAYOUT, TargetDataLayout, WORD_SIZE_BYTES};
 pub use sonatina::{
     LowerError, SonatinaContractBytecode, SonatinaTestOptions, emit_ingot_sonatina_bytecode,
