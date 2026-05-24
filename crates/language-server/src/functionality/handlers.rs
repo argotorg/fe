@@ -45,6 +45,7 @@ impl std::fmt::Display for NeedsDiagnostics {
 pub struct FileChange {
     pub uri: url::Url,
     pub kind: ChangeKind,
+    pub version: Option<i32>,
 }
 
 #[derive(Debug)]
@@ -357,6 +358,7 @@ pub async fn handle_did_change_watched_files(
         let _ = backend.client.clone().emit(FileChange {
             uri: event.uri,
             kind,
+            version: None,
         });
     }
     Ok(())
@@ -370,6 +372,7 @@ pub async fn handle_did_open_text_document(
     let _ = backend.client.clone().emit(FileChange {
         uri: message.text_document.uri,
         kind: ChangeKind::Open(message.text_document.text),
+        version: Some(message.text_document.version),
     });
     Ok(())
 }
@@ -396,6 +399,7 @@ pub async fn handle_did_change_text_document(
     let _ = backend.client.clone().emit(FileChange {
         uri: message.text_document.uri,
         kind: ChangeKind::Edit(Some(last.text.clone())),
+        version: Some(message.text_document.version),
     });
     Ok(())
 }
@@ -449,6 +453,7 @@ pub async fn handle_file_change(
             ));
         }
     };
+    let document_version = message.version;
 
     // Check if this is a fe.toml file
     let is_fe_toml = path
@@ -465,6 +470,7 @@ pub async fn handle_file_change(
                     .db
                     .workspace()
                     .update(&mut backend.db, url.clone(), contents);
+                note_document_change(backend, &url, document_version);
             }
         }
         ChangeKind::Create => {
@@ -478,6 +484,7 @@ pub async fn handle_file_change(
                     .db
                     .workspace()
                     .update(&mut backend.db, url.clone(), contents);
+                note_document_change(backend, &url, document_version);
 
                 // If a fe.toml was created, discover and load all files in the new ingot
                 if is_fe_toml && let Some(ingot_dir) = path.parent() {
@@ -501,6 +508,7 @@ pub async fn handle_file_change(
                     .db
                     .workspace()
                     .update(&mut backend.db, url.clone(), contents);
+                note_document_change(backend, &url, document_version);
 
                 // If fe.toml was modified, re-scan the ingot for any new files
                 if is_fe_toml && let Some(ingot_dir) = path.parent() {
@@ -512,6 +520,7 @@ pub async fn handle_file_change(
             debug!("file deleted: {:?}", path_str);
             if let Ok(url) = url::Url::from_file_path(&path) {
                 backend.db.workspace().remove(&mut backend.db, &url);
+                backend.clear_document_version(&url);
             }
 
             // When a fe.toml is deleted, re-init the parent workspace so that
@@ -561,6 +570,14 @@ pub async fn handle_file_change(
     }
 
     Ok(())
+}
+
+fn note_document_change(backend: &mut Backend, url: &Url, version: Option<i32>) {
+    if let Some(version) = version {
+        backend.set_document_version(url.clone(), version);
+    } else {
+        backend.clear_document_version(url);
+    }
 }
 
 fn load_ingot_files(

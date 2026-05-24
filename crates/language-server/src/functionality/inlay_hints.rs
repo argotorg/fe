@@ -9,11 +9,13 @@ use hir::{
     lower::map_file_to_mod,
     visitor::prelude::*,
 };
-use introspection_config::{HintMode, LoopHintMode};
-use trace_query::{GasBreakdownRequest, IntrospectionService, LoopCostRequest};
+use introspection_config::{FeToolingConfig, HintMode, LoopHintMode};
+use trace_query::{
+    GasBreakdownRequest, IntrospectionService, LoopCostRequest, TraceIntrospectionService,
+};
 
 pub async fn handle_inlay_hints(
-    backend: &Backend,
+    backend: &mut Backend,
     params: async_lsp::lsp_types::InlayHintParams,
 ) -> Result<Option<Vec<InlayHint>>, ResponseError> {
     let url = backend.map_client_uri_to_internal(params.text_document.uri.clone());
@@ -37,14 +39,16 @@ pub async fn handle_inlay_hints(
     if config.types {
         collect_hints_from_mod(&backend.db, top_mod, &mut hints);
     }
-    collect_trace_hints(backend, &url, params.range.start, &mut hints).await;
+    let trace_anchor =
+        first_trace_anchor_position(&backend.db, top_mod).unwrap_or(params.range.start);
+    collect_trace_hints(backend, &url, trace_anchor, &mut hints).await;
     hints.truncate(backend.tooling_config().lsp.max_hints_per_file);
 
     Ok(Some(hints))
 }
 
 async fn collect_trace_hints(
-    backend: &Backend,
+    backend: &mut Backend,
     url: &url::Url,
     position: async_lsp::lsp_types::Position,
     hints: &mut Vec<InlayHint>,
@@ -57,25 +61,9 @@ async fn collect_trace_hints(
         return;
     }
 
-    let url = url.clone();
     let gas_schedule = config.lsp.gas.schedule.clone();
-    let service_config = config.clone();
-    let service = match backend
-        .spawn_on_workers(move |db| {
-            crate::introspection::service_for_file(db, &url, service_config)
-        })
-        .await
-    {
-        Ok(Ok(Some(service))) => service,
-        Ok(Ok(None)) => return,
-        Ok(Err(err)) => {
-            tracing::debug!("trace inlay service unavailable: {err}");
-            return;
-        }
-        Err(err) => {
-            tracing::debug!("trace inlay worker failed: {err}");
-            return;
-        }
+    let Some(service) = trace_service_for_inlays(backend, url, config.clone()).await else {
+        return;
     };
 
     if wants_loop
@@ -114,14 +102,70 @@ async fn collect_trace_hints(
             kind: Some(InlayHintKind::PARAMETER),
             text_edits: None,
             tooltip: Some(async_lsp::lsp_types::InlayHintTooltip::String(format!(
-                "Static gas estimate under {} schedule",
-                report.schedule
+                "Static opcode gas estimate under {} schedule ({:?} confidence)",
+                report.schedule, report.confidence
             ))),
             padding_left: Some(true),
             padding_right: None,
             data: None,
         });
     }
+}
+
+async fn trace_service_for_inlays(
+    backend: &mut Backend,
+    url: &url::Url,
+    config: FeToolingConfig,
+) -> Option<TraceIntrospectionService> {
+    let config_hash = config.stable_hash();
+    let document_version = backend.document_version(url);
+    if let Some(version) = document_version
+        && let Some(service) = backend.cached_trace_service(url, version, &config_hash)
+    {
+        return Some(service);
+    }
+
+    let url_for_worker = url.clone();
+    let service_config = config.clone();
+    let service = match backend
+        .spawn_on_workers(move |db| {
+            crate::introspection::service_for_file(db, &url_for_worker, service_config)
+        })
+        .await
+    {
+        Ok(Ok(Some(service))) => service,
+        Ok(Ok(None)) => return None,
+        Ok(Err(err)) => {
+            tracing::debug!("trace inlay service unavailable: {err}");
+            return None;
+        }
+        Err(err) => {
+            tracing::debug!("trace inlay worker failed: {err}");
+            return None;
+        }
+    };
+
+    if let Some(version) = document_version {
+        backend.cache_trace_service(url.clone(), version, config_hash, service.clone());
+    }
+    Some(service)
+}
+
+fn first_trace_anchor_position(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod,
+) -> Option<async_lsp::lsp_types::Position> {
+    for item in top_mod.scope_graph(db).items_dfs(db) {
+        if !matches!(item, ItemKind::Contract(_) | ItemKind::Func(_)) {
+            continue;
+        }
+        if let Some(span) = item.span().resolve(db)
+            && let Ok(range) = to_lsp_range_from_span(span, db)
+        {
+            return Some(range.start);
+        }
+    }
+    None
 }
 
 fn collect_hints_from_mod(db: &DriverDataBase, top_mod: TopLevelMod, hints: &mut Vec<InlayHint>) {

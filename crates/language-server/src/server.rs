@@ -96,7 +96,7 @@ pub(crate) fn setup_service(
         .handle_request::<Rename>(rename::handle_rename)
         .handle_request::<SemanticTokensFullRequest>(semantic_tokens::handle_semantic_tokens_full)
         .handle_request::<Formatting>(handlers::handle_formatting)
-        .handle_request::<InlayHintRequest>(inlay_hints::handle_inlay_hints)
+        .handle_request_mut::<InlayHintRequest>(inlay_hints::handle_inlay_hints)
         .handle_request::<DocumentSymbolRequest>(document_symbols::handle_document_symbols)
         .handle_request::<WorkspaceSymbolRequest>(workspace_symbols::handle_workspace_symbols)
         // call hierarchy
@@ -160,7 +160,7 @@ pub(crate) fn setup_ws_service(
         .handle_request::<Rename>(rename::handle_rename)
         .handle_request::<SemanticTokensFullRequest>(semantic_tokens::handle_semantic_tokens_full)
         .handle_request::<Formatting>(handlers::handle_formatting)
-        .handle_request::<InlayHintRequest>(inlay_hints::handle_inlay_hints)
+        .handle_request_mut::<InlayHintRequest>(inlay_hints::handle_inlay_hints)
         .handle_request::<DocumentSymbolRequest>(document_symbols::handle_document_symbols)
         .handle_request::<WorkspaceSymbolRequest>(workspace_symbols::handle_workspace_symbols)
         // call hierarchy

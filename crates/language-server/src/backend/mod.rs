@@ -1,12 +1,13 @@
 use async_lsp::ClientSocket;
 use driver::DriverDataBase;
 use introspection_config::FeToolingConfig;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use tokio::sync::broadcast;
+use trace_query::TraceIntrospectionService;
 use url::Url;
 
 use crate::virtual_files::{VirtualFiles, materialize_builtins};
@@ -53,6 +54,15 @@ pub struct Backend {
     pub(super) docs_url: Option<String>,
     pub(super) lsp_workspace_root: Option<PathBuf>,
     pub(super) tooling_config: FeToolingConfig,
+    document_versions: FxHashMap<Url, i32>,
+    trace_cache: FxHashMap<TraceCacheKey, TraceIntrospectionService>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct TraceCacheKey {
+    uri: Url,
+    document_version: i32,
+    config_hash: String,
 }
 
 impl Backend {
@@ -90,11 +100,63 @@ impl Backend {
             docs_url,
             lsp_workspace_root: None,
             tooling_config,
+            document_versions: FxHashMap::default(),
+            trace_cache: FxHashMap::default(),
         }
     }
 
     pub fn tooling_config(&self) -> &FeToolingConfig {
         &self.tooling_config
+    }
+
+    pub fn set_document_version(&mut self, uri: Url, version: i32) {
+        self.document_versions.insert(uri.clone(), version);
+        self.clear_trace_cache_for_uri(&uri);
+    }
+
+    pub fn clear_document_version(&mut self, uri: &Url) {
+        self.document_versions.remove(uri);
+        self.clear_trace_cache_for_uri(uri);
+    }
+
+    pub fn document_version(&self, uri: &Url) -> Option<i32> {
+        self.document_versions.get(uri).copied()
+    }
+
+    pub fn cached_trace_service(
+        &self,
+        uri: &Url,
+        document_version: i32,
+        config_hash: &str,
+    ) -> Option<TraceIntrospectionService> {
+        self.trace_cache
+            .get(&TraceCacheKey {
+                uri: uri.clone(),
+                document_version,
+                config_hash: config_hash.to_string(),
+            })
+            .cloned()
+    }
+
+    pub fn cache_trace_service(
+        &mut self,
+        uri: Url,
+        document_version: i32,
+        config_hash: String,
+        service: TraceIntrospectionService,
+    ) {
+        self.trace_cache.insert(
+            TraceCacheKey {
+                uri,
+                document_version,
+                config_hash,
+            },
+            service,
+        );
+    }
+
+    pub fn clear_trace_cache_for_uri(&mut self, uri: &Url) {
+        self.trace_cache.retain(|key, _| &key.uri != uri);
     }
 
     /// Broadcast a doc-navigate event (path like "mylib::Foo/struct").
@@ -252,6 +314,22 @@ mod tests {
             None,
             introspection_config::FeToolingConfig::default(),
         )
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn document_version_tracking_records_and_clears_lsp_versions() {
+        let mut backend = test_backend();
+        let uri = Url::parse("file:///workspace/src/lib.fe").unwrap();
+
+        assert_eq!(backend.document_version(&uri), None);
+        backend.set_document_version(uri.clone(), 7);
+        assert_eq!(backend.document_version(&uri), Some(7));
+        backend.clear_document_version(&uri);
+        assert_eq!(backend.document_version(&uri), None);
+
+        tokio::task::spawn_blocking(move || drop(backend))
+            .await
+            .expect("backend drop task panicked");
     }
 
     /// Regression test: `spawn_on_workers` must `catch_unwind` inside the
