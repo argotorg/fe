@@ -10,6 +10,6 @@ description = "Derived multi-dimensional shape content addresses for Fe compiler
 doctest = false
 
 [dependencies]
+blake3 = "1"
 common.workspace = true
 serde = { version = "1.0", features = ["derive"] }
-
