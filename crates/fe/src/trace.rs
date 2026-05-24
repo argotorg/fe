@@ -10,23 +10,43 @@ use trace_facts::{
     StorageFact, StorageLocation, StorageReason, TraceFact, TraceValidator,
 };
 
-use crate::{TraceCommand, TraceExplainLocalArgs, TraceLoopCostArgs};
+use crate::{
+    DevCommand, DevTraceCommand, TraceFixtureCommand, TraceFixtureExplainLocalArgs,
+    TraceFixtureLoopCostArgs,
+};
 
 const FIB_OWNER: &str = "fixture:fib_demo";
 
-pub(crate) fn run_trace_command(command: &TraceCommand) -> Result<String, String> {
+pub(crate) fn run_dev_command(command: &DevCommand) -> Result<String, String> {
     match command {
-        TraceCommand::LoopCost(args) => run_loop_cost(args),
-        TraceCommand::ExplainLocal(args) => run_explain_local(args),
+        DevCommand::TraceFixture { command } => run_trace_fixture_command(command),
+        DevCommand::Trace { command } => run_dev_trace_command(command),
     }
 }
 
-fn run_loop_cost(args: &TraceLoopCostArgs) -> Result<String, String> {
+fn run_trace_fixture_command(command: &TraceFixtureCommand) -> Result<String, String> {
+    match command {
+        TraceFixtureCommand::LoopCost(args) => run_fixture_loop_cost(args),
+        TraceFixtureCommand::ExplainLocal(args) => run_fixture_explain_local(args),
+    }
+}
+
+fn run_dev_trace_command(command: &DevTraceCommand) -> Result<String, String> {
+    match command {
+        DevTraceCommand::Status => Ok(
+            "fe dev trace is reserved for compiler-derived validated trace JSONL.\n\
+             Current Fibonacci diagnostics are fixture-backed and live under fe dev trace-fixture.\n"
+                .to_string(),
+        ),
+    }
+}
+
+fn run_fixture_loop_cost(args: &TraceFixtureLoopCostArgs) -> Result<String, String> {
     let trace = load_fib_trace(&args.path, &args.function)?;
     render_loop_cost(&trace)
 }
 
-fn run_explain_local(args: &TraceExplainLocalArgs) -> Result<String, String> {
+fn run_fixture_explain_local(args: &TraceFixtureExplainLocalArgs) -> Result<String, String> {
     let trace = load_fib_trace(&args.path, &args.function)?;
     render_explain_local(&trace, &args.local)
 }
@@ -316,7 +336,10 @@ fn render_loop_cost(trace: &FibTrace) -> Result<String, String> {
     let b_storage = trace.storage_for(&b_key);
 
     let mut out = String::new();
-    out.push_str("Fe trace loop-cost: Fibonacci codegen diagnosis\n\n");
+    out.push_str("Fe trace-fixture loop-cost: Fibonacci codegen UX prototype\n\n");
+    out.push_str(
+        "Data source: fixture (hard-coded facts in the CLI, not compiler-derived trace emission)\n",
+    );
     out.push_str(&format!("Target: {}\n", trace.path));
     out.push_str(&format!("Function: {}\n", trace.function_label));
     out.push_str(&format!("Loop: {}\n\n", trace.label(&trace.loop_key)));
@@ -392,7 +415,10 @@ fn render_explain_local(trace: &FibTrace, local_name: &str) -> Result<String, St
     let related_edges = related_instruction_edges(trace, local_key, &loop_instructions);
 
     let mut out = String::new();
-    out.push_str("Fe trace explain-local: Fibonacci codegen diagnosis\n\n");
+    out.push_str("Fe trace-fixture explain-local: Fibonacci codegen UX prototype\n\n");
+    out.push_str(
+        "Data source: fixture (hard-coded facts in the CLI, not compiler-derived trace emission)\n",
+    );
     out.push_str(&format!("Target: {}\n", trace.path));
     out.push_str(&format!("Function: {}\n", trace.function_label));
     out.push_str(&format!("Local: {local_name}\n"));

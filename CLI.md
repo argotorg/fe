@@ -9,6 +9,20 @@ It is not a stability guarantee.
 
 - `--color <auto|always|never>`: controls colored output (default: `auto`).
 
+### Unstable developer tracing
+
+`fe dev trace-fixture ...` is a fixture-backed UX prototype for Fibonacci diagnostics. It uses hard-coded facts derived from `fib_demo.fe` markers and must not be read as compiler-derived instrumentation.
+
+`fe dev trace ...` is reserved for validated compiler-emitted trace JSONL. In this branch state, `fe dev trace status` reports that boundary instead of pretending real tracing is wired.
+
+Current fixture commands:
+
+```
+fe dev trace-fixture loop-cost fib_demo.fe
+fe dev trace-fixture explain-local fib_demo.fe --local b
+fe dev trace status
+```
+
 ### Output streams
 
 - **Stdout**: “normal” command output (e.g. artifact paths, formatted file paths, dependency trees).

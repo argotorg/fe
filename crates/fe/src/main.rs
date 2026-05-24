@@ -211,10 +211,10 @@ pub enum Command {
         #[arg(long, default_value = "false")]
         recovery_mode: bool,
     },
-    /// Run unstable developer trace diagnostics.
-    Trace {
+    /// Run unstable developer tooling.
+    Dev {
         #[command(subcommand)]
-        command: TraceCommand,
+        command: DevCommand,
     },
     /// Generate documentation for a Fe project
     Doc {
@@ -443,37 +443,6 @@ pub enum DocAction {
     },
 }
 
-#[derive(Debug, Clone, Subcommand)]
-pub enum TraceCommand {
-    /// Summarize static per-iteration loop cost for the Fibonacci trace fixture.
-    LoopCost(TraceLoopCostArgs),
-    /// Explain storage and codegen symptoms for one local in the Fibonacci trace fixture.
-    ExplainLocal(TraceExplainLocalArgs),
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct TraceLoopCostArgs {
-    /// Path to fib_demo.fe.
-    #[arg(default_value_t = default_project_path())]
-    pub path: Utf8PathBuf,
-    /// Function label to display in the report.
-    #[arg(long, default_value = "Fib.recv Compute handler")]
-    pub function: String,
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct TraceExplainLocalArgs {
-    /// Path to fib_demo.fe.
-    #[arg(default_value_t = default_project_path())]
-    pub path: Utf8PathBuf,
-    /// Source local to explain.
-    #[arg(long)]
-    pub local: String,
-    /// Function label to display in the report.
-    #[arg(long, default_value = "Fib.recv Compute handler")]
-    pub function: String,
-}
-
 #[cfg(feature = "lsp")]
 #[derive(Debug, Clone, Subcommand)]
 pub enum LspMode {
@@ -490,6 +459,57 @@ pub enum LspMode {
 
 fn default_project_path() -> Utf8PathBuf {
     Utf8PathBuf::from(".")
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum DevCommand {
+    /// Fixture-backed trace UX prototype; not compiler-derived.
+    TraceFixture {
+        #[command(subcommand)]
+        command: TraceFixtureCommand,
+    },
+    /// Reserved for validated compiler-derived trace JSONL.
+    Trace {
+        #[command(subcommand)]
+        command: DevTraceCommand,
+    },
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum DevTraceCommand {
+    /// Explain that real compiler-derived tracing is reserved but not wired yet.
+    Status,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum TraceFixtureCommand {
+    /// Summarize static per-iteration loop cost using hard-coded Fibonacci fixture facts.
+    LoopCost(TraceFixtureLoopCostArgs),
+    /// Explain one local using hard-coded Fibonacci fixture facts.
+    ExplainLocal(TraceFixtureExplainLocalArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct TraceFixtureLoopCostArgs {
+    /// Path to fib_demo.fe.
+    #[arg(default_value_t = default_project_path())]
+    pub path: Utf8PathBuf,
+    /// Function label to display in the report.
+    #[arg(long, default_value = "Fib.recv Compute handler")]
+    pub function: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct TraceFixtureExplainLocalArgs {
+    /// Path to fib_demo.fe.
+    #[arg(default_value_t = default_project_path())]
+    pub path: Utf8PathBuf,
+    /// Source local to explain.
+    #[arg(long)]
+    pub local: String,
+    /// Function label to display in the report.
+    #[arg(long, default_value = "Fib.recv Compute handler")]
+    pub function: String,
 }
 
 fn main() {
@@ -608,7 +628,7 @@ pub fn run(opts: &Options) {
                 std::process::exit(1);
             }
         },
-        Command::Trace { command } => match trace::run_trace_command(command) {
+        Command::Dev { command } => match trace::run_dev_command(command) {
             Ok(output) => print!("{output}"),
             Err(err) => {
                 eprintln!("Error: {err}");
