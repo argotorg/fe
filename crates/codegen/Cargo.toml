@@ -20,6 +20,7 @@ sonatina-verifier.workspace = true
 smallvec.workspace = true
 smallvec1.workspace = true
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 tracing.workspace = true
 
 [dev-dependencies]
@@ -27,4 +28,3 @@ dir-test.workspace = true
 test-utils.workspace = true
 url.workspace = true
 hir = { workspace = true, features = ["testutils"] }
-serde_json = "1.0"

@@ -1,7 +1,7 @@
 use common::InputDb;
 use driver::DriverDataBase;
 use hir::lower::map_file_to_mod;
-use trace_facts::{TraceBundle, TraceMetadata, TraceSnapshot};
+use trace_facts::{CompilerPhase, TraceBundle, TraceMetadata, TraceSnapshot};
 use trace_query::{
     TraceIntrospectionService, TraceQueryHttpResponse, TraceQueryRequest, run_trace_query,
 };
@@ -101,10 +101,18 @@ pub(crate) fn service_for_file(
     let package = mir::build_runtime_package(db, top_mod)
         .map_err(|err| format!("runtime package lowering for trace: {err}"))?;
     let mut facts = mir::trace::emit_mir_facts(db, package);
-    facts.extend(codegen::trace::emit_sonatina_cfg_facts(db, package));
+    let module_key = top_mod.name(db).data(db).to_string();
+    let sonatina_module =
+        codegen::compile_runtime_package_sonatina(db, &package, codegen::EVM_LAYOUT)
+            .map_err(|err| format!("Sonatina IR lowering for trace: {err}"))?;
+    let sonatina_owner = codegen::trace::sonatina_module_owner_key(uri.as_str(), &module_key);
+    facts.extend(codegen::trace::emit_sonatina_trace_view_facts(
+        &sonatina_owner,
+        &sonatina_module,
+        CompilerPhase::SonatinaPreOpt,
+    ));
     let bytecode = codegen::emit_module_sonatina_bytecode(db, top_mod, codegen::OptLevel::O1, None)
         .map_err(|err| format!("bytecode emission for trace: {err}"))?;
-    let module_key = top_mod.name(db).data(db).to_string();
     for (contract_name, artifact) in bytecode {
         let owner_key =
             codegen::trace::bytecode_runtime_owner_key(uri.as_str(), &module_key, &contract_name);

@@ -5,6 +5,9 @@ use shape_address::{
     ShapeCyclePolicy, ShapeDimension, ShapeGraph, ShapeGraphKey, ShapeHashPolicy, ShapeNodeKey,
     ShapeViewMode, hash_shape_graph,
 };
+use sonatina_ir::{
+    CfgEdgeKind as SonatinaCfgEdgeKind, FrontendOriginKind, FrontendOriginRecord, SonatinaTraceView,
+};
 use trace_facts::{
     BlockFact, CategorySource, CfgEdgeFact, CfgEdgeKind, CodeObjectFact, CodeObjectKind,
     CompilerPhase, EvmSchedule, FunctionFact, GasConfidence, GasCostFact, GasKind, GasSource,
@@ -151,6 +154,106 @@ pub fn emit_bytecode_shape_facts(
         return Vec::new();
     };
     trace_facts::shape_hash_facts(&graph, &policy, &hashes)
+}
+
+pub fn frontend_origin_record_for_export_key(
+    key: &OriginExportKey,
+    kind: FrontendOriginKind,
+) -> FrontendOriginRecord {
+    FrontendOriginRecord {
+        external_key: Some(
+            serde_json::to_string(key).expect("OriginExportKey serialization cannot fail"),
+        ),
+        source_span: None,
+        display_label: Some(key.display_label()),
+        kind,
+    }
+}
+
+pub fn emit_sonatina_trace_view_facts(
+    owner_key: &str,
+    module: &sonatina_ir::Module,
+    phase: CompilerPhase,
+) -> Vec<TraceFact> {
+    let Some((function_kind, block_kind, inst_kind)) = sonatina_phase_kinds(phase) else {
+        return Vec::new();
+    };
+    let mut facts = Vec::new();
+    for function_ref in module.trace_functions() {
+        let function_key = sonatina_function_key(function_kind, owner_key, function_ref);
+        push_node(&mut facts, function_key.clone());
+        let function_name = module
+            .ctx
+            .func_sig(function_ref, |sig| sig.name().to_string());
+        facts.push(TraceFact::Function(FunctionFact::new(
+            function_key.clone(),
+            function_name,
+            None,
+            None,
+        )));
+
+        let blocks = module.trace_blocks(function_ref);
+        for (block_ordinal, block) in blocks.iter().copied().enumerate() {
+            let block_key = sonatina_trace_block_key(block_kind, owner_key, function_ref, block);
+            push_node(&mut facts, block_key.clone());
+            facts.push(TraceFact::Block(BlockFact::new(
+                block_key,
+                function_key.clone(),
+                phase,
+                block_ordinal as u32,
+                Some(format!("{block:?}")),
+            )));
+        }
+
+        let mut instruction_index = 0u32;
+        for block in blocks {
+            let block_key = sonatina_trace_block_key(block_kind, owner_key, function_ref, block);
+            for edge in module.trace_block_successors(function_ref, block) {
+                let to_block =
+                    sonatina_trace_block_key(block_kind, owner_key, function_ref, edge.to);
+                facts.push(TraceFact::CfgEdge(CfgEdgeFact::new(
+                    function_key.clone(),
+                    block_key.clone(),
+                    to_block,
+                    sonatina_trace_edge_kind(edge.kind, edge.ordinal),
+                    None,
+                )));
+            }
+
+            for inst in module.trace_instructions(function_ref, block) {
+                let inst_key = sonatina_trace_inst_key(inst_kind, owner_key, function_ref, inst);
+                push_node(&mut facts, inst_key.clone());
+                let mnemonic = module
+                    .trace_inst_kind(function_ref, inst)
+                    .map(|kind| kind.opcode.to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
+                facts.push(TraceFact::Instruction(InstructionFact::new(
+                    inst_key.clone(),
+                    function_key.clone(),
+                    instruction_index,
+                    mnemonic,
+                )));
+                facts.push(TraceFact::InstructionBlock(InstructionBlockFact::new(
+                    inst_key.clone(),
+                    block_key.clone(),
+                    phase,
+                )));
+                instruction_index += 1;
+
+                if let Some(frontend_origin) =
+                    sonatina_frontend_origin_for_inst(module, function_ref, inst)
+                {
+                    facts.push(TraceFact::OriginEdge(OriginEdgeFact::new(
+                        inst_key,
+                        frontend_origin,
+                        OriginEdgeLabel::LoweredFrom,
+                        Some(phase),
+                    )));
+                }
+            }
+        }
+    }
+    facts
 }
 
 /// Emit Sonatina-owned CFG and lowering bridge facts from the runtime package.
@@ -408,6 +511,10 @@ pub fn bytecode_runtime_owner_key(
     contract_name: &str,
 ) -> String {
     format!("package:{package_key}:module:{module_key}:contract:{contract_name}:section:runtime")
+}
+
+pub fn sonatina_module_owner_key(package_key: &str, module_key: &str) -> String {
+    format!("package:{package_key}:module:{module_key}:sonatina")
 }
 
 pub fn bytecode_function_key(owner_key: &str, function_local_key: &str) -> OriginExportKey {
@@ -899,6 +1006,87 @@ fn sonatina_block_key(
     sonatina_key(kind, owner, format!("block:{block_index}"))
 }
 
+fn sonatina_phase_kinds(
+    phase: CompilerPhase,
+) -> Option<(&'static str, &'static str, &'static str)> {
+    match phase {
+        CompilerPhase::SonatinaPreOpt => Some((
+            SONATINA_PREOPT_FUNCTION_KIND,
+            SONATINA_PREOPT_BLOCK_KIND,
+            SONATINA_PREOPT_INST_KIND,
+        )),
+        CompilerPhase::SonatinaPostOpt => Some((
+            SONATINA_POSTOPT_FUNCTION_KIND,
+            SONATINA_POSTOPT_BLOCK_KIND,
+            SONATINA_POSTOPT_INST_KIND,
+        )),
+        _ => None,
+    }
+}
+
+fn sonatina_function_key(
+    kind: &str,
+    owner_key: &str,
+    function: sonatina_ir::module::FuncRef,
+) -> OriginExportKey {
+    OriginExportKey::try_from_raw_parts(kind, owner_key, format!("function:{function:?}"))
+        .expect("Sonatina function trace key must be valid")
+}
+
+fn sonatina_trace_block_key(
+    kind: &str,
+    owner_key: &str,
+    function: sonatina_ir::module::FuncRef,
+    block: sonatina_ir::BlockId,
+) -> OriginExportKey {
+    OriginExportKey::try_from_raw_parts(
+        kind,
+        owner_key,
+        format!("function:{function:?}:block:{block:?}"),
+    )
+    .expect("Sonatina block trace key must be valid")
+}
+
+fn sonatina_trace_inst_key(
+    kind: &str,
+    owner_key: &str,
+    function: sonatina_ir::module::FuncRef,
+    inst: sonatina_ir::InstId,
+) -> OriginExportKey {
+    OriginExportKey::try_from_raw_parts(
+        kind,
+        owner_key,
+        format!("function:{function:?}:inst:{inst:?}"),
+    )
+    .expect("Sonatina instruction trace key must be valid")
+}
+
+fn sonatina_trace_edge_kind(kind: SonatinaCfgEdgeKind, ordinal: usize) -> CfgEdgeKind {
+    match kind {
+        SonatinaCfgEdgeKind::Jump => CfgEdgeKind::Jump,
+        SonatinaCfgEdgeKind::Branch if ordinal == 0 => CfgEdgeKind::BranchTrue,
+        SonatinaCfgEdgeKind::Branch if ordinal == 1 => CfgEdgeKind::BranchFalse,
+        SonatinaCfgEdgeKind::Branch | SonatinaCfgEdgeKind::BranchTable => CfgEdgeKind::Unknown,
+    }
+}
+
+fn sonatina_frontend_origin_for_inst(
+    module: &sonatina_ir::Module,
+    function_ref: sonatina_ir::module::FuncRef,
+    inst: sonatina_ir::InstId,
+) -> Option<OriginExportKey> {
+    module.func_store.try_view(function_ref, |function| {
+        let loc = function.inst_debug_loc(inst)?;
+        let origin = function
+            .debug
+            .debug_loc(loc)?
+            .primary_origin
+            .and_then(|origin| function.debug.frontend_origin(origin))?;
+        let external_key = origin.external_key.as_deref()?;
+        serde_json::from_str(external_key).ok()
+    })?
+}
+
 fn sonatina_loop_key(
     kind: &str,
     owner: &mir::RuntimeInstanceOwnerKey,
@@ -1039,14 +1227,15 @@ fn evm_static_gas(opcode: u8) -> u64 {
 mod tests {
     use common::{InputDb, origin::OriginExportKey};
     use driver::DriverDataBase;
-    use trace_facts::{TraceFact, TraceValidator};
+    use trace_facts::{CompilerPhase, OriginNodeFact, OriginNodeKind, TraceFact, TraceValidator};
     use url::Url;
 
     use crate::{
         BytecodePcRange, BytecodeSourceMapEntry,
         trace::{
             bytecode_runtime_owner_key, emit_bytecode_instruction_facts, emit_codegen_facts,
-            emit_sonatina_cfg_facts,
+            emit_sonatina_cfg_facts, emit_sonatina_trace_view_facts,
+            frontend_origin_record_for_export_key,
         },
     };
 
@@ -1126,6 +1315,83 @@ mod tests {
             fact,
             TraceFact::ShapeGraphHash(hash) if hash.graph.local.as_str() == "bytecode-shape"
         )));
+    }
+
+    #[test]
+    fn sonatina_trace_view_adapter_emits_cfg_and_frontend_origin_edge() {
+        use sonatina_ir::{
+            DebugConfidence, DebugLoc, Linkage, Signature, Type, builder::ModuleBuilder,
+            func_cursor::InstInserter, inst::arith::Add, isa::Isa, isa::evm::Evm,
+            module::ModuleCtx,
+        };
+        use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
+
+        let evm = Evm::new(TargetTriple::new(
+            Architecture::Evm,
+            Vendor::Ethereum,
+            OperatingSystem::Evm(EvmVersion::London),
+        ));
+        let mb = ModuleBuilder::new(ModuleCtx::new(&evm));
+        let func_ref = mb
+            .declare_function(Signature::new_single(
+                "traced",
+                Linkage::Public,
+                &[],
+                Type::I32,
+            ))
+            .unwrap();
+        let mut builder = mb.func_builder::<InstInserter>(func_ref);
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+        let lhs = builder.make_imm_value(1i32);
+        let rhs = builder.make_imm_value(2i32);
+        let value = builder.insert_inst(Add::new(evm.inst_set(), lhs, rhs), Type::I32);
+        let inst = builder.func.dfg.value_inst(value).unwrap();
+        let source_origin =
+            OriginExportKey::try_from_raw_parts("mir.stmt", "runtime:test", "block:0:stmt:0")
+                .unwrap();
+        let frontend_origin =
+            builder
+                .func
+                .debug
+                .add_frontend_origin(frontend_origin_record_for_export_key(
+                    &source_origin,
+                    sonatina_ir::FrontendOriginKind::SourceStmt,
+                ));
+        let loc = builder.func.debug.add_debug_loc(DebugLoc {
+            primary_origin: Some(frontend_origin),
+            source_span: None,
+            confidence: DebugConfidence::Exact,
+        });
+        builder.func.set_inst_debug_loc(inst, loc);
+        builder.insert_return(value);
+        builder.seal_all();
+        builder.finish();
+        let module = mb.build();
+
+        let mut facts = vec![TraceFact::OriginNode(OriginNodeFact::new(
+            source_origin.clone(),
+            OriginNodeKind::new(source_origin.kind()),
+        ))];
+        facts.extend(emit_sonatina_trace_view_facts(
+            "owner:test",
+            &module,
+            CompilerPhase::SonatinaPreOpt,
+        ));
+        TraceValidator::validate(&facts).unwrap();
+
+        assert!(facts.iter().any(|fact| {
+            matches!(fact, TraceFact::Instruction(instruction) if instruction.mnemonic == "add")
+        }));
+        assert!(facts.iter().any(|fact| {
+            matches!(
+                fact,
+                TraceFact::OriginEdge(edge)
+                    if edge.to == source_origin
+                        && edge.label == trace_facts::OriginEdgeLabel::LoweredFrom
+                        && edge.introduced_by == Some(CompilerPhase::SonatinaPreOpt)
+            )
+        }));
     }
 
     #[test]

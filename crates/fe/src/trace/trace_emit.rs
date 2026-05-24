@@ -9,8 +9,8 @@ use driver::{
 };
 use salsa::Setter;
 use trace_facts::{
-    JsonlTraceReader, JsonlTraceSink, OriginNodeFact, OriginNodeKind, SourceFileFact,
-    SourceSpanFact, TraceBundle, TraceFact, TraceSnapshot, TraceValidator,
+    CompilerPhase, JsonlTraceReader, JsonlTraceSink, OriginNodeFact, OriginNodeKind,
+    SourceFileFact, SourceSpanFact, TraceBundle, TraceFact, TraceSnapshot, TraceValidator,
 };
 use url::Url;
 
@@ -151,7 +151,17 @@ pub(super) fn emit_real_trace_bundle(
     let package = mir::build_runtime_package(&db, top_mod)
         .map_err(|err| format!("failed to build runtime package for trace: {err}"))?;
     let mut facts = mir::trace::emit_mir_facts(&db, package);
-    facts.extend(codegen::trace::emit_sonatina_cfg_facts(&db, package));
+    let module_key = top_mod.name(&db).data(&db).to_string();
+    let sonatina_module =
+        codegen::compile_runtime_package_sonatina(&db, &package, codegen::EVM_LAYOUT)
+            .map_err(|err| format!("failed to compile Sonatina IR for trace: {err}"))?;
+    let sonatina_owner =
+        codegen::trace::sonatina_module_owner_key(input_path.as_str(), &module_key);
+    facts.extend(codegen::trace::emit_sonatina_trace_view_facts(
+        &sonatina_owner,
+        &sonatina_module,
+        CompilerPhase::SonatinaPreOpt,
+    ));
     let source_file = source_file_key(&input_path);
     facts.extend(emit_standalone_source_file_facts(
         &input_path,
@@ -160,7 +170,6 @@ pub(super) fn emit_real_trace_bundle(
     ));
     let bytecode = codegen::emit_module_sonatina_bytecode(&db, top_mod, opt_level, None)
         .map_err(|err| format!("failed to compile bytecode for trace: {err}"))?;
-    let module_key = top_mod.name(&db).data(&db).to_string();
     for (contract_name, artifact) in bytecode {
         let owner_key = codegen::trace::bytecode_runtime_owner_key(
             input_path.as_str(),
