@@ -120,7 +120,7 @@ fn render_builtin_rulepack_report(
 }
 
 fn looks_like_rulepack_path(value: &str) -> bool {
-    value.contains('/') || value == "." || value.starts_with("..")
+    value.contains('/') || value.contains('\\') || value == "." || value.starts_with("..")
 }
 
 fn load_custom_rulepack(
