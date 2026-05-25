@@ -4,6 +4,7 @@ mod analyze;
 mod build;
 mod check;
 mod cli;
+mod debug_cli;
 mod dependency_diagnostics;
 mod doc;
 #[cfg(feature = "doc-server")]
@@ -60,6 +61,18 @@ pub enum AnalyzeFormat {
 pub enum TraceReportFormat {
     Text,
     Json,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum DatalogExportFormat {
+    Csv,
+    Jsonl,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum DebugExportFormat {
+    Dwarf,
+    Ethdebug,
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -510,7 +523,12 @@ pub enum DevCommand {
         #[command(subcommand)]
         command: TraceFixtureCommand,
     },
-    /// Reserved for validated compiler-derived trace JSONL.
+    /// Experimental debug export wrappers over validated trace bundles.
+    Debug {
+        #[command(subcommand)]
+        command: DevDebugCommand,
+    },
+    /// Experimental trace queries and exports over validated trace JSONL.
     Trace {
         #[command(subcommand)]
         command: DevTraceCommand,
@@ -645,6 +663,13 @@ pub enum DevTraceCommand {
         #[command(subcommand)]
         command: DevTraceQueryCommand,
     },
+    /// Export engine-agnostic Datalog base relations from a validated trace snapshot.
+    ExportDatalog(DevTraceDatalogExportArgs),
+    /// Experimental Datalog rulepack wrappers over validated trace snapshots.
+    Datalog {
+        #[command(subcommand)]
+        command: DevTraceDatalogCommand,
+    },
     /// Query a live LSP introspection endpoint discovered from .fe-lsp.json.
     Live {
         #[command(subcommand)]
@@ -682,6 +707,22 @@ pub enum DevTraceQueryCommand {
     OptimizedCodeHonesty(DevTraceInputArgs),
     /// Show variable locations active at a bytecode PC.
     VariablesAtPc(DevTracePcArgs),
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum DevTraceDatalogCommand {
+    /// Run a built-in/custom rulepack query. Currently validates inputs and reports unavailable until Phase 5.
+    Run(DevTraceDatalogRunArgs),
+    /// Initialize a skeleton custom rulepack directory.
+    InitRulepack(DevTraceDatalogInitArgs),
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum DevDebugCommand {
+    /// Emit an experimental debug artifact from a validated trace snapshot.
+    Emit(DevDebugEmitArgs),
+    /// Validate an experimental debug artifact.
+    Validate(DevDebugValidateArgs),
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -755,6 +796,97 @@ pub struct DevTraceInputArgs {
     /// Output format.
     #[arg(long, value_enum, default_value = "text")]
     pub format: TraceReportFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DevTraceDatalogExportArgs {
+    /// Trace JSONL bundle to read.
+    #[arg(long = "from", value_name = "TRACE_JSONL")]
+    pub from: Utf8PathBuf,
+    /// Output directory for relation files and manifest.
+    #[arg(long)]
+    pub out: Utf8PathBuf,
+    /// Relation row file format.
+    #[arg(long, value_enum, default_value = "csv")]
+    pub format: DatalogExportFormat,
+    /// Export only typed base relations generated from TraceFact rows.
+    #[arg(long)]
+    pub base_only: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DevTraceDatalogRunArgs {
+    /// Trace JSONL bundle to read.
+    #[arg(long = "from", value_name = "TRACE_JSONL")]
+    pub from: Utf8PathBuf,
+    /// Built-in rulepack id or custom rulepack directory.
+    #[arg(long)]
+    pub rulepack: String,
+    /// Rulepack query name.
+    #[arg(long)]
+    pub query: String,
+    /// Output format.
+    #[arg(long, value_enum, default_value = "text")]
+    pub format: TraceReportFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DevTraceDatalogInitArgs {
+    /// Directory to create for the rulepack skeleton.
+    pub path: Utf8PathBuf,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DevDebugEmitArgs {
+    /// Debug export format.
+    #[arg(long, value_enum)]
+    pub format: DebugExportFormat,
+    /// Trace JSONL bundle to read.
+    #[arg(long = "from", value_name = "TRACE_JSONL")]
+    pub from: Utf8PathBuf,
+    /// Output artifact path.
+    #[arg(long)]
+    pub out: Utf8PathBuf,
+    /// DWARF sections to emit, or ethdebug phase list.
+    #[arg(long)]
+    pub sections: Option<String>,
+    /// Compilation unit display name for DWARF metadata.
+    #[arg(long)]
+    pub unit_name: Option<String>,
+    /// Source language label for debug metadata.
+    #[arg(long, default_value = "fe")]
+    pub language: String,
+    /// Minimum source confidence label for debug rows.
+    #[arg(long, default_value = "compiler-emitted")]
+    pub confidence: String,
+    /// ethdebug schema version; use `pinned` for the vendored schema.
+    #[arg(long, default_value = "pinned")]
+    pub schema_version: String,
+    /// ethdebug phase list.
+    #[arg(long)]
+    pub phase: Option<String>,
+    /// Optional Fe origin/confidence sidecar output path for ethdebug.
+    #[arg(long)]
+    pub sidecar: Option<Utf8PathBuf>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DevDebugValidateArgs {
+    /// Debug export format.
+    #[arg(long, value_enum)]
+    pub format: DebugExportFormat,
+    /// Input artifact path.
+    #[arg(long)]
+    pub input: Utf8PathBuf,
+    /// ethdebug schema version; use `pinned` for the vendored schema.
+    #[arg(long, default_value = "pinned")]
+    pub schema_version: String,
+    /// Optional Fe origin/confidence sidecar to validate alongside ethdebug.
+    #[arg(long)]
+    pub sidecar: Option<Utf8PathBuf>,
+    /// Optional validation JSON output path.
+    #[arg(long)]
+    pub verify_json: Option<Utf8PathBuf>,
 }
 
 #[derive(Debug, Clone, Args)]

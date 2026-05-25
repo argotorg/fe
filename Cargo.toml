@@ -16,6 +16,7 @@ parser = { path = "crates/parser", package = "fe-parser" }
 test-utils = { path = "crates/test-utils", package = "fe-test-utils" }
 resolver = { path = "crates/resolver", package = "fe-resolver" }
 codegen = { path = "crates/codegen", package = "fe-codegen" }
+debug-export = { path = "crates/debug-export", package = "fe-debug-export" }
 fe-web = { path = "crates/fe-web" }
 semantic-indexing = { path = "crates/semantic-indexing", package = "fe-semantic-indexing" }
 language-server = { path = "crates/language-server", package = "fe-language-server" }

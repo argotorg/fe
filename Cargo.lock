@@ -2108,6 +2108,7 @@ dependencies = [
  "fe-codegen",
  "fe-common",
  "fe-contract-harness",
+ "fe-debug-export",
  "fe-driver",
  "fe-fmt",
  "fe-hir",

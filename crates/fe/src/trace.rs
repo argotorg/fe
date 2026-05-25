@@ -1,12 +1,25 @@
 mod trace_cli;
+mod trace_datalog;
 mod trace_emit;
 mod trace_fixture;
 mod trace_live;
 mod trace_render;
 
-use trace_facts::{TraceDataSource, TraceMetadata};
+use std::{fs::File, io::BufReader};
+
+use camino::Utf8PathBuf;
+use trace_facts::{TraceDataSource, TraceMetadata, TraceSnapshot};
 
 pub(crate) use trace_cli::run_dev_command;
+
+pub(crate) fn read_trace_snapshot_jsonl_from_path(
+    path: &Utf8PathBuf,
+) -> Result<TraceSnapshot, String> {
+    let file =
+        File::open(path.as_std_path()).map_err(|err| format!("failed to open {path}: {err}"))?;
+    TraceSnapshot::read_jsonl(BufReader::new(file))
+        .map_err(|err| format!("failed to read validated trace JSONL {path}: {err}"))
+}
 
 fn compiler_commit() -> String {
     runtime_git_commit()
@@ -28,7 +41,7 @@ fn runtime_git_commit() -> Option<String> {
     (!commit.is_empty()).then_some(commit)
 }
 
-fn format_data_source(metadata: &TraceMetadata) -> String {
+pub(crate) fn format_data_source(metadata: &TraceMetadata) -> String {
     match metadata.data_source {
         TraceDataSource::Fixture => {
             let marker = metadata.fixture_marker.as_deref().unwrap_or("unspecified");

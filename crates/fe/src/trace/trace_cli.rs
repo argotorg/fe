@@ -3,6 +3,7 @@ use crate::{DevCommand, DevTraceCommand, DevTraceQueryCommand, TraceFixtureComma
 pub(crate) fn run_dev_command(command: &DevCommand) -> Result<String, String> {
     match command {
         DevCommand::TraceFixture { command } => run_trace_fixture_command(command),
+        DevCommand::Debug { command } => crate::debug_cli::run_debug_command(command),
         DevCommand::Trace { command } => run_dev_trace_command(command),
     }
 }
@@ -35,6 +36,10 @@ fn run_dev_trace_command(command: &DevTraceCommand) -> Result<String, String> {
         DevTraceCommand::Emit(args) => super::trace_emit::run_trace_emit(args),
         DevTraceCommand::Validate(args) => super::trace_emit::run_trace_validate(args),
         DevTraceCommand::Query { command } => run_trace_query_command(command),
+        DevTraceCommand::ExportDatalog(args) => super::trace_datalog::run_export_datalog(args),
+        DevTraceCommand::Datalog { command } => {
+            super::trace_datalog::run_datalog_command(command)
+        }
         DevTraceCommand::Live { command } => super::trace_live::run_trace_live_command(command),
         DevTraceCommand::LoopCost(args) => super::trace_emit::run_trace_loop_cost(args),
         DevTraceCommand::LoopContents(args) => super::trace_emit::run_trace_loop_contents(args),

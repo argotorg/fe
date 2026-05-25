@@ -27,6 +27,7 @@ mir.workspace = true
 shape-address.workspace = true
 trace-facts.workspace = true
 trace-query.workspace = true
+debug-export.workspace = true
 cranelift-entity.workspace = true
 rustc-hash.workspace = true
 blake3.workspace = true
