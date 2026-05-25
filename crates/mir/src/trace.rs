@@ -711,11 +711,13 @@ fn local_binding_name<'db>(
         LocalBinding::Param { idx, .. } => format!("%param{idx}"),
         LocalBinding::EffectParam {
             binding_name, idx, ..
-        } => binding_name
-            .data(db)
-            .is_empty()
-            .then(|| format!("%effect{idx}"))
-            .unwrap_or_else(|| binding_name.data(db).to_string()),
+        } => {
+            if binding_name.data(db).is_empty() {
+                format!("%effect{idx}")
+            } else {
+                binding_name.data(db).to_string()
+            }
+        }
     }
 }
 

@@ -3,18 +3,10 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FeToolingConfig {
     pub lsp: LspToolingConfig,
-}
-
-impl Default for FeToolingConfig {
-    fn default() -> Self {
-        Self {
-            lsp: LspToolingConfig::default(),
-        }
-    }
 }
 
 impl FeToolingConfig {

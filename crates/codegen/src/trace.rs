@@ -1413,7 +1413,7 @@ fn evm_instruction_category(opcode: u8) -> InstructionCategory {
         0x52 | 0x53 | 0x55 => InstructionCategory::Store,
         0x56 => InstructionCategory::Jump,
         0x57 => InstructionCategory::Branch,
-        0x5f..=0x7f | 0x80..=0x9f => InstructionCategory::Move,
+        0x5f..=0x9f => InstructionCategory::Move,
         _ => InstructionCategory::Unknown,
     }
 }
@@ -1441,7 +1441,7 @@ fn evm_static_gas(opcode: u8) -> u64 {
         0x20 => 30,
         0x35 | 0x36 => 3,
         0x37 | 0x39 => 3,
-        0x51 | 0x52 | 0x53 => 3,
+        0x51..=0x53 => 3,
         0x54 => 100,
         0x55 => 100,
         0x56 => 8,

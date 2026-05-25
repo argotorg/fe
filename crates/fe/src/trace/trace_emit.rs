@@ -247,7 +247,7 @@ fn emit_standalone_source_file_facts(
             input_path.as_str(),
             input_path
                 .file_name()
-                .map_or_else(|| input_path.as_str(), |name| name)
+                .map_or(input_path.as_str(), |name| name)
                 .to_string(),
             trace_content_hash(content.as_bytes()),
             Some(0),

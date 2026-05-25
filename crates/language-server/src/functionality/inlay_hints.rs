@@ -79,6 +79,7 @@ async fn collect_trace_hints(
             )),
             kind: Some(InlayHintKind::PARAMETER),
             text_edits: None,
+            #[allow(clippy::format_in_format_args)]
             tooltip: Some(async_lsp::lsp_types::InlayHintTooltip::String(format!(
                 "Trace-backed loop cost from {} ({})",
                 report.metadata.data_source,

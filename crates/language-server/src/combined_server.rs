@@ -1,3 +1,4 @@
+#![allow(clippy::items_after_test_module)]
 //! Combined HTTP (doc pages) + WebSocket (LSP) server.
 //!
 //! Replaces the standalone `ws_lsp.rs` server. Serves static documentation
@@ -44,6 +45,7 @@ pub type SharedActor = ActorRef<Backend, LspActorKey>;
 /// - `/lsp` upgrades to WebSocket and bridges to the shared Backend.
 /// - `fe/navigate` notifications are forwarded to WS clients from `doc_nav_tx`.
 /// - `fe/docReload` notifications are forwarded from `doc_reload_tx`.
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     listener: tokio::net::TcpListener,
     doc_html: String,

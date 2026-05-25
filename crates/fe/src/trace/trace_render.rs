@@ -627,7 +627,7 @@ fn render_gas_breakdown_report(report: &GasBreakdownReport) -> String {
     ));
     out.push_str("Top opcode contributors:\n");
     let mut rows = report.rows.clone();
-    rows.sort_by(|a, b| b.gas.cmp(&a.gas));
+    rows.sort_by_key(|b| std::cmp::Reverse(b.gas));
     for row in rows.iter().take(12) {
         out.push_str(&format!(
             "  {:>4} gas  {:<24} {} ({})\n",

@@ -235,7 +235,7 @@ fn normalize_hex(hex: &str) -> Result<String, String> {
     if hex.is_empty() {
         return Ok(String::new());
     }
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return Err("bytecode hex must contain an even number of digits".to_string());
     }
     if !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {

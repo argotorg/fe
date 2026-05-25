@@ -15,6 +15,7 @@ pub struct TraceSnapshot {
 }
 
 impl TraceSnapshot {
+    #[allow(clippy::result_large_err)]
     pub fn new(bundle: TraceBundle) -> Result<Self, TraceValidationError> {
         let validation = TraceValidator::check(&bundle.facts);
         if let Some(error) = validation.first_error() {
@@ -29,6 +30,7 @@ impl TraceSnapshot {
         })
     }
 
+    #[allow(clippy::result_large_err)]
     pub fn read_jsonl(reader: impl BufRead) -> Result<Self, TraceSnapshotReadError> {
         let bundle = read_trace_bundle_jsonl(reader)?;
         Self::new(bundle).map_err(TraceSnapshotReadError::Validation)
@@ -56,6 +58,7 @@ impl TraceSnapshot {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum TraceSnapshotReadError {
     Jsonl(JsonlTraceReadError),
     Validation(TraceValidationError),

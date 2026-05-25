@@ -138,7 +138,7 @@ fn ensure_workspace_file(backend: &Backend, uri: &Url) -> Result<(), String> {
     let path = uri
         .to_file_path()
         .map_err(|()| format!("trace query URI is not a local file path: {uri}"))?;
-    if !path.extension().is_some_and(|ext| ext == "fe") {
+    if path.extension().is_none_or(|ext| ext != "fe") {
         return Err(format!("trace query URI must point to a .fe file: {uri}"));
     }
     if let Some(root) = backend.lsp_workspace_root.as_ref()

@@ -906,6 +906,7 @@ fn default_gas_schedule() -> String {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum TraceQueryHttpResponse {
     Ok {
         report: TraceQueryReport,

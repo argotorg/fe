@@ -117,6 +117,7 @@ pub enum TraceValidationInfo {
 pub struct TraceValidator;
 
 impl TraceValidator {
+    #[allow(clippy::result_large_err)]
     pub fn validate(facts: &[TraceFact]) -> Result<TraceValidationSummary, TraceValidationError> {
         let report = Self::check(facts);
         if let Some(error) = report.first_error() {
