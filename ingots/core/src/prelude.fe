@@ -4,6 +4,7 @@ pub use super::{
     marker::Copy,
     error::ErrorVariant,
     message::MsgVariant,
+    num::Bounded,
     num::IntDowncast,
     option::Option::{self, *},
     result::Result::{self, *},
