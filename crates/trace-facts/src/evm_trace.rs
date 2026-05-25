@@ -4,12 +4,17 @@ use std::fmt;
 use common::origin::OriginExportKey;
 use serde::{Deserialize, Serialize};
 
-use crate::{DynamicGasStepFact, TraceFact};
+use crate::{
+    DynamicGasStepFact, ExecutionStepFact, ExecutionTraceSessionFact, OriginNodeFact,
+    RuntimeCaptureMode, RuntimeCodeObjectBindingFact, RuntimePcJoinConfidence,
+    RuntimeTraceDataSource, RuntimeValue, RuntimeValuePolicy, StackSampleFact, TraceFact,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EvmExecutionTrace {
     pub trace_id: String,
     pub code_object: OriginExportKey,
+    pub source: RuntimeTraceDataSource,
     pub steps: Vec<EvmExecutionStep>,
 }
 
@@ -22,6 +27,7 @@ impl EvmExecutionTrace {
         Self {
             trace_id: trace_id.into(),
             code_object,
+            source: RuntimeTraceDataSource::DebugTraceTransaction,
             steps,
         }
     }
@@ -38,26 +44,61 @@ impl EvmExecutionTrace {
         };
         Ok(Self::new(trace_id, code_object, steps))
     }
+
+    pub fn from_eip3155_jsonl(
+        trace_id: impl Into<String>,
+        code_object: OriginExportKey,
+        jsonl: &str,
+    ) -> Result<Self, EvmExecutionTraceError> {
+        let mut steps = Vec::new();
+        for (index, line) in jsonl.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let step = serde_json::from_str::<EvmExecutionStep>(line).map_err(|source| {
+                EvmExecutionTraceError::JsonLine {
+                    line: index + 1,
+                    source,
+                }
+            })?;
+            steps.push(step);
+        }
+        Ok(Self {
+            trace_id: trace_id.into(),
+            code_object,
+            source: RuntimeTraceDataSource::Eip3155,
+            steps,
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EvmExecutionStep {
     pub pc: u32,
+    #[serde(default, alias = "op", alias = "opName", alias = "opcode")]
+    pub opcode: Option<String>,
+    #[serde(default)]
+    pub depth: Option<u32>,
     #[serde(alias = "gas")]
     pub gas_before: u64,
     #[serde(default, alias = "gasCost")]
     pub gas_cost: Option<u64>,
     #[serde(default)]
     pub gas_after: Option<u64>,
+    #[serde(default)]
+    pub stack: Vec<String>,
 }
 
 impl EvmExecutionStep {
     pub fn new(pc: u32, gas_before: u64, gas_after: u64) -> Self {
         Self {
             pc,
+            opcode: None,
+            depth: None,
             gas_before,
             gas_cost: Some(gas_before.saturating_sub(gas_after)),
             gas_after: Some(gas_after),
+            stack: Vec::new(),
         }
     }
 
@@ -85,6 +126,54 @@ impl EvmExecutionStep {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuntimeImportConfig {
+    pub session: OriginExportKey,
+    pub code_object: OriginExportKey,
+    pub runtime_code_hash: String,
+    pub source: RuntimeTraceDataSource,
+    pub capture_mode: RuntimeCaptureMode,
+    pub value_policy: RuntimeValuePolicy,
+    pub instruction_by_pc: BTreeMap<u32, OriginExportKey>,
+}
+
+impl RuntimeImportConfig {
+    pub fn new(
+        session: OriginExportKey,
+        code_object: OriginExportKey,
+        runtime_code_hash: impl Into<String>,
+        source: RuntimeTraceDataSource,
+    ) -> Self {
+        Self {
+            session,
+            code_object,
+            runtime_code_hash: runtime_code_hash.into(),
+            source,
+            capture_mode: RuntimeCaptureMode::Standard,
+            value_policy: RuntimeValuePolicy::HashOnly,
+            instruction_by_pc: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_capture_mode(mut self, capture_mode: RuntimeCaptureMode) -> Self {
+        self.capture_mode = capture_mode;
+        self
+    }
+
+    pub fn with_value_policy(mut self, value_policy: RuntimeValuePolicy) -> Self {
+        self.value_policy = value_policy;
+        self
+    }
+
+    pub fn with_instruction_by_pc(
+        mut self,
+        instruction_by_pc: impl IntoIterator<Item = (u32, OriginExportKey)>,
+    ) -> Self {
+        self.instruction_by_pc = instruction_by_pc.into_iter().collect();
+        self
+    }
+}
+
 pub fn dynamic_gas_facts_from_evm_trace(
     trace: &EvmExecutionTrace,
     base_facts: &[TraceFact],
@@ -108,6 +197,117 @@ pub fn dynamic_gas_facts_from_evm_trace(
             )))
         })
         .collect()
+}
+
+pub fn runtime_facts_from_debug_trace_json(
+    config: RuntimeImportConfig,
+    json: &str,
+) -> Result<Vec<TraceFact>, EvmExecutionTraceError> {
+    let trace = EvmExecutionTrace::from_debug_trace_json(
+        config.session.canonical_storage_key(),
+        config.code_object.clone(),
+        json,
+    )?;
+    runtime_facts_from_evm_execution_trace(&config, &trace)
+}
+
+pub fn runtime_facts_from_eip3155_jsonl(
+    config: RuntimeImportConfig,
+    jsonl: &str,
+) -> Result<Vec<TraceFact>, EvmExecutionTraceError> {
+    let trace = EvmExecutionTrace::from_eip3155_jsonl(
+        config.session.canonical_storage_key(),
+        config.code_object.clone(),
+        jsonl,
+    )?;
+    runtime_facts_from_evm_execution_trace(&config, &trace)
+}
+
+pub fn runtime_facts_from_evm_execution_trace(
+    config: &RuntimeImportConfig,
+    trace: &EvmExecutionTrace,
+) -> Result<Vec<TraceFact>, EvmExecutionTraceError> {
+    let mut facts = Vec::new();
+    let binding = runtime_key(&config.session, "runtime.binding", "binding:runtime");
+    facts.push(node(config.session.clone()));
+    facts.push(node(binding.clone()));
+    facts.push(TraceFact::ExecutionTraceSession(
+        ExecutionTraceSessionFact {
+            session: config.session.clone(),
+            source: config.source,
+            capture_mode: config.capture_mode,
+            value_policy: config.value_policy,
+            transaction_hash: None,
+            chain_id: None,
+            block_number: None,
+            entry_code_object: Some(config.code_object.clone()),
+        },
+    ));
+    facts.push(TraceFact::RuntimeCodeObjectBinding(
+        RuntimeCodeObjectBindingFact {
+            binding,
+            session: config.session.clone(),
+            code_object: config.code_object.clone(),
+            runtime_code_hash: config.runtime_code_hash.clone(),
+            address: None,
+            confidence: RuntimePcJoinConfidence::PcOnlyWithinUniqueCodeObject,
+        },
+    ));
+    for (index, step) in trace.steps.iter().enumerate() {
+        let gas_after = step.resolved_gas_after()?;
+        let step_key = runtime_key(&config.session, "runtime.step", format!("step:{index}"));
+        let instruction = config.instruction_by_pc.get(&step.pc).cloned();
+        let join_confidence = if instruction.is_some() {
+            RuntimePcJoinConfidence::PcOnlyWithinUniqueCodeObject
+        } else {
+            RuntimePcJoinConfidence::MissingStaticInstruction
+        };
+        facts.push(node(step_key.clone()));
+        facts.push(TraceFact::ExecutionStep(ExecutionStepFact {
+            step: step_key.clone(),
+            session: config.session.clone(),
+            step_index: index as u64,
+            code_object: config.code_object.clone(),
+            pc: step.pc,
+            opcode: step.opcode.clone().unwrap_or_else(|| "UNKNOWN".to_string()),
+            instruction: instruction.clone(),
+            gas_before: step.gas_before,
+            gas_after,
+            gas_cost: step.gas_before.saturating_sub(gas_after),
+            depth: step.depth.unwrap_or(1),
+            join_confidence,
+        }));
+        facts.push(TraceFact::DynamicGasStep(DynamicGasStepFact::new(
+            trace.trace_id.clone(),
+            index as u64,
+            config.code_object.clone(),
+            step.pc,
+            instruction,
+            step.gas_before,
+            gas_after,
+            step.gas_before.saturating_sub(gas_after),
+        )));
+        if matches!(
+            config.capture_mode,
+            RuntimeCaptureMode::Full | RuntimeCaptureMode::DebugFull
+        ) && !step.stack.is_empty()
+        {
+            let sample = runtime_key(&config.session, "runtime.stack", format!("sample:{index}"));
+            facts.push(node(sample.clone()));
+            facts.push(TraceFact::StackSample(StackSampleFact {
+                sample,
+                step: step_key,
+                policy: config.value_policy,
+                values_top_first: step
+                    .stack
+                    .iter()
+                    .rev()
+                    .map(|value| imported_runtime_value(value, config.value_policy))
+                    .collect(),
+            }));
+        }
+    }
+    Ok(facts)
 }
 
 fn instruction_pc_index(
@@ -148,16 +348,55 @@ fn instruction_pc(instruction: &OriginExportKey) -> Option<u32> {
         .flatten()
 }
 
+fn node(key: OriginExportKey) -> TraceFact {
+    TraceFact::OriginNode(OriginNodeFact::from_key(key))
+}
+
+fn runtime_key(session: &OriginExportKey, kind: &str, local: impl Into<String>) -> OriginExportKey {
+    OriginExportKey::try_from_raw_parts(kind, session.owner_key(), local.into())
+        .expect("runtime import key should be valid")
+}
+
+fn imported_runtime_value(value: &str, policy: RuntimeValuePolicy) -> RuntimeValue {
+    match policy {
+        RuntimeValuePolicy::Redacted => RuntimeValue::redacted(),
+        RuntimeValuePolicy::HashOnly => RuntimeValue::hash(
+            "blake3",
+            blake3::hash(value.as_bytes()).to_hex().to_string(),
+        ),
+        RuntimeValuePolicy::Full => RuntimeValue::bytes(normalize_hex(value)),
+    }
+}
+
+fn normalize_hex(value: &str) -> String {
+    let trimmed = value.trim().strip_prefix("0x").unwrap_or(value.trim());
+    if trimmed.len().is_multiple_of(2) {
+        trimmed.to_string()
+    } else {
+        format!("0{trimmed}")
+    }
+}
+
 #[derive(Debug)]
 pub enum EvmExecutionTraceError {
     Json(serde_json::Error),
-    InvalidStepGas { pc: u32, reason: &'static str },
+    JsonLine {
+        line: usize,
+        source: serde_json::Error,
+    },
+    InvalidStepGas {
+        pc: u32,
+        reason: &'static str,
+    },
 }
 
 impl fmt::Display for EvmExecutionTraceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Json(err) => write!(f, "invalid EVM execution trace JSON: {err}"),
+            Self::JsonLine { line, source } => {
+                write!(f, "invalid EVM execution trace JSONL line {line}: {source}")
+            }
             Self::InvalidStepGas { pc, reason } => {
                 write!(f, "invalid EVM execution trace step at pc {pc}: {reason}")
             }
@@ -165,7 +404,14 @@ impl fmt::Display for EvmExecutionTraceError {
     }
 }
 
-impl std::error::Error for EvmExecutionTraceError {}
+impl std::error::Error for EvmExecutionTraceError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Json(source) | Self::JsonLine { source, .. } => Some(source),
+            Self::InvalidStepGas { .. } => None,
+        }
+    }
+}
 
 impl From<serde_json::Error> for EvmExecutionTraceError {
     fn from(err: serde_json::Error) -> Self {
@@ -179,7 +425,10 @@ mod tests {
 
     use crate::{
         CodeObjectFact, CodeObjectKind, EvmExecutionTrace, FunctionFact, InstructionFact,
-        OriginNodeFact, OriginNodeKind, TraceFact, dynamic_gas_facts_from_evm_trace,
+        OriginNodeFact, OriginNodeKind, RuntimeCaptureMode, RuntimeImportConfig,
+        RuntimeTraceDataSource, RuntimeValuePolicy, TraceFact, TraceValidator,
+        dynamic_gas_facts_from_evm_trace, runtime_facts_from_debug_trace_json,
+        runtime_facts_from_eip3155_jsonl,
     };
 
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -238,5 +487,97 @@ mod tests {
         assert_eq!(step.gas_before, 100);
         assert_eq!(step.gas_after, 97);
         assert_eq!(step.gas_cost, 3);
+    }
+
+    #[test]
+    fn imports_debug_trace_as_valid_runtime_facts() {
+        let code_object = key("code.object", "demo", "runtime");
+        let function = key("bytecode.function", "demo", "runtime");
+        let instruction = key("bytecode.pc", "demo", "pc:4");
+        let session = key("runtime.session", "tx:1", "session");
+        let mut facts = vec![
+            node(code_object.clone()),
+            node(function.clone()),
+            node(instruction.clone()),
+            TraceFact::CodeObject(CodeObjectFact::new(
+                code_object.clone(),
+                CodeObjectKind::EvmRuntimeBytecode,
+                Some(function.clone()),
+                "evm/sonatina",
+                Some(
+                    "blake3:000000000000000000000000000000000000000000000000000000000000beef"
+                        .to_string(),
+                ),
+            )),
+            TraceFact::Function(FunctionFact::new(
+                function.clone(),
+                "runtime",
+                None,
+                Some(code_object.clone()),
+            )),
+            TraceFact::Instruction(InstructionFact::new(
+                instruction.clone(),
+                function,
+                0,
+                "ADD",
+            )),
+        ];
+        let config = RuntimeImportConfig::new(
+            session,
+            code_object,
+            "blake3:000000000000000000000000000000000000000000000000000000000000beef",
+            RuntimeTraceDataSource::DebugTraceTransaction,
+        )
+        .with_capture_mode(RuntimeCaptureMode::Full)
+        .with_value_policy(RuntimeValuePolicy::Full)
+        .with_instruction_by_pc([(4, instruction)]);
+
+        facts.extend(
+            runtime_facts_from_debug_trace_json(
+                config,
+                r#"{"structLogs":[{"pc":4,"op":"ADD","gas":100,"gasCost":3,"depth":1,"stack":["0x01","0x02"]}]}"#,
+            )
+            .unwrap(),
+        );
+
+        assert!(
+            facts
+                .iter()
+                .any(|fact| matches!(fact, TraceFact::ExecutionStep(step) if step.opcode == "ADD"))
+        );
+        assert!(
+            facts
+                .iter()
+                .any(|fact| matches!(fact, TraceFact::StackSample(_)))
+        );
+        assert!(TraceValidator::validate(&facts).is_ok());
+    }
+
+    #[test]
+    fn imports_eip3155_jsonl_as_runtime_facts() {
+        let code_object = key("code.object", "demo", "runtime");
+        let session = key("runtime.session", "tx:1", "session");
+        let mut facts = vec![node(code_object.clone())];
+        let config = RuntimeImportConfig::new(
+            session,
+            code_object,
+            "blake3:000000000000000000000000000000000000000000000000000000000000beef",
+            RuntimeTraceDataSource::Eip3155,
+        );
+
+        facts.extend(
+            runtime_facts_from_eip3155_jsonl(
+                config,
+                r#"{"pc":0,"opName":"STOP","gas":10,"gasCost":0}"#,
+            )
+            .unwrap(),
+        );
+
+        assert!(
+            facts.iter().any(
+                |fact| matches!(fact, TraceFact::ExecutionStep(step) if step.opcode == "STOP")
+            )
+        );
+        assert!(TraceValidator::validate(&facts).is_ok());
     }
 }

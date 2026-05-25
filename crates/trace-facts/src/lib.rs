@@ -6,7 +6,9 @@ pub mod snapshot;
 pub mod validate;
 
 pub use evm_trace::{
-    EvmExecutionStep, EvmExecutionTrace, EvmExecutionTraceError, dynamic_gas_facts_from_evm_trace,
+    EvmExecutionStep, EvmExecutionTrace, EvmExecutionTraceError, RuntimeImportConfig,
+    dynamic_gas_facts_from_evm_trace, runtime_facts_from_debug_trace_json,
+    runtime_facts_from_eip3155_jsonl, runtime_facts_from_evm_execution_trace,
 };
 pub use fact::{
     BlockFact, CallFact, CategorySource, CfgEdgeFact, CfgEdgeKind, CodeObjectFact, CodeObjectKind,
