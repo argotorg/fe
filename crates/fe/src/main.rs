@@ -75,6 +75,42 @@ pub enum DebugExportFormat {
     Ethdebug,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum RuntimeCaptureModeArg {
+    Minimal,
+    Standard,
+    Full,
+    DebugFull,
+}
+
+impl From<RuntimeCaptureModeArg> for trace_facts::RuntimeCaptureMode {
+    fn from(value: RuntimeCaptureModeArg) -> Self {
+        match value {
+            RuntimeCaptureModeArg::Minimal => Self::Minimal,
+            RuntimeCaptureModeArg::Standard => Self::Standard,
+            RuntimeCaptureModeArg::Full => Self::Full,
+            RuntimeCaptureModeArg::DebugFull => Self::DebugFull,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum RuntimeValuePolicyArg {
+    Redacted,
+    HashOnly,
+    Full,
+}
+
+impl From<RuntimeValuePolicyArg> for trace_facts::RuntimeValuePolicy {
+    fn from(value: RuntimeValuePolicyArg) -> Self {
+        match value {
+            RuntimeValuePolicyArg::Redacted => Self::Redacted,
+            RuntimeValuePolicyArg::HashOnly => Self::HashOnly,
+            RuntimeValuePolicyArg::Full => Self::Full,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Parser)]
 #[command(version, about, long_about = None)]
 pub struct Options {
@@ -656,6 +692,8 @@ pub enum DevTraceCommand {
     Status,
     /// Emit compiler-derived trace JSONL for a Fe target.
     Emit(DevTraceEmitArgs),
+    /// Execute a compiled trace target in revm and append runtime facts.
+    Run(DevTraceRunArgs),
     /// Validate a trace JSONL bundle before running reports.
     Validate(DevTraceInputArgs),
     /// Run a report query against a validated trace snapshot.
@@ -802,6 +840,34 @@ pub struct DevTraceEmitArgs {
     /// Optimization level for emitted bytecode facts.
     #[arg(long = "optimize", short = 'O', default_value = "1", value_parser = ["0", "1", "2", "s"])]
     pub optimize: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DevTraceRunArgs {
+    /// Static compiler trace JSONL bundle to extend with runtime facts.
+    #[arg(long = "static", value_name = "TRACE_JSONL")]
+    pub static_trace: Utf8PathBuf,
+    /// Source file to compile for execution. Defaults to the static trace input path.
+    #[arg(long)]
+    pub source: Option<Utf8PathBuf>,
+    /// Entry label in the form Contract or Contract::Message. Used only to select the contract.
+    #[arg(long)]
+    pub entry: String,
+    /// Explicit 4-byte message selector as hex. This command does not infer ABI selectors.
+    #[arg(long)]
+    pub selector: String,
+    /// ABI word arguments as decimal integers or 0x-prefixed hex. Repeat or comma-separate.
+    #[arg(long = "args", value_delimiter = ',')]
+    pub args: Vec<String>,
+    /// Runtime capture detail level.
+    #[arg(long = "runtime-capture", value_enum, default_value = "standard")]
+    pub runtime_capture: RuntimeCaptureModeArg,
+    /// Runtime value capture policy.
+    #[arg(long = "value-policy", value_enum, default_value = "hash-only")]
+    pub value_policy: RuntimeValuePolicyArg,
+    /// Output combined trace JSONL bundle path.
+    #[arg(long)]
+    pub out: Utf8PathBuf,
 }
 
 #[derive(Debug, Clone, Args)]

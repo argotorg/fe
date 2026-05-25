@@ -263,6 +263,11 @@ impl<S: RuntimeTraceSink> FeRuntimeTraceInspector<S> {
             RuntimeCaptureMode::Full | RuntimeCaptureMode::DebugFull
         ) {
             self.emit_stack_sample(&pending);
+        }
+        if matches!(
+            self.config.capture_mode,
+            RuntimeCaptureMode::Standard | RuntimeCaptureMode::Full | RuntimeCaptureMode::DebugFull
+        ) {
             self.emit_memory_or_storage_access(&pending, instruction);
         }
         self.next_step_index += 1;

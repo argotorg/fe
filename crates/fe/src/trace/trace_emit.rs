@@ -1,22 +1,25 @@
+use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Cursor};
 
 use camino::Utf8PathBuf;
 use common::{InputDb, origin::OriginExportKey};
+use contract_harness::{CompileOptions, ExecutionOptions, FeContractHarness, RuntimeTraceConfig};
 use driver::{
     DriverDataBase,
     cli_target::{CliTarget, resolve_cli_target},
 };
 use salsa::Setter;
 use trace_facts::{
-    CompilerPhase, JsonlTraceReader, JsonlTraceSink, OriginNodeFact, OriginNodeKind,
-    SourceFileFact, SourceSpanFact, TraceBundle, TraceFact, TraceSnapshot, TraceValidator,
+    CodeObjectFact, CodeObjectKind, CompilerPhase, InstructionExtentFact, JsonlTraceReader,
+    JsonlTraceSink, OriginNodeFact, OriginNodeKind, SourceFileFact, SourceSpanFact, TraceBundle,
+    TraceFact, TraceSnapshot, TraceValidator,
 };
 use url::Url;
 
 use crate::{
     DevTraceAttributionArgs, DevTraceDynamicGasArgs, DevTraceEmitArgs, DevTraceExplainLocalArgs,
-    DevTraceGasArgs, DevTraceGasToSourceArgs, DevTraceInputArgs, DevTracePcArgs,
+    DevTraceGasArgs, DevTraceGasToSourceArgs, DevTraceInputArgs, DevTracePcArgs, DevTraceRunArgs,
     DevTraceRuntimeArgs, DevTraceRuntimeAttributionArgs, DevTraceRuntimePcArgs,
     DevTraceStorageSlotArgs,
 };
@@ -34,6 +37,116 @@ pub(super) fn run_trace_emit(args: &DevTraceEmitArgs) -> Result<String, String> 
         summary.fact_count,
         summary.node_count,
         summary.instruction_count
+    ))
+}
+
+pub(super) fn run_trace_run(args: &DevTraceRunArgs) -> Result<String, String> {
+    let static_bundle = read_trace_bundle_jsonl_from_path(&args.static_trace)?;
+    let static_snapshot = TraceSnapshot::new(static_bundle.clone())
+        .map_err(|err| format!("static trace validation failed: {err}"))?;
+    let contract = contract_from_entry(&args.entry)?;
+    let source_path = args
+        .source
+        .clone()
+        .unwrap_or_else(|| Utf8PathBuf::from(static_snapshot.metadata().input_path.clone()));
+    let code_object = select_runtime_code_object(static_snapshot.facts(), contract)?;
+    let instruction_by_pc = runtime_instruction_by_pc(static_snapshot.facts(), code_object)?;
+    let opt_level = opt_level_from_metadata(static_snapshot.metadata())?;
+    let harness = FeContractHarness::compile_from_file(
+        contract,
+        source_path.as_std_path(),
+        CompileOptions { opt_level },
+    )
+    .map_err(|err| format!("failed to compile runtime target {contract}: {err}"))?;
+    let runtime_hash = runtime_code_hash(harness.runtime_bytecode())?;
+    let static_hash = code_object.code_hash.clone().ok_or_else(|| {
+        format!(
+            "static code object {} has no code hash",
+            code_object.code_object.canonical_storage_key()
+        )
+    })?;
+    if static_hash != runtime_hash {
+        return Err(format!(
+            "runtime bytecode hash mismatch for {contract}: static trace has {static_hash}, execution compile produced {runtime_hash}"
+        ));
+    }
+
+    let calldata = encode_selector_call(&args.selector, &args.args)?;
+    let mut check_instance = harness
+        .deploy_with_init()
+        .map_err(|err| format!("failed to deploy {contract}: {err}"))?;
+    let call_result = check_instance
+        .call_raw(&calldata, ExecutionOptions::default())
+        .map_err(|err| format!("runtime execution failed for {contract}: {err}"))?;
+
+    let trace_instance = harness
+        .deploy_with_init()
+        .map_err(|err| format!("failed to deploy trace instance for {contract}: {err}"))?;
+    let session = runtime_session_key(&code_object.code_object, &args.entry, &args.args)?;
+    let runtime_facts = trace_instance
+        .call_raw_runtime_trace(
+            &calldata,
+            ExecutionOptions::default(),
+            RuntimeTraceConfig::new(
+                session,
+                code_object.code_object.clone(),
+                runtime_hash.clone(),
+            )
+            .with_address(trace_instance.address())
+            .with_capture_mode(args.runtime_capture.into())
+            .with_value_policy(args.value_policy.into())
+            .with_instruction_by_pc(instruction_by_pc),
+        )
+        .map_err(|err| format!("runtime trace capture failed for {contract}: {err}"))?;
+
+    let mut metadata = static_bundle.metadata;
+    metadata.command = vec![
+        "fe".to_string(),
+        "dev".to_string(),
+        "trace".to_string(),
+        "run".to_string(),
+    ];
+    metadata.flags.push(format!("static={}", args.static_trace));
+    metadata.flags.push(format!("entry={}", args.entry));
+    metadata.flags.push(format!("selector={}", args.selector));
+    metadata.flags.push(format!(
+        "runtime_capture={:?}",
+        trace_facts::RuntimeCaptureMode::from(args.runtime_capture)
+    ));
+    metadata.flags.push(format!(
+        "value_policy={:?}",
+        trace_facts::RuntimeValuePolicy::from(args.value_policy)
+    ));
+    metadata.flags.push(format!(
+        "runtime_source={:?}",
+        trace_facts::RuntimeTraceDataSource::RevmInspector
+    ));
+
+    let mut facts = static_bundle.facts;
+    let runtime_fact_count = runtime_facts.len();
+    facts.extend(runtime_facts);
+    let combined = TraceBundle::new(metadata, facts);
+    let summary = TraceValidator::validate(&combined.facts)
+        .map_err(|err| format!("combined runtime trace is invalid: {err}"))?;
+    write_trace_bundle_jsonl(&args.out, &combined)?;
+    Ok(format!(
+        "wrote combined runtime trace JSONL: {}\n\
+         Data source: {}\n\
+         Runtime source: revm_inspector\n\
+         Capture mode: {:?}\n\
+         Value policy: {:?}\n\
+         Runtime facts appended: {}\n\
+         Runtime return bytes: {}\n\
+         Facts: {}\n\
+         Instructions: {}\n",
+        args.out,
+        super::format_data_source(&combined.metadata),
+        trace_facts::RuntimeCaptureMode::from(args.runtime_capture),
+        trace_facts::RuntimeValuePolicy::from(args.value_policy),
+        runtime_fact_count,
+        call_result.return_data.len(),
+        summary.fact_count,
+        summary.instruction_count,
     ))
 }
 
@@ -221,6 +334,154 @@ pub(super) fn run_trace_value_flow_at_pc(args: &DevTraceRuntimePcArgs) -> Result
         args.trace_id.clone(),
         args.format,
     )
+}
+
+fn contract_from_entry(entry: &str) -> Result<&str, String> {
+    let contract = entry
+        .split_once("::")
+        .map_or(entry, |(contract, _)| contract);
+    if contract.trim().is_empty() {
+        Err("trace run --entry must include a contract name".to_string())
+    } else {
+        Ok(contract)
+    }
+}
+
+fn opt_level_from_metadata(
+    metadata: &trace_facts::TraceMetadata,
+) -> Result<codegen::OptLevel, String> {
+    metadata
+        .flags
+        .iter()
+        .find_map(|flag| flag.strip_prefix("optimize="))
+        .unwrap_or("1")
+        .parse::<codegen::OptLevel>()
+        .map_err(|err| format!("failed to parse static trace optimize flag: {err}"))
+}
+
+fn select_runtime_code_object<'a>(
+    facts: &'a [TraceFact],
+    contract: &str,
+) -> Result<&'a CodeObjectFact, String> {
+    let needle = format!("contract:{contract}:section:runtime");
+    let matches = facts
+        .iter()
+        .filter_map(|fact| match fact {
+            TraceFact::CodeObject(code_object)
+                if code_object.kind == CodeObjectKind::EvmRuntimeBytecode
+                    && code_object.code_object.owner_key().contains(&needle) =>
+            {
+                Some(code_object)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [code_object] => Ok(code_object),
+        [] => Err(format!(
+            "static trace does not contain an EVM runtime code object for contract {contract}"
+        )),
+        _ => Err(format!(
+            "static trace contains multiple runtime code objects for contract {contract}; refine --entry"
+        )),
+    }
+}
+
+fn runtime_instruction_by_pc(
+    facts: &[TraceFact],
+    code_object: &CodeObjectFact,
+) -> Result<BTreeMap<u32, OriginExportKey>, String> {
+    let mut by_pc = BTreeMap::new();
+    for extent in facts.iter().filter_map(|fact| match fact {
+        TraceFact::InstructionExtent(extent) if extent.code_object == code_object.code_object => {
+            Some(extent)
+        }
+        _ => None,
+    }) {
+        insert_extent_pc(&mut by_pc, extent)?;
+    }
+    if by_pc.is_empty() {
+        return Err(format!(
+            "static trace has no instruction extents for runtime code object {}",
+            code_object.code_object.canonical_storage_key()
+        ));
+    }
+    Ok(by_pc)
+}
+
+fn insert_extent_pc(
+    by_pc: &mut BTreeMap<u32, OriginExportKey>,
+    extent: &InstructionExtentFact,
+) -> Result<(), String> {
+    if by_pc
+        .insert(extent.pc_range.start, extent.instruction.clone())
+        .is_some()
+    {
+        return Err(format!(
+            "duplicate instruction extent start pc {} for {}",
+            extent.pc_range.start,
+            extent.code_object.canonical_storage_key()
+        ));
+    }
+    Ok(())
+}
+
+fn runtime_code_hash(runtime_bytecode_hex: &str) -> Result<String, String> {
+    let bytes = hex::decode(runtime_bytecode_hex)
+        .map_err(|err| format!("failed to decode runtime bytecode hex: {err}"))?;
+    Ok(format!("blake3:{}", blake3::hash(&bytes).to_hex()))
+}
+
+fn runtime_session_key(
+    code_object: &OriginExportKey,
+    entry: &str,
+    args: &[String],
+) -> Result<OriginExportKey, String> {
+    let arg_digest = blake3::hash(args.join(",").as_bytes()).to_hex().to_string();
+    OriginExportKey::try_from_raw_parts(
+        "runtime.session",
+        code_object.owner_key(),
+        format!("entry:{entry}:args:{arg_digest}"),
+    )
+    .map_err(|err| format!("invalid runtime session key: {err}"))
+}
+
+fn encode_selector_call(selector: &str, args: &[String]) -> Result<Vec<u8>, String> {
+    let mut calldata = parse_selector(selector)?;
+    for arg in args {
+        calldata.extend_from_slice(&encode_u256_word(arg)?);
+    }
+    Ok(calldata)
+}
+
+fn parse_selector(selector: &str) -> Result<Vec<u8>, String> {
+    let trimmed = selector
+        .trim()
+        .strip_prefix("0x")
+        .unwrap_or(selector.trim());
+    if trimmed.len() > 8 {
+        return Err(format!("selector {selector} is wider than 4 bytes"));
+    }
+    let padded = format!("{trimmed:0>8}");
+    hex::decode(&padded).map_err(|err| format!("invalid selector {selector}: {err}"))
+}
+
+fn encode_u256_word(value: &str) -> Result<[u8; 32], String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err("empty runtime argument".to_string());
+    }
+    let parsed = if let Some(hex_value) = trimmed.strip_prefix("0x") {
+        u128::from_str_radix(hex_value, 16)
+            .map_err(|err| format!("invalid hex runtime argument {value}: {err}"))?
+    } else {
+        trimmed
+            .parse::<u128>()
+            .map_err(|err| format!("invalid decimal runtime argument {value}: {err}"))?
+    };
+    let mut word = [0u8; 32];
+    word[16..].copy_from_slice(&parsed.to_be_bytes());
+    Ok(word)
 }
 
 pub(super) fn emit_real_trace_bundle(
@@ -440,6 +701,13 @@ pub(super) fn write_trace_bundle_jsonl(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use debug_export::{
+        DebugBundle, emit_dwarf_line_table, emit_ethdebug_artifact, validate_ethdebug_artifact,
+    };
+    use trace_query::{
+        GasAttributionPolicy, IntrospectionService, RuntimeGasBySourceRequest,
+        RuntimeTraceFilterRequest, TraceIntrospectionService, datalog_emit,
+    };
 
     #[test]
     fn real_trace_bundle_compiles_fib_demo_without_fixture_claims() {
@@ -518,6 +786,135 @@ mod tests {
         assert!(explain.contains("Why b is memory-backed in MIR"));
         assert!(explain.contains("Mir: memory place (MutableLocalLowering)"));
         assert!(!explain.contains("stack slot sp+24"));
+    }
+
+    #[test]
+    fn fib_demo_runtime_acceptance_matrix_uses_one_validated_bundle() {
+        let temp = tempfile::tempdir().unwrap();
+        let static_path = Utf8PathBuf::from_path_buf(temp.path().join("fib.static.trace.jsonl"))
+            .expect("temp path should be utf8");
+        let combined_path =
+            Utf8PathBuf::from_path_buf(temp.path().join("fib.combined.trace.jsonl"))
+                .expect("temp path should be utf8");
+        let source_path = Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fib_demo.fe");
+        let static_bundle =
+            emit_real_trace_bundle(&source_path, false, "dev", codegen::OptLevel::O1).unwrap();
+        write_trace_bundle_jsonl(&static_path, &static_bundle).unwrap();
+
+        let run_output = run_trace_run(&crate::DevTraceRunArgs {
+            static_trace: static_path,
+            source: Some(source_path),
+            entry: "Fib::Compute".to_string(),
+            selector: "0x01".to_string(),
+            args: vec!["8".to_string()],
+            runtime_capture: crate::RuntimeCaptureModeArg::Standard,
+            value_policy: crate::RuntimeValuePolicyArg::HashOnly,
+            out: combined_path.clone(),
+        })
+        .unwrap();
+        assert!(run_output.contains("Runtime source: revm_inspector"));
+        assert!(run_output.contains("Runtime facts appended:"));
+
+        let snapshot = read_trace_snapshot_jsonl_from_path(&combined_path).unwrap();
+        let validation = snapshot.validation();
+        assert_eq!(validation.error_count(), 0);
+        assert!(
+            validation.summary.fact_count > static_bundle.facts.len(),
+            "combined bundle should append runtime facts to the static trace"
+        );
+        assert!(
+            snapshot.facts().iter().any(|fact| matches!(
+                fact,
+                TraceFact::ExecutionStep(step)
+                    if step.instruction.is_some()
+                        && step.join_confidence
+                            == trace_facts::RuntimePcJoinConfidence::ExactCodeObjectAndPc
+            )),
+            "runtime steps should join back to static bytecode instructions"
+        );
+        assert!(
+            snapshot
+                .facts()
+                .iter()
+                .any(|fact| matches!(fact, TraceFact::MemoryAccess(_))),
+            "standard capture should include memory access ranges for runtime queries"
+        );
+
+        let service = TraceIntrospectionService::new(snapshot.clone());
+        let runtime_gas = service
+            .runtime_gas_by_source(RuntimeGasBySourceRequest {
+                trace_id: None,
+                policy: GasAttributionPolicy::RuntimeStepExclusive,
+            })
+            .unwrap();
+        assert_eq!(runtime_gas.policy, "runtime-step-exclusive");
+        assert!(runtime_gas.total_gas > 0);
+        assert!(runtime_gas.runtime.session_count > 0);
+        assert!(runtime_gas.runtime.exact_join_steps > 0);
+        assert_eq!(runtime_gas.runtime.missing_join_steps, 0);
+        assert!(!runtime_gas.rows.is_empty());
+
+        let memory = service
+            .memory_growth_by_source(RuntimeTraceFilterRequest {
+                trace_id: None,
+                policy: GasAttributionPolicy::RuntimeStepExclusive,
+            })
+            .unwrap();
+        assert!(memory.total_accesses > 0);
+
+        let storage = service
+            .storage_writes_by_source(RuntimeTraceFilterRequest {
+                trace_id: None,
+                policy: GasAttributionPolicy::RuntimeStepExclusive,
+            })
+            .unwrap();
+        assert_eq!(
+            storage.total_writes, 0,
+            "Fibonacci should not manufacture storage writes"
+        );
+
+        let datalog =
+            datalog_emit::run_builtin_rulepack(&snapshot, "gas-v1", "runtime-gas-by-source")
+                .unwrap();
+        assert_eq!(datalog.status, "ok");
+        assert_eq!(datalog.attribution_policy, "runtime-step-exclusive");
+        assert!(datalog.base_row_count >= snapshot.facts().len());
+
+        let debug_bundle = DebugBundle::from_snapshot(&snapshot);
+        let dwarf = emit_dwarf_line_table(&debug_bundle).unwrap();
+        assert!(!dwarf.rows.is_empty());
+        let ethdebug = emit_ethdebug_artifact(&debug_bundle).unwrap();
+        validate_ethdebug_artifact(&ethdebug).unwrap();
+        assert!(!ethdebug.programs.is_empty());
+
+        let agent_golden = serde_json::json!({
+            "fixture": "fib_demo.fe",
+            "data_source": snapshot.metadata().data_source,
+            "surfaces": {
+                "static_trace": true,
+                "runtime_trace": runtime_gas.runtime.session_count > 0,
+                "datalog": datalog.status,
+                "dwarf_line_rows": !dwarf.rows.is_empty(),
+                "ethdebug_programs": !ethdebug.programs.is_empty(),
+            },
+            "confidence": {
+                "runtime_gas": runtime_gas.confidence,
+                "memory_growth": memory.confidence,
+                "storage_writes": storage.confidence,
+            },
+            "runtime": {
+                "policy": runtime_gas.policy,
+                "exact_join_steps": runtime_gas.runtime.exact_join_steps,
+                "missing_join_steps": runtime_gas.runtime.missing_join_steps,
+                "total_gas_positive": runtime_gas.total_gas > 0,
+            }
+        });
+        assert_eq!(agent_golden["fixture"], "fib_demo.fe");
+        assert_eq!(agent_golden["runtime"]["missing_join_steps"], 0);
+        assert_eq!(
+            agent_golden["surfaces"]["datalog"],
+            serde_json::Value::String("ok".to_string())
+        );
     }
 
     fn is_content_digest(value: &str) -> bool {
