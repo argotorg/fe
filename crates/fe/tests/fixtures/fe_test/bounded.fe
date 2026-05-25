@@ -1,0 +1,90 @@
+// Tests for the `Bounded` trait — inclusive numeric type bounds exposed as
+// `const fn` so they resolve as `T::min()` / `T::max()` on concrete types.
+
+#[test]
+fn u8_bounds() {
+    assert(u8::min() == 0)
+    assert(u8::max() == 255)
+}
+
+#[test]
+fn u32_bounds() {
+    assert(u32::min() == 0)
+    assert(u32::max() == 4294967295)
+}
+
+#[test]
+fn u256_bounds() {
+    assert(u256::min() == 0)
+    assert(u256::max() == 115792089237316195423570985008687907853269984665640564039457584007913129639935)
+}
+
+#[test]
+fn i8_bounds() {
+    assert(i8::min() == -128)
+    assert(i8::max() == 127)
+}
+
+#[test]
+fn i32_bounds() {
+    assert(i32::min() == -2147483648)
+    assert(i32::max() == 2147483647)
+}
+
+#[test]
+fn i256_bounds() {
+    assert(i256::min() == -57896044618658097711785492504343953926634992332820282019728792003956564819968)
+    assert(i256::max() ==  57896044618658097711785492504343953926634992332820282019728792003956564819967)
+}
+
+// Bounds are const fn — usable in compile-time contexts.
+const U32_MAX_CONST: u32 = u32::max()
+const I32_MIN_CONST: i32 = i32::min()
+
+#[test]
+fn bounds_are_const() {
+    assert(U32_MAX_CONST == 4294967295)
+    assert(I32_MIN_CONST == -2147483648)
+}
+
+// Remaining type coverage — catches typos in the per-type impls.
+#[test]
+fn u16_bounds() {
+    assert(u16::min() == 0)
+    assert(u16::max() == 65535)
+}
+#[test]
+fn u64_bounds() {
+    assert(u64::min() == 0)
+    assert(u64::max() == 18446744073709551615)
+}
+#[test]
+fn u128_bounds() {
+    assert(u128::min() == 0)
+    assert(u128::max() == 340282366920938463463374607431768211455)
+}
+#[test]
+fn usize_bounds() {
+    assert(usize::min() == 0)
+    assert(usize::max() == 115792089237316195423570985008687907853269984665640564039457584007913129639935)
+}
+#[test]
+fn i16_bounds() {
+    assert(i16::min() == -32768)
+    assert(i16::max() == 32767)
+}
+#[test]
+fn i64_bounds() {
+    assert(i64::min() == -9223372036854775808)
+    assert(i64::max() == 9223372036854775807)
+}
+#[test]
+fn i128_bounds() {
+    assert(i128::min() == -170141183460469231731687303715884105728)
+    assert(i128::max() ==  170141183460469231731687303715884105727)
+}
+#[test]
+fn isize_bounds() {
+    assert(isize::min() == -57896044618658097711785492504343953926634992332820282019728792003956564819968)
+    assert(isize::max() ==  57896044618658097711785492504343953926634992332820282019728792003956564819967)
+}
