@@ -403,6 +403,70 @@ pub trait IntDowncast<T> {
     const fn downcast_unchecked(self) -> T
 }
 
+// Inclusive lower and upper bounds of a numeric type, exposed as `const fn`
+// so they resolve uniformly on concrete types (`u32::max()`, `i32::min()`).
+pub trait Bounded {
+    const fn min() -> Self
+    const fn max() -> Self
+}
+
+impl Bounded for u8 {
+    const fn min() -> u8 { 0 }
+    const fn max() -> u8 { 255 }
+}
+impl Bounded for u16 {
+    const fn min() -> u16 { 0 }
+    const fn max() -> u16 { 65535 }
+}
+impl Bounded for u32 {
+    const fn min() -> u32 { 0 }
+    const fn max() -> u32 { 4294967295 }
+}
+impl Bounded for u64 {
+    const fn min() -> u64 { 0 }
+    const fn max() -> u64 { 18446744073709551615 }
+}
+impl Bounded for u128 {
+    const fn min() -> u128 { 0 }
+    const fn max() -> u128 { 340282366920938463463374607431768211455 }
+}
+impl Bounded for u256 {
+    const fn min() -> u256 { 0 }
+    const fn max() -> u256 { 115792089237316195423570985008687907853269984665640564039457584007913129639935 }
+}
+impl Bounded for usize {
+    const fn min() -> usize { 0 }
+    const fn max() -> usize { 115792089237316195423570985008687907853269984665640564039457584007913129639935 }
+}
+impl Bounded for i8 {
+    const fn min() -> i8 { -128 }
+    const fn max() -> i8 { 127 }
+}
+impl Bounded for i16 {
+    const fn min() -> i16 { -32768 }
+    const fn max() -> i16 { 32767 }
+}
+impl Bounded for i32 {
+    const fn min() -> i32 { -2147483648 }
+    const fn max() -> i32 { 2147483647 }
+}
+impl Bounded for i64 {
+    const fn min() -> i64 { -9223372036854775808 }
+    const fn max() -> i64 { 9223372036854775807 }
+}
+impl Bounded for i128 {
+    const fn min() -> i128 { -170141183460469231731687303715884105728 }
+    const fn max() -> i128 {  170141183460469231731687303715884105727 }
+}
+impl Bounded for i256 {
+    const fn min() -> i256 { -57896044618658097711785492504343953926634992332820282019728792003956564819968 }
+    const fn max() -> i256 {  57896044618658097711785492504343953926634992332820282019728792003956564819967 }
+}
+impl Bounded for isize {
+    const fn min() -> isize { -57896044618658097711785492504343953926634992332820282019728792003956564819968 }
+    const fn max() -> isize {  57896044618658097711785492504343953926634992332820282019728792003956564819967 }
+}
+
 pub trait IntWord: Copy {
     const MASK: u256
     const SIGN_BIT: u256
