@@ -38,6 +38,18 @@ pub enum TraceFact {
     LocationRange(LocationRangeFact),
     StaticGas(StaticGasFact),
     DynamicGasStep(DynamicGasStepFact),
+    ExecutionTraceSession(ExecutionTraceSessionFact),
+    RuntimeCodeObjectBinding(RuntimeCodeObjectBindingFact),
+    ExecutionStep(ExecutionStepFact),
+    StackSample(StackSampleFact),
+    StorageAccess(StorageAccessFact),
+    MemoryAccess(MemoryAccessFact),
+    Call(CallFact),
+    Log(LogFact),
+    ReturnData(ReturnDataFact),
+    Revert(RevertFact),
+    PrecompileInvocation(PrecompileInvocationFact),
+    Selfdestruct(SelfdestructFact),
     ShapePolicy(ShapePolicyFact),
     ShapeNodeHash(ShapeNodeHashFact),
     ShapeComponentHash(ShapeComponentHashFact),
@@ -75,6 +87,18 @@ impl TraceFact {
             Self::LocationRange(_) => "location_range",
             Self::StaticGas(_) => "static_gas",
             Self::DynamicGasStep(_) => "dynamic_gas_step",
+            Self::ExecutionTraceSession(_) => "execution_trace_session",
+            Self::RuntimeCodeObjectBinding(_) => "runtime_code_object_binding",
+            Self::ExecutionStep(_) => "execution_step",
+            Self::StackSample(_) => "stack_sample",
+            Self::StorageAccess(_) => "storage_access",
+            Self::MemoryAccess(_) => "memory_access",
+            Self::Call(_) => "call",
+            Self::Log(_) => "log",
+            Self::ReturnData(_) => "return_data",
+            Self::Revert(_) => "revert",
+            Self::PrecompileInvocation(_) => "precompile_invocation",
+            Self::Selfdestruct(_) => "selfdestruct",
             Self::ShapePolicy(_) => "shape_policy",
             Self::ShapeNodeHash(_) => "shape_node_hash",
             Self::ShapeComponentHash(_) => "shape_component_hash",
@@ -1353,6 +1377,250 @@ impl DynamicGasStepFact {
             gas_cost,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeTraceDataSource {
+    RevmInspector,
+    DebugTraceTransaction,
+    Eip3155,
+    Foundry,
+    Hardhat,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeCaptureMode {
+    Minimal,
+    Standard,
+    Full,
+    DebugFull,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeValuePolicy {
+    Redacted,
+    HashOnly,
+    Full,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimePcJoinConfidence {
+    ExactCodeHashAndPc,
+    ExactCodeObjectAndPc,
+    PcOnlyWithinUniqueCodeObject,
+    AmbiguousPc,
+    MissingStaticInstruction,
+    CodeHashMismatch,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StorageAccessKind {
+    Read,
+    Write,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryAccessKind {
+    Read,
+    Write,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeCallKind {
+    Call,
+    CallCode,
+    DelegateCall,
+    StaticCall,
+    Create,
+    Create2,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReturnDataKind {
+    Return,
+    Revert,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RuntimeValue {
+    Redacted,
+    Hash { algorithm: String, digest: String },
+    Bytes { hex: String },
+}
+
+impl RuntimeValue {
+    pub fn redacted() -> Self {
+        Self::Redacted
+    }
+
+    pub fn hash(algorithm: impl Into<String>, digest: impl Into<String>) -> Self {
+        Self::Hash {
+            algorithm: algorithm.into(),
+            digest: digest.into(),
+        }
+    }
+
+    pub fn bytes(hex: impl Into<String>) -> Self {
+        Self::Bytes { hex: hex.into() }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionTraceSessionFact {
+    pub session: OriginExportKey,
+    pub source: RuntimeTraceDataSource,
+    pub capture_mode: RuntimeCaptureMode,
+    pub value_policy: RuntimeValuePolicy,
+    pub transaction_hash: Option<String>,
+    pub chain_id: Option<u64>,
+    pub block_number: Option<u64>,
+    pub entry_code_object: Option<OriginExportKey>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeCodeObjectBindingFact {
+    pub binding: OriginExportKey,
+    pub session: OriginExportKey,
+    pub code_object: OriginExportKey,
+    pub runtime_code_hash: String,
+    pub address: Option<String>,
+    pub confidence: RuntimePcJoinConfidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionStepFact {
+    pub step: OriginExportKey,
+    pub session: OriginExportKey,
+    pub step_index: u64,
+    pub code_object: OriginExportKey,
+    pub pc: u32,
+    pub opcode: String,
+    pub instruction: Option<OriginExportKey>,
+    pub gas_before: u64,
+    pub gas_after: u64,
+    pub gas_cost: u64,
+    pub depth: u32,
+    pub join_confidence: RuntimePcJoinConfidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StackSampleFact {
+    pub sample: OriginExportKey,
+    pub step: OriginExportKey,
+    pub policy: RuntimeValuePolicy,
+    pub values_top_first: Vec<RuntimeValue>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StorageAccessFact {
+    pub access: OriginExportKey,
+    pub step: OriginExportKey,
+    pub code_object: OriginExportKey,
+    pub instruction: Option<OriginExportKey>,
+    pub kind: StorageAccessKind,
+    pub address: Option<String>,
+    pub slot: RuntimeValue,
+    pub value_before: Option<RuntimeValue>,
+    pub value_after: Option<RuntimeValue>,
+    pub policy: RuntimeValuePolicy,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryAccessFact {
+    pub access: OriginExportKey,
+    pub step: OriginExportKey,
+    pub kind: MemoryAccessKind,
+    pub offset: u64,
+    pub length: u64,
+    pub value: Option<RuntimeValue>,
+    pub policy: RuntimeValuePolicy,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CallFact {
+    pub call: OriginExportKey,
+    pub step: OriginExportKey,
+    pub kind: RuntimeCallKind,
+    pub caller: Option<String>,
+    pub callee: Option<String>,
+    pub value: Option<RuntimeValue>,
+    pub gas_requested: Option<u64>,
+    pub gas_used: Option<u64>,
+    pub success: Option<bool>,
+    pub callsite_instruction: Option<OriginExportKey>,
+    pub policy: RuntimeValuePolicy,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LogFact {
+    pub log: OriginExportKey,
+    pub step: OriginExportKey,
+    pub address: Option<String>,
+    pub topics: Vec<RuntimeValue>,
+    pub data: RuntimeValue,
+    pub policy: RuntimeValuePolicy,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReturnDataFact {
+    pub event: OriginExportKey,
+    pub step: OriginExportKey,
+    pub kind: ReturnDataKind,
+    pub data: RuntimeValue,
+    pub policy: RuntimeValuePolicy,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RevertFact {
+    pub revert: OriginExportKey,
+    pub step: OriginExportKey,
+    pub reason: Option<String>,
+    pub data: RuntimeValue,
+    pub policy: RuntimeValuePolicy,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrecompileInvocationFact {
+    pub invocation: OriginExportKey,
+    pub step: OriginExportKey,
+    pub address: String,
+    pub gas_used: u64,
+    pub input: RuntimeValue,
+    pub output: Option<RuntimeValue>,
+    pub success: bool,
+    pub policy: RuntimeValuePolicy,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelfdestructFact {
+    pub event: OriginExportKey,
+    pub step: OriginExportKey,
+    pub contract: Option<String>,
+    pub beneficiary: Option<String>,
+    pub balance: Option<RuntimeValue>,
+    pub policy: RuntimeValuePolicy,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

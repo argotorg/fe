@@ -163,6 +163,7 @@ fn validate_metadata_text(field: &'static str, value: &str) -> Result<(), TraceM
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)]
 #[serde(tag = "record", rename_all = "snake_case")]
 pub enum TraceJsonlRecord {
     Metadata(TraceMetadata),

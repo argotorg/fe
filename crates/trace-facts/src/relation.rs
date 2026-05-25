@@ -3,13 +3,15 @@ use serde::{Deserialize, Serialize};
 use shape_address::{DimensionDigests, ShapeDimension};
 
 use crate::fact::{
-    BlockFact, CfgEdgeFact, CodeObjectFact, CompilerEventFact, DisplayNameFact, DynamicGasStepFact,
-    FunctionFact, GasCostFact, InlineContextFact, InstructionBlockFact, InstructionCategoryFact,
-    InstructionExtentFact, InstructionFact, LexicalScopeFact, LocationRangeFact, LoopBlockFact,
-    LoopFact, LoopMembershipFact, OpcodeFact, OriginEdgeFact, OriginNodeFact,
-    ShapeComponentHashFact, ShapeGraphHashFact, ShapeNodeHashFact, ShapePolicyFact, SourceFileFact,
-    SourceSpanFact, StaticGasFact, StorageFact, TraceFact, TypeFact, ValuePropertyFact,
-    VariableFact,
+    BlockFact, CallFact, CfgEdgeFact, CodeObjectFact, CompilerEventFact, DisplayNameFact,
+    DynamicGasStepFact, ExecutionStepFact, ExecutionTraceSessionFact, FunctionFact, GasCostFact,
+    InlineContextFact, InstructionBlockFact, InstructionCategoryFact, InstructionExtentFact,
+    InstructionFact, LexicalScopeFact, LocationRangeFact, LogFact, LoopBlockFact, LoopFact,
+    LoopMembershipFact, MemoryAccessFact, OpcodeFact, OriginEdgeFact, OriginNodeFact,
+    PrecompileInvocationFact, ReturnDataFact, RevertFact, RuntimeCodeObjectBindingFact,
+    SelfdestructFact, ShapeComponentHashFact, ShapeGraphHashFact, ShapeNodeHashFact,
+    ShapePolicyFact, SourceFileFact, SourceSpanFact, StackSampleFact, StaticGasFact,
+    StorageAccessFact, StorageFact, TraceFact, TypeFact, ValuePropertyFact, VariableFact,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,6 +83,18 @@ impl TraceFact {
             Self::LocationRange(_) => LocationRangeFact::NAME,
             Self::StaticGas(_) => StaticGasFact::NAME,
             Self::DynamicGasStep(_) => DynamicGasStepFact::NAME,
+            Self::ExecutionTraceSession(_) => ExecutionTraceSessionFact::NAME,
+            Self::RuntimeCodeObjectBinding(_) => RuntimeCodeObjectBindingFact::NAME,
+            Self::ExecutionStep(_) => ExecutionStepFact::NAME,
+            Self::StackSample(_) => StackSampleFact::NAME,
+            Self::StorageAccess(_) => StorageAccessFact::NAME,
+            Self::MemoryAccess(_) => MemoryAccessFact::NAME,
+            Self::Call(_) => CallFact::NAME,
+            Self::Log(_) => LogFact::NAME,
+            Self::ReturnData(_) => ReturnDataFact::NAME,
+            Self::Revert(_) => RevertFact::NAME,
+            Self::PrecompileInvocation(_) => PrecompileInvocationFact::NAME,
+            Self::Selfdestruct(_) => SelfdestructFact::NAME,
             Self::ShapePolicy(_) => ShapePolicyFact::NAME,
             Self::ShapeNodeHash(_) => ShapeNodeHashFact::NAME,
             Self::ShapeComponentHash(_) => ShapeComponentHashFact::NAME,
@@ -118,6 +132,18 @@ impl TraceFact {
             Self::LocationRange(_) => LocationRangeFact::schema(),
             Self::StaticGas(_) => StaticGasFact::schema(),
             Self::DynamicGasStep(_) => DynamicGasStepFact::schema(),
+            Self::ExecutionTraceSession(_) => ExecutionTraceSessionFact::schema(),
+            Self::RuntimeCodeObjectBinding(_) => RuntimeCodeObjectBindingFact::schema(),
+            Self::ExecutionStep(_) => ExecutionStepFact::schema(),
+            Self::StackSample(_) => StackSampleFact::schema(),
+            Self::StorageAccess(_) => StorageAccessFact::schema(),
+            Self::MemoryAccess(_) => MemoryAccessFact::schema(),
+            Self::Call(_) => CallFact::schema(),
+            Self::Log(_) => LogFact::schema(),
+            Self::ReturnData(_) => ReturnDataFact::schema(),
+            Self::Revert(_) => RevertFact::schema(),
+            Self::PrecompileInvocation(_) => PrecompileInvocationFact::schema(),
+            Self::Selfdestruct(_) => SelfdestructFact::schema(),
             Self::ShapePolicy(_) => ShapePolicyFact::schema(),
             Self::ShapeNodeHash(_) => ShapeNodeHashFact::schema(),
             Self::ShapeComponentHash(_) => ShapeComponentHashFact::schema(),
@@ -155,6 +181,18 @@ impl TraceFact {
             Self::LocationRange(fact) => fact.row(),
             Self::StaticGas(fact) => fact.row(),
             Self::DynamicGasStep(fact) => fact.row(),
+            Self::ExecutionTraceSession(fact) => fact.row(),
+            Self::RuntimeCodeObjectBinding(fact) => fact.row(),
+            Self::ExecutionStep(fact) => fact.row(),
+            Self::StackSample(fact) => fact.row(),
+            Self::StorageAccess(fact) => fact.row(),
+            Self::MemoryAccess(fact) => fact.row(),
+            Self::Call(fact) => fact.row(),
+            Self::Log(fact) => fact.row(),
+            Self::ReturnData(fact) => fact.row(),
+            Self::Revert(fact) => fact.row(),
+            Self::PrecompileInvocation(fact) => fact.row(),
+            Self::Selfdestruct(fact) => fact.row(),
             Self::ShapePolicy(fact) => fact.row(),
             Self::ShapeNodeHash(fact) => fact.row(),
             Self::ShapeComponentHash(fact) => fact.row(),
@@ -949,6 +987,416 @@ impl TraceRelation for DynamicGasStepFact {
                 self.gas_before.to_string(),
                 self.gas_after.to_string(),
                 self.gas_cost.to_string(),
+            ]
+        )
+    }
+}
+
+impl TraceRelation for ExecutionTraceSessionFact {
+    const NAME: &'static str = "base_execution_trace_session";
+
+    fn schema() -> RelationSchema {
+        schema!(
+            Self::NAME,
+            [
+                "session": Key,
+                "source": Text,
+                "capture_mode": Text,
+                "value_policy": Text,
+                "transaction_hash": OptionalText,
+                "chain_id": OptionalText,
+                "block_number": OptionalText,
+                "entry_code_object": OptionalKey,
+            ]
+        )
+    }
+
+    fn row(&self) -> RelationRow {
+        row!(
+            Self::NAME,
+            [
+                key(&self.session),
+                value(&self.source),
+                value(&self.capture_mode),
+                value(&self.value_policy),
+                self.transaction_hash.clone().unwrap_or_default(),
+                self.chain_id
+                    .map_or_else(String::new, |value| value.to_string()),
+                self.block_number
+                    .map_or_else(String::new, |value| value.to_string()),
+                opt_key(self.entry_code_object.as_ref()),
+            ]
+        )
+    }
+}
+
+impl TraceRelation for RuntimeCodeObjectBindingFact {
+    const NAME: &'static str = "base_runtime_code_object_binding";
+
+    fn schema() -> RelationSchema {
+        schema!(
+            Self::NAME,
+            [
+                "binding": Key,
+                "session": Key,
+                "code_object": Key,
+                "runtime_code_hash": Text,
+                "address": OptionalText,
+                "confidence": Text,
+            ]
+        )
+    }
+
+    fn row(&self) -> RelationRow {
+        row!(
+            Self::NAME,
+            [
+                key(&self.binding),
+                key(&self.session),
+                key(&self.code_object),
+                self.runtime_code_hash.clone(),
+                self.address.clone().unwrap_or_default(),
+                value(&self.confidence),
+            ]
+        )
+    }
+}
+
+impl TraceRelation for ExecutionStepFact {
+    const NAME: &'static str = "base_execution_step";
+
+    fn schema() -> RelationSchema {
+        schema!(
+            Self::NAME,
+            [
+                "step": Key,
+                "session": Key,
+                "step_index": U64,
+                "code_object": Key,
+                "pc": U32,
+                "opcode": Text,
+                "instruction": OptionalKey,
+                "gas_before": U64,
+                "gas_after": U64,
+                "gas_cost": U64,
+                "depth": U32,
+                "join_confidence": Text,
+            ]
+        )
+    }
+
+    fn row(&self) -> RelationRow {
+        row!(
+            Self::NAME,
+            [
+                key(&self.step),
+                key(&self.session),
+                self.step_index.to_string(),
+                key(&self.code_object),
+                self.pc.to_string(),
+                self.opcode.clone(),
+                opt_key(self.instruction.as_ref()),
+                self.gas_before.to_string(),
+                self.gas_after.to_string(),
+                self.gas_cost.to_string(),
+                self.depth.to_string(),
+                value(&self.join_confidence),
+            ]
+        )
+    }
+}
+
+impl TraceRelation for StackSampleFact {
+    const NAME: &'static str = "base_stack_sample";
+
+    fn schema() -> RelationSchema {
+        schema!(
+            Self::NAME,
+            ["sample": Key, "step": Key, "policy": Text, "values_top_first": List]
+        )
+    }
+
+    fn row(&self) -> RelationRow {
+        row!(
+            Self::NAME,
+            [
+                key(&self.sample),
+                key(&self.step),
+                value(&self.policy),
+                value(&self.values_top_first),
+            ]
+        )
+    }
+}
+
+impl TraceRelation for StorageAccessFact {
+    const NAME: &'static str = "base_storage_access";
+
+    fn schema() -> RelationSchema {
+        schema!(
+            Self::NAME,
+            [
+                "access": Key,
+                "step": Key,
+                "code_object": Key,
+                "instruction": OptionalKey,
+                "kind": Text,
+                "address": OptionalText,
+                "slot": Text,
+                "value_before": OptionalText,
+                "value_after": OptionalText,
+                "policy": Text,
+            ]
+        )
+    }
+
+    fn row(&self) -> RelationRow {
+        row!(
+            Self::NAME,
+            [
+                key(&self.access),
+                key(&self.step),
+                key(&self.code_object),
+                opt_key(self.instruction.as_ref()),
+                value(&self.kind),
+                self.address.clone().unwrap_or_default(),
+                value(&self.slot),
+                opt_value(self.value_before.as_ref()),
+                opt_value(self.value_after.as_ref()),
+                value(&self.policy),
+            ]
+        )
+    }
+}
+
+impl TraceRelation for MemoryAccessFact {
+    const NAME: &'static str = "base_memory_access";
+
+    fn schema() -> RelationSchema {
+        schema!(
+            Self::NAME,
+            [
+                "access": Key,
+                "step": Key,
+                "kind": Text,
+                "offset": U64,
+                "length": U64,
+                "value": OptionalText,
+                "policy": Text,
+            ]
+        )
+    }
+
+    fn row(&self) -> RelationRow {
+        row!(
+            Self::NAME,
+            [
+                key(&self.access),
+                key(&self.step),
+                value(&self.kind),
+                self.offset.to_string(),
+                self.length.to_string(),
+                opt_value(self.value.as_ref()),
+                value(&self.policy),
+            ]
+        )
+    }
+}
+
+impl TraceRelation for CallFact {
+    const NAME: &'static str = "base_runtime_call";
+
+    fn schema() -> RelationSchema {
+        schema!(
+            Self::NAME,
+            [
+                "call": Key,
+                "step": Key,
+                "kind": Text,
+                "caller": OptionalText,
+                "callee": OptionalText,
+                "value": OptionalText,
+                "gas_requested": OptionalText,
+                "gas_used": OptionalText,
+                "success": OptionalText,
+                "callsite_instruction": OptionalKey,
+                "policy": Text,
+            ]
+        )
+    }
+
+    fn row(&self) -> RelationRow {
+        row!(
+            Self::NAME,
+            [
+                key(&self.call),
+                key(&self.step),
+                value(&self.kind),
+                self.caller.clone().unwrap_or_default(),
+                self.callee.clone().unwrap_or_default(),
+                opt_value(self.value.as_ref()),
+                self.gas_requested
+                    .map_or_else(String::new, |value| value.to_string()),
+                self.gas_used
+                    .map_or_else(String::new, |value| value.to_string()),
+                self.success
+                    .map_or_else(String::new, |value| value.to_string()),
+                opt_key(self.callsite_instruction.as_ref()),
+                value(&self.policy),
+            ]
+        )
+    }
+}
+
+impl TraceRelation for LogFact {
+    const NAME: &'static str = "base_runtime_log";
+
+    fn schema() -> RelationSchema {
+        schema!(
+            Self::NAME,
+            [
+                "log": Key,
+                "step": Key,
+                "address": OptionalText,
+                "topics": List,
+                "data": Text,
+                "policy": Text,
+            ]
+        )
+    }
+
+    fn row(&self) -> RelationRow {
+        row!(
+            Self::NAME,
+            [
+                key(&self.log),
+                key(&self.step),
+                self.address.clone().unwrap_or_default(),
+                value(&self.topics),
+                value(&self.data),
+                value(&self.policy),
+            ]
+        )
+    }
+}
+
+impl TraceRelation for ReturnDataFact {
+    const NAME: &'static str = "base_return_data";
+
+    fn schema() -> RelationSchema {
+        schema!(
+            Self::NAME,
+            ["event": Key, "step": Key, "kind": Text, "data": Text, "policy": Text]
+        )
+    }
+
+    fn row(&self) -> RelationRow {
+        row!(
+            Self::NAME,
+            [
+                key(&self.event),
+                key(&self.step),
+                value(&self.kind),
+                value(&self.data),
+                value(&self.policy),
+            ]
+        )
+    }
+}
+
+impl TraceRelation for RevertFact {
+    const NAME: &'static str = "base_revert";
+
+    fn schema() -> RelationSchema {
+        schema!(
+            Self::NAME,
+            [
+                "revert": Key,
+                "step": Key,
+                "reason": OptionalText,
+                "data": Text,
+                "policy": Text,
+            ]
+        )
+    }
+
+    fn row(&self) -> RelationRow {
+        row!(
+            Self::NAME,
+            [
+                key(&self.revert),
+                key(&self.step),
+                self.reason.clone().unwrap_or_default(),
+                value(&self.data),
+                value(&self.policy),
+            ]
+        )
+    }
+}
+
+impl TraceRelation for PrecompileInvocationFact {
+    const NAME: &'static str = "base_precompile_invocation";
+
+    fn schema() -> RelationSchema {
+        schema!(
+            Self::NAME,
+            [
+                "invocation": Key,
+                "step": Key,
+                "address": Text,
+                "gas_used": U64,
+                "input": Text,
+                "output": OptionalText,
+                "success": Text,
+                "policy": Text,
+            ]
+        )
+    }
+
+    fn row(&self) -> RelationRow {
+        row!(
+            Self::NAME,
+            [
+                key(&self.invocation),
+                key(&self.step),
+                self.address.clone(),
+                self.gas_used.to_string(),
+                value(&self.input),
+                opt_value(self.output.as_ref()),
+                self.success.to_string(),
+                value(&self.policy),
+            ]
+        )
+    }
+}
+
+impl TraceRelation for SelfdestructFact {
+    const NAME: &'static str = "base_selfdestruct";
+
+    fn schema() -> RelationSchema {
+        schema!(
+            Self::NAME,
+            [
+                "event": Key,
+                "step": Key,
+                "contract": OptionalText,
+                "beneficiary": OptionalText,
+                "balance": OptionalText,
+                "policy": Text,
+            ]
+        )
+    }
+
+    fn row(&self) -> RelationRow {
+        row!(
+            Self::NAME,
+            [
+                key(&self.event),
+                key(&self.step),
+                self.contract.clone().unwrap_or_default(),
+                self.beneficiary.clone().unwrap_or_default(),
+                opt_value(self.balance.as_ref()),
+                value(&self.policy),
             ]
         )
     }

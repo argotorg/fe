@@ -5,14 +5,18 @@ use common::origin::OriginExportKey;
 use shape_address::{DimensionDigests, ShapeHashPolicy, ShapeLevel, ShapePolicyId};
 
 use crate::fact::{
-    BlockFact, CategorySource, CfgEdgeFact, CodeObjectFact, CompilerEventFact, CompilerPhase,
-    DisplayNameFact, DisplayNameKind, DynamicGasStepFact, FunctionFact, InlineContextFact,
-    InstructionBlockFact, InstructionCategoryFact, InstructionExtentFact, InstructionFact,
-    LexicalScopeFact, LocationExpr, LocationRangeFact, LoopBlockFact, LoopBlockRole,
-    LoopDerivation, LoopFact, LoopMembershipFact, OpcodeFact, OriginEdgeFact, OriginNodeFact,
+    BlockFact, CallFact, CategorySource, CfgEdgeFact, CodeObjectFact, CompilerEventFact,
+    CompilerPhase, DisplayNameFact, DisplayNameKind, DynamicGasStepFact, ExecutionStepFact,
+    ExecutionTraceSessionFact, FunctionFact, InlineContextFact, InstructionBlockFact,
+    InstructionCategoryFact, InstructionExtentFact, InstructionFact, LexicalScopeFact,
+    LocationExpr, LocationRangeFact, LogFact, LoopBlockFact, LoopBlockRole, LoopDerivation,
+    LoopFact, LoopMembershipFact, MemoryAccessFact, OpcodeFact, OriginEdgeFact, OriginNodeFact,
+    PrecompileInvocationFact, ReturnDataFact, RevertFact, RuntimeCodeObjectBindingFact,
+    RuntimePcJoinConfidence, RuntimeValue, RuntimeValuePolicy, SelfdestructFact,
     ShapeComponentHashFact, ShapeGraphHashFact, ShapeNodeHashFact, ShapePolicyFact, SourceFileFact,
-    SourceSpanFact, StaticGasFact, StorageFact, StorageLocation, TraceFact, TypeFact,
-    ValueLocation, ValueProperty, ValuePropertyFact, VariableFact,
+    SourceSpanFact, StackSampleFact, StaticGasFact, StorageAccessFact, StorageFact,
+    StorageLocation, TraceFact, TypeFact, ValueLocation, ValueProperty, ValuePropertyFact,
+    VariableFact,
 };
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -157,6 +161,18 @@ impl TraceValidator {
         let mut location_ranges = Vec::new();
         let mut static_gas = Vec::new();
         let mut dynamic_gas_steps = Vec::new();
+        let mut execution_sessions = Vec::new();
+        let mut runtime_code_object_bindings = Vec::new();
+        let mut execution_steps = Vec::new();
+        let mut stack_samples = Vec::new();
+        let mut storage_accesses = Vec::new();
+        let mut memory_accesses = Vec::new();
+        let mut calls = Vec::new();
+        let mut logs = Vec::new();
+        let mut return_data = Vec::new();
+        let mut reverts = Vec::new();
+        let mut precompile_invocations = Vec::new();
+        let mut selfdestructs = Vec::new();
         let mut shape_policies = Vec::new();
         let mut shape_node_hashes = Vec::new();
         let mut shape_component_hashes = Vec::new();
@@ -202,6 +218,22 @@ impl TraceValidator {
                 TraceFact::LocationRange(location_range) => location_ranges.push(location_range),
                 TraceFact::StaticGas(gas) => static_gas.push(gas),
                 TraceFact::DynamicGasStep(step) => dynamic_gas_steps.push(step),
+                TraceFact::ExecutionTraceSession(session) => execution_sessions.push(session),
+                TraceFact::RuntimeCodeObjectBinding(binding) => {
+                    runtime_code_object_bindings.push(binding);
+                }
+                TraceFact::ExecutionStep(step) => execution_steps.push(step),
+                TraceFact::StackSample(sample) => stack_samples.push(sample),
+                TraceFact::StorageAccess(access) => storage_accesses.push(access),
+                TraceFact::MemoryAccess(access) => memory_accesses.push(access),
+                TraceFact::Call(call) => calls.push(call),
+                TraceFact::Log(log) => logs.push(log),
+                TraceFact::ReturnData(event) => return_data.push(event),
+                TraceFact::Revert(revert) => reverts.push(revert),
+                TraceFact::PrecompileInvocation(invocation) => {
+                    precompile_invocations.push(invocation);
+                }
+                TraceFact::Selfdestruct(event) => selfdestructs.push(event),
                 TraceFact::ShapePolicy(policy) => shape_policies.push(policy),
                 TraceFact::ShapeNodeHash(hash) => shape_node_hashes.push(hash),
                 TraceFact::ShapeComponentHash(hash) => shape_component_hashes.push(hash),
@@ -499,6 +531,82 @@ impl TraceValidator {
         }
         for step in dynamic_gas_steps {
             validate_dynamic_gas_step(step, &nodes, &mut diagnostics);
+        }
+        let mut runtime_sessions = BTreeSet::new();
+        for session in execution_sessions {
+            validate_execution_trace_session(session, &nodes, &mut diagnostics);
+            runtime_sessions.insert(session.session.clone());
+        }
+        for binding in runtime_code_object_bindings {
+            validate_runtime_code_object_binding(
+                binding,
+                &nodes,
+                &runtime_sessions,
+                &mut diagnostics,
+            );
+        }
+        let mut runtime_steps = BTreeSet::new();
+        let mut runtime_step_sites = BTreeMap::new();
+        for step in execution_steps {
+            validate_execution_step(
+                step,
+                &nodes,
+                &runtime_sessions,
+                &instruction_owners,
+                &mut diagnostics,
+            );
+            runtime_steps.insert(step.step.clone());
+            let site = (step.session.clone(), step.step_index);
+            if let Some(first_step) = runtime_step_sites.insert(site, step.step.clone()) {
+                push_error(
+                    &mut diagnostics,
+                    TraceValidationError::DuplicateRuntimeStepSite {
+                        session: step.session.clone(),
+                        step_index: step.step_index,
+                        first_step,
+                        second_step: step.step.clone(),
+                    },
+                );
+            }
+        }
+        for sample in stack_samples {
+            validate_stack_sample(sample, &nodes, &runtime_steps, &mut diagnostics);
+        }
+        for access in storage_accesses {
+            validate_storage_access(
+                access,
+                &nodes,
+                &runtime_steps,
+                &instruction_owners,
+                &mut diagnostics,
+            );
+        }
+        for access in memory_accesses {
+            validate_memory_access(access, &nodes, &runtime_steps, &mut diagnostics);
+        }
+        for call in calls {
+            validate_call(
+                call,
+                &nodes,
+                &runtime_steps,
+                &instruction_owners,
+                &mut diagnostics,
+            );
+        }
+        for log in logs {
+            validate_log(log, &nodes, &runtime_steps, &mut diagnostics);
+        }
+        for event in return_data {
+            validate_return_data(event, &nodes, &runtime_steps, &mut diagnostics);
+        }
+        for revert in reverts {
+            validate_revert(revert, &nodes, &runtime_steps, &mut diagnostics);
+        }
+        for invocation in precompile_invocations {
+            validate_precompile_invocation(invocation, &nodes, &runtime_steps, &mut diagnostics);
+        }
+        for event in selfdestructs {
+            validate_selfdestruct(event, &nodes, &runtime_steps, &mut diagnostics);
         }
         let shape_policy_by_id = validate_shape_policies(shape_policies, &mut diagnostics);
         for hash in shape_node_hashes {
@@ -1400,6 +1508,552 @@ fn validate_dynamic_gas_step(
     }
 }
 
+fn validate_execution_trace_session(
+    session: &ExecutionTraceSessionFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(
+        nodes,
+        &session.session,
+        "runtime_session.session",
+        diagnostics,
+    );
+    if let Some(code_object) = &session.entry_code_object {
+        require_node(
+            nodes,
+            code_object,
+            "runtime_session.entry_code_object",
+            diagnostics,
+        );
+    }
+    validate_optional_runtime_text(
+        &session.session,
+        "transaction_hash",
+        session.transaction_hash.as_deref(),
+        diagnostics,
+    );
+}
+
+fn validate_runtime_code_object_binding(
+    binding: &RuntimeCodeObjectBindingFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    runtime_sessions: &BTreeSet<OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(
+        nodes,
+        &binding.binding,
+        "runtime_binding.binding",
+        diagnostics,
+    );
+    require_node(
+        nodes,
+        &binding.session,
+        "runtime_binding.session",
+        diagnostics,
+    );
+    require_node(
+        nodes,
+        &binding.code_object,
+        "runtime_binding.code_object",
+        diagnostics,
+    );
+    require_runtime_session(
+        &binding.binding,
+        &binding.session,
+        runtime_sessions,
+        diagnostics,
+    );
+    validate_required_runtime_text(
+        &binding.binding,
+        "runtime_code_hash",
+        &binding.runtime_code_hash,
+        diagnostics,
+    );
+    validate_optional_runtime_text(
+        &binding.binding,
+        "address",
+        binding.address.as_deref(),
+        diagnostics,
+    );
+}
+
+fn validate_execution_step(
+    step: &ExecutionStepFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    runtime_sessions: &BTreeSet<OriginExportKey>,
+    instruction_owners: &BTreeMap<OriginExportKey, OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(nodes, &step.step, "execution_step.step", diagnostics);
+    require_node(nodes, &step.session, "execution_step.session", diagnostics);
+    require_node(
+        nodes,
+        &step.code_object,
+        "execution_step.code_object",
+        diagnostics,
+    );
+    require_runtime_session(&step.step, &step.session, runtime_sessions, diagnostics);
+    validate_optional_instruction(
+        &step.step,
+        step.instruction.as_ref(),
+        nodes,
+        instruction_owners,
+        diagnostics,
+    );
+    validate_required_runtime_text(&step.step, "opcode", &step.opcode, diagnostics);
+    validate_runtime_gas(
+        &step.step,
+        step.gas_before,
+        step.gas_after,
+        step.gas_cost,
+        diagnostics,
+    );
+    validate_runtime_join(
+        &step.step,
+        step.instruction.as_ref(),
+        step.join_confidence,
+        diagnostics,
+    );
+}
+
+fn validate_stack_sample(
+    sample: &StackSampleFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    runtime_steps: &BTreeSet<OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(nodes, &sample.sample, "stack_sample.sample", diagnostics);
+    require_node(nodes, &sample.step, "stack_sample.step", diagnostics);
+    require_runtime_step(&sample.sample, &sample.step, runtime_steps, diagnostics);
+    for value in &sample.values_top_first {
+        validate_runtime_value(
+            &sample.sample,
+            "values_top_first",
+            sample.policy,
+            value,
+            diagnostics,
+        );
+    }
+}
+
+fn validate_storage_access(
+    access: &StorageAccessFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    runtime_steps: &BTreeSet<OriginExportKey>,
+    instruction_owners: &BTreeMap<OriginExportKey, OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(nodes, &access.access, "storage_access.access", diagnostics);
+    require_node(nodes, &access.step, "storage_access.step", diagnostics);
+    require_node(
+        nodes,
+        &access.code_object,
+        "storage_access.code_object",
+        diagnostics,
+    );
+    require_runtime_step(&access.access, &access.step, runtime_steps, diagnostics);
+    validate_optional_instruction(
+        &access.access,
+        access.instruction.as_ref(),
+        nodes,
+        instruction_owners,
+        diagnostics,
+    );
+    validate_optional_runtime_text(
+        &access.access,
+        "address",
+        access.address.as_deref(),
+        diagnostics,
+    );
+    validate_runtime_value(
+        &access.access,
+        "slot",
+        access.policy,
+        &access.slot,
+        diagnostics,
+    );
+    if let Some(value) = &access.value_before {
+        validate_runtime_value(
+            &access.access,
+            "value_before",
+            access.policy,
+            value,
+            diagnostics,
+        );
+    }
+    if let Some(value) = &access.value_after {
+        validate_runtime_value(
+            &access.access,
+            "value_after",
+            access.policy,
+            value,
+            diagnostics,
+        );
+    }
+}
+
+fn validate_memory_access(
+    access: &MemoryAccessFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    runtime_steps: &BTreeSet<OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(nodes, &access.access, "memory_access.access", diagnostics);
+    require_node(nodes, &access.step, "memory_access.step", diagnostics);
+    require_runtime_step(&access.access, &access.step, runtime_steps, diagnostics);
+    if access.length == 0 {
+        push_error(
+            diagnostics,
+            TraceValidationError::InvalidRuntimeMemoryAccess {
+                access: access.access.clone(),
+                reason: "length must be non-zero",
+            },
+        );
+    }
+    if let Some(value) = &access.value {
+        validate_runtime_value(&access.access, "value", access.policy, value, diagnostics);
+    }
+}
+
+fn validate_call(
+    call: &CallFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    runtime_steps: &BTreeSet<OriginExportKey>,
+    instruction_owners: &BTreeMap<OriginExportKey, OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(nodes, &call.call, "call.call", diagnostics);
+    require_node(nodes, &call.step, "call.step", diagnostics);
+    require_runtime_step(&call.call, &call.step, runtime_steps, diagnostics);
+    validate_optional_instruction(
+        &call.call,
+        call.callsite_instruction.as_ref(),
+        nodes,
+        instruction_owners,
+        diagnostics,
+    );
+    validate_optional_runtime_text(&call.call, "caller", call.caller.as_deref(), diagnostics);
+    validate_optional_runtime_text(&call.call, "callee", call.callee.as_deref(), diagnostics);
+    if let Some(value) = &call.value {
+        validate_runtime_value(&call.call, "value", call.policy, value, diagnostics);
+    }
+}
+
+fn validate_log(
+    log: &LogFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    runtime_steps: &BTreeSet<OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(nodes, &log.log, "log.log", diagnostics);
+    require_node(nodes, &log.step, "log.step", diagnostics);
+    require_runtime_step(&log.log, &log.step, runtime_steps, diagnostics);
+    validate_optional_runtime_text(&log.log, "address", log.address.as_deref(), diagnostics);
+    for topic in &log.topics {
+        validate_runtime_value(&log.log, "topics", log.policy, topic, diagnostics);
+    }
+    validate_runtime_value(&log.log, "data", log.policy, &log.data, diagnostics);
+}
+
+fn validate_return_data(
+    event: &ReturnDataFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    runtime_steps: &BTreeSet<OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(nodes, &event.event, "return_data.event", diagnostics);
+    require_node(nodes, &event.step, "return_data.step", diagnostics);
+    require_runtime_step(&event.event, &event.step, runtime_steps, diagnostics);
+    validate_runtime_value(&event.event, "data", event.policy, &event.data, diagnostics);
+}
+
+fn validate_revert(
+    revert: &RevertFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    runtime_steps: &BTreeSet<OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(nodes, &revert.revert, "revert.revert", diagnostics);
+    require_node(nodes, &revert.step, "revert.step", diagnostics);
+    require_runtime_step(&revert.revert, &revert.step, runtime_steps, diagnostics);
+    validate_optional_runtime_text(
+        &revert.revert,
+        "reason",
+        revert.reason.as_deref(),
+        diagnostics,
+    );
+    validate_runtime_value(
+        &revert.revert,
+        "data",
+        revert.policy,
+        &revert.data,
+        diagnostics,
+    );
+}
+
+fn validate_precompile_invocation(
+    invocation: &PrecompileInvocationFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    runtime_steps: &BTreeSet<OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(
+        nodes,
+        &invocation.invocation,
+        "precompile_invocation.invocation",
+        diagnostics,
+    );
+    require_node(
+        nodes,
+        &invocation.step,
+        "precompile_invocation.step",
+        diagnostics,
+    );
+    require_runtime_step(
+        &invocation.invocation,
+        &invocation.step,
+        runtime_steps,
+        diagnostics,
+    );
+    validate_required_runtime_text(
+        &invocation.invocation,
+        "address",
+        &invocation.address,
+        diagnostics,
+    );
+    validate_runtime_value(
+        &invocation.invocation,
+        "input",
+        invocation.policy,
+        &invocation.input,
+        diagnostics,
+    );
+    if let Some(output) = &invocation.output {
+        validate_runtime_value(
+            &invocation.invocation,
+            "output",
+            invocation.policy,
+            output,
+            diagnostics,
+        );
+    }
+}
+
+fn validate_selfdestruct(
+    event: &SelfdestructFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    runtime_steps: &BTreeSet<OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(nodes, &event.event, "selfdestruct.event", diagnostics);
+    require_node(nodes, &event.step, "selfdestruct.step", diagnostics);
+    require_runtime_step(&event.event, &event.step, runtime_steps, diagnostics);
+    validate_optional_runtime_text(
+        &event.event,
+        "contract",
+        event.contract.as_deref(),
+        diagnostics,
+    );
+    validate_optional_runtime_text(
+        &event.event,
+        "beneficiary",
+        event.beneficiary.as_deref(),
+        diagnostics,
+    );
+    if let Some(balance) = &event.balance {
+        validate_runtime_value(&event.event, "balance", event.policy, balance, diagnostics);
+    }
+}
+
+fn require_runtime_session(
+    subject: &OriginExportKey,
+    session: &OriginExportKey,
+    runtime_sessions: &BTreeSet<OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    if !runtime_sessions.contains(session) {
+        push_error(
+            diagnostics,
+            TraceValidationError::RuntimeFactWithoutSession {
+                subject: subject.clone(),
+                session: session.clone(),
+            },
+        );
+    }
+}
+
+fn require_runtime_step(
+    subject: &OriginExportKey,
+    step: &OriginExportKey,
+    runtime_steps: &BTreeSet<OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    if !runtime_steps.contains(step) {
+        push_error(
+            diagnostics,
+            TraceValidationError::RuntimeFactWithoutStep {
+                subject: subject.clone(),
+                step: step.clone(),
+            },
+        );
+    }
+}
+
+fn validate_optional_instruction(
+    subject: &OriginExportKey,
+    instruction: Option<&OriginExportKey>,
+    nodes: &BTreeSet<OriginExportKey>,
+    instruction_owners: &BTreeMap<OriginExportKey, OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    if let Some(instruction) = instruction {
+        require_node(nodes, instruction, "runtime.instruction", diagnostics);
+        if !instruction_owners.contains_key(instruction) {
+            push_error(
+                diagnostics,
+                TraceValidationError::RuntimeFactWithoutInstruction {
+                    subject: subject.clone(),
+                    instruction: instruction.clone(),
+                },
+            );
+        }
+    }
+}
+
+fn validate_runtime_join(
+    subject: &OriginExportKey,
+    instruction: Option<&OriginExportKey>,
+    confidence: RuntimePcJoinConfidence,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    match (instruction.is_some(), confidence) {
+        (
+            false,
+            RuntimePcJoinConfidence::ExactCodeHashAndPc
+            | RuntimePcJoinConfidence::ExactCodeObjectAndPc
+            | RuntimePcJoinConfidence::PcOnlyWithinUniqueCodeObject,
+        ) => push_error(
+            diagnostics,
+            TraceValidationError::InvalidRuntimeJoin {
+                subject: subject.clone(),
+                reason: "joined runtime step confidence requires an instruction key",
+            },
+        ),
+        (true, RuntimePcJoinConfidence::MissingStaticInstruction) => push_error(
+            diagnostics,
+            TraceValidationError::InvalidRuntimeJoin {
+                subject: subject.clone(),
+                reason: "missing-static-instruction confidence must not include an instruction key",
+            },
+        ),
+        _ => {}
+    }
+}
+
+fn validate_runtime_gas(
+    subject: &OriginExportKey,
+    gas_before: u64,
+    gas_after: u64,
+    gas_cost: u64,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    if gas_after > gas_before {
+        push_error(
+            diagnostics,
+            TraceValidationError::InvalidRuntimeGas {
+                subject: subject.clone(),
+                reason: "gas_after must not exceed gas_before",
+            },
+        );
+    } else if gas_before - gas_after != gas_cost {
+        push_error(
+            diagnostics,
+            TraceValidationError::InvalidRuntimeGas {
+                subject: subject.clone(),
+                reason: "gas_cost must equal gas_before - gas_after",
+            },
+        );
+    }
+}
+
+fn validate_required_runtime_text(
+    subject: &OriginExportKey,
+    field: &'static str,
+    value: &str,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    if value.trim().is_empty() {
+        push_error(
+            diagnostics,
+            TraceValidationError::EmptyRuntimeField {
+                subject: subject.clone(),
+                field,
+            },
+        );
+    }
+}
+
+fn validate_optional_runtime_text(
+    subject: &OriginExportKey,
+    field: &'static str,
+    value: Option<&str>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    if let Some(value) = value {
+        validate_required_runtime_text(subject, field, value, diagnostics);
+    }
+}
+
+fn validate_runtime_value(
+    subject: &OriginExportKey,
+    field: &'static str,
+    policy: RuntimeValuePolicy,
+    value: &RuntimeValue,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    match value {
+        RuntimeValue::Redacted => {}
+        RuntimeValue::Hash { algorithm, digest } => {
+            validate_required_runtime_text(subject, field, algorithm, diagnostics);
+            validate_required_runtime_text(subject, field, digest, diagnostics);
+            if policy == RuntimeValuePolicy::Redacted {
+                push_error(
+                    diagnostics,
+                    TraceValidationError::RuntimeValuePolicyViolation {
+                        subject: subject.clone(),
+                        field,
+                        policy,
+                    },
+                );
+            }
+        }
+        RuntimeValue::Bytes { hex } => {
+            if !hex.chars().all(|ch| ch.is_ascii_hexdigit()) || hex.len() % 2 != 0 {
+                push_error(
+                    diagnostics,
+                    TraceValidationError::InvalidRuntimeValue {
+                        subject: subject.clone(),
+                        field,
+                        reason: "byte values must be even-length hex",
+                    },
+                );
+            }
+            if policy != RuntimeValuePolicy::Full {
+                push_error(
+                    diagnostics,
+                    TraceValidationError::RuntimeValuePolicyViolation {
+                        subject: subject.clone(),
+                        field,
+                        policy,
+                    },
+                );
+            }
+        }
+    }
+}
+
 fn validate_shape_policies<'a>(
     policies: Vec<&'a ShapePolicyFact>,
     diagnostics: &mut Vec<TraceValidationDiagnostic>,
@@ -1910,6 +2564,50 @@ pub enum TraceValidationError {
         code_object: OriginExportKey,
         reason: &'static str,
     },
+    RuntimeFactWithoutSession {
+        subject: OriginExportKey,
+        session: OriginExportKey,
+    },
+    RuntimeFactWithoutStep {
+        subject: OriginExportKey,
+        step: OriginExportKey,
+    },
+    RuntimeFactWithoutInstruction {
+        subject: OriginExportKey,
+        instruction: OriginExportKey,
+    },
+    DuplicateRuntimeStepSite {
+        session: OriginExportKey,
+        step_index: u64,
+        first_step: OriginExportKey,
+        second_step: OriginExportKey,
+    },
+    EmptyRuntimeField {
+        subject: OriginExportKey,
+        field: &'static str,
+    },
+    InvalidRuntimeGas {
+        subject: OriginExportKey,
+        reason: &'static str,
+    },
+    InvalidRuntimeJoin {
+        subject: OriginExportKey,
+        reason: &'static str,
+    },
+    InvalidRuntimeMemoryAccess {
+        access: OriginExportKey,
+        reason: &'static str,
+    },
+    InvalidRuntimeValue {
+        subject: OriginExportKey,
+        field: &'static str,
+        reason: &'static str,
+    },
+    RuntimeValuePolicyViolation {
+        subject: OriginExportKey,
+        field: &'static str,
+        policy: RuntimeValuePolicy,
+    },
     MissingShapePolicy {
         policy: ShapePolicyId,
     },
@@ -2227,6 +2925,78 @@ impl fmt::Display for TraceValidationError {
                 "dynamic gas step for {} is invalid: {reason}",
                 code_object.display_label()
             ),
+            Self::RuntimeFactWithoutSession { subject, session } => write!(
+                f,
+                "runtime fact {} references session {} but no execution trace session fact defines it",
+                subject.display_label(),
+                session.display_label()
+            ),
+            Self::RuntimeFactWithoutStep { subject, step } => write!(
+                f,
+                "runtime fact {} references step {} but no execution step fact defines it",
+                subject.display_label(),
+                step.display_label()
+            ),
+            Self::RuntimeFactWithoutInstruction {
+                subject,
+                instruction,
+            } => write!(
+                f,
+                "runtime fact {} references instruction {} but no instruction fact defines it",
+                subject.display_label(),
+                instruction.display_label()
+            ),
+            Self::DuplicateRuntimeStepSite {
+                session,
+                step_index,
+                first_step,
+                second_step,
+            } => write!(
+                f,
+                "runtime session {} has duplicate step index {} for {} and {}",
+                session.display_label(),
+                step_index,
+                first_step.display_label(),
+                second_step.display_label()
+            ),
+            Self::EmptyRuntimeField { subject, field } => write!(
+                f,
+                "runtime fact {} has an empty {field}",
+                subject.display_label()
+            ),
+            Self::InvalidRuntimeGas { subject, reason } => write!(
+                f,
+                "runtime gas for {} is invalid: {reason}",
+                subject.display_label()
+            ),
+            Self::InvalidRuntimeJoin { subject, reason } => write!(
+                f,
+                "runtime PC join for {} is invalid: {reason}",
+                subject.display_label()
+            ),
+            Self::InvalidRuntimeMemoryAccess { access, reason } => write!(
+                f,
+                "runtime memory access {} is invalid: {reason}",
+                access.display_label()
+            ),
+            Self::InvalidRuntimeValue {
+                subject,
+                field,
+                reason,
+            } => write!(
+                f,
+                "runtime value {field} for {} is invalid: {reason}",
+                subject.display_label()
+            ),
+            Self::RuntimeValuePolicyViolation {
+                subject,
+                field,
+                policy,
+            } => write!(
+                f,
+                "runtime value {field} for {} violates {policy:?} capture policy",
+                subject.display_label()
+            ),
             Self::MissingShapePolicy { policy } => {
                 write!(f, "shape hash references unknown policy {policy}")
             }
@@ -2258,16 +3028,20 @@ mod tests {
     };
 
     use crate::{
-        BlockFact, CategorySource, CfgEdgeFact, CfgEdgeKind, CodeObjectFact, CodeObjectKind,
-        CompilerPhase, DisplayNameFact, DisplayNameKind, DynamicGasStepFact, EvmSchedule,
-        FunctionFact, GasConfidence, GasCostFact, GasKind, GasSource, InlineContextFact,
-        InstructionBlockFact, InstructionCategory, InstructionCategoryFact, InstructionExtentFact,
-        InstructionFact, LoopBlockFact, LoopBlockRole, LoopConfidence, LoopDerivation, LoopFact,
-        LoopMembershipFact, OpcodeCategory, OpcodeFact, OriginEdgeFact, OriginEdgeLabel,
-        OriginNodeFact, OriginNodeKind, PcRange, ShapeComponentHashFact, ShapeGraphHashFact,
-        ShapeNodeHashFact, ShapePolicyFact, SourceFileFact, SourceSpanFact, StaticGasFact,
-        StorageFact, StorageLocation, StorageReason, TraceFact, TraceValidationDiagnostic,
-        TraceValidationError, TraceValidationLevel, TraceValidationWarning, TraceValidator,
+        BlockFact, CallFact, CategorySource, CfgEdgeFact, CfgEdgeKind, CodeObjectFact,
+        CodeObjectKind, CompilerPhase, DisplayNameFact, DisplayNameKind, DynamicGasStepFact,
+        EvmSchedule, ExecutionStepFact, ExecutionTraceSessionFact, FunctionFact, GasConfidence,
+        GasCostFact, GasKind, GasSource, InlineContextFact, InstructionBlockFact,
+        InstructionCategory, InstructionCategoryFact, InstructionExtentFact, InstructionFact,
+        LoopBlockFact, LoopBlockRole, LoopConfidence, LoopDerivation, LoopFact, LoopMembershipFact,
+        MemoryAccessFact, MemoryAccessKind, OpcodeCategory, OpcodeFact, OriginEdgeFact,
+        OriginEdgeLabel, OriginNodeFact, OriginNodeKind, PcRange, RuntimeCallKind,
+        RuntimeCaptureMode, RuntimeCodeObjectBindingFact, RuntimePcJoinConfidence,
+        RuntimeTraceDataSource, RuntimeValue, RuntimeValuePolicy, ShapeComponentHashFact,
+        ShapeGraphHashFact, ShapeNodeHashFact, ShapePolicyFact, SourceFileFact, SourceSpanFact,
+        StackSampleFact, StaticGasFact, StorageAccessFact, StorageAccessKind, StorageFact,
+        StorageLocation, StorageReason, TraceFact, TraceValidationDiagnostic, TraceValidationError,
+        TraceValidationLevel, TraceValidationWarning, TraceValidator,
     };
 
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -3063,6 +3837,210 @@ mod tests {
             Err(TraceValidationError::InvalidDynamicGasStep {
                 code_object,
                 reason: "gas_cost must equal gas_before - gas_after",
+            })
+        );
+    }
+
+    #[test]
+    fn validator_accepts_runtime_trace_fact_spine() {
+        let session = key("runtime.session", "tx:1", "session");
+        let binding = key("runtime.binding", "tx:1", "runtime");
+        let code_object = key("code.object", "fib", "runtime");
+        let function = key("bytecode.function", "fib", "runtime");
+        let instruction = key("bytecode.pc", "fib", "pc:4");
+        let step = key("runtime.step", "tx:1", "step:0");
+        let stack_sample = key("runtime.stack", "tx:1", "sample:0");
+        let storage_access = key("runtime.storage", "tx:1", "access:0");
+        let memory_access = key("runtime.memory", "tx:1", "access:0");
+        let call = key("runtime.call", "tx:1", "call:0");
+        let facts = vec![
+            node("runtime.session", "tx:1", "session"),
+            node("runtime.binding", "tx:1", "runtime"),
+            node("code.object", "fib", "runtime"),
+            node("bytecode.function", "fib", "runtime"),
+            node("bytecode.pc", "fib", "pc:4"),
+            node("runtime.step", "tx:1", "step:0"),
+            node("runtime.stack", "tx:1", "sample:0"),
+            node("runtime.storage", "tx:1", "access:0"),
+            node("runtime.memory", "tx:1", "access:0"),
+            node("runtime.call", "tx:1", "call:0"),
+            TraceFact::CodeObject(CodeObjectFact::new(
+                code_object.clone(),
+                CodeObjectKind::EvmRuntimeBytecode,
+                Some(function.clone()),
+                "evm/sonatina",
+                Some(
+                    "blake3:000000000000000000000000000000000000000000000000000000000000beef"
+                        .to_string(),
+                ),
+            )),
+            TraceFact::Function(FunctionFact::new(
+                function.clone(),
+                "runtime",
+                None,
+                Some(code_object.clone()),
+            )),
+            TraceFact::Instruction(InstructionFact::new(
+                instruction.clone(),
+                function,
+                0,
+                "ADD",
+            )),
+            TraceFact::ExecutionTraceSession(ExecutionTraceSessionFact {
+                session: session.clone(),
+                source: RuntimeTraceDataSource::RevmInspector,
+                capture_mode: RuntimeCaptureMode::Standard,
+                value_policy: RuntimeValuePolicy::HashOnly,
+                transaction_hash: Some("0xabc".to_string()),
+                chain_id: Some(31337),
+                block_number: Some(1),
+                entry_code_object: Some(code_object.clone()),
+            }),
+            TraceFact::RuntimeCodeObjectBinding(RuntimeCodeObjectBindingFact {
+                binding,
+                session: session.clone(),
+                code_object: code_object.clone(),
+                runtime_code_hash:
+                    "blake3:000000000000000000000000000000000000000000000000000000000000beef"
+                        .to_string(),
+                address: Some("0x0000000000000000000000000000000000000001".to_string()),
+                confidence: RuntimePcJoinConfidence::ExactCodeHashAndPc,
+            }),
+            TraceFact::ExecutionStep(ExecutionStepFact {
+                step: step.clone(),
+                session,
+                step_index: 0,
+                code_object: code_object.clone(),
+                pc: 4,
+                opcode: "ADD".to_string(),
+                instruction: Some(instruction.clone()),
+                gas_before: 100,
+                gas_after: 97,
+                gas_cost: 3,
+                depth: 1,
+                join_confidence: RuntimePcJoinConfidence::ExactCodeHashAndPc,
+            }),
+            TraceFact::StackSample(StackSampleFact {
+                sample: stack_sample,
+                step: step.clone(),
+                policy: RuntimeValuePolicy::HashOnly,
+                values_top_first: vec![RuntimeValue::hash("blake3", "abcd")],
+            }),
+            TraceFact::StorageAccess(StorageAccessFact {
+                access: storage_access,
+                step: step.clone(),
+                code_object,
+                instruction: Some(instruction.clone()),
+                kind: StorageAccessKind::Write,
+                address: None,
+                slot: RuntimeValue::hash("blake3", "slot"),
+                value_before: Some(RuntimeValue::redacted()),
+                value_after: Some(RuntimeValue::hash("blake3", "value")),
+                policy: RuntimeValuePolicy::HashOnly,
+            }),
+            TraceFact::MemoryAccess(MemoryAccessFact {
+                access: memory_access,
+                step: step.clone(),
+                kind: MemoryAccessKind::Read,
+                offset: 0,
+                length: 32,
+                value: Some(RuntimeValue::redacted()),
+                policy: RuntimeValuePolicy::HashOnly,
+            }),
+            TraceFact::Call(CallFact {
+                call,
+                step,
+                kind: RuntimeCallKind::Call,
+                caller: None,
+                callee: Some("0x0000000000000000000000000000000000000002".to_string()),
+                value: Some(RuntimeValue::redacted()),
+                gas_requested: Some(10),
+                gas_used: Some(7),
+                success: Some(true),
+                callsite_instruction: Some(instruction),
+                policy: RuntimeValuePolicy::HashOnly,
+            }),
+        ];
+
+        assert!(TraceValidator::validate(&facts).is_ok());
+    }
+
+    #[test]
+    fn validator_rejects_runtime_fact_without_step() {
+        let sample = key("runtime.stack", "tx:1", "sample:0");
+        let missing_step = key("runtime.step", "tx:1", "step:0");
+        let facts = vec![
+            node("runtime.stack", "tx:1", "sample:0"),
+            node("runtime.step", "tx:1", "step:0"),
+            TraceFact::StackSample(StackSampleFact {
+                sample: sample.clone(),
+                step: missing_step.clone(),
+                policy: RuntimeValuePolicy::Redacted,
+                values_top_first: vec![RuntimeValue::redacted()],
+            }),
+        ];
+
+        assert_eq!(
+            TraceValidator::validate(&facts),
+            Err(TraceValidationError::RuntimeFactWithoutStep {
+                subject: sample,
+                step: missing_step,
+            })
+        );
+    }
+
+    #[test]
+    fn validator_rejects_unredacted_runtime_value_under_hash_policy() {
+        let session = key("runtime.session", "tx:1", "session");
+        let code_object = key("code.object", "fib", "runtime");
+        let step = key("runtime.step", "tx:1", "step:0");
+        let access = key("runtime.memory", "tx:1", "access:0");
+        let facts = vec![
+            node("runtime.session", "tx:1", "session"),
+            node("code.object", "fib", "runtime"),
+            node("runtime.step", "tx:1", "step:0"),
+            node("runtime.memory", "tx:1", "access:0"),
+            TraceFact::ExecutionTraceSession(ExecutionTraceSessionFact {
+                session: session.clone(),
+                source: RuntimeTraceDataSource::RevmInspector,
+                capture_mode: RuntimeCaptureMode::Standard,
+                value_policy: RuntimeValuePolicy::HashOnly,
+                transaction_hash: None,
+                chain_id: None,
+                block_number: None,
+                entry_code_object: Some(code_object.clone()),
+            }),
+            TraceFact::ExecutionStep(ExecutionStepFact {
+                step: step.clone(),
+                session,
+                step_index: 0,
+                code_object,
+                pc: 4,
+                opcode: "MLOAD".to_string(),
+                instruction: None,
+                gas_before: 10,
+                gas_after: 7,
+                gas_cost: 3,
+                depth: 1,
+                join_confidence: RuntimePcJoinConfidence::MissingStaticInstruction,
+            }),
+            TraceFact::MemoryAccess(MemoryAccessFact {
+                access: access.clone(),
+                step,
+                kind: MemoryAccessKind::Read,
+                offset: 0,
+                length: 32,
+                value: Some(RuntimeValue::bytes("00")),
+                policy: RuntimeValuePolicy::HashOnly,
+            }),
+        ];
+
+        assert_eq!(
+            TraceValidator::validate(&facts),
+            Err(TraceValidationError::RuntimeValuePolicyViolation {
+                subject: access,
+                field: "value",
+                policy: RuntimeValuePolicy::HashOnly,
             })
         );
     }
