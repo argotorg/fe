@@ -524,6 +524,189 @@ impl UnsignedAbs for isize {
     }
 }
 
+// Absolute value of a signed integer, in the same signed type. Bundles the
+// usual checked / wrapping / saturating / overflowing variants alongside the
+// default panicking `abs()`, matching how `IntDowncast` bundles its variants.
+//
+// `T::MIN` is the asymmetric edge: its magnitude doesn't fit in the signed
+// type, so each variant takes a different stance on what to do:
+//   abs              -> panic (uses Neg, which is `__checked_neg`)
+//   checked_abs      -> None
+//   wrapping_abs     -> T::MIN (the bit pattern of |T::MIN| in T is T::MIN)
+//   saturating_abs   -> T::MAX
+//   overflowing_abs  -> (T::MIN, true)
+//
+// For `T::MIN`-free magnitude in an unsigned type, use `UnsignedAbs`.
+pub trait Abs {
+    const fn abs(self) -> Self
+    const fn checked_abs(self) -> Option<Self>
+    const fn wrapping_abs(self) -> Self
+    const fn saturating_abs(self) -> Self
+    const fn overflowing_abs(self) -> (Self, bool)
+}
+
+impl Abs for i8 {
+    const fn abs(self) -> i8 {
+        if self < 0 { -self } else { self }
+    }
+    const fn checked_abs(self) -> Option<i8> {
+        if self == i8::min() { Option::None }
+        else if self < 0 { Option::Some(-self) }
+        else { Option::Some(self) }
+    }
+    const fn wrapping_abs(self) -> i8 {
+        if self < 0 { (0 as i8).wrapping_sub(self) } else { self }
+    }
+    const fn saturating_abs(self) -> i8 {
+        if self == i8::min() { i8::max() }
+        else if self < 0 { -self }
+        else { self }
+    }
+    const fn overflowing_abs(self) -> (i8, bool) {
+        if self == i8::min() { (i8::min(), true) }
+        else if self < 0 { (-self, false) }
+        else { (self, false) }
+    }
+}
+impl Abs for i16 {
+    const fn abs(self) -> i16 {
+        if self < 0 { -self } else { self }
+    }
+    const fn checked_abs(self) -> Option<i16> {
+        if self == i16::min() { Option::None }
+        else if self < 0 { Option::Some(-self) }
+        else { Option::Some(self) }
+    }
+    const fn wrapping_abs(self) -> i16 {
+        if self < 0 { (0 as i16).wrapping_sub(self) } else { self }
+    }
+    const fn saturating_abs(self) -> i16 {
+        if self == i16::min() { i16::max() }
+        else if self < 0 { -self }
+        else { self }
+    }
+    const fn overflowing_abs(self) -> (i16, bool) {
+        if self == i16::min() { (i16::min(), true) }
+        else if self < 0 { (-self, false) }
+        else { (self, false) }
+    }
+}
+impl Abs for i32 {
+    const fn abs(self) -> i32 {
+        if self < 0 { -self } else { self }
+    }
+    const fn checked_abs(self) -> Option<i32> {
+        if self == i32::min() { Option::None }
+        else if self < 0 { Option::Some(-self) }
+        else { Option::Some(self) }
+    }
+    const fn wrapping_abs(self) -> i32 {
+        if self < 0 { (0 as i32).wrapping_sub(self) } else { self }
+    }
+    const fn saturating_abs(self) -> i32 {
+        if self == i32::min() { i32::max() }
+        else if self < 0 { -self }
+        else { self }
+    }
+    const fn overflowing_abs(self) -> (i32, bool) {
+        if self == i32::min() { (i32::min(), true) }
+        else if self < 0 { (-self, false) }
+        else { (self, false) }
+    }
+}
+impl Abs for i64 {
+    const fn abs(self) -> i64 {
+        if self < 0 { -self } else { self }
+    }
+    const fn checked_abs(self) -> Option<i64> {
+        if self == i64::min() { Option::None }
+        else if self < 0 { Option::Some(-self) }
+        else { Option::Some(self) }
+    }
+    const fn wrapping_abs(self) -> i64 {
+        if self < 0 { (0 as i64).wrapping_sub(self) } else { self }
+    }
+    const fn saturating_abs(self) -> i64 {
+        if self == i64::min() { i64::max() }
+        else if self < 0 { -self }
+        else { self }
+    }
+    const fn overflowing_abs(self) -> (i64, bool) {
+        if self == i64::min() { (i64::min(), true) }
+        else if self < 0 { (-self, false) }
+        else { (self, false) }
+    }
+}
+impl Abs for i128 {
+    const fn abs(self) -> i128 {
+        if self < 0 { -self } else { self }
+    }
+    const fn checked_abs(self) -> Option<i128> {
+        if self == i128::min() { Option::None }
+        else if self < 0 { Option::Some(-self) }
+        else { Option::Some(self) }
+    }
+    const fn wrapping_abs(self) -> i128 {
+        if self < 0 { (0 as i128).wrapping_sub(self) } else { self }
+    }
+    const fn saturating_abs(self) -> i128 {
+        if self == i128::min() { i128::max() }
+        else if self < 0 { -self }
+        else { self }
+    }
+    const fn overflowing_abs(self) -> (i128, bool) {
+        if self == i128::min() { (i128::min(), true) }
+        else if self < 0 { (-self, false) }
+        else { (self, false) }
+    }
+}
+impl Abs for i256 {
+    const fn abs(self) -> i256 {
+        if self < 0 { -self } else { self }
+    }
+    const fn checked_abs(self) -> Option<i256> {
+        if self == i256::min() { Option::None }
+        else if self < 0 { Option::Some(-self) }
+        else { Option::Some(self) }
+    }
+    const fn wrapping_abs(self) -> i256 {
+        if self < 0 { (0 as i256).wrapping_sub(self) } else { self }
+    }
+    const fn saturating_abs(self) -> i256 {
+        if self == i256::min() { i256::max() }
+        else if self < 0 { -self }
+        else { self }
+    }
+    const fn overflowing_abs(self) -> (i256, bool) {
+        if self == i256::min() { (i256::min(), true) }
+        else if self < 0 { (-self, false) }
+        else { (self, false) }
+    }
+}
+impl Abs for isize {
+    const fn abs(self) -> isize {
+        if self < 0 { -self } else { self }
+    }
+    const fn checked_abs(self) -> Option<isize> {
+        if self == isize::min() { Option::None }
+        else if self < 0 { Option::Some(-self) }
+        else { Option::Some(self) }
+    }
+    const fn wrapping_abs(self) -> isize {
+        if self < 0 { (0 as isize).wrapping_sub(self) } else { self }
+    }
+    const fn saturating_abs(self) -> isize {
+        if self == isize::min() { isize::max() }
+        else if self < 0 { -self }
+        else { self }
+    }
+    const fn overflowing_abs(self) -> (isize, bool) {
+        if self == isize::min() { (isize::min(), true) }
+        else if self < 0 { (-self, false) }
+        else { (self, false) }
+    }
+}
+
 pub trait IntWord: Copy {
     const MASK: u256
     const SIGN_BIT: u256
