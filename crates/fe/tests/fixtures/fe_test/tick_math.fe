@@ -1,0 +1,139 @@
+// Uniswap V3's TickMath, with the factor table and ratio bounds derived at
+// compile time via `const fn` instead of pasted from an offline Python script.
+//
+// Reference (hardcoded constants in Solidity):
+//   https://github.com/Uniswap/v3-core/blob/main/contracts/libraries/TickMath.sol
+
+const MIN_TICK: i32 = -887272
+const MAX_TICK: i32 =  887272
+
+// Builds the 20-entry factor table by iterative squaring in Q128.128.
+//   table[k] ≈ floor(2^128 / 1.0001^(2^k))
+const fn tick_factors() -> [u256; 20] {
+    let mut table: [u256; 20] = [0; 20]
+    // Seed: 1 / 1.0001 in Q128.128 (identical to Uniswap's k=0 constant).
+    let mut x: u256 = 0xfffcb933bd6fad37aa2d162d1a594001
+    let mut k: usize = 0
+    while k < 20 {
+        table[k] = x
+        // ceil(x^2 / 2^128) — keeps the iteration on the right side of Uniswap.
+        x = (x * x + ((1 << 128) - 1)) >> 128
+        k += 1
+    }
+    table
+}
+
+const TICK_FACTORS: [u256; 20] = tick_factors()
+
+// Same function, runs at compile time AND at runtime.
+// Returns sqrtPriceX96 packed in u256 (Fe lacks a primitive u160; the value
+// fits in 160 bits and matches Solidity's encoding bit-for-bit).
+pub const fn get_sqrt_ratio_at_tick(_ tick: i32) -> u256 {
+    let abs_tick: u32 = tick.unsigned_abs()
+
+    let mut ratio: u256 = if (abs_tick & 0x1) != 0 {
+        TICK_FACTORS[0]
+    } else {
+        1 << 128
+    }
+
+    let mut k: u32 = 1
+    while k < 20 {
+        if (abs_tick >> k) & 1 != 0 {
+            ratio = (ratio * TICK_FACTORS[k.downcast_unchecked()]) >> 128
+        }
+        k += 1
+    }
+
+    if tick > 0 {
+        ratio = u256::max() / ratio
+    }
+
+    let round_up: u256 = if ratio % (1 << 32) == 0 { 0 } else { 1 }
+    (ratio >> 32) + round_up
+}
+
+// Bounds derive themselves from the same function — no magic numbers.
+pub const MIN_SQRT_RATIO: u256 = get_sqrt_ratio_at_tick(MIN_TICK)
+pub const MAX_SQRT_RATIO: u256 = get_sqrt_ratio_at_tick(MAX_TICK)
+
+// --------------------------------------------------------------------------
+// Tests
+// --------------------------------------------------------------------------
+
+// Uniswap V3's hardcoded factor table, for reference comparison.
+const UNISWAP_FACTORS: [u256; 20] = [
+    0xfffcb933bd6fad37aa2d162d1a594001,
+    0xfff97272373d413259a46990580e213a,
+    0xfff2e50f5f656932ef12357cf3c7fdcc,
+    0xffe5caca7e10e4e61c3624eaa0941cd0,
+    0xffcb9843d60f6159c9db58835c926644,
+    0xff973b41fa98c081472e6896dfb254c0,
+    0xff2ea16466c96a3843ec78b326b52861,
+    0xfe5dee046a99a2a811c461f1969c3053,
+    0xfcbe86c7900a88aedcffc83b479aa3a4,
+    0xf987a7253ac413176f2b074cf7815e54,
+    0xf3392b0822b70005940c7a398e4b70f3,
+    0xe7159475a2c29b7443b29c7fa6e889d9,
+    0xd097f3bdfd2022b8845ad8f792aa5825,
+    0xa9f746462d870fdf8a65dc1f90e061e5,
+    0x70d869a156d2a1b890bb3df62baf32f7,
+    0x31be135f97d08fd981231505542fcfa6,
+    0x09aa508b5b7a84e1c677de54f3e99bc9,
+    0x005d6af8dedb81196699c329225ee604,
+    0x00002216e584f5fa1ea926041bedfe98,
+    0x0000000048a170391f7dc42444e8fa2,
+]
+
+const fn abs_diff(_ a: u256, _ b: u256) -> u256 {
+    if a > b { a - b } else { b - a }
+}
+
+// The seed equals Uniswap's k=0 constant — bit-exact.
+#[test]
+fn factor_0_is_bit_exact() {
+    assert(TICK_FACTORS[0] == UNISWAP_FACTORS[0])
+}
+
+// Our iterative ceiling-squaring vs. Uniswap's offline arbitrary-precision
+// generator: the values drift by less than 2^16 in the low bits.
+// Values are ~2^128, so this is a relative error well below 2^-110 — far
+// below the precision that survives the final `>> 32` truncation.
+#[test]
+fn factors_drift_under_2_to_16() {
+    let mut k: usize = 0
+    while k < 20 {
+        assert(abs_diff(TICK_FACTORS[k], UNISWAP_FACTORS[k]) < (1 << 16))
+        k += 1
+    }
+}
+
+// sqrt(1.0001^0) * 2^96 = 2^96.
+#[test]
+fn sqrt_ratio_at_zero_is_q96() {
+    assert(get_sqrt_ratio_at_tick(0) == 79228162514264337593543950336)
+}
+
+// Bit-exact match with Uniswap V3's hardcoded MIN_SQRT_RATIO.
+#[test]
+fn min_sqrt_ratio_matches_uniswap() {
+    assert(MIN_SQRT_RATIO == 4295128739)
+}
+
+// Bit-exact match with Uniswap V3's hardcoded MAX_SQRT_RATIO.
+#[test]
+fn max_sqrt_ratio_matches_uniswap() {
+    assert(MAX_SQRT_RATIO == 1461446703485210103287273052203988822378723970342)
+}
+
+// `getSqrtRatioAtTick(MIN_TICK)` matches the constant — the equivalence
+// Uniswap asserts in a comment is enforced by the type system here.
+#[test]
+fn runtime_min_call_matches_const() {
+    assert(get_sqrt_ratio_at_tick(MIN_TICK) == MIN_SQRT_RATIO)
+}
+
+#[test]
+fn runtime_max_call_matches_const() {
+    assert(get_sqrt_ratio_at_tick(MAX_TICK) == MAX_SQRT_RATIO)
+}
