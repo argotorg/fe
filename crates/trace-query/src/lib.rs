@@ -907,9 +907,23 @@ fn default_gas_schedule() -> String {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum TraceQueryHttpResponse {
-    Ok { report: TraceQueryReport },
-    Error { reason: String },
-    Unauthorized { reason: String },
+    Ok {
+        report: TraceQueryReport,
+        #[serde(default)]
+        cache_hit: bool,
+        #[serde(default)]
+        query_duration_ms: u64,
+    },
+    Error {
+        reason: String,
+        #[serde(default)]
+        cache_hit: bool,
+        #[serde(default)]
+        query_duration_ms: u64,
+    },
+    Unauthorized {
+        reason: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -2211,7 +2225,8 @@ mod tests {
         DynamicGasBySourceRequest, ExplainLocalRequest, ExplainPcRequest, GasBySourceRequest,
         GasToSourceRequest, IntrospectionService, LoopContentsRequest, LoopCostRequest,
         OptimizedCodeHonestyRequest, TraceIntrospectionService, TraceQueryHttpRequest,
-        TraceQueryReport, TraceQueryRequest, VariablesAtPcRequest, run_trace_query,
+        TraceQueryHttpResponse, TraceQueryReport, TraceQueryRequest, VariablesAtPcRequest,
+        run_trace_query,
     };
 
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -2860,6 +2875,37 @@ mod tests {
             request.query,
             TraceQueryRequest::GasBreakdown { ref schedule } if schedule == "cancun"
         ));
+    }
+
+    #[test]
+    fn live_http_response_reports_cache_and_duration_metadata() {
+        let report = run_trace_query(&demo_service(), TraceQueryRequest::loop_cost()).unwrap();
+        let response = TraceQueryHttpResponse::Ok {
+            report,
+            cache_hit: true,
+            query_duration_ms: 7,
+        };
+        let json = serde_json::to_value(&response).unwrap();
+
+        assert_eq!(json["status"], "ok");
+        assert_eq!(json["cache_hit"], true);
+        assert_eq!(json["query_duration_ms"], 7);
+
+        let legacy: TraceQueryHttpResponse = serde_json::from_str(
+            r#"{
+                "status": "error",
+                "reason": "not available"
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            legacy,
+            TraceQueryHttpResponse::Error {
+                reason: "not available".to_string(),
+                cache_hit: false,
+                query_duration_ms: 0,
+            }
+        );
     }
 
     #[test]

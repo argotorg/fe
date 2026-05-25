@@ -159,8 +159,8 @@ impl Default for HoverConfig {
     fn default() -> Self {
         Self {
             origin_chain: true,
-            storage_history: true,
-            gas_breakdown: true,
+            storage_history: false,
+            gas_breakdown: false,
             max_origin_depth: 8,
             show_confidence: true,
         }
@@ -213,6 +213,10 @@ pub struct TraceConfig {
     pub out_dir: String,
     pub validate: bool,
     pub level: TraceLevel,
+    pub max_trace_facts: usize,
+    pub max_shape_nodes: usize,
+    pub max_query_ms: u64,
+    pub debounce_ms: u64,
 }
 
 impl Default for TraceConfig {
@@ -222,6 +226,10 @@ impl Default for TraceConfig {
             out_dir: "target/fe-traces".to_string(),
             validate: true,
             level: TraceLevel::Summary,
+            max_trace_facts: 100_000,
+            max_shape_nodes: 50_000,
+            max_query_ms: 1_000,
+            debounce_ms: 75,
         }
     }
 }
@@ -232,6 +240,10 @@ impl TraceConfig {
         assign(&mut self.out_dir, patch.out_dir);
         assign(&mut self.validate, patch.validate);
         assign(&mut self.level, patch.level);
+        assign(&mut self.max_trace_facts, patch.max_trace_facts);
+        assign(&mut self.max_shape_nodes, patch.max_shape_nodes);
+        assign(&mut self.max_query_ms, patch.max_query_ms);
+        assign(&mut self.debounce_ms, patch.debounce_ms);
     }
 }
 
@@ -382,6 +394,18 @@ impl FeToolingConfigPatch {
                 "fe.lsp.trace.maxAnalysisMs" => {
                     patch.lsp_mut().max_analysis_ms = Some(json_u64(key, value)?);
                 }
+                "fe.lsp.trace.maxFacts" => {
+                    patch.lsp_mut().trace_mut().max_trace_facts = Some(json_usize(key, value)?);
+                }
+                "fe.lsp.trace.maxShapeNodes" => {
+                    patch.lsp_mut().trace_mut().max_shape_nodes = Some(json_usize(key, value)?);
+                }
+                "fe.lsp.trace.maxQueryMs" => {
+                    patch.lsp_mut().trace_mut().max_query_ms = Some(json_u64(key, value)?);
+                }
+                "fe.lsp.trace.debounceMs" => {
+                    patch.lsp_mut().trace_mut().debounce_ms = Some(json_u64(key, value)?);
+                }
                 "fe.lsp.inlayHints.types" => {
                     patch.lsp_mut().inlay_hints_mut().types = Some(json_bool(key, value)?);
                 }
@@ -437,6 +461,10 @@ impl LspToolingConfigPatch {
         self.hover.get_or_insert_with(HoverConfigPatch::default)
     }
 
+    fn trace_mut(&mut self) -> &mut TraceConfigPatch {
+        self.trace.get_or_insert_with(TraceConfigPatch::default)
+    }
+
     fn live_mut(&mut self) -> &mut LiveConfigPatch {
         self.live.get_or_insert_with(LiveConfigPatch::default)
     }
@@ -478,6 +506,10 @@ pub struct TraceConfigPatch {
     pub out_dir: Option<String>,
     pub validate: Option<bool>,
     pub level: Option<TraceLevel>,
+    pub max_trace_facts: Option<usize>,
+    pub max_shape_nodes: Option<usize>,
+    pub max_query_ms: Option<u64>,
+    pub debounce_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -600,6 +632,15 @@ fn json_u64(key: &str, value: &serde_json::Value) -> Result<u64, ConfigLoadError
     })
 }
 
+fn json_usize(key: &str, value: &serde_json::Value) -> Result<usize, ConfigLoadError> {
+    json_u64(key, value)?
+        .try_into()
+        .map_err(|_| ConfigLoadError::JsonSetting {
+            key: key.to_string(),
+            message: "integer is too large for this platform".to_string(),
+        })
+}
+
 fn json_string_enum<T>(key: &str, value: &serde_json::Value) -> Result<T, ConfigLoadError>
 where
     T: for<'de> Deserialize<'de>,
@@ -630,6 +671,14 @@ mod tests {
         assert!(config.lsp.inlay_hints.types);
         assert_eq!(config.lsp.inlay_hints.gas, HintMode::Off);
         assert_eq!(config.lsp.inlay_hints.loop_cost, LoopHintMode::Off);
+        assert!(!config.lsp.hover.storage_history);
+        assert!(!config.lsp.hover.gas_breakdown);
+        assert!(!config.lsp.code_lens.trace_loop);
+        assert!(!config.lsp.code_lens.gas_breakdown);
+        assert_eq!(config.lsp.trace.max_trace_facts, 100_000);
+        assert_eq!(config.lsp.trace.max_shape_nodes, 50_000);
+        assert_eq!(config.lsp.trace.max_query_ms, 1_000);
+        assert_eq!(config.lsp.trace.debounce_ms, 75);
         assert!(config.lsp.live.write_server_info);
     }
 
@@ -681,6 +730,10 @@ types = false
         .unwrap();
         let settings = serde_json::json!({
             "fe.lsp.trace.maxAnalysisMs": 100,
+            "fe.lsp.trace.maxFacts": 10,
+            "fe.lsp.trace.maxShapeNodes": 11,
+            "fe.lsp.trace.maxQueryMs": 12,
+            "fe.lsp.trace.debounceMs": 13,
             "fe.lsp.inlayHints.types": true,
             "fe.lsp.inlayHints.gas": "hotspots",
             "fe.lsp.live.browserGraphs": true,
@@ -694,6 +747,10 @@ types = false
         .unwrap();
 
         assert_eq!(config.lsp.max_analysis_ms, 100);
+        assert_eq!(config.lsp.trace.max_trace_facts, 10);
+        assert_eq!(config.lsp.trace.max_shape_nodes, 11);
+        assert_eq!(config.lsp.trace.max_query_ms, 12);
+        assert_eq!(config.lsp.trace.debounce_ms, 13);
         assert!(config.lsp.inlay_hints.types);
         assert_eq!(config.lsp.inlay_hints.gas, HintMode::Hotspots);
         assert!(config.lsp.live.browser_graphs);

@@ -1,6 +1,7 @@
 use common::InputDb;
 use driver::DriverDataBase;
 use hir::lower::map_file_to_mod;
+use std::time::{Duration, Instant};
 use trace_facts::{CompilerPhase, TraceBundle, TraceMetadata, TraceSnapshot};
 use trace_query::{
     TraceIntrospectionService, TraceQueryHttpResponse, TraceQueryRequest, run_trace_query,
@@ -17,9 +18,10 @@ pub(crate) struct TraceBackendQueryRequest {
 }
 
 pub(crate) async fn handle_trace_query(
-    backend: &Backend,
+    backend: &mut Backend,
     request: TraceBackendQueryRequest,
 ) -> Result<TraceQueryHttpResponse, async_lsp::ResponseError> {
+    let started = Instant::now();
     let current_config_hash = backend.tooling_config().stable_hash();
     if request
         .config_hash
@@ -32,6 +34,8 @@ pub(crate) async fn handle_trace_query(
                 request.config_hash.unwrap_or_default(),
                 current_config_hash
             ),
+            cache_hit: false,
+            query_duration_ms: elapsed_ms(started),
         });
     }
 
@@ -40,19 +44,81 @@ pub(crate) async fn handle_trace_query(
     let internal_uri = backend.map_client_uri_to_internal(client_uri);
     let query = request.query;
     let config = backend.tooling_config().clone();
+    let trace_config = config.lsp.trace.clone();
+    let document_version = backend.document_version(&internal_uri);
 
-    let result = backend
-        .spawn_on_workers(move |db| {
-            let service = service_for_file(db, &internal_uri, config)?
-                .ok_or_else(|| format!("no Fe source file is loaded for URI {internal_uri}"))?;
-            run_trace_query(&service, query).map_err(|err| err.to_string())
-        })
-        .await
-        .map_err(internal_error)?;
+    if trace_config.debounce_ms > 0 {
+        tokio::time::sleep(Duration::from_millis(trace_config.debounce_ms)).await;
+    }
 
-    Ok(match result {
-        Ok(report) => TraceQueryHttpResponse::Ok { report },
-        Err(reason) => TraceQueryHttpResponse::Error { reason },
+    if let Some(version) = document_version
+        && let Some(service) =
+            backend.cached_trace_service(&internal_uri, version, &current_config_hash)
+    {
+        return Ok(match run_trace_query(&service, query) {
+            Ok(report) => TraceQueryHttpResponse::Ok {
+                report,
+                cache_hit: true,
+                query_duration_ms: elapsed_ms(started),
+            },
+            Err(err) => TraceQueryHttpResponse::Error {
+                reason: err.to_string(),
+                cache_hit: true,
+                query_duration_ms: elapsed_ms(started),
+            },
+        });
+    }
+
+    let internal_uri_for_worker = internal_uri.clone();
+    let worker = backend.spawn_on_workers(move |db| {
+        let service = service_for_file(db, &internal_uri_for_worker, config)?.ok_or_else(|| {
+            format!("no Fe source file is loaded for URI {internal_uri_for_worker}")
+        })?;
+        Ok::<_, String>(service)
+    });
+    let result = tokio::time::timeout(
+        Duration::from_millis(trace_config.max_query_ms.max(1)),
+        worker,
+    )
+    .await
+    .map_err(|_| {
+        internal_error(format!(
+            "live trace query exceeded {}ms budget",
+            trace_config.max_query_ms.max(1)
+        ))
+    })?
+    .map_err(internal_error)?;
+
+    let service = match result {
+        Ok(service) => service,
+        Err(reason) => {
+            return Ok(TraceQueryHttpResponse::Error {
+                reason,
+                cache_hit: false,
+                query_duration_ms: elapsed_ms(started),
+            });
+        }
+    };
+    if let Some(version) = document_version {
+        backend.cache_trace_service(
+            internal_uri.clone(),
+            version,
+            current_config_hash.clone(),
+            service.clone(),
+        );
+    }
+
+    Ok(match run_trace_query(&service, query) {
+        Ok(report) => TraceQueryHttpResponse::Ok {
+            report,
+            cache_hit: false,
+            query_duration_ms: elapsed_ms(started),
+        },
+        Err(err) => TraceQueryHttpResponse::Error {
+            reason: err.to_string(),
+            cache_hit: false,
+            query_duration_ms: elapsed_ms(started),
+        },
     })
 }
 
@@ -122,6 +188,7 @@ pub(crate) fn service_for_file(
             &artifact.runtime,
         ));
     }
+    enforce_trace_limits(&facts, &config)?;
 
     let metadata = TraceMetadata::compiler_emitted(
         option_env!("FE_GIT_COMMIT").unwrap_or("unknown"),
@@ -135,4 +202,33 @@ pub(crate) fn service_for_file(
     Ok(Some(TraceIntrospectionService::with_config(
         snapshot, config,
     )))
+}
+
+fn enforce_trace_limits(
+    facts: &[trace_facts::TraceFact],
+    config: &introspection_config::FeToolingConfig,
+) -> Result<(), String> {
+    let trace = &config.lsp.trace;
+    if facts.len() > trace.max_trace_facts {
+        return Err(format!(
+            "trace fact limit exceeded: {} facts > max_trace_facts={}",
+            facts.len(),
+            trace.max_trace_facts
+        ));
+    }
+    let shape_nodes = facts
+        .iter()
+        .filter(|fact| matches!(fact, trace_facts::TraceFact::ShapeNodeHash(_)))
+        .count();
+    if shape_nodes > trace.max_shape_nodes {
+        return Err(format!(
+            "shape node limit exceeded: {shape_nodes} nodes > max_shape_nodes={}",
+            trace.max_shape_nodes
+        ));
+    }
+    Ok(())
+}
+
+fn elapsed_ms(started: Instant) -> u64 {
+    started.elapsed().as_millis().try_into().unwrap_or(u64::MAX)
 }

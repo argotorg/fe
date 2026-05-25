@@ -10,6 +10,7 @@ use hir::{
     visitor::prelude::*,
 };
 use introspection_config::{FeToolingConfig, HintMode, LoopHintMode};
+use std::time::Duration;
 use trace_query::{
     GasBreakdownRequest, IntrospectionService, LoopCostRequest, TraceIntrospectionService,
 };
@@ -125,22 +126,37 @@ async fn trace_service_for_inlays(
         return Some(service);
     }
 
+    let trace_config = config.lsp.trace.clone();
+    if trace_config.debounce_ms > 0 {
+        tokio::time::sleep(Duration::from_millis(trace_config.debounce_ms)).await;
+    }
+
     let url_for_worker = url.clone();
     let service_config = config.clone();
-    let service = match backend
-        .spawn_on_workers(move |db| {
-            crate::introspection::service_for_file(db, &url_for_worker, service_config)
-        })
-        .await
+    let worker = backend.spawn_on_workers(move |db| {
+        crate::introspection::service_for_file(db, &url_for_worker, service_config)
+    });
+    let service = match tokio::time::timeout(
+        Duration::from_millis(trace_config.max_query_ms.max(1)),
+        worker,
+    )
+    .await
     {
-        Ok(Ok(Some(service))) => service,
-        Ok(Ok(None)) => return None,
-        Ok(Err(err)) => {
+        Ok(Ok(Ok(Some(service)))) => service,
+        Ok(Ok(Ok(None))) => return None,
+        Ok(Ok(Err(err))) => {
             tracing::debug!("trace inlay service unavailable: {err}");
             return None;
         }
-        Err(err) => {
+        Ok(Err(err)) => {
             tracing::debug!("trace inlay worker failed: {err}");
+            return None;
+        }
+        Err(_) => {
+            tracing::debug!(
+                "trace inlay service exceeded {}ms budget",
+                trace_config.max_query_ms.max(1)
+            );
             return None;
         }
     };

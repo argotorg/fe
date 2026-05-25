@@ -206,11 +206,15 @@ async fn handle_trace_query_http(
         Err(reason) => {
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
-                Json(TraceQueryHttpResponse::Error { reason }),
+                Json(TraceQueryHttpResponse::Error {
+                    reason,
+                    cache_hit: false,
+                    query_duration_ms: 0,
+                }),
             );
         }
     };
-    actor_ref.register_handler_async(
+    actor_ref.register_handler_async_mutating(
         MessageKey(LspActorKey::of::<TraceBackendQueryRequest>()),
         crate::introspection::handle_trace_query,
     );
@@ -230,6 +234,8 @@ async fn handle_trace_query_http(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(TraceQueryHttpResponse::Error {
                 reason: format!("live trace backend query failed: {err:?}"),
+                cache_hit: false,
+                query_duration_ms: 0,
             }),
         ),
     }

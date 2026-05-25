@@ -17,6 +17,7 @@ use resolver::{
     files::{FilesResolver, FilesResource},
 };
 use rustc_hash::FxHashSet;
+use std::time::Duration;
 use url::Url;
 
 use super::{capabilities::server_capabilities, hover::hover_helper};
@@ -827,20 +828,34 @@ pub async fn handle_hover_request(
         && backend.tooling_config().lsp.hover.storage_history
     {
         let config = backend.tooling_config().clone();
+        let trace_config = config.lsp.trace.clone();
+        if trace_config.debounce_ms > 0 {
+            tokio::time::sleep(Duration::from_millis(trace_config.debounce_ms)).await;
+        }
         let url_for_trace = url.clone();
-        match backend
-            .spawn_on_workers(move |db| {
-                crate::introspection::service_for_file(db, &url_for_trace, config)
-            })
-            .await
+        let worker = backend.spawn_on_workers(move |db| {
+            crate::introspection::service_for_file(db, &url_for_trace, config)
+        });
+        match tokio::time::timeout(
+            Duration::from_millis(trace_config.max_query_ms.max(1)),
+            worker,
+        )
+        .await
         {
-            Ok(Ok(service)) => service,
-            Ok(Err(err)) => {
+            Ok(Ok(Ok(service))) => service,
+            Ok(Ok(Err(err))) => {
                 debug!("hover trace service unavailable: {err}");
                 None
             }
-            Err(err) => {
+            Ok(Err(err)) => {
                 debug!("hover trace worker failed: {err}");
+                None
+            }
+            Err(_) => {
+                debug!(
+                    "hover trace service exceeded {}ms budget",
+                    trace_config.max_query_ms.max(1)
+                );
                 None
             }
         }
