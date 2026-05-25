@@ -228,7 +228,7 @@ mod tests {
         };
 
         assert_eq!(
-            graph_edge_digest(&policy, &[first.clone(), second.clone()]),
+            graph_edge_digest(&policy, &[first, second]),
             graph_edge_digest(&policy, &[second, first])
         );
         assert_ne!(

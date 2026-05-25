@@ -239,6 +239,24 @@ pub fn validate_origin_key_text(kind: &'static str, value: &str) -> Result<(), O
     Ok(())
 }
 
+impl<Owner, Local> OriginKey<Owner, Local> {
+    pub const fn new(owner: Owner, local: Local) -> Self {
+        Self { owner, local }
+    }
+
+    pub fn owner(&self) -> &Owner {
+        &self.owner
+    }
+
+    pub fn local(&self) -> &Local {
+        &self.local
+    }
+
+    pub fn into_parts(self) -> (Owner, Local) {
+        (self.owner, self.local)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -400,23 +418,5 @@ mod tests {
         assert!(validate_origin_key_text("origin owner key", "runtime:test").is_ok());
         assert!(validate_origin_key_text("origin owner key", "").is_err());
         assert!(validate_origin_key_text("origin owner key", "runtime\u{1f}test").is_err());
-    }
-}
-
-impl<Owner, Local> OriginKey<Owner, Local> {
-    pub const fn new(owner: Owner, local: Local) -> Self {
-        Self { owner, local }
-    }
-
-    pub fn owner(&self) -> &Owner {
-        &self.owner
-    }
-
-    pub fn local(&self) -> &Local {
-        &self.local
-    }
-
-    pub fn into_parts(self) -> (Owner, Local) {
-        (self.owner, self.local)
     }
 }
