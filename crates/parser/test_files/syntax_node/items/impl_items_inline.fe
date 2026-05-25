@@ -1,0 +1,10 @@
+// Multiple items on the same line inside `impl` / `trait` blocks are
+// permitted — newlines between items are not required by the grammar.
+
+trait Bounded { const fn min() -> Self  const fn max() -> Self }
+
+trait Pair { type Lhs  type Rhs  const N: u32  fn pair(self) -> u32 }
+
+impl Bounded for u32 { const fn min() -> u32 { 0 }  const fn max() -> u32 { 4294967295 } }
+
+impl Foo { fn a() -> u32 { 1 }  fn b() -> u32 { 2 } }

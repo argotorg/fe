@@ -1006,17 +1006,6 @@ fn parse_fn_item_block<S: TokenStream>(
 
         if is_fn_head {
             parser.parse_cp(FuncScope::new(fn_def_scope), checkpoint)?;
-
-            parser.set_newline_as_trivia(false);
-            parser.expect(
-                &[
-                    SyntaxKind::Newline,
-                    SyntaxKind::RBrace,
-                    SyntaxKind::DocComment,
-                    SyntaxKind::DocCommentAttr,
-                ],
-                None,
-            )?;
         } else {
             let proof = parser.error("only `fn` is allowed in this block");
             if parser.current_kind() == Some(SyntaxKind::ConstKw) {
@@ -1053,43 +1042,15 @@ fn parse_trait_item_block<S: TokenStream>(
         match parser.current_kind() {
             Some(SyntaxKind::FnKw) => {
                 parser.parse_cp(FuncScope::new(fn_def_scope), checkpoint)?;
-
-                parser.set_newline_as_trivia(false);
-                parser.expect(
-                    &[
-                        SyntaxKind::Newline,
-                        SyntaxKind::RBrace,
-                        SyntaxKind::DocComment,
-                        SyntaxKind::DocCommentAttr,
-                    ],
-                    None,
-                )?;
             }
             Some(SyntaxKind::TypeKw) => {
                 parser.parse_cp(TraitTypeItemScope::default(), checkpoint)?;
-
-                parser.set_newline_as_trivia(false);
-                parser.expect(&[SyntaxKind::Newline, SyntaxKind::RBrace], None)?;
             }
             Some(SyntaxKind::ConstKw) if is_fn_item_head(parser) => {
                 parser.parse_cp(FuncScope::new(fn_def_scope), checkpoint)?;
-
-                parser.set_newline_as_trivia(false);
-                parser.expect(
-                    &[
-                        SyntaxKind::Newline,
-                        SyntaxKind::RBrace,
-                        SyntaxKind::DocComment,
-                        SyntaxKind::DocCommentAttr,
-                    ],
-                    None,
-                )?;
             }
             Some(SyntaxKind::ConstKw) => {
                 parser.parse_cp(TraitConstItemScope::default(), checkpoint)?;
-
-                parser.set_newline_as_trivia(false);
-                parser.expect(&[SyntaxKind::Newline, SyntaxKind::RBrace], None)?;
             }
             _ => {
                 let proof = parser.error_msg_on_current_token(
