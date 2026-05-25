@@ -19,3 +19,4 @@ CLAUDE.md
 # Local debug artifacts
 stackify_*.txt
 trace_*.txt
+*.pdf
