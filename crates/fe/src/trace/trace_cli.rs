@@ -20,15 +20,16 @@ fn run_trace_fixture_command(command: &TraceFixtureCommand) -> Result<String, St
 fn run_dev_trace_command(command: &DevTraceCommand) -> Result<String, String> {
     match command {
         DevTraceCommand::Status => Ok(
-            "fe dev trace is reserved for compiler-derived validated trace JSONL.\n\
+            "fe dev trace consumes compiler-derived validated trace JSONL and derived report views.\n\
              Fixture-backed Fibonacci diagnostics remain under fe dev trace-fixture.\n\
-             compiler-emitted: phase-owned MIR facts, source-local display names, MIR storage reasons, MIR lowering events, value properties, Sonatina trace-view CFG/loop facts through the Fe adapter, and actual EVM bytecode/gas facts.\n\
-             coarse: source attribution may fall back to whole-file code-object spans when per-node source edges are missing.\n\
+             emitted: phase-owned MIR facts, source-local display names, MIR storage reasons, MIR lowering events, MIR value properties, Sonatina trace-view CFG/loop facts through the Fe adapter, and actual EVM bytecode/gas facts.\n\
+             derived: loop-cost, explain-local, gas, size, Datalog, DebugBundle, DWARF, and ethdebug reports are read-only projections over validated facts.\n\
+             inferred/coarse: source attribution may fall back to whole-file code-object spans when per-node source edges are missing; those rows are low confidence.\n\
              posthoc: fixture instruction categories and demo loop membership are accepted only when metadata says fixture.\n\
-             available: real Sonatina CFG loop membership when Sonatina trace-view facts are present, but not target bytecode loop membership.\n\
+             available: real Sonatina CFG loop membership when Sonatina trace-view facts are present; this is not target bytecode loop membership.\n\
              deprecated: the old MIR-derived Sonatina CFG bridge is transitional/test-only and is not used by real trace emission.\n\
-             unavailable: MIR-to-bytecode origin edges, backend storage allocation, target bytecode loop membership, and zext causality hooks are still incomplete.\n\
-             zext-report is intentionally unavailable until InsertIntegerZeroExtend events and value properties are emitted by compiler phases.\n"
+             unavailable: MIR-to-bytecode origin edges, backend stack/register allocation facts, target bytecode loop membership, and real zext causality hooks are still incomplete.\n\
+             zext-report is intentionally unavailable until compiler phases emit InsertIntegerZeroExtend events linked to final instructions; MIR value-property facts alone are not enough.\n"
                 .to_string(),
         ),
         DevTraceCommand::Emit(args) => super::trace_emit::run_trace_emit(args),
@@ -80,13 +81,15 @@ mod tests {
         let output = run_dev_trace_command(&DevTraceCommand::Status).unwrap();
 
         assert!(output.contains("Fixture-backed Fibonacci diagnostics"));
-        assert!(output.contains("compiler-emitted: phase-owned MIR facts"));
-        assert!(output.contains("coarse: source attribution"));
+        assert!(output.contains("emitted: phase-owned MIR facts"));
+        assert!(output.contains("derived: loop-cost"));
+        assert!(output.contains("inferred/coarse: source attribution"));
         assert!(output.contains("posthoc: fixture instruction categories"));
         assert!(output.contains("available: real Sonatina CFG loop membership"));
         assert!(output.contains("MIR-derived Sonatina CFG bridge is transitional/test-only"));
         assert!(output.contains("target bytecode loop membership"));
         assert!(output.contains("zext-report is intentionally unavailable"));
         assert!(output.contains("InsertIntegerZeroExtend events"));
+        assert!(output.contains("MIR value-property facts alone are not enough"));
     }
 }

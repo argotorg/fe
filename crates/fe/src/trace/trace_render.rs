@@ -43,9 +43,12 @@ pub(super) fn render_validation_summary_with_format(
             }
         }));
     }
+    let data_source = super::format_data_source(metadata);
     Ok(format!(
         "Trace validation: passed\n\
          Data source: {}\n\
+         Fact basis: {}\n\
+         Report basis: schema validation only; no inference or posthoc attribution.\n\
          Schema version: {}\n\
          Compiler commit: {}\n\
          Target: {}\n\
@@ -56,7 +59,8 @@ pub(super) fn render_validation_summary_with_format(
          Instructions: {}\n\
          Confidence: n/a (schema validation)\n\
          Diagnostics: {} error, {} warning, {} info\n",
-        super::format_data_source(metadata),
+        data_source,
+        fact_basis_from_data_source(&data_source),
         metadata.schema_version,
         metadata.compiler_commit,
         metadata.target,
@@ -389,16 +393,28 @@ fn render_loop_cost_report(report: &LoopCostReport) -> String {
         .iter()
         .find(|impact| impact.local == "b")
     {
-        out.push_str("\nStack residency:\n");
-        if let Some(step) = impact
+        out.push_str("\nStorage impact:\n");
+        let stack_slot = impact
             .storage_history
             .iter()
-            .find(|step| step.location.contains("stack slot"))
-        {
+            .find(|step| step.location.contains("stack slot"));
+        let memory_place = impact
+            .storage_history
+            .iter()
+            .find(|step| step.location == "memory place");
+        if let Some(step) = stack_slot {
             out.push_str(&format!(
                 "  b: {}, earliest memory-like phase: MIR\n",
                 step.location
             ));
+            out.push_str("  evidence: backend storage fact assigns the local to a stack slot.\n");
+        } else if memory_place.is_some() {
+            out.push_str(
+                "  b: MIR memory place; backend stack/register allocation fact unavailable.\n",
+            );
+            out.push_str("  evidence: MIR storage fact only, not final frame layout.\n");
+        } else {
+            out.push_str("  b: storage facts are incomplete; no stack residency claim.\n");
         }
         out.push_str(
             "  reason: mutable-local lowering made b a memory place before backend frame layout\n",
@@ -407,7 +423,11 @@ fn render_loop_cost_report(report: &LoopCostReport) -> String {
             "  loop traffic: {} load + {} store per iteration\n",
             impact.loads, impact.stores
         ));
-        out.push_str("  suggested area: scalar promotion / mem2reg for loop-carried u32 locals\n");
+        if stack_slot.is_some() || memory_place.is_some() {
+            out.push_str(
+                "  suggested area: scalar promotion / mem2reg for loop-carried u32 locals\n",
+            );
+        }
     }
 
     out.push_str("\nSummary:\n");
@@ -562,17 +582,24 @@ fn render_explain_local_report(report: &ExplainLocalReport) -> String {
 
     if matches!(report.local.as_str(), "i" | "n") {
         out.push_str("\nZero-extension diagnosis:\n");
-        let reason = report
-            .zero_extends
-            .first()
-            .and_then(|related| related.reason.as_deref())
-            .unwrap_or("missing compiler event reason");
-        out.push_str(&format!(
-            "  repeated zero-extensions for {}: {}\n",
-            report.local,
-            report.zero_extends.len()
-        ));
-        out.push_str(&format!("  cause: {reason}\n"));
+        if report.zero_extends.is_empty() {
+            out.push_str("  unavailable: no compiler-emitted IntegerLegalizationFor edges link final instructions to this local.\n");
+            out.push_str(
+                "  MIR value-property facts alone do not prove target zero-extension causality.\n",
+            );
+        } else {
+            let reason = report
+                .zero_extends
+                .first()
+                .and_then(|related| related.reason.as_deref())
+                .unwrap_or("compiler event reason unavailable");
+            out.push_str(&format!(
+                "  repeated zero-extensions for {}: {}\n",
+                report.local,
+                report.zero_extends.len()
+            ));
+            out.push_str(&format!("  cause: {reason}\n"));
+        }
     }
 
     out
@@ -899,6 +926,10 @@ fn render_variables_at_pc_report(report: &VariablesAtPcReport) -> String {
 
 fn push_report_header(out: &mut String, metadata: &ReportMetadata, confidence: Confidence) {
     out.push_str(&format!("Data source: {}\n", metadata.data_source));
+    out.push_str(&format!("Fact basis: {}\n", fact_basis(metadata)));
+    out.push_str(
+        "Report basis: derived read-only view; inferred/posthoc/unavailable details stay labeled.\n",
+    );
     out.push_str("Trace validation: passed\n");
     out.push_str(&format!("Target: {}\n", metadata.target));
     out.push_str(&format!("Input: {}\n", metadata.input_path));
@@ -907,6 +938,20 @@ fn push_report_header(out: &mut String, metadata: &ReportMetadata, confidence: C
 
 fn is_fixture_report(metadata: &ReportMetadata) -> bool {
     metadata.data_source.starts_with("fixture ")
+}
+
+fn fact_basis(metadata: &ReportMetadata) -> &'static str {
+    fact_basis_from_data_source(&metadata.data_source)
+}
+
+fn fact_basis_from_data_source(data_source: &str) -> &'static str {
+    if data_source.starts_with("fixture ") {
+        "fixture-backed demo facts; not compiler-derived"
+    } else if data_source == "compiler_emitted" {
+        "compiler-emitted base facts"
+    } else {
+        "metadata-declared trace facts"
+    }
 }
 
 fn attribution_route_from_keys<'a>(

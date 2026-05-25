@@ -634,7 +634,7 @@ pub struct ShapeBucketArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum DevTraceCommand {
-    /// Explain that real compiler-derived tracing is reserved but not wired yet.
+    /// Show trace fact/report availability and confidence boundaries.
     Status,
     /// Emit compiler-derived trace JSONL for a Fe target.
     Emit(DevTraceEmitArgs),
