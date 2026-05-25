@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File},
     io::{BufWriter, Write},
 };
@@ -7,7 +7,10 @@ use std::{
 use serde::Serialize;
 use serde_json::json;
 use trace_facts::{RelationRow, RelationSchema};
-use trace_query::datalog_emit::{CORE_DATALOG_RULES, DatalogBaseExport, emit_base_relations};
+use trace_query::datalog_emit::{
+    CORE_DATALOG_RULES, DatalogBaseExport, builtin_rulepack, builtin_rulepacks,
+    emit_base_relations, run_builtin_rulepack,
+};
 
 use crate::{
     DatalogExportFormat, DevTraceDatalogCommand, DevTraceDatalogExportArgs,
@@ -51,35 +54,142 @@ pub(super) fn run_datalog_command(command: &DevTraceDatalogCommand) -> Result<St
 fn run_datalog_query(args: &DevTraceDatalogRunArgs) -> Result<String, String> {
     let snapshot = crate::trace::read_trace_snapshot_jsonl_from_path(&args.from)?;
     let export = emit_base_relations(&snapshot);
-    let response = DatalogUnavailableReport {
-        status: "unavailable",
-        reason: "Datalog rulepack execution is reserved for the runtime tracing Phase 5 implementation.",
+    if builtin_rulepack(&args.rulepack).is_some() {
+        let report = run_builtin_rulepack(&snapshot, &args.rulepack, &args.query)
+            .map_err(|err| err.to_string())?;
+        return match args.format {
+            TraceReportFormat::Text => Ok(render_builtin_rulepack_report(
+                &report,
+                &super::format_data_source(snapshot.metadata()),
+            )),
+            TraceReportFormat::Json => serde_json::to_string_pretty(&report)
+                .map(|json| format!("{json}\n"))
+                .map_err(|err| format!("failed to render Datalog result JSON: {err}")),
+        };
+    }
+    if looks_like_rulepack_path(&args.rulepack) {
+        let custom = load_custom_rulepack(&args.rulepack, &export)?;
+        return render_custom_rulepack_status(custom, args, &snapshot, &export);
+    }
+
+    let known = builtin_rulepacks()
+        .into_iter()
+        .map(|rulepack| rulepack.id)
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(format!(
+        "unknown Datalog rulepack {:?}; known built-ins: {known}; pass a rulepack directory for custom packs",
+        args.rulepack
+    ))
+}
+
+fn render_builtin_rulepack_report(
+    report: &trace_query::datalog_emit::DatalogRunReport,
+    data_source: &str,
+) -> String {
+    let mut out = String::new();
+    out.push_str("Datalog rulepack query\n");
+    out.push_str(&format!("Status: {}\n", report.status));
+    out.push_str(&format!("Data source: {data_source}\n"));
+    out.push_str(&format!("Trace hash: {}\n", report.trace_hash));
+    out.push_str(&format!(
+        "Rulepack: {}@{}\n",
+        report.rulepack_id, report.rulepack_version
+    ));
+    out.push_str(&format!("Engine: {}\n", report.engine));
+    out.push_str(&format!("Relation schema: {}\n", report.relation_schema));
+    out.push_str(&format!("Query: {}\n", report.query));
+    out.push_str(&format!(
+        "Attribution policy: {}\n",
+        report.attribution_policy
+    ));
+    out.push_str(&format!("Base relations: {}\n", report.base_relation_count));
+    out.push_str(&format!("Base rows: {}\n", report.base_row_count));
+    if !report.missing_evidence.is_empty() {
+        out.push_str("Missing evidence:\n");
+        for item in &report.missing_evidence {
+            out.push_str(&format!("  {item}\n"));
+        }
+    }
+    out.push_str("Output JSON:\n");
+    out.push_str(
+        &serde_json::to_string_pretty(&report.output).unwrap_or_else(|_| report.output.to_string()),
+    );
+    out.push('\n');
+    out
+}
+
+fn looks_like_rulepack_path(value: &str) -> bool {
+    value.contains('/') || value == "." || value.starts_with("..")
+}
+
+fn load_custom_rulepack(
+    path: &str,
+    export: &DatalogBaseExport,
+) -> Result<CustomRulepackStatus, String> {
+    let path = camino::Utf8PathBuf::from(path);
+    let manifest_path = path.join("manifest.toml");
+    let rules_path = path.join("rules.dl");
+    let reports_path = path.join("reports.toml");
+    let manifest = fs::read_to_string(manifest_path.as_std_path())
+        .map_err(|err| format!("failed to read custom rulepack manifest {manifest_path}: {err}"))?;
+    let rules = fs::read_to_string(rules_path.as_std_path())
+        .map_err(|err| format!("failed to read custom rulepack rules {rules_path}: {err}"))?;
+    let reports = fs::read_to_string(reports_path.as_std_path())
+        .map_err(|err| format!("failed to read custom rulepack reports {reports_path}: {err}"))?;
+    let relation_names = export
+        .schemas
+        .iter()
+        .map(|schema| schema.name.to_string())
+        .collect::<BTreeSet<_>>();
+    Ok(CustomRulepackStatus {
+        path: path.to_string(),
+        manifest_bytes: manifest.len(),
+        rules_bytes: rules.len(),
+        reports_bytes: reports.len(),
+        available_base_relations: relation_names.into_iter().collect(),
+    })
+}
+
+fn render_custom_rulepack_status(
+    custom: CustomRulepackStatus,
+    args: &DevTraceDatalogRunArgs,
+    snapshot: &trace_facts::TraceSnapshot,
+    export: &DatalogBaseExport,
+) -> Result<String, String> {
+    let response = CustomRulepackRunReport {
+        status: "loaded",
+        reason: "custom Datalog rulepacks are loaded and validated for shape, but no external Datalog engine is invoked by this dev wrapper yet",
         data_source: super::format_data_source(snapshot.metadata()),
         trace_hash: snapshot.trace_hash().to_string(),
-        fact_count: snapshot.facts().len(),
         base_relation_count: export.schemas.len(),
         base_row_count: export.rows.len(),
         rulepack: args.rulepack.clone(),
         query: args.query.clone(),
+        custom,
     };
     match args.format {
         TraceReportFormat::Text => Ok(format!(
-            "Datalog query execution is unavailable in this phase.\n\
+            "Custom Datalog rulepack loaded.\n\
              Data source: {}\n\
              Trace hash: {}\n\
-             Facts: {}\n\
              Base relations: {}\n\
              Base rows: {}\n\
              Rulepack: {}\n\
              Query: {}\n\
-             No derived claims were emitted.\n",
+             Manifest bytes: {}\n\
+             Rules bytes: {}\n\
+             Reports bytes: {}\n\
+             No derived claims were emitted by the custom rulepack path.\n",
             response.data_source,
             response.trace_hash,
-            response.fact_count,
             response.base_relation_count,
             response.base_row_count,
             response.rulepack,
             response.query,
+            response.custom.manifest_bytes,
+            response.custom.rules_bytes,
+            response.custom.reports_bytes,
         )),
         TraceReportFormat::Json => serde_json::to_string_pretty(&response)
             .map(|json| format!("{json}\n"))
@@ -110,6 +220,7 @@ description = "Custom read-only rules over Fe trace base relations."
 
 [requires]
 trace_schema_version = 1
+relation_schema = "fe-datalog-base-export-v1"
 "#,
     )
     .map_err(|err| format!("failed to write rulepack manifest: {err}"))?;
@@ -118,13 +229,13 @@ trace_schema_version = 1
     fs::write(
         args.path.join("reports.toml").as_std_path(),
         r#"# Reports are read-only views over base TraceFact relations.
-# Datalog execution is wired in the runtime tracing Phase 5 implementation.
+# Custom Datalog execution is intentionally external-engine-only for now.
 "#,
     )
     .map_err(|err| format!("failed to write rulepack report config: {err}"))?;
     Ok(format!(
         "initialized Datalog rulepack skeleton: {}\n\
-         Note: rulepack execution is unavailable until the runtime tracing Phase 5 implementation.\n",
+         Built-in rulepacks are gas-v1, runtime-v1, and security-v1; custom packs are loaded but not executed by this dev wrapper yet.\n",
         args.path
     ))
 }
@@ -302,16 +413,25 @@ struct RelationColumnManifest {
 }
 
 #[derive(Debug, Serialize)]
-struct DatalogUnavailableReport {
+struct CustomRulepackStatus {
+    path: String,
+    manifest_bytes: usize,
+    rules_bytes: usize,
+    reports_bytes: usize,
+    available_base_relations: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct CustomRulepackRunReport {
     status: &'static str,
     reason: &'static str,
     data_source: String,
     trace_hash: String,
-    fact_count: usize,
     base_relation_count: usize,
     base_row_count: usize,
     rulepack: String,
     query: String,
+    custom: CustomRulepackStatus,
 }
 
 #[cfg(test)]
@@ -385,20 +505,45 @@ mod tests {
     }
 
     #[test]
-    fn datalog_run_reports_unavailable_without_emitting_claims() {
+    fn datalog_run_executes_builtin_rulepack_projection() {
         let temp = tempdir().unwrap();
         let trace_path = Utf8PathBuf::from_path_buf(temp.path().join("trace.jsonl")).unwrap();
         write_snapshot(&trace_path);
 
         let output = run_datalog_query(&DevTraceDatalogRunArgs {
             from: trace_path,
-            rulepack: "core".to_string(),
-            query: "loop-cost".to_string(),
+            rulepack: "gas-v1".to_string(),
+            query: "gas-by-source".to_string(),
             format: TraceReportFormat::Text,
         })
         .unwrap();
 
-        assert!(output.contains("unavailable"));
+        assert!(output.contains("Datalog rulepack query"));
+        assert!(output.contains("Rulepack: gas-v1@1.0.0"));
+        assert!(output.contains("Engine: builtin-rust-derived-v1"));
+        assert!(output.contains("Output JSON"));
+    }
+
+    #[test]
+    fn datalog_run_loads_custom_rulepack_without_emitting_claims() {
+        let temp = tempdir().unwrap();
+        let trace_path = Utf8PathBuf::from_path_buf(temp.path().join("trace.jsonl")).unwrap();
+        let rulepack = Utf8PathBuf::from_path_buf(temp.path().join("rulepack")).unwrap();
+        write_snapshot(&trace_path);
+        init_rulepack(&DevTraceDatalogInitArgs {
+            path: rulepack.clone(),
+        })
+        .unwrap();
+
+        let output = run_datalog_query(&DevTraceDatalogRunArgs {
+            from: trace_path,
+            rulepack: rulepack.to_string(),
+            query: "custom-query".to_string(),
+            format: TraceReportFormat::Text,
+        })
+        .unwrap();
+
+        assert!(output.contains("Custom Datalog rulepack loaded"));
         assert!(output.contains("No derived claims were emitted"));
     }
 

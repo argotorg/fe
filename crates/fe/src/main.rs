@@ -727,7 +727,7 @@ pub enum DevTraceQueryCommand {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum DevTraceDatalogCommand {
-    /// Run a built-in/custom rulepack query. Currently validates inputs and reports unavailable until Phase 5.
+    /// Run a built-in rulepack query or load a custom rulepack directory.
     Run(DevTraceDatalogRunArgs),
     /// Initialize a skeleton custom rulepack directory.
     InitRulepack(DevTraceDatalogInitArgs),
