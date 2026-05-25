@@ -43,3 +43,33 @@ fn abs_runtime_i256() {
     // |i256::MIN| = 2^255
     assert(i256::min().unsigned_abs() == 57896044618658097711785492504343953926634992332820282019728792003956564819968)
 }
+
+// Remaining type coverage.
+#[test]
+fn abs_runtime_i16() {
+    let x: i16 = -42
+    assert(x.unsigned_abs() == 42)
+    // |i16::MIN| = 2^15 = 32768
+    assert(i16::min().unsigned_abs() == 32768)
+}
+#[test]
+fn abs_runtime_i64() {
+    let x: i64 = -42
+    assert(x.unsigned_abs() == 42)
+    // |i64::MIN| = 2^63
+    assert(i64::min().unsigned_abs() == 9223372036854775808)
+}
+#[test]
+fn abs_runtime_i128() {
+    let x: i128 = -42
+    assert(x.unsigned_abs() == 42)
+    // |i128::MIN| = 2^127
+    assert(i128::min().unsigned_abs() == 170141183460469231731687303715884105728)
+}
+#[test]
+fn abs_runtime_isize() {
+    let x: isize = -42
+    assert(x.unsigned_abs() == 42)
+    // |isize::MIN| = 2^255 (isize is 256 bits wide in Fe)
+    assert(isize::min().unsigned_abs() == 57896044618658097711785492504343953926634992332820282019728792003956564819968)
+}

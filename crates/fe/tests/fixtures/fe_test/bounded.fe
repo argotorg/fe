@@ -46,3 +46,45 @@ fn bounds_are_const() {
     assert(U32_MAX_CONST == 4294967295)
     assert(I32_MIN_CONST == -2147483648)
 }
+
+// Remaining type coverage — catches typos in the per-type impls.
+#[test]
+fn u16_bounds() {
+    assert(u16::min() == 0)
+    assert(u16::max() == 65535)
+}
+#[test]
+fn u64_bounds() {
+    assert(u64::min() == 0)
+    assert(u64::max() == 18446744073709551615)
+}
+#[test]
+fn u128_bounds() {
+    assert(u128::min() == 0)
+    assert(u128::max() == 340282366920938463463374607431768211455)
+}
+#[test]
+fn usize_bounds() {
+    assert(usize::min() == 0)
+    assert(usize::max() == 115792089237316195423570985008687907853269984665640564039457584007913129639935)
+}
+#[test]
+fn i16_bounds() {
+    assert(i16::min() == -32768)
+    assert(i16::max() == 32767)
+}
+#[test]
+fn i64_bounds() {
+    assert(i64::min() == -9223372036854775808)
+    assert(i64::max() == 9223372036854775807)
+}
+#[test]
+fn i128_bounds() {
+    assert(i128::min() == -170141183460469231731687303715884105728)
+    assert(i128::max() ==  170141183460469231731687303715884105727)
+}
+#[test]
+fn isize_bounds() {
+    assert(isize::min() == -57896044618658097711785492504343953926634992332820282019728792003956564819968)
+    assert(isize::max() ==  57896044618658097711785492504343953926634992332820282019728792003956564819967)
+}
