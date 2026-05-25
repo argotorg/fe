@@ -22,6 +22,7 @@ fn run_debug_emit(args: &DevDebugEmitArgs) -> Result<String, String> {
     match args.format {
         DebugExportFormat::Ethdebug => {
             ensure_ethdebug_schema(&args.schema_version)?;
+            let phase = ensure_ethdebug_phase(args.phase.as_deref())?;
             let artifact = emit_ethdebug_artifact(&bundle)?;
             write_json_file(&args.out, &artifact)?;
             if let Some(sidecar_path) = &args.sidecar {
@@ -32,21 +33,24 @@ fn run_debug_emit(args: &DevDebugEmitArgs) -> Result<String, String> {
                  Data source: {}\n\
                  Trace hash: {}\n\
                  Schema: {}\n\
+                 Phase: {}\n\
                  Programs: {}\n\
                  Note: artifact is a derived view over DebugBundle; Fe origin/confidence details stay in the optional sidecar.\n",
                 args.out,
                 crate::trace::format_data_source(snapshot.metadata()),
                 bundle.trace_hash,
                 ETHDEBUG_SCHEMA_VERSION,
+                phase,
                 artifact.programs.len(),
             ))
         }
         DebugExportFormat::Dwarf => {
+            let sections = ensure_dwarf_sections(args.sections.as_deref())?;
             let line_table = emit_dwarf_line_table(&bundle)?;
             let section_bundle = dwarf_section_bundle(
                 &bundle,
                 &line_table,
-                args.sections.as_deref().unwrap_or("line"),
+                sections,
                 args.unit_name.as_deref(),
                 &args.language,
                 &args.confidence,
@@ -57,7 +61,7 @@ fn run_debug_emit(args: &DevDebugEmitArgs) -> Result<String, String> {
                  Data source: {}\n\
                  Trace hash: {}\n\
                  Rows: {}\n\
-                 Note: this is not an object file; object-container emission and dwarfdump validation are Phase 6 work.\n",
+                 Note: this is a derived DWARF section bundle, not an object file; llvm-dwarfdump validation requires a future object-container wrapper.\n",
                 args.out,
                 crate::trace::format_data_source(snapshot.metadata()),
                 bundle.trace_hash,
@@ -105,11 +109,11 @@ fn run_debug_validate(args: &DevDebugValidateArgs) -> Result<String, String> {
                     "status": "ok",
                     "trace_hash": section_bundle.trace_hash,
                     "row_count": section_bundle.rows.len(),
-                    "note": "experimental section bundle validation only",
+                    "note": "section bundle validation only; object-container validation is not emitted by this wrapper",
                 }),
             )?;
             Ok(format!(
-                "experimental DWARF section bundle validation passed: {}\nRows: {}\nNote: object-container validation is not wired yet.\n",
+                "experimental DWARF section bundle validation passed: {}\nRows: {}\nNote: object-container validation requires a future wrapper.\n",
                 args.input,
                 section_bundle.rows.len(),
             ))
@@ -124,6 +128,24 @@ fn ensure_ethdebug_schema(value: &str) -> Result<(), String> {
         Err(format!(
             "unsupported ethdebug schema version {value}; expected `pinned` or {ETHDEBUG_SCHEMA_VERSION}"
         ))
+    }
+}
+
+fn ensure_ethdebug_phase(value: Option<&str>) -> Result<&'static str, String> {
+    match value.unwrap_or("instruction-source") {
+        "instruction-source" => Ok("instruction-source"),
+        other => Err(format!(
+            "unsupported ethdebug phase {other}; this wrapper currently emits instruction-source only"
+        )),
+    }
+}
+
+fn ensure_dwarf_sections(value: Option<&str>) -> Result<&'static str, String> {
+    match value.unwrap_or("line") {
+        "line" => Ok("line"),
+        other => Err(format!(
+            "unsupported DWARF sections {other}; this wrapper currently emits line only"
+        )),
     }
 }
 
@@ -235,7 +257,7 @@ fn dwarf_section_bundle(
 ) -> DwarfSectionBundle {
     DwarfSectionBundle {
         format: "fe-dwarf-section-bundle-v1".to_string(),
-        note: "experimental wrapper; object-container emission and llvm-dwarfdump validation are Phase 6 work".to_string(),
+        note: "experimental line-table section bundle; object-container emission and llvm-dwarfdump validation require a future wrapper".to_string(),
         trace_hash: bundle.trace_hash.clone(),
         unit_name: unit_name
             .map(str::to_string)
@@ -464,6 +486,7 @@ mod tests {
         .unwrap();
 
         assert!(output.contains("derived view over DebugBundle"));
+        assert!(output.contains("Phase: instruction-source"));
         assert!(out.exists());
         assert!(sidecar.exists());
         let validation = run_debug_validate(&DevDebugValidateArgs {
@@ -509,5 +532,14 @@ mod tests {
         let err = ensure_ethdebug_schema("future").unwrap_err();
 
         assert!(err.contains("unsupported ethdebug schema version"));
+    }
+
+    #[test]
+    fn debug_emit_rejects_unimplemented_surfaces() {
+        let err = ensure_ethdebug_phase(Some("types")).unwrap_err();
+        assert!(err.contains("instruction-source only"));
+
+        let err = ensure_dwarf_sections(Some("line,types")).unwrap_err();
+        assert!(err.contains("line only"));
     }
 }
