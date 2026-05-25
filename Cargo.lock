@@ -2118,6 +2118,7 @@ dependencies = [
  "fe-semantic-indexing",
  "fe-solc-runner",
  "fe-shape-address",
+ "fe-solc-runner",
  "fe-test-utils",
  "fe-trace-facts",
  "fe-trace-query",
