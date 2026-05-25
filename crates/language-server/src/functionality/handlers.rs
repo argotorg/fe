@@ -824,8 +824,10 @@ pub async fn handle_hover_request(
     };
 
     debug!("handling hover request in file: {:?}", file);
-    let trace_service = if backend.tooling_config().lsp.trace.emit_jsonl
-        && backend.tooling_config().lsp.hover.storage_history
+    let trace_service = if (backend.tooling_config().lsp.trace.emit_jsonl
+        || backend.tooling_config().lsp.trace.attached_trace.is_some())
+        && (backend.tooling_config().lsp.hover.storage_history
+            || backend.tooling_config().lsp.hover.gas_breakdown)
     {
         let config = backend.tooling_config().clone();
         let trace_config = config.lsp.trace.clone();

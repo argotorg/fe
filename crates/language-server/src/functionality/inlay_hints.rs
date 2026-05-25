@@ -9,10 +9,11 @@ use hir::{
     lower::map_file_to_mod,
     visitor::prelude::*,
 };
-use introspection_config::{FeToolingConfig, HintMode, LoopHintMode};
+use introspection_config::{FeToolingConfig, GasMode, HintMode, LoopHintMode};
 use std::time::Duration;
 use trace_query::{
-    GasBreakdownRequest, IntrospectionService, LoopCostRequest, TraceIntrospectionService,
+    GasAttributionPolicy, GasBreakdownRequest, IntrospectionService, LoopCostRequest,
+    RuntimeGasBySourceRequest, TraceIntrospectionService,
 };
 
 pub async fn handle_inlay_hints(
@@ -92,8 +93,9 @@ async fn collect_trace_hints(
     }
 
     if wants_gas
+        && matches!(config.lsp.gas.mode, GasMode::Static | GasMode::Both)
         && let Ok(report) = service.gas_breakdown(GasBreakdownRequest {
-            schedule: gas_schedule,
+            schedule: gas_schedule.clone(),
         })
         && report.available
         && let Some(total_gas) = report.total_gas
@@ -106,6 +108,30 @@ async fn collect_trace_hints(
             tooltip: Some(async_lsp::lsp_types::InlayHintTooltip::String(format!(
                 "Static opcode gas estimate under {} schedule ({:?} confidence)",
                 report.schedule, report.confidence
+            ))),
+            padding_left: Some(true),
+            padding_right: None,
+            data: None,
+        });
+    }
+
+    if wants_gas
+        && matches!(config.lsp.gas.mode, GasMode::TestTrace | GasMode::Both)
+        && let Ok(report) = service.runtime_gas_by_source(RuntimeGasBySourceRequest {
+            trace_id: None,
+            policy: GasAttributionPolicy::RuntimeStepExclusive,
+        })
+        && report.total_gas > 0
+    {
+        hints.push(InlayHint {
+            position,
+            label: InlayHintLabel::String(format!(" ~{} gas runtime", report.total_gas)),
+            kind: Some(InlayHintKind::PARAMETER),
+            text_edits: None,
+            tooltip: Some(async_lsp::lsp_types::InlayHintTooltip::String(format!(
+                "Runtime-observed step-exclusive gas from {} session(s); source={}",
+                report.runtime.session_count,
+                report.runtime.runtime_sources.join(",")
             ))),
             padding_left: Some(true),
             padding_right: None,

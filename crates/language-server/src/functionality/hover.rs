@@ -17,7 +17,8 @@ use hir::{
     span::LazySpan,
 };
 use trace_query::{
-    ExplainLocalRequest, GasBreakdownRequest, IntrospectionService, TraceIntrospectionService,
+    ExplainLocalRequest, GasAttributionPolicy, GasBreakdownRequest, IntrospectionService,
+    RuntimeGasBySourceRequest, TraceIntrospectionService,
 };
 use tracing::debug;
 
@@ -359,6 +360,18 @@ fn trace_hover_markdown<'db>(
         out.push_str(&format!(
             "\nStatic gas estimate: `{total}` under `{}` schedule. This is opcode-table static gas, not runtime transaction gas.\n",
             gas.schedule
+        ));
+    }
+    if let Ok(runtime_gas) = trace_service.runtime_gas_by_source(RuntimeGasBySourceRequest {
+        trace_id: None,
+        policy: GasAttributionPolicy::RuntimeStepExclusive,
+    }) && runtime_gas.total_gas > 0
+    {
+        out.push_str(&format!(
+            "\nRuntime gas observed: `{}` step-exclusive gas across {} source bucket(s). Runtime source: `{}`.\n",
+            runtime_gas.total_gas,
+            runtime_gas.rows.len(),
+            runtime_gas.runtime.runtime_sources.join(",")
         ));
     }
     Some(out)

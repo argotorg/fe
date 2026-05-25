@@ -1,6 +1,8 @@
 use common::InputDb;
 use driver::DriverDataBase;
 use hir::lower::map_file_to_mod;
+use std::fs::File;
+use std::io::BufReader;
 use std::time::{Duration, Instant};
 use trace_facts::{CompilerPhase, TraceBundle, TraceMetadata, TraceSnapshot};
 use trace_query::{
@@ -160,6 +162,12 @@ pub(crate) fn service_for_file(
     uri: &Url,
     config: introspection_config::FeToolingConfig,
 ) -> Result<Option<TraceIntrospectionService>, String> {
+    if let Some(attached_trace) = config.lsp.trace.attached_trace.as_deref()
+        && !attached_trace.trim().is_empty()
+    {
+        return attached_trace_service(attached_trace, &config).map(Some);
+    }
+
     let Some(file) = db.workspace().get(db, uri) else {
         return Ok(None);
     };
@@ -204,6 +212,21 @@ pub(crate) fn service_for_file(
     )))
 }
 
+fn attached_trace_service(
+    path: &str,
+    config: &introspection_config::FeToolingConfig,
+) -> Result<TraceIntrospectionService, String> {
+    let file =
+        File::open(path).map_err(|err| format!("failed to open attached trace {path}: {err}"))?;
+    let snapshot = TraceSnapshot::read_jsonl(BufReader::new(file))
+        .map_err(|err| format!("failed to read attached trace {path}: {err}"))?;
+    enforce_trace_limits(snapshot.facts(), config)?;
+    Ok(TraceIntrospectionService::with_config(
+        snapshot,
+        config.clone(),
+    ))
+}
+
 fn enforce_trace_limits(
     facts: &[trace_facts::TraceFact],
     config: &introspection_config::FeToolingConfig,
@@ -231,4 +254,63 @@ fn enforce_trace_limits(
 
 fn elapsed_ms(started: Instant) -> u64 {
     started.elapsed().as_millis().try_into().unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use common::origin::OriginExportKey;
+    use trace_facts::{
+        InstructionFact, JsonlTraceSink, OriginNodeFact, OriginNodeKind, TraceBundle, TraceFact,
+        TraceMetadata,
+    };
+
+    use super::attached_trace_service;
+
+    fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
+        OriginExportKey::try_from_raw_parts(kind, owner, local).unwrap()
+    }
+
+    fn node(key: OriginExportKey) -> TraceFact {
+        TraceFact::OriginNode(OriginNodeFact::new(
+            key.clone(),
+            OriginNodeKind::new(key.kind()),
+        ))
+    }
+
+    #[test]
+    fn attached_trace_service_loads_validated_snapshot_without_running_compiler() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("combined.trace.jsonl");
+        let function = key("bytecode.function", "demo", "runtime");
+        let instruction = key("bytecode.pc", "demo", "pc:0");
+        let bundle = TraceBundle::new(
+            TraceMetadata::compiler_emitted(
+                "abc123",
+                "evm/sonatina",
+                vec!["fe".to_string(), "dev".to_string(), "trace".to_string()],
+                "demo.fe",
+                vec!["runtime=attached".to_string()],
+            ),
+            vec![
+                node(function.clone()),
+                node(instruction.clone()),
+                TraceFact::Instruction(InstructionFact::new(instruction, function, 0, "STOP")),
+            ],
+        );
+        let mut sink = JsonlTraceSink::new(Vec::new());
+        sink.write_bundle(&bundle).unwrap();
+        std::fs::write(&path, sink.into_inner()).unwrap();
+
+        let mut config = introspection_config::FeToolingConfig::default();
+        config.lsp.trace.attached_trace = Some(path.display().to_string());
+        let service =
+            attached_trace_service(config.lsp.trace.attached_trace.as_deref().unwrap(), &config)
+                .unwrap();
+
+        assert_eq!(
+            service.snapshot().metadata().flags,
+            vec!["runtime=attached"]
+        );
+        assert_eq!(service.snapshot().validation().summary.instruction_count, 1);
+    }
 }

@@ -203,6 +203,7 @@ impl CodeLensConfig {
 pub struct TraceConfig {
     pub emit_jsonl: bool,
     pub out_dir: String,
+    pub attached_trace: Option<String>,
     pub validate: bool,
     pub level: TraceLevel,
     pub max_trace_facts: usize,
@@ -216,6 +217,7 @@ impl Default for TraceConfig {
         Self {
             emit_jsonl: false,
             out_dir: "target/fe-traces".to_string(),
+            attached_trace: None,
             validate: true,
             level: TraceLevel::Summary,
             max_trace_facts: 100_000,
@@ -230,6 +232,7 @@ impl TraceConfig {
     fn apply_patch(&mut self, patch: TraceConfigPatch) {
         assign(&mut self.emit_jsonl, patch.emit_jsonl);
         assign(&mut self.out_dir, patch.out_dir);
+        assign(&mut self.attached_trace, patch.attached_trace);
         assign(&mut self.validate, patch.validate);
         assign(&mut self.level, patch.level);
         assign(&mut self.max_trace_facts, patch.max_trace_facts);
@@ -398,6 +401,9 @@ impl FeToolingConfigPatch {
                 "fe.lsp.trace.debounceMs" => {
                     patch.lsp_mut().trace_mut().debounce_ms = Some(json_u64(key, value)?);
                 }
+                "fe.lsp.trace.attachedTrace" => {
+                    patch.lsp_mut().trace_mut().attached_trace = Some(json_string(key, value)?);
+                }
                 "fe.lsp.inlayHints.types" => {
                     patch.lsp_mut().inlay_hints_mut().types = Some(json_bool(key, value)?);
                 }
@@ -496,6 +502,7 @@ pub struct CodeLensConfigPatch {
 pub struct TraceConfigPatch {
     pub emit_jsonl: Option<bool>,
     pub out_dir: Option<String>,
+    pub attached_trace: Option<Option<String>>,
     pub validate: Option<bool>,
     pub level: Option<TraceLevel>,
     pub max_trace_facts: Option<usize>,
@@ -617,6 +624,19 @@ fn json_bool(key: &str, value: &serde_json::Value) -> Result<bool, ConfigLoadErr
     })
 }
 
+fn json_string(key: &str, value: &serde_json::Value) -> Result<Option<String>, ConfigLoadError> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    value
+        .as_str()
+        .map(|value| Some(value.to_string()))
+        .ok_or_else(|| ConfigLoadError::JsonSetting {
+            key: key.to_string(),
+            message: "expected string or null".to_string(),
+        })
+}
+
 fn json_u64(key: &str, value: &serde_json::Value) -> Result<u64, ConfigLoadError> {
     value.as_u64().ok_or_else(|| ConfigLoadError::JsonSetting {
         key: key.to_string(),
@@ -671,6 +691,7 @@ mod tests {
         assert_eq!(config.lsp.trace.max_shape_nodes, 50_000);
         assert_eq!(config.lsp.trace.max_query_ms, 1_000);
         assert_eq!(config.lsp.trace.debounce_ms, 75);
+        assert_eq!(config.lsp.trace.attached_trace, None);
         assert!(config.lsp.live.write_server_info);
     }
 
@@ -693,6 +714,7 @@ storage = "hover-only"
 [tooling.lsp.trace]
 emit_jsonl = true
 out_dir = "target/custom-traces"
+attached_trace = "target/fib/combined.trace.jsonl"
 "#,
         )
         .unwrap();
@@ -704,6 +726,10 @@ out_dir = "target/custom-traces"
         assert_eq!(config.lsp.inlay_hints.storage, StorageHintMode::HoverOnly);
         assert!(config.lsp.trace.emit_jsonl);
         assert_eq!(config.lsp.trace.out_dir, "target/custom-traces");
+        assert_eq!(
+            config.lsp.trace.attached_trace.as_deref(),
+            Some("target/fib/combined.trace.jsonl")
+        );
     }
 
     #[test]
@@ -726,6 +752,7 @@ types = false
             "fe.lsp.trace.maxShapeNodes": 11,
             "fe.lsp.trace.maxQueryMs": 12,
             "fe.lsp.trace.debounceMs": 13,
+            "fe.lsp.trace.attachedTrace": "target/live.trace.jsonl",
             "fe.lsp.inlayHints.types": true,
             "fe.lsp.inlayHints.gas": "hotspots",
             "fe.lsp.live.browserGraphs": true,
@@ -743,6 +770,10 @@ types = false
         assert_eq!(config.lsp.trace.max_shape_nodes, 11);
         assert_eq!(config.lsp.trace.max_query_ms, 12);
         assert_eq!(config.lsp.trace.debounce_ms, 13);
+        assert_eq!(
+            config.lsp.trace.attached_trace.as_deref(),
+            Some("target/live.trace.jsonl")
+        );
         assert!(config.lsp.inlay_hints.types);
         assert_eq!(config.lsp.inlay_hints.gas, HintMode::Hotspots);
         assert!(config.lsp.live.browser_graphs);
