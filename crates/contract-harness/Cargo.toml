@@ -7,6 +7,8 @@ edition.workspace = true
 driver = { path = "../driver", package = "fe-driver" }
 codegen = { path = "../codegen", package = "fe-codegen" }
 common = { path = "../common", package = "fe-common" }
+trace-facts.workspace = true
+blake3.workspace = true
 revm = { version = "33.1.0", default-features = false, features = ["std"] }
 hex = "0.4"
 url.workspace = true

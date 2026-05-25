@@ -1,4 +1,6 @@
 //! Test harness utilities for compiling Fe contracts and exercising their runtimes with `revm`.
+mod runtime_trace;
+
 use codegen::{OptLevel, emit_module_sonatina_bytecode};
 use common::InputDb;
 use driver::DriverDataBase;
@@ -17,6 +19,9 @@ use revm::{
     interpreter::interpreter_types::Jumps,
     primitives::{Bytes as EvmBytes, TxKind},
     state::AccountInfo,
+};
+pub use runtime_trace::{
+    FeRuntimeTraceInspector, RuntimeTraceConfig, RuntimeTraceSink, VecRuntimeTraceSink,
 };
 use std::{
     cmp::Reverse,
@@ -1163,6 +1168,46 @@ impl RuntimeInstance {
             .total_step_gas
             .saturating_sub(profile.constructor_frame_gas);
         profile
+    }
+
+    /// Re-executes the call on a cloned EVM context and returns runtime trace facts.
+    ///
+    /// The returned facts are the runtime-owned part of the trace. Consumers should append
+    /// them to compiler-emitted static facts so referenced code object and instruction keys
+    /// are already defined by their owning phase.
+    pub fn call_raw_runtime_trace(
+        &self,
+        calldata: &[u8],
+        options: ExecutionOptions,
+        config: RuntimeTraceConfig,
+    ) -> Result<Vec<trace_facts::TraceFact>, HarnessError> {
+        let ctx = self.evm.ctx.clone();
+        let mut trace_evm =
+            ctx.build_mainnet_with_inspector(FeRuntimeTraceInspector::new_vec(config));
+
+        let nonce = options.nonce.unwrap_or_else(|| {
+            self.next_nonce_by_caller
+                .get(&options.caller)
+                .copied()
+                .unwrap_or(0)
+        });
+
+        let tx = TxEnv::builder()
+            .caller(options.caller)
+            .gas_limit(options.gas_limit)
+            .gas_price(options.gas_price)
+            .to(self.address)
+            .value(options.value)
+            .data(EvmBytes::copy_from_slice(calldata))
+            .nonce(nonce)
+            .build()
+            .expect("tx builder is valid");
+
+        let result = trace_evm
+            .inspect_tx_commit(tx)
+            .map_err(|err| HarnessError::Execution(err.to_string()))?;
+        trace_evm.inspector.finish_result(&result);
+        Ok(trace_evm.inspector.into_facts())
     }
 
     /// Returns the contract address assigned to this runtime instance.

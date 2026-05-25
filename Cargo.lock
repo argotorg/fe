@@ -2219,10 +2219,12 @@ dependencies = [
 name = "fe-contract-harness"
 version = "26.1.0"
 dependencies = [
+ "blake3",
  "ethers-core",
  "fe-codegen",
  "fe-common",
  "fe-driver",
+ "fe-trace-facts",
  "hex",
  "revm",
  "serde_json",
