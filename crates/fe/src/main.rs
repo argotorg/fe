@@ -707,6 +707,22 @@ pub enum DevTraceQueryCommand {
     OptimizedCodeHonesty(DevTraceInputArgs),
     /// Show variable locations active at a bytecode PC.
     VariablesAtPc(DevTracePcArgs),
+    /// Summarize observed runtime step gas by source attribution.
+    RuntimeGasBySource(DevTraceRuntimeAttributionArgs),
+    /// Summarize observed runtime storage writes by source attribution.
+    StorageWritesBySource(DevTraceRuntimeAttributionArgs),
+    /// Group observed runtime storage accesses by storage slot.
+    StorageAccessesBySlot(DevTraceStorageSlotArgs),
+    /// Summarize observed runtime call-frame cost by callsite.
+    CallCostByCallsite(DevTraceRuntimeArgs),
+    /// Summarize observed runtime memory access extents by source attribution.
+    MemoryGrowthBySource(DevTraceRuntimeAttributionArgs),
+    /// Attribute observed runtime reverts back to source where possible.
+    RevertAttribution(DevTraceRuntimeArgs),
+    /// Summarize hot runtime PCs, scoped to loop membership when present.
+    HotPathByIteration(DevTraceRuntimeAttributionArgs),
+    /// Show runtime stack/storage/memory evidence at a bytecode PC.
+    ValueFlowAtPc(DevTraceRuntimePcArgs),
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -964,6 +980,70 @@ pub struct DevTraceGasToSourceArgs {
     /// Source-attribution policy.
     #[arg(long, default_value = "exclusive-primary")]
     pub policy: String,
+    /// Output format.
+    #[arg(long, value_enum, default_value = "text")]
+    pub format: TraceReportFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DevTraceRuntimeArgs {
+    /// Trace JSONL bundle to read.
+    #[arg(long = "from", value_name = "TRACE_JSONL")]
+    pub from: Utf8PathBuf,
+    /// Optional runtime execution trace/session id to filter.
+    #[arg(long)]
+    pub trace_id: Option<String>,
+    /// Output format.
+    #[arg(long, value_enum, default_value = "text")]
+    pub format: TraceReportFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DevTraceRuntimeAttributionArgs {
+    /// Trace JSONL bundle to read.
+    #[arg(long = "from", value_name = "TRACE_JSONL")]
+    pub from: Utf8PathBuf,
+    /// Optional runtime execution trace/session id to filter.
+    #[arg(long)]
+    pub trace_id: Option<String>,
+    /// Source-attribution policy.
+    #[arg(long, default_value = "runtime-step-exclusive")]
+    pub policy: String,
+    /// Output format.
+    #[arg(long, value_enum, default_value = "text")]
+    pub format: TraceReportFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DevTraceStorageSlotArgs {
+    /// Trace JSONL bundle to read.
+    #[arg(long = "from", value_name = "TRACE_JSONL")]
+    pub from: Utf8PathBuf,
+    /// Optional runtime execution trace/session id to filter.
+    #[arg(long)]
+    pub trace_id: Option<String>,
+    /// Optional rendered storage slot label to filter.
+    #[arg(long)]
+    pub slot: Option<String>,
+    /// Source-attribution policy.
+    #[arg(long, default_value = "runtime-step-exclusive")]
+    pub policy: String,
+    /// Output format.
+    #[arg(long, value_enum, default_value = "text")]
+    pub format: TraceReportFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DevTraceRuntimePcArgs {
+    /// Trace JSONL bundle to read.
+    #[arg(long = "from", value_name = "TRACE_JSONL")]
+    pub from: Utf8PathBuf,
+    /// Bytecode PC to inspect.
+    #[arg(long)]
+    pub pc: u32,
+    /// Optional runtime execution trace/session id to filter.
+    #[arg(long)]
+    pub trace_id: Option<String>,
     /// Output format.
     #[arg(long, value_enum, default_value = "text")]
     pub format: TraceReportFormat,

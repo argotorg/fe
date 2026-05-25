@@ -74,6 +74,30 @@ fn run_trace_query_command(command: &DevTraceQueryCommand) -> Result<String, Str
         DevTraceQueryCommand::VariablesAtPc(args) => {
             super::trace_emit::run_trace_variables_at_pc(args)
         }
+        DevTraceQueryCommand::RuntimeGasBySource(args) => {
+            super::trace_emit::run_trace_runtime_gas_by_source(args)
+        }
+        DevTraceQueryCommand::StorageWritesBySource(args) => {
+            super::trace_emit::run_trace_storage_writes_by_source(args)
+        }
+        DevTraceQueryCommand::StorageAccessesBySlot(args) => {
+            super::trace_emit::run_trace_storage_accesses_by_slot(args)
+        }
+        DevTraceQueryCommand::CallCostByCallsite(args) => {
+            super::trace_emit::run_trace_call_cost_by_callsite(args)
+        }
+        DevTraceQueryCommand::MemoryGrowthBySource(args) => {
+            super::trace_emit::run_trace_memory_growth_by_source(args)
+        }
+        DevTraceQueryCommand::RevertAttribution(args) => {
+            super::trace_emit::run_trace_revert_attribution(args)
+        }
+        DevTraceQueryCommand::HotPathByIteration(args) => {
+            super::trace_emit::run_trace_hot_path_by_iteration(args)
+        }
+        DevTraceQueryCommand::ValueFlowAtPc(args) => {
+            super::trace_emit::run_trace_value_flow_at_pc(args)
+        }
     }
 }
 

@@ -9,8 +9,8 @@ use introspection_config::FeToolingConfig;
 use serde::{Deserialize, Serialize};
 use trace_facts::{
     CompilerEventKind, GasKind, InstructionCategory, InstructionFact, LoopBlockRole,
-    OriginEdgeLabel, StorageFact, StorageLocation, TraceDataSource, TraceFact, TraceMetadata,
-    TraceSnapshot,
+    OriginEdgeLabel, RuntimePcJoinConfidence, RuntimeValue, StorageAccessKind, StorageFact,
+    StorageLocation, TraceDataSource, TraceFact, TraceMetadata, TraceSnapshot,
 };
 
 pub type QueryResult<T> = Result<T, QueryError>;
@@ -38,6 +38,35 @@ pub trait IntrospectionService {
         request: OptimizedCodeHonestyRequest,
     ) -> QueryResult<OptimizedCodeHonestyReport>;
     fn variables_at_pc(&self, request: VariablesAtPcRequest) -> QueryResult<VariablesAtPcReport>;
+    fn runtime_gas_by_source(
+        &self,
+        request: RuntimeGasBySourceRequest,
+    ) -> QueryResult<RuntimeGasBySourceReport>;
+    fn storage_writes_by_source(
+        &self,
+        request: RuntimeTraceFilterRequest,
+    ) -> QueryResult<StorageWritesBySourceReport>;
+    fn storage_accesses_by_slot(
+        &self,
+        request: StorageAccessesBySlotRequest,
+    ) -> QueryResult<StorageAccessesBySlotReport>;
+    fn call_cost_by_callsite(
+        &self,
+        request: RuntimeTraceFilterRequest,
+    ) -> QueryResult<CallCostByCallsiteReport>;
+    fn memory_growth_by_source(
+        &self,
+        request: RuntimeTraceFilterRequest,
+    ) -> QueryResult<MemoryGrowthBySourceReport>;
+    fn revert_attribution(
+        &self,
+        request: RuntimeTraceFilterRequest,
+    ) -> QueryResult<RevertAttributionReport>;
+    fn hot_path_by_iteration(
+        &self,
+        request: RuntimeTraceFilterRequest,
+    ) -> QueryResult<HotPathByIterationReport>;
+    fn value_flow_at_pc(&self, request: ValueFlowAtPcRequest) -> QueryResult<ValueFlowAtPcReport>;
 }
 
 #[derive(Clone, Debug)]
@@ -612,6 +641,494 @@ impl IntrospectionService for TraceIntrospectionService {
             confidence: Confidence::Medium,
         })
     }
+
+    fn runtime_gas_by_source(
+        &self,
+        request: RuntimeGasBySourceRequest,
+    ) -> QueryResult<RuntimeGasBySourceReport> {
+        reject_call_policy(request.policy)?;
+        let index = TraceIndex::new(&self.snapshot);
+        let evidence = index.runtime_evidence(request.trace_id.as_deref());
+        let mut rows: BTreeMap<String, GasBySourceRow> = BTreeMap::new();
+        let mut total_gas = 0;
+        let mut unattributed_steps = 0;
+
+        for step in index.execution_steps(request.trace_id.as_deref()) {
+            total_gas += step.gas_cost;
+            let buckets = step
+                .instruction
+                .as_ref()
+                .map(|instruction| index.gas_attribution_buckets(instruction, request.policy))
+                .unwrap_or_else(|| vec![GasAttributionBucket::unmapped()]);
+            if buckets.iter().all(|bucket| bucket.source.is_none()) {
+                unattributed_steps += 1;
+            }
+            for bucket in buckets {
+                let row = rows
+                    .entry(bucket.key.clone())
+                    .or_insert_with(|| GasBySourceRow {
+                        label: bucket.label.clone(),
+                        source: bucket.source.clone(),
+                        gas: 0,
+                        instruction_count: 0,
+                        confidence: bucket.confidence,
+                    });
+                row.gas += step.gas_cost;
+                row.instruction_count += 1;
+                row.confidence = merge_confidence(row.confidence, bucket.confidence);
+            }
+        }
+
+        let mut rows = rows.into_values().collect::<Vec<_>>();
+        rows.sort_by(|a, b| b.gas.cmp(&a.gas).then_with(|| a.label.cmp(&b.label)));
+        Ok(RuntimeGasBySourceReport {
+            metadata: ReportMetadata::from_snapshot(&self.snapshot),
+            trace_id: request.trace_id,
+            runtime: evidence.clone(),
+            policy: request.policy.to_string(),
+            total_gas,
+            unattributed_steps,
+            rows,
+            confidence: runtime_report_confidence(total_gas > 0, &evidence),
+        })
+    }
+
+    fn storage_writes_by_source(
+        &self,
+        request: RuntimeTraceFilterRequest,
+    ) -> QueryResult<StorageWritesBySourceReport> {
+        reject_call_policy(request.policy)?;
+        let index = TraceIndex::new(&self.snapshot);
+        let evidence = index.runtime_evidence(request.trace_id.as_deref());
+        let mut rows: BTreeMap<String, StorageWriteBySourceRow> = BTreeMap::new();
+        let mut total_writes = 0;
+        let mut total_gas = 0;
+
+        for access in index.storage_accesses(request.trace_id.as_deref()) {
+            if access.kind != StorageAccessKind::Write {
+                continue;
+            }
+            total_writes += 1;
+            let gas = index.gas_for_step(&access.step);
+            total_gas += gas;
+            let buckets = index
+                .instruction_for_runtime_access(access.instruction.as_ref(), &access.step)
+                .map(|instruction| index.gas_attribution_buckets(&instruction, request.policy))
+                .unwrap_or_else(|| vec![GasAttributionBucket::unmapped()]);
+            let slot = runtime_value_label(&access.slot);
+            for bucket in buckets {
+                let row =
+                    rows.entry(bucket.key.clone())
+                        .or_insert_with(|| StorageWriteBySourceRow {
+                            source: bucket.source.clone(),
+                            label: bucket.label.clone(),
+                            writes: 0,
+                            gas: 0,
+                            slots: Vec::new(),
+                            confidence: bucket.confidence,
+                        });
+                row.writes += 1;
+                row.gas += gas;
+                if !row.slots.contains(&slot) {
+                    row.slots.push(slot.clone());
+                }
+                row.confidence = merge_confidence(row.confidence, bucket.confidence);
+            }
+        }
+
+        let mut rows = rows.into_values().collect::<Vec<_>>();
+        for row in &mut rows {
+            row.slots.sort();
+        }
+        rows.sort_by(|a, b| b.writes.cmp(&a.writes).then_with(|| a.label.cmp(&b.label)));
+        Ok(StorageWritesBySourceReport {
+            metadata: ReportMetadata::from_snapshot(&self.snapshot),
+            trace_id: request.trace_id,
+            runtime: evidence.clone(),
+            policy: request.policy.to_string(),
+            total_writes,
+            total_gas,
+            rows,
+            confidence: runtime_report_confidence(total_writes > 0, &evidence),
+        })
+    }
+
+    fn storage_accesses_by_slot(
+        &self,
+        request: StorageAccessesBySlotRequest,
+    ) -> QueryResult<StorageAccessesBySlotReport> {
+        reject_call_policy(request.policy)?;
+        let index = TraceIndex::new(&self.snapshot);
+        let evidence = index.runtime_evidence(request.trace_id.as_deref());
+        let mut rows: BTreeMap<String, StorageAccessBySlotRow> = BTreeMap::new();
+
+        for access in index.storage_accesses(request.trace_id.as_deref()) {
+            let slot = runtime_value_label(&access.slot);
+            if request.slot.as_ref().is_some_and(|filter| filter != &slot) {
+                continue;
+            }
+            let gas = index.gas_for_step(&access.step);
+            let sources =
+                index.sources_for_runtime_access(access.instruction.as_ref(), &access.step);
+            let row = rows
+                .entry(slot.clone())
+                .or_insert_with(|| StorageAccessBySlotRow {
+                    slot,
+                    reads: 0,
+                    writes: 0,
+                    gas: 0,
+                    sources: Vec::new(),
+                    confidence: Confidence::Unknown,
+                });
+            match access.kind {
+                StorageAccessKind::Read => row.reads += 1,
+                StorageAccessKind::Write => row.writes += 1,
+            }
+            row.gas += gas;
+            for source in sources {
+                if !row
+                    .sources
+                    .iter()
+                    .any(|candidate| candidate.origin == source.origin)
+                {
+                    row.sources.push(source);
+                }
+            }
+            row.confidence = if row.sources.is_empty() {
+                Confidence::Unknown
+            } else {
+                Confidence::Medium
+            };
+        }
+
+        let total_reads = rows.values().map(|row| row.reads).sum();
+        let total_writes = rows.values().map(|row| row.writes).sum();
+        let mut rows = rows.into_values().collect::<Vec<_>>();
+        rows.sort_by(|a, b| {
+            (b.reads + b.writes)
+                .cmp(&(a.reads + a.writes))
+                .then_with(|| a.slot.cmp(&b.slot))
+        });
+        Ok(StorageAccessesBySlotReport {
+            metadata: ReportMetadata::from_snapshot(&self.snapshot),
+            trace_id: request.trace_id,
+            runtime: evidence.clone(),
+            policy: request.policy.to_string(),
+            slot_filter: request.slot,
+            total_reads,
+            total_writes,
+            rows,
+            confidence: runtime_report_confidence(total_reads + total_writes > 0, &evidence),
+        })
+    }
+
+    fn call_cost_by_callsite(
+        &self,
+        request: RuntimeTraceFilterRequest,
+    ) -> QueryResult<CallCostByCallsiteReport> {
+        let index = TraceIndex::new(&self.snapshot);
+        let evidence = index.runtime_evidence(request.trace_id.as_deref());
+        let mut rows = Vec::new();
+        let mut total_gas_used = 0;
+
+        for call in index.calls(request.trace_id.as_deref()) {
+            if let Some(gas) = call.gas_used {
+                total_gas_used += gas;
+            }
+            let instruction = call.callsite_instruction.clone().or_else(|| {
+                index
+                    .execution_step(&call.step)
+                    .and_then(|step| step.instruction.clone())
+            });
+            let source = instruction
+                .as_ref()
+                .and_then(|instruction| index.primary_source_for_instruction(instruction));
+            rows.push(CallCostByCallsiteRow {
+                call: call.call.clone(),
+                callsite_instruction: instruction,
+                source,
+                kind: format!("{:?}", call.kind),
+                callee: call.callee.clone(),
+                gas_requested: call.gas_requested,
+                gas_used: call.gas_used,
+                success: call.success,
+                confidence: if call.callsite_instruction.is_some() {
+                    Confidence::Medium
+                } else {
+                    Confidence::Low
+                },
+            });
+        }
+
+        rows.sort_by(|a, b| {
+            b.gas_used
+                .unwrap_or_default()
+                .cmp(&a.gas_used.unwrap_or_default())
+                .then_with(|| a.call.display_label().cmp(&b.call.display_label()))
+        });
+        Ok(CallCostByCallsiteReport {
+            metadata: ReportMetadata::from_snapshot(&self.snapshot),
+            trace_id: request.trace_id,
+            runtime: evidence.clone(),
+            policy: "call-inclusive-frame".to_string(),
+            total_calls: rows.len(),
+            total_gas_used,
+            rows,
+            confidence: runtime_report_confidence(total_gas_used > 0, &evidence),
+        })
+    }
+
+    fn memory_growth_by_source(
+        &self,
+        request: RuntimeTraceFilterRequest,
+    ) -> QueryResult<MemoryGrowthBySourceReport> {
+        reject_call_policy(request.policy)?;
+        let index = TraceIndex::new(&self.snapshot);
+        let evidence = index.runtime_evidence(request.trace_id.as_deref());
+        let mut rows: BTreeMap<String, MemoryGrowthBySourceRow> = BTreeMap::new();
+        let mut total_accesses = 0;
+        let mut total_bytes_touched = 0;
+        let mut max_end_offset = 0;
+
+        for access in index.memory_accesses(request.trace_id.as_deref()) {
+            total_accesses += 1;
+            total_bytes_touched += access.length;
+            let end_offset = access.offset.saturating_add(access.length);
+            max_end_offset = max_end_offset.max(end_offset);
+            let gas = index.gas_for_step(&access.step);
+            let buckets = index
+                .execution_step(&access.step)
+                .and_then(|step| step.instruction.as_ref())
+                .map(|instruction| index.gas_attribution_buckets(instruction, request.policy))
+                .unwrap_or_else(|| vec![GasAttributionBucket::unmapped()]);
+            for bucket in buckets {
+                let row =
+                    rows.entry(bucket.key.clone())
+                        .or_insert_with(|| MemoryGrowthBySourceRow {
+                            source: bucket.source.clone(),
+                            label: bucket.label.clone(),
+                            accesses: 0,
+                            bytes_touched: 0,
+                            max_end_offset: 0,
+                            gas: 0,
+                            confidence: bucket.confidence,
+                        });
+                row.accesses += 1;
+                row.bytes_touched += access.length;
+                row.max_end_offset = row.max_end_offset.max(end_offset);
+                row.gas += gas;
+                row.confidence = merge_confidence(row.confidence, bucket.confidence);
+            }
+        }
+
+        let mut rows = rows.into_values().collect::<Vec<_>>();
+        rows.sort_by(|a, b| {
+            b.max_end_offset
+                .cmp(&a.max_end_offset)
+                .then_with(|| b.bytes_touched.cmp(&a.bytes_touched))
+                .then_with(|| a.label.cmp(&b.label))
+        });
+        Ok(MemoryGrowthBySourceReport {
+            metadata: ReportMetadata::from_snapshot(&self.snapshot),
+            trace_id: request.trace_id,
+            runtime: evidence.clone(),
+            policy: request.policy.to_string(),
+            total_accesses,
+            total_bytes_touched,
+            max_end_offset,
+            rows,
+            confidence: runtime_report_confidence(total_accesses > 0, &evidence),
+        })
+    }
+
+    fn revert_attribution(
+        &self,
+        request: RuntimeTraceFilterRequest,
+    ) -> QueryResult<RevertAttributionReport> {
+        let index = TraceIndex::new(&self.snapshot);
+        let evidence = index.runtime_evidence(request.trace_id.as_deref());
+        let mut rows = Vec::new();
+
+        for revert in index.reverts(request.trace_id.as_deref()) {
+            let step = index.execution_step(&revert.step);
+            let instruction = step.and_then(|step| step.instruction.clone());
+            let source = instruction
+                .as_ref()
+                .and_then(|instruction| index.primary_source_for_instruction(instruction));
+            rows.push(RevertAttributionRow {
+                revert: revert.revert.clone(),
+                step: revert.step.clone(),
+                instruction,
+                source,
+                reason: revert.reason.clone(),
+                data: runtime_value_label(&revert.data),
+                confidence: step
+                    .map(|step| confidence_for_join(step.join_confidence))
+                    .unwrap_or(Confidence::Unknown),
+            });
+        }
+
+        rows.sort_by_key(|row| row.revert.display_label());
+        let available = !rows.is_empty();
+        Ok(RevertAttributionReport {
+            metadata: ReportMetadata::from_snapshot(&self.snapshot),
+            trace_id: request.trace_id,
+            runtime: evidence.clone(),
+            policy: "runtime-step-to-source".to_string(),
+            total_reverts: rows.len(),
+            rows,
+            confidence: runtime_report_confidence(available, &evidence),
+        })
+    }
+
+    fn hot_path_by_iteration(
+        &self,
+        request: RuntimeTraceFilterRequest,
+    ) -> QueryResult<HotPathByIterationReport> {
+        reject_call_policy(request.policy)?;
+        let index = TraceIndex::new(&self.snapshot);
+        let evidence = index.runtime_evidence(request.trace_id.as_deref());
+        let loop_members = index.active_loop_instructions();
+        let mut rows: BTreeMap<(Option<OriginExportKey>, u32, String), HotPathRow> =
+            BTreeMap::new();
+        let mut total_steps = 0;
+        let mut total_gas = 0;
+
+        for step in index.execution_steps(request.trace_id.as_deref()) {
+            if !loop_members.is_empty()
+                && step
+                    .instruction
+                    .as_ref()
+                    .is_none_or(|instruction| !loop_members.contains(instruction))
+            {
+                continue;
+            }
+            total_steps += 1;
+            total_gas += step.gas_cost;
+            let key = (
+                step.instruction.clone(),
+                step.pc,
+                step.opcode.to_ascii_uppercase(),
+            );
+            let source = step
+                .instruction
+                .as_ref()
+                .and_then(|instruction| index.primary_source_for_instruction(instruction));
+            let row = rows.entry(key).or_insert_with(|| HotPathRow {
+                pc: step.pc,
+                opcode: step.opcode.clone(),
+                instruction: step.instruction.clone(),
+                executions: 0,
+                gas: 0,
+                source,
+                confidence: confidence_for_join(step.join_confidence),
+            });
+            row.executions += 1;
+            row.gas += step.gas_cost;
+            row.confidence =
+                merge_confidence(row.confidence, confidence_for_join(step.join_confidence));
+        }
+
+        let mut rows = rows.into_values().collect::<Vec<_>>();
+        rows.sort_by(|a, b| {
+            b.gas
+                .cmp(&a.gas)
+                .then_with(|| b.executions.cmp(&a.executions))
+                .then_with(|| a.pc.cmp(&b.pc))
+        });
+        Ok(HotPathByIterationReport {
+            metadata: ReportMetadata::from_snapshot(&self.snapshot),
+            trace_id: request.trace_id,
+            runtime: evidence.clone(),
+            policy: request.policy.to_string(),
+            loop_key: index.loop_key,
+            scope: if loop_members.is_empty() {
+                "all runtime steps; loop iteration facts unavailable".to_string()
+            } else {
+                "compiler-derived loop membership".to_string()
+            },
+            total_steps,
+            total_gas,
+            rows,
+            confidence: runtime_report_confidence(total_steps > 0, &evidence),
+        })
+    }
+
+    fn value_flow_at_pc(&self, request: ValueFlowAtPcRequest) -> QueryResult<ValueFlowAtPcReport> {
+        let index = TraceIndex::new(&self.snapshot);
+        let evidence = index.runtime_evidence(request.trace_id.as_deref());
+        let mut rows = Vec::new();
+
+        for step in index.execution_steps(request.trace_id.as_deref()) {
+            if step.pc != request.pc {
+                continue;
+            }
+            if request
+                .code_object
+                .as_ref()
+                .is_some_and(|code_object| code_object != &step.code_object)
+            {
+                continue;
+            }
+            rows.push(ValueFlowAtPcRow {
+                step: step.step.clone(),
+                instruction: step.instruction.clone(),
+                opcode: step.opcode.clone(),
+                gas_cost: step.gas_cost,
+                stack_top: index
+                    .stack_sample_for_step(&step.step)
+                    .map(|sample| {
+                        sample
+                            .values_top_first
+                            .iter()
+                            .map(runtime_value_label)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default(),
+                storage_accesses: index
+                    .storage_accesses_for_step(&step.step)
+                    .into_iter()
+                    .map(|access| RuntimeValueAccessRow {
+                        event: access.access.clone(),
+                        kind: format!("{:?}", access.kind),
+                        location: runtime_value_label(&access.slot),
+                        value_before: access.value_before.as_ref().map(runtime_value_label),
+                        value_after: access.value_after.as_ref().map(runtime_value_label),
+                        value: None,
+                    })
+                    .collect(),
+                memory_accesses: index
+                    .memory_accesses_for_step(&step.step)
+                    .into_iter()
+                    .map(|access| RuntimeValueAccessRow {
+                        event: access.access.clone(),
+                        kind: format!("{:?}", access.kind),
+                        location: format!(
+                            "mem[{}..{})",
+                            access.offset,
+                            access.offset + access.length
+                        ),
+                        value_before: None,
+                        value_after: None,
+                        value: access.value.as_ref().map(runtime_value_label),
+                    })
+                    .collect(),
+                confidence: confidence_for_join(step.join_confidence),
+            });
+        }
+
+        rows.sort_by_key(|row| row.step.display_label());
+        let available = !rows.is_empty();
+        Ok(ValueFlowAtPcReport {
+            metadata: ReportMetadata::from_snapshot(&self.snapshot),
+            pc: request.pc,
+            code_object: request.code_object,
+            trace_id: request.trace_id,
+            runtime: evidence.clone(),
+            rows,
+            confidence: runtime_report_confidence(available, &evidence),
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -722,6 +1239,7 @@ pub enum GasAttributionPolicy {
     SyntheticOverhead,
     CallInclusive,
     CallExclusive,
+    RuntimeStepExclusive,
 }
 
 impl GasAttributionPolicy {
@@ -732,6 +1250,7 @@ impl GasAttributionPolicy {
             Self::SyntheticOverhead => "synthetic-overhead",
             Self::CallInclusive => "call-inclusive",
             Self::CallExclusive => "call-exclusive",
+            Self::RuntimeStepExclusive => "runtime-step-exclusive",
         }
     }
 }
@@ -752,6 +1271,7 @@ impl FromStr for GasAttributionPolicy {
             "synthetic-overhead" => Ok(Self::SyntheticOverhead),
             "call-inclusive" => Ok(Self::CallInclusive),
             "call-exclusive" => Ok(Self::CallExclusive),
+            "runtime-step-exclusive" => Ok(Self::RuntimeStepExclusive),
             _ => Err(QueryError::InvalidRequest(format!(
                 "unknown gas attribution policy {value:?}"
             ))),
@@ -764,6 +1284,69 @@ pub struct VariablesAtPcRequest {
     pub pc: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code_object: Option<OriginExportKey>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeGasBySourceRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
+    #[serde(default)]
+    pub policy: GasAttributionPolicy,
+}
+
+impl Default for RuntimeGasBySourceRequest {
+    fn default() -> Self {
+        Self {
+            trace_id: None,
+            policy: GasAttributionPolicy::RuntimeStepExclusive,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeTraceFilterRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
+    #[serde(default)]
+    pub policy: GasAttributionPolicy,
+}
+
+impl Default for RuntimeTraceFilterRequest {
+    fn default() -> Self {
+        Self {
+            trace_id: None,
+            policy: GasAttributionPolicy::RuntimeStepExclusive,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageAccessesBySlotRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot: Option<String>,
+    #[serde(default)]
+    pub policy: GasAttributionPolicy,
+}
+
+impl Default for StorageAccessesBySlotRequest {
+    fn default() -> Self {
+        Self {
+            trace_id: None,
+            slot: None,
+            policy: GasAttributionPolicy::RuntimeStepExclusive,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValueFlowAtPcRequest {
+    pub pc: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_object: Option<OriginExportKey>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -832,6 +1415,53 @@ pub enum TraceQueryRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         code_object: Option<OriginExportKey>,
     },
+    RuntimeGasBySource {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trace_id: Option<String>,
+        #[serde(default = "default_runtime_gas_policy")]
+        policy: GasAttributionPolicy,
+    },
+    StorageWritesBySource {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trace_id: Option<String>,
+        #[serde(default = "default_runtime_gas_policy")]
+        policy: GasAttributionPolicy,
+    },
+    StorageAccessesBySlot {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trace_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        slot: Option<String>,
+        #[serde(default = "default_runtime_gas_policy")]
+        policy: GasAttributionPolicy,
+    },
+    CallCostByCallsite {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trace_id: Option<String>,
+    },
+    MemoryGrowthBySource {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trace_id: Option<String>,
+        #[serde(default = "default_runtime_gas_policy")]
+        policy: GasAttributionPolicy,
+    },
+    RevertAttribution {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trace_id: Option<String>,
+    },
+    HotPathByIteration {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trace_id: Option<String>,
+        #[serde(default = "default_runtime_gas_policy")]
+        policy: GasAttributionPolicy,
+    },
+    ValueFlowAtPc {
+        pc: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        code_object: Option<OriginExportKey>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trace_id: Option<String>,
+    },
 }
 
 impl TraceQueryRequest {
@@ -898,10 +1528,66 @@ impl TraceQueryRequest {
             code_object: None,
         }
     }
+
+    pub fn runtime_gas_by_source() -> Self {
+        Self::RuntimeGasBySource {
+            trace_id: None,
+            policy: GasAttributionPolicy::RuntimeStepExclusive,
+        }
+    }
+
+    pub fn storage_writes_by_source() -> Self {
+        Self::StorageWritesBySource {
+            trace_id: None,
+            policy: GasAttributionPolicy::RuntimeStepExclusive,
+        }
+    }
+
+    pub fn storage_accesses_by_slot() -> Self {
+        Self::StorageAccessesBySlot {
+            trace_id: None,
+            slot: None,
+            policy: GasAttributionPolicy::RuntimeStepExclusive,
+        }
+    }
+
+    pub fn call_cost_by_callsite() -> Self {
+        Self::CallCostByCallsite { trace_id: None }
+    }
+
+    pub fn memory_growth_by_source() -> Self {
+        Self::MemoryGrowthBySource {
+            trace_id: None,
+            policy: GasAttributionPolicy::RuntimeStepExclusive,
+        }
+    }
+
+    pub fn revert_attribution() -> Self {
+        Self::RevertAttribution { trace_id: None }
+    }
+
+    pub fn hot_path_by_iteration() -> Self {
+        Self::HotPathByIteration {
+            trace_id: None,
+            policy: GasAttributionPolicy::RuntimeStepExclusive,
+        }
+    }
+
+    pub fn value_flow_at_pc(pc: u32) -> Self {
+        Self::ValueFlowAtPc {
+            pc,
+            code_object: None,
+            trace_id: None,
+        }
+    }
 }
 
 fn default_gas_schedule() -> String {
     GasBreakdownRequest::default().schedule
+}
+
+fn default_runtime_gas_policy() -> GasAttributionPolicy {
+    GasAttributionPolicy::RuntimeStepExclusive
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -941,6 +1627,14 @@ pub enum TraceQueryReport {
     GasToSource(GasToSourceReport),
     OptimizedCodeHonesty(OptimizedCodeHonestyReport),
     VariablesAtPc(VariablesAtPcReport),
+    RuntimeGasBySource(RuntimeGasBySourceReport),
+    StorageWritesBySource(StorageWritesBySourceReport),
+    StorageAccessesBySlot(StorageAccessesBySlotReport),
+    CallCostByCallsite(CallCostByCallsiteReport),
+    MemoryGrowthBySource(MemoryGrowthBySourceReport),
+    RevertAttribution(RevertAttributionReport),
+    HotPathByIteration(HotPathByIterationReport),
+    ValueFlowAtPc(ValueFlowAtPcReport),
 }
 
 pub fn run_trace_query(
@@ -989,6 +1683,52 @@ pub fn run_trace_query(
         TraceQueryRequest::VariablesAtPc { pc, code_object } => service
             .variables_at_pc(VariablesAtPcRequest { pc, code_object })
             .map(TraceQueryReport::VariablesAtPc),
+        TraceQueryRequest::RuntimeGasBySource { trace_id, policy } => service
+            .runtime_gas_by_source(RuntimeGasBySourceRequest { trace_id, policy })
+            .map(TraceQueryReport::RuntimeGasBySource),
+        TraceQueryRequest::StorageWritesBySource { trace_id, policy } => service
+            .storage_writes_by_source(RuntimeTraceFilterRequest { trace_id, policy })
+            .map(TraceQueryReport::StorageWritesBySource),
+        TraceQueryRequest::StorageAccessesBySlot {
+            trace_id,
+            slot,
+            policy,
+        } => service
+            .storage_accesses_by_slot(StorageAccessesBySlotRequest {
+                trace_id,
+                slot,
+                policy,
+            })
+            .map(TraceQueryReport::StorageAccessesBySlot),
+        TraceQueryRequest::CallCostByCallsite { trace_id } => service
+            .call_cost_by_callsite(RuntimeTraceFilterRequest {
+                trace_id,
+                policy: GasAttributionPolicy::RuntimeStepExclusive,
+            })
+            .map(TraceQueryReport::CallCostByCallsite),
+        TraceQueryRequest::MemoryGrowthBySource { trace_id, policy } => service
+            .memory_growth_by_source(RuntimeTraceFilterRequest { trace_id, policy })
+            .map(TraceQueryReport::MemoryGrowthBySource),
+        TraceQueryRequest::RevertAttribution { trace_id } => service
+            .revert_attribution(RuntimeTraceFilterRequest {
+                trace_id,
+                policy: GasAttributionPolicy::RuntimeStepExclusive,
+            })
+            .map(TraceQueryReport::RevertAttribution),
+        TraceQueryRequest::HotPathByIteration { trace_id, policy } => service
+            .hot_path_by_iteration(RuntimeTraceFilterRequest { trace_id, policy })
+            .map(TraceQueryReport::HotPathByIteration),
+        TraceQueryRequest::ValueFlowAtPc {
+            pc,
+            code_object,
+            trace_id,
+        } => service
+            .value_flow_at_pc(ValueFlowAtPcRequest {
+                pc,
+                code_object,
+                trace_id,
+            })
+            .map(TraceQueryReport::ValueFlowAtPc),
     }
 }
 
@@ -1169,6 +1909,203 @@ pub struct VariablesAtPcReport {
     pub code_object: Option<OriginExportKey>,
     pub variables: Vec<VariableAtPcRow>,
     pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeEvidenceSummary {
+    pub session_count: usize,
+    pub runtime_sources: Vec<String>,
+    pub value_policies: Vec<String>,
+    pub exact_join_steps: usize,
+    pub pc_only_join_steps: usize,
+    pub ambiguous_join_steps: usize,
+    pub missing_join_steps: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeGasBySourceReport {
+    pub metadata: ReportMetadata,
+    pub trace_id: Option<String>,
+    pub runtime: RuntimeEvidenceSummary,
+    pub policy: String,
+    pub total_gas: u64,
+    pub unattributed_steps: usize,
+    pub rows: Vec<GasBySourceRow>,
+    pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageWritesBySourceReport {
+    pub metadata: ReportMetadata,
+    pub trace_id: Option<String>,
+    pub runtime: RuntimeEvidenceSummary,
+    pub policy: String,
+    pub total_writes: usize,
+    pub total_gas: u64,
+    pub rows: Vec<StorageWriteBySourceRow>,
+    pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageWriteBySourceRow {
+    pub source: Option<OriginExportKey>,
+    pub label: String,
+    pub writes: usize,
+    pub gas: u64,
+    pub slots: Vec<String>,
+    pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageAccessesBySlotReport {
+    pub metadata: ReportMetadata,
+    pub trace_id: Option<String>,
+    pub runtime: RuntimeEvidenceSummary,
+    pub policy: String,
+    pub slot_filter: Option<String>,
+    pub total_reads: usize,
+    pub total_writes: usize,
+    pub rows: Vec<StorageAccessBySlotRow>,
+    pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageAccessBySlotRow {
+    pub slot: String,
+    pub reads: usize,
+    pub writes: usize,
+    pub gas: u64,
+    pub sources: Vec<SourceAttribution>,
+    pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CallCostByCallsiteReport {
+    pub metadata: ReportMetadata,
+    pub trace_id: Option<String>,
+    pub runtime: RuntimeEvidenceSummary,
+    pub policy: String,
+    pub total_calls: usize,
+    pub total_gas_used: u64,
+    pub rows: Vec<CallCostByCallsiteRow>,
+    pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CallCostByCallsiteRow {
+    pub call: OriginExportKey,
+    pub callsite_instruction: Option<OriginExportKey>,
+    pub source: Option<SourceAttribution>,
+    pub kind: String,
+    pub callee: Option<String>,
+    pub gas_requested: Option<u64>,
+    pub gas_used: Option<u64>,
+    pub success: Option<bool>,
+    pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryGrowthBySourceReport {
+    pub metadata: ReportMetadata,
+    pub trace_id: Option<String>,
+    pub runtime: RuntimeEvidenceSummary,
+    pub policy: String,
+    pub total_accesses: usize,
+    pub total_bytes_touched: u64,
+    pub max_end_offset: u64,
+    pub rows: Vec<MemoryGrowthBySourceRow>,
+    pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryGrowthBySourceRow {
+    pub source: Option<OriginExportKey>,
+    pub label: String,
+    pub accesses: usize,
+    pub bytes_touched: u64,
+    pub max_end_offset: u64,
+    pub gas: u64,
+    pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RevertAttributionReport {
+    pub metadata: ReportMetadata,
+    pub trace_id: Option<String>,
+    pub runtime: RuntimeEvidenceSummary,
+    pub policy: String,
+    pub total_reverts: usize,
+    pub rows: Vec<RevertAttributionRow>,
+    pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RevertAttributionRow {
+    pub revert: OriginExportKey,
+    pub step: OriginExportKey,
+    pub instruction: Option<OriginExportKey>,
+    pub source: Option<SourceAttribution>,
+    pub reason: Option<String>,
+    pub data: String,
+    pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HotPathByIterationReport {
+    pub metadata: ReportMetadata,
+    pub trace_id: Option<String>,
+    pub runtime: RuntimeEvidenceSummary,
+    pub policy: String,
+    pub loop_key: Option<OriginExportKey>,
+    pub scope: String,
+    pub total_steps: usize,
+    pub total_gas: u64,
+    pub rows: Vec<HotPathRow>,
+    pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HotPathRow {
+    pub pc: u32,
+    pub opcode: String,
+    pub instruction: Option<OriginExportKey>,
+    pub executions: usize,
+    pub gas: u64,
+    pub source: Option<SourceAttribution>,
+    pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValueFlowAtPcReport {
+    pub metadata: ReportMetadata,
+    pub pc: u32,
+    pub code_object: Option<OriginExportKey>,
+    pub trace_id: Option<String>,
+    pub runtime: RuntimeEvidenceSummary,
+    pub rows: Vec<ValueFlowAtPcRow>,
+    pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValueFlowAtPcRow {
+    pub step: OriginExportKey,
+    pub instruction: Option<OriginExportKey>,
+    pub opcode: String,
+    pub gas_cost: u64,
+    pub stack_top: Vec<String>,
+    pub storage_accesses: Vec<RuntimeValueAccessRow>,
+    pub memory_accesses: Vec<RuntimeValueAccessRow>,
+    pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeValueAccessRow {
+    pub event: OriginExportKey,
+    pub kind: String,
+    pub location: String,
+    pub value_before: Option<String>,
+    pub value_after: Option<String>,
+    pub value: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1868,6 +2805,7 @@ impl<'a> TraceIndex<'a> {
                 }
             }
             GasAttributionPolicy::ExclusivePrimary
+            | GasAttributionPolicy::RuntimeStepExclusive
             | GasAttributionPolicy::SyntheticOverhead
             | GasAttributionPolicy::CallExclusive => {
                 if sources.len() == 1 {
@@ -2018,6 +2956,212 @@ impl<'a> TraceIndex<'a> {
                 _ => None,
             })
             .collect()
+    }
+
+    fn runtime_evidence(&self, trace_id: Option<&str>) -> RuntimeEvidenceSummary {
+        let mut runtime_sources = BTreeSet::new();
+        let mut value_policies = BTreeSet::new();
+        let mut session_count = 0;
+        let mut exact_join_steps = 0;
+        let mut pc_only_join_steps = 0;
+        let mut ambiguous_join_steps = 0;
+        let mut missing_join_steps = 0;
+
+        for fact in self.snapshot.facts() {
+            if let TraceFact::ExecutionTraceSession(session) = fact
+                && runtime_session_matches(&session.session, trace_id)
+            {
+                session_count += 1;
+                runtime_sources.insert(format!("{:?}", session.source));
+                value_policies.insert(format!("{:?}", session.value_policy));
+            }
+        }
+
+        for step in self.execution_steps(trace_id) {
+            match step.join_confidence {
+                RuntimePcJoinConfidence::ExactCodeHashAndPc
+                | RuntimePcJoinConfidence::ExactCodeObjectAndPc => exact_join_steps += 1,
+                RuntimePcJoinConfidence::PcOnlyWithinUniqueCodeObject => pc_only_join_steps += 1,
+                RuntimePcJoinConfidence::AmbiguousPc
+                | RuntimePcJoinConfidence::CodeHashMismatch => ambiguous_join_steps += 1,
+                RuntimePcJoinConfidence::MissingStaticInstruction => missing_join_steps += 1,
+            }
+        }
+
+        RuntimeEvidenceSummary {
+            session_count,
+            runtime_sources: runtime_sources.into_iter().collect(),
+            value_policies: value_policies.into_iter().collect(),
+            exact_join_steps,
+            pc_only_join_steps,
+            ambiguous_join_steps,
+            missing_join_steps,
+        }
+    }
+
+    fn execution_steps(&self, trace_id: Option<&str>) -> Vec<&'a trace_facts::ExecutionStepFact> {
+        self.snapshot
+            .facts()
+            .iter()
+            .filter_map(|fact| match fact {
+                TraceFact::ExecutionStep(step)
+                    if runtime_session_matches(&step.session, trace_id) =>
+                {
+                    Some(step)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn execution_step(
+        &self,
+        step_key: &OriginExportKey,
+    ) -> Option<&'a trace_facts::ExecutionStepFact> {
+        self.snapshot.facts().iter().find_map(|fact| match fact {
+            TraceFact::ExecutionStep(step) if &step.step == step_key => Some(step),
+            _ => None,
+        })
+    }
+
+    fn storage_accesses(&self, trace_id: Option<&str>) -> Vec<&'a trace_facts::StorageAccessFact> {
+        self.snapshot
+            .facts()
+            .iter()
+            .filter_map(|fact| match fact {
+                TraceFact::StorageAccess(access)
+                    if self
+                        .execution_step(&access.step)
+                        .is_some_and(|step| runtime_session_matches(&step.session, trace_id)) =>
+                {
+                    Some(access)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn memory_accesses(&self, trace_id: Option<&str>) -> Vec<&'a trace_facts::MemoryAccessFact> {
+        self.snapshot
+            .facts()
+            .iter()
+            .filter_map(|fact| match fact {
+                TraceFact::MemoryAccess(access)
+                    if self
+                        .execution_step(&access.step)
+                        .is_some_and(|step| runtime_session_matches(&step.session, trace_id)) =>
+                {
+                    Some(access)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn calls(&self, trace_id: Option<&str>) -> Vec<&'a trace_facts::CallFact> {
+        self.snapshot
+            .facts()
+            .iter()
+            .filter_map(|fact| match fact {
+                TraceFact::Call(call)
+                    if self
+                        .execution_step(&call.step)
+                        .is_some_and(|step| runtime_session_matches(&step.session, trace_id)) =>
+                {
+                    Some(call)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn reverts(&self, trace_id: Option<&str>) -> Vec<&'a trace_facts::RevertFact> {
+        self.snapshot
+            .facts()
+            .iter()
+            .filter_map(|fact| match fact {
+                TraceFact::Revert(revert)
+                    if self
+                        .execution_step(&revert.step)
+                        .is_some_and(|step| runtime_session_matches(&step.session, trace_id)) =>
+                {
+                    Some(revert)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn stack_sample_for_step(
+        &self,
+        step_key: &OriginExportKey,
+    ) -> Option<&'a trace_facts::StackSampleFact> {
+        self.snapshot.facts().iter().find_map(|fact| match fact {
+            TraceFact::StackSample(sample) if &sample.step == step_key => Some(sample),
+            _ => None,
+        })
+    }
+
+    fn storage_accesses_for_step(
+        &self,
+        step_key: &OriginExportKey,
+    ) -> Vec<&'a trace_facts::StorageAccessFact> {
+        self.snapshot
+            .facts()
+            .iter()
+            .filter_map(|fact| match fact {
+                TraceFact::StorageAccess(access) if &access.step == step_key => Some(access),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn memory_accesses_for_step(
+        &self,
+        step_key: &OriginExportKey,
+    ) -> Vec<&'a trace_facts::MemoryAccessFact> {
+        self.snapshot
+            .facts()
+            .iter()
+            .filter_map(|fact| match fact {
+                TraceFact::MemoryAccess(access) if &access.step == step_key => Some(access),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn gas_for_step(&self, step_key: &OriginExportKey) -> u64 {
+        self.execution_step(step_key)
+            .map(|step| step.gas_cost)
+            .unwrap_or_default()
+    }
+
+    fn instruction_for_runtime_access(
+        &self,
+        instruction: Option<&OriginExportKey>,
+        step: &OriginExportKey,
+    ) -> Option<OriginExportKey> {
+        instruction.cloned().or_else(|| {
+            self.execution_step(step)
+                .and_then(|step| step.instruction.clone())
+        })
+    }
+
+    fn sources_for_runtime_access(
+        &self,
+        instruction: Option<&OriginExportKey>,
+        step: &OriginExportKey,
+    ) -> Vec<SourceAttribution> {
+        self.instruction_for_runtime_access(instruction, step)
+            .map(|instruction| self.source_candidates_for_instruction(&instruction))
+            .unwrap_or_default()
+    }
+
+    fn primary_source_for_instruction(
+        &self,
+        instruction: &OriginExportKey,
+    ) -> Option<SourceAttribution> {
+        primary_source(&self.source_candidates_for_instruction(instruction))
     }
 
     fn variable_name(&self, variable: &OriginExportKey) -> String {
@@ -2176,6 +3320,68 @@ fn primary_source(candidates: &[SourceAttribution]) -> Option<SourceAttribution>
     (candidates.len() == 1).then(|| candidates[0].clone())
 }
 
+fn runtime_session_matches(session: &OriginExportKey, trace_id: Option<&str>) -> bool {
+    trace_id.is_none_or(|trace_id| {
+        trace_id == session.canonical_storage_key()
+            || trace_id == session.display_label()
+            || trace_id == session.owner_key()
+            || trace_id == session.local_key()
+    })
+}
+
+fn runtime_value_label(value: &RuntimeValue) -> String {
+    match value {
+        RuntimeValue::Redacted => "<redacted>".to_string(),
+        RuntimeValue::Hash { algorithm, digest } => format!("{algorithm}:{digest}"),
+        RuntimeValue::Bytes { hex } => hex.clone(),
+    }
+}
+
+fn confidence_for_join(join: RuntimePcJoinConfidence) -> Confidence {
+    match join {
+        RuntimePcJoinConfidence::ExactCodeHashAndPc
+        | RuntimePcJoinConfidence::ExactCodeObjectAndPc => Confidence::Exact,
+        RuntimePcJoinConfidence::PcOnlyWithinUniqueCodeObject => Confidence::Medium,
+        RuntimePcJoinConfidence::AmbiguousPc | RuntimePcJoinConfidence::CodeHashMismatch => {
+            Confidence::Low
+        }
+        RuntimePcJoinConfidence::MissingStaticInstruction => Confidence::Unknown,
+    }
+}
+
+fn merge_confidence(left: Confidence, right: Confidence) -> Confidence {
+    if confidence_rank(left) <= confidence_rank(right) {
+        left
+    } else {
+        right
+    }
+}
+
+fn confidence_rank(confidence: Confidence) -> u8 {
+    match confidence {
+        Confidence::Unknown => 0,
+        Confidence::Low => 1,
+        Confidence::Medium => 2,
+        Confidence::High => 3,
+        Confidence::Exact => 4,
+    }
+}
+
+fn runtime_report_confidence(has_rows: bool, evidence: &RuntimeEvidenceSummary) -> Confidence {
+    if !has_rows {
+        return Confidence::Unknown;
+    }
+    if evidence.missing_join_steps > 0 || evidence.ambiguous_join_steps > 0 {
+        Confidence::Low
+    } else if evidence.pc_only_join_steps > 0 {
+        Confidence::Medium
+    } else if evidence.exact_join_steps > 0 {
+        Confidence::High
+    } else {
+        Confidence::Unknown
+    }
+}
+
 pub fn data_source_label(metadata: &TraceMetadata) -> String {
     match metadata.data_source {
         TraceDataSource::Fixture => {
@@ -2210,24 +3416,28 @@ fn format_storage_location(location: &StorageLocation) -> String {
 mod tests {
     use common::origin::OriginExportKey;
     use trace_facts::{
-        BlockFact, CategorySource, CodeObjectFact, CodeObjectKind, CompilerEventFact,
+        BlockFact, CallFact, CategorySource, CodeObjectFact, CodeObjectKind, CompilerEventFact,
         CompilerEventKind, CompilerPhase, CompilerReason, DisplayNameFact, DisplayNameKind,
-        DynamicGasStepFact, EvmSchedule, GasConfidence, GasCostFact, GasKind, GasSource,
-        InstructionBlockFact, InstructionCategory, InstructionCategoryFact, InstructionExtentFact,
-        InstructionFact, LocationConfidence, LocationRangeFact, LoopBlockFact, LoopBlockRole,
-        LoopConfidence, LoopDerivation, LoopFact, LoopMembershipFact, OriginEdgeFact,
-        OriginEdgeLabel, OriginNodeFact, OriginNodeKind, PcRange, SourceFileFact, SourceSpanFact,
-        StaticGasFact, StorageFact, StorageLocation, StorageReason, TraceBundle, TraceFact,
-        TraceMetadata, TraceSnapshot, TypeFact, TypeKind, ValueLocation, VariableFact,
-        VariableStorageClass,
+        DynamicGasStepFact, EvmSchedule, ExecutionStepFact, ExecutionTraceSessionFact,
+        GasConfidence, GasCostFact, GasKind, GasSource, InstructionBlockFact, InstructionCategory,
+        InstructionCategoryFact, InstructionExtentFact, InstructionFact, LocationConfidence,
+        LocationRangeFact, LoopBlockFact, LoopBlockRole, LoopConfidence, LoopDerivation, LoopFact,
+        LoopMembershipFact, MemoryAccessFact, MemoryAccessKind, OriginEdgeFact, OriginEdgeLabel,
+        OriginNodeFact, OriginNodeKind, PcRange, RevertFact, RuntimeCallKind, RuntimeCaptureMode,
+        RuntimeCodeObjectBindingFact, RuntimePcJoinConfidence, RuntimeTraceDataSource,
+        RuntimeValue, RuntimeValuePolicy, SourceFileFact, SourceSpanFact, StackSampleFact,
+        StaticGasFact, StorageAccessFact, StorageAccessKind, StorageFact, StorageLocation,
+        StorageReason, TraceBundle, TraceFact, TraceMetadata, TraceSnapshot, TypeFact, TypeKind,
+        ValueLocation, VariableFact, VariableStorageClass,
     };
 
     use super::{
-        DynamicGasBySourceRequest, ExplainLocalRequest, ExplainPcRequest, GasBySourceRequest,
-        GasToSourceRequest, IntrospectionService, LoopContentsRequest, LoopCostRequest,
-        OptimizedCodeHonestyRequest, TraceIntrospectionService, TraceQueryHttpRequest,
-        TraceQueryHttpResponse, TraceQueryReport, TraceQueryRequest, VariablesAtPcRequest,
-        run_trace_query,
+        CallCostByCallsiteReport, DynamicGasBySourceRequest, ExplainLocalRequest, ExplainPcRequest,
+        GasBySourceRequest, GasToSourceRequest, IntrospectionService, LoopContentsRequest,
+        LoopCostRequest, OptimizedCodeHonestyRequest, RuntimeGasBySourceRequest,
+        RuntimeTraceFilterRequest, StorageAccessesBySlotRequest, TraceIntrospectionService,
+        TraceQueryHttpRequest, TraceQueryHttpResponse, TraceQueryReport, TraceQueryRequest,
+        ValueFlowAtPcRequest, VariablesAtPcRequest, run_trace_query,
     };
 
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -2552,6 +3762,161 @@ mod tests {
         TraceIntrospectionService::new(snapshot)
     }
 
+    fn runtime_demo_service() -> TraceIntrospectionService {
+        let mut bundle = demo_service().snapshot().clone().into_bundle();
+        let code_object = key("code.object", "demo", "runtime");
+        let inst = key("bytecode.pc", "demo", "pc:0");
+        let zext = key("bytecode.pc", "demo", "pc:1");
+        let session = key("runtime.session", "tx:1", "session");
+        let binding = key("runtime.binding", "tx:1", "runtime");
+        let step0 = key("runtime.step", "tx:1", "step:0");
+        let step1 = key("runtime.step", "tx:1", "step:1");
+        let step2 = key("runtime.step", "tx:1", "step:2");
+        let sample = key("runtime.stack", "tx:1", "sample:0");
+        let storage_write = key("runtime.storage", "tx:1", "write:0");
+        let storage_read = key("runtime.storage", "tx:1", "read:0");
+        let memory = key("runtime.memory", "tx:1", "access:0");
+        let call = key("runtime.call", "tx:1", "call:0");
+        let revert = key("runtime.revert", "tx:1", "revert:0");
+
+        bundle.facts.extend([
+            node(session.clone()),
+            node(binding.clone()),
+            node(step0.clone()),
+            node(step1.clone()),
+            node(step2.clone()),
+            node(sample.clone()),
+            node(storage_write.clone()),
+            node(storage_read.clone()),
+            node(memory.clone()),
+            node(call.clone()),
+            node(revert.clone()),
+            TraceFact::ExecutionTraceSession(ExecutionTraceSessionFact {
+                session: session.clone(),
+                source: RuntimeTraceDataSource::RevmInspector,
+                capture_mode: RuntimeCaptureMode::Standard,
+                value_policy: RuntimeValuePolicy::HashOnly,
+                transaction_hash: Some("0xabc".to_string()),
+                chain_id: Some(31337),
+                block_number: Some(1),
+                entry_code_object: Some(code_object.clone()),
+            }),
+            TraceFact::RuntimeCodeObjectBinding(RuntimeCodeObjectBindingFact {
+                binding,
+                session: session.clone(),
+                code_object: code_object.clone(),
+                runtime_code_hash:
+                    "blake3:000000000000000000000000000000000000000000000000000000000000beef"
+                        .to_string(),
+                address: Some("0x0000000000000000000000000000000000000001".to_string()),
+                confidence: RuntimePcJoinConfidence::ExactCodeHashAndPc,
+            }),
+            TraceFact::ExecutionStep(ExecutionStepFact {
+                step: step0.clone(),
+                session: session.clone(),
+                step_index: 0,
+                code_object: code_object.clone(),
+                pc: 0,
+                opcode: "SSTORE".to_string(),
+                instruction: Some(inst.clone()),
+                gas_before: 100,
+                gas_after: 80,
+                gas_cost: 20,
+                depth: 1,
+                join_confidence: RuntimePcJoinConfidence::ExactCodeHashAndPc,
+            }),
+            TraceFact::ExecutionStep(ExecutionStepFact {
+                step: step1.clone(),
+                session: session.clone(),
+                step_index: 1,
+                code_object: code_object.clone(),
+                pc: 1,
+                opcode: "MSTORE".to_string(),
+                instruction: Some(zext.clone()),
+                gas_before: 80,
+                gas_after: 70,
+                gas_cost: 10,
+                depth: 1,
+                join_confidence: RuntimePcJoinConfidence::ExactCodeHashAndPc,
+            }),
+            TraceFact::ExecutionStep(ExecutionStepFact {
+                step: step2.clone(),
+                session,
+                step_index: 2,
+                code_object: code_object.clone(),
+                pc: 0,
+                opcode: "SSTORE".to_string(),
+                instruction: Some(inst.clone()),
+                gas_before: 70,
+                gas_after: 55,
+                gas_cost: 15,
+                depth: 1,
+                join_confidence: RuntimePcJoinConfidence::ExactCodeHashAndPc,
+            }),
+            TraceFact::StackSample(StackSampleFact {
+                sample,
+                step: step0.clone(),
+                policy: RuntimeValuePolicy::HashOnly,
+                values_top_first: vec![RuntimeValue::hash("blake3", "top")],
+            }),
+            TraceFact::StorageAccess(StorageAccessFact {
+                access: storage_write,
+                step: step0,
+                code_object: code_object.clone(),
+                instruction: Some(inst.clone()),
+                kind: StorageAccessKind::Write,
+                address: Some("0x0000000000000000000000000000000000000001".to_string()),
+                slot: RuntimeValue::hash("blake3", "slot-0"),
+                value_before: Some(RuntimeValue::redacted()),
+                value_after: Some(RuntimeValue::hash("blake3", "value-0")),
+                policy: RuntimeValuePolicy::HashOnly,
+            }),
+            TraceFact::StorageAccess(StorageAccessFact {
+                access: storage_read,
+                step: step2.clone(),
+                code_object,
+                instruction: Some(inst.clone()),
+                kind: StorageAccessKind::Read,
+                address: Some("0x0000000000000000000000000000000000000001".to_string()),
+                slot: RuntimeValue::hash("blake3", "slot-0"),
+                value_before: Some(RuntimeValue::hash("blake3", "value-0")),
+                value_after: None,
+                policy: RuntimeValuePolicy::HashOnly,
+            }),
+            TraceFact::MemoryAccess(MemoryAccessFact {
+                access: memory,
+                step: step1.clone(),
+                kind: MemoryAccessKind::Write,
+                offset: 32,
+                length: 64,
+                value: Some(RuntimeValue::hash("blake3", "mem")),
+                policy: RuntimeValuePolicy::HashOnly,
+            }),
+            TraceFact::Call(CallFact {
+                call,
+                step: step1,
+                kind: RuntimeCallKind::Call,
+                caller: Some("0x0000000000000000000000000000000000000001".to_string()),
+                callee: Some("0x0000000000000000000000000000000000000002".to_string()),
+                value: Some(RuntimeValue::redacted()),
+                gas_requested: Some(12),
+                gas_used: Some(7),
+                success: Some(true),
+                callsite_instruction: Some(zext),
+                policy: RuntimeValuePolicy::HashOnly,
+            }),
+            TraceFact::Revert(RevertFact {
+                revert,
+                step: step2,
+                reason: Some("demo revert".to_string()),
+                data: RuntimeValue::hash("blake3", "revert"),
+                policy: RuntimeValuePolicy::HashOnly,
+            }),
+        ]);
+
+        TraceIntrospectionService::new(TraceSnapshot::new(bundle).unwrap())
+    }
+
     fn ambiguous_local_service() -> (TraceIntrospectionService, OriginExportKey, OriginExportKey) {
         let first = key("runtime.local", "demo:func_a", "body:0:local:b");
         let second = key("runtime.local", "demo:func_b", "body:0:local:b");
@@ -2811,6 +4176,114 @@ mod tests {
     }
 
     #[test]
+    fn runtime_gas_by_source_uses_execution_steps() {
+        let report = runtime_demo_service()
+            .runtime_gas_by_source(RuntimeGasBySourceRequest::default())
+            .unwrap();
+
+        assert_eq!(report.policy, "runtime-step-exclusive");
+        assert_eq!(report.runtime.runtime_sources, vec!["RevmInspector"]);
+        assert_eq!(report.total_gas, 45);
+        assert_eq!(report.unattributed_steps, 0);
+        assert_eq!(report.rows.len(), 1);
+        assert_eq!(report.rows[0].label, "fib.fe:2:8-2:9");
+        assert_eq!(report.rows[0].gas, 45);
+    }
+
+    #[test]
+    fn runtime_storage_reports_group_by_source_and_slot() {
+        let service = runtime_demo_service();
+        let writes = service
+            .storage_writes_by_source(RuntimeTraceFilterRequest::default())
+            .unwrap();
+
+        assert_eq!(writes.total_writes, 1);
+        assert_eq!(writes.total_gas, 20);
+        assert_eq!(writes.rows[0].label, "fib.fe:2:8-2:9");
+        assert_eq!(writes.rows[0].slots, vec!["blake3:slot-0"]);
+
+        let slots = service
+            .storage_accesses_by_slot(StorageAccessesBySlotRequest::default())
+            .unwrap();
+
+        assert_eq!(slots.total_reads, 1);
+        assert_eq!(slots.total_writes, 1);
+        assert_eq!(slots.rows[0].slot, "blake3:slot-0");
+        assert_eq!(slots.rows[0].sources[0].label, "fib.fe:2:8-2:9");
+    }
+
+    #[test]
+    fn runtime_call_memory_revert_and_hot_path_reports_are_derived() {
+        let service = runtime_demo_service();
+        let calls = service
+            .call_cost_by_callsite(RuntimeTraceFilterRequest::default())
+            .unwrap();
+        assert_call_cost(&calls);
+
+        let memory = service
+            .memory_growth_by_source(RuntimeTraceFilterRequest::default())
+            .unwrap();
+        assert_eq!(memory.total_accesses, 1);
+        assert_eq!(memory.max_end_offset, 96);
+        assert_eq!(memory.rows[0].bytes_touched, 64);
+
+        let reverts = service
+            .revert_attribution(RuntimeTraceFilterRequest::default())
+            .unwrap();
+        assert_eq!(reverts.total_reverts, 1);
+        assert_eq!(reverts.rows[0].reason.as_deref(), Some("demo revert"));
+        assert_eq!(
+            reverts.rows[0].source.as_ref().unwrap().label,
+            "fib.fe:2:8-2:9"
+        );
+
+        let hot = service
+            .hot_path_by_iteration(RuntimeTraceFilterRequest::default())
+            .unwrap();
+        assert_eq!(hot.total_steps, 3);
+        assert_eq!(hot.total_gas, 45);
+        assert_eq!(hot.rows[0].pc, 0);
+        assert_eq!(hot.rows[0].executions, 2);
+        assert_eq!(hot.rows[0].gas, 35);
+    }
+
+    fn assert_call_cost(report: &CallCostByCallsiteReport) {
+        assert_eq!(report.policy, "call-inclusive-frame");
+        assert_eq!(report.total_calls, 1);
+        assert_eq!(report.total_gas_used, 7);
+        assert_eq!(report.rows[0].gas_requested, Some(12));
+        assert_eq!(
+            report.rows[0].source.as_ref().unwrap().label,
+            "fib.fe:2:8-2:9"
+        );
+    }
+
+    #[test]
+    fn value_flow_at_pc_reports_stack_storage_and_memory_events() {
+        let service = runtime_demo_service();
+        let pc0 = service
+            .value_flow_at_pc(ValueFlowAtPcRequest {
+                pc: 0,
+                code_object: None,
+                trace_id: None,
+            })
+            .unwrap();
+
+        assert_eq!(pc0.rows.len(), 2);
+        assert_eq!(pc0.rows[0].stack_top, vec!["blake3:top"]);
+        assert_eq!(pc0.rows[0].storage_accesses[0].location, "blake3:slot-0");
+
+        let pc1 = service
+            .value_flow_at_pc(ValueFlowAtPcRequest {
+                pc: 1,
+                code_object: None,
+                trace_id: None,
+            })
+            .unwrap();
+        assert_eq!(pc1.rows[0].memory_accesses[0].location, "mem[32..96)");
+    }
+
+    #[test]
     fn gas_to_source_combines_static_and_dynamic_attribution() {
         let report = demo_service()
             .gas_to_source(GasToSourceRequest {
@@ -2952,6 +4425,52 @@ mod tests {
         assert!(matches!(
             run_trace_query(&service, TraceQueryRequest::variables_at_pc(0)).unwrap(),
             TraceQueryReport::VariablesAtPc(_)
+        ));
+
+        let runtime_service = runtime_demo_service();
+        assert!(matches!(
+            run_trace_query(&runtime_service, TraceQueryRequest::runtime_gas_by_source()).unwrap(),
+            TraceQueryReport::RuntimeGasBySource(_)
+        ));
+        assert!(matches!(
+            run_trace_query(
+                &runtime_service,
+                TraceQueryRequest::storage_writes_by_source()
+            )
+            .unwrap(),
+            TraceQueryReport::StorageWritesBySource(_)
+        ));
+        assert!(matches!(
+            run_trace_query(
+                &runtime_service,
+                TraceQueryRequest::storage_accesses_by_slot()
+            )
+            .unwrap(),
+            TraceQueryReport::StorageAccessesBySlot(_)
+        ));
+        assert!(matches!(
+            run_trace_query(&runtime_service, TraceQueryRequest::call_cost_by_callsite()).unwrap(),
+            TraceQueryReport::CallCostByCallsite(_)
+        ));
+        assert!(matches!(
+            run_trace_query(
+                &runtime_service,
+                TraceQueryRequest::memory_growth_by_source()
+            )
+            .unwrap(),
+            TraceQueryReport::MemoryGrowthBySource(_)
+        ));
+        assert!(matches!(
+            run_trace_query(&runtime_service, TraceQueryRequest::revert_attribution()).unwrap(),
+            TraceQueryReport::RevertAttribution(_)
+        ));
+        assert!(matches!(
+            run_trace_query(&runtime_service, TraceQueryRequest::hot_path_by_iteration()).unwrap(),
+            TraceQueryReport::HotPathByIteration(_)
+        ));
+        assert!(matches!(
+            run_trace_query(&runtime_service, TraceQueryRequest::value_flow_at_pc(0)).unwrap(),
+            TraceQueryReport::ValueFlowAtPc(_)
         ));
     }
 }

@@ -17,6 +17,8 @@ use url::Url;
 use crate::{
     DevTraceAttributionArgs, DevTraceDynamicGasArgs, DevTraceEmitArgs, DevTraceExplainLocalArgs,
     DevTraceGasArgs, DevTraceGasToSourceArgs, DevTraceInputArgs, DevTracePcArgs,
+    DevTraceRuntimeArgs, DevTraceRuntimeAttributionArgs, DevTraceRuntimePcArgs,
+    DevTraceStorageSlotArgs,
 };
 
 pub(super) fn run_trace_emit(args: &DevTraceEmitArgs) -> Result<String, String> {
@@ -134,6 +136,89 @@ pub(super) fn run_trace_variables_at_pc(args: &DevTracePcArgs) -> Result<String,
     super::trace_render::render_variables_at_pc_snapshot_with_format(
         read_trace_snapshot_jsonl_from_path(&args.from)?,
         args.pc,
+        args.format,
+    )
+}
+
+pub(super) fn run_trace_runtime_gas_by_source(
+    args: &DevTraceRuntimeAttributionArgs,
+) -> Result<String, String> {
+    super::trace_render::render_runtime_gas_by_source_snapshot_with_format(
+        read_trace_snapshot_jsonl_from_path(&args.from)?,
+        args.trace_id.clone(),
+        &args.policy,
+        args.format,
+    )
+}
+
+pub(super) fn run_trace_storage_writes_by_source(
+    args: &DevTraceRuntimeAttributionArgs,
+) -> Result<String, String> {
+    super::trace_render::render_storage_writes_by_source_snapshot_with_format(
+        read_trace_snapshot_jsonl_from_path(&args.from)?,
+        args.trace_id.clone(),
+        &args.policy,
+        args.format,
+    )
+}
+
+pub(super) fn run_trace_storage_accesses_by_slot(
+    args: &DevTraceStorageSlotArgs,
+) -> Result<String, String> {
+    super::trace_render::render_storage_accesses_by_slot_snapshot_with_format(
+        read_trace_snapshot_jsonl_from_path(&args.from)?,
+        args.trace_id.clone(),
+        args.slot.clone(),
+        &args.policy,
+        args.format,
+    )
+}
+
+pub(super) fn run_trace_call_cost_by_callsite(
+    args: &DevTraceRuntimeArgs,
+) -> Result<String, String> {
+    super::trace_render::render_call_cost_by_callsite_snapshot_with_format(
+        read_trace_snapshot_jsonl_from_path(&args.from)?,
+        args.trace_id.clone(),
+        args.format,
+    )
+}
+
+pub(super) fn run_trace_memory_growth_by_source(
+    args: &DevTraceRuntimeAttributionArgs,
+) -> Result<String, String> {
+    super::trace_render::render_memory_growth_by_source_snapshot_with_format(
+        read_trace_snapshot_jsonl_from_path(&args.from)?,
+        args.trace_id.clone(),
+        &args.policy,
+        args.format,
+    )
+}
+
+pub(super) fn run_trace_revert_attribution(args: &DevTraceRuntimeArgs) -> Result<String, String> {
+    super::trace_render::render_revert_attribution_snapshot_with_format(
+        read_trace_snapshot_jsonl_from_path(&args.from)?,
+        args.trace_id.clone(),
+        args.format,
+    )
+}
+
+pub(super) fn run_trace_hot_path_by_iteration(
+    args: &DevTraceRuntimeAttributionArgs,
+) -> Result<String, String> {
+    super::trace_render::render_hot_path_by_iteration_snapshot_with_format(
+        read_trace_snapshot_jsonl_from_path(&args.from)?,
+        args.trace_id.clone(),
+        &args.policy,
+        args.format,
+    )
+}
+
+pub(super) fn run_trace_value_flow_at_pc(args: &DevTraceRuntimePcArgs) -> Result<String, String> {
+    super::trace_render::render_value_flow_at_pc_snapshot_with_format(
+        read_trace_snapshot_jsonl_from_path(&args.from)?,
+        args.pc,
+        args.trace_id.clone(),
         args.format,
     )
 }

@@ -2,13 +2,17 @@ use common::origin::OriginExportKey;
 use serde::Serialize;
 use trace_facts::{TraceBundle, TraceMetadata, TraceSnapshot, TraceValidationReport};
 use trace_query::{
-    BytecodeSizeBySourceReport, BytecodeSizeBySourceRequest, Confidence, DynamicGasBySourceReport,
-    DynamicGasBySourceRequest, ExplainLocalReport, ExplainLocalRequest, ExplainPcReport,
-    ExplainPcRequest, GasAttributionPolicy, GasBreakdownReport, GasBreakdownRequest,
-    GasBySourceReport, GasBySourceRequest, GasToSourceReport, GasToSourceRequest,
-    IntrospectionService, LoopContentsReport, LoopContentsRequest, LoopCostReport, LoopCostRequest,
-    OptimizedCodeHonestyReport, OptimizedCodeHonestyRequest, ReportMetadata, SourceAttribution,
-    TraceIntrospectionService, VariablesAtPcReport, VariablesAtPcRequest,
+    BytecodeSizeBySourceReport, BytecodeSizeBySourceRequest, CallCostByCallsiteReport, Confidence,
+    DynamicGasBySourceReport, DynamicGasBySourceRequest, ExplainLocalReport, ExplainLocalRequest,
+    ExplainPcReport, ExplainPcRequest, GasAttributionPolicy, GasBreakdownReport,
+    GasBreakdownRequest, GasBySourceReport, GasBySourceRequest, GasToSourceReport,
+    GasToSourceRequest, HotPathByIterationReport, IntrospectionService, LoopContentsReport,
+    LoopContentsRequest, LoopCostReport, LoopCostRequest, MemoryGrowthBySourceReport,
+    OptimizedCodeHonestyReport, OptimizedCodeHonestyRequest, ReportMetadata,
+    RevertAttributionReport, RuntimeGasBySourceReport, RuntimeGasBySourceRequest,
+    RuntimeTraceFilterRequest, SourceAttribution, StorageAccessesBySlotReport,
+    StorageAccessesBySlotRequest, StorageWritesBySourceReport, TraceIntrospectionService,
+    ValueFlowAtPcReport, ValueFlowAtPcRequest, VariablesAtPcReport, VariablesAtPcRequest,
 };
 
 use crate::TraceReportFormat;
@@ -288,6 +292,135 @@ pub(super) fn render_variables_at_pc_snapshot_with_format(
         })
         .map_err(|err| err.to_string())?;
     render_report(format, &report, render_variables_at_pc_report)
+}
+
+pub(super) fn render_runtime_gas_by_source_snapshot_with_format(
+    snapshot: TraceSnapshot,
+    trace_id: Option<String>,
+    policy: &str,
+    format: TraceReportFormat,
+) -> Result<String, String> {
+    let service = TraceIntrospectionService::new(snapshot);
+    let report = service
+        .runtime_gas_by_source(RuntimeGasBySourceRequest {
+            trace_id,
+            policy: parse_gas_policy(policy)?,
+        })
+        .map_err(|err| err.to_string())?;
+    render_report(format, &report, render_runtime_gas_by_source_report)
+}
+
+pub(super) fn render_storage_writes_by_source_snapshot_with_format(
+    snapshot: TraceSnapshot,
+    trace_id: Option<String>,
+    policy: &str,
+    format: TraceReportFormat,
+) -> Result<String, String> {
+    let service = TraceIntrospectionService::new(snapshot);
+    let report = service
+        .storage_writes_by_source(RuntimeTraceFilterRequest {
+            trace_id,
+            policy: parse_gas_policy(policy)?,
+        })
+        .map_err(|err| err.to_string())?;
+    render_report(format, &report, render_storage_writes_by_source_report)
+}
+
+pub(super) fn render_storage_accesses_by_slot_snapshot_with_format(
+    snapshot: TraceSnapshot,
+    trace_id: Option<String>,
+    slot: Option<String>,
+    policy: &str,
+    format: TraceReportFormat,
+) -> Result<String, String> {
+    let service = TraceIntrospectionService::new(snapshot);
+    let report = service
+        .storage_accesses_by_slot(StorageAccessesBySlotRequest {
+            trace_id,
+            slot,
+            policy: parse_gas_policy(policy)?,
+        })
+        .map_err(|err| err.to_string())?;
+    render_report(format, &report, render_storage_accesses_by_slot_report)
+}
+
+pub(super) fn render_call_cost_by_callsite_snapshot_with_format(
+    snapshot: TraceSnapshot,
+    trace_id: Option<String>,
+    format: TraceReportFormat,
+) -> Result<String, String> {
+    let service = TraceIntrospectionService::new(snapshot);
+    let report = service
+        .call_cost_by_callsite(RuntimeTraceFilterRequest {
+            trace_id,
+            ..Default::default()
+        })
+        .map_err(|err| err.to_string())?;
+    render_report(format, &report, render_call_cost_by_callsite_report)
+}
+
+pub(super) fn render_memory_growth_by_source_snapshot_with_format(
+    snapshot: TraceSnapshot,
+    trace_id: Option<String>,
+    policy: &str,
+    format: TraceReportFormat,
+) -> Result<String, String> {
+    let service = TraceIntrospectionService::new(snapshot);
+    let report = service
+        .memory_growth_by_source(RuntimeTraceFilterRequest {
+            trace_id,
+            policy: parse_gas_policy(policy)?,
+        })
+        .map_err(|err| err.to_string())?;
+    render_report(format, &report, render_memory_growth_by_source_report)
+}
+
+pub(super) fn render_revert_attribution_snapshot_with_format(
+    snapshot: TraceSnapshot,
+    trace_id: Option<String>,
+    format: TraceReportFormat,
+) -> Result<String, String> {
+    let service = TraceIntrospectionService::new(snapshot);
+    let report = service
+        .revert_attribution(RuntimeTraceFilterRequest {
+            trace_id,
+            ..Default::default()
+        })
+        .map_err(|err| err.to_string())?;
+    render_report(format, &report, render_revert_attribution_report)
+}
+
+pub(super) fn render_hot_path_by_iteration_snapshot_with_format(
+    snapshot: TraceSnapshot,
+    trace_id: Option<String>,
+    policy: &str,
+    format: TraceReportFormat,
+) -> Result<String, String> {
+    let service = TraceIntrospectionService::new(snapshot);
+    let report = service
+        .hot_path_by_iteration(RuntimeTraceFilterRequest {
+            trace_id,
+            policy: parse_gas_policy(policy)?,
+        })
+        .map_err(|err| err.to_string())?;
+    render_report(format, &report, render_hot_path_by_iteration_report)
+}
+
+pub(super) fn render_value_flow_at_pc_snapshot_with_format(
+    snapshot: TraceSnapshot,
+    pc: u32,
+    trace_id: Option<String>,
+    format: TraceReportFormat,
+) -> Result<String, String> {
+    let service = TraceIntrospectionService::new(snapshot);
+    let report = service
+        .value_flow_at_pc(ValueFlowAtPcRequest {
+            pc,
+            code_object: None,
+            trace_id,
+        })
+        .map_err(|err| err.to_string())?;
+    render_report(format, &report, render_value_flow_at_pc_report)
 }
 
 fn render_report<T: Serialize>(
@@ -922,6 +1055,328 @@ fn render_variables_at_pc_report(report: &VariablesAtPcReport) -> String {
         ));
     }
     out
+}
+
+fn render_runtime_gas_by_source_report(report: &RuntimeGasBySourceReport) -> String {
+    let mut out = String::new();
+    out.push_str("Fe dev trace runtime-gas-by-source\n\n");
+    push_runtime_report_header(
+        &mut out,
+        &report.metadata,
+        report.confidence,
+        &report.runtime,
+    );
+    out.push_str(&format!("Attribution policy: {}\n", report.policy));
+    if let Some(trace_id) = &report.trace_id {
+        out.push_str(&format!("Trace id: {trace_id}\n"));
+    }
+    out.push_str(&format!("Total runtime gas: {}\n", report.total_gas));
+    out.push_str(&format!(
+        "Unattributed runtime steps: {}\n\n",
+        report.unattributed_steps
+    ));
+    push_gas_source_rows(&mut out, &report.rows);
+    out
+}
+
+fn render_storage_writes_by_source_report(report: &StorageWritesBySourceReport) -> String {
+    let mut out = String::new();
+    out.push_str("Fe dev trace storage-writes-by-source\n\n");
+    push_runtime_report_header(
+        &mut out,
+        &report.metadata,
+        report.confidence,
+        &report.runtime,
+    );
+    out.push_str(&format!("Attribution policy: {}\n", report.policy));
+    out.push_str(&format!("Storage writes: {}\n", report.total_writes));
+    out.push_str(&format!(
+        "Step-exclusive gas at write PCs: {}\n\n",
+        report.total_gas
+    ));
+    if report.rows.is_empty() {
+        out.push_str("No runtime storage write facts were present in this trace.\n");
+        return out;
+    }
+    out.push_str("Source contributors:\n");
+    for row in report.rows.iter().take(20) {
+        out.push_str(&format!(
+            "  {:>3} writes  {:>4} gas  {:<8?} {}  slots={}\n",
+            row.writes,
+            row.gas,
+            row.confidence,
+            row.label,
+            row.slots.join(",")
+        ));
+    }
+    out
+}
+
+fn render_storage_accesses_by_slot_report(report: &StorageAccessesBySlotReport) -> String {
+    let mut out = String::new();
+    out.push_str("Fe dev trace storage-accesses-by-slot\n\n");
+    push_runtime_report_header(
+        &mut out,
+        &report.metadata,
+        report.confidence,
+        &report.runtime,
+    );
+    out.push_str(&format!("Attribution policy: {}\n", report.policy));
+    if let Some(slot) = &report.slot_filter {
+        out.push_str(&format!("Slot filter: {slot}\n"));
+    }
+    out.push_str(&format!(
+        "Storage reads: {}  writes: {}\n\n",
+        report.total_reads, report.total_writes
+    ));
+    if report.rows.is_empty() {
+        out.push_str("No runtime storage access facts matched this trace.\n");
+        return out;
+    }
+    out.push_str("Slots:\n");
+    for row in report.rows.iter().take(20) {
+        let sources = row
+            .sources
+            .iter()
+            .map(format_source)
+            .collect::<Vec<_>>()
+            .join("; ");
+        out.push_str(&format!(
+            "  reads={} writes={} gas={} {:<8?} {}",
+            row.reads, row.writes, row.gas, row.confidence, row.slot
+        ));
+        if !sources.is_empty() {
+            out.push_str(&format!("  source={sources}"));
+        }
+        out.push('\n');
+    }
+    out
+}
+
+fn render_call_cost_by_callsite_report(report: &CallCostByCallsiteReport) -> String {
+    let mut out = String::new();
+    out.push_str("Fe dev trace call-cost-by-callsite\n\n");
+    push_runtime_report_header(
+        &mut out,
+        &report.metadata,
+        report.confidence,
+        &report.runtime,
+    );
+    out.push_str(&format!("Gas policy: {}\n", report.policy));
+    out.push_str(&format!(
+        "Runtime calls: {}  inclusive gas: {}\n\n",
+        report.total_calls, report.total_gas_used
+    ));
+    if report.rows.is_empty() {
+        out.push_str("No runtime call facts were present in this trace.\n");
+        return out;
+    }
+    out.push_str("Callsites:\n");
+    for row in report.rows.iter().take(20) {
+        let source = row
+            .source
+            .as_ref()
+            .map(format_source)
+            .unwrap_or_else(|| "<unmapped>".to_string());
+        out.push_str(&format!(
+            "  gas_used={:?} requested={:?} success={:?} kind={} callee={} {:<8?} {}\n",
+            row.gas_used,
+            row.gas_requested,
+            row.success,
+            row.kind,
+            row.callee.as_deref().unwrap_or("<unknown>"),
+            row.confidence,
+            source
+        ));
+    }
+    out
+}
+
+fn render_memory_growth_by_source_report(report: &MemoryGrowthBySourceReport) -> String {
+    let mut out = String::new();
+    out.push_str("Fe dev trace memory-growth-by-source\n\n");
+    push_runtime_report_header(
+        &mut out,
+        &report.metadata,
+        report.confidence,
+        &report.runtime,
+    );
+    out.push_str(&format!("Attribution policy: {}\n", report.policy));
+    out.push_str(
+        "Growth note: current facts expose observed memory access ranges, not allocator intent.\n",
+    );
+    out.push_str(&format!(
+        "Memory accesses: {}  bytes touched: {}  max end offset: {}\n\n",
+        report.total_accesses, report.total_bytes_touched, report.max_end_offset
+    ));
+    if report.rows.is_empty() {
+        out.push_str("No runtime memory access facts were present in this trace.\n");
+        return out;
+    }
+    out.push_str("Source contributors:\n");
+    for row in report.rows.iter().take(20) {
+        out.push_str(&format!(
+            "  accesses={} bytes={} max_end={} gas={} {:<8?} {}\n",
+            row.accesses, row.bytes_touched, row.max_end_offset, row.gas, row.confidence, row.label
+        ));
+    }
+    out
+}
+
+fn render_revert_attribution_report(report: &RevertAttributionReport) -> String {
+    let mut out = String::new();
+    out.push_str("Fe dev trace revert-attribution\n\n");
+    push_runtime_report_header(
+        &mut out,
+        &report.metadata,
+        report.confidence,
+        &report.runtime,
+    );
+    out.push_str(&format!("Attribution policy: {}\n", report.policy));
+    out.push_str(&format!("Runtime reverts: {}\n\n", report.total_reverts));
+    if report.rows.is_empty() {
+        out.push_str("No runtime revert facts were present in this trace.\n");
+        return out;
+    }
+    out.push_str("Reverts:\n");
+    for row in report.rows.iter().take(20) {
+        let source = row
+            .source
+            .as_ref()
+            .map(format_source)
+            .unwrap_or_else(|| "<unmapped>".to_string());
+        out.push_str(&format!(
+            "  reason={} data={} {:<8?} {}\n",
+            row.reason.as_deref().unwrap_or("<undecoded>"),
+            row.data,
+            row.confidence,
+            source
+        ));
+    }
+    out
+}
+
+fn render_hot_path_by_iteration_report(report: &HotPathByIterationReport) -> String {
+    let mut out = String::new();
+    out.push_str("Fe dev trace hot-path-by-iteration\n\n");
+    push_runtime_report_header(
+        &mut out,
+        &report.metadata,
+        report.confidence,
+        &report.runtime,
+    );
+    out.push_str(&format!("Attribution policy: {}\n", report.policy));
+    out.push_str(&format!("Scope: {}\n", report.scope));
+    out.push_str(&format!(
+        "Runtime steps: {}  gas: {}\n\n",
+        report.total_steps, report.total_gas
+    ));
+    if report.rows.is_empty() {
+        out.push_str("No runtime step facts were present in this trace.\n");
+        return out;
+    }
+    out.push_str("Hot PCs:\n");
+    for row in report.rows.iter().take(20) {
+        let source = row
+            .source
+            .as_ref()
+            .map(format_source)
+            .unwrap_or_else(|| "<unmapped>".to_string());
+        out.push_str(&format!(
+            "  pc={} opcode={} executions={} gas={} {:<8?} {}\n",
+            row.pc, row.opcode, row.executions, row.gas, row.confidence, source
+        ));
+    }
+    out
+}
+
+fn render_value_flow_at_pc_report(report: &ValueFlowAtPcReport) -> String {
+    let mut out = String::new();
+    out.push_str("Fe dev trace value-flow-at-pc\n\n");
+    push_runtime_report_header(
+        &mut out,
+        &report.metadata,
+        report.confidence,
+        &report.runtime,
+    );
+    out.push_str(&format!("PC: {}\n\n", report.pc));
+    if report.rows.is_empty() {
+        out.push_str("No runtime execution steps matched this PC.\n");
+        return out;
+    }
+    out.push_str("Runtime values:\n");
+    for row in report.rows.iter().take(20) {
+        out.push_str(&format!(
+            "  step={} opcode={} gas={} {:<8?}\n",
+            row.step.display_label(),
+            row.opcode,
+            row.gas_cost,
+            row.confidence
+        ));
+        if !row.stack_top.is_empty() {
+            out.push_str(&format!("    stack_top: {}\n", row.stack_top.join(", ")));
+        }
+        for access in &row.storage_accesses {
+            out.push_str(&format!(
+                "    storage {} {} before={:?} after={:?}\n",
+                access.kind, access.location, access.value_before, access.value_after
+            ));
+        }
+        for access in &row.memory_accesses {
+            out.push_str(&format!(
+                "    memory {} {} value={:?}\n",
+                access.kind, access.location, access.value
+            ));
+        }
+    }
+    out
+}
+
+fn push_gas_source_rows(out: &mut String, rows: &[trace_query::GasBySourceRow]) {
+    if rows.is_empty() {
+        out.push_str("No runtime gas rows were present in this trace.\n");
+        return;
+    }
+    out.push_str("Source contributors:\n");
+    for row in rows.iter().take(20) {
+        out.push_str(&format!(
+            "  {:>4} gas  {:>3} steps  {:<8?} {}\n",
+            row.gas, row.instruction_count, row.confidence, row.label
+        ));
+    }
+}
+
+fn push_runtime_report_header(
+    out: &mut String,
+    metadata: &ReportMetadata,
+    confidence: Confidence,
+    runtime: &trace_query::RuntimeEvidenceSummary,
+) {
+    push_report_header(out, metadata, confidence);
+    out.push_str(&format!("Runtime sessions: {}\n", runtime.session_count));
+    out.push_str(&format!(
+        "Runtime source: {}\n",
+        join_or_none(&runtime.runtime_sources)
+    ));
+    out.push_str(&format!(
+        "Runtime value policy: {}\n",
+        join_or_none(&runtime.value_policies)
+    ));
+    out.push_str(&format!(
+        "Join confidence: exact={} pc_only={} ambiguous={} missing={}\n",
+        runtime.exact_join_steps,
+        runtime.pc_only_join_steps,
+        runtime.ambiguous_join_steps,
+        runtime.missing_join_steps
+    ));
+}
+
+fn join_or_none(values: &[String]) -> String {
+    if values.is_empty() {
+        "none".to_string()
+    } else {
+        values.join(",")
+    }
 }
 
 fn push_report_header(out: &mut String, metadata: &ReportMetadata, confidence: Confidence) {
