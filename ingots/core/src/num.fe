@@ -467,6 +467,63 @@ impl Bounded for isize {
     const fn max() -> isize {  57896044618658097711785492504343953926634992332820282019728792003956564819967 }
 }
 
+// Magnitude of a signed integer, returned in the unsigned type of the same
+// width. Unlike `-self`, this handles the `T::MIN` case without overflow.
+pub trait UnsignedAbs {
+    type Output
+    const fn unsigned_abs(self) -> Self::Output
+}
+
+impl UnsignedAbs for i8 {
+    type Output = u8
+    const fn unsigned_abs(self) -> u8 {
+        let bits: u8 = self.downcast_unchecked()
+        if self < 0 { (0 as u8).wrapping_sub(bits) } else { bits }
+    }
+}
+impl UnsignedAbs for i16 {
+    type Output = u16
+    const fn unsigned_abs(self) -> u16 {
+        let bits: u16 = self.downcast_unchecked()
+        if self < 0 { (0 as u16).wrapping_sub(bits) } else { bits }
+    }
+}
+impl UnsignedAbs for i32 {
+    type Output = u32
+    const fn unsigned_abs(self) -> u32 {
+        let bits: u32 = self.downcast_unchecked()
+        if self < 0 { (0 as u32).wrapping_sub(bits) } else { bits }
+    }
+}
+impl UnsignedAbs for i64 {
+    type Output = u64
+    const fn unsigned_abs(self) -> u64 {
+        let bits: u64 = self.downcast_unchecked()
+        if self < 0 { (0 as u64).wrapping_sub(bits) } else { bits }
+    }
+}
+impl UnsignedAbs for i128 {
+    type Output = u128
+    const fn unsigned_abs(self) -> u128 {
+        let bits: u128 = self.downcast_unchecked()
+        if self < 0 { (0 as u128).wrapping_sub(bits) } else { bits }
+    }
+}
+impl UnsignedAbs for i256 {
+    type Output = u256
+    const fn unsigned_abs(self) -> u256 {
+        let bits: u256 = self.downcast_unchecked()
+        if self < 0 { (0 as u256).wrapping_sub(bits) } else { bits }
+    }
+}
+impl UnsignedAbs for isize {
+    type Output = usize
+    const fn unsigned_abs(self) -> usize {
+        let bits: usize = self.downcast_unchecked()
+        if self < 0 { (0 as usize).wrapping_sub(bits) } else { bits }
+    }
+}
+
 pub trait IntWord: Copy {
     const MASK: u256
     const SIGN_BIT: u256

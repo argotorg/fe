@@ -6,6 +6,7 @@ pub use super::{
     message::MsgVariant,
     num::Bounded,
     num::IntDowncast,
+    num::UnsignedAbs,
     option::Option::{self, *},
     result::Result::{self, *},
     todo, panic,

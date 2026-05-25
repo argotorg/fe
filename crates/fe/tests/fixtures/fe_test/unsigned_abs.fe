@@ -1,0 +1,45 @@
+// Tests for `UnsignedAbs::unsigned_abs` — the magnitude of a signed integer
+// returned in the unsigned type of the same width.
+//
+// The key reason this exists (instead of `(-x).downcast_unchecked()`):
+// `-T::MIN` overflows the signed type. `unsigned_abs` handles it correctly
+// because the result fits in the unsigned counterpart.
+
+const ABS_I32_MIN: u32 = i32::min().unsigned_abs()
+const ABS_I32_MAX: u32 = i32::max().unsigned_abs()
+const ABS_I32_NEG_ONE: u32 = (-1 as i32).unsigned_abs()
+const ABS_I32_ZERO: u32 = (0 as i32).unsigned_abs()
+const ABS_I32_TICK: u32 = (-887272 as i32).unsigned_abs()
+
+#[test]
+fn abs_i32_min_does_not_overflow() {
+    // |i32::MIN| = 2^31, which fits in u32 but not i32.
+    assert(ABS_I32_MIN == 2147483648)
+}
+
+#[test]
+fn abs_i32_max() { assert(ABS_I32_MAX == 2147483647) }
+
+#[test]
+fn abs_i32_neg_one() { assert(ABS_I32_NEG_ONE == 1) }
+
+#[test]
+fn abs_i32_zero() { assert(ABS_I32_ZERO == 0) }
+
+#[test]
+fn abs_i32_tick() { assert(ABS_I32_TICK == 887272) }
+
+#[test]
+fn abs_runtime_i8() {
+    let x: i8 = -42
+    assert(x.unsigned_abs() == 42)
+    assert(i8::min().unsigned_abs() == 128)
+}
+
+#[test]
+fn abs_runtime_i256() {
+    let x: i256 = -1
+    assert(x.unsigned_abs() == 1)
+    // |i256::MIN| = 2^255
+    assert(i256::min().unsigned_abs() == 57896044618658097711785492504343953926634992332820282019728792003956564819968)
+}
