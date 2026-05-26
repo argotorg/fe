@@ -38,7 +38,7 @@ pub struct TransientStorage {}
 /// This is a general-purpose effect provider type. Backends decide how the raw
 /// handle maps to runtime memory.
 pub struct MemPtr<T> {
-    addr: u256
+    addr: *T
 }
 
 /// Pointer/handle to a contract field of type `T`.
@@ -84,10 +84,20 @@ impl<T> EffectHandle for MemPtr<T> {
     type AddressSpace = Memory
 
     fn from_raw(_ raw: u256) -> Self {
-        Self { addr: raw }
+        Self { addr: raw as *T }
     }
 
     fn raw(self) -> u256 {
+        self.addr as u256
+    }
+}
+
+impl<T> MemPtr<T> {
+    pub fn from_ptr(_ ptr: *T) -> Self {
+        Self { addr: ptr }
+    }
+
+    pub fn ptr(self) -> *T {
         self.addr
     }
 }

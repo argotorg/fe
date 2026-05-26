@@ -78,6 +78,7 @@ impl<'a, 'db> LocalStateInferer<'a, 'db> {
 
     pub(super) fn run(mut self) -> InferenceResult<'db> {
         seed_root_provider_carriers(self.env, &mut self.carriers);
+        seed_direct_pointer_carriers(self.env, &mut self.carriers);
         solve_sparse(&mut self, &mut ());
         let roots = self.infer_roots();
         let (semantic_locals, provider_bindings) =
@@ -275,6 +276,33 @@ pub(crate) fn seed_root_provider_carriers<'a, 'db>(
         if let Some(class) = class {
             carriers[idx] = RuntimeCarrier::Value(class);
         }
+    }
+}
+
+pub(crate) fn seed_direct_pointer_carriers<'a, 'db>(
+    env: BodyEnv<'a, 'db>,
+    carriers: &mut [RuntimeCarrier<'db>],
+) {
+    for (idx, local) in env.body().locals.iter().enumerate() {
+        if !matches!(carriers[idx], RuntimeCarrier::Erased)
+            || !matches!(local.facts.interface, SemanticLocalKind::DirectValue)
+            || runtime_repr_ty_in_context(env.db(), local.ty, env.scope(), env.assumptions())
+                .as_ptr(env.db())
+                .is_none()
+        {
+            continue;
+        }
+        let Some(class) = top_level_class_for_ty_in_context(
+            env.db(),
+            local.ty,
+            AddressSpaceKind::Memory,
+            env.scope(),
+            env.assumptions(),
+        ) else {
+            continue;
+        };
+        carriers[idx] =
+            desired_runtime_value_carrier(env.db(), local, class, env.scope(), env.assumptions());
     }
 }
 
@@ -790,6 +818,9 @@ fn infer_runtime_local_root<'db>(
     ) {
         *carrier = RuntimeCarrier::Value(transport_class.clone());
     }
+    if local_data.ty.as_ptr(cx.env.db()).is_some() {
+        return RuntimeLocalRoot::Slot(transport_class);
+    }
     match transport_class {
         RuntimeClass::RawAddr { space, .. } => RuntimeLocalRoot::Ptr {
             space,
@@ -957,7 +988,7 @@ pub(crate) fn merge_runtime_carrier<'db>(
     match (current, desired) {
         (RuntimeCarrier::Erased, desired) | (desired, RuntimeCarrier::Erased) => desired,
         (RuntimeCarrier::Value(current), RuntimeCarrier::Value(desired)) => {
-            let demand = RuntimeJoinDemand::for_local(local);
+            let demand = RuntimeJoinDemand::for_local(db, local);
             RuntimeCarrier::Value(join_runtime_class(db, demand, &current, &desired).unwrap_or_else(
                 || {
                     panic!(
@@ -976,13 +1007,15 @@ struct RuntimeJoinDemand {
 }
 
 impl RuntimeJoinDemand {
-    fn for_local(local: &NSLocal<'_>) -> Self {
+    fn for_local<'db>(db: &'db dyn MirDb, local: &NSLocal<'db>) -> Self {
         Self {
             prefer_owned_object: local.facts.root_demand.needs_projectable_owned_storage(),
-            prefer_transport: matches!(
-                local.facts.interface,
-                SemanticLocalKind::PlaceCarrier | SemanticLocalKind::DirectCarrier
-            ) || local.facts.origin.root_provider().is_some(),
+            prefer_transport: local.ty.as_ptr(db).is_some()
+                || matches!(
+                    local.facts.interface,
+                    SemanticLocalKind::PlaceCarrier | SemanticLocalKind::DirectCarrier
+                )
+                || local.facts.origin.root_provider().is_some(),
         }
     }
 }
@@ -995,6 +1028,11 @@ fn join_runtime_class<'db>(
 ) -> Option<RuntimeClass<'db>> {
     if current == desired {
         return Some(current.clone());
+    }
+    if demand.prefer_transport
+        && let Some(raw_addr) = prefer_raw_addr_join(current, desired)
+    {
+        return Some(raw_addr);
     }
     if let Some(merged) = merge_runtime_class(db, current, desired) {
         return Some(merged);
@@ -1017,6 +1055,60 @@ fn join_runtime_class<'db>(
         .into_iter()
         .filter(|candidate| can_join_as(db, current, desired, candidate))
         .min_by_key(|candidate| join_candidate_rank(demand, candidate))
+}
+
+fn prefer_raw_addr_join<'db>(
+    current: &RuntimeClass<'db>,
+    desired: &RuntimeClass<'db>,
+) -> Option<RuntimeClass<'db>> {
+    let (
+        RuntimeClass::RawAddr {
+            space,
+            target: raw_target,
+        },
+        RuntimeClass::Ref {
+            pointee,
+            kind,
+            view: RefView::Whole,
+        },
+    ) = (current, desired)
+    else {
+        let (
+            RuntimeClass::Ref {
+                pointee,
+                kind,
+                view: RefView::Whole,
+            },
+            RuntimeClass::RawAddr {
+                space,
+                target: raw_target,
+            },
+        ) = (current, desired)
+        else {
+            return None;
+        };
+        let target = raw_addr_join_target(*raw_target, pointee.aggregate_layout())?;
+        return Some(RuntimeClass::RawAddr {
+            space: preferred_address_space(ref_kind_address_space(kind), *space),
+            target,
+        });
+    };
+    let target = raw_addr_join_target(*raw_target, pointee.aggregate_layout())?;
+    Some(RuntimeClass::RawAddr {
+        space: preferred_address_space(*space, ref_kind_address_space(kind)),
+        target,
+    })
+}
+
+fn raw_addr_join_target<'db>(
+    raw_target: Option<LayoutId<'db>>,
+    ref_target: Option<LayoutId<'db>>,
+) -> Option<Option<LayoutId<'db>>> {
+    match (raw_target, ref_target) {
+        (Some(raw), Some(ref_)) if raw != ref_ => None,
+        (Some(raw), _) => Some(Some(raw)),
+        (None, target) => Some(target),
+    }
 }
 
 fn push_materialized_join_candidates<'db>(

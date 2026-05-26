@@ -33,6 +33,7 @@ completions:
   - Helper (Struct) [use shadow_test::Helper [Helper]] {+0:use shadow_test::Helper}
   - IntDowncast (Interface)
   - Log (Interface)
+  - MemArray (Struct)
   - MsgVariant (Interface)
   - None (EnumMember)
   - Ok (EnumMember)
@@ -46,12 +47,20 @@ completions:
   - StorageMap (Struct)
   - Text (Class)
   - Vec (Class)
+  - addr (Function) -> "addr(${1:ptr})$0" [fn addr(ptr: *<T>) -> u256]
   - another_func_with_args (Function) -> "another_func_with_args(${1:x}, ${2:y})$0" [fn another_func_with_args(x: i32, y: i32) -> i32]
+  - as_bytes (Function) -> "as_bytes(${1:ptr})$0" [fn as_bytes(ptr: *<T>) -> *<u8>]
+  - assert (Function) -> "assert(${1:b})$0" [fn assert(b: bool)]
+  - cast (Function) -> "cast(${1:ptr})$0" [fn cast(ptr: *<T>) -> *<U>]
+  - from_addr (Function) -> "from_addr(${1:addr})$0" [fn from_addr(addr: u256) -> *<T>]
   - func_with_args (Function) -> "func_with_args(${1:x}, ${2:y})$0" [use utils::func_with_args [fn func_with_args(x: i32, y: i32) -> i32]] {+0:use utils::func_with_args}
   - help (Function) -> "help()$0" [use utils::help [fn help() -> i32]] {+0:use utils::help}
   - helper_func (Function) -> "helper_func()$0" [use utils::helper_func [fn helper_func() -> i32]] {+0:use utils::helper_func}
   - import_test (Module) -> "import_test::"
   - needs_import (Function) -> "needs_import()$0" [use import_test::needs_import [fn needs_import()]] {+0:use import_test::needs_import}
+  - null (Function) -> "null()$0" [fn null() -> *<T>]
+  - offset (Function) -> "offset(${1:ptr}, ${2:count})$0" [fn offset(ptr: *<T>, count: u256) -> *<T>]
+  - offset_bytes (Function) -> "offset_bytes(${1:ptr}, ${2:offset})$0" [fn offset_bytes(ptr: *<T>, offset: u256) -> *<T>]
   - other_stuff (Module) -> "other_stuff::"
   - panic (Function) -> "panic()$0" [fn panic() -> !]
   - revert (Function) -> "revert(${1:value})$0" [fn revert(value: T) -> !]
@@ -95,6 +104,7 @@ completions:
   - Helpable (Interface) [use utils::Helpable [Helpable]] {+0:use utils::Helpable}
   - Helper (Struct) [use utils::Helper [Helper]] {+0:use utils::Helper}
   - Helper (Struct) [use shadow_test::Helper [Helper]] {+0:use shadow_test::Helper}
+  - MemArray (Struct)
   - Option (Enum)
   - OtherThing (Struct) [use other_stuff::OtherThing [OtherThing]] {+0:use other_stuff::OtherThing}
   - Panic (Struct)
@@ -116,11 +126,19 @@ completions:
   - None (EnumMember)
   - Ok (EnumMember)
   - Some (EnumMember)
+  - addr (Function) -> "addr(${1:ptr})$0" [fn addr(ptr: *<T>) -> u256]
   - another_func_with_args (Function) -> "another_func_with_args(${1:x}, ${2:y})$0" [fn another_func_with_args(x: i32, y: i32) -> i32]
+  - as_bytes (Function) -> "as_bytes(${1:ptr})$0" [fn as_bytes(ptr: *<T>) -> *<u8>]
+  - assert (Function) -> "assert(${1:b})$0" [fn assert(b: bool)]
+  - cast (Function) -> "cast(${1:ptr})$0" [fn cast(ptr: *<T>) -> *<U>]
+  - from_addr (Function) -> "from_addr(${1:addr})$0" [fn from_addr(addr: u256) -> *<T>]
   - func_with_args (Function) -> "func_with_args(${1:x}, ${2:y})$0" [use utils::func_with_args [fn func_with_args(x: i32, y: i32) -> i32]] {+0:use utils::func_with_args}
   - help (Function) -> "help()$0" [use utils::help [fn help() -> i32]] {+0:use utils::help}
   - helper_func (Function) -> "helper_func()$0" [use utils::helper_func [fn helper_func() -> i32]] {+0:use utils::helper_func}
   - needs_import (Function) -> "needs_import()$0" [use import_test::needs_import [fn needs_import()]] {+0:use import_test::needs_import}
+  - null (Function) -> "null()$0" [fn null() -> *<T>]
+  - offset (Function) -> "offset(${1:ptr}, ${2:count})$0" [fn offset(ptr: *<T>, count: u256) -> *<T>]
+  - offset_bytes (Function) -> "offset_bytes(${1:ptr}, ${2:offset})$0" [fn offset_bytes(ptr: *<T>, offset: u256) -> *<T>]
   - panic (Function) -> "panic()$0" [fn panic() -> !]
   - result (Variable) [result: _]
   - revert (Function) -> "revert(${1:value})$0" [fn revert(value: T) -> !]
@@ -160,6 +178,7 @@ completions:
   - Helpable (Interface) [use utils::Helpable [Helpable]] {+0:use utils::Helpable}
   - Helper (Struct) [use utils::Helper [Helper]] {+0:use utils::Helper}
   - Helper (Struct) [use shadow_test::Helper [Helper]] {+0:use shadow_test::Helper}
+  - MemArray (Struct)
   - Option (Enum)
   - OtherThing (Struct) [use other_stuff::OtherThing [OtherThing]] {+0:use other_stuff::OtherThing}
   - Panic (Struct)
@@ -181,12 +200,20 @@ completions:
   - None (EnumMember)
   - Ok (EnumMember)
   - Some (EnumMember)
+  - addr (Function) -> "addr(${1:ptr})$0" [fn addr(ptr: *<T>) -> u256]
   - another_func_with_args (Function) -> "another_func_with_args(${1:x}, ${2:y})$0" [fn another_func_with_args(x: i32, y: i32) -> i32]
+  - as_bytes (Function) -> "as_bytes(${1:ptr})$0" [fn as_bytes(ptr: *<T>) -> *<u8>]
+  - assert (Function) -> "assert(${1:b})$0" [fn assert(b: bool)]
+  - cast (Function) -> "cast(${1:ptr})$0" [fn cast(ptr: *<T>) -> *<U>]
+  - from_addr (Function) -> "from_addr(${1:addr})$0" [fn from_addr(addr: u256) -> *<T>]
   - func_with_args (Function) -> "func_with_args(${1:x}, ${2:y})$0" [use utils::func_with_args [fn func_with_args(x: i32, y: i32) -> i32]] {+0:use utils::func_with_args}
   - help (Function) -> "help()$0" [use utils::help [fn help() -> i32]] {+0:use utils::help}
   - helper_func (Function) -> "helper_func()$0" [use utils::helper_func [fn helper_func() -> i32]] {+0:use utils::helper_func}
   - local_var (Variable) [local_var: {integer}]
   - needs_import (Function) -> "needs_import()$0" [use import_test::needs_import [fn needs_import()]] {+0:use import_test::needs_import}
+  - null (Function) -> "null()$0" [fn null() -> *<T>]
+  - offset (Function) -> "offset(${1:ptr}, ${2:count})$0" [fn offset(ptr: *<T>, count: u256) -> *<T>]
+  - offset_bytes (Function) -> "offset_bytes(${1:ptr}, ${2:offset})$0" [fn offset_bytes(ptr: *<T>, offset: u256) -> *<T>]
   - panic (Function) -> "panic()$0" [fn panic() -> !]
   - param (Variable) [param: i32]
   - revert (Function) -> "revert(${1:value})$0" [fn revert(value: T) -> !]
@@ -213,6 +240,7 @@ completions:
   - Bytes (Struct)
   - Evm (Struct)
   - Helper (Struct)
+  - MemArray (Struct)
   - Option (Enum)
   - OtherThing (Struct) [use other_stuff::OtherThing [OtherThing]] {+82:use other_stuff::OtherThing}
   - Panic (Struct)
@@ -236,6 +264,7 @@ completions:
   - Helpable (Interface) [use utils::Helpable [Helpable]] {+104:use utils::Helpable}
   - Helper (Struct) [use utils::Helper [Helper]] {+104:use utils::Helper}
   - Helper (Struct) [use shadow_test::Helper [Helper]] {+104:use shadow_test::Helper}
+  - MemArray (Struct)
   - Option (Enum)
   - OtherThing (Struct) [use other_stuff::OtherThing [OtherThing]] {+104:use other_stuff::OtherThing}
   - Panic (Struct)

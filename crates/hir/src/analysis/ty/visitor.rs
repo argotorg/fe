@@ -308,9 +308,9 @@ impl<'db> TyVisitable<'db> for PlaceProjection<'db> {
         V: TyVisitor<'db> + ?Sized,
     {
         match self {
-            PlaceProjection::Field { result_ty, .. } | PlaceProjection::Index { result_ty, .. } => {
-                result_ty.visit_with(visitor)
-            }
+            PlaceProjection::Deref { result_ty }
+            | PlaceProjection::Field { result_ty, .. }
+            | PlaceProjection::Index { result_ty, .. } => result_ty.visit_with(visitor),
         }
     }
 }

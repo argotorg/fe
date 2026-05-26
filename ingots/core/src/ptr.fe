@@ -1,0 +1,159 @@
+use super::intrinsic::size_of
+use super::marker::Copy
+use super::ops::{Index, IndexMut}
+use super::panic
+
+/// Dynamic allocation in linear memory.
+///
+/// This is a compiler intrinsic: backend-specific lowering is handled in codegen.
+extern {
+    /// Allocates `size` bytes and returns a pointer to the first byte.
+    pub fn alloc_raw(_ size: u256) -> *u8
+
+    fn zero_mem(_ ptr: *u8, _ len: u256)
+}
+
+/// A dynamically sized array in linear memory.
+pub struct MemArray<T> {
+    pub ptr: *T,
+    pub len: u256,
+}
+
+impl<T> Copy for *T {}
+impl<T> Copy for MemArray<T> {}
+
+impl<T> MemArray<T> {
+    #[arithmetic(unchecked)]
+    pub fn new_uninit(_ len: u256) -> Self {
+        Self::from_raw_parts(ptr: alloc_raw(len * size_of<T>()) as *T, len: len)
+    }
+
+    pub fn new_zeroed(_ len: u256) -> Self {
+        let array = Self::new_uninit(len)
+        array.zero()
+        array
+    }
+
+    pub fn from_raw_parts(ptr: *T, len: u256) -> Self {
+        Self { ptr, len }
+    }
+
+    pub fn byte_len(self) -> u256 {
+        self.len * size_of<T>()
+    }
+
+    pub fn as_bytes(self) -> MemArray<u8> {
+        MemArray {
+            ptr: self.ptr as *u8,
+            len: self.byte_len(),
+        }
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.len == 0
+    }
+
+    pub fn ptr_at(self, _ index: usize) -> *T {
+        elem(self.ptr, index)
+    }
+
+    pub fn zero(self) {
+        zero_bytes(self.ptr as *u8, self.byte_len())
+    }
+}
+
+pub fn addr<T>(_ ptr: *T) -> u256 {
+    ptr as u256
+}
+
+pub fn from_addr<T>(_ addr: u256) -> *T {
+    addr as *T
+}
+
+pub fn null<T>() -> *T {
+    from_addr(0)
+}
+
+pub fn cast<T, U>(_ ptr: *T) -> *U {
+    ptr as *U
+}
+
+#[arithmetic(unchecked)]
+pub fn offset_bytes<T>(_ ptr: *T, _ offset: u256) -> *T {
+    (addr(ptr) + offset) as *T
+}
+
+#[arithmetic(unchecked)]
+pub fn offset<T>(_ ptr: *T, _ count: u256) -> *T {
+    offset_bytes(ptr, count * size_of<T>())
+}
+
+pub fn as_bytes<T>(_ ptr: *T) -> *u8 {
+    ptr as *u8
+}
+
+pub fn alloc<T>() -> *T {
+    alloc_raw(size_of<T>()) as *T
+}
+
+pub fn alloc_bytes(_ len: u256) -> *u8 {
+    alloc_raw(len)
+}
+
+pub fn alloc_array<T>(_ len: u256) -> MemArray<T> {
+    MemArray::new_uninit(len)
+}
+
+pub fn zero_bytes(_ ptr: *u8, _ len: u256) {
+    zero_mem(ptr, len)
+}
+
+fn array_elem<T, const N: usize>(_ ptr: *[T; N], _ index: usize) -> *T {
+    if index >= N {
+        panic()
+    }
+    elem(cast<[T; N], T>(ptr), index)
+}
+
+fn mem_array_elem<T>(_ array: MemArray<T>, _ index: usize) -> *T {
+    if index as u256 >= array.len {
+        panic()
+    }
+    elem(array.ptr, index)
+}
+
+fn elem<T>(_ ptr: *T, _ index: usize) -> *T {
+    offset(ptr, index as u256)
+}
+
+impl<T, const N: usize> Index<usize> for *[T; N] {
+    type Output = T
+
+    fn index(self, _ index: usize) -> T {
+        *array_elem(self, index)
+    }
+}
+
+impl<T, const N: usize> IndexMut<usize> for *[T; N] {
+    type Output = T
+
+    fn index_mut(self, _ index: usize) -> mut T {
+        mut *array_elem(self, index)
+    }
+}
+
+impl<T> Index<usize> for MemArray<T> {
+    type Output = T
+
+    fn index(self, _ index: usize) -> T {
+        *mem_array_elem(self, index)
+    }
+}
+
+impl<T> IndexMut<usize> for MemArray<T> {
+    type Output = T
+
+    fn index_mut(self, _ index: usize) -> mut T {
+        mut *mem_array_elem(self, index)
+    }
+}

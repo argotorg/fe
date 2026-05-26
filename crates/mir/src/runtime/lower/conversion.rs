@@ -336,6 +336,12 @@ impl<'db> RuntimeConversionPlanner<'db> {
                 steps.push(RuntimeConversionStep::RetagRef { class: target });
                 Ok(())
             }
+            (RuntimeClass::RawAddr { .. }, RuntimeClass::RawAddr { .. })
+                if source.shares_runtime_rep_with(self.db, &target) =>
+            {
+                steps.push(RuntimeConversionStep::UseAs { class: target });
+                Ok(())
+            }
             (
                 RuntimeClass::Ref {
                     pointee,
@@ -911,6 +917,31 @@ mod tests {
                 space: AddressSpaceKind::Storage,
                 layout,
             }]
+        );
+    }
+
+    #[test]
+    fn raw_address_retag_preserves_same_space_pointer_value() {
+        let db = DriverDataBase::default();
+        let layout = test_struct_layout(&db);
+        let target = RuntimeClass::RawAddr {
+            space: AddressSpaceKind::Memory,
+            target: None,
+        };
+
+        let plan = RuntimeConversionPlanner::plan(
+            &db,
+            RuntimeClass::RawAddr {
+                space: AddressSpaceKind::Memory,
+                target: Some(layout),
+            },
+            target.clone(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            plan.steps.as_ref(),
+            &[RuntimeConversionStep::UseAs { class: target }]
         );
     }
 }

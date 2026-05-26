@@ -5,6 +5,19 @@ input_file: crates/codegen/tests/fixtures/alloc_self_assign.fe
 ---
 target = "evm-ethereum-osaka"
 
+func private %alloc(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.*i8 = evm_malloc v2;
+        v4.i256 = ptr_to_int v3 i256;
+        return v4;
+}
+
 func private %bump_self_assign(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;
@@ -14,11 +27,10 @@ func private %bump_self_assign(v0.i256) -> i256 {
 
     block1:
         v3.i256 = mload v1 i256;
-        v4.*i8 = evm_malloc v3;
-        v5.i256 = ptr_to_int v4 i256;
-        mstore v2 v5 i256;
-        v6.i256 = mload v2 i256;
-        return v6;
+        v4.i256 = call %alloc v3;
+        mstore v2 v4 i256;
+        v5.i256 = mload v2 i256;
+        return v5;
 }
 
 func private %main() -> i256 {

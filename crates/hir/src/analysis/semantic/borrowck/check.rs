@@ -12,7 +12,10 @@ use crate::{
             SBlockId, SemOrigin, SemanticInstance, get_or_build_semantic_instance,
             identity_semantic_instance_key,
         },
-        ty::{ty_check::BodyOwner, ty_def::BorrowKind},
+        ty::{
+            ty_check::BodyOwner,
+            ty_def::{BorrowKind, TyId},
+        },
     },
     hir_def::{Body, Expr, FuncParamMode, ItemKind, Partial, TopLevelMod},
     projection::{IndexSource, Projection},
@@ -634,7 +637,17 @@ impl<'db> Borrowck<'db> {
             for stmt in &block.stmts {
                 self.canon().apply_stmt_state(&mut state, stmt);
             }
-            for target in self.canon().borrow_local_targets(&state, value.local) {
+            let targets = self.canon().borrow_local_targets(&state, value.local);
+            if targets.is_empty() {
+                return Err(self.internal_diag(
+                    block.terminator.origin,
+                    format!(
+                        "borrow return local has no tracked loan targets while computing summary: local=%{}",
+                        value.local.index()
+                    ),
+                ));
+            }
+            for target in targets {
                 for proj in target.proj.iter() {
                     if matches!(proj, Projection::Index(IndexSource::Dynamic(_))) {
                         return Err(self.invalid_return_diag(
@@ -660,6 +673,23 @@ impl<'db> Borrowck<'db> {
                         ));
                     }
                     BorrowRoot::Local(local) => {
+                        if self
+                            .body
+                            .local(*local)
+                            .is_some_and(|local| local.ty.as_ptr(self.db).is_some())
+                            && matches!(target.proj.iter().next(), Some(Projection::Deref))
+                        {
+                            if let Some(input) = self.first_pointer_param_input() {
+                                let transform = BorrowTransform {
+                                    input,
+                                    proj: target.proj.clone(),
+                                };
+                                if !out.contains(&transform) {
+                                    out.push(transform);
+                                }
+                            }
+                            continue;
+                        }
                         let name = self.pretty_local_name(*local);
                         return Err(self.invalid_return_diag(
                             block.terminator.origin,
@@ -670,6 +700,28 @@ impl<'db> Borrowck<'db> {
             }
         }
         Ok(out)
+    }
+
+    fn first_pointer_param_input(&self) -> Option<BorrowInputRef> {
+        self.body.borrow_roots.iter().find_map(|root| {
+            let NBorrowRoot::Param {
+                param_idx, local, ..
+            } = root
+            else {
+                return None;
+            };
+            self.body
+                .local(*local)
+                .is_some_and(|local| self.ty_is_pointer_or_borrowed_pointer(local.ty))
+                .then_some(BorrowInputRef::Param(*param_idx))
+        })
+    }
+
+    fn ty_is_pointer_or_borrowed_pointer(&self, ty: TyId<'db>) -> bool {
+        ty.as_ptr(self.db).is_some()
+            || ty
+                .as_borrow(self.db)
+                .is_some_and(|(_, inner)| inner.as_ptr(self.db).is_some())
     }
 
     fn effective_loans(

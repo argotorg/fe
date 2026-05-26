@@ -1,10 +1,22 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 402
 expression: output
 input_file: crates/codegen/tests/fixtures/code_region_qualified.fe
 ---
 target = "evm-ethereum-osaka"
+
+func private %alloc(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.*i8 = evm_malloc v2;
+        v4.i256 = ptr_to_int v3 i256;
+        return v4;
+}
 
 func private %codecopy(v0.i256, v1.i256, v2.i256) {
     block0:
@@ -31,10 +43,9 @@ func private %init() {
     block1:
         v0.i256 = sym_size &__Foo_runtime;
         v1.i256 = sym_addr &__Foo_runtime;
-        v2.*i8 = evm_malloc v0;
-        v3.i256 = ptr_to_int v2 i256;
-        call %codecopy v3 v1 v0;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_cf61_0 v3 v0;
+        v2.i256 = call %alloc v0;
+        call %codecopy v2 v1 v0;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_cf61_0 v2 v0;
         unreachable;
 }
 

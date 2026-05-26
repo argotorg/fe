@@ -30,9 +30,9 @@ impl core::abi::Encode<std::abi::Sol> for InsufficientBalance {
     fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {
         let mut __tail = e.base() + <Self as core::abi::AbiSize>::HEAD_SIZE
         let __field_0 = self.balance
-        core::abi::encode_field<std::abi::Sol, u256, E>(__field_0, e, mut __tail)
+        __tail = core::abi::encode_field<std::abi::Sol, u256, E>(__field_0, e, __tail)
         let __field_1 = self.required
-        core::abi::encode_field<std::abi::Sol, u256, E>(__field_1, e, mut __tail)
+        __tail = core::abi::encode_field<std::abi::Sol, u256, E>(__field_1, e, __tail)
     }
 
     fn encode_to_ptr(own self, _ ptr: u256) {

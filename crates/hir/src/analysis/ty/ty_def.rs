@@ -259,6 +259,16 @@ impl<'db> TyId<'db> {
         Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::Ptr)))
     }
 
+    pub fn ptr_to(db: &'db dyn HirAnalysisDb, inner: TyId<'db>) -> TyId<'db> {
+        Self::app(db, Self::ptr(db), inner)
+    }
+
+    pub fn as_ptr(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
+        let (base, args) = self.decompose_ty_app(db);
+        let inner = args.first().copied()?;
+        matches!(base.data(db), TyData::TyBase(TyBase::Prim(PrimTy::Ptr))).then_some(inner)
+    }
+
     pub fn borrow_mut_of(db: &'db dyn HirAnalysisDb, inner: TyId<'db>) -> TyId<'db> {
         let ctor = Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::BorrowMut)));
         Self::app(db, ctor, inner)
@@ -316,6 +326,10 @@ impl<'db> TyId<'db> {
 
     pub fn bool(db: &'db dyn HirAnalysisDb) -> Self {
         Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::Bool)))
+    }
+
+    pub fn u8(db: &'db dyn HirAnalysisDb) -> Self {
+        Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U8)))
     }
 
     pub fn u256(db: &'db dyn HirAnalysisDb) -> Self {
@@ -1059,6 +1073,41 @@ pub fn strip_derived_adt_layout_args<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'
     }
 
     ty.fold_with(db, &mut StripDerivedAdtLayoutArgs)
+}
+
+pub fn strip_adt_layout_args<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+    struct StripAdtLayoutArgs;
+
+    impl<'db> TyFolder<'db> for StripAdtLayoutArgs {
+        fn fold_ty_app(
+            &mut self,
+            db: &'db dyn HirAnalysisDb,
+            abs: TyId<'db>,
+            arg: TyId<'db>,
+        ) -> TyId<'db> {
+            TyId::new(db, TyData::TyApp(abs, arg))
+        }
+
+        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+            let ty = ty.super_fold_with(db, self);
+            let (base, args) = ty.decompose_ty_app(db);
+            if args.is_empty() {
+                return ty;
+            }
+
+            let retained_args = match base.data(db) {
+                TyData::TyBase(TyBase::Adt(adt_def)) => {
+                    let explicit_len = adt_def.params(db).len();
+                    &args[..explicit_len.min(args.len())]
+                }
+                _ => args,
+            };
+
+            TyId::foldl(db, base, retained_args)
+        }
+    }
+
+    ty.fold_with(db, &mut StripAdtLayoutArgs)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

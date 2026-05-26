@@ -411,6 +411,9 @@ impl<'db> TyFoldable<'db> for PlaceProjection<'db> {
         F: TyFolder<'db>,
     {
         match self {
+            PlaceProjection::Deref { result_ty } => PlaceProjection::Deref {
+                result_ty: result_ty.fold_with(db, folder),
+            },
             PlaceProjection::Field { index, result_ty } => PlaceProjection::Field {
                 index,
                 result_ty: result_ty.fold_with(db, folder),
@@ -479,6 +482,15 @@ impl<'db> AssocTySubst<'db> {
     pub fn new(trait_inst: TraitInstId<'db>) -> Self {
         Self { trait_inst }
     }
+
+    fn matches_trait_inst_self(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        trait_inst: TraitInstId<'db>,
+    ) -> bool {
+        trait_inst.def(db) == self.trait_inst.def(db)
+            && trait_inst.self_ty(db) == self.trait_inst.self_ty(db)
+    }
 }
 
 impl<'db> TyFolder<'db> for AssocTySubst<'db> {
@@ -508,14 +520,14 @@ impl<'db> TyFolder<'db> for AssocTySubst<'db> {
                 // First fold the trait instance to handle any Self substitutions
                 let folded_trait = assoc_ty.trait_.fold_with(db, self);
 
-                // Check if this associated type belongs to our trait instance
-                if assoc_ty.trait_.def(db) == self.trait_inst.def(db) {
-                    // Check if we have a binding for this associated type
-                    if let Some(&bound_ty) =
+                // Check if this associated type belongs to this exact trait instance.
+                // Matching only by trait definition would incorrectly rewrite nested
+                // projections like `T::Foo` while substituting `Self::Foo`.
+                if self.matches_trait_inst_self(db, folded_trait)
+                    && let Some(&bound_ty) =
                         self.trait_inst.assoc_type_bindings(db).get(&assoc_ty.name)
-                    {
-                        return bound_ty.fold_with(db, self);
-                    }
+                {
+                    return bound_ty.fold_with(db, self);
                 }
 
                 // If the trait instance changed due to Self substitution, create a new associated type

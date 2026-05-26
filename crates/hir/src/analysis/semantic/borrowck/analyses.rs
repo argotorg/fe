@@ -11,12 +11,15 @@ use crate::analysis::{
         borrowck::ir::{NExpr, NSStmtKind},
         get_or_build_semantic_instance,
     },
+    ty::adt_def::AdtRef,
 };
+use crate::projection::Projection;
+use common::ingot::IngotKind;
 
 use super::{
     canon::{BorrowCanonCx, CanonPlace, CfgAdjacency, Loan, LoanId, MovedPlaces, State},
     check::{Borrowck, provisional_borrow_summary_voucher, semantic_borrow_summary_voucher},
-    ir::{BorrowInputRef, NormalizedSemanticBody, SemanticBorrowDiagnostic},
+    ir::{BorrowInputRef, NSProjectionPath, NormalizedSemanticBody, SemanticBorrowDiagnostic},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,8 +119,16 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
                     }
                 }?;
                 let Some(summary) = summary else {
-                    return Ok(false);
+                    return Ok(self
+                        .extend_pointer_return_borrow(loans, state, loan_id, args)
+                        .unwrap_or(false));
                 };
+                if summary.is_empty()
+                    && let Some(changed) =
+                        self.extend_pointer_return_borrow(loans, state, loan_id, args)
+                {
+                    return Ok(changed);
+                }
                 let (targets, parents) = {
                     let canon = self.canon(loans);
                     let mut targets = FxHashSet::default();
@@ -149,6 +160,66 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
             }
             _ => Ok(false),
         }
+    }
+
+    fn extend_pointer_return_borrow(
+        &self,
+        loans: &mut [Loan<'db>],
+        state: &State,
+        loan_id: LoanId,
+        args: &[super::ir::NOperand],
+    ) -> Option<bool> {
+        let canon = self.canon(loans);
+        let mut targets = FxHashSet::default();
+        let mut parents = FxHashSet::default();
+        for arg in args {
+            let arg_ty = self.body.local(arg.local)?.ty;
+            let Some(target_suffix) = self.pointer_carrier_target_suffix(arg_ty) else {
+                continue;
+            };
+            for base in canon.canonicalize_value_base(state, arg.local) {
+                targets.insert(CanonPlace {
+                    root: base.root,
+                    proj: base.proj.concat(&target_suffix),
+                });
+            }
+            parents.extend(canon.mut_loans_for_value(state, arg.local));
+            return Some(self.extend_loan(loans, loan_id, targets, parents));
+        }
+        None
+    }
+
+    fn pointer_carrier_target_suffix(
+        &self,
+        ty: crate::analysis::ty::ty_def::TyId<'db>,
+    ) -> Option<NSProjectionPath<'db>> {
+        let ty = ty.as_borrow(self.db).map_or(ty, |(_, inner)| inner);
+        if ty.as_ptr(self.db).is_some() {
+            return Some(NSProjectionPath::from_projection(Projection::Deref));
+        }
+        if !self.ty_is_core_mem_array(ty) {
+            return None;
+        }
+        let mut path = NSProjectionPath::from_projection(Projection::Field(0));
+        path.push(Projection::Deref);
+        Some(path)
+    }
+
+    fn ty_is_core_mem_array(&self, ty: crate::analysis::ty::ty_def::TyId<'db>) -> bool {
+        let Some(adt_def) = ty.adt_def(self.db) else {
+            return false;
+        };
+        let AdtRef::Struct(struct_) = adt_def.adt_ref(self.db) else {
+            return false;
+        };
+        struct_
+            .name(self.db)
+            .to_opt()
+            .is_some_and(|name| name.data(self.db) == "MemArray")
+            && ty
+                .base_ty(self.db)
+                .ingot(self.db)
+                .is_some_and(|ingot| ingot.kind(self.db) == IngotKind::Core)
     }
 }
 

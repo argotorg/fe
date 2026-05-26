@@ -15,3 +15,7 @@ struct Bar {
 pub fn foo3(bar: Bar) -> i32 {
     bar.v
 }
+
+pub fn foo4(ptr: *u256) -> u256 {
+    ptr.x
+}

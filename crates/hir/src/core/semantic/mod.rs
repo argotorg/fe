@@ -87,7 +87,9 @@ use crate::analysis::ty::trait_resolution::constraint::{
     collect_adt_constraints, collect_constraints, collect_func_decl_constraints,
     collect_func_def_constraints,
 };
-use crate::analysis::ty::ty_def::{TyBase, TyData, TyParam, strip_derived_adt_layout_args};
+use crate::analysis::ty::ty_def::{
+    TyBase, TyData, TyParam, strip_adt_layout_args, strip_derived_adt_layout_args,
+};
 use crate::analysis::ty::ty_lower::{GenericParamTypeSet, collect_generic_params};
 use crate::analysis::ty::visitor::{TyVisitable, TyVisitor, walk_ty};
 use crate::analysis::ty::{
@@ -95,10 +97,7 @@ use crate::analysis::ty::{
     provider::{
         ProviderSemantics, RootProviderRegistration, provider_semantics, registered_root_providers,
     },
-    trait_resolution::{
-        GoalSatisfiability, PredicateListId, TraitSolveCx, WellFormedness, check_ty_wf,
-        is_goal_satisfiable,
-    },
+    trait_resolution::{PredicateListId, Selection, TraitSolveCx, WellFormedness, check_ty_wf},
     ty_check::EffectParamSite,
     ty_contains_const_hole,
     ty_def::{InvalidCause, PrimTy, TyId, instantiate_adt_field_ty},
@@ -107,6 +106,7 @@ use crate::analysis::ty::{
         TyAlias, lower_callable_input_param_ty, lower_hir_ty, lower_opt_hir_ty, lower_type_alias,
         lower_type_alias_from_hir, resolve_callable_input_effect_key,
     },
+    unify::UnificationTable,
 };
 use crate::core::adt_lower::{lower_adt, lower_contract_fields};
 use common::indexmap::IndexMap;
@@ -1919,17 +1919,35 @@ impl<'db> ContractFieldEffectHandleCx<'db> {
         db: &'db dyn HirAnalysisDb,
         field_ty: TyId<'db>,
     ) -> (bool, TyId<'db>, TyId<'db>) {
-        let inst = TraitInstId::new(db, self.effect_handle, vec![field_ty], IndexMap::new());
-        match is_goal_satisfiable(db, TraitSolveCx::new(db, self.scope), inst) {
-            GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => {
-                (false, self.fallback_space, field_ty)
-            }
-            GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation(_) => {
+        let provider_ty = strip_adt_layout_args(db, field_ty);
+        let inst = TraitInstId::new(db, self.effect_handle, vec![provider_ty], IndexMap::new());
+        let solve_cx = TraitSolveCx::new(db, self.scope).with_assumptions(self.assumptions);
+        match solve_cx.select_impl(db, inst) {
+            Selection::NotFound | Selection::Ambiguous(_) => (false, self.fallback_space, field_ty),
+            Selection::Unique(implementor) => {
                 let normalize_assoc = |name, fallback, allow_holes| {
+                    let valid = |ty: &TyId<'db>| {
+                        !ty.has_invalid(db)
+                            && !ty.has_var(db)
+                            && !ty.has_param(db)
+                            && !matches!(ty.data(db), TyData::AssocTy(_) | TyData::QualifiedTy(_))
+                            && (allow_holes || !ty_contains_const_hole(db, *ty))
+                    };
+                    let normalize = |ty| normalize_ty(db, ty, self.scope, self.assumptions);
+
                     inst.assoc_ty(db, name)
-                        .map(|assoc| normalize_ty(db, assoc, self.scope, self.assumptions))
-                        .filter(|ty| {
-                            !ty.has_invalid(db) && (allow_holes || !ty_contains_const_hole(db, *ty))
+                        .map(normalize)
+                        .filter(valid)
+                        .or_else(|| {
+                            let mut table = UnificationTable::new(db);
+                            let implementor =
+                                table.instantiate_with_fresh_vars(Binder::bind(implementor));
+                            table.unify(implementor.trait_inst(db), inst).ok()?;
+                            implementor
+                                .assoc_ty(db, name)
+                                .map(|ty| ty.fold_with(db, &mut table))
+                                .map(normalize)
+                                .filter(valid)
                         })
                         .unwrap_or(fallback)
                 };

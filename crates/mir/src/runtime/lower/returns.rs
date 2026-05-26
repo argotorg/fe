@@ -23,7 +23,10 @@ use super::{
         AssignmentId, BodyEnv, BodyStaticFacts, InferClassCache, RuntimeVisibleReturnPlan,
         default_return_class, desired_runtime_return_plan, selected_visible_return_for_local,
     },
-    infer::{desired_runtime_value_carrier, merge_runtime_carrier, seed_root_provider_carriers},
+    infer::{
+        desired_runtime_value_carrier, merge_runtime_carrier, seed_direct_pointer_carriers,
+        seed_root_provider_carriers,
+    },
     interface::runtime_visible_binding_plans,
 };
 use crate::runtime::synthetic::runtime_synthetic_exit_behavior;
@@ -328,6 +331,7 @@ impl<'summary, 'lookup, 'db> ReturnSliceInferer<'summary, 'lookup, 'db> {
 
     fn run(mut self) -> Vec<RuntimeCarrier<'db>> {
         seed_root_provider_carriers(self.summary.env(self.db), &mut self.carriers);
+        seed_direct_pointer_carriers(self.summary.env(self.db), &mut self.carriers);
         solve_sparse(&mut self, &mut ());
         self.carriers
     }

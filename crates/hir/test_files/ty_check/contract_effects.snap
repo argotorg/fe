@@ -112,13 +112,13 @@ note:
    ┌─ contract_effects.fe:30:5
    │
 30 │     Deposit { amount: u256 } -> u256,
-   │     ^^^^^^^ () | Deposit | fn decode_field<Sol, u256, D> | fn dynamic_payload_size<u256> | fn encode_field<Sol, u256, E> | mut D | mut E | mut u256 | u256
+   │     ^^^^^^^ () | Deposit | fn decode_field<Sol, u256, D> | fn dynamic_payload_size<u256> | fn encode_field<Sol, u256, E> | mut D | mut E | u256
 
 note:
    ┌─ contract_effects.fe:33:5
    │
 33 │     Withdraw { amount: u256 } -> bool,
-   │     ^^^^^^^^ () | Withdraw | fn decode_field<Sol, u256, D> | fn dynamic_payload_size<u256> | fn encode_field<Sol, u256, E> | mut D | mut E | mut u256 | u256
+   │     ^^^^^^^^ () | Withdraw | fn decode_field<Sol, u256, D> | fn dynamic_payload_size<u256> | fn encode_field<Sol, u256, E> | mut D | mut E | u256
 
 note:
    ┌─ contract_effects.fe:36:5

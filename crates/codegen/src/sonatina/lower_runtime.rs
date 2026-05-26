@@ -36,8 +36,9 @@ use sonatina_ir::{
         data::{
             Alloca, ConstIndex, ConstLoad, ConstProj, ConstRef, EnumAssertVariant,
             EnumAssertVariantRef, EnumExtract, EnumGetTag, EnumIsVariant, EnumMake, EnumProj,
-            EnumSetTag, EnumTag, EnumWriteVariant, Mload, Mstore, ObjAlloc, ObjIndex, ObjInitConst,
-            ObjLoad, ObjProj, ObjStore, SymAddr, SymSize, SymbolRef,
+            EnumSetTag, EnumTag, EnumWriteVariant, ExtractValue, InsertValue, Memzero, Mload,
+            Mstore, ObjAlloc, ObjIndex, ObjInitConst, ObjLoad, ObjProj, ObjStore, SymAddr, SymSize,
+            SymbolRef,
         },
         evm::{
             EvmAddMod, EvmAddress, EvmBalance, EvmBaseFee, EvmBlobBaseFee, EvmBlobHash,
@@ -1115,7 +1116,21 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         dst: Option<RLocalId>,
     ) -> Result<Lowered<ValueId>, LowerError> {
         let value = match expr {
-            RExpr::Use(value) => self.local_value(*value)?,
+            RExpr::Use(value) => {
+                let lowered = self.local_value(*value)?;
+                if let Some(dst) = dst
+                    && let (Some(source), Some(target)) = (
+                        self.body.value_class(*value).cloned(),
+                        self.body.value_class(dst).cloned(),
+                    )
+                    && source != target
+                    && source.shares_runtime_rep_with(self.module.db, &target)
+                {
+                    self.retype_value_for_class(lowered, &source, &target)?
+                } else {
+                    lowered
+                }
+            }
             RExpr::ConstScalar(value) => self.fb.make_imm_value(
                 self.module
                     .immediate_for_const(value, dst.and_then(|dst| self.body.value_class(dst)))?,
@@ -1381,6 +1396,13 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let len = self.local_value(*len)?;
                 self.fb
                     .insert_inst_no_result(EvmMcopy::new(self.module.inst_set(), dst, src, len));
+                zero_for_type(&mut self.fb, Type::Unit)
+            }
+            RuntimeBuiltin::ZeroMem { dst, len } => {
+                let dst = self.local_value(*dst)?;
+                let len = self.local_value(*len)?;
+                self.fb
+                    .insert_inst_no_result(Memzero::new(self.module.inst_set(), dst, len));
                 zero_for_type(&mut self.fb, Type::Unit)
             }
             RuntimeBuiltin::Msize => self
@@ -3475,14 +3497,9 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 ..
             } => self.load_word(addr, space),
             RuntimeClass::RawAddr { .. } => self.load_word(addr, space),
-            RuntimeClass::AggregateValue { layout } => match space {
-                AddressSpaceKind::Memory => Err(LowerError::Unsupported(
-                    "memory aggregate values should be addressed through object refs".to_string(),
-                )),
-                AddressSpaceKind::Storage
-                | AddressSpaceKind::Transient
-                | AddressSpaceKind::Calldata => self.load_aggregate_from_ptr(addr, space, *layout),
-            },
+            RuntimeClass::AggregateValue { layout } => {
+                self.load_aggregate_from_ptr(addr, space, *layout)
+            }
             RuntimeClass::Ref { .. } => Err(LowerError::Unsupported(
                 "loading handle values from raw-address places is not supported".to_string(),
             )),
@@ -3515,12 +3532,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     }
                     let idx = self.index_value(idx as u64);
                     value = self.fb.insert_inst(
-                        sonatina_ir::inst::data::InsertValue::new(
-                            self.module.inst_set(),
-                            value,
-                            idx,
-                            field_value,
-                        ),
+                        InsertValue::new(self.module.inst_set(), value, idx, field_value),
                         ty,
                     );
                 }
@@ -3546,12 +3558,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     }
                     let idx = self.index_value(idx as u64);
                     value = self.fb.insert_inst(
-                        sonatina_ir::inst::data::InsertValue::new(
-                            self.module.inst_set(),
-                            value,
-                            idx,
-                            elem,
-                        ),
+                        InsertValue::new(self.module.inst_set(), value, idx, elem),
                         ty,
                     );
                 }
@@ -3724,10 +3731,230 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         let idx = self.index_value(idx as u64);
         self.fb
             .insert_inst(
-                sonatina_ir::inst::data::ExtractValue::new(self.module.inst_set(), value, idx),
+                ExtractValue::new(self.module.inst_set(), value, idx),
                 self.module.ty_for_class(class)?,
             )
             .pipe(Ok)
+    }
+
+    fn retype_value_for_class(
+        &mut self,
+        value: ValueId,
+        source: &RuntimeClass<'db>,
+        target: &RuntimeClass<'db>,
+    ) -> Result<ValueId, LowerError> {
+        if source == target {
+            return Ok(value);
+        }
+        if !source.shares_runtime_rep_with(self.module.db, target) {
+            return Err(LowerError::Internal(format!(
+                "cannot retype value between different runtime representations: source={source:?} target={target:?}"
+            )));
+        }
+        match (source, target) {
+            (
+                RuntimeClass::AggregateValue {
+                    layout: source_layout,
+                },
+                RuntimeClass::AggregateValue {
+                    layout: target_layout,
+                },
+            ) => self.retype_aggregate_value(value, *source_layout, *target_layout),
+            (
+                RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. },
+                RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. },
+            ) => {
+                let ty = self.module.ty_for_class(target)?;
+                self.coerce_value_to_ty(value, ty)
+            }
+            (RuntimeClass::Ref { .. }, RuntimeClass::Ref { .. }) => {
+                let target_ty = self.module.ty_for_class(target)?;
+                if self.fb.type_of(value) == target_ty {
+                    Ok(value)
+                } else {
+                    Err(LowerError::Internal(format!(
+                        "reference retyping is not representable in Sonatina IR: source={source:?} target={target:?}"
+                    )))
+                }
+            }
+            _ => Err(LowerError::Internal(format!(
+                "unsupported runtime class retype: source={source:?} target={target:?}"
+            ))),
+        }
+    }
+
+    fn retype_aggregate_value(
+        &mut self,
+        value: ValueId,
+        source_layout: LayoutId<'db>,
+        target_layout: LayoutId<'db>,
+    ) -> Result<ValueId, LowerError> {
+        let target_ty = self.module.ty_for_layout(target_layout)?;
+        if source_layout == target_layout || self.fb.type_of(value) == target_ty {
+            return Ok(value);
+        }
+        match (
+            source_layout.data(self.module.db),
+            target_layout.data(self.module.db),
+        ) {
+            (Layout::Struct(source), Layout::Struct(target)) => {
+                if source.fields.len() != target.fields.len() {
+                    return Err(LowerError::Internal(format!(
+                        "struct retype field count mismatch: source={source_layout:?} target={target_layout:?}"
+                    )));
+                }
+                let mut retyped = self.fb.make_undef_value(target_ty);
+                for (idx, (source_field, target_field)) in
+                    source.fields.iter().zip(target.fields.iter()).enumerate()
+                {
+                    let field = self.extract_aggregate_field(value, idx, source_field)?;
+                    let field = self.retype_value_for_class(field, source_field, target_field)?;
+                    let idx = self.index_value(idx as u64);
+                    retyped = self.fb.insert_inst(
+                        InsertValue::new(self.module.inst_set(), retyped, idx, field),
+                        target_ty,
+                    );
+                }
+                Ok(retyped)
+            }
+            (Layout::Array(source), Layout::Array(target)) => {
+                if source.len != target.len {
+                    return Err(LowerError::Internal(format!(
+                        "array retype length mismatch: source={source_layout:?} target={target_layout:?}"
+                    )));
+                }
+                let mut retyped = self.fb.make_undef_value(target_ty);
+                for idx in 0..source.len as usize {
+                    let elem = self.extract_aggregate_field(value, idx, &source.elem)?;
+                    let elem = self.retype_value_for_class(elem, &source.elem, &target.elem)?;
+                    let idx = self.index_value(idx as u64);
+                    retyped = self.fb.insert_inst(
+                        InsertValue::new(self.module.inst_set(), retyped, idx, elem),
+                        target_ty,
+                    );
+                }
+                Ok(retyped)
+            }
+            (Layout::Enum(source), Layout::Enum(target)) => {
+                self.retype_enum_value(value, source_layout, &source, target_layout, &target)
+            }
+            _ => Err(LowerError::Internal(format!(
+                "aggregate retype shape mismatch: source={source_layout:?} target={target_layout:?}"
+            ))),
+        }
+    }
+
+    fn retype_enum_value(
+        &mut self,
+        value: ValueId,
+        source_layout: LayoutId<'db>,
+        source: &mir::runtime::EnumLayout<'db>,
+        target_layout: LayoutId<'db>,
+        target: &mir::runtime::EnumLayout<'db>,
+    ) -> Result<ValueId, LowerError> {
+        if source.variants.len() != target.variants.len() {
+            return Err(LowerError::Internal(format!(
+                "enum retype variant count mismatch: source={source_layout:?} target={target_layout:?}"
+            )));
+        }
+        let target_ty = self.module.ty_for_layout(target_layout)?;
+        let source_ty = self.module.ty_for_layout(source_layout)?;
+        if source_ty == target_ty {
+            return Ok(value);
+        }
+
+        self.fb
+            .current_block()
+            .expect("enum retype requires a current block");
+        let tag = self.fb.insert_inst(
+            EnumTag::new(self.module.inst_set(), value),
+            self.module.enum_tag_ty(source_layout)?,
+        );
+        let done = self.fb.append_block();
+        let invalid = self.fb.append_block();
+        let mut cases = Vec::with_capacity(source.variants.len());
+        let mut blocks = Vec::with_capacity(source.variants.len());
+        for (idx, _) in source.variants.iter().enumerate() {
+            let block = self.fb.append_block();
+            cases.push((
+                self.fb
+                    .make_imm_value(self.module.enum_tag_immediate(source_layout, idx as u16)?),
+                block,
+            ));
+            blocks.push(block);
+        }
+        self.fb.insert_inst_no_result(BrTable::new(
+            self.module.inst_set(),
+            tag,
+            Some(invalid),
+            cases,
+        ));
+
+        let mut phi_args = Vec::with_capacity(blocks.len());
+        for (idx, block) in blocks.into_iter().enumerate() {
+            let source_fields = source.variants[idx].fields.as_ref();
+            let target_fields = target.variants[idx].fields.as_ref();
+            if source_fields.len() != target_fields.len() {
+                return Err(LowerError::Internal(format!(
+                    "enum retype field count mismatch: source={source_layout:?} target={target_layout:?} variant={idx}"
+                )));
+            }
+            self.fb.switch_to_block(block);
+            let source_variant = VariantId {
+                enum_layout: source_layout,
+                index: idx as u16,
+            };
+            let target_variant = VariantId {
+                enum_layout: target_layout,
+                index: idx as u16,
+            };
+            self.fb.insert_inst_no_result(EnumAssertVariant::new(
+                self.module.inst_set(),
+                value,
+                self.variant_ref(source_variant)?,
+            ));
+            let mut fields = SmallVec::<[ValueId; 2]>::new();
+            for (field_idx, (source_field, target_field)) in
+                source_fields.iter().zip(target_fields.iter()).enumerate()
+            {
+                let field_idx = self.index_value(field_idx as u64);
+                let field = self.fb.insert_inst(
+                    EnumExtract::new(
+                        self.module.inst_set(),
+                        value,
+                        self.variant_ref(source_variant)?,
+                        field_idx,
+                    ),
+                    self.module.ty_for_class(source_field)?,
+                );
+                fields.push(self.retype_value_for_class(field, source_field, target_field)?);
+            }
+            let retyped = self.fb.insert_inst(
+                EnumMake::new(
+                    self.module.inst_set(),
+                    target_ty,
+                    self.variant_ref(target_variant)?,
+                    fields,
+                ),
+                target_ty,
+            );
+            let pred = self
+                .fb
+                .current_block()
+                .expect("enum retype variant block should remain current");
+            self.fb
+                .insert_inst_no_result(Jump::new(self.module.inst_set(), done));
+            phi_args.push((retyped, pred));
+        }
+
+        self.fb.switch_to_block(invalid);
+        self.fb
+            .insert_inst_no_result(Unreachable::new(self.module.inst_set()));
+
+        self.fb.switch_to_block(done);
+        Ok(self
+            .fb
+            .insert_inst(Phi::new(self.module.inst_set(), phi_args), target_ty))
     }
 
     fn cast_scalar(&mut self, value: ValueId, ty: Type) -> Result<ValueId, LowerError> {
@@ -3834,7 +4061,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 self.fb
                     .insert_inst(Not::new(self.module.inst_set(), value), ty)
             }
-            UnOp::Plus | UnOp::Mut | UnOp::Ref => value,
+            UnOp::Plus | UnOp::Mut | UnOp::Ref | UnOp::Deref => value,
         })
     }
 

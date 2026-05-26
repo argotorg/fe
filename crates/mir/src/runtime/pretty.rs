@@ -650,6 +650,11 @@ fn format_builtin<'db>(db: &'db dyn MirDb, builtin: &RuntimeBuiltin<'db>) -> Str
             format_local_id(*src),
             format_local_id(*len)
         ),
+        RuntimeBuiltin::ZeroMem { dst, len } => format!(
+            "zero_mem {}, {}",
+            format_local_id(*dst),
+            format_local_id(*len)
+        ),
         RuntimeBuiltin::Msize => "msize".to_string(),
         RuntimeBuiltin::Sload { slot } => format!("sload {}", format_local_id(*slot)),
         RuntimeBuiltin::Sstore { slot, value } => {

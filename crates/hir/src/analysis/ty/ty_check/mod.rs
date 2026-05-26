@@ -2780,7 +2780,16 @@ impl<'db> TypedBody<'db> {
         let Partial::Present(expr_data) = expr_data else {
             return true;
         };
+        let body = self
+            .body
+            .expect("SMIR lowering blocker check requires a typed HIR body");
         let expr_ty = self.expr_ty(db, expr);
+        let is_pointer_deref = |expr: ExprId| {
+            matches!(
+                expr.data(db, body),
+                Partial::Present(Expr::Un(_, crate::hir_def::expr::UnOp::Deref))
+            )
+        };
 
         match expr_data {
             Expr::Path(_) => {
@@ -2798,11 +2807,19 @@ impl<'db> TypedBody<'db> {
                 expr_ty.has_invalid(db) && self.record_init_lowering(expr).is_none()
             }
             Expr::Un(inner, crate::hir_def::expr::UnOp::Mut | crate::hir_def::expr::UnOp::Ref) => {
-                expr_ty.has_invalid(db) && self.expr_place(*inner).is_none()
+                expr_ty.has_invalid(db)
+                    && self.expr_place(*inner).is_none()
+                    && !is_pointer_deref(*inner)
             }
-            Expr::Assign(dst, _) => self.expr_place(*dst).is_none(),
+            Expr::Assign(dst, _) => {
+                self.expr_place(*dst).is_none()
+                    && self.semantic_expr_lowering(*dst).is_none()
+                    && !is_pointer_deref(*dst)
+            }
             Expr::AugAssign(dst, _, _) => {
-                self.semantic_expr_lowering(expr).is_none() && self.expr_place(*dst).is_none()
+                self.semantic_expr_lowering(expr).is_none()
+                    && self.expr_place(*dst).is_none()
+                    && !is_pointer_deref(*dst)
             }
             Expr::Match(_, Partial::Absent) => true,
             Expr::Match(_, Partial::Present(arms)) => arms

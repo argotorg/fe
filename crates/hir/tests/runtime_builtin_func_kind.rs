@@ -14,8 +14,8 @@ fn classifies_core_and_std_runtime_builtins() {
     db.assert_no_diags(top_mod);
     let func = top_mod.all_funcs(&db)[0];
 
-    let alloc = resolve_lib_func_path(&db, func.scope(), "std::evm::mem::alloc")
-        .expect("failed to resolve std::evm::mem::alloc");
+    let alloc = resolve_lib_func_path(&db, func.scope(), "core::ptr::alloc_raw")
+        .expect("failed to resolve core::ptr::alloc_raw");
     let mload = resolve_lib_func_path(&db, func.scope(), "std::evm::ops::mload")
         .expect("failed to resolve std::evm::ops::mload");
     let panic = resolve_lib_func_path(&db, func.scope(), "core::panic")

@@ -7,6 +7,7 @@ pub use abi::{self, *}
 pub use message::MsgVariant
 pub use error::ErrorVariant
 pub use ops::{self, *}
+pub use ptr::{self, *}
 pub use bytes::{AsBytes, keccak}
 pub use string::{self, concat}
 pub use intrinsic::{contract_field_slot, size_of}

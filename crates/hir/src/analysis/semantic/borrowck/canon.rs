@@ -274,7 +274,7 @@ impl<'a, 'db> BorrowCanonCx<'a, 'db> {
                 proj: place.path.clone(),
             }])),
             NSPlaceRoot::CarrierDerefLocal(local) => {
-                let suffix = place.path.clone();
+                let suffix = self.carrier_deref_suffix(local, &place.path);
                 let mut out = FxHashSet::default();
                 let mut resolved = false;
                 for loan in state.loans_in(local) {
@@ -297,7 +297,10 @@ impl<'a, 'db> BorrowCanonCx<'a, 'db> {
                         });
                     } else if let Some(root) = root.and_then(|root| self.root_to_borrow_root(root))
                     {
-                        out.insert(CanonPlace { root, proj: suffix });
+                        out.insert(CanonPlace {
+                            root,
+                            proj: suffix.clone(),
+                        });
                     }
                 }
                 if out.is_empty() {
@@ -308,6 +311,24 @@ impl<'a, 'db> BorrowCanonCx<'a, 'db> {
                 }
                 Ok(out)
             }
+        }
+    }
+
+    fn carrier_deref_suffix(
+        &self,
+        local: SLocalId,
+        suffix: &NSProjectionPath<'db>,
+    ) -> NSProjectionPath<'db> {
+        if self
+            .body
+            .local(local)
+            .is_some_and(|local| local.ty.as_ptr(self.db).is_some())
+        {
+            let mut path = NSProjectionPath::from_projection(crate::projection::Projection::Deref);
+            path = path.concat(suffix);
+            path
+        } else {
+            suffix.clone()
         }
     }
 

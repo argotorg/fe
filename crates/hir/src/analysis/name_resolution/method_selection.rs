@@ -94,6 +94,33 @@ pub(crate) fn select_method_candidate<'db>(
     selector.select()
 }
 
+pub(crate) fn select_trait_method_candidates<'db>(
+    db: &'db dyn HirAnalysisDb,
+    receiver: &Canonicalized<'db, TyId<'db>>,
+    method_name: IdentId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    trait_: Trait<'db>,
+) -> Result<AmbiguousTraitMethods<'db>, MethodSelectionError<'db>> {
+    let receiver_ty = receiver.original();
+    if receiver_ty.is_ty_var(db) {
+        return Err(MethodSelectionError::ReceiverTypeMustBeKnown);
+    }
+
+    let candidates =
+        assemble_method_candidates(db, receiver, method_name, scope, assumptions, Some(trait_));
+
+    let selector = MethodSelector {
+        db,
+        receiver,
+        scope,
+        candidates,
+        assumptions,
+    };
+
+    selector.select_visible_trait_method_candidates()
+}
+
 fn assemble_method_candidates<'db>(
     db: &'db dyn HirAnalysisDb,
     receiver: &Canonicalized<'db, TyId<'db>>,
@@ -177,7 +204,7 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
             ];
             for ingot in search_ingots.into_iter().flatten() {
                 for &imp in impls_for_ty(self.db, ingot, self.receiver.canonical()) {
-                    self.insert_trait_method_cand(imp.skip_binder().trait_(self.db));
+                    self.insert_trait_method_cand(imp.skip_binder().trait_inst(self.db));
                 }
             }
         }
@@ -372,6 +399,68 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                     },
                 ))
             }
+        }
+    }
+
+    fn select_visible_trait_method_candidates(
+        &self,
+    ) -> Result<AmbiguousTraitMethods<'db>, MethodSelectionError<'db>> {
+        let traits = &self.candidates.traits;
+
+        if traits.len() == 1 {
+            let (inst, method) = traits.iter().next().unwrap();
+            return Ok(self.trait_method_candidates([(*inst, *method)]));
+        }
+
+        let available_traits = self.available_traits();
+        let visible_traits: Vec<_> = traits
+            .iter()
+            .copied()
+            .filter(|(inst, _method)| available_traits.contains(&inst.def(self.db)))
+            .collect();
+
+        match visible_traits.len() {
+            0 => {
+                if traits.is_empty() {
+                    Err(MethodSelectionError::NotFound)
+                } else {
+                    let traits = traits.iter().map(|(inst, _)| inst.def(self.db)).collect();
+                    Err(MethodSelectionError::InvisibleTraitMethod(traits))
+                }
+            }
+            _ => Ok(self.trait_method_candidates(visible_traits)),
+        }
+    }
+
+    fn trait_method_candidates(
+        &self,
+        traits: impl IntoIterator<Item = (TraitInstId<'db>, Func<'db>)>,
+    ) -> AmbiguousTraitMethods<'db> {
+        let mut selected = IndexMap::default();
+        let mut diagnostic_traits = ThinVec::new();
+        for (inst, method) in traits {
+            diagnostic_traits.push(inst);
+            match self.check_inst(inst, method) {
+                MethodCandidate::TraitMethod(cand) => {
+                    selected.insert(cand, true);
+                }
+                MethodCandidate::NeedsConfirmation(cand) => {
+                    selected.entry(cand).or_insert(false);
+                }
+                MethodCandidate::InherentMethod(_) => unreachable!(),
+            }
+        }
+
+        let candidates = selected
+            .into_iter()
+            .map(|(cand, confirmed)| AmbiguousTraitMethodCand {
+                cand,
+                needs_confirmation: !confirmed,
+            })
+            .collect();
+        AmbiguousTraitMethods {
+            candidates,
+            diagnostic_traits,
         }
     }
 

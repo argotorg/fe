@@ -4,7 +4,7 @@ use crate::{
         semantic::{FieldIndex, SPlace},
         ty::ty_def::TyId,
     },
-    hir_def::ExprId,
+    hir_def::{ExprId, Partial},
 };
 
 use super::body::SmirLowerCtxt;
@@ -15,6 +15,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     pub(super) fn lower_place(&mut self, expr: ExprId) -> SPlace<'db> {
+        if let Partial::Present(crate::hir_def::Expr::Un(inner, crate::hir_def::UnOp::Deref)) =
+            expr.data(self.db, self.body)
+        {
+            let ptr = self.lower_expr(*inner);
+            return SPlace::deref(ptr);
+        }
         let place = self
             .typed_body
             .expr_place(expr)
@@ -32,6 +38,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
 
         for projection in &source_place.projections {
             match *projection {
+                PlaceProjection::Deref { .. } => {
+                    place.push_deref();
+                }
                 PlaceProjection::Field { index, .. } => {
                     place.push_field(FieldIndex(index));
                 }

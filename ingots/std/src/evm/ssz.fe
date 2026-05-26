@@ -47,9 +47,11 @@
 /// or pre-merkleize sub-trees yourself. Variable-length lists are
 /// supported via `mix_in_length` on top of a fixed-arity merkleization.
 use core::abi::{Bytes, BytesView, MemoryInput}
+use core::ptr
 use super::effects::RawMem
-use super::mem
 use super::ops
+
+type ChunkPair = [u256; 2]
 
 /// Hash two adjacent SSZ chunks as `sha256(left || right)`.
 ///
@@ -59,10 +61,8 @@ use super::ops
 /// directly when building an incremental tree (the deposit contract's
 /// `branch[]` accumulator is the canonical example).
 pub fn hash_pair(left: u256, right: u256) -> u256 uses (mem: mut RawMem) {
-    let ptr = mem::alloc(64)
-    mem.mstore(addr: ptr, value: left)
-    mem.mstore(addr: ptr + 32, value: right)
-    sha256_64_to(ptr, ptr)
+    let scratch = alloc_pair(left, right)
+    hash_pair_buffer(scratch)
 }
 
 /// Pack a `uint64` SSZ basic value into a 32-byte chunk.
@@ -106,10 +106,8 @@ pub fn u64_chunk(_ value: u64) -> u256 {
 /// Note: the on-wire layout matches `u64_chunk` (LE in the top 8
 /// bytes of a word), wrapped with `len = 8` and `size = 64`.
 pub fn serialize_u64(_ value: u64) -> Bytes uses (mem: mut RawMem) {
-    let out: u256 = mem::alloc(64)
-    mem.mstore(addr: out, value: 8)
-    mem.mstore(addr: out + 32, value: u64_chunk(value))
-    Bytes { data: out, len: 8, size: 64 }
+    let out = alloc_pair(8, u64_chunk(value))
+    Bytes { data: pair_offset(out), len: 8, size: 64 }
 }
 
 /// Type-level tag for an SSZ `ByteVector[N]` (fixed-length byte
@@ -156,14 +154,12 @@ impl HashTreeRoot for ByteVector<48> {
     uses (mem: mut RawMem)
     {
         assert!(view.len == 48)
-        let ptr = mem::alloc(64)
-        mem.mstore(addr: ptr, value: view.word_at(0))
         // Word at offset 32 holds bytes 32..48 in its top 16 bytes
         // followed by 16 bytes of slack. Mask the slack to zero by
         // shifting the high 128 bits down and back up.
         let tail = view.word_at(32)
-        mem.mstore(addr: ptr + 32, value: (tail >> 128) << 128)
-        sha256_64_to(ptr, ptr)
+        let scratch = alloc_pair(view.word_at(0), (tail >> 128) << 128)
+        hash_pair_buffer(scratch)
     }
 }
 
@@ -192,16 +188,15 @@ impl HashTreeRoot for ByteVector<96> {
     {
         assert!(view.len == 96)
         let base = view.input.base + view.start
-        let ptr = mem::alloc(64)
-        let left = sha256_64_to(base, ptr)
+        let scratch = alloc_pair(0, 0)
+        let offset = pair_offset(scratch)
+        let left = sha256_64_to(base, offset)
 
-        mem.mstore(addr: ptr, value: view.word_at(64))
-        mem.mstore(addr: ptr + 32, value: 0)
-        let right = sha256_64_to(ptr, ptr)
+        write_pair(scratch, view.word_at(64), 0)
+        let right = hash_pair_buffer(scratch)
 
-        mem.mstore(addr: ptr, value: left)
-        mem.mstore(addr: ptr + 32, value: right)
-        sha256_64_to(ptr, ptr)
+        write_pair(scratch, left, right)
+        hash_pair_buffer(scratch)
     }
 }
 
@@ -389,23 +384,19 @@ pub fn mix_in_length(root: u256, len: u64) -> u256 uses (mem: mut RawMem) {
 fn merkleize4(_ a: u256, _ b: u256, _ c: u256, _ d: u256) -> u256
 uses (mem: mut RawMem)
 {
-    // ptr is a 64-byte scratch buffer reused across the three sha256
+    // scratch is a 64-byte typed buffer reused across the three sha256
     // calls: first to hash (a||b) → left, then (c||d) → right, then
     // (left||right) → root. sha256_64_to writes its 32-byte digest at
     // the same address it reads its 64-byte input from, so the buffer
     // can be reset between rounds with two stores.
-    let ptr = mem::alloc(64)
-    mem.mstore(addr: ptr, value: a)
-    mem.mstore(addr: ptr + 32, value: b)
-    let left = sha256_64_to(ptr, ptr)
+    let scratch = alloc_pair(a, b)
+    let left = hash_pair_buffer(scratch)
 
-    mem.mstore(addr: ptr, value: c)
-    mem.mstore(addr: ptr + 32, value: d)
-    let right = sha256_64_to(ptr, ptr)
+    write_pair(scratch, c, d)
+    let right = hash_pair_buffer(scratch)
 
-    mem.mstore(addr: ptr, value: left)
-    mem.mstore(addr: ptr + 32, value: right)
-    sha256_64_to(ptr, ptr)
+    write_pair(scratch, left, right)
+    hash_pair_buffer(scratch)
 }
 
 fn merkleize8(
@@ -432,6 +423,26 @@ uses (mem: mut RawMem)
         left: merkleize8(a, b, c, d, e, f, g, h),
         right: merkleize8(i, j, k, l, m, n, o, p),
     )
+}
+
+fn alloc_pair(_ left: u256, _ right: u256) -> *ChunkPair {
+    let scratch = ptr::alloc<ChunkPair>()
+    write_pair(scratch, left, right)
+    scratch
+}
+
+fn write_pair(_ scratch: *ChunkPair, _ left: u256, _ right: u256) {
+    scratch[0] = left
+    scratch[1] = right
+}
+
+fn pair_offset(_ scratch: *ChunkPair) -> u256 {
+    ptr::addr(ptr::as_bytes(scratch))
+}
+
+fn hash_pair_buffer(_ scratch: *ChunkPair) -> u256 {
+    let offset = pair_offset(scratch)
+    sha256_64_to(offset, offset)
 }
 
 // Private form of `crypto::sha256` for callers that already own a

@@ -1,0 +1,48 @@
+struct Data {
+    value: u256,
+    other: u256,
+}
+
+struct Holder {
+    data: *Data,
+}
+
+fn pointer_casts_and_offsets(raw: u256, data: *Data, bytes: *u8) -> u256 {
+    let typed_from_raw: *Data = raw as *Data
+    let raw_again: u256 = typed_from_raw as u256
+    let bytes_from_typed: *u8 = typed_from_raw as *u8
+    let typed_again: *Data = bytes_from_typed as *Data
+    let next: *Data = core::ptr::offset_bytes(typed_again, 32)
+    let prev: *Data = core::ptr::from_addr(core::ptr::addr(next) - 32)
+    let distance: u256 = core::ptr::addr(next) - core::ptr::addr(typed_again)
+    let raw_bytes: *u8 = core::ptr::null<u8>()
+
+    raw_again + distance + core::ptr::addr(prev) + core::ptr::addr(data) + core::ptr::addr(bytes) + core::ptr::addr(raw_bytes)
+}
+
+fn pointer_field_access(data: *Data) -> u256 {
+    data.value = 10
+    data.other = data.value + 3
+    data.value + data.other
+}
+
+fn pointer_tuple_field_access(pair: *(u256, u256)) -> u256 {
+    pair.0 = 4
+    pair.1 = pair.0 + 5
+    pair.0 + pair.1
+}
+
+fn nested_pointer_field_access(holder: Holder) -> u256 {
+    holder.data.value = 17
+    holder.data.other = holder.data.value + 2
+    holder.data.value + holder.data.other
+}
+
+fn mem_array_allocation() -> u256 {
+    let array = core::ptr::alloc_array<u256>(2)
+    array[0] = 3
+    array[1] = 5
+
+    let zeroed = core::ptr::MemArray<u256>::new_zeroed(1)
+    zeroed[0] + array[0] + array[1]
+}

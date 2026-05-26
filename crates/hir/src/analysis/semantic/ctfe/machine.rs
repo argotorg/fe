@@ -2532,9 +2532,9 @@ impl<'db> CtfeMachine<'db> {
                     -int - BigInt::one(),
                 )))
             }
-            UnOp::Mut | UnOp::Ref => Err(CtfeError::InvalidOperation {
+            UnOp::Mut | UnOp::Ref | UnOp::Deref => Err(CtfeError::InvalidOperation {
                 origin,
-                message: "unexpected borrow operator in CTFE unary evaluation".into(),
+                message: "unexpected place operator in CTFE unary evaluation".into(),
             }),
         }
     }
