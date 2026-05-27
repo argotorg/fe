@@ -1,0 +1,341 @@
+use std::evm::StoragePackedArray
+
+const U256_MAX: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+
+msg PackedMsg {
+    #[selector = 0x00000001]
+    Get8 { i: u256 } -> u256,
+
+    #[selector = 0x00000002]
+    Set8 { i: u256, v: u256 } -> u256,
+
+    #[selector = 0x00000003]
+    Get32 { i: u256 } -> u256,
+
+    #[selector = 0x00000004]
+    Set32 { i: u256, v: u256 } -> u256,
+
+    #[selector = 0x00000005]
+    Get1 { i: u256 } -> u256,
+
+    #[selector = 0x00000006]
+    Set1 { i: u256, v: u256 } -> u256,
+
+    // Returns the index if found, U256_MAX if not.
+    #[selector = 0x00000007]
+    Search8 { needle: u256, start: u256, end: u256 } -> u256,
+}
+
+struct PackedStore {
+    s8: StoragePackedArray<8>,
+    s32: StoragePackedArray<32>,
+    s1: StoragePackedArray<1>,
+}
+
+pub contract Packed {
+    mut store: PackedStore
+
+    init() uses (mut store) {}
+
+    recv PackedMsg {
+        Get8 { i } -> u256 uses (store) {
+            return store.s8.get(i)
+        }
+
+        Set8 { i, v } -> u256 uses (mut store) {
+            store.s8.set(i: i, value: v)
+            return 0
+        }
+
+        Get32 { i } -> u256 uses (store) {
+            return store.s32.get(i)
+        }
+
+        Set32 { i, v } -> u256 uses (mut store) {
+            store.s32.set(i: i, value: v)
+            return 0
+        }
+
+        Get1 { i } -> u256 uses (store) {
+            return store.s1.get(i)
+        }
+
+        Set1 { i, v } -> u256 uses (mut store) {
+            store.s1.set(i: i, value: v)
+            return 0
+        }
+
+        Search8 { needle, start, end } -> u256 uses (store) {
+            match store.s8.search(needle: needle, start: start, end: end) {
+                Option::Some(idx) => return idx
+                Option::None => return U256_MAX
+            }
+        }
+    }
+}
+
+// -- Tests -------------------------------------------------------------------
+
+#[test]
+fn test_initial_zero_and_roundtrip_8bit() uses (evm: mut Evm) {
+    let addr = evm.create2<Packed>(value: 0, args: (), salt: 0)
+
+    // Initially empty: every lane reads as 0.
+    let v: u256 = evm.call(
+        addr: addr, gas: 100000, value: 0,
+        message: PackedMsg::Get8 { i: 5 }
+    )
+    assert(v == 0)
+
+    // Write 0x2A at index 5 and read it back.
+    evm.call(
+        addr: addr, gas: 100000, value: 0,
+        message: PackedMsg::Set8 { i: 5, v: 0x2A }
+    )
+    let v: u256 = evm.call(
+        addr: addr, gas: 100000, value: 0,
+        message: PackedMsg::Get8 { i: 5 }
+    )
+    assert(v == 0x2A)
+}
+
+#[test]
+fn test_lane_isolation_within_slot() uses (evm: mut Evm) {
+    let addr = evm.create2<Packed>(value: 0, args: (), salt: 0)
+
+    // Indices 0..32 share slot 0 with 8-bit packing. Write three lanes
+    // in that slot and ensure all three round-trip without overwriting
+    // each other.
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set8 { i: 0, v: 0xAA })
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set8 { i: 1, v: 0xBB })
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set8 { i: 31, v: 0xCC })
+
+    let v0: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get8 { i: 0 })
+    let v1: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get8 { i: 1 })
+    let v31: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get8 { i: 31 })
+    assert(v0 == 0xAA)
+    assert(v1 == 0xBB)
+    assert(v31 == 0xCC)
+
+    // Overwrite the middle lane. The two siblings must remain unchanged —
+    // this catches mask bugs in the read-modify-write path.
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set8 { i: 1, v: 0x99 })
+    let v0: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get8 { i: 0 })
+    let v1: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get8 { i: 1 })
+    let v31: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get8 { i: 31 })
+    assert(v0 == 0xAA)
+    assert(v1 == 0x99)
+    assert(v31 == 0xCC)
+}
+
+#[test]
+fn test_slot_boundary() uses (evm: mut Evm) {
+    let addr = evm.create2<Packed>(value: 0, args: (), salt: 0)
+
+    // Index 31 is the last lane of slot 0; index 32 is the first lane of
+    // slot 1. They live in distinct storage slots — writes must not bleed.
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set8 { i: 31, v: 0xAA })
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set8 { i: 32, v: 0xBB })
+
+    let v31: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get8 { i: 31 })
+    let v32: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get8 { i: 32 })
+    let v33: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get8 { i: 33 })
+    assert(v31 == 0xAA)
+    assert(v32 == 0xBB)
+    assert(v33 == 0)
+}
+
+#[test]
+fn test_truncation_8bit() uses (evm: mut Evm) {
+    let addr = evm.create2<Packed>(value: 0, args: (), salt: 0)
+
+    // Values with bits set above BITS=8 must be silently truncated.
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set8 { i: 7, v: 0x1FF })
+    let v: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get8 { i: 7 })
+    assert(v == 0xFF)
+
+    // Test the top of the byte range too.
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set8 { i: 8, v: 0xABCD })
+    let v: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get8 { i: 8 })
+    assert(v == 0xCD)
+}
+
+#[test]
+fn test_32bit_lanes() uses (evm: mut Evm) {
+    let addr = evm.create2<Packed>(value: 0, args: (), salt: 0)
+
+    // With BITS=32, 8 lanes fit per slot. Test isolation across all 8.
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set32 { i: 0, v: 0xDEADBEEF })
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set32 { i: 7, v: 0xCAFEBABE })
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set32 { i: 8, v: 0x12345678 })
+
+    let v0: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get32 { i: 0 })
+    let v7: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get32 { i: 7 })
+    let v8: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get32 { i: 8 })
+    assert(v0 == 0xDEADBEEF)
+    assert(v7 == 0xCAFEBABE)
+    assert(v8 == 0x12345678)
+}
+
+#[test]
+fn test_1bit_bitmap() uses (evm: mut Evm) {
+    let addr = evm.create2<Packed>(value: 0, args: (), salt: 0)
+
+    // BITS=1: 256 lanes per slot. Set bits at scattered positions across
+    // the first slot and the second slot.
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set1 { i: 0, v: 1 })
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set1 { i: 7, v: 1 })
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set1 { i: 255, v: 1 })
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set1 { i: 256, v: 1 })
+
+    let b0: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get1 { i: 0 })
+    let b1: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get1 { i: 1 })
+    let b7: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get1 { i: 7 })
+    let b255: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get1 { i: 255 })
+    let b256: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get1 { i: 256 })
+    let b257: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get1 { i: 257 })
+    assert(b0 == 1)
+    assert(b1 == 0)
+    assert(b7 == 1)
+    assert(b255 == 1)
+    assert(b256 == 1)
+    assert(b257 == 0)
+
+    // Clear bit 7 — its neighbours and the cross-slot bit must remain.
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set1 { i: 7, v: 0 })
+    let b0: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get1 { i: 0 })
+    let b7: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get1 { i: 7 })
+    let b255: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get1 { i: 255 })
+    let b256: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get1 { i: 256 })
+    assert(b0 == 1)
+    assert(b7 == 0)
+    assert(b255 == 1)
+    assert(b256 == 1)
+}
+
+#[test]
+fn test_arrays_with_different_salts_are_independent() uses (evm: mut Evm) {
+    let addr = evm.create2<Packed>(value: 0, args: (), salt: 0)
+
+    // Write at the same index in three arrays with different SALTs.
+    // They must live in disjoint storage regions.
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set8 { i: 0, v: 0x11 })
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set32 { i: 0, v: 0x22222222 })
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set1 { i: 0, v: 1 })
+
+    let s8: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get8 { i: 0 })
+    let s32: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get32 { i: 0 })
+    let s1: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get1 { i: 0 })
+    assert(s8 == 0x11)
+    assert(s32 == 0x22222222)
+    assert(s1 == 1)
+}
+
+#[test]
+fn test_inferred_salts_do_not_collide_across_slots() uses (evm: mut Evm) {
+    let addr = evm.create2<Packed>(value: 0, args: (), salt: 0)
+
+    // PackedStore declares `s8` and `s32` as adjacent fields. With raw
+    // arithmetic addressing (slot = SALT + i / lanes_per_slot), writing
+    // to s8 at index 32 would spill into the next storage slot — which
+    // is exactly where the next field starts under inferred salts. The
+    // hashed base (keccak(SALT)) puts each array's data ≈2^256 slots away
+    // from any other, so adjacent fields remain disjoint regardless of
+    // how far the array grows.
+    //
+    // Pre-populate s32 so we can detect any clobber. Then write into s8
+    // at indices that cross multiple slot boundaries (32, 64, 96).
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set32 { i: 0, v: 0xCAFEBABE })
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set32 { i: 1, v: 0xDEADBEEF })
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set8 { i: 32, v: 0xAA })
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set8 { i: 64, v: 0xBB })
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set8 { i: 96, v: 0xCC })
+
+    // s32 must be untouched by the cross-slot writes into s8.
+    let v0: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get32 { i: 0 })
+    let v1: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get32 { i: 1 })
+    assert(v0 == 0xCAFEBABE)
+    assert(v1 == 0xDEADBEEF)
+
+    // And s8 must read back the values we just wrote.
+    let s8_32: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get8 { i: 32 })
+    let s8_64: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get8 { i: 64 })
+    let s8_96: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Get8 { i: 96 })
+    assert(s8_32 == 0xAA)
+    assert(s8_64 == 0xBB)
+    assert(s8_96 == 0xCC)
+}
+
+#[test]
+fn test_search_hit_within_slot() uses (evm: mut Evm) {
+    let addr = evm.create2<Packed>(value: 0, args: (), salt: 0)
+
+    // Populate three lanes in slot 0. Search for the middle one.
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set8 { i: 3, v: 0x42 })
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set8 { i: 7, v: 0x99 })
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set8 { i: 12, v: 0xFF })
+
+    let idx: u256 = evm.call(
+        addr: addr, gas: 200000, value: 0,
+        message: PackedMsg::Search8 { needle: 0x99, start: 0, end: 32 }
+    )
+    assert(idx == 7)
+}
+
+#[test]
+fn test_search_miss_returns_sentinel() uses (evm: mut Evm) {
+    let addr = evm.create2<Packed>(value: 0, args: (), salt: 0)
+
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set8 { i: 3, v: 0x42 })
+
+    let idx: u256 = evm.call(
+        addr: addr, gas: 200000, value: 0,
+        message: PackedMsg::Search8 { needle: 0xAB, start: 0, end: 32 }
+    )
+    assert(idx == U256_MAX)
+}
+
+#[test]
+fn test_search_across_slots() uses (evm: mut Evm) {
+    let addr = evm.create2<Packed>(value: 0, args: (), salt: 0)
+
+    // Needle lives in slot 2 (index >= 64). Starting from 0 forces the
+    // search to walk past two full slots before hitting it — exercises
+    // the word-at-a-time loop's outer slot transition.
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set8 { i: 70, v: 0x55 })
+
+    let idx: u256 = evm.call(
+        addr: addr, gas: 500000, value: 0,
+        message: PackedMsg::Search8 { needle: 0x55, start: 0, end: 96 }
+    )
+    assert(idx == 70)
+}
+
+#[test]
+fn test_search_respects_start_and_end() uses (evm: mut Evm) {
+    let addr = evm.create2<Packed>(value: 0, args: (), salt: 0)
+
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set8 { i: 5, v: 0x77 })
+    evm.call(addr: addr, gas: 100000, value: 0, message: PackedMsg::Set8 { i: 25, v: 0x77 })
+
+    // start excludes the first match → finds the second
+    let idx: u256 = evm.call(
+        addr: addr, gas: 200000, value: 0,
+        message: PackedMsg::Search8 { needle: 0x77, start: 10, end: 32 }
+    )
+    assert(idx == 25)
+
+    // end excludes the second match → finds the first
+    let idx: u256 = evm.call(
+        addr: addr, gas: 200000, value: 0,
+        message: PackedMsg::Search8 { needle: 0x77, start: 0, end: 20 }
+    )
+    assert(idx == 5)
+
+    // Range that excludes both → miss
+    let idx: u256 = evm.call(
+        addr: addr, gas: 200000, value: 0,
+        message: PackedMsg::Search8 { needle: 0x77, start: 10, end: 20 }
+    )
+    assert(idx == U256_MAX)
+}

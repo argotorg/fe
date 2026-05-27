@@ -1,0 +1,127 @@
+use core::keccak
+use core::option::Option
+
+use super::ops::{sload, sstore}
+
+const U256_MASK: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+
+/// A storage-backed packed array of fixed-bit-width integer lanes.
+///
+/// Multiple lanes are packed into each 256-bit storage slot, and consecutive
+/// indices live in consecutive slots — so this is only meaningful for dense
+/// integer indices (token IDs, user IDs, order IDs, sequence positions).
+/// Passing addresses or hashes as `i` would spread one value per slot and
+/// is strictly worse than `StorageMap`.
+///
+/// `BITS` must be a power of two that divides 256 — one of
+/// 1, 2, 4, 8, 16, 32, 64, 128. The constraint is enforced at compile time
+/// via `PackedBits<BITS>: ValidPackedBits`; invalid widths fail type-checking
+/// with a "trait bound is not satisfied" error.
+///
+/// `SALT` is the layout seed. Lanes are stored starting at
+/// `keccak256(SALT)` (computed at compile time per monomorphization),
+/// so each array occupies a region of the 256-bit slot space that is
+/// effectively collision-free with any other field — adjacent inferred
+/// salts produce hashed bases ≈2²⁵⁶ apart. When the array is declared
+/// as a contract storage field, `SALT` is inferred automatically.
+/// Supply it explicitly only when you need a stable layout — for example
+/// with `core::keccak("myapp.storage.foo")` for upgradeable contracts.
+///
+/// # Example
+///
+/// ```fe
+/// // As a contract field — salts are inferred per-field:
+/// struct Store {
+///     order_status: StoragePackedArray<8>,
+///     order_tier:   StoragePackedArray<4>,
+/// }
+///
+/// // With an explicit namespaced salt:
+/// const ORDERS_NS: u256 = keccak("myapp.storage.order_status")
+/// let order_status: StoragePackedArray<8, ORDERS_NS> = StoragePackedArray::new()
+/// order_status.set(42, 1)
+/// ```
+pub struct StoragePackedArray<const BITS: u256, const SALT: u256 = _> {}
+
+/// Marker trait for `BITS` values that produce a well-formed packed layout
+/// — power of two ≤ 128, so 256 divides evenly into `256 / BITS` lanes.
+///
+/// Implemented only via `PackedBits<N>` for valid `N`; not user-extensible.
+pub trait ValidPackedBits {}
+
+/// Type-level witness used to constrain `BITS` of `StoragePackedArray`.
+///
+/// Most users do not name this directly. Generic helpers over `BITS` may need
+/// a `where PackedBits<BITS>: ValidPackedBits` bound to call the accessor methods
+/// for an otherwise unknown lane width.
+pub struct PackedBits<const N: u256> {}
+
+impl ValidPackedBits for PackedBits<1> {}
+impl ValidPackedBits for PackedBits<2> {}
+impl ValidPackedBits for PackedBits<4> {}
+impl ValidPackedBits for PackedBits<8> {}
+impl ValidPackedBits for PackedBits<16> {}
+impl ValidPackedBits for PackedBits<32> {}
+impl ValidPackedBits for PackedBits<64> {}
+impl ValidPackedBits for PackedBits<128> {}
+
+impl<const BITS: u256, const SALT: u256> Copy for StoragePackedArray<BITS, SALT> {}
+
+impl<const BITS: u256, const SALT: u256> StoragePackedArray<BITS, SALT>
+    where PackedBits<BITS>: ValidPackedBits
+{
+    pub fn new() -> Self {
+        Self {}
+    }
+
+    /// Read the lane at index `i`. Returns the lane value zero-extended to `u256`.
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    pub fn get(self, _ i: u256) -> u256 {
+        let lanes_per_slot: u256 = 256 / BITS
+        let lane_mask: u256 = (1 << BITS) - 1
+        let slot: u256 = keccak(SALT) + (i / lanes_per_slot)
+        let bit_pos: u256 = (i % lanes_per_slot) * BITS
+        (sload(slot) >> bit_pos) & lane_mask
+    }
+
+    /// Overwrite the lane at index `i` with `value`. Bits above `BITS` in
+    /// `value` are silently dropped.
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    pub fn set(self, i: u256, value: u256) {
+        let lanes_per_slot: u256 = 256 / BITS
+        let lane_mask: u256 = (1 << BITS) - 1
+        let slot: u256 = keccak(SALT) + (i / lanes_per_slot)
+        let bit_pos: u256 = (i % lanes_per_slot) * BITS
+        let lane_mask_shifted: u256 = lane_mask << bit_pos
+        let cleared: u256 = sload(slot) & (U256_MASK ^ lane_mask_shifted)
+        let inserted: u256 = (value & lane_mask) << bit_pos
+        sstore(slot: slot, value: cleared | inserted)
+    }
+
+    /// Linear search in `[start, end)` for the first lane equal to `needle`.
+    ///
+    /// Reads one SLOAD per slot and then scans up to `lanes_per_slot` lanes
+    /// from the in-register word, amortizing storage access across
+    /// consecutive indices.
+    #[arithmetic(unchecked)]
+    pub fn search(self, needle: u256, start: u256, end: u256) -> Option<u256> {
+        let lanes_per_slot: u256 = 256 / BITS
+        let lane_mask: u256 = (1 << BITS) - 1
+        let base: u256 = keccak(SALT)
+        let mut i: u256 = start
+        while i < end {
+            let word: u256 = sload(base + (i / lanes_per_slot))
+            let mut lane: u256 = i % lanes_per_slot
+            while lane < lanes_per_slot && i < end {
+                if ((word >> (lane * BITS)) & lane_mask) == needle {
+                    return Option::Some(i)
+                }
+                lane += 1
+                i += 1
+            }
+        }
+        Option::None
+    }
+}

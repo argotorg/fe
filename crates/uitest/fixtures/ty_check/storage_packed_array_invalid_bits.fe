@@ -1,0 +1,36 @@
+use std::evm::{PackedBits, StoragePackedArray, ValidPackedBits}
+
+// `BITS` must divide 256 evenly (power of two ≤ 128). Other widths
+// produce a "trait bound is not satisfied" error from the `ValidPackedBits`
+// constraint on the impl block.
+
+pub fn ok_8bit() -> u256 {
+    let a = StoragePackedArray<8, 0>::new()
+    a.get(0)
+}
+
+pub fn bad_7bit() -> u256 {
+    let a = StoragePackedArray<7, 0>::new()
+    a.get(0)
+}
+
+pub fn bad_24bit() -> u256 {
+    let a = StoragePackedArray<24, 0>::new()
+    a.get(0)
+}
+
+pub fn bad_zero() -> u256 {
+    let a = StoragePackedArray<0, 0>::new()
+    a.get(0)
+}
+
+pub fn bad_256() -> u256 {
+    let a = StoragePackedArray<256, 0>::new()
+    a.get(0)
+}
+
+pub fn ok_generic<const BITS: u256, const SALT: u256>(_ a: StoragePackedArray<BITS, SALT>) -> u256
+    where PackedBits<BITS>: ValidPackedBits
+{
+    a.get(0)
+}

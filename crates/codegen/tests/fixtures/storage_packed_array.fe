@@ -1,0 +1,40 @@
+use std::evm::StoragePackedArray
+
+fn get_status(_ id: u256) -> u256
+    uses (status: StoragePackedArray<8, 0>)
+{
+    status.get(id)
+}
+
+fn set_status(id: u256, value: u256)
+    uses (status: mut StoragePackedArray<8, 0>)
+{
+    status.set(i: id, value)
+}
+
+fn search_status(needle: u256, start: u256, end: u256) -> u256
+    uses (status: StoragePackedArray<8, 0>)
+{
+    match status.search(needle: needle, start: start, end: end) {
+        Option::Some(i) => return i
+        Option::None => return 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+    }
+}
+
+pub fn main() -> u256 {
+    let mut status = StoragePackedArray<8, 0>::new()
+    with (status) {
+        set_status(id: 1, value: 2)
+        set_status(id: 33, value: 5)
+        search_status(needle: 5, start: 0, end: 64)
+        get_status(1)
+    }
+}
+
+#[test]
+fn foo() {
+    let mut st = StoragePackedArray<8, 0>::new()
+    with (st) {
+        main()
+    }
+}
