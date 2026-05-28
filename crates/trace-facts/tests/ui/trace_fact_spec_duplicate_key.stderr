@@ -1,0 +1,5 @@
+error: TraceFactSpec supports only one #[trace_key] field
+ --> tests/ui/trace_fact_spec_duplicate_key.rs:9:5
+  |
+9 |     #[trace_key]
+  |     ^

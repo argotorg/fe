@@ -2494,8 +2494,20 @@ dependencies = [
  "blake3",
  "fe-common",
  "fe-shape-address",
+ "fe-trace-facts-macros",
  "serde",
  "serde_json",
+ "trybuild",
+]
+
+[[package]]
+name = "fe-trace-facts-macros"
+version = "26.1.0"
+dependencies = [
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.116",
 ]
 
 [[package]]

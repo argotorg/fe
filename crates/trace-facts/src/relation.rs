@@ -52,6 +52,60 @@ pub trait TraceRelation {
     fn row(&self) -> RelationRow;
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OriginRef<'a> {
+    pub field: &'static str,
+    pub key: &'a OriginExportKey,
+    pub required: bool,
+    pub expected_kind: Option<&'static str>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ValidationSeverity {
+    Error,
+    Warning,
+    Info,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidationIssue {
+    pub severity: ValidationSeverity,
+    pub code: &'static str,
+    pub fact_type: &'static str,
+    pub field: Option<&'static str>,
+    pub message: String,
+}
+
+pub trait TraceFactSpec: Serialize {
+    const TYPE_NAME: &'static str;
+    const RELATION_NAME: &'static str;
+
+    fn primary_key(&self) -> Option<&OriginExportKey>;
+    fn origin_refs(&self) -> Vec<OriginRef<'_>>;
+    fn relation_schema() -> RelationSchema;
+    fn relation_row(&self) -> RelationRow;
+
+    fn local_validation(&self) -> Vec<ValidationIssue> {
+        Vec::new()
+    }
+}
+
+impl<T> TraceRelation for T
+where
+    T: TraceFactSpec,
+{
+    const NAME: &'static str = T::RELATION_NAME;
+
+    fn schema() -> RelationSchema {
+        T::relation_schema()
+    }
+
+    fn row(&self) -> RelationRow {
+        self.relation_row()
+    }
+}
+
 impl TraceFact {
     pub fn base_relation_name(&self) -> &'static str {
         match self {
@@ -230,41 +284,6 @@ macro_rules! row {
     };
 }
 
-impl TraceRelation for OriginNodeFact {
-    const NAME: &'static str = "base_origin_node";
-
-    fn schema() -> RelationSchema {
-        schema!(Self::NAME, ["node": Key, "kind": Text])
-    }
-
-    fn row(&self) -> RelationRow {
-        row!(Self::NAME, [key(&self.key), self.kind().to_string()])
-    }
-}
-
-impl TraceRelation for OriginEdgeFact {
-    const NAME: &'static str = "base_origin_edge";
-
-    fn schema() -> RelationSchema {
-        schema!(
-            Self::NAME,
-            ["from": Key, "to": Key, "label": Text, "introduced_by": OptionalText]
-        )
-    }
-
-    fn row(&self) -> RelationRow {
-        row!(
-            Self::NAME,
-            [
-                key(&self.from),
-                key(&self.to),
-                value(&self.label),
-                opt_value(self.introduced_by.as_ref()),
-            ]
-        )
-    }
-}
-
 impl TraceRelation for CompilerEventFact {
     const NAME: &'static str = "base_compiler_event";
 
@@ -317,29 +336,6 @@ impl TraceRelation for StorageFact {
                 value(&self.phase),
                 value(&self.location),
                 value(&self.reason),
-            ]
-        )
-    }
-}
-
-impl TraceRelation for InstructionFact {
-    const NAME: &'static str = "base_instruction";
-
-    fn schema() -> RelationSchema {
-        schema!(
-            Self::NAME,
-            ["instruction": Key, "function": Key, "index": U32, "mnemonic": Text]
-        )
-    }
-
-    fn row(&self) -> RelationRow {
-        row!(
-            Self::NAME,
-            [
-                key(&self.instruction),
-                key(&self.function),
-                self.index.to_string(),
-                self.mnemonic.clone(),
             ]
         )
     }
@@ -488,36 +484,6 @@ impl TraceRelation for InstructionBlockFact {
         row!(
             Self::NAME,
             [key(&self.instruction), key(&self.block), value(&self.phase),]
-        )
-    }
-}
-
-impl TraceRelation for InstructionExtentFact {
-    const NAME: &'static str = "base_instruction_extent";
-
-    fn schema() -> RelationSchema {
-        schema!(
-            Self::NAME,
-            [
-                "instruction": Key,
-                "code_object": Key,
-                "pc_start": U32,
-                "pc_end": U32,
-                "byte_len": U32,
-            ]
-        )
-    }
-
-    fn row(&self) -> RelationRow {
-        row!(
-            Self::NAME,
-            [
-                key(&self.instruction),
-                key(&self.code_object),
-                self.pc_range.start.to_string(),
-                self.pc_range.end.to_string(),
-                self.byte_len.to_string(),
-            ]
         )
     }
 }
@@ -1532,15 +1498,15 @@ impl TraceRelation for ShapeGraphHashFact {
     }
 }
 
-fn key(key: &OriginExportKey) -> String {
+pub fn encode_key(key: &OriginExportKey) -> String {
     key.canonical_storage_key()
 }
 
-fn opt_key(key: Option<&OriginExportKey>) -> String {
+pub fn encode_optional_key(key: Option<&OriginExportKey>) -> String {
     key.map_or_else(String::new, OriginExportKey::canonical_storage_key)
 }
 
-fn key_list(keys: &[OriginExportKey]) -> String {
+pub fn encode_key_list(keys: &[OriginExportKey]) -> String {
     keys.iter().map(key).collect::<Vec<_>>().join("|")
 }
 
@@ -1560,14 +1526,14 @@ fn dimension_digests(digests: &DimensionDigests) -> String {
         .join("|")
 }
 
-fn opt_value<T>(value: Option<&T>) -> String
+pub fn encode_optional_value<T>(value: Option<&T>) -> String
 where
     T: Serialize,
 {
     value.map_or_else(String::new, self::value)
 }
 
-fn value<T>(value: &T) -> String
+pub fn encode_value<T>(value: &T) -> String
 where
     T: Serialize,
 {
@@ -1577,11 +1543,42 @@ where
     }
 }
 
+fn key(key: &OriginExportKey) -> String {
+    encode_key(key)
+}
+
+fn opt_key(key: Option<&OriginExportKey>) -> String {
+    encode_optional_key(key)
+}
+
+fn key_list(keys: &[OriginExportKey]) -> String {
+    encode_key_list(keys)
+}
+
+fn opt_value<T>(value: Option<&T>) -> String
+where
+    T: Serialize,
+{
+    encode_optional_value(value)
+}
+
+fn value<T>(value: &T) -> String
+where
+    T: Serialize,
+{
+    encode_value(value)
+}
+
 #[cfg(test)]
 mod tests {
     use common::origin::OriginExportKey;
 
-    use crate::{InstructionFact, OriginEdgeFact, OriginEdgeLabel, OriginNodeFact, TraceFact};
+    use crate::{
+        InstructionExtentFact, InstructionFact, OriginEdgeFact, OriginEdgeLabel, OriginNodeFact,
+        PcRange, TraceFact,
+    };
+
+    use super::TraceFactSpec;
 
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
         OriginExportKey::try_from_raw_parts(kind, owner, local).unwrap()
@@ -1644,6 +1641,40 @@ mod tests {
                 "7".to_string(),
                 "addi".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn generated_instruction_extent_relation_matches_legacy_projection() {
+        let instruction = key("bytecode.pc", "demo", "pc:4");
+        let code_object = key("code.object", "demo", "runtime");
+        let fact = InstructionExtentFact::new(
+            instruction.clone(),
+            code_object.clone(),
+            PcRange::new(4, 7),
+            3,
+        );
+
+        assert_eq!(fact.primary_key(), Some(&instruction));
+        assert_eq!(
+            fact.origin_refs()
+                .iter()
+                .map(|origin_ref| origin_ref.field)
+                .collect::<Vec<_>>(),
+            vec!["instruction", "code_object"]
+        );
+        assert_eq!(
+            TraceFact::InstructionExtent(fact).base_relation_row(),
+            super::RelationRow {
+                relation: "base_instruction_extent",
+                values: vec![
+                    instruction.canonical_storage_key(),
+                    code_object.canonical_storage_key(),
+                    "4".to_string(),
+                    "7".to_string(),
+                    "3".to_string(),
+                ],
+            }
         );
     }
 }

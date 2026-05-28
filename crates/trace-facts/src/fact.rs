@@ -6,6 +6,7 @@ use shape_address::{
     DimensionDigests, ShapeCyclePolicy, ShapeDigestAlgorithm, ShapeDimension, ShapeGraph,
     ShapeGraphHashes, ShapeGraphKey, ShapeHashPolicy, ShapeNodeKey, ShapePolicyId, ShapeViewMode,
 };
+use trace_facts_macros::TraceFactSpec;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -224,8 +225,11 @@ fn validate_trace_text(kind: &'static str, value: &str) -> Result<(), TraceFactT
     })
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TraceFactSpec)]
+#[trace_fact(type = "origin_node", relation = "base_origin_node")]
+#[trace_col(name = "kind", kind = "text", expr = "self.kind()")]
 pub struct OriginNodeFact {
+    #[trace_key(name = "node")]
     pub key: OriginExportKey,
 }
 
@@ -275,12 +279,17 @@ impl<'de> Deserialize<'de> for OriginNodeFact {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TraceFactSpec)]
+#[trace_fact(type = "origin_edge", relation = "base_origin_edge")]
 #[serde(deny_unknown_fields)]
 pub struct OriginEdgeFact {
+    #[trace_ref]
     pub from: OriginExportKey,
+    #[trace_ref]
     pub to: OriginExportKey,
+    #[trace_col]
     pub label: OriginEdgeLabel,
+    #[trace_col]
     pub introduced_by: Option<CompilerPhase>,
 }
 
@@ -425,12 +434,18 @@ pub enum StorageReason {
     Unknown,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TraceFactSpec)]
+#[trace_fact(type = "instruction", relation = "base_instruction")]
 #[serde(deny_unknown_fields)]
 pub struct InstructionFact {
+    #[trace_key]
+    #[trace_ref]
     pub instruction: OriginExportKey,
+    #[trace_ref]
     pub function: OriginExportKey,
+    #[trace_col]
     pub index: u32,
+    #[trace_col]
     pub mnemonic: String,
 }
 
@@ -656,12 +671,19 @@ impl InstructionBlockFact {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TraceFactSpec)]
+#[trace_fact(type = "instruction_extent", relation = "base_instruction_extent")]
 #[serde(deny_unknown_fields)]
 pub struct InstructionExtentFact {
+    #[trace_key]
+    #[trace_ref]
     pub instruction: OriginExportKey,
+    #[trace_ref]
     pub code_object: OriginExportKey,
+    #[trace_col(name = "pc_start", kind = "u32", expr = "self.pc_range.start")]
+    #[trace_col(name = "pc_end", kind = "u32", expr = "self.pc_range.end")]
     pub pc_range: PcRange,
+    #[trace_col]
     pub byte_len: u32,
 }
 

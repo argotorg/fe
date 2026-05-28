@@ -5,6 +5,9 @@ pub mod relation;
 pub mod snapshot;
 pub mod validate;
 
+extern crate self as trace_facts;
+
+pub use common::origin::OriginExportKey;
 pub use evm_trace::{
     EvmExecutionStep, EvmExecutionTrace, EvmExecutionTraceError, RuntimeImportConfig,
     dynamic_gas_facts_from_evm_trace, runtime_facts_from_debug_trace_json,
@@ -35,9 +38,11 @@ pub use jsonl::{
     read_trace_facts_jsonl,
 };
 pub use relation::{
-    RelationColumn, RelationColumnKind, RelationRow, RelationSchema, TraceRelation,
+    OriginRef, RelationColumn, RelationColumnKind, RelationRow, RelationSchema, TraceFactSpec,
+    TraceRelation, ValidationIssue, ValidationSeverity,
 };
 pub use snapshot::{TraceSnapshot, TraceSnapshotReadError};
+pub use trace_facts_macros::TraceFactSpec;
 pub use validate::{
     TraceValidationDiagnostic, TraceValidationError, TraceValidationInfo, TraceValidationLevel,
     TraceValidationReport, TraceValidationSummary, TraceValidationWarning, TraceValidator,
