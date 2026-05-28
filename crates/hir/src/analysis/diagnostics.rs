@@ -3061,6 +3061,30 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
+            Self::WhereConstPredicateFailed { primary } => CompleteDiagnostic {
+                severity,
+                message: "where clause const predicate failed".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "const predicate evaluated to `false`".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: Vec::new(),
+                error_code,
+            },
+
+            Self::WhereConstPredicateEvalFailed { primary } => CompleteDiagnostic {
+                severity,
+                message: "where clause const predicate could not be evaluated".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "CTFE evaluation failed for this predicate".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: Vec::new(),
+                error_code,
+            },
+
             Self::InvalidCast {
                 primary,
                 from,
@@ -4386,6 +4410,7 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                 primary_goal,
                 unsat_subgoal,
                 required_by,
+                const_predicate_failures,
             } => {
                 let msg = format!(
                     "`{}` doesn't implement `{}`",
@@ -4426,7 +4451,7 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                     severity,
                     message: "trait bound is not satisfied".to_string(),
                     sub_diagnostics,
-                    notes: vec![],
+                    notes: const_predicate_failures.clone(),
                     error_code,
                 }
             }

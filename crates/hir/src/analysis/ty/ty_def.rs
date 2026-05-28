@@ -635,6 +635,7 @@ impl<'db> TyId<'db> {
                     primary_goal: goal,
                     unsat_subgoal: subgoal,
                     required_by: None,
+                    const_predicate_failures: vec![],
                 }
                 .into(),
             )

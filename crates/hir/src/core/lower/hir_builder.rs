@@ -140,7 +140,7 @@ where
     }
 
     pub(super) fn empty_where_clause(&self) -> WhereClauseId<'db> {
-        WhereClauseId::new(self.db(), vec![])
+        WhereClauseId::new(self.db(), vec![], vec![])
     }
 
     pub(super) fn empty_effect_params(&self) -> EffectParamListId<'db> {

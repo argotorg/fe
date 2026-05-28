@@ -340,20 +340,69 @@ impl GeneratorNode {
         }
     }
 
-    /// Advances the solving process for the generator node.
-    ///
-    /// This function attempts to find a new solution or sub-goal for the
-    /// generator node. It iterates through the candidate implementors and
-    /// assumptions, unifying them with the goal. If a solution is found, it
-    /// is registered. If a sub-goal is found, a new consumer node is
-    /// created to handle it.
-    ///
-    /// # Parameters
-    /// - `pf`: A mutable reference to the `ProofForest`.
-    ///
-    /// # Returns
-    /// `true` if a new solution or sub-goal was found and processed; `false`
-    /// otherwise.
+    fn check_impl_const_predicates<'db>(
+        db: &'db dyn HirAnalysisDb,
+        gen_cand: &ImplementorId<'db>,
+        table: &mut PersistentUnificationTable<'db>,
+    ) -> bool {
+        use crate::analysis::semantic::{SemConstScalar, SemConstValue, eval_body_owner_const};
+        use crate::analysis::ty::ty_check::BodyOwner;
+        use crate::hir_def::WhereClauseOwner;
+
+        use super::super::trait_def::ImplementorOrigin;
+
+        let ImplementorOrigin::Hir(impl_trait) = gen_cand.origin(db) else {
+            return true;
+        };
+
+        let const_preds = WhereClauseOwner::ImplTrait(impl_trait)
+            .where_clause(db)
+            .const_predicates(db);
+        if const_preds.is_empty() {
+            return true;
+        }
+
+        let resolved_params: Vec<TyId<'db>> = gen_cand
+            .params(db)
+            .iter()
+            .map(|ty| ty.fold_with(db, table))
+            .collect();
+
+        let any_unresolved = resolved_params
+            .iter()
+            .any(|ty| ty.has_var(db) || ty.has_param(db));
+        if any_unresolved {
+            return true;
+        }
+
+        let bool_ty = TyId::bool(db);
+        for body in const_preds {
+            let owner = BodyOwner::AnonConstBody {
+                body: *body,
+                expected: bool_ty,
+            };
+            match eval_body_owner_const(db, owner, resolved_params.clone()) {
+                Ok(value) => {
+                    let is_false = matches!(
+                        value.value(db),
+                        SemConstValue::Scalar {
+                            value: SemConstScalar::Bool(false),
+                            ..
+                        }
+                    );
+                    if is_false {
+                        return false;
+                    }
+                }
+                Err(_) => {
+                    return false;
+                }
+            }
+        }
+
+        true
+    }
+
     fn step(self, pf: &mut ProofForest) -> bool {
         let g_node = &mut pf.g_nodes[self];
         let db = pf.db;
@@ -392,6 +441,12 @@ impl GeneratorNode {
                 assumptions,
             );
             if let Err(_err) = table.unify(normalized_gen_cand, normalized_goal) {
+                continue;
+            }
+
+            // Check const predicates on the impl's where clause.
+            // If types are concrete after unification, CTFE-evaluate; reject if false.
+            if !Self::check_impl_const_predicates(db, &gen_cand, &mut table) {
                 continue;
             }
 

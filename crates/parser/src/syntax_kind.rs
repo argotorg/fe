@@ -517,6 +517,8 @@ pub enum SyntaxKind {
     WhereClause,
     /// `Option<T>: Trait1 + Trait2`
     WherePredicate,
+    /// `{ const_expr }` in a where clause
+    WhereConstPredicate,
     /// `Transfer { to: Address, amount: u256 } -> bool`
     MsgVariant,
     /// `{ to: Address, amount: u256 }`
@@ -797,6 +799,7 @@ impl SyntaxKind {
             SyntaxKind::KindBoundMono => "kind bound",
             SyntaxKind::WhereClause => "`where` clause",
             SyntaxKind::WherePredicate => "`where` predicate",
+            SyntaxKind::WhereConstPredicate => "`where` const predicate",
             SyntaxKind::UsesClause => "`uses` clause",
             SyntaxKind::UsesParamList => "`uses` parameter list",
             SyntaxKind::UsesParam => "`uses` parameter",

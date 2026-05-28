@@ -408,6 +408,12 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
         comparison: Option<StaticAssertComparisonValues>,
     },
+    WhereConstPredicateFailed {
+        primary: DynLazySpan<'db>,
+    },
+    WhereConstPredicateEvalFailed {
+        primary: DynLazySpan<'db>,
+    },
 
     InvalidCast {
         primary: DynLazySpan<'db>,
@@ -792,6 +798,8 @@ impl<'db> BodyDiag<'db> {
             Self::InvalidCast { .. } => 55,
             Self::ConstValueMustBeKnown(..) => 64,
             Self::StaticAssertFailed { .. } => 81,
+            Self::WhereConstPredicateFailed { .. } => 82,
+            Self::WhereConstPredicateEvalFailed { .. } => 83,
             Self::AccessedFieldNotFound { .. } => 15,
             Self::OpsTraitNotImplemented { .. } => 16,
             Self::UnsupportedUnaryPlus(..) => 52,
@@ -893,6 +901,7 @@ pub enum TraitConstraintDiag<'db> {
         primary_goal: TraitInstId<'db>,
         unsat_subgoal: Option<TraitInstId<'db>>,
         required_by: Option<CallConstraintDiagInfo<'db>>,
+        const_predicate_failures: Vec<String>,
     },
 
     InfiniteBoundRecursion(DynLazySpan<'db>, String),

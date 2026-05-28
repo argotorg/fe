@@ -1,0 +1,34 @@
+trait Sized {
+    const SIZE: u256
+}
+
+struct Small {}
+impl Sized for Small {
+    const SIZE: u256 = 1
+}
+
+struct Big {}
+impl Sized for Big {
+    const SIZE: u256 = 100
+}
+
+fn needs_big<T>() where T: Sized, T::SIZE >= 50 {}
+
+// Case 1: Syntactic identity — same predicate forwarded. No error.
+fn forward_same<T>() where T: Sized, T::SIZE >= 50 {
+    needs_big<T>()
+}
+
+// Case 2: No matching assumption — defers silently. No error at definition time.
+fn no_assumption<T>() where T: Sized {
+    needs_big<T>()
+}
+
+// Case 3: Concrete types still get CTFE-checked (existing behavior).
+fn concrete_ok() {
+    needs_big<Big>()
+}
+
+fn concrete_fail() {
+    needs_big<Small>()
+}
