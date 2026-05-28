@@ -5051,6 +5051,10 @@
                 {
                   "type": "STRING",
                   "value": "+"
+                },
+                {
+                  "type": "STRING",
+                  "value": "*"
                 }
               ]
             }
@@ -8153,6 +8157,5 @@
     "_pattern",
     "_item",
     "_statement"
-  ],
-  "reserved": {}
+  ]
 }

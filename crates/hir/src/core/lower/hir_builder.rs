@@ -11,7 +11,7 @@ use crate::{
         GenericParam, GenericParamListId, IdentId, ImplTrait, ItemKind, Mod, NormalAttr, Partial,
         Pat, PatId, PathId, PathKind, Stmt, StmtId, Struct, TopLevelMod, TrackedItemId,
         TrackedItemVariant, TraitRefId, TypeBound, TypeGenericArg, TypeGenericParam, TypeId,
-        TypeKind, TypeMode, UnOp, Visibility, WhereClauseId, expr::CallArg,
+        TypeKind, TypeMode, Visibility, WhereClauseId, expr::CallArg,
     },
     span::{DesugaredOrigin, HirOrigin},
 };
@@ -758,13 +758,14 @@ where
             let encode_field_callee = self.path_expr(encode_field_path);
             let field_value = self.ident_expr(field_ident);
             let encoder_arg = self.ident_expr(encoder_ident);
-            let tail_value = self.ident_expr(tail_ident);
-            let tail_arg = self.push_expr(Expr::Un(tail_value, UnOp::Mut));
+            let tail_arg = self.ident_expr(tail_ident);
             let call = self.call_expr(
                 encode_field_callee,
                 vec![field_value, encoder_arg, tail_arg],
             );
-            self.emit_expr_stmt(call);
+            let tail_place = self.ident_expr(tail_ident);
+            let assign = self.push_expr(Expr::Assign(tail_place, call));
+            self.emit_expr_stmt(assign);
         }
     }
 

@@ -264,6 +264,10 @@ impl<'db> SPlace<'db> {
         Self::with_projection(local, Projection::Index(IndexSource::Dynamic(index)))
     }
 
+    pub fn deref(local: SLocalId) -> Self {
+        Self::with_projection(local, Projection::Deref)
+    }
+
     pub fn variant_field(
         local: SLocalId,
         variant: VariantIndex,
@@ -287,6 +291,10 @@ impl<'db> SPlace<'db> {
     pub fn push_dynamic_index(&mut self, index: SValueId) {
         self.path
             .push(Projection::Index(IndexSource::Dynamic(index)));
+    }
+
+    pub fn push_deref(&mut self) {
+        self.path.push(Projection::Deref);
     }
 }
 

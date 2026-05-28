@@ -214,22 +214,13 @@ impl<'db> RuntimeClass<'db> {
             (
                 RuntimeClass::RawAddr {
                     space: actual_space,
-                    target: actual_target,
+                    ..
                 },
                 RuntimeClass::RawAddr {
                     space: desired_space,
-                    target: desired_target,
+                    ..
                 },
-            ) => {
-                actual_space == desired_space
-                    && match (actual_target, desired_target) {
-                        (Some(actual), Some(desired)) => {
-                            layouts_share_runtime_rep(db, *actual, *desired)
-                        }
-                        (None, None) => true,
-                        (Some(_), None) | (None, Some(_)) => false,
-                    }
-            }
+            ) => actual_space == desired_space,
             (
                 RuntimeClass::Scalar(_),
                 RuntimeClass::AggregateValue { .. }
@@ -1088,6 +1079,10 @@ pub enum RuntimeBuiltin<'db> {
     Mcopy {
         dst: RValueId,
         src: RValueId,
+        len: RValueId,
+    },
+    ZeroMem {
+        dst: RValueId,
         len: RValueId,
     },
     Msize,

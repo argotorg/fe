@@ -641,6 +641,7 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
         }
         let mut current =
             normalized_place_root_class_in_context(self, place.root.clone(), carriers)?;
+        let root_local = normalized_place_root_local(self.body, &place.root);
         for projection in place.path.iter() {
             current = match projection {
                 Projection::Field(field) => project_field_class(
@@ -649,9 +650,23 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                     FieldIndex((*field).try_into().expect("field index fits")),
                 ),
                 Projection::Index(_) => project_index_class(self.db, current),
-                Projection::Deref => current
-                    .deref_target()
-                    .unwrap_or_else(|| panic!("invalid deref projection class")),
+                Projection::Deref => {
+                    if root_local.is_some_and(|local| {
+                        self.body
+                            .locals
+                            .get(local.index())
+                            .is_some_and(|local| local.ty.as_borrow(self.db).is_some())
+                    }) {
+                        current
+                    } else {
+                        current
+                            .deref_target()
+                            .or_else(|| {
+                                pointer_pointee_class_for_local(self, root_local?, &current)
+                            })
+                            .expect("invalid deref projection class")
+                    }
+                }
                 Projection::VariantField {
                     variant, field_idx, ..
                 } => project_variant_field_place_class(
@@ -769,6 +784,36 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                 .or_else(|| local_facts.semantic_fallback_class.clone()),
         }
     }
+}
+
+fn normalized_place_root_local(
+    body: &NormalizedSemanticBody,
+    root: &NSPlaceRoot,
+) -> Option<SLocalId> {
+    match root {
+        NSPlaceRoot::CarrierDerefLocal(local) => Some(*local),
+        NSPlaceRoot::Root(root) => match body.root(*root)? {
+            NBorrowRoot::Param { local, .. } | NBorrowRoot::LocalSlot { local } => Some(*local),
+            NBorrowRoot::Provider { .. } => None,
+        },
+    }
+}
+
+fn pointer_pointee_class_for_local<'db>(
+    env: BodyEnv<'_, 'db>,
+    local: SLocalId,
+    ptr_class: &RuntimeClass<'db>,
+) -> Option<RuntimeClass<'db>> {
+    let space = match ptr_class {
+        RuntimeClass::RawAddr { space, .. } => *space,
+        RuntimeClass::Scalar(_)
+        | RuntimeClass::AggregateValue { .. }
+        | RuntimeClass::Ref { .. } => AddressSpaceKind::Memory,
+    };
+    let local = env.body.locals.get(local.index())?;
+    let scope = env.scope()?;
+    let pointee = normalize_ty(env.db, local.ty, scope, env.assumptions()).as_ptr(env.db)?;
+    top_level_class_for_ty_in_context(env.db, pointee, space, Some(scope), env.assumptions())
 }
 
 fn single_field_transport_projection_class<'db>(
@@ -907,6 +952,13 @@ fn build_local_static_facts<'db>(
             CompiledMaterializationPlan::Erased
         } else {
             match local_data.facts.interface {
+                SemanticLocalKind::DirectValue
+                    if runtime_repr_ty_in_context(db, local_data.ty, scope, assumptions)
+                        .as_ptr(db)
+                        .is_some() =>
+                {
+                    CompiledMaterializationPlan::SemanticValue
+                }
                 SemanticLocalKind::DirectValue => top_level_class_for_ty_in_context(
                     db,
                     local_data.ty,
@@ -2854,6 +2906,9 @@ fn runtime_abstract_param_ty<'db>(
     assumptions: PredicateListId<'db>,
 ) -> bool {
     let ty = runtime_repr_ty_in_context(db, ty, scope, assumptions);
+    if ty.as_ptr(db).is_some() {
+        return false;
+    }
     ty.has_param(db) || ty.contains_assoc_ty_of_param(db)
 }
 

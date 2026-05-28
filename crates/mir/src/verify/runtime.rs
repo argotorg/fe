@@ -197,10 +197,10 @@ fn verify_assign<'db>(
         RuntimeCarrier::Erased => None,
         RuntimeCarrier::Value(class) => Some(class.clone()),
     };
-
     let expr_class = match expr {
         RExpr::Use(value) => Some(runtime_value_class(body, *value)?.clone()),
         RExpr::ConstScalar(value) => match (value, &dst_class) {
+            (_, Some(RuntimeClass::RawAddr { .. })) => dst_class.clone(),
             (
                 crate::runtime::ConstScalar::FixedBytes(bytes),
                 Some(RuntimeClass::Scalar(ScalarClass {
@@ -574,6 +574,11 @@ fn verify_builtin<'db>(
             verify_word_value(body, *len)?;
             Ok(None)
         }
+        RuntimeBuiltin::ZeroMem { dst, len } => {
+            verify_address_operand(body, *dst, AddressSpaceKind::Memory)?;
+            verify_word_value(body, *len)?;
+            Ok(None)
+        }
         RuntimeBuiltin::Msize
         | RuntimeBuiltin::CallValue
         | RuntimeBuiltin::ReturnDataSize
@@ -693,7 +698,10 @@ fn verify_builtin<'db>(
         }
         RuntimeBuiltin::Malloc { size } => {
             verify_word_value(body, *size)?;
-            Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
+            Ok(Some(RuntimeClass::RawAddr {
+                space: AddressSpaceKind::Memory,
+                target: None,
+            }))
         }
         RuntimeBuiltin::Call {
             gas,

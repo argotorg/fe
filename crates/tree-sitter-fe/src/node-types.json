@@ -1828,7 +1828,6 @@
   {
     "type": "block_comment",
     "named": true,
-    "extra": true,
     "fields": {}
   },
   {
@@ -8567,6 +8566,10 @@
             "named": false
           },
           {
+            "type": "*",
+            "named": false
+          },
+          {
             "type": "+",
             "named": false
           },
@@ -9444,8 +9447,7 @@
   },
   {
     "type": "line_comment",
-    "named": true,
-    "extra": true
+    "named": true
   },
   {
     "type": "match",

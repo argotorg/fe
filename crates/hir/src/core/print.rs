@@ -950,6 +950,7 @@ impl UnOp {
             UnOp::BitNot => "~",
             UnOp::Mut => "mut",
             UnOp::Ref => "ref",
+            UnOp::Deref => "*",
         }
     }
 }

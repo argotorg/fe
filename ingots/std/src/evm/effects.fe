@@ -783,13 +783,13 @@ impl ContractHost for Evm {
         where T: Encode<A> + AbiSize
     {
         if !T::IS_DYNAMIC && T::DIRECT_ENCODE {
-            if T::HEAD_SIZE <= 64 {
+            if <T as AbiSize>::HEAD_SIZE <= 64 {
                 value.encode_to_ptr(0)
-                self.return_data(offset: 0, len: T::HEAD_SIZE)
+                self.return_data(offset: 0, len: <T as AbiSize>::HEAD_SIZE)
             } else {
-                let ptr = mem::alloc(T::HEAD_SIZE)
+                let ptr = mem::alloc(<T as AbiSize>::HEAD_SIZE)
                 value.encode_to_ptr(ptr)
-                self.return_data(offset: ptr, len: T::HEAD_SIZE)
+                self.return_data(offset: ptr, len: <T as AbiSize>::HEAD_SIZE)
             }
         } else {
             let (out_ptr, out_len) = encode_single_root_alloc<A, T>(value)

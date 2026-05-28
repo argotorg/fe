@@ -72,6 +72,9 @@ enum RuntimeTypeShape<'db> {
         info: RuntimeEffectHandleInfo<'db>,
         effect_scope: ScopeId<'db>,
     },
+    Pointer {
+        target: TyId<'db>,
+    },
     Scalar(ScalarClass<'db>),
     Aggregate,
     Other,
@@ -90,6 +93,8 @@ impl<'db> RuntimeTypeModel<'db> {
             RuntimeTypeShape::Borrow { kind, inner }
         } else if let Some((_, inner)) = repr_ty.as_capability(db) {
             RuntimeTypeShape::Capability { inner }
+        } else if let Some(target) = repr_ty.as_ptr(db) {
+            RuntimeTypeShape::Pointer { target }
         } else if let Some(effect_scope) = effect_scope
             && let Some(info) =
                 runtime_effect_handle_info(db, repr_ty, Some(effect_scope), assumptions)
@@ -145,6 +150,12 @@ impl<'db> RuntimeTypeModel<'db> {
             RuntimeTypeShape::EffectHandle { info, effect_scope } => Some(
                 effect_handle_class_for_info(db, *info, *effect_scope, assumptions),
             ),
+            RuntimeTypeShape::Pointer { target } => Some(raw_addr_class_for_ty_in_context(
+                db,
+                *target,
+                scope,
+                assumptions,
+            )),
             RuntimeTypeShape::Scalar(scalar) => {
                 (!runtime_zero_sized_ty(db, self.repr_ty, scope, assumptions))
                     .then(|| RuntimeClass::Scalar(scalar.clone()))
@@ -179,6 +190,9 @@ impl<'db> RuntimeTypeModel<'db> {
             RuntimeTypeShape::EffectHandle { info, effect_scope } => {
                 effect_handle_class_for_info(db, *info, *effect_scope, assumptions)
             }
+            RuntimeTypeShape::Pointer { target } => {
+                raw_addr_class_for_ty_in_context(db, *target, scope, assumptions)
+            }
             RuntimeTypeShape::Scalar(scalar) => RuntimeClass::Scalar(scalar.clone()),
             RuntimeTypeShape::Aggregate | RuntimeTypeShape::Other => RuntimeClass::AggregateValue {
                 layout: layout_for_ty_in_context(db, self.repr_ty, scope, assumptions),
@@ -195,6 +209,7 @@ impl<'db> RuntimeTypeModel<'db> {
         match &self.shape {
             RuntimeTypeShape::Borrow { .. } => true,
             RuntimeTypeShape::Capability { .. }
+            | RuntimeTypeShape::Pointer { .. }
             | RuntimeTypeShape::EffectHandle { .. }
             | RuntimeTypeShape::Scalar(_) => false,
             RuntimeTypeShape::Aggregate => {
@@ -588,9 +603,25 @@ fn raw_addr_target_for_ty_in_context<'db>(
     scope: Option<ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> Option<LayoutId<'db>> {
+    let ty = runtime_repr_ty_in_context(db, ty, scope, assumptions);
+    if ty.has_param(db) || ty.contains_assoc_ty_of_param(db) {
+        return None;
+    }
     match stored_class_for_ty_in_context(db, ty, scope, assumptions) {
         RuntimeClass::AggregateValue { layout } => Some(layout),
         RuntimeClass::Scalar(_) | RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => None,
+    }
+}
+
+fn raw_addr_class_for_ty_in_context<'db>(
+    db: &'db dyn MirDb,
+    ty: TyId<'db>,
+    scope: Option<ScopeId<'db>>,
+    assumptions: PredicateListId<'db>,
+) -> RuntimeClass<'db> {
+    RuntimeClass::RawAddr {
+        space: AddressSpaceKind::Memory,
+        target: raw_addr_target_for_ty_in_context(db, ty, scope, assumptions),
     }
 }
 

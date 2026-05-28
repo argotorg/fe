@@ -5,6 +5,32 @@ input_file: crates/codegen/tests/fixtures/storage_map.fe
 ---
 target = "evm-ethereum-osaka"
 
+func private %std__lib__evm__mem__alloc_53c1(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.*i8 = evm_malloc v2;
+        v4.i256 = ptr_to_int v3 i256;
+        return v4;
+}
+
+func private %std__lib__evm__mem__alloc_53c1_0(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.*i8 = evm_malloc v2;
+        v4.i256 = ptr_to_int v3 i256;
+        return v4;
+}
+
 func private %from_word(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;
@@ -141,12 +167,11 @@ func inline(always) private %std__lib__evm__storage_map__storagemap_storage_slot
         jump block1;
 
     block1:
-        v5.*i8 = evm_malloc 0.i256;
-        v6.i256 = ptr_to_int v5 i256;
-        v7.i256 = mload v2 i256;
-        v8.i256 = call %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_2db6 v6 v7;
-        (v9.i256, v10.i1) = uaddo v6 v8;
-        br v10 block2 block3;
+        v5.i256 = call %std__lib__evm__mem__alloc_53c1 0.i256;
+        v6.i256 = mload v2 i256;
+        v7.i256 = call %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_2db6 v5 v6;
+        (v8.i256, v9.i1) = uaddo v5 v7;
+        br v9 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -154,14 +179,14 @@ func inline(always) private %std__lib__evm__storage_map__storagemap_storage_slot
         evm_revert 0.i256 36.i256;
 
     block3:
-        v15.i256 = mload v3 i256;
-        mstore v9 v15 i256;
-        (v19.i256, v20.i1) = uaddo v8 32.i256;
-        br v20 block2 block4;
+        v14.i256 = mload v3 i256;
+        mstore v8 v14 i256;
+        (v18.i256, v19.i1) = uaddo v7 32.i256;
+        br v19 block2 block4;
 
     block4:
-        v22.i256 = evm_keccak256 v6 v19;
-        return v22;
+        v21.i256 = evm_keccak256 v5 v18;
+        return v21;
 }
 
 func inline(always) private %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_3954_0(v0.i256, v1.i256) -> i256 {
@@ -173,12 +198,11 @@ func inline(always) private %std__lib__evm__storage_map__storagemap_storage_slot
         jump block1;
 
     block1:
-        v5.*i8 = evm_malloc 0.i256;
-        v6.i256 = ptr_to_int v5 i256;
-        v7.i256 = mload v2 i256;
-        v8.i256 = call %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_2db6_0 v6 v7;
-        (v9.i256, v10.i1) = uaddo v6 v8;
-        br v10 block2 block3;
+        v5.i256 = call %std__lib__evm__mem__alloc_53c1_0 0.i256;
+        v6.i256 = mload v2 i256;
+        v7.i256 = call %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_2db6_0 v5 v6;
+        (v8.i256, v9.i1) = uaddo v5 v7;
+        br v9 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -186,14 +210,14 @@ func inline(always) private %std__lib__evm__storage_map__storagemap_storage_slot
         evm_revert 0.i256 36.i256;
 
     block3:
-        v15.i256 = mload v3 i256;
-        mstore v9 v15 i256;
-        (v19.i256, v20.i1) = uaddo v8 32.i256;
-        br v20 block2 block4;
+        v14.i256 = mload v3 i256;
+        mstore v8 v14 i256;
+        (v18.i256, v19.i1) = uaddo v7 32.i256;
+        br v19 block2 block4;
 
     block4:
-        v22.i256 = evm_keccak256 v6 v19;
-        return v22;
+        v21.i256 = evm_keccak256 v5 v18;
+        return v21;
 }
 
 func private %to_word(v0.i256) -> i256 {

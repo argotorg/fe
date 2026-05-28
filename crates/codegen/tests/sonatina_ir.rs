@@ -170,6 +170,20 @@ pub fn main() -> u32 {
 }
 
 #[test]
+fn first_class_pointer_fixture_lowers_to_sonatina_ir() {
+    let ir = with_top_mod_for_source(
+        "pointer_first_class.fe",
+        include_str!("fixtures/pointer_first_class.fe"),
+        |db, top_mod| emit_module_sonatina_ir(db, top_mod).expect("Sonatina IR should emit"),
+    );
+
+    assert!(
+        ir.contains("evm_malloc") && ir.contains("mstore") && ir.contains("mload"),
+        "first-class pointer fixture should lower through memory operations:\n{ir}"
+    );
+}
+
+#[test]
 fn wildcard_storage_map_root_reports_runtime_root_error() {
     let err = with_top_mod_for_source(
         "wildcard_storage_map_root_reports_runtime_root_error.fe",

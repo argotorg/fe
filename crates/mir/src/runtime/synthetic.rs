@@ -425,10 +425,14 @@ impl<'db> SyntheticBodyBuilder<'db> {
             };
             cont_bb = decode_bb;
             let tail_len = self.push_binary_word(decode_bb, ArithBinOp::Sub, code_size, self_len);
+            let ptr_ty = TyId::ptr_to(self.db, TyId::u8(self.db));
             let tail_ptr = self.push_builtin_value(
                 decode_bb,
-                TyId::u256(self.db),
-                RuntimeClass::Scalar(word_scalar_class()),
+                ptr_ty,
+                RuntimeClass::RawAddr {
+                    space: AddressSpaceKind::Memory,
+                    target: None,
+                },
                 RuntimeBuiltin::Malloc { size: tail_len },
             );
             self.push_side_effect_builtin(
@@ -1159,29 +1163,6 @@ impl<'db> SyntheticBodyBuilder<'db> {
         ptr: RLocalId,
         len: RLocalId,
     ) -> RLocalId {
-        let ptr = if matches!(
-            self.locals[ptr.index()].carrier.value_class(),
-            Some(RuntimeClass::RawAddr { .. })
-        ) {
-            let casted = self.push_local(
-                TyId::u256(self.db),
-                RuntimeCarrier::Value(RuntimeClass::Scalar(word_scalar_class())),
-                RuntimeLocalRoot::None,
-            );
-            self.push_stmt(
-                bb,
-                RStmt::Assign {
-                    dst: casted,
-                    expr: RExpr::Cast {
-                        value: ptr,
-                        to: word_scalar_class(),
-                    },
-                },
-            );
-            casted
-        } else {
-            ptr
-        };
         let ty = memory_bytes_ty(self.db, scope).expect("MemoryBytes");
         let class = top_level_class_for_ty_in_env(
             self.db,
@@ -1201,6 +1182,15 @@ impl<'db> SyntheticBodyBuilder<'db> {
             | RuntimeClass::RawAddr { .. }
             | RuntimeClass::AggregateValue { .. } => PlaceRoot::Slot(local),
         };
+        let layout = class
+            .aggregate_layout()
+            .expect("MemoryBytes aggregate layout");
+        let crate::runtime::Layout::Struct(layout) = layout.data(self.db) else {
+            panic!("MemoryBytes should lower as a struct layout");
+        };
+        let field_tys = ty.field_types(self.db);
+        let ptr = self.coerce_runtime_value(bb, ptr, &layout.fields[0], field_tys[0]);
+        let len = self.coerce_runtime_value(bb, len, &layout.fields[1], field_tys[1]);
         self.push_stmt(
             bb,
             RStmt::Store {
@@ -1299,33 +1289,11 @@ impl<'db> SyntheticBodyBuilder<'db> {
                     .collect(),
             },
         );
-        let ptr = self.push_builtin_value(
-            bb,
-            TyId::u256(self.db),
-            RuntimeClass::Scalar(word_scalar_class()),
-            RuntimeBuiltin::Malloc { size },
-        );
         let raw_class = RuntimeClass::RawAddr {
             space: AddressSpaceKind::Memory,
             target: Some(layout),
         };
-        let raw = self.push_local(
-            semantic_ty,
-            RuntimeCarrier::Value(raw_class.clone()),
-            RuntimeLocalRoot::None,
-        );
-        self.push_stmt(
-            bb,
-            RStmt::Assign {
-                dst: raw,
-                expr: RExpr::WordToRawAddr {
-                    value: ptr,
-                    space: AddressSpaceKind::Memory,
-                    target: Some(layout),
-                },
-            },
-        );
-        raw
+        self.push_builtin_value(bb, semantic_ty, raw_class, RuntimeBuiltin::Malloc { size })
     }
 
     fn push_zeroed_memory_object_ref(

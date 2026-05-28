@@ -3,7 +3,7 @@
 
 use std::collections::BinaryHeap;
 
-use common::indexmap::IndexSet;
+use common::indexmap::{IndexMap, IndexSet};
 use cranelift_entity::{PrimaryMap, entity_impl};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -20,6 +20,7 @@ use crate::analysis::{
         trait_def::{ImplementorId, TraitInstId, impls_for_trait_in_ingots},
         ty_def::{TyData, TyId},
         unify::PersistentUnificationTable,
+        unify::{UnificationError, UnificationResult},
         visitor::{TyVisitable, TyVisitor},
     },
 };
@@ -40,6 +41,52 @@ const MAXIMUM_TYPE_DEPTH: usize = 256;
 type Query<'db> = Canonical<TraitSolverQuery<'db>>;
 type Solution<'db> = crate::analysis::ty::canonical::Solution<TraitGoalSolution<'db>>;
 type UnsatSubgoal<'db> = crate::analysis::ty::canonical::Solution<TraitInstId<'db>>;
+
+fn trait_inst_head<'db>(db: &'db dyn HirAnalysisDb, inst: TraitInstId<'db>) -> TraitInstId<'db> {
+    TraitInstId::new(db, inst.def(db), inst.args(db).to_vec(), IndexMap::new())
+}
+
+fn normalize_assoc_binding<'db>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut PersistentUnificationTable<'db>,
+    ty: TyId<'db>,
+    scope: crate::core::hir_def::scope_graph::ScopeId<'db>,
+    assumptions: super::PredicateListId<'db>,
+) -> TyId<'db> {
+    let ty = ty.fold_with(db, table);
+    crate::analysis::ty::normalize::normalize_ty(db, ty, scope, assumptions)
+}
+
+fn unify_trait_inst_with_normalized_assoc_bindings<'db>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut PersistentUnificationTable<'db>,
+    candidate: TraitInstId<'db>,
+    goal: TraitInstId<'db>,
+    scope: crate::core::hir_def::scope_graph::ScopeId<'db>,
+    assumptions: super::PredicateListId<'db>,
+) -> UnificationResult {
+    table.unify(trait_inst_head(db, candidate), trait_inst_head(db, goal))?;
+
+    for (name, &candidate_assoc_ty) in candidate.assoc_type_bindings(db) {
+        if let Some(&goal_assoc_ty) = goal.assoc_type_bindings(db).get(name) {
+            let candidate_assoc_ty =
+                normalize_assoc_binding(db, table, candidate_assoc_ty, scope, assumptions);
+            let goal_assoc_ty =
+                normalize_assoc_binding(db, table, goal_assoc_ty, scope, assumptions);
+            table.unify(candidate_assoc_ty, goal_assoc_ty)?;
+        }
+    }
+
+    if goal
+        .assoc_type_bindings(db)
+        .keys()
+        .any(|name| !candidate.assoc_type_bindings(db).contains_key(name))
+    {
+        return Err(UnificationError::TypeMismatch);
+    }
+
+    Ok(())
+}
 
 /// A structure representing a proof forest used for solving trait goals.
 ///
@@ -391,7 +438,16 @@ impl GeneratorNode {
                 scope,
                 assumptions,
             );
-            if let Err(_err) = table.unify(normalized_gen_cand, normalized_goal) {
+            if unify_trait_inst_with_normalized_assoc_bindings(
+                db,
+                &mut table,
+                normalized_gen_cand,
+                normalized_goal,
+                scope,
+                assumptions,
+            )
+            .is_err()
+            {
                 continue;
             }
 
@@ -425,7 +481,16 @@ impl GeneratorNode {
                 g_node.next_cand += 1;
                 next_cand += 1;
                 let mut table = g_node.table.clone();
-                if table.unify(assumption, normalized_goal).is_ok() {
+                if unify_trait_inst_with_normalized_assoc_bindings(
+                    db,
+                    &mut table,
+                    assumption,
+                    normalized_goal,
+                    scope,
+                    assumptions,
+                )
+                .is_ok()
+                {
                     let selected_impl =
                         ImplementorId::assumption(db, extracted_goal.fold_with(db, &mut table));
                     self.register_solution_with(pf, &mut table, selected_impl);

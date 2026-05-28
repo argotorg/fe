@@ -158,6 +158,7 @@ enum JobOutcome {
     SuitePrepared(PreparedSuite),
     SingleFinished(Box<SingleRunResult>),
     SuiteFinished(SuiteRunResult),
+    WorkerFailed(String),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -468,6 +469,7 @@ impl OutcomeCollectorState {
                     self.finalize_pending_suite(&suite_key, ctx)?;
                 }
             }
+            JobOutcome::WorkerFailed(message) => return Err(message),
         }
         Ok(())
     }
@@ -774,10 +776,31 @@ pub fn run_tests(
                 single_rx: single_rx.clone(),
                 outcome_tx: outcome_tx.clone(),
             };
+            let panic_tx = outcome_tx.clone();
             if grouped {
-                scope.spawn(move || suite_worker_loop_grouped(channels, cfg));
+                scope.spawn(move || {
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        suite_worker_loop_grouped(channels, cfg);
+                    }));
+                    if let Err(payload) = result {
+                        let _ = panic_tx.send(JobOutcome::WorkerFailed(format!(
+                            "suite worker panicked: {}",
+                            panic_payload_message(payload)
+                        )));
+                    }
+                });
             } else {
-                scope.spawn(move || suite_worker_loop_parallel(channels, cfg));
+                scope.spawn(move || {
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        suite_worker_loop_parallel(channels, cfg);
+                    }));
+                    if let Err(payload) = result {
+                        let _ = panic_tx.send(JobOutcome::WorkerFailed(format!(
+                            "suite worker panicked: {}",
+                            panic_payload_message(payload)
+                        )));
+                    }
+                });
             }
         }
 
@@ -790,33 +813,47 @@ pub fn run_tests(
                 single_rx: single_rx.clone(),
                 outcome_tx: outcome_tx.clone(),
             };
-            scope.spawn(move || single_worker_loop(channels, cfg));
+            let panic_tx = outcome_tx.clone();
+            scope.spawn(move || {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    single_worker_loop(channels, cfg);
+                }));
+                if let Err(payload) = result {
+                    let _ = panic_tx.send(JobOutcome::WorkerFailed(format!(
+                        "single-test worker panicked: {}",
+                        panic_payload_message(payload)
+                    )));
+                }
+            });
         }
         drop(outcome_tx);
 
-        let ctx = OutcomeContext {
-            suite_plans: &suite_plans,
-            suite_tx: &suite_tx,
-            single_tx: &single_tx,
-            shared: shared.as_ref(),
-            filter: filter.as_deref(),
-            multi,
-            suite_label_width,
+        let result = {
+            let ctx = OutcomeContext {
+                suite_plans: &suite_plans,
+                suite_tx: &suite_tx,
+                single_tx: &single_tx,
+                shared: shared.as_ref(),
+                filter: filter.as_deref(),
+                multi,
+                suite_label_width,
+            };
+            let mut collector =
+                OutcomeCollectorState::new(&suite_plans, grouped, multi, suite_in_flight_limit);
+            let mut result = collector.queue_initial_suites(&ctx, suite_worker_count);
+
+            while result.is_ok() && collector.suite_runs.len() < suite_plans.len() {
+                result = outcome_rx
+                    .recv()
+                    .map_err(|err| format!("suite worker failed: {err}"))
+                    .and_then(|outcome| collector.handle_outcome(outcome, &ctx));
+            }
+
+            result.map(|()| collector.suite_runs)
         };
-        let mut collector =
-            OutcomeCollectorState::new(&suite_plans, grouped, multi, suite_in_flight_limit);
-        collector.queue_initial_suites(&ctx, suite_worker_count)?;
-
-        while collector.suite_runs.len() < suite_plans.len() {
-            let outcome = outcome_rx
-                .recv()
-                .map_err(|err| format!("suite worker failed: {err}"))?;
-            collector.handle_outcome(outcome, &ctx)?;
-        }
-
         drop(single_tx);
         drop(suite_tx);
-        Ok(collector.suite_runs)
+        result
     })?;
 
     suite_runs.sort_unstable_by_key(|run| run.index);
@@ -1124,6 +1161,16 @@ fn emit_grouped_suite_outcome(
         });
     }
     let _ = outcome_tx.send(JobOutcome::SuiteFinished(suite_run));
+}
+
+fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "unknown panic payload".to_string()
+    }
 }
 
 fn single_worker_loop(channels: SingleWorkerChannels, cfg: SingleWorkerConfig) {

@@ -5,7 +5,8 @@ use hir::hir_def::TopLevelMod;
 use mir::runtime::{AddressSpaceKind, RefKind};
 use mir::{
     Layout, LayoutId, PlaceElem, PlaceRoot, RExpr, RLocalId, RStmt, RuntimeCarrier, RuntimeClass,
-    RuntimeInstance, RuntimeLocalRoot, build_runtime_package, build_test_runtime_package,
+    RuntimeInstance, RuntimeLocalRoot, RuntimePlace, build_runtime_package,
+    build_test_runtime_package,
 };
 use url::Url;
 
@@ -435,62 +436,89 @@ fn effect_handle_from_raw_helpers_preserve_transport_in_rmir() {
 }
 
 #[test]
-fn mem_ptr_from_raw_helpers_use_raw_addr_transport_in_rmir() {
+fn pointer_helpers_use_native_raw_addr_transport_in_rmir() {
     with_runtime_package!(
-        "mem_ptr_from_raw_helpers_use_raw_addr_transport_in_rmir.fe",
-        include_str!("fixtures/raw_log_emit.fe").to_string(),
+        "pointer_helpers_use_native_raw_addr_transport_in_rmir.fe",
+        r#"
+pub fn pointer_roundtrip() -> u256 {
+    let ptr = core::ptr::alloc<u256>()
+    *ptr = 7
+    *ptr
+}
+"#
+        .to_string(),
         |db, package| {
-            let from_raw_helpers = package
+            let from_ptr_helpers = package
                 .functions(&db)
                 .iter()
                 .copied()
-                .filter(|function| function.symbol(&db).contains("from_raw"))
+                .filter(|function| function.symbol(&db).contains("from_ptr"))
                 .collect::<Vec<_>>();
             assert!(
-                !from_raw_helpers.is_empty(),
-                "expected generated MemPtr::from_raw helper in runtime package"
+                from_ptr_helpers.is_empty(),
+                "native pointer reads/writes should not generate MemPtr::from_ptr helpers"
             );
 
-            for function in from_raw_helpers {
-                let body = function.instance(&db).body(&db);
-                assert!(
-                    body.blocks
-                        .iter()
-                        .flat_map(|block| block.stmts.iter())
-                        .any(|stmt| {
-                            matches!(
-                                stmt,
-                                RStmt::Assign {
-                                    expr: RExpr::WordToRawAddr {
+            let test_fn = package
+                .functions(&db)
+                .iter()
+                .copied()
+                .find(|function| function.symbol(&db).contains("pointer_roundtrip"))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "generated pointer_roundtrip runtime function; symbols={:?}",
+                        package
+                            .functions(&db)
+                            .iter()
+                            .map(|function| function.symbol(&db))
+                            .collect::<Vec<_>>()
+                    )
+                });
+            let body = test_fn.instance(&db).body(&db);
+            assert!(
+                body.blocks
+                    .iter()
+                    .flat_map(|block| block.stmts.iter())
+                    .any(|stmt| {
+                        matches!(
+                            stmt,
+                            RStmt::Store {
+                                dst: RuntimePlace {
+                                    root: PlaceRoot::Ptr {
                                         space: AddressSpaceKind::Memory,
                                         ..
                                     },
                                     ..
-                                }
-                            )
-                        }),
-                    "MemPtr::from_raw should keep memory handles as raw-address transport:\n{body:#?}"
-                );
-                assert!(
-                    !body
-                        .blocks
-                        .iter()
-                        .flat_map(|block| block.stmts.iter())
-                        .any(|stmt| {
-                            matches!(
-                                stmt,
-                                RStmt::Assign {
-                                    expr: RExpr::ProviderFromRaw {
-                                        space: AddressSpaceKind::Memory,
+                                },
+                                ..
+                            }
+                        )
+                    }),
+                "native pointer writes should lower to memory pointer stores:\n{body:#?}"
+            );
+            assert!(
+                body.blocks
+                    .iter()
+                    .flat_map(|block| block.stmts.iter())
+                    .any(|stmt| {
+                        matches!(
+                            stmt,
+                            RStmt::Assign {
+                                expr: RExpr::Load {
+                                    place: RuntimePlace {
+                                        root: PlaceRoot::Ptr {
+                                            space: AddressSpaceKind::Memory,
+                                            ..
+                                        },
                                         ..
                                     },
-                                    ..
-                                }
-                            )
-                        }),
-                    "MemPtr::from_raw must not reconstruct memory provider refs:\n{body:#?}"
-                );
-            }
+                                },
+                                ..
+                            }
+                        )
+                    }),
+                "native pointer reads should lower to memory pointer loads:\n{body:#?}"
+            );
         }
     );
 }

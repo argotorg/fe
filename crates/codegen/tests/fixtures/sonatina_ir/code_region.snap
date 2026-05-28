@@ -7,6 +7,32 @@ target = "evm-ethereum-osaka"
 
 type @layout_0 = {i256};
 
+func private %std__lib__evm__mem__alloc_07f1(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.*i8 = evm_malloc v2;
+        v4.i256 = ptr_to_int v3 i256;
+        return v4;
+}
+
+func private %std__lib__evm__mem__alloc_07f1_0(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.*i8 = evm_malloc v2;
+        v4.i256 = ptr_to_int v3 i256;
+        return v4;
+}
+
 func private %balance() {
     block0:
         jump block1;
@@ -53,10 +79,9 @@ func private %child_init() {
     block1:
         v0.i256 = sym_size &__Child_runtime;
         v1.i256 = sym_addr &__Child_runtime;
-        v2.*i8 = evm_malloc v0;
-        v3.i256 = ptr_to_int v2 i256;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__codecopy_7791_0 v3 v1 v0;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25_2 v3 v0;
+        v2.i256 = call %std__lib__evm__mem__alloc_07f1_0 v0;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__codecopy_7791_0 v2 v1 v0;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25_2 v2 v0;
         unreachable;
 }
 
@@ -138,16 +163,14 @@ func private %init() {
     block1:
         v0.i256 = sym_size &__Child_init;
         v1.i256 = sym_addr &__Child_init;
-        v2.*i8 = evm_malloc v0;
-        v3.i256 = ptr_to_int v2 i256;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__codecopy_7791 v3 v1 v0;
-        v7.@layout_0 = call %create2_raw 0.i256 v3 v0 4660.i256;
-        v8.i256 = sym_size &__Foo_runtime;
-        v9.i256 = sym_addr &__Foo_runtime;
-        v10.*i8 = evm_malloc v8;
-        v11.i256 = ptr_to_int v10 i256;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__codecopy_7791 v11 v9 v8;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25_0 v11 v8;
+        v2.i256 = call %std__lib__evm__mem__alloc_07f1 v0;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__codecopy_7791 v2 v1 v0;
+        v6.@layout_0 = call %create2_raw 0.i256 v2 v0 4660.i256;
+        v7.i256 = sym_size &__Foo_runtime;
+        v8.i256 = sym_addr &__Foo_runtime;
+        v9.i256 = call %std__lib__evm__mem__alloc_07f1 v7;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__codecopy_7791 v9 v8 v7;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25_0 v9 v7;
         unreachable;
 }
 

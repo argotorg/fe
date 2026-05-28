@@ -275,7 +275,7 @@ impl super::Parse for LetExprScope {
 fn prefix_binding_power(kind: SyntaxKind) -> Option<u8> {
     use SyntaxKind::*;
     match kind {
-        Not | Plus | Minus | Tilde | MutKw | RefKw => Some(145),
+        Not | Plus | Minus | Tilde | MutKw | RefKw | Star => Some(145),
         _ => None,
     }
 }
@@ -375,7 +375,14 @@ fn infix_binding_power<S: TokenStream>(parser: &mut Parser<S>) -> Option<(u8, u8
             }
             (120, 121)
         }
-        Star | Slash | Percent => (130, 131),
+        Star => {
+            if has_line_break_before(parser) {
+                parser.set_newline_as_trivia(is_trivia);
+                return None;
+            }
+            (130, 131)
+        }
+        Slash | Percent => (130, 131),
         Star2 => (141, 140),
         Eq => {
             // `Assign` and `AugAssign` have the same binding power

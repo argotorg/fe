@@ -1,0 +1,69 @@
+struct Data {
+    a: u256,
+    b: u256,
+}
+
+struct Holder {
+    data: *Data,
+}
+
+#[test]
+fn test_first_class_memory_pointers() {
+    let data = core::ptr::alloc<Data>()
+    data.a = 5
+    data.b = 8
+
+    let words = core::ptr::cast<Data, u256>(data)
+    let second = core::ptr::offset(words, 1)
+    *second = *second + 3
+    assert(data.a == 5)
+    assert(data.b == 11)
+
+    let holder = Holder { data: data }
+    holder.data.b = holder.data.a + holder.data.b
+    assert(holder.data.b == 16)
+    assert(data.b == 16)
+
+    let byte_ptr = core::ptr::as_bytes(data)
+    let roundtrip = core::ptr::cast<u8, Data>(byte_ptr)
+    let first = *roundtrip
+    assert(first.a == 5)
+    assert(first.b == 16)
+
+    let raw_array = core::ptr::alloc_array<u256>(1)
+    raw_array[0] = 19
+    assert(raw_array[0] == 19)
+
+    let byte_alloc = core::ptr::alloc_bytes(1)
+    *byte_alloc = 37
+    assert(*byte_alloc == 37)
+
+    let array = core::ptr::alloc_array<u256>(2)
+    array[0] = first.a
+    array[1] = first.b
+
+    let bytes = array.as_bytes()
+    assert(array.len == 2)
+    assert(bytes.len == 64)
+    assert(core::ptr::addr(bytes.ptr) == core::ptr::addr(array.ptr))
+    assert(core::ptr::addr(array.ptr_at(1)) - core::ptr::addr(array.ptr) == 32)
+    assert(array[0] + array[1] == 21)
+
+    let zeroed = core::ptr::MemArray<u256>::new_zeroed(2)
+    assert(!zeroed.is_empty())
+    assert(zeroed[0] == 0)
+    assert(zeroed[1] == 0)
+    zeroed[0] = 99
+    zeroed.zero()
+    assert(zeroed[0] == 0)
+
+    let pair = core::ptr::alloc<[u256; 2]>()
+    pair[0] = 13
+    pair[1] = 21
+    let pair_bytes = core::ptr::as_bytes(pair)
+    let pair_words = core::ptr::cast<u8, u256>(pair_bytes)
+    assert(pair[0] == 13)
+    assert(pair[1] == 21)
+    assert(core::ptr::addr(pair_bytes) == core::ptr::addr(pair_words))
+    assert(*pair_words + *core::ptr::offset(pair_words, 1) == 34)
+}

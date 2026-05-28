@@ -783,6 +783,11 @@ pub fn runtime_size_bytes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Opt
             TyData::TyBase(TyBase::Func(_) | TyBase::Contract(_))
         ) {
             Some(0)
+        } else if ty.is_array(db) {
+            let (_, args) = ty.decompose_ty_app(db);
+            let elem = args.first().copied()?;
+            let stride = inner(db, elem, visiting).unwrap_or(WORD_SIZE_BYTES);
+            Some(array_len(db, ty)? * stride)
         } else if let TyData::TyBase(TyBase::Prim(prim)) = ty.base_ty(db).data(db) {
             match prim {
                 PrimTy::Bool => Some(1),
@@ -794,11 +799,6 @@ pub fn runtime_size_bytes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Opt
                 PrimTy::Array | PrimTy::Tuple(_) => None,
                 _ => prim_int_bits(*prim).map(|bits| bits / 8),
             }
-        } else if ty.is_array(db) {
-            let (_, args) = ty.decompose_ty_app(db);
-            let elem = args.first().copied()?;
-            let stride = inner(db, elem, visiting).unwrap_or(WORD_SIZE_BYTES);
-            Some(array_len(db, ty)? * stride)
         } else if ty.is_struct(db) {
             ty.field_types(db)
                 .into_iter()
