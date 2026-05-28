@@ -1,0 +1,27 @@
+contract = "Bench"
+
+# Single write to a fresh storage slot. Both Fe and Solady pay the
+# 0 -> non-zero SSTORE cost (~22.1k). Measures the baseline cost of
+# packing infrastructure (slot derivation, lane masking) on a cold path.
+[[calls]]
+function = "set(uint256,uint256)"
+args = ["42", "7"]
+
+# Two writes to the same packed slot (indices 0 and 1 share a slot at
+# 8-bit lanes, 32 per slot). Exercises the read-modify-write pattern:
+# first set primes the slot, second is non-zero -> non-zero. Tests
+# whether the compiler reuses slot derivation between the two writes.
+[[calls]]
+function = "setTwoLanes(uint256,uint256,uint256,uint256)"
+args = ["0", "7", "1", "11"]
+
+# Read an empty lane. Hits the cold SLOAD + lane extraction (shift + mask).
+[[calls]]
+function = "get(uint256)"
+args = ["42"]
+
+# Full round-trip in one call: write a lane, immediately read it back.
+# After the write, the slot is warm, so the read should be cheap.
+[[calls]]
+function = "setThenGet(uint256,uint256)"
+args = ["42", "7"]

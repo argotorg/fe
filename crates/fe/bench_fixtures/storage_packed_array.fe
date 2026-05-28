@@ -1,0 +1,34 @@
+use std::abi::sol
+use std::evm::StoragePackedArray
+
+pub msg BenchMsg {
+    #[selector = sol("set(uint256,uint256)")]
+    Set { idx: u256, value: u256 },
+    #[selector = sol("setTwoLanes(uint256,uint256,uint256,uint256)")]
+    SetTwoLanes { idxA: u256, valA: u256, idxB: u256, valB: u256 },
+    #[selector = sol("get(uint256)")]
+    Get { idx: u256 } -> u256,
+    #[selector = sol("setThenGet(uint256,uint256)")]
+    SetThenGet { idx: u256, value: u256 } -> u256,
+}
+
+pub contract Bench {
+    mut pack: StoragePackedArray<8, 0>,
+
+    recv BenchMsg {
+        Set { idx, value } uses (mut pack) {
+            pack.set(i: idx, value)
+        }
+        SetTwoLanes { idxA, valA, idxB, valB } uses (mut pack) {
+            pack.set(i: idxA, value: valA)
+            pack.set(i: idxB, value: valB)
+        }
+        Get { idx } -> u256 uses (pack) {
+            pack.get(idx)
+        }
+        SetThenGet { idx, value } -> u256 uses (mut pack) {
+            pack.set(i: idx, value)
+            pack.get(idx)
+        }
+    }
+}
