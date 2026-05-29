@@ -1028,50 +1028,6 @@ impl TraceRelation for RuntimeCodeObjectBindingFact {
     }
 }
 
-impl TraceRelation for ExecutionStepFact {
-    const NAME: &'static str = "base_execution_step";
-
-    fn schema() -> RelationSchema {
-        schema!(
-            Self::NAME,
-            [
-                "step": Key,
-                "session": Key,
-                "step_index": U64,
-                "code_object": Key,
-                "pc": U32,
-                "opcode": Text,
-                "instruction": OptionalKey,
-                "gas_before": U64,
-                "gas_after": U64,
-                "gas_cost": U64,
-                "depth": U32,
-                "join_confidence": Text,
-            ]
-        )
-    }
-
-    fn row(&self) -> RelationRow {
-        row!(
-            Self::NAME,
-            [
-                key(&self.step),
-                key(&self.session),
-                self.step_index.to_string(),
-                key(&self.code_object),
-                self.pc.to_string(),
-                self.opcode.clone(),
-                opt_key(self.instruction.as_ref()),
-                self.gas_before.to_string(),
-                self.gas_after.to_string(),
-                self.gas_cost.to_string(),
-                self.depth.to_string(),
-                value(&self.join_confidence),
-            ]
-        )
-    }
-}
-
 impl TraceRelation for StackSampleFact {
     const NAME: &'static str = "base_stack_sample";
 
@@ -1574,8 +1530,8 @@ mod tests {
     use common::origin::OriginExportKey;
 
     use crate::{
-        InstructionExtentFact, InstructionFact, OriginEdgeFact, OriginEdgeLabel, OriginNodeFact,
-        PcRange, TraceFact,
+        ExecutionStepFact, InstructionExtentFact, InstructionFact, OriginEdgeFact, OriginEdgeLabel,
+        OriginNodeFact, PcRange, RuntimePcJoinConfidence, TraceFact,
     };
 
     use super::TraceFactSpec;
@@ -1673,6 +1629,62 @@ mod tests {
                     "4".to_string(),
                     "7".to_string(),
                     "3".to_string(),
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn generated_execution_step_relation_keeps_runtime_projection_shape() {
+        let step = key("runtime.step", "demo", "step:0");
+        let session = key("runtime.session", "demo", "session:0");
+        let code_object = key("code.object", "demo", "runtime");
+        let instruction = key("bytecode.pc", "demo", "pc:4");
+        let fact = ExecutionStepFact {
+            step: step.clone(),
+            session: session.clone(),
+            step_index: 9,
+            code_object: code_object.clone(),
+            pc: 4,
+            opcode: "JUMPDEST".to_string(),
+            instruction: Some(instruction.clone()),
+            gas_before: 100,
+            gas_after: 98,
+            gas_cost: 2,
+            depth: 1,
+            join_confidence: RuntimePcJoinConfidence::ExactCodeObjectAndPc,
+        };
+
+        assert_eq!(fact.primary_key(), Some(&step));
+        assert_eq!(
+            fact.origin_refs()
+                .iter()
+                .map(|origin_ref| (origin_ref.field, origin_ref.required))
+                .collect::<Vec<_>>(),
+            vec![
+                ("step", true),
+                ("session", true),
+                ("code_object", true),
+                ("instruction", false),
+            ]
+        );
+        assert_eq!(
+            TraceFact::ExecutionStep(fact).base_relation_row(),
+            super::RelationRow {
+                relation: "base_execution_step",
+                values: vec![
+                    step.canonical_storage_key(),
+                    session.canonical_storage_key(),
+                    "9".to_string(),
+                    code_object.canonical_storage_key(),
+                    "4".to_string(),
+                    "JUMPDEST".to_string(),
+                    instruction.canonical_storage_key(),
+                    "100".to_string(),
+                    "98".to_string(),
+                    "2".to_string(),
+                    "1".to_string(),
+                    "exact_code_object_and_pc".to_string(),
                 ],
             }
         );

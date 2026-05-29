@@ -3,7 +3,7 @@ use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::{
-    Attribute, Data, DeriveInput, Expr, Fields, GenericArgument, LitStr, PathArguments, Type,
+    Attribute, Data, DeriveInput, Expr, Fields, GenericArgument, LitStr, Path, PathArguments, Type,
     parse_macro_input, spanned::Spanned,
 };
 
@@ -55,6 +55,7 @@ fn expand_trace_fact_spec(input: DeriveInput) -> syn::Result<TokenStream2> {
             .clone()
             .expect("named fields should have identifiers");
         if has_attr(&field.attrs, "trace_skip") {
+            reject_skip_conflicts(&field.attrs)?;
             continue;
         }
         let key_attr = field_flag_attr(&field.attrs, "trace_key")?;
@@ -62,6 +63,13 @@ fn expand_trace_fact_spec(input: DeriveInput) -> syn::Result<TokenStream2> {
         let col_attrs = trace_col_attrs(&field.attrs)?;
 
         if let Some(attr) = key_attr {
+            require_origin_key_type(&field.ty, attr.span, "trace_key")?;
+            if ref_attr.as_ref().is_some_and(|attr| attr.optional) {
+                return Err(syn::Error::new(
+                    attr.span,
+                    "trace_key cannot be combined with trace_ref(optional)",
+                ));
+            }
             if primary_key.replace(field_ident.clone()).is_some() {
                 return Err(syn::Error::new(
                     attr.span,
@@ -86,6 +94,7 @@ fn expand_trace_fact_spec(input: DeriveInput) -> syn::Result<TokenStream2> {
                 ));
             }
         } else if let Some(attr) = ref_attr {
+            require_trace_ref_type(&field.ty, attr.optional)?;
             let name = attr.name.unwrap_or_else(|| field_ident.to_string());
             let kind = attr.kind;
             let column_kind = if attr.optional {
@@ -118,7 +127,7 @@ fn expand_trace_fact_spec(input: DeriveInput) -> syn::Result<TokenStream2> {
             let name = attr.name.unwrap_or_else(|| field_ident.to_string());
             let kind = attr
                 .kind
-                .unwrap_or_else(|| infer_column_kind(&field.ty, attr.expr.is_some()));
+                .map_or_else(|| infer_column_kind(&field.ty, attr.expr.is_some()), Ok)?;
             let expr = if let Some(expr) = attr.expr {
                 quote!(#expr)
             } else {
@@ -153,6 +162,10 @@ fn expand_trace_fact_spec(input: DeriveInput) -> syn::Result<TokenStream2> {
         primary_key.map_or_else(|| quote!(None), |field| quote!(Some(&self.#field)));
     let type_name = fact_attr.type_name;
     let relation_name = fact_attr.relation_name;
+    let local_validation = fact_attr.validate_hook.map_or_else(
+        || quote!(::std::vec::Vec::new()),
+        |hook| quote!(#hook(self)),
+    );
 
     Ok(quote! {
         impl #impl_generics #trace_facts::relation::TraceFactSpec for #ident #ty_generics #where_clause {
@@ -182,6 +195,10 @@ fn expand_trace_fact_spec(input: DeriveInput) -> syn::Result<TokenStream2> {
                     values: vec![#(#row_values),*],
                 }
             }
+
+            fn local_validation(&self) -> Vec<#trace_facts::relation::ValidationIssue> {
+                #local_validation
+            }
         }
     })
 }
@@ -203,11 +220,13 @@ fn trace_facts_crate() -> syn::Result<TokenStream2> {
 struct TraceFactAttr {
     type_name: LitStr,
     relation_name: LitStr,
+    validate_hook: Option<Path>,
 }
 
 fn trace_fact_attr(attrs: &[Attribute]) -> syn::Result<TraceFactAttr> {
     let mut type_name = None;
     let mut relation_name = None;
+    let mut validate_hook = None;
     for attr in attrs
         .iter()
         .filter(|attr| attr.path().is_ident("trace_fact"))
@@ -218,6 +237,12 @@ fn trace_fact_attr(attrs: &[Attribute]) -> syn::Result<TraceFactAttr> {
                 Ok(())
             } else if meta.path.is_ident("relation") {
                 relation_name = Some(meta.value()?.parse()?);
+                Ok(())
+            } else if meta.path.is_ident("validate") {
+                let value = meta.value()?.parse::<LitStr>()?;
+                validate_hook = Some(syn::parse_str(&value.value()).map_err(|err| {
+                    syn::Error::new(value.span(), format!("invalid validation hook path: {err}"))
+                })?);
                 Ok(())
             } else {
                 Err(meta.error("unsupported trace_fact attribute"))
@@ -237,6 +262,7 @@ fn trace_fact_attr(attrs: &[Attribute]) -> syn::Result<TraceFactAttr> {
                 "TraceFactSpec requires #[trace_fact(relation = \"...\")]",
             )
         })?,
+        validate_hook,
     })
 }
 
@@ -359,6 +385,28 @@ fn has_attr(attrs: &[Attribute], name: &str) -> bool {
     attrs.iter().any(|attr| attr.path().is_ident(name))
 }
 
+fn reject_skip_conflicts(attrs: &[Attribute]) -> syn::Result<()> {
+    if let Some(attr) = attrs.iter().find(|attr| attr.path().is_ident("trace_key")) {
+        return Err(syn::Error::new(
+            attr.span(),
+            "trace_skip cannot be combined with trace_key",
+        ));
+    }
+    if let Some(attr) = attrs.iter().find(|attr| attr.path().is_ident("trace_ref")) {
+        return Err(syn::Error::new(
+            attr.span(),
+            "trace_skip cannot be combined with trace_ref",
+        ));
+    }
+    if let Some(attr) = attrs.iter().find(|attr| attr.path().is_ident("trace_col")) {
+        return Err(syn::Error::new(
+            attr.span(),
+            "trace_skip cannot be combined with trace_col",
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 enum ColumnKind {
     Key,
@@ -403,32 +451,38 @@ fn parse_column_kind(value: &LitStr) -> syn::Result<ColumnKind> {
     }
 }
 
-fn infer_column_kind(ty: &Type, explicit_expr: bool) -> ColumnKind {
+fn infer_column_kind(ty: &Type, explicit_expr: bool) -> syn::Result<ColumnKind> {
     if explicit_expr {
-        return ColumnKind::Text;
+        return Ok(ColumnKind::Text);
     }
     if path_is(ty, "OriginExportKey") {
-        return ColumnKind::Key;
+        return Ok(ColumnKind::Key);
     }
     if option_inner(ty).is_some_and(|inner| path_is(inner, "OriginExportKey")) {
-        return ColumnKind::OptionalKey;
+        return Ok(ColumnKind::OptionalKey);
     }
     if option_inner(ty).is_some() {
-        return ColumnKind::OptionalText;
+        return Ok(ColumnKind::OptionalText);
     }
     if path_is(ty, "u32") {
-        return ColumnKind::U32;
+        return Ok(ColumnKind::U32);
     }
     if path_is(ty, "u64") {
-        return ColumnKind::U64;
+        return Ok(ColumnKind::U64);
     }
     if path_is(ty, "i32") || path_is(ty, "i64") {
-        return ColumnKind::I64;
+        return Ok(ColumnKind::I64);
     }
     if path_is(ty, "Vec") {
-        return ColumnKind::List;
+        return Ok(ColumnKind::List);
     }
-    ColumnKind::Text
+    if is_plain_path(ty) {
+        return Ok(ColumnKind::Text);
+    }
+    Err(syn::Error::new(
+        ty.span(),
+        "TraceFactSpec cannot infer a relation column kind for this type; add #[trace_col(kind = \"...\")] or #[trace_skip]",
+    ))
 }
 
 fn path_is(ty: &Type, expected: &str) -> bool {
@@ -459,6 +513,47 @@ fn option_inner(ty: &Type) -> Option<&Type> {
             None
         }
     })
+}
+
+fn is_plain_path(ty: &Type) -> bool {
+    let Type::Path(path) = ty else {
+        return false;
+    };
+    path.path
+        .segments
+        .last()
+        .is_some_and(|segment| matches!(segment.arguments, PathArguments::None))
+}
+
+fn require_origin_key_type(ty: &Type, span: Span, attr_name: &str) -> syn::Result<()> {
+    if path_is(ty, "OriginExportKey") {
+        Ok(())
+    } else {
+        Err(syn::Error::new(
+            span,
+            format!("{attr_name} fields must have type OriginExportKey"),
+        ))
+    }
+}
+
+fn require_trace_ref_type(ty: &Type, optional: bool) -> syn::Result<()> {
+    if optional {
+        if option_inner(ty).is_some_and(|inner| path_is(inner, "OriginExportKey")) {
+            Ok(())
+        } else {
+            Err(syn::Error::new(
+                ty.span(),
+                "trace_ref(optional) fields must have type Option<OriginExportKey>",
+            ))
+        }
+    } else if path_is(ty, "OriginExportKey") {
+        Ok(())
+    } else {
+        Err(syn::Error::new(
+            ty.span(),
+            "trace_ref fields must have type OriginExportKey",
+        ))
+    }
 }
 
 fn column_tokens(trace_facts: &TokenStream2, name: &str, kind: TokenStream2) -> TokenStream2 {

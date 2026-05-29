@@ -1521,20 +1521,34 @@ pub struct RuntimeCodeObjectBindingFact {
     pub confidence: RuntimePcJoinConfidence,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TraceFactSpec)]
 #[serde(deny_unknown_fields)]
+#[trace_fact(type = "execution_step", relation = "base_execution_step")]
 pub struct ExecutionStepFact {
+    #[trace_key]
+    #[trace_ref]
     pub step: OriginExportKey,
+    #[trace_ref]
     pub session: OriginExportKey,
+    #[trace_col]
     pub step_index: u64,
+    #[trace_ref]
     pub code_object: OriginExportKey,
+    #[trace_col]
     pub pc: u32,
+    #[trace_col]
     pub opcode: String,
+    #[trace_ref(optional)]
     pub instruction: Option<OriginExportKey>,
+    #[trace_col]
     pub gas_before: u64,
+    #[trace_col]
     pub gas_after: u64,
+    #[trace_col]
     pub gas_cost: u64,
+    #[trace_col]
     pub depth: u32,
+    #[trace_col]
     pub join_confidence: RuntimePcJoinConfidence,
 }
 

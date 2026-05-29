@@ -1,0 +1,5 @@
+error: trace_skip cannot be combined with trace_col
+ --> tests/ui/trace_fact_spec_skip_conflict.rs:8:5
+  |
+8 |     #[trace_col]
+  |     ^
