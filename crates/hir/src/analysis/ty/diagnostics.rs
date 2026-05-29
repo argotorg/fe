@@ -230,6 +230,12 @@ pub struct ConstPredicateDiagInfo<'db> {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum ConstPredicateProofFailureKind {
+    MissingEvidence,
+    EvaluationError,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct StaticAssertComparisonValues {
     pub op: CompBinOp,
@@ -416,6 +422,7 @@ pub enum BodyDiag<'db> {
     WhereConstPredicateEvalFailed {
         primary: DynLazySpan<'db>,
         required_by: Option<ConstPredicateDiagInfo<'db>>,
+        kind: ConstPredicateProofFailureKind,
     },
 
     InvalidCast {

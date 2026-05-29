@@ -696,6 +696,9 @@ pub fn resolve_path<'db>(
     db: &'db dyn HirAnalysisDb,
     path: PathId<'db>,
     scope: ScopeId<'db>,
+    // TODO(constraints): this resolver boundary still accepts the trait-solver
+    // projection of ParamEnv. The metaprogramming/evidence work should replace
+    // this loose PredicateListId input with a content-addressed ResolveEnvId.
     assumptions: PredicateListId<'db>,
     resolve_tail_as_value: bool,
 ) -> PathResolutionResult<'db, PathRes<'db>> {

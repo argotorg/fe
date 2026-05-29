@@ -14,6 +14,9 @@ use crate::analysis::{
 };
 use crate::hir_def::{Body, WhereClauseOwner, scope_graph::ScopeId};
 
+// ConstraintListId is the canonical internal representation for assumptions and
+// obligations. PredicateListId is now a trait-solver compatibility projection,
+// not a separate semantic collection pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub(crate) enum ConstraintKind<'db> {
     Trait(TraitInstId<'db>),
@@ -74,6 +77,7 @@ impl<'db> ConstraintListId<'db> {
         self.list(db).is_empty()
     }
 
+    /// Project constraints for the current trait-solver backend.
     pub(crate) fn trait_predicates(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
         PredicateListId::new(
             db,

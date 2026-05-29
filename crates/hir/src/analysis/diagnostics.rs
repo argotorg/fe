@@ -8,9 +8,9 @@ use crate::analysis::{
     name_resolution::diagnostics::{ImportDiag, PathResDiag},
     ty::{
         diagnostics::{
-            BodyDiag, CallConstraintDiagInfo, ConstPredicateDiagInfo, DefConflictError,
-            FuncBodyDiag, ImplDiag, TraitConstraintDiag, TraitLowerDiag, TyDiagCollection,
-            TyLowerDiag,
+            BodyDiag, CallConstraintDiagInfo, ConstPredicateDiagInfo,
+            ConstPredicateProofFailureKind, DefConflictError, FuncBodyDiag, ImplDiag,
+            TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag,
         },
         trait_def::TraitInstId,
         ty_check::{EffectParamOwner, RecordLike},
@@ -3085,10 +3085,29 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             Self::WhereConstPredicateEvalFailed {
                 primary,
                 required_by,
+                kind,
             } => {
+                let (message, primary_message, notes) = match kind {
+                    ConstPredicateProofFailureKind::MissingEvidence => (
+                        "missing const predicate evidence",
+                        "could not prove this const predicate from the current assumptions",
+                        vec![
+                            "add a matching predicate to the caller's `where` clause or use a concrete type that satisfies it"
+                                .to_string(),
+                        ],
+                    ),
+                    ConstPredicateProofFailureKind::EvaluationError => (
+                        "const predicate could not be evaluated",
+                        "CTFE evaluation failed for this predicate",
+                        vec![
+                            "const predicates must type-check as `bool` and evaluate without CTFE errors"
+                                .to_string(),
+                        ],
+                    ),
+                };
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
-                    message: "could not prove this const predicate here".to_string(),
+                    message: primary_message.to_string(),
                     span: primary.resolve(db),
                 }];
                 if let Some(required_by) = required_by {
@@ -3097,12 +3116,9 @@ impl DiagnosticVoucher for BodyDiag<'_> {
 
                 CompleteDiagnostic {
                     severity,
-                    message: "cannot prove const predicate".to_string(),
+                    message: message.to_string(),
                     sub_diagnostics,
-                    notes: vec![
-                        "const predicates must be proven by an assumption or by CTFE evaluating to `true`"
-                            .to_string(),
-                    ],
+                    notes,
                     error_code,
                 }
             }

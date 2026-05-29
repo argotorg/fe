@@ -96,6 +96,13 @@ fn assert_const_predicate_note(diags: &[CompleteDiagnostic], expected: &str) {
     );
 }
 
+fn assert_diag_message(diags: &[CompleteDiagnostic], expected: &str) {
+    assert!(
+        diags.iter().any(|diag| diag.message.contains(expected)),
+        "expected diagnostic message containing `{expected}`, got diagnostics: {diags:#?}"
+    );
+}
+
 #[test]
 fn const_predicate_generic_caller_with_matching_assumption_passes() {
     let mut db = HirAnalysisTestDb::default();
@@ -188,6 +195,7 @@ where
     let (top_mod, _) = db.top_mod(file);
     let diags = diagnostics_for(&db, top_mod);
     assert_const_predicate_diag(&diags);
+    assert_diag_message(&diags, "missing const predicate evidence");
     assert_const_predicate_required_by(
         &diags,
         "required by this where-clause predicate on `needs_big`",
@@ -356,6 +364,109 @@ where
     let (top_mod, _) = db.top_mod(file);
     let diags = diagnostics_for(&db, top_mod);
     assert_const_predicate_diag(&diags);
+}
+
+#[test]
+fn const_predicate_true_and_arithmetic_true_pass() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "const_predicate_true_and_arithmetic_true_pass.fe".into(),
+        r#"
+fn requires_true()
+where
+    true
+{}
+
+fn requires_arithmetic_true()
+where
+    1 + 1 == 2
+{}
+
+fn caller() {
+    requires_true()
+    requires_arithmetic_true()
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn const_predicate_false_fails_as_disproved_constraint() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "const_predicate_false_fails_as_disproved_constraint.fe".into(),
+        r#"
+fn requires_false()
+where
+    false
+{}
+
+fn fail() {
+    requires_false()
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+    assert_diag_message(&diags, "const predicate is not satisfied");
+    assert_const_predicate_required_by(
+        &diags,
+        "required by this where-clause predicate on `requires_false`",
+    );
+}
+
+#[test]
+fn const_predicate_arithmetic_false_fails_as_disproved_constraint() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "const_predicate_arithmetic_false_fails_as_disproved_constraint.fe".into(),
+        r#"
+fn requires_arithmetic_false()
+where
+    1 + 1 == 3
+{}
+
+fn fail() {
+    requires_arithmetic_false()
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+    assert_diag_message(&diags, "const predicate is not satisfied");
+    assert_const_predicate_required_by(
+        &diags,
+        "required by this where-clause predicate on `requires_arithmetic_false`",
+    );
+}
+
+#[test]
+fn const_predicate_ctfe_error_is_not_reported_as_false() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "const_predicate_ctfe_error_is_not_reported_as_false.fe".into(),
+        r#"
+fn requires_eval()
+where
+    1 / 0 == 0
+{}
+
+fn fail() {
+    requires_eval()
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+    assert_diag_message(&diags, "const predicate could not be evaluated");
+    assert!(
+        diags
+            .iter()
+            .all(|diag| !diag.message.contains("not satisfied")),
+        "expected CTFE error rather than false predicate diagnostic, got diagnostics: {diags:#?}"
+    );
 }
 
 #[test]

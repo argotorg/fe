@@ -1,4 +1,4 @@
-use crate::analysis::ty::diagnostics::{BodyDiag, FuncBodyDiag};
+use crate::analysis::ty::diagnostics::{BodyDiag, ConstPredicateProofFailureKind, FuncBodyDiag};
 use crate::analysis::ty::effects::{ResolvedEffectKey, resolve_effect_key};
 use crate::analysis::ty::trait_resolution::{
     GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
@@ -449,6 +449,7 @@ fn where_const_predicate_diags<'db>(
                     Box::new(BodyDiag::WhereConstPredicateEvalFailed {
                         primary: body.span().into(),
                         required_by: None,
+                        kind: ConstPredicateProofFailureKind::EvaluationError,
                     }) as Box<dyn DiagnosticVoucher + 'db>
                 },
             )

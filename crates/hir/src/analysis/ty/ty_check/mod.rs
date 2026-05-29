@@ -58,8 +58,9 @@ use super::{
     assoc_const::AssocConstUse,
     canonical::Canonical,
     diagnostics::{
-        BodyDiag, CallConstraintDiagInfo, ConstPredicateDiagInfo, FuncBodyDiag,
-        StaticAssertComparisonValues, TraitConstraintDiag, TyDiagCollection, TyLowerDiag,
+        BodyDiag, CallConstraintDiagInfo, ConstPredicateDiagInfo, ConstPredicateProofFailureKind,
+        FuncBodyDiag, StaticAssertComparisonValues, TraitConstraintDiag, TyDiagCollection,
+        TyLowerDiag,
     },
     effects::{EffectKeyKind, ResolvedEffectKey, resolve_effect_key},
     trait_def::TraitInstId,
@@ -1377,6 +1378,7 @@ impl<'db> TyChecker<'db> {
                 self.push_diag(BodyDiag::WhereConstPredicateEvalFailed {
                     primary: obligation.span.clone(),
                     required_by,
+                    kind: ConstPredicateProofFailureKind::MissingEvidence,
                 });
                 return ObligationOutcome::Discharged;
             }
@@ -1396,11 +1398,24 @@ impl<'db> TyChecker<'db> {
                     self.requeue_const_predicate_obligation(pred, obligation)
                 }
             }
-            ConstProveResult::Ambiguous | ConstProveResult::Error => {
+            ConstProveResult::Ambiguous => {
                 if final_pass {
                     self.push_diag(BodyDiag::WhereConstPredicateEvalFailed {
                         primary: obligation.span.clone(),
                         required_by,
+                        kind: ConstPredicateProofFailureKind::MissingEvidence,
+                    });
+                    ObligationOutcome::Discharged
+                } else {
+                    self.requeue_const_predicate_obligation(pred, obligation)
+                }
+            }
+            ConstProveResult::Error => {
+                if final_pass {
+                    self.push_diag(BodyDiag::WhereConstPredicateEvalFailed {
+                        primary: obligation.span.clone(),
+                        required_by,
+                        kind: ConstPredicateProofFailureKind::EvaluationError,
                     });
                     ObligationOutcome::Discharged
                 } else {
@@ -4385,11 +4400,22 @@ impl<'db> TyCheckerFinalizer<'db> {
                         .into(),
                     );
                 }
-                ConstProveResult::Ambiguous | ConstProveResult::Error => {
+                ConstProveResult::Ambiguous => {
                     self.diags.push(
                         BodyDiag::WhereConstPredicateEvalFailed {
                             primary: span.clone(),
                             required_by,
+                            kind: ConstPredicateProofFailureKind::MissingEvidence,
+                        }
+                        .into(),
+                    );
+                }
+                ConstProveResult::Error => {
+                    self.diags.push(
+                        BodyDiag::WhereConstPredicateEvalFailed {
+                            primary: span.clone(),
+                            required_by,
+                            kind: ConstPredicateProofFailureKind::EvaluationError,
                         }
                         .into(),
                     );
