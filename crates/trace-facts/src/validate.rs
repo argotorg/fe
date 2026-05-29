@@ -618,6 +618,9 @@ impl TraceValidator {
         for hash in shape_graph_hashes {
             validate_shape_graph_hash(hash, &nodes, &shape_policy_by_id, &mut diagnostics);
         }
+        for fact in facts {
+            validate_generated_origin_refs(fact, &nodes, &mut diagnostics);
+        }
 
         TraceValidationReport {
             summary: TraceValidationSummary {
@@ -2376,6 +2379,41 @@ fn require_node(
     }
 }
 
+fn validate_generated_origin_refs(
+    fact: &TraceFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    for origin_ref in fact.origin_refs() {
+        if !nodes.contains(origin_ref.key)
+            && !missing_origin_node_reported(diagnostics, origin_ref.key)
+        {
+            push_error(
+                diagnostics,
+                TraceValidationError::MissingOriginNode {
+                    role: origin_ref.field,
+                    key: origin_ref.key.clone(),
+                },
+            );
+        }
+    }
+}
+
+fn missing_origin_node_reported(
+    diagnostics: &[TraceValidationDiagnostic],
+    key: &OriginExportKey,
+) -> bool {
+    diagnostics.iter().any(|diagnostic| {
+        matches!(
+            diagnostic,
+            TraceValidationDiagnostic::Error(TraceValidationError::MissingOriginNode {
+                key: reported,
+                ..
+            }) if reported == key
+        )
+    })
+}
+
 fn push_error(diagnostics: &mut Vec<TraceValidationDiagnostic>, error: TraceValidationError) {
     diagnostics.push(TraceValidationDiagnostic::Error(error));
 }
@@ -3072,6 +3110,44 @@ mod tests {
             ShapeDigest::new(hex_digit.to_string().repeat(64)).unwrap(),
         );
         digests
+    }
+
+    #[test]
+    fn generated_origin_ref_validation_reports_derived_refs() {
+        let step = key("runtime.step", "tx:1", "step:0");
+        let session = key("runtime.session", "tx:1", "session");
+        let code_object = key("code.object", "fib", "runtime");
+        let instruction = key("bytecode.pc", "fib", "pc:4");
+        let fact = TraceFact::ExecutionStep(ExecutionStepFact {
+            step,
+            session,
+            step_index: 0,
+            code_object,
+            pc: 4,
+            opcode: "ADD".to_string(),
+            instruction: Some(instruction),
+            gas_before: 100,
+            gas_after: 97,
+            gas_cost: 3,
+            depth: 1,
+            join_confidence: RuntimePcJoinConfidence::ExactCodeHashAndPc,
+        });
+        let mut diagnostics = Vec::new();
+
+        super::validate_generated_origin_refs(
+            &fact,
+            &std::collections::BTreeSet::new(),
+            &mut diagnostics,
+        );
+
+        assert_eq!(diagnostics.len(), 4);
+        assert!(matches!(
+            &diagnostics[0],
+            TraceValidationDiagnostic::Error(TraceValidationError::MissingOriginNode {
+                role: "step",
+                ..
+            })
+        ));
     }
 
     #[test]

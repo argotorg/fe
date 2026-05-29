@@ -82,6 +82,18 @@ pub trait TraceRelation {
 
     fn schema() -> RelationSchema;
     fn row(&self) -> RelationRow;
+
+    fn primary_key(&self) -> Option<&OriginExportKey> {
+        None
+    }
+
+    fn origin_refs(&self) -> Vec<OriginRef<'_>> {
+        Vec::new()
+    }
+
+    fn local_validation(&self) -> Vec<ValidationIssue> {
+        Vec::new()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -136,155 +148,107 @@ where
     fn row(&self) -> RelationRow {
         self.relation_row()
     }
+
+    fn primary_key(&self) -> Option<&OriginExportKey> {
+        TraceFactSpec::primary_key(self)
+    }
+
+    fn origin_refs(&self) -> Vec<OriginRef<'_>> {
+        TraceFactSpec::origin_refs(self)
+    }
+
+    fn local_validation(&self) -> Vec<ValidationIssue> {
+        TraceFactSpec::local_validation(self)
+    }
 }
 
-impl TraceFact {
-    pub fn base_relation_name(&self) -> &'static str {
-        match self {
-            Self::OriginNode(_) => OriginNodeFact::NAME,
-            Self::OriginEdge(_) => OriginEdgeFact::NAME,
-            Self::CompilerEvent(_) => CompilerEventFact::NAME,
-            Self::Storage(_) => StorageFact::NAME,
-            Self::Instruction(_) => InstructionFact::NAME,
-            Self::InstructionCategory(_) => InstructionCategoryFact::NAME,
-            Self::Block(_) => BlockFact::NAME,
-            Self::CfgEdge(_) => CfgEdgeFact::NAME,
-            Self::Loop(_) => LoopFact::NAME,
-            Self::LoopBlock(_) => LoopBlockFact::NAME,
-            Self::InstructionBlock(_) => InstructionBlockFact::NAME,
-            Self::InstructionExtent(_) => InstructionExtentFact::NAME,
-            Self::LoopMembership(_) => LoopMembershipFact::NAME,
-            Self::InlineContext(_) => InlineContextFact::NAME,
-            Self::Opcode(_) => OpcodeFact::NAME,
-            Self::GasCost(_) => GasCostFact::NAME,
-            Self::DisplayName(_) => DisplayNameFact::NAME,
-            Self::ValueProperty(_) => ValuePropertyFact::NAME,
-            Self::SourceFile(_) => SourceFileFact::NAME,
-            Self::SourceSpan(_) => SourceSpanFact::NAME,
-            Self::CodeObject(_) => CodeObjectFact::NAME,
-            Self::Function(_) => FunctionFact::NAME,
-            Self::LexicalScope(_) => LexicalScopeFact::NAME,
-            Self::Type(_) => TypeFact::NAME,
-            Self::Variable(_) => VariableFact::NAME,
-            Self::LocationRange(_) => LocationRangeFact::NAME,
-            Self::StaticGas(_) => StaticGasFact::NAME,
-            Self::DynamicGasStep(_) => DynamicGasStepFact::NAME,
-            Self::ExecutionTraceSession(_) => ExecutionTraceSessionFact::NAME,
-            Self::RuntimeCodeObjectBinding(_) => RuntimeCodeObjectBindingFact::NAME,
-            Self::ExecutionStep(_) => ExecutionStepFact::NAME,
-            Self::StackSample(_) => StackSampleFact::NAME,
-            Self::StorageAccess(_) => StorageAccessFact::NAME,
-            Self::MemoryAccess(_) => MemoryAccessFact::NAME,
-            Self::Call(_) => CallFact::NAME,
-            Self::Log(_) => LogFact::NAME,
-            Self::ReturnData(_) => ReturnDataFact::NAME,
-            Self::Revert(_) => RevertFact::NAME,
-            Self::PrecompileInvocation(_) => PrecompileInvocationFact::NAME,
-            Self::Selfdestruct(_) => SelfdestructFact::NAME,
-            Self::ShapePolicy(_) => ShapePolicyFact::NAME,
-            Self::ShapeNodeHash(_) => ShapeNodeHashFact::NAME,
-            Self::ShapeComponentHash(_) => ShapeComponentHashFact::NAME,
-            Self::ShapeGraphHash(_) => ShapeGraphHashFact::NAME,
-        }
-    }
+macro_rules! trace_fact_registry {
+    ($($variant:ident($ty:ty)),+ $(,)?) => {
+        impl TraceFact {
+            pub fn base_relation_name(&self) -> &'static str {
+                match self {
+                    $(Self::$variant(_) => <$ty as TraceRelation>::NAME,)+
+                }
+            }
 
-    pub fn base_relation_schema(&self) -> RelationSchema {
-        match self {
-            Self::OriginNode(_) => OriginNodeFact::schema(),
-            Self::OriginEdge(_) => OriginEdgeFact::schema(),
-            Self::CompilerEvent(_) => CompilerEventFact::schema(),
-            Self::Storage(_) => StorageFact::schema(),
-            Self::Instruction(_) => InstructionFact::schema(),
-            Self::InstructionCategory(_) => InstructionCategoryFact::schema(),
-            Self::Block(_) => BlockFact::schema(),
-            Self::CfgEdge(_) => CfgEdgeFact::schema(),
-            Self::Loop(_) => LoopFact::schema(),
-            Self::LoopBlock(_) => LoopBlockFact::schema(),
-            Self::InstructionBlock(_) => InstructionBlockFact::schema(),
-            Self::InstructionExtent(_) => InstructionExtentFact::schema(),
-            Self::LoopMembership(_) => LoopMembershipFact::schema(),
-            Self::InlineContext(_) => InlineContextFact::schema(),
-            Self::Opcode(_) => OpcodeFact::schema(),
-            Self::GasCost(_) => GasCostFact::schema(),
-            Self::DisplayName(_) => DisplayNameFact::schema(),
-            Self::ValueProperty(_) => ValuePropertyFact::schema(),
-            Self::SourceFile(_) => SourceFileFact::schema(),
-            Self::SourceSpan(_) => SourceSpanFact::schema(),
-            Self::CodeObject(_) => CodeObjectFact::schema(),
-            Self::Function(_) => FunctionFact::schema(),
-            Self::LexicalScope(_) => LexicalScopeFact::schema(),
-            Self::Type(_) => TypeFact::schema(),
-            Self::Variable(_) => VariableFact::schema(),
-            Self::LocationRange(_) => LocationRangeFact::schema(),
-            Self::StaticGas(_) => StaticGasFact::schema(),
-            Self::DynamicGasStep(_) => DynamicGasStepFact::schema(),
-            Self::ExecutionTraceSession(_) => ExecutionTraceSessionFact::schema(),
-            Self::RuntimeCodeObjectBinding(_) => RuntimeCodeObjectBindingFact::schema(),
-            Self::ExecutionStep(_) => ExecutionStepFact::schema(),
-            Self::StackSample(_) => StackSampleFact::schema(),
-            Self::StorageAccess(_) => StorageAccessFact::schema(),
-            Self::MemoryAccess(_) => MemoryAccessFact::schema(),
-            Self::Call(_) => CallFact::schema(),
-            Self::Log(_) => LogFact::schema(),
-            Self::ReturnData(_) => ReturnDataFact::schema(),
-            Self::Revert(_) => RevertFact::schema(),
-            Self::PrecompileInvocation(_) => PrecompileInvocationFact::schema(),
-            Self::Selfdestruct(_) => SelfdestructFact::schema(),
-            Self::ShapePolicy(_) => ShapePolicyFact::schema(),
-            Self::ShapeNodeHash(_) => ShapeNodeHashFact::schema(),
-            Self::ShapeComponentHash(_) => ShapeComponentHashFact::schema(),
-            Self::ShapeGraphHash(_) => ShapeGraphHashFact::schema(),
-        }
-    }
+            pub fn base_relation_schema(&self) -> RelationSchema {
+                match self {
+                    $(Self::$variant(_) => <$ty as TraceRelation>::schema(),)+
+                }
+            }
 
-    pub fn base_relation_row(&self) -> RelationRow {
-        match self {
-            Self::OriginNode(fact) => fact.row(),
-            Self::OriginEdge(fact) => fact.row(),
-            Self::CompilerEvent(fact) => fact.row(),
-            Self::Storage(fact) => fact.row(),
-            Self::Instruction(fact) => fact.row(),
-            Self::InstructionCategory(fact) => fact.row(),
-            Self::Block(fact) => fact.row(),
-            Self::CfgEdge(fact) => fact.row(),
-            Self::Loop(fact) => fact.row(),
-            Self::LoopBlock(fact) => fact.row(),
-            Self::InstructionBlock(fact) => fact.row(),
-            Self::InstructionExtent(fact) => fact.row(),
-            Self::LoopMembership(fact) => fact.row(),
-            Self::InlineContext(fact) => fact.row(),
-            Self::Opcode(fact) => fact.row(),
-            Self::GasCost(fact) => fact.row(),
-            Self::DisplayName(fact) => fact.row(),
-            Self::ValueProperty(fact) => fact.row(),
-            Self::SourceFile(fact) => fact.row(),
-            Self::SourceSpan(fact) => fact.row(),
-            Self::CodeObject(fact) => fact.row(),
-            Self::Function(fact) => fact.row(),
-            Self::LexicalScope(fact) => fact.row(),
-            Self::Type(fact) => fact.row(),
-            Self::Variable(fact) => fact.row(),
-            Self::LocationRange(fact) => fact.row(),
-            Self::StaticGas(fact) => fact.row(),
-            Self::DynamicGasStep(fact) => fact.row(),
-            Self::ExecutionTraceSession(fact) => fact.row(),
-            Self::RuntimeCodeObjectBinding(fact) => fact.row(),
-            Self::ExecutionStep(fact) => fact.row(),
-            Self::StackSample(fact) => fact.row(),
-            Self::StorageAccess(fact) => fact.row(),
-            Self::MemoryAccess(fact) => fact.row(),
-            Self::Call(fact) => fact.row(),
-            Self::Log(fact) => fact.row(),
-            Self::ReturnData(fact) => fact.row(),
-            Self::Revert(fact) => fact.row(),
-            Self::PrecompileInvocation(fact) => fact.row(),
-            Self::Selfdestruct(fact) => fact.row(),
-            Self::ShapePolicy(fact) => fact.row(),
-            Self::ShapeNodeHash(fact) => fact.row(),
-            Self::ShapeComponentHash(fact) => fact.row(),
-            Self::ShapeGraphHash(fact) => fact.row(),
+            pub fn base_relation_row(&self) -> RelationRow {
+                match self {
+                    $(Self::$variant(fact) => TraceRelation::row(fact),)+
+                }
+            }
+
+            pub fn primary_key(&self) -> Option<&OriginExportKey> {
+                match self {
+                    $(Self::$variant(fact) => TraceRelation::primary_key(fact),)+
+                }
+            }
+
+            pub fn origin_refs(&self) -> Vec<OriginRef<'_>> {
+                match self {
+                    $(Self::$variant(fact) => TraceRelation::origin_refs(fact),)+
+                }
+            }
+
+            pub fn local_validation(&self) -> Vec<ValidationIssue> {
+                match self {
+                    $(Self::$variant(fact) => TraceRelation::local_validation(fact),)+
+                }
+            }
         }
-    }
+    };
+}
+
+trace_fact_registry! {
+    OriginNode(OriginNodeFact),
+    OriginEdge(OriginEdgeFact),
+    CompilerEvent(CompilerEventFact),
+    Storage(StorageFact),
+    Instruction(InstructionFact),
+    InstructionCategory(InstructionCategoryFact),
+    Block(BlockFact),
+    CfgEdge(CfgEdgeFact),
+    Loop(LoopFact),
+    LoopBlock(LoopBlockFact),
+    InstructionBlock(InstructionBlockFact),
+    InstructionExtent(InstructionExtentFact),
+    LoopMembership(LoopMembershipFact),
+    InlineContext(InlineContextFact),
+    Opcode(OpcodeFact),
+    GasCost(GasCostFact),
+    DisplayName(DisplayNameFact),
+    ValueProperty(ValuePropertyFact),
+    SourceFile(SourceFileFact),
+    SourceSpan(SourceSpanFact),
+    CodeObject(CodeObjectFact),
+    Function(FunctionFact),
+    LexicalScope(LexicalScopeFact),
+    Type(TypeFact),
+    Variable(VariableFact),
+    LocationRange(LocationRangeFact),
+    StaticGas(StaticGasFact),
+    DynamicGasStep(DynamicGasStepFact),
+    ExecutionTraceSession(ExecutionTraceSessionFact),
+    RuntimeCodeObjectBinding(RuntimeCodeObjectBindingFact),
+    ExecutionStep(ExecutionStepFact),
+    StackSample(StackSampleFact),
+    StorageAccess(StorageAccessFact),
+    MemoryAccess(MemoryAccessFact),
+    Call(CallFact),
+    Log(LogFact),
+    ReturnData(ReturnDataFact),
+    Revert(RevertFact),
+    PrecompileInvocation(PrecompileInvocationFact),
+    Selfdestruct(SelfdestructFact),
+    ShapePolicy(ShapePolicyFact),
+    ShapeNodeHash(ShapeNodeHashFact),
+    ShapeComponentHash(ShapeComponentHashFact),
+    ShapeGraphHash(ShapeGraphHashFact),
 }
 
 macro_rules! cols {
@@ -1083,157 +1047,6 @@ impl TraceRelation for StackSampleFact {
     }
 }
 
-impl TraceRelation for StorageAccessFact {
-    const NAME: &'static str = "base_storage_access";
-
-    fn schema() -> RelationSchema {
-        schema!(
-            Self::NAME,
-            [
-                "access": Key,
-                "step": Key,
-                "code_object": Key,
-                "instruction": OptionalKey,
-                "kind": Text,
-                "address": OptionalText,
-                "slot": Text,
-                "value_before": OptionalText,
-                "value_after": OptionalText,
-                "policy": Text,
-            ]
-        )
-    }
-
-    fn row(&self) -> RelationRow {
-        row!(
-            Self::NAME,
-            [
-                key(&self.access),
-                key(&self.step),
-                key(&self.code_object),
-                opt_key(self.instruction.as_ref()),
-                value(&self.kind),
-                self.address.clone().unwrap_or_default(),
-                value(&self.slot),
-                opt_value(self.value_before.as_ref()),
-                opt_value(self.value_after.as_ref()),
-                value(&self.policy),
-            ]
-        )
-    }
-}
-
-impl TraceRelation for MemoryAccessFact {
-    const NAME: &'static str = "base_memory_access";
-
-    fn schema() -> RelationSchema {
-        schema!(
-            Self::NAME,
-            [
-                "access": Key,
-                "step": Key,
-                "kind": Text,
-                "offset": U64,
-                "length": U64,
-                "value": OptionalText,
-                "policy": Text,
-            ]
-        )
-    }
-
-    fn row(&self) -> RelationRow {
-        row!(
-            Self::NAME,
-            [
-                key(&self.access),
-                key(&self.step),
-                value(&self.kind),
-                self.offset.to_string(),
-                self.length.to_string(),
-                opt_value(self.value.as_ref()),
-                value(&self.policy),
-            ]
-        )
-    }
-}
-
-impl TraceRelation for CallFact {
-    const NAME: &'static str = "base_runtime_call";
-
-    fn schema() -> RelationSchema {
-        schema!(
-            Self::NAME,
-            [
-                "call": Key,
-                "step": Key,
-                "kind": Text,
-                "caller": OptionalText,
-                "callee": OptionalText,
-                "value": OptionalText,
-                "gas_requested": OptionalText,
-                "gas_used": OptionalText,
-                "success": OptionalText,
-                "callsite_instruction": OptionalKey,
-                "policy": Text,
-            ]
-        )
-    }
-
-    fn row(&self) -> RelationRow {
-        row!(
-            Self::NAME,
-            [
-                key(&self.call),
-                key(&self.step),
-                value(&self.kind),
-                self.caller.clone().unwrap_or_default(),
-                self.callee.clone().unwrap_or_default(),
-                opt_value(self.value.as_ref()),
-                self.gas_requested
-                    .map_or_else(String::new, |value| value.to_string()),
-                self.gas_used
-                    .map_or_else(String::new, |value| value.to_string()),
-                self.success
-                    .map_or_else(String::new, |value| value.to_string()),
-                opt_key(self.callsite_instruction.as_ref()),
-                value(&self.policy),
-            ]
-        )
-    }
-}
-
-impl TraceRelation for LogFact {
-    const NAME: &'static str = "base_runtime_log";
-
-    fn schema() -> RelationSchema {
-        schema!(
-            Self::NAME,
-            [
-                "log": Key,
-                "step": Key,
-                "address": OptionalText,
-                "topics": List,
-                "data": Text,
-                "policy": Text,
-            ]
-        )
-    }
-
-    fn row(&self) -> RelationRow {
-        row!(
-            Self::NAME,
-            [
-                key(&self.log),
-                key(&self.step),
-                self.address.clone().unwrap_or_default(),
-                value(&self.topics),
-                value(&self.data),
-                value(&self.policy),
-            ]
-        )
-    }
-}
-
 impl TraceRelation for ReturnDataFact {
     const NAME: &'static str = "base_return_data";
 
@@ -1251,36 +1064,6 @@ impl TraceRelation for ReturnDataFact {
                 key(&self.event),
                 key(&self.step),
                 value(&self.kind),
-                value(&self.data),
-                value(&self.policy),
-            ]
-        )
-    }
-}
-
-impl TraceRelation for RevertFact {
-    const NAME: &'static str = "base_revert";
-
-    fn schema() -> RelationSchema {
-        schema!(
-            Self::NAME,
-            [
-                "revert": Key,
-                "step": Key,
-                "reason": OptionalText,
-                "data": Text,
-                "policy": Text,
-            ]
-        )
-    }
-
-    fn row(&self) -> RelationRow {
-        row!(
-            Self::NAME,
-            [
-                key(&self.revert),
-                key(&self.step),
-                self.reason.clone().unwrap_or_default(),
                 value(&self.data),
                 value(&self.policy),
             ]

@@ -1561,57 +1561,99 @@ pub struct StackSampleFact {
     pub values_top_first: Vec<RuntimeValue>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TraceFactSpec)]
 #[serde(deny_unknown_fields)]
+#[trace_fact(type = "storage_access", relation = "base_storage_access")]
 pub struct StorageAccessFact {
+    #[trace_key]
+    #[trace_ref]
     pub access: OriginExportKey,
+    #[trace_ref]
     pub step: OriginExportKey,
+    #[trace_ref]
     pub code_object: OriginExportKey,
+    #[trace_ref(optional)]
     pub instruction: Option<OriginExportKey>,
+    #[trace_col]
     pub kind: StorageAccessKind,
+    #[trace_col]
     pub address: Option<String>,
+    #[trace_col]
     pub slot: RuntimeValue,
+    #[trace_col]
     pub value_before: Option<RuntimeValue>,
+    #[trace_col]
     pub value_after: Option<RuntimeValue>,
+    #[trace_col]
     pub policy: RuntimeValuePolicy,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TraceFactSpec)]
 #[serde(deny_unknown_fields)]
+#[trace_fact(type = "memory_access", relation = "base_memory_access")]
 pub struct MemoryAccessFact {
+    #[trace_key]
+    #[trace_ref]
     pub access: OriginExportKey,
+    #[trace_ref]
     pub step: OriginExportKey,
+    #[trace_col]
     pub kind: MemoryAccessKind,
+    #[trace_col]
     pub offset: u64,
+    #[trace_col]
     pub length: u64,
+    #[trace_col]
     pub value: Option<RuntimeValue>,
+    #[trace_col]
     pub policy: RuntimeValuePolicy,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TraceFactSpec)]
 #[serde(deny_unknown_fields)]
+#[trace_fact(type = "runtime_call", relation = "base_runtime_call")]
 pub struct CallFact {
+    #[trace_key]
+    #[trace_ref]
     pub call: OriginExportKey,
+    #[trace_ref]
     pub step: OriginExportKey,
+    #[trace_col]
     pub kind: RuntimeCallKind,
+    #[trace_col]
     pub caller: Option<String>,
+    #[trace_col]
     pub callee: Option<String>,
+    #[trace_col]
     pub value: Option<RuntimeValue>,
+    #[trace_col]
     pub gas_requested: Option<u64>,
+    #[trace_col]
     pub gas_used: Option<u64>,
+    #[trace_col]
     pub success: Option<bool>,
+    #[trace_ref(optional)]
     pub callsite_instruction: Option<OriginExportKey>,
+    #[trace_col]
     pub policy: RuntimeValuePolicy,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TraceFactSpec)]
 #[serde(deny_unknown_fields)]
+#[trace_fact(type = "runtime_log", relation = "base_runtime_log")]
 pub struct LogFact {
+    #[trace_key]
+    #[trace_ref]
     pub log: OriginExportKey,
+    #[trace_ref]
     pub step: OriginExportKey,
+    #[trace_col]
     pub address: Option<String>,
+    #[trace_col]
     pub topics: Vec<RuntimeValue>,
+    #[trace_col]
     pub data: RuntimeValue,
+    #[trace_col]
     pub policy: RuntimeValuePolicy,
 }
 
@@ -1625,13 +1667,20 @@ pub struct ReturnDataFact {
     pub policy: RuntimeValuePolicy,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TraceFactSpec)]
 #[serde(deny_unknown_fields)]
+#[trace_fact(type = "revert", relation = "base_revert")]
 pub struct RevertFact {
+    #[trace_key]
+    #[trace_ref]
     pub revert: OriginExportKey,
+    #[trace_ref]
     pub step: OriginExportKey,
+    #[trace_col]
     pub reason: Option<String>,
+    #[trace_col]
     pub data: RuntimeValue,
+    #[trace_col]
     pub policy: RuntimeValuePolicy,
 }
 
