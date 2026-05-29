@@ -1,0 +1,7 @@
+error: shape skip requires reason
+ --> tests/ui/shape_describe_skip_without_reason.rs:3:17
+  |
+3 | #[derive(Clone, ShapeDescribe)]
+  |                 ^^^^^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `ShapeDescribe` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -3,6 +3,7 @@ use std::fmt;
 
 use common::origin::OriginExportKey;
 use serde::{Deserialize, Serialize};
+pub use shape_address_macros::ShapeDescribe;
 
 pub const SHAPE_SCHEMA_VERSION: u32 = 1;
 
@@ -347,10 +348,32 @@ impl From<u64> for ShapeValue {
     }
 }
 
+impl From<u32> for ShapeValue {
+    fn from(value: u32) -> Self {
+        Self::U64(value.into())
+    }
+}
+
 impl From<i64> for ShapeValue {
     fn from(value: i64) -> Self {
         Self::I64(value)
     }
+}
+
+impl From<i32> for ShapeValue {
+    fn from(value: i32) -> Self {
+        Self::I64(value.into())
+    }
+}
+
+pub trait ShapeDescribe {
+    const SHAPE_KIND: &'static str;
+
+    fn describe_shape(
+        &self,
+        sink: &mut impl ShapeSink,
+        key: ShapeNodeKey,
+    ) -> Result<(), ShapeError>;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1636,6 +1659,40 @@ impl std::error::Error for ShapeError {}
 mod tests {
     use super::*;
 
+    #[derive(Clone, ShapeDescribe)]
+    #[allow(dead_code)]
+    #[shape(kind = "hir.local")]
+    struct HirLocalShapeExample {
+        #[shape(structure)]
+        kind: String,
+        #[shape(names)]
+        name: String,
+        #[shape(skip(reason = "source spans are described by origin/source facts"))]
+        span: Option<String>,
+    }
+
+    #[derive(Clone, ShapeDescribe)]
+    #[shape(kind = "mir.stmt")]
+    struct MirStmtShapeExample {
+        #[shape(structure)]
+        opcode: String,
+        #[shape(types)]
+        ty: String,
+        #[shape(constants)]
+        ordinal: u32,
+    }
+
+    #[derive(Clone, ShapeDescribe)]
+    #[shape(kind = "bytecode.inst")]
+    struct BytecodeInstShapeExample {
+        #[shape(structure)]
+        opcode: String,
+        #[shape(constants)]
+        immediate: u64,
+        #[shape(trace_events)]
+        synthetic: bool,
+    }
+
     fn origin(kind: &str, owner: &str, local: &str) -> OriginExportKey {
         OriginExportKey::try_from_raw_parts(kind, owner, local).unwrap()
     }
@@ -1682,6 +1739,66 @@ mod tests {
             ),
             Err(ShapeError::EmptyDimensions)
         ));
+    }
+
+    #[test]
+    fn shape_describe_derive_adds_local_node_fields() {
+        let mut graph = graph();
+        let hir = ShapeNodeKey::entity(origin("hir.local", "demo", "local:i"));
+        HirLocalShapeExample {
+            kind: "binding".to_string(),
+            name: "i".to_string(),
+            span: Some("1:1-1:2".to_string()),
+        }
+        .describe_shape(&mut graph, hir.clone())
+        .unwrap();
+
+        let node = graph.nodes.get(&hir).unwrap();
+        assert_eq!(node.kind.as_str(), "hir.local");
+        assert_eq!(node.fields.len(), 2);
+        assert!(node.fields.iter().any(|field| {
+            field.dimension == ShapeDimension::Names
+                && field.name.as_str() == "name"
+                && field.value == ShapeValue::Text("i".to_string())
+        }));
+    }
+
+    #[test]
+    fn shape_describe_examples_cover_hir_mir_and_bytecode_nodes() {
+        let mut graph = graph();
+        HirLocalShapeExample {
+            kind: "binding".to_string(),
+            name: "b".to_string(),
+            span: None,
+        }
+        .describe_shape(
+            &mut graph,
+            ShapeNodeKey::entity(origin("hir.local", "demo", "local:b")),
+        )
+        .unwrap();
+        MirStmtShapeExample {
+            opcode: "assign".to_string(),
+            ty: "u32".to_string(),
+            ordinal: 3,
+        }
+        .describe_shape(
+            &mut graph,
+            ShapeNodeKey::entity(origin("mir.stmt", "demo", "stmt:3")),
+        )
+        .unwrap();
+        BytecodeInstShapeExample {
+            opcode: "PUSH1".to_string(),
+            immediate: 1,
+            synthetic: false,
+        }
+        .describe_shape(
+            &mut graph,
+            ShapeNodeKey::entity(origin("bytecode.inst", "demo", "pc:0")),
+        )
+        .unwrap();
+
+        assert_eq!(graph.nodes.len(), 3);
+        assert!(graph.validate().is_ok());
     }
 
     #[test]

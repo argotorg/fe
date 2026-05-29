@@ -1,0 +1,7 @@
+error: ShapeDescribe requires #[shape(kind = "...")]
+ --> tests/ui/shape_describe_missing_kind.rs:3:17
+  |
+3 | #[derive(Clone, ShapeDescribe)]
+  |                 ^^^^^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `ShapeDescribe` (in Nightly builds, run with -Z macro-backtrace for more info)

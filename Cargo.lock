@@ -2462,7 +2462,19 @@ version = "26.1.0"
 dependencies = [
  "blake3",
  "fe-common",
+ "fe-shape-address-macros",
  "serde",
+ "trybuild",
+]
+
+[[package]]
+name = "fe-shape-address-macros"
+version = "26.1.0"
+dependencies = [
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.116",
 ]
 
 [[package]]

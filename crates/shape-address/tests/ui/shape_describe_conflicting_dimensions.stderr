@@ -1,0 +1,5 @@
+error: shape field can have only one dimension
+ --> tests/ui/shape_describe_conflicting_dimensions.rs:6:24
+  |
+6 |     #[shape(structure, names)]
+  |                        ^^^^^

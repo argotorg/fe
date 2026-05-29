@@ -25,6 +25,7 @@ trace-facts = { path = "crates/trace-facts", package = "fe-trace-facts" }
 trace-facts-macros = { path = "crates/trace-facts-macros", package = "fe-trace-facts-macros" }
 trace-query = { path = "crates/trace-query", package = "fe-trace-query" }
 shape-address = { path = "crates/shape-address", package = "fe-shape-address" }
+shape-address-macros = { path = "crates/shape-address-macros", package = "fe-shape-address-macros" }
 cranelift-entity = "0.130"
 url = "2.5.4"
 camino = "1.1.9"
