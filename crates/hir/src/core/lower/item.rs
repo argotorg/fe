@@ -98,7 +98,11 @@ impl<'db> ItemKind<'db> {
                     struct_.attr_list(),
                     "struct",
                 );
-                Struct::lower_ast(ctxt, struct_);
+                if super::derive::is_derive_struct(&struct_) {
+                    super::derive::lower_derive_struct(ctxt, struct_);
+                } else {
+                    Struct::lower_ast(ctxt, struct_);
+                }
             }
             ast::ItemKind::Contract(contract) => {
                 super::arithmetic::report_arithmetic_attr_on_unsupported_item(
@@ -131,6 +135,11 @@ impl<'db> ItemKind<'db> {
                 );
                 super::event::report_event_attr_on_non_struct_item(ctxt, enum_.attr_list(), "enum");
                 super::error::report_error_attr_on_non_struct_item(ctxt, enum_.attr_list(), "enum");
+                super::derive::report_derive_attr_on_non_struct_item(
+                    ctxt,
+                    enum_.attr_list(),
+                    "enum",
+                );
                 super::payable::report_payable_attr_on_unsupported_item(
                     ctxt,
                     enum_.attr_list(),

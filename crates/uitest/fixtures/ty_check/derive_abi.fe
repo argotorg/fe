@@ -1,0 +1,5 @@
+#[derive(Abi)]
+struct Transfer {
+    to: Address,
+    amount: u256,
+}

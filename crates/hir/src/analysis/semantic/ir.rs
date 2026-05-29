@@ -391,6 +391,12 @@ pub enum SExpr<'db> {
         base: SOperand,
         field: FieldIndex,
     },
+    /// `.{expr}` compile-time field access. The field_expr operand evaluates
+    /// to a Name at compile time, used as a FieldIndex during CTFE.
+    DynField {
+        base: SOperand,
+        field_expr: SOperand,
+    },
     Index {
         base: SOperand,
         index: SOperand,

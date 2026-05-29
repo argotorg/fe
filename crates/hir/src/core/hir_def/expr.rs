@@ -30,6 +30,9 @@ pub enum Expr<'db> {
     /// The fist `PathId` is the record type, the second is the record fields.
     RecordInit(Partial<PathId<'db>>, Vec<Field<'db>>),
     Field(ExprId, Partial<FieldIndex<'db>>),
+    /// `expr.{field_expr}` — comptime dynamic field access. The field name is
+    /// determined by evaluating field_expr at compile time (returns an IdentId).
+    DynField(ExprId, ExprId),
     Tuple(Vec<ExprId>),
     Array(Vec<ExprId>),
 

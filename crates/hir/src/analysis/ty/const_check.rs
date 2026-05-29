@@ -4,7 +4,7 @@ use crate::analysis::ty::trait_def::resolve_trait_method_instance;
 use crate::analysis::ty::trait_resolution::TraitSolveCx;
 use crate::analysis::ty::ty_check::{Callable, TypedBody};
 use crate::hir_def::{
-    Body, CallableDef, Cond, CondId, Expr, ExprId, Func, Partial, Pat, Stmt, StmtId,
+    Body, CallableDef, Cond, CondId, Expr, ExprId, Func, ItemKind, Partial, Pat, Stmt, StmtId,
 };
 use crate::span::DynLazySpan;
 
@@ -24,7 +24,10 @@ pub(crate) fn check_const_fn_body<'db>(
         diags: Vec::new(),
     };
 
-    if func.has_effects(db) {
+    let is_derive_strategy = ItemKind::Func(func)
+        .attrs(db)
+        .is_some_and(|a| a.has_attr(db, "derive_strategy"));
+    if func.has_effects(db) && !is_derive_strategy {
         checker
             .diags
             .push(BodyDiag::ConstFnEffectsNotAllowed(func.span().effects().into()).into());
@@ -56,7 +59,11 @@ impl<'db> ConstFnChecker<'db, '_> {
                 primary,
                 callee: callable.callable_def(),
             });
-        } else if callee.has_effects(self.db) {
+        } else if callee.has_effects(self.db)
+            && !ItemKind::Func(callee)
+                .attrs(self.db)
+                .is_some_and(|a| a.has_attr(self.db, "derive_strategy"))
+        {
             self.push(BodyDiag::ConstFnEffectfulCall {
                 primary,
                 callee: callable.callable_def(),
@@ -174,6 +181,11 @@ impl<'db> ConstFnChecker<'db, '_> {
 
             Expr::Field(inner, _) | Expr::ArrayRep(inner, _) | Expr::Cast(inner, _) => {
                 self.check_expr(*inner);
+            }
+
+            Expr::DynField(receiver, field_expr) => {
+                self.check_expr(*receiver);
+                self.check_expr(*field_expr);
             }
 
             Expr::If(cond, then, else_) => {

@@ -235,6 +235,7 @@ fn call_like_receiver_expr<'db>(expr_data: &Expr<'db>) -> Option<ExprId> {
         | Expr::ArrayRep(..)
         | Expr::RecordInit(..)
         | Expr::Field(..)
+        | Expr::DynField(..)
         | Expr::Cast(..)
         | Expr::Assign(..)
         | Expr::Block(..)

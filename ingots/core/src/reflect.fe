@@ -1,0 +1,14 @@
+pub struct Reflect<T> {}
+
+impl<T> Reflect<T> {
+    pub const fn field_count(self) -> usize { 0 }
+    pub const fn field_name(self, _ index: usize) -> usize { 0 }
+    pub const fn field_is_pub(self, _ index: usize) -> bool { false }
+    pub const fn field_has_attr(self, _ index: usize, _ name: usize) -> bool { false }
+
+    pub const fn type_param_count(self) -> usize { 0 }
+    pub const fn type_param_name(self, _ index: usize) -> usize { 0 }
+
+    pub const fn field_head_size(self, _ index: usize) -> u256 { 0 }
+    pub const fn field_is_dynamic(self, _ index: usize) -> bool { false }
+}

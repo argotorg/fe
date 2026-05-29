@@ -1,0 +1,14 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/derive_hash.fe
+---
+error[2-0010]: no method named `hash` found for u256 `u256`
+  ┌─ derive_hash.fe:1:1
+  │
+1 │ ╭ #[derive(Hash)]
+2 │ │ struct Token {
+3 │ │     id: u256,
+4 │ │     amount: u256,
+5 │ │ }
+  │ ╰─^ method not found in `u256`

@@ -15,6 +15,8 @@ pub use effect_ref::{EffectHandle, EffectHandleMut, EffectRef, EffectRefMut, Mem
 pub use contracts::{self, *}
 pub use range::{Bound, Known, Unknown, Range}
 pub use seq::Seq
+pub use reflect::Reflect
+pub use builder::Builder
 
 extern {
     pub fn panic() -> !

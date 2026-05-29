@@ -1,0 +1,22 @@
+// This test verifies CTFE drives output: if the strategy function body
+// weren't being evaluated, derives on a struct with 3+ fields would still
+// work (they'd need 3 field comparisons from the strategy's for loop).
+// A hardcoded fallback that doesn't read the strategy would break here.
+#[derive(Eq, Default, Ord)]
+struct Triple {
+    a: u256,
+    b: u256,
+    c: u256,
+}
+
+fn eq_works(x: Triple, y: Triple) -> bool {
+    x.eq(y)
+}
+
+fn default_works() -> Triple {
+    Triple::default()
+}
+
+fn lt_works(x: Triple, y: Triple) -> bool {
+    x.lt(y)
+}

@@ -1,0 +1,22 @@
+#[derive(Ord)]
+struct Coordinate {
+    x: u256,
+    y: u256,
+    z: u256,
+}
+
+fn test_lt(a: Coordinate, b: Coordinate) -> bool {
+    a.lt(b)
+}
+
+fn test_le(a: Coordinate, b: Coordinate) -> bool {
+    a.le(b)
+}
+
+fn test_gt(a: Coordinate, b: Coordinate) -> bool {
+    a.gt(b)
+}
+
+fn test_ge(a: Coordinate, b: Coordinate) -> bool {
+    a.ge(b)
+}

@@ -137,6 +137,12 @@ impl<'db> Expr<'db> {
                 Self::Field(receiver, field)
             }
 
+            ast::ExprKind::ComptimeField(ct_field) => {
+                let receiver = Self::push_to_body_opt(ctxt, ct_field.receiver());
+                let field_expr = Self::push_to_body_opt(ctxt, ct_field.field_expr());
+                Self::DynField(receiver, field_expr)
+            }
+
             ast::ExprKind::Index(index) => {
                 let indexed = Self::push_to_body_opt(ctxt, index.expr());
                 let index = Self::push_to_body_opt(ctxt, index.index());

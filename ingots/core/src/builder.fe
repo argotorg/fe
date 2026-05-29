@@ -1,0 +1,6 @@
+pub struct Builder<T> {}
+
+impl<T> Builder<T> {
+    pub const fn set_field<V>(mut self, _ index: usize, _ value: V) {}
+    pub fn finish(self) -> T { ingot::panic() }
+}

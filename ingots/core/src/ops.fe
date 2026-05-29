@@ -130,6 +130,69 @@ pub trait Ord<T = Self> {
     fn ge(self, _ other: T) -> bool
 }
 
+pub trait Hash {
+    fn hash(self) -> u256
+}
+
+pub trait Hasher {
+    fn feed(mut self, _ value: u256)
+    fn finish(self) -> u256
+}
+
+use super::reflect::Reflect
+
+#[derive_strategy]
+const fn __derive_eq<T>(self_val: T, other: T) -> bool
+    uses (reflect: Reflect<T>)
+{
+    for i in 0..reflect.field_count() {
+        if self_val.{reflect.field_name(i)} != other.{reflect.field_name(i)} {
+            return false
+        }
+    }
+    true
+}
+
+#[derive_strategy]
+const fn __derive_hash<T>(self_val: T) -> u256
+    uses (reflect: Reflect<T>, hasher: mut Hasher)
+{
+    for i in 0..reflect.field_count() {
+        hasher.feed(self_val.{reflect.field_name(i)})
+    }
+    hasher.finish()
+}
+
+#[derive_strategy]
+const fn __derive_ord<T>(self_val: T, other: T) -> bool
+    uses (reflect: Reflect<T>)
+{
+    for i in 0..reflect.field_count() {
+        if self_val.{reflect.field_name(i)} < other.{reflect.field_name(i)} {
+            return true
+        }
+        if self_val.{reflect.field_name(i)} > other.{reflect.field_name(i)} {
+            return false
+        }
+    }
+    false
+}
+
+#[derive_strategy]
+const fn __derive_le<T>(self_val: T, other: T) -> bool {
+    !(other < self_val)
+}
+
+#[derive_strategy]
+const fn __derive_gt<T>(self_val: T, other: T) -> bool {
+    other < self_val
+}
+
+#[derive_strategy]
+const fn __derive_ge<T>(self_val: T, other: T) -> bool {
+    !(self_val < other)
+}
+
 // Indexing operator
 pub trait Index<I> {
     type Output

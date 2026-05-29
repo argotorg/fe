@@ -613,6 +613,16 @@ impl super::Parse for FieldExprScope {
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
         parser.bump_expected(SyntaxKind::Dot);
 
+        // `.{expr}` — comptime field access
+        if parser.current_kind() == Some(SyntaxKind::LBrace) {
+            self.set_kind(SyntaxKind::ComptimeFieldExpr);
+            parser.bump_expected(SyntaxKind::LBrace);
+            parse_expr(parser)?;
+            parser.expect(&[SyntaxKind::RBrace], None)?;
+            parser.bump();
+            return Ok(());
+        }
+
         parser.expect(&[SyntaxKind::Ident, SyntaxKind::Int], None)?;
         parser.bump();
         Ok(())

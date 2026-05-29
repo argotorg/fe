@@ -695,6 +695,17 @@ impl<'db> Expr<'db> {
                 )
             }
 
+            Expr::DynField(receiver, field_expr) => {
+                let receiver = unwrap_partial_ref(receiver.data(db, body), "DynField::receiver");
+                let field_expr =
+                    unwrap_partial_ref(field_expr.data(db, body), "DynField::field_expr");
+                format!(
+                    "{}.{{{}}}",
+                    receiver.pretty_print(db, body, indent),
+                    field_expr.pretty_print(db, body, indent)
+                )
+            }
+
             Expr::Tuple(exprs) => {
                 let exprs_str = exprs
                     .iter()

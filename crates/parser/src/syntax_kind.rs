@@ -292,6 +292,8 @@ pub enum SyntaxKind {
     RecordField,
     /// `foo.bar`, `foo.0`
     FieldExpr,
+    /// `foo.{expr}` — comptime field access
+    ComptimeFieldExpr,
     /// `foo[1]`
     IndexExpr,
     /// `(x ,y)`
@@ -705,6 +707,7 @@ impl SyntaxKind {
             SyntaxKind::RecordFieldList => "record field list",
             SyntaxKind::RecordField => "field",
             SyntaxKind::FieldExpr => "field",
+            SyntaxKind::ComptimeFieldExpr => "comptime field access",
             SyntaxKind::TupleExpr => "tuple expression",
             SyntaxKind::ArrayRepExpr => "array expression",
             SyntaxKind::WithParamList => "`with` parameter list",
