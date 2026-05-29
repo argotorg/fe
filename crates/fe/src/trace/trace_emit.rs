@@ -555,6 +555,7 @@ pub(super) fn emit_real_trace_bundle(
             _ => None,
         })
         .collect::<std::collections::BTreeSet<_>>();
+    let postopt_sonatina_aliases = postopt_sonatina_instruction_aliases(&postopt_sonatina_facts);
     facts.extend(postopt_sonatina_facts);
     for (contract_name, artifact) in bytecode {
         let owner_key = codegen::trace::bytecode_runtime_owner_key(
@@ -570,6 +571,7 @@ pub(super) fn emit_real_trace_bundle(
                 Some(&sonatina_owner),
                 artifact.runtime_observability.as_ref(),
                 Some(&postopt_sonatina_nodes),
+                Some(&postopt_sonatina_aliases),
             ),
         );
         facts.extend(codegen::trace::emit_bytecode_shape_facts(
@@ -600,6 +602,30 @@ pub(super) fn emit_real_trace_bundle(
         ],
     );
     Ok(TraceBundle::new(metadata, facts))
+}
+
+fn postopt_sonatina_instruction_aliases(
+    facts: &[TraceFact],
+) -> BTreeMap<OriginExportKey, OriginExportKey> {
+    facts
+        .iter()
+        .filter_map(|fact| {
+            let TraceFact::Instruction(instruction) = fact else {
+                return None;
+            };
+            if instruction.instruction.kind() != codegen::trace::SONATINA_POSTOPT_INST_KIND {
+                return None;
+            }
+            let (function_prefix, _) = instruction.instruction.local_key().rsplit_once(":inst:")?;
+            let alias = OriginExportKey::try_from_raw_parts(
+                instruction.instruction.kind(),
+                instruction.instruction.owner_key(),
+                format!("{function_prefix}:inst:InstId({})", instruction.index),
+            )
+            .ok()?;
+            (alias != instruction.instruction).then(|| (alias, instruction.instruction.clone()))
+        })
+        .collect()
 }
 
 fn emit_standalone_source_file_facts(
@@ -809,11 +835,8 @@ mod tests {
         assert!(
             loop_contents.contains("Membership source: compiler-emitted Sonatina trace-view CFG")
         );
-        assert!(
-            loop_contents
-                .contains("bytecode PC origin edges exist, but none join to this loop yet")
-        );
-        assert!(!loop_contents.contains("Target bytecode PCs linked to this loop:"));
+        assert!(loop_contents.contains("bytecode PCs linked by observability origin edges"));
+        assert!(loop_contents.contains("Target bytecode PCs linked to this loop:"));
         assert!(loop_contents.contains("Loop blocks:"));
 
         let gas_by_source = super::super::trace_render::render_gas_by_source_snapshot(

@@ -61,6 +61,7 @@ pub fn emit_bytecode_instruction_facts(
         None,
         None,
         None,
+        None,
     )
 }
 
@@ -71,6 +72,7 @@ pub fn emit_bytecode_instruction_facts_with_observability(
     sonatina_owner_key: Option<&str>,
     observability: Option<&SectionObservability>,
     known_sonatina_endpoint_nodes: Option<&BTreeSet<OriginExportKey>>,
+    sonatina_endpoint_aliases: Option<&BTreeMap<OriginExportKey, OriginExportKey>>,
 ) -> Vec<TraceFact> {
     let function = bytecode_function_key(owner_key, function_local_key);
     let code_object = bytecode_code_object_key(owner_key);
@@ -142,6 +144,10 @@ pub fn emit_bytecode_instruction_facts_with_observability(
                     entry.func,
                     ir_inst,
                 );
+                let postopt_inst = sonatina_endpoint_aliases
+                    .and_then(|aliases| aliases.get(&postopt_inst))
+                    .cloned()
+                    .unwrap_or(postopt_inst);
                 let should_emit_endpoint_node = known_sonatina_endpoint_nodes
                     .is_none_or(|known| !known.contains(&postopt_inst));
                 if should_emit_endpoint_node && emitted_postopt_nodes.insert(postopt_inst.clone()) {

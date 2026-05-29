@@ -1,6 +1,6 @@
 mod lower_runtime;
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use common::ingot::Ingot;
 use driver::DriverDataBase;
@@ -10,13 +10,16 @@ use mir::{RuntimePackage, build_runtime_package, build_test_runtime_package};
 use rustc_hash::FxHashSet;
 use sonatina_codegen::{
     EvmCompile, OptLevel as SonatinaOptLevel,
-    object::{FrontendProvenanceMap, SectionObservability},
+    object::{
+        FrontendProvenanceMap, ObjectArtifact, SectionArtifact, SectionObservability, SymbolId,
+    },
 };
 use sonatina_ir::{
     Module,
     ir_writer::{FuncWriter, ModuleWriter},
     isa::evm::Evm,
     module::{FuncRef, ModuleCtx},
+    object::EmbedSymbol,
 };
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 use sonatina_verifier::{
@@ -278,6 +281,91 @@ fn apply_frontend_provenance_to_artifacts(
             }
         }
     }
+}
+
+fn merged_section_observability<'db>(
+    db: &'db dyn mir::MirDb,
+    artifacts_by_name: &HashMap<&str, &ObjectArtifact>,
+    section_artifact: &SectionArtifact,
+    section: &mir::RuntimeSection<'db>,
+) -> Option<SectionObservability> {
+    const MAX_EMBED_DEPTH: usize = 16;
+
+    fn merge_embeds<'db>(
+        db: &'db dyn mir::MirDb,
+        artifacts_by_name: &HashMap<&str, &ObjectArtifact>,
+        section_artifact: &SectionArtifact,
+        section: &mir::RuntimeSection<'db>,
+        depth: usize,
+    ) -> Option<SectionObservability> {
+        let mut merged = section_artifact.observability.clone()?;
+        if depth >= MAX_EMBED_DEPTH {
+            return Some(merged);
+        }
+
+        for embed in &section.embeds {
+            let symbol_id = SymbolId::Embed(EmbedSymbol::from(embed.as_symbol.clone()));
+            let Some(symbol_def) = section_artifact.symtab.get(&symbol_id).copied() else {
+                continue;
+            };
+            let Some((embedded_section, embedded_artifact)) =
+                section_artifact_for_ref(db, artifacts_by_name, &embed.source)
+            else {
+                continue;
+            };
+            let Some(embedded_observability) = merge_embeds(
+                db,
+                artifacts_by_name,
+                embedded_artifact,
+                &embedded_section,
+                depth + 1,
+            ) else {
+                continue;
+            };
+
+            for mut entry in embedded_observability.pc_map {
+                if entry.pc_end > symbol_def.size {
+                    continue;
+                }
+                let Some(pc_start) = entry.pc_start.checked_add(symbol_def.offset) else {
+                    continue;
+                };
+                let Some(pc_end) = entry.pc_end.checked_add(symbol_def.offset) else {
+                    continue;
+                };
+                entry.pc_start = pc_start;
+                entry.pc_end = pc_end;
+                merged.pc_map.push(entry);
+            }
+        }
+
+        merged
+            .pc_map
+            .sort_by_key(|entry| (entry.pc_start, entry.pc_end));
+        Some(merged)
+    }
+
+    merge_embeds(db, artifacts_by_name, section_artifact, section, 0)
+}
+
+fn section_artifact_for_ref<'db, 'a>(
+    db: &'db dyn mir::MirDb,
+    artifacts_by_name: &'a HashMap<&str, &ObjectArtifact>,
+    section_ref: &mir::RuntimeSectionRef<'db>,
+) -> Option<(mir::RuntimeSection<'db>, &'a SectionArtifact)> {
+    let (object, section_name) = match section_ref {
+        mir::RuntimeSectionRef::Local { object, section }
+        | mir::RuntimeSectionRef::External { object, section } => (*object, section),
+    };
+    let runtime_section = object
+        .sections(db)
+        .into_iter()
+        .find(|section| &section.name == section_name)?;
+    let artifact = artifacts_by_name.get(object.name(db).as_str()).copied()?;
+    let section_artifact = artifact
+        .sections
+        .get(&section_name_for_runtime(section_name))?;
+    Some((runtime_section, section_artifact))
 }
 
 fn section_name_for_runtime(name: &mir::RuntimeSectionName) -> sonatina_ir::SectionName {
@@ -654,12 +742,24 @@ fn emit_runtime_package_sonatina_bytecode_with_options(
         let runtime = artifact
             .sections
             .get(&section_name_for_runtime(&mir::RuntimeSectionName::Runtime));
+        let runtime_section_name = mir::RuntimeSectionName::Runtime;
         let (deploy, runtime, runtime_observability) = match (init, runtime) {
-            (Some(init), Some(runtime)) => (
-                init.bytes.clone(),
-                runtime.bytes.clone(),
-                runtime.observability.clone(),
-            ),
+            (Some(init), Some(runtime)) => {
+                let runtime_section = object
+                    .sections(db)
+                    .into_iter()
+                    .find(|section| section.name == runtime_section_name)
+                    .ok_or_else(|| {
+                        LowerError::Internal(format!(
+                            "root object `{object_name}` has runtime artifact but no runtime section"
+                        ))
+                    })?;
+                (
+                    init.bytes.clone(),
+                    runtime.bytes.clone(),
+                    merged_section_observability(db, &artifacts_by_name, runtime, &runtime_section),
+                )
+            }
             _ => {
                 let sections = object.sections(db);
                 let section = sections.first().ok_or_else(|| {
@@ -678,7 +778,7 @@ fn emit_runtime_package_sonatina_bytecode_with_options(
                 (
                     wrap_as_init_code(&runtime),
                     runtime,
-                    runtime_section.observability.clone(),
+                    merged_section_observability(db, &artifacts_by_name, runtime_section, section),
                 )
             }
         };
