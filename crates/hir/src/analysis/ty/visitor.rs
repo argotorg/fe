@@ -255,6 +255,7 @@ impl<'db> TyVisitable<'db> for TraitGoalSolution<'db> {
     {
         self.inst.visit_with(visitor);
         self.implementor.visit_with(visitor);
+        self.residual_constraints.visit_with(visitor);
     }
 }
 

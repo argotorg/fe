@@ -967,6 +967,11 @@ pub enum ImplDiag<'db> {
         stricter_bounds: ThinVec<TraitInstId<'db>>,
     },
 
+    MethodMissingConstPredicate {
+        trait_m: CallableDef<'db>,
+        impl_m: CallableDef<'db>,
+    },
+
     InvalidSelfType {
         span: DynLazySpan<'db>,
         expected: TyId<'db>,
@@ -1017,12 +1022,13 @@ impl ImplDiag<'_> {
             Self::MethodArgTyMismatch { .. } => 7,
             Self::MethodRetTyMismatch { .. } => 8,
             Self::MethodStricterBound { .. } => 9,
-            Self::InvalidSelfType { .. } => 10,
-            Self::InherentImplIsNotAllowed { .. } => 11,
-            Self::MissingAssociatedType { .. } => 12,
-            Self::MissingAssociatedConstValue { .. } => 13,
-            Self::ConstNotDefinedInTrait { .. } => 14,
-            Self::MissingAssociatedConst { .. } => 15,
+            Self::MethodMissingConstPredicate { .. } => 10,
+            Self::InvalidSelfType { .. } => 11,
+            Self::InherentImplIsNotAllowed { .. } => 12,
+            Self::MissingAssociatedType { .. } => 13,
+            Self::MissingAssociatedConstValue { .. } => 14,
+            Self::ConstNotDefinedInTrait { .. } => 15,
+            Self::MissingAssociatedConst { .. } => 16,
         }
     }
 }

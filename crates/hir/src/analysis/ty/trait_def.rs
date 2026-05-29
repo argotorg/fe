@@ -18,12 +18,14 @@ use salsa::Update;
 use super::{
     binder::Binder,
     canonical::Canonical,
+    constraint::ConstraintListId,
     diagnostics::{ImplDiag, TyDiagCollection},
     fold::TyFoldable as _,
     trait_lower::collect_implementor_methods,
     trait_resolution::{
-        TraitSolveCx, constraint::collect_constraints, is_goal_satisfiable,
-        normalize_trait_inst_preserving_validity,
+        TraitSolveCx,
+        constraint::{collect_constraints, collect_constraints2},
+        is_goal_satisfiable, normalize_trait_inst_preserving_validity,
     },
     ty_def::TyId,
     unify::UnificationTable,
@@ -552,6 +554,17 @@ impl<'db> ImplementorId<'db> {
             }
             ImplementorOrigin::VirtualContract(_) | ImplementorOrigin::Assumption => {
                 PredicateListId::empty_list(db)
+            }
+        }
+    }
+
+    pub(crate) fn constraints2(self, db: &'db dyn HirAnalysisDb) -> ConstraintListId<'db> {
+        match self.origin(db) {
+            ImplementorOrigin::Hir(impl_trait) => {
+                collect_constraints2(db, impl_trait.into()).instantiate(db, self.params(db))
+            }
+            ImplementorOrigin::VirtualContract(_) | ImplementorOrigin::Assumption => {
+                ConstraintListId::empty(db)
             }
         }
     }

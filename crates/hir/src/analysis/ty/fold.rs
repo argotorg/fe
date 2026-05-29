@@ -347,6 +347,7 @@ impl<'db> TyFoldable<'db> for TraitGoalSolution<'db> {
         Self {
             inst: self.inst.fold_with(db, folder),
             implementor: self.implementor.fold_with(db, folder),
+            residual_constraints: self.residual_constraints.fold_with(db, folder),
         }
     }
 }

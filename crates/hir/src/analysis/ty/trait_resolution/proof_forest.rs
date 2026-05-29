@@ -16,11 +16,13 @@ use crate::analysis::{
     ty::{
         binder::Binder,
         canonical::Canonical,
+        constraint::{ConstraintId, ConstraintKind, ConstraintListId, ParamEnv},
         fold::TyFoldable,
         trait_def::{ImplementorId, TraitInstId, impls_for_trait_in_ingots},
+        ty_check::const_predicate_prover::{ConstProveResult, prove_const_predicate},
         ty_def::{TyData, TyId},
         unify::PersistentUnificationTable,
-        visitor::{TyVisitable, TyVisitor},
+        visitor::{TyVisitable, TyVisitor, collect_flags},
     },
 };
 const MAXIMUM_SOLUTION_NUM: usize = 2;
@@ -222,6 +224,7 @@ impl<'db> ProofForest<'db> {
         mut remaining_goals: Vec<TraitInstId<'db>>,
         table: PersistentUnificationTable<'db>,
         selected_impl: ImplementorId<'db>,
+        residual_constraints: ConstraintListId<'db>,
     ) -> ConsumerNode {
         let pending_goal = remaining_goals.pop().unwrap();
         debug_assert_eq!(pending_goal, query.goal);
@@ -233,6 +236,7 @@ impl<'db> ProofForest<'db> {
             remaining_goals,
             root,
             selected_impl,
+            residual_constraints,
             query,
             table,
             children: Vec::new(),
@@ -319,14 +323,17 @@ impl GeneratorNode {
         pf: &mut ProofForest<'db>,
         table: &mut PersistentUnificationTable<'db>,
         selected_impl: ImplementorId<'db>,
+        residual_constraints: ConstraintListId<'db>,
     ) {
         let g_node = &mut pf.g_nodes[self];
+        let residual_constraints = residual_constraints.fold_with(table.db, table);
         let solution = g_node.query.canonicalize_solution(
             table.db,
             table,
             TraitGoalSolution {
                 inst: g_node.extracted_query.goal,
                 implementor: selected_impl,
+                residual_constraints,
             },
         );
         if g_node.solutions.insert(solution) {
@@ -340,67 +347,50 @@ impl GeneratorNode {
         }
     }
 
-    fn check_impl_const_predicates<'db>(
+    fn split_impl_candidate_constraints<'db>(
         db: &'db dyn HirAnalysisDb,
         gen_cand: &ImplementorId<'db>,
         table: &mut PersistentUnificationTable<'db>,
-    ) -> bool {
-        use crate::analysis::semantic::{SemConstScalar, SemConstValue, eval_body_owner_const};
-        use crate::analysis::ty::ty_check::BodyOwner;
-        use crate::hir_def::WhereClauseOwner;
-
-        use super::super::trait_def::ImplementorOrigin;
-
-        let ImplementorOrigin::Hir(impl_trait) = gen_cand.origin(db) else {
-            return true;
+        scope: crate::hir_def::scope_graph::ScopeId<'db>,
+    ) -> Option<(Vec<TraitInstId<'db>>, ConstraintListId<'db>)> {
+        let mut sub_goals = Vec::new();
+        let mut residual_constraints = Vec::new();
+        let empty_env = ParamEnv {
+            scope,
+            constraints: ConstraintListId::empty(db),
         };
 
-        let const_preds = WhereClauseOwner::ImplTrait(impl_trait)
-            .where_clause(db)
-            .const_predicates(db);
-        if const_preds.is_empty() {
-            return true;
-        }
-
-        let resolved_params: Vec<TyId<'db>> = gen_cand
-            .params(db)
-            .iter()
-            .map(|ty| ty.fold_with(db, table))
-            .collect();
-
-        let any_unresolved = resolved_params
-            .iter()
-            .any(|ty| ty.has_var(db) || ty.has_param(db));
-        if any_unresolved {
-            return true;
-        }
-
-        let bool_ty = TyId::bool(db);
-        for body in const_preds {
-            let owner = BodyOwner::AnonConstBody {
-                body: *body,
-                expected: bool_ty,
-            };
-            match eval_body_owner_const(db, owner, resolved_params.clone()) {
-                Ok(value) => {
-                    let is_false = matches!(
-                        value.value(db),
-                        SemConstValue::Scalar {
-                            value: SemConstScalar::Bool(false),
-                            ..
-                        }
-                    );
-                    if is_false {
-                        return false;
+        for &constraint in gen_cand.constraints2(db).list(db) {
+            let constraint = constraint.fold_with(db, table);
+            match constraint.kind(db) {
+                ConstraintKind::Trait(goal) => sub_goals.push(goal),
+                ConstraintKind::ConstPredicate(pred) => {
+                    let flags = collect_flags(db, pred);
+                    if flags.contains(crate::analysis::ty::ty_def::TyFlags::HAS_INVALID) {
+                        continue;
                     }
-                }
-                Err(_) => {
-                    return false;
+                    if flags.intersects(
+                        crate::analysis::ty::ty_def::TyFlags::HAS_VAR
+                            | crate::analysis::ty::ty_def::TyFlags::HAS_PARAM,
+                    ) {
+                        residual_constraints
+                            .push(ConstraintId::new(db, ConstraintKind::ConstPredicate(pred)));
+                        continue;
+                    }
+
+                    match prove_const_predicate(db, pred, empty_env) {
+                        ConstProveResult::Proven(_) => {}
+                        ConstProveResult::Ambiguous => {
+                            residual_constraints
+                                .push(ConstraintId::new(db, ConstraintKind::ConstPredicate(pred)));
+                        }
+                        ConstProveResult::Disproved | ConstProveResult::Error => return None,
+                    }
                 }
             }
         }
 
-        true
+        Some((sub_goals, ConstraintListId::new(db, residual_constraints)))
     }
 
     fn step(self, pf: &mut ProofForest) -> bool {
@@ -444,30 +434,27 @@ impl GeneratorNode {
                 continue;
             }
 
-            // Check const predicates on the impl's where clause.
-            // If types are concrete after unification, CTFE-evaluate; reject if false.
-            if !Self::check_impl_const_predicates(db, &gen_cand, &mut table) {
+            let Some((sub_goals, residual_constraints)) =
+                Self::split_impl_candidate_constraints(db, &gen_cand, &mut table, scope)
+            else {
                 continue;
-            }
+            };
 
-            let constraints = gen_cand.constraints(db);
-
-            if constraints.list(db).is_empty() {
-                self.register_solution_with(pf, &mut table, selected_impl);
+            if sub_goals.is_empty() {
+                self.register_solution_with(pf, &mut table, selected_impl, residual_constraints);
             } else {
-                let sub_goals: Vec<_> = {
-                    constraints
-                        .list(db)
-                        .iter()
-                        .map(|c| c.fold_with(db, &mut table))
-                        .collect()
-                };
                 let child_query = TraitSolverQuery {
                     goal: *sub_goals.last().unwrap(),
                     assumptions: assumptions.fold_with(db, &mut table),
                 };
-                let child =
-                    pf.new_consumer_node(self, child_query, sub_goals, table, selected_impl);
+                let child = pf.new_consumer_node(
+                    self,
+                    child_query,
+                    sub_goals,
+                    table,
+                    selected_impl,
+                    residual_constraints,
+                );
                 pf.g_nodes[self].children.push(child);
             }
 
@@ -483,7 +470,12 @@ impl GeneratorNode {
                 if table.unify(assumption, normalized_goal).is_ok() {
                     let selected_impl =
                         ImplementorId::assumption(db, extracted_goal.fold_with(db, &mut table));
-                    self.register_solution_with(pf, &mut table, selected_impl);
+                    self.register_solution_with(
+                        pf,
+                        &mut table,
+                        selected_impl,
+                        ConstraintListId::empty(db),
+                    );
                     return true;
                 }
             }
@@ -525,6 +517,7 @@ struct ConsumerNodeData<'db> {
     /// The root generator node of the consumer node.
     root: GeneratorNode,
     selected_impl: ImplementorId<'db>,
+    residual_constraints: ConstraintListId<'db>,
 
     /// The current pending query that is resolved by another [`GeneratorNode`].
     query: CanonicalGoalQuery<'db>,
@@ -562,7 +555,8 @@ impl ConsumerNode {
         // Extract solution to the current env.
         let pending_query = c_node.query.clone();
         let pending_inst = pending_query.goal();
-        let solution = pending_query.extract_solution(&mut table, solution).inst;
+        let solution = pending_query.extract_solution(&mut table, solution);
+        let solution_inst = solution.inst;
 
         // Normalize both instances before unification
         let normalized_pending = {
@@ -584,12 +578,12 @@ impl ConsumerNode {
             let scope = TraitSolveCx::normalization_scope_for_trait_inst_with_origin(
                 db,
                 pf.origin_ingot,
-                solution,
+                solution_inst,
             );
             let assumptions = pending_query.assumptions();
             normalize_trait_inst_preserving_validity(
                 db,
-                solution.fold_with(db, &mut table),
+                solution_inst.fold_with(db, &mut table),
                 scope,
                 assumptions,
             )
@@ -606,12 +600,15 @@ impl ConsumerNode {
         let tree_root = c_node.root;
         let selected_impl = c_node.selected_impl;
         let remaining_goals = c_node.remaining_goals.clone();
+        let residual_constraints = c_node
+            .residual_constraints
+            .merge(db, solution.residual_constraints);
         let _ = c_node;
 
         if remaining_goals.is_empty() {
             // If no remaining goals in the consumer node, it's the solution for the root
             // goal.
-            tree_root.register_solution_with(pf, &mut table, selected_impl);
+            tree_root.register_solution_with(pf, &mut table, selected_impl, residual_constraints);
         } else {
             // Create a child consumer node for the subgoals.
             let child_query = TraitSolverQuery {
@@ -624,11 +621,12 @@ impl ConsumerNode {
                 remaining_goals,
                 table,
                 selected_impl,
+                residual_constraints,
             );
             pf.c_nodes[self].children.push(child);
         }
 
-        maximum_ty_depth(db, solution) <= MAXIMUM_TYPE_DEPTH
+        maximum_ty_depth(db, solution_inst) <= MAXIMUM_TYPE_DEPTH
     }
 
     fn unresolved_subgoal<'db>(self, pf: &mut ProofForest<'db>) -> Option<UnsatSubgoal<'db>> {

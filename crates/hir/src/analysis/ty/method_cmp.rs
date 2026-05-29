@@ -9,6 +9,7 @@ use super::{
         canonicalize_ty_for_mode, const_ty_from_assoc_const_use,
         normalize_const_tys_for_comparison,
     },
+    constraint::ParamEnv,
     diagnostics::{ImplDiag, TyDiagCollection},
     effects::{
         CanonicalEffectIdentity, EffectKeyCanonMode, EffectKeyKind,
@@ -22,9 +23,13 @@ use super::{
     trait_def::TraitInstId,
     trait_resolution::{
         GoalSatisfiability, PredicateListId, TraitSolveCx,
-        constraint::collect_func_def_constraints, is_goal_satisfiable,
+        constraint::{collect_func_def_constraints, collect_func_def_constraints2},
+        is_goal_satisfiable,
     },
-    ty_check::{ConstRef, check_anon_const_body},
+    ty_check::{
+        ConstRef, check_anon_const_body,
+        const_predicate_prover::{ConstProveResult, prove_const_predicate},
+    },
     ty_def::{InvalidCause, TyData, TyId},
     unify::UnificationTable,
 };
@@ -1009,9 +1014,8 @@ fn compare_constraints<'db>(
         }
     }
 
-    if unsatisfied_goals.is_empty() {
-        true
-    } else {
+    let mut ok = true;
+    if !unsatisfied_goals.is_empty() {
         sink.push(
             ImplDiag::MethodStricterBound {
                 span: impl_m.name_span(),
@@ -1019,6 +1023,49 @@ fn compare_constraints<'db>(
             }
             .into(),
         );
-        false
+        ok = false;
     }
+
+    ok &= compare_const_predicate_constraints(db, impl_m, trait_m, trait_inst, param_subst, sink);
+
+    ok
+}
+
+fn compare_const_predicate_constraints<'db>(
+    db: &'db dyn HirAnalysisDb,
+    impl_m: CallableDef<'db>,
+    trait_m: CallableDef<'db>,
+    trait_inst: TraitInstId<'db>,
+    param_subst: &ParamSubstMap<'db>,
+    sink: &mut Vec<TyDiagCollection<'db>>,
+) -> bool {
+    let impl_constraints = collect_func_def_constraints2(db, impl_m, false).instantiate_identity();
+    let mut trait_constraints = instantiate_with_partial_map(
+        db,
+        collect_func_def_constraints2(db, trait_m, false),
+        param_subst,
+    );
+
+    let mut substituter = AssocTySubst::new(trait_inst);
+    trait_constraints = trait_constraints.fold_with(db, &mut substituter);
+
+    if trait_constraints.const_predicates(db).is_empty() {
+        return true;
+    }
+
+    let env = ParamEnv {
+        scope: impl_m.scope(),
+        constraints: impl_constraints,
+    };
+    for pred in trait_constraints.const_predicates(db) {
+        match prove_const_predicate(db, pred, env) {
+            ConstProveResult::Proven(_) => {}
+            ConstProveResult::Disproved | ConstProveResult::Ambiguous | ConstProveResult::Error => {
+                sink.push(ImplDiag::MethodMissingConstPredicate { trait_m, impl_m }.into());
+                return false;
+            }
+        }
+    }
+
+    true
 }

@@ -16,12 +16,13 @@ use crate::analysis::{
     HirAnalysisDb,
     ty::{
         const_ty::LayoutHoleArgSite,
+        constraint::{ConstraintId, ConstraintKind},
         corelib::resolve_lib_func_path,
         diagnostics::{BodyDiag, FuncBodyDiag},
         fold::{AssocTySubst, TyFoldable, TyFolder},
         normalize::normalize_ty,
         trait_def::TraitInstId,
-        trait_resolution::constraint::collect_func_decl_constraints,
+        trait_resolution::constraint::collect_func_decl_constraints2,
         ty_def::{BorrowKind, CapabilityKind},
         ty_def::{InvalidCause, TyBase, TyData, TyFlags, TyId},
         ty_lower::lower_generic_arg_list,
@@ -762,7 +763,7 @@ impl<'db> Callable<'db> {
         span: DynLazySpan<'db>,
     ) {
         let db = tc.db;
-        let constraints = collect_func_decl_constraints(db, self.callable_def, true);
+        let constraints = collect_func_decl_constraints2(db, self.callable_def, true);
         let instantiated = constraints.instantiate(db, &self.generic_args);
 
         for (constraint_idx, &constraint) in instantiated.list(db).iter().enumerate() {
@@ -772,177 +773,36 @@ impl<'db> Callable<'db> {
             } else {
                 constraint
             };
-            let constraint = tc.normalize_trait_goal(constraint);
+
+            let constraint = match constraint.kind(db) {
+                ConstraintKind::Trait(goal) => {
+                    let goal = tc.normalize_trait_goal(goal);
+                    if collect_flags(db, goal).contains(TyFlags::HAS_INVALID) {
+                        continue;
+                    }
+                    ConstraintId::new(db, ConstraintKind::Trait(goal))
+                }
+                ConstraintKind::ConstPredicate(pred) => {
+                    if collect_flags(db, pred).contains(TyFlags::HAS_INVALID) {
+                        continue;
+                    }
+                    ConstraintId::new(db, ConstraintKind::ConstPredicate(pred))
+                }
+            };
+
             if collect_flags(db, constraint).contains(TyFlags::HAS_INVALID) {
                 continue;
             }
 
-            tc.env
-                .register_trait_obligation(super::env::TraitObligation {
-                    goal: constraint,
-                    origin: super::env::TraitObligationOrigin::CallConstraint {
-                        call_expr,
-                        callable_def: self.callable_def,
-                        constraint_idx,
-                    },
-                    span: span.clone(),
-                });
+            tc.env.register_obligation(super::env::Obligation {
+                constraint,
+                origin: super::env::ObligationOrigin::CallConstraint {
+                    call_expr,
+                    callable_def: self.callable_def,
+                    constraint_idx,
+                },
+                span: span.clone(),
+            });
         }
-
-        // Check where-clause const predicates.
-        self.check_const_predicates(tc, span);
-    }
-
-    /// Evaluate where-clause const predicates with the call's concrete generic
-    /// args. If any predicate evaluates to `false`, push a diagnostic.
-    /// When generic args still contain type params, runs the early detection
-    /// pipeline instead of CTFE (proving from caller assumptions or deferring).
-    fn check_const_predicates(&self, tc: &mut TyChecker<'db>, span: DynLazySpan<'db>) {
-        use super::const_predicate_prover::try_prove_const_predicate;
-        use crate::analysis::semantic::{SemConstScalar, SemConstValue, eval_body_owner_const};
-        use crate::hir_def::{CallableDef, ItemKind, WhereClauseOwner};
-
-        let db = tc.db;
-        let func = match self.callable_def {
-            CallableDef::Func(f) => f,
-            CallableDef::VariantCtor(_) => return,
-        };
-
-        // Skip evaluation if any generic arg still contains inference variables.
-        if self
-            .generic_args
-            .iter()
-            .any(|ty| collect_flags(db, *ty).contains(TyFlags::HAS_VAR))
-        {
-            return;
-        }
-
-        // Collect const predicates from the callee's where clause and its
-        // parent's where clause (impl, impl-trait, etc.).
-        let mut all_const_preds: Vec<Body<'db>> = Vec::new();
-        let func_wc = WhereClauseOwner::Func(func).where_clause(db);
-        all_const_preds.extend_from_slice(func_wc.const_predicates(db));
-
-        if let Some(parent) = func.scope().parent_item(db) {
-            let parent_wc = match parent {
-                ItemKind::ImplTrait(it) => Some(WhereClauseOwner::ImplTrait(it).where_clause(db)),
-                ItemKind::Impl(i) => Some(WhereClauseOwner::Impl(i).where_clause(db)),
-                ItemKind::Trait(t) => Some(WhereClauseOwner::Trait(t).where_clause(db)),
-                _ => None,
-            };
-            if let Some(wc) = parent_wc {
-                all_const_preds.extend_from_slice(wc.const_predicates(db));
-            }
-        }
-
-        if all_const_preds.is_empty() {
-            return;
-        }
-
-        // Early detection path: generic args still contain type params.
-        let has_params = self
-            .generic_args
-            .iter()
-            .any(|ty| collect_flags(db, *ty).contains(TyFlags::HAS_PARAM));
-
-        if has_params {
-            let caller_preds = self.collect_caller_assumptions(tc);
-            let callee_param_names = self.callee_param_names(db);
-            for body in &all_const_preds {
-                let _result = try_prove_const_predicate(
-                    db,
-                    *body,
-                    &caller_preds,
-                    &self.generic_args,
-                    &callee_param_names,
-                );
-                // Proven → skip. Unknown → silently defer to monomorphization.
-                // No errors at definition time for generic calls.
-            }
-            return;
-        }
-
-        // Concrete path: CTFE-evaluate each predicate.
-        let bool_ty = TyId::bool(db);
-        for body in &all_const_preds {
-            let owner = BodyOwner::AnonConstBody {
-                body: *body,
-                expected: bool_ty,
-            };
-            match eval_body_owner_const(db, owner, self.generic_args.clone()) {
-                Ok(value) => {
-                    let is_false = matches!(
-                        value.value(db),
-                        SemConstValue::Scalar {
-                            value: SemConstScalar::Bool(false),
-                            ..
-                        }
-                    );
-                    if is_false {
-                        tc.push_diag(BodyDiag::WhereConstPredicateFailed {
-                            primary: span.clone(),
-                        });
-                    }
-                }
-                Err(_) => {
-                    tc.push_diag(BodyDiag::WhereConstPredicateEvalFailed {
-                        primary: span.clone(),
-                    });
-                }
-            }
-        }
-    }
-
-    /// Collect const predicate assumptions from the caller's where clause
-    /// (and its parent's where clause).
-    fn collect_caller_assumptions(&self, tc: &TyChecker<'db>) -> Vec<Body<'db>> {
-        use crate::hir_def::{ItemKind, WhereClauseOwner};
-
-        let db = tc.db;
-        let mut assumptions = Vec::new();
-
-        let caller_func = match tc.env.owner() {
-            BodyOwner::Func(f) => f,
-            _ => return assumptions,
-        };
-
-        let caller_wc = WhereClauseOwner::Func(caller_func).where_clause(db);
-        assumptions.extend_from_slice(caller_wc.const_predicates(db));
-
-        if let Some(parent) = caller_func.scope().parent_item(db) {
-            let parent_wc = match parent {
-                ItemKind::ImplTrait(it) => Some(WhereClauseOwner::ImplTrait(it).where_clause(db)),
-                ItemKind::Impl(i) => Some(WhereClauseOwner::Impl(i).where_clause(db)),
-                ItemKind::Trait(t) => Some(WhereClauseOwner::Trait(t).where_clause(db)),
-                _ => None,
-            };
-            if let Some(wc) = parent_wc {
-                assumptions.extend_from_slice(wc.const_predicates(db));
-            }
-        }
-
-        assumptions
-    }
-
-    /// Get the callee function's generic param names (for building the param map).
-    /// Extracts names from the lowered TyParam types.
-    fn callee_param_names(&self, db: &'db dyn HirAnalysisDb) -> Vec<Option<IdentId<'db>>> {
-        use crate::analysis::ty::ty_lower::collect_generic_params;
-        use crate::hir_def::{CallableDef, GenericParamOwner};
-
-        let func = match self.callable_def {
-            CallableDef::Func(f) => f,
-            CallableDef::VariantCtor(_) => return Vec::new(),
-        };
-
-        let param_set = collect_generic_params(db, GenericParamOwner::Func(func));
-        param_set
-            .params(db)
-            .iter()
-            .map(|ty| match ty.base_ty(db).data(db) {
-                TyData::TyParam(p) => Some(p.name),
-                _ => None,
-            })
-            .collect()
     }
 }

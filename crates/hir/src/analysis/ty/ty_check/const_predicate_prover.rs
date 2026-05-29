@@ -1,29 +1,117 @@
 use crate::analysis::HirAnalysisDb;
-use crate::analysis::ty::ty_def::{TyData, TyId};
-use crate::hir_def::{Body, Expr, ExprId, IdentId, LitKind, Partial, PathId, path::PathKind};
+use crate::analysis::semantic::{SemConstScalar, SemConstValue, eval_body_owner_const};
+use crate::analysis::ty::{
+    constraint::{
+        ConstPredicateInstId, ConstProofId, ConstraintId, ConstraintKind, EvidenceId, EvidenceKind,
+        ParamEnv,
+    },
+    ty_def::{TyData, TyFlags, TyId},
+    ty_lower::collect_generic_params,
+    visitor::collect_flags,
+};
+use crate::hir_def::{
+    Body, Expr, ExprId, GenericParamOwner, IdentId, LitKind, Partial, PathId, WhereClauseOwner,
+    path::PathKind,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum EarlyProofResult {
-    Proven,
-    Unknown,
+pub(crate) enum ConstProveResult<'db> {
+    Proven(EvidenceId<'db>),
+    Disproved,
+    Ambiguous,
+    Error,
 }
 
-pub(super) fn try_prove_const_predicate<'db>(
+pub(crate) fn prove_const_predicate<'db>(
     db: &'db dyn HirAnalysisDb,
-    requirement: Body<'db>,
-    assumptions: &[Body<'db>],
-    generic_args: &[TyId<'db>],
-    callee_param_names: &[Option<IdentId<'db>>],
-) -> EarlyProofResult {
-    let param_map = ParamMap::build(db, generic_args, callee_param_names);
+    pred: ConstPredicateInstId<'db>,
+    env: ParamEnv<'db>,
+) -> ConstProveResult<'db> {
+    let flags = collect_flags(db, pred);
+    if flags.contains(TyFlags::HAS_INVALID) {
+        return ConstProveResult::Error;
+    }
 
-    for assumption in assumptions {
-        if syntactic_identity_proves(db, *assumption, requirement, &param_map) {
-            return EarlyProofResult::Proven;
+    if flags.contains(TyFlags::HAS_PARAM) {
+        if let Some(evidence) = assumption_evidence(db, pred, env) {
+            return ConstProveResult::Proven(evidence);
+        }
+        return ConstProveResult::Ambiguous;
+    }
+
+    let owner = super::BodyOwner::AnonConstBody {
+        body: pred.body(db),
+        expected: TyId::bool(db),
+    };
+    match eval_body_owner_const(db, owner, pred.args(db).to_vec()) {
+        Ok(value) => match value.value(db) {
+            SemConstValue::Scalar {
+                value: SemConstScalar::Bool(true),
+                ..
+            } => {
+                let proof = ConstProofId { predicate: pred };
+                ConstProveResult::Proven(EvidenceId::new(db, EvidenceKind::ConstProof(proof)))
+            }
+            SemConstValue::Scalar {
+                value: SemConstScalar::Bool(false),
+                ..
+            } => ConstProveResult::Disproved,
+            _ => ConstProveResult::Error,
+        },
+        Err(_) => ConstProveResult::Error,
+    }
+}
+
+fn assumption_evidence<'db>(
+    db: &'db dyn HirAnalysisDb,
+    pred: ConstPredicateInstId<'db>,
+    env: ParamEnv<'db>,
+) -> Option<EvidenceId<'db>> {
+    for assumption in env.const_assumptions(db) {
+        if assumption == pred || assumption_matches_requirement(db, assumption, pred) {
+            let constraint = ConstraintId::new(db, ConstraintKind::ConstPredicate(assumption));
+            return Some(EvidenceId::new(db, EvidenceKind::Assumption(constraint)));
         }
     }
 
-    EarlyProofResult::Unknown
+    None
+}
+
+fn assumption_matches_requirement<'db>(
+    db: &'db dyn HirAnalysisDb,
+    assumption: ConstPredicateInstId<'db>,
+    requirement: ConstPredicateInstId<'db>,
+) -> bool {
+    if assumption.predicate(db) == requirement.predicate(db) {
+        return assumption.args(db) == requirement.args(db);
+    }
+
+    let requirement_param_names = predicate_param_names(db, requirement);
+    let param_map = ParamMap::build(db, requirement.args(db), &requirement_param_names);
+    syntactic_identity_proves(db, assumption.body(db), requirement.body(db), &param_map)
+}
+
+fn predicate_param_names<'db>(
+    db: &'db dyn HirAnalysisDb,
+    pred: ConstPredicateInstId<'db>,
+) -> Vec<Option<IdentId<'db>>> {
+    let owner = match pred.predicate(db).owner {
+        WhereClauseOwner::Func(func) => GenericParamOwner::Func(func),
+        WhereClauseOwner::Struct(struct_) => GenericParamOwner::Struct(struct_),
+        WhereClauseOwner::Enum(enum_) => GenericParamOwner::Enum(enum_),
+        WhereClauseOwner::Impl(impl_) => GenericParamOwner::Impl(impl_),
+        WhereClauseOwner::Trait(trait_) => GenericParamOwner::Trait(trait_),
+        WhereClauseOwner::ImplTrait(impl_trait) => GenericParamOwner::ImplTrait(impl_trait),
+    };
+
+    collect_generic_params(db, owner)
+        .params(db)
+        .iter()
+        .map(|ty| match ty.base_ty(db).data(db) {
+            TyData::TyParam(param) => Some(param.name),
+            _ => None,
+        })
+        .collect()
 }
 
 struct ParamMap<'db> {

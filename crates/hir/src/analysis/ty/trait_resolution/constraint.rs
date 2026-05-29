@@ -11,6 +11,9 @@ use crate::analysis::{
     ty::{
         adt_def::AdtDef,
         binder::Binder,
+        constraint::{
+            ConstPredicateInstId, ConstPredicateRef, ConstraintId, ConstraintKind, ConstraintListId,
+        },
         corelib::resolve_core_trait,
         effects::{
             EffectKeyCanonMode, EffectKeyKind, canonical_effect_identity_for_binding,
@@ -169,6 +172,36 @@ pub(crate) fn ty_constraints<'db>(
     base_constraints.instantiate(db, &args)
 }
 
+/// Returns a constraint list which is derived from the given type.
+#[salsa::tracked]
+pub(crate) fn ty_constraints2<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+) -> ConstraintListId<'db> {
+    let (base, args) = ty.decompose_ty_app(db);
+    let (params, base_constraints) = match base.data(db) {
+        TyData::TyBase(TyBase::Adt(adt)) => (adt.params(db), collect_adt_constraints2(db, *adt)),
+        TyData::TyBase(TyBase::Func(func_def)) => (
+            func_def.params(db),
+            collect_func_def_constraints2(db, *func_def, true),
+        ),
+        _ => {
+            return ConstraintListId::empty(db);
+        }
+    };
+
+    let mut args = args.to_vec();
+
+    // Generalize unbound type parameters.
+    for &arg in params.iter().skip(args.len()) {
+        let key = InferenceKey(args.len() as u32, Default::default());
+        let ty_var = TyId::ty_var(db, TyVarSort::General, arg.kind(db).clone(), key);
+        args.push(ty_var);
+    }
+
+    base_constraints.instantiate(db, &args)
+}
+
 /// Collect super traits of the given trait.
 /// The returned trait ref is bound by the given trait's generic parameters.
 #[salsa::tracked(return_ref)]
@@ -212,6 +245,18 @@ pub(crate) fn collect_adt_constraints<'db>(
         return Binder::bind(PredicateListId::empty_list(db));
     };
     collect_constraints(db, owner)
+}
+
+/// Collect constraints that are specified by the given ADT definition.
+#[allow(dead_code)]
+pub(crate) fn collect_adt_constraints2<'db>(
+    db: &'db dyn HirAnalysisDb,
+    adt: AdtDef<'db>,
+) -> Binder<ConstraintListId<'db>> {
+    let Some(owner) = adt.as_generic_param_owner(db) else {
+        return Binder::bind(ConstraintListId::empty(db));
+    };
+    collect_constraints2(db, owner)
 }
 
 #[salsa::tracked(
@@ -305,6 +350,102 @@ fn collect_func_def_constraints_cycle_recover<'db>(
     _func: CallableDef<'db>,
     _include_parent: bool,
 ) -> salsa::CycleRecoveryAction<Binder<PredicateListId<'db>>> {
+    salsa::CycleRecoveryAction::Iterate
+}
+
+#[salsa::tracked(
+    cycle_fn=collect_func_constraints2_cycle_recover,
+    cycle_initial=collect_func_constraints2_cycle_initial
+)]
+pub(crate) fn collect_func_decl_constraints2<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: CallableDef<'db>,
+    include_parent: bool,
+) -> Binder<ConstraintListId<'db>> {
+    let hir_func = match func {
+        CallableDef::Func(func) => func,
+        CallableDef::VariantCtor(var) => {
+            let adt = var.enum_.as_adt(db);
+            if include_parent {
+                return collect_adt_constraints2(db, adt);
+            }
+            return Binder::bind(ConstraintListId::empty(db));
+        }
+    };
+
+    let func_constraints = collect_decl_constraints2(db, hir_func.into());
+    if !include_parent {
+        return func_constraints;
+    }
+
+    let parent_constraints = match hir_func.scope().parent_item(db) {
+        Some(ItemKind::Trait(trait_)) => collect_constraints2(db, trait_.into()),
+
+        Some(ItemKind::Impl(impl_)) => collect_constraints2(db, impl_.into()),
+
+        Some(ItemKind::ImplTrait(impl_trait)) => {
+            if lower_impl_trait(db, impl_trait).is_none() {
+                return func_constraints;
+            }
+            collect_constraints2(db, impl_trait.into())
+        }
+
+        _ => return func_constraints,
+    };
+
+    Binder::bind(
+        func_constraints
+            .instantiate_identity()
+            .merge(db, parent_constraints.instantiate_identity()),
+    )
+}
+
+#[salsa::tracked(
+    cycle_fn=collect_func_constraints2_cycle_recover,
+    cycle_initial=collect_func_constraints2_cycle_initial
+)]
+pub(crate) fn collect_func_def_constraints2<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: CallableDef<'db>,
+    include_parent: bool,
+) -> Binder<ConstraintListId<'db>> {
+    let CallableDef::Func(hir_func) = func else {
+        return collect_func_decl_constraints2(db, func, include_parent);
+    };
+
+    let mut constraints: IndexSet<_> = collect_func_decl_constraints2(db, func, include_parent)
+        .instantiate_identity()
+        .list(db)
+        .iter()
+        .copied()
+        .collect();
+    for inst in collect_func_effect_provider_constraints(db, hir_func) {
+        constraints.insert(ConstraintId::from_trait(db, inst));
+    }
+
+    Binder::bind(ConstraintListId::new(
+        db,
+        constraints.into_iter().collect::<Vec<_>>(),
+    ))
+}
+
+#[allow(dead_code)]
+fn collect_func_constraints2_cycle_initial<'db>(
+    db: &'db dyn HirAnalysisDb,
+    _func: CallableDef<'db>,
+    _include_parent: bool,
+) -> Binder<ConstraintListId<'db>> {
+    Binder::bind(ConstraintListId::empty(db))
+}
+
+#[allow(dead_code)]
+fn collect_func_constraints2_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &Binder<ConstraintListId<'db>>,
+    _count: u32,
+    _func: CallableDef<'db>,
+    _include_parent: bool,
+) -> salsa::CycleRecoveryAction<Binder<ConstraintListId<'db>>> {
     salsa::CycleRecoveryAction::Iterate
 }
 
@@ -425,6 +566,72 @@ pub fn collect_constraints<'db>(
     }
 }
 
+#[salsa::tracked(
+    cycle_fn=collect_constraints2_cycle_recover,
+    cycle_initial=collect_constraints2_cycle_initial
+)]
+pub(crate) fn collect_decl_constraints2<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: GenericParamOwner<'db>,
+) -> Binder<ConstraintListId<'db>> {
+    let trait_constraints = ConstraintListId::from_trait_predicates(
+        db,
+        collect_decl_constraints(db, owner).instantiate_identity(),
+    );
+    let mut constraints = trait_constraints.list(db).to_vec();
+
+    if let Some(where_owner) = owner.where_clause_owner() {
+        let args = collect_generic_params(db, owner).params(db).to_vec();
+        for (index, _) in where_owner
+            .where_clause(db)
+            .const_predicates(db)
+            .iter()
+            .enumerate()
+        {
+            let predicate = ConstPredicateRef {
+                owner: where_owner,
+                index: index as u32,
+            };
+            let pred = ConstPredicateInstId::new(db, predicate, args.clone());
+            constraints.push(ConstraintId::new(db, ConstraintKind::ConstPredicate(pred)));
+        }
+    }
+
+    Binder::bind(ConstraintListId::new(db, constraints))
+}
+
+#[allow(dead_code)]
+fn collect_constraints2_cycle_initial<'db>(
+    db: &'db dyn HirAnalysisDb,
+    _owner: GenericParamOwner<'db>,
+) -> Binder<ConstraintListId<'db>> {
+    Binder::bind(ConstraintListId::empty(db))
+}
+
+#[allow(dead_code)]
+fn collect_constraints2_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &Binder<ConstraintListId<'db>>,
+    _count: u32,
+    _owner: GenericParamOwner<'db>,
+) -> salsa::CycleRecoveryAction<Binder<ConstraintListId<'db>>> {
+    salsa::CycleRecoveryAction::Iterate
+}
+
+#[salsa::tracked(
+    cycle_fn=collect_constraints2_cycle_recover,
+    cycle_initial=collect_constraints2_cycle_initial
+)]
+pub(crate) fn collect_constraints2<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: GenericParamOwner<'db>,
+) -> Binder<ConstraintListId<'db>> {
+    match owner {
+        GenericParamOwner::Func(func) => collect_func_def_constraints2(db, func.into(), true),
+        _ => collect_decl_constraints2(db, owner),
+    }
+}
+
 struct Deferred<'db> {
     bound_ty: Either<HirTypeId<'db>, TyId<'db>>,
     trait_ref: TraitRefId<'db>,
@@ -464,10 +671,13 @@ mod tests {
 
     use super::*;
     use crate::analysis::ty::{
-        GoalSatisfiability, TraitSolveCx, corelib::resolve_lib_type_path, is_goal_satisfiable,
-        layout_holes::ty_contains_const_hole,
+        GoalSatisfiability, TraitSolveCx, constraint::ConstraintKind,
+        corelib::resolve_lib_type_path, is_goal_satisfiable, layout_holes::ty_contains_const_hole,
     };
-    use crate::test_db::HirAnalysisTestDb;
+    use crate::{
+        hir_def::{Enum, EnumVariant, Struct, WhereClauseOwner},
+        test_db::HirAnalysisTestDb,
+    };
 
     fn find_func<'db>(
         db: &'db HirAnalysisTestDb,
@@ -509,6 +719,139 @@ mod tests {
                 _ => None,
             })
             .expect("missing trait")
+    }
+
+    fn find_struct<'db>(
+        db: &'db HirAnalysisTestDb,
+        top_mod: crate::hir_def::TopLevelMod<'db>,
+        struct_name: &str,
+    ) -> Struct<'db> {
+        top_mod
+            .children_non_nested(db)
+            .find_map(|item| match item {
+                ItemKind::Struct(struct_)
+                    if struct_
+                        .name(db)
+                        .to_opt()
+                        .is_some_and(|name| name.data(db) == struct_name) =>
+                {
+                    Some(struct_)
+                }
+                _ => None,
+            })
+            .expect("missing struct")
+    }
+
+    fn find_enum<'db>(
+        db: &'db HirAnalysisTestDb,
+        top_mod: crate::hir_def::TopLevelMod<'db>,
+        enum_name: &str,
+    ) -> Enum<'db> {
+        top_mod
+            .children_non_nested(db)
+            .find_map(|item| match item {
+                ItemKind::Enum(enum_)
+                    if enum_
+                        .name(db)
+                        .to_opt()
+                        .is_some_and(|name| name.data(db) == enum_name) =>
+                {
+                    Some(enum_)
+                }
+                _ => None,
+            })
+            .expect("missing enum")
+    }
+
+    #[test]
+    fn constraint_collection2_includes_function_const_predicates() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("constraint_collection2_includes_function_const_predicates.fe"),
+            r#"
+trait HasSize {
+    const SIZE: u256
+}
+
+fn needs_big<T>()
+where
+    T: HasSize,
+    T::SIZE >= 50
+{}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let func = find_func(&db, top_mod, "needs_big");
+
+        let constraints = collect_func_decl_constraints2(&db, func.into(), true)
+            .instantiate_identity()
+            .extend_all_trait_bounds(&db);
+        assert_eq!(constraints.trait_predicates(&db).list(&db).len(), 1);
+        let const_preds = constraints.const_predicates(&db);
+        assert_eq!(const_preds.len(), 1);
+        assert_eq!(
+            const_preds[0].body(&db),
+            WhereClauseOwner::Func(func)
+                .where_clause(&db)
+                .const_predicates(&db)[0]
+        );
+    }
+
+    #[test]
+    fn constraint_collection2_includes_adt_and_variant_const_predicates() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from(
+                "constraint_collection2_includes_adt_and_variant_const_predicates.fe",
+            ),
+            r#"
+trait HasSize {
+    const SIZE: u256
+}
+
+struct BigOnly<T>
+where
+    T: HasSize,
+    T::SIZE >= 50
+{
+    value: T,
+}
+
+enum BigEnum<T>
+where
+    T: HasSize,
+    T::SIZE >= 50
+{
+    Value(T)
+}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let struct_ = find_struct(&db, top_mod, "BigOnly");
+        let enum_ = find_enum(&db, top_mod, "BigEnum");
+        let variant = EnumVariant::new(enum_, 0);
+
+        let struct_constraints = collect_constraints2(&db, struct_.into()).instantiate_identity();
+        assert_eq!(struct_constraints.const_predicates(&db).len(), 1);
+
+        let enum_constraints = collect_constraints2(&db, enum_.into()).instantiate_identity();
+        assert_eq!(enum_constraints.const_predicates(&db).len(), 1);
+
+        let variant_constraints =
+            collect_func_decl_constraints2(&db, variant.into(), true).instantiate_identity();
+        assert_eq!(variant_constraints.const_predicates(&db).len(), 1);
+        assert!(variant_constraints.list(&db).iter().any(|constraint| {
+            matches!(
+                constraint.kind(&db),
+                ConstraintKind::ConstPredicate(predicate)
+                    if predicate.body(&db)
+                        == WhereClauseOwner::Enum(enum_)
+                            .where_clause(&db)
+                            .const_predicates(&db)[0]
+            )
+        }));
     }
 
     #[test]

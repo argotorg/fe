@@ -1,5 +1,5 @@
 mod callable;
-mod const_predicate_prover;
+pub(crate) mod const_predicate_prover;
 mod contract;
 mod effect_env;
 pub(crate) mod env;
@@ -65,7 +65,7 @@ use super::{
     trait_def::TraitInstId,
     trait_resolution::{
         CanonicalGoalQuery, GoalSatisfiability, PredicateListId, TraitSolveCx,
-        is_goal_query_satisfiable, is_goal_satisfiable,
+        constraint::ty_constraints2, is_goal_query_satisfiable, is_goal_satisfiable,
     },
     ty_contains_const_hole,
     ty_def::{
@@ -80,6 +80,7 @@ use crate::analysis::semantic::{SemConstId, SemConstScalar, SemConstValue, eval_
 use crate::analysis::ty::ty_def::{TyBase, TyData};
 use crate::analysis::ty::{
     const_ty::{ConstTyData, invalid_cause_from_ctfe_error},
+    constraint::{ConstPredicateInstId, ConstraintId, ConstraintKind, ConstraintListId, ParamEnv},
     effect_handle_metadata,
     fold::AssocTySubst,
     normalize::normalize_ty,
@@ -414,6 +415,12 @@ pub struct TyChecker<'db> {
 pub(crate) struct TyCheckerSnapshot<'db> {
     table: Snapshot<InPlace<InferenceKey<'db>>>,
     deferred_len: usize,
+}
+
+enum ObligationOutcome<'db> {
+    Discharged,
+    Progressed,
+    Requeue(env::Obligation<'db>),
 }
 
 enum TraitObligationOutcome<'db> {
@@ -1159,11 +1166,18 @@ impl<'db> TyChecker<'db> {
         let query = CanonicalGoalQuery::new(db, goal, assumptions);
         match is_goal_query_satisfiable(db, solve_cx, &query) {
             GoalSatisfiability::Satisfied(solution) => {
-                let solved = query.extract_solution(&mut self.table, solution).inst;
+                let solved_solution = query.extract_solution(&mut self.table, solution);
+                let solved = solved_solution.inst;
                 if self.has_dead_inference_keys(&solved) {
                     return TraitObligationOutcome::Discharged;
                 }
                 self.table.unify(goal, solved).unwrap();
+                self.register_residual_constraints(
+                    goal,
+                    solved_solution.implementor,
+                    solved_solution.residual_constraints,
+                    obligation.span.clone(),
+                );
                 if self.normalize_trait_goal(goal) != goal {
                     TraitObligationOutcome::Progressed
                 } else {
@@ -1173,17 +1187,34 @@ impl<'db> TyChecker<'db> {
             GoalSatisfiability::NeedsConfirmation(ambiguous) => {
                 let mut candidates: Vec<_> = ambiguous
                     .iter()
-                    .map(|solution| query.extract_solution(&mut self.table, *solution).inst)
+                    .map(|solution| query.extract_solution(&mut self.table, *solution))
                     .collect();
-                candidates.retain(|candidate| !self.has_dead_inference_keys(candidate));
-                let candidates = self.dedup_equivalent_trait_insts(candidates);
+                candidates.retain(|candidate| !self.has_dead_inference_keys(&candidate.inst));
+                let candidate_insts =
+                    self.dedup_equivalent_trait_insts(candidates.iter().map(|c| c.inst).collect());
 
-                if let [solution] = candidates.as_slice() {
+                if let [solution] = candidate_insts.as_slice() {
+                    let selected_solution = candidates
+                        .into_iter()
+                        .find(|candidate| candidate.inst == *solution)
+                        .expect("deduplicated candidate came from candidate list");
                     if self.table.unify(goal, *solution).is_ok()
                         && self.normalize_trait_goal(goal) != goal
                     {
+                        self.register_residual_constraints(
+                            goal,
+                            selected_solution.implementor,
+                            selected_solution.residual_constraints,
+                            obligation.span.clone(),
+                        );
                         TraitObligationOutcome::Progressed
                     } else {
+                        self.register_residual_constraints(
+                            goal,
+                            selected_solution.implementor,
+                            selected_solution.residual_constraints,
+                            obligation.span.clone(),
+                        );
                         TraitObligationOutcome::Discharged
                     }
                 } else {
@@ -1194,11 +1225,12 @@ impl<'db> TyChecker<'db> {
                                 constraint_idx,
                                 ..
                             } => self.call_constraint_diag_info(callable_def, constraint_idx),
+                            env::TraitObligationOrigin::ImplCandidateConstraint { .. } => None,
                             env::TraitObligationOrigin::GenericConfirmation => None,
                         };
                         self.push_diag(BodyDiag::AmbiguousTraitInst {
                             primary: obligation.span.clone(),
-                            cands: candidates.into_iter().collect(),
+                            cands: candidate_insts.into_iter().collect(),
                             required_by,
                         });
                         return TraitObligationOutcome::Discharged;
@@ -1219,6 +1251,7 @@ impl<'db> TyChecker<'db> {
                             constraint_idx,
                             ..
                         } => self.call_constraint_diag_info(callable_def, constraint_idx),
+                        env::TraitObligationOrigin::ImplCandidateConstraint { .. } => None,
                         env::TraitObligationOrigin::GenericConfirmation => None,
                     };
                     let unsat = subgoal.map(|goal| query.extract_subgoal(&mut self.table, goal));
@@ -1242,6 +1275,117 @@ impl<'db> TyChecker<'db> {
             }
             GoalSatisfiability::ContainsInvalid => TraitObligationOutcome::Discharged,
         }
+    }
+
+    fn process_obligation(
+        &mut self,
+        obligation: env::Obligation<'db>,
+        final_pass: bool,
+    ) -> ObligationOutcome<'db> {
+        match obligation.constraint.kind(self.db) {
+            ConstraintKind::Trait(goal) => {
+                let trait_obligation = env::TraitObligation {
+                    goal,
+                    origin: obligation.origin,
+                    span: obligation.span,
+                };
+                match self.process_trait_obligation(trait_obligation, final_pass) {
+                    TraitObligationOutcome::Discharged => ObligationOutcome::Discharged,
+                    TraitObligationOutcome::Progressed => ObligationOutcome::Progressed,
+                    TraitObligationOutcome::Requeue(obligation) => {
+                        ObligationOutcome::Requeue(obligation.into_constraint_obligation(self.db))
+                    }
+                }
+            }
+            ConstraintKind::ConstPredicate(pred) => {
+                self.process_const_predicate_obligation(pred, obligation, final_pass)
+            }
+        }
+    }
+
+    fn register_residual_constraints(
+        &mut self,
+        goal: TraitInstId<'db>,
+        implementor: crate::analysis::ty::trait_def::ImplementorId<'db>,
+        residual_constraints: ConstraintListId<'db>,
+        span: DynLazySpan<'db>,
+    ) {
+        for (constraint_idx, &constraint) in residual_constraints.list(self.db).iter().enumerate() {
+            self.env.register_obligation(env::Obligation {
+                constraint,
+                origin: env::ObligationOrigin::ImplCandidateConstraint {
+                    goal,
+                    implementor,
+                    constraint_idx,
+                },
+                span: span.clone(),
+            });
+        }
+    }
+
+    fn process_const_predicate_obligation(
+        &mut self,
+        mut pred: ConstPredicateInstId<'db>,
+        obligation: env::Obligation<'db>,
+        final_pass: bool,
+    ) -> ObligationOutcome<'db> {
+        use self::const_predicate_prover::{ConstProveResult, prove_const_predicate};
+
+        let db = self.db;
+        if self.has_dead_inference_keys(&pred) {
+            return ObligationOutcome::Discharged;
+        }
+
+        pred = pred.fold_with(db, &mut self.table);
+        let flags = collect_flags(db, pred);
+        if flags.contains(TyFlags::HAS_INVALID) || self.has_dead_inference_keys(&pred) {
+            return ObligationOutcome::Discharged;
+        }
+
+        if flags.contains(TyFlags::HAS_VAR) {
+            if final_pass {
+                self.push_diag(BodyDiag::WhereConstPredicateEvalFailed {
+                    primary: obligation.span,
+                });
+                return ObligationOutcome::Discharged;
+            }
+            return self.requeue_const_predicate_obligation(pred, obligation);
+        }
+
+        match prove_const_predicate(db, pred, self.env.param_env()) {
+            ConstProveResult::Proven(_) => ObligationOutcome::Discharged,
+            ConstProveResult::Disproved => {
+                if final_pass {
+                    self.push_diag(BodyDiag::WhereConstPredicateFailed {
+                        primary: obligation.span,
+                    });
+                    ObligationOutcome::Discharged
+                } else {
+                    self.requeue_const_predicate_obligation(pred, obligation)
+                }
+            }
+            ConstProveResult::Ambiguous | ConstProveResult::Error => {
+                if final_pass {
+                    self.push_diag(BodyDiag::WhereConstPredicateEvalFailed {
+                        primary: obligation.span,
+                    });
+                    ObligationOutcome::Discharged
+                } else {
+                    self.requeue_const_predicate_obligation(pred, obligation)
+                }
+            }
+        }
+    }
+
+    fn requeue_const_predicate_obligation(
+        &self,
+        pred: ConstPredicateInstId<'db>,
+        obligation: env::Obligation<'db>,
+    ) -> ObligationOutcome<'db> {
+        ObligationOutcome::Requeue(env::Obligation {
+            constraint: ConstraintId::new(self.db, ConstraintKind::ConstPredicate(pred)),
+            ..obligation
+        })
     }
 
     fn check_const_predicate_failures_for_diag(&mut self, goal: TraitInstId<'db>) -> Vec<String> {
@@ -1415,11 +1559,11 @@ impl<'db> TyChecker<'db> {
             for task in tasks {
                 match task {
                     env::DeferredTask::Obligation(obligation) => {
-                        match self.process_trait_obligation(obligation, false) {
-                            TraitObligationOutcome::Discharged => {}
-                            TraitObligationOutcome::Progressed => progressed = true,
-                            TraitObligationOutcome::Requeue(obligation) => {
-                                self.env.register_trait_obligation(obligation);
+                        match self.process_obligation(obligation, false) {
+                            ObligationOutcome::Discharged => {}
+                            ObligationOutcome::Progressed => progressed = true,
+                            ObligationOutcome::Requeue(obligation) => {
+                                self.env.register_obligation(obligation);
                             }
                         }
                     }
@@ -1580,7 +1724,7 @@ impl<'db> TyChecker<'db> {
         for task in self.env.take_deferred_tasks() {
             match task {
                 env::DeferredTask::Obligation(obligation) => {
-                    let _ = self.process_trait_obligation(obligation, true);
+                    let _ = self.process_obligation(obligation, true);
                 }
                 env::DeferredTask::Method(pending) => {
                     let Some(expr_prop) = self.env.typed_expr(pending.expr) else {
@@ -4030,6 +4174,7 @@ struct TyCheckerFinalizer<'db> {
     db: &'db dyn HirAnalysisDb,
     body: TypedBody<'db>,
     assumptions: PredicateListId<'db>,
+    param_env: ParamEnv<'db>,
     ty_vars: FxHashSet<InferenceKey<'db>>,
     effect_provider_keys: FxHashSet<InferenceKey<'db>>,
     direct_call_callees: FxHashSet<ExprId>,
@@ -4093,6 +4238,7 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
 impl<'db> TyCheckerFinalizer<'db> {
     fn new(mut checker: TyChecker<'db>) -> Self {
         let assumptions = checker.env.assumptions();
+        let param_env = checker.env.param_env();
         checker.resolve_deferred();
         let mut body = checker.env.finish(&mut checker.table);
         body.return_borrow_provider = checker
@@ -4113,6 +4259,7 @@ impl<'db> TyCheckerFinalizer<'db> {
             db: checker.db,
             body,
             assumptions,
+            param_env,
             ty_vars: FxHashSet::default(),
             effect_provider_keys: checker.effect_provider_keys,
             direct_call_callees,
@@ -4167,8 +4314,48 @@ impl<'db> TyCheckerFinalizer<'db> {
         }
 
         let solve_cx = TraitSolveCx::new(self.db, self.body.body.unwrap().scope());
-        if let Some(diag) = ty.emit_wf_diag(self.db, solve_cx, self.assumptions, span) {
+        if let Some(diag) = ty.emit_wf_diag(self.db, solve_cx, self.assumptions, span.clone()) {
             self.diags.push(diag.into());
+        }
+        self.check_const_wf(ty, span);
+    }
+
+    fn check_const_wf(&mut self, ty: TyId<'db>, span: DynLazySpan<'db>) {
+        use self::const_predicate_prover::{ConstProveResult, prove_const_predicate};
+
+        let db = self.db;
+        let (_, args) = ty.decompose_ty_app(db);
+        for &arg in args {
+            let flags = arg.flags(db);
+            if flags.contains(TyFlags::HAS_INVALID) || flags.contains(TyFlags::HAS_VAR) {
+                continue;
+            }
+            self.check_const_wf(arg, span.clone());
+        }
+
+        for constraint in ty_constraints2(db, ty).list(db) {
+            let ConstraintKind::ConstPredicate(pred) = constraint.kind(db) else {
+                continue;
+            };
+            match prove_const_predicate(db, pred, self.param_env) {
+                ConstProveResult::Proven(_) => {}
+                ConstProveResult::Disproved => {
+                    self.diags.push(
+                        BodyDiag::WhereConstPredicateFailed {
+                            primary: span.clone(),
+                        }
+                        .into(),
+                    );
+                }
+                ConstProveResult::Ambiguous | ConstProveResult::Error => {
+                    self.diags.push(
+                        BodyDiag::WhereConstPredicateEvalFailed {
+                            primary: span.clone(),
+                        }
+                        .into(),
+                    );
+                }
+            }
         }
     }
 }

@@ -1,5 +1,6 @@
 use super::{
     canonical::{Canonical, Canonicalized, Solution},
+    constraint::ConstraintListId,
     fold::{AssocTySubst, TyFoldable},
     trait_def::{ImplementorId, TraitInstId},
     ty_def::{TyData, TyFlags, TyId},
@@ -372,6 +373,7 @@ pub(crate) fn check_trait_inst_wf<'db>(
 pub struct TraitGoalSolution<'db> {
     pub(crate) inst: TraitInstId<'db>,
     pub(crate) implementor: ImplementorId<'db>,
+    pub(crate) residual_constraints: ConstraintListId<'db>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Update)]

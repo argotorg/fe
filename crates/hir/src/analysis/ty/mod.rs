@@ -1,4 +1,4 @@
-use crate::analysis::ty::diagnostics::BodyDiag;
+use crate::analysis::ty::diagnostics::{BodyDiag, FuncBodyDiag};
 use crate::analysis::ty::effects::{ResolvedEffectKey, resolve_effect_key};
 use crate::analysis::ty::trait_resolution::{
     GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
@@ -6,7 +6,7 @@ use crate::analysis::ty::trait_resolution::{
 use crate::analysis::ty::ty_check::EffectParamOwner;
 use crate::core::adt_lower::lower_adt;
 use crate::core::hir_def::{
-    IdentId, ItemKind, PathId, TopLevelMod, Trait, TypeAlias,
+    IdentId, ItemKind, PathId, TopLevelMod, Trait, TypeAlias, WhereClauseOwner,
     scope_graph::{ScopeGraph, ScopeId},
 };
 use adt_def::{AdtDef, AdtRef};
@@ -32,6 +32,7 @@ pub mod canonical;
 pub(crate) mod const_check;
 pub mod const_expr;
 pub mod const_ty;
+pub(crate) mod constraint;
 pub mod corelib;
 pub mod effects;
 pub mod msg_selector;
@@ -377,12 +378,37 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
         // Check function and const bodies; contract-specific analysis is handled separately.
-        let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = top_mod
-            .all_funcs(db)
-            .iter()
-            .flat_map(|func| &ty_check::check_func_body(db, *func).0)
-            .map(|diag| diag.to_voucher())
-            .collect();
+        let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> =
+            top_mod
+                .all_structs(db)
+                .iter()
+                .flat_map(|struct_| {
+                    where_const_predicate_diags(db, WhereClauseOwner::Struct(*struct_))
+                })
+                .chain(top_mod.all_enums(db).iter().flat_map(|enum_| {
+                    where_const_predicate_diags(db, WhereClauseOwner::Enum(*enum_))
+                }))
+                .chain(top_mod.all_traits(db).iter().flat_map(|trait_| {
+                    where_const_predicate_diags(db, WhereClauseOwner::Trait(*trait_))
+                }))
+                .chain(top_mod.all_impls(db).iter().flat_map(|impl_| {
+                    where_const_predicate_diags(db, WhereClauseOwner::Impl(*impl_))
+                }))
+                .chain(top_mod.all_impl_traits(db).iter().flat_map(|impl_trait| {
+                    where_const_predicate_diags(db, WhereClauseOwner::ImplTrait(*impl_trait))
+                }))
+                .chain(top_mod.all_funcs(db).iter().flat_map(|func| {
+                    where_const_predicate_diags(db, WhereClauseOwner::Func(*func))
+                }))
+                .collect();
+
+        diags.extend(
+            top_mod
+                .all_funcs(db)
+                .iter()
+                .flat_map(|func| &ty_check::check_func_body(db, *func).0)
+                .map(|diag| diag.to_voucher()),
+        );
 
         diags.extend(
             top_mod
@@ -406,6 +432,36 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
 
         diags
     }
+}
+
+fn where_const_predicate_diags<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: WhereClauseOwner<'db>,
+) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
+    owner
+        .where_clause(db)
+        .const_predicates(db)
+        .iter()
+        .filter_map(|body| {
+            let body_diags = &ty_check::check_anon_const_body(db, *body, TyId::bool(db)).0;
+            (!body_diags.is_empty() && !const_predicate_decl_diags_are_ignorable(body_diags)).then(
+                || {
+                    Box::new(BodyDiag::WhereConstPredicateEvalFailed {
+                        primary: body.span().into(),
+                    }) as Box<dyn DiagnosticVoucher + 'db>
+                },
+            )
+        })
+        .collect()
+}
+
+fn const_predicate_decl_diags_are_ignorable<'db>(diags: &[FuncBodyDiag<'db>]) -> bool {
+    diags.iter().all(|diag| {
+        matches!(
+            diag,
+            FuncBodyDiag::Body(BodyDiag::TypeAnnotationNeeded { .. })
+        )
+    })
 }
 
 /// An analysis pass for contract definitions.

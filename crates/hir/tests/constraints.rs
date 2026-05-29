@@ -59,6 +59,266 @@ fn assert_required_by_bound(diags: &[CompleteDiagnostic], callable_name: &str) {
     );
 }
 
+fn assert_const_predicate_diag(diags: &[CompleteDiagnostic]) {
+    assert!(
+        diags.iter().any(|diag| {
+            diag.message.contains("const predicate")
+                || diag
+                    .sub_diagnostics
+                    .iter()
+                    .any(|sub| sub.message.contains("const predicate"))
+                || diag
+                    .notes
+                    .iter()
+                    .any(|note| note.contains("const predicate"))
+        }),
+        "expected const predicate diagnostic, got diagnostics: {diags:#?}"
+    );
+}
+
+#[test]
+fn const_predicate_generic_caller_with_matching_assumption_passes() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "const_predicate_generic_caller_with_matching_assumption_passes.fe".into(),
+        r#"
+trait HasSize {
+    const SIZE: u256
+}
+
+fn needs_big<T>()
+where
+    T: HasSize,
+    T::SIZE >= 50
+{}
+
+fn caller<T>()
+where
+    T: HasSize,
+    T::SIZE >= 50
+{
+    needs_big<T>()
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn const_predicate_inferred_generic_call_rechecked_after_inference() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "const_predicate_inferred_generic_call_rechecked_after_inference.fe".into(),
+        r#"
+trait HasSize {
+    const SIZE: u256
+}
+
+struct Small {}
+
+impl HasSize for Small {
+    const SIZE: u256 = 1
+}
+
+fn needs_big<T>(value: T)
+where
+    T: HasSize,
+    T::SIZE >= 50
+{}
+
+fn fail() {
+    needs_big(Small {})
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+    assert_const_predicate_diag(&diags);
+}
+
+#[test]
+fn const_predicate_generic_caller_requires_matching_assumption() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "const_predicate_generic_caller_requires_matching_assumption.fe".into(),
+        r#"
+trait HasSize {
+    const SIZE: u256
+}
+
+fn needs_big<T>()
+where
+    T: HasSize,
+    T::SIZE >= 50
+{}
+
+fn fail<T>()
+where
+    T: HasSize
+{
+    needs_big<T>()
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+    assert_const_predicate_diag(&diags);
+}
+
+#[test]
+fn const_predicate_adt_instantiation_enforces_where_clause() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "const_predicate_adt_instantiation_enforces_where_clause.fe".into(),
+        r#"
+trait HasSize {
+    const SIZE: u256
+}
+
+struct Small {}
+
+impl HasSize for Small {
+    const SIZE: u256 = 1
+}
+
+struct BigOnly<T>
+where
+    T: HasSize,
+    T::SIZE >= 50
+{
+    value: T,
+}
+
+fn fail() {
+    let value = BigOnly<Small> { value: Small {} }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+    assert_const_predicate_diag(&diags);
+}
+
+#[test]
+fn const_predicate_enum_variant_ctor_enforces_where_clause() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "const_predicate_enum_variant_ctor_enforces_where_clause.fe".into(),
+        r#"
+trait HasSize {
+    const SIZE: u256
+}
+
+struct Small {}
+
+impl HasSize for Small {
+    const SIZE: u256 = 1
+}
+
+enum BigEnum<T>
+where
+    T: HasSize,
+    T::SIZE >= 50
+{
+    Value(T)
+}
+
+fn fail() {
+    let value = BigEnum::Value(Small {})
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+    assert_const_predicate_diag(&diags);
+}
+
+#[test]
+fn const_predicate_trait_method_impl_cannot_drop_required_predicate() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "const_predicate_trait_method_impl_cannot_drop_required_predicate.fe".into(),
+        r#"
+trait HasSize {
+    const SIZE: u256
+}
+
+trait Bounded {
+    fn check<T>()
+    where
+        T: HasSize,
+        T::SIZE >= 50
+}
+
+struct Checker {}
+
+impl Bounded for Checker {
+    fn check<T>()
+    where
+        T: HasSize
+    {}
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+    assert_const_predicate_diag(&diags);
+}
+
+#[test]
+fn const_predicate_impl_candidate_yields_residual_obligation() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "const_predicate_impl_candidate_yields_residual_obligation.fe".into(),
+        r#"
+trait HasSize {
+    const SIZE: u256
+}
+
+trait Pack {}
+
+impl<T> Pack for T
+where
+    T: HasSize,
+    T::SIZE >= 50
+{}
+
+fn require_pack<T>()
+where
+    T: Pack
+{}
+
+fn fail<T>()
+where
+    T: HasSize
+{
+    require_pack<T>()
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+    assert_const_predicate_diag(&diags);
+}
+
+#[test]
+fn const_predicate_declaration_rejects_non_bool_predicate() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "const_predicate_declaration_rejects_non_bool_predicate.fe".into(),
+        r#"
+fn bad<T>()
+where
+    1 + 1
+{}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+    assert_const_predicate_diag(&diags);
+}
+
 #[test]
 fn free_function_calls_check_instantiated_constraints_without_effects() {
     let mut db = HirAnalysisTestDb::default();

@@ -27,6 +27,7 @@ use crate::analysis::ty::pattern_ir::{
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
+        constraint::{ConstraintId, ConstraintListId, ParamEnv},
         corelib::resolve_lib_type_path,
         effects::{
             EffectKeyKind,
@@ -35,11 +36,11 @@ use crate::analysis::{
         },
         fold::{TyFoldable, TyFolder},
         provider::ProviderAddressSpace,
-        trait_def::TraitInstId,
+        trait_def::{ImplementorId, TraitInstId},
         trait_resolution::{
             PredicateListId,
             constraint::{
-                collect_constraints, collect_func_decl_constraints,
+                collect_constraints2, collect_func_decl_constraints2,
                 collect_func_effect_provider_constraints,
             },
         },
@@ -75,6 +76,8 @@ pub(crate) struct TyCheckEnv<'db> {
     effect_bounds: ThinVec<TraitInstId<'db>>,
     base_assumptions: PredicateListId<'db>,
     assumptions: PredicateListId<'db>,
+    base_constraint_assumptions: ConstraintListId<'db>,
+    constraint_assumptions: ConstraintListId<'db>,
     var_env: Vec<BlockEnv<'db>>,
     pending_vars: FxHashMap<IdentId<'db>, LocalBinding<'db>>,
     loop_stack: Vec<StmtId>,
@@ -99,24 +102,59 @@ pub(crate) struct TyCheckEnv<'db> {
 
 impl<'db> TyCheckEnv<'db> {
     pub(super) fn new(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -> Result<Self, ()> {
-        fn const_owner_preds<'db>(
+        fn self_trait_pred<'db>(
+            db: &'db dyn HirAnalysisDb,
+            trait_: crate::hir_def::Trait<'db>,
+        ) -> TraitInstId<'db> {
+            TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new())
+        }
+
+        fn const_owner_constraints<'db>(
             db: &'db dyn HirAnalysisDb,
             scope: ScopeId<'db>,
-        ) -> PredicateListId<'db> {
+        ) -> ConstraintListId<'db> {
             match scope.parent_item(db) {
+                Some(ItemKind::Func(func)) => {
+                    collect_func_decl_constraints2(db, func.into(), true).instantiate_identity()
+                }
+                Some(ItemKind::Struct(struct_)) => {
+                    collect_constraints2(db, struct_.into()).instantiate_identity()
+                }
+                Some(ItemKind::Enum(enum_)) => {
+                    collect_constraints2(db, enum_.into()).instantiate_identity()
+                }
                 Some(ItemKind::Trait(trait_)) => {
-                    let self_pred =
-                        TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
-                    PredicateListId::new(db, vec![self_pred])
+                    let self_pred = self_trait_pred(db, trait_);
+                    ConstraintListId::new(db, vec![ConstraintId::from_trait(db, self_pred)])
                 }
                 Some(ItemKind::ImplTrait(impl_trait)) => {
-                    collect_constraints(db, impl_trait.into()).instantiate_identity()
+                    collect_constraints2(db, impl_trait.into()).instantiate_identity()
                 }
                 Some(ItemKind::Impl(impl_)) => {
-                    collect_constraints(db, impl_.into()).instantiate_identity()
+                    collect_constraints2(db, impl_.into()).instantiate_identity()
                 }
-                _ => PredicateListId::empty_list(db),
+                _ => ConstraintListId::empty(db),
             }
+        }
+
+        fn split_constraint_assumptions<'db>(
+            db: &'db dyn HirAnalysisDb,
+            constraints: ConstraintListId<'db>,
+        ) -> (
+            PredicateListId<'db>,
+            PredicateListId<'db>,
+            ConstraintListId<'db>,
+            ConstraintListId<'db>,
+        ) {
+            let constraint_assumptions = constraints.extend_all_trait_bounds(db);
+            let base_preds = constraints.trait_predicates(db);
+            let base_assumptions = constraint_assumptions.trait_predicates(db);
+            (
+                base_preds,
+                base_assumptions,
+                constraints,
+                constraint_assumptions,
+            )
         }
 
         let Some(body) = owner.body(db) else {
@@ -125,69 +163,55 @@ impl<'db> TyCheckEnv<'db> {
 
         let owner_scope = owner.scope();
 
-        // Compute base assumptions (without effect-derived bounds) up-front
-        let (base_preds, base_assumptions) = match owner {
-            BodyOwner::Func(func) => {
-                let mut preds =
-                    collect_func_decl_constraints(db, func.into(), true).instantiate_identity();
-                // Methods inside a trait implicitly assume `Self: Trait` in their bodies so
-                // default method calls resolve against the trait being implemented.
-                if let Some(ItemKind::Trait(trait_)) = func.scope().parent_item(db) {
-                    let self_pred =
-                        TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
-                    let mut merged = preds.list(db).to_vec();
-                    merged.push(self_pred);
-                    preds = PredicateListId::new(db, merged);
-                }
-                let assumptions = preds.extend_all_bounds(db);
-                (preds, assumptions)
-            }
-            BodyOwner::AnonConstBody { .. } => {
-                let containing_func = match owner_scope.parent_item(db) {
-                    Some(ItemKind::Func(func)) => Some(func),
-                    Some(ItemKind::Body(parent)) => parent.containing_func(db),
-                    _ => None,
-                };
-                if let Some(func) = containing_func {
-                    let mut preds =
-                        collect_func_decl_constraints(db, func.into(), true).instantiate_identity();
+        // Compute base assumptions (without effect-derived bounds) up-front.
+        let (_base_preds, base_assumptions, base_constraints, base_constraint_assumptions) =
+            match owner {
+                BodyOwner::Func(func) => {
+                    let mut constraints = collect_func_decl_constraints2(db, func.into(), true)
+                        .instantiate_identity();
+                    // Methods inside a trait implicitly assume `Self: Trait` in their bodies so
+                    // default method calls resolve against the trait being implemented.
                     if let Some(ItemKind::Trait(trait_)) = func.scope().parent_item(db) {
-                        let self_pred = TraitInstId::new(
-                            db,
-                            trait_,
-                            trait_.params(db).to_vec(),
-                            IndexMap::new(),
-                        );
-                        let mut merged = preds.list(db).to_vec();
-                        merged.push(self_pred);
-                        preds = PredicateListId::new(db, merged);
+                        let self_pred = self_trait_pred(db, trait_);
+                        let mut merged = constraints.list(db).to_vec();
+                        merged.push(ConstraintId::from_trait(db, self_pred));
+                        constraints = ConstraintListId::new(db, merged);
                     }
-                    let assumptions = preds.extend_all_bounds(db);
-                    (preds, assumptions)
-                } else {
-                    // Walk up through nested body scopes to find an enclosing item (trait/impl).
-                    let mut enclosing = owner_scope;
-                    let mut parent_item = enclosing.parent_item(db);
-                    while let Some(ItemKind::Body(parent)) = parent_item {
-                        enclosing = parent.scope();
-                        parent_item = enclosing.parent_item(db);
-                    }
-
-                    let preds = const_owner_preds(db, enclosing);
-                    let assumptions = preds.extend_all_bounds(db);
-                    (preds, assumptions)
+                    split_constraint_assumptions(db, constraints)
                 }
-            }
-            BodyOwner::Const(const_) => {
-                let preds = const_owner_preds(db, const_.scope());
-                let assumptions = preds.extend_all_bounds(db);
-                (preds, assumptions)
-            }
-            _ => {
-                let empty = PredicateListId::empty_list(db);
-                (empty, empty)
-            }
-        };
+                BodyOwner::AnonConstBody { .. } => {
+                    let containing_func = match owner_scope.parent_item(db) {
+                        Some(ItemKind::Func(func)) => Some(func),
+                        Some(ItemKind::Body(parent)) => parent.containing_func(db),
+                        _ => None,
+                    };
+                    if let Some(func) = containing_func {
+                        let mut constraints = collect_func_decl_constraints2(db, func.into(), true)
+                            .instantiate_identity();
+                        if let Some(ItemKind::Trait(trait_)) = func.scope().parent_item(db) {
+                            let self_pred = self_trait_pred(db, trait_);
+                            let mut merged = constraints.list(db).to_vec();
+                            merged.push(ConstraintId::from_trait(db, self_pred));
+                            constraints = ConstraintListId::new(db, merged);
+                        }
+                        split_constraint_assumptions(db, constraints)
+                    } else {
+                        // Walk up through nested body scopes to find an enclosing item (trait/impl).
+                        let mut enclosing = owner_scope;
+                        let mut parent_item = enclosing.parent_item(db);
+                        while let Some(ItemKind::Body(parent)) = parent_item {
+                            enclosing = parent.scope();
+                            parent_item = enclosing.parent_item(db);
+                        }
+
+                        split_constraint_assumptions(db, const_owner_constraints(db, enclosing))
+                    }
+                }
+                BodyOwner::Const(const_) => {
+                    split_constraint_assumptions(db, const_owner_constraints(db, const_.scope()))
+                }
+                _ => split_constraint_assumptions(db, ConstraintListId::empty(db)),
+            };
 
         let mut env = Self {
             db,
@@ -208,6 +232,8 @@ impl<'db> TyCheckEnv<'db> {
             effect_bounds: ThinVec::new(),
             base_assumptions,
             assumptions: base_assumptions,
+            base_constraint_assumptions,
+            constraint_assumptions: base_constraint_assumptions,
             var_env: vec![BlockEnv::new(owner_scope, 0)],
             pending_vars: FxHashMap::default(),
             loop_stack: Vec::new(),
@@ -294,9 +320,15 @@ impl<'db> TyCheckEnv<'db> {
         env.register_effect_bindings(base_assumptions);
 
         // Finalize assumptions by merging in effect-derived bounds
-        let mut preds = base_preds.list(db).to_vec();
-        preds.extend(env.effect_bounds.iter().copied());
-        env.assumptions = PredicateListId::new(db, preds).extend_all_bounds(db);
+        let mut constraints = base_constraints.list(db).to_vec();
+        constraints.extend(
+            env.effect_bounds
+                .iter()
+                .map(|inst| ConstraintId::from_trait(db, *inst)),
+        );
+        env.constraint_assumptions =
+            ConstraintListId::new(db, constraints).extend_all_trait_bounds(db);
+        env.assumptions = env.constraint_assumptions.trait_predicates(db);
 
         Ok(env)
     }
@@ -594,6 +626,24 @@ impl<'db> TyCheckEnv<'db> {
         self.base_assumptions
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn constraint_assumptions(&self) -> ConstraintListId<'db> {
+        self.constraint_assumptions
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn base_constraint_assumptions(&self) -> ConstraintListId<'db> {
+        self.base_constraint_assumptions
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn param_env(&self) -> ParamEnv<'db> {
+        ParamEnv {
+            scope: self.owner_scope,
+            constraints: self.constraint_assumptions,
+        }
+    }
+
     pub(super) fn body(&self) -> Body<'db> {
         self.body
     }
@@ -832,6 +882,10 @@ impl<'db> TyCheckEnv<'db> {
     }
 
     pub(super) fn register_trait_obligation(&mut self, obligation: TraitObligation<'db>) {
+        self.register_obligation(obligation.into_constraint_obligation(self.db));
+    }
+
+    pub(super) fn register_obligation(&mut self, obligation: Obligation<'db>) {
         self.deferred.push(DeferredTask::Obligation(obligation))
     }
 
@@ -1546,26 +1600,48 @@ impl PendingPrimitiveOp {
 
 #[derive(Debug, Clone)]
 pub(super) enum DeferredTask<'db> {
-    Obligation(TraitObligation<'db>),
+    Obligation(Obligation<'db>),
     Method(PendingMethod<'db>),
     PrimitiveOp(PendingPrimitiveOp),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum TraitObligationOrigin<'db> {
+pub(super) enum ObligationOrigin<'db> {
     CallConstraint {
         call_expr: ExprId,
         callable_def: CallableDef<'db>,
+        constraint_idx: usize,
+    },
+    ImplCandidateConstraint {
+        goal: TraitInstId<'db>,
+        implementor: ImplementorId<'db>,
         constraint_idx: usize,
     },
     GenericConfirmation,
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct TraitObligation<'db> {
-    pub goal: TraitInstId<'db>,
-    pub origin: TraitObligationOrigin<'db>,
+pub(super) struct Obligation<'db> {
+    pub constraint: ConstraintId<'db>,
+    pub origin: ObligationOrigin<'db>,
     pub span: DynLazySpan<'db>,
 }
 
-impl<'db> TyCheckEnv<'db> {}
+pub(super) type TraitObligationOrigin<'db> = ObligationOrigin<'db>;
+
+#[derive(Debug, Clone)]
+pub(super) struct TraitObligation<'db> {
+    pub goal: TraitInstId<'db>,
+    pub origin: ObligationOrigin<'db>,
+    pub span: DynLazySpan<'db>,
+}
+
+impl<'db> TraitObligation<'db> {
+    pub(super) fn into_constraint_obligation(self, db: &'db dyn HirAnalysisDb) -> Obligation<'db> {
+        Obligation {
+            constraint: ConstraintId::from_trait(db, self.goal),
+            origin: self.origin,
+            span: self.span,
+        }
+    }
+}

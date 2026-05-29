@@ -4714,6 +4714,31 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                 }
             }
 
+            Self::MethodMissingConstPredicate { trait_m, impl_m } => {
+                let method_name = impl_m.name(db).expect("methods have names").data(db);
+                CompleteDiagnostic {
+                    severity,
+                    message: format!(
+                        "method `{method_name}` is missing a required const predicate"
+                    ),
+                    sub_diagnostics: vec![
+                        SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: "implementation method must provide this const predicate"
+                                .to_string(),
+                            span: impl_m.name_span().resolve(db),
+                        },
+                        SubDiagnostic {
+                            style: LabelStyle::Secondary,
+                            message: "trait method requires a const predicate here".to_string(),
+                            span: trait_m.name_span().resolve(db),
+                        },
+                    ],
+                    notes: vec![],
+                    error_code,
+                }
+            }
+
             Self::InvalidSelfType {
                 span,
                 expected,
