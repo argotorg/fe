@@ -29,6 +29,9 @@ pub const FE_DOC_NAV_JS: &str = include_str!("../assets/fe-doc-nav.js");
 /// `<fe-doc-viewer>` custom element.
 pub const FE_DOC_VIEWER_JS: &str = include_str!("../assets/fe-doc-viewer.js");
 
+/// `<fe-origin-trace>` custom element.
+pub const FE_ORIGIN_TRACE_JS: &str = include_str!("../assets/fe-origin-trace.js");
+
 /// Standalone syntax highlighting CSS (hardcoded colors, no CSS variables).
 /// For embedding in Starlight/Astro or any external site.
 pub const FE_HIGHLIGHT_CSS: &str = include_str!("../assets/fe-highlight.css");
@@ -195,6 +198,38 @@ pub fn html_shell_full(
         search_js = FE_SEARCH_JS,
         doc_nav_js = FE_DOC_NAV_JS,
         doc_viewer_js = FE_DOC_VIEWER_JS,
+    )
+}
+
+/// Generate a standalone HTML shell for the origin trace web component.
+///
+/// The trace view JSON is inlined so the page works from `file://` and from
+/// the existing static HTTP server without a separate bundling step.
+pub fn origin_trace_html_shell(title: &str, trace_view_json: &str) -> String {
+    let safe_title = escape_html_text(title);
+    let safe_json = escape_script_content(trace_view_json);
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{title}</title>
+  <style>
+    html, body {{ margin: 0; min-height: 100%; background: #11130f; }}
+  </style>
+  <style>{highlight_css}</style>
+</head>
+<body>
+  <script>window.FE_ORIGIN_TRACE_DATA = {json};</script>
+  <script>{origin_trace_js}</script>
+  <fe-origin-trace></fe-origin-trace>
+</body>
+</html>"#,
+        title = safe_title,
+        highlight_css = FE_HIGHLIGHT_CSS,
+        json = safe_json,
+        origin_trace_js = FE_ORIGIN_TRACE_JS,
     )
 }
 

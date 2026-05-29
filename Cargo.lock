@@ -2285,6 +2285,7 @@ version = "26.1.0"
 dependencies = [
  "ascii_tree",
  "bitflags 2.11.1",
+ "blake3",
  "camino",
  "codespan-reporting",
  "cranelift-entity 0.130.2",

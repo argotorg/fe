@@ -142,7 +142,20 @@ fn main() -> u256 {
         origin_node_kind_count(&facts, "runtime.function"),
         package.functions(&db).len()
     );
-    assert_eq!(summary.edge_count, 0);
+    assert!(
+        summary.edge_count > 0,
+        "MIR trace should link runtime origins back to HIR origins"
+    );
+    assert!(
+        facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::OriginEdge(edge)
+                if matches!(edge.from.kind(), "runtime.stmt" | "runtime.terminator")
+                    && matches!(edge.to.kind(), "hir.expr" | "hir.stmt")
+                    && edge.label == trace_facts::OriginEdgeLabel::LoweredFrom
+        )),
+        "MIR trace should include runtime-to-HIR lowering edges"
+    );
     assert!(
         facts
             .iter()

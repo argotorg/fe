@@ -8,9 +8,9 @@ use shape_address::{
 use trace_facts::{
     BlockFact, CfgEdgeFact, CfgEdgeKind, CompilerEventFact, CompilerEventKind, CompilerPhase,
     CompilerReason, DisplayNameFact, DisplayNameKind, FunctionFact, LoopBlockFact, LoopBlockRole,
-    LoopConfidence, LoopDerivation, LoopFact, OriginNodeFact, OriginNodeKind, StorageFact,
-    StorageLocation, StorageReason, TraceFact, TypeFact, TypeKind, ValueProperty,
-    ValuePropertyFact, VariableFact, VariableStorageClass,
+    LoopConfidence, LoopDerivation, LoopFact, OriginEdgeFact, OriginEdgeLabel, OriginNodeFact,
+    OriginNodeKind, StorageFact, StorageLocation, StorageReason, TraceFact, TypeFact, TypeKind,
+    ValueProperty, ValuePropertyFact, VariableFact, VariableStorageClass,
 };
 
 use crate::{
@@ -29,8 +29,12 @@ use crate::{
     },
 };
 use hir::{
-    analysis::{semantic::borrowck::normalize_semantic_body, ty::ty_check::LocalBinding},
+    analysis::{
+        semantic::{SemOrigin, borrowck::normalize_semantic_body},
+        ty::ty_check::LocalBinding,
+    },
     hir_def::{Partial, Pat},
+    origin::{HIR_EXPR_EXPORT_KIND, HIR_STMT_EXPORT_KIND, HirOriginBodyOwnerKey},
 };
 
 /// Emit MIR/runtime-owned trace facts for a runtime package.
@@ -39,10 +43,22 @@ use hir::{
 /// registers, final instructions, and codegen events are emitted by codegen.
 pub fn emit_mir_facts<'db>(db: &'db dyn MirDb, package: RuntimePackage<'db>) -> Vec<TraceFact> {
     let mut facts = Vec::new();
+    let mut emitted_source_file_nodes = BTreeSet::new();
+    let mut emitted_source_file_records = BTreeSet::new();
     for function in package.functions(db) {
         let instance = function.instance(db);
         let owner_key = RuntimeInstanceOwnerKey::for_instance(db, instance);
         let body = instance.body(db);
+        let hir_body = hir_body_for_instance(db, instance);
+        let hir_owner_key = hir_origin_body_owner_key(&owner_key);
+        if let Some(hir_body) = hir_body {
+            extend_with_deduped_source_files(
+                &mut facts,
+                &mut emitted_source_file_nodes,
+                &mut emitted_source_file_records,
+                hir::trace::emit_hir_body_facts_with_source_spans(db, &hir_owner_key, hir_body),
+            );
+        }
         let function_key = RuntimeFunctionOrigin::new(instance).export_key(&owner_key);
         facts.push(origin_node(
             function_key.clone(),
@@ -154,16 +170,41 @@ pub fn emit_mir_facts<'db>(db: &'db dyn MirDb, package: RuntimePackage<'db>) -> 
             for (stmt_index, _) in runtime_block.stmts.iter().enumerate() {
                 let site =
                     RuntimeStmtSite::new(block, RuntimeStmtIndex::from_u32(stmt_index as u32));
-                facts.push(origin_node(
-                    RuntimeStmtOrigin::new(instance, site).export_key(&owner_key),
-                    RUNTIME_STMT_EXPORT_KIND,
-                ));
+                let stmt_key = RuntimeStmtOrigin::new(instance, site).export_key(&owner_key);
+                facts.push(origin_node(stmt_key.clone(), RUNTIME_STMT_EXPORT_KIND));
+                if let Some(hir_key) = body
+                    .stmt_origins
+                    .get(block_index)
+                    .and_then(|origins| origins.get(stmt_index))
+                    .and_then(|origin| sem_origin_hir_key(*origin, &hir_owner_key))
+                {
+                    facts.push(TraceFact::OriginEdge(OriginEdgeFact::new(
+                        stmt_key,
+                        hir_key,
+                        OriginEdgeLabel::LoweredFrom,
+                        Some(CompilerPhase::Mir),
+                    )));
+                }
             }
             let terminator_site = RuntimeTerminatorSite::new(block);
+            let terminator_key =
+                RuntimeTerminatorOrigin::new(instance, terminator_site).export_key(&owner_key);
             facts.push(origin_node(
-                RuntimeTerminatorOrigin::new(instance, terminator_site).export_key(&owner_key),
+                terminator_key.clone(),
                 RUNTIME_TERMINATOR_EXPORT_KIND,
             ));
+            if let Some(hir_key) = body
+                .terminator_origins
+                .get(block_index)
+                .and_then(|origin| sem_origin_hir_key(*origin, &hir_owner_key))
+            {
+                facts.push(TraceFact::OriginEdge(OriginEdgeFact::new(
+                    terminator_key,
+                    hir_key,
+                    OriginEdgeLabel::LoweredFrom,
+                    Some(CompilerPhase::Mir),
+                )));
+            }
         }
         for edge in &cfg.edges {
             let from_key = RuntimeBlockOrigin::new(instance, edge.from).export_key(&owner_key);
@@ -747,4 +788,63 @@ fn runtime_type_key(
 
 fn origin_node(key: common::origin::OriginExportKey, kind: &str) -> TraceFact {
     TraceFact::OriginNode(OriginNodeFact::new(key, OriginNodeKind::new(kind)))
+}
+
+fn extend_with_deduped_source_files(
+    facts: &mut Vec<TraceFact>,
+    emitted_source_file_nodes: &mut BTreeSet<common::origin::OriginExportKey>,
+    emitted_source_file_records: &mut BTreeSet<common::origin::OriginExportKey>,
+    new_facts: Vec<TraceFact>,
+) {
+    for fact in new_facts {
+        match &fact {
+            TraceFact::OriginNode(node) if node.key.kind() == "source.file" => {
+                if emitted_source_file_nodes.insert(node.key.clone()) {
+                    facts.push(fact);
+                }
+            }
+            TraceFact::SourceFile(source_file) => {
+                if emitted_source_file_records.insert(source_file.file_key.clone()) {
+                    facts.push(fact);
+                }
+            }
+            _ => facts.push(fact),
+        }
+    }
+}
+
+fn hir_body_for_instance<'db>(
+    db: &'db dyn MirDb,
+    instance: crate::RuntimeInstance<'db>,
+) -> Option<hir::hir_def::Body<'db>> {
+    instance.key(db).semantic(db)?.key(db).typed_body(db).body()
+}
+
+fn hir_origin_body_owner_key(owner_key: &RuntimeInstanceOwnerKey) -> HirOriginBodyOwnerKey {
+    HirOriginBodyOwnerKey::new(format!("runtime:{}", owner_key.as_str()))
+}
+
+fn sem_origin_hir_key(
+    origin: SemOrigin<'_>,
+    stable_body_key: &HirOriginBodyOwnerKey,
+) -> Option<common::origin::OriginExportKey> {
+    match origin {
+        SemOrigin::Expr(expr) => Some(
+            common::origin::OriginExportKey::try_from_raw_parts(
+                HIR_EXPR_EXPORT_KIND,
+                stable_body_key.as_str(),
+                expr.index().to_string(),
+            )
+            .expect("HIR expr origin key must be valid"),
+        ),
+        SemOrigin::Stmt(stmt) => Some(
+            common::origin::OriginExportKey::try_from_raw_parts(
+                HIR_STMT_EXPORT_KIND,
+                stable_body_key.as_str(),
+                stmt.index().to_string(),
+            )
+            .expect("HIR stmt origin key must be valid"),
+        ),
+        SemOrigin::Body(_) | SemOrigin::Synthetic => None,
+    }
 }

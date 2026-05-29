@@ -786,6 +786,26 @@ mod tests {
             "source file content hashes should be cryptographic digests"
         );
         assert!(
+            bundle.facts.iter().any(|fact| matches!(
+                fact,
+                trace_facts::TraceFact::SourceSpan(span)
+                    if matches!(span.origin.kind(), "hir.expr" | "hir.stmt")
+                        && span.start_line >= 1
+                        && span.end_line >= span.start_line
+            )),
+            "real Fibonacci trace should include exact HIR expression/statement source spans"
+        );
+        assert!(
+            bundle.facts.iter().any(|fact| matches!(
+                fact,
+                trace_facts::TraceFact::OriginEdge(edge)
+                    if matches!(edge.from.kind(), "runtime.stmt" | "runtime.terminator")
+                        && matches!(edge.to.kind(), "hir.expr" | "hir.stmt")
+                        && edge.label == trace_facts::OriginEdgeLabel::LoweredFrom
+            )),
+            "runtime MIR origins should link back to HIR expression/statement origins"
+        );
+        assert!(
             bundle
                 .facts
                 .iter()

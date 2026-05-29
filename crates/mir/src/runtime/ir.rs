@@ -1,6 +1,6 @@
 use cranelift_entity::{EntityRef, entity_impl};
 use hir::analysis::{
-    semantic::{FieldIndex, SemanticInstance},
+    semantic::{FieldIndex, SemOrigin, SemanticInstance},
     ty::ty_def::TyId,
 };
 use hir::hir_def::{BinOp, Contract, Func, TopLevelMod, UnOp};
@@ -607,6 +607,8 @@ pub struct RuntimeBody<'db> {
     pub provider_bindings: Vec<RuntimeProviderBinding<'db>>,
     pub locals: Vec<RLocal<'db>>,
     pub blocks: Vec<RBlock<'db>>,
+    pub stmt_origins: Vec<Vec<SemOrigin<'db>>>,
+    pub terminator_origins: Vec<SemOrigin<'db>>,
 }
 
 impl<'db> RuntimeBody<'db> {
