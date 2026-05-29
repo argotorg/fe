@@ -216,7 +216,7 @@ impl ShapeGraphKey {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ShapeHashPolicy {
     pub schema_version: u32,
     pub algorithm: ShapeDigestAlgorithm,
@@ -272,6 +272,45 @@ impl ShapeHashPolicy {
         }
         digest_bytes(&bytes)
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ShapeDigestRequest {
+    pub graph: ShapeGraphKey,
+    pub policy: ShapeHashPolicy,
+}
+
+impl ShapeDigestRequest {
+    pub fn new(graph: ShapeGraphKey, policy: ShapeHashPolicy) -> Self {
+        Self { graph, policy }
+    }
+
+    pub fn policy_id(&self) -> ShapePolicyId {
+        self.policy.policy_id()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShapeDigestResult {
+    pub request: ShapeDigestRequest,
+    pub hashes: ShapeGraphHashes,
+}
+
+pub fn shape_digest(
+    request: &ShapeDigestRequest,
+    graph: &ShapeGraph,
+) -> Result<ShapeDigestResult, ShapeError> {
+    if graph.graph_key != request.graph {
+        return Err(ShapeError::GraphKeyMismatch {
+            requested: request.graph.canonical_key(),
+            actual: graph.graph_key.canonical_key(),
+        });
+    }
+    let hashes = hash_shape_graph(&request.policy, graph)?;
+    Ok(ShapeDigestResult {
+        request: request.clone(),
+        hashes,
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -1554,6 +1593,7 @@ pub enum ShapeError {
     DuplicateNode { key: String },
     MissingNode { key: String },
     NodeKeyMismatch { map_key: String, node_key: String },
+    GraphKeyMismatch { requested: String, actual: String },
     CycleDetected { key: String },
 }
 
@@ -1575,6 +1615,12 @@ impl fmt::Display for ShapeError {
                 write!(
                     f,
                     "shape node stored under {map_key} but contains key {node_key}"
+                )
+            }
+            Self::GraphKeyMismatch { requested, actual } => {
+                write!(
+                    f,
+                    "shape digest requested graph {requested} but got {actual}"
                 )
             }
             Self::CycleDetected { key } => {
@@ -1635,6 +1681,31 @@ mod tests {
                 ShapeCyclePolicy::Reject
             ),
             Err(ShapeError::EmptyDimensions)
+        ));
+    }
+
+    #[test]
+    fn digest_request_hashes_matching_graph() {
+        let graph = literal_graph(13);
+        let policy = policy(ShapeViewMode::IdentityBound);
+        let request = ShapeDigestRequest::new(graph.graph_key.clone(), policy.clone());
+
+        let result = shape_digest(&request, &graph).unwrap();
+
+        assert_eq!(result.request, request);
+        assert_eq!(result.hashes.policy_id, policy.policy_id());
+        assert!(result.hashes.graph.get(ShapeDimension::Structure).is_some());
+    }
+
+    #[test]
+    fn digest_request_rejects_wrong_graph() {
+        let graph = literal_graph(13);
+        let other = ShapeGraphKey::new(origin("hir.body", "demo", "body:other"), "body").unwrap();
+        let request = ShapeDigestRequest::new(other, policy(ShapeViewMode::IdentityBound));
+
+        assert!(matches!(
+            shape_digest(&request, &graph),
+            Err(ShapeError::GraphKeyMismatch { .. })
         ));
     }
 
