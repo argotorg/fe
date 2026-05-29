@@ -150,7 +150,7 @@ fn where_doc<'a, N: ast::WhereClauseOwner + AstNode>(
     let alloc = &ctx.alloc;
 
     if let Some(where_clause) = node.where_clause() {
-        if where_clause.iter().next().is_none() && !has_comment_tokens(where_clause.syntax()) {
+        if where_clause_is_empty(&where_clause) && !has_comment_tokens(where_clause.syntax()) {
             return alloc.nil();
         }
 
@@ -164,6 +164,10 @@ fn where_doc<'a, N: ast::WhereClauseOwner + AstNode>(
     } else {
         alloc.nil()
     }
+}
+
+fn where_clause_is_empty(where_clause: &ast::WhereClause) -> bool {
+    where_clause.iter().next().is_none() && where_clause.const_predicates().next().is_none()
 }
 
 /// Format a block of items `{ ... }`, preserving whether there was a blank line
@@ -577,7 +581,7 @@ fn where_doc_forced<'a, N: ast::WhereClauseOwner + AstNode>(
     let alloc = &ctx.alloc;
 
     if let Some(where_clause) = node.where_clause() {
-        if where_clause.iter().next().is_none() && !has_comment_tokens(where_clause.syntax()) {
+        if where_clause_is_empty(&where_clause) && !has_comment_tokens(where_clause.syntax()) {
             return alloc.nil();
         }
 

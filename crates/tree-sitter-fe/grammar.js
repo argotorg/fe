@@ -49,7 +49,7 @@ module.exports = grammar({
   conflicts: $ => [
     // Self type vs self path segment vs expression
     [$.self_type, $.path_segment],
-    // [$.self_type, $._expression, $.path_segment], -- resolved by precedence
+    [$.self_type, $._expression, $.path_segment],
     // recv arm pattern
     [$.recv_arm_pattern],
     // _condition variants use the same terminals as expressions.
@@ -58,13 +58,20 @@ module.exports = grammar({
     // scoped_path / path ambiguity: identifiers, scoped_path, keywords can be
     // expression, _path (for further ::), or path_segment (for type paths)
     [$._expression, $.path_segment],
+    [$._where_const_expression, $.path_segment],
     [$._path, $.path_segment],
     // When seeing `ident <`, could be expression (instantiation), _path (scoped_path
     // with generic args), or path_segment. Need three-way conflict.
     [$._expression, $._path, $.path_segment],
+    [$._expression, $._where_const_expression, $._path, $.path_segment],
+    [$._expression, $._where_const_expression, $._path],
     [$._expression, $._path],
+    [$._expression, $._where_const_expression],
     [$._expression, $._condition_atom_no_let],
     [$._expression, $._condition_let_value],
+    [$.tuple_type, $.tuple_expression],
+    [$.qualified_path_type, $.qualified_path_expression],
+    [$.where_clause],
     [$._condition_atom, $._condition_no_or_no_let],
     // attribute name can be identifier or path (path starts with path_segment which is identifier)
     [$.path_segment, $.attribute],
@@ -151,19 +158,34 @@ module.exports = grammar({
     ),
 
     // Function definition: fn name<T>(params) -> Type uses (...) where ... { body }
-    function_definition: $ => prec.right(seq(
-      optional($.attribute_list),
-      optional($.visibility),
-      optional('unsafe'),
-      optional('const'),
-      'fn',
-      field('name', $.identifier),
-      optional($.generic_param_list),
-      $.parameter_list,
-      optional(seq('->', field('return_type', $._type))),
-      optional($.uses_clause),
-      optional($.where_clause),
-      optional(field('body', $.block)),
+    function_definition: $ => prec.right(choice(
+      prec(2, seq(
+        optional($.attribute_list),
+        optional($.visibility),
+        optional('unsafe'),
+        optional('const'),
+        'fn',
+        field('name', $.identifier),
+        optional($.generic_param_list),
+        $.parameter_list,
+        optional(seq('->', field('return_type', $._type))),
+        optional($.uses_clause),
+        optional($.where_clause),
+        field('body', $.block),
+      )),
+      prec(1, seq(
+        optional($.attribute_list),
+        optional($.visibility),
+        optional('unsafe'),
+        optional('const'),
+        'fn',
+        field('name', $.identifier),
+        optional($.generic_param_list),
+        $.parameter_list,
+        optional(seq('->', field('return_type', $._type))),
+        optional($.uses_clause),
+        optional($.where_clause),
+      )),
     )),
 
     parameter_list: $ => seq(
@@ -541,15 +563,16 @@ module.exports = grammar({
 
     where_clause: $ => prec.right(seq(
       'where',
-      sep1($.where_predicate, ','),
-      optional(','),
+      sep1Trailing(choice($.where_predicate, $.where_const_predicate), ','),
     )),
 
-    where_predicate: $ => seq(
+    where_predicate: $ => prec(1, seq(
       $._type,
       ':',
       $.type_bound_list,
-    ),
+    )),
+
+    where_const_predicate: $ => $._where_const_expression,
 
     // ==================== TYPES ====================
 
@@ -636,6 +659,36 @@ module.exports = grammar({
       $.match_expression,
       $.with_expression,
       $.block,
+      $.assignment_expression,
+      $.augmented_assignment_expression,
+      $.range_expression,
+      $.qualified_path_expression,
+      $.mode_expression,
+    ),
+
+    _where_const_expression: $ => choice(
+      $.binary_expression,
+      $.unary_expression,
+      $.cast_expression,
+      $.call_expression,
+      $.method_call_expression,
+      $.instantiation_expression,
+      $.field_expression,
+      $.index_expression,
+      prec.left($.identifier),
+      $.scoped_path,
+      'self',
+      'Self',
+      'super',
+      'ingot',
+      $.tuple_expression,
+      $.array_expression,
+      $.array_repeat_expression,
+      $.paren_expression,
+      $.literal,
+      $.if_expression,
+      $.match_expression,
+      $.with_expression,
       $.assignment_expression,
       $.augmented_assignment_expression,
       $.range_expression,
@@ -1416,4 +1469,14 @@ function sepTrailing(rule, sep) {
 // Helper: one or more separated by separator
 function sep1(rule, sep) {
   return seq(rule, repeat(seq(sep, rule)));
+}
+
+// Helper: one or more separated by separator with optional trailing.
+// Prefer the parse that consumes a final predicate over one that stops at an
+// earlier trailing separator.
+function sep1Trailing(rule, sep) {
+  return choice(
+    prec.dynamic(1, seq(repeat(seq(rule, sep)), rule, optional(sep))),
+    repeat1(seq(rule, sep)),
+  );
 }

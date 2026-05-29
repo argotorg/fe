@@ -336,17 +336,19 @@ impl KindBound {
 impl<'db> WhereClauseId<'db> {
     /// Pretty-prints a where clause.
     pub fn pretty_print(self, db: &'db dyn HirDb) -> String {
-        let predicates = self.data(db);
+        let mut predicates = self
+            .data(db)
+            .iter()
+            .map(|p| p.pretty_print(db))
+            .collect::<Vec<_>>();
+
+        predicates.extend(self.const_predicates(db).iter().map(|p| p.pretty_print(db)));
+
         if predicates.is_empty() {
             return String::new();
         }
 
-        let preds = predicates
-            .iter()
-            .map(|p| p.pretty_print(db))
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!(" where {}", preds)
+        format!(" where {}", predicates.join(", "))
     }
 }
 

@@ -1,0 +1,21 @@
+---
+source: crates/hir/tests/pretty_print.rs
+expression: output
+input_file: test_files/pretty_print/where_const_predicates.fe
+---
+use core::prelude::*
+use std::prelude::*
+
+trait Sized {
+    const SIZE: u256;
+}
+
+fn needs_big<T>() where T: Sized, T::SIZE >= 50 {}
+
+struct BigOnly<T> where T: Sized, T::SIZE >= 50 {
+    value: T,
+}
+
+enum BigEnum<T> where T: Sized, T::SIZE >= 50 {
+    Value(T),
+}

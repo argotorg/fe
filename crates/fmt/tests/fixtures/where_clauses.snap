@@ -1,6 +1,5 @@
 ---
 source: crates/fmt/tests/format_snapshots.rs
-assertion_line: 16
 expression: output
 input_file: tests/fixtures/where_clauses.fe
 ---
@@ -13,8 +12,17 @@ fn multi_bounded<T, U>(x: T, y: U) where T: Clone, U: Copy {}
 // Function with complex bounds
 fn complex_bounds<T>(x: T) where T: Clone + Copy + Default {}
 
+// Function with const predicate
+fn const_bounded<T>(x: T) where T::SIZE >= 50 {}
+
+// Function with mixed predicates
+fn mixed_bounded<T>(x: T) where T: Clone, T::SIZE >= 50 {}
+
 // Struct with where clause
 struct BoundedStruct<T> where T: Clone { value: T }
+
+// Struct with const predicate
+struct ConstBoundedStruct<T> where T::SIZE >= 50 { value: T }
 
 // Enum with where clause
 enum BoundedEnum<T> where T: Clone {

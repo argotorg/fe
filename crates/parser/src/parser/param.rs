@@ -521,7 +521,7 @@ impl super::Parse for WhereClauseScope {
         }
 
         if pred_count == 0 {
-            parser.error("`where` clause requires one or more type constraints");
+            parser.error("`where` clause requires one or more predicates");
         }
         Ok(())
     }

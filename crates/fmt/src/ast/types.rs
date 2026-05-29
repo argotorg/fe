@@ -591,7 +591,11 @@ impl ToDoc for ast::WhereClause {
         let indent = ctx.config.clause_indent as isize;
 
         if !has_comment_tokens(self.syntax()) {
-            let predicates: Vec<_> = self.into_iter().map(|pred| pred.to_doc(ctx)).collect();
+            let predicates: Vec<_> = self
+                .syntax()
+                .children()
+                .filter_map(|node| where_clause_predicate_doc(ctx, node))
+                .collect();
             if predicates.is_empty() {
                 return alloc.nil();
             }
@@ -617,11 +621,11 @@ impl ToDoc for ast::WhereClause {
         for child in self.syntax().children_with_tokens() {
             match child {
                 NodeOrToken::Node(node) => {
-                    let Some(pred) = ast::WherePredicate::cast(node) else {
+                    let Some(doc) = where_clause_predicate_doc(ctx, node) else {
                         continue;
                     };
                     entries.push(Entry {
-                        doc: pred.to_doc(ctx),
+                        doc,
                         blank_line_before: pending_newlines >= 2,
                         is_predicate: true,
                     });
@@ -676,6 +680,15 @@ impl ToDoc for ast::WhereClause {
             .append(alloc.line().append(inner).nest(indent))
             .group()
     }
+}
+
+fn where_clause_predicate_doc<'a>(
+    ctx: &'a RewriteContext<'a>,
+    node: parser::SyntaxNode,
+) -> Option<Doc<'a>> {
+    ast::WherePredicate::cast(node.clone())
+        .map(|pred| pred.to_doc(ctx))
+        .or_else(|| ast::WhereConstPredicate::cast(node).map(|pred| pred.to_doc(ctx)))
 }
 
 impl ToDoc for ast::WherePredicate {
@@ -742,6 +755,27 @@ impl ToDoc for ast::WherePredicate {
         }
 
         doc
+    }
+}
+
+impl ToDoc for ast::WhereConstPredicate {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        if !has_comment_tokens(self.syntax()) {
+            return self
+                .expr()
+                .map(|expr| expr.to_doc(ctx))
+                .unwrap_or_else(|| alloc.nil());
+        }
+
+        token_doc(
+            ctx,
+            self.syntax(),
+            ctx.config.clause_indent as isize,
+            |node| ast::Expr::cast(node).map(|expr| TokenPiece::new(expr.to_doc(ctx))),
+            |_| None,
+        )
     }
 }
 

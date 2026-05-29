@@ -293,7 +293,7 @@ impl WhereClause {
         support::token(self.syntax(), SK::WhereKw)
     }
 
-    /// Returns an iterator over const predicates `{ expr }` in this where clause.
+    /// Returns an iterator over bare const-expression predicates in this where clause.
     pub fn const_predicates(&self) -> impl Iterator<Item = WhereConstPredicate> {
         support::children(self.syntax())
     }
@@ -306,12 +306,12 @@ ast_node! {
 }
 
 ast_node! {
-    /// `{ const_expr }` in a where clause
+    /// A bare const-expression predicate in a where clause.
     pub struct WhereConstPredicate,
     SK::WhereConstPredicate,
 }
 impl WhereConstPredicate {
-    /// Returns the block expression inside the const predicate.
+    /// Returns the expression inside the const predicate.
     pub fn expr(&self) -> Option<super::Expr> {
         support::child(self.syntax())
     }
