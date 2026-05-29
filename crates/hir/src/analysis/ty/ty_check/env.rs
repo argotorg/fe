@@ -40,7 +40,7 @@ use crate::analysis::{
         trait_resolution::{
             PredicateListId,
             constraint::{
-                collect_constraints2, collect_func_decl_constraints2,
+                collect_constraints, collect_func_decl_constraints,
                 collect_func_effect_provider_constraints,
             },
         },
@@ -115,23 +115,23 @@ impl<'db> TyCheckEnv<'db> {
         ) -> ConstraintListId<'db> {
             match scope.parent_item(db) {
                 Some(ItemKind::Func(func)) => {
-                    collect_func_decl_constraints2(db, func.into(), true).instantiate_identity()
+                    collect_func_decl_constraints(db, func.into(), true).instantiate_identity()
                 }
                 Some(ItemKind::Struct(struct_)) => {
-                    collect_constraints2(db, struct_.into()).instantiate_identity()
+                    collect_constraints(db, struct_.into()).instantiate_identity()
                 }
                 Some(ItemKind::Enum(enum_)) => {
-                    collect_constraints2(db, enum_.into()).instantiate_identity()
+                    collect_constraints(db, enum_.into()).instantiate_identity()
                 }
                 Some(ItemKind::Trait(trait_)) => {
                     let self_pred = self_trait_pred(db, trait_);
                     ConstraintListId::new(db, vec![ConstraintId::from_trait(db, self_pred)])
                 }
                 Some(ItemKind::ImplTrait(impl_trait)) => {
-                    collect_constraints2(db, impl_trait.into()).instantiate_identity()
+                    collect_constraints(db, impl_trait.into()).instantiate_identity()
                 }
                 Some(ItemKind::Impl(impl_)) => {
-                    collect_constraints2(db, impl_.into()).instantiate_identity()
+                    collect_constraints(db, impl_.into()).instantiate_identity()
                 }
                 _ => ConstraintListId::empty(db),
             }
@@ -167,8 +167,8 @@ impl<'db> TyCheckEnv<'db> {
         let (_base_preds, base_assumptions, base_constraints, base_constraint_assumptions) =
             match owner {
                 BodyOwner::Func(func) => {
-                    let mut constraints = collect_func_decl_constraints2(db, func.into(), true)
-                        .instantiate_identity();
+                    let mut constraints =
+                        collect_func_decl_constraints(db, func.into(), true).instantiate_identity();
                     // Methods inside a trait implicitly assume `Self: Trait` in their bodies so
                     // default method calls resolve against the trait being implemented.
                     if let Some(ItemKind::Trait(trait_)) = func.scope().parent_item(db) {
@@ -186,7 +186,7 @@ impl<'db> TyCheckEnv<'db> {
                         _ => None,
                     };
                     if let Some(func) = containing_func {
-                        let mut constraints = collect_func_decl_constraints2(db, func.into(), true)
+                        let mut constraints = collect_func_decl_constraints(db, func.into(), true)
                             .instantiate_identity();
                         if let Some(ItemKind::Trait(trait_)) = func.scope().parent_item(db) {
                             let self_pred = self_trait_pred(db, trait_);

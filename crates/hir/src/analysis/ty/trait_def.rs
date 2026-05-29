@@ -24,7 +24,7 @@ use super::{
     trait_lower::collect_implementor_methods,
     trait_resolution::{
         TraitSolveCx,
-        constraint::{collect_constraints, collect_constraints2},
+        constraint::{collect_constraints, collect_trait_constraints},
         is_goal_satisfiable, normalize_trait_inst_preserving_validity,
     },
     ty_def::TyId,
@@ -282,7 +282,7 @@ pub(crate) fn impls_for_ty_with_constraints<'db>(
 
             if unifies {
                 // Filter out impls that don't satisfy assumptions
-                let impl_constraints = inst.constraints(db);
+                let impl_constraints = inst.trait_constraints(db);
                 if impl_constraints.is_empty(db) {
                     table.rollback_to(snapshot);
                     return true;
@@ -547,24 +547,24 @@ impl<'db> ImplementorId<'db> {
 
     /// Returns the constraints that the implementor requires when the
     /// implementation is selected.
-    pub(crate) fn constraints(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+    pub(crate) fn constraints(self, db: &'db dyn HirAnalysisDb) -> ConstraintListId<'db> {
         match self.origin(db) {
             ImplementorOrigin::Hir(impl_trait) => {
                 collect_constraints(db, impl_trait.into()).instantiate(db, self.params(db))
             }
             ImplementorOrigin::VirtualContract(_) | ImplementorOrigin::Assumption => {
-                PredicateListId::empty_list(db)
+                ConstraintListId::empty(db)
             }
         }
     }
 
-    pub(crate) fn constraints2(self, db: &'db dyn HirAnalysisDb) -> ConstraintListId<'db> {
+    pub(crate) fn trait_constraints(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
         match self.origin(db) {
             ImplementorOrigin::Hir(impl_trait) => {
-                collect_constraints2(db, impl_trait.into()).instantiate(db, self.params(db))
+                collect_trait_constraints(db, impl_trait.into()).instantiate(db, self.params(db))
             }
             ImplementorOrigin::VirtualContract(_) | ImplementorOrigin::Assumption => {
-                ConstraintListId::empty(db)
+                PredicateListId::empty_list(db)
             }
         }
     }
@@ -648,8 +648,8 @@ pub(crate) fn does_impl_trait_conflict<'db>(
         return false;
     }
 
-    let a_constraints = a.constraints(db);
-    let b_constraints = b.constraints(db);
+    let a_constraints = a.trait_constraints(db);
+    let b_constraints = b.trait_constraints(db);
 
     if a_constraints.is_empty(db) && b_constraints.is_empty(db) {
         return true;

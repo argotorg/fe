@@ -721,7 +721,7 @@ impl<'db> ImplTrait<'db> {
         let trait_scope = implementor.trait_def(db).scope();
         let impl_trait_hir = implementor.hir_impl_trait(db);
         let assumptions =
-            ty::trait_resolution::constraint::collect_constraints(db, impl_trait_hir.into())
+            ty::trait_resolution::constraint::collect_trait_constraints(db, impl_trait_hir.into())
                 .instantiate_identity();
 
         for assoc in implementor.assoc_type_views(db) {
@@ -763,7 +763,9 @@ impl<'db> ImplTrait<'db> {
     /// Diagnostics for trait-ref WF and satisfiability for this impl-trait.
     pub fn diags_trait_ref_and_wf(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         use ty::trait_lower::lower_impl_trait;
-        use ty::trait_resolution::{self, GoalSatisfiability, constraint::collect_constraints};
+        use ty::trait_resolution::{
+            self, GoalSatisfiability, constraint::collect_trait_constraints,
+        };
 
         let mut diags = Vec::new();
         let Some(implementor) = lower_impl_trait(db, self) else {
@@ -774,9 +776,9 @@ impl<'db> ImplTrait<'db> {
         let trait_def = implementor.trait_def(db);
 
         let trait_constraints =
-            collect_constraints(db, trait_def.into()).instantiate(db, trait_inst.args(db));
+            collect_trait_constraints(db, trait_def.into()).instantiate(db, trait_inst.args(db));
 
-        let assumptions = collect_constraints(db, self.into()).instantiate_identity();
+        let assumptions = collect_trait_constraints(db, self.into()).instantiate_identity();
         let solve_cx =
             trait_resolution::TraitSolveCx::new(db, self.scope()).with_assumptions(assumptions);
 

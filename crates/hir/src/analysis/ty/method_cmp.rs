@@ -23,7 +23,7 @@ use super::{
     trait_def::TraitInstId,
     trait_resolution::{
         GoalSatisfiability, PredicateListId, TraitSolveCx,
-        constraint::{collect_func_def_constraints, collect_func_def_constraints2},
+        constraint::{collect_func_def_constraints, collect_func_def_trait_constraints},
         is_goal_satisfiable,
     },
     ty_check::{
@@ -221,10 +221,11 @@ fn compare_ty<'db>(
     let trait_m_arg_tys = trait_m.arg_tys(db);
 
     let mut substituter = AssocTySubst::new(trait_inst);
-    let impl_assumptions = collect_func_def_constraints(db, impl_m, true).instantiate_identity();
+    let impl_assumptions =
+        collect_func_def_trait_constraints(db, impl_m, true).instantiate_identity();
     let trait_assumptions = instantiate_with_partial_map(
         db,
-        collect_func_def_constraints(db, trait_m, true),
+        collect_func_def_trait_constraints(db, trait_m, true),
         param_subst,
     );
     let compare_assumptions = impl_assumptions
@@ -469,7 +470,7 @@ fn map_effect_provider_params_by_identity<'db>(
     trait_layout: &FxHashMap<CallableInputLayoutHoleOrigin, Vec<TyId<'db>>>,
     impl_layout: &FxHashMap<CallableInputLayoutHoleOrigin, Vec<TyId<'db>>>,
 ) {
-    let assumptions = collect_func_def_constraints(db, impl_m, true).instantiate_identity();
+    let assumptions = collect_func_def_trait_constraints(db, impl_m, true).instantiate_identity();
     let trait_entries = collect_effect_provider_entries(
         db,
         trait_m,
@@ -974,10 +975,11 @@ fn compare_constraints<'db>(
     param_subst: &ParamSubstMap<'db>,
     sink: &mut Vec<TyDiagCollection<'db>>,
 ) -> bool {
-    let impl_m_constraints = collect_func_def_constraints(db, impl_m, false).instantiate_identity();
+    let impl_m_constraints =
+        collect_func_def_trait_constraints(db, impl_m, false).instantiate_identity();
     let trait_m_constraints = instantiate_with_partial_map(
         db,
-        collect_func_def_constraints(db, trait_m, false),
+        collect_func_def_trait_constraints(db, trait_m, false),
         param_subst,
     );
     let compare_assumptions = impl_m_constraints
@@ -1039,10 +1041,10 @@ fn compare_const_predicate_constraints<'db>(
     param_subst: &ParamSubstMap<'db>,
     sink: &mut Vec<TyDiagCollection<'db>>,
 ) -> bool {
-    let impl_constraints = collect_func_def_constraints2(db, impl_m, false).instantiate_identity();
+    let impl_constraints = collect_func_def_constraints(db, impl_m, false).instantiate_identity();
     let mut trait_constraints = instantiate_with_partial_map(
         db,
-        collect_func_def_constraints2(db, trait_m, false),
+        collect_func_def_constraints(db, trait_m, false),
         param_subst,
     );
 

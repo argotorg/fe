@@ -17,7 +17,7 @@ use super::{
     trait_def::TraitInstId,
     trait_resolution::{
         TraitSolveCx,
-        constraint::{collect_constraints, collect_func_decl_constraints},
+        constraint::{collect_func_decl_trait_constraints, collect_trait_constraints},
     },
     ty_check::{check_anon_const_body, check_const_body},
     ty_def::{InvalidCause, TyId, TyParam, TyVar},
@@ -2099,7 +2099,8 @@ pub(crate) fn assumptions_for_body<'db>(
         _ => None,
     };
     if let Some(func) = containing_func {
-        let mut preds = collect_func_decl_constraints(db, func.into(), true).instantiate_identity();
+        let mut preds =
+            collect_func_decl_trait_constraints(db, func.into(), true).instantiate_identity();
         if let Some(ItemKind::Trait(trait_)) = func.scope().parent_item(db) {
             let self_pred =
                 TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
@@ -2123,10 +2124,10 @@ pub(crate) fn assumptions_for_body<'db>(
                 TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
             PredicateListId::new(db, vec![self_pred]).extend_all_bounds(db)
         }
-        Some(ItemKind::ImplTrait(impl_trait)) => collect_constraints(db, impl_trait.into())
+        Some(ItemKind::ImplTrait(impl_trait)) => collect_trait_constraints(db, impl_trait.into())
             .instantiate_identity()
             .extend_all_bounds(db),
-        Some(ItemKind::Impl(impl_)) => collect_constraints(db, impl_.into())
+        Some(ItemKind::Impl(impl_)) => collect_trait_constraints(db, impl_.into())
             .instantiate_identity()
             .extend_all_bounds(db),
         _ => PredicateListId::empty_list(db),

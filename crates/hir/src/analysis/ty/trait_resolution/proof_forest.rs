@@ -360,7 +360,7 @@ impl GeneratorNode {
             constraints: ConstraintListId::empty(db),
         };
 
-        for &constraint in gen_cand.constraints2(db).list(db) {
+        for &constraint in gen_cand.constraints(db).list(db) {
             let constraint = constraint.fold_with(db, table);
             match constraint.kind(db) {
                 ConstraintKind::Trait(goal) => sub_goals.push(goal),

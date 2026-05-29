@@ -65,7 +65,7 @@ use super::{
     trait_def::TraitInstId,
     trait_resolution::{
         CanonicalGoalQuery, GoalSatisfiability, PredicateListId, TraitSolveCx,
-        constraint::ty_constraints2, is_goal_query_satisfiable, is_goal_satisfiable,
+        constraint::ty_constraints, is_goal_query_satisfiable, is_goal_satisfiable,
     },
     ty_contains_const_hole,
     ty_def::{
@@ -324,7 +324,7 @@ fn typed_body_for_bodyless_func<'db>(
     func: Func<'db>,
 ) -> TypedBody<'db> {
     let mut preds =
-        crate::analysis::ty::trait_resolution::constraint::collect_func_decl_constraints(
+        crate::analysis::ty::trait_resolution::constraint::collect_func_decl_trait_constraints(
             db,
             func.into(),
             true,
@@ -4366,7 +4366,7 @@ impl<'db> TyCheckerFinalizer<'db> {
             self.check_const_wf(arg, span.clone());
         }
 
-        for constraint in ty_constraints2(db, ty).list(db) {
+        for constraint in ty_constraints(db, ty).list(db) {
             let ConstraintKind::ConstPredicate(pred) = constraint.kind(db) else {
                 continue;
             };

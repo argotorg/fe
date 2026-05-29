@@ -1549,7 +1549,7 @@ fn root_owner_effect_providers<'db>(
     let site = effect_param_site(owner).expect("function owners should always have an effect site");
     let view = EffectEnvView::new(site);
     let assumptions =
-        crate::analysis::ty::trait_resolution::constraint::collect_func_decl_constraints(
+        crate::analysis::ty::trait_resolution::constraint::collect_func_decl_trait_constraints(
             db,
             func.into(),
             true,

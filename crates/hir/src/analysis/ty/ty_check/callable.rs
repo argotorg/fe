@@ -22,7 +22,7 @@ use crate::analysis::{
         fold::{AssocTySubst, TyFoldable, TyFolder},
         normalize::normalize_ty,
         trait_def::TraitInstId,
-        trait_resolution::constraint::collect_func_decl_constraints2,
+        trait_resolution::constraint::collect_func_decl_constraints,
         ty_def::{BorrowKind, CapabilityKind},
         ty_def::{InvalidCause, TyBase, TyData, TyFlags, TyId},
         ty_lower::lower_generic_arg_list,
@@ -763,7 +763,7 @@ impl<'db> Callable<'db> {
         span: DynLazySpan<'db>,
     ) {
         let db = tc.db;
-        let constraints = collect_func_decl_constraints2(db, self.callable_def, true);
+        let constraints = collect_func_decl_constraints(db, self.callable_def, true);
         let instantiated = constraints.instantiate(db, &self.generic_args);
 
         for (constraint_idx, &constraint) in instantiated.list(db).iter().enumerate() {

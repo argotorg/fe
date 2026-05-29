@@ -11,7 +11,7 @@ use super::{
     binder::Binder,
     const_ty::ConstTyData,
     layout_holes::{LayoutPlaceholderPolicy, collect_layout_placeholder_tys_in_order_with_policy},
-    trait_resolution::constraint::collect_constraints,
+    trait_resolution::constraint::collect_trait_constraints,
     ty_def::{InvalidCause, TyData, TyId},
     ty_lower::{GenericParamTypeSet, lower_hir_ty},
 };
@@ -111,10 +111,11 @@ impl<'db> AdtField<'db> {
 
         let assumptions = match self.scope {
             ScopeId::Item(ItemKind::Struct(struct_)) => {
-                collect_constraints(db, GenericParamOwner::Struct(struct_)).instantiate_identity()
+                collect_trait_constraints(db, GenericParamOwner::Struct(struct_))
+                    .instantiate_identity()
             }
             ScopeId::Item(ItemKind::Enum(enum_)) => {
-                collect_constraints(db, GenericParamOwner::Enum(enum_)).instantiate_identity()
+                collect_trait_constraints(db, GenericParamOwner::Enum(enum_)).instantiate_identity()
             }
             ScopeId::Item(ItemKind::Contract(_)) => PredicateListId::empty_list(db),
             _ => PredicateListId::empty_list(db),

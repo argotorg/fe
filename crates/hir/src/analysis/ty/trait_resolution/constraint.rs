@@ -41,7 +41,7 @@ pub(crate) fn collect_func_effect_provider_constraints<'db>(
     let provider_map = place_effect_provider_param_index_map(db, func);
     let provider_params = CallableDef::Func(func).params(db);
     let scope = func.scope();
-    let assumptions = collect_func_decl_constraints(db, func.into(), true)
+    let assumptions = collect_func_decl_trait_constraints(db, func.into(), true)
         .instantiate_identity()
         .extend_all_bounds(db);
 
@@ -142,48 +142,18 @@ pub(crate) fn collect_func_effect_provider_constraints<'db>(
     out
 }
 
-/// Returns a constraints list which is derived from the given type.
+/// Returns a constraint list which is derived from the given type.
 #[salsa::tracked]
 pub(crate) fn ty_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
-) -> PredicateListId<'db> {
+) -> ConstraintListId<'db> {
     let (base, args) = ty.decompose_ty_app(db);
     let (params, base_constraints) = match base.data(db) {
         TyData::TyBase(TyBase::Adt(adt)) => (adt.params(db), collect_adt_constraints(db, *adt)),
         TyData::TyBase(TyBase::Func(func_def)) => (
             func_def.params(db),
             collect_func_def_constraints(db, *func_def, true),
-        ),
-        _ => {
-            return PredicateListId::empty_list(db);
-        }
-    };
-
-    let mut args = args.to_vec();
-
-    // Generalize unbound type parameters.
-    for &arg in params.iter().skip(args.len()) {
-        let key = InferenceKey(args.len() as u32, Default::default());
-        let ty_var = TyId::ty_var(db, TyVarSort::General, arg.kind(db).clone(), key);
-        args.push(ty_var);
-    }
-
-    base_constraints.instantiate(db, &args)
-}
-
-/// Returns a constraint list which is derived from the given type.
-#[salsa::tracked]
-pub(crate) fn ty_constraints2<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ty: TyId<'db>,
-) -> ConstraintListId<'db> {
-    let (base, args) = ty.decompose_ty_app(db);
-    let (params, base_constraints) = match base.data(db) {
-        TyData::TyBase(TyBase::Adt(adt)) => (adt.params(db), collect_adt_constraints2(db, *adt)),
-        TyData::TyBase(TyBase::Func(func_def)) => (
-            func_def.params(db),
-            collect_func_def_constraints2(db, *func_def, true),
         ),
         _ => {
             return ConstraintListId::empty(db);
@@ -200,6 +170,15 @@ pub(crate) fn ty_constraints2<'db>(
     }
 
     base_constraints.instantiate(db, &args)
+}
+
+/// Returns the trait projection of the constraints derived from the given type.
+#[salsa::tracked]
+pub(crate) fn ty_trait_constraints<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+) -> PredicateListId<'db> {
+    ty_constraints(db, ty).trait_predicates(db)
 }
 
 /// Collect super traits of the given trait.
@@ -240,34 +219,34 @@ pub fn super_trait_cycle_impl<'db>(
 pub(crate) fn collect_adt_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     adt: AdtDef<'db>,
-) -> Binder<PredicateListId<'db>> {
-    let Some(owner) = adt.as_generic_param_owner(db) else {
-        return Binder::bind(PredicateListId::empty_list(db));
-    };
-    collect_constraints(db, owner)
-}
-
-/// Collect constraints that are specified by the given ADT definition.
-#[allow(dead_code)]
-pub(crate) fn collect_adt_constraints2<'db>(
-    db: &'db dyn HirAnalysisDb,
-    adt: AdtDef<'db>,
 ) -> Binder<ConstraintListId<'db>> {
     let Some(owner) = adt.as_generic_param_owner(db) else {
         return Binder::bind(ConstraintListId::empty(db));
     };
-    collect_constraints2(db, owner)
+    collect_constraints(db, owner)
+}
+
+/// Collect the trait projection of constraints specified by an ADT definition.
+pub(crate) fn collect_adt_trait_constraints<'db>(
+    db: &'db dyn HirAnalysisDb,
+    adt: AdtDef<'db>,
+) -> Binder<PredicateListId<'db>> {
+    Binder::bind(
+        collect_adt_constraints(db, adt)
+            .instantiate_identity()
+            .trait_predicates(db),
+    )
 }
 
 #[salsa::tracked(
-    cycle_fn=collect_func_def_constraints_cycle_recover,
-    cycle_initial=collect_func_def_constraints_cycle_initial
+    cycle_fn=collect_func_constraints_cycle_recover,
+    cycle_initial=collect_func_constraints_cycle_initial
 )]
 pub(crate) fn collect_func_decl_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     func: CallableDef<'db>,
     include_parent: bool,
-) -> Binder<PredicateListId<'db>> {
+) -> Binder<ConstraintListId<'db>> {
     let hir_func = match func {
         CallableDef::Func(func) => func,
         CallableDef::VariantCtor(var) => {
@@ -275,7 +254,7 @@ pub(crate) fn collect_func_decl_constraints<'db>(
             if include_parent {
                 return collect_adt_constraints(db, adt);
             }
-            return Binder::bind(PredicateListId::empty_list(db));
+            return Binder::bind(ConstraintListId::empty(db));
         }
     };
 
@@ -307,113 +286,19 @@ pub(crate) fn collect_func_decl_constraints<'db>(
 }
 
 #[salsa::tracked(
-    cycle_fn=collect_func_def_constraints_cycle_recover,
-    cycle_initial=collect_func_def_constraints_cycle_initial
+    cycle_fn=collect_func_constraints_cycle_recover,
+    cycle_initial=collect_func_constraints_cycle_initial
 )]
 pub(crate) fn collect_func_def_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     func: CallableDef<'db>,
     include_parent: bool,
-) -> Binder<PredicateListId<'db>> {
+) -> Binder<ConstraintListId<'db>> {
     let CallableDef::Func(hir_func) = func else {
         return collect_func_decl_constraints(db, func, include_parent);
     };
 
-    let mut predicates: IndexSet<_> = collect_func_decl_constraints(db, func, include_parent)
-        .instantiate_identity()
-        .list(db)
-        .iter()
-        .copied()
-        .collect();
-    for inst in collect_func_effect_provider_constraints(db, hir_func) {
-        predicates.insert(inst);
-    }
-
-    Binder::bind(PredicateListId::new(
-        db,
-        predicates.into_iter().collect::<Vec<_>>(),
-    ))
-}
-
-fn collect_func_def_constraints_cycle_initial<'db>(
-    db: &'db dyn HirAnalysisDb,
-    _func: CallableDef<'db>,
-    _include_parent: bool,
-) -> Binder<PredicateListId<'db>> {
-    Binder::bind(PredicateListId::empty_list(db))
-}
-
-fn collect_func_def_constraints_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &Binder<PredicateListId<'db>>,
-    _count: u32,
-    _func: CallableDef<'db>,
-    _include_parent: bool,
-) -> salsa::CycleRecoveryAction<Binder<PredicateListId<'db>>> {
-    salsa::CycleRecoveryAction::Iterate
-}
-
-#[salsa::tracked(
-    cycle_fn=collect_func_constraints2_cycle_recover,
-    cycle_initial=collect_func_constraints2_cycle_initial
-)]
-pub(crate) fn collect_func_decl_constraints2<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: CallableDef<'db>,
-    include_parent: bool,
-) -> Binder<ConstraintListId<'db>> {
-    let hir_func = match func {
-        CallableDef::Func(func) => func,
-        CallableDef::VariantCtor(var) => {
-            let adt = var.enum_.as_adt(db);
-            if include_parent {
-                return collect_adt_constraints2(db, adt);
-            }
-            return Binder::bind(ConstraintListId::empty(db));
-        }
-    };
-
-    let func_constraints = collect_decl_constraints2(db, hir_func.into());
-    if !include_parent {
-        return func_constraints;
-    }
-
-    let parent_constraints = match hir_func.scope().parent_item(db) {
-        Some(ItemKind::Trait(trait_)) => collect_constraints2(db, trait_.into()),
-
-        Some(ItemKind::Impl(impl_)) => collect_constraints2(db, impl_.into()),
-
-        Some(ItemKind::ImplTrait(impl_trait)) => {
-            if lower_impl_trait(db, impl_trait).is_none() {
-                return func_constraints;
-            }
-            collect_constraints2(db, impl_trait.into())
-        }
-
-        _ => return func_constraints,
-    };
-
-    Binder::bind(
-        func_constraints
-            .instantiate_identity()
-            .merge(db, parent_constraints.instantiate_identity()),
-    )
-}
-
-#[salsa::tracked(
-    cycle_fn=collect_func_constraints2_cycle_recover,
-    cycle_initial=collect_func_constraints2_cycle_initial
-)]
-pub(crate) fn collect_func_def_constraints2<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: CallableDef<'db>,
-    include_parent: bool,
-) -> Binder<ConstraintListId<'db>> {
-    let CallableDef::Func(hir_func) = func else {
-        return collect_func_decl_constraints2(db, func, include_parent);
-    };
-
-    let mut constraints: IndexSet<_> = collect_func_decl_constraints2(db, func, include_parent)
+    let mut constraints: IndexSet<_> = collect_func_decl_constraints(db, func, include_parent)
         .instantiate_identity()
         .list(db)
         .iter()
@@ -429,8 +314,7 @@ pub(crate) fn collect_func_def_constraints2<'db>(
     ))
 }
 
-#[allow(dead_code)]
-fn collect_func_constraints2_cycle_initial<'db>(
+fn collect_func_constraints_cycle_initial<'db>(
     db: &'db dyn HirAnalysisDb,
     _func: CallableDef<'db>,
     _include_parent: bool,
@@ -438,8 +322,7 @@ fn collect_func_constraints2_cycle_initial<'db>(
     Binder::bind(ConstraintListId::empty(db))
 }
 
-#[allow(dead_code)]
-fn collect_func_constraints2_cycle_recover<'db>(
+fn collect_func_constraints_cycle_recover<'db>(
     _db: &'db dyn HirAnalysisDb,
     _value: &Binder<ConstraintListId<'db>>,
     _count: u32,
@@ -449,11 +332,35 @@ fn collect_func_constraints2_cycle_recover<'db>(
     salsa::CycleRecoveryAction::Iterate
 }
 
+pub(crate) fn collect_func_decl_trait_constraints<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: CallableDef<'db>,
+    include_parent: bool,
+) -> Binder<PredicateListId<'db>> {
+    Binder::bind(
+        collect_func_decl_constraints(db, func, include_parent)
+            .instantiate_identity()
+            .trait_predicates(db),
+    )
+}
+
+pub(crate) fn collect_func_def_trait_constraints<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: CallableDef<'db>,
+    include_parent: bool,
+) -> Binder<PredicateListId<'db>> {
+    Binder::bind(
+        collect_func_def_constraints(db, func, include_parent)
+            .instantiate_identity()
+            .trait_predicates(db),
+    )
+}
+
 #[salsa::tracked(
-    cycle_fn=collect_constraints_cycle_recover,
-    cycle_initial=collect_constraints_cycle_initial
+    cycle_fn=collect_trait_constraints_cycle_recover,
+    cycle_initial=collect_trait_constraints_cycle_initial
 )]
-pub(crate) fn collect_decl_constraints<'db>(
+fn collect_decl_trait_constraints_raw<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
 ) -> Binder<PredicateListId<'db>> {
@@ -539,14 +446,14 @@ pub(crate) fn collect_decl_constraints<'db>(
     ))
 }
 
-fn collect_constraints_cycle_initial<'db>(
+fn collect_trait_constraints_cycle_initial<'db>(
     db: &'db dyn HirAnalysisDb,
     _owner: GenericParamOwner<'db>,
 ) -> Binder<PredicateListId<'db>> {
     Binder::bind(PredicateListId::empty_list(db))
 }
 
-fn collect_constraints_cycle_recover<'db>(
+fn collect_trait_constraints_cycle_recover<'db>(
     _db: &'db dyn HirAnalysisDb,
     _value: &Binder<PredicateListId<'db>>,
     _count: u32,
@@ -556,27 +463,13 @@ fn collect_constraints_cycle_recover<'db>(
 }
 
 #[salsa::tracked(cycle_fn=collect_constraints_cycle_recover, cycle_initial=collect_constraints_cycle_initial)]
-pub fn collect_constraints<'db>(
-    db: &'db dyn HirAnalysisDb,
-    owner: GenericParamOwner<'db>,
-) -> Binder<PredicateListId<'db>> {
-    match owner {
-        GenericParamOwner::Func(func) => collect_func_def_constraints(db, func.into(), true),
-        _ => collect_decl_constraints(db, owner),
-    }
-}
-
-#[salsa::tracked(
-    cycle_fn=collect_constraints2_cycle_recover,
-    cycle_initial=collect_constraints2_cycle_initial
-)]
-pub(crate) fn collect_decl_constraints2<'db>(
+pub(crate) fn collect_decl_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
 ) -> Binder<ConstraintListId<'db>> {
     let trait_constraints = ConstraintListId::from_trait_predicates(
         db,
-        collect_decl_constraints(db, owner).instantiate_identity(),
+        collect_decl_trait_constraints_raw(db, owner).instantiate_identity(),
     );
     let mut constraints = trait_constraints.list(db).to_vec();
 
@@ -600,16 +493,14 @@ pub(crate) fn collect_decl_constraints2<'db>(
     Binder::bind(ConstraintListId::new(db, constraints))
 }
 
-#[allow(dead_code)]
-fn collect_constraints2_cycle_initial<'db>(
+fn collect_constraints_cycle_initial<'db>(
     db: &'db dyn HirAnalysisDb,
     _owner: GenericParamOwner<'db>,
 ) -> Binder<ConstraintListId<'db>> {
     Binder::bind(ConstraintListId::empty(db))
 }
 
-#[allow(dead_code)]
-fn collect_constraints2_cycle_recover<'db>(
+fn collect_constraints_cycle_recover<'db>(
     _db: &'db dyn HirAnalysisDb,
     _value: &Binder<ConstraintListId<'db>>,
     _count: u32,
@@ -618,18 +509,26 @@ fn collect_constraints2_cycle_recover<'db>(
     salsa::CycleRecoveryAction::Iterate
 }
 
-#[salsa::tracked(
-    cycle_fn=collect_constraints2_cycle_recover,
-    cycle_initial=collect_constraints2_cycle_initial
-)]
-pub(crate) fn collect_constraints2<'db>(
+#[salsa::tracked(cycle_fn=collect_constraints_cycle_recover, cycle_initial=collect_constraints_cycle_initial)]
+pub(crate) fn collect_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
 ) -> Binder<ConstraintListId<'db>> {
     match owner {
-        GenericParamOwner::Func(func) => collect_func_def_constraints2(db, func.into(), true),
-        _ => collect_decl_constraints2(db, owner),
+        GenericParamOwner::Func(func) => collect_func_def_constraints(db, func.into(), true),
+        _ => collect_decl_constraints(db, owner),
     }
+}
+
+pub fn collect_trait_constraints<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: GenericParamOwner<'db>,
+) -> Binder<PredicateListId<'db>> {
+    Binder::bind(
+        collect_constraints(db, owner)
+            .instantiate_identity()
+            .trait_predicates(db),
+    )
 }
 
 struct Deferred<'db> {
@@ -764,10 +663,10 @@ mod tests {
     }
 
     #[test]
-    fn constraint_collection2_includes_function_const_predicates() {
+    fn constraint_collection_includes_function_const_predicates() {
         let mut db = HirAnalysisTestDb::default();
         let file = db.new_stand_alone(
-            Utf8PathBuf::from("constraint_collection2_includes_function_const_predicates.fe"),
+            Utf8PathBuf::from("constraint_collection_includes_function_const_predicates.fe"),
             r#"
 trait HasSize {
     const SIZE: u256
@@ -784,7 +683,7 @@ where
         db.assert_no_diags(top_mod);
         let func = find_func(&db, top_mod, "needs_big");
 
-        let constraints = collect_func_decl_constraints2(&db, func.into(), true)
+        let constraints = collect_func_decl_constraints(&db, func.into(), true)
             .instantiate_identity()
             .extend_all_trait_bounds(&db);
         assert_eq!(constraints.trait_predicates(&db).list(&db).len(), 1);
@@ -799,12 +698,10 @@ where
     }
 
     #[test]
-    fn constraint_collection2_includes_adt_and_variant_const_predicates() {
+    fn constraint_collection_includes_adt_and_variant_const_predicates() {
         let mut db = HirAnalysisTestDb::default();
         let file = db.new_stand_alone(
-            Utf8PathBuf::from(
-                "constraint_collection2_includes_adt_and_variant_const_predicates.fe",
-            ),
+            Utf8PathBuf::from("constraint_collection_includes_adt_and_variant_const_predicates.fe"),
             r#"
 trait HasSize {
     const SIZE: u256
@@ -833,14 +730,14 @@ where
         let enum_ = find_enum(&db, top_mod, "BigEnum");
         let variant = EnumVariant::new(enum_, 0);
 
-        let struct_constraints = collect_constraints2(&db, struct_.into()).instantiate_identity();
+        let struct_constraints = collect_constraints(&db, struct_.into()).instantiate_identity();
         assert_eq!(struct_constraints.const_predicates(&db).len(), 1);
 
-        let enum_constraints = collect_constraints2(&db, enum_.into()).instantiate_identity();
+        let enum_constraints = collect_constraints(&db, enum_.into()).instantiate_identity();
         assert_eq!(enum_constraints.const_predicates(&db).len(), 1);
 
         let variant_constraints =
-            collect_func_decl_constraints2(&db, variant.into(), true).instantiate_identity();
+            collect_func_decl_constraints(&db, variant.into(), true).instantiate_identity();
         assert_eq!(variant_constraints.const_predicates(&db).len(), 1);
         assert!(variant_constraints.list(&db).iter().any(|constraint| {
             matches!(
@@ -1047,7 +944,7 @@ where
         assert!(matches!(args[1].data(&db), TyData::ConstTy(_)));
 
         let effect_ref_trait = resolve_core_trait(&db, func.scope(), &["EffectRef"]).unwrap();
-        let constraints = collect_constraints(&db, func.into()).instantiate_identity();
+        let constraints = collect_trait_constraints(&db, func.into()).instantiate_identity();
         let effect_ref = constraints
             .list(&db)
             .iter()
@@ -1089,8 +986,8 @@ fn require_decode<T>() where T: Decode<Sol> {}
         let u256_ty = TyId::u256(&db);
 
         for (label, func) in [("encode", require_encode), ("decode", require_decode)] {
-            let constraints =
-                collect_func_decl_constraints(&db, func.into(), true).instantiate(&db, &[u256_ty]);
+            let constraints = collect_func_decl_trait_constraints(&db, func.into(), true)
+                .instantiate(&db, &[u256_ty]);
             let goal = *constraints
                 .list(&db)
                 .first()

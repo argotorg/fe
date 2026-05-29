@@ -26,7 +26,7 @@ use super::{
     trait_def::TraitInstId,
     trait_resolution::{
         PredicateListId,
-        constraint::{collect_constraints, collect_func_decl_constraints},
+        constraint::{collect_func_decl_trait_constraints, collect_trait_constraints},
     },
     ty_def::{InvalidCause, Kind, TyData, TyId, TyParam},
     visitor::TyVisitable,
@@ -274,9 +274,9 @@ fn generic_param_owner_assumptions<'db>(
     GenericParamOwner::from_item_opt(scope.item())
         .map(|owner| match owner {
             GenericParamOwner::Func(func) => {
-                collect_func_decl_constraints(db, func.into(), true).instantiate_identity()
+                collect_func_decl_trait_constraints(db, func.into(), true).instantiate_identity()
             }
-            _ => collect_constraints(db, owner).instantiate_identity(),
+            _ => collect_trait_constraints(db, owner).instantiate_identity(),
         })
         .unwrap_or_else(|| PredicateListId::empty_list(db))
 }
@@ -405,7 +405,8 @@ pub(crate) fn instantiate_callable_effect_layout_args<'db>(
     actual_key_ty: TyId<'db>,
     subst_args: &mut [TyId<'db>],
 ) {
-    let assumptions = collect_func_decl_constraints(db, func.into(), true).instantiate_identity();
+    let assumptions =
+        collect_func_decl_trait_constraints(db, func.into(), true).instantiate_identity();
     let Some(key_path) = func
         .effect_params(db)
         .nth(effect_idx)
@@ -489,7 +490,8 @@ pub(crate) fn callable_input_layout_hole_groups<'db>(
     func: crate::hir_def::Func<'db>,
 ) -> Vec<CallableInputLayoutHoleGroup<'db>> {
     let mut groups = Vec::new();
-    let assumptions = collect_func_decl_constraints(db, func.into(), true).instantiate_identity();
+    let assumptions =
+        collect_func_decl_trait_constraints(db, func.into(), true).instantiate_identity();
 
     if func.is_method(db)
         && let Some(param) = func.params(db).next()
@@ -615,7 +617,8 @@ pub(crate) fn func_implicit_param_plan<'db>(
     let prefix_len = func_inherited_param_precursors(db, func).len();
     let mut implicit_precursors = Vec::new();
     let mut bindings_by_origin = FxHashMap::default();
-    let assumptions = collect_func_decl_constraints(db, func.into(), true).instantiate_identity();
+    let assumptions =
+        collect_func_decl_trait_constraints(db, func.into(), true).instantiate_identity();
 
     for group in groups {
         let mut bindings = Vec::with_capacity(group.placeholders.len());
@@ -708,7 +711,7 @@ pub(crate) fn lower_type_alias_from_hir<'db>(
         };
     };
 
-    let assumptions = collect_constraints(db, alias.into()).instantiate_identity();
+    let assumptions = collect_trait_constraints(db, alias.into()).instantiate_identity();
     let alias_to = lower_hir_ty(db, hir_ty, alias.scope(), assumptions);
     let alias_to = if let TyData::Invalid(InvalidCause::AliasCycle(cycle)) = alias_to.data(db) {
         if cycle.contains(&alias) {

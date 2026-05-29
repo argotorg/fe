@@ -84,8 +84,8 @@ use crate::analysis::ty::trait_def::{
 };
 use crate::analysis::ty::trait_lower::{TraitRefLowerError, lower_trait_ref};
 use crate::analysis::ty::trait_resolution::constraint::{
-    collect_adt_constraints, collect_constraints, collect_func_decl_constraints,
-    collect_func_def_constraints,
+    collect_adt_trait_constraints, collect_func_decl_trait_constraints,
+    collect_func_def_trait_constraints, collect_trait_constraints,
 };
 use crate::analysis::ty::ty_def::{TyBase, TyData, TyParam, strip_derived_adt_layout_args};
 use crate::analysis::ty::ty_lower::{GenericParamTypeSet, collect_generic_params};
@@ -133,16 +133,18 @@ pub fn constraints_for<'db>(
     item: ItemKind<'db>,
 ) -> PredicateListId<'db> {
     match item {
-        ItemKind::Struct(s) => collect_adt_constraints(db, s.as_adt(db)).instantiate_identity(),
-        ItemKind::Enum(e) => collect_adt_constraints(db, e.as_adt(db)).instantiate_identity(),
+        ItemKind::Struct(s) => {
+            collect_adt_trait_constraints(db, s.as_adt(db)).instantiate_identity()
+        }
+        ItemKind::Enum(e) => collect_adt_trait_constraints(db, e.as_adt(db)).instantiate_identity(),
         // Contracts have no generic parameters, so no constraints
         ItemKind::Contract(_) => PredicateListId::empty_list(db),
         ItemKind::Func(f) => {
-            collect_func_def_constraints(db, f.into(), true).instantiate_identity()
+            collect_func_def_trait_constraints(db, f.into(), true).instantiate_identity()
         }
-        ItemKind::Impl(i) => collect_constraints(db, i.into()).instantiate_identity(),
+        ItemKind::Impl(i) => collect_trait_constraints(db, i.into()).instantiate_identity(),
         ItemKind::Trait(t) => {
-            let mut preds = collect_constraints(db, t.into()).instantiate_identity();
+            let mut preds = collect_trait_constraints(db, t.into()).instantiate_identity();
             let self_pred = TraitInstId::new(db, t, t.params(db).to_vec(), IndexMap::new());
             if !preds.list(db).contains(&self_pred) {
                 let mut merged = preds.list(db).to_vec();
@@ -151,7 +153,7 @@ pub fn constraints_for<'db>(
             }
             preds
         }
-        ItemKind::ImplTrait(i) => collect_constraints(db, i.into()).instantiate_identity(),
+        ItemKind::ImplTrait(i) => collect_trait_constraints(db, i.into()).instantiate_identity(),
         _ => PredicateListId::empty_list(db),
     }
 }
@@ -167,7 +169,9 @@ pub(crate) fn header_constraints_for<'db>(
     item: ItemKind<'db>,
 ) -> PredicateListId<'db> {
     match item {
-        ItemKind::Trait(trait_) => collect_constraints(db, trait_.into()).instantiate_identity(),
+        ItemKind::Trait(trait_) => {
+            collect_trait_constraints(db, trait_.into()).instantiate_identity()
+        }
         _ => constraints_for(db, item),
     }
 }
@@ -338,7 +342,8 @@ fn func_effect_requirements_canonical<'db>(
     db: &'db dyn HirAnalysisDb,
     func: Func<'db>,
 ) -> Vec<EffectRequirement<'db>> {
-    let assumptions = collect_func_decl_constraints(db, func.into(), true).instantiate_identity();
+    let assumptions =
+        collect_func_decl_trait_constraints(db, func.into(), true).instantiate_identity();
     let layout_args = callable_input_layout_args(db, func);
     func.effects(db)
         .data(db)
@@ -397,7 +402,8 @@ fn func_provider_bindings_canonical<'db>(
     func: Func<'db>,
 ) -> Vec<ProviderBinding<'db>> {
     let requirements = func_effect_requirements_canonical(db, func);
-    let assumptions = collect_func_decl_constraints(db, func.into(), true).instantiate_identity();
+    let assumptions =
+        collect_func_decl_trait_constraints(db, func.into(), true).instantiate_identity();
     let scope = func.scope();
     let provider_map = place_effect_provider_param_index_map(db, func);
     let provider_params = CallableDef::Func(func).params(db);
@@ -3143,7 +3149,7 @@ impl<'db> Struct<'db> {
 
         let scope = self.scope();
         let assumptions =
-            collect_constraints(db, GenericParamOwner::Struct(self)).instantiate_identity();
+            collect_trait_constraints(db, GenericParamOwner::Struct(self)).instantiate_identity();
         let fields = self.fields(db);
 
         fields
@@ -3537,7 +3543,7 @@ impl<'db> Trait<'db> {
     ) -> impl Iterator<Item = TraitInstId<'db>> + 'db {
         let self_param = self.self_param(db);
         let scope = self.scope();
-        let assumptions = collect_constraints(db, self.into()).instantiate_identity();
+        let assumptions = collect_trait_constraints(db, self.into()).instantiate_identity();
 
         let mut super_traits = IndexSet::new();
         for view in self.super_trait_refs(db) {
@@ -4678,7 +4684,7 @@ impl<'db> VariantView<'db> {
         let var = EnumVariant::new(enum_, self.idx);
         let scope = var.scope();
         let assumptions =
-            collect_constraints(db, GenericParamOwner::Enum(enum_)).instantiate_identity();
+            collect_trait_constraints(db, GenericParamOwner::Enum(enum_)).instantiate_identity();
 
         match self.kind(db) {
             VariantKind::Unit => Vec::new(),

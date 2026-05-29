@@ -8,7 +8,7 @@ use super::{
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
-        trait_resolution::{constraint::ty_constraints, proof_forest::ProofForest},
+        trait_resolution::{constraint::ty_trait_constraints, proof_forest::ProofForest},
         unify::UnificationTable,
     },
 };
@@ -17,7 +17,7 @@ use crate::{
     hir_def::{HirIngot, scope_graph::ScopeId},
 };
 use common::indexmap::IndexSet;
-use constraint::collect_constraints;
+use constraint::collect_trait_constraints;
 use rustc_hash::FxHashSet;
 use salsa::Update;
 
@@ -290,7 +290,7 @@ pub(crate) fn check_ty_wf<'db>(
         }
     }
 
-    let constraints = ty_constraints(db, ty);
+    let constraints = ty_trait_constraints(db, ty);
     let assumptions = solve_cx.assumptions();
 
     // Normalize constraints to resolve associated types
@@ -341,8 +341,8 @@ pub(crate) fn check_trait_inst_wf<'db>(
     solve_cx: TraitSolveCx<'db>,
     trait_inst: TraitInstId<'db>,
 ) -> WellFormedness<'db> {
-    let constraints =
-        collect_constraints(db, trait_inst.def(db).into()).instantiate(db, trait_inst.args(db));
+    let constraints = collect_trait_constraints(db, trait_inst.def(db).into())
+        .instantiate(db, trait_inst.args(db));
     let assumptions = solve_cx.assumptions();
 
     // Normalize constraints after instantiation to resolve associated types
@@ -569,7 +569,7 @@ mod tests {
     };
     use crate::{
         analysis::ty::{
-            trait_resolution::constraint::collect_func_def_constraints, ty_def::TyId,
+            trait_resolution::constraint::collect_func_def_trait_constraints, ty_def::TyId,
             ty_lower::collect_generic_params,
         },
         hir_def::{Func, Trait},
@@ -585,7 +585,7 @@ mod tests {
         ) -> (CanonicalGoalQuery<'db>, TraitSolveCx<'db>) {
             let ty_param = collect_generic_params(db, func.into()).explicit_params(db)[0];
             let assumptions =
-                collect_func_def_constraints(db, func.into(), true).instantiate_identity();
+                collect_func_def_trait_constraints(db, func.into(), true).instantiate_identity();
             let goal =
                 TraitInstId::new(db, needs_a, vec![TyId::unit(db), ty_param], IndexMap::new());
             let query = CanonicalGoalQuery::new(db, goal, assumptions);

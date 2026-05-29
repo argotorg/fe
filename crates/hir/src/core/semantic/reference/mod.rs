@@ -22,7 +22,7 @@ use crate::{
         resolve_query,
     },
     analysis::ty::{
-        trait_resolution::{PredicateListId, constraint::collect_constraints},
+        trait_resolution::{PredicateListId, constraint::collect_trait_constraints},
         ty_check::{
             LocalBinding, RecordLike, TypedBody, check_contract_init_body,
             check_contract_recv_arm_body, check_func_body,
@@ -53,7 +53,7 @@ pub(crate) fn enclosing_assumptions<'db>(
     let mut current = scope;
     loop {
         if let Some(owner) = GenericParamOwner::from_item_opt(current.item()) {
-            return collect_constraints(db, owner).instantiate_identity();
+            return collect_trait_constraints(db, owner).instantiate_identity();
         }
         match current.parent(db) {
             Some(parent) => current = parent,
