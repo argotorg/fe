@@ -38,10 +38,10 @@ pub use jsonl::{
     read_trace_facts_jsonl,
 };
 pub use relation::{
-    OriginRef, RelationColumn, RelationColumnKind, RelationRow, RelationSchema, TraceFactSpec,
-    TraceRelation, ValidationIssue, ValidationSeverity,
+    OriginRef, RelationBundleData, RelationColumn, RelationColumnKind, RelationRow, RelationSchema,
+    TraceFactSpec, TraceRelation, ValidationIssue, ValidationSeverity,
 };
-pub use snapshot::{TraceSnapshot, TraceSnapshotReadError};
+pub use snapshot::{TraceSnapshot, TraceSnapshotData, TraceSnapshotReadError};
 pub use trace_facts_macros::TraceFactSpec;
 pub use validate::{
     TraceValidationDiagnostic, TraceValidationError, TraceValidationInfo, TraceValidationLevel,

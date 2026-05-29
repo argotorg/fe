@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use common::origin::OriginExportKey;
 use serde::{Deserialize, Serialize};
 use shape_address::{DimensionDigests, ShapeDimension};
@@ -43,6 +45,36 @@ pub struct RelationSchema {
 pub struct RelationRow {
     pub relation: &'static str,
     pub values: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RelationBundleData {
+    pub trace_hash: String,
+    pub schemas: Vec<RelationSchema>,
+    pub rows: Vec<RelationRow>,
+}
+
+impl RelationBundleData {
+    pub fn from_snapshot(snapshot: &crate::snapshot::TraceSnapshot) -> Self {
+        Self::from_facts(snapshot.trace_hash(), snapshot.facts())
+    }
+
+    pub fn from_facts(trace_hash: impl Into<String>, facts: &[TraceFact]) -> Self {
+        let mut schemas = BTreeMap::new();
+        let mut rows = Vec::with_capacity(facts.len());
+
+        for fact in facts {
+            let schema = fact.base_relation_schema();
+            schemas.entry(schema.name).or_insert(schema);
+            rows.push(fact.base_relation_row());
+        }
+
+        Self {
+            trace_hash: trace_hash.into(),
+            schemas: schemas.into_values().collect(),
+            rows,
+        }
+    }
 }
 
 pub trait TraceRelation {
@@ -1531,7 +1563,8 @@ mod tests {
 
     use crate::{
         ExecutionStepFact, InstructionExtentFact, InstructionFact, OriginEdgeFact, OriginEdgeLabel,
-        OriginNodeFact, PcRange, RuntimePcJoinConfidence, TraceFact,
+        OriginNodeFact, PcRange, RelationBundleData, RuntimePcJoinConfidence, TraceBundle,
+        TraceFact, TraceMetadata, TraceSnapshot,
     };
 
     use super::TraceFactSpec;
@@ -1687,6 +1720,40 @@ mod tests {
                     "exact_code_object_and_pc".to_string(),
                 ],
             }
+        );
+    }
+
+    #[test]
+    fn relation_bundle_data_is_derived_from_snapshot_facts() {
+        let function = key("function", "demo", "main");
+        let instruction = key("bytecode.inst", "demo", "pc:0");
+        let snapshot = TraceSnapshot::new(TraceBundle::new(
+            TraceMetadata::compiler_emitted(
+                "abc123",
+                "evm/sonatina",
+                vec!["fe".to_string()],
+                "demo.fe",
+                vec![],
+            ),
+            vec![
+                TraceFact::OriginNode(OriginNodeFact::from_key(function.clone())),
+                TraceFact::OriginNode(OriginNodeFact::from_key(instruction.clone())),
+                TraceFact::Instruction(InstructionFact::new(instruction, function, 0, "STOP")),
+            ],
+        ))
+        .unwrap();
+
+        let relation_bundle = RelationBundleData::from_snapshot(&snapshot);
+
+        assert_eq!(relation_bundle.trace_hash, snapshot.trace_hash());
+        assert_eq!(relation_bundle.rows.len(), 3);
+        assert_eq!(
+            relation_bundle
+                .schemas
+                .iter()
+                .map(|schema| schema.name)
+                .collect::<Vec<_>>(),
+            vec!["base_instruction", "base_origin_node"]
         );
     }
 }

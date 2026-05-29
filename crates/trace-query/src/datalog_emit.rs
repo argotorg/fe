@@ -4,7 +4,7 @@ use std::fmt;
 use common::origin::OriginExportKey;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use trace_facts::{RelationRow, RelationSchema, TraceFact, TraceSnapshot};
+use trace_facts::{RelationBundleData, RelationRow, RelationSchema, TraceFact, TraceSnapshot};
 
 use crate::{
     GasAttributionPolicy, GasBySourceRequest, IntrospectionService, RuntimeGasBySourceRequest,
@@ -81,19 +81,11 @@ impl fmt::Display for DatalogRunError {
 impl std::error::Error for DatalogRunError {}
 
 pub fn emit_base_relations(snapshot: &TraceSnapshot) -> DatalogBaseExport {
-    let mut schemas = BTreeMap::new();
-    let mut rows = Vec::new();
-
-    for fact in snapshot.facts() {
-        let schema = fact.base_relation_schema();
-        schemas.entry(schema.name).or_insert(schema);
-        rows.push(fact.base_relation_row());
-    }
-
+    let bundle = RelationBundleData::from_snapshot(snapshot);
     DatalogBaseExport {
-        trace_hash: snapshot.trace_hash().to_string(),
-        schemas: schemas.into_values().collect(),
-        rows,
+        trace_hash: bundle.trace_hash,
+        schemas: bundle.schemas,
+        rows: bundle.rows,
         rules: CORE_DATALOG_RULES,
     }
 }
