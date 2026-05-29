@@ -314,6 +314,89 @@ pub fn shape_digest(
     })
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShapeIndexEntry {
+    pub dimension: ShapeDimension,
+    pub digest: ShapeDigest,
+    pub graphs: Vec<ShapeGraphKey>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShapeIndex {
+    pub policy_id: ShapePolicyId,
+    pub entries: Vec<ShapeIndexEntry>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ShapeLookupRequest {
+    pub policy_id: ShapePolicyId,
+    pub dimension: ShapeDimension,
+    pub digest: ShapeDigest,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShapeLookupResult {
+    pub request: ShapeLookupRequest,
+    pub graphs: Vec<ShapeGraphKey>,
+}
+
+impl ShapeIndex {
+    pub fn from_results(
+        policy_id: ShapePolicyId,
+        results: impl IntoIterator<Item = ShapeDigestResult>,
+    ) -> Result<Self, ShapeError> {
+        let mut by_digest = BTreeMap::<(ShapeDimension, ShapeDigest), Vec<ShapeGraphKey>>::new();
+        for result in results {
+            if result.hashes.policy_id != policy_id {
+                return Err(ShapeError::ShapeIndexPolicyMismatch {
+                    expected: policy_id.to_string(),
+                    actual: result.hashes.policy_id.to_string(),
+                });
+            }
+            for (dimension, digest) in result.hashes.graph.iter() {
+                by_digest
+                    .entry((*dimension, digest.clone()))
+                    .or_default()
+                    .push(result.request.graph.clone());
+            }
+        }
+
+        let mut entries = by_digest
+            .into_iter()
+            .map(|((dimension, digest), mut graphs)| {
+                graphs.sort();
+                ShapeIndexEntry {
+                    dimension,
+                    digest,
+                    graphs,
+                }
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| {
+            (left.dimension, &left.digest).cmp(&(right.dimension, &right.digest))
+        });
+        Ok(Self { policy_id, entries })
+    }
+
+    pub fn roots_with_shape_digest(
+        &self,
+        request: ShapeLookupRequest,
+    ) -> Result<ShapeLookupResult, ShapeError> {
+        if request.policy_id != self.policy_id {
+            return Err(ShapeError::ShapeIndexPolicyMismatch {
+                expected: self.policy_id.to_string(),
+                actual: request.policy_id.to_string(),
+            });
+        }
+        let graphs = self
+            .entries
+            .iter()
+            .find(|entry| entry.dimension == request.dimension && entry.digest == request.digest)
+            .map_or_else(Vec::new, |entry| entry.graphs.clone());
+        Ok(ShapeLookupResult { request, graphs })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum ShapeValue {
@@ -1617,6 +1700,7 @@ pub enum ShapeError {
     MissingNode { key: String },
     NodeKeyMismatch { map_key: String, node_key: String },
     GraphKeyMismatch { requested: String, actual: String },
+    ShapeIndexPolicyMismatch { expected: String, actual: String },
     CycleDetected { key: String },
 }
 
@@ -1645,6 +1729,9 @@ impl fmt::Display for ShapeError {
                     f,
                     "shape digest requested graph {requested} but got {actual}"
                 )
+            }
+            Self::ShapeIndexPolicyMismatch { expected, actual } => {
+                write!(f, "shape index policy {actual} does not match {expected}")
             }
             Self::CycleDetected { key } => {
                 write!(f, "shape child graph contains a cycle at {key}")
@@ -1823,6 +1910,74 @@ mod tests {
         assert!(matches!(
             shape_digest(&request, &graph),
             Err(ShapeError::GraphKeyMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn shape_index_returns_digest_candidates_for_policy() {
+        let policy = ShapeHashPolicy::new(
+            "hir",
+            ShapeViewMode::AnonymousShape,
+            ShapeCyclePolicy::Reject,
+        )
+        .unwrap();
+        let left = literal_graph(13);
+        let mut right = literal_graph(13);
+        right.graph_key =
+            ShapeGraphKey::new(origin("hir.body", "demo-other", "body:0"), "body").unwrap();
+        let left_result = shape_digest(
+            &ShapeDigestRequest::new(left.graph_key.clone(), policy.clone()),
+            &left,
+        )
+        .unwrap();
+        let right_result = shape_digest(
+            &ShapeDigestRequest::new(right.graph_key.clone(), policy.clone()),
+            &right,
+        )
+        .unwrap();
+        let digest = left_result
+            .hashes
+            .graph
+            .get(ShapeDimension::Structure)
+            .unwrap()
+            .clone();
+        assert_eq!(
+            Some(&digest),
+            right_result.hashes.graph.get(ShapeDimension::Structure)
+        );
+
+        let lookup = ShapeIndex::from_results(
+            policy.policy_id(),
+            vec![left_result.clone(), right_result.clone()],
+        )
+        .unwrap()
+        .roots_with_shape_digest(ShapeLookupRequest {
+            policy_id: policy.policy_id(),
+            dimension: ShapeDimension::Structure,
+            digest,
+        })
+        .unwrap();
+
+        assert_eq!(
+            lookup.graphs,
+            vec![left_result.request.graph, right_result.request.graph]
+        );
+    }
+
+    #[test]
+    fn shape_index_rejects_policy_mismatch() {
+        let graph = literal_graph(13);
+        let identity = policy(ShapeViewMode::IdentityBound);
+        let anonymous = policy(ShapeViewMode::AnonymousShape);
+        let result = shape_digest(
+            &ShapeDigestRequest::new(graph.graph_key.clone(), identity.clone()),
+            &graph,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            ShapeIndex::from_results(anonymous.policy_id(), vec![result]),
+            Err(ShapeError::ShapeIndexPolicyMismatch { .. })
         ));
     }
 
