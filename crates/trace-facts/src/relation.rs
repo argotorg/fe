@@ -164,6 +164,14 @@ where
 
 macro_rules! trace_fact_registry {
     ($($variant:ident($ty:ty)),+ $(,)?) => {
+        $(
+            impl From<$ty> for TraceFact {
+                fn from(fact: $ty) -> Self {
+                    Self::$variant(fact)
+                }
+            }
+        )+
+
         impl TraceFact {
             pub fn base_relation_name(&self) -> &'static str {
                 match self {
@@ -1538,5 +1546,23 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["base_instruction", "base_origin_node"]
         );
+    }
+
+    #[test]
+    fn trace_emit_pushes_already_constructed_facts_only() {
+        let function = key("function", "demo", "main");
+        let instruction = key("bytecode.inst", "demo", "pc:0");
+        let mut facts = Vec::new();
+
+        crate::trace_emit!(
+            facts,
+            OriginNodeFact::from_key(function.clone()),
+            OriginNodeFact::from_key(instruction.clone()),
+            InstructionFact::new(instruction, function, 0, "STOP"),
+        );
+
+        assert_eq!(facts.len(), 3);
+        assert!(matches!(facts[0], TraceFact::OriginNode(_)));
+        assert!(matches!(facts[2], TraceFact::Instruction(_)));
     }
 }

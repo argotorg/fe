@@ -7,6 +7,16 @@ pub mod validate;
 
 extern crate self as trace_facts;
 
+#[macro_export]
+macro_rules! trace_emit {
+    ($sink:expr, $($fact:expr),+ $(,)?) => {{
+        let sink = &mut $sink;
+        $(
+            sink.push($crate::TraceFact::from($fact));
+        )+
+    }};
+}
+
 pub use common::origin::OriginExportKey;
 pub use evm_trace::{
     EvmExecutionStep, EvmExecutionTrace, EvmExecutionTraceError, RuntimeImportConfig,
