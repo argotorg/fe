@@ -8,7 +8,7 @@ use common::origin::OriginExportKey;
 use introspection_config::FeToolingConfig;
 use serde::{Deserialize, Serialize};
 use trace_facts::{
-    CompilerEventKind, GasKind, InstructionCategory, InstructionFact, LoopBlockRole,
+    CompilerEventKind, CompilerPhase, GasKind, InstructionCategory, InstructionFact, LoopBlockRole,
     OriginEdgeLabel, RuntimePcJoinConfidence, RuntimeValue, StorageAccessKind, StorageFact,
     StorageLocation, TraceDataSource, TraceFact, TraceMetadata, TraceSnapshot,
 };
@@ -163,6 +163,14 @@ impl IntrospectionService for TraceIntrospectionService {
             .unwrap_or_default();
         let available = !instructions.is_empty();
         let instruction_rows = index.sorted_instruction_rows(&instructions);
+        let target_instruction_keys = loop_key
+            .as_ref()
+            .filter(|key| index.loop_phase(key) == Some(CompilerPhase::SonatinaPostOpt))
+            .map(|_| index.bytecode_instructions_for_loop_members(&instructions))
+            .unwrap_or_default();
+        let target_instructions = index.sorted_instruction_rows(&target_instruction_keys);
+        let bytecode_bridge_available = !target_instructions.is_empty();
+        let bytecode_origin_edges_available = index.has_bytecode_origin_edges();
         let blocks = loop_key
             .as_ref()
             .map(|key| index.loop_block_contents(key, &instructions))
@@ -178,6 +186,9 @@ impl IntrospectionService for TraceIntrospectionService {
             loop_label: loop_key.as_ref().map(|key| index.label(key)),
             blocks,
             instructions: instruction_rows,
+            target_instructions,
+            bytecode_bridge_available,
+            bytecode_origin_edges_available,
             findings: if available {
                 vec![Insight::info(
                     "CFG-derived loop membership",
@@ -1755,6 +1766,9 @@ pub struct LoopContentsReport {
     pub loop_label: Option<String>,
     pub blocks: Vec<LoopBlockContents>,
     pub instructions: Vec<InstructionRow>,
+    pub target_instructions: Vec<InstructionRow>,
+    pub bytecode_bridge_available: bool,
+    pub bytecode_origin_edges_available: bool,
     pub findings: Vec<Insight>,
     pub confidence: Confidence,
 }
@@ -2331,6 +2345,7 @@ fn reject_call_policy(policy: GasAttributionPolicy) -> QueryResult<()> {
 struct TraceIndex<'a> {
     snapshot: &'a TraceSnapshot,
     loop_key: Option<OriginExportKey>,
+    loop_phases: BTreeMap<OriginExportKey, CompilerPhase>,
     loop_members: BTreeMap<OriginExportKey, BTreeSet<OriginExportKey>>,
     loop_blocks: BTreeMap<OriginExportKey, Vec<(OriginExportKey, LoopBlockRole)>>,
     locals: BTreeMap<String, Vec<OriginExportKey>>,
@@ -2344,7 +2359,8 @@ struct TraceIndex<'a> {
 
 impl<'a> TraceIndex<'a> {
     fn new(snapshot: &'a TraceSnapshot) -> Self {
-        let mut loop_key = None;
+        let mut first_loop_key = None;
+        let mut loop_phases = BTreeMap::new();
         let mut loop_members: BTreeMap<OriginExportKey, BTreeSet<OriginExportKey>> =
             BTreeMap::new();
         let mut loop_blocks: BTreeMap<OriginExportKey, Vec<(OriginExportKey, LoopBlockRole)>> =
@@ -2365,8 +2381,11 @@ impl<'a> TraceIndex<'a> {
 
         for fact in snapshot.facts() {
             match fact {
+                TraceFact::Loop(loop_fact) => {
+                    loop_phases.insert(loop_fact.loop_key.clone(), loop_fact.phase);
+                }
                 TraceFact::LoopMembership(membership) => {
-                    loop_key.get_or_insert_with(|| membership.loop_key.clone());
+                    first_loop_key.get_or_insert_with(|| membership.loop_key.clone());
                     loop_members
                         .entry(membership.loop_key.clone())
                         .or_default()
@@ -2408,9 +2427,11 @@ impl<'a> TraceIndex<'a> {
             }
         }
 
+        let loop_key = preferred_loop_key(&loop_members, &loop_phases).or(first_loop_key);
         Self {
             snapshot,
             loop_key,
+            loop_phases,
             loop_members,
             loop_blocks,
             locals,
@@ -2421,6 +2442,10 @@ impl<'a> TraceIndex<'a> {
             instruction_extents,
             function_code_objects,
         }
+    }
+
+    fn loop_phase(&self, loop_key: &OriginExportKey) -> Option<CompilerPhase> {
+        self.loop_phases.get(loop_key).copied()
     }
 
     fn active_loop_instructions(&self) -> BTreeSet<OriginExportKey> {
@@ -2506,6 +2531,59 @@ impl<'a> TraceIndex<'a> {
             });
         }
         rows
+    }
+
+    fn bytecode_instructions_for_loop_members(
+        &self,
+        loop_members: &BTreeSet<OriginExportKey>,
+    ) -> BTreeSet<OriginExportKey> {
+        let mut loop_member_origins = BTreeSet::new();
+        for fact in self.snapshot.facts() {
+            let TraceFact::OriginEdge(edge) = fact else {
+                continue;
+            };
+            if loop_members.contains(&edge.from)
+                && matches!(
+                    edge.label,
+                    OriginEdgeLabel::LoweredFrom | OriginEdgeLabel::EmittedFrom
+                )
+            {
+                loop_member_origins.insert(edge.to.clone());
+            }
+        }
+
+        let mut bytecode = BTreeSet::new();
+        for fact in self.snapshot.facts() {
+            let TraceFact::OriginEdge(edge) = fact else {
+                continue;
+            };
+            if edge.from.kind() != "bytecode.pc" {
+                continue;
+            }
+            if edge.label == OriginEdgeLabel::EmittedFrom && loop_members.contains(&edge.to) {
+                bytecode.insert(edge.from.clone());
+            }
+            if edge.label == OriginEdgeLabel::LoweredFrom && loop_member_origins.contains(&edge.to)
+            {
+                bytecode.insert(edge.from.clone());
+            }
+        }
+        bytecode
+    }
+
+    fn has_bytecode_origin_edges(&self) -> bool {
+        self.snapshot.facts().iter().any(|fact| {
+            matches!(
+                fact,
+                TraceFact::OriginEdge(edge)
+                    if edge.from.kind() == "bytecode.pc"
+                        && edge.to.kind() != "code.object"
+                        && matches!(
+                            edge.label,
+                            OriginEdgeLabel::LoweredFrom | OriginEdgeLabel::EmittedFrom
+                        )
+            )
+        })
     }
 
     fn instruction_row(&self, key: &OriginExportKey) -> Option<InstructionRow> {
@@ -3221,6 +3299,25 @@ fn loop_block_role_label(role: LoopBlockRole) -> &'static str {
         LoopBlockRole::Preheader => "preheader",
         LoopBlockRole::Exit => "exit",
     }
+}
+
+fn preferred_loop_key(
+    loop_members: &BTreeMap<OriginExportKey, BTreeSet<OriginExportKey>>,
+    loop_phases: &BTreeMap<OriginExportKey, CompilerPhase>,
+) -> Option<OriginExportKey> {
+    [
+        CompilerPhase::SonatinaPostOpt,
+        CompilerPhase::SonatinaPreOpt,
+        CompilerPhase::Mir,
+    ]
+    .into_iter()
+    .find_map(|preferred| {
+        loop_members
+            .keys()
+            .find(|key| loop_phases.get(*key) == Some(&preferred))
+            .cloned()
+    })
+    .or_else(|| loop_members.keys().next().cloned())
 }
 
 #[derive(Clone, Debug)]

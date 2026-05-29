@@ -8,7 +8,10 @@ use hir::hir_def::{HirIngot, TopLevelMod};
 use mir::runtime::ir::RuntimePackagePlan;
 use mir::{RuntimePackage, build_runtime_package, build_test_runtime_package};
 use rustc_hash::FxHashSet;
-use sonatina_codegen::{EvmCompile, OptLevel as SonatinaOptLevel};
+use sonatina_codegen::{
+    EvmCompile, OptLevel as SonatinaOptLevel,
+    object::{FrontendProvenanceMap, SectionObservability},
+};
 use sonatina_ir::{
     Module,
     ir_writer::{FuncWriter, ModuleWriter},
@@ -55,6 +58,7 @@ impl From<mir::LowerError> for LowerError {
 pub struct SonatinaContractBytecode {
     pub deploy: Vec<u8>,
     pub runtime: Vec<u8>,
+    pub runtime_observability: Option<SectionObservability>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -185,11 +189,95 @@ fn compile_runtime_objects(
     opt_level: OptLevel,
     emit_observability: bool,
 ) -> Result<Vec<sonatina_codegen::object::ObjectArtifact>, LowerError> {
+    let (artifacts, _) =
+        compile_runtime_objects_with_postopt_trace(module, opt_level, emit_observability, None)?;
+    Ok(artifacts)
+}
+
+fn compile_runtime_objects_with_postopt_trace(
+    module: Module,
+    opt_level: OptLevel,
+    emit_observability: bool,
+    postopt_trace_owner: Option<&str>,
+) -> Result<
+    (
+        Vec<sonatina_codegen::object::ObjectArtifact>,
+        Vec<trace_facts::TraceFact>,
+    ),
+    LowerError,
+> {
     let mut compile = evm_compile(module, opt_level, emit_observability);
-    ensure_module_sonatina_ir_valid(compile.optimize())?;
-    compile
+    let (frontend_provenance, postopt_trace_facts) = {
+        let optimized = compile.optimize();
+        ensure_module_sonatina_ir_valid(optimized)?;
+        let trace_facts = postopt_trace_owner
+            .map(|owner| {
+                crate::trace::emit_sonatina_trace_view_facts(
+                    owner,
+                    optimized,
+                    trace_facts::CompilerPhase::SonatinaPostOpt,
+                )
+            })
+            .unwrap_or_default();
+        let provenance = if emit_observability {
+            frontend_provenance_map(optimized)
+        } else {
+            FrontendProvenanceMap::default()
+        };
+        (provenance, trace_facts)
+    };
+    let mut artifacts = compile
         .compile()
-        .map_err(|errors| LowerError::Internal(format_object_compile_errors(&errors)))
+        .map_err(|errors| LowerError::Internal(format_object_compile_errors(&errors)))?;
+    if emit_observability {
+        apply_frontend_provenance_to_artifacts(&mut artifacts, &frontend_provenance);
+    }
+    Ok((artifacts, postopt_trace_facts))
+}
+
+fn frontend_provenance_map(module: &Module) -> FrontendProvenanceMap {
+    let mut map = FrontendProvenanceMap::default();
+    for func_ref in module.funcs() {
+        module.func_store.view(func_ref, |function| {
+            for inst in function.dfg.inst_ids() {
+                let Some(loc) = function.inst_debug_loc(inst) else {
+                    continue;
+                };
+                let Some(origin) = function
+                    .debug
+                    .debug_loc(loc)
+                    .and_then(|loc| loc.primary_origin)
+                    .and_then(|origin| function.debug.frontend_origin(origin))
+                    .and_then(|origin| origin.external_key.clone())
+                else {
+                    continue;
+                };
+                map.insert((func_ref, inst), origin);
+            }
+        });
+    }
+    map
+}
+
+fn apply_frontend_provenance_to_artifacts(
+    artifacts: &mut [sonatina_codegen::object::ObjectArtifact],
+    provenance: &FrontendProvenanceMap,
+) {
+    for artifact in artifacts {
+        for section in artifact.sections.values_mut() {
+            let Some(observability) = section.observability.as_mut() else {
+                continue;
+            };
+            for entry in &mut observability.pc_map {
+                let Some(ir_inst) = entry.ir_inst else {
+                    continue;
+                };
+                if let Some(origin) = provenance.get(&(entry.func, ir_inst)) {
+                    entry.frontend_provenance = Some(origin.clone());
+                }
+            }
+        }
+    }
 }
 
 fn section_name_for_runtime(name: &mir::RuntimeSectionName) -> sonatina_ir::SectionName {
@@ -523,16 +611,29 @@ pub fn emit_runtime_package_sonatina_ir_optimized(
     Ok(writer.dump_string())
 }
 
-pub fn emit_runtime_package_sonatina_bytecode(
+fn emit_runtime_package_sonatina_bytecode_with_options(
     db: &DriverDataBase,
     package: &RuntimePackage<'_>,
     layout: TargetDataLayout,
     opt_level: OptLevel,
-) -> Result<BTreeMap<String, SonatinaContractBytecode>, LowerError> {
+    emit_observability: bool,
+    postopt_trace_owner: Option<&str>,
+) -> Result<
+    (
+        BTreeMap<String, SonatinaContractBytecode>,
+        Vec<trace_facts::TraceFact>,
+    ),
+    LowerError,
+> {
     ensure_runtime_package_has_roots(db, package, "Sonatina bytecode")?;
     let module = compile_runtime_package_sonatina(db, package, layout)?;
     ensure_module_sonatina_ir_valid(&module)?;
-    let artifacts = compile_runtime_objects(module, opt_level, false)?;
+    let (artifacts, postopt_trace_facts) = compile_runtime_objects_with_postopt_trace(
+        module,
+        opt_level,
+        emit_observability,
+        postopt_trace_owner,
+    )?;
     let artifacts_by_name = artifacts
         .iter()
         .map(|artifact| (artifact.object.0.as_str(), artifact))
@@ -553,14 +654,18 @@ pub fn emit_runtime_package_sonatina_bytecode(
         let runtime = artifact
             .sections
             .get(&section_name_for_runtime(&mir::RuntimeSectionName::Runtime));
-        let (deploy, runtime) = match (init, runtime) {
-            (Some(init), Some(runtime)) => (init.bytes.clone(), runtime.bytes.clone()),
+        let (deploy, runtime, runtime_observability) = match (init, runtime) {
+            (Some(init), Some(runtime)) => (
+                init.bytes.clone(),
+                runtime.bytes.clone(),
+                runtime.observability.clone(),
+            ),
             _ => {
                 let sections = object.sections(db);
                 let section = sections.first().ok_or_else(|| {
                     LowerError::Internal(format!("root object `{object_name}` has no sections"))
                 })?;
-                let runtime = artifact
+                let runtime_section = artifact
                     .sections
                     .get(&section_name_for_runtime(&section.name))
                     .ok_or_else(|| {
@@ -568,18 +673,68 @@ pub fn emit_runtime_package_sonatina_bytecode(
                             "compiled object `{object_name}` is missing section `{:?}`",
                             section.name
                         ))
-                    })?
-                    .bytes
-                    .clone();
-                (wrap_as_init_code(&runtime), runtime)
+                    })?;
+                let runtime = runtime_section.bytes.clone();
+                (
+                    wrap_as_init_code(&runtime),
+                    runtime,
+                    runtime_section.observability.clone(),
+                )
             }
         };
         out.insert(
             object_name.clone(),
-            SonatinaContractBytecode { deploy, runtime },
+            SonatinaContractBytecode {
+                deploy,
+                runtime,
+                runtime_observability,
+            },
         );
     }
-    Ok(out)
+    Ok((out, postopt_trace_facts))
+}
+
+pub fn emit_runtime_package_sonatina_bytecode(
+    db: &DriverDataBase,
+    package: &RuntimePackage<'_>,
+    layout: TargetDataLayout,
+    opt_level: OptLevel,
+) -> Result<BTreeMap<String, SonatinaContractBytecode>, LowerError> {
+    emit_runtime_package_sonatina_bytecode_with_options(db, package, layout, opt_level, false, None)
+        .map(|(bytecode, _)| bytecode)
+}
+
+pub fn emit_runtime_package_sonatina_bytecode_with_observability(
+    db: &DriverDataBase,
+    package: &RuntimePackage<'_>,
+    layout: TargetDataLayout,
+    opt_level: OptLevel,
+) -> Result<BTreeMap<String, SonatinaContractBytecode>, LowerError> {
+    emit_runtime_package_sonatina_bytecode_with_options(db, package, layout, opt_level, true, None)
+        .map(|(bytecode, _)| bytecode)
+}
+
+pub fn emit_runtime_package_sonatina_bytecode_with_observability_and_trace(
+    db: &DriverDataBase,
+    package: &RuntimePackage<'_>,
+    layout: TargetDataLayout,
+    opt_level: OptLevel,
+    postopt_trace_owner: &str,
+) -> Result<
+    (
+        BTreeMap<String, SonatinaContractBytecode>,
+        Vec<trace_facts::TraceFact>,
+    ),
+    LowerError,
+> {
+    emit_runtime_package_sonatina_bytecode_with_options(
+        db,
+        package,
+        layout,
+        opt_level,
+        true,
+        Some(postopt_trace_owner),
+    )
 }
 
 pub fn emit_module_sonatina_ir(
@@ -667,6 +822,46 @@ pub fn emit_module_sonatina_bytecode(
     let package = build_runtime_package(db, top_mod)?;
     let package = select_runtime_package_contract(db, package, contract)?;
     emit_runtime_package_sonatina_bytecode(db, &package, crate::EVM_LAYOUT, opt_level)
+}
+
+pub fn emit_module_sonatina_bytecode_with_observability(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    opt_level: OptLevel,
+    contract: Option<&str>,
+) -> Result<BTreeMap<String, SonatinaContractBytecode>, LowerError> {
+    let package = build_runtime_package(db, top_mod)?;
+    let package = select_runtime_package_contract(db, package, contract)?;
+    emit_runtime_package_sonatina_bytecode_with_observability(
+        db,
+        &package,
+        crate::EVM_LAYOUT,
+        opt_level,
+    )
+}
+
+pub fn emit_module_sonatina_bytecode_with_observability_and_trace(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    opt_level: OptLevel,
+    contract: Option<&str>,
+    postopt_trace_owner: &str,
+) -> Result<
+    (
+        BTreeMap<String, SonatinaContractBytecode>,
+        Vec<trace_facts::TraceFact>,
+    ),
+    LowerError,
+> {
+    let package = build_runtime_package(db, top_mod)?;
+    let package = select_runtime_package_contract(db, package, contract)?;
+    emit_runtime_package_sonatina_bytecode_with_observability_and_trace(
+        db,
+        &package,
+        crate::EVM_LAYOUT,
+        opt_level,
+        postopt_trace_owner,
+    )
 }
 
 pub fn emit_ingot_sonatina_bytecode(

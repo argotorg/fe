@@ -463,7 +463,7 @@ fn render_loop_cost_report(report: &LoopCostReport) -> String {
             out.push_str("Static per-iteration cost (fixture target UX):\n");
         } else {
             out.push_str("Compiler-derived loop instruction summary:\n");
-            out.push_str("  cost basis: Sonatina loop membership only; target bytecode loop membership and per-iteration gas require Sonatina-to-bytecode edges.\n");
+            out.push_str("  cost basis: compiler-emitted loop membership; target bytecode loop membership is only reported when bytecode PC origin edges are present.\n");
         }
     }
 
@@ -607,7 +607,15 @@ fn render_loop_contents_report(report: &LoopContentsReport) -> String {
     out.push_str(
         "Membership source: compiler-emitted Sonatina trace-view CFG natural-loop analysis\n",
     );
-    out.push_str("Scope: Sonatina loop membership only; target bytecode loop membership requires Sonatina-to-bytecode edges.\n");
+    if report.bytecode_bridge_available {
+        out.push_str(
+            "Scope: Sonatina post-optimization loop membership with bytecode PCs linked by observability origin edges.\n",
+        );
+    } else if report.bytecode_origin_edges_available {
+        out.push_str("Scope: Sonatina loop membership only; bytecode PC origin edges exist, but none join to this loop yet.\n");
+    } else {
+        out.push_str("Scope: Sonatina loop membership only; target bytecode PC membership requires bytecode-to-Sonatina observability edges.\n");
+    }
     out.push_str(&format!("Blocks: {}\n", report.blocks.len()));
     out.push_str(&format!("Instructions: {}\n\n", report.instructions.len()));
     out.push_str("Loop blocks:\n");
@@ -623,6 +631,15 @@ fn render_loop_contents_report(report: &LoopContentsReport) -> String {
         for instruction in &block.instructions {
             out.push_str(&format!(
                 "    ir[{}] {}\n",
+                instruction.index, instruction.mnemonic
+            ));
+        }
+    }
+    if report.bytecode_bridge_available {
+        out.push_str("\nTarget bytecode PCs linked to this loop:\n");
+        for instruction in &report.target_instructions {
+            out.push_str(&format!(
+                "  asm[{}] {}\n",
                 instruction.index, instruction.mnemonic
             ));
         }

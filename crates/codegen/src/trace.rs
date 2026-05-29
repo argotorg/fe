@@ -1,10 +1,11 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use common::origin::OriginExportKey;
 use shape_address::{
     ShapeCyclePolicy, ShapeDimension, ShapeGraph, ShapeGraphKey, ShapeHashPolicy, ShapeNodeKey,
     ShapeViewMode, hash_shape_graph,
 };
+use sonatina_codegen::object::SectionObservability;
 use sonatina_ir::{
     CfgEdgeKind as SonatinaCfgEdgeKind, FrontendOriginKind, FrontendOriginRecord, SonatinaTraceView,
 };
@@ -53,8 +54,36 @@ pub fn emit_bytecode_instruction_facts(
     function_local_key: &str,
     bytecode: &[u8],
 ) -> Vec<TraceFact> {
+    emit_bytecode_instruction_facts_with_observability(
+        owner_key,
+        function_local_key,
+        bytecode,
+        None,
+        None,
+        None,
+    )
+}
+
+pub fn emit_bytecode_instruction_facts_with_observability(
+    owner_key: &str,
+    function_local_key: &str,
+    bytecode: &[u8],
+    sonatina_owner_key: Option<&str>,
+    observability: Option<&SectionObservability>,
+    known_sonatina_endpoint_nodes: Option<&BTreeSet<OriginExportKey>>,
+) -> Vec<TraceFact> {
     let function = bytecode_function_key(owner_key, function_local_key);
     let code_object = bytecode_code_object_key(owner_key);
+    let pc_map = observability
+        .map(|observability| {
+            observability
+                .pc_map
+                .iter()
+                .map(|entry| (entry.pc_start, entry))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let mut emitted_postopt_nodes = BTreeSet::new();
     let mut facts = vec![
         origin_node(function.clone(), "bytecode.function"),
         origin_node(code_object.clone(), "code.object"),
@@ -105,6 +134,42 @@ pub fn emit_bytecode_instruction_facts(
             OriginEdgeLabel::EmittedFrom,
             Some(CompilerPhase::BytecodeEmission),
         )));
+        if let Some(entry) = pc_map.get(&(pc as u32)) {
+            if let (Some(sonatina_owner_key), Some(ir_inst)) = (sonatina_owner_key, entry.ir_inst) {
+                let postopt_inst = sonatina_trace_inst_key(
+                    SONATINA_POSTOPT_INST_KIND,
+                    sonatina_owner_key,
+                    entry.func,
+                    ir_inst,
+                );
+                let should_emit_endpoint_node = known_sonatina_endpoint_nodes
+                    .is_none_or(|known| !known.contains(&postopt_inst));
+                if should_emit_endpoint_node && emitted_postopt_nodes.insert(postopt_inst.clone()) {
+                    facts.push(origin_node(
+                        postopt_inst.clone(),
+                        SONATINA_POSTOPT_INST_KIND,
+                    ));
+                }
+                facts.push(TraceFact::OriginEdge(OriginEdgeFact::new(
+                    instruction.clone(),
+                    postopt_inst,
+                    OriginEdgeLabel::EmittedFrom,
+                    Some(CompilerPhase::BytecodeEmission),
+                )));
+            }
+            if let Some(frontend_origin) = entry
+                .frontend_provenance
+                .as_deref()
+                .and_then(|raw| serde_json::from_str::<OriginExportKey>(raw).ok())
+            {
+                facts.push(TraceFact::OriginEdge(OriginEdgeFact::new(
+                    instruction.clone(),
+                    frontend_origin,
+                    OriginEdgeLabel::LoweredFrom,
+                    Some(CompilerPhase::BytecodeEmission),
+                )));
+            }
+        }
         facts.push(TraceFact::InstructionCategory(
             InstructionCategoryFact::new(
                 instruction.clone(),

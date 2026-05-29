@@ -535,19 +535,43 @@ pub(super) fn emit_real_trace_bundle(
         &input_content,
         &source_file,
     ));
-    let bytecode = codegen::emit_module_sonatina_bytecode(&db, top_mod, opt_level, None)
+    let (bytecode, postopt_sonatina_facts) =
+        codegen::emit_module_sonatina_bytecode_with_observability_and_trace(
+            &db,
+            top_mod,
+            opt_level,
+            None,
+            &sonatina_owner,
+        )
         .map_err(|err| format!("failed to compile bytecode for trace: {err}"))?;
+    let postopt_sonatina_nodes = postopt_sonatina_facts
+        .iter()
+        .filter_map(|fact| match fact {
+            TraceFact::OriginNode(node)
+                if node.key.kind() == codegen::trace::SONATINA_POSTOPT_INST_KIND =>
+            {
+                Some(node.key.clone())
+            }
+            _ => None,
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    facts.extend(postopt_sonatina_facts);
     for (contract_name, artifact) in bytecode {
         let owner_key = codegen::trace::bytecode_runtime_owner_key(
             input_path.as_str(),
             &module_key,
             &contract_name,
         );
-        facts.extend(codegen::trace::emit_bytecode_instruction_facts(
-            &owner_key,
-            "function:runtime",
-            &artifact.runtime,
-        ));
+        facts.extend(
+            codegen::trace::emit_bytecode_instruction_facts_with_observability(
+                &owner_key,
+                "function:runtime",
+                &artifact.runtime,
+                Some(&sonatina_owner),
+                artifact.runtime_observability.as_ref(),
+                Some(&postopt_sonatina_nodes),
+            ),
+        );
         facts.extend(codegen::trace::emit_bytecode_shape_facts(
             &owner_key,
             "function:runtime",
@@ -742,6 +766,34 @@ mod tests {
                 .any(|fact| matches!(fact, trace_facts::TraceFact::LoopMembership(_))),
             "real Fibonacci trace should include Sonatina CFG-derived loop membership"
         );
+        assert!(
+            bundle.facts.iter().any(|fact| matches!(
+                fact,
+                trace_facts::TraceFact::LoopMembership(membership)
+                    if membership.loop_key.kind() == codegen::trace::SONATINA_POSTOPT_LOOP_KIND
+            )),
+            "real Fibonacci trace should include post-optimization Sonatina loop membership"
+        );
+        assert!(
+            bundle.facts.iter().any(|fact| matches!(
+                fact,
+                trace_facts::TraceFact::OriginEdge(edge)
+                    if edge.from.kind() == "bytecode.pc"
+                        && edge.to.kind() == codegen::trace::SONATINA_POSTOPT_INST_KIND
+                        && edge.label == trace_facts::OriginEdgeLabel::EmittedFrom
+            )),
+            "bytecode PCs should be linked to Sonatina post-opt instructions"
+        );
+        assert!(
+            bundle.facts.iter().any(|fact| matches!(
+                fact,
+                trace_facts::TraceFact::OriginEdge(edge)
+                    if edge.from.kind() == "bytecode.pc"
+                        && matches!(edge.to.kind(), "runtime.stmt" | "runtime.terminator")
+                        && edge.label == trace_facts::OriginEdgeLabel::LoweredFrom
+            )),
+            "bytecode PCs should carry propagated MIR runtime origins"
+        );
         let loop_cost =
             super::super::trace_render::render_loop_cost_bundle(bundle.clone()).unwrap();
         assert!(loop_cost.contains("Data source: compiler_emitted"));
@@ -759,8 +811,9 @@ mod tests {
         );
         assert!(
             loop_contents
-                .contains("target bytecode loop membership requires Sonatina-to-bytecode edges")
+                .contains("bytecode PC origin edges exist, but none join to this loop yet")
         );
+        assert!(!loop_contents.contains("Target bytecode PCs linked to this loop:"));
         assert!(loop_contents.contains("Loop blocks:"));
 
         let gas_by_source = super::super::trace_render::render_gas_by_source_snapshot(
