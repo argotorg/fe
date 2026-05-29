@@ -58,8 +58,8 @@ use super::{
     assoc_const::AssocConstUse,
     canonical::Canonical,
     diagnostics::{
-        BodyDiag, CallConstraintDiagInfo, FuncBodyDiag, StaticAssertComparisonValues,
-        TraitConstraintDiag, TyDiagCollection, TyLowerDiag,
+        BodyDiag, CallConstraintDiagInfo, ConstPredicateDiagInfo, FuncBodyDiag,
+        StaticAssertComparisonValues, TraitConstraintDiag, TyDiagCollection, TyLowerDiag,
     },
     effects::{EffectKeyKind, ResolvedEffectKey, resolve_effect_key},
     trait_def::TraitInstId,
@@ -895,6 +895,34 @@ impl<'db> TyChecker<'db> {
         })
     }
 
+    fn const_predicate_diag_info(
+        &self,
+        pred: ConstPredicateInstId<'db>,
+        origin: env::ObligationOrigin<'db>,
+    ) -> ConstPredicateDiagInfo<'db> {
+        let db = self.db;
+        let message = match origin {
+            env::ObligationOrigin::CallConstraint { callable_def, .. } => {
+                let callable_name = callable_def
+                    .name(db)
+                    .map(|name| name.data(db).to_string())
+                    .unwrap_or_else(|| "callable".to_string());
+                format!("required by this where-clause predicate on `{callable_name}`")
+            }
+            env::ObligationOrigin::ImplCandidateConstraint { .. } => {
+                "required by this where-clause predicate on an impl candidate".to_string()
+            }
+            env::ObligationOrigin::GenericConfirmation => {
+                "required by this where-clause predicate".to_string()
+            }
+        };
+
+        ConstPredicateDiagInfo {
+            predicate_span: pred.body(db).span().into(),
+            message,
+        }
+    }
+
     fn call_constraint_bound_span(
         &self,
         callable_def: CallableDef<'db>,
@@ -1342,10 +1370,13 @@ impl<'db> TyChecker<'db> {
             return ObligationOutcome::Discharged;
         }
 
+        let required_by = Some(self.const_predicate_diag_info(pred, obligation.origin));
+
         if flags.contains(TyFlags::HAS_VAR) {
             if final_pass {
                 self.push_diag(BodyDiag::WhereConstPredicateEvalFailed {
-                    primary: obligation.span,
+                    primary: obligation.span.clone(),
+                    required_by,
                 });
                 return ObligationOutcome::Discharged;
             }
@@ -1357,7 +1388,8 @@ impl<'db> TyChecker<'db> {
             ConstProveResult::Disproved => {
                 if final_pass {
                     self.push_diag(BodyDiag::WhereConstPredicateFailed {
-                        primary: obligation.span,
+                        primary: obligation.span.clone(),
+                        required_by: required_by.clone(),
                     });
                     ObligationOutcome::Discharged
                 } else {
@@ -1367,7 +1399,8 @@ impl<'db> TyChecker<'db> {
             ConstProveResult::Ambiguous | ConstProveResult::Error => {
                 if final_pass {
                     self.push_diag(BodyDiag::WhereConstPredicateEvalFailed {
-                        primary: obligation.span,
+                        primary: obligation.span.clone(),
+                        required_by,
                     });
                     ObligationOutcome::Discharged
                 } else {
@@ -4337,12 +4370,17 @@ impl<'db> TyCheckerFinalizer<'db> {
             let ConstraintKind::ConstPredicate(pred) = constraint.kind(db) else {
                 continue;
             };
+            let required_by = Some(ConstPredicateDiagInfo {
+                predicate_span: pred.body(db).span().into(),
+                message: "required by this type's where-clause predicate".to_string(),
+            });
             match prove_const_predicate(db, pred, self.param_env) {
                 ConstProveResult::Proven(_) => {}
                 ConstProveResult::Disproved => {
                     self.diags.push(
                         BodyDiag::WhereConstPredicateFailed {
                             primary: span.clone(),
+                            required_by,
                         }
                         .into(),
                     );
@@ -4351,6 +4389,7 @@ impl<'db> TyCheckerFinalizer<'db> {
                     self.diags.push(
                         BodyDiag::WhereConstPredicateEvalFailed {
                             primary: span.clone(),
+                            required_by,
                         }
                         .into(),
                     );

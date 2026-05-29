@@ -448,6 +448,7 @@ fn where_const_predicate_diags<'db>(
                 || {
                     Box::new(BodyDiag::WhereConstPredicateEvalFailed {
                         primary: body.span().into(),
+                        required_by: None,
                     }) as Box<dyn DiagnosticVoucher + 'db>
                 },
             )

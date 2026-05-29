@@ -225,6 +225,12 @@ pub struct CallConstraintDiagInfo<'db> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub struct ConstPredicateDiagInfo<'db> {
+    pub predicate_span: DynLazySpan<'db>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct StaticAssertComparisonValues {
     pub op: CompBinOp,
     pub lhs: String,
@@ -405,9 +411,11 @@ pub enum BodyDiag<'db> {
     },
     WhereConstPredicateFailed {
         primary: DynLazySpan<'db>,
+        required_by: Option<ConstPredicateDiagInfo<'db>>,
     },
     WhereConstPredicateEvalFailed {
         primary: DynLazySpan<'db>,
+        required_by: Option<ConstPredicateDiagInfo<'db>>,
     },
 
     InvalidCast {
@@ -970,6 +978,7 @@ pub enum ImplDiag<'db> {
     MethodMissingConstPredicate {
         trait_m: CallableDef<'db>,
         impl_m: CallableDef<'db>,
+        predicate_span: DynLazySpan<'db>,
     },
 
     InvalidSelfType {

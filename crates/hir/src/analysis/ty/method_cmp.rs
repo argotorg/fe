@@ -1061,7 +1061,14 @@ fn compare_const_predicate_constraints<'db>(
         match prove_const_predicate(db, pred, env) {
             ConstProveResult::Proven(_) => {}
             ConstProveResult::Disproved | ConstProveResult::Ambiguous | ConstProveResult::Error => {
-                sink.push(ImplDiag::MethodMissingConstPredicate { trait_m, impl_m }.into());
+                sink.push(
+                    ImplDiag::MethodMissingConstPredicate {
+                        trait_m,
+                        impl_m,
+                        predicate_span: pred.body(db).span().into(),
+                    }
+                    .into(),
+                );
                 return false;
             }
         }

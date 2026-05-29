@@ -8,8 +8,9 @@ use crate::analysis::{
     name_resolution::diagnostics::{ImportDiag, PathResDiag},
     ty::{
         diagnostics::{
-            BodyDiag, CallConstraintDiagInfo, DefConflictError, FuncBodyDiag, ImplDiag,
-            TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag,
+            BodyDiag, CallConstraintDiagInfo, ConstPredicateDiagInfo, DefConflictError,
+            FuncBodyDiag, ImplDiag, TraitConstraintDiag, TraitLowerDiag, TyDiagCollection,
+            TyLowerDiag,
         },
         trait_def::TraitInstId,
         ty_check::{EffectParamOwner, RecordLike},
@@ -226,6 +227,17 @@ fn format_call_constraint_source<'db>(
         .map(|name| name.data(db).to_string())
         .unwrap_or_else(|| "callable".to_string());
     format!("required by this bound on `{callable_name}`")
+}
+
+fn const_predicate_required_by_subdiag<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    required_by: &ConstPredicateDiagInfo<'db>,
+) -> SubDiagnostic {
+    SubDiagnostic {
+        style: LabelStyle::Secondary,
+        message: required_by.message.clone(),
+        span: required_by.predicate_span.resolve(db),
+    }
 }
 
 /// All diagnostics accumulated in salsa-db should implement
@@ -3045,29 +3057,55 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
-            Self::WhereConstPredicateFailed { primary } => CompleteDiagnostic {
-                severity,
-                message: "where clause const predicate failed".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
+            Self::WhereConstPredicateFailed {
+                primary,
+                required_by,
+            } => {
+                let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
-                    message: "const predicate evaluated to `false`".to_string(),
+                    message: "const predicate evaluated to `false` here".to_string(),
                     span: primary.resolve(db),
-                }],
-                notes: Vec::new(),
-                error_code,
-            },
+                }];
+                if let Some(required_by) = required_by {
+                    sub_diagnostics.push(const_predicate_required_by_subdiag(db, required_by));
+                }
 
-            Self::WhereConstPredicateEvalFailed { primary } => CompleteDiagnostic {
-                severity,
-                message: "where clause const predicate could not be evaluated".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
+                CompleteDiagnostic {
+                    severity,
+                    message: "const predicate is not satisfied".to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "const predicates must be proven by an assumption or by CTFE evaluating to `true`"
+                            .to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
+            Self::WhereConstPredicateEvalFailed {
+                primary,
+                required_by,
+            } => {
+                let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
-                    message: "CTFE evaluation failed for this predicate".to_string(),
+                    message: "could not prove this const predicate here".to_string(),
                     span: primary.resolve(db),
-                }],
-                notes: Vec::new(),
-                error_code,
-            },
+                }];
+                if let Some(required_by) = required_by {
+                    sub_diagnostics.push(const_predicate_required_by_subdiag(db, required_by));
+                }
+
+                CompleteDiagnostic {
+                    severity,
+                    message: "cannot prove const predicate".to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "const predicates must be proven by an assumption or by CTFE evaluating to `true`"
+                            .to_string(),
+                    ],
+                    error_code,
+                }
+            }
 
             Self::InvalidCast {
                 primary,
@@ -4714,7 +4752,11 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                 }
             }
 
-            Self::MethodMissingConstPredicate { trait_m, impl_m } => {
+            Self::MethodMissingConstPredicate {
+                trait_m: _,
+                impl_m,
+                predicate_span,
+            } => {
                 let method_name = impl_m.name(db).expect("methods have names").data(db);
                 CompleteDiagnostic {
                     severity,
@@ -4730,11 +4772,14 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                         },
                         SubDiagnostic {
                             style: LabelStyle::Secondary,
-                            message: "trait method requires a const predicate here".to_string(),
-                            span: trait_m.name_span().resolve(db),
+                            message: "trait method requires this const predicate".to_string(),
+                            span: predicate_span.resolve(db),
                         },
                     ],
-                    notes: vec![],
+                    notes: vec![
+                        "add the same const predicate to the implementation method's `where` clause"
+                            .to_string(),
+                    ],
                     error_code,
                 }
             }

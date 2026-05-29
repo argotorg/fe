@@ -76,6 +76,26 @@ fn assert_const_predicate_diag(diags: &[CompleteDiagnostic]) {
     );
 }
 
+fn assert_const_predicate_required_by(diags: &[CompleteDiagnostic], expected: &str) {
+    assert!(
+        diags.iter().any(|diag| {
+            diag.sub_diagnostics
+                .iter()
+                .any(|sub| sub.message.contains(expected))
+        }),
+        "expected const predicate source label containing `{expected}`, got diagnostics: {diags:#?}"
+    );
+}
+
+fn assert_const_predicate_note(diags: &[CompleteDiagnostic], expected: &str) {
+    assert!(
+        diags
+            .iter()
+            .any(|diag| diag.notes.iter().any(|note| note.contains(expected))),
+        "expected const predicate note containing `{expected}`, got diagnostics: {diags:#?}"
+    );
+}
+
 #[test]
 fn const_predicate_generic_caller_with_matching_assumption_passes() {
     let mut db = HirAnalysisTestDb::default();
@@ -135,6 +155,10 @@ fn fail() {
     let (top_mod, _) = db.top_mod(file);
     let diags = diagnostics_for(&db, top_mod);
     assert_const_predicate_diag(&diags);
+    assert_const_predicate_required_by(
+        &diags,
+        "required by this where-clause predicate on `needs_big`",
+    );
 }
 
 #[test]
@@ -164,6 +188,10 @@ where
     let (top_mod, _) = db.top_mod(file);
     let diags = diagnostics_for(&db, top_mod);
     assert_const_predicate_diag(&diags);
+    assert_const_predicate_required_by(
+        &diags,
+        "required by this where-clause predicate on `needs_big`",
+    );
 }
 
 #[test]
@@ -198,6 +226,7 @@ fn fail() {
     let (top_mod, _) = db.top_mod(file);
     let diags = diagnostics_for(&db, top_mod);
     assert_const_predicate_diag(&diags);
+    assert_const_predicate_required_by(&diags, "required by this type's where-clause predicate");
 }
 
 #[test]
@@ -232,6 +261,7 @@ fn fail() {
     let (top_mod, _) = db.top_mod(file);
     let diags = diagnostics_for(&db, top_mod);
     assert_const_predicate_diag(&diags);
+    assert_const_predicate_required_by(&diags, "required by this where-clause predicate on");
 }
 
 #[test]
@@ -264,6 +294,11 @@ impl Bounded for Checker {
     let (top_mod, _) = db.top_mod(file);
     let diags = diagnostics_for(&db, top_mod);
     assert_const_predicate_diag(&diags);
+    assert_const_predicate_required_by(&diags, "trait method requires this const predicate");
+    assert_const_predicate_note(
+        &diags,
+        "add the same const predicate to the implementation method's `where` clause",
+    );
 }
 
 #[test]
@@ -300,6 +335,10 @@ where
     let (top_mod, _) = db.top_mod(file);
     let diags = diagnostics_for(&db, top_mod);
     assert_const_predicate_diag(&diags);
+    assert_const_predicate_required_by(
+        &diags,
+        "required by this where-clause predicate on an impl candidate",
+    );
 }
 
 #[test]
