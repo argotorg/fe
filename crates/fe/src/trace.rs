@@ -4,6 +4,7 @@ mod trace_emit;
 mod trace_fixture;
 mod trace_live;
 mod trace_render;
+mod trace_web_demo;
 
 use std::{fs::File, io::BufReader};
 

@@ -696,6 +696,8 @@ pub enum DevTraceCommand {
     Run(DevTraceRunArgs),
     /// Validate a trace JSONL bundle before running reports.
     Validate(DevTraceInputArgs),
+    /// Write a standalone browser demo for origin tracing through source, Sonatina, and bytecode.
+    WebDemo(DevTraceWebDemoArgs),
     /// Run a report query against a validated trace snapshot.
     Query {
         #[command(subcommand)]
@@ -878,6 +880,16 @@ pub struct DevTraceInputArgs {
     /// Output format.
     #[arg(long, value_enum, default_value = "text")]
     pub format: TraceReportFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DevTraceWebDemoArgs {
+    /// Trace JSONL bundle to read.
+    #[arg(long = "from", value_name = "TRACE_JSONL")]
+    pub from: Utf8PathBuf,
+    /// Output standalone HTML path.
+    #[arg(long)]
+    pub out: Utf8PathBuf,
 }
 
 #[derive(Debug, Clone, Args)]
