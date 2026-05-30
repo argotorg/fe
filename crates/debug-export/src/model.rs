@@ -7,8 +7,9 @@ use common::origin::OriginExportKey;
 use serde::{Deserialize, Serialize};
 use trace_facts::{
     CodeObjectFact, FunctionFact, GasCostFact, GasKind, InstructionCategory, InstructionExtentFact,
-    InstructionFact, LocationRangeFact, OpcodeFact, OriginEdgeFact, OriginEdgeLabel, PcRange,
-    SourceSpanFact, StaticGasFact, TraceDataSource, TraceFact, TraceSnapshot,
+    InstructionFact, LocationRangeFact, OpcodeFact, OriginEdgeFact, OriginEdgeLabel,
+    OriginEdgeTraversalClass, PcRange, SourceSpanFact, StaticGasFact, TraceDataSource, TraceFact,
+    TraceSnapshot,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -511,24 +512,30 @@ impl<'a> DebugFactIndex<'a> {
             if !visited.insert(current.clone()) {
                 continue;
             }
-            if current != *instruction && self.source_spans.contains_key(&current) {
+            if current != *instruction
+                && is_precise_source_candidate(&current)
+                && self.source_spans.contains_key(&current)
+            {
                 result.origins.insert(current.clone());
             }
             for edge in self.outgoing_edges.get(&current).into_iter().flatten() {
-                match edge.label {
-                    OriginEdgeLabel::LoweredFrom | OriginEdgeLabel::EmittedFrom => {
+                match edge.traversal_class() {
+                    OriginEdgeTraversalClass::ExactAttribution
+                    | OriginEdgeTraversalClass::SnapshotAlias => {
                         queue.push_back(edge.to.clone());
                     }
-                    OriginEdgeLabel::SyntheticFor => {
+                    OriginEdgeTraversalClass::Synthetic => {
                         result.synthetic_reasons.insert("SyntheticFor".to_string());
                         queue.push_back(edge.to.clone());
                     }
-                    OriginEdgeLabel::BackendPrepared => {
+                    OriginEdgeTraversalClass::Contextual
+                        if edge.label == OriginEdgeLabel::BackendPrepared =>
+                    {
                         result
                             .synthetic_reasons
                             .insert("BackendPrepared".to_string());
                     }
-                    OriginEdgeLabel::Unmapped => {
+                    OriginEdgeTraversalClass::Unmapped => {
                         result.saw_unmapped = true;
                     }
                     _ => {}
@@ -604,6 +611,10 @@ struct SourceCandidateResult {
     origins: BTreeSet<OriginExportKey>,
     synthetic_reasons: BTreeSet<String>,
     saw_unmapped: bool,
+}
+
+fn is_precise_source_candidate(origin: &OriginExportKey) -> bool {
+    origin.kind() != "code.object" && origin.kind() != "source.file"
 }
 
 fn debug_code_object(code_object: &CodeObjectFact) -> DebugCodeObject {
@@ -743,13 +754,23 @@ mod tests {
             )),
             TraceFact::SourceSpan(SourceSpanFact::new(
                 source_expr.clone(),
+                source_file.clone(),
+                10,
+                13,
+                1,
+                10,
+                1,
+                13,
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                code_object.clone(),
                 source_file,
-                10,
-                13,
+                0,
+                100,
                 1,
-                10,
                 1,
-                13,
+                9,
+                1,
             )),
             TraceFact::CodeObject(trace_facts::CodeObjectFact::new(
                 code_object.clone(),
@@ -772,6 +793,12 @@ mod tests {
                 function,
                 0,
                 "ADD",
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                instruction.clone(),
+                code_object.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                None,
             )),
             TraceFact::OriginEdge(OriginEdgeFact::new(
                 instruction.clone(),
@@ -805,6 +832,12 @@ mod tests {
         assert_eq!(bundle.code_objects.len(), 1);
         assert_eq!(bundle.gas.len(), 1);
         assert_eq!(bundle.instructions[0].primary_source, Some(source_expr));
+        assert!(
+            bundle.instructions[0]
+                .all_origins
+                .iter()
+                .all(|origin| origin.kind() != "code.object")
+        );
         assert_eq!(
             bundle.instructions[0].classification,
             InstructionClassification::SourceMapped

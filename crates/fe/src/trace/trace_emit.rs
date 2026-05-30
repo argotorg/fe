@@ -246,6 +246,13 @@ pub(super) fn run_trace_optimized_code_honesty(args: &DevTraceInputArgs) -> Resu
     )
 }
 
+pub(super) fn run_trace_attribution_audit(args: &DevTraceInputArgs) -> Result<String, String> {
+    super::trace_render::render_attribution_audit_snapshot_with_format(
+        read_trace_snapshot_jsonl_from_path(&args.from)?,
+        args.format,
+    )
+}
+
 pub(super) fn run_trace_static_analysis(args: &DevTraceInputArgs) -> Result<String, String> {
     super::trace_render::render_static_analysis_snapshot_with_format(
         read_trace_snapshot_jsonl_from_path(&args.from)?,
@@ -916,20 +923,30 @@ mod tests {
                 fact,
                 trace_facts::TraceFact::OriginEdge(edge)
                     if edge.from.kind() == "bytecode.pc"
+                        && edge.to.kind() == codegen::trace::SONATINA_EVM_PREPARED_INST_KIND
+                        && edge.label == trace_facts::OriginEdgeLabel::EmittedFrom
+            )),
+            "bytecode PCs should be linked to Sonatina EVM prepared instructions"
+        );
+        assert!(
+            !bundle.facts.iter().any(|fact| matches!(
+                fact,
+                trace_facts::TraceFact::OriginEdge(edge)
+                    if edge.from.kind() == "bytecode.pc"
                         && edge.to.kind() == codegen::trace::SONATINA_POSTOPT_INST_KIND
                         && edge.label == trace_facts::OriginEdgeLabel::EmittedFrom
             )),
-            "bytecode PCs should be linked to Sonatina post-opt instructions"
+            "bytecode PCs must not key EVM prepared instruction IDs as post-opt Sonatina IDs"
         );
         assert!(
-            bundle.facts.iter().any(|fact| matches!(
+            !bundle.facts.iter().any(|fact| matches!(
                 fact,
                 trace_facts::TraceFact::OriginEdge(edge)
                     if edge.from.kind() == "bytecode.pc"
                         && matches!(edge.to.kind(), "runtime.stmt" | "runtime.terminator")
                         && edge.label == trace_facts::OriginEdgeLabel::LoweredFrom
             )),
-            "bytecode PCs should carry propagated MIR runtime origins"
+            "bytecode PCs must not upgrade contextual MIR runtime origins to exact LoweredFrom edges"
         );
         let loop_cost =
             super::super::trace_render::render_loop_cost_bundle(bundle.clone()).unwrap();
@@ -949,18 +966,20 @@ mod tests {
                 .loop_contents(LoopContentsRequest::default())
                 .unwrap();
         assert!(
-            loop_report.bytecode_bridge_available,
-            "optimized Fibonacci loop should retain a target bytecode bridge through backend-origin propagation"
+            !loop_report.bytecode_bridge_available,
+            "optimized Fibonacci loop should not claim a target bytecode bridge from contextual backend-origin propagation"
         );
         assert!(
-            !loop_report.target_instructions.is_empty(),
-            "optimized Fibonacci loop should resolve to bytecode PCs"
+            loop_report.target_instructions.is_empty(),
+            "optimized Fibonacci loop should not resolve contextual backend-prepared origins to exact bytecode PCs"
         );
         assert!(
             loop_contents.contains("Membership source: compiler-emitted Sonatina trace-view CFG")
         );
-        assert!(loop_contents.contains("bytecode PCs linked by observability origin edges"));
-        assert!(loop_contents.contains("Target bytecode PCs linked to this loop:"));
+        assert!(
+            loop_contents
+                .contains("bytecode PC origin edges exist, but none join to this loop yet")
+        );
         assert!(loop_contents.contains("Loop blocks:"));
 
         let gas_by_source = super::super::trace_render::render_gas_by_source_snapshot(
@@ -969,18 +988,18 @@ mod tests {
             "exclusive-primary",
         )
         .unwrap();
-        assert!(gas_by_source.contains("fib_demo.fe"));
         assert!(gas_by_source.contains("Attribution policy: exclusive-primary"));
-        assert!(!gas_by_source.contains("<unmapped>"));
+        assert!(gas_by_source.contains("Attribution route: mixed_with_unmapped"));
+        assert!(gas_by_source.contains("<unmapped>"));
 
         let bytecode_size = super::super::trace_render::render_bytecode_size_by_source_snapshot(
             TraceSnapshot::new(bundle.clone()).unwrap(),
             "exclusive-primary",
         )
         .unwrap();
-        assert!(bytecode_size.contains("fib_demo.fe"));
         assert!(bytecode_size.contains("Total emitted bytecode bytes"));
-        assert!(!bytecode_size.contains("<unmapped>"));
+        assert!(bytecode_size.contains("Attribution route: mixed_with_unmapped"));
+        assert!(bytecode_size.contains("<unmapped>"));
 
         let explain = super::super::trace_render::render_explain_local_bundle(bundle, "b").unwrap();
         assert!(explain.contains("Why b is memory-backed in MIR"));

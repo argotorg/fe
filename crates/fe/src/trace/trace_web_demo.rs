@@ -850,6 +850,11 @@ fn build_origin_panels(
             "Sonatina CFG after optimization",
         ),
         (
+            "sonatina-prepared",
+            "EVM Prepared",
+            "Sonatina EVM prepared/backend instructions used by bytecode pc-map",
+        ),
+        (
             "bytecode",
             "Bytecode",
             "final runtime bytecode PCs; highlighted rows have exact trace links",
@@ -966,6 +971,7 @@ fn key_belongs_to_panel(key: &OriginExportKey, panel: &str) -> bool {
         "mir" => key.kind().starts_with("runtime."),
         "sonatina-pre" => key.kind().starts_with("sonatina.preopt."),
         "sonatina-post" => key.kind().starts_with("sonatina.postopt."),
+        "sonatina-prepared" => key.kind().starts_with("sonatina.evm.prepared."),
         "bytecode" => key.kind() == "bytecode.pc",
         _ => false,
     }

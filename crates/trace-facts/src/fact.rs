@@ -307,9 +307,25 @@ impl OriginEdgeFact {
             introduced_by,
         }
     }
+
+    pub fn traversal_class(&self) -> OriginEdgeTraversalClass {
+        classify_origin_edge(
+            self.label,
+            self.introduced_by,
+            self.from.kind(),
+            self.to.kind(),
+        )
+    }
+
+    pub fn is_exact_attribution_edge(&self) -> bool {
+        matches!(
+            self.traversal_class(),
+            OriginEdgeTraversalClass::ExactAttribution | OriginEdgeTraversalClass::SnapshotAlias
+        )
+    }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OriginEdgeLabel {
     LoweredFrom,
@@ -327,7 +343,63 @@ pub enum OriginEdgeLabel {
     Unmapped,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OriginEdgeTraversalClass {
+    ExactAttribution,
+    Structural,
+    Contextual,
+    Synthetic,
+    SnapshotAlias,
+    Unmapped,
+}
+
+pub fn classify_origin_edge(
+    label: OriginEdgeLabel,
+    introduced_by: Option<CompilerPhase>,
+    from_kind: &str,
+    to_kind: &str,
+) -> OriginEdgeTraversalClass {
+    match label {
+        OriginEdgeLabel::Unmapped => OriginEdgeTraversalClass::Unmapped,
+        OriginEdgeLabel::SyntheticFor => OriginEdgeTraversalClass::Synthetic,
+        OriginEdgeLabel::BackendPrepared
+        | OriginEdgeLabel::IntegerLegalizationFor
+        | OriginEdgeLabel::LoadOf
+        | OriginEdgeLabel::StoreOf
+        | OriginEdgeLabel::SpillOf
+        | OriginEdgeLabel::ReloadOf
+        | OriginEdgeLabel::InlinedFrom
+        | OriginEdgeLabel::CallsiteOf => OriginEdgeTraversalClass::Contextual,
+        OriginEdgeLabel::PreservedSnapshotIdentity => OriginEdgeTraversalClass::SnapshotAlias,
+        OriginEdgeLabel::LoweredFrom | OriginEdgeLabel::EmittedFrom => {
+            if is_structural_origin_edge(from_kind, to_kind) {
+                OriginEdgeTraversalClass::Structural
+            } else if is_bytecode_to_frontend_edge(from_kind, to_kind)
+                && introduced_by == Some(CompilerPhase::BytecodeEmission)
+            {
+                OriginEdgeTraversalClass::Contextual
+            } else {
+                OriginEdgeTraversalClass::ExactAttribution
+            }
+        }
+    }
+}
+
+fn is_structural_origin_edge(from_kind: &str, to_kind: &str) -> bool {
+    matches!(to_kind, "code.object" | "source.file")
+        || matches!(from_kind, "code.object" | "source.file")
+}
+
+fn is_bytecode_to_frontend_edge(from_kind: &str, to_kind: &str) -> bool {
+    from_kind.starts_with("bytecode.")
+        && (to_kind.starts_with("hir.")
+            || to_kind.starts_with("mir.")
+            || to_kind.starts_with("runtime.")
+            || to_kind.starts_with("source."))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CompilerPhase {
     Hir,

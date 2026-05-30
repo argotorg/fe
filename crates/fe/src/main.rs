@@ -747,6 +747,8 @@ pub enum DevTraceQueryCommand {
     GasToSource(DevTraceGasToSourceArgs),
     /// Report ambiguous, synthetic, and unmapped optimized-code attribution.
     OptimizedCodeHonesty(DevTraceInputArgs),
+    /// Audit bytecode attribution edge classes and source-line concentration.
+    AttributionAudit(DevTraceInputArgs),
     /// Emit the Argot static-analysis correctness report over a validated trace snapshot.
     StaticAnalysis(DevTraceInputArgs),
     /// Show variable locations active at a bytecode PC.

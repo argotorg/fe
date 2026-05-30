@@ -4,7 +4,8 @@ use common::origin::OriginExportKey;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use trace_facts::{
-    CompilerEventKind, OriginEdgeFact, OriginEdgeLabel, TraceDataSource, TraceFact, TraceSnapshot,
+    CompilerEventKind, OriginEdgeFact, OriginEdgeTraversalClass, TraceDataSource, TraceFact,
+    TraceSnapshot,
 };
 
 use crate::{
@@ -788,13 +789,18 @@ impl<'a> CoverageIndex<'a> {
             }
             if let Some(edges) = self.edges_by_from.get(&key) {
                 for edge in edges {
+                    let class = edge.traversal_class();
                     if matches!(
-                        edge.label,
-                        OriginEdgeLabel::SyntheticFor | OriginEdgeLabel::BackendPrepared
+                        class,
+                        OriginEdgeTraversalClass::Synthetic | OriginEdgeTraversalClass::Contextual
                     ) {
                         return true;
                     }
-                    if exact_attribution_label(edge.label) {
+                    if matches!(
+                        class,
+                        OriginEdgeTraversalClass::ExactAttribution
+                            | OriginEdgeTraversalClass::SnapshotAlias
+                    ) {
                         stack.push(edge.to.clone());
                     }
                 }
@@ -802,13 +808,6 @@ impl<'a> CoverageIndex<'a> {
         }
         false
     }
-}
-
-fn exact_attribution_label(label: OriginEdgeLabel) -> bool {
-    matches!(
-        label,
-        OriginEdgeLabel::LoweredFrom | OriginEdgeLabel::EmittedFrom
-    )
 }
 
 fn is_bytecode_instruction(key: &OriginExportKey) -> bool {

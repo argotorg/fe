@@ -10,13 +10,13 @@ use crate::fact::{
     ExecutionTraceSessionFact, FunctionFact, InlineContextFact, InstructionBlockFact,
     InstructionCategoryFact, InstructionExtentFact, InstructionFact, LexicalScopeFact,
     LocationExpr, LocationRangeFact, LogFact, LoopBlockFact, LoopBlockRole, LoopDerivation,
-    LoopFact, LoopMembershipFact, MemoryAccessFact, OpcodeFact, OriginEdgeFact, OriginNodeFact,
-    PrecompileInvocationFact, ReturnDataFact, RevertFact, RuntimeCodeObjectBindingFact,
-    RuntimePcJoinConfidence, RuntimeValue, RuntimeValuePolicy, SelfdestructFact,
-    ShapeComponentHashFact, ShapeGraphHashFact, ShapeNodeHashFact, ShapePolicyFact, SourceFileFact,
-    SourceSpanFact, StackSampleFact, StaticGasFact, StorageAccessFact, StorageFact,
-    StorageLocation, TraceFact, TypeFact, ValueLocation, ValueProperty, ValuePropertyFact,
-    VariableFact,
+    LoopFact, LoopMembershipFact, MemoryAccessFact, OpcodeFact, OriginEdgeFact, OriginEdgeLabel,
+    OriginEdgeTraversalClass, OriginNodeFact, PrecompileInvocationFact, ReturnDataFact, RevertFact,
+    RuntimeCodeObjectBindingFact, RuntimePcJoinConfidence, RuntimeValue, RuntimeValuePolicy,
+    SelfdestructFact, ShapeComponentHashFact, ShapeGraphHashFact, ShapeNodeHashFact,
+    ShapePolicyFact, SourceFileFact, SourceSpanFact, StackSampleFact, StaticGasFact,
+    StorageAccessFact, StorageFact, StorageLocation, TraceFact, TypeFact, ValueLocation,
+    ValueProperty, ValuePropertyFact, VariableFact,
 };
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -107,6 +107,17 @@ pub enum TraceValidationWarning {
         dynamic_cost_kind: Option<String>,
         first_base_cost: u64,
         second_base_cost: u64,
+    },
+    ExactLabelWithoutPhase {
+        from: OriginExportKey,
+        to: OriginExportKey,
+        label: OriginEdgeLabel,
+    },
+    BytecodeFrontendEdgeIsContextual {
+        from: OriginExportKey,
+        to: OriginExportKey,
+        label: OriginEdgeLabel,
+        introduced_by: Option<CompilerPhase>,
     },
 }
 
@@ -710,6 +721,43 @@ fn validate_edge(
 ) {
     require_node(nodes, &edge.from, "origin_edge.from", diagnostics);
     require_node(nodes, &edge.to, "origin_edge.to", diagnostics);
+    validate_edge_semantics(edge, diagnostics);
+}
+
+fn validate_edge_semantics(
+    edge: &OriginEdgeFact,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    if edge.introduced_by.is_none()
+        && matches!(
+            edge.label,
+            OriginEdgeLabel::LoweredFrom | OriginEdgeLabel::EmittedFrom
+        )
+    {
+        diagnostics.push(TraceValidationDiagnostic::Warning(
+            TraceValidationWarning::ExactLabelWithoutPhase {
+                from: edge.from.clone(),
+                to: edge.to.clone(),
+                label: edge.label,
+            },
+        ));
+    }
+    if matches!(edge.traversal_class(), OriginEdgeTraversalClass::Contextual)
+        && matches!(
+            edge.label,
+            OriginEdgeLabel::LoweredFrom | OriginEdgeLabel::EmittedFrom
+        )
+        && edge.from.kind().starts_with("bytecode.")
+    {
+        diagnostics.push(TraceValidationDiagnostic::Warning(
+            TraceValidationWarning::BytecodeFrontendEdgeIsContextual {
+                from: edge.from.clone(),
+                to: edge.to.clone(),
+                label: edge.label,
+                introduced_by: edge.introduced_by,
+            },
+        ));
+    }
 }
 
 fn validate_storage(
@@ -3882,6 +3930,39 @@ mod tests {
                 second_name: "b2".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn validator_warns_when_bytecode_frontend_edge_is_contextual() {
+        let instruction = key("bytecode.pc", "fib", "pc:17");
+        let runtime_stmt = key("runtime.stmt", "fib", "block:0:stmt:0");
+        let facts = vec![
+            node("bytecode.pc", "fib", "pc:17"),
+            node("runtime.stmt", "fib", "block:0:stmt:0"),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                instruction.clone(),
+                runtime_stmt.clone(),
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+        ];
+
+        let report = TraceValidator::check(&facts);
+
+        assert_eq!(report.error_count(), 0);
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            matches!(
+                diagnostic,
+                TraceValidationDiagnostic::Warning(
+                    TraceValidationWarning::BytecodeFrontendEdgeIsContextual {
+                        from,
+                        to,
+                        label: OriginEdgeLabel::LoweredFrom,
+                        introduced_by: Some(CompilerPhase::BytecodeEmission),
+                    },
+                ) if from == &instruction && to == &runtime_stmt
+            )
+        }));
     }
 
     #[test]

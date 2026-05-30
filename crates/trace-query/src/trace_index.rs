@@ -3,7 +3,10 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use common::origin::OriginExportKey;
 use serde::{Deserialize, Serialize};
-use trace_facts::{OriginEdgeFact, OriginEdgeLabel, SourceSpanFact, TraceFact, TraceSnapshot};
+use trace_facts::{
+    OriginEdgeFact, OriginEdgeLabel, OriginEdgeTraversalClass, SourceSpanFact, TraceFact,
+    TraceSnapshot,
+};
 
 #[derive(Debug)]
 pub struct TraceIndex<'a> {
@@ -84,7 +87,7 @@ impl<'a> TraceIndex<'a> {
     ) -> Vec<OriginExportKey> {
         self.reachable_targets(instruction, policy)
             .into_iter()
-            .filter(|key| self.source_spans.contains_key(key))
+            .filter(|key| is_precise_source_candidate(key) && self.source_spans.contains_key(key))
             .collect()
     }
 
@@ -127,7 +130,7 @@ impl<'a> TraceIndex<'a> {
         let mut parent = BTreeMap::<OriginExportKey, TraceEdgeStep>::new();
         while let Some(key) = queue.pop_front() {
             for edge in self.edges_by_from.get(&key).into_iter().flatten() {
-                if !policy.allows(edge.label) {
+                if !policy.allows_edge(edge) {
                     continue;
                 }
                 if !seen.insert(edge.to.clone()) {
@@ -162,7 +165,7 @@ impl<'a> TraceIndex<'a> {
                 continue;
             }
             for edge in self.edges_by_from.get(&key).into_iter().flatten() {
-                if policy.allows(edge.label) {
+                if policy.allows_edge(edge) {
                     stack.push(edge.to.clone());
                 }
             }
@@ -197,16 +200,20 @@ pub enum TraceReachabilityPolicy {
 }
 
 impl TraceReachabilityPolicy {
-    pub const fn allows(self, label: OriginEdgeLabel) -> bool {
+    pub fn allows_edge(self, edge: &OriginEdgeFact) -> bool {
+        self.allows_class(edge.traversal_class())
+    }
+
+    pub const fn allows_class(self, class: OriginEdgeTraversalClass) -> bool {
         match self {
-            Self::ExactOnly => exact_label(label),
+            Self::ExactOnly => is_exact_class(class),
             Self::ExactPlusSynthetic => {
-                exact_label(label) || matches!(label, OriginEdgeLabel::SyntheticFor)
+                is_exact_class(class) || matches!(class, OriginEdgeTraversalClass::Synthetic)
             }
             Self::ExactPlusContextual | Self::DebugAttribution => {
-                !matches!(label, OriginEdgeLabel::Unmapped)
+                !matches!(class, OriginEdgeTraversalClass::Unmapped)
             }
-            Self::UiHighlighting => !matches!(label, OriginEdgeLabel::Unmapped),
+            Self::UiHighlighting => !matches!(class, OriginEdgeTraversalClass::Unmapped),
         }
     }
 }
@@ -249,11 +256,15 @@ impl TracePhase {
     }
 }
 
-const fn exact_label(label: OriginEdgeLabel) -> bool {
+const fn is_exact_class(class: OriginEdgeTraversalClass) -> bool {
     matches!(
-        label,
-        OriginEdgeLabel::LoweredFrom | OriginEdgeLabel::EmittedFrom
+        class,
+        OriginEdgeTraversalClass::ExactAttribution | OriginEdgeTraversalClass::SnapshotAlias
     )
+}
+
+fn is_precise_source_candidate(key: &OriginExportKey) -> bool {
+    key.kind() != "code.object" && key.kind() != "source.file"
 }
 
 fn reconstruct_path(
@@ -278,8 +289,8 @@ fn reconstruct_path(
 mod tests {
     use common::origin::OriginExportKey;
     use trace_facts::{
-        OriginEdgeFact, OriginEdgeLabel, OriginNodeFact, OriginNodeKind, SourceFileFact,
-        SourceSpanFact, TraceBundle, TraceFact, TraceMetadata, TraceSnapshot,
+        CompilerPhase, OriginEdgeFact, OriginEdgeLabel, OriginNodeFact, OriginNodeKind,
+        SourceFileFact, SourceSpanFact, TraceBundle, TraceFact, TraceMetadata, TraceSnapshot,
     };
 
     use super::{TraceIndex, TracePhase, TraceReachabilityPolicy};
@@ -450,5 +461,146 @@ mod tests {
                 .phase_frontier(&instruction, TraceReachabilityPolicy::ExactOnly)
                 .contains_key(&TracePhase::SonatinaPost)
         );
+    }
+
+    #[test]
+    fn source_candidates_ignore_code_object_whole_file_spans() {
+        let file = key("source.file", "demo", "demo.fe");
+        let instruction = key("bytecode.pc", "demo", "pc:0");
+        let code_object = key("code.object", "demo", "runtime");
+        let source = key("hir.expr", "demo", "expr:0");
+        let facts = vec![
+            node(&file),
+            node(&instruction),
+            node(&code_object),
+            node(&source),
+            TraceFact::SourceFile(SourceFileFact::new(
+                file.clone(),
+                "file:///demo.fe",
+                "demo.fe",
+                "blake3:0000000000000000000000000000000000000000000000000000000000000001",
+                Some(0),
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                code_object.clone(),
+                file.clone(),
+                0,
+                100,
+                1,
+                1,
+                9,
+                1,
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                source.clone(),
+                file,
+                10,
+                11,
+                2,
+                4,
+                2,
+                5,
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                instruction.clone(),
+                code_object,
+                OriginEdgeLabel::EmittedFrom,
+                None,
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                instruction.clone(),
+                source.clone(),
+                OriginEdgeLabel::LoweredFrom,
+                None,
+            )),
+        ];
+        let snapshot = snapshot(facts);
+        let index = TraceIndex::new(&snapshot);
+
+        assert_eq!(
+            index.source_candidates_for_instruction(
+                &instruction,
+                TraceReachabilityPolicy::ExactOnly
+            ),
+            vec![source]
+        );
+    }
+
+    #[test]
+    fn exact_policy_treats_bytecode_code_object_edges_as_structural() {
+        let instruction = key("bytecode.pc", "demo", "pc:0");
+        let code_object = key("code.object", "demo", "runtime");
+        let facts = vec![
+            node(&instruction),
+            node(&code_object),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                instruction.clone(),
+                code_object.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+        ];
+        let snapshot = snapshot(facts);
+        let index = TraceIndex::new(&snapshot);
+
+        assert!(!index.origin_reaches(
+            &instruction,
+            &code_object,
+            TraceReachabilityPolicy::ExactOnly
+        ));
+        assert!(index.origin_reaches(
+            &instruction,
+            &code_object,
+            TraceReachabilityPolicy::UiHighlighting
+        ));
+    }
+
+    #[test]
+    fn exact_policy_rejects_bytecode_frontend_edges_from_emission_phase() {
+        let instruction = key("bytecode.pc", "demo", "pc:0");
+        let runtime_stmt = key("runtime.stmt", "demo", "block:0:stmt:0");
+        let facts = vec![
+            node(&instruction),
+            node(&runtime_stmt),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                instruction.clone(),
+                runtime_stmt.clone(),
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+        ];
+        let snapshot = snapshot(facts);
+        let index = TraceIndex::new(&snapshot);
+
+        assert!(!index.origin_reaches(
+            &instruction,
+            &runtime_stmt,
+            TraceReachabilityPolicy::ExactOnly
+        ));
+        assert!(index.origin_reaches(
+            &instruction,
+            &runtime_stmt,
+            TraceReachabilityPolicy::DebugAttribution
+        ));
+    }
+
+    #[test]
+    fn exact_policy_crosses_snapshot_alias_for_optimized_attribution_continuity() {
+        let post = key("sonatina.postopt.inst", "demo", "inst:post");
+        let pre = key("sonatina.preopt.inst", "demo", "inst:pre");
+        let facts = vec![
+            node(&post),
+            node(&pre),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                post.clone(),
+                pre.clone(),
+                OriginEdgeLabel::PreservedSnapshotIdentity,
+                Some(CompilerPhase::SonatinaPostOpt),
+            )),
+        ];
+        let snapshot = snapshot(facts);
+        let index = TraceIndex::new(&snapshot);
+
+        assert!(index.origin_reaches(&post, &pre, TraceReachabilityPolicy::ExactOnly));
     }
 }

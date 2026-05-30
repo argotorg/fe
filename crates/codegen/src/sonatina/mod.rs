@@ -10,9 +10,7 @@ use mir::{RuntimePackage, build_runtime_package, build_test_runtime_package};
 use rustc_hash::FxHashSet;
 use sonatina_codegen::{
     EvmCompile, OptLevel as SonatinaOptLevel,
-    object::{
-        FrontendProvenanceMap, ObjectArtifact, SectionArtifact, SectionObservability, SymbolId,
-    },
+    object::{ObjectArtifact, SectionArtifact, SectionObservability, SymbolId},
 };
 use sonatina_ir::{
     Module,
@@ -210,10 +208,10 @@ fn compile_runtime_objects_with_postopt_trace(
     LowerError,
 > {
     let mut compile = evm_compile(module, opt_level, emit_observability);
-    let (frontend_provenance, postopt_trace_facts) = {
+    let postopt_trace_facts = {
         let optimized = compile.optimize();
         ensure_module_sonatina_ir_valid(optimized)?;
-        let trace_facts = postopt_trace_owner
+        postopt_trace_owner
             .map(|owner| {
                 crate::trace::emit_sonatina_trace_view_facts(
                     owner,
@@ -221,66 +219,12 @@ fn compile_runtime_objects_with_postopt_trace(
                     trace_facts::CompilerPhase::SonatinaPostOpt,
                 )
             })
-            .unwrap_or_default();
-        let provenance = if emit_observability {
-            frontend_provenance_map(optimized)
-        } else {
-            FrontendProvenanceMap::default()
-        };
-        (provenance, trace_facts)
+            .unwrap_or_default()
     };
-    let mut artifacts = compile
+    let artifacts = compile
         .compile()
         .map_err(|errors| LowerError::Internal(format_object_compile_errors(&errors)))?;
-    if emit_observability {
-        apply_frontend_provenance_to_artifacts(&mut artifacts, &frontend_provenance);
-    }
     Ok((artifacts, postopt_trace_facts))
-}
-
-fn frontend_provenance_map(module: &Module) -> FrontendProvenanceMap {
-    let mut map = FrontendProvenanceMap::default();
-    for func_ref in module.funcs() {
-        module.func_store.view(func_ref, |function| {
-            for inst in function.dfg.inst_ids() {
-                let Some(loc) = function.inst_debug_loc(inst) else {
-                    continue;
-                };
-                let Some(origin) = function
-                    .debug
-                    .debug_loc(loc)
-                    .and_then(|loc| loc.primary_origin)
-                    .and_then(|origin| function.debug.frontend_origin(origin))
-                    .and_then(|origin| origin.external_key.clone())
-                else {
-                    continue;
-                };
-                map.insert((func_ref, inst), origin);
-            }
-        });
-    }
-    map
-}
-
-fn apply_frontend_provenance_to_artifacts(
-    artifacts: &mut [sonatina_codegen::object::ObjectArtifact],
-    provenance: &FrontendProvenanceMap,
-) {
-    for artifact in artifacts {
-        for section in artifact.sections.values_mut() {
-            let Some(observability) = section.observability.as_mut() else {
-                continue;
-            };
-            for entry in &mut observability.pc_map {
-                let Some(ir_inst) = entry.ir_inst else {
-                    continue;
-                };
-                if let Some(origin) = provenance.get(&(entry.func, ir_inst)) {
-                    entry.frontend_provenance = Some(origin.clone());
-                }
-            }
-        }
-    }
 }
 
 fn merged_section_observability<'db>(

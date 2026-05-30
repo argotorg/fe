@@ -32,15 +32,15 @@ pub use fact::{
     InstructionExtentFact, InstructionFact, LexicalScopeFact, LocationConfidence, LocationExpr,
     LocationRangeFact, LogFact, LoopBlockFact, LoopBlockRole, LoopConfidence, LoopDerivation,
     LoopFact, LoopMembershipFact, MemoryAccessFact, MemoryAccessKind, OpcodeCategory, OpcodeFact,
-    OriginEdgeFact, OriginEdgeLabel, OriginNodeFact, OriginNodeKind, PcRange,
-    PrecompileInvocationFact, ReturnDataFact, ReturnDataKind, RevertFact, RuntimeCallKind,
+    OriginEdgeFact, OriginEdgeLabel, OriginEdgeTraversalClass, OriginNodeFact, OriginNodeKind,
+    PcRange, PrecompileInvocationFact, ReturnDataFact, ReturnDataKind, RevertFact, RuntimeCallKind,
     RuntimeCaptureMode, RuntimeCodeObjectBindingFact, RuntimePcJoinConfidence,
     RuntimeTraceDataSource, RuntimeValue, RuntimeValuePolicy, SelfdestructFact,
     ShapeComponentHashFact, ShapeGraphHashFact, ShapeNodeHashFact, ShapePolicyFact, SourceFileFact,
     SourceSpanFact, StackSampleFact, StaticGasFact, StorageAccessFact, StorageAccessKind,
     StorageFact, StorageLocation, StorageReason, TraceFact, TraceFactTextError, TypeFact,
     TypeField, TypeKind, ValueLocation, ValueProperty, ValuePropertyFact, VariableFact,
-    VariableStorageClass, shape_hash_facts,
+    VariableStorageClass, classify_origin_edge, shape_hash_facts,
 };
 pub use jsonl::{
     JsonlTraceReadError, JsonlTraceReader, JsonlTraceSink, TRACE_SCHEMA_VERSION, TraceBundle,

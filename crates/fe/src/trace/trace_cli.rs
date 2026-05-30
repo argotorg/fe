@@ -76,6 +76,9 @@ fn run_trace_query_command(command: &DevTraceQueryCommand) -> Result<String, Str
         DevTraceQueryCommand::OptimizedCodeHonesty(args) => {
             super::trace_emit::run_trace_optimized_code_honesty(args)
         }
+        DevTraceQueryCommand::AttributionAudit(args) => {
+            super::trace_emit::run_trace_attribution_audit(args)
+        }
         DevTraceQueryCommand::StaticAnalysis(args) => {
             super::trace_emit::run_trace_static_analysis(args)
         }

@@ -3,7 +3,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use common::origin::OriginExportKey;
 use serde::Serialize;
 use trace_facts::{
-    InstructionFact, OriginEdgeFact, OriginEdgeLabel, SourceSpanFact, TraceFact, TraceSnapshot,
+    InstructionFact, OriginEdgeFact, OriginEdgeTraversalClass, SourceSpanFact, TraceFact,
+    TraceSnapshot,
 };
 
 use crate::LoopContentsReport;
@@ -431,13 +432,9 @@ fn closure_roots(
 
 fn has_exact_trace_edge(key: &OriginExportKey, index: &OriginClosureIndex<'_>) -> bool {
     index.edges_by_from.get(key).is_some_and(|edges| {
-        edges.iter().any(|edge| {
-            edge.to.kind() != "code.object"
-                && matches!(
-                    edge.label,
-                    OriginEdgeLabel::LoweredFrom | OriginEdgeLabel::EmittedFrom
-                )
-        })
+        edges
+            .iter()
+            .any(|edge| allows_origin_closure_edge(edge, OriginClosureTraversalMode::PreciseAudit))
     })
 }
 
@@ -823,13 +820,7 @@ fn origin_closure(start: &OriginExportKey, index: &OriginClosureIndex<'_>) -> Ra
             if from_hub.is_some() || to_hub.is_some() {
                 continue;
             }
-            if !matches!(
-                edge.label,
-                OriginEdgeLabel::LoweredFrom
-                    | OriginEdgeLabel::EmittedFrom
-                    | OriginEdgeLabel::SyntheticFor
-                    | OriginEdgeLabel::BackendPrepared
-            ) {
+            if !allows_origin_closure_edge(edge, OriginClosureTraversalMode::PreciseAudit) {
                 continue;
             }
             let edge_key = (
@@ -865,6 +856,20 @@ fn origin_closure(start: &OriginExportKey, index: &OriginClosureIndex<'_>) -> Ra
             truncation_reason,
             skipped_hubs: skipped_hubs.into_iter().collect(),
         },
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OriginClosureTraversalMode {
+    PreciseAudit,
+}
+
+fn allows_origin_closure_edge(edge: &OriginEdgeFact, mode: OriginClosureTraversalMode) -> bool {
+    match mode {
+        OriginClosureTraversalMode::PreciseAudit => matches!(
+            edge.traversal_class(),
+            OriginEdgeTraversalClass::ExactAttribution | OriginEdgeTraversalClass::SnapshotAlias
+        ),
     }
 }
 
@@ -959,7 +964,7 @@ fn display_key(key: &OriginExportKey) -> String {
 mod tests {
     use super::*;
     use crate::{Confidence, ReportMetadata};
-    use trace_facts::{CompilerPhase, InstructionFact, OriginEdgeFact};
+    use trace_facts::{CompilerPhase, InstructionFact, OriginEdgeFact, OriginEdgeLabel};
 
     #[test]
     fn origin_closure_does_not_expand_through_code_object() {
@@ -1049,6 +1054,81 @@ mod tests {
         let roots = closure_roots("fib_demo.fe", &index, &empty_loop_report());
 
         assert!(roots.contains(&pc));
+    }
+
+    #[test]
+    fn closure_roots_exclude_bytecode_with_only_contextual_frontend_edges() {
+        let pc = test_key("bytecode.pc", "runtime", "pc:0");
+        let runtime = test_key("runtime.stmt", "runtime", "block:0:stmt:0");
+        let function = test_key("bytecode.function", "runtime", "function");
+        let edges = [OriginEdgeFact::new(
+            pc.clone(),
+            runtime,
+            OriginEdgeLabel::LoweredFrom,
+            Some(CompilerPhase::BytecodeEmission),
+        )];
+        let instruction = InstructionFact::new(pc.clone(), function, 0, "PUSH0");
+        let index = test_index(&edges, [(pc.clone(), &instruction)]);
+
+        let roots = closure_roots("fib_demo.fe", &index, &empty_loop_report());
+
+        assert!(!roots.contains(&pc));
+    }
+
+    #[test]
+    fn precise_closure_crosses_snapshot_alias() {
+        let post = test_key("sonatina.postopt.inst", "sonatina", "inst:post");
+        let pre = test_key("sonatina.preopt.inst", "sonatina", "inst:pre");
+        let source = test_key("hir.expr", "body", "expr:0");
+        let edges = [
+            OriginEdgeFact::new(
+                post.clone(),
+                pre.clone(),
+                OriginEdgeLabel::PreservedSnapshotIdentity,
+                Some(CompilerPhase::SonatinaPostOpt),
+            ),
+            OriginEdgeFact::new(
+                pre.clone(),
+                source.clone(),
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::SonatinaPreOpt),
+            ),
+        ];
+        let index = test_index(&edges, []);
+
+        let closure = origin_closure(&post, &index);
+
+        assert!(closure.keys.contains(&post));
+        assert!(closure.keys.contains(&pre));
+        assert!(closure.keys.contains(&source));
+    }
+
+    #[test]
+    fn precise_closure_rejects_backend_prepared_and_synthetic_edges() {
+        let pc = test_key("bytecode.pc", "runtime", "pc:0");
+        let runtime = test_key("runtime.stmt", "runtime", "block:0:stmt:0");
+        let synthetic = test_key("backend.synthetic", "runtime", "helper:0");
+        let edges = [
+            OriginEdgeFact::new(
+                pc.clone(),
+                runtime.clone(),
+                OriginEdgeLabel::BackendPrepared,
+                Some(CompilerPhase::BytecodeEmission),
+            ),
+            OriginEdgeFact::new(
+                pc.clone(),
+                synthetic.clone(),
+                OriginEdgeLabel::SyntheticFor,
+                Some(CompilerPhase::Backend),
+            ),
+        ];
+        let index = test_index(&edges, []);
+
+        let closure = origin_closure(&pc, &index);
+
+        assert!(closure.keys.contains(&pc));
+        assert!(!closure.keys.contains(&runtime));
+        assert!(!closure.keys.contains(&synthetic));
     }
 
     #[test]
@@ -1261,6 +1341,30 @@ mod tests {
 
     fn test_key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
         OriginExportKey::try_from_raw_parts(kind, owner, local).unwrap()
+    }
+
+    fn test_index<'a, I>(edges: &'a [OriginEdgeFact], instructions: I) -> OriginClosureIndex<'a>
+    where
+        I: IntoIterator<Item = (OriginExportKey, &'a InstructionFact)>,
+    {
+        let mut edges_by_from = BTreeMap::<OriginExportKey, Vec<&OriginEdgeFact>>::new();
+        let mut edges_by_to = BTreeMap::<OriginExportKey, Vec<&OriginEdgeFact>>::new();
+        for edge in edges {
+            edges_by_from
+                .entry(edge.from.clone())
+                .or_default()
+                .push(edge);
+            edges_by_to.entry(edge.to.clone()).or_default().push(edge);
+        }
+        let instructions = instructions.into_iter().collect();
+        OriginClosureIndex {
+            edges_by_from,
+            edges_by_to,
+            instructions,
+            source_spans: BTreeMap::new(),
+            edge_count: edges.len(),
+            instruction_count: 0,
+        }
     }
 
     fn empty_loop_report() -> LoopContentsReport {

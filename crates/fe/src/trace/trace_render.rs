@@ -2,14 +2,14 @@ use common::origin::OriginExportKey;
 use serde::Serialize;
 use trace_facts::{TraceBundle, TraceMetadata, TraceSnapshot, TraceValidationReport};
 use trace_query::{
-    BytecodeSizeBySourceReport, BytecodeSizeBySourceRequest, CallCostByCallsiteReport, Confidence,
-    DynamicGasBySourceReport, DynamicGasBySourceRequest, ExplainLocalReport, ExplainLocalRequest,
-    ExplainPcReport, ExplainPcRequest, GasAttributionPolicy, GasBreakdownReport,
-    GasBreakdownRequest, GasBySourceReport, GasBySourceRequest, GasToSourceReport,
-    GasToSourceRequest, HotPathByIterationReport, IntrospectionService, LoopContentsReport,
-    LoopContentsRequest, LoopCostReport, LoopCostRequest, MemoryGrowthBySourceReport,
-    OptimizedCodeHonestyReport, OptimizedCodeHonestyRequest, ReportMetadata,
-    RevertAttributionReport, RuntimeGasBySourceReport, RuntimeGasBySourceRequest,
+    AttributionAuditReport, BytecodeSizeBySourceReport, BytecodeSizeBySourceRequest,
+    CallCostByCallsiteReport, Confidence, DynamicGasBySourceReport, DynamicGasBySourceRequest,
+    ExplainLocalReport, ExplainLocalRequest, ExplainPcReport, ExplainPcRequest,
+    GasAttributionPolicy, GasBreakdownReport, GasBreakdownRequest, GasBySourceReport,
+    GasBySourceRequest, GasToSourceReport, GasToSourceRequest, HotPathByIterationReport,
+    IntrospectionService, LoopContentsReport, LoopContentsRequest, LoopCostReport, LoopCostRequest,
+    MemoryGrowthBySourceReport, OptimizedCodeHonestyReport, OptimizedCodeHonestyRequest,
+    ReportMetadata, RevertAttributionReport, RuntimeGasBySourceReport, RuntimeGasBySourceRequest,
     RuntimeTraceFilterRequest, SourceAttribution, StorageAccessesBySlotReport,
     StorageAccessesBySlotRequest, StorageWritesBySourceReport, TraceIntrospectionService,
     ValueFlowAtPcReport, ValueFlowAtPcRequest, VariablesAtPcReport, VariablesAtPcRequest,
@@ -278,6 +278,15 @@ pub(super) fn render_optimized_code_honesty_snapshot_with_format(
         .optimized_code_honesty(OptimizedCodeHonestyRequest::default())
         .map_err(|err| err.to_string())?;
     render_report(format, &report, render_optimized_code_honesty_report)
+}
+
+pub(super) fn render_attribution_audit_snapshot_with_format(
+    snapshot: TraceSnapshot,
+    format: TraceReportFormat,
+) -> Result<String, String> {
+    let service = TraceIntrospectionService::new(snapshot);
+    let report = service.attribution_audit().map_err(|err| err.to_string())?;
+    render_report(format, &report, render_attribution_audit_report)
 }
 
 pub(super) fn render_static_analysis_snapshot_with_format(
@@ -1058,6 +1067,72 @@ fn render_optimized_code_honesty_report(report: &OptimizedCodeHonestyReport) -> 
         out.push_str(
             "\nHonesty note: this report preserves ambiguity instead of selecting a source the compiler did not record.\n",
         );
+    }
+    out
+}
+
+fn render_attribution_audit_report(report: &AttributionAuditReport) -> String {
+    let mut out = String::new();
+    out.push_str("Fe dev trace attribution-audit\n\n");
+    push_report_header(&mut out, &report.metadata, Confidence::Medium);
+    out.push_str(
+        "Policy: exactness is derived from OriginEdgeLabel + introduced_by + endpoint kinds.\n",
+    );
+    out.push_str(&format!(
+        "Bytecode PCs: {} total, {} without exact source candidates\n\n",
+        report.total_bytecode_pcs, report.unmapped_pcs
+    ));
+
+    out.push_str("Direct bytecode edge classes:\n");
+    for row in &report.direct_edges_by_class {
+        out.push_str(&format!("  {:>5} {:?}\n", row.count, row.traversal_class));
+    }
+
+    out.push_str("\nDirect bytecode edges:\n");
+    for row in report.direct_bytecode_edges.iter().take(16) {
+        out.push_str(&format!(
+            "  {:>5} {:?} -> {} introduced_by={:?} class={:?}\n",
+            row.count, row.label, row.to_kind, row.introduced_by, row.traversal_class
+        ));
+    }
+
+    out.push_str("\nTop exact source lines:\n");
+    if report.source_lines.is_empty() {
+        out.push_str("  none\n");
+    } else {
+        for row in report.source_lines.iter().take(16) {
+            out.push_str(&format!(
+                "  {:>5} {} ({})\n",
+                row.count, row.label, row.origin_kind
+            ));
+        }
+    }
+
+    out.push_str("\nTop Sonatina targets:\n");
+    if report.sonatina_targets.is_empty() {
+        out.push_str("  none\n");
+    } else {
+        for row in report.sonatina_targets.iter().take(12) {
+            out.push_str(&format!(
+                "  {:>5} {}\n",
+                row.count,
+                row.target.display_label()
+            ));
+        }
+    }
+
+    if !report.suspicious_edges.is_empty() {
+        out.push_str("\nSuspicious exact-looking bytecode edges:\n");
+        for edge in report.suspicious_edges.iter().take(12) {
+            out.push_str(&format!(
+                "  {:?} {} -> {} class={:?}: {}\n",
+                edge.label,
+                edge.from.display_label(),
+                edge.to.display_label(),
+                edge.traversal_class,
+                edge.reason
+            ));
+        }
     }
     out
 }

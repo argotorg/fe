@@ -12,8 +12,9 @@ use introspection_config::FeToolingConfig;
 use serde::{Deserialize, Serialize};
 use trace_facts::{
     CompilerEventKind, CompilerPhase, GasKind, InstructionCategory, InstructionFact, LoopBlockRole,
-    OriginEdgeLabel, RuntimePcJoinConfidence, RuntimeValue, StorageAccessKind, StorageFact,
-    StorageLocation, TraceDataSource, TraceFact, TraceMetadata, TraceSnapshot,
+    OriginEdgeLabel, OriginEdgeTraversalClass, RuntimePcJoinConfidence, RuntimeValue,
+    StorageAccessKind, StorageFact, StorageLocation, TraceDataSource, TraceFact, TraceMetadata,
+    TraceSnapshot,
 };
 
 pub type QueryResult<T> = Result<T, QueryError>;
@@ -40,6 +41,7 @@ pub trait IntrospectionService {
         &self,
         request: OptimizedCodeHonestyRequest,
     ) -> QueryResult<OptimizedCodeHonestyReport>;
+    fn attribution_audit(&self) -> QueryResult<AttributionAuditReport>;
     fn variables_at_pc(&self, request: VariablesAtPcRequest) -> QueryResult<VariablesAtPcReport>;
     fn runtime_gas_by_source(
         &self,
@@ -642,6 +644,10 @@ impl IntrospectionService for TraceIntrospectionService {
             unmapped_instructions,
             confidence: Confidence::Medium,
         })
+    }
+
+    fn attribution_audit(&self) -> QueryResult<AttributionAuditReport> {
+        Ok(attribution_audit_report(&self.snapshot))
     }
 
     fn variables_at_pc(&self, request: VariablesAtPcRequest) -> QueryResult<VariablesAtPcReport> {
@@ -1424,6 +1430,7 @@ pub enum TraceQueryRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         schedule: Option<String>,
     },
+    AttributionAudit,
     VariablesAtPc {
         pc: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1536,6 +1543,10 @@ impl TraceQueryRequest {
         Self::OptimizedCodeHonesty { schedule: None }
     }
 
+    pub fn attribution_audit() -> Self {
+        Self::AttributionAudit
+    }
+
     pub fn variables_at_pc(pc: u32) -> Self {
         Self::VariablesAtPc {
             pc,
@@ -1640,6 +1651,7 @@ pub enum TraceQueryReport {
     DynamicGasBySource(DynamicGasBySourceReport),
     GasToSource(GasToSourceReport),
     OptimizedCodeHonesty(OptimizedCodeHonestyReport),
+    AttributionAudit(AttributionAuditReport),
     VariablesAtPc(VariablesAtPcReport),
     RuntimeGasBySource(RuntimeGasBySourceReport),
     StorageWritesBySource(StorageWritesBySourceReport),
@@ -1694,6 +1706,9 @@ pub fn run_trace_query(
         TraceQueryRequest::OptimizedCodeHonesty { schedule } => service
             .optimized_code_honesty(OptimizedCodeHonestyRequest { schedule })
             .map(TraceQueryReport::OptimizedCodeHonesty),
+        TraceQueryRequest::AttributionAudit => service
+            .attribution_audit()
+            .map(TraceQueryReport::AttributionAudit),
         TraceQueryRequest::VariablesAtPc { pc, code_object } => service
             .variables_at_pc(VariablesAtPcRequest { pc, code_object })
             .map(TraceQueryReport::VariablesAtPc),
@@ -1917,6 +1932,56 @@ pub struct SyntheticOverheadRow {
     pub static_gas: Option<u64>,
     pub dynamic_gas: u64,
     pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttributionAuditReport {
+    pub metadata: ReportMetadata,
+    pub total_bytecode_pcs: usize,
+    pub unmapped_pcs: usize,
+    pub direct_bytecode_edges: Vec<AttributionAuditEdgeCount>,
+    pub direct_edges_by_class: Vec<AttributionAuditClassCount>,
+    pub source_lines: Vec<AttributionAuditSourceLineCount>,
+    pub sonatina_targets: Vec<AttributionAuditTargetCount>,
+    pub suspicious_edges: Vec<AttributionAuditSuspiciousEdge>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttributionAuditEdgeCount {
+    pub label: OriginEdgeLabel,
+    pub to_kind: String,
+    pub introduced_by: Option<CompilerPhase>,
+    pub traversal_class: OriginEdgeTraversalClass,
+    pub count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttributionAuditClassCount {
+    pub traversal_class: OriginEdgeTraversalClass,
+    pub count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttributionAuditSourceLineCount {
+    pub label: String,
+    pub origin_kind: String,
+    pub count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttributionAuditTargetCount {
+    pub target: OriginExportKey,
+    pub count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttributionAuditSuspiciousEdge {
+    pub from: OriginExportKey,
+    pub to: OriginExportKey,
+    pub label: OriginEdgeLabel,
+    pub introduced_by: Option<CompilerPhase>,
+    pub traversal_class: OriginEdgeTraversalClass,
+    pub reason: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -2545,12 +2610,7 @@ impl<'a> TraceIndex<'a> {
             let TraceFact::OriginEdge(edge) = fact else {
                 continue;
             };
-            if loop_members.contains(&edge.from)
-                && matches!(
-                    edge.label,
-                    OriginEdgeLabel::LoweredFrom | OriginEdgeLabel::EmittedFrom
-                )
-            {
+            if loop_members.contains(&edge.from) && is_exact_edge(edge) {
                 loop_member_origins.insert(edge.to.clone());
             }
         }
@@ -2563,11 +2623,10 @@ impl<'a> TraceIndex<'a> {
             if edge.from.kind() != "bytecode.pc" {
                 continue;
             }
-            if edge.label == OriginEdgeLabel::EmittedFrom && loop_members.contains(&edge.to) {
+            if is_exact_edge(edge) && loop_members.contains(&edge.to) {
                 bytecode.insert(edge.from.clone());
             }
-            if edge.label == OriginEdgeLabel::LoweredFrom && loop_member_origins.contains(&edge.to)
-            {
+            if is_exact_edge(edge) && loop_member_origins.contains(&edge.to) {
                 bytecode.insert(edge.from.clone());
             }
         }
@@ -2581,10 +2640,7 @@ impl<'a> TraceIndex<'a> {
                 TraceFact::OriginEdge(edge)
                     if edge.from.kind() == "bytecode.pc"
                         && edge.to.kind() != "code.object"
-                        && matches!(
-                            edge.label,
-                            OriginEdgeLabel::LoweredFrom | OriginEdgeLabel::EmittedFrom
-                        )
+                        && is_exact_edge(edge)
             )
         })
     }
@@ -2961,14 +3017,27 @@ impl<'a> TraceIndex<'a> {
         &self,
         instruction: &OriginExportKey,
     ) -> Vec<SourceAttribution> {
-        let reaches = datalog_emit::origin_reaches(self.snapshot);
         let mut candidates = BTreeSet::new();
         if self.source_attribution(instruction).is_some() {
             candidates.insert(instruction.clone());
         }
-        for (from, to) in reaches {
-            if &from == instruction && self.source_attribution(&to).is_some() {
-                candidates.insert(to);
+
+        let mut seen = BTreeSet::new();
+        let mut stack = vec![instruction.clone()];
+        while let Some(current) = stack.pop() {
+            if !seen.insert(current.clone()) {
+                continue;
+            }
+            for edge in self.snapshot.facts().iter().filter_map(|fact| match fact {
+                TraceFact::OriginEdge(edge) if edge.from == current && is_exact_edge(edge) => {
+                    Some(edge)
+                }
+                _ => None,
+            }) {
+                if self.source_attribution(&edge.to).is_some() {
+                    candidates.insert(edge.to.clone());
+                }
+                stack.push(edge.to.clone());
             }
         }
         candidates
@@ -2978,6 +3047,9 @@ impl<'a> TraceIndex<'a> {
     }
 
     fn source_attribution(&self, origin: &OriginExportKey) -> Option<SourceAttribution> {
+        if !is_precise_source_candidate(origin) {
+            return None;
+        }
         let span = self.snapshot.facts().iter().find_map(|fact| match fact {
             TraceFact::SourceSpan(span) if &span.origin == origin => Some(span),
             _ => None,
@@ -3286,6 +3358,17 @@ impl<'a> TraceIndex<'a> {
     }
 }
 
+fn is_exact_edge(edge: &trace_facts::OriginEdgeFact) -> bool {
+    matches!(
+        edge.traversal_class(),
+        OriginEdgeTraversalClass::ExactAttribution | OriginEdgeTraversalClass::SnapshotAlias
+    )
+}
+
+fn is_precise_source_candidate(origin: &OriginExportKey) -> bool {
+    origin.kind() != "code.object" && origin.kind() != "source.file"
+}
+
 fn storage_step(storage: &StorageFact) -> StorageStep {
     StorageStep {
         phase: format!("{:?}", storage.phase),
@@ -3420,6 +3503,141 @@ fn primary_source(candidates: &[SourceAttribution]) -> Option<SourceAttribution>
     (candidates.len() == 1).then(|| candidates[0].clone())
 }
 
+fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport {
+    let index = TraceIndex::new(snapshot);
+    let mut direct_edges = BTreeMap::<
+        (
+            OriginEdgeLabel,
+            String,
+            Option<CompilerPhase>,
+            OriginEdgeTraversalClass,
+        ),
+        usize,
+    >::new();
+    let mut class_counts = BTreeMap::<OriginEdgeTraversalClass, usize>::new();
+    let mut source_lines = BTreeMap::<(String, String), usize>::new();
+    let mut sonatina_targets = BTreeMap::<OriginExportKey, usize>::new();
+    let mut suspicious_edges = Vec::new();
+    let mut total_bytecode_pcs = 0usize;
+    let mut unmapped_pcs = 0usize;
+
+    for instruction in index.all_instruction_keys() {
+        if instruction.kind() != "bytecode.pc" {
+            continue;
+        }
+        total_bytecode_pcs += 1;
+        let sources = index.source_candidates_for_instruction(&instruction);
+        if sources.is_empty() {
+            unmapped_pcs += 1;
+        }
+        for source in sources {
+            *source_lines
+                .entry((source.label, source.origin.kind().to_string()))
+                .or_default() += 1;
+        }
+        for edge in snapshot.facts().iter().filter_map(|fact| match fact {
+            TraceFact::OriginEdge(edge) if edge.from == instruction => Some(edge),
+            _ => None,
+        }) {
+            let class = edge.traversal_class();
+            *direct_edges
+                .entry((
+                    edge.label,
+                    edge.to.kind().to_string(),
+                    edge.introduced_by,
+                    class,
+                ))
+                .or_default() += 1;
+            *class_counts.entry(class).or_default() += 1;
+            if edge.to.kind().starts_with("sonatina.") {
+                *sonatina_targets.entry(edge.to.clone()).or_default() += 1;
+            }
+            if matches!(class, OriginEdgeTraversalClass::Contextual)
+                && matches!(
+                    edge.label,
+                    OriginEdgeLabel::LoweredFrom | OriginEdgeLabel::EmittedFrom
+                )
+            {
+                suspicious_edges.push(AttributionAuditSuspiciousEdge {
+                    from: edge.from.clone(),
+                    to: edge.to.clone(),
+                    label: edge.label,
+                    introduced_by: edge.introduced_by,
+                    traversal_class: class,
+                    reason:
+                        "exact-looking bytecode edge is contextual under endpoint/phase semantics"
+                            .to_string(),
+                });
+            }
+        }
+    }
+
+    let mut direct_bytecode_edges = direct_edges
+        .into_iter()
+        .map(
+            |((label, to_kind, introduced_by, traversal_class), count)| AttributionAuditEdgeCount {
+                label,
+                to_kind,
+                introduced_by,
+                traversal_class,
+                count,
+            },
+        )
+        .collect::<Vec<_>>();
+    direct_bytecode_edges.sort_by(|a, b| {
+        b.count
+            .cmp(&a.count)
+            .then_with(|| a.to_kind.cmp(&b.to_kind))
+            .then_with(|| format!("{:?}", a.label).cmp(&format!("{:?}", b.label)))
+    });
+
+    let mut direct_edges_by_class = class_counts
+        .into_iter()
+        .map(|(traversal_class, count)| AttributionAuditClassCount {
+            traversal_class,
+            count,
+        })
+        .collect::<Vec<_>>();
+    direct_edges_by_class.sort_by(|a, b| b.count.cmp(&a.count));
+
+    let mut source_lines = source_lines
+        .into_iter()
+        .map(
+            |((label, origin_kind), count)| AttributionAuditSourceLineCount {
+                label,
+                origin_kind,
+                count,
+            },
+        )
+        .collect::<Vec<_>>();
+    source_lines.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.label.cmp(&b.label)));
+
+    let mut sonatina_targets = sonatina_targets
+        .into_iter()
+        .map(|(target, count)| AttributionAuditTargetCount { target, count })
+        .collect::<Vec<_>>();
+    sonatina_targets.sort_by(|a, b| {
+        b.count.cmp(&a.count).then_with(|| {
+            a.target
+                .canonical_storage_key()
+                .cmp(&b.target.canonical_storage_key())
+        })
+    });
+    sonatina_targets.truncate(25);
+    suspicious_edges.truncate(25);
+
+    AttributionAuditReport {
+        metadata: ReportMetadata::from_snapshot(snapshot),
+        total_bytecode_pcs,
+        unmapped_pcs,
+        direct_bytecode_edges,
+        direct_edges_by_class,
+        source_lines,
+        sonatina_targets,
+        suspicious_edges,
+    }
+}
+
 fn runtime_session_matches(session: &OriginExportKey, trace_id: Option<&str>) -> bool {
     trace_id.is_none_or(|trace_id| {
         trace_id == session.canonical_storage_key()
@@ -3523,12 +3741,12 @@ mod tests {
         InstructionCategoryFact, InstructionExtentFact, InstructionFact, LocationConfidence,
         LocationRangeFact, LoopBlockFact, LoopBlockRole, LoopConfidence, LoopDerivation, LoopFact,
         LoopMembershipFact, MemoryAccessFact, MemoryAccessKind, OriginEdgeFact, OriginEdgeLabel,
-        OriginNodeFact, OriginNodeKind, PcRange, RevertFact, RuntimeCallKind, RuntimeCaptureMode,
-        RuntimeCodeObjectBindingFact, RuntimePcJoinConfidence, RuntimeTraceDataSource,
-        RuntimeValue, RuntimeValuePolicy, SourceFileFact, SourceSpanFact, StackSampleFact,
-        StaticGasFact, StorageAccessFact, StorageAccessKind, StorageFact, StorageLocation,
-        StorageReason, TraceBundle, TraceFact, TraceMetadata, TraceSnapshot, TypeFact, TypeKind,
-        ValueLocation, VariableFact, VariableStorageClass,
+        OriginEdgeTraversalClass, OriginNodeFact, OriginNodeKind, PcRange, RevertFact,
+        RuntimeCallKind, RuntimeCaptureMode, RuntimeCodeObjectBindingFact, RuntimePcJoinConfidence,
+        RuntimeTraceDataSource, RuntimeValue, RuntimeValuePolicy, SourceFileFact, SourceSpanFact,
+        StackSampleFact, StaticGasFact, StorageAccessFact, StorageAccessKind, StorageFact,
+        StorageLocation, StorageReason, TraceBundle, TraceFact, TraceMetadata, TraceSnapshot,
+        TypeFact, TypeKind, ValueLocation, VariableFact, VariableStorageClass,
     };
 
     use super::{
@@ -3563,6 +3781,8 @@ mod tests {
         let ty = key("type", "demo", "u32");
         let inst = key("bytecode.pc", "demo", "pc:0");
         let zext = key("bytecode.pc", "demo", "pc:1");
+        let inst_postopt = key("sonatina.postopt.inst", "demo", "inst:0");
+        let zext_postopt = key("sonatina.postopt.inst", "demo", "inst:1");
         let ambiguous = key("bytecode.pc", "demo", "pc:2");
         let synthetic = key("bytecode.pc", "demo", "pc:3");
         let event = key("compiler.event", "demo", "event:0");
@@ -3578,6 +3798,8 @@ mod tests {
             node(ty.clone()),
             node(inst.clone()),
             node(zext.clone()),
+            node(inst_postopt.clone()),
+            node(zext_postopt.clone()),
             node(ambiguous.clone()),
             node(synthetic.clone()),
             node(event.clone()),
@@ -3597,6 +3819,16 @@ mod tests {
                 8,
                 2,
                 9,
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                code_object.clone(),
+                source_file.clone(),
+                0,
+                100,
+                1,
+                1,
+                9,
+                1,
             )),
             TraceFact::SourceSpan(SourceSpanFact::new(
                 source_expr_alt.clone(),
@@ -3743,6 +3975,42 @@ mod tests {
                 loop_key,
                 zext.clone(),
                 LoopDerivation::BackendBlockMapping,
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                inst.clone(),
+                code_object.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                zext.clone(),
+                code_object.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                inst.clone(),
+                inst_postopt.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                zext.clone(),
+                zext_postopt.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                inst_postopt,
+                source_expr.clone(),
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::SonatinaPostOpt),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                zext_postopt,
+                source_expr.clone(),
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::SonatinaPostOpt),
             )),
             TraceFact::OriginEdge(OriginEdgeFact::new(
                 inst.clone(),
@@ -4180,6 +4448,12 @@ mod tests {
         assert_eq!(report.instruction.unwrap().mnemonic, "lw");
         assert_eq!(report.static_gas, Some(3));
         assert_eq!(report.primary_source.unwrap().label, "fib.fe:2:8-2:9");
+        assert!(
+            report
+                .source_candidates
+                .iter()
+                .all(|source| source.origin.kind() != "code.object")
+        );
     }
 
     #[test]
@@ -4419,6 +4693,25 @@ mod tests {
     }
 
     #[test]
+    fn attribution_audit_splits_exact_structural_and_contextual_edges() {
+        let report = demo_service().attribution_audit().unwrap();
+
+        assert_eq!(report.total_bytecode_pcs, 4);
+        assert!(report.direct_edges_by_class.iter().any(|row| {
+            row.traversal_class == OriginEdgeTraversalClass::ExactAttribution && row.count >= 2
+        }));
+        assert!(report.direct_edges_by_class.iter().any(|row| {
+            row.traversal_class == OriginEdgeTraversalClass::Structural && row.count >= 2
+        }));
+        assert!(
+            report
+                .source_lines
+                .iter()
+                .any(|row| { row.label == "fib.fe:2:8-2:9" && row.origin_kind == "hir.expr" })
+        );
+    }
+
+    #[test]
     fn variables_at_pc_reports_location_ranges() {
         let report = demo_service()
             .variables_at_pc(VariablesAtPcRequest {
@@ -4521,6 +4814,10 @@ mod tests {
         assert!(matches!(
             run_trace_query(&service, TraceQueryRequest::optimized_code_honesty()).unwrap(),
             TraceQueryReport::OptimizedCodeHonesty(_)
+        ));
+        assert!(matches!(
+            run_trace_query(&service, TraceQueryRequest::attribution_audit()).unwrap(),
+            TraceQueryReport::AttributionAudit(_)
         ));
         assert!(matches!(
             run_trace_query(&service, TraceQueryRequest::variables_at_pc(0)).unwrap(),
