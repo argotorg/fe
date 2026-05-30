@@ -130,7 +130,7 @@
           this._badges(classes)
         );
         rows.append(row);
-      });
+      }, this);
       panel.append(rows);
       return panel;
     }
@@ -261,7 +261,7 @@
           });
         }
         detail.append(box);
-      });
+      }, this);
       if (selected.length > 1) {
         detail.insertBefore(el("p", "selection-note", selected.length + " closures selected as a grouped view. Cards below remain exact per-origin closures."), detail.firstChild);
       }
