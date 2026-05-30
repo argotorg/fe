@@ -70,6 +70,9 @@
         this._card(cards, "render ms", data.salsa.elapsed_ms);
       }
       page.append(cards);
+      if (data.static_analysis) {
+        page.append(this._analysis(data.static_analysis));
+      }
 
       var workspace = el("main", "workspace");
       workspace.append(this._sourcePanel(data.source || {}));
@@ -93,6 +96,50 @@
       var card = el("div", "card");
       card.append(el("span", "", label), el("b", "", value == null ? "unknown" : value));
       parent.append(card);
+    }
+
+    _analysis(report) {
+      var section = el("section", "analysis");
+      var head = el("div", "analysis-head");
+      head.append(
+        el("h2", "", "Static Evidence Checks"),
+        el("p", "muted", "Artifact-specific checks over validated compiler trace facts. Gaps are evidence gaps, not compiler correctness claims.")
+      );
+      section.append(head);
+
+      var checks = el("div", "analysis-grid");
+      (report.checks || []).forEach(function (check) {
+        var card = el("div", "analysis-card status-" + (check.status || "unknown"));
+        card.append(
+          el("h3", "", check.title || check.check_id),
+          el("p", "analysis-status", (check.status || "unknown") + " · " + (check.confidence || "unknown")),
+          el("p", "muted", check.summary || "")
+        );
+        if ((check.gaps || []).length) {
+          card.append(el("p", "gap", (check.gaps || []).length + " evidence gap(s)"));
+        }
+        checks.append(card);
+      });
+      section.append(checks);
+
+      var bloat = report.bloat;
+      if (bloat && (bloat.findings || []).length) {
+        var bloatBox = el("div", "bloat-card");
+        bloatBox.append(
+          el("h3", "", "Bloat Signals"),
+          el("p", "muted", (bloat.total_instructions || 0) + " bytecode instruction(s) · " + (bloat.total_byte_len || 0) + " byte(s) · " + (bloat.total_static_gas || 0) + " static gas")
+        );
+        (bloat.findings || []).slice(0, 5).forEach(function (finding) {
+          var row = el("div", "bloat-row");
+          row.append(
+            el("span", "bloat-kind", (finding.kind || "").replace(/_/g, " ")),
+            el("span", "bloat-count", (finding.instruction_count || 0) + " ops · " + (finding.byte_len || 0) + " bytes · " + (finding.static_gas || 0) + " gas")
+          );
+          bloatBox.append(row);
+        });
+        section.append(bloatBox);
+      }
+      return section;
     }
 
     _sourcePanel(source) {
@@ -429,6 +476,20 @@ h1 { margin:0; font:700 32px/1.1 Georgia,serif; }
 .card { padding:13px 15px; min-width:0; }
 .card span { display:block; color:#aaa58e; font-size:12px; text-transform:uppercase; letter-spacing:.08em; }
 .card b { display:block; margin-top:4px; color:#f3bd55; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.analysis { margin:0 32px 16px; padding:14px; border:1px solid #343b2e; border-radius:18px; background:#12170f; box-shadow:0 18px 48px #0007; }
+.analysis-head { display:flex; justify-content:space-between; gap:18px; align-items:end; margin-bottom:12px; }
+.analysis-head h2 { margin:0; color:#9ad97f; font-size:13px; text-transform:uppercase; letter-spacing:.14em; }
+.analysis-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+.analysis-card,.bloat-card { padding:12px; border:1px solid #30382b; border-radius:12px; background:#0f140d; }
+.analysis-card.status-pass { border-color:#3f6541; }
+.analysis-card.status-warning { border-color:#775f23; background:#17150d; }
+.analysis-card.status-inconclusive { border-color:#44515b; background:#111821; }
+.analysis-card h3,.bloat-card h3 { margin:0 0 6px; color:#f0bd58; font-size:14px; }
+.analysis-status { margin:0 0 6px; color:#7fb5ff; text-transform:uppercase; letter-spacing:.07em; font-size:11px; }
+.bloat-card { margin-top:10px; }
+.bloat-row { display:flex; justify-content:space-between; gap:12px; padding:6px 0; border-top:1px solid #252b22; color:#aaa58e; }
+.bloat-kind { color:#f0bd58; }
+.bloat-count { color:#bdb59d; white-space:nowrap; }
 .workspace { display:grid; grid-template-columns:minmax(330px,1.15fr) repeat(3,minmax(260px,.8fr)); gap:14px; padding:0 32px 28px; align-items:start; }
 .panel { overflow:hidden; min-height:260px; }
 .source-panel { grid-row:span 2; }
@@ -494,8 +555,8 @@ h1 { margin:0; font:700 32px/1.1 Georgia,serif; }
 .edge-text,.span-line { overflow-wrap:anywhere; }
 .notes { margin:0; padding:0 32px 30px 52px; color:#aaa58e; }
 .notes li { margin:6px 0; }
-@media (max-width:1250px) { .workspace,.cards { grid-template-columns:1fr 1fr; } .source-panel,.detail-panel { grid-column:span 2; } }
-@media (max-width:760px) { .workspace,.cards { grid-template-columns:1fr; padding-left:14px; padding-right:14px; } .source-panel,.detail-panel { grid-column:span 1; } .trace-header { padding-left:14px; padding-right:14px; } .notes { padding-left:32px; padding-right:14px; } }
+@media (max-width:1250px) { .workspace,.cards,.analysis-grid { grid-template-columns:1fr 1fr; } .source-panel,.detail-panel { grid-column:span 2; } }
+@media (max-width:760px) { .workspace,.cards,.analysis-grid { grid-template-columns:1fr; padding-left:14px; padding-right:14px; } .analysis { margin-left:14px; margin-right:14px; } .analysis-head { display:block; } .source-panel,.detail-panel { grid-column:span 1; } .trace-header { padding-left:14px; padding-right:14px; } .notes { padding-left:32px; padding-right:14px; } }
 `;
     }
   }

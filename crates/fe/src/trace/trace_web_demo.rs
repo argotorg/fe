@@ -18,6 +18,7 @@ use trace_query::{
         audit_origin_closures, build_origin_closure_set, classes_by_origin_key,
         source_owner_matches_input,
     },
+    static_analysis::{StaticAnalysisReport, static_analysis_report},
 };
 
 use crate::{DevTraceAuditClosuresArgs, DevTraceWebDemoArgs, TraceReportFormat};
@@ -464,6 +465,7 @@ struct WebDemoModel {
     counts: DemoCounts,
     salsa: Option<DemoSalsaStats>,
     audit: Option<ClosureAuditReport>,
+    static_analysis: Option<StaticAnalysisReport>,
     source: DemoSource,
     panels: Vec<DemoPanel>,
     closures: Vec<DemoClosure>,
@@ -578,6 +580,7 @@ fn build_demo_model(snapshot: &TraceSnapshot, salsa: Option<DemoSalsaStats>) -> 
         &closures,
         &audit_source_lines,
     );
+    let static_analysis = static_analysis_report(snapshot);
     let mut panels = build_origin_panels(&index, &classes_by_key);
     panels.insert(1, loop_panel(&loop_report, &classes_by_key));
 
@@ -597,6 +600,7 @@ fn build_demo_model(snapshot: &TraceSnapshot, salsa: Option<DemoSalsaStats>) -> 
         },
         salsa,
         audit: Some(audit),
+        static_analysis: Some(static_analysis),
         source: DemoSource {
             display_name: snapshot.metadata().input_path.clone(),
             confidence: source_confidence,
@@ -1015,6 +1019,7 @@ mod tests {
             },
             salsa: None,
             audit: None,
+            static_analysis: None,
             source: DemoSource {
                 display_name: "demo.fe".to_string(),
                 confidence: "coarse file-level fallback".to_string(),
