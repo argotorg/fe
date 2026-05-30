@@ -581,7 +581,8 @@ fn build_demo_model(snapshot: &TraceSnapshot, salsa: Option<DemoSalsaStats>) -> 
         &audit_source_lines,
     );
     let static_analysis = static_analysis_report(snapshot);
-    let mut panels = build_origin_panels(&index, &classes_by_key);
+    let loop_block_roles = loop_block_roles(&loop_report);
+    let mut panels = build_origin_panels(&index, &classes_by_key, &loop_block_roles);
     panels.insert(1, loop_panel(&loop_report, &classes_by_key));
 
     WebDemoModel {
@@ -653,7 +654,8 @@ fn source_lines(
     source_text: &str,
     closures: &[DemoClosure],
 ) -> Vec<DemoSourceLine> {
-    let mut classes_by_line = BTreeMap::<u32, BTreeSet<String>>::new();
+    let mut exact_classes_by_line = BTreeMap::<u32, BTreeSet<String>>::new();
+    let mut enclosing_classes_by_line = BTreeMap::<u32, BTreeSet<String>>::new();
     for closure in closures {
         for span in &closure.source_spans {
             if span.confidence != "direct"
@@ -661,11 +663,18 @@ fn source_lines(
             {
                 continue;
             }
-            for line in span.start_line..=span.end_line {
-                classes_by_line
-                    .entry(line)
+            if span.start_line == span.end_line {
+                exact_classes_by_line
+                    .entry(span.start_line)
                     .or_default()
                     .insert(closure.class_name.clone());
+            } else {
+                for line in span.start_line..=span.end_line {
+                    enclosing_classes_by_line
+                        .entry(line)
+                        .or_default()
+                        .insert(closure.class_name.clone());
+                }
             }
         }
     }
@@ -681,8 +690,9 @@ fn source_lines(
             DemoSourceLine {
                 number,
                 text: text.to_string(),
-                classes: classes_by_line
+                classes: exact_classes_by_line
                     .get(&number)
+                    .or_else(|| enclosing_classes_by_line.get(&number))
                     .map(|classes| classes.iter().cloned().collect())
                     .unwrap_or_default(),
             }
@@ -816,6 +826,7 @@ fn render_closure_audit_report(report: &ClosureAuditReport) -> String {
 fn build_origin_panels(
     index: &DemoIndex<'_>,
     classes_by_key: &BTreeMap<String, Vec<String>>,
+    loop_block_roles: &BTreeMap<String, String>,
 ) -> Vec<DemoPanel> {
     [
         (
@@ -838,43 +849,107 @@ fn build_origin_panels(
             "Sonatina Post-Opt",
             "Sonatina CFG after optimization",
         ),
-        ("bytecode", "Bytecode", "final runtime bytecode PCs"),
+        (
+            "bytecode",
+            "Bytecode",
+            "final runtime bytecode PCs; highlighted rows have exact trace links",
+        ),
     ]
     .into_iter()
     .map(|(id, title, summary)| DemoPanel {
         id: id.to_string(),
         title: title.to_string(),
         summary: summary.to_string(),
-        rows: panel_rows(id, index, classes_by_key),
+        rows: panel_rows(id, index, classes_by_key, loop_block_roles),
     })
     .collect()
+}
+
+fn loop_block_roles(loop_report: &trace_query::LoopContentsReport) -> BTreeMap<String, String> {
+    loop_report
+        .blocks
+        .iter()
+        .map(|block| {
+            (
+                block.block.canonical_storage_key(),
+                format!("loop {}", block.role),
+            )
+        })
+        .collect()
 }
 
 fn panel_rows(
     panel: &str,
     index: &DemoIndex<'_>,
     classes_by_key: &BTreeMap<String, Vec<String>>,
+    loop_block_roles: &BTreeMap<String, String>,
 ) -> Vec<DemoPanelRow> {
+    if panel == "bytecode" {
+        let mut instructions = index
+            .instructions
+            .values()
+            .filter(|instruction| key_belongs_to_panel(&instruction.instruction, panel))
+            .copied()
+            .collect::<Vec<_>>();
+        instructions.sort_by(|left, right| {
+            left.function
+                .canonical_storage_key()
+                .cmp(&right.function.canonical_storage_key())
+                .then(left.index.cmp(&right.index))
+                .then(
+                    left.instruction
+                        .canonical_storage_key()
+                        .cmp(&right.instruction.canonical_storage_key()),
+                )
+        });
+        return instructions
+            .into_iter()
+            .map(|instruction| instruction_panel_row(instruction, classes_by_key))
+            .collect();
+    }
+
     index
         .origin_nodes
         .keys()
         .filter(|key| key_belongs_to_panel(key, panel))
         .filter(|key| classes_by_key.contains_key(&key.canonical_storage_key()))
-        .map(|key| origin_panel_row(key, index, classes_by_key))
+        .map(|key| origin_panel_row(key, index, classes_by_key, loop_block_roles))
         .collect()
+}
+
+fn instruction_panel_row(
+    instruction: &InstructionFact,
+    classes_by_key: &BTreeMap<String, Vec<String>>,
+) -> DemoPanelRow {
+    let storage_key = instruction.instruction.canonical_storage_key();
+    DemoPanelRow {
+        key: Some(storage_key.clone()),
+        label: instruction.instruction.local_key().to_string(),
+        meta: instruction.instruction.kind().to_string(),
+        text: format!("ir[{}] {}", instruction.index, instruction.mnemonic),
+        classes: classes_by_key
+            .get(&storage_key)
+            .cloned()
+            .unwrap_or_default(),
+    }
 }
 
 fn origin_panel_row(
     key: &OriginExportKey,
     index: &DemoIndex<'_>,
     classes_by_key: &BTreeMap<String, Vec<String>>,
+    loop_block_roles: &BTreeMap<String, String>,
 ) -> DemoPanelRow {
     let storage_key = key.canonical_storage_key();
     let instruction = index.instructions.get(key);
+    let meta = loop_block_roles
+        .get(&storage_key)
+        .map(|role| format!("{} · {role}", key.kind()))
+        .unwrap_or_else(|| key.kind().to_string());
     DemoPanelRow {
         key: Some(storage_key.clone()),
         label: key.local_key().to_string(),
-        meta: key.kind().to_string(),
+        meta,
         text: instruction
             .map(|instruction| format!("ir[{}] {}", instruction.index, instruction.mnemonic))
             .unwrap_or_else(|| key.owner_key().to_string()),
@@ -927,9 +1002,10 @@ fn loop_panel(
     }
     DemoPanel {
         id: "loop".to_string(),
-        title: "Selected Loop".to_string(),
+        title: "Loop CFG".to_string(),
         summary: if loop_report.available {
-            "compiler-derived loop membership".to_string()
+            "compiler-derived static loop membership; not runtime iterations or bytecode proof"
+                .to_string()
         } else {
             "loop membership unavailable".to_string()
         },
@@ -940,11 +1016,11 @@ fn loop_panel(
 fn demo_notes(bytecode_count: usize, exact_source_spans: bool) -> Vec<String> {
     let mut notes = vec![
         "This page is a derived view over validated trace JSONL; it does not define compiler identity.".to_string(),
-        "Bytecode rows are selected from the loop-contents report, so they are tied to compiler-emitted Sonatina loop facts.".to_string(),
+        "The bytecode pane shows final bytecode instruction facts; highlighted bytecode rows are the subset with exact trace links.".to_string(),
     ];
     if bytecode_count == 0 {
         notes.push(
-            "No bytecode PCs joined to the selected loop; rebuild the trace after enabling Sonatina observability.".to_string(),
+            "No bytecode PCs joined to the selected loop; this is an attribution gap, not evidence that the optimized source work disappeared.".to_string(),
         );
     }
     if !exact_source_spans {

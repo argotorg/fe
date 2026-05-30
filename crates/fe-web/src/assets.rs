@@ -157,7 +157,7 @@ pub fn html_shell_full(
 
     format!(
         r#"<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -210,13 +210,14 @@ pub fn origin_trace_html_shell(title: &str, trace_view_json: &str) -> String {
     let safe_json = escape_script_content(trace_view_json);
     format!(
         r#"<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{title}</title>
+  <style>{css}</style>
   <style>
-    html, body {{ margin: 0; min-height: 100%; background: #11130f; }}
+    html, body {{ margin: 0; min-height: 100%; background: var(--bg); }}
   </style>
   <style>{highlight_css}</style>
 </head>
@@ -227,6 +228,7 @@ pub fn origin_trace_html_shell(title: &str, trace_view_json: &str) -> String {
 </body>
 </html>"#,
         title = safe_title,
+        css = STYLES_CSS,
         highlight_css = FE_HIGHLIGHT_CSS,
         json = safe_json,
         origin_trace_js = FE_ORIGIN_TRACE_JS,

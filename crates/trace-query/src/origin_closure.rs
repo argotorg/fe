@@ -418,7 +418,27 @@ fn closure_roots(
             );
         }
     }
+    for (key, instruction) in &index.instructions {
+        if key.kind() == "bytecode.pc" && has_exact_trace_edge(key, index) {
+            roots.insert(
+                instruction.instruction.canonical_storage_key(),
+                instruction.instruction.clone(),
+            );
+        }
+    }
     roots.into_values().collect()
+}
+
+fn has_exact_trace_edge(key: &OriginExportKey, index: &OriginClosureIndex<'_>) -> bool {
+    index.edges_by_from.get(key).is_some_and(|edges| {
+        edges.iter().any(|edge| {
+            edge.to.kind() != "code.object"
+                && matches!(
+                    edge.label,
+                    OriginEdgeLabel::LoweredFrom | OriginEdgeLabel::EmittedFrom
+                )
+        })
+    })
 }
 
 fn source_span_matches_input(span: &SourceSpanFact, input_path: &str) -> bool {
@@ -938,7 +958,8 @@ fn display_key(key: &OriginExportKey) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use trace_facts::{CompilerPhase, OriginEdgeFact};
+    use crate::{Confidence, ReportMetadata};
+    use trace_facts::{CompilerPhase, InstructionFact, OriginEdgeFact};
 
     #[test]
     fn origin_closure_does_not_expand_through_code_object() {
@@ -984,6 +1005,50 @@ mod tests {
         assert!(!closure.keys.contains(&code_object));
         assert!(closure.edges.is_empty());
         assert_eq!(closure.traversal.skipped_hubs.len(), 1);
+    }
+
+    #[test]
+    fn closure_roots_include_bytecode_with_exact_trace_edges() {
+        let pc = test_key("bytecode.pc", "runtime", "pc:0");
+        let code_object = test_key("code.object", "runtime", "runtime");
+        let postopt = test_key("sonatina.postopt.inst", "sonatina", "inst:0");
+        let function = test_key("bytecode.function", "runtime", "function");
+        let edges = [
+            OriginEdgeFact::new(
+                pc.clone(),
+                code_object,
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            ),
+            OriginEdgeFact::new(
+                pc.clone(),
+                postopt,
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            ),
+        ];
+        let instruction = InstructionFact::new(pc.clone(), function, 0, "PUSH0");
+        let mut edges_by_from = BTreeMap::<OriginExportKey, Vec<&OriginEdgeFact>>::new();
+        let mut edges_by_to = BTreeMap::<OriginExportKey, Vec<&OriginEdgeFact>>::new();
+        for edge in &edges {
+            edges_by_from
+                .entry(edge.from.clone())
+                .or_default()
+                .push(edge);
+            edges_by_to.entry(edge.to.clone()).or_default().push(edge);
+        }
+        let index = OriginClosureIndex {
+            edges_by_from,
+            edges_by_to,
+            instructions: BTreeMap::from([(pc.clone(), &instruction)]),
+            source_spans: BTreeMap::new(),
+            edge_count: edges.len(),
+            instruction_count: 1,
+        };
+
+        let roots = closure_roots("fib_demo.fe", &index, &empty_loop_report());
+
+        assert!(roots.contains(&pc));
     }
 
     #[test]
@@ -1196,6 +1261,30 @@ mod tests {
 
     fn test_key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
         OriginExportKey::try_from_raw_parts(kind, owner, local).unwrap()
+    }
+
+    fn empty_loop_report() -> LoopContentsReport {
+        LoopContentsReport {
+            metadata: ReportMetadata {
+                trace_hash: "demo".to_string(),
+                data_source: "fixture".to_string(),
+                target: "evm/sonatina".to_string(),
+                input_path: "fib_demo.fe".to_string(),
+                compiler_commit: "abc123".to_string(),
+                flags: Vec::new(),
+            },
+            available: false,
+            unavailable_reason: None,
+            loop_key: None,
+            loop_label: None,
+            blocks: Vec::new(),
+            instructions: Vec::new(),
+            target_instructions: Vec::new(),
+            bytecode_bridge_available: false,
+            bytecode_origin_edges_available: false,
+            findings: Vec::new(),
+            confidence: Confidence::Unknown,
+        }
     }
 
     fn test_closure() -> OriginClosure {
