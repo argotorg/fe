@@ -86,3 +86,10 @@ deterministic audit flags as suspicious.
 Closure construction and audit classification live in `trace-query`, not in the
 web demo renderer. The CLI/web layer renders the derived closure and audit
 reports so future LSP, agent, or browser views consume the same query behavior.
+
+The web component uses the audit annotations across every representation panel:
+source, HIR, MIR, Sonatina, loop contents, and bytecode rows all receive the
+same closure badges, phase reachability chips, suspicious/good styling, and
+source-span group inspector. Clicking a grouped source span still preserves
+per-origin closure cards, so same-span HIR siblings are visible without
+collapsing identity.

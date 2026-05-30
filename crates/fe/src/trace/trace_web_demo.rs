@@ -463,6 +463,7 @@ struct WebDemoModel {
     metadata: DemoMetadata,
     counts: DemoCounts,
     salsa: Option<DemoSalsaStats>,
+    audit: Option<ClosureAuditReport>,
     source: DemoSource,
     panels: Vec<DemoPanel>,
     closures: Vec<DemoClosure>,
@@ -562,6 +563,21 @@ fn build_demo_model(snapshot: &TraceSnapshot, salsa: Option<DemoSalsaStats>) -> 
         &source_text,
         &closures,
     );
+    let audit_source_lines = source_lines
+        .iter()
+        .map(|line| OriginClosureSourceLine {
+            number: line.number,
+            text: line.text.clone(),
+        })
+        .collect::<Vec<_>>();
+    let audit = audit_origin_closures(
+        snapshot.metadata().input_path.as_str(),
+        snapshot.metadata().target.as_str(),
+        &super::format_data_source(snapshot.metadata()),
+        bytecode_count,
+        &closures,
+        &audit_source_lines,
+    );
     let mut panels = build_origin_panels(&index, &classes_by_key);
     panels.insert(1, loop_panel(&loop_report, &classes_by_key));
 
@@ -580,6 +596,7 @@ fn build_demo_model(snapshot: &TraceSnapshot, salsa: Option<DemoSalsaStats>) -> 
             source_spans: closure_set.source_span_count,
         },
         salsa,
+        audit: Some(audit),
         source: DemoSource {
             display_name: snapshot.metadata().input_path.clone(),
             confidence: source_confidence,
@@ -997,6 +1014,7 @@ mod tests {
                 source_spans: 0,
             },
             salsa: None,
+            audit: None,
             source: DemoSource {
                 display_name: "demo.fe".to_string(),
                 confidence: "coarse file-level fallback".to_string(),
