@@ -640,7 +640,7 @@ fn audit_closure(
     if closure.counts.bytecode > broad_bytecode_threshold || closure.keys.len() > 300 {
         symptoms.insert(ClosureAuditSymptom::TooBroad);
         notes.push(format!(
-            "closure touches {} bytecode PC(s) and {} total key(s)",
+            "connected trace region touches {} bytecode PC(s) and {} total key(s)",
             closure.counts.bytecode,
             closure.keys.len()
         ));
@@ -649,7 +649,7 @@ fn audit_closure(
     if closure.traversal.truncated {
         symptoms.insert(ClosureAuditSymptom::Truncated);
         notes.push(format!(
-            "closure traversal truncated: {}",
+            "connected trace region traversal truncated: {}",
             closure
                 .traversal
                 .truncation_reason
@@ -838,7 +838,7 @@ fn origin_closure(start: &OriginExportKey, index: &OriginClosureIndex<'_>) -> Ra
         keys,
         edges: edges_out,
         traversal: OriginClosureTraversalSummary {
-            mode: "undirected_connected_origin_closure".to_string(),
+            mode: "undirected_connected_trace_region".to_string(),
             max_depth: CLOSURE_MAX_DEPTH,
             max_nodes: CLOSURE_MAX_NODES,
             truncated,
@@ -1230,7 +1230,7 @@ mod tests {
 
     fn test_traversal() -> OriginClosureTraversalSummary {
         OriginClosureTraversalSummary {
-            mode: "undirected_connected_origin_closure".to_string(),
+            mode: "undirected_connected_trace_region".to_string(),
             max_depth: CLOSURE_MAX_DEPTH,
             max_nodes: CLOSURE_MAX_NODES,
             truncated: false,

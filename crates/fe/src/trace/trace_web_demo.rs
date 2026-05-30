@@ -70,7 +70,7 @@ pub(super) fn run_trace_audit_closures(args: &DevTraceAuditClosuresArgs) -> Resu
                 json.push('\n');
                 json
             })
-            .map_err(|err| format!("failed to render closure audit JSON: {err}")),
+            .map_err(|err| format!("failed to render trace reachability audit JSON: {err}")),
     }
 }
 
@@ -699,23 +699,23 @@ fn truncate_for_report(value: &str, max_chars: usize) -> String {
 fn render_closure_audit_report(report: &ClosureAuditReport) -> String {
     let mut out = String::new();
     out.push_str("Fe dev trace audit-closures\n");
-    out.push_str("Confidence: deterministic audit over derived closure graph; does not prove semantic completeness.\n");
+    out.push_str("Confidence: deterministic audit over derived connected trace regions; does not prove semantic completeness.\n");
     out.push_str(&format!("Input: {}\n", report.input_path));
     out.push_str(&format!("Target: {}\n", report.target));
     out.push_str(&format!("Data source: {}\n", report.data_source));
     out.push_str(&format!(
-        "Closures: {} total, {} suspicious\n\n",
+        "Trace selections: {} total, {} suspicious\n\n",
         report.total_closures, report.suspicious_closures
     ));
     out.push_str(&format!(
-        "Source span groups: {} total, {} with mixed closure connectivity\n",
+        "Source span groups: {} total, {} with mixed trace connectivity\n",
         report.span_groups.total_groups, report.span_groups.mixed_connectivity_groups
     ));
     if !report.span_group_details.is_empty() {
         out.push_str("Mixed source span groups:\n");
         for group in &report.span_group_details {
             out.push_str(&format!(
-                "  {}:{}..{} closures={} target_connected={} source_only={} text={}\n",
+                "  {}:{}..{} trace_selections={} target_connected={} source_only={} text={}\n",
                 group.file_owner,
                 group.start_byte,
                 group.end_byte,
@@ -756,7 +756,7 @@ fn render_closure_audit_report(report: &ClosureAuditReport) -> String {
             out.push_str(&format!("  {:>31}: {count}\n", symptom.as_str()));
         }
     }
-    out.push_str("\nSuspicious closures:\n");
+    out.push_str("\nSuspicious trace selections:\n");
     for closure in &report.closures {
         if !closure.suspicious {
             continue;
@@ -1114,7 +1114,7 @@ mod tests {
 
     fn test_traversal() -> trace_query::origin_closure::OriginClosureTraversalSummary {
         trace_query::origin_closure::OriginClosureTraversalSummary {
-            mode: "undirected_connected_origin_closure".to_string(),
+            mode: "undirected_connected_trace_region".to_string(),
             max_depth: 16,
             max_nodes: 512,
             truncated: false,

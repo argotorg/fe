@@ -51,7 +51,7 @@
         el(
           "p",
           "subtitle",
-          "Derived browser view over compiler trace facts. Hover or click any highlighted region to select its transitive origin closure across source, HIR, MIR, Sonatina, and bytecode."
+          "Derived browser view over compiler trace facts. Hover or click any highlighted region to select its connected trace region across source, HIR, MIR, Sonatina, and bytecode."
         )
       );
       page.append(header);
@@ -59,7 +59,7 @@
       var cards = el("section", "cards");
       this._card(cards, "data source", data.metadata && data.metadata.data_source);
       this._card(cards, "facts", data.counts && data.counts.facts);
-      this._card(cards, "closures", (data.closures || []).length);
+      this._card(cards, "trace selections", (data.closures || []).length);
       this._card(cards, "suspicious", data.audit && data.audit.suspicious_closures);
       this._card(cards, "mixed spans", data.audit && data.audit.span_groups && data.audit.span_groups.mixed_connectivity_groups);
       this._card(cards, "source confidence", data.source && data.source.confidence);
@@ -200,7 +200,7 @@
       if (!detail) return;
       detail.textContent = "";
       if (!groups || groups.length === 0) {
-        detail.append(el("p", "muted", "No origin closure selected."));
+        detail.append(el("p", "muted", "No trace selection selected."));
         if (this._data.audit) {
           detail.append(this._auditSummary());
         }
@@ -218,7 +218,7 @@
         spanBox.append(el("h3", "", "Source span group"));
         spanGroups.forEach(function (group) {
           var section = el("div", "span-group");
-          section.append(el("p", "span-title", (group.source_text || "unknown source") + " · " + group.closures + " closures"));
+          section.append(el("p", "span-title", (group.source_text || "unknown source") + " · " + group.closures + " trace selections"));
           section.append(el("p", "muted", group.closures_with_targets + " target-connected · " + group.source_only_closures + " source-only sibling(s)"));
           section.append(this._memberList("Target-connected", group.target_connected_members || []));
           section.append(this._memberList("Source-only siblings", group.source_only_members || []));
@@ -244,7 +244,7 @@
           box.append(el("p", "audit-note", note));
         });
         if (closure.traversal) {
-          box.append(el("p", "traversal", "closure walk: " + closure.traversal.mode + " · truncated=" + closure.traversal.truncated + " · skipped hubs=" + (closure.traversal.skipped_hubs || []).length));
+          box.append(el("p", "traversal", "connected-region walk: " + closure.traversal.mode + " · truncated=" + closure.traversal.truncated + " · skipped hubs=" + (closure.traversal.skipped_hubs || []).length));
         }
         (closure.edges || []).forEach(function (edge) {
           var row = el("div", "edge");
@@ -263,7 +263,7 @@
         detail.append(box);
       }, this);
       if (selected.length > 1) {
-        detail.insertBefore(el("p", "selection-note", selected.length + " closures selected as a grouped view. Cards below remain exact per-origin closures."), detail.firstChild);
+        detail.insertBefore(el("p", "selection-note", selected.length + " trace selections shown as a grouped view. Cards below remain exact per-origin trace roots."), detail.firstChild);
       }
     }
 
@@ -271,7 +271,7 @@
       var audit = this._data.audit || {};
       var box = el("div", "audit-summary");
       box.append(el("h3", "", "Audit summary"));
-      box.append(el("p", "muted", (audit.total_closures || 0) + " closures · " + (audit.suspicious_closures || 0) + " suspicious · " + ((audit.span_groups && audit.span_groups.mixed_connectivity_groups) || 0) + " mixed source spans"));
+      box.append(el("p", "muted", (audit.total_closures || 0) + " trace selections · " + (audit.suspicious_closures || 0) + " suspicious · " + ((audit.span_groups && audit.span_groups.mixed_connectivity_groups) || 0) + " mixed source spans"));
       var counts = audit.primary_counts || {};
       Object.keys(counts).forEach(function (name) {
         var row = el("div", "audit-count");
@@ -334,7 +334,7 @@
       }.bind(this))[0];
       wrap.append(el("span", "badge phase", top.highest_phase_reached || "unknown"));
       wrap.append(el("span", "badge " + (top.suspicious ? "warn" : "ok"), this._shortPrimary(top.primary)));
-      if (entries.length > 1) wrap.append(el("span", "badge group", entries.length + " closures"));
+      if (entries.length > 1) wrap.append(el("span", "badge group", entries.length + " roots"));
       return wrap;
     }
 
