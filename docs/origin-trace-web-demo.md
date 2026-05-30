@@ -82,3 +82,7 @@ agent review by whether a closure stopped at HIR, MIR, Sonatina pre-opt,
 Sonatina post-opt, or bytecode. Use `--format json` to produce compact evidence
 packs for cheaper agent review. The agent should only review closures that the
 deterministic audit flags as suspicious.
+
+Closure construction and audit classification live in `trace-query`, not in the
+web demo renderer. The CLI/web layer renders the derived closure and audit
+reports so future LSP, agent, or browser views consume the same query behavior.

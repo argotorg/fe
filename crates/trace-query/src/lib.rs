@@ -3,6 +3,7 @@ use std::fmt;
 use std::str::FromStr;
 
 pub mod datalog_emit;
+pub mod origin_closure;
 
 use common::origin::OriginExportKey;
 use introspection_config::FeToolingConfig;
