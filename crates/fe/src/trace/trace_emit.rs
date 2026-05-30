@@ -846,14 +846,14 @@ mod tests {
         DebugBundle, emit_dwarf_line_table, emit_ethdebug_artifact, validate_ethdebug_artifact,
     };
     use trace_query::{
-        GasAttributionPolicy, IntrospectionService, RuntimeGasBySourceRequest,
+        GasAttributionPolicy, IntrospectionService, LoopContentsRequest, RuntimeGasBySourceRequest,
         RuntimeTraceFilterRequest, TraceIntrospectionService, datalog_emit,
     };
 
     #[test]
     fn real_trace_bundle_compiles_fib_demo_without_fixture_claims() {
         let path = Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fib_demo.fe");
-        let bundle = emit_real_trace_bundle(&path, false, "dev", codegen::OptLevel::O1).unwrap();
+        let bundle = emit_real_trace_bundle(&path, false, "dev", codegen::OptLevel::O2).unwrap();
         let summary = TraceValidator::validate(&bundle.facts).unwrap();
 
         assert_eq!(
@@ -943,6 +943,19 @@ mod tests {
         )
         .unwrap();
         assert!(loop_contents.contains("Fe dev trace loop-contents"));
+
+        let loop_report =
+            TraceIntrospectionService::new(TraceSnapshot::new(bundle.clone()).unwrap())
+                .loop_contents(LoopContentsRequest::default())
+                .unwrap();
+        assert!(
+            loop_report.bytecode_bridge_available,
+            "optimized Fibonacci loop should retain a target bytecode bridge through backend-origin propagation"
+        );
+        assert!(
+            !loop_report.target_instructions.is_empty(),
+            "optimized Fibonacci loop should resolve to bytecode PCs"
+        );
         assert!(
             loop_contents.contains("Membership source: compiler-emitted Sonatina trace-view CFG")
         );
