@@ -1989,11 +1989,7 @@ mod tests {
         closure.counts.sonatina_post = 2;
         closure.gap = closure_gap_note(&closure.counts);
 
-        let groups = SourceSpanGroupIndex::new(
-            "fib_demo.fe",
-            std::slice::from_ref(&closure),
-            &test_source_lines(),
-        );
+        let groups = groups_for_closure(&closure);
         let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
 
         assert_eq!(entry.primary, ClosureAuditPrimary::OptimizedAttributionGap);
@@ -2019,16 +2015,39 @@ mod tests {
             "pc:3".to_string(),
         ];
 
-        let groups = SourceSpanGroupIndex::new(
-            "fib_demo.fe",
-            std::slice::from_ref(&closure),
-            &test_source_lines(),
-        );
+        let groups = groups_for_closure(&closure);
         let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
 
         assert_eq!(entry.primary, ClosureAuditPrimary::GoodManyToMany);
         assert_eq!(entry.highest_phase_reached, ClosureAuditPhase::Bytecode);
         assert!(entry.symptoms.is_empty());
+    }
+
+    #[test]
+    fn closure_audit_marks_source_to_bytecode_exact() {
+        let mut closure = test_closure();
+        closure.counts.bytecode = 1;
+
+        let groups = groups_for_closure(&closure);
+        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
+
+        assert_eq!(entry.primary, ClosureAuditPrimary::GoodExact);
+        assert_eq!(entry.highest_phase_reached, ClosureAuditPhase::Bytecode);
+        assert!(!entry.suspicious);
+    }
+
+    #[test]
+    fn closure_audit_marks_source_only_expected() {
+        let mut closure = test_closure();
+        closure.counts.mir = 0;
+        closure.counts.sonatina_pre = 0;
+
+        let groups = groups_for_closure(&closure);
+        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
+
+        assert_eq!(entry.primary, ClosureAuditPrimary::SourceOnlyExpected);
+        assert_eq!(entry.highest_phase_reached, ClosureAuditPhase::Hir);
+        assert!(!entry.suspicious);
     }
 
     #[test]
@@ -2073,15 +2092,27 @@ mod tests {
     #[test]
     fn closure_audit_flags_preopt_elision_without_postopt() {
         let closure = test_closure();
-        let groups = SourceSpanGroupIndex::new(
-            "fib_demo.fe",
-            std::slice::from_ref(&closure),
-            &test_source_lines(),
-        );
+        let groups = groups_for_closure(&closure);
 
         let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
 
         assert_eq!(entry.primary, ClosureAuditPrimary::PreoptElisionGap);
+        assert!(entry.suspicious);
+    }
+
+    #[test]
+    fn closure_audit_flags_lowered_no_target_unexplained() {
+        let mut closure = test_closure();
+        closure.counts.sonatina_pre = 0;
+
+        let groups = groups_for_closure(&closure);
+        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
+
+        assert_eq!(
+            entry.primary,
+            ClosureAuditPrimary::LoweredNoTargetUnexplained
+        );
+        assert_eq!(entry.highest_phase_reached, ClosureAuditPhase::Mir);
         assert!(entry.suspicious);
     }
 
@@ -2095,11 +2126,7 @@ mod tests {
             from: "backend event".to_string(),
             to: "bytecode.pc pc:0".to_string(),
         });
-        let groups = SourceSpanGroupIndex::new(
-            "fib_demo.fe",
-            std::slice::from_ref(&closure),
-            &test_source_lines(),
-        );
+        let groups = groups_for_closure(&closure);
 
         let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
 
@@ -2110,6 +2137,58 @@ mod tests {
                 .contains(&ClosureAuditSymptom::SourceUnavailableSynthetic)
         );
         assert!(!entry.suspicious);
+    }
+
+    #[test]
+    fn closure_audit_flags_unexplained_missing_source() {
+        let mut closure = test_closure();
+        closure.source_spans.clear();
+        closure.counts.bytecode = 1;
+
+        let groups = groups_for_closure(&closure);
+        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
+
+        assert_eq!(entry.primary, ClosureAuditPrimary::MissingSourceUnexplained);
+        assert!(
+            entry
+                .symptoms
+                .contains(&ClosureAuditSymptom::MissingSourceUnexplained)
+        );
+        assert!(entry.suspicious);
+    }
+
+    #[test]
+    fn closure_audit_flags_truncated_unknown() {
+        let mut closure = test_closure();
+        closure.traversal.truncated = true;
+        closure.traversal.truncation_reason = Some("max_nodes".to_string());
+
+        let groups = groups_for_closure(&closure);
+        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
+
+        assert_eq!(entry.primary, ClosureAuditPrimary::TruncatedUnknown);
+        assert!(entry.symptoms.contains(&ClosureAuditSymptom::Truncated));
+        assert!(entry.suspicious);
+    }
+
+    #[test]
+    fn closure_audit_keeps_unclassified_fallback_visible() {
+        let mut closure = test_closure();
+        closure.source_spans.clear();
+        closure.counts = DemoClosureCounts {
+            hir: 0,
+            mir: 0,
+            sonatina_pre: 0,
+            sonatina_post: 0,
+            bytecode: 0,
+        };
+
+        let groups = groups_for_closure(&closure);
+        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
+
+        assert_eq!(entry.primary, ClosureAuditPrimary::Unclassified);
+        assert_eq!(entry.highest_phase_reached, ClosureAuditPhase::Source);
+        assert!(entry.suspicious);
     }
 
     fn test_key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -2155,6 +2234,14 @@ mod tests {
             truncation_reason: None,
             skipped_hubs: Vec::new(),
         }
+    }
+
+    fn groups_for_closure(closure: &DemoClosure) -> SourceSpanGroupIndex {
+        SourceSpanGroupIndex::new(
+            "fib_demo.fe",
+            std::slice::from_ref(closure),
+            &test_source_lines(),
+        )
     }
 
     fn test_source_lines() -> Vec<DemoSourceLine> {
