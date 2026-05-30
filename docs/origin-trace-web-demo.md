@@ -72,6 +72,13 @@ and `foreign_source`.
 The audit also groups exact input source spans. A source-only HIR origin that
 shares a span with another HIR origin reaching MIR/Sonatina/bytecode is reported
 as `source_span_sibling_unlowered`, which is informational rather than
-suspicious. Use `--format json` to produce compact evidence packs for cheaper
-agent review. The agent should only review closures that the deterministic audit
-flags as suspicious.
+suspicious. Mixed source-span groups are included with target-connected members
+and source-only members, including their stable root keys and highest reached
+phase, so cases like `a = b` can be reviewed as one source operation without
+collapsing distinct HIR identities.
+
+Each closure also reports `highest_phase_reached`, making it easier to sort
+agent review by whether a closure stopped at HIR, MIR, Sonatina pre-opt,
+Sonatina post-opt, or bytecode. Use `--format json` to produce compact evidence
+packs for cheaper agent review. The agent should only review closures that the
+deterministic audit flags as suspicious.

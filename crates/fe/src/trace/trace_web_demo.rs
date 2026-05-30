@@ -854,6 +854,22 @@ fn closure_gap_note(counts: &DemoClosureCounts) -> Option<String> {
     }
 }
 
+fn highest_phase_reached(counts: &DemoClosureCounts) -> ClosureAuditPhase {
+    if counts.bytecode > 0 {
+        ClosureAuditPhase::Bytecode
+    } else if counts.sonatina_post > 0 {
+        ClosureAuditPhase::SonatinaPost
+    } else if counts.sonatina_pre > 0 {
+        ClosureAuditPhase::SonatinaPre
+    } else if counts.mir > 0 {
+        ClosureAuditPhase::Mir
+    } else if counts.hir > 0 {
+        ClosureAuditPhase::Hir
+    } else {
+        ClosureAuditPhase::Source
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct ClosureAuditReport {
     input_path: String,
@@ -861,6 +877,7 @@ struct ClosureAuditReport {
     data_source: String,
     total_closures: usize,
     span_groups: ClosureAuditSpanGroupSummary,
+    span_group_details: Vec<ClosureAuditSpanGroupDetail>,
     primary_counts: BTreeMap<ClosureAuditPrimary, usize>,
     symptom_counts: BTreeMap<ClosureAuditSymptom, usize>,
     suspicious_closures: usize,
@@ -874,6 +891,27 @@ struct ClosureAuditSpanGroupSummary {
 }
 
 #[derive(Debug, Serialize)]
+struct ClosureAuditSpanGroupDetail {
+    file_owner: String,
+    start_byte: u32,
+    end_byte: u32,
+    source_text: Option<String>,
+    closures: usize,
+    closures_with_targets: usize,
+    source_only_closures: usize,
+    target_connected_members: Vec<ClosureAuditSpanGroupMember>,
+    source_only_members: Vec<ClosureAuditSpanGroupMember>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+struct ClosureAuditSpanGroupMember {
+    class_name: String,
+    label: String,
+    root_key: String,
+    highest_phase_reached: ClosureAuditPhase,
+}
+
+#[derive(Debug, Serialize)]
 struct ClosureAuditEntry {
     class_name: String,
     label: String,
@@ -881,12 +919,37 @@ struct ClosureAuditEntry {
     primary: ClosureAuditPrimary,
     symptoms: Vec<ClosureAuditSymptom>,
     suspicious: bool,
+    highest_phase_reached: ClosureAuditPhase,
     counts: DemoClosureCounts,
     traversal: DemoClosureTraversalSummary,
     key_count: usize,
     edge_count: usize,
     source_spans: Vec<String>,
     notes: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ClosureAuditPhase {
+    Source,
+    Hir,
+    Mir,
+    SonatinaPre,
+    SonatinaPost,
+    Bytecode,
+}
+
+impl ClosureAuditPhase {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Source => "source",
+            Self::Hir => "hir",
+            Self::Mir => "mir",
+            Self::SonatinaPre => "sonatina_pre",
+            Self::SonatinaPost => "sonatina_post",
+            Self::Bytecode => "bytecode",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -982,6 +1045,9 @@ struct SourceSpanGroup {
     closures: usize,
     closures_with_targets: usize,
     source_only_closures: usize,
+    target_connected_members: BTreeSet<ClosureAuditSpanGroupMember>,
+    source_only_members: BTreeSet<ClosureAuditSpanGroupMember>,
+    source_text: Option<String>,
 }
 
 struct SourceSpanGroupIndex {
@@ -989,7 +1055,7 @@ struct SourceSpanGroupIndex {
 }
 
 impl SourceSpanGroupIndex {
-    fn new(input_path: &str, closures: &[DemoClosure]) -> Self {
+    fn new(input_path: &str, closures: &[DemoClosure], source_lines: &[DemoSourceLine]) -> Self {
         let mut groups = BTreeMap::<SourceSpanSignature, SourceSpanGroup>::new();
         for closure in closures {
             let has_lowering_target = closure.counts.mir
@@ -1003,10 +1069,21 @@ impl SourceSpanGroupIndex {
                 };
                 let group = groups.entry(signature).or_default();
                 group.closures += 1;
+                let member = ClosureAuditSpanGroupMember {
+                    class_name: closure.class_name.clone(),
+                    label: closure.label.clone(),
+                    root_key: closure.root_key.clone(),
+                    highest_phase_reached: highest_phase_reached(&closure.counts),
+                };
                 if has_lowering_target {
                     group.closures_with_targets += 1;
+                    group.target_connected_members.insert(member);
                 } else {
                     group.source_only_closures += 1;
+                    group.source_only_members.insert(member);
+                }
+                if group.source_text.is_none() {
+                    group.source_text = source_text_for_span(span, source_lines);
                 }
             }
         }
@@ -1023,6 +1100,24 @@ impl SourceSpanGroupIndex {
                 .count(),
         }
     }
+
+    fn mixed_details(&self) -> Vec<ClosureAuditSpanGroupDetail> {
+        self.groups
+            .iter()
+            .filter(|(_, group)| group.closures_with_targets > 0 && group.source_only_closures > 0)
+            .map(|(signature, group)| ClosureAuditSpanGroupDetail {
+                file_owner: signature.file_owner.clone(),
+                start_byte: signature.start_byte,
+                end_byte: signature.end_byte,
+                source_text: group.source_text.clone(),
+                closures: group.closures,
+                closures_with_targets: group.closures_with_targets,
+                source_only_closures: group.source_only_closures,
+                target_connected_members: group.target_connected_members.iter().cloned().collect(),
+                source_only_members: group.source_only_members.iter().cloned().collect(),
+            })
+            .collect()
+    }
 }
 
 fn source_span_signature(span: &DemoSourceSpan, input_path: &str) -> Option<SourceSpanSignature> {
@@ -1035,8 +1130,23 @@ fn source_span_signature(span: &DemoSourceSpan, input_path: &str) -> Option<Sour
     )
 }
 
+fn source_text_for_span(span: &DemoSourceSpan, source_lines: &[DemoSourceLine]) -> Option<String> {
+    if span.start_line != span.end_line {
+        return Some(format!("{}:{}", span.start_line, span.end_line));
+    }
+    source_lines
+        .iter()
+        .find(|line| line.number == span.start_line)
+        .map(|line| line.text.trim().to_string())
+        .filter(|text| !text.is_empty())
+}
+
 fn audit_closures(model: &WebDemoModel) -> ClosureAuditReport {
-    let span_groups = SourceSpanGroupIndex::new(&model.metadata.input_path, &model.closures);
+    let span_groups = SourceSpanGroupIndex::new(
+        &model.metadata.input_path,
+        &model.closures,
+        &model.source.lines,
+    );
     let closures = model
         .closures
         .iter()
@@ -1067,6 +1177,7 @@ fn audit_closures(model: &WebDemoModel) -> ClosureAuditReport {
         data_source: model.metadata.data_source.clone(),
         total_closures: closures.len(),
         span_groups: span_groups.summary(),
+        span_group_details: span_groups.mixed_details(),
         primary_counts,
         symptom_counts,
         suspicious_closures: suspicious,
@@ -1223,6 +1334,7 @@ fn audit_closure(
         primary,
         symptoms,
         suspicious,
+        highest_phase_reached: highest_phase_reached(&closure.counts),
         counts: closure.counts.clone(),
         traversal: closure.traversal.clone(),
         key_count: closure.keys.len(),
@@ -1233,6 +1345,16 @@ fn audit_closure(
             .collect(),
         notes,
     }
+}
+
+fn truncate_for_report(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    let prefix_len = max_chars.saturating_sub(3);
+    let mut truncated = value.chars().take(prefix_len).collect::<String>();
+    truncated.push_str("...");
+    truncated
 }
 
 fn render_closure_audit_report(report: &ClosureAuditReport) -> String {
@@ -1250,6 +1372,41 @@ fn render_closure_audit_report(report: &ClosureAuditReport) -> String {
         "Source span groups: {} total, {} with mixed closure connectivity\n",
         report.span_groups.total_groups, report.span_groups.mixed_connectivity_groups
     ));
+    if !report.span_group_details.is_empty() {
+        out.push_str("Mixed source span groups:\n");
+        for group in &report.span_group_details {
+            out.push_str(&format!(
+                "  {}:{}..{} closures={} target_connected={} source_only={} text={}\n",
+                group.file_owner,
+                group.start_byte,
+                group.end_byte,
+                group.closures,
+                group.closures_with_targets,
+                group.source_only_closures,
+                group
+                    .source_text
+                    .as_deref()
+                    .map(|text| truncate_for_report(text, 96))
+                    .unwrap_or_else(|| "unknown".to_string())
+            ));
+            for member in &group.target_connected_members {
+                out.push_str(&format!(
+                    "    target: {} highest_phase={} {}\n",
+                    member.class_name,
+                    member.highest_phase_reached.as_str(),
+                    truncate_for_report(&member.label, 160)
+                ));
+            }
+            for member in &group.source_only_members {
+                out.push_str(&format!(
+                    "    source-only: {} highest_phase={} {}\n",
+                    member.class_name,
+                    member.highest_phase_reached.as_str(),
+                    truncate_for_report(&member.label, 160)
+                ));
+            }
+        }
+    }
     out.push_str("Primary classifications:\n");
     for (primary, count) in &report.primary_counts {
         out.push_str(&format!("  {:>31}: {count}\n", primary.as_str()));
@@ -1279,7 +1436,8 @@ fn render_closure_audit_report(report: &ClosureAuditReport) -> String {
             closure.label
         ));
         out.push_str(&format!(
-            "    phases: HIR={} MIR={} pre={} post={} bytecode={} keys={} edges={}\n",
+            "    highest_phase={} phases: HIR={} MIR={} pre={} post={} bytecode={} keys={} edges={}\n",
+            closure.highest_phase_reached.as_str(),
             closure.counts.hir,
             closure.counts.mir,
             closure.counts.sonatina_pre,
@@ -1831,10 +1989,15 @@ mod tests {
         closure.counts.sonatina_post = 2;
         closure.gap = closure_gap_note(&closure.counts);
 
-        let groups = SourceSpanGroupIndex::new("fib_demo.fe", std::slice::from_ref(&closure));
+        let groups = SourceSpanGroupIndex::new(
+            "fib_demo.fe",
+            std::slice::from_ref(&closure),
+            &test_source_lines(),
+        );
         let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
 
         assert_eq!(entry.primary, ClosureAuditPrimary::OptimizedAttributionGap);
+        assert_eq!(entry.highest_phase_reached, ClosureAuditPhase::SonatinaPost);
         assert!(
             entry
                 .symptoms
@@ -1856,10 +2019,15 @@ mod tests {
             "pc:3".to_string(),
         ];
 
-        let groups = SourceSpanGroupIndex::new("fib_demo.fe", std::slice::from_ref(&closure));
+        let groups = SourceSpanGroupIndex::new(
+            "fib_demo.fe",
+            std::slice::from_ref(&closure),
+            &test_source_lines(),
+        );
         let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
 
         assert_eq!(entry.primary, ClosureAuditPrimary::GoodManyToMany);
+        assert_eq!(entry.highest_phase_reached, ClosureAuditPhase::Bytecode);
         assert!(entry.symptoms.is_empty());
     }
 
@@ -1873,7 +2041,7 @@ mod tests {
         lowered.root_key = "lowered".to_string();
         lowered.counts.bytecode = 1;
         let closures = vec![source_only.clone(), lowered];
-        let groups = SourceSpanGroupIndex::new("fib_demo.fe", &closures);
+        let groups = SourceSpanGroupIndex::new("fib_demo.fe", &closures, &test_source_lines());
 
         let entry = audit_closure("fib_demo.fe", 24, &source_only, &groups);
 
@@ -1882,12 +2050,34 @@ mod tests {
             ClosureAuditPrimary::SourceSpanSiblingUnlowered
         );
         assert!(!entry.suspicious);
+
+        let details = groups.mixed_details();
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].source_text.as_deref(), Some("a = b"));
+        assert_eq!(details[0].closures_with_targets, 1);
+        assert_eq!(details[0].source_only_closures, 1);
+        assert_eq!(details[0].target_connected_members.len(), 1);
+        assert_eq!(details[0].target_connected_members[0].root_key, "lowered");
+        assert_eq!(
+            details[0].target_connected_members[0].highest_phase_reached,
+            ClosureAuditPhase::Bytecode
+        );
+        assert_eq!(details[0].source_only_members.len(), 1);
+        assert_eq!(details[0].source_only_members[0].root_key, "root");
+        assert_eq!(
+            details[0].source_only_members[0].highest_phase_reached,
+            ClosureAuditPhase::Hir
+        );
     }
 
     #[test]
     fn closure_audit_flags_preopt_elision_without_postopt() {
         let closure = test_closure();
-        let groups = SourceSpanGroupIndex::new("fib_demo.fe", std::slice::from_ref(&closure));
+        let groups = SourceSpanGroupIndex::new(
+            "fib_demo.fe",
+            std::slice::from_ref(&closure),
+            &test_source_lines(),
+        );
 
         let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
 
@@ -1905,7 +2095,11 @@ mod tests {
             from: "backend event".to_string(),
             to: "bytecode.pc pc:0".to_string(),
         });
-        let groups = SourceSpanGroupIndex::new("fib_demo.fe", std::slice::from_ref(&closure));
+        let groups = SourceSpanGroupIndex::new(
+            "fib_demo.fe",
+            std::slice::from_ref(&closure),
+            &test_source_lines(),
+        );
 
         let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
 
@@ -1961,5 +2155,13 @@ mod tests {
             truncation_reason: None,
             skipped_hubs: Vec::new(),
         }
+    }
+
+    fn test_source_lines() -> Vec<DemoSourceLine> {
+        vec![DemoSourceLine {
+            number: 18,
+            text: "a = b".to_string(),
+            classes: Vec::new(),
+        }]
     }
 }
