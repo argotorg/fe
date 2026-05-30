@@ -411,8 +411,52 @@ impl TraceValidator {
             }
         }
 
+        let mut extent_sites = BTreeMap::new();
+        let mut extents_by_code_object =
+            BTreeMap::<OriginExportKey, Vec<&InstructionExtentFact>>::new();
         for extent in instruction_extents {
             validate_instruction_extent(extent, &nodes, &instruction_owners, &mut diagnostics);
+            if let Some(first_code_object) =
+                extent_sites.insert(extent.instruction.clone(), extent.code_object.clone())
+            {
+                push_error(
+                    &mut diagnostics,
+                    TraceValidationError::DuplicateInstructionExtent {
+                        instruction: extent.instruction.clone(),
+                        first_code_object,
+                        second_code_object: extent.code_object.clone(),
+                    },
+                );
+            }
+            extents_by_code_object
+                .entry(extent.code_object.clone())
+                .or_default()
+                .push(extent);
+        }
+        for (code_object, extents) in &mut extents_by_code_object {
+            extents.sort_by_key(|extent| {
+                (
+                    extent.pc_range.start,
+                    extent.pc_range.end,
+                    extent.instruction.clone(),
+                )
+            });
+            for pair in extents.windows(2) {
+                let first = pair[0];
+                let second = pair[1];
+                if first.pc_range.end > second.pc_range.start {
+                    push_error(
+                        &mut diagnostics,
+                        TraceValidationError::OverlappingInstructionExtent {
+                            code_object: code_object.clone(),
+                            first_instruction: first.instruction.clone(),
+                            second_instruction: second.instruction.clone(),
+                            pc_start: second.pc_range.start,
+                            pc_end: first.pc_range.end.min(second.pc_range.end),
+                        },
+                    );
+                }
+            }
         }
 
         for edge in &edges {
@@ -2513,6 +2557,18 @@ pub enum TraceValidationError {
     InstructionExtentWithoutInstruction {
         instruction: OriginExportKey,
     },
+    DuplicateInstructionExtent {
+        instruction: OriginExportKey,
+        first_code_object: OriginExportKey,
+        second_code_object: OriginExportKey,
+    },
+    OverlappingInstructionExtent {
+        code_object: OriginExportKey,
+        first_instruction: OriginExportKey,
+        second_instruction: OriginExportKey,
+        pc_start: u32,
+        pc_end: u32,
+    },
     InvalidInstructionExtent {
         instruction: OriginExportKey,
         reason: &'static str,
@@ -2824,6 +2880,30 @@ impl fmt::Display for TraceValidationError {
                 f,
                 "instruction extent references {} but no instruction fact defines it",
                 instruction.display_label()
+            ),
+            Self::DuplicateInstructionExtent {
+                instruction,
+                first_code_object,
+                second_code_object,
+            } => write!(
+                f,
+                "instruction {} has duplicate extents in {} and {}",
+                instruction.display_label(),
+                first_code_object.display_label(),
+                second_code_object.display_label()
+            ),
+            Self::OverlappingInstructionExtent {
+                code_object,
+                first_instruction,
+                second_instruction,
+                pc_start,
+                pc_end,
+            } => write!(
+                f,
+                "code object {} has overlapping instruction extents {} and {} at PC range {pc_start}..{pc_end}",
+                code_object.display_label(),
+                first_instruction.display_label(),
+                second_instruction.display_label()
             ),
             Self::InvalidInstructionExtent {
                 instruction,
@@ -3398,6 +3478,89 @@ mod tests {
             Err(TraceValidationError::InvalidInstructionExtent {
                 instruction,
                 reason: "byte_len must equal pc_range length",
+            })
+        );
+    }
+
+    #[test]
+    fn validator_rejects_duplicate_instruction_extent_for_same_instruction() {
+        let function = key("bytecode.function", "fib", "runtime");
+        let code_object = key("code.object", "fib", "runtime");
+        let instruction = key("bytecode.pc", "fib", "pc:0");
+        let facts = vec![
+            node("bytecode.function", "fib", "runtime"),
+            node("code.object", "fib", "runtime"),
+            node("bytecode.pc", "fib", "pc:0"),
+            TraceFact::Instruction(InstructionFact::new(
+                instruction.clone(),
+                function,
+                0,
+                "STOP",
+            )),
+            TraceFact::InstructionExtent(InstructionExtentFact::new(
+                instruction.clone(),
+                code_object.clone(),
+                PcRange::new(0, 1),
+                1,
+            )),
+            TraceFact::InstructionExtent(InstructionExtentFact::new(
+                instruction.clone(),
+                code_object.clone(),
+                PcRange::new(1, 2),
+                1,
+            )),
+        ];
+
+        assert_eq!(
+            TraceValidator::validate(&facts),
+            Err(TraceValidationError::DuplicateInstructionExtent {
+                instruction,
+                first_code_object: code_object.clone(),
+                second_code_object: code_object,
+            })
+        );
+    }
+
+    #[test]
+    fn validator_rejects_overlapping_instruction_extents_in_code_object() {
+        let function = key("bytecode.function", "fib", "runtime");
+        let code_object = key("code.object", "fib", "runtime");
+        let first = key("bytecode.pc", "fib", "pc:0");
+        let second = key("bytecode.pc", "fib", "pc:1");
+        let facts = vec![
+            node("bytecode.function", "fib", "runtime"),
+            node("code.object", "fib", "runtime"),
+            node("bytecode.pc", "fib", "pc:0"),
+            node("bytecode.pc", "fib", "pc:1"),
+            TraceFact::Instruction(InstructionFact::new(
+                first.clone(),
+                function.clone(),
+                0,
+                "PUSH1",
+            )),
+            TraceFact::Instruction(InstructionFact::new(second.clone(), function, 1, "ADD")),
+            TraceFact::InstructionExtent(InstructionExtentFact::new(
+                first.clone(),
+                code_object.clone(),
+                PcRange::new(0, 2),
+                2,
+            )),
+            TraceFact::InstructionExtent(InstructionExtentFact::new(
+                second.clone(),
+                code_object.clone(),
+                PcRange::new(1, 3),
+                2,
+            )),
+        ];
+
+        assert_eq!(
+            TraceValidator::validate(&facts),
+            Err(TraceValidationError::OverlappingInstructionExtent {
+                code_object,
+                first_instruction: first,
+                second_instruction: second,
+                pc_start: 1,
+                pc_end: 2,
             })
         );
     }
