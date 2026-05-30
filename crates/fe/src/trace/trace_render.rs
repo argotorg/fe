@@ -13,6 +13,7 @@ use trace_query::{
     RuntimeTraceFilterRequest, SourceAttribution, StorageAccessesBySlotReport,
     StorageAccessesBySlotRequest, StorageWritesBySourceReport, TraceIntrospectionService,
     ValueFlowAtPcReport, ValueFlowAtPcRequest, VariablesAtPcReport, VariablesAtPcRequest,
+    static_analysis::{StaticAnalysisReport, static_analysis_report},
 };
 
 use crate::TraceReportFormat;
@@ -277,6 +278,14 @@ pub(super) fn render_optimized_code_honesty_snapshot_with_format(
         .optimized_code_honesty(OptimizedCodeHonestyRequest::default())
         .map_err(|err| err.to_string())?;
     render_report(format, &report, render_optimized_code_honesty_report)
+}
+
+pub(super) fn render_static_analysis_snapshot_with_format(
+    snapshot: TraceSnapshot,
+    format: TraceReportFormat,
+) -> Result<String, String> {
+    let report = static_analysis_report(&snapshot);
+    render_report(format, &report, render_static_analysis_report)
 }
 
 pub(super) fn render_variables_at_pc_snapshot_with_format(
@@ -1050,6 +1059,85 @@ fn render_optimized_code_honesty_report(report: &OptimizedCodeHonestyReport) -> 
             "\nHonesty note: this report preserves ambiguity instead of selecting a source the compiler did not record.\n",
         );
     }
+    out
+}
+
+fn render_static_analysis_report(report: &StaticAnalysisReport) -> String {
+    let mut out = String::new();
+    out.push_str("Fe dev trace static-analysis\n\n");
+    out.push_str(
+        "Claim: artifact-specific static checks over validated trace evidence; not formal compiler verification.\n",
+    );
+    out.push_str(&format!(
+        "Data source: {}\nCompiler commit: {}\nTarget: {}\nInput: {}\n",
+        report.metadata.data_source,
+        report.metadata.compiler_commit,
+        report.metadata.target,
+        report.metadata.input_path
+    ));
+    out.push_str(&format!(
+        "Optimization: {}\nTrace schema: {}\nQuery pack: {} {}\nRelation schema: {}\n",
+        report
+            .metadata
+            .optimization_level
+            .as_deref()
+            .unwrap_or("unknown"),
+        report.metadata.trace_schema_version,
+        report.metadata.query_pack_id,
+        report.metadata.query_pack_version,
+        report.metadata.relation_schema_version
+    ));
+    out.push_str(&format!(
+        "Confidence: source={:?}, bytecode_attribution={:?}, runtime={:?}\n",
+        report.metadata.source_confidence,
+        report.metadata.bytecode_attribution_confidence,
+        report.metadata.runtime_trace_source
+    ));
+    out.push_str(&format!(
+        "Evidence flags: inferred_boundaries={}, derived_bytecode_blocks={}, runtime_facts={}, posthoc_classification={}\n\n",
+        report.metadata.uses_inferred_boundaries,
+        report.metadata.uses_derived_bytecode_blocks,
+        report.metadata.uses_runtime_facts,
+        report.metadata.uses_posthoc_classification
+    ));
+
+    out.push_str("Checks\n");
+    for check in &report.checks {
+        out.push_str(&format!(
+            "- {}: {:?} ({:?})\n  Policy: {}\n  Summary: {}\n  Witnesses: {}, gaps: {}\n",
+            check.check_id,
+            check.status,
+            check.confidence,
+            check.policy,
+            check.summary,
+            check.witnesses.len(),
+            check.gaps.len()
+        ));
+    }
+
+    if !report.gaps.is_empty() {
+        out.push_str("\nGaps\n");
+        for gap in &report.gaps {
+            out.push_str(&format!(
+                "- {}: {:?}\n  {}\n",
+                gap.id, gap.kind, gap.summary
+            ));
+            if let Some(next_fact) = &gap.suggested_next_fact {
+                out.push_str(&format!("  Suggested next fact: {next_fact}\n"));
+            }
+        }
+    }
+
+    if !report.witnesses.is_empty() {
+        out.push_str("\nWitnesses\n");
+        for witness in &report.witnesses {
+            out.push_str(&format!(
+                "- {}: {:?}\n  {}\n",
+                witness.id, witness.kind, witness.summary
+            ));
+        }
+    }
+
     out
 }
 

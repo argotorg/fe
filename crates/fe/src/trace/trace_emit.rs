@@ -246,6 +246,13 @@ pub(super) fn run_trace_optimized_code_honesty(args: &DevTraceInputArgs) -> Resu
     )
 }
 
+pub(super) fn run_trace_static_analysis(args: &DevTraceInputArgs) -> Result<String, String> {
+    super::trace_render::render_static_analysis_snapshot_with_format(
+        read_trace_snapshot_jsonl_from_path(&args.from)?,
+        args.format,
+    )
+}
+
 pub(super) fn run_trace_variables_at_pc(args: &DevTracePcArgs) -> Result<String, String> {
     super::trace_render::render_variables_at_pc_snapshot_with_format(
         read_trace_snapshot_jsonl_from_path(&args.from)?,
