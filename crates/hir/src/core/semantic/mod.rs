@@ -4482,7 +4482,13 @@ impl<'db> ImplTrait<'db> {
                 if cand_impl_trait == self {
                     continue;
                 }
-                if does_impl_trait_conflict(db, cand_view, implementor) {
+                if does_impl_trait_conflict(db, cand_view, implementor)
+                    && !Self::impl_trait_conflict_is_sealed_marker_disjoint(
+                        db,
+                        cand_impl_trait,
+                        self,
+                    )
+                {
                     return Err(ImplTraitLowerError::Conflict {
                         primary: cand_impl_trait,
                         conflict: self,
@@ -4628,17 +4634,72 @@ impl<'db> ImplTrait<'db> {
         .is_ok_and(|inst| inst.def(db) == marker)
     }
 
+    fn impl_trait_conflict_is_sealed_marker_disjoint(
+        db: &'db dyn HirAnalysisDb,
+        a: ImplTrait<'db>,
+        b: ImplTrait<'db>,
+    ) -> bool {
+        let a_markers = Self::sealed_local_marker_anchors(db, a);
+        let b_markers = Self::sealed_local_marker_anchors(db, b);
+        a_markers.iter().any(|&a_marker| {
+            let a_roots = Self::sealed_marker_target_roots(db, a_marker);
+            b_markers.iter().any(|&b_marker| {
+                a_roots.is_disjoint(&Self::sealed_marker_target_roots(db, b_marker))
+            })
+        })
+    }
+
+    fn sealed_local_marker_anchors(
+        db: &'db dyn HirAnalysisDb,
+        impl_trait: ImplTrait<'db>,
+    ) -> Vec<Trait<'db>> {
+        let impl_trait_ingot = impl_trait.top_mod(db).ingot(db);
+        let ty = impl_trait.ty(db);
+        constraints_for(db, impl_trait.into())
+            .list(db)
+            .iter()
+            .filter_map(|pred| {
+                let marker = pred.def(db);
+                (pred.self_ty(db) == ty
+                    && Self::is_sealed_local_marker_anchor(db, marker, impl_trait_ingot))
+                .then_some(marker)
+            })
+            .collect()
+    }
+
+    fn sealed_marker_target_roots(
+        db: &'db dyn HirAnalysisDb,
+        marker: Trait<'db>,
+    ) -> FxHashSet<TyBase<'db>> {
+        marker
+            .ingot(db)
+            .all_impl_traits(db)
+            .iter()
+            .copied()
+            .filter(|&impl_| Self::impl_trait_implements_marker(db, impl_, marker))
+            .filter_map(|impl_| Self::impl_trait_local_nominal_root(db, impl_))
+            .collect()
+    }
+
     fn impl_trait_targets_local_nominal_root(
         db: &'db dyn HirAnalysisDb,
         impl_trait: ImplTrait<'db>,
         impl_trait_ingot: common::ingot::Ingot<'db>,
     ) -> bool {
+        Self::impl_trait_local_nominal_root(db, impl_trait).is_some_and(|root| match root {
+            TyBase::Adt(adt) => adt.ingot(db) == impl_trait_ingot,
+            TyBase::Contract(contract) => contract.top_mod(db).ingot(db) == impl_trait_ingot,
+            TyBase::Prim(_) | TyBase::Func(_) => false,
+        })
+    }
+
+    fn impl_trait_local_nominal_root(
+        db: &'db dyn HirAnalysisDb,
+        impl_trait: ImplTrait<'db>,
+    ) -> Option<TyBase<'db>> {
         match impl_trait.ty(db).base_ty(db).data(db) {
-            TyData::TyBase(TyBase::Adt(adt)) => adt.ingot(db) == impl_trait_ingot,
-            TyData::TyBase(TyBase::Contract(contract)) => {
-                contract.top_mod(db).ingot(db) == impl_trait_ingot
-            }
-            _ => false,
+            TyData::TyBase(root @ (TyBase::Adt(_) | TyBase::Contract(_))) => Some(*root),
+            _ => None,
         }
     }
 

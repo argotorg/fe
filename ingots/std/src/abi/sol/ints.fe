@@ -1,6 +1,7 @@
 use core::abi::{Abi, AbiDecoder, AbiEncoder, AbiSize, AbiSpan, ByteInput, Decode, Encode}
 use core::num::IntDowncast
-use ingot::evm::{TopicValue, ops::revert}
+use core::ops::{WrappingAdd, WrappingMul, WrappingSub}
+use ingot::evm::{TopicValue, ops::{revert, signextend}}
 
 use super::types::SolCompat
 
@@ -89,6 +90,67 @@ fn decode_int_i256(word: u256, bits: u256) -> i256 {
 
 pub trait SolWordRepr {
     fn canonical_word(self) -> u256
+}
+
+trait SolWrappingInt: Copy {
+    fn raw_word(self) -> u256
+    fn from_wrapping_word(self, _: u256) -> Self
+}
+
+trait SolWrappingIntMarker {}
+
+fn wrapping_unsigned_word(word: u256, bits: u256) -> u256 {
+    word & (((1 as u256) << bits) - 1)
+}
+
+fn wrapping_signed_word(word: u256, bits: u256) -> u256 {
+    signextend(byte: (bits / 8) - 1, value: word)
+}
+
+fn wrapping_unsigned_u32(word: u256, bits: u256) -> u32 {
+    wrapping_unsigned_word(word: word, bits: bits).downcast_unchecked()
+}
+
+fn wrapping_unsigned_u64(word: u256, bits: u256) -> u64 {
+    wrapping_unsigned_word(word: word, bits: bits).downcast_unchecked()
+}
+
+fn wrapping_unsigned_u128(word: u256, bits: u256) -> u128 {
+    wrapping_unsigned_word(word: word, bits: bits).downcast_unchecked()
+}
+
+fn wrapping_signed_i32(word: u256, bits: u256) -> i32 {
+    let signed: i256 = wrapping_signed_word(word: word, bits: bits).downcast_unchecked()
+    signed.downcast_unchecked()
+}
+
+fn wrapping_signed_i64(word: u256, bits: u256) -> i64 {
+    let signed: i256 = wrapping_signed_word(word: word, bits: bits).downcast_unchecked()
+    signed.downcast_unchecked()
+}
+
+fn wrapping_signed_i128(word: u256, bits: u256) -> i128 {
+    let signed: i256 = wrapping_signed_word(word: word, bits: bits).downcast_unchecked()
+    signed.downcast_unchecked()
+}
+
+fn wrapping_signed_i256(word: u256, bits: u256) -> i256 {
+    wrapping_signed_word(word: word, bits: bits).downcast_unchecked()
+}
+
+#[arithmetic(unchecked)]
+fn sol_wrapping_add<T: SolWrappingInt>(a: T, b: T) -> T {
+    a.from_wrapping_word(a.raw_word() + b.raw_word())
+}
+
+#[arithmetic(unchecked)]
+fn sol_wrapping_sub<T: SolWrappingInt>(a: T, b: T) -> T {
+    a.from_wrapping_word(a.raw_word() - b.raw_word())
+}
+
+#[arithmetic(unchecked)]
+fn sol_wrapping_mul<T: SolWrappingInt>(a: T, b: T) -> T {
+    a.from_wrapping_word(a.raw_word() * b.raw_word())
 }
 
 // ---------------------------------------------------------------------------
@@ -530,6 +592,278 @@ impl SolCompat for Int248 {
 }
 impl SolWordRepr for Int248 {
     fn canonical_word(self) -> u256 { canonical_custom_signed_word(word: self.val.downcast_unchecked(), bits: 248) }
+}
+
+impl SolWrappingInt for Uint24 {
+    fn raw_word(self) -> u256 { self.val as u256 }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Uint24 { val: wrapping_unsigned_u32(word: word, bits: 24) } }
+}
+impl SolWrappingIntMarker for Uint24 {}
+impl SolWrappingInt for Uint40 {
+    fn raw_word(self) -> u256 { self.val as u256 }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Uint40 { val: wrapping_unsigned_u64(word: word, bits: 40) } }
+}
+impl SolWrappingIntMarker for Uint40 {}
+impl SolWrappingInt for Uint48 {
+    fn raw_word(self) -> u256 { self.val as u256 }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Uint48 { val: wrapping_unsigned_u64(word: word, bits: 48) } }
+}
+impl SolWrappingIntMarker for Uint48 {}
+impl SolWrappingInt for Uint56 {
+    fn raw_word(self) -> u256 { self.val as u256 }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Uint56 { val: wrapping_unsigned_u64(word: word, bits: 56) } }
+}
+impl SolWrappingIntMarker for Uint56 {}
+impl SolWrappingInt for Uint72 {
+    fn raw_word(self) -> u256 { self.val as u256 }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Uint72 { val: wrapping_unsigned_u128(word: word, bits: 72) } }
+}
+impl SolWrappingIntMarker for Uint72 {}
+impl SolWrappingInt for Uint80 {
+    fn raw_word(self) -> u256 { self.val as u256 }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Uint80 { val: wrapping_unsigned_u128(word: word, bits: 80) } }
+}
+impl SolWrappingIntMarker for Uint80 {}
+impl SolWrappingInt for Uint88 {
+    fn raw_word(self) -> u256 { self.val as u256 }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Uint88 { val: wrapping_unsigned_u128(word: word, bits: 88) } }
+}
+impl SolWrappingIntMarker for Uint88 {}
+impl SolWrappingInt for Uint96 {
+    fn raw_word(self) -> u256 { self.val as u256 }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Uint96 { val: wrapping_unsigned_u128(word: word, bits: 96) } }
+}
+impl SolWrappingIntMarker for Uint96 {}
+impl SolWrappingInt for Uint104 {
+    fn raw_word(self) -> u256 { self.val as u256 }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Uint104 { val: wrapping_unsigned_u128(word: word, bits: 104) } }
+}
+impl SolWrappingIntMarker for Uint104 {}
+impl SolWrappingInt for Uint112 {
+    fn raw_word(self) -> u256 { self.val as u256 }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Uint112 { val: wrapping_unsigned_u128(word: word, bits: 112) } }
+}
+impl SolWrappingIntMarker for Uint112 {}
+impl SolWrappingInt for Uint120 {
+    fn raw_word(self) -> u256 { self.val as u256 }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Uint120 { val: wrapping_unsigned_u128(word: word, bits: 120) } }
+}
+impl SolWrappingIntMarker for Uint120 {}
+impl SolWrappingInt for Uint136 {
+    fn raw_word(self) -> u256 { self.val }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Uint136 { val: wrapping_unsigned_word(word: word, bits: 136) } }
+}
+impl SolWrappingIntMarker for Uint136 {}
+impl SolWrappingInt for Uint144 {
+    fn raw_word(self) -> u256 { self.val }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Uint144 { val: wrapping_unsigned_word(word: word, bits: 144) } }
+}
+impl SolWrappingIntMarker for Uint144 {}
+impl SolWrappingInt for Uint152 {
+    fn raw_word(self) -> u256 { self.val }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Uint152 { val: wrapping_unsigned_word(word: word, bits: 152) } }
+}
+impl SolWrappingIntMarker for Uint152 {}
+impl SolWrappingInt for Uint160 {
+    fn raw_word(self) -> u256 { self.val }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Uint160 { val: wrapping_unsigned_word(word: word, bits: 160) } }
+}
+impl SolWrappingIntMarker for Uint160 {}
+impl SolWrappingInt for Uint168 {
+    fn raw_word(self) -> u256 { self.val }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Uint168 { val: wrapping_unsigned_word(word: word, bits: 168) } }
+}
+impl SolWrappingIntMarker for Uint168 {}
+impl SolWrappingInt for Uint176 {
+    fn raw_word(self) -> u256 { self.val }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Uint176 { val: wrapping_unsigned_word(word: word, bits: 176) } }
+}
+impl SolWrappingIntMarker for Uint176 {}
+impl SolWrappingInt for Uint184 {
+    fn raw_word(self) -> u256 { self.val }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Uint184 { val: wrapping_unsigned_word(word: word, bits: 184) } }
+}
+impl SolWrappingIntMarker for Uint184 {}
+impl SolWrappingInt for Uint192 {
+    fn raw_word(self) -> u256 { self.val }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Uint192 { val: wrapping_unsigned_word(word: word, bits: 192) } }
+}
+impl SolWrappingIntMarker for Uint192 {}
+impl SolWrappingInt for Uint200 {
+    fn raw_word(self) -> u256 { self.val }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Uint200 { val: wrapping_unsigned_word(word: word, bits: 200) } }
+}
+impl SolWrappingIntMarker for Uint200 {}
+impl SolWrappingInt for Uint208 {
+    fn raw_word(self) -> u256 { self.val }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Uint208 { val: wrapping_unsigned_word(word: word, bits: 208) } }
+}
+impl SolWrappingIntMarker for Uint208 {}
+impl SolWrappingInt for Uint216 {
+    fn raw_word(self) -> u256 { self.val }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Uint216 { val: wrapping_unsigned_word(word: word, bits: 216) } }
+}
+impl SolWrappingIntMarker for Uint216 {}
+impl SolWrappingInt for Uint224 {
+    fn raw_word(self) -> u256 { self.val }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Uint224 { val: wrapping_unsigned_word(word: word, bits: 224) } }
+}
+impl SolWrappingIntMarker for Uint224 {}
+impl SolWrappingInt for Uint232 {
+    fn raw_word(self) -> u256 { self.val }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Uint232 { val: wrapping_unsigned_word(word: word, bits: 232) } }
+}
+impl SolWrappingIntMarker for Uint232 {}
+impl SolWrappingInt for Uint240 {
+    fn raw_word(self) -> u256 { self.val }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Uint240 { val: wrapping_unsigned_word(word: word, bits: 240) } }
+}
+impl SolWrappingIntMarker for Uint240 {}
+impl SolWrappingInt for Uint248 {
+    fn raw_word(self) -> u256 { self.val }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Uint248 { val: wrapping_unsigned_word(word: word, bits: 248) } }
+}
+impl SolWrappingIntMarker for Uint248 {}
+
+impl SolWrappingInt for Int24 {
+    fn raw_word(self) -> u256 { self.val.downcast_unchecked() }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Int24 { val: wrapping_signed_i32(word: word, bits: 24) } }
+}
+impl SolWrappingIntMarker for Int24 {}
+impl SolWrappingInt for Int40 {
+    fn raw_word(self) -> u256 { self.val.downcast_unchecked() }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Int40 { val: wrapping_signed_i64(word: word, bits: 40) } }
+}
+impl SolWrappingIntMarker for Int40 {}
+impl SolWrappingInt for Int48 {
+    fn raw_word(self) -> u256 { self.val.downcast_unchecked() }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Int48 { val: wrapping_signed_i64(word: word, bits: 48) } }
+}
+impl SolWrappingIntMarker for Int48 {}
+impl SolWrappingInt for Int56 {
+    fn raw_word(self) -> u256 { self.val.downcast_unchecked() }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Int56 { val: wrapping_signed_i64(word: word, bits: 56) } }
+}
+impl SolWrappingIntMarker for Int56 {}
+impl SolWrappingInt for Int72 {
+    fn raw_word(self) -> u256 { self.val.downcast_unchecked() }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Int72 { val: wrapping_signed_i128(word: word, bits: 72) } }
+}
+impl SolWrappingIntMarker for Int72 {}
+impl SolWrappingInt for Int80 {
+    fn raw_word(self) -> u256 { self.val.downcast_unchecked() }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Int80 { val: wrapping_signed_i128(word: word, bits: 80) } }
+}
+impl SolWrappingIntMarker for Int80 {}
+impl SolWrappingInt for Int88 {
+    fn raw_word(self) -> u256 { self.val.downcast_unchecked() }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Int88 { val: wrapping_signed_i128(word: word, bits: 88) } }
+}
+impl SolWrappingIntMarker for Int88 {}
+impl SolWrappingInt for Int96 {
+    fn raw_word(self) -> u256 { self.val.downcast_unchecked() }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Int96 { val: wrapping_signed_i128(word: word, bits: 96) } }
+}
+impl SolWrappingIntMarker for Int96 {}
+impl SolWrappingInt for Int104 {
+    fn raw_word(self) -> u256 { self.val.downcast_unchecked() }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Int104 { val: wrapping_signed_i128(word: word, bits: 104) } }
+}
+impl SolWrappingIntMarker for Int104 {}
+impl SolWrappingInt for Int112 {
+    fn raw_word(self) -> u256 { self.val.downcast_unchecked() }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Int112 { val: wrapping_signed_i128(word: word, bits: 112) } }
+}
+impl SolWrappingIntMarker for Int112 {}
+impl SolWrappingInt for Int120 {
+    fn raw_word(self) -> u256 { self.val.downcast_unchecked() }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Int120 { val: wrapping_signed_i128(word: word, bits: 120) } }
+}
+impl SolWrappingIntMarker for Int120 {}
+impl SolWrappingInt for Int136 {
+    fn raw_word(self) -> u256 { self.val.downcast_unchecked() }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Int136 { val: wrapping_signed_i256(word: word, bits: 136) } }
+}
+impl SolWrappingIntMarker for Int136 {}
+impl SolWrappingInt for Int144 {
+    fn raw_word(self) -> u256 { self.val.downcast_unchecked() }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Int144 { val: wrapping_signed_i256(word: word, bits: 144) } }
+}
+impl SolWrappingIntMarker for Int144 {}
+impl SolWrappingInt for Int152 {
+    fn raw_word(self) -> u256 { self.val.downcast_unchecked() }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Int152 { val: wrapping_signed_i256(word: word, bits: 152) } }
+}
+impl SolWrappingIntMarker for Int152 {}
+impl SolWrappingInt for Int160 {
+    fn raw_word(self) -> u256 { self.val.downcast_unchecked() }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Int160 { val: wrapping_signed_i256(word: word, bits: 160) } }
+}
+impl SolWrappingIntMarker for Int160 {}
+impl SolWrappingInt for Int168 {
+    fn raw_word(self) -> u256 { self.val.downcast_unchecked() }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Int168 { val: wrapping_signed_i256(word: word, bits: 168) } }
+}
+impl SolWrappingIntMarker for Int168 {}
+impl SolWrappingInt for Int176 {
+    fn raw_word(self) -> u256 { self.val.downcast_unchecked() }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Int176 { val: wrapping_signed_i256(word: word, bits: 176) } }
+}
+impl SolWrappingIntMarker for Int176 {}
+impl SolWrappingInt for Int184 {
+    fn raw_word(self) -> u256 { self.val.downcast_unchecked() }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Int184 { val: wrapping_signed_i256(word: word, bits: 184) } }
+}
+impl SolWrappingIntMarker for Int184 {}
+impl SolWrappingInt for Int192 {
+    fn raw_word(self) -> u256 { self.val.downcast_unchecked() }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Int192 { val: wrapping_signed_i256(word: word, bits: 192) } }
+}
+impl SolWrappingIntMarker for Int192 {}
+impl SolWrappingInt for Int200 {
+    fn raw_word(self) -> u256 { self.val.downcast_unchecked() }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Int200 { val: wrapping_signed_i256(word: word, bits: 200) } }
+}
+impl SolWrappingIntMarker for Int200 {}
+impl SolWrappingInt for Int208 {
+    fn raw_word(self) -> u256 { self.val.downcast_unchecked() }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Int208 { val: wrapping_signed_i256(word: word, bits: 208) } }
+}
+impl SolWrappingIntMarker for Int208 {}
+impl SolWrappingInt for Int216 {
+    fn raw_word(self) -> u256 { self.val.downcast_unchecked() }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Int216 { val: wrapping_signed_i256(word: word, bits: 216) } }
+}
+impl SolWrappingIntMarker for Int216 {}
+impl SolWrappingInt for Int224 {
+    fn raw_word(self) -> u256 { self.val.downcast_unchecked() }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Int224 { val: wrapping_signed_i256(word: word, bits: 224) } }
+}
+impl SolWrappingIntMarker for Int224 {}
+impl SolWrappingInt for Int232 {
+    fn raw_word(self) -> u256 { self.val.downcast_unchecked() }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Int232 { val: wrapping_signed_i256(word: word, bits: 232) } }
+}
+impl SolWrappingIntMarker for Int232 {}
+impl SolWrappingInt for Int240 {
+    fn raw_word(self) -> u256 { self.val.downcast_unchecked() }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Int240 { val: wrapping_signed_i256(word: word, bits: 240) } }
+}
+impl SolWrappingIntMarker for Int240 {}
+impl SolWrappingInt for Int248 {
+    fn raw_word(self) -> u256 { self.val.downcast_unchecked() }
+    fn from_wrapping_word(self, _ word: u256) -> Self { Int248 { val: wrapping_signed_i256(word: word, bits: 248) } }
+}
+impl SolWrappingIntMarker for Int248 {}
+
+impl<T: SolWrappingInt + SolWrappingIntMarker> WrappingAdd for T {
+    fn wrapping_add(self, _ other: T) -> T { sol_wrapping_add(a: self, b: other) }
+}
+impl<T: SolWrappingInt + SolWrappingIntMarker> WrappingSub for T {
+    fn wrapping_sub(self, _ other: T) -> T { sol_wrapping_sub(a: self, b: other) }
+}
+impl<T: SolWrappingInt + SolWrappingIntMarker> WrappingMul for T {
+    fn wrapping_mul(self, _ other: T) -> T { sol_wrapping_mul(a: self, b: other) }
 }
 
 impl<A: Abi> Encode<A> for Uint24 {

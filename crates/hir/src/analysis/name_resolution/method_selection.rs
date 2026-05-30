@@ -1,6 +1,6 @@
 use crate::core::hir_def::{IdentId, Trait, scope_graph::ScopeId};
 use common::indexmap::{IndexMap, IndexSet};
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use thin_vec::ThinVec;
 
 use crate::analysis::{
@@ -10,7 +10,8 @@ use crate::analysis::{
         binder::Binder,
         canonical::{Canonical, Canonicalized, Solution},
         method_table::{ProbedMethod, probe_method},
-        trait_def::{TraitInstId, impls_for_ty},
+        fold::{TyFoldable as _, TyFolder},
+        trait_def::{ImplementorId, TraitInstId, impls_for_ty},
         trait_resolution::{
             CanonicalGoalQuery, GoalSatisfiability, PredicateListId, TraitSolveCx,
             is_goal_query_satisfiable,
@@ -177,7 +178,9 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
             ];
             for ingot in search_ingots.into_iter().flatten() {
                 for &imp in impls_for_ty(self.db, ingot, self.receiver.canonical()) {
-                    self.insert_trait_method_cand(imp.skip_binder().trait_(self.db));
+                    if let Some(inst) = self.impl_trait_inst_for_receiver(imp) {
+                        self.insert_trait_method_cand(inst);
+                    }
                 }
             }
         }
@@ -196,10 +199,10 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
                 };
 
                 if cx.unify::<TyId<'db>>(receiver, self_ty).is_ok() {
-                    self.insert_trait_method_cand(pred);
+                    self.insert_assumption_trait_method_cand(pred);
                     for super_trait in pred.def(self.db).super_traits(self.db) {
                         let super_trait = super_trait.instantiate(self.db, pred.args(self.db));
-                        self.insert_trait_method_cand(super_trait);
+                        self.insert_assumption_trait_method_cand(super_trait);
                     }
                 }
 
@@ -220,6 +223,65 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
         if let Some(&trait_method) = trait_def.method_defs(self.db).get(&self.method_name) {
             self.candidates.traits.insert((inst, trait_method));
         }
+    }
+
+    fn insert_assumption_trait_method_cand(&mut self, inst: TraitInstId<'db>) {
+        let trait_def = inst.def(self.db);
+        if self.allow_trait(trait_def)
+            && let Some(&trait_method) = trait_def.method_defs(self.db).get(&self.method_name)
+        {
+            self.candidates.traits.insert((inst, trait_method));
+            self.candidates
+                .assumption_traits
+                .insert((inst, trait_method));
+        }
+    }
+
+    fn impl_trait_inst_for_receiver(
+        &self,
+        implementor: Binder<ImplementorId<'db>>,
+    ) -> Option<TraitInstId<'db>> {
+        let mut table = UnificationTable::new(self.db);
+        let original = implementor.skip_binder();
+        let receiver_ty = self.receiver.canonical().extract_identity(&mut table);
+        let implementor = table.instantiate_with_fresh_vars(implementor);
+        let impl_ty = table.instantiate_to_term(implementor.self_ty(self.db));
+        let receiver_ty = table.instantiate_to_term(receiver_ty);
+        table.unify(impl_ty, receiver_ty).ok()?;
+
+        let mut param_subst = FxHashMap::default();
+        for (&original_param, &instantiated_param) in original
+            .params(self.db)
+            .iter()
+            .zip(implementor.params(self.db).iter())
+        {
+            let resolved = instantiated_param.fold_with(self.db, &mut table);
+            let resolved = if resolved.has_var(self.db) {
+                original_param
+            } else {
+                resolved
+            };
+            param_subst.insert(original_param, resolved);
+        }
+
+        struct ParamSubst<'db> {
+            map: FxHashMap<TyId<'db>, TyId<'db>>,
+        }
+
+        impl<'db> TyFolder<'db> for ParamSubst<'db> {
+            fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+                self.map
+                    .get(&ty)
+                    .copied()
+                    .unwrap_or_else(|| ty.super_fold_with(db, self))
+            }
+        }
+
+        Some(
+            original
+                .trait_(self.db)
+                .fold_with(self.db, &mut ParamSubst { map: param_subst }),
+        )
     }
 }
 
@@ -323,20 +385,39 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                 // constraints can disambiguate them.
                 let mut selected = IndexMap::default();
                 for (inst, method) in visible_traits.iter().copied() {
+                    let from_assumption =
+                        self.candidates.assumption_traits.contains(&(inst, method));
                     match self.check_inst(inst, method) {
                         MethodCandidate::TraitMethod(cand) => {
-                            selected.insert(cand, true);
+                            selected
+                                .entry(cand)
+                                .and_modify(|origin: &mut SelectedTraitMethodOrigin| {
+                                    origin.confirmed = true;
+                                    origin.from_assumption |= from_assumption;
+                                })
+                                .or_insert(SelectedTraitMethodOrigin {
+                                    confirmed: true,
+                                    from_assumption,
+                                });
                         }
                         MethodCandidate::NeedsConfirmation(cand) => {
-                            selected.entry(cand).or_insert(false);
+                            selected
+                                .entry(cand)
+                                .and_modify(|origin: &mut SelectedTraitMethodOrigin| {
+                                    origin.from_assumption |= from_assumption;
+                                })
+                                .or_insert(SelectedTraitMethodOrigin {
+                                    confirmed: false,
+                                    from_assumption,
+                                });
                         }
                         MethodCandidate::InherentMethod(_) => unreachable!(),
                     }
                 }
 
                 if selected.len() == 1 {
-                    let (cand, confirmed) = selected.into_iter().next().unwrap();
-                    return Ok(if confirmed {
+                    let (cand, origin) = selected.into_iter().next().unwrap();
+                    return Ok(if origin.confirmed {
                         MethodCandidate::TraitMethod(cand)
                     } else {
                         MethodCandidate::NeedsConfirmation(cand)
@@ -345,14 +426,19 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
 
                 let confirmed: Vec<_> = selected
                     .iter()
-                    .filter_map(|(&cand, &is_confirmed)| is_confirmed.then_some(cand))
+                    .filter_map(|(&cand, origin)| origin.confirmed.then_some(cand))
                     .collect();
                 if confirmed.len() == 1
                     && (self.receiver.original().has_var(self.db)
                         || selected
                             .iter()
-                            .filter_map(|(&cand, &is_confirmed)| (!is_confirmed).then_some(cand))
-                            .all(|cand| self.candidate_specializes_to(cand, confirmed[0])))
+                            .filter_map(|(&cand, origin)| {
+                                (!origin.confirmed).then_some((cand, origin))
+                            })
+                            .all(|(cand, origin)| {
+                                (!origin.from_assumption && self.candidate_is_unsatisfied(cand))
+                                    || self.candidate_specializes_to(cand, confirmed[0])
+                            }))
                 {
                     return Ok(MethodCandidate::TraitMethod(confirmed[0]));
                 }
@@ -360,9 +446,9 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                 let diagnostic_traits = visible_traits.iter().map(|cand| cand.0).collect();
                 let candidates = selected
                     .into_iter()
-                    .map(|(cand, confirmed)| AmbiguousTraitMethodCand {
+                    .map(|(cand, origin)| AmbiguousTraitMethodCand {
                         cand,
-                        needs_confirmation: !confirmed,
+                        needs_confirmation: !origin.confirmed,
                     })
                     .collect();
                 Err(MethodSelectionError::AmbiguousTraitMethod(
@@ -406,6 +492,17 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
             }
             GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => false,
         }
+    }
+
+    fn candidate_is_unsatisfied(&self, candidate: TraitMethodCand<'db>) -> bool {
+        let mut table = UnificationTable::new(self.db);
+        let candidate_inst = self.receiver.extract_solution(&mut table, candidate.inst);
+        let solve_cx = TraitSolveCx::new(self.db, self.scope).with_assumptions(self.assumptions);
+        let query = CanonicalGoalQuery::new(self.db, candidate_inst, self.assumptions);
+        matches!(
+            is_goal_query_satisfiable(self.db, solve_cx, &query),
+            GoalSatisfiability::UnSat(_)
+        )
     }
 
     /// Finds an instance of a trait method for the given trait definition and
@@ -515,12 +612,19 @@ pub enum MethodSelectionError<'db> {
 struct AssembledCandidates<'db> {
     inherent_methods: FxHashSet<ProbedMethod<'db>>,
     traits: IndexSet<(TraitInstId<'db>, Func<'db>)>,
+    assumption_traits: FxHashSet<(TraitInstId<'db>, Func<'db>)>,
 }
 
 impl<'db> AssembledCandidates<'db> {
     fn insert_inherent_method(&mut self, method: ProbedMethod<'db>) {
         self.inherent_methods.insert(method);
     }
+}
+
+#[derive(Clone, Copy, Default)]
+struct SelectedTraitMethodOrigin {
+    confirmed: bool,
+    from_assumption: bool,
 }
 
 #[cfg(test)]

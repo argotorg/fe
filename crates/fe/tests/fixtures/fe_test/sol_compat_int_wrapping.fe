@@ -1,0 +1,55 @@
+use core::ops::{WrappingAdd, WrappingMul, WrappingSub}
+use std::abi::sol::{Int24, Int56, Int160, Uint24, Uint160}
+use std::evm::effects::assert
+
+#[test]
+fn sol_unsigned_wrapping_methods() {
+    let max_u24 = Uint24 { val: 0xffffff }
+    let zero_u24 = Uint24 { val: 0 }
+    let one_u24 = Uint24 { val: 1 }
+    let u24_mul = Uint24 { val: 0x1000 }
+
+    assert(max_u24.wrapping_add(one_u24).val == 0)
+    assert(zero_u24.wrapping_sub(one_u24).val == 0xffffff)
+    assert(u24_mul.wrapping_mul(u24_mul).val == 0)
+
+    let u160_modulus: u256 = (1 as u256) << 160
+    let max_u160 = Uint160 { val: u160_modulus - 1 }
+    let zero_u160 = Uint160 { val: 0 }
+    let one_u160 = Uint160 { val: 1 }
+    let u160_mul = Uint160 { val: (1 as u256) << 80 }
+
+    assert(max_u160.wrapping_add(one_u160).val == 0)
+    assert(zero_u160.wrapping_sub(one_u160).val == u160_modulus - 1)
+    assert(u160_mul.wrapping_mul(u160_mul).val == 0)
+}
+
+#[test]
+fn sol_signed_wrapping_methods() {
+    let max_i24 = Int24 { val: 8388607 }
+    let min_i24 = Int24 { val: -8388608 }
+    let one_i24 = Int24 { val: 1 }
+    let i24_mul = Int24 { val: 4096 }
+
+    assert(max_i24.wrapping_add(one_i24).val == min_i24.val)
+    assert(min_i24.wrapping_sub(one_i24).val == max_i24.val)
+    assert(i24_mul.wrapping_mul(i24_mul).val == 0)
+
+    let max_i56 = Int56 { val: 36028797018963967 }
+    let min_i56 = Int56 { val: -36028797018963968 }
+    let one_i56 = Int56 { val: 1 }
+
+    assert(max_i56.wrapping_add(one_i56).val == min_i56.val)
+    assert(min_i56.wrapping_sub(one_i56).val == max_i56.val)
+
+    let i160_min_word: i256 = -((1 as i256) << 159)
+    let i160_max_word: i256 = ((1 as i256) << 159) - 1
+    let max_i160 = Int160 { val: i160_max_word }
+    let min_i160 = Int160 { val: i160_min_word }
+    let one_i160 = Int160 { val: 1 }
+    let i160_mul = Int160 { val: (1 as i256) << 80 }
+
+    assert(max_i160.wrapping_add(one_i160).val == min_i160.val)
+    assert(min_i160.wrapping_sub(one_i160).val == max_i160.val)
+    assert(i160_mul.wrapping_mul(i160_mul).val == 0)
+}
