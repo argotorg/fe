@@ -5,6 +5,7 @@ use std::str::FromStr;
 pub mod datalog_emit;
 pub mod origin_closure;
 pub mod static_analysis;
+pub mod trace_index;
 
 use common::origin::OriginExportKey;
 use introspection_config::FeToolingConfig;

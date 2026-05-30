@@ -3,11 +3,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use common::origin::OriginExportKey;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use trace_facts::{
-    OriginEdgeFact, OriginEdgeLabel, SourceSpanFact, TraceDataSource, TraceFact, TraceSnapshot,
-};
+use trace_facts::{OriginEdgeFact, OriginEdgeLabel, TraceDataSource, TraceFact, TraceSnapshot};
 
-use crate::{Confidence, data_source_label};
+use crate::{
+    Confidence, data_source_label,
+    trace_index::{TraceIndex, TraceReachabilityPolicy},
+};
 
 pub const ARGOT_STATIC_CHECKS_ID: &str = "argot_static_checks_v0";
 pub const ARGOT_STATIC_CHECKS_VERSION: &str = "0.1.0";
@@ -383,15 +384,14 @@ fn provenance_coverage_summary(coverage: &ProvenanceCoverageReport) -> String {
 struct CoverageIndex<'a> {
     bytecode_instructions: Vec<OriginExportKey>,
     primary_code_object: Option<OriginExportKey>,
-    source_spans: BTreeMap<OriginExportKey, &'a SourceSpanFact>,
     edges_by_from: BTreeMap<OriginExportKey, Vec<&'a OriginEdgeFact>>,
+    trace_index: TraceIndex<'a>,
 }
 
 impl<'a> CoverageIndex<'a> {
     fn new(snapshot: &'a TraceSnapshot) -> Self {
         let mut bytecode_instructions = BTreeSet::new();
         let mut primary_code_object = None;
-        let mut source_spans = BTreeMap::new();
         let mut edges_by_from: BTreeMap<OriginExportKey, Vec<&OriginEdgeFact>> = BTreeMap::new();
         for fact in snapshot.facts() {
             match fact {
@@ -405,9 +405,6 @@ impl<'a> CoverageIndex<'a> {
                         primary_code_object.get_or_insert_with(|| extent.code_object.clone());
                     }
                 }
-                TraceFact::SourceSpan(span) => {
-                    source_spans.insert(span.origin.clone(), span);
-                }
                 TraceFact::OriginEdge(edge) => {
                     edges_by_from
                         .entry(edge.from.clone())
@@ -420,18 +417,21 @@ impl<'a> CoverageIndex<'a> {
         Self {
             bytecode_instructions: bytecode_instructions.into_iter().collect(),
             primary_code_object,
-            source_spans,
             edges_by_from,
+            trace_index: TraceIndex::new(snapshot),
         }
     }
 
     fn classify(&self, instruction: &OriginExportKey) -> ProvenanceCoverageRow {
-        let reachable = self.reachable(instruction);
-        let source_candidates = reachable
+        let source_candidates = self
+            .trace_index
+            .source_candidates_for_instruction(instruction, TraceReachabilityPolicy::ExactOnly)
+            .len();
+        let has_sonatina_path = self
+            .trace_index
+            .reachable_targets(instruction, TraceReachabilityPolicy::ExactOnly)
             .iter()
-            .filter(|key| self.source_spans.contains_key(*key))
-            .count();
-        let has_sonatina_path = reachable.iter().any(|key| is_sonatina_origin(key));
+            .any(is_sonatina_origin);
         let has_synthetic_or_backend_path = self.has_synthetic_or_backend_path(instruction);
         let is_unmapped =
             source_candidates == 0 && !has_sonatina_path && !has_synthetic_or_backend_path;
@@ -452,25 +452,6 @@ impl<'a> CoverageIndex<'a> {
             is_unmapped,
             confidence,
         }
-    }
-
-    fn reachable(&self, root: &OriginExportKey) -> BTreeSet<OriginExportKey> {
-        let mut reachable = BTreeSet::new();
-        let mut stack = vec![root.clone()];
-        while let Some(key) = stack.pop() {
-            if !reachable.insert(key.clone()) {
-                continue;
-            }
-            if let Some(edges) = self.edges_by_from.get(&key) {
-                for edge in edges {
-                    if exact_attribution_label(edge.label) {
-                        stack.push(edge.to.clone());
-                    }
-                }
-            }
-        }
-        reachable.remove(root);
-        reachable
     }
 
     fn has_synthetic_or_backend_path(&self, root: &OriginExportKey) -> bool {
