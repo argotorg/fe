@@ -118,7 +118,7 @@ func private %credit_bob(v0.i256, v1.i256, v2.i256) -> i256 {
         return v25;
 }
 
-func private %from_raw__g9438(v0.i256) -> i256 {
+func private %from_raw__gf198(v0.i256) -> i256 {
     block0:
         jump block1;
 
@@ -126,7 +126,7 @@ func private %from_raw__g9438(v0.i256) -> i256 {
         return v0;
 }
 
-func private %from_raw__gf198(v0.i256) -> i256 {
+func private %from_raw__g9438(v0.i256) -> i256 {
     block0:
         jump block1;
 
