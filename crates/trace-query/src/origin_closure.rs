@@ -59,6 +59,8 @@ pub struct OriginClosureEdge {
     pub label: String,
     pub from: String,
     pub to: String,
+    pub traversal_class: OriginEdgeTraversalClass,
+    pub generated_work: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -680,9 +682,7 @@ fn audit_closure(
         + closure.counts.sonatina_pre
         + closure.counts.sonatina_post
         > 0;
-    let has_expected_synthetic = closure.edges.iter().any(|edge| {
-        edge.label.starts_with("SyntheticFor") || edge.label.starts_with("BackendPrepared")
-    });
+    let has_expected_synthetic = closure.edges.iter().any(|edge| edge.generated_work);
     let has_lowering_target = closure.counts.mir
         + closure.counts.sonatina_pre
         + closure.counts.sonatina_post
@@ -839,6 +839,8 @@ fn origin_closure(start: &OriginExportKey, index: &OriginClosureIndex<'_>) -> Ra
                     ),
                     from: display_key(&edge.from),
                     to: display_key(&edge.to),
+                    traversal_class: edge.traversal_class(),
+                    generated_work: edge.is_generated_work_edge(),
                 });
             }
             queue.push_back((edge.from.clone(), depth + 1));
@@ -1273,6 +1275,8 @@ mod tests {
             label: "BackendPrepared / Backend".to_string(),
             from: "backend event".to_string(),
             to: "bytecode.pc pc:0".to_string(),
+            traversal_class: OriginEdgeTraversalClass::Contextual,
+            generated_work: true,
         });
         let groups = groups_for_closure(&closure);
 
@@ -1285,6 +1289,46 @@ mod tests {
                 .contains(&ClosureAuditSymptom::SourceUnavailableSynthetic)
         );
         assert!(!entry.suspicious);
+    }
+
+    #[test]
+    fn web_and_origin_closure_production_do_not_match_raw_edge_labels() {
+        let query_crate = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let repo_root = query_crate
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("trace-query crate should live under crates/");
+        let files = [
+            query_crate.join("src/origin_closure.rs"),
+            repo_root.join("crates/fe/src/trace/trace_web_demo.rs"),
+        ];
+        let forbidden = [
+            "OriginEdgeLabel::",
+            "LoweredFrom",
+            "EmittedFrom",
+            "BackendPrepared",
+            "SyntheticFor",
+            "\"lowered_from\"",
+            "\"emitted_from\"",
+            "\"backend_prepared\"",
+            "\"synthetic_for\"",
+        ];
+
+        for file in files {
+            let source = std::fs::read_to_string(&file)
+                .unwrap_or_else(|err| panic!("failed to read {}: {err}", file.display()));
+            let production = source
+                .split("\n#[cfg(test)]")
+                .next()
+                .expect("split always yields one segment");
+            for pattern in forbidden {
+                assert!(
+                    !production.contains(pattern),
+                    "{} production code must use OriginEdgeFact::traversal_class() / TraceReachabilityPolicy, not raw edge-label pattern {pattern:?}",
+                    file.display()
+                );
+            }
+        }
     }
 
     #[test]

@@ -323,6 +323,13 @@ impl OriginEdgeFact {
             OriginEdgeTraversalClass::ExactAttribution | OriginEdgeTraversalClass::SnapshotAlias
         )
     }
+
+    pub fn is_generated_work_edge(&self) -> bool {
+        matches!(
+            self.label,
+            OriginEdgeLabel::SyntheticFor | OriginEdgeLabel::BackendPrepared
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
