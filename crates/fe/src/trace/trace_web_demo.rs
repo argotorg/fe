@@ -24,11 +24,15 @@ pub(super) fn run_trace_web_demo(args: &DevTraceWebDemoArgs) -> Result<String, S
     }
 
     let rendered = render_trace_web_demo_once(args, false)?;
-    fs::write(args.out.as_std_path(), &rendered.html)
-        .map_err(|err| format!("failed to write web demo {}: {err}", args.out))?;
+    let out = args
+        .out
+        .as_ref()
+        .ok_or_else(|| "pass --out HTML_PATH when not using --serve".to_string())?;
+    fs::write(out.as_std_path(), &rendered.html)
+        .map_err(|err| format!("failed to write web demo {out}: {err}"))?;
     Ok(format!(
         "wrote origin trace web demo: {}\nData source: {}\nLoop bytecode PCs: {}\nSource confidence: {}\n{}\n",
-        args.out,
+        out,
         rendered.model.metadata.data_source,
         rendered.model.bytecode_count,
         rendered.model.source.confidence,
@@ -161,7 +165,7 @@ impl LiveWebDemoInput {
 
 struct LiveWebDemoState {
     input: LiveWebDemoInput,
-    out: Utf8PathBuf,
+    out: Option<Utf8PathBuf>,
     last_modified: Option<SystemTime>,
     generation: u64,
     cached_html: String,
@@ -206,8 +210,10 @@ impl LiveWebDemoState {
                 render_incremental_trace(emitter, generation, true)?
             }
         };
-        fs::write(self.out.as_std_path(), &rendered.html)
-            .map_err(|err| format!("failed to write web demo {}: {err}", self.out))?;
+        if let Some(out) = &self.out {
+            fs::write(out.as_std_path(), &rendered.html)
+                .map_err(|err| format!("failed to write web demo {out}: {err}"))?;
+        }
 
         self.generation = generation;
         self.last_modified = modified;
@@ -232,14 +238,17 @@ fn serve_trace_web_demo(args: &DevTraceWebDemoArgs) -> Result<String, String> {
         )
     })?;
     eprintln!(
-        "serving origin trace web demo at http://127.0.0.1:{}/\nwatching: {}\nwriting: {}",
+        "serving origin trace web demo at http://127.0.0.1:{}/\nwatching: {}\nmirroring: {}",
         args.port,
         state
             .lock()
             .map_err(|_| "trace web demo state lock poisoned".to_string())?
             .input
             .path(),
-        args.out,
+        args.out
+            .as_ref()
+            .map(|path| path.to_string())
+            .unwrap_or_else(|| "disabled; served from memory".to_string()),
     );
 
     for stream in listener.incoming() {

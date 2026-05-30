@@ -11,7 +11,6 @@ Run the demo directly from a Fe source file:
 ```sh
 cargo run -p fe -- dev trace web-demo \
   --source fib_demo.fe \
-  --out /tmp/fe-origin-trace.html \
   --serve \
   --port 5179
 ```
@@ -28,6 +27,9 @@ show salsa event counters:
 
 Small source edits should produce a much lower `query execs` count and a non-zero
 `memo reuse` count after the cold first generation.
+
+Pass `--out /tmp/fe-origin-trace.html` only if you also want the live server to
+mirror the current page to disk on each successful render.
 
 ## Offline JSONL Mode
 

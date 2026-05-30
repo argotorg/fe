@@ -892,7 +892,7 @@ pub struct DevTraceWebDemoArgs {
     pub source: Option<Utf8PathBuf>,
     /// Output standalone HTML path.
     #[arg(long)]
-    pub out: Utf8PathBuf,
+    pub out: Option<Utf8PathBuf>,
     /// Serve the demo and live-reload when the source or JSONL input changes.
     #[arg(long)]
     pub serve: bool,
