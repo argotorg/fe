@@ -3,7 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use common::origin::OriginExportKey;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use trace_facts::{OriginEdgeFact, OriginEdgeLabel, TraceDataSource, TraceFact, TraceSnapshot};
+use trace_facts::{
+    CompilerEventKind, OriginEdgeFact, OriginEdgeLabel, TraceDataSource, TraceFact, TraceSnapshot,
+};
 
 use crate::{
     Confidence, data_source_label,
@@ -127,6 +129,7 @@ pub enum AnalysisGapKind {
     MissingBytecodeAttribution,
     MissingSourceAttribution,
     AmbiguousSourceAttribution,
+    PostOptAttributionGap,
     MissingEvidence,
 }
 
@@ -143,6 +146,7 @@ pub struct AnalysisWitness {
 pub enum AnalysisWitnessKind {
     ExactSourcePath,
     SyntheticBackendPath,
+    PostOptBytecodeAttribution,
     UnmappedInstruction,
 }
 
@@ -226,8 +230,94 @@ pub struct ProvenanceCoverageRow {
     pub confidence: AttributionConfidence,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PostOptAttributionGapReport {
+    pub total_postopt_origins: usize,
+    pub bytecode_attributed_origins: usize,
+    pub explicitly_explained_origins: usize,
+    pub gap_count: usize,
+    pub confidence: AttributionConfidence,
+    pub gaps: Vec<PostOptAttributionGap>,
+}
+
+impl PostOptAttributionGapReport {
+    pub fn from_snapshot(snapshot: &TraceSnapshot) -> Self {
+        let index = TraceIndex::new(snapshot);
+        let postopt_origins = snapshot
+            .facts()
+            .iter()
+            .filter_map(|fact| match fact {
+                TraceFact::OriginNode(node) if is_sonatina_post_origin(&node.key) => {
+                    Some(node.key.clone())
+                }
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        let bytecode_instructions = snapshot
+            .facts()
+            .iter()
+            .filter_map(|fact| match fact {
+                TraceFact::Instruction(instruction)
+                    if is_bytecode_instruction(&instruction.instruction) =>
+                {
+                    Some(instruction.instruction.clone())
+                }
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        let mut bytecode_attributed = BTreeSet::new();
+        for instruction in &bytecode_instructions {
+            for target in index.reachable_targets(instruction, TraceReachabilityPolicy::ExactOnly) {
+                if postopt_origins.contains(&target) {
+                    bytecode_attributed.insert(target);
+                }
+            }
+        }
+        let explicitly_explained = explicit_postopt_explanations(snapshot);
+        let gaps = postopt_origins
+            .iter()
+            .filter(|origin| !bytecode_attributed.contains(*origin))
+            .filter(|origin| !explicitly_explained.contains(*origin))
+            .map(|origin| PostOptAttributionGap {
+                sonatina_origin: origin.clone(),
+                reason: "missing exact post-opt Sonatina to final bytecode attribution".to_string(),
+                suggested_next_fact:
+                    "Emit an exact bytecode OriginEdgeFact/InstructionExtentFact or an optimizer elision/coalescing CompilerEventFact"
+                        .to_string(),
+            })
+            .collect::<Vec<_>>();
+        let confidence = if postopt_origins.is_empty() {
+            Confidence::Unknown
+        } else if gaps.is_empty() {
+            Confidence::High
+        } else if !bytecode_attributed.is_empty() {
+            Confidence::Medium
+        } else {
+            Confidence::Low
+        };
+        Self {
+            total_postopt_origins: postopt_origins.len(),
+            bytecode_attributed_origins: bytecode_attributed.len(),
+            explicitly_explained_origins: explicitly_explained
+                .intersection(&postopt_origins)
+                .count(),
+            gap_count: gaps.len(),
+            confidence,
+            gaps,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PostOptAttributionGap {
+    pub sonatina_origin: OriginExportKey,
+    pub reason: String,
+    pub suggested_next_fact: String,
+}
+
 pub fn static_analysis_report(snapshot: &TraceSnapshot) -> StaticAnalysisReport {
     let coverage = ProvenanceCoverageReport::from_snapshot(snapshot);
+    let postopt = PostOptAttributionGapReport::from_snapshot(snapshot);
     let mut gaps = Vec::new();
     if coverage.unmapped_pcs > 0 {
         gaps.push(AnalysisGap {
@@ -289,6 +379,25 @@ pub fn static_analysis_report(snapshot: &TraceSnapshot) -> StaticAnalysisReport 
             ),
         });
     }
+    if postopt.gap_count > 0 {
+        gaps.push(AnalysisGap {
+            id: "gap:postopt_attribution:missing_bytecode".to_string(),
+            kind: AnalysisGapKind::PostOptAttributionGap,
+            summary: format!(
+                "{} optimized Sonatina origin(s) do not reach final bytecode and lack an explicit optimizer explanation",
+                postopt.gap_count
+            ),
+            involved_origins: postopt
+                .gaps
+                .iter()
+                .map(|gap| gap.sonatina_origin.clone())
+                .collect(),
+            suggested_next_fact: Some(
+                "Emit post-opt to bytecode edges, instruction extents, or optimizer rewrite/elision events"
+                    .to_string(),
+            ),
+        });
+    }
 
     let mut witnesses = Vec::new();
     if let Some(row) = coverage.rows.iter().find(|row| row.source_candidates == 1) {
@@ -321,13 +430,29 @@ pub fn static_analysis_report(snapshot: &TraceSnapshot) -> StaticAnalysisReport 
             involved_origins: vec![row.instruction.clone()],
         });
     }
+    if postopt.bytecode_attributed_origins > 0 {
+        witnesses.push(AnalysisWitness {
+            id: "witness:postopt_attribution:bytecode_edge".to_string(),
+            kind: AnalysisWitnessKind::PostOptBytecodeAttribution,
+            summary: "At least one optimized Sonatina origin is reached from final bytecode under exact attribution"
+                .to_string(),
+            involved_origins: Vec::new(),
+        });
+    }
 
-    let status = if coverage.total_instructions == 0 {
+    let coverage_status = if coverage.total_instructions == 0 {
         CheckStatus::Inconclusive
     } else if coverage.unmapped_pcs == 0
         && coverage.ambiguous_pcs == 0
         && coverage.sonatina_only_pcs == 0
     {
+        CheckStatus::Pass
+    } else {
+        CheckStatus::Warning
+    };
+    let postopt_status = if postopt.total_postopt_origins == 0 {
+        CheckStatus::Inconclusive
+    } else if postopt.gap_count == 0 {
         CheckStatus::Pass
     } else {
         CheckStatus::Warning
@@ -340,7 +465,7 @@ pub fn static_analysis_report(snapshot: &TraceSnapshot) -> StaticAnalysisReport 
     let check = CheckResult {
         check_id: "provenance_coverage".to_string(),
         title: "Provenance coverage".to_string(),
-        status,
+        status: coverage_status,
         policy: "exact_lowered_emitted_source_paths".to_string(),
         confidence: coverage.confidence,
         summary: provenance_coverage_summary(&coverage),
@@ -356,14 +481,56 @@ pub fn static_analysis_report(snapshot: &TraceSnapshot) -> StaticAnalysisReport 
             "coverage": coverage,
         }),
     };
+    let postopt_gap_ids = gaps
+        .iter()
+        .filter(|gap| gap.kind == AnalysisGapKind::PostOptAttributionGap)
+        .map(|gap| gap.id.clone())
+        .collect::<Vec<_>>();
+    let postopt_witness_ids = witnesses
+        .iter()
+        .filter(|witness| witness.kind == AnalysisWitnessKind::PostOptBytecodeAttribution)
+        .map(|witness| witness.id.clone())
+        .collect::<Vec<_>>();
+    let postopt_check = CheckResult {
+        check_id: "postopt_attribution_gap".to_string(),
+        title: "Post-opt attribution gap".to_string(),
+        status: postopt_status,
+        policy: "exact_bytecode_to_postopt_paths_or_explicit_optimizer_explanation".to_string(),
+        confidence: postopt.confidence,
+        summary: postopt_gap_summary(&postopt),
+        witnesses: postopt_witness_ids,
+        gaps: postopt_gap_ids,
+        involved_origins: postopt
+            .gaps
+            .iter()
+            .map(|gap| gap.sonatina_origin.clone())
+            .collect(),
+        involved_boundaries: Vec::new(),
+        evidence: json!({
+            "postopt_attribution": postopt,
+        }),
+    };
 
     StaticAnalysisReport {
         metadata: AnalysisMetadata::from_snapshot(snapshot),
-        checks: vec![check],
+        checks: vec![check, postopt_check],
         bloat: None,
         gaps,
         witnesses,
     }
+}
+
+fn postopt_gap_summary(report: &PostOptAttributionGapReport) -> String {
+    if report.total_postopt_origins == 0 {
+        return "no optimized Sonatina origins were present in the trace".to_string();
+    }
+    format!(
+        "{} post-opt origin(s): {} bytecode-attributed, {} explicitly explained, {} gap(s)",
+        report.total_postopt_origins,
+        report.bytecode_attributed_origins,
+        report.explicitly_explained_origins,
+        report.gap_count
+    )
 }
 
 fn provenance_coverage_summary(coverage: &ProvenanceCoverageReport) -> String {
@@ -494,6 +661,39 @@ fn is_sonatina_origin(key: &OriginExportKey) -> bool {
     key.kind().starts_with("sonatina.")
 }
 
+fn is_sonatina_post_origin(key: &OriginExportKey) -> bool {
+    key.kind().starts_with("sonatina.post")
+}
+
+fn explicit_postopt_explanations(snapshot: &TraceSnapshot) -> BTreeSet<OriginExportKey> {
+    snapshot
+        .facts()
+        .iter()
+        .filter_map(|fact| match fact {
+            TraceFact::CompilerEvent(event)
+                if matches!(
+                    event.kind,
+                    CompilerEventKind::OptimizerElidedOrRewritten
+                        | CompilerEventKind::OptimizerSnapshotJoin
+                        | CompilerEventKind::OptimizerCreated
+                ) =>
+            {
+                Some(
+                    event
+                        .inputs
+                        .iter()
+                        .chain(event.outputs.iter())
+                        .filter(|key| is_sonatina_post_origin(key))
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                )
+            }
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
+
 fn source_confidence(facts: &[TraceFact]) -> Confidence {
     if facts
         .iter()
@@ -572,9 +772,10 @@ fn optimization_level(flags: &[String]) -> Option<String> {
 mod tests {
     use common::origin::OriginExportKey;
     use trace_facts::{
-        CodeObjectFact, CodeObjectKind, InstructionExtentFact, InstructionFact, OriginEdgeFact,
-        OriginEdgeLabel, OriginNodeFact, OriginNodeKind, PcRange, SourceFileFact, SourceSpanFact,
-        TraceBundle, TraceFact, TraceMetadata, TraceSnapshot,
+        CodeObjectFact, CodeObjectKind, CompilerEventFact, CompilerEventKind, CompilerPhase,
+        InstructionExtentFact, InstructionFact, OriginEdgeFact, OriginEdgeLabel, OriginNodeFact,
+        OriginNodeKind, PcRange, SourceFileFact, SourceSpanFact, TraceBundle, TraceFact,
+        TraceMetadata, TraceSnapshot,
     };
 
     use super::{CheckStatus, Confidence, RuntimeTraceSource, static_analysis_report};
@@ -778,5 +979,82 @@ mod tests {
             report.metadata.bytecode_attribution_confidence,
             Confidence::Unknown
         );
+    }
+
+    #[test]
+    fn postopt_attribution_gap_reports_unattributed_postopt_origins() {
+        let function = key("function", "demo", "recv");
+        let bytecode = key("bytecode.pc", "demo", "pc:0");
+        let attributed = key("sonatina.post.inst", "demo", "inst:0");
+        let gap = key("sonatina.post.inst", "demo", "inst:1");
+        let facts = vec![
+            node(function.clone()),
+            node(bytecode.clone()),
+            node(attributed.clone()),
+            node(gap.clone()),
+            TraceFact::Instruction(InstructionFact::new(bytecode.clone(), function, 0, "ADD")),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                bytecode,
+                attributed,
+                OriginEdgeLabel::EmittedFrom,
+                None,
+            )),
+        ];
+
+        let report = static_analysis_report(&snapshot(facts));
+        let check = report
+            .checks
+            .iter()
+            .find(|check| check.check_id == "postopt_attribution_gap")
+            .unwrap();
+
+        assert_eq!(check.status, CheckStatus::Warning);
+        assert_eq!(
+            check.evidence["postopt_attribution"]["total_postopt_origins"],
+            2
+        );
+        assert_eq!(
+            check.evidence["postopt_attribution"]["bytecode_attributed_origins"],
+            1
+        );
+        assert_eq!(check.evidence["postopt_attribution"]["gap_count"], 1);
+        assert!(
+            report
+                .gaps
+                .iter()
+                .any(|analysis_gap| analysis_gap.involved_origins == vec![gap.clone()])
+        );
+    }
+
+    #[test]
+    fn postopt_attribution_gap_accepts_explicit_optimizer_explanations() {
+        let postopt = key("sonatina.post.inst", "demo", "inst:0");
+        let event = key("compiler.event", "demo", "optimizer:0");
+        let facts = vec![
+            node(postopt.clone()),
+            node(event.clone()),
+            TraceFact::CompilerEvent(CompilerEventFact::new(
+                event,
+                CompilerPhase::SonatinaPostOpt,
+                CompilerEventKind::OptimizerElidedOrRewritten,
+                vec![postopt],
+                Vec::new(),
+                None,
+            )),
+        ];
+
+        let report = static_analysis_report(&snapshot(facts));
+        let check = report
+            .checks
+            .iter()
+            .find(|check| check.check_id == "postopt_attribution_gap")
+            .unwrap();
+
+        assert_eq!(check.status, CheckStatus::Pass);
+        assert_eq!(
+            check.evidence["postopt_attribution"]["explicitly_explained_origins"],
+            1
+        );
+        assert!(check.gaps.is_empty());
     }
 }
