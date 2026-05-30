@@ -50,3 +50,21 @@ cargo run -p fe -- dev trace web-demo \
 
 Offline mode is useful for sharing a standalone HTML artifact, but it cannot demonstrate
 salsa caching because it consumes already-serialized JSONL.
+
+## Closure Audit
+
+To audit the same transitive closures without opening the browser:
+
+```sh
+cargo run -p fe -- dev trace audit-closures \
+  --source fib_demo.fe \
+  --optimize 2
+```
+
+The audit is deterministic and intentionally conservative. It classifies each
+closure into buckets such as `good_many_to_many`, `optimized_attribution_gap`,
+`source_only`, `missing_bytecode`, `too_broad`, and `foreign_source`. A
+`source_only` closure is not automatically suspicious: many HIR subexpressions do
+not correspond to standalone target instructions. Use `--format json` to produce
+compact evidence packs for cheaper agent review. The agent should only review
+closures that the deterministic audit flags as suspicious.

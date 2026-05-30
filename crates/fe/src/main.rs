@@ -698,6 +698,8 @@ pub enum DevTraceCommand {
     Validate(DevTraceInputArgs),
     /// Write a standalone browser demo for origin tracing through source, Sonatina, and bytecode.
     WebDemo(DevTraceWebDemoArgs),
+    /// Deterministically classify every origin closure used by the web demo.
+    AuditClosures(DevTraceAuditClosuresArgs),
     /// Run a report query against a validated trace snapshot.
     Query {
         #[command(subcommand)]
@@ -908,6 +910,28 @@ pub struct DevTraceWebDemoArgs {
     /// Optimization level for --source: 0, 1, 2, or s.
     #[arg(long, default_value = "0")]
     pub optimize: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DevTraceAuditClosuresArgs {
+    /// Trace JSONL bundle to read.
+    #[arg(long = "from", value_name = "TRACE_JSONL", conflicts_with = "source")]
+    pub from: Option<Utf8PathBuf>,
+    /// Fe source file to compile before auditing closures.
+    #[arg(long, value_name = "FE_FILE", conflicts_with = "from")]
+    pub source: Option<Utf8PathBuf>,
+    /// Treat --source as a standalone Fe file even if it lives under an ingot.
+    #[arg(long)]
+    pub standalone: bool,
+    /// Compilation profile for --source.
+    #[arg(long, default_value = "debug")]
+    pub profile: String,
+    /// Optimization level for --source: 0, 1, 2, or s.
+    #[arg(long, default_value = "2")]
+    pub optimize: String,
+    /// Output format.
+    #[arg(long, value_enum, default_value = "text")]
+    pub format: TraceReportFormat,
 }
 
 #[derive(Debug, Clone, Args)]

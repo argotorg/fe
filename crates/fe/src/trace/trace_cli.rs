@@ -37,6 +37,9 @@ fn run_dev_trace_command(command: &DevTraceCommand) -> Result<String, String> {
         DevTraceCommand::Run(args) => super::trace_emit::run_trace_run(args),
         DevTraceCommand::Validate(args) => super::trace_emit::run_trace_validate(args),
         DevTraceCommand::WebDemo(args) => super::trace_web_demo::run_trace_web_demo(args),
+        DevTraceCommand::AuditClosures(args) => {
+            super::trace_web_demo::run_trace_audit_closures(args)
+        }
         DevTraceCommand::Query { command } => run_trace_query_command(command),
         DevTraceCommand::ExportDatalog(args) => super::trace_datalog::run_export_datalog(args),
         DevTraceCommand::Datalog { command } => {

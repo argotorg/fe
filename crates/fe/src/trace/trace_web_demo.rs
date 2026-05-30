@@ -16,7 +16,7 @@ use trace_facts::{
 };
 use trace_query::{IntrospectionService, LoopContentsRequest, TraceIntrospectionService};
 
-use crate::DevTraceWebDemoArgs;
+use crate::{DevTraceAuditClosuresArgs, DevTraceWebDemoArgs, TraceReportFormat};
 
 pub(super) fn run_trace_web_demo(args: &DevTraceWebDemoArgs) -> Result<String, String> {
     if args.serve {
@@ -38,6 +38,20 @@ pub(super) fn run_trace_web_demo(args: &DevTraceWebDemoArgs) -> Result<String, S
         rendered.model.source.confidence,
         rendered.salsa_summary(),
     ))
+}
+
+pub(super) fn run_trace_audit_closures(args: &DevTraceAuditClosuresArgs) -> Result<String, String> {
+    let model = render_trace_audit_model_once(args)?;
+    let report = audit_closures(&model);
+    match args.format {
+        TraceReportFormat::Text => Ok(render_closure_audit_report(&report)),
+        TraceReportFormat::Json => serde_json::to_string_pretty(&report)
+            .map(|mut json| {
+                json.push('\n');
+                json
+            })
+            .map_err(|err| format!("failed to render closure audit JSON: {err}")),
+    }
 }
 
 struct RenderedWebDemo {
@@ -69,7 +83,13 @@ fn render_trace_web_demo_once(
             render_snapshot(&snapshot, None, live_reload)
         }
         (None, Some(source)) => {
-            let mut emitter = incremental_emitter(source, args)?;
+            let mut emitter = incremental_emitter(
+                source,
+                args.standalone,
+                &args.profile,
+                &args.optimize,
+                "web-demo",
+            )?;
             render_incremental_trace(&mut emitter, 1, live_reload)
         }
         (None, None) => Err("pass either --from TRACE_JSONL or --source FE_FILE".to_string()),
@@ -79,21 +99,46 @@ fn render_trace_web_demo_once(
 
 fn incremental_emitter(
     source: &Utf8PathBuf,
-    args: &DevTraceWebDemoArgs,
+    standalone: bool,
+    profile: &str,
+    optimize: &str,
+    command_leaf: &str,
 ) -> Result<super::trace_emit::IncrementalTraceEmitter, String> {
-    let opt_level = args.optimize.parse::<codegen::OptLevel>()?;
+    let opt_level = optimize.parse::<codegen::OptLevel>()?;
     super::trace_emit::IncrementalTraceEmitter::new(
         source,
-        args.standalone,
-        &args.profile,
+        standalone,
+        profile,
         opt_level,
         vec![
             "fe".to_string(),
             "dev".to_string(),
             "trace".to_string(),
-            "web-demo".to_string(),
+            command_leaf.to_string(),
         ],
     )
+}
+
+fn render_trace_audit_model_once(args: &DevTraceAuditClosuresArgs) -> Result<WebDemoModel, String> {
+    match (&args.from, &args.source) {
+        (Some(from), None) => {
+            let snapshot = super::read_trace_snapshot_jsonl_from_path(from)?;
+            Ok(build_demo_model(&snapshot, None))
+        }
+        (None, Some(source)) => {
+            let mut emitter = incremental_emitter(
+                source,
+                args.standalone,
+                &args.profile,
+                &args.optimize,
+                "audit-closures",
+            )?;
+            let rendered = render_incremental_trace(&mut emitter, 1, false)?;
+            Ok(rendered.model)
+        }
+        (None, None) => Err("pass either --from TRACE_JSONL or --source FE_FILE".to_string()),
+        (Some(_), Some(_)) => Err("pass only one of --from or --source".to_string()),
+    }
 }
 
 fn render_incremental_trace(
@@ -177,7 +222,13 @@ impl LiveWebDemoState {
         let input = match (&args.from, &args.source) {
             (Some(from), None) => LiveWebDemoInput::Jsonl { path: from.clone() },
             (None, Some(source)) => LiveWebDemoInput::Source {
-                emitter: Box::new(incremental_emitter(source, args)?),
+                emitter: Box::new(incremental_emitter(
+                    source,
+                    args.standalone,
+                    &args.profile,
+                    &args.optimize,
+                    "web-demo",
+                )?),
             },
             (None, None) => return Err("pass either --from TRACE_JSONL or --source FE_FILE".into()),
             (Some(_), Some(_)) => return Err("pass only one of --from or --source".into()),
@@ -472,7 +523,7 @@ struct DemoClosure {
     source_spans: Vec<DemoSourceSpan>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct DemoClosureCounts {
     hir: usize,
     mir: usize,
@@ -778,6 +829,275 @@ fn closure_gap_note(counts: &DemoClosureCounts) -> Option<String> {
     } else {
         None
     }
+}
+
+#[derive(Debug, Serialize)]
+struct ClosureAuditReport {
+    input_path: String,
+    target: String,
+    data_source: String,
+    total_closures: usize,
+    verdict_counts: BTreeMap<ClosureAuditVerdict, usize>,
+    suspicious_closures: usize,
+    closures: Vec<ClosureAuditEntry>,
+}
+
+#[derive(Debug, Serialize)]
+struct ClosureAuditEntry {
+    class_name: String,
+    label: String,
+    root_key: String,
+    verdicts: Vec<ClosureAuditVerdict>,
+    counts: DemoClosureCounts,
+    key_count: usize,
+    edge_count: usize,
+    source_spans: Vec<String>,
+    notes: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ClosureAuditVerdict {
+    GoodExact,
+    GoodManyToMany,
+    SourceOnly,
+    ExpectedSynthetic,
+    OptimizedAttributionGap,
+    TooBroad,
+    MissingSource,
+    MissingBytecode,
+    ForeignSource,
+    Unclassified,
+}
+
+impl ClosureAuditVerdict {
+    fn is_suspicious(self) -> bool {
+        matches!(
+            self,
+            Self::OptimizedAttributionGap
+                | Self::TooBroad
+                | Self::MissingSource
+                | Self::MissingBytecode
+                | Self::ForeignSource
+                | Self::Unclassified
+        )
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::GoodExact => "good_exact",
+            Self::GoodManyToMany => "good_many_to_many",
+            Self::SourceOnly => "source_only",
+            Self::ExpectedSynthetic => "expected_synthetic",
+            Self::OptimizedAttributionGap => "optimized_attribution_gap",
+            Self::TooBroad => "too_broad",
+            Self::MissingSource => "missing_source",
+            Self::MissingBytecode => "missing_bytecode",
+            Self::ForeignSource => "foreign_source",
+            Self::Unclassified => "unclassified",
+        }
+    }
+}
+
+fn audit_closures(model: &WebDemoModel) -> ClosureAuditReport {
+    let closures = model
+        .closures
+        .iter()
+        .map(|closure| audit_closure(&model.metadata.input_path, model.bytecode_count, closure))
+        .collect::<Vec<_>>();
+    let mut verdict_counts = BTreeMap::<ClosureAuditVerdict, usize>::new();
+    let mut suspicious = 0;
+    for closure in &closures {
+        if closure
+            .verdicts
+            .iter()
+            .any(|verdict| verdict.is_suspicious())
+        {
+            suspicious += 1;
+        }
+        for verdict in &closure.verdicts {
+            *verdict_counts.entry(*verdict).or_default() += 1;
+        }
+    }
+    ClosureAuditReport {
+        input_path: model.metadata.input_path.clone(),
+        target: model.metadata.target.clone(),
+        data_source: model.metadata.data_source.clone(),
+        total_closures: closures.len(),
+        verdict_counts,
+        suspicious_closures: suspicious,
+        closures,
+    }
+}
+
+fn audit_closure(
+    input_path: &str,
+    loop_bytecode_count: usize,
+    closure: &DemoClosure,
+) -> ClosureAuditEntry {
+    let mut verdicts = BTreeSet::new();
+    let mut notes = Vec::new();
+    let direct_input_spans = closure
+        .source_spans
+        .iter()
+        .filter(|span| {
+            span.confidence == "direct" && source_owner_matches_input(&span.file_owner, input_path)
+        })
+        .collect::<Vec<_>>();
+    let foreign_spans = closure
+        .source_spans
+        .iter()
+        .filter(|span| {
+            span.confidence == "direct" && !source_owner_matches_input(&span.file_owner, input_path)
+        })
+        .collect::<Vec<_>>();
+
+    if !foreign_spans.is_empty() {
+        verdicts.insert(ClosureAuditVerdict::ForeignSource);
+        notes.push(format!(
+            "{} direct source span(s) point at a file other than {input_path}",
+            foreign_spans.len()
+        ));
+    }
+
+    let broad_bytecode_threshold = (loop_bytecode_count.saturating_mul(3) / 4).max(64);
+    if closure.counts.bytecode > broad_bytecode_threshold || closure.keys.len() > 300 {
+        verdicts.insert(ClosureAuditVerdict::TooBroad);
+        notes.push(format!(
+            "closure touches {} bytecode PC(s) and {} total key(s)",
+            closure.counts.bytecode,
+            closure.keys.len()
+        ));
+    }
+
+    if let Some(gap) = &closure.gap {
+        verdicts.insert(ClosureAuditVerdict::OptimizedAttributionGap);
+        notes.push(gap.clone());
+    }
+
+    let has_ir = closure.counts.hir
+        + closure.counts.mir
+        + closure.counts.sonatina_pre
+        + closure.counts.sonatina_post
+        > 0;
+    if closure.counts.sonatina_post > 0 && closure.counts.bytecode == 0 {
+        verdicts.insert(ClosureAuditVerdict::MissingBytecode);
+        notes.push("post-opt closure reaches no final bytecode PC".to_string());
+    }
+    if has_ir && closure.counts.bytecode > 0 && direct_input_spans.is_empty() {
+        verdicts.insert(ClosureAuditVerdict::MissingSource);
+        notes.push(
+            "bytecode-linked closure has no direct span in the audited input file".to_string(),
+        );
+    }
+
+    if closure.edges.iter().any(|edge| {
+        edge.label.starts_with("SyntheticFor") || edge.label.starts_with("BackendPrepared")
+    }) {
+        verdicts.insert(ClosureAuditVerdict::ExpectedSynthetic);
+    }
+
+    if !verdicts.iter().any(|verdict| verdict.is_suspicious())
+        && !direct_input_spans.is_empty()
+        && closure.counts.bytecode > 0
+    {
+        let exact = direct_input_spans.len() == 1
+            && closure.counts.bytecode == 1
+            && closure.counts.hir <= 1
+            && closure.counts.mir <= 1
+            && closure.counts.sonatina_pre <= 1
+            && closure.counts.sonatina_post <= 1;
+        verdicts.insert(if exact {
+            ClosureAuditVerdict::GoodExact
+        } else {
+            ClosureAuditVerdict::GoodManyToMany
+        });
+    }
+
+    if !verdicts.iter().any(|verdict| verdict.is_suspicious())
+        && !direct_input_spans.is_empty()
+        && closure.counts.bytecode == 0
+    {
+        verdicts.insert(ClosureAuditVerdict::SourceOnly);
+    }
+
+    if verdicts.is_empty() {
+        verdicts.insert(ClosureAuditVerdict::Unclassified);
+        notes.push("closure did not match a known audit bucket".to_string());
+    }
+
+    ClosureAuditEntry {
+        class_name: closure.class_name.clone(),
+        label: closure.label.clone(),
+        root_key: closure.root_key.clone(),
+        verdicts: verdicts.into_iter().collect(),
+        counts: closure.counts.clone(),
+        key_count: closure.keys.len(),
+        edge_count: closure.edges.len(),
+        source_spans: direct_input_spans
+            .into_iter()
+            .map(|span| format!("{} {} {}", span.file, span.lines, span.origin))
+            .collect(),
+        notes,
+    }
+}
+
+fn render_closure_audit_report(report: &ClosureAuditReport) -> String {
+    let mut out = String::new();
+    out.push_str("Fe dev trace audit-closures\n");
+    out.push_str("Confidence: deterministic audit over derived closure graph; does not prove semantic completeness.\n");
+    out.push_str(&format!("Input: {}\n", report.input_path));
+    out.push_str(&format!("Target: {}\n", report.target));
+    out.push_str(&format!("Data source: {}\n", report.data_source));
+    out.push_str(&format!(
+        "Closures: {} total, {} suspicious\n\n",
+        report.total_closures, report.suspicious_closures
+    ));
+    out.push_str("Verdicts:\n");
+    for (verdict, count) in &report.verdict_counts {
+        out.push_str(&format!("  {:>27}: {count}\n", verdict.as_str()));
+    }
+    out.push_str("\nSuspicious closures:\n");
+    for closure in &report.closures {
+        if !closure
+            .verdicts
+            .iter()
+            .any(|verdict| verdict.is_suspicious())
+        {
+            continue;
+        }
+        out.push_str(&format!(
+            "  {} [{}] {}\n",
+            closure.class_name,
+            closure
+                .verdicts
+                .iter()
+                .map(|verdict| verdict.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
+            closure.label
+        ));
+        out.push_str(&format!(
+            "    phases: HIR={} MIR={} pre={} post={} bytecode={} keys={} edges={}\n",
+            closure.counts.hir,
+            closure.counts.mir,
+            closure.counts.sonatina_pre,
+            closure.counts.sonatina_post,
+            closure.counts.bytecode,
+            closure.key_count,
+            closure.edge_count
+        ));
+        for span in &closure.source_spans {
+            out.push_str(&format!("    source: {span}\n"));
+        }
+        for note in &closure.notes {
+            out.push_str(&format!("    note: {note}\n"));
+        }
+    }
+    if report.suspicious_closures == 0 {
+        out.push_str("  none\n");
+    }
+    out
 }
 
 fn build_origin_panels(
@@ -1245,7 +1565,75 @@ mod tests {
         assert_eq!(lines[0].classes, vec!["trace-c-0".to_string()]);
     }
 
+    #[test]
+    fn closure_audit_flags_optimized_gap_without_calling_it_dead() {
+        let mut closure = test_closure();
+        closure.counts.sonatina_post = 2;
+        closure.gap = closure_gap_note(&closure.counts);
+
+        let entry = audit_closure("fib_demo.fe", 24, &closure);
+
+        assert!(
+            entry
+                .verdicts
+                .contains(&ClosureAuditVerdict::OptimizedAttributionGap)
+        );
+        assert!(
+            entry
+                .verdicts
+                .contains(&ClosureAuditVerdict::MissingBytecode)
+        );
+        assert!(entry.notes.iter().any(|note| note.contains("not evidence")));
+    }
+
+    #[test]
+    fn closure_audit_marks_source_to_bytecode_many_to_many() {
+        let mut closure = test_closure();
+        closure.counts.bytecode = 3;
+        closure.keys = vec![
+            "hir".to_string(),
+            "mir".to_string(),
+            "post".to_string(),
+            "pc:1".to_string(),
+            "pc:2".to_string(),
+            "pc:3".to_string(),
+        ];
+
+        let entry = audit_closure("fib_demo.fe", 24, &closure);
+
+        assert_eq!(entry.verdicts, vec![ClosureAuditVerdict::GoodManyToMany]);
+    }
+
     fn test_key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
         OriginExportKey::try_from_raw_parts(kind, owner, local).unwrap()
+    }
+
+    fn test_closure() -> DemoClosure {
+        DemoClosure {
+            class_name: "trace-c-0".to_string(),
+            label: "hir.expr:demo:11".to_string(),
+            root_key: "root".to_string(),
+            keys: Vec::new(),
+            counts: DemoClosureCounts {
+                hir: 1,
+                mir: 1,
+                sonatina_pre: 1,
+                sonatina_post: 0,
+                bytecode: 0,
+            },
+            gap: None,
+            edges: Vec::new(),
+            source_spans: vec![DemoSourceSpan {
+                origin: "hir.expr:body:11".to_string(),
+                file: "fib_demo.fe".to_string(),
+                file_owner: "fib_demo.fe".to_string(),
+                lines: "18:18".to_string(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 18,
+                end_line: 18,
+                confidence: "direct".to_string(),
+            }],
+        }
     }
 }
