@@ -17,6 +17,13 @@ cargo run -p fe -- dev trace web-demo \
 
 Open `http://127.0.0.1:5179/`.
 
+Source mode defaults to `--optimize 0` for this tech demo because the current
+trace stream preserves the clearest source-to-bytecode edges before optimization.
+Passing `--optimize 2` is useful for auditing optimized-code attribution, but
+some closures may honestly stop at Sonatina post-opt until the backend records
+the final PC edges for transformed or moved values. The viewer labels that as an
+attribution gap; it should not be read as evidence that the source was dead.
+
 This mode keeps one `DriverDataBase` alive, updates the source `File` salsa input when
 the watched file changes, and re-renders from the new trace facts. The cards at the top
 show salsa event counters:

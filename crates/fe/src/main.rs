@@ -906,7 +906,7 @@ pub struct DevTraceWebDemoArgs {
     #[arg(long, default_value = "debug")]
     pub profile: String,
     /// Optimization level for --source: 0, 1, 2, or s.
-    #[arg(long, default_value = "2")]
+    #[arg(long, default_value = "0")]
     pub optimize: String,
 }
 

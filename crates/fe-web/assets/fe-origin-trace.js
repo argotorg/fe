@@ -207,6 +207,22 @@
         if (!closure) return;
         var box = el("div", "closure-card");
         box.append(el("h3", "", closure.label));
+        if (closure.counts) {
+          box.append(
+            el(
+              "p",
+              "phase-counts",
+              "HIR " + closure.counts.hir +
+                " | MIR " + closure.counts.mir +
+                " | pre-opt " + closure.counts.sonatina_pre +
+                " | post-opt " + closure.counts.sonatina_post +
+                " | bytecode " + closure.counts.bytecode
+            )
+          );
+        }
+        if (closure.gap) {
+          box.append(el("p", "gap", closure.gap));
+        }
         (closure.edges || []).forEach(function (edge) {
           var row = el("div", "edge");
           row.append(
@@ -263,6 +279,8 @@ h1 { margin:0; font:700 32px/1.1 Georgia,serif; }
 .closure-card { padding:12px; border:1px solid #30382b; border-radius:12px; background:#11160f; margin-bottom:12px; }
 .closure-card h3 { margin:0 0 8px; color:#f0bd58; font-size:14px; }
 .closure-card h4 { margin:12px 0 6px; color:#9ad97f; font-size:12px; text-transform:uppercase; letter-spacing:.1em; }
+.phase-counts { margin:0 0 8px; color:#b8b098; font-size:12px; }
+.gap { margin:8px 0; padding:8px 10px; border:1px solid #775f23; border-radius:9px; background:#2a2110; color:#ffd37a; }
 .edge,.span-line { display:grid; grid-template-columns:145px 1fr; gap:8px; padding:4px 0; color:#aeb59b; }
 .edge-label { color:#7fb5ff; }
 .edge-text,.span-line { overflow-wrap:anywhere; }

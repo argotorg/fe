@@ -466,8 +466,19 @@ struct DemoClosure {
     root_key: String,
     #[serde(skip_serializing)]
     keys: Vec<String>,
+    counts: DemoClosureCounts,
+    gap: Option<String>,
     edges: Vec<DemoClosureEdge>,
     source_spans: Vec<DemoSourceSpan>,
+}
+
+#[derive(Debug, Serialize)]
+struct DemoClosureCounts {
+    hir: usize,
+    mir: usize,
+    sonatina_pre: usize,
+    sonatina_post: usize,
+    bytecode: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -487,6 +498,8 @@ struct DemoKey {
 struct DemoSourceSpan {
     origin: String,
     file: String,
+    #[serde(skip_serializing)]
+    file_owner: String,
     lines: String,
     start_byte: u32,
     end_byte: u32,
@@ -522,7 +535,11 @@ fn build_demo_model(snapshot: &TraceSnapshot, salsa: Option<DemoSalsaStats>) -> 
     );
     let closures = build_closures(closure_roots, &index);
     let classes_by_key = classes_by_key(&closures);
-    let source_lines = source_lines(&source_text, &closures);
+    let source_lines = source_lines(
+        snapshot.metadata().input_path.as_str(),
+        &source_text,
+        &closures,
+    );
     let mut panels = build_origin_panels(&index, &classes_by_key);
     panels.insert(1, loop_panel(&loop_report, &classes_by_key));
 
@@ -641,7 +658,10 @@ fn closure_roots(
 }
 
 fn source_span_matches_input(span: &SourceSpanFact, input_path: &str) -> bool {
-    let owner = span.file.owner_key();
+    source_owner_matches_input(span.file.owner_key(), input_path)
+}
+
+fn source_owner_matches_input(owner: &str, input_path: &str) -> bool {
     owner == input_path || owner.ends_with(input_path)
 }
 
@@ -652,6 +672,8 @@ fn build_closures(roots: Vec<OriginExportKey>, index: &DemoIndex<'_>) -> Vec<Dem
         .map(|(ordinal, root)| {
             let (keys, edges) = origin_closure(&root, index);
             let source_spans = source_spans_for_keys(&keys, index);
+            let counts = closure_counts(&keys);
+            let gap = closure_gap_note(&counts);
             DemoClosure {
                 class_name: format!("trace-c-{ordinal}"),
                 label: closure_label(&root, index),
@@ -660,6 +682,8 @@ fn build_closures(roots: Vec<OriginExportKey>, index: &DemoIndex<'_>) -> Vec<Dem
                     .iter()
                     .map(OriginExportKey::canonical_storage_key)
                     .collect(),
+                counts,
+                gap,
                 edges,
                 source_spans,
             }
@@ -683,11 +707,17 @@ fn classes_by_key(closures: &[DemoClosure]) -> BTreeMap<String, Vec<String>> {
         .collect()
 }
 
-fn source_lines(source_text: &str, closures: &[DemoClosure]) -> Vec<DemoSourceLine> {
+fn source_lines(
+    input_path: &str,
+    source_text: &str,
+    closures: &[DemoClosure],
+) -> Vec<DemoSourceLine> {
     let mut classes_by_line = BTreeMap::<u32, BTreeSet<String>>::new();
     for closure in closures {
         for span in &closure.source_spans {
-            if span.confidence != "direct" {
+            if span.confidence != "direct"
+                || !source_owner_matches_input(&span.file_owner, input_path)
+            {
                 continue;
             }
             for line in span.start_line..=span.end_line {
@@ -717,6 +747,37 @@ fn source_lines(source_text: &str, closures: &[DemoClosure]) -> Vec<DemoSourceLi
             }
         })
         .collect()
+}
+
+fn closure_counts(keys: &BTreeSet<OriginExportKey>) -> DemoClosureCounts {
+    let mut counts = DemoClosureCounts {
+        hir: 0,
+        mir: 0,
+        sonatina_pre: 0,
+        sonatina_post: 0,
+        bytecode: 0,
+    };
+    for key in keys {
+        match key.kind() {
+            kind if kind.starts_with("hir.") => counts.hir += 1,
+            kind if kind.starts_with("runtime.") => counts.mir += 1,
+            kind if kind.starts_with("sonatina.preopt.") => counts.sonatina_pre += 1,
+            kind if kind.starts_with("sonatina.postopt.") => counts.sonatina_post += 1,
+            "bytecode.pc" => counts.bytecode += 1,
+            _ => {}
+        }
+    }
+    counts
+}
+
+fn closure_gap_note(counts: &DemoClosureCounts) -> Option<String> {
+    if counts.sonatina_post > 0 && counts.bytecode == 0 {
+        Some(
+            "Reached Sonatina post-opt but no bytecode PC edge was recorded. This is an optimized-code attribution gap through backend preparation or value movement, not evidence that the source is dead.".to_string(),
+        )
+    } else {
+        None
+    }
 }
 
 fn build_origin_panels(
@@ -858,6 +919,9 @@ fn origin_closure(
         let outgoing = index.edges_by_from.get(&key).into_iter().flatten().copied();
         let incoming = index.edges_by_to.get(&key).into_iter().flatten().copied();
         for edge in outgoing.chain(incoming) {
+            if is_trace_hub(&edge.from) || is_trace_hub(&edge.to) {
+                continue;
+            }
             if !matches!(
                 edge.label,
                 OriginEdgeLabel::LoweredFrom
@@ -892,6 +956,10 @@ fn origin_closure(
     (keys, edges_out)
 }
 
+fn is_trace_hub(key: &OriginExportKey) -> bool {
+    matches!(key.kind(), "code.object" | "source.file")
+}
+
 fn source_spans_for_keys(
     keys: &BTreeSet<OriginExportKey>,
     index: &DemoIndex<'_>,
@@ -908,6 +976,7 @@ fn source_spans_for_keys(
         .map(|(origin, span)| DemoSourceSpan {
             origin: origin.display_label(),
             file: span.file.display_label(),
+            file_owner: span.file.owner_key().to_string(),
             lines: format!("{}:{}", span.start_line, span.end_line),
             start_byte: span.start_byte,
             end_byte: span.end_byte,
@@ -1063,5 +1132,120 @@ mod tests {
 
         assert!(html.contains("new EventSource(\"/events\")"));
         assert!(html.contains("window.location.reload()"));
+    }
+
+    #[test]
+    fn origin_closure_does_not_expand_through_code_object() {
+        let pc0 = test_key("bytecode.pc", "runtime", "pc:0");
+        let pc1 = test_key("bytecode.pc", "runtime", "pc:1");
+        let code_object = test_key("code.object", "runtime", "runtime");
+        let edges = vec![
+            OriginEdgeFact::new(
+                pc0.clone(),
+                code_object.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(trace_facts::CompilerPhase::BytecodeEmission),
+            ),
+            OriginEdgeFact::new(
+                pc1.clone(),
+                code_object.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(trace_facts::CompilerPhase::BytecodeEmission),
+            ),
+        ];
+        let mut edges_by_from = BTreeMap::<OriginExportKey, Vec<&OriginEdgeFact>>::new();
+        let mut edges_by_to = BTreeMap::<OriginExportKey, Vec<&OriginEdgeFact>>::new();
+        for edge in &edges {
+            edges_by_from
+                .entry(edge.from.clone())
+                .or_default()
+                .push(edge);
+            edges_by_to.entry(edge.to.clone()).or_default().push(edge);
+        }
+        let index = DemoIndex {
+            origin_nodes: BTreeMap::new(),
+            edges_by_from,
+            edges_by_to,
+            instructions: BTreeMap::new(),
+            source_spans: BTreeMap::new(),
+            edge_count: edges.len(),
+            instruction_count: 0,
+        };
+
+        let (keys, closure_edges) = origin_closure(&pc0, &index);
+
+        assert!(keys.contains(&pc0));
+        assert!(!keys.contains(&pc1));
+        assert!(!keys.contains(&code_object));
+        assert!(closure_edges.is_empty());
+    }
+
+    #[test]
+    fn source_lines_ignore_foreign_source_spans() {
+        let closure = DemoClosure {
+            class_name: "trace-c-0".to_string(),
+            label: "demo".to_string(),
+            root_key: "root".to_string(),
+            keys: Vec::new(),
+            counts: DemoClosureCounts {
+                hir: 1,
+                mir: 0,
+                sonatina_pre: 0,
+                sonatina_post: 0,
+                bytecode: 0,
+            },
+            gap: None,
+            edges: Vec::new(),
+            source_spans: vec![DemoSourceSpan {
+                origin: "hir.expr:body:1".to_string(),
+                file: "std/foo.fe".to_string(),
+                file_owner: "std/foo.fe".to_string(),
+                lines: "1:1".to_string(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+                end_line: 1,
+                confidence: "direct".to_string(),
+            }],
+        };
+
+        let lines = source_lines("fib_demo.fe", "x", &[closure]);
+
+        assert!(lines[0].classes.is_empty());
+
+        let closure = DemoClosure {
+            class_name: "trace-c-0".to_string(),
+            label: "demo".to_string(),
+            root_key: "root".to_string(),
+            keys: Vec::new(),
+            counts: DemoClosureCounts {
+                hir: 1,
+                mir: 0,
+                sonatina_pre: 0,
+                sonatina_post: 0,
+                bytecode: 0,
+            },
+            gap: None,
+            edges: Vec::new(),
+            source_spans: vec![DemoSourceSpan {
+                origin: "hir.expr:body:1".to_string(),
+                file: "fib_demo.fe".to_string(),
+                file_owner: "fib_demo.fe".to_string(),
+                lines: "1:1".to_string(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+                end_line: 1,
+                confidence: "direct".to_string(),
+            }],
+        };
+
+        let lines = source_lines("fib_demo.fe", "x", &[closure]);
+
+        assert_eq!(lines[0].classes, vec!["trace-c-0".to_string()]);
+    }
+
+    fn test_key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
+        OriginExportKey::try_from_raw_parts(kind, owner, local).unwrap()
     }
 }
