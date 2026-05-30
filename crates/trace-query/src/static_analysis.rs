@@ -152,6 +152,9 @@ pub enum AnalysisWitnessKind {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BloatReport {
+    pub total_instructions: usize,
+    pub total_byte_len: u64,
+    pub total_static_gas: u64,
     pub findings: Vec<BloatFinding>,
 }
 
@@ -161,6 +164,9 @@ pub struct BloatFinding {
     pub summary: String,
     pub confidence: AttributionConfidence,
     pub involved_origins: Vec<OriginExportKey>,
+    pub instruction_count: usize,
+    pub byte_len: u64,
+    pub static_gas: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -318,6 +324,7 @@ pub struct PostOptAttributionGap {
 pub fn static_analysis_report(snapshot: &TraceSnapshot) -> StaticAnalysisReport {
     let coverage = ProvenanceCoverageReport::from_snapshot(snapshot);
     let postopt = PostOptAttributionGapReport::from_snapshot(snapshot);
+    let bloat = bytecode_bloat_report(snapshot);
     let mut gaps = Vec::new();
     if coverage.unmapped_pcs > 0 {
         gaps.push(AnalysisGap {
@@ -514,7 +521,7 @@ pub fn static_analysis_report(snapshot: &TraceSnapshot) -> StaticAnalysisReport 
     StaticAnalysisReport {
         metadata: AnalysisMetadata::from_snapshot(snapshot),
         checks: vec![check, postopt_check],
-        bloat: None,
+        bloat: Some(bloat),
         gaps,
         witnesses,
     }
@@ -531,6 +538,157 @@ fn postopt_gap_summary(report: &PostOptAttributionGapReport) -> String {
         report.explicitly_explained_origins,
         report.gap_count
     )
+}
+
+fn bytecode_bloat_report(snapshot: &TraceSnapshot) -> BloatReport {
+    let mut byte_len_by_instruction = BTreeMap::<OriginExportKey, u64>::new();
+    let mut static_gas_by_instruction = BTreeMap::<OriginExportKey, u64>::new();
+    for fact in snapshot.facts() {
+        match fact {
+            TraceFact::InstructionExtent(extent)
+                if is_bytecode_instruction(&extent.instruction) =>
+            {
+                byte_len_by_instruction
+                    .insert(extent.instruction.clone(), u64::from(extent.byte_len));
+            }
+            TraceFact::StaticGas(gas) if is_bytecode_instruction(&gas.instruction) => {
+                static_gas_by_instruction
+                    .entry(gas.instruction.clone())
+                    .and_modify(|total| *total += gas.base_cost)
+                    .or_insert(gas.base_cost);
+            }
+            _ => {}
+        }
+    }
+
+    let mut buckets = BTreeMap::<BloatBucketKind, BloatBucket>::new();
+    let mut total_instructions = 0;
+    let mut total_byte_len = 0;
+    let mut total_static_gas = 0;
+    for fact in snapshot.facts() {
+        let TraceFact::Instruction(instruction) = fact else {
+            continue;
+        };
+        if !is_bytecode_instruction(&instruction.instruction) {
+            continue;
+        }
+        total_instructions += 1;
+        let byte_len = byte_len_by_instruction
+            .get(&instruction.instruction)
+            .copied()
+            .unwrap_or(0);
+        let static_gas = static_gas_by_instruction
+            .get(&instruction.instruction)
+            .copied()
+            .unwrap_or(0);
+        total_byte_len += byte_len;
+        total_static_gas += static_gas;
+        for kind in bloat_bucket_kinds(&instruction.mnemonic) {
+            let bucket = buckets.entry(kind).or_default();
+            bucket.instructions.push(instruction.instruction.clone());
+            bucket.byte_len += byte_len;
+            bucket.static_gas += static_gas;
+        }
+    }
+
+    let mut findings = buckets
+        .into_iter()
+        .map(|(kind, bucket)| BloatFinding {
+            kind: kind.as_str().to_string(),
+            summary: kind.summary(
+                bucket.instructions.len(),
+                bucket.byte_len,
+                bucket.static_gas,
+            ),
+            confidence: Confidence::Medium,
+            instruction_count: bucket.instructions.len(),
+            byte_len: bucket.byte_len,
+            static_gas: bucket.static_gas,
+            involved_origins: bucket.instructions,
+        })
+        .collect::<Vec<_>>();
+    findings.sort_by(|left, right| {
+        right
+            .instruction_count
+            .cmp(&left.instruction_count)
+            .then_with(|| right.byte_len.cmp(&left.byte_len))
+            .then_with(|| left.kind.cmp(&right.kind))
+    });
+    BloatReport {
+        total_instructions,
+        total_byte_len,
+        total_static_gas,
+        findings,
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct BloatBucket {
+    instructions: Vec<OriginExportKey>,
+    byte_len: u64,
+    static_gas: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum BloatBucketKind {
+    StackShuffle,
+    ControlFlowOverhead,
+    IntegerNormalization,
+    MemoryScratch,
+    LiteralChurn,
+}
+
+impl BloatBucketKind {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::StackShuffle => "stack_shuffle_tax",
+            Self::ControlFlowOverhead => "control_flow_overhead",
+            Self::IntegerNormalization => "integer_normalization_tax",
+            Self::MemoryScratch => "memory_scratch_tax",
+            Self::LiteralChurn => "literal_churn",
+        }
+    }
+
+    fn summary(self, instructions: usize, byte_len: u64, static_gas: u64) -> String {
+        format!(
+            "{} candidate instruction(s), {byte_len} byte(s), {static_gas} static gas; conservative taxonomy, not proof of waste",
+            instructions
+        )
+    }
+}
+
+fn bloat_bucket_kinds(mnemonic: &str) -> Vec<BloatBucketKind> {
+    let opcode = mnemonic
+        .split_whitespace()
+        .next()
+        .unwrap_or(mnemonic)
+        .to_ascii_uppercase();
+    let mut kinds = Vec::new();
+    if opcode.starts_with("DUP") || opcode.starts_with("SWAP") || opcode == "POP" {
+        kinds.push(BloatBucketKind::StackShuffle);
+    }
+    if matches!(
+        opcode.as_str(),
+        "JUMP" | "JUMPI" | "JUMPDEST" | "RJUMP" | "RJUMPI"
+    ) {
+        kinds.push(BloatBucketKind::ControlFlowOverhead);
+    }
+    if matches!(
+        opcode.as_str(),
+        "AND" | "SIGNEXTEND" | "SHL" | "SHR" | "SAR" | "BYTE" | "ISZERO"
+    ) {
+        kinds.push(BloatBucketKind::IntegerNormalization);
+    }
+    if matches!(
+        opcode.as_str(),
+        "MLOAD" | "MSTORE" | "MSTORE8" | "MCOPY" | "CALLDATACOPY" | "CODECOPY" | "RETURNDATACOPY"
+    ) {
+        kinds.push(BloatBucketKind::MemoryScratch);
+    }
+    if opcode.starts_with("PUSH") {
+        kinds.push(BloatBucketKind::LiteralChurn);
+    }
+    kinds
 }
 
 fn provenance_coverage_summary(coverage: &ProvenanceCoverageReport) -> String {
@@ -773,9 +931,9 @@ mod tests {
     use common::origin::OriginExportKey;
     use trace_facts::{
         CodeObjectFact, CodeObjectKind, CompilerEventFact, CompilerEventKind, CompilerPhase,
-        InstructionExtentFact, InstructionFact, OriginEdgeFact, OriginEdgeLabel, OriginNodeFact,
-        OriginNodeKind, PcRange, SourceFileFact, SourceSpanFact, TraceBundle, TraceFact,
-        TraceMetadata, TraceSnapshot,
+        EvmSchedule, InstructionExtentFact, InstructionFact, OriginEdgeFact, OriginEdgeLabel,
+        OriginNodeFact, OriginNodeKind, PcRange, SourceFileFact, SourceSpanFact, StaticGasFact,
+        TraceBundle, TraceFact, TraceMetadata, TraceSnapshot,
     };
 
     use super::{CheckStatus, Confidence, RuntimeTraceSource, static_analysis_report};
@@ -1056,5 +1214,77 @@ mod tests {
             1
         );
         assert!(check.gaps.is_empty());
+    }
+
+    #[test]
+    fn bloat_report_groups_conservative_opcode_taxonomy() {
+        let function = key("function", "demo", "recv");
+        let code_object = key("code.object", "demo", "runtime");
+        let instructions = [
+            ("pc:0", "DUP1"),
+            ("pc:1", "SWAP1"),
+            ("pc:2", "AND"),
+            ("pc:3", "MSTORE"),
+            ("pc:4", "JUMP"),
+            ("pc:5", "PUSH1 0x00"),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (local, mnemonic))| {
+            (
+                index as u32,
+                key("bytecode.pc", "demo", local),
+                mnemonic.to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
+        let mut facts = vec![node(function.clone()), node(code_object.clone())];
+        for (_, instruction, _) in &instructions {
+            facts.push(node(instruction.clone()));
+        }
+        for (index, instruction, mnemonic) in &instructions {
+            facts.push(TraceFact::Instruction(InstructionFact::new(
+                instruction.clone(),
+                function.clone(),
+                *index,
+                mnemonic,
+            )));
+            facts.push(TraceFact::InstructionExtent(InstructionExtentFact::new(
+                instruction.clone(),
+                code_object.clone(),
+                PcRange::new(*index, *index + 1),
+                1,
+            )));
+            facts.push(TraceFact::StaticGas(StaticGasFact::new(
+                instruction.clone(),
+                EvmSchedule::new("cancun"),
+                3,
+                None,
+            )));
+        }
+
+        let report = static_analysis_report(&snapshot(facts));
+        let bloat = report.bloat.unwrap();
+
+        assert_eq!(bloat.total_instructions, 6);
+        assert_eq!(bloat.total_byte_len, 6);
+        assert_eq!(bloat.total_static_gas, 18);
+        assert!(bloat.findings.iter().any(|finding| {
+            finding.kind == "stack_shuffle_tax" && finding.instruction_count == 2
+        }));
+        assert!(bloat.findings.iter().any(|finding| {
+            finding.kind == "integer_normalization_tax" && finding.instruction_count == 1
+        }));
+        assert!(bloat.findings.iter().any(|finding| {
+            finding.kind == "memory_scratch_tax" && finding.instruction_count == 1
+        }));
+        assert!(bloat.findings.iter().any(|finding| {
+            finding.kind == "control_flow_overhead" && finding.instruction_count == 1
+        }));
+        assert!(
+            bloat.findings.iter().any(|finding| {
+                finding.kind == "literal_churn" && finding.instruction_count == 1
+            })
+        );
     }
 }
