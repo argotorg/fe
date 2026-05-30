@@ -61,6 +61,12 @@
       this._card(cards, "facts", data.counts && data.counts.facts);
       this._card(cards, "closures", (data.closures || []).length);
       this._card(cards, "source confidence", data.source && data.source.confidence);
+      if (data.salsa) {
+        this._card(cards, "salsa mode", data.salsa.mode);
+        this._card(cards, "query execs", data.salsa.will_execute);
+        this._card(cards, "memo reuse", data.salsa.memo_reuse);
+        this._card(cards, "render ms", data.salsa.elapsed_ms);
+      }
       page.append(cards);
 
       var workspace = el("main", "workspace");

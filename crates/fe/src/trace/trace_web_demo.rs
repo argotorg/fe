@@ -1,9 +1,14 @@
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     fs,
+    io::{BufRead, BufReader, Write},
+    net::{TcpListener, TcpStream},
+    sync::{Arc, Mutex},
+    time::{Duration, Instant, SystemTime},
 };
 
-use common::origin::OriginExportKey;
+use camino::Utf8PathBuf;
+use common::{SalsaEventCounters, origin::OriginExportKey};
 use serde::Serialize;
 use trace_facts::{
     InstructionFact, OriginEdgeFact, OriginEdgeLabel, OriginNodeFact, SourceSpanFact, TraceFact,
@@ -14,24 +19,370 @@ use trace_query::{IntrospectionService, LoopContentsRequest, TraceIntrospectionS
 use crate::DevTraceWebDemoArgs;
 
 pub(super) fn run_trace_web_demo(args: &DevTraceWebDemoArgs) -> Result<String, String> {
-    let snapshot = super::read_trace_snapshot_jsonl_from_path(&args.from)?;
-    let model = build_demo_model(&snapshot);
-    let html = render_origin_trace_html(&model)?;
-    fs::write(args.out.as_std_path(), html)
+    if args.serve {
+        return serve_trace_web_demo(args);
+    }
+
+    let rendered = render_trace_web_demo_once(args, false)?;
+    fs::write(args.out.as_std_path(), &rendered.html)
         .map_err(|err| format!("failed to write web demo {}: {err}", args.out))?;
     Ok(format!(
-        "wrote origin trace web demo: {}\nData source: {}\nLoop bytecode PCs: {}\nSource confidence: {}\n",
+        "wrote origin trace web demo: {}\nData source: {}\nLoop bytecode PCs: {}\nSource confidence: {}\n{}\n",
         args.out,
-        super::format_data_source(snapshot.metadata()),
-        model.bytecode_count,
-        model.source.confidence,
+        rendered.model.metadata.data_source,
+        rendered.model.bytecode_count,
+        rendered.model.source.confidence,
+        rendered.salsa_summary(),
     ))
+}
+
+struct RenderedWebDemo {
+    html: String,
+    model: WebDemoModel,
+}
+
+impl RenderedWebDemo {
+    fn salsa_summary(&self) -> String {
+        self.model.salsa.as_ref().map_or_else(
+            || "Salsa: offline JSONL input".to_string(),
+            |salsa| {
+                format!(
+                    "Salsa: {} in {}ms, will_execute={}, memo_reuse={}",
+                    salsa.mode, salsa.elapsed_ms, salsa.will_execute, salsa.memo_reuse
+                )
+            },
+        )
+    }
+}
+
+fn render_trace_web_demo_once(
+    args: &DevTraceWebDemoArgs,
+    live_reload: bool,
+) -> Result<RenderedWebDemo, String> {
+    match (&args.from, &args.source) {
+        (Some(from), None) => {
+            let snapshot = super::read_trace_snapshot_jsonl_from_path(from)?;
+            render_snapshot(&snapshot, None, live_reload)
+        }
+        (None, Some(source)) => {
+            let mut emitter = incremental_emitter(source, args)?;
+            render_incremental_trace(&mut emitter, 1, live_reload)
+        }
+        (None, None) => Err("pass either --from TRACE_JSONL or --source FE_FILE".to_string()),
+        (Some(_), Some(_)) => Err("pass only one of --from or --source".to_string()),
+    }
+}
+
+fn incremental_emitter(
+    source: &Utf8PathBuf,
+    args: &DevTraceWebDemoArgs,
+) -> Result<super::trace_emit::IncrementalTraceEmitter, String> {
+    let opt_level = args.optimize.parse::<codegen::OptLevel>()?;
+    super::trace_emit::IncrementalTraceEmitter::new(
+        source,
+        args.standalone,
+        &args.profile,
+        opt_level,
+        vec![
+            "fe".to_string(),
+            "dev".to_string(),
+            "trace".to_string(),
+            "web-demo".to_string(),
+        ],
+    )
+}
+
+fn render_incremental_trace(
+    emitter: &mut super::trace_emit::IncrementalTraceEmitter,
+    generation: u64,
+    live_reload: bool,
+) -> Result<RenderedWebDemo, String> {
+    let started = Instant::now();
+    let output = emitter.emit_from_disk()?;
+    let elapsed = started.elapsed();
+    let snapshot = TraceSnapshot::new(output.bundle)
+        .map_err(|err| format!("incremental trace validation failed: {err}"))?;
+    let salsa = Some(DemoSalsaStats::from_counters(
+        "long-lived DriverDataBase",
+        generation,
+        elapsed,
+        output.salsa_events,
+    ));
+    render_snapshot(&snapshot, salsa, live_reload)
+}
+
+fn render_snapshot(
+    snapshot: &TraceSnapshot,
+    salsa: Option<DemoSalsaStats>,
+    live_reload: bool,
+) -> Result<RenderedWebDemo, String> {
+    let model = build_demo_model(snapshot, salsa);
+    let html = render_origin_trace_html(&model, live_reload)?;
+    Ok(RenderedWebDemo { html, model })
+}
+
+impl DemoSalsaStats {
+    fn from_counters(
+        mode: impl Into<String>,
+        generation: u64,
+        elapsed: Duration,
+        counters: SalsaEventCounters,
+    ) -> Self {
+        Self {
+            mode: mode.into(),
+            generation,
+            elapsed_ms: elapsed.as_millis(),
+            will_execute: counters.will_execute,
+            memo_reuse: counters.did_validate_memoized_value,
+            stale_outputs: counters.will_discard_stale_output,
+            discarded: counters.did_discard,
+            cycle_iterations: counters.will_iterate_cycle,
+        }
+    }
+}
+
+enum LiveWebDemoInput {
+    Jsonl {
+        path: Utf8PathBuf,
+    },
+    Source {
+        emitter: Box<super::trace_emit::IncrementalTraceEmitter>,
+    },
+}
+
+impl LiveWebDemoInput {
+    fn path(&self) -> &Utf8PathBuf {
+        match self {
+            Self::Jsonl { path } => path,
+            Self::Source { emitter } => emitter.input_path(),
+        }
+    }
+}
+
+struct LiveWebDemoState {
+    input: LiveWebDemoInput,
+    out: Utf8PathBuf,
+    last_modified: Option<SystemTime>,
+    generation: u64,
+    cached_html: String,
+    cached_summary: String,
+}
+
+impl LiveWebDemoState {
+    fn new(args: &DevTraceWebDemoArgs) -> Result<Self, String> {
+        let input = match (&args.from, &args.source) {
+            (Some(from), None) => LiveWebDemoInput::Jsonl { path: from.clone() },
+            (None, Some(source)) => LiveWebDemoInput::Source {
+                emitter: Box::new(incremental_emitter(source, args)?),
+            },
+            (None, None) => return Err("pass either --from TRACE_JSONL or --source FE_FILE".into()),
+            (Some(_), Some(_)) => return Err("pass only one of --from or --source".into()),
+        };
+        let mut state = Self {
+            input,
+            out: args.out.clone(),
+            last_modified: None,
+            generation: 0,
+            cached_html: String::new(),
+            cached_summary: String::new(),
+        };
+        state.refresh(true)?;
+        Ok(state)
+    }
+
+    fn refresh(&mut self, force: bool) -> Result<bool, String> {
+        let modified = file_modified(self.input.path());
+        if !force && !self.cached_html.is_empty() && modified == self.last_modified {
+            return Ok(false);
+        }
+
+        let generation = self.generation + 1;
+        let rendered = match &mut self.input {
+            LiveWebDemoInput::Jsonl { path } => {
+                let snapshot = super::read_trace_snapshot_jsonl_from_path(path)?;
+                render_snapshot(&snapshot, None, true)?
+            }
+            LiveWebDemoInput::Source { emitter } => {
+                render_incremental_trace(emitter, generation, true)?
+            }
+        };
+        fs::write(self.out.as_std_path(), &rendered.html)
+            .map_err(|err| format!("failed to write web demo {}: {err}", self.out))?;
+
+        self.generation = generation;
+        self.last_modified = modified;
+        self.cached_summary = format!(
+            "generation={} source_confidence={} loop_bytecode_pcs={} {}",
+            self.generation,
+            rendered.model.source.confidence,
+            rendered.model.bytecode_count,
+            rendered.salsa_summary()
+        );
+        self.cached_html = rendered.html;
+        Ok(true)
+    }
+}
+
+fn serve_trace_web_demo(args: &DevTraceWebDemoArgs) -> Result<String, String> {
+    let state = Arc::new(Mutex::new(LiveWebDemoState::new(args)?));
+    let listener = TcpListener::bind(("127.0.0.1", args.port)).map_err(|err| {
+        format!(
+            "failed to bind trace web demo server on port {}: {err}",
+            args.port
+        )
+    })?;
+    eprintln!(
+        "serving origin trace web demo at http://127.0.0.1:{}/\nwatching: {}\nwriting: {}",
+        args.port,
+        state
+            .lock()
+            .map_err(|_| "trace web demo state lock poisoned".to_string())?
+            .input
+            .path(),
+        args.out,
+    );
+
+    for stream in listener.incoming() {
+        let stream = stream.map_err(|err| format!("trace web demo server accept failed: {err}"))?;
+        let state = state.clone();
+        std::thread::spawn(move || {
+            if let Err(err) = handle_live_connection(stream, state) {
+                eprintln!("trace web demo request failed: {err}");
+            }
+        });
+    }
+    Ok("trace web demo server stopped".to_string())
+}
+
+fn handle_live_connection(
+    mut stream: TcpStream,
+    state: Arc<Mutex<LiveWebDemoState>>,
+) -> Result<(), String> {
+    let mut first_line = String::new();
+    {
+        let mut reader = BufReader::new(
+            stream
+                .try_clone()
+                .map_err(|err| format!("failed to clone HTTP stream: {err}"))?,
+        );
+        reader
+            .read_line(&mut first_line)
+            .map_err(|err| format!("failed to read HTTP request: {err}"))?;
+    }
+    let path = first_line
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or("/")
+        .split('?')
+        .next()
+        .unwrap_or("/");
+
+    match path {
+        "/" | "/index.html" => {
+            let (html, summary) = {
+                let mut state = state
+                    .lock()
+                    .map_err(|_| "trace web demo state lock poisoned".to_string())?;
+                state.refresh(false)?;
+                (state.cached_html.clone(), state.cached_summary.clone())
+            };
+            write_http_response(&mut stream, "200 OK", "text/html; charset=utf-8", &html)
+                .map_err(|err| format!("failed to write HTTP response: {err}"))?;
+            eprintln!("served trace web demo {summary}");
+        }
+        "/events" => serve_event_stream(&mut stream, state)?,
+        "/health" => {
+            write_http_response(&mut stream, "200 OK", "text/plain; charset=utf-8", "ok\n")
+                .map_err(|err| format!("failed to write health response: {err}"))?;
+        }
+        _ => {
+            write_http_response(
+                &mut stream,
+                "404 Not Found",
+                "text/plain; charset=utf-8",
+                "not found\n",
+            )
+            .map_err(|err| format!("failed to write 404 response: {err}"))?;
+        }
+    }
+    Ok(())
+}
+
+fn serve_event_stream(
+    stream: &mut TcpStream,
+    state: Arc<Mutex<LiveWebDemoState>>,
+) -> Result<(), String> {
+    stream
+        .write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n",
+        )
+        .map_err(|err| format!("failed to start event stream: {err}"))?;
+    let mut last_generation = {
+        let state = state
+            .lock()
+            .map_err(|_| "trace web demo state lock poisoned".to_string())?;
+        state.generation
+    };
+    stream
+        .write_all(format!("event: ready\ndata: {last_generation}\n\n").as_bytes())
+        .map_err(|err| format!("failed to write ready event: {err}"))?;
+    stream
+        .flush()
+        .map_err(|err| format!("failed to flush ready event: {err}"))?;
+
+    loop {
+        std::thread::sleep(Duration::from_millis(700));
+        let event = {
+            let mut state = state
+                .lock()
+                .map_err(|_| "trace web demo state lock poisoned".to_string())?;
+            match state.refresh(false) {
+                Ok(true) if state.generation != last_generation => {
+                    last_generation = state.generation;
+                    format!("event: reload\ndata: {}\n\n", state.generation)
+                }
+                Ok(_) => ": keepalive\n\n".to_string(),
+                Err(err) => format!("event: trace-error\ndata: {}\n\n", sse_escape(&err)),
+            }
+        };
+        stream
+            .write_all(event.as_bytes())
+            .map_err(|err| format!("failed to write event stream: {err}"))?;
+        stream
+            .flush()
+            .map_err(|err| format!("failed to flush event stream: {err}"))?;
+    }
+}
+
+fn write_http_response(
+    stream: &mut TcpStream,
+    status: &str,
+    content_type: &str,
+    body: &str,
+) -> std::io::Result<()> {
+    write!(
+        stream,
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )?;
+    stream.write_all(body.as_bytes())
+}
+
+fn file_modified(path: &Utf8PathBuf) -> Option<SystemTime> {
+    fs::metadata(path.as_std_path())
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+}
+
+fn sse_escape(value: &str) -> String {
+    value.replace(['\r', '\n'], " ")
 }
 
 #[derive(Debug, Serialize)]
 struct WebDemoModel {
     metadata: DemoMetadata,
     counts: DemoCounts,
+    salsa: Option<DemoSalsaStats>,
     source: DemoSource,
     panels: Vec<DemoPanel>,
     closures: Vec<DemoClosure>,
@@ -54,6 +405,18 @@ struct DemoCounts {
     origin_edges: usize,
     instructions: usize,
     source_spans: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct DemoSalsaStats {
+    mode: String,
+    generation: u64,
+    elapsed_ms: u128,
+    will_execute: usize,
+    memo_reuse: usize,
+    stale_outputs: usize,
+    discarded: usize,
+    cycle_iterations: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -92,6 +455,8 @@ struct DemoClosure {
     class_name: String,
     label: String,
     root_key: String,
+    #[serde(skip_serializing)]
+    keys: Vec<String>,
     edges: Vec<DemoClosureEdge>,
     source_spans: Vec<DemoSourceSpan>,
 }
@@ -101,30 +466,6 @@ struct DemoClosureEdge {
     label: String,
     from: String,
     to: String,
-}
-
-#[derive(Debug, Serialize)]
-struct DemoBytecode {
-    key: String,
-    pc: String,
-    index: u32,
-    mnemonic: String,
-    byte_range: String,
-    gas: Option<u64>,
-    opcode: Option<String>,
-    immediate: Option<String>,
-    chain: Vec<DemoOriginHop>,
-    source_spans: Vec<DemoSourceSpan>,
-    classes: Vec<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct DemoOriginHop {
-    depth: usize,
-    label: String,
-    phase: String,
-    from: DemoKey,
-    to: DemoKey,
 }
 
 #[derive(Debug, Serialize)]
@@ -145,7 +486,7 @@ struct DemoSourceSpan {
     confidence: String,
 }
 
-fn build_demo_model(snapshot: &TraceSnapshot) -> WebDemoModel {
+fn build_demo_model(snapshot: &TraceSnapshot, salsa: Option<DemoSalsaStats>) -> WebDemoModel {
     let service = TraceIntrospectionService::new(snapshot.clone());
     let loop_report = service
         .loop_contents(LoopContentsRequest::default())
@@ -164,41 +505,17 @@ fn build_demo_model(snapshot: &TraceSnapshot) -> WebDemoModel {
         "coarse file-level fallback".to_string()
     };
 
-    let mut bytecode = loop_report
-        .target_instructions
-        .iter()
-        .enumerate()
-        .map(|(closure_index, instruction)| {
-            let extent = index.instruction_extents.get(&instruction.key);
-            let opcode = index.opcodes.get(&instruction.key);
-            let chain = origin_chain(&instruction.key, &index);
-            let source_spans = source_spans_for_chain(&chain, &index);
-            let class_name = format!("trace-c-{closure_index}");
-            DemoBytecode {
-                key: instruction.key.canonical_storage_key(),
-                pc: instruction.key.display_label(),
-                index: instruction.index,
-                mnemonic: instruction.mnemonic.clone(),
-                byte_range: extent
-                    .map(|extent| format!("{}..{}", extent.pc_range.start, extent.pc_range.end))
-                    .unwrap_or_else(|| "unknown".to_string()),
-                gas: index.static_gas.get(&instruction.key).copied(),
-                opcode: opcode.map(|opcode| opcode.opcode.clone()),
-                immediate: opcode.and_then(|opcode| opcode.immediate.clone()),
-                chain,
-                source_spans,
-                classes: vec![class_name],
-            }
-        })
-        .collect::<Vec<_>>();
-    let closures = build_closures(&bytecode);
-    for (row, closure) in bytecode.iter_mut().zip(&closures) {
-        row.classes = vec![closure.class_name.clone()];
-    }
-    let classes_by_key = classes_by_key(&bytecode);
+    let bytecode_count = loop_report.target_instructions.len();
+    let closure_roots = closure_roots(
+        snapshot.metadata().input_path.as_str(),
+        &index,
+        &loop_report,
+    );
+    let closures = build_closures(closure_roots, &index);
+    let classes_by_key = classes_by_key(&closures);
     let source_lines = source_lines(&source_text, &closures);
     let mut panels = build_origin_panels(&index, &classes_by_key);
-    panels.insert(1, loop_panel(loop_report, &classes_by_key));
+    panels.insert(1, loop_panel(&loop_report, &classes_by_key));
 
     WebDemoModel {
         metadata: DemoMetadata {
@@ -214,6 +531,7 @@ fn build_demo_model(snapshot: &TraceSnapshot) -> WebDemoModel {
             instructions: index.instruction_count,
             source_spans: index.source_spans.len(),
         },
+        salsa,
         source: DemoSource {
             display_name: snapshot.metadata().input_path.clone(),
             confidence: source_confidence,
@@ -221,18 +539,16 @@ fn build_demo_model(snapshot: &TraceSnapshot) -> WebDemoModel {
         },
         panels,
         closures,
-        bytecode_count: bytecode.len(),
-        notes: demo_notes(&bytecode, exact_source_spans),
+        bytecode_count,
+        notes: demo_notes(bytecode_count, exact_source_spans),
     }
 }
 
 struct DemoIndex<'a> {
     origin_nodes: BTreeMap<OriginExportKey, &'a OriginNodeFact>,
     edges_by_from: BTreeMap<OriginExportKey, Vec<&'a OriginEdgeFact>>,
+    edges_by_to: BTreeMap<OriginExportKey, Vec<&'a OriginEdgeFact>>,
     instructions: BTreeMap<OriginExportKey, &'a InstructionFact>,
-    instruction_extents: BTreeMap<OriginExportKey, &'a trace_facts::InstructionExtentFact>,
-    opcodes: BTreeMap<OriginExportKey, &'a trace_facts::OpcodeFact>,
-    static_gas: BTreeMap<OriginExportKey, u64>,
     source_spans: BTreeMap<OriginExportKey, &'a SourceSpanFact>,
     edge_count: usize,
     instruction_count: usize,
@@ -242,10 +558,8 @@ impl<'a> DemoIndex<'a> {
     fn new(snapshot: &'a TraceSnapshot) -> Self {
         let mut origin_nodes = BTreeMap::new();
         let mut edges_by_from = BTreeMap::<OriginExportKey, Vec<&OriginEdgeFact>>::new();
+        let mut edges_by_to = BTreeMap::<OriginExportKey, Vec<&OriginEdgeFact>>::new();
         let mut instructions = BTreeMap::new();
-        let mut instruction_extents = BTreeMap::new();
-        let mut opcodes = BTreeMap::new();
-        let mut static_gas = BTreeMap::new();
         let mut source_spans = BTreeMap::new();
         let mut edge_count = 0;
         let mut instruction_count = 0;
@@ -261,21 +575,11 @@ impl<'a> DemoIndex<'a> {
                         .entry(edge.from.clone())
                         .or_default()
                         .push(edge);
+                    edges_by_to.entry(edge.to.clone()).or_default().push(edge);
                 }
                 TraceFact::Instruction(instruction) => {
                     instruction_count += 1;
                     instructions.insert(instruction.instruction.clone(), instruction);
-                }
-                TraceFact::InstructionExtent(extent) => {
-                    instruction_extents.insert(extent.instruction.clone(), extent);
-                }
-                TraceFact::Opcode(opcode) => {
-                    opcodes.insert(opcode.pc.clone(), opcode);
-                }
-                TraceFact::StaticGas(gas) => {
-                    static_gas
-                        .entry(gas.instruction.clone())
-                        .or_insert(gas.base_cost);
                 }
                 TraceFact::SourceSpan(span) => {
                     source_spans.insert(span.origin.clone(), span);
@@ -287,10 +591,8 @@ impl<'a> DemoIndex<'a> {
         Self {
             origin_nodes,
             edges_by_from,
+            edges_by_to,
             instructions,
-            instruction_extents,
-            opcodes,
-            static_gas,
             source_spans,
             edge_count,
             instruction_count,
@@ -298,46 +600,72 @@ impl<'a> DemoIndex<'a> {
     }
 }
 
-fn build_closures(bytecode: &[DemoBytecode]) -> Vec<DemoClosure> {
-    bytecode
-        .iter()
+fn closure_roots(
+    input_path: &str,
+    index: &DemoIndex<'_>,
+    loop_report: &trace_query::LoopContentsReport,
+) -> Vec<OriginExportKey> {
+    let mut roots = BTreeMap::<String, OriginExportKey>::new();
+    for span in index.source_spans.values() {
+        if matches!(span.origin.kind(), "hir.expr" | "hir.stmt")
+            && source_span_matches_input(span, input_path)
+        {
+            roots.insert(span.origin.canonical_storage_key(), span.origin.clone());
+        }
+    }
+    for instruction in &loop_report.target_instructions {
+        roots.insert(
+            instruction.key.canonical_storage_key(),
+            instruction.key.clone(),
+        );
+    }
+    for block in &loop_report.blocks {
+        roots.insert(block.block.canonical_storage_key(), block.block.clone());
+        for instruction in &block.instructions {
+            roots.insert(
+                instruction.key.canonical_storage_key(),
+                instruction.key.clone(),
+            );
+        }
+    }
+    roots.into_values().collect()
+}
+
+fn source_span_matches_input(span: &SourceSpanFact, input_path: &str) -> bool {
+    let owner = span.file.owner_key();
+    owner == input_path || owner.ends_with(input_path)
+}
+
+fn build_closures(roots: Vec<OriginExportKey>, index: &DemoIndex<'_>) -> Vec<DemoClosure> {
+    roots
+        .into_iter()
         .enumerate()
-        .map(|(index, row)| DemoClosure {
-            class_name: format!("trace-c-{index}"),
-            label: format!("{} {}", row.pc, row.mnemonic),
-            root_key: row.key.clone(),
-            edges: row
-                .chain
-                .iter()
-                .map(|hop| DemoClosureEdge {
-                    label: format!("{} / {}", hop.label, hop.phase),
-                    from: hop.from.short.clone(),
-                    to: hop.to.short.clone(),
-                })
-                .collect(),
-            source_spans: row.source_spans.clone(),
+        .map(|(ordinal, root)| {
+            let (keys, edges) = origin_closure(&root, index);
+            let source_spans = source_spans_for_keys(&keys, index);
+            DemoClosure {
+                class_name: format!("trace-c-{ordinal}"),
+                label: closure_label(&root, index),
+                root_key: root.canonical_storage_key(),
+                keys: keys
+                    .iter()
+                    .map(OriginExportKey::canonical_storage_key)
+                    .collect(),
+                edges,
+                source_spans,
+            }
         })
         .collect()
 }
 
-fn classes_by_key(bytecode: &[DemoBytecode]) -> BTreeMap<String, Vec<String>> {
+fn classes_by_key(closures: &[DemoClosure]) -> BTreeMap<String, Vec<String>> {
     let mut classes = BTreeMap::<String, BTreeSet<String>>::new();
-    for row in bytecode {
-        for class_name in &row.classes {
+    for closure in closures {
+        for key in &closure.keys {
             classes
-                .entry(row.key.clone())
+                .entry(key.clone())
                 .or_default()
-                .insert(class_name.clone());
-            for hop in &row.chain {
-                classes
-                    .entry(hop.from.full.clone())
-                    .or_default()
-                    .insert(class_name.clone());
-                classes
-                    .entry(hop.to.full.clone())
-                    .or_default()
-                    .insert(class_name.clone());
-            }
+                .insert(closure.class_name.clone());
         }
     }
     classes
@@ -428,6 +756,7 @@ fn panel_rows(
         .origin_nodes
         .keys()
         .filter(|key| key_belongs_to_panel(key, panel))
+        .filter(|key| classes_by_key.contains_key(&key.canonical_storage_key()))
         .map(|key| origin_panel_row(key, index, classes_by_key))
         .collect()
 }
@@ -465,7 +794,7 @@ fn key_belongs_to_panel(key: &OriginExportKey, panel: &str) -> bool {
 }
 
 fn loop_panel(
-    loop_report: trace_query::LoopContentsReport,
+    loop_report: &trace_query::LoopContentsReport,
     classes_by_key: &BTreeMap<String, Vec<String>>,
 ) -> DemoPanel {
     let mut rows = Vec::new();
@@ -473,7 +802,7 @@ fn loop_panel(
         .loop_label
         .clone()
         .unwrap_or_else(|| "selected loop".to_string());
-    for block in loop_report.blocks {
+    for block in &loop_report.blocks {
         let block_key = block.block.canonical_storage_key();
         rows.push(DemoPanelRow {
             key: Some(block_key.clone()),
@@ -482,13 +811,13 @@ fn loop_panel(
             text: loop_label.clone(),
             classes: classes_by_key.get(&block_key).cloned().unwrap_or_default(),
         });
-        for instruction in block.instructions {
+        for instruction in &block.instructions {
             let key = instruction.key.canonical_storage_key();
             rows.push(DemoPanelRow {
                 key: Some(key.clone()),
                 label: instruction.key.local_key().to_string(),
                 meta: format!("ir[{}]", instruction.index),
-                text: instruction.mnemonic,
+                text: instruction.mnemonic.clone(),
                 classes: classes_by_key.get(&key).cloned().unwrap_or_default(),
             });
         }
@@ -505,18 +834,21 @@ fn loop_panel(
     }
 }
 
-fn origin_chain(start: &OriginExportKey, index: &DemoIndex<'_>) -> Vec<DemoOriginHop> {
-    let mut out = Vec::new();
-    let mut seen = BTreeSet::new();
+fn origin_closure(
+    start: &OriginExportKey,
+    index: &DemoIndex<'_>,
+) -> (BTreeSet<OriginExportKey>, Vec<DemoClosureEdge>) {
+    let mut keys = BTreeSet::new();
+    let mut edges_out = Vec::new();
+    let mut seen_edges = BTreeSet::new();
     let mut queue = VecDeque::from([(start.clone(), 0_usize)]);
     while let Some((key, depth)) = queue.pop_front() {
-        if depth >= 4 || !seen.insert(key.clone()) {
+        if depth >= 8 || !keys.insert(key.clone()) {
             continue;
         }
-        let Some(edges) = index.edges_by_from.get(&key) else {
-            continue;
-        };
-        for edge in edges {
+        let outgoing = index.edges_by_from.get(&key).into_iter().flatten().copied();
+        let incoming = index.edges_by_to.get(&key).into_iter().flatten().copied();
+        for edge in outgoing.chain(incoming) {
             if !matches!(
                 edge.label,
                 OriginEdgeLabel::LoweredFrom
@@ -526,33 +858,44 @@ fn origin_chain(start: &OriginExportKey, index: &DemoIndex<'_>) -> Vec<DemoOrigi
             ) {
                 continue;
             }
-            out.push(DemoOriginHop {
-                depth,
-                label: format!("{:?}", edge.label),
-                phase: edge
-                    .introduced_by
-                    .map(|phase| format!("{phase:?}"))
-                    .unwrap_or_else(|| "unknown".to_string()),
-                from: demo_key(&edge.from),
-                to: demo_key(&edge.to),
-            });
+            let edge_key = (
+                edge.from.canonical_storage_key(),
+                edge.to.canonical_storage_key(),
+                format!("{:?}", edge.label),
+            );
+            if seen_edges.insert(edge_key) {
+                edges_out.push(DemoClosureEdge {
+                    label: format!(
+                        "{:?} / {}",
+                        edge.label,
+                        edge.introduced_by
+                            .map(|phase| format!("{phase:?}"))
+                            .unwrap_or_else(|| "unknown".to_string())
+                    ),
+                    from: demo_key(&edge.from).short,
+                    to: demo_key(&edge.to).short,
+                });
+            }
+            queue.push_back((edge.from.clone(), depth + 1));
             queue.push_back((edge.to.clone(), depth + 1));
         }
     }
-    out
+    (keys, edges_out)
 }
 
-fn source_spans_for_chain(chain: &[DemoOriginHop], index: &DemoIndex<'_>) -> Vec<DemoSourceSpan> {
-    let mut keys = BTreeSet::new();
-    for hop in chain {
-        keys.insert(hop.from.full.clone());
-        keys.insert(hop.to.full.clone());
-    }
+fn source_spans_for_keys(
+    keys: &BTreeSet<OriginExportKey>,
+    index: &DemoIndex<'_>,
+) -> Vec<DemoSourceSpan> {
+    let storage_keys = keys
+        .iter()
+        .map(OriginExportKey::canonical_storage_key)
+        .collect::<BTreeSet<_>>();
     index
         .source_spans
         .iter()
-        .filter(|(origin, _)| keys.contains(&origin.canonical_storage_key()))
-        .filter(|(_, span)| !has_finer_span(span, &keys, index))
+        .filter(|(origin, _)| storage_keys.contains(&origin.canonical_storage_key()))
+        .filter(|(_, span)| !has_finer_span(span, &storage_keys, index))
         .map(|(origin, span)| DemoSourceSpan {
             origin: origin.display_label(),
             file: span.file.display_label(),
@@ -568,6 +911,20 @@ fn source_spans_for_chain(chain: &[DemoOriginHop], index: &DemoIndex<'_>) -> Vec
             },
         })
         .collect()
+}
+
+fn closure_label(root: &OriginExportKey, index: &DemoIndex<'_>) -> String {
+    index.instructions.get(root).map_or_else(
+        || root.display_label(),
+        |instruction| {
+            format!(
+                "{} ir[{}] {}",
+                root.display_label(),
+                instruction.index,
+                instruction.mnemonic
+            )
+        },
+    )
 }
 
 fn has_finer_span(span: &SourceSpanFact, keys: &BTreeSet<String>, index: &DemoIndex<'_>) -> bool {
@@ -591,12 +948,12 @@ fn demo_key(key: &OriginExportKey) -> DemoKey {
     }
 }
 
-fn demo_notes(bytecode: &[DemoBytecode], exact_source_spans: bool) -> Vec<String> {
+fn demo_notes(bytecode_count: usize, exact_source_spans: bool) -> Vec<String> {
     let mut notes = vec![
         "This page is a derived view over validated trace JSONL; it does not define compiler identity.".to_string(),
         "Bytecode rows are selected from the loop-contents report, so they are tied to compiler-emitted Sonatina loop facts.".to_string(),
     ];
-    if bytecode.is_empty() {
+    if bytecode_count == 0 {
         notes.push(
             "No bytecode PCs joined to the selected loop; rebuild the trace after enabling Sonatina observability.".to_string(),
         );
@@ -619,13 +976,33 @@ fn read_source_text(input_path: &str) -> Option<String> {
     fs::read_to_string(path).ok()
 }
 
-fn render_origin_trace_html(model: &WebDemoModel) -> Result<String, String> {
+fn render_origin_trace_html(model: &WebDemoModel, live_reload: bool) -> Result<String, String> {
     let data = serde_json::to_string(model)
         .map_err(|err| format!("failed to serialize web demo model: {err}"))?;
-    Ok(fe_web::assets::origin_trace_html_shell(
-        "Fe Origin Trace Demo",
-        &data,
-    ))
+    let html = fe_web::assets::origin_trace_html_shell("Fe Origin Trace Demo", &data);
+    if live_reload {
+        Ok(inject_live_reload_script(&html))
+    } else {
+        Ok(html)
+    }
+}
+
+fn inject_live_reload_script(html: &str) -> String {
+    let script = r#"<script>
+(function () {
+  if (!("EventSource" in window)) return;
+  var events = new EventSource("/events");
+  events.addEventListener("reload", function () { window.location.reload(); });
+  events.addEventListener("trace-error", function (event) {
+    console.warn("[fe trace web-demo]", event.data);
+  });
+})();
+</script>"#;
+    if html.contains("</body>") {
+        html.replacen("</body>", &format!("{script}\n</body>"), 1)
+    } else {
+        format!("{html}\n{script}")
+    }
 }
 
 #[cfg(test)]
@@ -648,6 +1025,7 @@ mod tests {
                 instructions: 0,
                 source_spans: 0,
             },
+            salsa: None,
             source: DemoSource {
                 display_name: "demo.fe".to_string(),
                 confidence: "coarse file-level fallback".to_string(),
@@ -663,10 +1041,18 @@ mod tests {
             notes: Vec::new(),
         };
 
-        let html = render_origin_trace_html(&model).unwrap();
+        let html = render_origin_trace_html(&model, false).unwrap();
 
         assert!(html.contains(r"<\/script>"));
         assert!(html.contains("fe-origin-trace"));
         assert!(html.contains("Fe Origin Trace Demo"));
+    }
+
+    #[test]
+    fn live_reload_script_connects_to_event_stream() {
+        let html = inject_live_reload_script("<html><body>x</body></html>");
+
+        assert!(html.contains("new EventSource(\"/events\")"));
+        assert!(html.contains("window.location.reload()"));
     }
 }

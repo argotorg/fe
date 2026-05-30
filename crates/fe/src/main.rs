@@ -885,11 +885,29 @@ pub struct DevTraceInputArgs {
 #[derive(Debug, Clone, Args)]
 pub struct DevTraceWebDemoArgs {
     /// Trace JSONL bundle to read.
-    #[arg(long = "from", value_name = "TRACE_JSONL")]
-    pub from: Utf8PathBuf,
+    #[arg(long = "from", value_name = "TRACE_JSONL", conflicts_with = "source")]
+    pub from: Option<Utf8PathBuf>,
+    /// Fe source file to compile with a long-lived salsa database.
+    #[arg(long, value_name = "FE_FILE", conflicts_with = "from")]
+    pub source: Option<Utf8PathBuf>,
     /// Output standalone HTML path.
     #[arg(long)]
     pub out: Utf8PathBuf,
+    /// Serve the demo and live-reload when the source or JSONL input changes.
+    #[arg(long)]
+    pub serve: bool,
+    /// HTTP port for --serve.
+    #[arg(long, default_value_t = 5179)]
+    pub port: u16,
+    /// Treat --source as a standalone Fe file even if it lives under an ingot.
+    #[arg(long)]
+    pub standalone: bool,
+    /// Compilation profile for --source.
+    #[arg(long, default_value = "debug")]
+    pub profile: String,
+    /// Optimization level for --source: 0, 1, 2, or s.
+    #[arg(long, default_value = "2")]
+    pub optimize: String,
 }
 
 #[derive(Debug, Clone, Args)]

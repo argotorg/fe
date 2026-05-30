@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Cursor};
+use std::sync::{Arc, Mutex};
 
 use camino::Utf8PathBuf;
-use common::{InputDb, origin::OriginExportKey};
+use common::{InputDb, SalsaEventCounters, origin::OriginExportKey};
 use contract_harness::{CompileOptions, ExecutionOptions, FeContractHarness, RuntimeTraceConfig};
 use driver::{
     DriverDataBase,
@@ -490,37 +491,125 @@ pub(super) fn emit_real_trace_bundle(
     profile: &str,
     opt_level: codegen::OptLevel,
 ) -> Result<TraceBundle, String> {
-    let mut db = DriverDataBase::default();
-    db.compilation_settings()
-        .set_profile(&mut db)
-        .to(profile.into());
-    let target = resolve_cli_target(&mut db, path, force_standalone)?;
-    let (top_mod, input_path, input_content) = match target {
-        CliTarget::StandaloneFile(file_path) => {
-            let (file_url, content) = standalone_file_input(&file_path)?;
-            db.workspace()
-                .touch(&mut db, file_url.clone(), Some(content.clone()));
-            let file = db
-                .workspace()
-                .get(&db, &file_url)
-                .ok_or_else(|| format!("could not process trace input {file_path}"))?;
-            let top_mod = db.top_mod(file);
-            (top_mod, file_path, content)
-        }
-        CliTarget::Directory(_) => {
-            return Err(
-                "fe dev trace emit currently supports standalone .fe files; ingot tracing is not wired yet"
-                    .to_string(),
-            );
-        }
-    };
+    let mut emitter = IncrementalTraceEmitter::new(
+        path,
+        force_standalone,
+        profile,
+        opt_level,
+        vec![
+            "fe".to_string(),
+            "dev".to_string(),
+            "trace".to_string(),
+            "emit".to_string(),
+        ],
+    )?;
+    Ok(emitter.emit_from_disk()?.bundle)
+}
 
-    let package = mir::build_runtime_package(&db, top_mod)
+pub(super) struct IncrementalTraceOutput {
+    pub bundle: TraceBundle,
+    pub salsa_events: SalsaEventCounters,
+}
+
+pub(super) struct IncrementalTraceEmitter {
+    db: DriverDataBase,
+    input_path: Utf8PathBuf,
+    file_url: Url,
+    profile: String,
+    opt_level: codegen::OptLevel,
+    command: Vec<String>,
+    counters: Arc<Mutex<SalsaEventCounters>>,
+}
+
+impl IncrementalTraceEmitter {
+    pub fn new(
+        path: &Utf8PathBuf,
+        force_standalone: bool,
+        profile: &str,
+        opt_level: codegen::OptLevel,
+        command: Vec<String>,
+    ) -> Result<Self, String> {
+        let mut db = DriverDataBase::default();
+        db.compilation_settings()
+            .set_profile(&mut db)
+            .to(profile.into());
+        let target = resolve_cli_target(&mut db, path, force_standalone)?;
+        let input_path = match target {
+            CliTarget::StandaloneFile(file_path) => file_path,
+            CliTarget::Directory(_) => {
+                return Err(
+                    "incremental trace emission currently supports standalone .fe files; ingot tracing is not wired yet"
+                        .to_string(),
+                );
+            }
+        };
+        let (file_url, content) = standalone_file_input(&input_path)?;
+        db.workspace()
+            .touch(&mut db, file_url.clone(), Some(content));
+        let counters = Arc::new(Mutex::new(SalsaEventCounters::default()));
+        db.set_salsa_event_counters(Some(counters.clone()));
+        Ok(Self {
+            db,
+            input_path,
+            file_url,
+            profile: profile.to_string(),
+            opt_level,
+            command,
+            counters,
+        })
+    }
+
+    pub fn emit_from_disk(&mut self) -> Result<IncrementalTraceOutput, String> {
+        if let Ok(mut counters) = self.counters.lock() {
+            *counters = SalsaEventCounters::default();
+        }
+        let content = fs::read_to_string(&self.input_path)
+            .map_err(|err| format!("failed to read trace input {}: {err}", self.input_path))?;
+        let file = self
+            .db
+            .workspace()
+            .update(&mut self.db, self.file_url.clone(), content.clone());
+        let top_mod = self.db.top_mod(file);
+        let bundle = emit_real_trace_bundle_from_top_mod(
+            &self.db,
+            top_mod,
+            &self.input_path,
+            &content,
+            &self.profile,
+            self.opt_level,
+            self.command.clone(),
+        )?;
+        let salsa_events = self
+            .counters
+            .lock()
+            .map(|counters| counters.clone())
+            .unwrap_or_default();
+        Ok(IncrementalTraceOutput {
+            bundle,
+            salsa_events,
+        })
+    }
+
+    pub fn input_path(&self) -> &Utf8PathBuf {
+        &self.input_path
+    }
+}
+
+fn emit_real_trace_bundle_from_top_mod<'db>(
+    db: &'db DriverDataBase,
+    top_mod: hir::hir_def::TopLevelMod<'db>,
+    input_path: &Utf8PathBuf,
+    input_content: &str,
+    profile: &str,
+    opt_level: codegen::OptLevel,
+    command: Vec<String>,
+) -> Result<TraceBundle, String> {
+    let package = mir::build_runtime_package(db, top_mod)
         .map_err(|err| format!("failed to build runtime package for trace: {err}"))?;
-    let mut facts = mir::trace::emit_mir_facts(&db, package);
-    let module_key = top_mod.name(&db).data(&db).to_string();
+    let mut facts = mir::trace::emit_mir_facts(db, package);
+    let module_key = top_mod.name(db).data(db).to_string();
     let sonatina_module =
-        codegen::compile_runtime_package_sonatina(&db, &package, codegen::EVM_LAYOUT)
+        codegen::compile_runtime_package_sonatina(db, &package, codegen::EVM_LAYOUT)
             .map_err(|err| format!("failed to compile Sonatina IR for trace: {err}"))?;
     let sonatina_owner =
         codegen::trace::sonatina_module_owner_key(input_path.as_str(), &module_key);
@@ -529,15 +618,15 @@ pub(super) fn emit_real_trace_bundle(
         &sonatina_module,
         CompilerPhase::SonatinaPreOpt,
     ));
-    let source_file = source_file_key(&input_path);
+    let source_file = source_file_key(input_path);
     facts.extend(emit_standalone_source_file_facts(
-        &input_path,
-        &input_content,
+        input_path,
+        input_content,
         &source_file,
     ));
     let (bytecode, postopt_sonatina_facts) =
         codegen::emit_module_sonatina_bytecode_with_observability_and_trace(
-            &db,
+            db,
             top_mod,
             opt_level,
             None,
@@ -580,7 +669,7 @@ pub(super) fn emit_real_trace_bundle(
             &artifact.runtime,
         ));
         let code_object = codegen::trace::bytecode_code_object_key(&owner_key);
-        if let Some(span) = whole_file_source_span(code_object, source_file.clone(), &input_content)
+        if let Some(span) = whole_file_source_span(code_object, source_file.clone(), input_content)
         {
             facts.push(TraceFact::SourceSpan(span));
         }
@@ -589,12 +678,7 @@ pub(super) fn emit_real_trace_bundle(
     let metadata = trace_facts::TraceMetadata::compiler_emitted(
         super::compiler_commit(),
         "evm/sonatina",
-        vec![
-            "fe".to_string(),
-            "dev".to_string(),
-            "trace".to_string(),
-            "emit".to_string(),
-        ],
+        command,
         input_path.as_str(),
         vec![
             format!("profile={profile}"),
