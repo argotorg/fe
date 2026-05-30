@@ -18,6 +18,10 @@ use trace_query::{IntrospectionService, LoopContentsRequest, TraceIntrospectionS
 
 use crate::{DevTraceAuditClosuresArgs, DevTraceWebDemoArgs, TraceReportFormat};
 
+const CLOSURE_MAX_DEPTH: usize = 16;
+const CLOSURE_MAX_NODES: usize = 512;
+const CLOSURE_DEGREE_HUB_THRESHOLD: usize = 128;
+
 pub(super) fn run_trace_web_demo(args: &DevTraceWebDemoArgs) -> Result<String, String> {
     if args.serve {
         return serve_trace_web_demo(args);
@@ -510,7 +514,7 @@ struct DemoPanelRow {
     classes: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct DemoClosure {
     class_name: String,
     label: String,
@@ -518,6 +522,7 @@ struct DemoClosure {
     #[serde(skip_serializing)]
     keys: Vec<String>,
     counts: DemoClosureCounts,
+    traversal: DemoClosureTraversalSummary,
     gap: Option<String>,
     edges: Vec<DemoClosureEdge>,
     source_spans: Vec<DemoSourceSpan>,
@@ -532,11 +537,27 @@ struct DemoClosureCounts {
     bytecode: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
+struct DemoClosureTraversalSummary {
+    mode: String,
+    max_depth: usize,
+    max_nodes: usize,
+    truncated: bool,
+    truncation_reason: Option<String>,
+    skipped_hubs: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
 struct DemoClosureEdge {
     label: String,
     from: String,
     to: String,
+}
+
+struct OriginClosure {
+    keys: BTreeSet<OriginExportKey>,
+    edges: Vec<DemoClosureEdge>,
+    traversal: DemoClosureTraversalSummary,
 }
 
 #[derive(Debug, Serialize)]
@@ -721,21 +742,23 @@ fn build_closures(roots: Vec<OriginExportKey>, index: &DemoIndex<'_>) -> Vec<Dem
         .into_iter()
         .enumerate()
         .map(|(ordinal, root)| {
-            let (keys, edges) = origin_closure(&root, index);
-            let source_spans = source_spans_for_keys(&keys, index);
-            let counts = closure_counts(&keys);
+            let closure = origin_closure(&root, index);
+            let source_spans = source_spans_for_keys(&closure.keys, index);
+            let counts = closure_counts(&closure.keys);
             let gap = closure_gap_note(&counts);
             DemoClosure {
                 class_name: format!("trace-c-{ordinal}"),
                 label: closure_label(&root, index),
                 root_key: root.canonical_storage_key(),
-                keys: keys
+                keys: closure
+                    .keys
                     .iter()
                     .map(OriginExportKey::canonical_storage_key)
                     .collect(),
                 counts,
+                traversal: closure.traversal,
                 gap,
-                edges,
+                edges: closure.edges,
                 source_spans,
             }
         })
@@ -837,9 +860,17 @@ struct ClosureAuditReport {
     target: String,
     data_source: String,
     total_closures: usize,
-    verdict_counts: BTreeMap<ClosureAuditVerdict, usize>,
+    span_groups: ClosureAuditSpanGroupSummary,
+    primary_counts: BTreeMap<ClosureAuditPrimary, usize>,
+    symptom_counts: BTreeMap<ClosureAuditSymptom, usize>,
     suspicious_closures: usize,
     closures: Vec<ClosureAuditEntry>,
+}
+
+#[derive(Debug, Serialize)]
+struct ClosureAuditSpanGroupSummary {
+    total_groups: usize,
+    mixed_connectivity_groups: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -847,8 +878,11 @@ struct ClosureAuditEntry {
     class_name: String,
     label: String,
     root_key: String,
-    verdicts: Vec<ClosureAuditVerdict>,
+    primary: ClosureAuditPrimary,
+    symptoms: Vec<ClosureAuditSymptom>,
+    suspicious: bool,
     counts: DemoClosureCounts,
+    traversal: DemoClosureTraversalSummary,
     key_count: usize,
     edge_count: usize,
     source_spans: Vec<String>,
@@ -857,28 +891,40 @@ struct ClosureAuditEntry {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum ClosureAuditVerdict {
+enum ClosureAuditPrimary {
     GoodExact,
     GoodManyToMany,
-    SourceOnly,
+    SourceOnlyExpected,
+    SourceSpanSiblingUnlowered,
     ExpectedSynthetic,
+    LoweredNoTargetUnexplained,
+    PreoptElisionGap,
     OptimizedAttributionGap,
-    TooBroad,
-    MissingSource,
-    MissingBytecode,
-    ForeignSource,
+    MissingSourceUnexplained,
+    TruncatedUnknown,
     Unclassified,
 }
 
-impl ClosureAuditVerdict {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ClosureAuditSymptom {
+    TooBroad,
+    MissingSourceUnexplained,
+    SourceUnavailableSynthetic,
+    MissingBytecode,
+    ForeignSource,
+    Truncated,
+}
+
+impl ClosureAuditPrimary {
     fn is_suspicious(self) -> bool {
         matches!(
             self,
             Self::OptimizedAttributionGap
-                | Self::TooBroad
-                | Self::MissingSource
-                | Self::MissingBytecode
-                | Self::ForeignSource
+                | Self::PreoptElisionGap
+                | Self::LoweredNoTargetUnexplained
+                | Self::MissingSourceUnexplained
+                | Self::TruncatedUnknown
                 | Self::Unclassified
         )
     }
@@ -887,36 +933,132 @@ impl ClosureAuditVerdict {
         match self {
             Self::GoodExact => "good_exact",
             Self::GoodManyToMany => "good_many_to_many",
-            Self::SourceOnly => "source_only",
+            Self::SourceOnlyExpected => "source_only_expected",
+            Self::SourceSpanSiblingUnlowered => "source_span_sibling_unlowered",
             Self::ExpectedSynthetic => "expected_synthetic",
+            Self::LoweredNoTargetUnexplained => "lowered_no_target_unexplained",
+            Self::PreoptElisionGap => "preopt_elision_gap",
             Self::OptimizedAttributionGap => "optimized_attribution_gap",
-            Self::TooBroad => "too_broad",
-            Self::MissingSource => "missing_source",
-            Self::MissingBytecode => "missing_bytecode",
-            Self::ForeignSource => "foreign_source",
+            Self::MissingSourceUnexplained => "missing_source_unexplained",
+            Self::TruncatedUnknown => "truncated_unknown",
             Self::Unclassified => "unclassified",
         }
     }
 }
 
+impl ClosureAuditSymptom {
+    fn is_suspicious(self) -> bool {
+        matches!(
+            self,
+            Self::TooBroad
+                | Self::MissingSourceUnexplained
+                | Self::MissingBytecode
+                | Self::ForeignSource
+                | Self::Truncated
+        )
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::TooBroad => "too_broad",
+            Self::MissingSourceUnexplained => "missing_source_unexplained",
+            Self::SourceUnavailableSynthetic => "source_unavailable_synthetic",
+            Self::MissingBytecode => "missing_bytecode",
+            Self::ForeignSource => "foreign_source",
+            Self::Truncated => "truncated",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct SourceSpanSignature {
+    file_owner: String,
+    start_byte: u32,
+    end_byte: u32,
+}
+
+#[derive(Default)]
+struct SourceSpanGroup {
+    closures: usize,
+    closures_with_targets: usize,
+    source_only_closures: usize,
+}
+
+struct SourceSpanGroupIndex {
+    groups: BTreeMap<SourceSpanSignature, SourceSpanGroup>,
+}
+
+impl SourceSpanGroupIndex {
+    fn new(input_path: &str, closures: &[DemoClosure]) -> Self {
+        let mut groups = BTreeMap::<SourceSpanSignature, SourceSpanGroup>::new();
+        for closure in closures {
+            let has_lowering_target = closure.counts.mir
+                + closure.counts.sonatina_pre
+                + closure.counts.sonatina_post
+                + closure.counts.bytecode
+                > 0;
+            for span in &closure.source_spans {
+                let Some(signature) = source_span_signature(span, input_path) else {
+                    continue;
+                };
+                let group = groups.entry(signature).or_default();
+                group.closures += 1;
+                if has_lowering_target {
+                    group.closures_with_targets += 1;
+                } else {
+                    group.source_only_closures += 1;
+                }
+            }
+        }
+        Self { groups }
+    }
+
+    fn summary(&self) -> ClosureAuditSpanGroupSummary {
+        ClosureAuditSpanGroupSummary {
+            total_groups: self.groups.len(),
+            mixed_connectivity_groups: self
+                .groups
+                .values()
+                .filter(|group| group.closures_with_targets > 0 && group.source_only_closures > 0)
+                .count(),
+        }
+    }
+}
+
+fn source_span_signature(span: &DemoSourceSpan, input_path: &str) -> Option<SourceSpanSignature> {
+    (span.confidence == "direct" && source_owner_matches_input(&span.file_owner, input_path)).then(
+        || SourceSpanSignature {
+            file_owner: span.file_owner.clone(),
+            start_byte: span.start_byte,
+            end_byte: span.end_byte,
+        },
+    )
+}
+
 fn audit_closures(model: &WebDemoModel) -> ClosureAuditReport {
+    let span_groups = SourceSpanGroupIndex::new(&model.metadata.input_path, &model.closures);
     let closures = model
         .closures
         .iter()
-        .map(|closure| audit_closure(&model.metadata.input_path, model.bytecode_count, closure))
+        .map(|closure| {
+            audit_closure(
+                &model.metadata.input_path,
+                model.bytecode_count,
+                closure,
+                &span_groups,
+            )
+        })
         .collect::<Vec<_>>();
-    let mut verdict_counts = BTreeMap::<ClosureAuditVerdict, usize>::new();
+    let mut primary_counts = BTreeMap::<ClosureAuditPrimary, usize>::new();
+    let mut symptom_counts = BTreeMap::<ClosureAuditSymptom, usize>::new();
     let mut suspicious = 0;
     for closure in &closures {
-        if closure
-            .verdicts
-            .iter()
-            .any(|verdict| verdict.is_suspicious())
-        {
+        if closure.suspicious {
             suspicious += 1;
         }
-        for verdict in &closure.verdicts {
-            *verdict_counts.entry(*verdict).or_default() += 1;
+        *primary_counts.entry(closure.primary).or_default() += 1;
+        for symptom in &closure.symptoms {
+            *symptom_counts.entry(*symptom).or_default() += 1;
         }
     }
     ClosureAuditReport {
@@ -924,7 +1066,9 @@ fn audit_closures(model: &WebDemoModel) -> ClosureAuditReport {
         target: model.metadata.target.clone(),
         data_source: model.metadata.data_source.clone(),
         total_closures: closures.len(),
-        verdict_counts,
+        span_groups: span_groups.summary(),
+        primary_counts,
+        symptom_counts,
         suspicious_closures: suspicious,
         closures,
     }
@@ -934,8 +1078,9 @@ fn audit_closure(
     input_path: &str,
     loop_bytecode_count: usize,
     closure: &DemoClosure,
+    span_groups: &SourceSpanGroupIndex,
 ) -> ClosureAuditEntry {
-    let mut verdicts = BTreeSet::new();
+    let mut symptoms = BTreeSet::new();
     let mut notes = Vec::new();
     let direct_input_spans = closure
         .source_spans
@@ -953,7 +1098,7 @@ fn audit_closure(
         .collect::<Vec<_>>();
 
     if !foreign_spans.is_empty() {
-        verdicts.insert(ClosureAuditVerdict::ForeignSource);
+        symptoms.insert(ClosureAuditSymptom::ForeignSource);
         notes.push(format!(
             "{} direct source span(s) point at a file other than {input_path}",
             foreign_spans.len()
@@ -962,7 +1107,7 @@ fn audit_closure(
 
     let broad_bytecode_threshold = (loop_bytecode_count.saturating_mul(3) / 4).max(64);
     if closure.counts.bytecode > broad_bytecode_threshold || closure.keys.len() > 300 {
-        verdicts.insert(ClosureAuditVerdict::TooBroad);
+        symptoms.insert(ClosureAuditSymptom::TooBroad);
         notes.push(format!(
             "closure touches {} bytecode PC(s) and {} total key(s)",
             closure.counts.bytecode,
@@ -970,9 +1115,16 @@ fn audit_closure(
         ));
     }
 
-    if let Some(gap) = &closure.gap {
-        verdicts.insert(ClosureAuditVerdict::OptimizedAttributionGap);
-        notes.push(gap.clone());
+    if closure.traversal.truncated {
+        symptoms.insert(ClosureAuditSymptom::Truncated);
+        notes.push(format!(
+            "closure traversal truncated: {}",
+            closure
+                .traversal
+                .truncation_reason
+                .as_deref()
+                .unwrap_or("unknown")
+        ));
     }
 
     let has_ir = closure.counts.hir
@@ -980,58 +1132,99 @@ fn audit_closure(
         + closure.counts.sonatina_pre
         + closure.counts.sonatina_post
         > 0;
+    let has_expected_synthetic = closure.edges.iter().any(|edge| {
+        edge.label.starts_with("SyntheticFor") || edge.label.starts_with("BackendPrepared")
+    });
+    let has_lowering_target = closure.counts.mir
+        + closure.counts.sonatina_pre
+        + closure.counts.sonatina_post
+        + closure.counts.bytecode
+        > 0;
+    let same_span_sibling_reaches_target = !has_lowering_target
+        && direct_input_spans.iter().any(|span| {
+            source_span_signature(span, input_path)
+                .and_then(|signature| span_groups.groups.get(&signature))
+                .is_some_and(|group| group.closures_with_targets > 0)
+        });
     if closure.counts.sonatina_post > 0 && closure.counts.bytecode == 0 {
-        verdicts.insert(ClosureAuditVerdict::MissingBytecode);
+        symptoms.insert(ClosureAuditSymptom::MissingBytecode);
         notes.push("post-opt closure reaches no final bytecode PC".to_string());
     }
     if has_ir && closure.counts.bytecode > 0 && direct_input_spans.is_empty() {
-        verdicts.insert(ClosureAuditVerdict::MissingSource);
-        notes.push(
-            "bytecode-linked closure has no direct span in the audited input file".to_string(),
-        );
+        if has_expected_synthetic {
+            symptoms.insert(ClosureAuditSymptom::SourceUnavailableSynthetic);
+            notes.push("bytecode-linked synthetic/backend closure has no direct source span; this is expected when the edge explains generated work".to_string());
+        } else {
+            symptoms.insert(ClosureAuditSymptom::MissingSourceUnexplained);
+            notes.push(
+                "bytecode-linked closure has no direct span in the audited input file".to_string(),
+            );
+        }
     }
 
-    if closure.edges.iter().any(|edge| {
-        edge.label.starts_with("SyntheticFor") || edge.label.starts_with("BackendPrepared")
-    }) {
-        verdicts.insert(ClosureAuditVerdict::ExpectedSynthetic);
-    }
-
-    if !verdicts.iter().any(|verdict| verdict.is_suspicious())
-        && !direct_input_spans.is_empty()
-        && closure.counts.bytecode > 0
+    let primary = if closure.traversal.truncated {
+        ClosureAuditPrimary::TruncatedUnknown
+    } else if closure.counts.sonatina_post > 0 && closure.counts.bytecode == 0 {
+        if let Some(gap) = &closure.gap {
+            notes.push(gap.clone());
+        }
+        ClosureAuditPrimary::OptimizedAttributionGap
+    } else if closure.counts.sonatina_pre > 0
+        && closure.counts.sonatina_post == 0
+        && closure.counts.bytecode == 0
     {
+        notes.push("closure reaches Sonatina pre-opt but has no post-opt or bytecode target; no explicit elision/coalescing event explains it".to_string());
+        ClosureAuditPrimary::PreoptElisionGap
+    } else if same_span_sibling_reaches_target {
+        notes.push("source-only HIR origin shares this exact input span with another HIR origin that reaches MIR/Sonatina/bytecode; this is a display/grouping sibling, not a duplicate identity".to_string());
+        ClosureAuditPrimary::SourceSpanSiblingUnlowered
+    } else if closure.counts.mir > 0
+        && closure.counts.sonatina_pre == 0
+        && closure.counts.sonatina_post == 0
+        && closure.counts.bytecode == 0
+    {
+        notes.push("closure reaches MIR but has no Sonatina or bytecode target; no explicit lowering/elision event explains it".to_string());
+        ClosureAuditPrimary::LoweredNoTargetUnexplained
+    } else if has_expected_synthetic {
+        ClosureAuditPrimary::ExpectedSynthetic
+    } else if has_ir && closure.counts.bytecode > 0 && direct_input_spans.is_empty() {
+        ClosureAuditPrimary::MissingSourceUnexplained
+    } else if !direct_input_spans.is_empty() && closure.counts.bytecode > 0 {
         let exact = direct_input_spans.len() == 1
             && closure.counts.bytecode == 1
             && closure.counts.hir <= 1
             && closure.counts.mir <= 1
             && closure.counts.sonatina_pre <= 1
             && closure.counts.sonatina_post <= 1;
-        verdicts.insert(if exact {
-            ClosureAuditVerdict::GoodExact
+        if exact {
+            ClosureAuditPrimary::GoodExact
         } else {
-            ClosureAuditVerdict::GoodManyToMany
-        });
-    }
-
-    if !verdicts.iter().any(|verdict| verdict.is_suspicious())
-        && !direct_input_spans.is_empty()
+            ClosureAuditPrimary::GoodManyToMany
+        }
+    } else if !direct_input_spans.is_empty()
+        && closure.counts.mir == 0
+        && closure.counts.sonatina_pre == 0
+        && closure.counts.sonatina_post == 0
         && closure.counts.bytecode == 0
     {
-        verdicts.insert(ClosureAuditVerdict::SourceOnly);
-    }
-
-    if verdicts.is_empty() {
-        verdicts.insert(ClosureAuditVerdict::Unclassified);
+        ClosureAuditPrimary::SourceOnlyExpected
+    } else {
         notes.push("closure did not match a known audit bucket".to_string());
-    }
+        ClosureAuditPrimary::Unclassified
+    };
+    let symptoms = symptoms.into_iter().collect::<Vec<_>>();
+    let suspicious =
+        primary.is_suspicious() || symptoms.iter().any(|symptom| symptom.is_suspicious());
 
     ClosureAuditEntry {
         class_name: closure.class_name.clone(),
         label: closure.label.clone(),
         root_key: closure.root_key.clone(),
-        verdicts: verdicts.into_iter().collect(),
+        primary,
+        symptoms,
+        suspicious,
         counts: closure.counts.clone(),
+        traversal: closure.traversal.clone(),
         key_count: closure.keys.len(),
         edge_count: closure.edges.len(),
         source_spans: direct_input_spans
@@ -1053,28 +1246,36 @@ fn render_closure_audit_report(report: &ClosureAuditReport) -> String {
         "Closures: {} total, {} suspicious\n\n",
         report.total_closures, report.suspicious_closures
     ));
-    out.push_str("Verdicts:\n");
-    for (verdict, count) in &report.verdict_counts {
-        out.push_str(&format!("  {:>27}: {count}\n", verdict.as_str()));
+    out.push_str(&format!(
+        "Source span groups: {} total, {} with mixed closure connectivity\n",
+        report.span_groups.total_groups, report.span_groups.mixed_connectivity_groups
+    ));
+    out.push_str("Primary classifications:\n");
+    for (primary, count) in &report.primary_counts {
+        out.push_str(&format!("  {:>31}: {count}\n", primary.as_str()));
+    }
+    if !report.symptom_counts.is_empty() {
+        out.push_str("Symptoms (multi-label):\n");
+        for (symptom, count) in &report.symptom_counts {
+            out.push_str(&format!("  {:>31}: {count}\n", symptom.as_str()));
+        }
     }
     out.push_str("\nSuspicious closures:\n");
     for closure in &report.closures {
-        if !closure
-            .verdicts
-            .iter()
-            .any(|verdict| verdict.is_suspicious())
-        {
+        if !closure.suspicious {
             continue;
         }
+        let symptoms = closure
+            .symptoms
+            .iter()
+            .map(|symptom| symptom.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
         out.push_str(&format!(
-            "  {} [{}] {}\n",
+            "  {} primary={} symptoms=[{}] {}\n",
             closure.class_name,
-            closure
-                .verdicts
-                .iter()
-                .map(|verdict| verdict.as_str())
-                .collect::<Vec<_>>()
-                .join(","),
+            closure.primary.as_str(),
+            symptoms,
             closure.label
         ));
         out.push_str(&format!(
@@ -1087,6 +1288,17 @@ fn render_closure_audit_report(report: &ClosureAuditReport) -> String {
             closure.key_count,
             closure.edge_count
         ));
+        out.push_str(&format!(
+            "    traversal: mode={} truncated={} max_depth={} max_nodes={} skipped_hubs={}\n",
+            closure.traversal.mode,
+            closure.traversal.truncated,
+            closure.traversal.max_depth,
+            closure.traversal.max_nodes,
+            closure.traversal.skipped_hubs.len()
+        ));
+        for hub in &closure.traversal.skipped_hubs {
+            out.push_str(&format!("    skipped hub: {hub}\n"));
+        }
         for span in &closure.source_spans {
             out.push_str(&format!("    source: {span}\n"));
         }
@@ -1224,22 +1436,40 @@ fn loop_panel(
     }
 }
 
-fn origin_closure(
-    start: &OriginExportKey,
-    index: &DemoIndex<'_>,
-) -> (BTreeSet<OriginExportKey>, Vec<DemoClosureEdge>) {
+fn origin_closure(start: &OriginExportKey, index: &DemoIndex<'_>) -> OriginClosure {
     let mut keys = BTreeSet::new();
     let mut edges_out = Vec::new();
     let mut seen_edges = BTreeSet::new();
+    let mut skipped_hubs = BTreeSet::new();
+    let mut truncated = false;
+    let mut truncation_reason = None;
     let mut queue = VecDeque::from([(start.clone(), 0_usize)]);
     while let Some((key, depth)) = queue.pop_front() {
-        if depth >= 8 || !keys.insert(key.clone()) {
+        if depth >= CLOSURE_MAX_DEPTH {
+            truncated = true;
+            truncation_reason.get_or_insert_with(|| "max_depth".to_string());
+            continue;
+        }
+        if keys.len() >= CLOSURE_MAX_NODES && !keys.contains(&key) {
+            truncated = true;
+            truncation_reason.get_or_insert_with(|| "max_nodes".to_string());
+            continue;
+        }
+        if !keys.insert(key.clone()) {
             continue;
         }
         let outgoing = index.edges_by_from.get(&key).into_iter().flatten().copied();
         let incoming = index.edges_by_to.get(&key).into_iter().flatten().copied();
         for edge in outgoing.chain(incoming) {
-            if is_trace_hub(&edge.from) || is_trace_hub(&edge.to) {
+            let from_hub = trace_hub_reason(&edge.from, index, start);
+            let to_hub = trace_hub_reason(&edge.to, index, start);
+            if let Some(reason) = from_hub {
+                skipped_hubs.insert(format!("{} ({reason})", edge.from.display_label()));
+            }
+            if let Some(reason) = to_hub {
+                skipped_hubs.insert(format!("{} ({reason})", edge.to.display_label()));
+            }
+            if from_hub.is_some() || to_hub.is_some() {
                 continue;
             }
             if !matches!(
@@ -1273,11 +1503,38 @@ fn origin_closure(
             queue.push_back((edge.to.clone(), depth + 1));
         }
     }
-    (keys, edges_out)
+    OriginClosure {
+        keys,
+        edges: edges_out,
+        traversal: DemoClosureTraversalSummary {
+            mode: "undirected_connected_origin_closure".to_string(),
+            max_depth: CLOSURE_MAX_DEPTH,
+            max_nodes: CLOSURE_MAX_NODES,
+            truncated,
+            truncation_reason,
+            skipped_hubs: skipped_hubs.into_iter().collect(),
+        },
+    }
 }
 
-fn is_trace_hub(key: &OriginExportKey) -> bool {
-    matches!(key.kind(), "code.object" | "source.file")
+fn trace_hub_reason(
+    key: &OriginExportKey,
+    index: &DemoIndex<'_>,
+    root: &OriginExportKey,
+) -> Option<&'static str> {
+    if key == root {
+        return None;
+    }
+    if matches!(key.kind(), "code.object" | "source.file") {
+        return Some("known_context_hub");
+    }
+    (origin_edge_degree(key, index) > CLOSURE_DEGREE_HUB_THRESHOLD)
+        .then_some("high_degree_context_hub")
+}
+
+fn origin_edge_degree(key: &OriginExportKey, index: &DemoIndex<'_>) -> usize {
+    index.edges_by_from.get(key).map_or(0, Vec::len)
+        + index.edges_by_to.get(key).map_or(0, Vec::len)
 }
 
 fn source_spans_for_keys(
@@ -1492,12 +1749,13 @@ mod tests {
             instruction_count: 0,
         };
 
-        let (keys, closure_edges) = origin_closure(&pc0, &index);
+        let closure = origin_closure(&pc0, &index);
 
-        assert!(keys.contains(&pc0));
-        assert!(!keys.contains(&pc1));
-        assert!(!keys.contains(&code_object));
-        assert!(closure_edges.is_empty());
+        assert!(closure.keys.contains(&pc0));
+        assert!(!closure.keys.contains(&pc1));
+        assert!(!closure.keys.contains(&code_object));
+        assert!(closure.edges.is_empty());
+        assert_eq!(closure.traversal.skipped_hubs.len(), 1);
     }
 
     #[test]
@@ -1514,6 +1772,7 @@ mod tests {
                 sonatina_post: 0,
                 bytecode: 0,
             },
+            traversal: test_traversal(),
             gap: None,
             edges: Vec::new(),
             source_spans: vec![DemoSourceSpan {
@@ -1545,6 +1804,7 @@ mod tests {
                 sonatina_post: 0,
                 bytecode: 0,
             },
+            traversal: test_traversal(),
             gap: None,
             edges: Vec::new(),
             source_spans: vec![DemoSourceSpan {
@@ -1571,17 +1831,14 @@ mod tests {
         closure.counts.sonatina_post = 2;
         closure.gap = closure_gap_note(&closure.counts);
 
-        let entry = audit_closure("fib_demo.fe", 24, &closure);
+        let groups = SourceSpanGroupIndex::new("fib_demo.fe", std::slice::from_ref(&closure));
+        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
 
+        assert_eq!(entry.primary, ClosureAuditPrimary::OptimizedAttributionGap);
         assert!(
             entry
-                .verdicts
-                .contains(&ClosureAuditVerdict::OptimizedAttributionGap)
-        );
-        assert!(
-            entry
-                .verdicts
-                .contains(&ClosureAuditVerdict::MissingBytecode)
+                .symptoms
+                .contains(&ClosureAuditSymptom::MissingBytecode)
         );
         assert!(entry.notes.iter().any(|note| note.contains("not evidence")));
     }
@@ -1599,9 +1856,66 @@ mod tests {
             "pc:3".to_string(),
         ];
 
-        let entry = audit_closure("fib_demo.fe", 24, &closure);
+        let groups = SourceSpanGroupIndex::new("fib_demo.fe", std::slice::from_ref(&closure));
+        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
 
-        assert_eq!(entry.verdicts, vec![ClosureAuditVerdict::GoodManyToMany]);
+        assert_eq!(entry.primary, ClosureAuditPrimary::GoodManyToMany);
+        assert!(entry.symptoms.is_empty());
+    }
+
+    #[test]
+    fn closure_audit_marks_same_span_source_only_sibling() {
+        let mut source_only = test_closure();
+        source_only.counts.mir = 0;
+        source_only.counts.sonatina_pre = 0;
+        let mut lowered = test_closure();
+        lowered.class_name = "trace-c-1".to_string();
+        lowered.root_key = "lowered".to_string();
+        lowered.counts.bytecode = 1;
+        let closures = vec![source_only.clone(), lowered];
+        let groups = SourceSpanGroupIndex::new("fib_demo.fe", &closures);
+
+        let entry = audit_closure("fib_demo.fe", 24, &source_only, &groups);
+
+        assert_eq!(
+            entry.primary,
+            ClosureAuditPrimary::SourceSpanSiblingUnlowered
+        );
+        assert!(!entry.suspicious);
+    }
+
+    #[test]
+    fn closure_audit_flags_preopt_elision_without_postopt() {
+        let closure = test_closure();
+        let groups = SourceSpanGroupIndex::new("fib_demo.fe", std::slice::from_ref(&closure));
+
+        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
+
+        assert_eq!(entry.primary, ClosureAuditPrimary::PreoptElisionGap);
+        assert!(entry.suspicious);
+    }
+
+    #[test]
+    fn closure_audit_downgrades_synthetic_missing_source() {
+        let mut closure = test_closure();
+        closure.source_spans.clear();
+        closure.counts.bytecode = 1;
+        closure.edges.push(DemoClosureEdge {
+            label: "BackendPrepared / Backend".to_string(),
+            from: "backend event".to_string(),
+            to: "bytecode.pc pc:0".to_string(),
+        });
+        let groups = SourceSpanGroupIndex::new("fib_demo.fe", std::slice::from_ref(&closure));
+
+        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
+
+        assert_eq!(entry.primary, ClosureAuditPrimary::ExpectedSynthetic);
+        assert!(
+            entry
+                .symptoms
+                .contains(&ClosureAuditSymptom::SourceUnavailableSynthetic)
+        );
+        assert!(!entry.suspicious);
     }
 
     fn test_key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -1621,6 +1935,7 @@ mod tests {
                 sonatina_post: 0,
                 bytecode: 0,
             },
+            traversal: test_traversal(),
             gap: None,
             edges: Vec::new(),
             source_spans: vec![DemoSourceSpan {
@@ -1634,6 +1949,17 @@ mod tests {
                 end_line: 18,
                 confidence: "direct".to_string(),
             }],
+        }
+    }
+
+    fn test_traversal() -> DemoClosureTraversalSummary {
+        DemoClosureTraversalSummary {
+            mode: "undirected_connected_origin_closure".to_string(),
+            max_depth: CLOSURE_MAX_DEPTH,
+            max_nodes: CLOSURE_MAX_NODES,
+            truncated: false,
+            truncation_reason: None,
+            skipped_hubs: Vec::new(),
         }
     }
 }

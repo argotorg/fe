@@ -62,9 +62,16 @@ cargo run -p fe -- dev trace audit-closures \
 ```
 
 The audit is deterministic and intentionally conservative. It classifies each
-closure into buckets such as `good_many_to_many`, `optimized_attribution_gap`,
-`source_only`, `missing_bytecode`, `too_broad`, and `foreign_source`. A
-`source_only` closure is not automatically suspicious: many HIR subexpressions do
-not correspond to standalone target instructions. Use `--format json` to produce
-compact evidence packs for cheaper agent review. The agent should only review
-closures that the deterministic audit flags as suspicious.
+closure with one primary classification plus multi-label symptoms. Primary
+classifications include `good_many_to_many`, `source_only_expected`,
+`source_span_sibling_unlowered`, `preopt_elision_gap`, and
+`optimized_attribution_gap`; suspicious primary classifications also include
+`missing_source_unexplained`. Symptoms include `missing_bytecode`, `too_broad`,
+and `foreign_source`.
+
+The audit also groups exact input source spans. A source-only HIR origin that
+shares a span with another HIR origin reaching MIR/Sonatina/bytecode is reported
+as `source_span_sibling_unlowered`, which is informational rather than
+suspicious. Use `--format json` to produce compact evidence packs for cheaper
+agent review. The agent should only review closures that the deterministic audit
+flags as suspicious.
