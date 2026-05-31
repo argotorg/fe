@@ -130,6 +130,7 @@ pub(crate) async fn handle_trace_workbench_model(
         .workspace()
         .get(&backend.db, &uri)
         .map(|file| file.text(&backend.db).to_string());
+    let source_hash = source_text.as_deref().map(trace_workbench_digest_text);
 
     let service = if let Some(version) = document_version
         && let Some(service) = backend.cached_trace_service(&uri, version, &current_config_hash)
@@ -159,6 +160,9 @@ pub(crate) async fn handle_trace_workbench_model(
     };
     let related_source_texts =
         trace_workbench_related_source_texts(backend, service.snapshot(), &uri);
+    let trace_snapshot_digest = service.snapshot().trace_hash().to_string();
+    let target_config_hash =
+        trace_workbench_target_config_hash(&session.target, &session.opt_level, &session.view);
     let projection = trace_workbench_report_projection(
         &service,
         service.snapshot(),
@@ -184,7 +188,14 @@ pub(crate) async fn handle_trace_workbench_model(
             revision: manifest.revision,
             document_version,
             status: "ready".to_string(),
-            config_hash: current_config_hash,
+            config_hash: current_config_hash.clone(),
+            compiler_config_hash: current_config_hash,
+            target_config_hash,
+            target: session.target,
+            opt_level: session.opt_level,
+            view: session.view,
+            source_hash,
+            trace_snapshot_digest,
             model_digest: manifest.root_digest,
             summary_digest: manifest.summary_digest,
             source_digest: manifest.source_digest,
@@ -195,6 +206,16 @@ pub(crate) async fn handle_trace_workbench_model(
         },
     );
     Ok(projection)
+}
+
+fn trace_workbench_target_config_hash(target: &str, opt_level: &str, view: &str) -> String {
+    trace_workbench_digest_text(&format!(
+        "target={target}\nopt_level={opt_level}\nview={view}\n"
+    ))
+}
+
+fn trace_workbench_digest_text(text: &str) -> String {
+    format!("blake3:{}", blake3::hash(text.as_bytes()).to_hex())
 }
 
 fn trace_workbench_related_source_texts(
@@ -633,6 +654,13 @@ mod tests {
                 document_version: Some(9),
                 status: "ready".to_string(),
                 config_hash: "config".to_string(),
+                compiler_config_hash: "config".to_string(),
+                target_config_hash: "blake3:target".to_string(),
+                target: "evm".to_string(),
+                opt_level: "O2".to_string(),
+                view: "source-postopt-bytecode".to_string(),
+                source_hash: Some("blake3:source-text".to_string()),
+                trace_snapshot_digest: "blake3:trace".to_string(),
                 model_digest: "blake3:model".to_string(),
                 summary_digest: "blake3:summary".to_string(),
                 source_digest: "blake3:source".to_string(),

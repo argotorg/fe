@@ -2337,6 +2337,7 @@ dependencies = [
  "async-lsp",
  "async-std",
  "axum",
+ "blake3",
  "camino",
  "clap",
  "codespan-reporting",
