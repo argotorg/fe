@@ -36,6 +36,7 @@
       this._data = window.FE_ORIGIN_TRACE_DATA || {};
       this._selected = [];
       this._paneChoices = null;
+      this._displayMode = "compact";
       this._render();
     }
 
@@ -46,30 +47,42 @@
 
       var page = el("div", "trace-page");
       var header = el("header", "trace-header");
+      var controls = el("div", "header-controls");
+      var mode = el("select", "display-mode-select");
+      ["compact", "annotated", "debug"].forEach(function (value) {
+        var option = el("option", "", value === "debug" ? "Debug/raw" : value[0].toUpperCase() + value.slice(1));
+        option.value = value;
+        option.selected = value === this._displayMode;
+        mode.append(option);
+      }, this);
+      controls.append(mode);
       header.append(
         el("h1", "", "Fe Trace Workbench"),
         el(
           "p",
           "subtitle",
-          "Source, optimized Sonatina, and bytecode side by side. Highlighted rows are exact trace links; muted bytecode rows are present but not yet attributed."
-        )
+          this._provenanceCopy()
+        ),
+        controls
       );
       page.append(header);
 
-      var cards = el("section", "cards");
-      this._card(cards, "data source", data.metadata && data.metadata.data_source);
-      this._card(cards, "facts", data.counts && data.counts.facts);
-      this._card(cards, "trace selections", (data.closures || []).length);
-      this._card(cards, "suspicious", data.audit && data.audit.suspicious_closures);
-      this._card(cards, "mixed spans", data.audit && data.audit.span_groups && data.audit.span_groups.mixed_connectivity_groups);
-      this._card(cards, "source confidence", data.source && data.source.confidence);
-      if (data.salsa) {
-        this._card(cards, "salsa mode", data.salsa.mode);
-        this._card(cards, "query execs", data.salsa.will_execute);
-        this._card(cards, "memo reuse", data.salsa.memo_reuse);
-        this._card(cards, "render ms", data.salsa.elapsed_ms);
+      var cards = this._topCards();
+      if (cards) page.append(cards);
+      if (this._displayMode === "debug") {
+        var internals = el("section", "cards internals");
+        this._card(internals, "facts", data.counts && data.counts.facts);
+        this._card(internals, "evidence paths", (data.closures || []).length);
+        this._card(internals, "needs evidence", data.audit && data.audit.suspicious_closures);
+        this._card(internals, "mixed spans", data.audit && data.audit.span_groups && data.audit.span_groups.mixed_connectivity_groups);
+        if (data.salsa) {
+          this._card(internals, "salsa mode", data.salsa.mode);
+          this._card(internals, "query execs", data.salsa.will_execute);
+          this._card(internals, "memo reuse", data.salsa.memo_reuse);
+          this._card(internals, "render ms", data.salsa.elapsed_ms);
+        }
+        page.append(internals);
       }
-      page.append(cards);
 
       var workspace = this._workbench();
       page.append(workspace);
@@ -96,6 +109,39 @@
       var card = el("div", "card");
       card.append(el("span", "", label), el("b", "", value == null ? "unknown" : value));
       parent.append(card);
+    }
+
+    _topCards() {
+      var data = this._data || {};
+      var cards = el("section", "cards");
+      this._card(cards, "data", data.metadata && data.metadata.data_source);
+      this._card(cards, "optimization", this._optimizationFlag());
+      this._card(cards, "provenance", data.provenance && data.provenance.summary);
+      this._card(cards, "bytecode", this._bytecodeSummary());
+      this._card(cards, "source spans", data.source && data.source.confidence);
+      return cards;
+    }
+
+    _provenanceCopy() {
+      var data = this._data || {};
+      var p = data.provenance || {};
+      return "Source → Optimized Sonatina: " + (p.source_to_optimized || "unknown")
+        + " · Optimized Sonatina → EVM prepared: " + (p.optimized_to_prepared || "unknown")
+        + " · EVM prepared → Bytecode: " + (p.prepared_to_bytecode || "unknown");
+    }
+
+    _optimizationFlag() {
+      var flags = (this._data.metadata && this._data.metadata.flags) || [];
+      var flag = flags.filter(function (value) { return String(value).indexOf("optimize=") === 0; })[0];
+      return flag ? flag.replace("optimize=", "O") : "unknown";
+    }
+
+    _bytecodeSummary() {
+      var rows = 0;
+      (this._data.panels || []).forEach(function (panel) {
+        if (panel.id === "bytecode") rows = (panel.rows || []).length;
+      });
+      return rows + " ops";
     }
 
     _analysis(report) {
@@ -227,22 +273,28 @@
 
     _sourceBody(source) {
       var body = el("div", "source-lines");
-      (source.lines || []).forEach(function (line) {
+      var markers = [];
+      var lines = source.lines || [];
+      lines.forEach(function (line, index) {
         var classes = line.classes || [];
         var row = el("div", "source-line trace-region " + classes.concat(this._auditClasses(classes)).join(" "));
         row.dataset.traceLabel = "source line " + line.number;
         row.append(el("span", "ln", line.number), el("code", "", line.text), this._badges(classes));
         body.append(row);
+        var marker = this._overviewMarker(classes, index, lines.length, "source line " + line.number);
+        if (marker) markers.push(marker);
       }, this);
-      if (!(source.lines || []).length) {
+      if (!lines.length) {
         body.append(el("p", "empty-pane", "No source rows available."));
       }
-      return body;
+      return this._listingShell(body, markers);
     }
 
     _panelBody(panelData) {
       var rows = el("div", "rows");
-      (panelData.rows || []).forEach(function (rowData, index) {
+      var markers = [];
+      var panelRows = panelData.rows || [];
+      panelRows.forEach(function (rowData, index) {
         var boundaryLabel = this._boundaryLabel(panelData, rowData, index);
         if (boundaryLabel) {
           rows.append(el("div", "boundary-marker", boundaryLabel));
@@ -263,11 +315,37 @@
           this._badges(classes)
         );
         rows.append(row);
+        var marker = this._overviewMarker(classes, index, panelRows.length, rowData.label || rowData.text || rowData.key || "");
+        if (marker) markers.push(marker);
       }, this);
-      if (!(panelData.rows || []).length) {
+      if (!panelRows.length) {
         rows.append(el("p", "empty-pane", "No rows for this representation. If this is Bytecode, exact PC attribution may be unavailable for the selected trace."));
       }
-      return rows;
+      return this._listingShell(rows, markers);
+    }
+
+    _listingShell(body, markers) {
+      var shell = el("div", "listing-shell");
+      var overview = el("div", "overview-rail");
+      if (markers.length) {
+        markers.forEach(function (marker) { overview.append(marker); });
+      } else {
+        overview.classList.add("empty");
+      }
+      shell.append(body, overview);
+      return shell;
+    }
+
+    _overviewMarker(classes, index, total, label) {
+      var trace = (classes || []).filter(function (name) { return name.indexOf("trace-c-") === 0; });
+      if (!trace.length || !total) return null;
+      var markerClasses = ["overview-marker", "trace-region"].concat(classes || []);
+      var marker = el("button", markerClasses.join(" "));
+      marker.type = "button";
+      marker.title = label || "evidence match";
+      marker.dataset.traceLabel = label || "evidence match";
+      marker.style.top = (((index + 0.5) / total) * 100).toFixed(3) + "%";
+      return marker;
     }
 
     _isBoundaryRow(rowData) {
@@ -332,9 +410,15 @@
       }.bind(this));
       root.addEventListener("change", function (event) {
         var select = event.target.closest && event.target.closest(".representation-select");
-        if (!select) return;
-        var index = Number(select.dataset.paneIndex || 0);
-        this._paneChoices[index] = select.value;
+        var mode = event.target.closest && event.target.closest(".display-mode-select");
+        if (select) {
+          var index = Number(select.dataset.paneIndex || 0);
+          this._paneChoices[index] = select.value;
+        } else if (mode) {
+          this._displayMode = mode.value || "compact";
+        } else {
+          return;
+        }
         this._render();
       }.bind(this));
     }
@@ -376,8 +460,9 @@
       if (!detail) return;
       detail.textContent = "";
       if (!groups || groups.length === 0) {
-        detail.append(el("p", "muted", "No trace selection selected."));
-        if (this._data.audit) {
+        detail.append(el("p", "muted", "No evidence path selected."));
+        detail.append(el("p", "audit-note", this._provenanceCopy()));
+        if (this._data.audit && this._displayMode === "debug") {
           detail.append(this._auditSummary());
         }
         return;
@@ -394,7 +479,7 @@
         spanBox.append(el("h3", "", "Source span group"));
         spanGroups.forEach(function (group) {
           var section = el("div", "span-group");
-          section.append(el("p", "span-title", (group.source_text || "unknown source") + " · " + group.closures + " trace selections"));
+          section.append(el("p", "span-title", (group.source_text || "unknown source") + " · " + group.closures + " evidence paths"));
           section.append(el("p", "muted", group.closures_with_targets + " target-connected · " + group.source_only_closures + " source-only sibling(s)"));
           section.append(this._memberList("Target-connected", group.target_connected_members || []));
           section.append(this._memberList("Source-only siblings", group.source_only_members || []));
@@ -408,7 +493,7 @@
         var audit = auditByClass[group] || {};
         var box = el("div", "closure-card");
         box.classList.add.apply(box.classList, this._auditClasses([group]));
-        box.append(el("h3", "", closure.label));
+        box.append(el("h3", "", this._compactSelectionTitle(closure, audit)));
         box.append(this._auditHeader(audit, closure));
         if (closure.counts) {
           box.append(this._phaseRail(closure.counts, audit.highest_phase_reached));
@@ -419,18 +504,22 @@
         (audit.notes || []).forEach(function (note) {
           box.append(el("p", "audit-note", note));
         });
-        if (closure.traversal) {
+        if (closure.traversal && this._displayMode === "debug") {
           box.append(el("p", "traversal", "connected-region walk: " + closure.traversal.mode + " · truncated=" + closure.traversal.truncated + " · skipped hubs=" + (closure.traversal.skipped_hubs || []).length));
         }
-        (closure.edges || []).forEach(function (edge) {
-          var row = el("div", "edge");
-          row.append(
-            el("span", "edge-label", edge.label),
-            el("span", "edge-text", edge.from + " -> " + edge.to)
-          );
-          box.append(row);
-        });
-        if ((closure.source_spans || []).length) {
+        if (this._displayMode === "debug") {
+          (closure.edges || []).forEach(function (edge) {
+            var traversal = String(edge.traversal_class || "unknown");
+            var row = el("div", "edge edge-" + traversal.replace(/_/g, "-") + (edge.generated_work ? " edge-generated" : ""));
+            row.append(
+              el("span", "edge-label", edge.label),
+              el("span", "edge-text", edge.from + " -> " + edge.to),
+              el("span", "edge-class", traversal.replace(/_/g, " ") + (edge.generated_work ? " · generated" : ""))
+            );
+            box.append(row);
+          });
+        }
+        if ((closure.source_spans || []).length && this._displayMode !== "compact") {
           box.append(el("h4", "", "Source spans"));
           closure.source_spans.forEach(function (span) {
             box.append(el("div", "span-line", span.lines + " " + span.origin));
@@ -439,7 +528,7 @@
         detail.append(box);
       }, this);
       if (selected.length > 1) {
-        detail.insertBefore(el("p", "selection-note", selected.length + " trace selections shown as a grouped view. Cards below remain exact per-origin trace roots."), detail.firstChild);
+        detail.insertBefore(el("p", "selection-note", selected.length + " evidence paths shown as a grouped view."), detail.firstChild);
       }
     }
 
@@ -447,7 +536,7 @@
       var audit = this._data.audit || {};
       var box = el("div", "audit-summary");
       box.append(el("h3", "", "Audit summary"));
-      box.append(el("p", "muted", (audit.total_closures || 0) + " trace selections · " + (audit.suspicious_closures || 0) + " suspicious · " + ((audit.span_groups && audit.span_groups.mixed_connectivity_groups) || 0) + " mixed source spans"));
+      box.append(el("p", "muted", (audit.total_closures || 0) + " evidence paths · " + (audit.suspicious_closures || 0) + " need evidence · " + ((audit.span_groups && audit.span_groups.mixed_connectivity_groups) || 0) + " mixed source spans"));
       var counts = audit.primary_counts || {};
       Object.keys(counts).forEach(function (name) {
         var row = el("div", "audit-count");
@@ -486,7 +575,7 @@
         }
       }, this);
       var names = ["audit-" + primary.replace(/_/g, "-")];
-      if (entries.some(function (entry) { return entry.suspicious; })) names.push("audit-suspicious");
+      if (entries.some(function (entry) { return entry.suspicious; })) names.push("audit-needs-evidence");
       if (entries.some(function (entry) { return entry.primary && entry.primary.indexOf("good_") === 0; })) names.push("audit-good");
       return names;
     }
@@ -504,19 +593,39 @@
     _badges(classes) {
       var entries = this._auditForClasses(classes);
       var wrap = el("span", "badges");
-      if (!entries.length) return wrap;
+      var status = this._displayStatus(entries, this._railStatus(classes));
+      if (!status) return wrap;
+      wrap.append(el("span", "badge " + status.kind, status.label));
+      return wrap;
+    }
+
+    _railStatus(classes) {
+      classes = classes || [];
+      if (classes.indexOf("origin-generated") >= 0) return { kind: "generated", label: "generated" };
+      if (classes.indexOf("origin-contextual") >= 0) return { kind: "context", label: "context" };
+      if (classes.indexOf("origin-structural") >= 0) return { kind: "structural", label: "boundary" };
+      return null;
+    }
+
+    _displayStatus(entries, railStatus) {
+      if (railStatus) return railStatus;
+      if (!entries || !entries.length) return null;
       var top = entries.slice().sort(function (a, b) {
         return this._severityRank(b) - this._severityRank(a);
       }.bind(this))[0];
-      wrap.append(el("span", "badge phase", top.highest_phase_reached || "unknown"));
-      wrap.append(el("span", "badge " + (top.suspicious ? "warn" : "ok"), this._shortPrimary(top.primary)));
-      if (entries.length > 1) wrap.append(el("span", "badge group", entries.length + " roots"));
-      return wrap;
+      var primary = top.primary || "unknown";
+      if (primary.indexOf("good_") === 0) return { kind: "ok", label: "exact" };
+      if (primary === "optimized_attribution_gap") return { kind: "warn", label: "missing link" };
+      if (primary === "lowered_no_target_unexplained" || primary === "preopt_elision_gap") return { kind: "warn", label: "missing downstream" };
+      if (primary === "expected_synthetic") return { kind: "generated", label: "generated" };
+      if (primary === "source_span_sibling_unlowered" || primary === "source_only_expected") return { kind: "context", label: "source-only" };
+      if (primary === "missing_source_unexplained" || primary === "unclassified") return { kind: "warn", label: "unmapped" };
+      return { kind: top.suspicious ? "warn" : "context", label: this._shortPrimary(primary) };
     }
 
     _shortPrimary(primary) {
       return (primary || "unknown")
-        .replace("optimized_attribution_gap", "opt gap")
+        .replace("optimized_attribution_gap", "missing link")
         .replace("source_span_sibling_unlowered", "span sibling")
         .replace("source_only_expected", "source only")
         .replace("good_many_to_many", "many-to-many")
@@ -530,11 +639,14 @@
     _auditHeader(audit, closure) {
       var head = el("div", "audit-header");
       head.append(el("span", "badge phase", audit.highest_phase_reached || "unknown"));
-      head.append(el("span", "badge " + (audit.suspicious ? "warn" : "ok"), this._shortPrimary(audit.primary)));
-      (audit.symptoms || []).forEach(function (symptom) {
-        head.append(el("span", "badge symptom", symptom.replace(/_/g, " ")));
-      });
-      if (closure && closure.root_key) {
+      var status = this._displayStatus(audit && audit.primary ? [audit] : [], null);
+      if (status) head.append(el("span", "badge " + status.kind, status.label));
+      if (this._displayMode !== "compact") {
+        (audit.symptoms || []).forEach(function (symptom) {
+          head.append(el("span", "badge symptom", symptom.replace(/_/g, " ")));
+        });
+      }
+      if (closure && closure.root_key && this._displayMode === "debug") {
         var key = el("code", "root-key", closure.root_key);
         key.title = closure.root_key;
         head.append(key);
@@ -558,6 +670,25 @@
         rail.append(chip);
       });
       return rail;
+    }
+
+    _compactSelectionTitle(closure, audit) {
+      if (audit && audit.source_spans && audit.source_spans.length) {
+        return audit.source_spans[0].replace(/ .*$/, "");
+      }
+      if (!closure) return "Selected evidence";
+      return this._compactLabel(closure.label || closure.root_key || "Selected evidence");
+    }
+
+    _compactLabel(label) {
+      var value = String(label || "");
+      value = value.replace(/.*bytecode\\.pc[^:]*:pc:/, "PC ");
+      value = value.replace(/.*sonatina\\.postopt\\.inst.*inst:/, "%");
+      value = value.replace(/.*sonatina\\.evm\\.prepared\\.inst.*inst:/, "%");
+      value = value.replace(/.*runtime\\.stmt.*block:/, "MIR bb");
+      value = value.replace(/.*hir\\.expr.*expr:/, "HIR expr ");
+      if (value.length > 96) value = value.slice(0, 93) + "...";
+      return value;
     }
 
     _spanGroupsForClasses(classes) {
@@ -629,9 +760,11 @@
 }
 * { box-sizing:border-box; }
 .trace-page { min-height:100vh; background:var(--trace-bg); }
-.trace-header { display:flex; justify-content:space-between; gap:18px; align-items:end; padding:12px 32px 8px; border-bottom:1px solid var(--trace-border); }
+.trace-header { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:18px; align-items:end; padding:12px 32px 8px; border-bottom:1px solid var(--trace-border); }
 h1 { margin:0; color:var(--trace-text); font:700 18px/1.15 ui-sans-serif, system-ui, sans-serif; }
 .subtitle { max-width:980px; margin:0; color:var(--trace-muted); font:13px/1.35 ui-sans-serif, system-ui, sans-serif; text-align:right; }
+.header-controls { display:flex; justify-content:flex-end; }
+.display-mode-select { border:1px solid var(--trace-border); border-radius:6px; background:var(--trace-panel); color:var(--trace-text); padding:5px 7px; font:inherit; font-size:12px; }
 .cards { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:10px; padding:12px 32px; }
 .card,.panel { background:var(--trace-panel); border:1px solid var(--trace-border); border-radius:8px; box-shadow:none; }
 .card { padding:10px 12px; min-width:0; }
@@ -663,25 +796,43 @@ h1 { margin:0; color:var(--trace-text); font:700 18px/1.15 ui-sans-serif, system
 .detail-panel { min-width:0; }
 .panel-head { padding:9px 10px; border-bottom:1px solid var(--trace-border); }
 .panel-head h2 { margin:0; color:var(--trace-text); font-size:12px; text-transform:uppercase; letter-spacing:.1em; }
-.panel-head p { margin:4px 0 0; color:var(--trace-muted); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.source-lines,.rows { max-height:62vh; overflow:auto; }
-.detail { max-height:420px; overflow:auto; }
+	.panel-head p { margin:4px 0 0; color:var(--trace-muted); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+	.listing-shell { display:grid; grid-template-columns:minmax(0,1fr) 10px; min-height:0; }
+	.source-lines,.rows { max-height:62vh; overflow:auto; scrollbar-width:thin; scrollbar-color:color-mix(in srgb, var(--trace-accent) 45%, var(--trace-border)) var(--trace-code-bg); }
+	.source-lines::-webkit-scrollbar,.rows::-webkit-scrollbar,.detail::-webkit-scrollbar { width:8px; height:8px; }
+	.source-lines::-webkit-scrollbar-track,.rows::-webkit-scrollbar-track,.detail::-webkit-scrollbar-track { background:var(--trace-code-bg); }
+	.source-lines::-webkit-scrollbar-thumb,.rows::-webkit-scrollbar-thumb,.detail::-webkit-scrollbar-thumb { background:color-mix(in srgb, var(--trace-accent) 45%, var(--trace-border)); border-radius:999px; border:2px solid var(--trace-code-bg); }
+	.overview-rail { position:relative; width:10px; min-height:100%; border-left:1px solid var(--trace-border); background:color-mix(in srgb, var(--trace-code-bg) 82%, var(--trace-panel)); }
+	.overview-rail.empty { opacity:.35; }
+	.overview-marker { position:absolute; left:2px; width:6px; height:3px; min-height:3px; padding:0; border:0; border-radius:999px; transform:translateY(-50%); background:color-mix(in srgb, var(--trace-accent) 72%, var(--trace-text)); cursor:pointer; }
+	.overview-marker.audit-needs-evidence { background:var(--trace-warn); }
+	.overview-marker.audit-good { background:var(--trace-pass); }
+	.overview-marker.origin-generated { height:5px; background:transparent; border:1px dashed var(--trace-warn); }
+	.overview-marker.origin-contextual { background:var(--trace-muted); opacity:.7; }
+	.overview-marker.origin-structural { background:transparent; border:1px solid var(--trace-muted); }
+	.detail { max-height:420px; overflow:auto; }
 .empty-pane { margin:12px; color:var(--trace-muted); }
-.source-line { display:grid; grid-template-columns:38px minmax(0,1fr); gap:8px; padding:0 10px; white-space:pre; cursor:pointer; align-items:center; }
+.source-line { display:grid; grid-template-columns:38px minmax(0,1fr) auto; gap:8px; padding:0 10px; white-space:pre; cursor:pointer; align-items:center; }
 .source-line code { color:var(--trace-code-text); font:inherit; }
 .ln { color:var(--trace-line); text-align:right; user-select:none; }
-.trace-row { display:grid; grid-template-columns:minmax(52px,.35fr) minmax(58px,.35fr) minmax(120px,1fr); width:100%; gap:6px; padding:7px 9px; border:0; border-bottom:1px solid var(--trace-border); background:transparent; color:var(--trace-code-text); text-align:left; font:inherit; cursor:pointer; align-items:center; }
+.trace-row { display:grid; grid-template-columns:minmax(52px,.22fr) minmax(58px,.28fr) minmax(120px,1fr) auto; width:100%; gap:6px; padding:7px 9px; border:0; border-bottom:1px solid var(--trace-border); background:transparent; color:var(--trace-code-text); text-align:left; font:inherit; cursor:pointer; align-items:center; }
 .trace-row:hover,.source-line:hover { background:color-mix(in srgb, var(--trace-accent) 8%, transparent); }
 .trace-row.unlinked-row { color:var(--trace-muted); cursor:default; }
 .trace-row.unlinked-row:hover { background:transparent; }
+.trace-row.origin-generated { background:color-mix(in srgb, var(--trace-warn) 6%, transparent); border-left:2px dashed color-mix(in srgb, var(--trace-warn) 60%, transparent); }
+.trace-row.origin-generated .row-meta::after { content:"generated"; display:inline-block; margin-left:6px; padding:1px 5px; border:1px solid color-mix(in srgb, var(--trace-warn) 42%, var(--trace-border)); border-radius:999px; color:var(--trace-warn); font-size:9px; text-transform:uppercase; letter-spacing:.06em; vertical-align:middle; }
+.trace-row.origin-contextual { color:var(--trace-muted); background:color-mix(in srgb, var(--trace-accent) 4%, transparent); }
+.trace-row.origin-contextual .row-meta::after { content:"context"; display:inline-block; margin-left:6px; padding:1px 5px; border:1px solid var(--trace-border); border-radius:999px; color:var(--trace-muted); font-size:9px; text-transform:uppercase; letter-spacing:.06em; vertical-align:middle; }
+.trace-row.origin-structural { box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--trace-muted) 25%, transparent); }
 .row-label { color:var(--trace-accent); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .row-meta { color:color-mix(in srgb, var(--trace-accent) 80%, var(--trace-text)); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .row-text { color:var(--trace-code-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 [class*="trace-c-"] { transition:background .16s ease-out, color .16s ease-out, outline-color .16s ease-out; }
-.trace-hover { background:color-mix(in srgb, var(--trace-accent) 10%, transparent) !important; outline:1px solid color-mix(in srgb, var(--trace-accent) 45%, transparent); outline-offset:-1px; }
-.trace-selected { background:color-mix(in srgb, var(--trace-accent) 18%, transparent) !important; color:var(--trace-text) !important; outline:2px solid var(--trace-accent); outline-offset:-2px; }
+	.trace-hover { background:color-mix(in srgb, var(--trace-accent) 10%, transparent) !important; outline:1px solid color-mix(in srgb, var(--trace-accent) 45%, transparent); outline-offset:-1px; }
+	.trace-selected { background:color-mix(in srgb, var(--trace-accent) 18%, transparent) !important; color:var(--trace-text) !important; outline:2px solid var(--trace-accent); outline-offset:-2px; }
+	.overview-marker.trace-hover,.overview-marker.trace-selected { left:0; width:10px; height:7px; outline:0; background:var(--trace-accent) !important; border:1px solid var(--trace-text); z-index:2; }
 .audit-good { box-shadow:inset 3px 0 var(--trace-pass); }
-.audit-suspicious { box-shadow:inset 3px 0 var(--trace-danger); }
+.audit-needs-evidence { box-shadow:inset 3px 0 var(--trace-danger); }
 .audit-optimized-attribution-gap { box-shadow:inset 3px 0 var(--trace-warn); }
 .audit-source-span-sibling-unlowered,.audit-source-only-expected { box-shadow:inset 3px 0 var(--trace-border); }
 .detail { padding:14px 15px; }
@@ -690,7 +841,7 @@ h1 { margin:0; color:var(--trace-text); font:700 18px/1.15 ui-sans-serif, system
 .muted { color:var(--trace-muted); margin:0; }
 .closure-card { padding:12px; border:1px solid var(--trace-border); border-radius:8px; background:var(--trace-bg); margin-bottom:12px; }
 .closure-card.audit-good { border-left:3px solid var(--trace-pass); }
-.closure-card.audit-suspicious { border-left:3px solid var(--trace-danger); }
+.closure-card.audit-needs-evidence { border-left:3px solid var(--trace-danger); }
 .closure-card.audit-optimized-attribution-gap { border-left:3px solid var(--trace-warn); }
 .closure-card.audit-source-span-sibling-unlowered,.closure-card.audit-source-only-expected { border-color:var(--trace-border); }
 .closure-card h3 { margin:0 0 8px; color:var(--trace-text); font-size:14px; }
@@ -700,12 +851,15 @@ h1 { margin:0; color:var(--trace-text); font:700 18px/1.15 ui-sans-serif, system
 .audit-note { margin:8px 0; padding:8px 10px; border:1px solid var(--trace-border); border-radius:8px; background:var(--trace-panel); color:var(--trace-muted); }
 .traversal,.selection-note { color:var(--trace-muted); font-size:12px; margin:8px 0; }
 .badges,.audit-header { display:flex; flex-wrap:wrap; gap:5px; align-items:center; justify-content:flex-end; min-width:0; }
-.source-line > .badges,.trace-row > .badges { display:none; }
+.source-line > .badges,.trace-row > .badges { display:flex; }
 .audit-header { justify-content:flex-start; margin:0 0 9px; }
 .badge { display:inline-flex; align-items:center; max-width:150px; padding:2px 7px; border:1px solid var(--trace-border); border-radius:999px; color:var(--trace-muted); background:var(--trace-panel); font-size:10px; line-height:1.4; text-transform:uppercase; letter-spacing:.06em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .badge.phase { color:var(--trace-accent); border-color:color-mix(in srgb, var(--trace-accent) 35%, var(--trace-border)); }
 .badge.ok { color:var(--trace-pass); border-color:color-mix(in srgb, var(--trace-pass) 35%, var(--trace-border)); }
 .badge.warn,.badge.symptom { color:var(--trace-warn); border-color:color-mix(in srgb, var(--trace-warn) 35%, var(--trace-border)); }
+	.badge.generated { color:var(--trace-warn); border-color:color-mix(in srgb, var(--trace-warn) 35%, var(--trace-border)); border-style:dashed; }
+	.badge.context { color:var(--trace-muted); border-color:var(--trace-border); }
+	.badge.structural { color:var(--trace-muted); border-color:var(--trace-border); }
 .badge.group { color:var(--trace-muted); }
 .root-key { display:block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--trace-muted); font-size:11px; }
 .phase-rail { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:5px; margin:8px 0 10px; }
@@ -724,8 +878,11 @@ h1 { margin:0; color:var(--trace-text); font:700 18px/1.15 ui-sans-serif, system
 .member-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .audit-count { display:flex; justify-content:space-between; gap:10px; padding:4px 0; color:var(--trace-muted); border-top:1px solid var(--trace-border); }
 .audit-count b { color:var(--trace-accent); }
-.edge,.span-line { display:grid; grid-template-columns:145px 1fr; gap:8px; padding:4px 0; color:var(--trace-muted); }
+.edge { display:grid; grid-template-columns:145px minmax(0,1fr) 120px; gap:8px; padding:4px 0; color:var(--trace-muted); }
+.span-line { display:grid; grid-template-columns:145px 1fr; gap:8px; padding:4px 0; color:var(--trace-muted); }
 .edge-label { color:var(--trace-accent); }
+.edge-contextual .edge-label,.edge-synthetic .edge-label,.edge-generated .edge-label { color:var(--trace-warn); }
+.edge-class { color:var(--trace-muted); font-size:10px; text-transform:uppercase; letter-spacing:.06em; text-align:right; }
 .edge-text,.span-line { overflow-wrap:anywhere; }
 .notes { margin:0; padding:0 32px 30px 52px; color:var(--trace-muted); }
 .notes li { margin:6px 0; }

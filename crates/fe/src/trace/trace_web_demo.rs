@@ -10,7 +10,10 @@ use std::{
 use camino::Utf8PathBuf;
 use common::{SalsaEventCounters, origin::OriginExportKey};
 use serde::Serialize;
-use trace_facts::{InstructionFact, OriginNodeFact, SourceSpanFact, TraceFact, TraceSnapshot};
+use trace_facts::{
+    InstructionFact, OriginEdgeFact, OriginEdgeTraversalClass, OriginNodeFact, SourceSpanFact,
+    TraceFact, TraceSnapshot,
+};
 use trace_query::{
     IntrospectionService, LoopContentsRequest, TraceIntrospectionService,
     origin_closure::{
@@ -462,6 +465,7 @@ fn sse_escape(value: &str) -> String {
 #[derive(Debug, Serialize)]
 struct WebDemoModel {
     metadata: DemoMetadata,
+    provenance: DemoProvenanceStatus,
     counts: DemoCounts,
     salsa: Option<DemoSalsaStats>,
     audit: Option<ClosureAuditReport>,
@@ -488,6 +492,14 @@ struct DemoCounts {
     origin_edges: usize,
     instructions: usize,
     source_spans: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct DemoProvenanceStatus {
+    source_to_optimized: String,
+    optimized_to_prepared: String,
+    prepared_to_bytecode: String,
+    summary: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -538,8 +550,8 @@ fn build_demo_model(snapshot: &TraceSnapshot, salsa: Option<DemoSalsaStats>) -> 
     let loop_report = service
         .loop_contents(LoopContentsRequest::default())
         .expect("loop-contents query over validated snapshot should not fail");
-    let index = DemoIndex::new(snapshot);
     let source_text = read_source_text(&snapshot.metadata().input_path).unwrap_or_default();
+    let index = DemoIndex::new(snapshot, &source_text);
     let exact_source_spans = index
         .source_spans
         .values()
@@ -560,6 +572,7 @@ fn build_demo_model(snapshot: &TraceSnapshot, salsa: Option<DemoSalsaStats>) -> 
     );
     let closures = closure_set.closures;
     let classes_by_key = classes_by_origin_key(&closures);
+    let rails_by_key = rails_by_origin_key(&closures);
     let source_lines = source_lines(
         snapshot.metadata().input_path.as_str(),
         &source_text,
@@ -582,8 +595,8 @@ fn build_demo_model(snapshot: &TraceSnapshot, salsa: Option<DemoSalsaStats>) -> 
     );
     let static_analysis = static_analysis_report(snapshot);
     let loop_block_roles = loop_block_roles(&loop_report);
-    let mut panels = build_origin_panels(&index, &classes_by_key, &loop_block_roles);
-    panels.insert(1, loop_panel(&loop_report, &classes_by_key));
+    let mut panels = build_origin_panels(&index, &classes_by_key, &rails_by_key, &loop_block_roles);
+    panels.insert(1, loop_panel(&loop_report, &classes_by_key, &rails_by_key));
 
     WebDemoModel {
         metadata: DemoMetadata {
@@ -593,6 +606,7 @@ fn build_demo_model(snapshot: &TraceSnapshot, salsa: Option<DemoSalsaStats>) -> 
             compiler_commit: snapshot.metadata().compiler_commit.clone(),
             flags: snapshot.metadata().flags.clone(),
         },
+        provenance: demo_provenance_status(&closures),
         counts: DemoCounts {
             facts: snapshot.facts().len(),
             origin_edges: closure_set.edge_count,
@@ -614,17 +628,171 @@ fn build_demo_model(snapshot: &TraceSnapshot, salsa: Option<DemoSalsaStats>) -> 
     }
 }
 
+fn demo_provenance_status(closures: &[DemoClosure]) -> DemoProvenanceStatus {
+    let source_to_optimized = closures.iter().any(|closure| {
+        closure.counts.hir > 0
+            && (closure.counts.sonatina_post > 0 || closure.counts.sonatina_pre > 0)
+    });
+    let optimized_to_prepared = closures.iter().any(|closure| {
+        closure
+            .keys
+            .iter()
+            .any(|key| key.contains("sonatina.postopt."))
+            && closure
+                .keys
+                .iter()
+                .any(|key| key.contains("sonatina.evm.prepared."))
+    });
+    let prepared_to_bytecode = closures.iter().any(|closure| {
+        closure
+            .keys
+            .iter()
+            .any(|key| key.contains("sonatina.evm.prepared."))
+            && closure.keys.iter().any(|key| key.contains("bytecode.pc"))
+    });
+    let summary = if source_to_optimized && optimized_to_prepared && prepared_to_bytecode {
+        "source to optimized to prepared to bytecode available".to_string()
+    } else if source_to_optimized && prepared_to_bytecode {
+        "bytecode is prepared-linked; exact source attribution needs optimized to prepared lineage"
+            .to_string()
+    } else {
+        "provenance is partial; inspect gaps for missing compiler evidence".to_string()
+    };
+    DemoProvenanceStatus {
+        source_to_optimized: status_word(source_to_optimized),
+        optimized_to_prepared: status_word(optimized_to_prepared),
+        prepared_to_bytecode: status_word(prepared_to_bytecode),
+        summary,
+    }
+}
+
+fn rails_by_origin_key(closures: &[DemoClosure]) -> BTreeMap<String, Vec<String>> {
+    let mut rails = BTreeMap::<String, BTreeSet<String>>::new();
+    for closure in closures {
+        for key in &closure.generated_keys {
+            rails
+                .entry(key.clone())
+                .or_default()
+                .insert("origin-generated".to_string());
+        }
+        for key in &closure.contextual_keys {
+            rails
+                .entry(key.clone())
+                .or_default()
+                .insert("origin-contextual".to_string());
+        }
+        for key in &closure.structural_keys {
+            rails
+                .entry(key.clone())
+                .or_default()
+                .insert("origin-structural".to_string());
+        }
+    }
+    rails
+        .into_iter()
+        .map(|(key, value)| (key, value.into_iter().collect()))
+        .collect()
+}
+
+fn source_snippet_for_span(source_text: &str, span: &SourceSpanFact) -> Option<DemoSourceSnippet> {
+    let start = span.start_byte as usize;
+    let end = span.end_byte as usize;
+    if start >= end || end > source_text.len() {
+        return None;
+    }
+    let raw = source_text.get(start..end)?;
+    let text = compact_source_snippet(raw)?;
+    Some(DemoSourceSnippet {
+        text,
+        line: span.start_line,
+        start_byte: span.start_byte,
+    })
+}
+
+fn compact_source_snippet(raw: &str) -> Option<String> {
+    let text = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.is_empty() {
+        None
+    } else if text.len() > 80 {
+        let mut truncated = text.chars().take(77).collect::<String>();
+        truncated.push_str("...");
+        Some(truncated)
+    } else {
+        Some(text)
+    }
+}
+
+fn source_context_for_key(
+    key: &OriginExportKey,
+    index: &DemoIndex<'_>,
+) -> Option<DemoSourceContext> {
+    if let Some(snippet) = index.source_snippets.get(key) {
+        return Some(DemoSourceContext {
+            snippet: snippet.clone(),
+            kind: DemoSourceContextKind::Exact,
+        });
+    }
+
+    let mut candidates = Vec::new();
+    let outgoing = index.edges_by_from.get(key).into_iter().flatten().copied();
+    let incoming = index.edges_by_to.get(key).into_iter().flatten().copied();
+    for edge in outgoing.chain(incoming) {
+        let Some(kind) = source_context_kind(edge.traversal_class()) else {
+            continue;
+        };
+        let other = if &edge.from == key {
+            &edge.to
+        } else {
+            &edge.from
+        };
+        if let Some(snippet) = index.source_snippets.get(other) {
+            candidates.push(DemoSourceContext {
+                snippet: snippet.clone(),
+                kind,
+            });
+        }
+    }
+    candidates.sort_by(|left, right| {
+        left.kind
+            .cmp(&right.kind)
+            .then(left.snippet.line.cmp(&right.snippet.line))
+            .then(left.snippet.start_byte.cmp(&right.snippet.start_byte))
+            .then(left.snippet.text.cmp(&right.snippet.text))
+    });
+    candidates.into_iter().next()
+}
+
+fn source_context_kind(class: OriginEdgeTraversalClass) -> Option<DemoSourceContextKind> {
+    match class {
+        OriginEdgeTraversalClass::ExactAttribution | OriginEdgeTraversalClass::SnapshotAlias => {
+            Some(DemoSourceContextKind::Exact)
+        }
+        OriginEdgeTraversalClass::Synthetic => Some(DemoSourceContextKind::Generated),
+        OriginEdgeTraversalClass::Contextual => Some(DemoSourceContextKind::Context),
+        OriginEdgeTraversalClass::Structural | OriginEdgeTraversalClass::Unmapped => None,
+    }
+}
+
+fn status_word(available: bool) -> String {
+    if available { "available" } else { "missing" }.to_string()
+}
+
 struct DemoIndex<'a> {
     origin_nodes: BTreeMap<OriginExportKey, &'a OriginNodeFact>,
     instructions: BTreeMap<OriginExportKey, &'a InstructionFact>,
     source_spans: BTreeMap<OriginExportKey, &'a SourceSpanFact>,
+    source_snippets: BTreeMap<OriginExportKey, DemoSourceSnippet>,
+    edges_by_from: BTreeMap<OriginExportKey, Vec<&'a OriginEdgeFact>>,
+    edges_by_to: BTreeMap<OriginExportKey, Vec<&'a OriginEdgeFact>>,
 }
 
 impl<'a> DemoIndex<'a> {
-    fn new(snapshot: &'a TraceSnapshot) -> Self {
+    fn new(snapshot: &'a TraceSnapshot, source_text: &str) -> Self {
         let mut origin_nodes = BTreeMap::new();
         let mut instructions = BTreeMap::new();
         let mut source_spans = BTreeMap::new();
+        let mut edges_by_from = BTreeMap::<OriginExportKey, Vec<&OriginEdgeFact>>::new();
+        let mut edges_by_to = BTreeMap::<OriginExportKey, Vec<&OriginEdgeFact>>::new();
 
         for fact in snapshot.facts() {
             match fact {
@@ -637,16 +805,52 @@ impl<'a> DemoIndex<'a> {
                 TraceFact::SourceSpan(span) => {
                     source_spans.insert(span.origin.clone(), span);
                 }
+                TraceFact::OriginEdge(edge) => {
+                    edges_by_from
+                        .entry(edge.from.clone())
+                        .or_default()
+                        .push(edge);
+                    edges_by_to.entry(edge.to.clone()).or_default().push(edge);
+                }
                 _ => {}
             }
         }
+        let source_snippets = source_spans
+            .iter()
+            .filter_map(|(origin, span)| {
+                source_snippet_for_span(source_text, span).map(|snippet| (origin.clone(), snippet))
+            })
+            .collect();
 
         Self {
             origin_nodes,
             instructions,
             source_spans,
+            source_snippets,
+            edges_by_from,
+            edges_by_to,
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DemoSourceSnippet {
+    text: String,
+    line: u32,
+    start_byte: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum DemoSourceContextKind {
+    Exact,
+    Generated,
+    Context,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DemoSourceContext {
+    snippet: DemoSourceSnippet,
+    kind: DemoSourceContextKind,
 }
 
 fn source_lines(
@@ -826,6 +1030,7 @@ fn render_closure_audit_report(report: &ClosureAuditReport) -> String {
 fn build_origin_panels(
     index: &DemoIndex<'_>,
     classes_by_key: &BTreeMap<String, Vec<String>>,
+    rails_by_key: &BTreeMap<String, Vec<String>>,
     loop_block_roles: &BTreeMap<String, String>,
 ) -> Vec<DemoPanel> {
     [
@@ -865,7 +1070,7 @@ fn build_origin_panels(
         id: id.to_string(),
         title: title.to_string(),
         summary: summary.to_string(),
-        rows: panel_rows(id, index, classes_by_key, loop_block_roles),
+        rows: panel_rows(id, index, classes_by_key, rails_by_key, loop_block_roles),
     })
     .collect()
 }
@@ -887,6 +1092,7 @@ fn panel_rows(
     panel: &str,
     index: &DemoIndex<'_>,
     classes_by_key: &BTreeMap<String, Vec<String>>,
+    rails_by_key: &BTreeMap<String, Vec<String>>,
     loop_block_roles: &BTreeMap<String, String>,
 ) -> Vec<DemoPanelRow> {
     if panel == "bytecode" {
@@ -909,7 +1115,7 @@ fn panel_rows(
         });
         return instructions
             .into_iter()
-            .map(|instruction| instruction_panel_row(instruction, classes_by_key))
+            .map(|instruction| instruction_panel_row(instruction, classes_by_key, rails_by_key))
             .collect();
     }
 
@@ -918,24 +1124,27 @@ fn panel_rows(
         .keys()
         .filter(|key| key_belongs_to_panel(key, panel))
         .filter(|key| classes_by_key.contains_key(&key.canonical_storage_key()))
-        .map(|key| origin_panel_row(key, index, classes_by_key, loop_block_roles))
+        .map(|key| origin_panel_row(key, index, classes_by_key, rails_by_key, loop_block_roles))
         .collect()
 }
 
 fn instruction_panel_row(
     instruction: &InstructionFact,
     classes_by_key: &BTreeMap<String, Vec<String>>,
+    rails_by_key: &BTreeMap<String, Vec<String>>,
 ) -> DemoPanelRow {
     let storage_key = instruction.instruction.canonical_storage_key();
+    let mut classes = classes_by_key
+        .get(&storage_key)
+        .cloned()
+        .unwrap_or_default();
+    classes.extend(rails_by_key.get(&storage_key).cloned().unwrap_or_default());
     DemoPanelRow {
         key: Some(storage_key.clone()),
-        label: instruction.instruction.local_key().to_string(),
-        meta: instruction.instruction.kind().to_string(),
-        text: format!("ir[{}] {}", instruction.index, instruction.mnemonic),
-        classes: classes_by_key
-            .get(&storage_key)
-            .cloned()
-            .unwrap_or_default(),
+        label: compact_origin_label(&instruction.instruction, Some(instruction)),
+        meta: compact_origin_meta(&instruction.instruction, None),
+        text: compact_instruction_text(instruction),
+        classes,
     }
 }
 
@@ -943,26 +1152,195 @@ fn origin_panel_row(
     key: &OriginExportKey,
     index: &DemoIndex<'_>,
     classes_by_key: &BTreeMap<String, Vec<String>>,
+    rails_by_key: &BTreeMap<String, Vec<String>>,
     loop_block_roles: &BTreeMap<String, String>,
 ) -> DemoPanelRow {
     let storage_key = key.canonical_storage_key();
     let instruction = index.instructions.get(key);
     let meta = loop_block_roles
         .get(&storage_key)
-        .map(|role| format!("{} · {role}", key.kind()))
-        .unwrap_or_else(|| key.kind().to_string());
+        .map(|role| format!("{} · {role}", compact_origin_meta(key, Some(index))))
+        .unwrap_or_else(|| compact_origin_meta(key, Some(index)));
+    let mut classes = classes_by_key
+        .get(&storage_key)
+        .cloned()
+        .unwrap_or_default();
+    classes.extend(rails_by_key.get(&storage_key).cloned().unwrap_or_default());
+    if origin_key_is_generated(key) {
+        classes.push("origin-generated".to_string());
+    }
     DemoPanelRow {
         key: Some(storage_key.clone()),
-        label: key.local_key().to_string(),
+        label: compact_origin_label(key, instruction.copied()),
         meta,
         text: instruction
-            .map(|instruction| format!("ir[{}] {}", instruction.index, instruction.mnemonic))
-            .unwrap_or_else(|| key.owner_key().to_string()),
-        classes: classes_by_key
-            .get(&storage_key)
-            .cloned()
-            .unwrap_or_default(),
+            .copied()
+            .map(compact_instruction_text)
+            .unwrap_or_else(|| compact_origin_text(key, index)),
+        classes,
     }
+}
+
+fn compact_instruction_text(instruction: &InstructionFact) -> String {
+    match instruction.instruction.kind() {
+        "bytecode.pc" | "runtime.stmt" | "runtime.terminator" => instruction.mnemonic.clone(),
+        _ => format!("%{} = {}", instruction.index, instruction.mnemonic),
+    }
+}
+
+fn compact_origin_label(key: &OriginExportKey, instruction: Option<&InstructionFact>) -> String {
+    if let Some(instruction) = instruction
+        && !matches!(key.kind(), "runtime.stmt" | "runtime.terminator")
+    {
+        return if key.kind() == "bytecode.pc" {
+            compact_pc_label(key)
+        } else {
+            format!("%{}", instruction.index)
+        };
+    }
+    match key.kind() {
+        "bytecode.pc" => compact_pc_label(key),
+        kind if kind.contains(".block") => compact_block_label(key),
+        "runtime.stmt" => compact_runtime_stmt_label(key),
+        "runtime.terminator" => compact_runtime_terminator_label(key),
+        kind if kind.starts_with("hir.") => compact_hir_label(key),
+        kind if kind.starts_with("sonatina.") => compact_sonatina_label(key),
+        _ => compact_tail_label(key.local_key()),
+    }
+}
+
+fn compact_origin_meta(key: &OriginExportKey, index: Option<&DemoIndex<'_>>) -> String {
+    let line_suffix = index
+        .and_then(|index| source_context_for_key(key, index))
+        .map(|context| format!(" · L{}", context.snippet.line))
+        .unwrap_or_default();
+    match key.kind() {
+        "runtime.stmt" => format!("MIR stmt{line_suffix}"),
+        "runtime.terminator" => format!("MIR terminator{line_suffix}"),
+        "runtime.block" => format!("MIR block{line_suffix}"),
+        "runtime.function" => "MIR function".to_string(),
+        "hir.expr" => format!("HIR expr{line_suffix}"),
+        "hir.stmt" => format!("HIR stmt{line_suffix}"),
+        kind if kind.starts_with("sonatina.postopt.") => "Optimized Sonatina".to_string(),
+        kind if kind.starts_with("sonatina.preopt.") => "Sonatina pre-opt".to_string(),
+        kind if kind.starts_with("sonatina.evm.prepared.") => "EVM prepared".to_string(),
+        "bytecode.pc" => "bytecode".to_string(),
+        _ => key.kind().to_string(),
+    }
+}
+
+fn compact_origin_text(key: &OriginExportKey, index: &DemoIndex<'_>) -> String {
+    if let Some(context) = source_context_for_key(key, index) {
+        let snippet = context.snippet.text;
+        return match key.kind() {
+            kind if kind.starts_with("hir.") => snippet,
+            "runtime.stmt" | "runtime.terminator" | "runtime.block" => match context.kind {
+                DemoSourceContextKind::Exact => format!("lowered from {snippet}"),
+                DemoSourceContextKind::Generated => format!("generated for {snippet}"),
+                DemoSourceContextKind::Context => format!("context for {snippet}"),
+            },
+            _ => snippet,
+        };
+    }
+    if key.kind().contains(".block") {
+        compact_block_label(key)
+    } else if origin_key_is_generated(key) {
+        match key.kind() {
+            "runtime.terminator" => "generated wrapper terminator".to_string(),
+            "runtime.stmt" => "generated wrapper statement".to_string(),
+            _ => "compiler-generated wrapper code".to_string(),
+        }
+    } else {
+        compact_origin_meta(key, None)
+    }
+}
+
+fn compact_pc_label(key: &OriginExportKey) -> String {
+    key.local_key()
+        .strip_prefix("pc:")
+        .and_then(|pc| pc.parse::<u32>().ok())
+        .map(|pc| format!("{pc:04}"))
+        .unwrap_or_else(|| compact_tail_label(key.local_key()))
+}
+
+fn compact_block_label(key: &OriginExportKey) -> String {
+    let local = key.local_key();
+    if let Some(block) = local.strip_prefix("block:") {
+        return format!("b{}", compact_tail_label(block));
+    }
+    compact_tail_label(local)
+}
+
+fn compact_runtime_stmt_label(key: &OriginExportKey) -> String {
+    let local = key.local_key();
+    if let Some(rest) = local.strip_prefix("block:") {
+        let parts = rest.split(':').collect::<Vec<_>>();
+        if parts.len() >= 3 && parts[1] == "stmt" {
+            return format!("bb{}.s{}", parts[0], parts[2]);
+        }
+    }
+    compact_tail_label(local)
+}
+
+fn compact_runtime_terminator_label(key: &OriginExportKey) -> String {
+    let local = key.local_key();
+    if let Some(rest) = local.strip_prefix("block:")
+        && let Some(block) = rest.strip_suffix(":terminator")
+    {
+        return format!("bb{block}.term");
+    }
+    compact_tail_label(local)
+}
+
+fn compact_hir_label(key: &OriginExportKey) -> String {
+    format!(
+        "{} {}",
+        key.kind().trim_start_matches("hir."),
+        compact_tail_label(key.local_key())
+    )
+}
+
+fn compact_sonatina_label(key: &OriginExportKey) -> String {
+    let local = key.local_key();
+    if let Some(inst) = extract_wrapped_id(local, "InstId(") {
+        return format!("%{inst}");
+    }
+    if let Some(block) = extract_wrapped_id(local, "BlockId(") {
+        return format!("b{block}");
+    }
+    if let Some((_, rest)) = local.rsplit_once("header:block") {
+        let header = rest
+            .split(|ch: char| !ch.is_ascii_digit())
+            .next()
+            .unwrap_or("");
+        if !header.is_empty() {
+            return format!("loop b{header}");
+        }
+    }
+    if let Some(func) = extract_wrapped_id(local, "FuncRef(") {
+        return format!("fn {func}");
+    }
+    compact_tail_label(local)
+}
+
+fn extract_wrapped_id(value: &str, marker: &str) -> Option<String> {
+    let start = value.rfind(marker)? + marker.len();
+    let tail = &value[start..];
+    let id = tail.split(')').next()?;
+    (!id.is_empty()).then(|| id.to_string())
+}
+
+fn compact_tail_label(value: &str) -> String {
+    value
+        .rsplit([':', '$'])
+        .next()
+        .filter(|tail| !tail.is_empty())
+        .unwrap_or(value)
+        .replace("InstId(", "")
+        .replace("FuncRef(", "")
+        .replace("BlockId(", "")
+        .replace(')', "")
+        .to_string()
 }
 
 fn key_belongs_to_panel(key: &OriginExportKey, panel: &str) -> bool {
@@ -977,32 +1355,37 @@ fn key_belongs_to_panel(key: &OriginExportKey, panel: &str) -> bool {
     }
 }
 
+fn origin_key_is_generated(key: &OriginExportKey) -> bool {
+    key.owner_key().contains("__synthetic") || key.local_key().contains("__synthetic")
+}
+
 fn loop_panel(
     loop_report: &trace_query::LoopContentsReport,
     classes_by_key: &BTreeMap<String, Vec<String>>,
+    rails_by_key: &BTreeMap<String, Vec<String>>,
 ) -> DemoPanel {
     let mut rows = Vec::new();
-    let loop_label = loop_report
-        .loop_label
-        .clone()
-        .unwrap_or_else(|| "selected loop".to_string());
     for block in &loop_report.blocks {
         let block_key = block.block.canonical_storage_key();
+        let mut block_classes = classes_by_key.get(&block_key).cloned().unwrap_or_default();
+        block_classes.extend(rails_by_key.get(&block_key).cloned().unwrap_or_default());
         rows.push(DemoPanelRow {
             key: Some(block_key.clone()),
-            label: block.block.local_key().to_string(),
+            label: compact_origin_label(&block.block, None),
             meta: format!("loop {}", block.role),
-            text: loop_label.clone(),
-            classes: classes_by_key.get(&block_key).cloned().unwrap_or_default(),
+            text: "static loop boundary".to_string(),
+            classes: block_classes,
         });
         for instruction in &block.instructions {
             let key = instruction.key.canonical_storage_key();
+            let mut classes = classes_by_key.get(&key).cloned().unwrap_or_default();
+            classes.extend(rails_by_key.get(&key).cloned().unwrap_or_default());
             rows.push(DemoPanelRow {
                 key: Some(key.clone()),
-                label: instruction.key.local_key().to_string(),
-                meta: format!("ir[{}]", instruction.index),
-                text: instruction.mnemonic.clone(),
-                classes: classes_by_key.get(&key).cloned().unwrap_or_default(),
+                label: compact_origin_label(&instruction.key, None),
+                meta: "loop instruction".to_string(),
+                text: format!("%{} = {}", instruction.index, instruction.mnemonic),
+                classes,
             });
         }
     }
@@ -1093,6 +1476,12 @@ mod tests {
                 compiler_commit: "abc123".to_string(),
                 flags: vec![],
             },
+            provenance: DemoProvenanceStatus {
+                source_to_optimized: "missing".to_string(),
+                optimized_to_prepared: "missing".to_string(),
+                prepared_to_bytecode: "missing".to_string(),
+                summary: "provenance is partial".to_string(),
+            },
             counts: DemoCounts {
                 facts: 1,
                 origin_edges: 0,
@@ -1139,6 +1528,9 @@ mod tests {
             label: "demo".to_string(),
             root_key: "root".to_string(),
             keys: Vec::new(),
+            generated_keys: Vec::new(),
+            contextual_keys: Vec::new(),
+            structural_keys: Vec::new(),
             counts: DemoClosureCounts {
                 hir: 1,
                 mir: 0,
@@ -1171,6 +1563,9 @@ mod tests {
             label: "demo".to_string(),
             root_key: "root".to_string(),
             keys: Vec::new(),
+            generated_keys: Vec::new(),
+            contextual_keys: Vec::new(),
+            structural_keys: Vec::new(),
             counts: DemoClosureCounts {
                 hir: 1,
                 mir: 0,

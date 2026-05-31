@@ -3553,10 +3553,7 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
                 *sonatina_targets.entry(edge.to.clone()).or_default() += 1;
             }
             if matches!(class, OriginEdgeTraversalClass::Contextual)
-                && matches!(
-                    edge.label,
-                    OriginEdgeLabel::LoweredFrom | OriginEdgeLabel::EmittedFrom
-                )
+                && edge.has_transform_claim_label()
             {
                 suspicious_edges.push(AttributionAuditSuspiciousEdge {
                     from: edge.from.clone(),

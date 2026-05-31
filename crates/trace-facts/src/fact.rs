@@ -330,6 +330,13 @@ impl OriginEdgeFact {
             OriginEdgeLabel::SyntheticFor | OriginEdgeLabel::BackendPrepared
         )
     }
+
+    pub fn has_transform_claim_label(&self) -> bool {
+        matches!(
+            self.label,
+            OriginEdgeLabel::LoweredFrom | OriginEdgeLabel::EmittedFrom
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

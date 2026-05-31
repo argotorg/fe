@@ -7,10 +7,10 @@ use shape_address::{
 };
 use trace_facts::{
     BlockFact, CfgEdgeFact, CfgEdgeKind, CompilerEventFact, CompilerEventKind, CompilerPhase,
-    CompilerReason, DisplayNameFact, DisplayNameKind, FunctionFact, LoopBlockFact, LoopBlockRole,
-    LoopConfidence, LoopDerivation, LoopFact, OriginEdgeFact, OriginEdgeLabel, OriginNodeFact,
-    OriginNodeKind, StorageFact, StorageLocation, StorageReason, TraceFact, TypeFact, TypeKind,
-    ValueProperty, ValuePropertyFact, VariableFact, VariableStorageClass,
+    CompilerReason, DisplayNameFact, DisplayNameKind, FunctionFact, InstructionFact, LoopBlockFact,
+    LoopBlockRole, LoopConfidence, LoopDerivation, LoopFact, OriginEdgeFact, OriginEdgeLabel,
+    OriginNodeFact, OriginNodeKind, StorageFact, StorageLocation, StorageReason, TraceFact,
+    TypeFact, TypeKind, ValueProperty, ValuePropertyFact, VariableFact, VariableStorageClass,
 };
 
 use crate::{
@@ -24,8 +24,8 @@ use crate::{
         RuntimeTerminatorSite,
     },
     runtime::{
-        RBlockId, RLocalId, RStmt, RTerminator, RuntimeBody, RuntimeCarrier, RuntimeLocalLowering,
-        RuntimeLocalRoot,
+        RBlockId, RExpr, RLocalId, RStmt, RTerminator, RuntimeBody, RuntimeCarrier,
+        RuntimeLocalLowering, RuntimeLocalRoot,
     },
 };
 use hir::{
@@ -156,6 +156,7 @@ pub fn emit_mir_facts<'db>(db: &'db dyn MirDb, package: RuntimePackage<'db>) -> 
         }
         let cfg = runtime_cfg(&body);
         let dominators = dominators(body.blocks.len(), &cfg.predecessors);
+        let mut instruction_index = 0u32;
         for (block_index, runtime_block) in body.blocks.iter().enumerate() {
             let block = RBlockId::from_u32(block_index as u32);
             let block_key = RuntimeBlockOrigin::new(instance, block).export_key(&owner_key);
@@ -167,11 +168,18 @@ pub fn emit_mir_facts<'db>(db: &'db dyn MirDb, package: RuntimePackage<'db>) -> 
                 block_index as u32,
                 Some(format!("bb{block_index}")),
             )));
-            for (stmt_index, _) in runtime_block.stmts.iter().enumerate() {
+            for (stmt_index, stmt) in runtime_block.stmts.iter().enumerate() {
                 let site =
                     RuntimeStmtSite::new(block, RuntimeStmtIndex::from_u32(stmt_index as u32));
                 let stmt_key = RuntimeStmtOrigin::new(instance, site).export_key(&owner_key);
                 facts.push(origin_node(stmt_key.clone(), RUNTIME_STMT_EXPORT_KIND));
+                facts.push(TraceFact::Instruction(InstructionFact::new(
+                    stmt_key.clone(),
+                    function_key.clone(),
+                    instruction_index,
+                    runtime_stmt_display(stmt),
+                )));
+                instruction_index += 1;
                 if let Some(hir_key) = body
                     .stmt_origins
                     .get(block_index)
@@ -179,7 +187,7 @@ pub fn emit_mir_facts<'db>(db: &'db dyn MirDb, package: RuntimePackage<'db>) -> 
                     .and_then(|origin| sem_origin_hir_key(*origin, &hir_owner_key))
                 {
                     facts.push(TraceFact::OriginEdge(OriginEdgeFact::new(
-                        stmt_key,
+                        stmt_key.clone(),
                         hir_key,
                         OriginEdgeLabel::LoweredFrom,
                         Some(CompilerPhase::Mir),
@@ -193,13 +201,20 @@ pub fn emit_mir_facts<'db>(db: &'db dyn MirDb, package: RuntimePackage<'db>) -> 
                 terminator_key.clone(),
                 RUNTIME_TERMINATOR_EXPORT_KIND,
             ));
+            facts.push(TraceFact::Instruction(InstructionFact::new(
+                terminator_key.clone(),
+                function_key.clone(),
+                instruction_index,
+                runtime_terminator_display(&runtime_block.terminator),
+            )));
+            instruction_index += 1;
             if let Some(hir_key) = body
                 .terminator_origins
                 .get(block_index)
                 .and_then(|origin| sem_origin_hir_key(*origin, &hir_owner_key))
             {
                 facts.push(TraceFact::OriginEdge(OriginEdgeFact::new(
-                    terminator_key,
+                    terminator_key.clone(),
                     hir_key,
                     OriginEdgeLabel::LoweredFrom,
                     Some(CompilerPhase::Mir),
@@ -364,6 +379,79 @@ fn runtime_stmt_kind(stmt: &RStmt<'_>) -> &'static str {
     }
 }
 
+fn runtime_stmt_display(stmt: &RStmt<'_>) -> String {
+    match stmt {
+        RStmt::Assign { dst, expr } => format!("{dst:?} = {}", runtime_expr_display(expr)),
+        RStmt::EnumAssertVariant { value, variant } => {
+            format!("assert_variant {value:?}, {variant:?}")
+        }
+        RStmt::Store { dst, src } => format!("store {dst:?}, {src:?}"),
+        RStmt::CopyInto { dst, src } => format!("copy_into {dst:?}, {src:?}"),
+        RStmt::EnumSetTag { root, variant } => format!("set_tag {root:?}, {variant:?}"),
+        RStmt::EnumWriteVariant {
+            root,
+            variant,
+            fields,
+        } => format!("write_variant {root:?}, {variant:?}, {fields:?}"),
+    }
+}
+
+fn runtime_expr_display(expr: &RExpr<'_>) -> String {
+    match expr {
+        RExpr::Use(value) => format!("{value:?}"),
+        RExpr::ConstScalar(value) => format!("const {value:?}"),
+        RExpr::Placeholder { class } => format!("placeholder {class:?}"),
+        RExpr::Builtin(builtin) => format!("builtin {builtin:?}"),
+        RExpr::Unary { op, value } => format!("{op:?} {value:?}"),
+        RExpr::Binary { op, lhs, rhs } => format!("{op:?} {lhs:?}, {rhs:?}"),
+        RExpr::Cast { value, to } => format!("cast {value:?} to {to:?}"),
+        RExpr::ConstRef { region, layout } => format!("const_ref {region:?} as {layout:?}"),
+        RExpr::AllocObject { layout } => format!("alloc_object {layout:?}"),
+        RExpr::MaterializeToObject { src } => format!("materialize {src:?}"),
+        RExpr::MaterializePlaceToObject { place } => format!("materialize_place {place:?}"),
+        RExpr::ProviderFromRaw {
+            raw,
+            provider_ty,
+            space,
+            target,
+        } => format!("provider_from_raw {raw:?}, {provider_ty:?}, {space:?}, {target:?}"),
+        RExpr::WordToRawAddr {
+            value,
+            space,
+            target,
+        } => format!("word_to_raw_addr {value:?}, {space:?}, {target:?}"),
+        RExpr::ProviderToRaw { value } => format!("provider_to_raw {value:?}"),
+        RExpr::RetagRef { value } => format!("retag_ref {value:?}"),
+        RExpr::AddrOf { place } => format!("addr_of {place:?}"),
+        RExpr::Load { place } => format!("load {place:?}"),
+        RExpr::AggregateExtract { value, index } => {
+            format!("aggregate_extract {value:?}[{index}]")
+        }
+        RExpr::AggregateMake { layout, fields } => {
+            format!("aggregate_make {layout:?}, {fields:?}")
+        }
+        RExpr::Call { callee, args } => format!("call {callee:?}({args:?})"),
+        RExpr::EnumMake {
+            layout,
+            variant,
+            fields,
+        } => format!("enum_make {layout:?}, {variant:?}, {fields:?}"),
+        RExpr::EnumTagOfValue { value } => format!("enum_tag {value:?}"),
+        RExpr::EnumIsVariant { value, variant } => {
+            format!("enum_is_variant {value:?}, {variant:?}")
+        }
+        RExpr::EnumExtract {
+            value,
+            variant,
+            field,
+        } => format!("enum_extract {value:?}, {variant:?}, {field:?}"),
+        RExpr::EnumGetTag { root } => format!("enum_get_tag {root:?}"),
+        RExpr::EnumAssertVariantRef { root, variant } => {
+            format!("enum_assert_variant_ref {root:?}, {variant:?}")
+        }
+    }
+}
+
 fn runtime_terminator_kind(terminator: &RTerminator<'_>) -> &'static str {
     match terminator {
         RTerminator::Goto(_) => "goto",
@@ -377,6 +465,39 @@ fn runtime_terminator_kind(terminator: &RTerminator<'_>) -> &'static str {
         RTerminator::Trap => "trap",
         RTerminator::Return(_) => "return",
         RTerminator::Stop => "stop",
+    }
+}
+
+fn runtime_terminator_display(terminator: &RTerminator<'_>) -> String {
+    match terminator {
+        RTerminator::Goto(block) => format!("goto bb{}", block.index()),
+        RTerminator::Branch {
+            cond,
+            then_bb,
+            else_bb,
+        } => format!(
+            "branch {cond:?}, bb{}, bb{}",
+            then_bb.index(),
+            else_bb.index()
+        ),
+        RTerminator::SwitchScalar {
+            discr,
+            cases,
+            default,
+        } => format!("switch {discr:?}, {cases:?}, default bb{}", default.index()),
+        RTerminator::MatchEnumTag {
+            tag,
+            enum_layout,
+            cases,
+            default,
+        } => format!("match_enum {tag:?}, {enum_layout:?}, {cases:?}, default {default:?}"),
+        RTerminator::TerminalCall { callee, args } => format!("tail_call {callee:?}({args:?})"),
+        RTerminator::ReturnData { offset, len } => format!("return_data {offset:?}, {len:?}"),
+        RTerminator::Revert { offset, len } => format!("revert {offset:?}, {len:?}"),
+        RTerminator::SelfDestruct { beneficiary } => format!("selfdestruct {beneficiary:?}"),
+        RTerminator::Trap => "trap".to_string(),
+        RTerminator::Return(value) => format!("return {value:?}"),
+        RTerminator::Stop => "stop".to_string(),
     }
 }
 

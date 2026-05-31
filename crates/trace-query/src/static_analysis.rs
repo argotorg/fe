@@ -176,6 +176,8 @@ pub struct ProvenanceCoverageReport {
     pub total_instructions: usize,
     pub exact_source_pcs: usize,
     pub exact_sonatina_pcs: usize,
+    pub optimized_sonatina_pcs: usize,
+    pub prepared_sonatina_pcs: usize,
     pub sonatina_only_pcs: usize,
     pub synthetic_backend_pcs: usize,
     pub ambiguous_pcs: usize,
@@ -193,7 +195,15 @@ impl ProvenanceCoverageReport {
         }
         let exact_source_pcs = rows.iter().filter(|row| row.source_candidates == 1).count();
         let ambiguous_pcs = rows.iter().filter(|row| row.source_candidates > 1).count();
-        let exact_sonatina_pcs = rows.iter().filter(|row| row.has_sonatina_path).count();
+        let optimized_sonatina_pcs = rows
+            .iter()
+            .filter(|row| row.has_optimized_sonatina_path)
+            .count();
+        let prepared_sonatina_pcs = rows
+            .iter()
+            .filter(|row| row.has_prepared_sonatina_path)
+            .count();
+        let exact_sonatina_pcs = optimized_sonatina_pcs;
         let sonatina_only_pcs = rows
             .iter()
             .filter(|row| row.has_sonatina_path && row.source_candidates == 0)
@@ -217,6 +227,8 @@ impl ProvenanceCoverageReport {
             total_instructions: rows.len(),
             exact_source_pcs,
             exact_sonatina_pcs,
+            optimized_sonatina_pcs,
+            prepared_sonatina_pcs,
             sonatina_only_pcs,
             synthetic_backend_pcs,
             ambiguous_pcs,
@@ -232,6 +244,8 @@ pub struct ProvenanceCoverageRow {
     pub instruction: OriginExportKey,
     pub source_candidates: usize,
     pub has_sonatina_path: bool,
+    pub has_optimized_sonatina_path: bool,
+    pub has_prepared_sonatina_path: bool,
     pub has_synthetic_or_backend_path: bool,
     pub is_unmapped: bool,
     pub confidence: AttributionConfidence,
@@ -697,10 +711,11 @@ fn provenance_coverage_summary(coverage: &ProvenanceCoverageReport) -> String {
         return "no bytecode instructions were present in the trace".to_string();
     }
     format!(
-        "{} instruction(s): {} exact source, {} Sonatina-linked, {} synthetic/backend, {} ambiguous, {} unmapped",
+        "{} instruction(s): {} source-exact, {} optimized-Sonatina-linked, {} prepared-linked, {} synthetic/backend, {} ambiguous, {} unmapped",
         coverage.total_instructions,
         coverage.exact_source_pcs,
-        coverage.exact_sonatina_pcs,
+        coverage.optimized_sonatina_pcs,
+        coverage.prepared_sonatina_pcs,
         coverage.synthetic_backend_pcs,
         coverage.ambiguous_pcs,
         coverage.unmapped_pcs
@@ -753,11 +768,12 @@ impl<'a> CoverageIndex<'a> {
             .trace_index
             .source_candidates_for_instruction(instruction, TraceReachabilityPolicy::ExactOnly)
             .len();
-        let has_sonatina_path = self
+        let reachable = self
             .trace_index
-            .reachable_targets(instruction, TraceReachabilityPolicy::ExactOnly)
-            .iter()
-            .any(is_sonatina_origin);
+            .reachable_targets(instruction, TraceReachabilityPolicy::ExactOnly);
+        let has_sonatina_path = reachable.iter().any(is_sonatina_origin);
+        let has_optimized_sonatina_path = reachable.iter().any(is_sonatina_post_origin);
+        let has_prepared_sonatina_path = reachable.iter().any(is_sonatina_prepared_origin);
         let has_synthetic_or_backend_path = self.has_synthetic_or_backend_path(instruction);
         let is_unmapped =
             source_candidates == 0 && !has_sonatina_path && !has_synthetic_or_backend_path;
@@ -774,6 +790,8 @@ impl<'a> CoverageIndex<'a> {
             instruction: instruction.clone(),
             source_candidates,
             has_sonatina_path,
+            has_optimized_sonatina_path,
+            has_prepared_sonatina_path,
             has_synthetic_or_backend_path,
             is_unmapped,
             confidence,
@@ -820,6 +838,10 @@ fn is_sonatina_origin(key: &OriginExportKey) -> bool {
 
 fn is_sonatina_post_origin(key: &OriginExportKey) -> bool {
     key.kind().starts_with("sonatina.post")
+}
+
+fn is_sonatina_prepared_origin(key: &OriginExportKey) -> bool {
+    key.kind().starts_with("sonatina.evm.prepared")
 }
 
 fn explicit_postopt_explanations(snapshot: &TraceSnapshot) -> BTreeSet<OriginExportKey> {
@@ -970,11 +992,13 @@ mod tests {
         let hir_exact = key("hir.expr", "demo", "expr:exact");
         let hir_alt = key("hir.expr", "demo", "expr:alt");
         let sonatina = key("sonatina.post.inst", "demo", "inst:0");
+        let prepared_inst = key("sonatina.evm.prepared.inst", "demo", "inst:prepared");
         let exact = key("bytecode.pc", "demo", "pc:0");
         let ambiguous = key("bytecode.pc", "demo", "pc:1");
         let sonatina_only = key("bytecode.pc", "demo", "pc:2");
         let synthetic = key("bytecode.pc", "demo", "pc:3");
         let unmapped = key("bytecode.pc", "demo", "pc:4");
+        let prepared = key("bytecode.pc", "demo", "pc:5");
         let facts = vec![
             node(function.clone()),
             node(code_object.clone()),
@@ -982,11 +1006,13 @@ mod tests {
             node(hir_exact.clone()),
             node(hir_alt.clone()),
             node(sonatina.clone()),
+            node(prepared_inst.clone()),
             node(exact.clone()),
             node(ambiguous.clone()),
             node(sonatina_only.clone()),
             node(synthetic.clone()),
             node(unmapped.clone()),
+            node(prepared.clone()),
             TraceFact::SourceFile(SourceFileFact::new(
                 source_file.clone(),
                 "file:///demo.fe",
@@ -1046,6 +1072,12 @@ mod tests {
                 "DUP1",
             )),
             TraceFact::Instruction(InstructionFact::new(unmapped.clone(), function, 4, "POP")),
+            TraceFact::Instruction(InstructionFact::new(
+                prepared.clone(),
+                key("function", "demo", "recv"),
+                5,
+                "ADD",
+            )),
             TraceFact::InstructionExtent(InstructionExtentFact::new(
                 exact.clone(),
                 code_object.clone(),
@@ -1082,6 +1114,12 @@ mod tests {
                 OriginEdgeLabel::BackendPrepared,
                 None,
             )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                prepared,
+                prepared_inst,
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
         ];
 
         let report = static_analysis_report(&snapshot(facts));
@@ -1089,11 +1127,13 @@ mod tests {
         let coverage = &check.evidence["coverage"];
 
         assert_eq!(check.status, CheckStatus::Warning);
-        assert_eq!(coverage["total_instructions"], 5);
+        assert_eq!(coverage["total_instructions"], 6);
         assert_eq!(coverage["exact_source_pcs"], 1);
         assert_eq!(coverage["ambiguous_pcs"], 1);
         assert_eq!(coverage["exact_sonatina_pcs"], 1);
-        assert_eq!(coverage["sonatina_only_pcs"], 1);
+        assert_eq!(coverage["optimized_sonatina_pcs"], 1);
+        assert_eq!(coverage["prepared_sonatina_pcs"], 1);
+        assert_eq!(coverage["sonatina_only_pcs"], 2);
         assert_eq!(coverage["synthetic_backend_pcs"], 1);
         assert_eq!(coverage["unmapped_pcs"], 1);
         assert_eq!(report.metadata.optimization_level.as_deref(), Some("2"));

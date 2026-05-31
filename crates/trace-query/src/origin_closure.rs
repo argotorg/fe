@@ -28,6 +28,9 @@ pub struct OriginClosure {
     pub root_key: String,
     #[serde(skip_serializing)]
     pub keys: Vec<String>,
+    pub generated_keys: Vec<String>,
+    pub contextual_keys: Vec<String>,
+    pub structural_keys: Vec<String>,
     pub counts: OriginClosureCounts,
     pub traversal: OriginClosureTraversalSummary,
     pub gap: Option<String>,
@@ -271,6 +274,17 @@ pub fn classes_by_origin_key(closures: &[OriginClosure]) -> BTreeMap<String, Vec
                 .or_default()
                 .insert(closure.class_name.clone());
         }
+        for key in closure
+            .generated_keys
+            .iter()
+            .chain(closure.contextual_keys.iter())
+            .chain(closure.structural_keys.iter())
+        {
+            classes
+                .entry(key.clone())
+                .or_default()
+                .insert(closure.class_name.clone());
+        }
     }
     classes
         .into_iter()
@@ -452,7 +466,9 @@ fn build_closures(
         .into_iter()
         .enumerate()
         .map(|(ordinal, root)| {
-            let closure = origin_closure(&root, index);
+            let mut closure = origin_closure(&root, index);
+            let explanation = origin_explanation_rails(&closure.keys, index);
+            closure.edges.extend(explanation.edges);
             let source_spans = source_spans_for_keys(&closure.keys, index);
             let counts = closure_counts(&closure.keys);
             let gap = closure_gap_note(&counts);
@@ -462,6 +478,21 @@ fn build_closures(
                 root_key: root.canonical_storage_key(),
                 keys: closure
                     .keys
+                    .iter()
+                    .map(OriginExportKey::canonical_storage_key)
+                    .collect(),
+                generated_keys: explanation
+                    .generated
+                    .iter()
+                    .map(OriginExportKey::canonical_storage_key)
+                    .collect(),
+                contextual_keys: explanation
+                    .contextual
+                    .iter()
+                    .map(OriginExportKey::canonical_storage_key)
+                    .collect(),
+                structural_keys: explanation
+                    .structural
                     .iter()
                     .map(OriginExportKey::canonical_storage_key)
                     .collect(),
@@ -494,6 +525,59 @@ fn closure_counts(keys: &BTreeSet<OriginExportKey>) -> OriginClosureCounts {
         }
     }
     counts
+}
+
+#[derive(Default)]
+struct OriginExplanationRails {
+    generated: BTreeSet<OriginExportKey>,
+    contextual: BTreeSet<OriginExportKey>,
+    structural: BTreeSet<OriginExportKey>,
+    edges: Vec<OriginClosureEdge>,
+}
+
+fn origin_explanation_rails(
+    exact_keys: &BTreeSet<OriginExportKey>,
+    index: &OriginClosureIndex<'_>,
+) -> OriginExplanationRails {
+    let mut rails = OriginExplanationRails::default();
+    let mut seen_edges = BTreeSet::new();
+    for key in exact_keys {
+        let outgoing = index.edges_by_from.get(key).into_iter().flatten().copied();
+        let incoming = index.edges_by_to.get(key).into_iter().flatten().copied();
+        for edge in outgoing.chain(incoming) {
+            let other = if &edge.from == key {
+                &edge.to
+            } else {
+                &edge.from
+            };
+            if exact_keys.contains(other) {
+                continue;
+            }
+            match edge.traversal_class() {
+                OriginEdgeTraversalClass::Synthetic => {
+                    rails.generated.insert(other.clone());
+                }
+                OriginEdgeTraversalClass::Contextual => {
+                    rails.contextual.insert(other.clone());
+                }
+                OriginEdgeTraversalClass::Structural => {
+                    rails.structural.insert(other.clone());
+                }
+                OriginEdgeTraversalClass::ExactAttribution
+                | OriginEdgeTraversalClass::SnapshotAlias
+                | OriginEdgeTraversalClass::Unmapped => continue,
+            }
+            let edge_key = (
+                edge.from.canonical_storage_key(),
+                edge.to.canonical_storage_key(),
+                format!("{:?}", edge.label),
+            );
+            if seen_edges.insert(edge_key) {
+                rails.edges.push(closure_edge(edge));
+            }
+        }
+    }
+    rails
 }
 
 fn closure_gap_note(counts: &OriginClosureCounts) -> Option<String> {
@@ -682,7 +766,8 @@ fn audit_closure(
         + closure.counts.sonatina_pre
         + closure.counts.sonatina_post
         > 0;
-    let has_expected_synthetic = closure.edges.iter().any(|edge| edge.generated_work);
+    let has_expected_synthetic = closure.edges.iter().any(|edge| edge.generated_work)
+        || closure_has_synthetic_origin(closure);
     let has_lowering_target = closure.counts.mir
         + closure.counts.sonatina_pre
         + closure.counts.sonatina_post
@@ -701,7 +786,7 @@ fn audit_closure(
     if has_ir && closure.counts.bytecode > 0 && direct_input_spans.is_empty() {
         if has_expected_synthetic {
             symptoms.insert(ClosureAuditSymptom::SourceUnavailableSynthetic);
-            notes.push("bytecode-linked synthetic/backend closure has no direct source span; this is expected when the edge explains generated work".to_string());
+            notes.push("bytecode-linked synthetic/backend closure has no direct source span; this is expected for compiler-generated wrapper or backend-prepared work".to_string());
         } else {
             symptoms.insert(ClosureAuditSymptom::MissingSourceUnexplained);
             notes.push(
@@ -784,6 +869,17 @@ fn audit_closure(
     }
 }
 
+fn closure_has_synthetic_origin(closure: &OriginClosure) -> bool {
+    closure
+        .keys
+        .iter()
+        .any(|key| origin_storage_key_is_synthetic(key))
+}
+
+fn origin_storage_key_is_synthetic(storage_key: &str) -> bool {
+    storage_key.contains("__synthetic")
+}
+
 fn origin_closure(start: &OriginExportKey, index: &OriginClosureIndex<'_>) -> RawOriginClosure {
     let mut keys = BTreeSet::new();
     let mut edges_out = Vec::new();
@@ -829,19 +925,7 @@ fn origin_closure(start: &OriginExportKey, index: &OriginClosureIndex<'_>) -> Ra
                 format!("{:?}", edge.label),
             );
             if seen_edges.insert(edge_key) {
-                edges_out.push(OriginClosureEdge {
-                    label: format!(
-                        "{:?} / {}",
-                        edge.label,
-                        edge.introduced_by
-                            .map(|phase| format!("{phase:?}"))
-                            .unwrap_or_else(|| "unknown".to_string())
-                    ),
-                    from: display_key(&edge.from),
-                    to: display_key(&edge.to),
-                    traversal_class: edge.traversal_class(),
-                    generated_work: edge.is_generated_work_edge(),
-                });
+                edges_out.push(closure_edge(edge));
             }
             queue.push_back((edge.from.clone(), depth + 1));
             queue.push_back((edge.to.clone(), depth + 1));
@@ -858,6 +942,22 @@ fn origin_closure(start: &OriginExportKey, index: &OriginClosureIndex<'_>) -> Ra
             truncation_reason,
             skipped_hubs: skipped_hubs.into_iter().collect(),
         },
+    }
+}
+
+fn closure_edge(edge: &OriginEdgeFact) -> OriginClosureEdge {
+    OriginClosureEdge {
+        label: format!(
+            "{:?} / {}",
+            edge.label,
+            edge.introduced_by
+                .map(|phase| format!("{phase:?}"))
+                .unwrap_or_else(|| "unknown".to_string())
+        ),
+        from: display_key(&edge.from),
+        to: display_key(&edge.to),
+        traversal_class: edge.traversal_class(),
+        generated_work: edge.is_generated_work_edge(),
     }
 }
 
@@ -1134,6 +1234,31 @@ mod tests {
     }
 
     #[test]
+    fn explanation_rails_show_synthetic_edges_without_exact_membership() {
+        let hir = test_key("hir.expr", "body", "expr:0");
+        let synthetic_mir = test_key("runtime.stmt", "runtime", "block:0:stmt:0");
+        let edges = [OriginEdgeFact::new(
+            synthetic_mir.clone(),
+            hir.clone(),
+            OriginEdgeLabel::SyntheticFor,
+            Some(CompilerPhase::Mir),
+        )];
+        let index = test_index(&edges, []);
+
+        let exact_from_hir = origin_closure(&hir, &index);
+        let hir_rails = origin_explanation_rails(&exact_from_hir.keys, &index);
+        assert!(exact_from_hir.keys.contains(&hir));
+        assert!(!exact_from_hir.keys.contains(&synthetic_mir));
+        assert!(hir_rails.generated.contains(&synthetic_mir));
+
+        let exact_from_synthetic = origin_closure(&synthetic_mir, &index);
+        let synthetic_rails = origin_explanation_rails(&exact_from_synthetic.keys, &index);
+        assert!(exact_from_synthetic.keys.contains(&synthetic_mir));
+        assert!(!exact_from_synthetic.keys.contains(&hir));
+        assert!(synthetic_rails.generated.contains(&hir));
+    }
+
+    #[test]
     fn closure_audit_flags_optimized_gap_without_calling_it_dead() {
         let mut closure = test_closure();
         closure.counts.sonatina_post = 2;
@@ -1280,6 +1405,31 @@ mod tests {
         });
         let groups = groups_for_closure(&closure);
 
+        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
+
+        assert_eq!(entry.primary, ClosureAuditPrimary::ExpectedSynthetic);
+        assert!(
+            entry
+                .symptoms
+                .contains(&ClosureAuditSymptom::SourceUnavailableSynthetic)
+        );
+        assert!(!entry.suspicious);
+    }
+
+    #[test]
+    fn closure_audit_downgrades_synthetic_runtime_owner_missing_source() {
+        let mut closure = test_closure();
+        closure.keys = vec![
+            "runtime.stmt:runtime-instance:__synthetic:contract_recv_abi:demo:block:0:stmt:0"
+                .to_string(),
+            "sonatina.postopt.inst:demo:function:FuncRef(1):inst:InstId(0)".to_string(),
+            "bytecode.pc:demo:pc:0".to_string(),
+        ];
+        closure.source_spans.clear();
+        closure.counts.bytecode = 1;
+        closure.counts.sonatina_post = 1;
+
+        let groups = groups_for_closure(&closure);
         let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
 
         assert_eq!(entry.primary, ClosureAuditPrimary::ExpectedSynthetic);
@@ -1441,6 +1591,9 @@ mod tests {
             label: "hir.expr:demo:11".to_string(),
             root_key: "root".to_string(),
             keys: Vec::new(),
+            generated_keys: Vec::new(),
+            contextual_keys: Vec::new(),
+            structural_keys: Vec::new(),
             counts: OriginClosureCounts {
                 hir: 1,
                 mir: 1,

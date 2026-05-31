@@ -195,6 +195,7 @@ pub enum TraceReachabilityPolicy {
     ExactOnly,
     ExactPlusSynthetic,
     ExactPlusContextual,
+    CompilerExplanation,
     DebugAttribution,
     UiHighlighting,
 }
@@ -213,6 +214,13 @@ impl TraceReachabilityPolicy {
             Self::ExactPlusContextual | Self::DebugAttribution => {
                 !matches!(class, OriginEdgeTraversalClass::Unmapped)
             }
+            Self::CompilerExplanation => matches!(
+                class,
+                OriginEdgeTraversalClass::ExactAttribution
+                    | OriginEdgeTraversalClass::SnapshotAlias
+                    | OriginEdgeTraversalClass::Synthetic
+                    | OriginEdgeTraversalClass::Contextual
+            ),
             Self::UiHighlighting => !matches!(class, OriginEdgeTraversalClass::Unmapped),
         }
     }
@@ -581,6 +589,31 @@ mod tests {
             &instruction,
             &runtime_stmt,
             TraceReachabilityPolicy::DebugAttribution
+        ));
+    }
+
+    #[test]
+    fn compiler_explanation_crosses_synthetic_without_making_it_exact() {
+        let hir = key("hir.expr", "demo", "expr:0");
+        let synthetic_mir = key("runtime.stmt", "demo", "block:0:stmt:0");
+        let facts = vec![
+            node(&hir),
+            node(&synthetic_mir),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                synthetic_mir.clone(),
+                hir.clone(),
+                OriginEdgeLabel::SyntheticFor,
+                Some(CompilerPhase::Mir),
+            )),
+        ];
+        let snapshot = snapshot(facts);
+        let index = TraceIndex::new(&snapshot);
+
+        assert!(!index.origin_reaches(&synthetic_mir, &hir, TraceReachabilityPolicy::ExactOnly));
+        assert!(index.origin_reaches(
+            &synthetic_mir,
+            &hir,
+            TraceReachabilityPolicy::CompilerExplanation
         ));
     }
 
