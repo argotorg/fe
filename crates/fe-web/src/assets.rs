@@ -768,6 +768,13 @@ mod tests {
     }
 
     #[test]
+    fn origin_trace_pane_switches_do_not_rerun_hash_navigation() {
+        assert!(FE_ORIGIN_TRACE_JS.contains("hashNavigation: false"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("hashNavigation: true"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("allowHashNavigation"));
+    }
+
+    #[test]
     fn js_escape_handles_special_chars() {
         assert_eq!(js_escape_string("hello\nworld"), "hello\\nworld");
         assert_eq!(js_escape_string(r#"a"b"#), r#"a\"b"#);

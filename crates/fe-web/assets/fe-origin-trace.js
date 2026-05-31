@@ -81,7 +81,7 @@
     setTraceData(data) {
       var scrollState = this._capturePaneScrollState ? this._capturePaneScrollState() : null;
       this._data = data || {};
-      this._render({ scrollState: scrollState, switchedPaneIndex: null });
+      this._render({ scrollState: scrollState, switchedPaneIndex: null, hashNavigation: true });
     }
 
     _render(scrollRestore) {
@@ -153,7 +153,8 @@
       this._restorePaneScroll(scrollRestore);
       this._renderDetail(this._selected);
       this._syncStateStyles();
-      if (window.location.hash) this._scheduleHashNavigation();
+      var allowHashNavigation = !scrollRestore || scrollRestore.hashNavigation !== false;
+      if (window.location.hash && allowHashNavigation) this._scheduleHashNavigation();
     }
 
     _card(parent, label, value) {
@@ -666,6 +667,7 @@
         this._render({
           scrollState: scrollState,
           switchedPaneIndex: switchedPaneIndex,
+          hashNavigation: false,
         });
       }.bind(this));
     }
@@ -738,6 +740,7 @@
           this._render({
             scrollState: this._capturePaneScrollState(),
             switchedPaneIndex: switchedPaneIndex,
+            hashNavigation: true,
           });
           return true;
         }
