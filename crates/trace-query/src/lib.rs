@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
@@ -2381,11 +2382,12 @@ fn trace_workbench_compare_panel_keys(
             .canonical_storage_key()
             .cmp(&right.function.canonical_storage_key())
             .then(left.index.cmp(&right.index))
-            .then(
-                left.instruction
-                    .canonical_storage_key()
-                    .cmp(&right.instruction.canonical_storage_key()),
-            ),
+            .then_with(|| {
+                trace_workbench_natural_key_cmp(
+                    &left.instruction.canonical_storage_key(),
+                    &right.instruction.canonical_storage_key(),
+                )
+            }),
         (Some(left), None) => left
             .function
             .canonical_storage_key()
@@ -2399,8 +2401,64 @@ fn trace_workbench_compare_panel_keys(
         (None, None) => left
             .owner_key()
             .cmp(right.owner_key())
-            .then(left.local_key().cmp(right.local_key())),
+            .then_with(|| trace_workbench_natural_key_cmp(left.local_key(), right.local_key())),
     }
+}
+
+fn trace_workbench_natural_key_cmp(left: &str, right: &str) -> Ordering {
+    let left_bytes = left.as_bytes();
+    let right_bytes = right.as_bytes();
+    let mut left_index = 0;
+    let mut right_index = 0;
+    while left_index < left_bytes.len() && right_index < right_bytes.len() {
+        let left_byte = left_bytes[left_index];
+        let right_byte = right_bytes[right_index];
+        if left_byte.is_ascii_digit() && right_byte.is_ascii_digit() {
+            let left_start = left_index;
+            let right_start = right_index;
+            while left_index < left_bytes.len() && left_bytes[left_index].is_ascii_digit() {
+                left_index += 1;
+            }
+            while right_index < right_bytes.len() && right_bytes[right_index].is_ascii_digit() {
+                right_index += 1;
+            }
+            let ordering = trace_workbench_digit_run_cmp(
+                &left[left_start..left_index],
+                &right[right_start..right_index],
+            );
+            if ordering != Ordering::Equal {
+                return ordering;
+            }
+            continue;
+        }
+        let ordering = left_byte.cmp(&right_byte);
+        if ordering != Ordering::Equal {
+            return ordering;
+        }
+        left_index += 1;
+        right_index += 1;
+    }
+    left_bytes.len().cmp(&right_bytes.len())
+}
+
+fn trace_workbench_digit_run_cmp(left: &str, right: &str) -> Ordering {
+    let left_significant = left.trim_start_matches('0');
+    let right_significant = right.trim_start_matches('0');
+    let left_significant = if left_significant.is_empty() {
+        "0"
+    } else {
+        left_significant
+    };
+    let right_significant = if right_significant.is_empty() {
+        "0"
+    } else {
+        right_significant
+    };
+    left_significant
+        .len()
+        .cmp(&right_significant.len())
+        .then_with(|| left_significant.cmp(right_significant))
+        .then_with(|| left.len().cmp(&right.len()))
 }
 
 fn trace_workbench_panel_row(
@@ -5082,7 +5140,7 @@ mod tests {
         TraceWorkbenchProjectionIndex, TraceWorkbenchProjectionRequest, ValueFlowAtPcRequest,
         VariablesAtPcRequest, run_trace_query, trace_workbench_compact_mir_text,
         trace_workbench_compact_origin_text, trace_workbench_manifest,
-        trace_workbench_report_projection,
+        trace_workbench_natural_key_cmp, trace_workbench_report_projection,
     };
 
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -6351,6 +6409,31 @@ mod tests {
         assert_eq!(
             trace_workbench_compact_origin_text(&hir, &index),
             "let x = y"
+        );
+    }
+
+    #[test]
+    fn trace_workbench_panel_sort_uses_natural_numeric_origin_order() {
+        let mut locals = vec![
+            "function:FuncRef(1):inst:InstId(663)",
+            "function:FuncRef(1):inst:InstId(122)",
+            "function:FuncRef(1):inst:InstId(68)",
+            "function:FuncRef(1):inst:InstId(9)",
+        ];
+        locals.sort_by(|left, right| trace_workbench_natural_key_cmp(left, right));
+
+        assert_eq!(
+            locals,
+            vec![
+                "function:FuncRef(1):inst:InstId(9)",
+                "function:FuncRef(1):inst:InstId(68)",
+                "function:FuncRef(1):inst:InstId(122)",
+                "function:FuncRef(1):inst:InstId(663)",
+            ]
+        );
+        assert_eq!(
+            trace_workbench_natural_key_cmp("block:0:stmt:9", "block:0:stmt:10"),
+            std::cmp::Ordering::Less
         );
     }
 
