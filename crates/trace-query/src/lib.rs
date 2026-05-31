@@ -1873,6 +1873,72 @@ pub fn trace_workbench_report_projection(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TraceViewManifest {
+    pub revision: u64,
+    pub root_digest: String,
+    pub metadata_digest: String,
+    pub rail_components_digest: String,
+    pub panes: BTreeMap<String, String>,
+    pub reports: BTreeMap<String, String>,
+}
+
+pub fn trace_workbench_manifest(projection: &serde_json::Value) -> TraceViewManifest {
+    let revision = projection
+        .get("revision")
+        .and_then(|revision| revision.get("id"))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_default();
+    let metadata = projection
+        .get("metadata")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let reports = [
+        (
+            "attribution".to_string(),
+            projection.get("attribution_audit"),
+        ),
+        (
+            "static_analysis".to_string(),
+            projection.get("static_analysis"),
+        ),
+        ("closure_audit".to_string(), projection.get("audit")),
+    ]
+    .into_iter()
+    .filter_map(|(name, value)| value.map(|value| (name, digest_json(value))))
+    .collect();
+    let panes = projection
+        .get("panels")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|pane| {
+            let id = pane
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)?;
+            Some((id, digest_json(pane)))
+        })
+        .collect();
+    TraceViewManifest {
+        revision,
+        root_digest: digest_json(projection),
+        metadata_digest: digest_json(&metadata),
+        rail_components_digest: digest_json(
+            projection
+                .get("rail_components")
+                .unwrap_or(&serde_json::Value::Null),
+        ),
+        panes,
+        reports,
+    }
+}
+
+fn digest_json(value: &serde_json::Value) -> String {
+    let bytes = serde_json::to_vec(value).unwrap_or_default();
+    format!("blake3:{}", blake3::hash(&bytes).to_hex())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoopCostReport {
     pub metadata: ReportMetadata,
     pub available: bool,
@@ -4004,7 +4070,7 @@ mod tests {
         RuntimeTraceFilterRequest, StorageAccessesBySlotRequest, TraceIntrospectionService,
         TraceQueryHttpRequest, TraceQueryHttpResponse, TraceQueryReport, TraceQueryRequest,
         TraceWorkbenchProjectionRequest, ValueFlowAtPcRequest, VariablesAtPcRequest,
-        run_trace_query, trace_workbench_report_projection,
+        run_trace_query, trace_workbench_manifest, trace_workbench_report_projection,
     };
 
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -5174,6 +5240,10 @@ mod tests {
             projection["notes"][2],
             "The browser does not compute provenance or graph reachability."
         );
+        let manifest = trace_workbench_manifest(&projection);
+        assert_eq!(manifest.revision, 3);
+        assert!(manifest.root_digest.starts_with("blake3:"));
+        assert!(manifest.reports.contains_key("attribution"));
     }
 
     #[test]

@@ -8,7 +8,8 @@ use std::time::{Duration, Instant};
 use trace_facts::{CompilerPhase, TraceBundle, TraceMetadata, TraceSnapshot};
 use trace_query::{
     TraceIntrospectionService, TraceQueryHttpResponse, TraceQueryRequest,
-    TraceWorkbenchProjectionRequest, run_trace_query, trace_workbench_report_projection,
+    TraceWorkbenchProjectionRequest, run_trace_query, trace_workbench_manifest,
+    trace_workbench_report_projection,
 };
 use url::Url;
 
@@ -142,6 +143,15 @@ pub(crate) async fn handle_trace_workbench_model(
             data_source: "lsp-live".to_string(),
         },
     ))
+}
+
+pub(crate) async fn handle_trace_workbench_manifest(
+    backend: &mut Backend,
+    request: TraceWorkbenchSessionRequest,
+) -> Result<serde_json::Value, async_lsp::ResponseError> {
+    let model = handle_trace_workbench_model(backend, request).await?;
+    serde_json::to_value(trace_workbench_manifest(&model))
+        .map_err(|err| internal_error(format!("failed to serialize trace manifest: {err}")))
 }
 
 pub(crate) async fn handle_trace_query(

@@ -9,6 +9,7 @@ description = "Read-only trace introspection queries for Fe compiler diagnostics
 [dependencies]
 common.workspace = true
 introspection-config.workspace = true
+blake3.workspace = true
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 trace-facts.workspace = true

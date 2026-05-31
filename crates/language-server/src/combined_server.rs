@@ -204,6 +204,29 @@ pub async fn run(
             }),
         )
         .route(
+            "/trace/session/{session_id}/manifest",
+            get({
+                let actor_rx = actor_rx.clone();
+                let workspace_root = workspace_root.clone();
+                move |Path(session_id): Path<String>,
+                      Query(query): Query<BTreeMap<String, String>>,
+                      headers: HeaderMap| {
+                    let actor_rx = actor_rx.clone();
+                    let workspace_root = workspace_root.clone();
+                    async move {
+                        handle_trace_workbench_manifest_http(
+                            session_id,
+                            query,
+                            headers,
+                            actor_rx,
+                            workspace_root,
+                        )
+                        .await
+                    }
+                }
+            }),
+        )
+        .route(
             "/trace/session/{session_id}/events",
             get({
                 let workspace_root = workspace_root.clone();
@@ -421,6 +444,51 @@ async fn handle_trace_workbench_model_http(
         Err(err) => json_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             serde_json::json!({ "reason": format!("trace workbench model failed: {err:?}") }),
+        ),
+    }
+}
+
+async fn handle_trace_workbench_manifest_http(
+    session_id: String,
+    query: BTreeMap<String, String>,
+    headers: HeaderMap,
+    actor_rx: watch::Receiver<Option<SharedActor>>,
+    workspace_root: Option<String>,
+) -> impl IntoResponse {
+    if let Err(reason) = validate_trace_auth(
+        workspace_root.as_deref(),
+        &trace_auth_token(&headers, &query).unwrap_or_default(),
+    ) {
+        return json_response(
+            StatusCode::UNAUTHORIZED,
+            serde_json::json!({ "reason": reason }),
+        );
+    }
+    let actor_ref = match ready_actor(actor_rx).await {
+        Ok(actor_ref) => actor_ref,
+        Err(reason) => {
+            return json_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                serde_json::json!({ "reason": reason }),
+            );
+        }
+    };
+    actor_ref.register_handler_async_mutating(
+        MessageKey(LspActorKey::of::<
+            crate::introspection::TraceWorkbenchSessionRequest,
+        >()),
+        crate::introspection::handle_trace_workbench_manifest,
+    );
+    let dispatcher = TraceQueryDispatcher;
+    let request = crate::introspection::TraceWorkbenchSessionRequest { session_id };
+    match actor_ref
+        .ask::<_, serde_json::Value, _>(&dispatcher, request)
+        .await
+    {
+        Ok(response) => json_response(StatusCode::OK, response),
+        Err(err) => json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            serde_json::json!({ "reason": format!("trace workbench manifest failed: {err:?}") }),
         ),
     }
 }
