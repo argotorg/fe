@@ -156,6 +156,7 @@ pub struct BloatReport {
     pub total_instructions: usize,
     pub total_byte_len: u64,
     pub total_static_gas: u64,
+    pub attribution_split: BloatAttributionSplit,
     pub findings: Vec<BloatFinding>,
 }
 
@@ -165,6 +166,40 @@ pub struct BloatFinding {
     pub summary: String,
     pub confidence: AttributionConfidence,
     pub involved_origins: Vec<OriginExportKey>,
+    pub instruction_count: usize,
+    pub byte_len: u64,
+    pub static_gas: u64,
+    pub attribution_split: BloatAttributionSplit,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BloatAttributionSplit {
+    pub source_exact: BloatAttributionCost,
+    pub source_ambiguous: BloatAttributionCost,
+    pub optimized_sonatina: BloatAttributionCost,
+    pub prepared_sonatina: BloatAttributionCost,
+    pub synthetic_backend: BloatAttributionCost,
+    pub unmapped: BloatAttributionCost,
+}
+
+impl BloatAttributionSplit {
+    fn add(&mut self, primary: ProvenanceCoveragePrimary, byte_len: u64, static_gas: u64) {
+        let cost = match primary {
+            ProvenanceCoveragePrimary::SourceExact => &mut self.source_exact,
+            ProvenanceCoveragePrimary::SourceAmbiguous => &mut self.source_ambiguous,
+            ProvenanceCoveragePrimary::OptimizedSonatina => &mut self.optimized_sonatina,
+            ProvenanceCoveragePrimary::PreparedSonatina => &mut self.prepared_sonatina,
+            ProvenanceCoveragePrimary::SyntheticBackend => &mut self.synthetic_backend,
+            ProvenanceCoveragePrimary::Unmapped => &mut self.unmapped,
+        };
+        cost.instruction_count += 1;
+        cost.byte_len += byte_len;
+        cost.static_gas += static_gas;
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BloatAttributionCost {
     pub instruction_count: usize,
     pub byte_len: u64,
     pub static_gas: u64,
@@ -604,6 +639,7 @@ fn postopt_gap_summary(report: &PostOptAttributionGapReport) -> String {
 }
 
 fn bytecode_bloat_report(snapshot: &TraceSnapshot) -> BloatReport {
+    let coverage_index = CoverageIndex::new(snapshot);
     let mut byte_len_by_instruction = BTreeMap::<OriginExportKey, u64>::new();
     let mut static_gas_by_instruction = BTreeMap::<OriginExportKey, u64>::new();
     for fact in snapshot.facts() {
@@ -628,6 +664,7 @@ fn bytecode_bloat_report(snapshot: &TraceSnapshot) -> BloatReport {
     let mut total_instructions = 0;
     let mut total_byte_len = 0;
     let mut total_static_gas = 0;
+    let mut attribution_split = BloatAttributionSplit::default();
     for fact in snapshot.facts() {
         let TraceFact::Instruction(instruction) = fact else {
             continue;
@@ -636,6 +673,7 @@ fn bytecode_bloat_report(snapshot: &TraceSnapshot) -> BloatReport {
             continue;
         }
         total_instructions += 1;
+        let attribution = coverage_index.classify(&instruction.instruction).primary;
         let byte_len = byte_len_by_instruction
             .get(&instruction.instruction)
             .copied()
@@ -646,11 +684,15 @@ fn bytecode_bloat_report(snapshot: &TraceSnapshot) -> BloatReport {
             .unwrap_or(0);
         total_byte_len += byte_len;
         total_static_gas += static_gas;
+        attribution_split.add(attribution, byte_len, static_gas);
         for kind in bloat_bucket_kinds(&instruction.mnemonic) {
             let bucket = buckets.entry(kind).or_default();
             bucket.instructions.push(instruction.instruction.clone());
             bucket.byte_len += byte_len;
             bucket.static_gas += static_gas;
+            bucket
+                .attribution_split
+                .add(attribution, byte_len, static_gas);
         }
     }
 
@@ -667,6 +709,7 @@ fn bytecode_bloat_report(snapshot: &TraceSnapshot) -> BloatReport {
             instruction_count: bucket.instructions.len(),
             byte_len: bucket.byte_len,
             static_gas: bucket.static_gas,
+            attribution_split: bucket.attribution_split,
             involved_origins: bucket.instructions,
         })
         .collect::<Vec<_>>();
@@ -681,6 +724,7 @@ fn bytecode_bloat_report(snapshot: &TraceSnapshot) -> BloatReport {
         total_instructions,
         total_byte_len,
         total_static_gas,
+        attribution_split,
         findings,
     }
 }
@@ -690,6 +734,7 @@ struct BloatBucket {
     instructions: Vec<OriginExportKey>,
     byte_len: u64,
     static_gas: u64,
+    attribution_split: BloatAttributionSplit,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -1327,6 +1372,8 @@ mod tests {
     fn bloat_report_groups_conservative_opcode_taxonomy() {
         let function = key("function", "demo", "recv");
         let code_object = key("code.object", "demo", "runtime");
+        let source_file = key("source.file", "demo", "demo.fe");
+        let hir = key("hir.expr", "demo", "expr:add");
         let instructions = [
             ("pc:0", "DUP1"),
             ("pc:1", "SWAP1"),
@@ -1345,7 +1392,29 @@ mod tests {
             )
         })
         .collect::<Vec<_>>();
-        let mut facts = vec![node(function.clone()), node(code_object.clone())];
+        let mut facts = vec![
+            node(function.clone()),
+            node(code_object.clone()),
+            node(source_file.clone()),
+            node(hir.clone()),
+            TraceFact::SourceFile(SourceFileFact::new(
+                source_file.clone(),
+                "file:///demo.fe",
+                "demo.fe",
+                "blake3:0000000000000000000000000000000000000000000000000000000000000001",
+                Some(0),
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                hir.clone(),
+                source_file,
+                0,
+                1,
+                1,
+                1,
+                1,
+                2,
+            )),
+        ];
         for (_, instruction, _) in &instructions {
             facts.push(node(instruction.clone()));
         }
@@ -1369,6 +1438,12 @@ mod tests {
                 None,
             )));
         }
+        facts.push(TraceFact::OriginEdge(OriginEdgeFact::new(
+            instructions[0].1.clone(),
+            hir,
+            OriginEdgeLabel::LoweredFrom,
+            None,
+        )));
 
         let report = static_analysis_report(&snapshot(facts));
         let bloat = report.bloat.unwrap();
@@ -1376,9 +1451,25 @@ mod tests {
         assert_eq!(bloat.total_instructions, 6);
         assert_eq!(bloat.total_byte_len, 6);
         assert_eq!(bloat.total_static_gas, 18);
-        assert!(bloat.findings.iter().any(|finding| {
-            finding.kind == "stack_shuffle_tax" && finding.instruction_count == 2
-        }));
+        assert_eq!(bloat.attribution_split.source_exact.instruction_count, 1);
+        assert_eq!(bloat.attribution_split.unmapped.instruction_count, 5);
+        let stack_shuffle = bloat
+            .findings
+            .iter()
+            .find(|finding| finding.kind == "stack_shuffle_tax")
+            .unwrap();
+        assert_eq!(stack_shuffle.instruction_count, 2);
+        assert_eq!(
+            stack_shuffle
+                .attribution_split
+                .source_exact
+                .instruction_count,
+            1
+        );
+        assert_eq!(
+            stack_shuffle.attribution_split.unmapped.instruction_count,
+            1
+        );
         assert!(bloat.findings.iter().any(|finding| {
             finding.kind == "integer_normalization_tax" && finding.instruction_count == 1
         }));
