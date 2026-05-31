@@ -229,12 +229,20 @@ pub async fn run(
         .route(
             "/trace/session/{session_id}/events",
             get({
+                let actor_rx = actor_rx.clone();
                 let workspace_root = workspace_root.clone();
                 move |Path(session_id): Path<String>,
                       Query(query): Query<BTreeMap<String, String>>| {
+                    let actor_rx = actor_rx.clone();
                     let workspace_root = workspace_root.clone();
                     async move {
-                        handle_trace_workbench_events_http(session_id, query, workspace_root).await
+                        handle_trace_workbench_events_http(
+                            session_id,
+                            query,
+                            actor_rx,
+                            workspace_root,
+                        )
+                        .await
                     }
                 }
             }),
@@ -496,6 +504,7 @@ async fn handle_trace_workbench_manifest_http(
 async fn handle_trace_workbench_events_http(
     session_id: String,
     query: BTreeMap<String, String>,
+    actor_rx: watch::Receiver<Option<SharedActor>>,
     workspace_root: Option<String>,
 ) -> impl IntoResponse {
     let event = if let Err(reason) = validate_trace_auth(
@@ -507,19 +516,48 @@ async fn handle_trace_workbench_events_http(
             .json_data(serde_json::json!({ "reason": reason }))
             .unwrap_or_else(|_| Event::default().event("trace/error"))
     } else {
-        Event::default()
-            .event("trace/revision")
-            .json_data(serde_json::json!({
-                "event": "trace/revision",
-                "sessionId": session_id,
-                "revision": 0,
-                "status": "ready",
-                "modelDeltas": false,
-            }))
-            .unwrap_or_else(|_| Event::default().event("trace/revision"))
+        match trace_workbench_bootstrap_for_event(session_id.clone(), actor_rx).await {
+            Ok(response) => Event::default()
+                .event("trace/revision")
+                .json_data(serde_json::json!({
+                    "event": "trace/revision",
+                    "sessionId": session_id,
+                    "revision": response.revision.id,
+                    "documentVersion": response.revision.document_version,
+                    "status": response.revision.status,
+                    "modelDeltas": response.capabilities.model_deltas,
+                    "chunks": response.capabilities.chunks,
+                }))
+                .unwrap_or_else(|_| Event::default().event("trace/revision")),
+            Err(reason) => Event::default()
+                .event("trace/error")
+                .json_data(serde_json::json!({ "reason": reason }))
+                .unwrap_or_else(|_| Event::default().event("trace/error")),
+        }
     };
     let stream = futures::stream::once(async move { Ok::<_, Infallible>(event) });
     Sse::new(stream)
+}
+
+async fn trace_workbench_bootstrap_for_event(
+    session_id: String,
+    actor_rx: watch::Receiver<Option<SharedActor>>,
+) -> Result<crate::introspection::TraceWorkbenchBootstrapResponse, String> {
+    let actor_ref = ready_actor(actor_rx).await?;
+    actor_ref.register_handler_async_mutating(
+        MessageKey(LspActorKey::of::<
+            crate::introspection::TraceWorkbenchSessionRequest,
+        >()),
+        crate::introspection::handle_trace_workbench_bootstrap,
+    );
+    let dispatcher = TraceQueryDispatcher;
+    actor_ref
+        .ask::<_, crate::introspection::TraceWorkbenchBootstrapResponse, _>(
+            &dispatcher,
+            crate::introspection::TraceWorkbenchSessionRequest { session_id },
+        )
+        .await
+        .map_err(|err| format!("trace workbench revision lookup failed: {err:?}"))
 }
 
 async fn handle_trace_workbench_select_http(
