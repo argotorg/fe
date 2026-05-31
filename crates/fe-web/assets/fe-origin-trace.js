@@ -16,6 +16,12 @@
   }
 
   function traceClasses(node) {
+    if (!node) return [];
+    if (node.__traceClasses) return node.__traceClasses;
+    if (node.dataset && node.dataset.traceGroups) {
+      node.__traceClasses = node.dataset.traceGroups.split(/\s+/).filter(Boolean);
+      return node.__traceClasses;
+    }
     return Array.prototype.filter.call(node.classList || [], function (name) {
       return name.indexOf("trace-c-") === 0;
     });
@@ -42,6 +48,10 @@
       this._selectedDisplayClasses = [];
       this._paneChoices = null;
       this._displayMode = "compact";
+      this._traceNodeIndex = Object.create(null);
+      this._hovered = [];
+      this._pendingHover = null;
+      this._hoverFrame = 0;
       this._render();
     }
 
@@ -105,10 +115,13 @@
       });
       page.append(notes);
       this.shadowRoot.append(page);
+      this._rebuildTraceNodeIndex();
       this._installInteractions();
       this._restoreSelection();
       this._restorePaneScroll(scrollRestore);
       this._renderDetail(this._selected);
+      this._rebuildTraceNodeIndex();
+      this._restoreSelection();
     }
 
     _card(parent, label, value) {
@@ -298,6 +311,7 @@
       lines.forEach(function (line, index) {
         var classes = line.classes || [];
         var row = el("div", "source-line trace-region " + classes.concat(this._auditClasses(classes)).join(" "));
+        this._bindTraceGroups(row, classes);
         row.id = this._rowId("source-main", index);
         row.dataset.traceLabel = "source line " + line.number;
         row.append(el("span", "ln", line.number), el("code", "", line.text), this._badges(classes));
@@ -313,6 +327,7 @@
         ((section && section.lines) || []).forEach(function (line, lineIndex) {
           var classes = line.classes || [];
           var row = el("div", "source-line related-source-line trace-region " + classes.concat(this._auditClasses(classes)).join(" "));
+          this._bindTraceGroups(row, classes);
           row.id = this._rowId("source-related-" + sectionIndex, lineIndex);
           row.dataset.traceLabel = (section.display_name || "related source") + " line " + line.number;
           row.append(el("span", "ln", line.number), el("code", "", line.text), this._badges(classes));
@@ -341,6 +356,7 @@
         var hasTrace = traceClasses({ classList: classes }).length > 0;
         var rowKind = this._isBoundaryRow(rowData) ? "boundary-row " : "";
         var row = el("button", "trace-row trace-region " + rowKind + (hasTrace ? "" : "unlinked-row ") + classes.concat(this._auditClasses(classes)).join(" "));
+        this._bindTraceGroups(row, classes);
         row.type = "button";
         row.id = this._rowId("panel-" + (panelData.id || "panel"), index);
         if (rowData.key) {
@@ -381,6 +397,7 @@
       if (!trace.length || !total) return null;
       var markerClasses = ["overview-marker", "trace-region"].concat(classes || []);
       var marker = el("button", markerClasses.join(" "));
+      this._bindTraceGroups(marker, classes || []);
       marker.type = "button";
       marker.title = label || "evidence match";
       marker.dataset.traceLabel = label || "evidence match";
@@ -391,6 +408,22 @@
 
     _rowId(prefix, index) {
       return "trace-row-" + String(prefix).replace(/[^a-zA-Z0-9_-]/g, "-") + "-" + index;
+    }
+
+    _bindTraceGroups(node, classes) {
+      var groups = (classes || []).filter(function (name) { return name.indexOf("trace-c-") === 0; });
+      node.__traceClasses = groups;
+      if (groups.length) node.dataset.traceGroups = groups.join(" ");
+    }
+
+    _rebuildTraceNodeIndex() {
+      var index = Object.create(null);
+      this.shadowRoot.querySelectorAll(".trace-region").forEach(function (node) {
+        traceClasses(node).forEach(function (group) {
+          (index[group] || (index[group] = [])).push(node);
+        });
+      });
+      this._traceNodeIndex = index;
     }
 
     _isBoundaryRow(rowData) {
@@ -440,12 +473,12 @@
       root.addEventListener("mouseover", function (event) {
         var row = event.target.closest && event.target.closest(".trace-region");
         if (!row || (event.relatedTarget && row.contains(event.relatedTarget))) return;
-        this._setHover(traceClasses(row), true);
+        this._queueHover(traceClasses(row));
       }.bind(this));
       root.addEventListener("mouseout", function (event) {
         var row = event.target.closest && event.target.closest(".trace-region");
         if (!row || (event.relatedTarget && row.contains(event.relatedTarget))) return;
-        this._setHover(traceClasses(row), false);
+        this._queueHover([]);
       }.bind(this));
       root.addEventListener("click", function (event) {
         var jump = event.target.closest && event.target.closest("[data-pane-jump]");
@@ -485,9 +518,35 @@
       }.bind(this));
     }
 
-    _setHover(groups, on) {
-      this._forGroups(groups, function (node) {
-        node.classList.toggle("trace-hover", on);
+    _queueHover(groups) {
+      this._pendingHover = (groups || []).slice();
+      if (this._hoverFrame) return;
+      var raf = window.requestAnimationFrame || function (fn) { return window.setTimeout(fn, 16); };
+      this._hoverFrame = raf(function () {
+        this._hoverFrame = 0;
+        this._applyHover(this._pendingHover || []);
+      }.bind(this));
+    }
+
+    _applyHover(groups) {
+      if (this._sameGroups(this._hovered, groups)) return;
+      this._forGroups(this._hovered, function (node) {
+        node.classList.remove("trace-hover");
+      });
+      this._hovered = groups.slice();
+      this._forGroups(this._hovered, function (node) {
+        node.classList.add("trace-hover");
+      });
+    }
+
+    _sameGroups(left, right) {
+      if ((left || []).length !== (right || []).length) return false;
+      var seen = Object.create(null);
+      (left || []).forEach(function (group) { seen[group] = (seen[group] || 0) + 1; });
+      return (right || []).every(function (group) {
+        if (!seen[group]) return false;
+        seen[group] -= 1;
+        return true;
       });
     }
 
@@ -500,6 +559,10 @@
         node.classList.add("trace-selected");
       });
       this._renderDetail(this._selected);
+      this._rebuildTraceNodeIndex();
+      this._forGroups(this._selected, function (node) {
+        node.classList.add("trace-selected");
+      });
     }
 
     _capturePaneScrollState() {
@@ -592,7 +655,10 @@
     _matchingRuns(shell, groups) {
       var wanted = Object.create(null);
       (groups || []).forEach(function (group) { wanted[group] = true; });
-      var rows = Array.prototype.slice.call(shell.querySelectorAll(".source-line.trace-region,.trace-row.trace-region"));
+      var key = (groups || []).slice().sort().join("|");
+      shell.__traceRunCache = shell.__traceRunCache || Object.create(null);
+      if (shell.__traceRunCache[key]) return shell.__traceRunCache[key];
+      var rows = this._traceRows(shell);
       var runs = [];
       var current = null;
       var lastMatchedIndex = -2;
@@ -610,7 +676,15 @@
         }
         lastMatchedIndex = index;
       });
+      shell.__traceRunCache[key] = runs;
       return runs;
+    }
+
+    _traceRows(shell) {
+      if (!shell.__traceRows) {
+        shell.__traceRows = Array.prototype.slice.call(shell.querySelectorAll(".source-line.trace-region,.trace-row.trace-region"));
+      }
+      return shell.__traceRows;
     }
 
     _scrollRunIntoView(run, direction) {
@@ -653,10 +727,23 @@
 
     _forGroups(groups, f) {
       var seen = Object.create(null);
+      var seenNodes = typeof WeakSet !== "undefined" ? new WeakSet() : null;
+      var index = this._traceNodeIndex || Object.create(null);
       groups.forEach(function (group) {
         if (!group || seen[group]) return;
         seen[group] = true;
-        this.shadowRoot.querySelectorAll("." + group).forEach(f);
+        var nodes = index[group];
+        if (!nodes) {
+          nodes = Array.prototype.slice.call(this.shadowRoot.querySelectorAll("." + group));
+          index[group] = nodes;
+        }
+        nodes.forEach(function (node) {
+          if (seenNodes) {
+            if (seenNodes.has(node)) return;
+            seenNodes.add(node);
+          }
+          f(node);
+        });
       }, this);
     }
 
@@ -973,6 +1060,7 @@
       }
       members.forEach(function (member) {
         var row = el("button", "member-row trace-region " + member.class_name + " " + this._auditClasses([member.class_name]).join(" "));
+        this._bindTraceGroups(row, [member.class_name]);
         row.type = "button";
         row.append(
           el("span", "member-class", member.class_name),
