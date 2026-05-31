@@ -1850,6 +1850,7 @@ pub fn trace_workbench_report_projection(
         .map(|closure_set| serde_json::to_value(&closure_set.closures).unwrap_or_default())
         .unwrap_or_else(|| serde_json::json!([]));
     let static_analysis = static_analysis::static_analysis_report(snapshot);
+    let duplicate_shapes = trace_workbench_duplicate_shape_report(snapshot);
     let provenance = trace_workbench_provenance_status(
         closure_set.as_ref(),
         optimized_linked,
@@ -1899,6 +1900,7 @@ pub fn trace_workbench_report_projection(
         "audit": closure_audit,
         "static_analysis": static_analysis,
         "attribution_audit": attribution_audit,
+        "duplicate_shapes": duplicate_shapes,
         "source": source,
         "panels": panels,
         "indexes": indexes,
@@ -1913,6 +1915,62 @@ pub fn trace_workbench_report_projection(
             "The browser does not compute provenance or graph reachability."
         ],
     })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+struct TraceWorkbenchDuplicateShapeReport {
+    groups: Vec<TraceWorkbenchDuplicateShapeGroup>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+struct TraceWorkbenchDuplicateShapeGroup {
+    policy: String,
+    dimension: String,
+    digest: String,
+    occurrence_count: usize,
+    origins: Vec<String>,
+}
+
+fn trace_workbench_duplicate_shape_report(
+    snapshot: &TraceSnapshot,
+) -> TraceWorkbenchDuplicateShapeReport {
+    let mut by_digest = BTreeMap::<(String, String, String), BTreeSet<String>>::new();
+    for fact in snapshot.facts() {
+        let TraceFact::ShapeNodeHash(hash) = fact else {
+            continue;
+        };
+        for (dimension, digest) in hash.tree.iter() {
+            by_digest
+                .entry((
+                    hash.policy.to_string(),
+                    dimension.as_str().to_string(),
+                    digest.to_string(),
+                ))
+                .or_default()
+                .insert(hash.node.canonical_storage_key());
+        }
+    }
+    let mut groups = by_digest
+        .into_iter()
+        .filter_map(|((policy, dimension, digest), origins)| {
+            (origins.len() > 1).then(|| TraceWorkbenchDuplicateShapeGroup {
+                policy,
+                dimension,
+                digest,
+                occurrence_count: origins.len(),
+                origins: origins.into_iter().take(12).collect(),
+            })
+        })
+        .collect::<Vec<_>>();
+    groups.sort_by(|left, right| {
+        right
+            .occurrence_count
+            .cmp(&left.occurrence_count)
+            .then_with(|| left.dimension.cmp(&right.dimension))
+            .then_with(|| left.digest.cmp(&right.digest))
+    });
+    groups.truncate(25);
+    TraceWorkbenchDuplicateShapeReport { groups }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3132,6 +3190,10 @@ pub fn trace_workbench_manifest(projection: &serde_json::Value) -> TraceViewMani
             projection.get("static_analysis"),
         ),
         ("closure_audit".to_string(), projection.get("audit")),
+        (
+            "duplicate_shapes".to_string(),
+            projection.get("duplicate_shapes"),
+        ),
     ]
     .into_iter()
     .filter_map(|(name, value)| value.map(|value| (name, digest_json(value))))
@@ -6489,6 +6551,7 @@ mod tests {
         assert_eq!(projection["metadata"]["data_source"], "lsp-live");
         assert_eq!(projection["provenance"]["source_to_optimized"], "available");
         assert!(projection["attribution_audit"].is_object());
+        assert!(projection["duplicate_shapes"].is_object());
         assert_eq!(projection["source"]["lines"].as_array().unwrap().len(), 3);
         assert_eq!(
             projection["source"]["lines"][1]["row_id"],
@@ -6539,6 +6602,7 @@ mod tests {
         assert!(manifest.source_digest.starts_with("blake3:"));
         assert!(manifest.indexes_digest.starts_with("blake3:"));
         assert!(manifest.reports.contains_key("attribution"));
+        assert!(manifest.reports.contains_key("duplicate_shapes"));
     }
 
     #[test]

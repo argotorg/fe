@@ -378,7 +378,8 @@ pub fn origin_trace_live_html_shell(title: &str) -> String {
       var reportKeys = {{
         attribution: "attribution_audit",
         static_analysis: "static_analysis",
-        closure_audit: "audit"
+        closure_audit: "audit",
+        duplicate_shapes: "duplicate_shapes"
       }};
       Object.keys(reportKeys).forEach(function (id) {{
         useChunk(nextReports[id], previousReports[id], function (value) {{
@@ -780,6 +781,14 @@ mod tests {
         assert!(FE_ORIGIN_TRACE_JS.contains("source-exact"));
         assert!(FE_ORIGIN_TRACE_JS.contains("prepared-only"));
         assert!(FE_ORIGIN_TRACE_JS.contains("generated/backend"));
+    }
+
+    #[test]
+    fn origin_trace_renders_duplicate_shape_report() {
+        assert!(FE_ORIGIN_TRACE_JS.contains("_duplicateShapes"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("Duplicate Shapes"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("not provenance"));
+        assert!(origin_trace_live_html_shell("Trace").contains("duplicate_shapes"));
     }
 
     #[test]

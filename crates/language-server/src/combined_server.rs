@@ -742,6 +742,7 @@ fn trace_workbench_chunk_payload(
             "attribution" => "attribution_audit",
             "static_analysis" => "static_analysis",
             "closure_audit" => "audit",
+            "duplicate_shapes" => "duplicate_shapes",
             _ => report_id.as_str(),
         };
         return Some(serde_json::json!({

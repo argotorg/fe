@@ -141,6 +141,9 @@
       if (data.static_analysis) {
         bottom.append(this._analysis(data.static_analysis));
       }
+      if (data.duplicate_shapes) {
+        bottom.append(this._duplicateShapes(data.duplicate_shapes));
+      }
       page.append(bottom);
 
       var notes = el("ul", "notes");
@@ -322,6 +325,29 @@
         if (count > 0) parts.push(entry[1] + " " + count);
       });
       return parts.length ? parts.join(" · ") : "attribution split unavailable";
+    }
+
+    _duplicateShapes(report) {
+      var groups = (report && report.groups) || [];
+      var section = el("section", "analysis duplicate-shapes");
+      section.append(
+        el("h2", "", "Duplicate Shapes"),
+        el("p", "muted", "Repeated content-addressed compiler shapes. These are grouping hints for bloat investigation, not provenance or semantic-equivalence proof.")
+      );
+      if (!groups.length) {
+        section.append(el("p", "audit-note", "No repeated shape groups were reported for this trace."));
+        return section;
+      }
+      groups.slice(0, 6).forEach(function (group) {
+        var row = el("div", "shape-row");
+        row.append(
+          el("span", "shape-kind", (group.dimension || "shape") + " ×" + (group.occurrence_count || 0)),
+          el("span", "shape-digest", String(group.digest || "").slice(0, 16)),
+          el("span", "shape-policy", String(group.policy || "").slice(0, 16))
+        );
+        section.append(row);
+      });
+      return section;
     }
 
     _analysisExplanation(check) {
@@ -1554,6 +1580,9 @@ h1 { margin:0; color:var(--trace-text); font:700 15px/1.1 ui-sans-serif, system-
 .bloat-kind { color:var(--trace-text); }
 .bloat-count { color:var(--trace-muted); white-space:nowrap; }
 .bloat-split { color:var(--trace-muted); font-size:11px; text-align:right; }
+.shape-row { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:10px; padding:6px 0; border-top:1px solid var(--trace-border); color:var(--trace-muted); font-size:12px; }
+.shape-kind { color:var(--trace-text); }
+.shape-digest,.shape-policy { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11px; color:var(--trace-muted); }
 .workspace { display:block; padding:0 20px 10px; }
 .pane-deck { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; min-width:0; }
 .bottom-deck { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:10px; padding:0 20px 16px; align-items:start; }
@@ -1695,7 +1724,7 @@ h1 { margin:0; color:var(--trace-text); font:700 15px/1.1 ui-sans-serif, system-
 .notes li { margin:6px 0; }
 @media (max-width:1250px) { .cards { grid-template-columns:repeat(3,minmax(0,1fr)); } .pane-deck,.bottom-deck,.analysis-grid { grid-template-columns:1fr; } }
 @media (max-width:980px) { .missing-link-summary { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-@media (max-width:760px) { .workspace,.bottom-deck,.cards,.pane-deck { padding-left:14px; padding-right:14px; } .cards,.analysis-grid,.pane-deck,.bottom-deck,.bloat-row { grid-template-columns:1fr; } .analysis-head { display:block; } .trace-header { padding-left:14px; padding-right:14px; } .notes { padding-left:32px; padding-right:14px; } .workbench-head { grid-template-columns:1fr; } .representation-select { max-width:none; width:100%; } .bloat-count,.bloat-split { white-space:normal; text-align:left; } }
+@media (max-width:760px) { .workspace,.bottom-deck,.cards,.pane-deck { padding-left:14px; padding-right:14px; } .cards,.analysis-grid,.pane-deck,.bottom-deck,.bloat-row,.shape-row { grid-template-columns:1fr; } .analysis-head { display:block; } .trace-header { padding-left:14px; padding-right:14px; } .notes { padding-left:32px; padding-right:14px; } .workbench-head { grid-template-columns:1fr; } .representation-select { max-width:none; width:100%; } .bloat-count,.bloat-split { white-space:normal; text-align:left; } }
 `;
     }
   }
