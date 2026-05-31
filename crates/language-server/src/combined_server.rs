@@ -131,6 +131,7 @@ pub async fn run(
         "config_hash": config_hash,
         "config": tooling_config,
     }));
+    let (trace_selection_tx, _) = broadcast::channel::<String>(128);
     let app = Router::new()
         .route(
             "/health",
@@ -258,15 +259,18 @@ pub async fn run(
             get({
                 let actor_rx = actor_rx.clone();
                 let workspace_root = workspace_root.clone();
+                let trace_selection_tx = trace_selection_tx.clone();
                 move |Path(session_id): Path<String>,
                       Query(query): Query<BTreeMap<String, String>>| {
                     let actor_rx = actor_rx.clone();
                     let workspace_root = workspace_root.clone();
+                    let selection_rx = trace_selection_tx.subscribe();
                     async move {
                         handle_trace_workbench_events_http(
                             session_id,
                             query,
                             actor_rx,
+                            selection_rx,
                             workspace_root,
                         )
                         .await
@@ -279,12 +283,14 @@ pub async fn run(
             post({
                 let actor_rx = actor_rx.clone();
                 let workspace_root = workspace_root.clone();
+                let trace_selection_tx = trace_selection_tx.clone();
                 move |Path(session_id): Path<String>,
                       Query(query): Query<BTreeMap<String, String>>,
                       headers: HeaderMap,
                       Json(selection): Json<serde_json::Value>| {
                     let actor_rx = actor_rx.clone();
                     let workspace_root = workspace_root.clone();
+                    let trace_selection_tx = trace_selection_tx.clone();
                     async move {
                         handle_trace_workbench_select_http(
                             session_id,
@@ -292,6 +298,7 @@ pub async fn run(
                             headers,
                             selection,
                             actor_rx,
+                            trace_selection_tx,
                             workspace_root,
                         )
                         .await
@@ -673,6 +680,7 @@ async fn handle_trace_workbench_events_http(
     session_id: String,
     query: BTreeMap<String, String>,
     actor_rx: watch::Receiver<Option<SharedActor>>,
+    selection_rx: broadcast::Receiver<String>,
     workspace_root: Option<String>,
 ) -> impl IntoResponse {
     let stream: Pin<Box<dyn futures::Stream<Item = Result<Event, Infallible>> + Send>> =
@@ -686,7 +694,7 @@ async fn handle_trace_workbench_events_http(
                 .unwrap_or_else(|_| Event::default().event("trace/error"));
             Box::pin(futures::stream::once(async move { Ok(event) }))
         } else {
-            Box::pin(futures::stream::unfold(
+            let revision_stream = futures::stream::unfold(
                 (session_id, actor_rx, None::<u64>),
                 |(session_id, actor_rx, mut last_revision)| async move {
                     loop {
@@ -734,7 +742,21 @@ async fn handle_trace_workbench_events_http(
                         tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
                     }
                 },
-            ))
+            );
+            let selection_stream =
+                futures::stream::unfold(selection_rx, |mut selection_rx| async move {
+                    loop {
+                        match selection_rx.recv().await {
+                            Ok(payload) => {
+                                let event = Event::default().event("trace/selection").data(payload);
+                                return Some((Ok::<_, Infallible>(event), selection_rx));
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+                        }
+                    }
+                });
+            Box::pin(futures::stream::select(revision_stream, selection_stream))
         };
     Sse::new(stream)
 }
@@ -766,6 +788,7 @@ async fn handle_trace_workbench_select_http(
     headers: HeaderMap,
     selection: serde_json::Value,
     actor_rx: watch::Receiver<Option<SharedActor>>,
+    selection_tx: broadcast::Sender<String>,
     workspace_root: Option<String>,
 ) -> impl IntoResponse {
     if let Err(reason) = validate_trace_auth(
@@ -787,16 +810,29 @@ async fn handle_trace_workbench_select_http(
         }
     };
     let resolved_rows = trace_workbench_resolved_rows_for_selection(&selection);
-    json_response(
-        StatusCode::OK,
-        serde_json::json!({
-            "event": "trace/selection",
-            "sessionId": session_id,
-            "revision": bootstrap.revision.id,
-            "selection": selection,
-            "resolvedRows": resolved_rows,
-        }),
-    )
+    let event = trace_workbench_selection_event(
+        &session_id,
+        bootstrap.revision.id,
+        selection,
+        resolved_rows,
+    );
+    let _ = selection_tx.send(event.to_string());
+    json_response(StatusCode::OK, event)
+}
+
+fn trace_workbench_selection_event(
+    session_id: &str,
+    revision: u64,
+    selection: serde_json::Value,
+    resolved_rows: Vec<String>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "event": "trace/selection",
+        "sessionId": session_id,
+        "revision": revision,
+        "selection": selection,
+        "resolvedRows": resolved_rows,
+    })
 }
 
 fn trace_workbench_resolved_rows_for_selection(selection: &serde_json::Value) -> Vec<String> {
@@ -920,7 +956,8 @@ impl Dispatcher<LspActorKey> for TraceQueryDispatcher {
 mod tests {
     use super::{
         trace_auth_token, trace_workbench_chunk_payload,
-        trace_workbench_resolved_rows_for_selection, validate_trace_auth,
+        trace_workbench_resolved_rows_for_selection, trace_workbench_selection_event,
+        validate_trace_auth,
     };
     use axum::http::{HeaderMap, header};
     use std::collections::BTreeMap;
@@ -984,6 +1021,21 @@ mod tests {
             trace_workbench_resolved_rows_for_selection(&selection),
             vec!["origin-abc123".to_string()]
         );
+    }
+
+    #[test]
+    fn trace_workbench_selection_event_carries_resolved_rows() {
+        let event = trace_workbench_selection_event(
+            "trace-session-1",
+            42,
+            serde_json::json!({ "source": "editor" }),
+            vec!["source-main-line-17".to_string()],
+        );
+
+        assert_eq!(event["event"], "trace/selection");
+        assert_eq!(event["sessionId"], "trace-session-1");
+        assert_eq!(event["revision"], 42);
+        assert_eq!(event["resolvedRows"][0], "source-main-line-17");
     }
 
     #[test]

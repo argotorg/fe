@@ -392,6 +392,15 @@ pub fn origin_trace_live_html_shell(title: &str) -> String {
         window.location.hash = nextHash;
       }}
     }}
+    function pinResolvedRow(rowId) {{
+      if (!rowId) return;
+      var current = new URLSearchParams((window.location.hash || "").replace(/^#/, ""));
+      current.delete("node");
+      current.delete("source");
+      current.set("row", rowId);
+      if (token && !current.get("token")) current.set("token", token);
+      window.location.hash = current.toString();
+    }}
     function fetchAndRenderModel() {{
       if (modelRefresh) return modelRefresh;
       modelRefresh = fetchJson("/trace/session/" + encodeURIComponent(session) + "/manifest")
@@ -446,6 +455,14 @@ pub fn origin_trace_live_html_shell(title: &str) -> String {
               renderCachedModel(reason);
             }});
           }}
+        }} catch (_) {{}}
+      }});
+      events.addEventListener("trace/selection", function (event) {{
+        try {{
+          var payload = JSON.parse(event.data || "{{}}");
+          if (payload.sessionId && payload.sessionId !== session) return;
+          var rows = payload.resolvedRows || [];
+          if (rows.length) pinResolvedRow(rows[0]);
         }} catch (_) {{}}
       }});
     }}
@@ -717,6 +734,8 @@ mod tests {
         assert!(html.contains("/chunk/"));
         assert!(html.contains("applyChunkedManifest"));
         assert!(html.contains("manifestCache"));
+        assert!(html.contains("trace/selection"));
+        assert!(html.contains("resolvedRows"));
     }
 
     #[test]
