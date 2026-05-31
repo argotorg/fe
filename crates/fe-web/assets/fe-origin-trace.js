@@ -1070,7 +1070,7 @@
       var statusCard = this._selectionStatusCard(groups, this._selectedDisplayClasses || []);
       if (statusCard) detail.append(statusCard);
       var spanGroups = this._spanGroupsForClasses(groups);
-      if (spanGroups.length) {
+      if (spanGroups.length && this._displayMode !== "compact") {
         var spanBox = el("div", "span-group-card");
         spanBox.append(el("h3", "", "Source span group"));
         spanGroups.forEach(function (group) {
@@ -1352,7 +1352,7 @@
 
     _auditHeader(audit, closure) {
       var head = el("div", "audit-header");
-      head.append(el("span", "badge phase", audit.highest_phase_reached || "unknown"));
+      head.append(el("span", "badge phase", this._phaseLabel(audit.highest_phase_reached || "unknown")));
       var status = this._displayStatus(audit && audit.primary ? [audit] : [], null);
       if (status) head.append(el("span", "badge " + status.kind, status.label));
       if (this._displayMode !== "compact") {
@@ -1372,8 +1372,8 @@
       var phases = [
         ["hir", "HIR", counts.hir],
         ["mir", "MIR", counts.mir],
-        ["sonatina_pre", "PreOpt", counts.sonatina_pre],
-        ["sonatina_post", "PostOpt", counts.sonatina_post],
+        ["sonatina_pre", "Pre-opt", counts.sonatina_pre],
+        ["sonatina_post", "Optimized", counts.sonatina_post],
         ["sonatina_prepared", "Prepared", counts.sonatina_prepared],
         ["bytecode", "Bytecode", counts.bytecode],
       ];
@@ -1385,6 +1385,18 @@
         rail.append(chip);
       });
       return rail;
+    }
+
+    _phaseLabel(phase) {
+      var labels = {
+        hir: "HIR",
+        mir: "MIR",
+        sonatina_pre: "Sonatina pre-opt",
+        sonatina_post: "Optimized Sonatina",
+        sonatina_prepared: "EVM prepared",
+        bytecode: "Bytecode",
+      };
+      return labels[phase] || String(phase || "unknown").replace(/_/g, " ");
     }
 
     _compactSelectionTitle(closure, audit) {
@@ -1430,7 +1442,7 @@
         row.type = "button";
         row.append(
           el("span", "member-class", member.class_name),
-          el("span", "member-phase", member.highest_phase_reached),
+          el("span", "member-phase", this._phaseLabel(member.highest_phase_reached)),
           el("span", "member-label", member.label)
         );
         box.append(row);
