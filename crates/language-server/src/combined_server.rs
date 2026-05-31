@@ -31,7 +31,7 @@ use futures::io::{AsyncRead, AsyncWrite};
 use futures::{SinkExt, StreamExt};
 use tokio::sync::{Mutex, broadcast, watch};
 use tower::ServiceBuilder;
-use trace_query::{TraceQueryHttpRequest, TraceQueryHttpResponse};
+use trace_query::{TraceQueryHttpRequest, TraceQueryHttpResponse, trace_workbench_manifest};
 use tracing::{info, warn};
 
 use crate::backend::Backend;
@@ -216,6 +216,30 @@ pub async fn run(
                     async move {
                         handle_trace_workbench_manifest_http(
                             session_id,
+                            query,
+                            headers,
+                            actor_rx,
+                            workspace_root,
+                        )
+                        .await
+                    }
+                }
+            }),
+        )
+        .route(
+            "/trace/session/{session_id}/chunk/{digest}",
+            get({
+                let actor_rx = actor_rx.clone();
+                let workspace_root = workspace_root.clone();
+                move |Path((session_id, digest)): Path<(String, String)>,
+                      Query(query): Query<BTreeMap<String, String>>,
+                      headers: HeaderMap| {
+                    let actor_rx = actor_rx.clone();
+                    let workspace_root = workspace_root.clone();
+                    async move {
+                        handle_trace_workbench_chunk_http(
+                            session_id,
+                            digest,
                             query,
                             headers,
                             actor_rx,
@@ -504,6 +528,130 @@ async fn handle_trace_workbench_manifest_http(
     }
 }
 
+async fn handle_trace_workbench_chunk_http(
+    session_id: String,
+    digest: String,
+    query: BTreeMap<String, String>,
+    headers: HeaderMap,
+    actor_rx: watch::Receiver<Option<SharedActor>>,
+    workspace_root: Option<String>,
+) -> impl IntoResponse {
+    if let Err(reason) = validate_trace_auth(
+        workspace_root.as_deref(),
+        &trace_auth_token(&headers, &query).unwrap_or_default(),
+    ) {
+        return json_response(
+            StatusCode::UNAUTHORIZED,
+            serde_json::json!({ "reason": reason }),
+        );
+    }
+    let actor_ref = match ready_actor(actor_rx).await {
+        Ok(actor_ref) => actor_ref,
+        Err(reason) => {
+            return json_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                serde_json::json!({ "reason": reason }),
+            );
+        }
+    };
+    actor_ref.register_handler_async_mutating(
+        MessageKey(LspActorKey::of::<
+            crate::introspection::TraceWorkbenchSessionRequest,
+        >()),
+        crate::introspection::handle_trace_workbench_model,
+    );
+    let dispatcher = TraceQueryDispatcher;
+    let model = match actor_ref
+        .ask::<_, serde_json::Value, _>(
+            &dispatcher,
+            crate::introspection::TraceWorkbenchSessionRequest { session_id },
+        )
+        .await
+    {
+        Ok(model) => model,
+        Err(err) => {
+            return json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                serde_json::json!({ "reason": format!("trace workbench chunk model failed: {err:?}") }),
+            );
+        }
+    };
+    match trace_workbench_chunk_payload(&model, &digest) {
+        Some(payload) => json_response(StatusCode::OK, payload),
+        None => json_response(
+            StatusCode::NOT_FOUND,
+            serde_json::json!({ "reason": format!("unknown trace workbench chunk digest {digest}") }),
+        ),
+    }
+}
+
+fn trace_workbench_chunk_payload(
+    model: &serde_json::Value,
+    digest: &str,
+) -> Option<serde_json::Value> {
+    let manifest = trace_workbench_manifest(model);
+    if manifest.root_digest == digest {
+        return Some(serde_json::json!({
+            "kind": "model",
+            "digest": digest,
+            "value": model,
+        }));
+    }
+    if manifest.metadata_digest == digest {
+        return Some(serde_json::json!({
+            "kind": "metadata",
+            "digest": digest,
+            "value": model.get("metadata").cloned().unwrap_or(serde_json::Value::Null),
+        }));
+    }
+    if manifest.rail_components_digest == digest {
+        return Some(serde_json::json!({
+            "kind": "rail_components",
+            "digest": digest,
+            "value": model.get("rail_components").cloned().unwrap_or(serde_json::Value::Null),
+        }));
+    }
+    for (pane_id, pane_digest) in &manifest.panes {
+        if pane_digest != digest {
+            continue;
+        }
+        let pane = model
+            .get("panels")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .find(|pane| {
+                pane.get("id").and_then(serde_json::Value::as_str) == Some(pane_id.as_str())
+            })
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        return Some(serde_json::json!({
+            "kind": "pane",
+            "id": pane_id,
+            "digest": digest,
+            "value": pane,
+        }));
+    }
+    for (report_id, report_digest) in &manifest.reports {
+        if report_digest != digest {
+            continue;
+        }
+        let key = match report_id.as_str() {
+            "attribution" => "attribution_audit",
+            "static_analysis" => "static_analysis",
+            "closure_audit" => "audit",
+            _ => report_id.as_str(),
+        };
+        return Some(serde_json::json!({
+            "kind": "report",
+            "id": report_id,
+            "digest": digest,
+            "value": model.get(key).cloned().unwrap_or(serde_json::Value::Null),
+        }));
+    }
+    None
+}
+
 async fn handle_trace_workbench_events_http(
     session_id: String,
     query: BTreeMap<String, String>,
@@ -754,10 +902,12 @@ impl Dispatcher<LspActorKey> for TraceQueryDispatcher {
 #[cfg(test)]
 mod tests {
     use super::{
-        trace_auth_token, trace_workbench_resolved_rows_for_selection, validate_trace_auth,
+        trace_auth_token, trace_workbench_chunk_payload,
+        trace_workbench_resolved_rows_for_selection, validate_trace_auth,
     };
     use axum::http::{HeaderMap, header};
     use std::collections::BTreeMap;
+    use trace_query::trace_workbench_manifest;
 
     #[test]
     fn trace_query_auth_validates_workspace_token_file() {
@@ -817,6 +967,37 @@ mod tests {
             trace_workbench_resolved_rows_for_selection(&selection),
             vec!["origin-abc123".to_string()]
         );
+    }
+
+    #[test]
+    fn trace_workbench_chunk_payload_resolves_manifest_digests() {
+        let model = serde_json::json!({
+            "revision": { "id": 7 },
+            "metadata": { "input_path": "demo.fe" },
+            "rail_components": { "exact": ["exact-c-a"] },
+            "panels": [
+                { "id": "source", "rows": [] },
+                { "id": "bytecode", "rows": [{ "text": "STOP" }] }
+            ],
+            "attribution_audit": { "prepared_linked_pcs": 1 },
+            "static_analysis": { "checks": [] },
+            "audit": { "total_closures": 0 }
+        });
+        let manifest = trace_workbench_manifest(&model);
+
+        let pane_digest = manifest.panes.get("bytecode").unwrap();
+        let pane = trace_workbench_chunk_payload(&model, pane_digest).unwrap();
+        assert_eq!(pane["kind"], "pane");
+        assert_eq!(pane["id"], "bytecode");
+        assert_eq!(pane["value"]["rows"][0]["text"], "STOP");
+
+        let report_digest = manifest.reports.get("attribution").unwrap();
+        let report = trace_workbench_chunk_payload(&model, report_digest).unwrap();
+        assert_eq!(report["kind"], "report");
+        assert_eq!(report["id"], "attribution");
+        assert_eq!(report["value"]["prepared_linked_pcs"], 1);
+
+        assert!(trace_workbench_chunk_payload(&model, "blake3:missing").is_none());
     }
 }
 

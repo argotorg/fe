@@ -82,7 +82,7 @@ pub(crate) async fn handle_trace_workbench_bootstrap(
         capabilities: TraceWorkbenchCapabilities {
             events: "sse",
             model_deltas: false,
-            chunks: false,
+            chunks: true,
             selection_sync: true,
         },
     })
