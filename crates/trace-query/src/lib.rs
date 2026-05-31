@@ -1767,6 +1767,7 @@ pub struct TraceWorkbenchProjectionRequest {
     pub target: String,
     pub opt_level: String,
     pub view: String,
+    pub source_text: Option<String>,
     pub document_version: Option<i32>,
     pub query_duration_ms: u64,
     pub compiler_commit: String,
@@ -1797,6 +1798,14 @@ pub fn trace_workbench_report_projection(
         .as_ref()
         .map(|audit| audit.total_bytecode_pcs)
         .unwrap_or_default();
+    let component_classes_by_key = origin_closure::component_classes_by_origin_key(snapshot);
+    let source = trace_workbench_source_projection(
+        &request.input_path,
+        request.source_text.as_deref(),
+        snapshot,
+        &component_classes_by_key,
+    );
+    let panels = trace_workbench_panes(snapshot, &component_classes_by_key);
     let source_to_optimized = if optimized_linked > 0 {
         "available"
     } else {
@@ -1855,21 +1864,674 @@ pub fn trace_workbench_report_projection(
         "audit": null,
         "static_analysis": null,
         "attribution_audit": attribution_audit,
-        "source": {
-            "display_name": request.input_path,
-            "confidence": "live projection bootstrap; typed pane chunks are next",
-            "lines": [],
-            "related_sources": [],
+        "source": source,
+        "panels": panels,
+        "rail_components": {
+            "classes_by_origin": component_classes_by_key,
         },
-        "panels": [],
         "closures": [],
         "bytecode_count": bytecode_count,
         "notes": [
             "Live trace workbench is served from the LSP-owned compiler state.",
-            "This initial live endpoint returns the shared audit/report projection; typed pane chunks are the next live-sync slice.",
+            "The live endpoint uses the shared trace-query workbench projection path.",
             "The browser does not compute provenance or graph reachability."
         ],
     })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[allow(dead_code)]
+#[serde(rename_all = "snake_case")]
+enum TraceWorkbenchPaneRowKind {
+    FileHeader,
+    FunctionHeader,
+    BlockHeader,
+    Instruction,
+    Statement,
+    Terminator,
+    BoundaryMarker,
+    DerivedBytecodeBlockHeader,
+    Blank,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[allow(dead_code)]
+#[serde(rename_all = "snake_case")]
+enum TraceWorkbenchDisplayStatus {
+    Exact,
+    Generated,
+    GeneratedDownstream,
+    Context,
+    PreparedLinked,
+    MissingOptimizedToPrepared,
+    MissingDownstreamLineage,
+    SourceOnly,
+    CompilerGenerated,
+    Unmapped,
+    Ambiguous,
+    Invalid,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+struct TraceWorkbenchRailClasses {
+    exact: Vec<String>,
+    generated: Vec<String>,
+    prepared: Vec<String>,
+    context: Vec<String>,
+    boundary: Vec<String>,
+    legacy: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+struct TraceWorkbenchPane {
+    id: &'static str,
+    title: &'static str,
+    summary: String,
+    rows: Vec<TraceWorkbenchPaneRow>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+struct TraceWorkbenchPaneRow {
+    key: Option<String>,
+    kind: TraceWorkbenchPaneRowKind,
+    indent: u8,
+    label: String,
+    meta: String,
+    text: String,
+    compact_text: String,
+    display_status: Option<TraceWorkbenchDisplayStatus>,
+    rail_classes: TraceWorkbenchRailClasses,
+    classes: Vec<String>,
+    debug: TraceWorkbenchRowDebugInfo,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+struct TraceWorkbenchSourceLine {
+    number: u32,
+    text: String,
+    classes: Vec<String>,
+    display_status: Option<TraceWorkbenchDisplayStatus>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+struct TraceWorkbenchRowDebugInfo {
+    origin_key: Option<String>,
+    origin_kind: Option<String>,
+    owner_key: Option<String>,
+    local_key: Option<String>,
+    instruction_index: Option<u32>,
+    raw_text: String,
+}
+
+fn trace_workbench_source_projection(
+    input_path: &str,
+    source_text: Option<&str>,
+    snapshot: &TraceSnapshot,
+    component_classes_by_key: &BTreeMap<String, Vec<String>>,
+) -> serde_json::Value {
+    let lines = source_text
+        .map(|text| {
+            trace_workbench_source_lines(input_path, text, snapshot, component_classes_by_key)
+        })
+        .unwrap_or_default();
+    let confidence = if source_text.is_some() {
+        "live source text from LSP workspace"
+    } else {
+        "source text unavailable; showing trace reports only"
+    };
+    serde_json::json!({
+        "display_name": input_path,
+        "confidence": confidence,
+        "lines": lines,
+        "related_sources": [],
+    })
+}
+
+fn trace_workbench_source_lines(
+    input_path: &str,
+    source_text: &str,
+    snapshot: &TraceSnapshot,
+    component_classes_by_key: &BTreeMap<String, Vec<String>>,
+) -> Vec<TraceWorkbenchSourceLine> {
+    let mut exact_classes_by_line = BTreeMap::<u32, BTreeSet<String>>::new();
+    let mut enclosing_classes_by_line = BTreeMap::<u32, BTreeSet<String>>::new();
+    for fact in snapshot.facts() {
+        let TraceFact::SourceSpan(span) = fact else {
+            continue;
+        };
+        if !origin_closure::source_owner_matches_input(span.file.owner_key(), input_path) {
+            continue;
+        }
+        let target = if span.start_line == span.end_line {
+            exact_classes_by_line.entry(span.start_line).or_default()
+        } else {
+            for line in span.start_line..=span.end_line {
+                if let Some(classes) =
+                    component_classes_by_key.get(&span.origin.canonical_storage_key())
+                {
+                    enclosing_classes_by_line.entry(line).or_default().extend(
+                        classes
+                            .iter()
+                            .filter(|class| trace_workbench_is_component_class(class.as_str()))
+                            .cloned(),
+                    );
+                }
+            }
+            continue;
+        };
+        if let Some(classes) = component_classes_by_key.get(&span.origin.canonical_storage_key()) {
+            target.extend(
+                classes
+                    .iter()
+                    .filter(|class| trace_workbench_is_component_class(class.as_str()))
+                    .cloned(),
+            );
+        }
+    }
+
+    source_text
+        .lines()
+        .enumerate()
+        .map(|(index, text)| {
+            let number = index as u32 + 1;
+            let classes = exact_classes_by_line
+                .get(&number)
+                .or_else(|| enclosing_classes_by_line.get(&number))
+                .map(|classes| classes.iter().cloned().collect::<Vec<_>>())
+                .unwrap_or_default();
+            TraceWorkbenchSourceLine {
+                number,
+                text: text.to_string(),
+                display_status: trace_workbench_status_for_source_line(&classes),
+                classes,
+            }
+        })
+        .collect()
+}
+
+fn trace_workbench_panes(
+    snapshot: &TraceSnapshot,
+    component_classes_by_key: &BTreeMap<String, Vec<String>>,
+) -> Vec<TraceWorkbenchPane> {
+    let index = TraceWorkbenchProjectionIndex::new(snapshot);
+    [
+        ("hir", "HIR", "High-level IR"),
+        ("mir", "MIR", "Runtime MIR"),
+        (
+            "sonatina-pre",
+            "Sonatina pre-opt",
+            "Sonatina before optimization",
+        ),
+        (
+            "sonatina-post",
+            "Optimized Sonatina",
+            "Optimized Sonatina trace view",
+        ),
+        (
+            "sonatina-prepared",
+            "EVM prepared",
+            "EVM prepared/codegen identity",
+        ),
+        ("bytecode", "EVM bytecode", "Final bytecode disassembly"),
+    ]
+    .into_iter()
+    .filter_map(|(id, title, summary)| {
+        let rows = trace_workbench_panel_rows(id, &index, component_classes_by_key);
+        (!rows.is_empty()).then_some(TraceWorkbenchPane {
+            id,
+            title,
+            summary: summary.to_string(),
+            rows,
+        })
+    })
+    .collect()
+}
+
+struct TraceWorkbenchProjectionIndex<'a> {
+    origin_nodes: BTreeSet<OriginExportKey>,
+    instructions: BTreeMap<OriginExportKey, &'a InstructionFact>,
+    source_spans: BTreeMap<OriginExportKey, &'a trace_facts::SourceSpanFact>,
+}
+
+impl<'a> TraceWorkbenchProjectionIndex<'a> {
+    fn new(snapshot: &'a TraceSnapshot) -> Self {
+        let mut origin_nodes = BTreeSet::new();
+        let mut instructions = BTreeMap::new();
+        let mut source_spans = BTreeMap::new();
+        for fact in snapshot.facts() {
+            match fact {
+                TraceFact::OriginNode(node) => {
+                    origin_nodes.insert(node.key.clone());
+                }
+                TraceFact::Instruction(instruction) => {
+                    origin_nodes.insert(instruction.instruction.clone());
+                    instructions.insert(instruction.instruction.clone(), instruction);
+                }
+                TraceFact::SourceSpan(span) => {
+                    source_spans.insert(span.origin.clone(), span);
+                }
+                _ => {}
+            }
+        }
+        Self {
+            origin_nodes,
+            instructions,
+            source_spans,
+        }
+    }
+}
+
+fn trace_workbench_panel_rows(
+    panel: &str,
+    index: &TraceWorkbenchProjectionIndex<'_>,
+    component_classes_by_key: &BTreeMap<String, Vec<String>>,
+) -> Vec<TraceWorkbenchPaneRow> {
+    let mut keys = index
+        .origin_nodes
+        .iter()
+        .filter(|key| trace_workbench_key_belongs_to_panel(key, panel))
+        .cloned()
+        .collect::<Vec<_>>();
+    keys.sort_by(|left, right| trace_workbench_compare_panel_keys(left, right, index));
+    keys.into_iter()
+        .map(|key| trace_workbench_panel_row(&key, index, component_classes_by_key))
+        .collect()
+}
+
+fn trace_workbench_compare_panel_keys(
+    left: &OriginExportKey,
+    right: &OriginExportKey,
+    index: &TraceWorkbenchProjectionIndex<'_>,
+) -> std::cmp::Ordering {
+    match (index.instructions.get(left), index.instructions.get(right)) {
+        (Some(left), Some(right)) => left
+            .function
+            .canonical_storage_key()
+            .cmp(&right.function.canonical_storage_key())
+            .then(left.index.cmp(&right.index))
+            .then(
+                left.instruction
+                    .canonical_storage_key()
+                    .cmp(&right.instruction.canonical_storage_key()),
+            ),
+        (Some(left), None) => left
+            .function
+            .canonical_storage_key()
+            .as_str()
+            .cmp(right.owner_key())
+            .then(std::cmp::Ordering::Less),
+        (None, Some(right)) => left
+            .owner_key()
+            .cmp(&right.function.canonical_storage_key())
+            .then(std::cmp::Ordering::Greater),
+        (None, None) => left
+            .owner_key()
+            .cmp(right.owner_key())
+            .then(left.local_key().cmp(right.local_key())),
+    }
+}
+
+fn trace_workbench_panel_row(
+    key: &OriginExportKey,
+    index: &TraceWorkbenchProjectionIndex<'_>,
+    component_classes_by_key: &BTreeMap<String, Vec<String>>,
+) -> TraceWorkbenchPaneRow {
+    let storage_key = key.canonical_storage_key();
+    let instruction = index.instructions.get(key).copied();
+    let mut classes = component_classes_by_key
+        .get(&storage_key)
+        .cloned()
+        .unwrap_or_default();
+    if trace_workbench_origin_key_is_generated(key) {
+        classes.push("origin-generated".to_string());
+    }
+    classes.sort();
+    classes.dedup();
+    let kind = trace_workbench_row_kind(key, instruction);
+    let compact_text = instruction
+        .map(trace_workbench_compact_instruction_text)
+        .unwrap_or_else(|| trace_workbench_compact_origin_text(key, index));
+    let raw_text = instruction
+        .map(|instruction| instruction.mnemonic.clone())
+        .unwrap_or_else(|| storage_key.clone());
+    TraceWorkbenchPaneRow {
+        key: Some(storage_key),
+        kind,
+        indent: trace_workbench_row_indent(kind),
+        label: trace_workbench_compact_origin_label(key, instruction),
+        meta: trace_workbench_compact_origin_meta(key),
+        text: compact_text.clone(),
+        compact_text,
+        display_status: trace_workbench_status_for_row(key, kind, &classes),
+        rail_classes: trace_workbench_split_rail_classes(&classes),
+        classes,
+        debug: TraceWorkbenchRowDebugInfo {
+            origin_key: Some(key.canonical_storage_key()),
+            origin_kind: Some(key.kind().to_string()),
+            owner_key: Some(key.owner_key().to_string()),
+            local_key: Some(key.local_key().to_string()),
+            instruction_index: instruction.map(|instruction| instruction.index),
+            raw_text,
+        },
+    }
+}
+
+fn trace_workbench_row_kind(
+    key: &OriginExportKey,
+    instruction: Option<&InstructionFact>,
+) -> TraceWorkbenchPaneRowKind {
+    if instruction.is_some() {
+        return match key.kind() {
+            "runtime.stmt" => TraceWorkbenchPaneRowKind::Statement,
+            "runtime.terminator" => TraceWorkbenchPaneRowKind::Terminator,
+            _ => TraceWorkbenchPaneRowKind::Instruction,
+        };
+    }
+    match key.kind() {
+        "source.file" => TraceWorkbenchPaneRowKind::FileHeader,
+        "runtime.function" => TraceWorkbenchPaneRowKind::FunctionHeader,
+        "runtime.block" => TraceWorkbenchPaneRowKind::BlockHeader,
+        "runtime.terminator" => TraceWorkbenchPaneRowKind::Terminator,
+        kind if kind.ends_with(".function") => TraceWorkbenchPaneRowKind::FunctionHeader,
+        kind if kind.ends_with(".block") => TraceWorkbenchPaneRowKind::BlockHeader,
+        kind if kind.contains(".loop") => TraceWorkbenchPaneRowKind::BoundaryMarker,
+        _ => TraceWorkbenchPaneRowKind::Instruction,
+    }
+}
+
+fn trace_workbench_row_indent(kind: TraceWorkbenchPaneRowKind) -> u8 {
+    match kind {
+        TraceWorkbenchPaneRowKind::FileHeader | TraceWorkbenchPaneRowKind::FunctionHeader => 0,
+        TraceWorkbenchPaneRowKind::BlockHeader
+        | TraceWorkbenchPaneRowKind::BoundaryMarker
+        | TraceWorkbenchPaneRowKind::DerivedBytecodeBlockHeader
+        | TraceWorkbenchPaneRowKind::Blank => 1,
+        TraceWorkbenchPaneRowKind::Instruction
+        | TraceWorkbenchPaneRowKind::Statement
+        | TraceWorkbenchPaneRowKind::Terminator => 2,
+    }
+}
+
+fn trace_workbench_status_for_source_line(
+    classes: &[String],
+) -> Option<TraceWorkbenchDisplayStatus> {
+    if classes.iter().any(|class| class.starts_with("exact-c-")) {
+        return Some(TraceWorkbenchDisplayStatus::Exact);
+    }
+    if classes
+        .iter()
+        .any(|class| class.starts_with("generated-c-"))
+    {
+        return Some(TraceWorkbenchDisplayStatus::GeneratedDownstream);
+    }
+    if classes.iter().any(|class| class.starts_with("context-c-")) {
+        return Some(TraceWorkbenchDisplayStatus::Context);
+    }
+    None
+}
+
+fn trace_workbench_status_for_row(
+    key: &OriginExportKey,
+    kind: TraceWorkbenchPaneRowKind,
+    classes: &[String],
+) -> Option<TraceWorkbenchDisplayStatus> {
+    if classes.iter().any(|class| class.starts_with("exact-c-")) {
+        return Some(TraceWorkbenchDisplayStatus::Exact);
+    }
+    if kind == TraceWorkbenchPaneRowKind::Instruction
+        && key.kind() == "bytecode.pc"
+        && classes.iter().any(|class| class.starts_with("prepared-c-"))
+    {
+        return Some(TraceWorkbenchDisplayStatus::PreparedLinked);
+    }
+    if trace_workbench_origin_key_is_generated(key)
+        || classes.iter().any(|class| class == "origin-generated")
+    {
+        return Some(match key.kind() {
+            kind if kind.starts_with("source.") => TraceWorkbenchDisplayStatus::GeneratedDownstream,
+            _ => TraceWorkbenchDisplayStatus::Generated,
+        });
+    }
+    if classes
+        .iter()
+        .any(|class| class.starts_with("generated-c-"))
+    {
+        return Some(TraceWorkbenchDisplayStatus::GeneratedDownstream);
+    }
+    if classes
+        .iter()
+        .any(|class| class.starts_with("context-c-") || class == "origin-contextual")
+    {
+        return Some(TraceWorkbenchDisplayStatus::Context);
+    }
+    None
+}
+
+fn trace_workbench_split_rail_classes(classes: &[String]) -> TraceWorkbenchRailClasses {
+    let mut rails = TraceWorkbenchRailClasses::default();
+    for class in classes {
+        if class.starts_with("exact-c-") {
+            rails.exact.push(class.clone());
+        } else if class.starts_with("generated-c-") || class == "origin-generated" {
+            rails.generated.push(class.clone());
+        } else if class.starts_with("prepared-c-") {
+            rails.prepared.push(class.clone());
+        } else if class.starts_with("context-c-") || class == "origin-contextual" {
+            rails.context.push(class.clone());
+        } else if class.starts_with("structural-c-") || class == "origin-structural" {
+            rails.boundary.push(class.clone());
+        } else {
+            rails.legacy.push(class.clone());
+        }
+    }
+    rails
+}
+
+fn trace_workbench_is_component_class(class: &str) -> bool {
+    class.starts_with("exact-c-")
+        || class.starts_with("generated-c-")
+        || class.starts_with("prepared-c-")
+        || class.starts_with("context-c-")
+        || class.starts_with("structural-c-")
+}
+
+fn trace_workbench_compact_instruction_text(instruction: &InstructionFact) -> String {
+    let mnemonic = trace_workbench_compact_instruction_mnemonic(&instruction.mnemonic);
+    match instruction.instruction.kind() {
+        "bytecode.pc" => mnemonic,
+        "runtime.stmt" | "runtime.terminator" => trace_workbench_compact_mir_text(&mnemonic),
+        _ => format!("%{} = {}", instruction.index, mnemonic),
+    }
+}
+
+fn trace_workbench_compact_instruction_mnemonic(text: &str) -> String {
+    let text = text.trim();
+    if let Some(rest) = text.strip_prefix("ir[")
+        && let Some((_, mnemonic)) = rest.split_once("] ")
+    {
+        return mnemonic.trim().to_string();
+    }
+    text.to_string()
+}
+
+fn trace_workbench_compact_origin_label(
+    key: &OriginExportKey,
+    instruction: Option<&InstructionFact>,
+) -> String {
+    if let Some(instruction) = instruction
+        && !matches!(key.kind(), "runtime.stmt" | "runtime.terminator")
+    {
+        return if key.kind() == "bytecode.pc" {
+            trace_workbench_compact_pc_label(key)
+        } else {
+            format!("%{}", instruction.index)
+        };
+    }
+    match key.kind() {
+        "bytecode.pc" => trace_workbench_compact_pc_label(key),
+        kind if kind.contains(".block") => trace_workbench_compact_block_label(key),
+        "runtime.stmt" => trace_workbench_compact_runtime_stmt_label(key),
+        "runtime.terminator" => trace_workbench_compact_runtime_terminator_label(key),
+        kind if kind.starts_with("hir.") => trace_workbench_compact_hir_label(key),
+        kind if kind.starts_with("sonatina.") => trace_workbench_compact_sonatina_label(key),
+        _ => trace_workbench_compact_tail_label(key.local_key()),
+    }
+}
+
+fn trace_workbench_compact_origin_meta(key: &OriginExportKey) -> String {
+    match key.kind() {
+        "runtime.stmt" => "MIR".to_string(),
+        "runtime.terminator" => "MIR term".to_string(),
+        "runtime.block" => "MIR block".to_string(),
+        "runtime.function" => "MIR function".to_string(),
+        "hir.expr" | "hir.stmt" => "HIR".to_string(),
+        kind if kind.starts_with("sonatina.postopt.") => "Optimized Sonatina".to_string(),
+        kind if kind.starts_with("sonatina.preopt.") => "Sonatina pre-opt".to_string(),
+        kind if kind.starts_with("sonatina.evm.prepared.") => "EVM prepared".to_string(),
+        "bytecode.pc" => "bytecode".to_string(),
+        _ => key.kind().to_string(),
+    }
+}
+
+fn trace_workbench_compact_origin_text(
+    key: &OriginExportKey,
+    index: &TraceWorkbenchProjectionIndex<'_>,
+) -> String {
+    if let Some(span) = index.source_spans.get(key) {
+        return format!("source span L{}:{}", span.start_line, span.start_column);
+    }
+    if key.kind().contains(".block") {
+        trace_workbench_compact_block_label(key)
+    } else if trace_workbench_origin_key_is_generated(key) {
+        match key.kind() {
+            "runtime.terminator" => "generated wrapper terminator".to_string(),
+            "runtime.stmt" => "generated wrapper statement".to_string(),
+            _ => "compiler-generated wrapper code".to_string(),
+        }
+    } else {
+        trace_workbench_compact_origin_meta(key)
+    }
+}
+
+fn trace_workbench_compact_pc_label(key: &OriginExportKey) -> String {
+    key.local_key()
+        .strip_prefix("pc:")
+        .and_then(|pc| pc.parse::<u32>().ok())
+        .map(|pc| format!("{pc:04}"))
+        .unwrap_or_else(|| trace_workbench_compact_tail_label(key.local_key()))
+}
+
+fn trace_workbench_compact_block_label(key: &OriginExportKey) -> String {
+    if let Some(block) = key.local_key().strip_prefix("block:") {
+        return format!("b{}", trace_workbench_compact_tail_label(block));
+    }
+    trace_workbench_compact_tail_label(key.local_key())
+}
+
+fn trace_workbench_compact_runtime_stmt_label(key: &OriginExportKey) -> String {
+    if let Some(rest) = key.local_key().strip_prefix("block:") {
+        let parts = rest.split(':').collect::<Vec<_>>();
+        if parts.len() >= 3 && parts[1] == "stmt" {
+            return format!("bb{}.s{}", parts[0], parts[2]);
+        }
+    }
+    trace_workbench_compact_tail_label(key.local_key())
+}
+
+fn trace_workbench_compact_runtime_terminator_label(key: &OriginExportKey) -> String {
+    if let Some(rest) = key.local_key().strip_prefix("block:")
+        && let Some(block) = rest.strip_suffix(":terminator")
+    {
+        return format!("bb{block}.term");
+    }
+    trace_workbench_compact_tail_label(key.local_key())
+}
+
+fn trace_workbench_compact_hir_label(key: &OriginExportKey) -> String {
+    let prefix = match key.kind() {
+        "hir.expr" => "e",
+        "hir.stmt" => "s",
+        _ => "h",
+    };
+    format!(
+        "{prefix}{}",
+        trace_workbench_compact_tail_label(key.local_key())
+    )
+}
+
+fn trace_workbench_compact_sonatina_label(key: &OriginExportKey) -> String {
+    let local = key.local_key();
+    if let Some(inst) = trace_workbench_extract_wrapped_id(local, "InstId(") {
+        return format!("%{inst}");
+    }
+    if let Some(block) = trace_workbench_extract_wrapped_id(local, "BlockId(") {
+        return format!("b{block}");
+    }
+    if let Some(func) = trace_workbench_extract_wrapped_id(local, "FuncRef(") {
+        return format!("fn {func}");
+    }
+    trace_workbench_compact_tail_label(local)
+}
+
+fn trace_workbench_extract_wrapped_id(value: &str, marker: &str) -> Option<String> {
+    let start = value.rfind(marker)? + marker.len();
+    let id = value[start..].split(')').next()?;
+    (!id.is_empty()).then(|| id.to_string())
+}
+
+fn trace_workbench_compact_tail_label(value: &str) -> String {
+    value
+        .rsplit([':', '$'])
+        .next()
+        .filter(|tail| !tail.is_empty())
+        .unwrap_or(value)
+        .replace("InstId(", "")
+        .replace("FuncRef(", "")
+        .replace("BlockId(", "")
+        .replace(')', "")
+        .to_string()
+}
+
+fn trace_workbench_compact_mir_text(text: &str) -> String {
+    let normalized = trace_workbench_compact_instruction_mnemonic(text);
+    let with_locals = trace_workbench_replace_wrapped_ids(&normalized, "RLocalId(", "%");
+    let with_layouts = trace_workbench_replace_wrapped_ids(&with_locals, "LayoutId(Id(", "layout#");
+    trace_workbench_replace_wrapped_ids(&with_layouts, "RuntimeInstance(Id(", "runtime#")
+}
+
+fn trace_workbench_replace_wrapped_ids(text: &str, marker: &str, prefix: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find(marker) {
+        out.push_str(&rest[..start]);
+        let tail = &rest[start + marker.len()..];
+        if let Some(end) = tail.find(')') {
+            out.push_str(prefix);
+            out.push_str(&tail[..end]);
+            rest = &tail[end + 1..];
+        } else {
+            out.push_str(&rest[start..]);
+            rest = "";
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+fn trace_workbench_key_belongs_to_panel(key: &OriginExportKey, panel: &str) -> bool {
+    match panel {
+        "hir" => key.kind().starts_with("hir."),
+        "mir" => key.kind().starts_with("runtime."),
+        "sonatina-pre" => key.kind().starts_with("sonatina.preopt."),
+        "sonatina-post" => key.kind().starts_with("sonatina.postopt."),
+        "sonatina-prepared" => key.kind().starts_with("sonatina.evm.prepared."),
+        "bytecode" => key.kind() == "bytecode.pc",
+        _ => false,
+    }
+}
+
+fn trace_workbench_origin_key_is_generated(key: &OriginExportKey) -> bool {
+    key.owner_key().contains("__synthetic") || key.local_key().contains("__synthetic")
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -5226,6 +5888,7 @@ mod tests {
                 target: "evm".to_string(),
                 opt_level: "O2".to_string(),
                 view: "source-postopt-bytecode".to_string(),
+                source_text: Some("fn fib() {\n  b + c\n}\n".to_string()),
                 document_version: Some(3),
                 query_duration_ms: 9,
                 compiler_commit: "test".to_string(),
@@ -5236,6 +5899,19 @@ mod tests {
         assert_eq!(projection["revision"]["id"], 3);
         assert_eq!(projection["metadata"]["data_source"], "lsp-live");
         assert!(projection["attribution_audit"].is_object());
+        assert_eq!(projection["source"]["lines"].as_array().unwrap().len(), 3);
+        assert!(
+            projection["panels"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|panel| {
+                    panel["id"] == "bytecode"
+                        && panel["rows"]
+                            .as_array()
+                            .is_some_and(|rows| !rows.is_empty())
+                })
+        );
         assert_eq!(
             projection["notes"][2],
             "The browser does not compute provenance or graph reachability."

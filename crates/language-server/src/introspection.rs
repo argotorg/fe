@@ -100,6 +100,11 @@ pub(crate) async fn handle_trace_workbench_model(
     ensure_workspace_file(backend, &uri).map_err(internal_error)?;
     let current_config_hash = backend.tooling_config().stable_hash();
     let document_version = backend.document_version(&uri);
+    let source_text = backend
+        .db
+        .workspace()
+        .get(&backend.db, &uri)
+        .map(|file| file.text(&backend.db).to_string());
 
     let service = if let Some(version) = document_version
         && let Some(service) = backend.cached_trace_service(&uri, version, &current_config_hash)
@@ -135,6 +140,7 @@ pub(crate) async fn handle_trace_workbench_model(
             target: session.target.clone(),
             opt_level: session.opt_level.clone(),
             view: session.view.clone(),
+            source_text,
             document_version,
             query_duration_ms: elapsed_ms(started),
             compiler_commit: option_env!("FE_GIT_COMMIT")
