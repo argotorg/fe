@@ -279,6 +279,7 @@ pub fn origin_trace_live_html_shell(title: &str) -> String {
       }})
       .then(function (model) {{
         window.FE_ORIGIN_TRACE_DATA = model;
+        window.FE_TRACE_WORKBENCH_REVISION = model && model.revision && model.revision.id || 0;
         if (loading) loading.remove();
         document.body.appendChild(document.createElement("fe-origin-trace"));
       }})
@@ -288,7 +289,9 @@ pub fn origin_trace_live_html_shell(title: &str) -> String {
       events.addEventListener("trace/revision", function (event) {{
         try {{
           var payload = JSON.parse(event.data || "{{}}");
-          if (payload.status === "ready") window.location.reload();
+          if (payload.status === "ready" && payload.revision && payload.revision !== window.FE_TRACE_WORKBENCH_REVISION) {{
+            window.location.reload();
+          }}
         }} catch (_) {{}}
       }});
     }}

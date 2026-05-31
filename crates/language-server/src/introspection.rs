@@ -176,8 +176,14 @@ fn live_trace_workbench_model(
         "missing"
     };
     serde_json::json!({
+        "revision": {
+            "id": document_version.unwrap_or_default().max(0) as u64,
+            "document_version": document_version,
+            "status": "ready",
+            "config_hash": session.config_hash.clone(),
+        },
         "metadata": {
-            "input_path": session.uri,
+            "input_path": session.uri.clone(),
             "target": status.target,
             "data_source": "lsp-live",
             "compiler_commit": option_env!("FE_GIT_COMMIT").unwrap_or("unknown"),
@@ -213,7 +219,7 @@ fn live_trace_workbench_model(
         "static_analysis": null,
         "attribution_audit": attribution_audit,
         "source": {
-            "display_name": session.uri,
+            "display_name": session.uri.clone(),
             "confidence": "live projection bootstrap; static pane projection is next",
             "lines": [],
             "related_sources": [],
