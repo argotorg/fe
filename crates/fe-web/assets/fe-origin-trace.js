@@ -129,6 +129,9 @@
 
       var bottom = el("section", "bottom-deck");
       bottom.append(this._detailPanel());
+      if (data.attribution_audit) {
+        bottom.append(this._missingLinkAudit(data.attribution_audit));
+      }
       if (data.static_analysis) {
         bottom.append(this._analysis(data.static_analysis));
       }
@@ -159,9 +162,72 @@
       this._card(cards, "data", data.metadata && data.metadata.data_source);
       this._card(cards, "optimization", this._optimizationFlag());
       this._card(cards, "provenance", data.provenance && data.provenance.summary);
+      this._card(cards, "missing links", this._missingLinkSummary());
       this._card(cards, "bytecode", this._bytecodeSummary());
       this._card(cards, "source spans", data.source && data.source.confidence);
       return cards;
+    }
+
+    _missingLinkSummary() {
+      var audit = this._data && this._data.attribution_audit;
+      if (!audit) return "unknown";
+      var count = audit.missing_optimized_to_prepared_lineage_pcs || 0;
+      if (count === 0) return "none detected";
+      return count + " prepared PC" + (count === 1 ? "" : "s");
+    }
+
+    _missingLinkAudit(audit) {
+      var section = el("section", "analysis missing-link-audit");
+      var count = (audit && audit.missing_optimized_to_prepared_lineage_pcs) || 0;
+      section.append(
+        el("h2", "", "Missing Link Audit"),
+        el(
+          "p",
+          "muted",
+          "Checks for prepared-linked bytecode whose EVM prepared/codegen origin lacks a validated optimized-Sonatina lineage edge."
+        )
+      );
+      var summary = el("div", "missing-link-summary");
+      summary.append(
+        this._metric("source-exact", audit.source_exact_pcs || 0),
+        this._metric("optimized-linked", audit.optimized_sonatina_linked_pcs || 0),
+        this._metric("prepared-linked", audit.prepared_linked_pcs || 0),
+        this._metric("lineage gaps", count),
+        this._metric("unmapped", audit.unmapped_pcs || 0)
+      );
+      section.append(summary);
+      if (count > 0) {
+        section.append(el("p", "gap", "Prepared bytecode exists, but " + count + " bytecode PC(s) lack an explicit optimized Sonatina → EVM prepared bridge. This is missing evidence, not automatically a compiler bug."));
+      } else {
+        section.append(el("p", "audit-note", "No optimized→prepared lineage gaps were detected by the attribution audit."));
+      }
+      var targets = (audit.missing_lineage_targets || []).slice(0, 5);
+      if (targets.length) {
+        var list = el("div", "missing-targets");
+        list.append(el("h3", "", "Top prepared targets without optimized lineage"));
+        targets.forEach(function (target) {
+          var row = el("div", "audit-count");
+          row.append(el("span", "", this._compactLabel(this._originDisplay(target.target))), el("b", "", target.count || 0));
+          list.append(row);
+        }, this);
+        section.append(list);
+      }
+      return section;
+    }
+
+    _originDisplay(origin) {
+      if (!origin) return "";
+      if (typeof origin === "string") return origin;
+      if (origin.kind || origin.owner || origin.local) {
+        return [origin.kind, origin.owner, origin.local].filter(Boolean).join(":");
+      }
+      return String(origin);
+    }
+
+    _metric(label, value) {
+      var node = el("div", "metric");
+      node.append(el("span", "", label), el("b", "", value));
+      return node;
     }
 
     _provenanceCopy() {
@@ -597,7 +663,18 @@
     }
 
     _navigateToHash(options) {
-      var row = this._rowForHash(window.location.hash || "");
+      var params = this._hashParams(window.location.hash || "");
+      var row = this._rowForHashParams(params);
+      if (!row && params && params.node) {
+        var switchedPaneIndex = this._ensureRepresentationVisibleForNode(params.node);
+        if (switchedPaneIndex !== null) {
+          this._render({
+            scrollState: this._capturePaneScrollState(),
+            switchedPaneIndex: switchedPaneIndex,
+          });
+          return true;
+        }
+      }
       if (!row) {
         if (!window.location.hash) {
           this._selected = [];
@@ -616,7 +693,10 @@
     }
 
     _rowForHash(hash) {
-      var params = this._hashParams(hash);
+      return this._rowForHashParams(this._hashParams(hash));
+    }
+
+    _rowForHashParams(params) {
       if (!params) return null;
       if (params.node) {
         var nodeClass = keyClass(params.node);
@@ -630,6 +710,28 @@
       if (params.row) {
         return this.shadowRoot.getElementById(params.row);
       }
+      return null;
+    }
+
+    _ensureRepresentationVisibleForNode(key) {
+      var representation = this._representationForOriginKey(key);
+      if (!representation) return null;
+      this._paneChoices = this._paneChoices || this._defaultPaneChoices(this._representations());
+      if (this._paneChoices.indexOf(representation) >= 0) return null;
+      var preferred = representation === "bytecode" ? 2 : 1;
+      if (representation === "source") preferred = 0;
+      this._paneChoices[preferred] = representation;
+      return preferred;
+    }
+
+    _representationForOriginKey(key) {
+      var kind = String(key || "").split("\u001f")[0];
+      if (kind === "bytecode.pc") return "bytecode";
+      if (kind.indexOf("runtime.") === 0) return "mir";
+      if (kind.indexOf("hir.") === 0) return "hir";
+      if (kind.indexOf("sonatina.evm.prepared.") === 0) return "sonatina-prepared";
+      if (kind.indexOf("sonatina.postopt.") === 0) return "sonatina-post";
+      if (kind.indexOf("sonatina.preopt.") === 0) return "sonatina-pre";
       return null;
     }
 
@@ -871,7 +973,8 @@
           fallback.push(group);
         }
       });
-      if (exact.length || generated.length) return exact.concat(generated);
+      if (exact.length) return exact;
+      if (generated.length) return generated;
       if (prepared.length) return prepared;
       if (context.length) return context;
       if (structural.length) return structural;
@@ -1022,6 +1125,7 @@
     _statusExplanation(kind, label) {
       if (kind === "ok") return "Solid highlights use validated exact attribution or snapshot-alias continuity.";
       if (kind === "generated") return "Generated highlights show compiler-created synthetic work. They are useful explanation paths, but they do not count as exact source ownership.";
+      if (kind === "explained") return "The missing direct bytecode link is explained by optimizer evidence such as elision, rewrite, creation, or snapshot-join facts.";
       if (kind === "context") return "Context highlights are navigation or cause context. They are intentionally separate from exact attribution.";
       if (kind === "structural") return "Boundary highlights show containment or derived block context, not provenance.";
       if (label === "missing link") return "This row reaches optimized compiler IR, but an exact downstream lineage edge is missing.";
@@ -1070,6 +1174,7 @@
       if (entry.primary === "truncated_unknown" || entry.primary === "missing_source_unexplained") return 5;
       if (entry.primary === "lowered_no_target_unexplained" || entry.primary === "preopt_elision_gap") return 4;
       if (entry.primary === "optimized_attribution_gap") return 3;
+      if (entry.primary === "optimizer_explained") return 0;
       if (entry.primary === "source_span_sibling_unlowered" || entry.primary === "source_only_expected") return 1;
       if (entry.primary && entry.primary.indexOf("good_") === 0) return 0;
       return entry.suspicious ? 4 : 1;
@@ -1086,8 +1191,13 @@
 
     _railStatus(classes) {
       classes = classes || [];
+      if (classes.some(function (name) { return name.indexOf("exact-c-") === 0; })) return { kind: "ok", label: "exact" };
       if (classes.indexOf("origin-generated") >= 0) return { kind: "generated", label: "generated" };
+      if (classes.some(function (name) { return name.indexOf("generated-c-") === 0; })) return { kind: "generated", label: "generated downstream" };
+      if (classes.some(function (name) { return name.indexOf("prepared-c-") === 0; })) return { kind: "context", label: "prepared-linked" };
+      if (classes.some(function (name) { return name.indexOf("context-c-") === 0; })) return { kind: "context", label: "context" };
       if (classes.indexOf("origin-contextual") >= 0) return { kind: "context", label: "context" };
+      if (classes.some(function (name) { return name.indexOf("structural-c-") === 0; })) return { kind: "structural", label: "boundary" };
       if (classes.indexOf("origin-structural") >= 0) return { kind: "structural", label: "boundary" };
       return null;
     }
@@ -1100,6 +1210,7 @@
       }.bind(this))[0];
       var primary = top.primary || "unknown";
       if (primary.indexOf("good_") === 0) return { kind: "ok", label: "exact" };
+      if (primary === "optimizer_explained") return { kind: "explained", label: "explained" };
       if (primary === "optimized_attribution_gap") return { kind: "warn", label: "missing link" };
       if (primary === "lowered_no_target_unexplained") return { kind: "warn", label: "MIR-only" };
       if (primary === "preopt_elision_gap") return { kind: "warn", label: "preopt-only" };
@@ -1124,6 +1235,7 @@
         .replace("optimized_attribution_gap", "missing link")
         .replace("source_span_sibling_unlowered", "span sibling")
         .replace("source_only_expected", "source only")
+        .replace("optimizer_explained", "explained")
         .replace("good_many_to_many", "many-to-many")
         .replace("good_exact", "exact")
         .replace("missing_source_unexplained", "missing source")
@@ -1359,6 +1471,7 @@ h1 { margin:0; color:var(--trace-text); font:700 15px/1.1 ui-sans-serif, system-
 .badge.phase { color:var(--trace-accent); border-color:color-mix(in srgb, var(--trace-accent) 35%, var(--trace-border)); }
 .badge.ok { color:var(--trace-pass); border-color:color-mix(in srgb, var(--trace-pass) 35%, var(--trace-border)); }
 .badge.warn,.badge.symptom { color:var(--trace-warn); border-color:color-mix(in srgb, var(--trace-warn) 35%, var(--trace-border)); }
+	.badge.explained { color:var(--trace-pass); border-color:color-mix(in srgb, var(--trace-pass) 35%, var(--trace-border)); border-style:dotted; }
 	.badge.generated { color:var(--trace-warn); border-color:color-mix(in srgb, var(--trace-warn) 35%, var(--trace-border)); border-style:dashed; }
 	.badge.context { color:var(--trace-muted); border-color:var(--trace-border); }
 	.badge.structural { color:var(--trace-muted); border-color:var(--trace-border); }
@@ -1372,12 +1485,18 @@ h1 { margin:0; color:var(--trace-text); font:700 15px/1.1 ui-sans-serif, system-
 .span-group-card h3,.audit-summary h3 { margin:0 0 8px; color:var(--trace-text); font-size:13px; text-transform:uppercase; letter-spacing:.1em; }
 .status-card { padding:12px; border:1px solid var(--trace-border); border-radius:8px; background:var(--trace-bg); margin-bottom:12px; }
 .status-card.status-ok { border-left:3px solid var(--trace-pass); }
+.status-card.status-explained { border-left:3px dotted var(--trace-pass); }
 .status-card.status-generated { border-left:3px dashed var(--trace-warn); }
 .status-card.status-context { border-left:3px solid var(--trace-muted); }
 .status-card.status-structural { box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--trace-muted) 30%, transparent); }
 .status-card.status-warn { border-left:3px solid var(--trace-warn); }
 .status-card h3 { margin:0 0 6px; color:var(--trace-text); font-size:13px; text-transform:uppercase; letter-spacing:.1em; }
 .status-line { margin:0 0 6px; color:var(--trace-accent); text-transform:uppercase; letter-spacing:.07em; font-size:11px; }
+.missing-link-summary { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:7px; margin:10px 0; }
+.metric { padding:7px 8px; border:1px solid var(--trace-border); border-radius:8px; background:var(--trace-bg); min-width:0; }
+.metric span { display:block; color:var(--trace-muted); font:600 9px/1.25 ui-sans-serif, system-ui, sans-serif; text-transform:uppercase; letter-spacing:.06em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.metric b { display:block; margin-top:3px; color:var(--trace-accent); font-size:13px; }
+.missing-targets h3 { margin:12px 0 6px; color:var(--trace-text); font-size:12px; text-transform:uppercase; letter-spacing:.08em; }
 .rail-legend { display:flex; flex-wrap:wrap; gap:5px; margin-top:10px; }
 .legend-chip { max-width:none; }
 .span-group { padding:9px 0; border-top:1px solid var(--trace-border); }
@@ -1399,6 +1518,7 @@ h1 { margin:0; color:var(--trace-text); font:700 15px/1.1 ui-sans-serif, system-
 .notes { margin:0; padding:0 32px 30px 52px; color:var(--trace-muted); }
 .notes li { margin:6px 0; }
 @media (max-width:1250px) { .cards { grid-template-columns:repeat(3,minmax(0,1fr)); } .pane-deck,.bottom-deck,.analysis-grid { grid-template-columns:1fr; } }
+@media (max-width:980px) { .missing-link-summary { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media (max-width:760px) { .workspace,.bottom-deck,.cards,.pane-deck { padding-left:14px; padding-right:14px; } .cards,.analysis-grid,.pane-deck,.bottom-deck { grid-template-columns:1fr; } .analysis-head { display:block; } .trace-header { padding-left:14px; padding-right:14px; } .notes { padding-left:32px; padding-right:14px; } .workbench-head { grid-template-columns:1fr; } .representation-select { max-width:none; width:100%; } }
 `;
     }

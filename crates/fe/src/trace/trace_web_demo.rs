@@ -15,7 +15,7 @@ use trace_facts::{
     SourceSpanFact, TraceFact, TraceSnapshot,
 };
 use trace_query::{
-    IntrospectionService, LoopContentsRequest, TraceIntrospectionService,
+    AttributionAuditReport, IntrospectionService, LoopContentsRequest, TraceIntrospectionService,
     origin_closure::{
         ClosureAuditReport, OriginClosure as DemoClosure, OriginClosureSourceLine,
         audit_origin_closures, build_origin_closure_set, classes_by_origin_key,
@@ -50,23 +50,9 @@ pub(super) fn run_trace_web_demo(args: &DevTraceWebDemoArgs) -> Result<String, S
 
 pub(super) fn run_trace_audit_closures(args: &DevTraceAuditClosuresArgs) -> Result<String, String> {
     let model = render_trace_audit_model_once(args)?;
-    let source_lines = model
-        .source
-        .lines
-        .iter()
-        .map(|line| OriginClosureSourceLine {
-            number: line.number,
-            text: line.text.clone(),
-        })
-        .collect::<Vec<_>>();
-    let report = audit_origin_closures(
-        &model.metadata.input_path,
-        &model.metadata.target,
-        &model.metadata.data_source,
-        model.bytecode_count,
-        &model.closures,
-        &source_lines,
-    );
+    let report = model
+        .audit
+        .ok_or_else(|| "trace audit model did not include a closure audit".to_string())?;
     match args.format {
         TraceReportFormat::Text => Ok(render_closure_audit_report(&report)),
         TraceReportFormat::Json => serde_json::to_string_pretty(&report)
@@ -470,6 +456,7 @@ struct WebDemoModel {
     salsa: Option<DemoSalsaStats>,
     audit: Option<ClosureAuditReport>,
     static_analysis: Option<StaticAnalysisReport>,
+    attribution_audit: Option<AttributionAuditReport>,
     source: DemoSource,
     panels: Vec<DemoPanel>,
     closures: Vec<DemoClosure>,
@@ -612,8 +599,12 @@ fn build_demo_model(snapshot: &TraceSnapshot, salsa: Option<DemoSalsaStats>) -> 
         bytecode_count,
         &closures,
         &audit_source_lines,
+        snapshot,
     );
     let static_analysis = static_analysis_report(snapshot);
+    let attribution_audit = service
+        .attribution_audit()
+        .expect("attribution-audit query over validated snapshot should not fail");
     let loop_block_roles = loop_block_roles(&loop_report);
     let mut panels = build_origin_panels(&index, &classes_by_key, &rails_by_key, &loop_block_roles);
     panels.insert(1, loop_panel(&loop_report, &classes_by_key, &rails_by_key));
@@ -636,6 +627,7 @@ fn build_demo_model(snapshot: &TraceSnapshot, salsa: Option<DemoSalsaStats>) -> 
         salsa,
         audit: Some(audit),
         static_analysis: Some(static_analysis),
+        attribution_audit: Some(attribution_audit),
         source: DemoSource {
             display_name: snapshot.metadata().input_path.clone(),
             confidence: source_confidence,
@@ -1794,6 +1786,7 @@ mod tests {
             salsa: None,
             audit: None,
             static_analysis: None,
+            attribution_audit: None,
             source: DemoSource {
                 display_name: "demo.fe".to_string(),
                 confidence: "coarse file-level fallback".to_string(),

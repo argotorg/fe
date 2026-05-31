@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use common::origin::OriginExportKey;
 use serde::Serialize;
 use trace_facts::{
-    InstructionFact, OriginEdgeFact, OriginEdgeTraversalClass, SourceSpanFact, TraceFact,
-    TraceSnapshot,
+    CompilerEventKind, InstructionFact, OriginEdgeFact, OriginEdgeTraversalClass, SourceSpanFact,
+    TraceFact, TraceSnapshot,
 };
 
 use crate::LoopContentsReport;
@@ -181,6 +181,7 @@ pub enum ClosureAuditPrimary {
     SourceOnlyExpected,
     SourceSpanSiblingUnlowered,
     ExpectedSynthetic,
+    OptimizerExplained,
     PreparedOnly,
     LoweredNoTargetUnexplained,
     PreoptElisionGap,
@@ -221,6 +222,7 @@ impl ClosureAuditPrimary {
             Self::SourceOnlyExpected => "source_only_expected",
             Self::SourceSpanSiblingUnlowered => "source_span_sibling_unlowered",
             Self::ExpectedSynthetic => "expected_synthetic",
+            Self::OptimizerExplained => "optimizer_explained",
             Self::PreparedOnly => "prepared_only",
             Self::LoweredNoTargetUnexplained => "lowered_no_target_unexplained",
             Self::PreoptElisionGap => "preopt_elision_gap",
@@ -263,7 +265,11 @@ pub fn build_origin_closure_set(
 ) -> OriginClosureSet {
     let index = OriginClosureIndex::new(snapshot);
     let roots = closure_roots(input_path, &index, loop_report);
-    let closures = build_closures(roots, &index);
+    let explained_postopt_origins = explicit_postopt_explanations(snapshot)
+        .into_iter()
+        .map(|key| key.canonical_storage_key())
+        .collect::<BTreeSet<_>>();
+    let closures = build_closures(roots, &index, &explained_postopt_origins);
     OriginClosureSet {
         closures,
         edge_count: index.edge_count,
@@ -333,11 +339,24 @@ pub fn audit_origin_closures(
     loop_bytecode_count: usize,
     closures: &[OriginClosure],
     source_lines: &[OriginClosureSourceLine],
+    snapshot: &TraceSnapshot,
 ) -> ClosureAuditReport {
     let span_groups = SourceSpanGroupIndex::new(input_path, closures, source_lines);
+    let explained_postopt_origins = explicit_postopt_explanations(snapshot)
+        .into_iter()
+        .map(|key| key.canonical_storage_key())
+        .collect::<BTreeSet<_>>();
     let closures = closures
         .iter()
-        .map(|closure| audit_closure(input_path, loop_bytecode_count, closure, &span_groups))
+        .map(|closure| {
+            audit_closure(
+                input_path,
+                loop_bytecode_count,
+                closure,
+                &span_groups,
+                &explained_postopt_origins,
+            )
+        })
         .collect::<Vec<_>>();
     let mut primary_counts = BTreeMap::<ClosureAuditPrimary, usize>::new();
     let mut symptom_counts = BTreeMap::<ClosureAuditSymptom, usize>::new();
@@ -475,6 +494,7 @@ fn source_span_matches_input(span: &SourceSpanFact, input_path: &str) -> bool {
 fn build_closures(
     roots: Vec<OriginExportKey>,
     index: &OriginClosureIndex<'_>,
+    explained_postopt_origins: &BTreeSet<String>,
 ) -> Vec<OriginClosure> {
     roots
         .into_iter()
@@ -485,16 +505,19 @@ fn build_closures(
             closure.edges.extend(explanation.edges);
             let source_spans = source_spans_for_keys(&closure.keys, index);
             let counts = closure_counts(&closure.keys);
-            let gap = closure_gap_note(&counts);
+            let storage_keys = closure
+                .keys
+                .iter()
+                .map(OriginExportKey::canonical_storage_key)
+                .collect::<Vec<_>>();
+            let postopt_explained =
+                storage_postopt_origins_are_explained(&storage_keys, explained_postopt_origins);
+            let gap = closure_gap_note(&counts, postopt_explained);
             OriginClosure {
                 class_name: format!("trace-c-{ordinal}"),
                 label: closure_label(&root, index),
                 root_key: root.canonical_storage_key(),
-                keys: closure
-                    .keys
-                    .iter()
-                    .map(OriginExportKey::canonical_storage_key)
-                    .collect(),
+                keys: storage_keys,
                 generated_keys: explanation
                     .generated
                     .iter()
@@ -760,14 +783,47 @@ fn origin_explanation_rails(
     rails
 }
 
-fn closure_gap_note(counts: &OriginClosureCounts) -> Option<String> {
+fn closure_gap_note(counts: &OriginClosureCounts, postopt_explained: bool) -> Option<String> {
     if counts.sonatina_post > 0 && counts.bytecode == 0 {
-        Some(
-            "Reached Sonatina post-opt but no bytecode PC edge was recorded. This is an optimized-code attribution gap through backend preparation or value movement, not evidence that the source is dead.".to_string(),
-        )
+        if postopt_explained {
+            Some("Reached Sonatina post-opt and the optimizer emitted an explicit elision/rewrite/snapshot explanation. The missing direct bytecode PC edge is explained by compiler evidence.".to_string())
+        } else {
+            Some(
+                "Reached Sonatina post-opt but no bytecode PC edge was recorded. This is an optimized-code attribution gap through backend preparation or value movement, not evidence that the source is dead.".to_string(),
+            )
+        }
     } else {
         None
     }
+}
+
+fn explicit_postopt_explanations(snapshot: &TraceSnapshot) -> BTreeSet<OriginExportKey> {
+    snapshot
+        .facts()
+        .iter()
+        .filter_map(|fact| match fact {
+            TraceFact::CompilerEvent(event)
+                if matches!(
+                    event.kind,
+                    CompilerEventKind::OptimizerElidedOrRewritten
+                        | CompilerEventKind::OptimizerSnapshotJoin
+                        | CompilerEventKind::OptimizerCreated
+                ) =>
+            {
+                Some(
+                    event
+                        .inputs
+                        .iter()
+                        .chain(event.outputs.iter())
+                        .filter(|key| key.kind().starts_with("sonatina.post"))
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                )
+            }
+            _ => None,
+        })
+        .flatten()
+        .collect()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -894,6 +950,7 @@ fn audit_closure(
     loop_bytecode_count: usize,
     closure: &OriginClosure,
     span_groups: &SourceSpanGroupIndex,
+    explained_postopt_origins: &BTreeSet<String>,
 ) -> ClosureAuditEntry {
     let mut symptoms = BTreeSet::new();
     let mut notes = Vec::new();
@@ -955,6 +1012,10 @@ fn audit_closure(
         && closure.counts.sonatina_post == 0;
     let has_expected_synthetic = closure.edges.iter().any(|edge| edge.generated_work)
         || closure_has_synthetic_origin(closure);
+    let has_postopt_without_bytecode =
+        closure.counts.sonatina_post > 0 && closure.counts.bytecode == 0;
+    let postopt_explained = has_postopt_without_bytecode
+        && closure_postopt_origins_are_explained(closure, explained_postopt_origins);
     let has_lowering_target = closure.counts.mir
         + closure.counts.sonatina_pre
         + closure.counts.sonatina_post
@@ -967,7 +1028,7 @@ fn audit_closure(
                 .and_then(|signature| span_groups.groups.get(&signature))
                 .is_some_and(|group| group.closures_with_targets > 0)
         });
-    if closure.counts.sonatina_post > 0 && closure.counts.bytecode == 0 {
+    if has_postopt_without_bytecode && !postopt_explained {
         symptoms.insert(ClosureAuditSymptom::MissingBytecode);
         notes.push("post-opt closure reaches no final bytecode PC".to_string());
     }
@@ -987,7 +1048,12 @@ fn audit_closure(
 
     let primary = if closure.traversal.truncated {
         ClosureAuditPrimary::TruncatedUnknown
-    } else if closure.counts.sonatina_post > 0 && closure.counts.bytecode == 0 {
+    } else if has_postopt_without_bytecode && postopt_explained {
+        if let Some(gap) = &closure.gap {
+            notes.push(gap.clone());
+        }
+        ClosureAuditPrimary::OptimizerExplained
+    } else if has_postopt_without_bytecode {
         if let Some(gap) = &closure.gap {
             notes.push(gap.clone());
         }
@@ -1061,6 +1127,27 @@ fn audit_closure(
             .collect(),
         notes,
     }
+}
+
+fn closure_postopt_origins_are_explained(
+    closure: &OriginClosure,
+    explained_postopt_origins: &BTreeSet<String>,
+) -> bool {
+    storage_postopt_origins_are_explained(&closure.keys, explained_postopt_origins)
+}
+
+fn storage_postopt_origins_are_explained(
+    keys: &[String],
+    explained_postopt_origins: &BTreeSet<String>,
+) -> bool {
+    let postopt_keys = keys
+        .iter()
+        .filter(|key| key.starts_with("sonatina.post"))
+        .collect::<Vec<_>>();
+    !postopt_keys.is_empty()
+        && postopt_keys
+            .iter()
+            .all(|key| explained_postopt_origins.contains(key.as_str()))
 }
 
 fn closure_has_synthetic_origin(closure: &OriginClosure) -> bool {
@@ -1515,10 +1602,10 @@ mod tests {
     fn closure_audit_flags_optimized_gap_without_calling_it_dead() {
         let mut closure = test_closure();
         closure.counts.sonatina_post = 2;
-        closure.gap = closure_gap_note(&closure.counts);
+        closure.gap = closure_gap_note(&closure.counts, false);
 
         let groups = groups_for_closure(&closure);
-        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
+        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups, &BTreeSet::new());
 
         assert_eq!(entry.primary, ClosureAuditPrimary::OptimizedAttributionGap);
         assert_eq!(entry.highest_phase_reached, ClosureAuditPhase::SonatinaPost);
@@ -1528,6 +1615,27 @@ mod tests {
                 .contains(&ClosureAuditSymptom::MissingBytecode)
         );
         assert!(entry.notes.iter().any(|note| note.contains("not evidence")));
+    }
+
+    #[test]
+    fn closure_audit_treats_optimizer_explanation_as_explained_not_missing() {
+        let mut closure = test_closure();
+        closure.counts.sonatina_post = 1;
+        closure.keys = vec!["sonatina.postopt.inst:demo:inst:0".to_string()];
+        let explained = BTreeSet::from(["sonatina.postopt.inst:demo:inst:0".to_string()]);
+        closure.gap = closure_gap_note(&closure.counts, true);
+
+        let groups = groups_for_closure(&closure);
+        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups, &explained);
+
+        assert_eq!(entry.primary, ClosureAuditPrimary::OptimizerExplained);
+        assert!(!entry.suspicious);
+        assert!(
+            !entry
+                .symptoms
+                .contains(&ClosureAuditSymptom::MissingBytecode)
+        );
+        assert!(entry.notes.iter().any(|note| note.contains("explained")));
     }
 
     #[test]
@@ -1544,7 +1652,7 @@ mod tests {
         ];
 
         let groups = groups_for_closure(&closure);
-        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
+        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups, &BTreeSet::new());
 
         assert_eq!(entry.primary, ClosureAuditPrimary::GoodManyToMany);
         assert_eq!(entry.highest_phase_reached, ClosureAuditPhase::Bytecode);
@@ -1557,7 +1665,7 @@ mod tests {
         closure.counts.bytecode = 1;
 
         let groups = groups_for_closure(&closure);
-        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
+        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups, &BTreeSet::new());
 
         assert_eq!(entry.primary, ClosureAuditPrimary::GoodExact);
         assert_eq!(entry.highest_phase_reached, ClosureAuditPhase::Bytecode);
@@ -1571,7 +1679,7 @@ mod tests {
         closure.counts.sonatina_pre = 0;
 
         let groups = groups_for_closure(&closure);
-        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
+        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups, &BTreeSet::new());
 
         assert_eq!(entry.primary, ClosureAuditPrimary::SourceOnlyExpected);
         assert_eq!(entry.highest_phase_reached, ClosureAuditPhase::Hir);
@@ -1590,7 +1698,7 @@ mod tests {
         let closures = vec![source_only.clone(), lowered];
         let groups = SourceSpanGroupIndex::new("fib_demo.fe", &closures, &test_source_lines());
 
-        let entry = audit_closure("fib_demo.fe", 24, &source_only, &groups);
+        let entry = audit_closure("fib_demo.fe", 24, &source_only, &groups, &BTreeSet::new());
 
         assert_eq!(
             entry.primary,
@@ -1622,7 +1730,7 @@ mod tests {
         let closure = test_closure();
         let groups = groups_for_closure(&closure);
 
-        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
+        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups, &BTreeSet::new());
 
         assert_eq!(entry.primary, ClosureAuditPrimary::PreoptElisionGap);
         assert!(entry.suspicious);
@@ -1634,7 +1742,7 @@ mod tests {
         closure.counts.sonatina_pre = 0;
 
         let groups = groups_for_closure(&closure);
-        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
+        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups, &BTreeSet::new());
 
         assert_eq!(
             entry.primary,
@@ -1658,7 +1766,7 @@ mod tests {
         });
         let groups = groups_for_closure(&closure);
 
-        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
+        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups, &BTreeSet::new());
 
         assert_eq!(entry.primary, ClosureAuditPrimary::ExpectedSynthetic);
         assert!(
@@ -1683,7 +1791,7 @@ mod tests {
         closure.counts.sonatina_post = 1;
 
         let groups = groups_for_closure(&closure);
-        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
+        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups, &BTreeSet::new());
 
         assert_eq!(entry.primary, ClosureAuditPrimary::ExpectedSynthetic);
         assert!(
@@ -1708,7 +1816,7 @@ mod tests {
         });
         let groups = groups_for_closure(&closure);
 
-        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
+        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups, &BTreeSet::new());
 
         assert_eq!(entry.primary, ClosureAuditPrimary::SourceOnlyExpected);
         assert!(!entry.suspicious);
@@ -1761,7 +1869,7 @@ mod tests {
         closure.counts.bytecode = 1;
 
         let groups = groups_for_closure(&closure);
-        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
+        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups, &BTreeSet::new());
 
         assert_eq!(entry.primary, ClosureAuditPrimary::MissingSourceUnexplained);
         assert!(
@@ -1779,7 +1887,7 @@ mod tests {
         closure.traversal.truncation_reason = Some("max_nodes".to_string());
 
         let groups = groups_for_closure(&closure);
-        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
+        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups, &BTreeSet::new());
 
         assert_eq!(entry.primary, ClosureAuditPrimary::TruncatedUnknown);
         assert!(entry.symptoms.contains(&ClosureAuditSymptom::Truncated));
@@ -1800,7 +1908,7 @@ mod tests {
         };
 
         let groups = groups_for_closure(&closure);
-        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
+        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups, &BTreeSet::new());
 
         assert_eq!(entry.primary, ClosureAuditPrimary::Unclassified);
         assert_eq!(entry.highest_phase_reached, ClosureAuditPhase::Source);
@@ -1821,7 +1929,7 @@ mod tests {
         };
 
         let groups = groups_for_closure(&closure);
-        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
+        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups, &BTreeSet::new());
 
         assert_eq!(entry.primary, ClosureAuditPrimary::PreparedOnly);
         assert_eq!(entry.highest_phase_reached, ClosureAuditPhase::Bytecode);
