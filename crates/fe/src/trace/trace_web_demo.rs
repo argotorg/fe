@@ -582,23 +582,21 @@ fn build_demo_model(snapshot: &TraceSnapshot, salsa: Option<DemoSalsaStats>) -> 
     );
     let closures = closure_set.closures;
     let mut classes_by_key = classes_by_origin_key(&closures);
-    merge_classes_by_key(
-        &mut classes_by_key,
-        component_classes_by_origin_key(snapshot),
-    );
+    let component_classes_by_key = component_classes_by_origin_key(snapshot);
+    merge_classes_by_key(&mut classes_by_key, component_classes_by_key.clone());
     let rails_by_key = rails_by_origin_key(&closures);
     let source_lines = source_lines(
         snapshot.metadata().input_path.as_str(),
         &source_text,
         &closures,
-        &classes_by_key,
+        &component_classes_by_key,
     );
     let related_sources = related_source_sections(
         snapshot.metadata().input_path.as_str(),
         &source_texts,
         &index,
         &closures,
-        &classes_by_key,
+        &component_classes_by_key,
     );
     let audit_source_lines = source_lines
         .iter()
@@ -904,7 +902,7 @@ fn source_lines(
     input_path: &str,
     source_text: &str,
     closures: &[DemoClosure],
-    classes_by_key: &BTreeMap<String, Vec<String>>,
+    component_classes_by_key: &BTreeMap<String, Vec<String>>,
 ) -> Vec<DemoSourceLine> {
     let mut exact_classes_by_line = BTreeMap::<u32, BTreeSet<String>>::new();
     let mut enclosing_classes_by_line = BTreeMap::<u32, BTreeSet<String>>::new();
@@ -917,11 +915,17 @@ fn source_lines(
             }
             if span.start_line == span.end_line {
                 let classes = exact_classes_by_line.entry(span.start_line).or_default();
-                insert_source_span_classes(classes, span, closure, classes_by_key);
+                insert_source_span_classes(classes, span, closure, component_classes_by_key, true);
             } else {
                 for line in span.start_line..=span.end_line {
                     let classes = enclosing_classes_by_line.entry(line).or_default();
-                    insert_source_span_classes(classes, span, closure, classes_by_key);
+                    insert_source_span_classes(
+                        classes,
+                        span,
+                        closure,
+                        component_classes_by_key,
+                        false,
+                    );
                 }
             }
         }
@@ -952,12 +956,28 @@ fn insert_source_span_classes(
     classes: &mut BTreeSet<String>,
     span: &trace_query::origin_closure::OriginClosureSourceSpan,
     closure: &DemoClosure,
-    classes_by_key: &BTreeMap<String, Vec<String>>,
+    component_classes_by_key: &BTreeMap<String, Vec<String>>,
+    include_component_classes: bool,
 ) {
     classes.insert(closure.class_name.clone());
-    if let Some(component_classes) = classes_by_key.get(&span.origin_key) {
-        classes.extend(component_classes.iter().cloned());
+    if include_component_classes
+        && let Some(component_classes) = component_classes_by_key.get(&span.origin_key)
+    {
+        classes.extend(
+            component_classes
+                .iter()
+                .filter(|class| is_component_class(class))
+                .cloned(),
+        );
     }
+}
+
+fn is_component_class(class: &str) -> bool {
+    class.starts_with("exact-c-")
+        || class.starts_with("generated-c-")
+        || class.starts_with("prepared-c-")
+        || class.starts_with("context-c-")
+        || class.starts_with("structural-c-")
 }
 
 fn related_source_sections(
@@ -965,7 +985,7 @@ fn related_source_sections(
     source_texts: &BTreeMap<OriginExportKey, String>,
     index: &DemoIndex<'_>,
     closures: &[DemoClosure],
-    classes_by_key: &BTreeMap<String, Vec<String>>,
+    component_classes_by_key: &BTreeMap<String, Vec<String>>,
 ) -> Vec<DemoRelatedSource> {
     let mut classes_by_file_line =
         BTreeMap::<OriginExportKey, BTreeMap<u32, BTreeSet<String>>>::new();
@@ -985,7 +1005,13 @@ fn related_source_sections(
                     .or_default()
                     .entry(line)
                     .or_default();
-                insert_source_span_classes(classes, span, closure, classes_by_key);
+                insert_source_span_classes(
+                    classes,
+                    span,
+                    closure,
+                    component_classes_by_key,
+                    span.start_line == span.end_line,
+                );
             }
         }
     }

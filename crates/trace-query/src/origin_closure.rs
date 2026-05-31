@@ -1008,12 +1008,8 @@ fn audit_closure(
     {
         notes.push("closure reaches MIR but has no Sonatina or bytecode target; no explicit lowering/elision event explains it".to_string());
         ClosureAuditPrimary::LoweredNoTargetUnexplained
-    } else if has_expected_synthetic {
-        ClosureAuditPrimary::ExpectedSynthetic
     } else if has_prepared_only && closure.counts.bytecode > 0 {
         ClosureAuditPrimary::PreparedOnly
-    } else if has_ir && closure.counts.bytecode > 0 && direct_input_spans.is_empty() {
-        ClosureAuditPrimary::MissingSourceUnexplained
     } else if !direct_input_spans.is_empty() && closure.counts.bytecode > 0 {
         let exact = direct_input_spans.len() == 1
             && closure.counts.bytecode == 1
@@ -1035,6 +1031,10 @@ fn audit_closure(
         && closure.counts.bytecode == 0
     {
         ClosureAuditPrimary::SourceOnlyExpected
+    } else if has_expected_synthetic {
+        ClosureAuditPrimary::ExpectedSynthetic
+    } else if has_ir && closure.counts.bytecode > 0 && direct_input_spans.is_empty() {
+        ClosureAuditPrimary::MissingSourceUnexplained
     } else {
         notes.push("closure did not match a known audit bucket".to_string());
         ClosureAuditPrimary::Unclassified
@@ -1691,6 +1691,26 @@ mod tests {
                 .symptoms
                 .contains(&ClosureAuditSymptom::SourceUnavailableSynthetic)
         );
+        assert!(!entry.suspicious);
+    }
+
+    #[test]
+    fn closure_audit_does_not_call_source_owned_hir_synthetic() {
+        let mut closure = test_closure();
+        closure.counts.mir = 0;
+        closure.counts.sonatina_pre = 0;
+        closure.edges.push(OriginClosureEdge {
+            label: "SyntheticFor / Mir".to_string(),
+            from: "runtime.stmt synthetic".to_string(),
+            to: "hir.expr source".to_string(),
+            traversal_class: OriginEdgeTraversalClass::Synthetic,
+            generated_work: true,
+        });
+        let groups = groups_for_closure(&closure);
+
+        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
+
+        assert_eq!(entry.primary, ClosureAuditPrimary::SourceOnlyExpected);
         assert!(!entry.suspicious);
     }
 
