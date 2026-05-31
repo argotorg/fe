@@ -2424,6 +2424,7 @@ struct TraceWorkbenchProjectionIndex<'a> {
     instructions: BTreeMap<OriginExportKey, &'a InstructionFact>,
     source_spans: BTreeMap<OriginExportKey, &'a trace_facts::SourceSpanFact>,
     source_snippets: BTreeMap<OriginExportKey, String>,
+    display_names: BTreeMap<OriginExportKey, String>,
 }
 
 impl<'a> TraceWorkbenchProjectionIndex<'a> {
@@ -2432,6 +2433,7 @@ impl<'a> TraceWorkbenchProjectionIndex<'a> {
         let mut instructions = BTreeMap::new();
         let mut source_spans = BTreeMap::new();
         let mut source_snippets = BTreeMap::new();
+        let mut display_names = BTreeMap::new();
         for fact in snapshot.facts() {
             match fact {
                 TraceFact::OriginNode(node) => {
@@ -2449,6 +2451,10 @@ impl<'a> TraceWorkbenchProjectionIndex<'a> {
                         source_snippets.insert(span.origin.clone(), snippet);
                     }
                 }
+                TraceFact::DisplayName(display_name) => {
+                    origin_nodes.insert(display_name.subject.clone());
+                    display_names.insert(display_name.subject.clone(), display_name.name.clone());
+                }
                 _ => {}
             }
         }
@@ -2457,6 +2463,7 @@ impl<'a> TraceWorkbenchProjectionIndex<'a> {
             instructions,
             source_spans,
             source_snippets,
+            display_names,
         }
     }
 }
@@ -2847,6 +2854,9 @@ fn trace_workbench_compact_origin_text(
     key: &OriginExportKey,
     index: &TraceWorkbenchProjectionIndex<'_>,
 ) -> String {
+    if let Some(display_name) = index.display_names.get(key) {
+        return display_name.clone();
+    }
     if let Some(snippet) = index.source_snippets.get(key) {
         return match key.kind() {
             kind if kind.starts_with("hir.") => snippet.clone(),
@@ -6580,6 +6590,36 @@ mod tests {
         assert_eq!(
             trace_workbench_compact_origin_text(&hir, &index),
             "let x = y"
+        );
+    }
+
+    #[test]
+    fn trace_workbench_rows_use_display_name_facts() {
+        let hir = key("hir.expr", "demo", "expr:0");
+        let mir_local = key("runtime.local", "demo", "local:0");
+        let snapshot = snapshot(vec![
+            node(hir.clone()),
+            node(mir_local.clone()),
+            TraceFact::DisplayName(DisplayNameFact::new(
+                hir.clone(),
+                DisplayNameKind::SourceLocal,
+                "balance + amount",
+            )),
+            TraceFact::DisplayName(DisplayNameFact::new(
+                mir_local.clone(),
+                DisplayNameKind::SourceLocal,
+                "balance",
+            )),
+        ]);
+        let index = TraceWorkbenchProjectionIndex::new(&snapshot, "demo.fe", None);
+
+        assert_eq!(
+            trace_workbench_compact_origin_text(&hir, &index),
+            "balance + amount"
+        );
+        assert_eq!(
+            trace_workbench_compact_origin_text(&mir_local, &index),
+            "balance"
         );
     }
 
