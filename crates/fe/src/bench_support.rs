@@ -7,6 +7,7 @@
 
 use codegen::OptLevel;
 use common::InputDb;
+use contract_harness::{ExecutionOptions, RuntimeInstance};
 use driver::DriverDataBase;
 pub use solc_runner::SolidityPipeline;
 use url::Url;
@@ -164,6 +165,295 @@ impl SolGasRow {
     pub fn sol_best(&self) -> u64 {
         *self.sol_variants.iter().min().unwrap()
     }
+}
+
+/// Optimized Solidity variants used by stateful differential gas tests.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SolOptVariant {
+    LegacyOpt,
+    ViaIrOpt,
+}
+
+impl SolOptVariant {
+    pub const ALL: [Self; 2] = [Self::LegacyOpt, Self::ViaIrOpt];
+
+    pub fn report_label(self) -> &'static str {
+        match self {
+            Self::LegacyOpt => "sol",
+            Self::ViaIrOpt => "sol-IR",
+        }
+    }
+
+    pub fn compile_label(self) -> &'static str {
+        let (pipeline, optimize) = self.compile_options();
+        sol_variant_label(pipeline, optimize)
+    }
+
+    pub fn compile_options(self) -> (SolidityPipeline, bool) {
+        match self {
+            Self::LegacyOpt => (SolidityPipeline::Legacy, true),
+            Self::ViaIrOpt => (SolidityPipeline::ViaIR, true),
+        }
+    }
+
+    pub fn is_primary(self) -> bool {
+        self == Self::LegacyOpt
+    }
+}
+
+pub struct SolOptBytecode {
+    pub variant: SolOptVariant,
+    pub bytecode: solc_runner::ContractBytecode,
+}
+
+impl SolOptBytecode {
+    pub fn deploy_len(&self) -> usize {
+        hex_byte_len(&self.bytecode.bytecode)
+    }
+
+    pub fn runtime_len(&self) -> usize {
+        hex_byte_len(&self.bytecode.runtime_bytecode)
+    }
+}
+
+pub fn compile_solidity_opt_variants(
+    source: &str,
+    contract_name: &str,
+    solc_path: Option<&str>,
+) -> Result<Vec<SolOptBytecode>, String> {
+    SolOptVariant::ALL
+        .iter()
+        .map(|variant| {
+            let (pipeline, optimize) = variant.compile_options();
+            let bytecode = compile_solidity_pipeline_bytecode(
+                source,
+                contract_name,
+                optimize,
+                pipeline,
+                solc_path,
+            )?;
+            Ok(SolOptBytecode {
+                variant: *variant,
+                bytecode,
+            })
+        })
+        .collect()
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct SolOptValues {
+    pub legacy_opt: u64,
+    pub via_ir_opt: u64,
+}
+
+impl SolOptValues {
+    pub fn get(self, variant: SolOptVariant) -> u64 {
+        match variant {
+            SolOptVariant::LegacyOpt => self.legacy_opt,
+            SolOptVariant::ViaIrOpt => self.via_ir_opt,
+        }
+    }
+
+    pub fn set(&mut self, variant: SolOptVariant, value: u64) {
+        match variant {
+            SolOptVariant::LegacyOpt => self.legacy_opt = value,
+            SolOptVariant::ViaIrOpt => self.via_ir_opt = value,
+        }
+    }
+
+    pub fn add_assign(&mut self, other: Self) {
+        self.legacy_opt += other.legacy_opt;
+        self.via_ir_opt += other.via_ir_opt;
+    }
+}
+
+#[derive(Clone)]
+pub struct SolOptGasRow {
+    pub label: String,
+    pub fe: u64,
+    pub sol: SolOptValues,
+}
+
+impl SolOptGasRow {
+    pub fn new(label: impl Into<String>, fe: u64, sol: SolOptValues) -> Self {
+        Self {
+            label: label.into(),
+            fe,
+            sol,
+        }
+    }
+}
+
+pub struct SolOptRuntime {
+    pub variant: SolOptVariant,
+    pub instance: RuntimeInstance,
+}
+
+pub fn deploy_solidity_opt_variants(
+    bytecodes: &[SolOptBytecode],
+) -> Result<(Vec<SolOptRuntime>, SolOptValues), String> {
+    let mut gas = SolOptValues::default();
+    let mut runtimes = Vec::with_capacity(bytecodes.len());
+    for sol in bytecodes {
+        let (instance, deploy_gas) = RuntimeInstance::deploy_tracked(&sol.bytecode.bytecode)
+            .map_err(|e| format!("deploy {}: {e:?}", sol.variant.compile_label()))?;
+        gas.set(sol.variant, deploy_gas);
+        runtimes.push(SolOptRuntime {
+            variant: sol.variant,
+            instance,
+        });
+    }
+    Ok((runtimes, gas))
+}
+
+pub fn primary_sol_runtime_mut(sols: &mut [SolOptRuntime]) -> &mut RuntimeInstance {
+    sols.iter_mut()
+        .find(|sol| sol.variant.is_primary())
+        .map(|sol| &mut sol.instance)
+        .expect("primary Solidity variant should be tested")
+}
+
+pub struct SolOptCallResult {
+    pub fe_return: Vec<u8>,
+    pub primary_sol_return: Vec<u8>,
+    pub sol_returns: Vec<(SolOptVariant, Vec<u8>)>,
+    pub row: SolOptGasRow,
+}
+
+pub fn call_sol_opt_variants(
+    label: &str,
+    fe: &mut RuntimeInstance,
+    sols: &mut [SolOptRuntime],
+    calldata: &[u8],
+    options: ExecutionOptions,
+) -> SolOptCallResult {
+    let fe_res = fe
+        .call_raw(calldata, options)
+        .unwrap_or_else(|e| panic!("fe {label}: {e:?}"));
+    let mut sol_gas = SolOptValues::default();
+    let mut primary_sol_return = Vec::new();
+    let mut sol_returns = Vec::with_capacity(sols.len());
+
+    for sol in sols {
+        let variant_label = sol.variant.compile_label();
+        let res = sol
+            .instance
+            .call_raw(calldata, options)
+            .unwrap_or_else(|e| panic!("{variant_label} {label}: {e:?}"));
+        sol_gas.set(sol.variant, res.gas_used);
+        if sol.variant.is_primary() {
+            primary_sol_return = res.return_data.clone();
+        }
+        sol_returns.push((sol.variant, res.return_data));
+    }
+
+    SolOptCallResult {
+        fe_return: fe_res.return_data,
+        primary_sol_return,
+        sol_returns,
+        row: SolOptGasRow::new(label, fe_res.gas_used, sol_gas),
+    }
+}
+
+pub fn render_sol_opt_call_gas_report(
+    rows: &[SolOptGasRow],
+    label_header: &str,
+    fe_header: &str,
+    separator_extra: usize,
+) -> String {
+    let mut out = String::new();
+    out.push_str("call gas\n");
+    let mut call_rows = rows.to_vec();
+    let total_fe = call_rows.iter().map(|row| row.fe).sum();
+    let total_sol = call_rows
+        .iter()
+        .fold(SolOptValues::default(), |mut total, row| {
+            total.add_assign(row.sol);
+            total
+        });
+    call_rows.push(SolOptGasRow::new("TOTAL", total_fe, total_sol));
+    render_sol_opt_gas_rows(
+        &mut out,
+        &call_rows,
+        label_header,
+        fe_header,
+        separator_extra,
+    );
+    out
+}
+
+pub fn render_sol_opt_gas_rows(
+    out: &mut String,
+    rows: &[SolOptGasRow],
+    label_header: &str,
+    fe_header: &str,
+    separator_extra: usize,
+) {
+    let label_width = rows
+        .iter()
+        .map(|row| row.label.len())
+        .chain(std::iter::once(label_header.len()))
+        .max()
+        .unwrap();
+    let delta_width = rows
+        .iter()
+        .map(|row| {
+            let sol_ir = row.sol.get(SolOptVariant::ViaIrOpt);
+            let delta_abs = row.fe as i64 - sol_ir as i64;
+            format!("{delta_abs:+} ({})", fmt_delta_pct(row.fe, sol_ir)).len()
+        })
+        .chain(std::iter::once("fe vs sol-IR".len()))
+        .max()
+        .unwrap();
+    out.push_str(&format!(
+        "{:<lw$} {:>10} {:>10} {:>10}  {:>dw$}\n",
+        label_header,
+        fe_header,
+        SolOptVariant::LegacyOpt.report_label(),
+        SolOptVariant::ViaIrOpt.report_label(),
+        "fe vs sol-IR",
+        lw = label_width,
+        dw = delta_width,
+    ));
+    out.push_str(&format!(
+        "{}\n",
+        "-".repeat(label_width + 1 + 10 * 3 + 2 + delta_width + separator_extra)
+    ));
+    for row in rows {
+        let sol_ir = row.sol.get(SolOptVariant::ViaIrOpt);
+        let delta_abs = row.fe as i64 - sol_ir as i64;
+        let delta = format!("{delta_abs:+} ({})", fmt_delta_pct(row.fe, sol_ir));
+        out.push_str(&format!(
+            "{:<lw$} {:>10} {:>10} {:>10}  {:>dw$}\n",
+            row.label,
+            row.fe,
+            row.sol.get(SolOptVariant::LegacyOpt),
+            row.sol.get(SolOptVariant::ViaIrOpt),
+            delta,
+            lw = label_width,
+            dw = delta_width,
+        ));
+    }
+}
+
+pub fn resolve_solc_path() -> Option<String> {
+    std::env::var_os("FE_SOLC_PATH")
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_file())
+        .or_else(|| find_executable_in_path("solc"))
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
+fn find_executable_in_path(name: &str) -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(name))
+        .find(|candidate| candidate.is_file())
+}
+
+fn hex_byte_len(hex: &str) -> usize {
+    assert_eq!(hex.len() % 2, 0, "bytecode hex length should be even");
+    hex.len() / 2
 }
 
 /// Print Fe vs all four Solidity variants with `best` and `fe vs best` columns.
