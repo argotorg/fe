@@ -45,7 +45,7 @@
       this._render();
     }
 
-    _render() {
+    _render(scrollRestore) {
       var data = this._data;
       this.shadowRoot.textContent = "";
       this.shadowRoot.append(el("style", "", this._style()));
@@ -107,6 +107,7 @@
       this.shadowRoot.append(page);
       this._installInteractions();
       this._restoreSelection();
+      this._restorePaneScroll(scrollRestore);
       this._renderDetail(this._selected);
     }
 
@@ -464,15 +465,21 @@
       root.addEventListener("change", function (event) {
         var select = event.target.closest && event.target.closest(".representation-select");
         var mode = event.target.closest && event.target.closest(".display-mode-select");
+        var scrollState = this._capturePaneScrollState();
+        var switchedPaneIndex = null;
         if (select) {
           var index = Number(select.dataset.paneIndex || 0);
           this._paneChoices[index] = select.value;
+          switchedPaneIndex = index;
         } else if (mode) {
           this._displayMode = mode.value || "compact";
         } else {
           return;
         }
-        this._render();
+        this._render({
+          scrollState: scrollState,
+          switchedPaneIndex: switchedPaneIndex,
+        });
       }.bind(this));
     }
 
@@ -491,6 +498,56 @@
         node.classList.add("trace-selected");
       });
       this._renderDetail(this._selected);
+    }
+
+    _capturePaneScrollState() {
+      var state = Object.create(null);
+      this.shadowRoot.querySelectorAll(".workbench-pane").forEach(function (pane) {
+        var index = pane.dataset.paneIndex;
+        var shell = pane.querySelector(".listing-shell");
+        var scroller = this._scrollContainer(shell);
+        if (!index || !scroller) return;
+        state[index] = {
+          representation: this._paneChoices && this._paneChoices[Number(index)],
+          scrollTop: scroller.scrollTop,
+          activeRun: shell && shell.dataset.activeRun || "",
+        };
+      }, this);
+      return state;
+    }
+
+    _restorePaneScroll(restore) {
+      if (!restore || !restore.scrollState) return;
+      var switchedPaneIndex = restore.switchedPaneIndex;
+      this.shadowRoot.querySelectorAll(".workbench-pane").forEach(function (pane) {
+        var index = pane.dataset.paneIndex;
+        var shell = pane.querySelector(".listing-shell");
+        var scroller = this._scrollContainer(shell);
+        if (!index || !shell || !scroller) return;
+        if (switchedPaneIndex !== null && Number(index) === Number(switchedPaneIndex)) {
+          this._scrollPaneToFirstSelectedRun(pane);
+          return;
+        }
+        var saved = restore.scrollState[index];
+        if (!saved) return;
+        scroller.scrollTop = saved.scrollTop || 0;
+        if (saved.activeRun) shell.dataset.activeRun = saved.activeRun;
+      }, this);
+    }
+
+    _scrollContainer(shell) {
+      return shell && shell.querySelector(".source-lines,.rows");
+    }
+
+    _scrollPaneToFirstSelectedRun(pane) {
+      if (!this._selected || !this._selected.length) return false;
+      var shell = pane && pane.querySelector(".listing-shell");
+      if (!shell) return false;
+      var runs = this._matchingRuns(shell, this._selected);
+      if (!runs.length) return false;
+      shell.dataset.activeRun = "0";
+      this._scrollRunIntoView(runs[0], 1);
+      return true;
     }
 
     _scrollToMarkerTarget(marker) {
@@ -556,9 +613,20 @@
 
     _scrollRunIntoView(run, direction) {
       if (!run || !run.length) return;
-      var boundary = run.filter(function (row) { return row.classList.contains("boundary-row"); })[0];
+      var boundary = run.filter(function (row) { return row.classList.contains("boundary-row"); })[0] || this._nearestSectionBoundary(run[0]);
       var target = boundary || (direction < 0 ? run[run.length - 1] : run[0]);
       this._scrollRowIntoView(target);
+    }
+
+    _nearestSectionBoundary(row) {
+      var node = row && row.previousElementSibling;
+      while (node) {
+        if (node.classList && (node.classList.contains("boundary-marker") || node.classList.contains("source-section-separator"))) {
+          return node;
+        }
+        node = node.previousElementSibling;
+      }
+      return null;
     }
 
     _scrollRowIntoView(row) {
