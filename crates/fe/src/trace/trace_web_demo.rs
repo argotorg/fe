@@ -1242,57 +1242,49 @@ fn panel_rows(
     rails_by_key: &BTreeMap<String, Vec<String>>,
     loop_block_roles: &BTreeMap<String, String>,
 ) -> Vec<DemoPanelRow> {
-    if panel == "bytecode" {
-        let mut instructions = index
-            .instructions
-            .values()
-            .filter(|instruction| key_belongs_to_panel(&instruction.instruction, panel))
-            .copied()
-            .collect::<Vec<_>>();
-        instructions.sort_by(|left, right| {
-            left.function
-                .canonical_storage_key()
-                .cmp(&right.function.canonical_storage_key())
-                .then(left.index.cmp(&right.index))
-                .then(
-                    left.instruction
-                        .canonical_storage_key()
-                        .cmp(&right.instruction.canonical_storage_key()),
-                )
-        });
-        return instructions
-            .into_iter()
-            .map(|instruction| instruction_panel_row(instruction, classes_by_key, rails_by_key))
-            .collect();
-    }
-
-    index
+    let mut keys = index
         .origin_nodes
         .keys()
         .filter(|key| key_belongs_to_panel(key, panel))
         .filter(|key| classes_by_key.contains_key(&key.canonical_storage_key()))
-        .map(|key| origin_panel_row(key, index, classes_by_key, rails_by_key, loop_block_roles))
+        .cloned()
+        .collect::<Vec<_>>();
+    keys.sort_by(|left, right| compare_panel_keys(left, right, index));
+    keys.into_iter()
+        .map(|key| origin_panel_row(&key, index, classes_by_key, rails_by_key, loop_block_roles))
         .collect()
 }
 
-fn instruction_panel_row(
-    instruction: &InstructionFact,
-    classes_by_key: &BTreeMap<String, Vec<String>>,
-    rails_by_key: &BTreeMap<String, Vec<String>>,
-) -> DemoPanelRow {
-    let storage_key = instruction.instruction.canonical_storage_key();
-    let mut classes = classes_by_key
-        .get(&storage_key)
-        .cloned()
-        .unwrap_or_default();
-    classes.extend(rails_by_key.get(&storage_key).cloned().unwrap_or_default());
-    classes.extend(bytecode_display_classes(instruction));
-    DemoPanelRow {
-        key: Some(storage_key.clone()),
-        label: compact_origin_label(&instruction.instruction, Some(instruction)),
-        meta: compact_origin_meta(&instruction.instruction, None),
-        text: compact_instruction_text(instruction),
-        classes,
+fn compare_panel_keys(
+    left: &OriginExportKey,
+    right: &OriginExportKey,
+    index: &DemoIndex<'_>,
+) -> std::cmp::Ordering {
+    match (index.instructions.get(left), index.instructions.get(right)) {
+        (Some(left), Some(right)) => left
+            .function
+            .canonical_storage_key()
+            .cmp(&right.function.canonical_storage_key())
+            .then(left.index.cmp(&right.index))
+            .then(
+                left.instruction
+                    .canonical_storage_key()
+                    .cmp(&right.instruction.canonical_storage_key()),
+            ),
+        (Some(left), None) => left
+            .function
+            .canonical_storage_key()
+            .as_str()
+            .cmp(right.owner_key())
+            .then(std::cmp::Ordering::Less),
+        (None, Some(right)) => left
+            .owner_key()
+            .cmp(&right.function.canonical_storage_key())
+            .then(std::cmp::Ordering::Greater),
+        (None, None) => left
+            .owner_key()
+            .cmp(right.owner_key())
+            .then(left.local_key().cmp(right.local_key())),
     }
 }
 
@@ -1334,14 +1326,6 @@ fn compact_instruction_text(instruction: &InstructionFact) -> String {
         "bytecode.pc" => instruction.mnemonic.clone(),
         "runtime.stmt" | "runtime.terminator" => compact_mir_text(&instruction.mnemonic),
         _ => format!("%{} = {}", instruction.index, instruction.mnemonic),
-    }
-}
-
-fn bytecode_display_classes(instruction: &InstructionFact) -> Vec<String> {
-    if instruction.instruction.kind() == "bytecode.pc" && instruction.mnemonic == "JUMPDEST" {
-        vec!["origin-structural".to_string()]
-    } else {
-        Vec::new()
     }
 }
 
