@@ -2863,12 +2863,33 @@ fn trace_workbench_compact_origin_text(
         trace_workbench_compact_block_label(key)
     } else if trace_workbench_origin_key_is_generated(key) {
         match key.kind() {
-            "runtime.terminator" => "generated wrapper terminator".to_string(),
-            "runtime.stmt" => "generated wrapper statement".to_string(),
-            _ => "compiler-generated wrapper code".to_string(),
+            "runtime.terminator" => "generated terminator".to_string(),
+            "runtime.stmt" => "generated statement".to_string(),
+            kind if kind.starts_with("hir.") => "generated HIR node".to_string(),
+            kind if kind.starts_with("sonatina.evm.prepared.") => {
+                "generated prepared code".to_string()
+            }
+            kind if kind.starts_with("sonatina.") => "generated Sonatina node".to_string(),
+            _ => "generated compiler node".to_string(),
         }
     } else {
-        trace_workbench_compact_origin_meta(key)
+        trace_workbench_compact_origin_fallback_text(key)
+    }
+}
+
+fn trace_workbench_compact_origin_fallback_text(key: &OriginExportKey) -> String {
+    match key.kind() {
+        "hir.expr" => "HIR expression".to_string(),
+        "hir.stmt" => "HIR statement".to_string(),
+        "runtime.function" => "MIR function".to_string(),
+        "runtime.block" => "MIR block".to_string(),
+        "runtime.stmt" => "MIR statement".to_string(),
+        "runtime.terminator" => "MIR terminator".to_string(),
+        kind if kind.starts_with("sonatina.postopt.") => "optimized instruction".to_string(),
+        kind if kind.starts_with("sonatina.preopt.") => "pre-opt instruction".to_string(),
+        kind if kind.starts_with("sonatina.evm.prepared.") => "prepared instruction".to_string(),
+        "bytecode.pc" => "bytecode instruction".to_string(),
+        _ => trace_workbench_compact_origin_meta(key),
     }
 }
 
@@ -6559,6 +6580,40 @@ mod tests {
         assert_eq!(
             trace_workbench_compact_origin_text(&hir, &index),
             "let x = y"
+        );
+    }
+
+    #[test]
+    fn trace_workbench_origin_fallback_text_is_representation_first() {
+        let hir = key("hir.expr", "demo", "expr:0");
+        let postopt = key(
+            "sonatina.postopt.inst",
+            "demo",
+            "function:FuncRef(1):inst:InstId(122)",
+        );
+        let generated_mir = key(
+            "runtime.stmt",
+            "runtime-instance:semantic:__synthetic_wrapper",
+            "block:0:stmt:1",
+        );
+        let snapshot = snapshot(vec![
+            node(hir.clone()),
+            node(postopt.clone()),
+            node(generated_mir.clone()),
+        ]);
+        let index = TraceWorkbenchProjectionIndex::new(&snapshot, "demo.fe", None);
+
+        assert_eq!(
+            trace_workbench_compact_origin_text(&hir, &index),
+            "HIR expression"
+        );
+        assert_eq!(
+            trace_workbench_compact_origin_text(&postopt, &index),
+            "optimized instruction"
+        );
+        assert_eq!(
+            trace_workbench_compact_origin_text(&generated_mir, &index),
+            "generated statement"
         );
     }
 
