@@ -438,7 +438,7 @@
       }, this);
       related.forEach(function (section, sectionIndex) {
         var header = el("div", "source-section-separator");
-        header.append(el("span", "", section.display_name || "related source"), el("small", "", section.origin || ""));
+        header.append(el("span", "", section.display_name || "related source"), el("small", "", section.summary || section.origin || ""));
         body.append(header);
         ((section && section.lines) || []).forEach(function (line, lineIndex) {
           var classes = line.classes || [];

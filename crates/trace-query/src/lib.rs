@@ -2094,8 +2094,102 @@ fn trace_workbench_source_projection(
         "display_name": input_path,
         "confidence": confidence,
         "lines": lines,
-        "related_sources": [],
+        "related_sources": trace_workbench_related_sources(input_path, snapshot, component_classes_by_key),
     })
+}
+
+fn trace_workbench_related_sources(
+    input_path: &str,
+    snapshot: &TraceSnapshot,
+    component_classes_by_key: &BTreeMap<String, Vec<String>>,
+) -> Vec<serde_json::Value> {
+    let mut source_files = BTreeMap::<OriginExportKey, &trace_facts::SourceFileFact>::new();
+    let mut lines_by_file = BTreeMap::<OriginExportKey, BTreeMap<u32, BTreeSet<String>>>::new();
+    for fact in snapshot.facts() {
+        if let TraceFact::SourceFile(source_file) = fact {
+            source_files.insert(source_file.file_key.clone(), source_file);
+        }
+    }
+    for fact in snapshot.facts() {
+        let TraceFact::SourceSpan(span) = fact else {
+            continue;
+        };
+        if origin_closure::source_owner_matches_input(span.file.owner_key(), input_path) {
+            continue;
+        }
+        let classes = component_classes_by_key
+            .get(&span.origin.canonical_storage_key())
+            .into_iter()
+            .flatten()
+            .filter(|class| trace_workbench_is_component_class(class.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        for line in span.start_line..=span.end_line {
+            lines_by_file
+                .entry(span.file.clone())
+                .or_default()
+                .entry(line)
+                .or_default()
+                .extend(classes.iter().cloned());
+        }
+    }
+    lines_by_file
+        .into_iter()
+        .filter_map(|(file, lines)| {
+            let source_file = source_files.get(&file)?;
+            let line_numbers = lines.keys().copied().collect::<Vec<_>>();
+            let row_prefix = trace_workbench_origin_row_id(&file.canonical_storage_key());
+            let rows = lines
+                .into_iter()
+                .map(|(number, classes)| {
+                    let classes = classes.into_iter().collect::<Vec<_>>();
+                    serde_json::json!({
+                        "row_id": format!("{row_prefix}-line-{number}"),
+                        "number": number,
+                        "text": "source text unavailable",
+                        "classes": classes,
+                        "display_status": trace_workbench_status_for_source_line(&classes),
+                    })
+                })
+                .collect::<Vec<_>>();
+            Some(serde_json::json!({
+                "display_name": source_file.display_name,
+                "origin": file.canonical_storage_key(),
+                "uri": source_file.uri,
+                "content_hash": source_file.content_hash,
+                "summary": trace_workbench_line_range_summary(&line_numbers),
+                "lines": rows,
+            }))
+        })
+        .collect()
+}
+
+fn trace_workbench_line_range_summary(lines: &[u32]) -> String {
+    if lines.is_empty() {
+        return "no referenced lines".to_string();
+    }
+    let mut ranges = Vec::new();
+    let mut start = lines[0];
+    let mut end = lines[0];
+    for line in lines.iter().copied().skip(1) {
+        if line == end.saturating_add(1) {
+            end = line;
+            continue;
+        }
+        ranges.push(trace_workbench_format_line_range(start, end));
+        start = line;
+        end = line;
+    }
+    ranges.push(trace_workbench_format_line_range(start, end));
+    format!("referenced lines {}", ranges.join(", "))
+}
+
+fn trace_workbench_format_line_range(start: u32, end: u32) -> String {
+    if start == end {
+        start.to_string()
+    } else {
+        format!("{start}-{end}")
+    }
 }
 
 fn trace_workbench_source_lines_for_audit(
@@ -5178,7 +5272,7 @@ mod tests {
         VariablesAtPcRequest, run_trace_query, trace_workbench_compact_mir_text,
         trace_workbench_compact_origin_text, trace_workbench_manifest,
         trace_workbench_natural_key_cmp, trace_workbench_report_projection,
-        trace_workbench_status_for_row,
+        trace_workbench_source_projection, trace_workbench_status_for_row,
     };
 
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -6448,6 +6542,39 @@ mod tests {
             trace_workbench_compact_origin_text(&hir, &index),
             "let x = y"
         );
+    }
+
+    #[test]
+    fn trace_workbench_source_projection_inventories_related_sources() {
+        let input_file = key("source.file", "file:///main.fe", "file:main");
+        let lib_file = key("source.file", "file:///std/lib.fe", "file:std");
+        let lib_hir = key("hir.expr", "file:///std/lib.fe", "expr:abi");
+        let snapshot = snapshot(vec![
+            node(input_file),
+            node(lib_file.clone()),
+            node(lib_hir.clone()),
+            TraceFact::SourceFile(SourceFileFact::new(
+                lib_file.clone(),
+                "file:///std/lib.fe",
+                "std/lib.fe",
+                "blake3:std",
+                None,
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(lib_hir, lib_file, 0, 12, 7, 1, 8, 3)),
+        ]);
+        let source = trace_workbench_source_projection(
+            "file:///main.fe",
+            Some("fn main() {}\n"),
+            &snapshot,
+            &std::collections::BTreeMap::new(),
+        );
+        let related = source["related_sources"].as_array().unwrap();
+
+        assert_eq!(related.len(), 1);
+        assert_eq!(related[0]["display_name"], "std/lib.fe");
+        assert_eq!(related[0]["summary"], "referenced lines 7-8");
+        assert_eq!(related[0]["lines"][0]["number"], 7);
+        assert_eq!(related[0]["lines"][0]["text"], "source text unavailable");
     }
 
     #[test]
