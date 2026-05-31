@@ -402,7 +402,7 @@
         var classes = line.classes || [];
         var row = el("div", "source-line trace-region " + classes.concat(this._auditClasses(classes)).join(" "));
         this._bindTraceGroups(row, classes);
-        row.id = this._rowId("source-main", index);
+        row.id = line.row_id || this._rowId("source-main", index);
         row.dataset.sourceRef = "main:" + line.number;
         row.dataset.traceLabel = "source line " + line.number;
         row.append(el("span", "ln", line.number), el("code", "", line.text), this._badges(line));
@@ -419,7 +419,7 @@
           var classes = line.classes || [];
           var row = el("div", "source-line related-source-line trace-region " + classes.concat(this._auditClasses(classes)).join(" "));
           this._bindTraceGroups(row, classes);
-          row.id = this._rowId("source-related-" + sectionIndex, lineIndex);
+          row.id = line.row_id || this._rowId("source-related-" + sectionIndex, lineIndex);
           row.dataset.sourceRef = "related:" + sectionIndex + ":" + line.number;
           row.dataset.traceLabel = (section.display_name || "related source") + " line " + line.number;
           row.append(el("span", "ln", line.number), el("code", "", line.text), this._badges(line));
@@ -451,7 +451,7 @@
         var row = el("button", "trace-row trace-region " + rowKind + (hasTrace ? "" : "unlinked-row ") + classes.concat(this._auditClasses(classes)).join(" "));
         this._bindTraceGroups(row, classes);
         row.type = "button";
-        row.id = this._rowId("panel-" + (panelData.id || "panel"), index);
+        row.id = rowData.row_id || this._rowId("panel-" + (panelData.id || "panel"), index);
         row.dataset.rowKind = kind;
         row.style.setProperty("--row-indent", String(rowData.indent || 0));
         if (rowData.key) {

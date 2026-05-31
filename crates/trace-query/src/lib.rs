@@ -1932,6 +1932,7 @@ struct TraceWorkbenchPane {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 struct TraceWorkbenchPaneRow {
+    row_id: String,
     key: Option<String>,
     kind: TraceWorkbenchPaneRowKind,
     indent: u8,
@@ -1947,6 +1948,7 @@ struct TraceWorkbenchPaneRow {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 struct TraceWorkbenchSourceLine {
+    row_id: String,
     number: u32,
     text: String,
     classes: Vec<String>,
@@ -2040,6 +2042,7 @@ fn trace_workbench_source_lines(
                 .map(|classes| classes.iter().cloned().collect::<Vec<_>>())
                 .unwrap_or_default();
             TraceWorkbenchSourceLine {
+                row_id: trace_workbench_source_row_id(number),
                 number,
                 text: text.to_string(),
                 display_status: trace_workbench_status_for_source_line(&classes),
@@ -2195,6 +2198,7 @@ fn trace_workbench_panel_row(
         .map(|instruction| instruction.mnemonic.clone())
         .unwrap_or_else(|| storage_key.clone());
     TraceWorkbenchPaneRow {
+        row_id: trace_workbench_origin_row_id(&storage_key),
         key: Some(storage_key),
         kind,
         indent: trace_workbench_row_indent(kind),
@@ -2214,6 +2218,19 @@ fn trace_workbench_panel_row(
             raw_text,
         },
     }
+}
+
+fn trace_workbench_source_row_id(line_number: u32) -> String {
+    format!("source-main-line-{line_number}")
+}
+
+fn trace_workbench_origin_row_id(storage_key: &str) -> String {
+    let mut hash = 2166136261u32;
+    for byte in storage_key.bytes() {
+        hash ^= u32::from(byte);
+        hash = hash.wrapping_mul(16777619);
+    }
+    format!("origin-{hash:08x}")
 }
 
 fn trace_workbench_row_kind(
@@ -5900,6 +5917,10 @@ mod tests {
         assert_eq!(projection["metadata"]["data_source"], "lsp-live");
         assert!(projection["attribution_audit"].is_object());
         assert_eq!(projection["source"]["lines"].as_array().unwrap().len(), 3);
+        assert_eq!(
+            projection["source"]["lines"][1]["row_id"],
+            "source-main-line-2"
+        );
         assert!(
             projection["panels"]
                 .as_array()
@@ -5911,6 +5932,17 @@ mod tests {
                             .as_array()
                             .is_some_and(|rows| !rows.is_empty())
                 })
+        );
+        let bytecode_panel = projection["panels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|panel| panel["id"] == "bytecode")
+            .unwrap();
+        assert!(
+            bytecode_panel["rows"][0]["row_id"]
+                .as_str()
+                .is_some_and(|row_id| row_id.starts_with("origin-"))
         );
         assert_eq!(
             projection["notes"][2],

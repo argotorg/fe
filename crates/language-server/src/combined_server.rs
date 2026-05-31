@@ -250,11 +250,13 @@ pub async fn run(
         .route(
             "/trace/session/{session_id}/select",
             post({
+                let actor_rx = actor_rx.clone();
                 let workspace_root = workspace_root.clone();
                 move |Path(session_id): Path<String>,
                       Query(query): Query<BTreeMap<String, String>>,
                       headers: HeaderMap,
                       Json(selection): Json<serde_json::Value>| {
+                    let actor_rx = actor_rx.clone();
                     let workspace_root = workspace_root.clone();
                     async move {
                         handle_trace_workbench_select_http(
@@ -262,6 +264,7 @@ pub async fn run(
                             query,
                             headers,
                             selection,
+                            actor_rx,
                             workspace_root,
                         )
                         .await
@@ -565,6 +568,7 @@ async fn handle_trace_workbench_select_http(
     query: BTreeMap<String, String>,
     headers: HeaderMap,
     selection: serde_json::Value,
+    actor_rx: watch::Receiver<Option<SharedActor>>,
     workspace_root: Option<String>,
 ) -> impl IntoResponse {
     if let Err(reason) = validate_trace_auth(
@@ -576,15 +580,57 @@ async fn handle_trace_workbench_select_http(
             serde_json::json!({ "reason": reason }),
         );
     }
+    let bootstrap = match trace_workbench_bootstrap_for_event(session_id.clone(), actor_rx).await {
+        Ok(response) => response,
+        Err(reason) => {
+            return json_response(
+                StatusCode::NOT_FOUND,
+                serde_json::json!({ "reason": reason }),
+            );
+        }
+    };
+    let resolved_rows = trace_workbench_resolved_rows_for_selection(&selection);
     json_response(
         StatusCode::OK,
         serde_json::json!({
             "event": "trace/selection",
             "sessionId": session_id,
+            "revision": bootstrap.revision.id,
             "selection": selection,
-            "resolvedRows": [],
+            "resolvedRows": resolved_rows,
         }),
     )
+}
+
+fn trace_workbench_resolved_rows_for_selection(selection: &serde_json::Value) -> Vec<String> {
+    if let Some(row) = selection.get("row").and_then(serde_json::Value::as_str)
+        && !row.trim().is_empty()
+    {
+        return vec![row.to_string()];
+    }
+    if let Some(source_ref) = selection
+        .get("sourceRef")
+        .or_else(|| selection.get("source_ref"))
+        .and_then(serde_json::Value::as_str)
+        && let Some(line) = source_ref.strip_prefix("main:")
+        && let Ok(line) = line.parse::<u64>()
+    {
+        return vec![trace_workbench_source_row_id(line)];
+    }
+    let Some(line) = selection
+        .get("range")
+        .and_then(|range| range.get("start"))
+        .and_then(|start| start.get("line"))
+        .and_then(serde_json::Value::as_u64)
+        .or_else(|| selection.get("line").and_then(serde_json::Value::as_u64))
+    else {
+        return Vec::new();
+    };
+    vec![trace_workbench_source_row_id(line.saturating_add(1))]
+}
+
+fn trace_workbench_source_row_id(line_number: u64) -> String {
+    format!("source-main-line-{line_number}")
 }
 
 fn json_response(status: StatusCode, value: serde_json::Value) -> axum::response::Response {
@@ -675,7 +721,9 @@ impl Dispatcher<LspActorKey> for TraceQueryDispatcher {
 
 #[cfg(test)]
 mod tests {
-    use super::{trace_auth_token, validate_trace_auth};
+    use super::{
+        trace_auth_token, trace_workbench_resolved_rows_for_selection, validate_trace_auth,
+    };
     use axum::http::{HeaderMap, header};
     use std::collections::BTreeMap;
 
@@ -708,6 +756,34 @@ mod tests {
         assert_eq!(
             trace_auth_token(&headers, &query).as_deref(),
             Some("query-secret")
+        );
+    }
+
+    #[test]
+    fn trace_workbench_selection_resolves_source_rows() {
+        let selection = serde_json::json!({
+            "source": "editor",
+            "selectionKind": "source-range",
+            "range": {
+                "start": { "line": 16, "character": 0 },
+                "end": { "line": 16, "character": 8 }
+            }
+        });
+        assert_eq!(
+            trace_workbench_resolved_rows_for_selection(&selection),
+            vec!["source-main-line-17".to_string()]
+        );
+
+        let selection = serde_json::json!({ "sourceRef": "main:94" });
+        assert_eq!(
+            trace_workbench_resolved_rows_for_selection(&selection),
+            vec!["source-main-line-94".to_string()]
+        );
+
+        let selection = serde_json::json!({ "row": "origin-abc123" });
+        assert_eq!(
+            trace_workbench_resolved_rows_for_selection(&selection),
+            vec!["origin-abc123".to_string()]
         );
     }
 }
