@@ -13,7 +13,7 @@ use trace_query::{
 };
 use url::Url;
 
-use crate::backend::Backend;
+use crate::backend::{Backend, TraceViewerRevisionRecord};
 
 #[derive(Clone, Debug)]
 pub(crate) struct TraceBackendQueryRequest {
@@ -51,6 +51,14 @@ pub(crate) struct TraceWorkbenchCapabilities {
     pub model_deltas: bool,
     pub chunks: bool,
     pub selection_sync: bool,
+    pub revision_history: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TraceWorkbenchRevisionHistoryResponse {
+    pub session_id: String,
+    pub revisions: Vec<TraceViewerRevisionRecord>,
 }
 
 pub(crate) async fn handle_trace_workbench_bootstrap(
@@ -84,6 +92,7 @@ pub(crate) async fn handle_trace_workbench_bootstrap(
             model_deltas: false,
             chunks: true,
             selection_sync: true,
+            revision_history: true,
         },
     })
 }
@@ -138,7 +147,7 @@ pub(crate) async fn handle_trace_workbench_model(
         }
         service
     };
-    Ok(trace_workbench_report_projection(
+    let projection = trace_workbench_report_projection(
         &service,
         service.snapshot(),
         TraceWorkbenchProjectionRequest {
@@ -154,7 +163,25 @@ pub(crate) async fn handle_trace_workbench_model(
                 .to_string(),
             data_source: "lsp-live".to_string(),
         },
-    ))
+    );
+    let manifest = trace_workbench_manifest(&projection);
+    backend.record_trace_viewer_revision(
+        &request.session_id,
+        TraceViewerRevisionRecord {
+            revision: manifest.revision,
+            document_version,
+            status: "ready".to_string(),
+            config_hash: current_config_hash,
+            model_digest: manifest.root_digest,
+            summary_digest: manifest.summary_digest,
+            source_digest: manifest.source_digest,
+            indexes_digest: manifest.indexes_digest,
+            rail_components_digest: manifest.rail_components_digest,
+            pane_digests: manifest.panes,
+            report_digests: manifest.reports,
+        },
+    );
+    Ok(projection)
 }
 
 pub(crate) async fn handle_trace_workbench_manifest(
@@ -164,6 +191,24 @@ pub(crate) async fn handle_trace_workbench_manifest(
     let model = handle_trace_workbench_model(backend, request).await?;
     serde_json::to_value(trace_workbench_manifest(&model))
         .map_err(|err| internal_error(format!("failed to serialize trace manifest: {err}")))
+}
+
+pub(crate) async fn handle_trace_workbench_revisions(
+    backend: &mut Backend,
+    request: TraceWorkbenchSessionRequest,
+) -> Result<TraceWorkbenchRevisionHistoryResponse, async_lsp::ResponseError> {
+    let revisions = backend
+        .trace_viewer_revisions(&request.session_id)
+        .ok_or_else(|| {
+            internal_error(format!(
+                "unknown trace workbench session {}",
+                request.session_id
+            ))
+        })?;
+    Ok(TraceWorkbenchRevisionHistoryResponse {
+        session_id: request.session_id,
+        revisions,
+    })
 }
 
 pub(crate) async fn handle_trace_query(

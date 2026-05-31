@@ -3,6 +3,7 @@ use driver::DriverDataBase;
 use introspection_config::FeToolingConfig;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -58,6 +59,7 @@ pub struct Backend {
     document_versions: FxHashMap<Url, i32>,
     trace_cache: FxHashMap<TraceCacheKey, TraceIntrospectionService>,
     trace_viewer_sessions: FxHashMap<String, TraceViewerSession>,
+    trace_viewer_revisions: FxHashMap<String, Vec<TraceViewerRevisionRecord>>,
     trace_viewer_generation: u64,
 }
 
@@ -106,6 +108,7 @@ impl Backend {
             document_versions: FxHashMap::default(),
             trace_cache: FxHashMap::default(),
             trace_viewer_sessions: FxHashMap::default(),
+            trace_viewer_revisions: FxHashMap::default(),
             trace_viewer_generation: 0,
         }
     }
@@ -187,11 +190,54 @@ impl Backend {
             initial_selection,
         };
         self.trace_viewer_sessions.insert(id, session.clone());
+        self.trace_viewer_revisions
+            .insert(session.id.clone(), Vec::new());
         session
     }
 
     pub(crate) fn trace_viewer_session(&self, session_id: &str) -> Option<TraceViewerSession> {
         self.trace_viewer_sessions.get(session_id).cloned()
+    }
+
+    pub(crate) fn record_trace_viewer_revision(
+        &mut self,
+        session_id: &str,
+        record: TraceViewerRevisionRecord,
+    ) -> bool {
+        if !self.trace_viewer_sessions.contains_key(session_id) {
+            return false;
+        }
+        let revisions = self
+            .trace_viewer_revisions
+            .entry(session_id.to_string())
+            .or_default();
+        if let Some(last) = revisions.last_mut()
+            && last.revision == record.revision
+            && last.model_digest == record.model_digest
+        {
+            *last = record;
+            return true;
+        }
+        revisions.push(record);
+        const MAX_TRACE_VIEWER_REVISIONS: usize = 64;
+        if revisions.len() > MAX_TRACE_VIEWER_REVISIONS {
+            let excess = revisions.len() - MAX_TRACE_VIEWER_REVISIONS;
+            revisions.drain(0..excess);
+        }
+        true
+    }
+
+    pub(crate) fn trace_viewer_revisions(
+        &self,
+        session_id: &str,
+    ) -> Option<Vec<TraceViewerRevisionRecord>> {
+        self.trace_viewer_sessions.get(session_id)?;
+        Some(
+            self.trace_viewer_revisions
+                .get(session_id)
+                .cloned()
+                .unwrap_or_default(),
+        )
     }
 
     /// Broadcast a doc-navigate event (path like "mylib::Foo/struct").
@@ -324,6 +370,22 @@ pub(crate) struct TraceViewerSelection {
     pub end_character: u32,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TraceViewerRevisionRecord {
+    pub revision: u64,
+    pub document_version: Option<i32>,
+    pub status: String,
+    pub config_hash: String,
+    pub model_digest: String,
+    pub summary_digest: String,
+    pub source_digest: String,
+    pub indexes_digest: String,
+    pub rail_components_digest: String,
+    pub pane_digests: BTreeMap<String, String>,
+    pub report_digests: BTreeMap<String, String>,
+}
+
 fn normalize_file_uri(uri: Url) -> Url {
     if uri.scheme() != "file" {
         return uri;
@@ -338,9 +400,10 @@ fn normalize_file_uri(uri: Url) -> Url {
 
 #[cfg(test)]
 mod tests {
-    use super::{Backend, WorkerError, normalize_file_uri};
+    use super::{Backend, TraceViewerRevisionRecord, WorkerError, normalize_file_uri};
     use async_lsp::MainLoop;
     use async_lsp::router::Router;
+    use std::collections::BTreeMap;
     use url::Url;
 
     #[test]
@@ -411,6 +474,70 @@ mod tests {
         tokio::task::spawn_blocking(move || drop(backend))
             .await
             .expect("backend drop task panicked");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn trace_viewer_revision_history_records_deduplicates_and_caps() {
+        let mut backend = test_backend();
+        let uri = Url::parse("file:///workspace/src/lib.fe").unwrap();
+        let session =
+            backend.create_trace_viewer_session(uri, "evm", "O2", "source-postopt-bytecode", None);
+
+        assert_eq!(
+            backend.trace_viewer_revisions(&session.id),
+            Some(Vec::new())
+        );
+        assert!(!backend.record_trace_viewer_revision(
+            "missing-session",
+            trace_viewer_revision_record(1, "blake3:missing"),
+        ));
+
+        assert!(backend.record_trace_viewer_revision(
+            &session.id,
+            trace_viewer_revision_record(1, "blake3:a"),
+        ));
+        assert!(backend.record_trace_viewer_revision(
+            &session.id,
+            trace_viewer_revision_record(1, "blake3:a"),
+        ));
+        assert_eq!(
+            backend.trace_viewer_revisions(&session.id).unwrap().len(),
+            1
+        );
+
+        for revision in 2..=66 {
+            assert!(backend.record_trace_viewer_revision(
+                &session.id,
+                trace_viewer_revision_record(revision, &format!("blake3:{revision:x}")),
+            ));
+        }
+        let revisions = backend.trace_viewer_revisions(&session.id).unwrap();
+        assert_eq!(revisions.len(), 64);
+        assert_eq!(revisions.first().unwrap().revision, 3);
+        assert_eq!(revisions.last().unwrap().revision, 66);
+
+        tokio::task::spawn_blocking(move || drop(backend))
+            .await
+            .expect("backend drop task panicked");
+    }
+
+    fn trace_viewer_revision_record(
+        revision: u64,
+        model_digest: &str,
+    ) -> TraceViewerRevisionRecord {
+        TraceViewerRevisionRecord {
+            revision,
+            document_version: Some(revision as i32),
+            status: "ready".to_string(),
+            config_hash: "config".to_string(),
+            model_digest: model_digest.to_string(),
+            summary_digest: "blake3:summary".to_string(),
+            source_digest: "blake3:source".to_string(),
+            indexes_digest: "blake3:indexes".to_string(),
+            rail_components_digest: "blake3:rails".to_string(),
+            pane_digests: BTreeMap::new(),
+            report_digests: BTreeMap::new(),
+        }
     }
 
     /// Regression test: `spawn_on_workers` must `catch_unwind` inside the

@@ -295,7 +295,8 @@ async fn handle_open_trace_workbench(
             "events": "sse",
             "modelDeltas": false,
             "chunks": true,
-            "selectionSync": true
+            "selectionSync": true,
+            "revisionHistory": true
         }
     })))
 }

@@ -269,6 +269,7 @@ pub fn origin_trace_live_html_shell(title: &str) -> String {
     var storageKey = "fe.trace.workbench.lastReady." + (session || "");
     var modelRefresh = null;
     var manifestCache = null;
+    var revisionHistoryCache = null;
     function fail(message) {{
       if (loading) loading.textContent = message;
       console.error("[fe trace workbench]", message);
@@ -314,6 +315,17 @@ pub fn origin_trace_live_html_shell(title: &str) -> String {
     }}
     function fetchChunk(digest) {{
       return fetchJson("/trace/session/" + encodeURIComponent(session) + "/chunk/" + encodeURIComponent(digest));
+    }}
+    function refreshRevisionHistory() {{
+      if (!session) return Promise.resolve(null);
+      return fetchJson("/trace/session/" + encodeURIComponent(session) + "/revisions")
+        .then(function (history) {{
+          revisionHistoryCache = history;
+          window.FE_TRACE_WORKBENCH_REVISIONS = history;
+          return history;
+        }}, function () {{
+          return revisionHistoryCache;
+        }});
     }}
     function applyChunkedManifest(manifest) {{
       var previous = manifestCache;
@@ -426,6 +438,7 @@ pub fn origin_trace_live_html_shell(title: &str) -> String {
         .then(function (model) {{
           rememberModel(model);
           renderModel(model);
+          refreshRevisionHistory();
           return model;
         }})
         .finally(function () {{
@@ -735,8 +748,10 @@ mod tests {
         assert!(html.contains("/trace/session/"));
         assert!(html.contains("/manifest"));
         assert!(html.contains("/chunk/"));
+        assert!(html.contains("/revisions"));
         assert!(html.contains("applyChunkedManifest"));
         assert!(html.contains("manifestCache"));
+        assert!(html.contains("FE_TRACE_WORKBENCH_REVISIONS"));
         assert!(html.contains("trace/selection"));
         assert!(html.contains("resolvedRows"));
     }
