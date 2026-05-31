@@ -44,6 +44,7 @@ pub struct OriginClosureCounts {
     pub mir: usize,
     pub sonatina_pre: usize,
     pub sonatina_post: usize,
+    pub sonatina_prepared: usize,
     pub bytecode: usize,
 }
 
@@ -152,6 +153,7 @@ pub enum ClosureAuditPhase {
     Mir,
     SonatinaPre,
     SonatinaPost,
+    SonatinaPrepared,
     Bytecode,
 }
 
@@ -163,6 +165,7 @@ impl ClosureAuditPhase {
             Self::Mir => "mir",
             Self::SonatinaPre => "sonatina_pre",
             Self::SonatinaPost => "sonatina_post",
+            Self::SonatinaPrepared => "sonatina_prepared",
             Self::Bytecode => "bytecode",
         }
     }
@@ -176,6 +179,7 @@ pub enum ClosureAuditPrimary {
     SourceOnlyExpected,
     SourceSpanSiblingUnlowered,
     ExpectedSynthetic,
+    PreparedOnly,
     LoweredNoTargetUnexplained,
     PreoptElisionGap,
     OptimizedAttributionGap,
@@ -215,6 +219,7 @@ impl ClosureAuditPrimary {
             Self::SourceOnlyExpected => "source_only_expected",
             Self::SourceSpanSiblingUnlowered => "source_span_sibling_unlowered",
             Self::ExpectedSynthetic => "expected_synthetic",
+            Self::PreparedOnly => "prepared_only",
             Self::LoweredNoTargetUnexplained => "lowered_no_target_unexplained",
             Self::PreoptElisionGap => "preopt_elision_gap",
             Self::OptimizedAttributionGap => "optimized_attribution_gap",
@@ -299,6 +304,8 @@ pub fn source_owner_matches_input(owner: &str, input_path: &str) -> bool {
 pub fn highest_phase_reached(counts: &OriginClosureCounts) -> ClosureAuditPhase {
     if counts.bytecode > 0 {
         ClosureAuditPhase::Bytecode
+    } else if counts.sonatina_prepared > 0 {
+        ClosureAuditPhase::SonatinaPrepared
     } else if counts.sonatina_post > 0 {
         ClosureAuditPhase::SonatinaPost
     } else if counts.sonatina_pre > 0 {
@@ -512,6 +519,7 @@ fn closure_counts(keys: &BTreeSet<OriginExportKey>) -> OriginClosureCounts {
         mir: 0,
         sonatina_pre: 0,
         sonatina_post: 0,
+        sonatina_prepared: 0,
         bytecode: 0,
     };
     for key in keys {
@@ -520,6 +528,7 @@ fn closure_counts(keys: &BTreeSet<OriginExportKey>) -> OriginClosureCounts {
             kind if kind.starts_with("runtime.") => counts.mir += 1,
             kind if kind.starts_with("sonatina.preopt.") => counts.sonatina_pre += 1,
             kind if kind.starts_with("sonatina.postopt.") => counts.sonatina_post += 1,
+            kind if kind.starts_with("sonatina.evm.prepared.") => counts.sonatina_prepared += 1,
             "bytecode.pc" => counts.bytecode += 1,
             _ => {}
         }
@@ -622,6 +631,7 @@ impl SourceSpanGroupIndex {
             let has_lowering_target = closure.counts.mir
                 + closure.counts.sonatina_pre
                 + closure.counts.sonatina_post
+                + closure.counts.sonatina_prepared
                 + closure.counts.bytecode
                 > 0;
             for span in &closure.source_spans {
@@ -765,12 +775,19 @@ fn audit_closure(
         + closure.counts.mir
         + closure.counts.sonatina_pre
         + closure.counts.sonatina_post
+        + closure.counts.sonatina_prepared
         > 0;
+    let has_prepared_only = closure.counts.sonatina_prepared > 0
+        && closure.counts.hir == 0
+        && closure.counts.mir == 0
+        && closure.counts.sonatina_pre == 0
+        && closure.counts.sonatina_post == 0;
     let has_expected_synthetic = closure.edges.iter().any(|edge| edge.generated_work)
         || closure_has_synthetic_origin(closure);
     let has_lowering_target = closure.counts.mir
         + closure.counts.sonatina_pre
         + closure.counts.sonatina_post
+        + closure.counts.sonatina_prepared
         + closure.counts.bytecode
         > 0;
     let same_span_sibling_reaches_target = !has_lowering_target
@@ -787,6 +804,8 @@ fn audit_closure(
         if has_expected_synthetic {
             symptoms.insert(ClosureAuditSymptom::SourceUnavailableSynthetic);
             notes.push("bytecode-linked synthetic/backend closure has no direct source span; this is expected for compiler-generated wrapper or backend-prepared work".to_string());
+        } else if has_prepared_only {
+            notes.push("bytecode is linked to EVM prepared/codegen identity, but no optimized Sonatina or source lineage is present for this prepared instruction".to_string());
         } else {
             symptoms.insert(ClosureAuditSymptom::MissingSourceUnexplained);
             notes.push(
@@ -820,6 +839,8 @@ fn audit_closure(
         ClosureAuditPrimary::LoweredNoTargetUnexplained
     } else if has_expected_synthetic {
         ClosureAuditPrimary::ExpectedSynthetic
+    } else if has_prepared_only && closure.counts.bytecode > 0 {
+        ClosureAuditPrimary::PreparedOnly
     } else if has_ir && closure.counts.bytecode > 0 && direct_input_spans.is_empty() {
         ClosureAuditPrimary::MissingSourceUnexplained
     } else if !direct_input_spans.is_empty() && closure.counts.bytecode > 0 {
@@ -828,7 +849,8 @@ fn audit_closure(
             && closure.counts.hir <= 1
             && closure.counts.mir <= 1
             && closure.counts.sonatina_pre <= 1
-            && closure.counts.sonatina_post <= 1;
+            && closure.counts.sonatina_post <= 1
+            && closure.counts.sonatina_prepared <= 1;
         if exact {
             ClosureAuditPrimary::GoodExact
         } else {
@@ -838,6 +860,7 @@ fn audit_closure(
         && closure.counts.mir == 0
         && closure.counts.sonatina_pre == 0
         && closure.counts.sonatina_post == 0
+        && closure.counts.sonatina_prepared == 0
         && closure.counts.bytecode == 0
     {
         ClosureAuditPrimary::SourceOnlyExpected
@@ -1522,6 +1545,7 @@ mod tests {
             mir: 0,
             sonatina_pre: 0,
             sonatina_post: 0,
+            sonatina_prepared: 0,
             bytecode: 0,
         };
 
@@ -1531,6 +1555,27 @@ mod tests {
         assert_eq!(entry.primary, ClosureAuditPrimary::Unclassified);
         assert_eq!(entry.highest_phase_reached, ClosureAuditPhase::Source);
         assert!(entry.suspicious);
+    }
+
+    #[test]
+    fn closure_audit_marks_prepared_only_bytecode() {
+        let mut closure = test_closure();
+        closure.source_spans.clear();
+        closure.counts = OriginClosureCounts {
+            hir: 0,
+            mir: 0,
+            sonatina_pre: 0,
+            sonatina_post: 0,
+            sonatina_prepared: 2,
+            bytecode: 3,
+        };
+
+        let groups = groups_for_closure(&closure);
+        let entry = audit_closure("fib_demo.fe", 24, &closure, &groups);
+
+        assert_eq!(entry.primary, ClosureAuditPrimary::PreparedOnly);
+        assert_eq!(entry.highest_phase_reached, ClosureAuditPhase::Bytecode);
+        assert!(!entry.suspicious);
     }
 
     fn test_key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -1599,6 +1644,7 @@ mod tests {
                 mir: 1,
                 sonatina_pre: 1,
                 sonatina_post: 0,
+                sonatina_prepared: 0,
                 bytecode: 0,
             },
             traversal: test_traversal(),

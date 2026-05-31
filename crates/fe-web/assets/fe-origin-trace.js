@@ -21,6 +21,10 @@
     });
   }
 
+  function allClasses(node) {
+    return Array.prototype.slice.call(node.classList || []);
+  }
+
   function keyClass(key) {
     var hash = 2166136261;
     for (var i = 0; i < key.length; i++) {
@@ -35,6 +39,7 @@
       if (!this.shadowRoot) this.attachShadow({ mode: "open" });
       this._data = window.FE_ORIGIN_TRACE_DATA || {};
       this._selected = [];
+      this._selectedDisplayClasses = [];
       this._paneChoices = null;
       this._displayMode = "compact";
       this._render();
@@ -300,8 +305,9 @@
           rows.append(el("div", "boundary-marker", boundaryLabel));
         }
         var classes = rowData.classes || [];
+        var hasTrace = traceClasses({ classList: classes }).length > 0;
         var rowKind = this._isBoundaryRow(rowData) ? "boundary-row " : "";
-        var row = el("button", "trace-row trace-region " + rowKind + (classes.length ? "" : "unlinked-row ") + classes.concat(this._auditClasses(classes)).join(" "));
+        var row = el("button", "trace-row trace-region " + rowKind + (hasTrace ? "" : "unlinked-row ") + classes.concat(this._auditClasses(classes)).join(" "));
         row.type = "button";
         if (rowData.key) {
           row.dataset.originKey = rowData.key;
@@ -406,6 +412,7 @@
         var row = event.target.closest && event.target.closest(".trace-region");
         if (!row) return;
         var groups = traceClasses(row);
+        this._selectedDisplayClasses = allClasses(row);
         this._select(groups);
       }.bind(this));
       root.addEventListener("change", function (event) {
@@ -460,6 +467,8 @@
       if (!detail) return;
       detail.textContent = "";
       if (!groups || groups.length === 0) {
+        var statusCard = this._selectionStatusCard([], this._selectedDisplayClasses || []);
+        if (statusCard) detail.append(statusCard);
         detail.append(el("p", "muted", "No evidence path selected."));
         detail.append(el("p", "audit-note", this._provenanceCopy()));
         if (this._data.audit && this._displayMode === "debug") {
@@ -473,6 +482,8 @@
       });
       var auditByClass = this._auditByClass();
       var selected = groups.map(function (group) { return closuresByClass[group]; }).filter(Boolean);
+      var statusCard = this._selectionStatusCard(groups, this._selectedDisplayClasses || []);
+      if (statusCard) detail.append(statusCard);
       var spanGroups = this._spanGroupsForClasses(groups);
       if (spanGroups.length) {
         var spanBox = el("div", "span-group-card");
@@ -562,6 +573,46 @@
       return (classes || []).map(function (name) { return byClass[name]; }).filter(Boolean);
     }
 
+    _selectionStatusCard(groups, displayClasses) {
+      var entries = this._auditForClasses(groups);
+      var status = this._displayStatus(entries, this._railStatus(displayClasses));
+      if (!status) return null;
+      var box = el("div", "status-card status-" + status.kind);
+      box.append(el("h3", "", "Selected row evidence"));
+      box.append(el("p", "status-line", status.label));
+      box.append(el("p", "muted", this._statusExplanation(status.kind, status.label)));
+      box.append(this._railLegend());
+      return box;
+    }
+
+    _statusExplanation(kind, label) {
+      if (kind === "ok") return "Solid highlights use validated exact attribution or snapshot-alias continuity.";
+      if (kind === "generated") return "Generated highlights show compiler-created synthetic work. They are useful explanation paths, but they do not count as exact source ownership.";
+      if (kind === "context") return "Context highlights are navigation or cause context. They are intentionally separate from exact attribution.";
+      if (kind === "structural") return "Boundary highlights show containment or derived block context, not provenance.";
+      if (label === "missing link") return "This row reaches optimized compiler IR, but an exact downstream lineage edge is missing.";
+      if (label === "MIR-only") return "This source/MIR region has precise MIR evidence but no Sonatina or bytecode lowering evidence yet.";
+      if (label === "preopt-only") return "This region reaches Sonatina pre-opt but lacks a post-opt or bytecode explanation.";
+      if (label === "prepared-linked") return "This final bytecode is linked to EVM prepared/codegen identity, but no optimized-Sonatina/source lineage is attached to that prepared instruction.";
+      if (label === "library source") return "This row is attributed to std/core or other non-input source, not to the audited input file.";
+      if (label === "compiler control") return "This row is compiler/runtime control-flow work without a direct user-source span.";
+      if (label === "missing source") return "This row reaches compiler or bytecode artifacts without a direct source span. It may be generated or needs a better source edge.";
+      return "This status is derived from the shared trace-query classifier and audit report, not from browser-side edge traversal.";
+    }
+
+    _railLegend() {
+      var legend = el("div", "rail-legend");
+      [
+        ["ok", "exact"],
+        ["generated", "generated"],
+        ["context", "context"],
+        ["structural", "boundary"],
+      ].forEach(function (item) {
+        legend.append(el("span", "legend-chip badge " + item[0], item[1]));
+      });
+      return legend;
+    }
+
     _auditClasses(classes) {
       var entries = this._auditForClasses(classes);
       if (!entries.length) return [];
@@ -616,10 +667,21 @@
       var primary = top.primary || "unknown";
       if (primary.indexOf("good_") === 0) return { kind: "ok", label: "exact" };
       if (primary === "optimized_attribution_gap") return { kind: "warn", label: "missing link" };
-      if (primary === "lowered_no_target_unexplained" || primary === "preopt_elision_gap") return { kind: "warn", label: "missing downstream" };
-      if (primary === "expected_synthetic") return { kind: "generated", label: "generated" };
+      if (primary === "lowered_no_target_unexplained") return { kind: "warn", label: "MIR-only" };
+      if (primary === "preopt_elision_gap") return { kind: "warn", label: "preopt-only" };
+      if (primary === "expected_synthetic") return { kind: "generated", label: "compiler-generated" };
+      if (primary === "prepared_only") return { kind: "context", label: "prepared-linked" };
       if (primary === "source_span_sibling_unlowered" || primary === "source_only_expected") return { kind: "context", label: "source-only" };
-      if (primary === "missing_source_unexplained" || primary === "unclassified") return { kind: "warn", label: "unmapped" };
+      if (primary === "missing_source_unexplained") {
+        if (entries.some(function (entry) { return (entry.symptoms || []).indexOf("foreign_source") >= 0; })) {
+          return { kind: "context", label: "library source" };
+        }
+        if (top.counts && top.counts.hir === 0 && top.counts.mir > 0) {
+          return { kind: "context", label: "compiler control" };
+        }
+        return { kind: "warn", label: "missing source" };
+      }
+      if (primary === "unclassified") return { kind: "warn", label: "needs evidence" };
       return { kind: top.suspicious ? "warn" : "context", label: this._shortPrimary(primary) };
     }
 
@@ -631,8 +693,9 @@
         .replace("good_many_to_many", "many-to-many")
         .replace("good_exact", "exact")
         .replace("missing_source_unexplained", "missing source")
-        .replace("lowered_no_target_unexplained", "lowering gap")
-        .replace("preopt_elision_gap", "preopt gap")
+        .replace("lowered_no_target_unexplained", "MIR-only")
+        .replace("preopt_elision_gap", "preopt-only")
+        .replace("prepared_only", "prepared-linked")
         .replace(/_/g, " ");
     }
 
@@ -660,6 +723,7 @@
         ["mir", "MIR", counts.mir],
         ["sonatina_pre", "PreOpt", counts.sonatina_pre],
         ["sonatina_post", "PostOpt", counts.sonatina_post],
+        ["sonatina_prepared", "Prepared", counts.sonatina_prepared],
         ["bytecode", "Bytecode", counts.bytecode],
       ];
       var rail = el("div", "phase-rail");
@@ -862,12 +926,22 @@ h1 { margin:0; color:var(--trace-text); font:700 18px/1.15 ui-sans-serif, system
 	.badge.structural { color:var(--trace-muted); border-color:var(--trace-border); }
 .badge.group { color:var(--trace-muted); }
 .root-key { display:block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--trace-muted); font-size:11px; }
-.phase-rail { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:5px; margin:8px 0 10px; }
+.phase-rail { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:5px; margin:8px 0 10px; }
 .phase-chip { padding:5px 6px; border:1px solid var(--trace-border); border-radius:6px; color:var(--trace-muted); background:var(--trace-panel); text-align:center; font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .phase-chip.reached { color:var(--trace-text); background:color-mix(in srgb, var(--trace-accent) 8%, var(--trace-panel)); }
 .phase-chip.highest { color:var(--trace-bg); background:var(--trace-accent); border-color:var(--trace-accent); }
 .span-group-card,.audit-summary { padding:12px; border:1px solid var(--trace-border); border-radius:8px; background:var(--trace-bg); margin-bottom:12px; }
 .span-group-card h3,.audit-summary h3 { margin:0 0 8px; color:var(--trace-text); font-size:13px; text-transform:uppercase; letter-spacing:.1em; }
+.status-card { padding:12px; border:1px solid var(--trace-border); border-radius:8px; background:var(--trace-bg); margin-bottom:12px; }
+.status-card.status-ok { border-left:3px solid var(--trace-pass); }
+.status-card.status-generated { border-left:3px dashed var(--trace-warn); }
+.status-card.status-context { border-left:3px solid var(--trace-muted); }
+.status-card.status-structural { box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--trace-muted) 30%, transparent); }
+.status-card.status-warn { border-left:3px solid var(--trace-warn); }
+.status-card h3 { margin:0 0 6px; color:var(--trace-text); font-size:13px; text-transform:uppercase; letter-spacing:.1em; }
+.status-line { margin:0 0 6px; color:var(--trace-accent); text-transform:uppercase; letter-spacing:.07em; font-size:11px; }
+.rail-legend { display:flex; flex-wrap:wrap; gap:5px; margin-top:10px; }
+.legend-chip { max-width:none; }
 .span-group { padding:9px 0; border-top:1px solid var(--trace-border); }
 .span-group:first-of-type { border-top:0; }
 .span-title { margin:0 0 4px; color:var(--trace-accent); overflow-wrap:anywhere; }

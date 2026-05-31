@@ -993,12 +993,13 @@ fn render_closure_audit_report(report: &ClosureAuditReport) -> String {
             closure.label
         ));
         out.push_str(&format!(
-            "    highest_phase={} phases: HIR={} MIR={} pre={} post={} bytecode={} keys={} edges={}\n",
+            "    highest_phase={} phases: HIR={} MIR={} pre={} post={} prepared={} bytecode={} keys={} edges={}\n",
             closure.highest_phase_reached.as_str(),
             closure.counts.hir,
             closure.counts.mir,
             closure.counts.sonatina_pre,
             closure.counts.sonatina_post,
+            closure.counts.sonatina_prepared,
             closure.counts.bytecode,
             closure.key_count,
             closure.edge_count
@@ -1139,6 +1140,7 @@ fn instruction_panel_row(
         .cloned()
         .unwrap_or_default();
     classes.extend(rails_by_key.get(&storage_key).cloned().unwrap_or_default());
+    classes.extend(bytecode_display_classes(instruction));
     DemoPanelRow {
         key: Some(storage_key.clone()),
         label: compact_origin_label(&instruction.instruction, Some(instruction)),
@@ -1183,8 +1185,17 @@ fn origin_panel_row(
 
 fn compact_instruction_text(instruction: &InstructionFact) -> String {
     match instruction.instruction.kind() {
-        "bytecode.pc" | "runtime.stmt" | "runtime.terminator" => instruction.mnemonic.clone(),
+        "bytecode.pc" => instruction.mnemonic.clone(),
+        "runtime.stmt" | "runtime.terminator" => compact_mir_text(&instruction.mnemonic),
         _ => format!("%{} = {}", instruction.index, instruction.mnemonic),
+    }
+}
+
+fn bytecode_display_classes(instruction: &InstructionFact) -> Vec<String> {
+    if instruction.instruction.kind() == "bytecode.pc" && instruction.mnemonic == "JUMPDEST" {
+        vec!["origin-structural".to_string()]
+    } else {
+        Vec::new()
     }
 }
 
@@ -1215,12 +1226,11 @@ fn compact_origin_meta(key: &OriginExportKey, index: Option<&DemoIndex<'_>>) -> 
         .map(|context| format!(" · L{}", context.snippet.line))
         .unwrap_or_default();
     match key.kind() {
-        "runtime.stmt" => format!("MIR stmt{line_suffix}"),
-        "runtime.terminator" => format!("MIR terminator{line_suffix}"),
+        "runtime.stmt" => format!("MIR{line_suffix}"),
+        "runtime.terminator" => format!("MIR term{line_suffix}"),
         "runtime.block" => format!("MIR block{line_suffix}"),
         "runtime.function" => "MIR function".to_string(),
-        "hir.expr" => format!("HIR expr{line_suffix}"),
-        "hir.stmt" => format!("HIR stmt{line_suffix}"),
+        "hir.expr" | "hir.stmt" => format!("HIR{line_suffix}"),
         kind if kind.starts_with("sonatina.postopt.") => "Optimized Sonatina".to_string(),
         kind if kind.starts_with("sonatina.preopt.") => "Sonatina pre-opt".to_string(),
         kind if kind.starts_with("sonatina.evm.prepared.") => "EVM prepared".to_string(),
@@ -1293,11 +1303,12 @@ fn compact_runtime_terminator_label(key: &OriginExportKey) -> String {
 }
 
 fn compact_hir_label(key: &OriginExportKey) -> String {
-    format!(
-        "{} {}",
-        key.kind().trim_start_matches("hir."),
-        compact_tail_label(key.local_key())
-    )
+    let prefix = match key.kind() {
+        "hir.expr" => "e",
+        "hir.stmt" => "s",
+        _ => "h",
+    };
+    format!("{prefix}{}", compact_tail_label(key.local_key()))
 }
 
 fn compact_sonatina_label(key: &OriginExportKey) -> String {
@@ -1341,6 +1352,96 @@ fn compact_tail_label(value: &str) -> String {
         .replace("BlockId(", "")
         .replace(')', "")
         .to_string()
+}
+
+fn compact_mir_text(text: &str) -> String {
+    let without_phantom = strip_phantom_data(text);
+    let with_locals = replace_wrapped_ids(&without_phantom, "RLocalId(", "%");
+    let with_layouts = replace_wrapped_ids(&with_locals, "LayoutId(Id(", "layout#");
+    let with_runtime = replace_wrapped_ids(&with_layouts, "RuntimeInstance(Id(", "runtime#");
+    compact_int_literals(&with_runtime)
+        .replace("))", ")")
+        .replace(")(", "(")
+        .replace("),", ",")
+        .replace("](", "]")
+}
+
+fn strip_phantom_data(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find(", PhantomData<") {
+        out.push_str(&rest[..start]);
+        let skip = &rest[start + 2..];
+        let mut depth = 0usize;
+        let mut end = skip.len();
+        for (idx, ch) in skip.char_indices() {
+            match ch {
+                '<' => depth += 1,
+                '>' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        end = idx + ch.len_utf8();
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        rest = &skip[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn replace_wrapped_ids(text: &str, marker: &str, prefix: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find(marker) {
+        out.push_str(&rest[..start]);
+        let tail = &rest[start + marker.len()..];
+        if let Some(end) = tail.find(')') {
+            out.push_str(prefix);
+            out.push_str(&tail[..end]);
+            rest = &tail[end + 1..];
+        } else {
+            out.push_str(&rest[start..]);
+            rest = "";
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+fn compact_int_literals(text: &str) -> String {
+    let mut out = text.to_string();
+    let needle = "const Int { bits: ";
+    while let Some(start) = out.find(needle) {
+        let bits_start = start + needle.len();
+        let Some(bits_end) = out[bits_start..]
+            .find(", signed: ")
+            .map(|idx| bits_start + idx)
+        else {
+            break;
+        };
+        let signed_start = bits_end + ", signed: ".len();
+        let Some(signed_end) = out[signed_start..]
+            .find(", words: [")
+            .map(|idx| signed_start + idx)
+        else {
+            break;
+        };
+        let value_start = signed_end + ", words: [".len();
+        let Some(value_end) = out[value_start..].find("] }").map(|idx| value_start + idx) else {
+            break;
+        };
+        let bits = out[bits_start..bits_end].to_string();
+        let signed = out[signed_start..signed_end].trim() == "true";
+        let value = out[value_start..value_end].to_string();
+        let prefix = if signed { "i" } else { "u" };
+        let replacement = format!("const {prefix}{bits} {value}");
+        out.replace_range(start..value_end + 3, &replacement);
+    }
+    out
 }
 
 fn key_belongs_to_panel(key: &OriginExportKey, panel: &str) -> bool {
@@ -1522,6 +1623,27 @@ mod tests {
     }
 
     #[test]
+    fn compact_mir_text_removes_rust_debug_noise() {
+        let text = "RLocalId(7) = call RuntimeInstance(Id(1fc03), PhantomData<&salsa::tracked_struct::Value<fe_mir::instance::runtime::RuntimeInstance<'_>>>)([RLocalId(6)])";
+
+        assert_eq!(compact_mir_text(text), "%7 = call runtime#1fc03([%6])");
+    }
+
+    #[test]
+    fn compact_mir_text_simplifies_layouts_and_ints() {
+        let text = "RLocalId(28) = aggregate_make LayoutId(Id(1f40d), PhantomData<&salsa::interned::Value<fe_mir::runtime::ir::LayoutId<'_>>>), [RLocalId(26), RLocalId(27)]";
+        let int_text = "RLocalId(22) = const Int { bits: 256, signed: false, words: [32] }";
+        let small_int_text = "RLocalId(17) = const Int { bits: 32, signed: false, words: [0] }";
+
+        assert_eq!(
+            compact_mir_text(text),
+            "%28 = aggregate_make layout#1f40d, [%26, %27]"
+        );
+        assert_eq!(compact_mir_text(int_text), "%22 = const u256 32");
+        assert_eq!(compact_mir_text(small_int_text), "%17 = const u32 0");
+    }
+
+    #[test]
     fn source_lines_ignore_foreign_source_spans() {
         let closure = DemoClosure {
             class_name: "trace-c-0".to_string(),
@@ -1536,6 +1658,7 @@ mod tests {
                 mir: 0,
                 sonatina_pre: 0,
                 sonatina_post: 0,
+                sonatina_prepared: 0,
                 bytecode: 0,
             },
             traversal: test_traversal(),
@@ -1571,6 +1694,7 @@ mod tests {
                 mir: 0,
                 sonatina_pre: 0,
                 sonatina_post: 0,
+                sonatina_prepared: 0,
                 bytecode: 0,
             },
             traversal: test_traversal(),

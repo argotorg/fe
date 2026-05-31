@@ -174,6 +174,12 @@ pub struct BloatFinding {
 pub struct ProvenanceCoverageReport {
     pub code_object: Option<OriginExportKey>,
     pub total_instructions: usize,
+    pub primary_source_exact_pcs: usize,
+    pub primary_source_ambiguous_pcs: usize,
+    pub primary_optimized_sonatina_pcs: usize,
+    pub primary_prepared_sonatina_pcs: usize,
+    pub primary_synthetic_backend_pcs: usize,
+    pub primary_unmapped_pcs: usize,
     pub exact_source_pcs: usize,
     pub exact_sonatina_pcs: usize,
     pub optimized_sonatina_pcs: usize,
@@ -193,6 +199,30 @@ impl ProvenanceCoverageReport {
         for instruction in &index.bytecode_instructions {
             rows.push(index.classify(instruction));
         }
+        let primary_source_exact_pcs = rows
+            .iter()
+            .filter(|row| row.primary == ProvenanceCoveragePrimary::SourceExact)
+            .count();
+        let primary_source_ambiguous_pcs = rows
+            .iter()
+            .filter(|row| row.primary == ProvenanceCoveragePrimary::SourceAmbiguous)
+            .count();
+        let primary_optimized_sonatina_pcs = rows
+            .iter()
+            .filter(|row| row.primary == ProvenanceCoveragePrimary::OptimizedSonatina)
+            .count();
+        let primary_prepared_sonatina_pcs = rows
+            .iter()
+            .filter(|row| row.primary == ProvenanceCoveragePrimary::PreparedSonatina)
+            .count();
+        let primary_synthetic_backend_pcs = rows
+            .iter()
+            .filter(|row| row.primary == ProvenanceCoveragePrimary::SyntheticBackend)
+            .count();
+        let primary_unmapped_pcs = rows
+            .iter()
+            .filter(|row| row.primary == ProvenanceCoveragePrimary::Unmapped)
+            .count();
         let exact_source_pcs = rows.iter().filter(|row| row.source_candidates == 1).count();
         let ambiguous_pcs = rows.iter().filter(|row| row.source_candidates > 1).count();
         let optimized_sonatina_pcs = rows
@@ -225,6 +255,12 @@ impl ProvenanceCoverageReport {
         Self {
             code_object: index.primary_code_object,
             total_instructions: rows.len(),
+            primary_source_exact_pcs,
+            primary_source_ambiguous_pcs,
+            primary_optimized_sonatina_pcs,
+            primary_prepared_sonatina_pcs,
+            primary_synthetic_backend_pcs,
+            primary_unmapped_pcs,
             exact_source_pcs,
             exact_sonatina_pcs,
             optimized_sonatina_pcs,
@@ -239,9 +275,21 @@ impl ProvenanceCoverageReport {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProvenanceCoveragePrimary {
+    SourceExact,
+    SourceAmbiguous,
+    OptimizedSonatina,
+    PreparedSonatina,
+    SyntheticBackend,
+    Unmapped,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProvenanceCoverageRow {
     pub instruction: OriginExportKey,
+    pub primary: ProvenanceCoveragePrimary,
     pub source_candidates: usize,
     pub has_sonatina_path: bool,
     pub has_optimized_sonatina_path: bool,
@@ -711,14 +759,16 @@ fn provenance_coverage_summary(coverage: &ProvenanceCoverageReport) -> String {
         return "no bytecode instructions were present in the trace".to_string();
     }
     format!(
-        "{} instruction(s): {} source-exact, {} optimized-Sonatina-linked, {} prepared-linked, {} synthetic/backend, {} ambiguous, {} unmapped",
+        "{} instruction(s). Primary attribution: {} source-exact, {} ambiguous-source, {} optimized-only, {} prepared-only, {} synthetic/backend-only, {} unmapped. Evidence overlap: {} optimized-linked, {} prepared-linked",
         coverage.total_instructions,
-        coverage.exact_source_pcs,
+        coverage.primary_source_exact_pcs,
+        coverage.primary_source_ambiguous_pcs,
+        coverage.primary_optimized_sonatina_pcs,
+        coverage.primary_prepared_sonatina_pcs,
+        coverage.primary_synthetic_backend_pcs,
+        coverage.primary_unmapped_pcs,
         coverage.optimized_sonatina_pcs,
-        coverage.prepared_sonatina_pcs,
-        coverage.synthetic_backend_pcs,
-        coverage.ambiguous_pcs,
-        coverage.unmapped_pcs
+        coverage.prepared_sonatina_pcs
     )
 }
 
@@ -775,19 +825,31 @@ impl<'a> CoverageIndex<'a> {
         let has_optimized_sonatina_path = reachable.iter().any(is_sonatina_post_origin);
         let has_prepared_sonatina_path = reachable.iter().any(is_sonatina_prepared_origin);
         let has_synthetic_or_backend_path = self.has_synthetic_or_backend_path(instruction);
-        let is_unmapped =
-            source_candidates == 0 && !has_sonatina_path && !has_synthetic_or_backend_path;
-        let confidence = if source_candidates == 1 {
-            Confidence::Exact
+        let primary = if source_candidates == 1 {
+            ProvenanceCoveragePrimary::SourceExact
         } else if source_candidates > 1 {
-            Confidence::Low
-        } else if has_sonatina_path || has_synthetic_or_backend_path {
-            Confidence::Medium
+            ProvenanceCoveragePrimary::SourceAmbiguous
+        } else if has_optimized_sonatina_path {
+            ProvenanceCoveragePrimary::OptimizedSonatina
+        } else if has_prepared_sonatina_path {
+            ProvenanceCoveragePrimary::PreparedSonatina
+        } else if has_synthetic_or_backend_path {
+            ProvenanceCoveragePrimary::SyntheticBackend
         } else {
-            Confidence::Unknown
+            ProvenanceCoveragePrimary::Unmapped
+        };
+        let is_unmapped = primary == ProvenanceCoveragePrimary::Unmapped;
+        let confidence = match primary {
+            ProvenanceCoveragePrimary::SourceExact => Confidence::Exact,
+            ProvenanceCoveragePrimary::SourceAmbiguous => Confidence::Low,
+            ProvenanceCoveragePrimary::OptimizedSonatina
+            | ProvenanceCoveragePrimary::PreparedSonatina
+            | ProvenanceCoveragePrimary::SyntheticBackend => Confidence::Medium,
+            ProvenanceCoveragePrimary::Unmapped => Confidence::Unknown,
         };
         ProvenanceCoverageRow {
             instruction: instruction.clone(),
+            primary,
             source_candidates,
             has_sonatina_path,
             has_optimized_sonatina_path,
@@ -1128,6 +1190,12 @@ mod tests {
 
         assert_eq!(check.status, CheckStatus::Warning);
         assert_eq!(coverage["total_instructions"], 6);
+        assert_eq!(coverage["primary_source_exact_pcs"], 1);
+        assert_eq!(coverage["primary_source_ambiguous_pcs"], 1);
+        assert_eq!(coverage["primary_optimized_sonatina_pcs"], 1);
+        assert_eq!(coverage["primary_prepared_sonatina_pcs"], 1);
+        assert_eq!(coverage["primary_synthetic_backend_pcs"], 1);
+        assert_eq!(coverage["primary_unmapped_pcs"], 1);
         assert_eq!(coverage["exact_source_pcs"], 1);
         assert_eq!(coverage["ambiguous_pcs"], 1);
         assert_eq!(coverage["exact_sonatina_pcs"], 1);
