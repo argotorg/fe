@@ -1839,21 +1839,12 @@ pub fn trace_workbench_report_projection(
         .map(|closure_set| serde_json::to_value(&closure_set.closures).unwrap_or_default())
         .unwrap_or_else(|| serde_json::json!([]));
     let static_analysis = static_analysis::static_analysis_report(snapshot);
-    let source_to_optimized = if optimized_linked > 0 {
-        "available"
-    } else {
-        "missing"
-    };
-    let optimized_to_prepared = if prepared_linked > 0 && missing_prepared == 0 {
-        "available"
-    } else {
-        "missing"
-    };
-    let prepared_to_bytecode = if prepared_linked > 0 {
-        "available"
-    } else {
-        "missing"
-    };
+    let provenance = trace_workbench_provenance_status(
+        closure_set.as_ref(),
+        optimized_linked,
+        prepared_linked,
+        missing_prepared,
+    );
     serde_json::json!({
         "revision": {
             "id": request.document_version.unwrap_or_default().max(0) as u64,
@@ -1876,12 +1867,12 @@ pub fn trace_workbench_report_projection(
             "query_duration_ms": request.query_duration_ms,
         },
         "provenance": {
-            "source_to_optimized": source_to_optimized,
-            "optimized_to_prepared": optimized_to_prepared,
-            "prepared_to_bytecode": prepared_to_bytecode,
-            "summary": if source_to_optimized == "available" && prepared_to_bytecode == "available" && optimized_to_prepared == "missing" {
+            "source_to_optimized": provenance.source_to_optimized,
+            "optimized_to_prepared": provenance.optimized_to_prepared,
+            "prepared_to_bytecode": provenance.prepared_to_bytecode,
+            "summary": if provenance.source_to_optimized == "available" && provenance.prepared_to_bytecode == "available" && provenance.optimized_to_prepared == "missing" {
                 "bytecode is prepared-linked; exact source attribution needs optimized to prepared lineage"
-            } else if source_to_optimized == "available" && optimized_to_prepared == "available" && prepared_to_bytecode == "available" {
+            } else if provenance.source_to_optimized == "available" && provenance.optimized_to_prepared == "available" && provenance.prepared_to_bytecode == "available" {
                 "source to optimized to prepared to bytecode available"
             } else {
                 "provenance is partial; inspect gaps for missing compiler evidence"
@@ -1910,6 +1901,57 @@ pub fn trace_workbench_report_projection(
             "The browser does not compute provenance or graph reachability."
         ],
     })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TraceWorkbenchProvenanceStatus {
+    source_to_optimized: &'static str,
+    optimized_to_prepared: &'static str,
+    prepared_to_bytecode: &'static str,
+}
+
+fn trace_workbench_provenance_status(
+    closure_set: Option<&origin_closure::OriginClosureSet>,
+    optimized_linked: usize,
+    prepared_linked: usize,
+    missing_prepared: usize,
+) -> TraceWorkbenchProvenanceStatus {
+    let source_to_optimized = closure_set.is_some_and(|closure_set| {
+        closure_set.closures.iter().any(|closure| {
+            closure.counts.hir > 0
+                && (closure.counts.sonatina_post > 0 || closure.counts.sonatina_pre > 0)
+        })
+    }) || optimized_linked > 0;
+    let optimized_to_prepared = closure_set.is_some_and(|closure_set| {
+        closure_set.closures.iter().any(|closure| {
+            closure
+                .keys
+                .iter()
+                .any(|key| key.contains("sonatina.postopt."))
+                && closure
+                    .keys
+                    .iter()
+                    .any(|key| key.contains("sonatina.evm.prepared."))
+        })
+    }) || (prepared_linked > 0 && missing_prepared == 0);
+    let prepared_to_bytecode = closure_set.is_some_and(|closure_set| {
+        closure_set.closures.iter().any(|closure| {
+            closure
+                .keys
+                .iter()
+                .any(|key| key.contains("sonatina.evm.prepared."))
+                && closure.keys.iter().any(|key| key.contains("bytecode.pc"))
+        })
+    }) || prepared_linked > 0;
+    TraceWorkbenchProvenanceStatus {
+        source_to_optimized: trace_workbench_status_word(source_to_optimized),
+        optimized_to_prepared: trace_workbench_status_word(optimized_to_prepared),
+        prepared_to_bytecode: trace_workbench_status_word(prepared_to_bytecode),
+    }
+}
+
+fn trace_workbench_status_word(available: bool) -> &'static str {
+    if available { "available" } else { "missing" }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -5976,6 +6018,7 @@ mod tests {
 
         assert_eq!(projection["revision"]["id"], 3);
         assert_eq!(projection["metadata"]["data_source"], "lsp-live");
+        assert_eq!(projection["provenance"]["source_to_optimized"], "available");
         assert!(projection["attribution_audit"].is_object());
         assert_eq!(projection["source"]["lines"].as_array().unwrap().len(), 3);
         assert_eq!(
