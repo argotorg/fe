@@ -579,7 +579,7 @@ impl OriginComponentRail {
         );
         match self {
             Self::Exact => exact,
-            Self::Generated => exact || matches!(class, OriginEdgeTraversalClass::Synthetic),
+            Self::Generated => matches!(class, OriginEdgeTraversalClass::Synthetic),
             Self::Prepared => is_prepared_bytecode_edge(edge),
             Self::Contextual => {
                 matches!(class, OriginEdgeTraversalClass::Contextual)
@@ -1583,8 +1583,9 @@ mod tests {
             prefixed_classes(&classes, &hir, "exact-c-")
         );
         assert!(prefixed_classes(&classes, &synthetic_mir, "exact-c-").is_empty());
+        assert!(prefixed_classes(&classes, &source, "generated-c-").is_empty());
         assert_eq!(
-            prefixed_classes(&classes, &source, "generated-c-"),
+            prefixed_classes(&classes, &hir, "generated-c-"),
             prefixed_classes(&classes, &synthetic_mir, "generated-c-")
         );
         assert_eq!(

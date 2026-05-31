@@ -1015,7 +1015,7 @@
           fallback.push(group);
         }
       });
-      if (exact.length) return exact;
+      if (exact.length) return exact.concat(generated);
       if (generated.length) return generated;
       if (prepared.length) return prepared;
       if (context.length) return context;
