@@ -268,6 +268,7 @@ pub fn origin_trace_live_html_shell(title: &str) -> String {
     var authHeaders = token ? {{ "Authorization": "Bearer " + token }} : {{}};
     var storageKey = "fe.trace.workbench.lastReady." + (session || "");
     var modelRefresh = null;
+    var manifestCache = null;
     function fail(message) {{
       if (loading) loading.textContent = message;
       console.error("[fe trace workbench]", message);
@@ -305,6 +306,77 @@ pub fn origin_trace_live_html_shell(title: &str) -> String {
         return false;
       }}
     }}
+    function fetchJson(path) {{
+      return fetch(path, {{ headers: authHeaders }}).then(function (response) {{
+        if (!response.ok) throw new Error(path + " fetch failed: " + response.status);
+        return response.json();
+      }});
+    }}
+    function fetchChunk(digest) {{
+      return fetchJson("/trace/session/" + encodeURIComponent(session) + "/chunk/" + encodeURIComponent(digest));
+    }}
+    function applyChunkedManifest(manifest) {{
+      var previous = manifestCache;
+      var current = window.FE_ORIGIN_TRACE_DATA || {{}};
+      if (!previous || !current || !current.revision) {{
+        manifestCache = manifest;
+        return fetchJson("/trace/session/" + encodeURIComponent(session) + "/model");
+      }}
+      if (manifest.root_digest && previous.root_digest === manifest.root_digest) {{
+        return Promise.resolve(current);
+      }}
+      var next = Object.assign({{}}, current);
+      var requests = [];
+      function useChunk(digest, previousDigest, apply) {{
+        if (!digest || digest === previousDigest) return;
+        requests.push(fetchChunk(digest).then(function (chunk) {{
+          if (!chunk || chunk.digest !== digest) throw new Error("chunk digest mismatch");
+          apply(chunk.value);
+        }}));
+      }}
+      useChunk(manifest.summary_digest, previous.summary_digest, function (value) {{
+        value = value || {{}};
+        ["revision", "metadata", "provenance", "counts", "salsa", "bytecode_count", "notes"].forEach(function (key) {{
+          if (Object.prototype.hasOwnProperty.call(value, key)) next[key] = value[key];
+        }});
+      }});
+      useChunk(manifest.source_digest, previous.source_digest, function (value) {{
+        next.source = value;
+      }});
+      useChunk(manifest.rail_components_digest, previous.rail_components_digest, function (value) {{
+        next.rail_components = value;
+      }});
+      var previousPanes = previous.panes || {{}};
+      var nextPanes = Object.assign({{}}, manifest.panes || {{}});
+      var paneById = Object.create(null);
+      (current.panels || []).forEach(function (pane) {{
+        if (pane && pane.id) paneById[pane.id] = pane;
+      }});
+      Object.keys(nextPanes).forEach(function (id) {{
+        useChunk(nextPanes[id], previousPanes[id], function (value) {{
+          paneById[id] = value;
+        }});
+      }});
+      var previousReports = previous.reports || {{}};
+      var nextReports = manifest.reports || {{}};
+      var reportKeys = {{
+        attribution: "attribution_audit",
+        static_analysis: "static_analysis",
+        closure_audit: "audit"
+      }};
+      Object.keys(reportKeys).forEach(function (id) {{
+        useChunk(nextReports[id], previousReports[id], function (value) {{
+          next[reportKeys[id]] = value;
+        }});
+      }});
+      return Promise.all(requests).then(function () {{
+        next.panels = Object.keys(nextPanes).map(function (id) {{
+          return paneById[id];
+        }}).filter(Boolean);
+        manifestCache = manifest;
+        return next;
+      }});
+    }}
     function applyInitialSelection(bootstrap) {{
       var selection = bootstrap
         && bootstrap.session
@@ -322,10 +394,22 @@ pub fn origin_trace_live_html_shell(title: &str) -> String {
     }}
     function fetchAndRenderModel() {{
       if (modelRefresh) return modelRefresh;
-      modelRefresh = fetch("/trace/session/" + encodeURIComponent(session) + "/model", {{ headers: authHeaders }})
-        .then(function (response) {{
-          if (!response.ok) throw new Error("model fetch failed: " + response.status);
-          return response.json();
+      modelRefresh = fetchJson("/trace/session/" + encodeURIComponent(session) + "/manifest")
+        .then(function (manifest) {{
+          return applyChunkedManifest(manifest);
+        }})
+        .catch(function () {{
+          return fetchJson("/trace/session/" + encodeURIComponent(session) + "/model")
+            .then(function (model) {{
+              return fetchJson("/trace/session/" + encodeURIComponent(session) + "/manifest")
+                .then(function (manifest) {{
+                  manifestCache = manifest;
+                  return model;
+                }}, function () {{
+                  manifestCache = null;
+                  return model;
+                }});
+            }});
         }})
         .then(function (model) {{
           rememberModel(model);
@@ -622,6 +706,17 @@ mod tests {
         let without = html_shell("Test", json);
         let with_none = html_shell_with_scip("Test", json, None);
         assert_eq!(without, with_none);
+    }
+
+    #[test]
+    fn live_trace_shell_fetches_manifest_and_chunks() {
+        let html = origin_trace_live_html_shell("Trace");
+
+        assert!(html.contains("/trace/session/"));
+        assert!(html.contains("/manifest"));
+        assert!(html.contains("/chunk/"));
+        assert!(html.contains("applyChunkedManifest"));
+        assert!(html.contains("manifestCache"));
     }
 
     #[test]

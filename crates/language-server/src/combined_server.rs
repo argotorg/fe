@@ -31,7 +31,10 @@ use futures::io::{AsyncRead, AsyncWrite};
 use futures::{SinkExt, StreamExt};
 use tokio::sync::{Mutex, broadcast, watch};
 use tower::ServiceBuilder;
-use trace_query::{TraceQueryHttpRequest, TraceQueryHttpResponse, trace_workbench_manifest};
+use trace_query::{
+    TraceQueryHttpRequest, TraceQueryHttpResponse, trace_workbench_manifest,
+    trace_workbench_summary_chunk,
+};
 use tracing::{info, warn};
 
 use crate::backend::Backend;
@@ -597,11 +600,25 @@ fn trace_workbench_chunk_payload(
             "value": model,
         }));
     }
+    if manifest.summary_digest == digest {
+        return Some(serde_json::json!({
+            "kind": "summary",
+            "digest": digest,
+            "value": trace_workbench_summary_chunk(model),
+        }));
+    }
     if manifest.metadata_digest == digest {
         return Some(serde_json::json!({
             "kind": "metadata",
             "digest": digest,
             "value": model.get("metadata").cloned().unwrap_or(serde_json::Value::Null),
+        }));
+    }
+    if manifest.source_digest == digest {
+        return Some(serde_json::json!({
+            "kind": "source",
+            "digest": digest,
+            "value": model.get("source").cloned().unwrap_or(serde_json::Value::Null),
         }));
     }
     if manifest.rail_components_digest == digest {
@@ -974,6 +991,8 @@ mod tests {
         let model = serde_json::json!({
             "revision": { "id": 7 },
             "metadata": { "input_path": "demo.fe" },
+            "source": { "lines": [{ "number": 1, "text": "fn main() {}" }] },
+            "provenance": { "source_to_optimized": "available" },
             "rail_components": { "exact": ["exact-c-a"] },
             "panels": [
                 { "id": "source", "rows": [] },
@@ -984,6 +1003,18 @@ mod tests {
             "audit": { "total_closures": 0 }
         });
         let manifest = trace_workbench_manifest(&model);
+
+        let summary = trace_workbench_chunk_payload(&model, &manifest.summary_digest).unwrap();
+        assert_eq!(summary["kind"], "summary");
+        assert_eq!(summary["value"]["revision"]["id"], 7);
+        assert_eq!(
+            summary["value"]["provenance"]["source_to_optimized"],
+            "available"
+        );
+
+        let source = trace_workbench_chunk_payload(&model, &manifest.source_digest).unwrap();
+        assert_eq!(source["kind"], "source");
+        assert_eq!(source["value"]["lines"][0]["text"], "fn main() {}");
 
         let pane_digest = manifest.panes.get("bytecode").unwrap();
         let pane = trace_workbench_chunk_payload(&model, pane_digest).unwrap();
