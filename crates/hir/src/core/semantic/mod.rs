@@ -4639,14 +4639,30 @@ impl<'db> ImplTrait<'db> {
         a: ImplTrait<'db>,
         b: ImplTrait<'db>,
     ) -> bool {
-        let a_markers = Self::sealed_local_marker_anchors(db, a);
-        let b_markers = Self::sealed_local_marker_anchors(db, b);
-        a_markers.iter().any(|&a_marker| {
-            let a_roots = Self::sealed_marker_target_roots(db, a_marker);
-            b_markers.iter().any(|&b_marker| {
-                a_roots.is_disjoint(&Self::sealed_marker_target_roots(db, b_marker))
-            })
-        })
+        let Some(a_roots) = Self::sealed_marker_possible_target_roots(db, a) else {
+            return false;
+        };
+        let Some(b_roots) = Self::sealed_marker_possible_target_roots(db, b) else {
+            return false;
+        };
+
+        a_roots.is_disjoint(&b_roots)
+    }
+
+    fn sealed_marker_possible_target_roots(
+        db: &'db dyn HirAnalysisDb,
+        impl_trait: ImplTrait<'db>,
+    ) -> Option<FxHashSet<TyBase<'db>>> {
+        let markers = Self::sealed_local_marker_anchors(db, impl_trait);
+        let (&first, rest) = markers.split_first()?;
+        let mut roots = Self::sealed_marker_target_roots(db, first);
+
+        for &marker in rest {
+            let marker_roots = Self::sealed_marker_target_roots(db, marker);
+            roots.retain(|root| marker_roots.contains(root));
+        }
+
+        Some(roots)
     }
 
     fn sealed_local_marker_anchors(
