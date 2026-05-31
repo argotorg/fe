@@ -58,16 +58,22 @@
       this._stateStyle = null;
       if (!this._boundHashChange) {
         this._boundHashChange = this._handleHashChange.bind(this);
+        this._boundPopState = this._handleHashChange.bind(this);
         window.addEventListener("hashchange", this._boundHashChange);
+        window.addEventListener("popstate", this._boundPopState);
       }
       this._render();
-      this._scheduleHashNavigation();
     }
 
     disconnectedCallback() {
+      this._hashNavigationToken = (this._hashNavigationToken || 0) + 1;
       if (this._boundHashChange) {
         window.removeEventListener("hashchange", this._boundHashChange);
         this._boundHashChange = null;
+      }
+      if (this._boundPopState) {
+        window.removeEventListener("popstate", this._boundPopState);
+        this._boundPopState = null;
       }
       this._interactionsInstalled = false;
     }
@@ -574,6 +580,8 @@
     }
 
     _scheduleHashNavigation() {
+      var token = (this._hashNavigationToken || 0) + 1;
+      this._hashNavigationToken = token;
       if (this._hashNavigationFrame) {
         var cancel = window.cancelAnimationFrame || window.clearTimeout;
         cancel(this._hashNavigationFrame);
@@ -582,6 +590,7 @@
       this._hashNavigationFrame = raf(function () {
         this._hashNavigationFrame = 0;
         raf(function () {
+          if (this._hashNavigationToken !== token) return;
           this._navigateToHash({ behavior: "auto" });
         }.bind(this));
       }.bind(this));
@@ -627,8 +636,12 @@
     _pinHashForRow(row) {
       var hash = this._hashForRow(row);
       if (!hash || window.location.hash === hash) return;
-      this._skipHashChange = hash;
-      window.location.hash = hash;
+      if (window.history && window.history.pushState) {
+        window.history.pushState(null, "", hash);
+      } else {
+        this._skipHashChange = hash;
+        window.location.hash = hash;
+      }
     }
 
     _hashForRow(row) {
