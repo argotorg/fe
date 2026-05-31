@@ -491,7 +491,7 @@
     _overviewMarker(classes, index, total, label, targetRowId) {
       var trace = (classes || []).filter(isTraceGroup);
       if (!trace.length || !total) return null;
-      var markerClasses = ["overview-marker", "trace-region"].concat(classes || []);
+      var markerClasses = ["overview-marker", "trace-region"].concat(this._overviewMarkerKinds(classes || [])).concat(classes || []);
       var marker = el("button", markerClasses.join(" "));
       this._bindTraceGroups(marker, classes || []);
       marker.type = "button";
@@ -500,6 +500,16 @@
       if (targetRowId) marker.dataset.targetRow = targetRowId;
       marker.style.top = (((index + 0.5) / total) * 100).toFixed(3) + "%";
       return marker;
+    }
+
+    _overviewMarkerKinds(classes) {
+      var out = [];
+      if ((classes || []).some(function (name) { return name.indexOf("exact-c-") === 0; })) out.push("overview-exact");
+      if ((classes || []).some(function (name) { return name.indexOf("generated-c-") === 0; }) || classes.indexOf("origin-generated") >= 0) out.push("overview-generated");
+      if ((classes || []).some(function (name) { return name.indexOf("prepared-c-") === 0; })) out.push("overview-prepared");
+      if ((classes || []).some(function (name) { return name.indexOf("context-c-") === 0; }) || classes.indexOf("origin-contextual") >= 0) out.push("overview-context");
+      if ((classes || []).some(function (name) { return name.indexOf("structural-c-") === 0; }) || classes.indexOf("origin-structural") >= 0) out.push("overview-boundary");
+      return out;
     }
 
     _rowId(prefix, index) {
@@ -1508,6 +1518,11 @@ h1 { margin:0; color:var(--trace-text); font:700 15px/1.1 ui-sans-serif, system-
 	.overview-rail { position:relative; width:10px; min-height:100%; border-left:1px solid var(--trace-border); background:color-mix(in srgb, var(--trace-code-bg) 82%, var(--trace-panel)); }
 	.overview-rail.empty { opacity:.35; }
 	.overview-marker { position:absolute; left:1px; width:8px; height:5px; min-height:5px; padding:0; border:0; border-radius:999px; transform:translateY(-50%); background:color-mix(in srgb, var(--trace-accent) 82%, var(--trace-text)); box-shadow:0 0 0 1px color-mix(in srgb, var(--trace-code-bg) 80%, transparent),0 0 8px color-mix(in srgb, var(--trace-accent) 28%, transparent); cursor:pointer; }
+	.overview-marker.overview-exact { background:var(--trace-accent); height:6px; }
+	.overview-marker.overview-generated { background:transparent; border:1px dashed var(--trace-warn); height:7px; }
+	.overview-marker.overview-prepared { background:color-mix(in srgb, var(--trace-pass) 75%, var(--trace-accent)); height:6px; }
+	.overview-marker.overview-context { background:var(--trace-muted); opacity:.8; }
+	.overview-marker.overview-boundary { background:transparent; border:1px solid var(--trace-muted); }
 	.overview-marker.audit-needs-evidence { background:var(--trace-warn); }
 	.overview-marker.audit-good { background:var(--trace-pass); }
 	.overview-marker.origin-generated { height:7px; background:transparent; border:1px dashed var(--trace-warn); }
