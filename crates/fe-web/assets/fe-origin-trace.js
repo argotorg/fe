@@ -61,7 +61,7 @@
         window.addEventListener("hashchange", this._boundHashChange);
       }
       this._render();
-      this._navigateToHash();
+      this._scheduleHashNavigation();
     }
 
     disconnectedCallback() {
@@ -138,6 +138,7 @@
       this._restorePaneScroll(scrollRestore);
       this._renderDetail(this._selected);
       this._syncStateStyles();
+      if (window.location.hash) this._scheduleHashNavigation();
     }
 
     _card(parent, label, value) {
@@ -569,10 +570,24 @@
         this._skipHashChange = "";
         return;
       }
-      this._navigateToHash();
+      this._scheduleHashNavigation();
     }
 
-    _navigateToHash() {
+    _scheduleHashNavigation() {
+      if (this._hashNavigationFrame) {
+        var cancel = window.cancelAnimationFrame || window.clearTimeout;
+        cancel(this._hashNavigationFrame);
+      }
+      var raf = window.requestAnimationFrame || function (fn) { return window.setTimeout(fn, 16); };
+      this._hashNavigationFrame = raf(function () {
+        this._hashNavigationFrame = 0;
+        raf(function () {
+          this._navigateToHash({ behavior: "auto" });
+        }.bind(this));
+      }.bind(this));
+    }
+
+    _navigateToHash(options) {
       var row = this._rowForHash(window.location.hash || "");
       if (!row) {
         if (!window.location.hash) {
@@ -586,8 +601,8 @@
       var groups = traceClasses(row);
       this._selectedDisplayClasses = allClasses(row);
       this._select(groups);
-      this._scrollRowIntoView(row);
-      this._scrollPeerPanesToSelection(groups, row);
+      this._scrollRowIntoView(row, options);
+      this._scrollPeerPanesToSelection(groups, row, options);
       return true;
     }
 
@@ -679,14 +694,14 @@
       return shell && shell.querySelector(".source-lines,.rows");
     }
 
-    _scrollPaneToFirstSelectedRun(pane) {
+    _scrollPaneToFirstSelectedRun(pane, options) {
       if (!this._selected || !this._selected.length) return false;
       var shell = pane && pane.querySelector(".listing-shell");
       if (!shell) return false;
       var runs = this._matchingRuns(shell, this._selected);
       if (!runs.length) return false;
       shell.dataset.activeRun = "0";
-      this._scrollRunIntoView(runs[0], 1);
+      this._scrollRunIntoView(runs[0], 1, options);
       return true;
     }
 
@@ -697,7 +712,7 @@
       if (target) this._scrollRowIntoView(target);
     }
 
-    _scrollPeerPanesToSelection(groups, origin) {
+    _scrollPeerPanesToSelection(groups, origin, options) {
       if (!groups || !groups.length) return;
       var originShell = origin && origin.closest && origin.closest(".listing-shell");
       this.shadowRoot.querySelectorAll(".listing-shell").forEach(function (shell) {
@@ -705,7 +720,7 @@
         var runs = this._matchingRuns(shell, groups);
         if (!runs.length) return;
         shell.dataset.activeRun = "0";
-        this._scrollRunIntoView(runs[0], 1);
+        this._scrollRunIntoView(runs[0], 1, options);
       }, this);
     }
 
@@ -763,7 +778,7 @@
       return shell.__traceRows;
     }
 
-    _scrollRunIntoView(run, direction) {
+    _scrollRunIntoView(run, direction, options) {
       if (!run || !run.length) return;
       var pane = run[0].closest && run[0].closest(".workbench-pane");
       var representation = pane && pane.dataset && pane.dataset.representationId;
@@ -772,7 +787,7 @@
         var boundary = run.filter(function (row) { return row.classList.contains("boundary-row"); })[0] || this._nearestSectionBoundary(run[0]);
         target = boundary || target;
       }
-      this._scrollRowIntoView(target);
+      this._scrollRowIntoView(target, options);
     }
 
     _nearestSectionBoundary(row) {
@@ -786,7 +801,7 @@
       return null;
     }
 
-    _scrollRowIntoView(row) {
+    _scrollRowIntoView(row, options) {
       var scroller = row && row.closest && row.closest(".source-lines,.rows");
       if (!scroller) return;
       var scrollerRect = scroller.getBoundingClientRect();
@@ -796,7 +811,7 @@
         - Math.max(0, (scroller.clientHeight - rowRect.height) / 2);
       scroller.scrollTo({
         top: Math.max(0, top),
-        behavior: "smooth",
+        behavior: (options && options.behavior) || "smooth",
       });
     }
 
