@@ -521,6 +521,7 @@ struct DemoSourceLine {
     number: u32,
     text: String,
     classes: Vec<String>,
+    display_status: Option<DemoDisplayStatus>,
 }
 
 #[derive(Debug, Serialize)]
@@ -990,17 +991,35 @@ fn source_lines(
         .enumerate()
         .map(|(index, text)| {
             let number = index as u32 + 1;
+            let classes = exact_classes_by_line
+                .get(&number)
+                .or_else(|| enclosing_classes_by_line.get(&number))
+                .map(|classes| classes.iter().cloned().collect::<Vec<_>>())
+                .unwrap_or_default();
             DemoSourceLine {
                 number,
                 text: text.to_string(),
-                classes: exact_classes_by_line
-                    .get(&number)
-                    .or_else(|| enclosing_classes_by_line.get(&number))
-                    .map(|classes| classes.iter().cloned().collect())
-                    .unwrap_or_default(),
+                display_status: display_status_for_source_line(&classes),
+                classes,
             }
         })
         .collect()
+}
+
+fn display_status_for_source_line(classes: &[String]) -> Option<DemoDisplayStatus> {
+    if classes.iter().any(|class| class.starts_with("exact-c-")) {
+        return Some(DemoDisplayStatus::Exact);
+    }
+    if classes
+        .iter()
+        .any(|class| class.starts_with("generated-c-"))
+    {
+        return Some(DemoDisplayStatus::GeneratedDownstream);
+    }
+    if classes.iter().any(|class| class.starts_with("context-c-")) {
+        return Some(DemoDisplayStatus::Context);
+    }
+    None
 }
 
 fn insert_source_span_classes(
@@ -1076,11 +1095,17 @@ fn related_source_sections(
                 .enumerate()
                 .filter_map(|(index, text)| {
                     let number = index as u32 + 1;
-                    let classes = classes_by_line.get(&number)?;
+                    let classes = classes_by_line
+                        .get(&number)?
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    let display_status = display_status_for_source_line(&classes);
                     Some(DemoSourceLine {
                         number,
                         text: text.to_string(),
-                        classes: classes.iter().cloned().collect(),
+                        classes,
+                        display_status,
                     })
                 })
                 .collect::<Vec<_>>();
@@ -2003,6 +2028,7 @@ mod tests {
                     number: 1,
                     text: "</script>".to_string(),
                     classes: Vec::new(),
+                    display_status: None,
                 }],
                 related_sources: Vec::new(),
             },
@@ -2126,6 +2152,14 @@ mod tests {
     }
 
     #[test]
+    fn source_line_generated_component_is_downstream_status() {
+        assert!(matches!(
+            display_status_for_source_line(&["generated-c-a".to_string()]),
+            Some(DemoDisplayStatus::GeneratedDownstream)
+        ));
+    }
+
+    #[test]
     fn source_lines_ignore_foreign_source_spans() {
         let closure = DemoClosure {
             class_name: "trace-c-0".to_string(),
@@ -2163,6 +2197,7 @@ mod tests {
         let lines = source_lines("fib_demo.fe", "x", &[closure], &BTreeMap::new());
 
         assert!(lines[0].classes.is_empty());
+        assert!(lines[0].display_status.is_none());
 
         let closure = DemoClosure {
             class_name: "trace-c-0".to_string(),
@@ -2208,6 +2243,10 @@ mod tests {
             lines[0].classes,
             vec!["exact-c-0".to_string(), "trace-c-0".to_string()]
         );
+        assert!(matches!(
+            lines[0].display_status,
+            Some(DemoDisplayStatus::Exact)
+        ));
     }
 
     #[test]

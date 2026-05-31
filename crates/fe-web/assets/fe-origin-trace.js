@@ -405,7 +405,7 @@
         row.id = this._rowId("source-main", index);
         row.dataset.sourceRef = "main:" + line.number;
         row.dataset.traceLabel = "source line " + line.number;
-        row.append(el("span", "ln", line.number), el("code", "", line.text), this._badges(classes));
+        row.append(el("span", "ln", line.number), el("code", "", line.text), this._badges(line));
         body.append(row);
         var marker = this._overviewMarker(classes, markerIndex, markerTotal, "source line " + line.number, row.id);
         if (marker) markers.push(marker);
@@ -422,7 +422,7 @@
           row.id = this._rowId("source-related-" + sectionIndex, lineIndex);
           row.dataset.sourceRef = "related:" + sectionIndex + ":" + line.number;
           row.dataset.traceLabel = (section.display_name || "related source") + " line " + line.number;
-          row.append(el("span", "ln", line.number), el("code", "", line.text), this._badges(classes));
+          row.append(el("span", "ln", line.number), el("code", "", line.text), this._badges(line));
           body.append(row);
           var marker = this._overviewMarker(classes, markerIndex, markerTotal, row.dataset.traceLabel, row.id);
           if (marker) markers.push(marker);
