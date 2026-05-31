@@ -440,30 +440,34 @@
       var markers = [];
       var panelRows = panelData.rows || [];
       panelRows.forEach(function (rowData, index) {
-        var boundaryLabel = this._boundaryLabel(panelData, rowData, index);
+        var boundaryLabel = this._rowBoundaryLabel(panelData, rowData, index);
         if (boundaryLabel) {
           rows.append(el("div", "boundary-marker", boundaryLabel));
         }
         var classes = rowData.classes || [];
         var hasTrace = traceClasses({ classList: classes }).length > 0;
-        var rowKind = this._isBoundaryRow(rowData) ? "boundary-row " : "";
+        var kind = rowData.kind || (this._isBoundaryRow(rowData) ? "block_header" : "instruction");
+        var rowKind = "row-kind-" + String(kind).replace(/_/g, "-") + " " + (this._isBoundaryKind(kind) ? "boundary-row " : "");
         var row = el("button", "trace-row trace-region " + rowKind + (hasTrace ? "" : "unlinked-row ") + classes.concat(this._auditClasses(classes)).join(" "));
         this._bindTraceGroups(row, classes);
         row.type = "button";
         row.id = this._rowId("panel-" + (panelData.id || "panel"), index);
+        row.dataset.rowKind = kind;
+        row.style.setProperty("--row-indent", String(rowData.indent || 0));
         if (rowData.key) {
           row.dataset.originKey = rowData.key;
           row.classList.add(keyClass(rowData.key));
         }
-        row.dataset.traceLabel = rowData.label || rowData.text || rowData.key || "";
+        var text = rowData.compact_text || rowData.text || "";
+        row.dataset.traceLabel = rowData.label || text || rowData.key || "";
         row.append(
           el("span", "row-label", rowData.label),
           el("span", "row-meta", rowData.meta),
-          el("span", "row-text", rowData.text),
-          this._badges(classes)
+          el("span", "row-text", text),
+          this._badges(rowData)
         );
         rows.append(row);
-        var marker = this._overviewMarker(classes, index, panelRows.length, rowData.label || rowData.text || rowData.key || "", row.id);
+        var marker = this._overviewMarker(classes, index, panelRows.length, rowData.label || text || rowData.key || "", row.id);
         if (marker) markers.push(marker);
       }, this);
       if (!panelRows.length) {
@@ -510,6 +514,33 @@
 
     _isBoundaryRow(rowData) {
       return ((rowData && rowData.meta) || "").indexOf("block") >= 0;
+    }
+
+    _isBoundaryKind(kind) {
+      return /^(file_header|function_header|block_header|boundary_marker|derived_bytecode_block_header)$/.test(kind || "");
+    }
+
+    _rowBoundaryLabel(panelData, rowData, index) {
+      var kind = rowData && rowData.kind;
+      if (kind === "file_header" || kind === "function_header" || kind === "block_header" || kind === "boundary_marker" || kind === "derived_bytecode_block_header") {
+        return this._typedBoundaryLabel(panelData, rowData, index);
+      }
+      return this._boundaryLabel(panelData, rowData, index);
+    }
+
+    _typedBoundaryLabel(panelData, rowData, index) {
+      var kind = rowData && rowData.kind;
+      var meta = (rowData && rowData.meta) || "";
+      var label = (rowData && (rowData.label || rowData.compact_text || rowData.text)) || "";
+      var role = this._loopRole(meta);
+      if (kind === "file_header") return label || "source file";
+      if (kind === "function_header") return label || (panelData && panelData.title ? panelData.title + " function" : "function");
+      if (kind === "boundary_marker") return label || "boundary";
+      if (kind === "derived_bytecode_block_header") return label || "derived bytecode block";
+      if (panelData && panelData.id === "bytecode") return label || "derived bytecode block";
+      if (panelData && panelData.id === "mir") return "MIR block" + (role ? " · " + role : "") + (label ? " · " + label : "");
+      if (panelData && panelData.id && panelData.id.indexOf("sonatina") === 0) return (panelData.title || "Sonatina") + " block" + (role ? " · " + role : "") + (label ? " · " + label : "");
+      return (label || "block") + (role ? " · " + role : "");
     }
 
     _boundaryLabel(panelData, rowData, index) {
@@ -1180,13 +1211,33 @@
       return entry.suspicious ? 4 : 1;
     }
 
-    _badges(classes) {
+    _badges(rowOrClasses) {
+      var rowStatus = this._rowDisplayStatus(rowOrClasses);
+      var classes = Array.isArray(rowOrClasses) ? rowOrClasses : ((rowOrClasses && rowOrClasses.classes) || []);
       var entries = this._auditForClasses(classes);
       var wrap = el("span", "badges");
-      var status = this._displayStatus(entries, this._railStatus(classes));
+      var status = rowStatus || this._displayStatus(entries, this._railStatus(classes));
       if (!status) return wrap;
       wrap.append(el("span", "badge " + status.kind, status.label));
       return wrap;
+    }
+
+    _rowDisplayStatus(rowData) {
+      if (!rowData || Array.isArray(rowData) || !rowData.display_status) return null;
+      var kind = String(rowData.display_status || "");
+      if (kind === "exact") return { kind: "ok", label: "exact" };
+      if (kind === "generated") return { kind: "generated", label: "generated" };
+      if (kind === "generated_downstream") return { kind: "generated", label: "generated downstream" };
+      if (kind === "context") return { kind: "context", label: "context" };
+      if (kind === "prepared_linked") return { kind: "context", label: "prepared-linked" };
+      if (kind === "missing_optimized_to_prepared") return { kind: "warn", label: "missing link" };
+      if (kind === "missing_downstream_lineage") return { kind: "warn", label: "missing downstream" };
+      if (kind === "source_only") return { kind: "context", label: "source-only" };
+      if (kind === "compiler_generated") return { kind: "generated", label: "compiler-generated" };
+      if (kind === "unmapped") return { kind: "warn", label: "unmapped" };
+      if (kind === "ambiguous") return { kind: "warn", label: "ambiguous" };
+      if (kind === "invalid") return { kind: "warn", label: "invalid" };
+      return null;
     }
 
     _railStatus(classes) {
@@ -1433,6 +1484,7 @@ h1 { margin:0; color:var(--trace-text); font:700 15px/1.1 ui-sans-serif, system-
 .source-line code { color:var(--trace-code-text); font:inherit; }
 .ln { color:var(--trace-line); text-align:right; user-select:none; }
 .trace-row { display:grid; grid-template-columns:minmax(42px,.18fr) minmax(46px,.22fr) minmax(90px,1fr) auto; width:100%; gap:4px; padding:4px 6px; border:0; border-bottom:1px solid var(--trace-border); background:transparent; color:var(--trace-code-text); text-align:left; font:inherit; cursor:pointer; align-items:center; }
+.trace-row .row-text { padding-left:calc(var(--row-indent, 0) * 10px); }
 .trace-row:hover,.source-line:hover { background:color-mix(in srgb, var(--trace-accent) 8%, transparent); }
 .trace-row.unlinked-row { color:var(--trace-muted); cursor:default; }
 .trace-row.unlinked-row:hover { background:transparent; }
@@ -1444,6 +1496,9 @@ h1 { margin:0; color:var(--trace-text); font:700 15px/1.1 ui-sans-serif, system-
 .row-label { color:var(--trace-accent); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .row-meta { color:color-mix(in srgb, var(--trace-accent) 80%, var(--trace-text)); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .row-text { color:var(--trace-code-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.row-kind-function-header,.row-kind-block-header,.row-kind-boundary-marker,.row-kind-derived-bytecode-block-header { background:color-mix(in srgb, var(--trace-accent) 5%, transparent); font-weight:650; }
+.row-kind-function-header .row-text,.row-kind-block-header .row-text,.row-kind-boundary-marker .row-text,.row-kind-derived-bytecode-block-header .row-text { color:color-mix(in srgb, var(--trace-code-text) 86%, var(--trace-accent)); }
+.row-kind-terminator .row-text { color:color-mix(in srgb, var(--trace-code-text) 82%, var(--trace-warn)); }
 [class*="trace-c-"] { transition:background .16s ease-out, color .16s ease-out, outline-color .16s ease-out; }
 .audit-good { box-shadow:inset 3px 0 var(--trace-pass); }
 .audit-needs-evidence { box-shadow:inset 3px 0 var(--trace-danger); }

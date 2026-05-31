@@ -534,10 +534,69 @@ struct DemoPanel {
 #[derive(Debug, Serialize)]
 struct DemoPanelRow {
     key: Option<String>,
+    kind: DemoPaneRowKind,
+    indent: u8,
     label: String,
     meta: String,
     text: String,
+    compact_text: String,
+    display_status: Option<DemoDisplayStatus>,
+    rail_classes: DemoRailClasses,
     classes: Vec<String>,
+    debug: DemoRowDebugInfo,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[allow(dead_code)]
+#[serde(rename_all = "snake_case")]
+enum DemoPaneRowKind {
+    FileHeader,
+    FunctionHeader,
+    BlockHeader,
+    Instruction,
+    Statement,
+    Terminator,
+    BoundaryMarker,
+    DerivedBytecodeBlockHeader,
+    Blank,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[allow(dead_code)]
+#[serde(rename_all = "snake_case")]
+enum DemoDisplayStatus {
+    Exact,
+    Generated,
+    GeneratedDownstream,
+    Context,
+    PreparedLinked,
+    MissingOptimizedToPrepared,
+    MissingDownstreamLineage,
+    SourceOnly,
+    CompilerGenerated,
+    Unmapped,
+    Ambiguous,
+    Invalid,
+}
+
+#[derive(Debug, Default, Serialize)]
+struct DemoRailClasses {
+    exact: Vec<String>,
+    generated: Vec<String>,
+    prepared: Vec<String>,
+    context: Vec<String>,
+    boundary: Vec<String>,
+    legacy: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct DemoRowDebugInfo {
+    origin_key: Option<String>,
+    origin_kind: Option<String>,
+    owner_key: Option<String>,
+    local_key: Option<String>,
+    instruction_index: Option<u32>,
+    raw_text: String,
 }
 
 fn build_demo_model(snapshot: &TraceSnapshot, salsa: Option<DemoSalsaStats>) -> WebDemoModel {
@@ -1309,24 +1368,164 @@ fn origin_panel_row(
     if origin_key_is_generated(key) {
         classes.push("origin-generated".to_string());
     }
+    let kind = pane_row_kind_for_origin(key, instruction.copied());
+    let compact_text = instruction
+        .copied()
+        .map(compact_instruction_text)
+        .unwrap_or_else(|| compact_origin_text(key, index));
+    let raw_text = instruction
+        .map(|instruction| instruction.mnemonic.clone())
+        .unwrap_or_else(|| key.canonical_storage_key());
+    let display_status = display_status_for_row(key, kind, &classes);
     DemoPanelRow {
         key: Some(storage_key.clone()),
+        kind,
+        indent: pane_row_indent(kind),
         label: compact_origin_label(key, instruction.copied()),
         meta,
-        text: instruction
-            .copied()
-            .map(compact_instruction_text)
-            .unwrap_or_else(|| compact_origin_text(key, index)),
+        text: compact_text.clone(),
+        compact_text,
+        display_status,
+        rail_classes: split_rail_classes(&classes),
         classes,
+        debug: row_debug_info(key, instruction.copied(), raw_text),
+    }
+}
+
+fn pane_row_kind_for_origin(
+    key: &OriginExportKey,
+    instruction: Option<&InstructionFact>,
+) -> DemoPaneRowKind {
+    if instruction.is_some() {
+        return match key.kind() {
+            "runtime.stmt" => DemoPaneRowKind::Statement,
+            "runtime.terminator" => DemoPaneRowKind::Terminator,
+            "bytecode.pc" => DemoPaneRowKind::Instruction,
+            _ => DemoPaneRowKind::Instruction,
+        };
+    }
+    match key.kind() {
+        "source.file" => DemoPaneRowKind::FileHeader,
+        "runtime.function" => DemoPaneRowKind::FunctionHeader,
+        "runtime.block" => DemoPaneRowKind::BlockHeader,
+        "runtime.terminator" => DemoPaneRowKind::Terminator,
+        kind if kind.ends_with(".function") => DemoPaneRowKind::FunctionHeader,
+        kind if kind.ends_with(".block") => DemoPaneRowKind::BlockHeader,
+        kind if kind.contains(".loop") => DemoPaneRowKind::BoundaryMarker,
+        "bytecode.pc" => DemoPaneRowKind::Instruction,
+        _ => DemoPaneRowKind::Instruction,
+    }
+}
+
+fn pane_row_indent(kind: DemoPaneRowKind) -> u8 {
+    match kind {
+        DemoPaneRowKind::FileHeader | DemoPaneRowKind::FunctionHeader => 0,
+        DemoPaneRowKind::BlockHeader
+        | DemoPaneRowKind::BoundaryMarker
+        | DemoPaneRowKind::DerivedBytecodeBlockHeader
+        | DemoPaneRowKind::Blank => 1,
+        DemoPaneRowKind::Instruction | DemoPaneRowKind::Statement | DemoPaneRowKind::Terminator => {
+            2
+        }
+    }
+}
+
+fn display_status_for_row(
+    key: &OriginExportKey,
+    kind: DemoPaneRowKind,
+    classes: &[String],
+) -> Option<DemoDisplayStatus> {
+    if classes.iter().any(|class| class.starts_with("exact-c-")) {
+        return Some(DemoDisplayStatus::Exact);
+    }
+    if kind == DemoPaneRowKind::Instruction
+        && key.kind() == "bytecode.pc"
+        && classes.iter().any(|class| class.starts_with("prepared-c-"))
+    {
+        return Some(DemoDisplayStatus::PreparedLinked);
+    }
+    if origin_key_is_generated(key) {
+        return Some(match key.kind() {
+            kind if kind.starts_with("source.") => DemoDisplayStatus::GeneratedDownstream,
+            _ => DemoDisplayStatus::Generated,
+        });
+    }
+    if classes.iter().any(|class| class == "origin-generated") {
+        return Some(DemoDisplayStatus::Generated);
+    }
+    if classes
+        .iter()
+        .any(|class| class.starts_with("generated-c-"))
+    {
+        return Some(DemoDisplayStatus::GeneratedDownstream);
+    }
+    if classes
+        .iter()
+        .any(|class| class.starts_with("context-c-") || class == "origin-contextual")
+    {
+        return Some(DemoDisplayStatus::Context);
+    }
+    if classes
+        .iter()
+        .any(|class| class.starts_with("structural-c-") || class == "origin-structural")
+    {
+        return None;
+    }
+    None
+}
+
+fn split_rail_classes(classes: &[String]) -> DemoRailClasses {
+    let mut rails = DemoRailClasses::default();
+    for class in classes {
+        if class.starts_with("exact-c-") {
+            rails.exact.push(class.clone());
+        } else if class.starts_with("generated-c-") || class == "origin-generated" {
+            rails.generated.push(class.clone());
+        } else if class.starts_with("prepared-c-") {
+            rails.prepared.push(class.clone());
+        } else if class.starts_with("context-c-") || class == "origin-contextual" {
+            rails.context.push(class.clone());
+        } else if class.starts_with("structural-c-") || class == "origin-structural" {
+            rails.boundary.push(class.clone());
+        } else {
+            rails.legacy.push(class.clone());
+        }
+    }
+    rails
+}
+
+fn row_debug_info(
+    key: &OriginExportKey,
+    instruction: Option<&InstructionFact>,
+    raw_text: String,
+) -> DemoRowDebugInfo {
+    DemoRowDebugInfo {
+        origin_key: Some(key.canonical_storage_key()),
+        origin_kind: Some(key.kind().to_string()),
+        owner_key: Some(key.owner_key().to_string()),
+        local_key: Some(key.local_key().to_string()),
+        instruction_index: instruction.map(|instruction| instruction.index),
+        raw_text,
     }
 }
 
 fn compact_instruction_text(instruction: &InstructionFact) -> String {
+    let mnemonic = compact_instruction_mnemonic(&instruction.mnemonic);
     match instruction.instruction.kind() {
-        "bytecode.pc" => instruction.mnemonic.clone(),
-        "runtime.stmt" | "runtime.terminator" => compact_mir_text(&instruction.mnemonic),
-        _ => format!("%{} = {}", instruction.index, instruction.mnemonic),
+        "bytecode.pc" => mnemonic,
+        "runtime.stmt" | "runtime.terminator" => compact_mir_text(&mnemonic),
+        _ => format!("%{} = {}", instruction.index, mnemonic),
     }
+}
+
+fn compact_instruction_mnemonic(text: &str) -> String {
+    let text = text.trim();
+    if let Some(rest) = text.strip_prefix("ir[")
+        && let Some((_, mnemonic)) = rest.split_once("] ")
+    {
+        return mnemonic.trim().to_string();
+    }
+    text.to_string()
 }
 
 fn compact_origin_label(key: &OriginExportKey, instruction: Option<&InstructionFact>) -> String {
@@ -1485,7 +1684,8 @@ fn compact_tail_label(value: &str) -> String {
 }
 
 fn compact_mir_text(text: &str) -> String {
-    let without_phantom = strip_phantom_data(text);
+    let normalized = compact_instruction_mnemonic(text);
+    let without_phantom = strip_phantom_data(&normalized);
     let with_locals = replace_wrapped_ids(&without_phantom, "RLocalId(", "%");
     let with_layouts = replace_wrapped_ids(&with_locals, "LayoutId(Id(", "layout#");
     let with_runtime = replace_wrapped_ids(&with_layouts, "RuntimeInstance(Id(", "runtime#");
@@ -1602,21 +1802,46 @@ fn loop_panel(
         block_classes.extend(rails_by_key.get(&block_key).cloned().unwrap_or_default());
         rows.push(DemoPanelRow {
             key: Some(block_key.clone()),
+            kind: DemoPaneRowKind::BlockHeader,
+            indent: pane_row_indent(DemoPaneRowKind::BlockHeader),
             label: compact_origin_label(&block.block, None),
             meta: format!("loop {}", block.role),
             text: "static loop boundary".to_string(),
+            compact_text: "static loop boundary".to_string(),
+            display_status: display_status_for_row(
+                &block.block,
+                DemoPaneRowKind::BlockHeader,
+                &block_classes,
+            ),
+            rail_classes: split_rail_classes(&block_classes),
             classes: block_classes,
+            debug: row_debug_info(&block.block, None, block.block.canonical_storage_key()),
         });
         for instruction in &block.instructions {
             let key = instruction.key.canonical_storage_key();
             let mut classes = classes_by_key.get(&key).cloned().unwrap_or_default();
             classes.extend(rails_by_key.get(&key).cloned().unwrap_or_default());
+            let compact_text = format!(
+                "%{} = {}",
+                instruction.index,
+                compact_instruction_mnemonic(&instruction.mnemonic)
+            );
             rows.push(DemoPanelRow {
                 key: Some(key.clone()),
+                kind: DemoPaneRowKind::Instruction,
+                indent: pane_row_indent(DemoPaneRowKind::Instruction),
                 label: compact_origin_label(&instruction.key, None),
                 meta: "loop instruction".to_string(),
-                text: format!("%{} = {}", instruction.index, instruction.mnemonic),
+                text: compact_text.clone(),
+                compact_text,
+                display_status: display_status_for_row(
+                    &instruction.key,
+                    DemoPaneRowKind::Instruction,
+                    &classes,
+                ),
+                rail_classes: split_rail_classes(&classes),
                 classes,
+                debug: row_debug_info(&instruction.key, None, instruction.mnemonic.clone()),
             });
         }
     }
@@ -1821,6 +2046,83 @@ mod tests {
         );
         assert_eq!(compact_mir_text(int_text), "%22 = const u256 32");
         assert_eq!(compact_mir_text(small_int_text), "%17 = const u32 0");
+    }
+
+    #[test]
+    fn compact_instruction_mnemonic_hides_ir_debug_prefix() {
+        assert_eq!(compact_instruction_mnemonic("ir[71] ADD"), "ADD");
+        assert_eq!(compact_instruction_mnemonic("PUSH1 0x20"), "PUSH1 0x20");
+    }
+
+    #[test]
+    fn panel_rows_emit_typed_compact_listing_data() {
+        let key = OriginExportKey::try_from_raw_parts(
+            "runtime.stmt",
+            "runtime-instance:semantic:entry",
+            "block:2:stmt:7",
+        )
+        .unwrap();
+        let function = OriginExportKey::try_from_raw_parts(
+            "runtime.function",
+            "runtime-instance:semantic:entry",
+            "function:0",
+        )
+        .unwrap();
+        let instruction = InstructionFact::new(
+            key.clone(),
+            function,
+            7,
+            "RLocalId(3) = const Int { bits: 32, signed: false, words: [1] }",
+        );
+        let mut instructions = BTreeMap::new();
+        instructions.insert(key.clone(), &instruction);
+        let storage_key = key.canonical_storage_key();
+        let index = DemoIndex {
+            origin_nodes: BTreeMap::new(),
+            instructions,
+            source_files: BTreeMap::new(),
+            source_spans: BTreeMap::new(),
+            source_snippets: BTreeMap::new(),
+            edges_by_from: BTreeMap::new(),
+            edges_by_to: BTreeMap::new(),
+        };
+        let mut classes_by_key = BTreeMap::new();
+        classes_by_key.insert(
+            storage_key.clone(),
+            vec!["trace-c-1".to_string(), "exact-c-abc".to_string()],
+        );
+
+        let row = origin_panel_row(
+            &key,
+            &index,
+            &classes_by_key,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        );
+
+        assert_eq!(row.kind, DemoPaneRowKind::Statement);
+        assert_eq!(row.indent, 2);
+        assert_eq!(row.label, "bb2.s7");
+        assert_eq!(row.compact_text, "%3 = const u32 1");
+        assert!(matches!(row.display_status, Some(DemoDisplayStatus::Exact)));
+        assert_eq!(row.rail_classes.exact, vec!["exact-c-abc"]);
+        assert_eq!(row.debug.origin_key.as_deref(), Some(storage_key.as_str()));
+        assert!(row.debug.raw_text.contains("RLocalId(3)"));
+    }
+
+    #[test]
+    fn source_generated_status_is_downstream_not_compiler_generated() {
+        let key = OriginExportKey::try_from_raw_parts(
+            "source.span",
+            "package:demo.fe:__synthetic",
+            "span:0",
+        )
+        .unwrap();
+
+        assert!(matches!(
+            display_status_for_row(&key, DemoPaneRowKind::Statement, &[]),
+            Some(DemoDisplayStatus::GeneratedDownstream)
+        ));
     }
 
     #[test]
