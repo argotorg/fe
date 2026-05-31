@@ -1938,11 +1938,20 @@ pub struct SyntheticOverheadRow {
 pub struct AttributionAuditReport {
     pub metadata: ReportMetadata,
     pub total_bytecode_pcs: usize,
+    pub source_exact_pcs: usize,
+    pub source_ambiguous_pcs: usize,
     pub unmapped_pcs: usize,
+    pub optimized_sonatina_linked_pcs: usize,
+    pub prepared_linked_pcs: usize,
+    pub missing_optimized_to_prepared_lineage_pcs: usize,
     pub direct_bytecode_edges: Vec<AttributionAuditEdgeCount>,
     pub direct_edges_by_class: Vec<AttributionAuditClassCount>,
     pub source_lines: Vec<AttributionAuditSourceLineCount>,
     pub sonatina_targets: Vec<AttributionAuditTargetCount>,
+    pub optimized_sonatina_targets: Vec<AttributionAuditTargetCount>,
+    pub prepared_targets: Vec<AttributionAuditTargetCount>,
+    pub missing_lineage_targets: Vec<AttributionAuditTargetCount>,
+    pub lineage_gaps: Vec<AttributionAuditLineageGap>,
     pub suspicious_edges: Vec<AttributionAuditSuspiciousEdge>,
 }
 
@@ -1972,6 +1981,13 @@ pub struct AttributionAuditSourceLineCount {
 pub struct AttributionAuditTargetCount {
     pub target: OriginExportKey,
     pub count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttributionAuditLineageGap {
+    pub bytecode_pc: OriginExportKey,
+    pub prepared_origin: OriginExportKey,
+    pub reason: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -3505,6 +3521,7 @@ fn primary_source(candidates: &[SourceAttribution]) -> Option<SourceAttribution>
 
 fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport {
     let index = TraceIndex::new(snapshot);
+    let semantic_index = trace_index::TraceIndex::new(snapshot);
     let mut direct_edges = BTreeMap::<
         (
             OriginEdgeLabel,
@@ -3517,24 +3534,92 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
     let mut class_counts = BTreeMap::<OriginEdgeTraversalClass, usize>::new();
     let mut source_lines = BTreeMap::<(String, String), usize>::new();
     let mut sonatina_targets = BTreeMap::<OriginExportKey, usize>::new();
+    let mut optimized_sonatina_targets = BTreeMap::<OriginExportKey, usize>::new();
+    let mut prepared_targets = BTreeMap::<OriginExportKey, usize>::new();
+    let mut lineage_gap_targets = BTreeMap::<OriginExportKey, usize>::new();
+    let mut lineage_gaps = Vec::new();
     let mut suspicious_edges = Vec::new();
     let mut total_bytecode_pcs = 0usize;
+    let mut source_exact_pcs = 0usize;
+    let mut source_ambiguous_pcs = 0usize;
     let mut unmapped_pcs = 0usize;
+    let mut optimized_sonatina_linked_pcs = 0usize;
+    let mut prepared_linked_pcs = 0usize;
+    let mut missing_optimized_to_prepared_lineage_pcs = 0usize;
 
     for instruction in index.all_instruction_keys() {
         if instruction.kind() != "bytecode.pc" {
             continue;
         }
         total_bytecode_pcs += 1;
-        let sources = index.source_candidates_for_instruction(&instruction);
-        if sources.is_empty() {
-            unmapped_pcs += 1;
+        let sources = semantic_index
+            .source_candidates_for_instruction(
+                &instruction,
+                trace_index::TraceReachabilityPolicy::ExactOnly,
+            )
+            .into_iter()
+            .filter_map(|origin| index.source_attribution(&origin))
+            .collect::<Vec<_>>();
+        match sources.len() {
+            0 => unmapped_pcs += 1,
+            1 => source_exact_pcs += 1,
+            _ => source_ambiguous_pcs += 1,
         }
         for source in sources {
             *source_lines
                 .entry((source.label, source.origin.kind().to_string()))
                 .or_default() += 1;
         }
+
+        let reachable = semantic_index.reachable_targets(
+            &instruction,
+            trace_index::TraceReachabilityPolicy::ExactOnly,
+        );
+        let optimized_targets_for_pc = reachable
+            .iter()
+            .filter(|target| is_optimized_sonatina_audit_origin(target))
+            .cloned()
+            .collect::<Vec<_>>();
+        let prepared_targets_for_pc = reachable
+            .iter()
+            .filter(|target| is_prepared_sonatina_audit_origin(target))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if !optimized_targets_for_pc.is_empty() {
+            optimized_sonatina_linked_pcs += 1;
+            for target in optimized_targets_for_pc {
+                *optimized_sonatina_targets.entry(target).or_default() += 1;
+            }
+        }
+        if !prepared_targets_for_pc.is_empty() {
+            prepared_linked_pcs += 1;
+            for target in &prepared_targets_for_pc {
+                *prepared_targets.entry(target.clone()).or_default() += 1;
+            }
+            let mut has_missing_prepared_lineage = false;
+            for prepared in prepared_targets_for_pc {
+                let prepared_reachable = semantic_index
+                    .reachable_targets(&prepared, trace_index::TraceReachabilityPolicy::ExactOnly);
+                if prepared_reachable
+                    .iter()
+                    .any(is_optimized_sonatina_audit_origin)
+                {
+                    continue;
+                }
+                has_missing_prepared_lineage = true;
+                *lineage_gap_targets.entry(prepared.clone()).or_default() += 1;
+                lineage_gaps.push(AttributionAuditLineageGap {
+                    bytecode_pc: instruction.clone(),
+                    prepared_origin: prepared,
+                    reason: "missing_optimized_to_prepared_lineage".to_string(),
+                });
+            }
+            if has_missing_prepared_lineage {
+                missing_optimized_to_prepared_lineage_pcs += 1;
+            }
+        }
+
         for edge in snapshot.facts().iter().filter_map(|fact| match fact {
             TraceFact::OriginEdge(edge) if edge.from == instruction => Some(edge),
             _ => None,
@@ -3621,18 +3706,73 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
         })
     });
     sonatina_targets.truncate(25);
+
+    let mut optimized_sonatina_targets =
+        attribution_audit_target_counts(optimized_sonatina_targets);
+    optimized_sonatina_targets.truncate(25);
+
+    let mut prepared_targets = attribution_audit_target_counts(prepared_targets);
+    prepared_targets.truncate(25);
+
+    let mut lineage_gap_targets = attribution_audit_target_counts(lineage_gap_targets);
+    lineage_gap_targets.truncate(25);
+    lineage_gaps.sort_by(|a, b| {
+        a.bytecode_pc
+            .canonical_storage_key()
+            .cmp(&b.bytecode_pc.canonical_storage_key())
+            .then_with(|| {
+                a.prepared_origin
+                    .canonical_storage_key()
+                    .cmp(&b.prepared_origin.canonical_storage_key())
+            })
+    });
+    lineage_gaps.truncate(25);
     suspicious_edges.truncate(25);
 
     AttributionAuditReport {
         metadata: ReportMetadata::from_snapshot(snapshot),
         total_bytecode_pcs,
+        source_exact_pcs,
+        source_ambiguous_pcs,
         unmapped_pcs,
+        optimized_sonatina_linked_pcs,
+        prepared_linked_pcs,
+        missing_optimized_to_prepared_lineage_pcs,
         direct_bytecode_edges,
         direct_edges_by_class,
         source_lines,
         sonatina_targets,
+        optimized_sonatina_targets,
+        prepared_targets,
+        missing_lineage_targets: lineage_gap_targets,
+        lineage_gaps,
         suspicious_edges,
     }
+}
+
+fn is_optimized_sonatina_audit_origin(key: &OriginExportKey) -> bool {
+    key.kind().starts_with("sonatina.post")
+}
+
+fn is_prepared_sonatina_audit_origin(key: &OriginExportKey) -> bool {
+    key.kind().starts_with("sonatina.evm.prepared")
+}
+
+fn attribution_audit_target_counts(
+    counts: BTreeMap<OriginExportKey, usize>,
+) -> Vec<AttributionAuditTargetCount> {
+    let mut targets = counts
+        .into_iter()
+        .map(|(target, count)| AttributionAuditTargetCount { target, count })
+        .collect::<Vec<_>>();
+    targets.sort_by(|a, b| {
+        b.count.cmp(&a.count).then_with(|| {
+            a.target
+                .canonical_storage_key()
+                .cmp(&b.target.canonical_storage_key())
+        })
+    });
+    targets
 }
 
 fn runtime_session_matches(session: &OriginExportKey, trace_id: Option<&str>) -> bool {
@@ -3764,6 +3904,21 @@ mod tests {
             key.clone(),
             OriginNodeKind::new(key.kind()),
         ))
+    }
+
+    fn snapshot(facts: Vec<TraceFact>) -> TraceSnapshot {
+        TraceSnapshot::new(TraceBundle::new(
+            TraceMetadata::fixture(
+                "abc123",
+                "evm/sonatina",
+                vec!["fe".to_string()],
+                "demo.fe",
+                vec!["optimize=2".to_string()],
+                "query-test",
+            ),
+            facts,
+        ))
+        .unwrap()
     }
 
     fn demo_service() -> TraceIntrospectionService {
@@ -4694,6 +4849,12 @@ mod tests {
         let report = demo_service().attribution_audit().unwrap();
 
         assert_eq!(report.total_bytecode_pcs, 4);
+        assert_eq!(report.source_exact_pcs, 2);
+        assert_eq!(report.source_ambiguous_pcs, 1);
+        assert_eq!(report.unmapped_pcs, 1);
+        assert_eq!(report.optimized_sonatina_linked_pcs, 2);
+        assert_eq!(report.prepared_linked_pcs, 0);
+        assert_eq!(report.missing_optimized_to_prepared_lineage_pcs, 0);
         assert!(report.direct_edges_by_class.iter().any(|row| {
             row.traversal_class == OriginEdgeTraversalClass::ExactAttribution && row.count >= 2
         }));
@@ -4705,6 +4866,110 @@ mod tests {
                 .source_lines
                 .iter()
                 .any(|row| { row.label == "fib.fe:2:8-2:9" && row.origin_kind == "hir.expr" })
+        );
+    }
+
+    #[test]
+    fn attribution_audit_reports_prepared_without_postopt_lineage() {
+        let function = key("function", "demo", "recv");
+        let source_file = key("source.file", "demo", "demo.fe");
+        let hir = key("hir.expr", "demo", "expr:source");
+        let postopt = key("sonatina.postopt.inst", "demo", "inst:postopt");
+        let prepared_linked = key("sonatina.evm.prepared.inst", "demo", "inst:prepared-linked");
+        let prepared_missing = key(
+            "sonatina.evm.prepared.inst",
+            "demo",
+            "inst:prepared-missing",
+        );
+        let pc_linked = key("bytecode.pc", "demo", "pc:0");
+        let pc_missing = key("bytecode.pc", "demo", "pc:1");
+        let facts = vec![
+            node(function.clone()),
+            node(source_file.clone()),
+            node(hir.clone()),
+            node(postopt.clone()),
+            node(prepared_linked.clone()),
+            node(prepared_missing.clone()),
+            node(pc_linked.clone()),
+            node(pc_missing.clone()),
+            TraceFact::SourceFile(SourceFileFact::new(
+                source_file.clone(),
+                "file:///demo.fe",
+                "demo.fe",
+                "blake3:0000000000000000000000000000000000000000000000000000000000000001",
+                Some(0),
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                hir.clone(),
+                source_file,
+                0,
+                1,
+                1,
+                1,
+                1,
+                2,
+            )),
+            TraceFact::Instruction(InstructionFact::new(
+                pc_linked.clone(),
+                function.clone(),
+                0,
+                "ADD",
+            )),
+            TraceFact::Instruction(InstructionFact::new(
+                pc_missing.clone(),
+                function,
+                1,
+                "DUP1",
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                pc_linked,
+                prepared_linked.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                prepared_linked,
+                postopt.clone(),
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::Backend),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                postopt,
+                hir,
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::SonatinaPostOpt),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                pc_missing.clone(),
+                prepared_missing.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+        ];
+        let snapshot = snapshot(facts);
+        let report = TraceIntrospectionService::new(snapshot)
+            .attribution_audit()
+            .unwrap();
+
+        assert_eq!(report.total_bytecode_pcs, 2);
+        assert_eq!(report.source_exact_pcs, 1);
+        assert_eq!(report.source_ambiguous_pcs, 0);
+        assert_eq!(report.unmapped_pcs, 1);
+        assert_eq!(report.optimized_sonatina_linked_pcs, 1);
+        assert_eq!(report.prepared_linked_pcs, 2);
+        assert_eq!(report.missing_optimized_to_prepared_lineage_pcs, 1);
+        assert_eq!(report.lineage_gaps.len(), 1);
+        assert_eq!(report.lineage_gaps[0].bytecode_pc, pc_missing);
+        assert_eq!(report.lineage_gaps[0].prepared_origin, prepared_missing);
+        assert_eq!(
+            report.lineage_gaps[0].reason,
+            "missing_optimized_to_prepared_lineage"
+        );
+        assert!(
+            report
+                .missing_lineage_targets
+                .iter()
+                .any(|row| row.target == report.lineage_gaps[0].prepared_origin && row.count == 1)
         );
     }
 

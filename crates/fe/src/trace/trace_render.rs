@@ -1079,8 +1079,18 @@ fn render_attribution_audit_report(report: &AttributionAuditReport) -> String {
         "Policy: exactness is derived from OriginEdgeLabel + introduced_by + endpoint kinds.\n",
     );
     out.push_str(&format!(
-        "Bytecode PCs: {} total, {} without exact source candidates\n\n",
-        report.total_bytecode_pcs, report.unmapped_pcs
+        "Bytecode PCs: {} total\n",
+        report.total_bytecode_pcs
+    ));
+    out.push_str(&format!(
+        "  source-exact: {}\n  ambiguous source: {}\n  no exact source: {}\n",
+        report.source_exact_pcs, report.source_ambiguous_pcs, report.unmapped_pcs
+    ));
+    out.push_str(&format!(
+        "  optimized-Sonatina linked: {}\n  prepared-linked: {}\n  missing optimized->prepared lineage: {}\n\n",
+        report.optimized_sonatina_linked_pcs,
+        report.prepared_linked_pcs,
+        report.missing_optimized_to_prepared_lineage_pcs
     ));
 
     out.push_str("Direct bytecode edge classes:\n");
@@ -1121,8 +1131,57 @@ fn render_attribution_audit_report(report: &AttributionAuditReport) -> String {
         }
     }
 
+    out.push_str("\nTop optimized Sonatina targets:\n");
+    if report.optimized_sonatina_targets.is_empty() {
+        out.push_str("  none\n");
+    } else {
+        for row in report.optimized_sonatina_targets.iter().take(12) {
+            out.push_str(&format!(
+                "  {:>5} {}\n",
+                row.count,
+                row.target.display_label()
+            ));
+        }
+    }
+
+    out.push_str("\nTop EVM prepared targets:\n");
+    if report.prepared_targets.is_empty() {
+        out.push_str("  none\n");
+    } else {
+        for row in report.prepared_targets.iter().take(12) {
+            out.push_str(&format!(
+                "  {:>5} {}\n",
+                row.count,
+                row.target.display_label()
+            ));
+        }
+    }
+
+    if !report.missing_lineage_targets.is_empty() {
+        out.push_str("\nPrepared targets missing optimized lineage:\n");
+        for row in report.missing_lineage_targets.iter().take(12) {
+            out.push_str(&format!(
+                "  {:>5} {}\n",
+                row.count,
+                row.target.display_label()
+            ));
+        }
+    }
+
+    if !report.lineage_gaps.is_empty() {
+        out.push_str("\nSample missing optimized->prepared lineage gaps:\n");
+        for gap in report.lineage_gaps.iter().take(12) {
+            out.push_str(&format!(
+                "  {} -> {}: {}\n",
+                gap.bytecode_pc.display_label(),
+                gap.prepared_origin.display_label(),
+                gap.reason
+            ));
+        }
+    }
+
     if !report.suspicious_edges.is_empty() {
-        out.push_str("\nSuspicious exact-looking bytecode edges:\n");
+        out.push_str("\nContextual exact-looking bytecode edges:\n");
         for edge in report.suspicious_edges.iter().take(12) {
             out.push_str(&format!(
                 "  {:?} {} -> {} class={:?}: {}\n",
