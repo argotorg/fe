@@ -343,6 +343,9 @@ pub fn origin_trace_live_html_shell(title: &str) -> String {
       useChunk(manifest.source_digest, previous.source_digest, function (value) {{
         next.source = value;
       }});
+      useChunk(manifest.indexes_digest, previous.indexes_digest, function (value) {{
+        next.indexes = value;
+      }});
       useChunk(manifest.rail_components_digest, previous.rail_components_digest, function (value) {{
         next.rail_components = value;
       }});

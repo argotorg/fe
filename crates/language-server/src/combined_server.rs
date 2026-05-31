@@ -628,6 +628,13 @@ fn trace_workbench_chunk_payload(
             "value": model.get("source").cloned().unwrap_or(serde_json::Value::Null),
         }));
     }
+    if manifest.indexes_digest == digest {
+        return Some(serde_json::json!({
+            "kind": "indexes",
+            "digest": digest,
+            "value": model.get("indexes").cloned().unwrap_or(serde_json::Value::Null),
+        }));
+    }
     if manifest.rail_components_digest == digest {
         return Some(serde_json::json!({
             "kind": "rail_components",
@@ -1044,6 +1051,7 @@ mod tests {
             "revision": { "id": 7 },
             "metadata": { "input_path": "demo.fe" },
             "source": { "lines": [{ "number": 1, "text": "fn main() {}" }] },
+            "indexes": { "source_lines": { "main:1": "source-main-line-1" } },
             "provenance": { "source_to_optimized": "available" },
             "rail_components": { "exact": ["exact-c-a"] },
             "panels": [
@@ -1067,6 +1075,13 @@ mod tests {
         let source = trace_workbench_chunk_payload(&model, &manifest.source_digest).unwrap();
         assert_eq!(source["kind"], "source");
         assert_eq!(source["value"]["lines"][0]["text"], "fn main() {}");
+
+        let indexes = trace_workbench_chunk_payload(&model, &manifest.indexes_digest).unwrap();
+        assert_eq!(indexes["kind"], "indexes");
+        assert_eq!(
+            indexes["value"]["source_lines"]["main:1"],
+            "source-main-line-1"
+        );
 
         let pane_digest = manifest.panes.get("bytecode").unwrap();
         let pane = trace_workbench_chunk_payload(&model, pane_digest).unwrap();

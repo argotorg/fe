@@ -1820,6 +1820,7 @@ pub fn trace_workbench_report_projection(
         request.source_text.as_deref(),
         &classes_by_key,
     );
+    let indexes = trace_workbench_projection_indexes(&source, &panels);
     let source_lines_for_audit = request
         .source_text
         .as_deref()
@@ -1895,6 +1896,7 @@ pub fn trace_workbench_report_projection(
         "attribution_audit": attribution_audit,
         "source": source,
         "panels": panels,
+        "indexes": indexes,
         "rail_components": {
             "classes_by_origin": component_classes_by_key,
         },
@@ -2157,6 +2159,84 @@ fn trace_workbench_source_lines(
                 classes,
             }
         })
+        .collect()
+}
+
+fn trace_workbench_projection_indexes(
+    source: &serde_json::Value,
+    panels: &[TraceWorkbenchPane],
+) -> serde_json::Value {
+    let mut source_lines = BTreeMap::<String, String>::new();
+    let mut origin_to_rows = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut component_to_rows = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut bytecode_pcs = BTreeMap::<String, BTreeSet<String>>::new();
+
+    for line in source
+        .get("lines")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(row_id) = line.get("row_id").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if let Some(number) = line.get("number").and_then(serde_json::Value::as_u64) {
+            source_lines.insert(format!("main:{number}"), row_id.to_string());
+        }
+        for class in line
+            .get("classes")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+        {
+            component_to_rows
+                .entry(class.to_string())
+                .or_default()
+                .insert(row_id.to_string());
+        }
+    }
+
+    for panel in panels {
+        for row in &panel.rows {
+            if let Some(key) = row.key.as_ref() {
+                origin_to_rows
+                    .entry(key.clone())
+                    .or_default()
+                    .insert(row.row_id.clone());
+            }
+            if row.debug.origin_kind.as_deref() == Some("bytecode.pc")
+                && let Some(local_key) = row.debug.local_key.as_deref()
+                && let Some(pc) = local_key.strip_prefix("pc:")
+            {
+                bytecode_pcs
+                    .entry(pc.to_string())
+                    .or_default()
+                    .insert(row.row_id.clone());
+            }
+            for class in &row.classes {
+                component_to_rows
+                    .entry(class.clone())
+                    .or_default()
+                    .insert(row.row_id.clone());
+            }
+        }
+    }
+
+    serde_json::json!({
+        "source_lines": source_lines,
+        "origin_to_rows": trace_workbench_index_sets_to_lists(origin_to_rows),
+        "component_to_rows": trace_workbench_index_sets_to_lists(component_to_rows),
+        "bytecode_pcs": trace_workbench_index_sets_to_lists(bytecode_pcs),
+    })
+}
+
+fn trace_workbench_index_sets_to_lists(
+    values: BTreeMap<String, BTreeSet<String>>,
+) -> BTreeMap<String, Vec<String>> {
+    values
+        .into_iter()
+        .map(|(key, rows)| (key, rows.into_iter().collect()))
         .collect()
 }
 
@@ -2782,6 +2862,7 @@ pub struct TraceViewManifest {
     pub summary_digest: String,
     pub metadata_digest: String,
     pub source_digest: String,
+    pub indexes_digest: String,
     pub rail_components_digest: String,
     pub panes: BTreeMap<String, String>,
     pub reports: BTreeMap<String, String>,
@@ -2799,6 +2880,10 @@ pub fn trace_workbench_manifest(projection: &serde_json::Value) -> TraceViewMani
         .unwrap_or(serde_json::Value::Null);
     let source = projection
         .get("source")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let indexes = projection
+        .get("indexes")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
     let summary = trace_workbench_summary_chunk(projection);
@@ -2835,6 +2920,7 @@ pub fn trace_workbench_manifest(projection: &serde_json::Value) -> TraceViewMani
         summary_digest: digest_json(&summary),
         metadata_digest: digest_json(&metadata),
         source_digest: digest_json(&source),
+        indexes_digest: digest_json(&indexes),
         rail_components_digest: digest_json(
             projection
                 .get("rail_components")
@@ -6193,6 +6279,17 @@ mod tests {
                 .is_some_and(|row_id| row_id.starts_with("origin-"))
         );
         assert_eq!(
+            projection["indexes"]["source_lines"]["main:2"],
+            "source-main-line-2"
+        );
+        let first_bytecode_row = &bytecode_panel["rows"][0];
+        let first_bytecode_key = first_bytecode_row["key"].as_str().unwrap();
+        let first_bytecode_row_id = first_bytecode_row["row_id"].as_str().unwrap();
+        assert_eq!(
+            projection["indexes"]["origin_to_rows"][first_bytecode_key][0],
+            first_bytecode_row_id
+        );
+        assert_eq!(
             projection["notes"][2],
             "The browser does not compute provenance or graph reachability."
         );
@@ -6201,6 +6298,7 @@ mod tests {
         assert!(manifest.root_digest.starts_with("blake3:"));
         assert!(manifest.summary_digest.starts_with("blake3:"));
         assert!(manifest.source_digest.starts_with("blake3:"));
+        assert!(manifest.indexes_digest.starts_with("blake3:"));
         assert!(manifest.reports.contains_key("attribution"));
     }
 
