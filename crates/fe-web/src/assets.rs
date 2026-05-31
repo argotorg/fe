@@ -330,6 +330,7 @@ pub fn origin_trace_live_html_shell(title: &str) -> String {
     function applyChunkedManifest(manifest) {{
       var previous = manifestCache;
       var current = window.FE_ORIGIN_TRACE_DATA || {{}};
+      window.FE_TRACE_WORKBENCH_MODEL_DIGEST = (manifest && manifest.root_digest) || "";
       if (!previous || !current || !current.revision) {{
         manifestCache = manifest;
         return fetchJson("/trace/session/" + encodeURIComponent(session) + "/model");
@@ -465,7 +466,9 @@ pub fn origin_trace_live_html_shell(title: &str) -> String {
       events.addEventListener("trace/revision", function (event) {{
         try {{
           var payload = JSON.parse(event.data || "{{}}");
-          if (payload.status === "ready" && payload.revision && Number(payload.revision) !== Number(window.FE_TRACE_WORKBENCH_REVISION || 0)) {{
+          var revisionChanged = payload.revision && Number(payload.revision) !== Number(window.FE_TRACE_WORKBENCH_REVISION || 0);
+          var digestChanged = payload.modelDigest && payload.modelDigest !== window.FE_TRACE_WORKBENCH_MODEL_DIGEST;
+          if (payload.status === "ready" && (revisionChanged || digestChanged)) {{
             fetchAndRenderModel().catch(function (err) {{
               var reason = String(err && err.message || err);
               renderCachedModel(reason);
@@ -751,6 +754,8 @@ mod tests {
         assert!(html.contains("/revisions"));
         assert!(html.contains("applyChunkedManifest"));
         assert!(html.contains("manifestCache"));
+        assert!(html.contains("FE_TRACE_WORKBENCH_MODEL_DIGEST"));
+        assert!(html.contains("modelDigest"));
         assert!(html.contains("FE_TRACE_WORKBENCH_REVISIONS"));
         assert!(html.contains("trace/selection"));
         assert!(html.contains("resolvedRows"));

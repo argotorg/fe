@@ -42,6 +42,7 @@ pub(crate) struct TraceWorkbenchRevision {
     pub document_version: Option<i32>,
     pub status: String,
     pub config_hash: String,
+    pub model_digest: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -77,6 +78,13 @@ pub(crate) async fn handle_trace_workbench_bootstrap(
         .map_err(|err| internal_error(format!("invalid session URI: {err}")))?;
     let document_version = backend.document_version(&uri);
     let config_hash = backend.tooling_config().stable_hash();
+    let latest_model_digest = backend
+        .trace_viewer_revisions(&request.session_id)
+        .and_then(|revisions| {
+            revisions
+                .last()
+                .map(|revision| revision.model_digest.clone())
+        });
     session.document_version = document_version;
     session.config_hash = config_hash.clone();
     Ok(TraceWorkbenchBootstrapResponse {
@@ -85,6 +93,7 @@ pub(crate) async fn handle_trace_workbench_bootstrap(
             document_version,
             status: "ready".to_string(),
             config_hash,
+            model_digest: latest_model_digest,
         },
         session,
         capabilities: TraceWorkbenchCapabilities {
@@ -453,6 +462,7 @@ mod tests {
     use async_lsp::MainLoop;
     use async_lsp::router::Router;
     use common::origin::OriginExportKey;
+    use std::collections::BTreeMap;
     use trace_facts::{
         InstructionFact, JsonlTraceSink, OriginNodeFact, OriginNodeKind, TraceBundle, TraceFact,
         TraceMetadata,
@@ -462,7 +472,7 @@ mod tests {
     use super::{
         TraceWorkbenchSessionRequest, attached_trace_service, handle_trace_workbench_bootstrap,
     };
-    use crate::backend::Backend;
+    use crate::backend::{Backend, TraceViewerRevisionRecord};
 
     fn test_backend() -> Backend {
         let (_main_loop, client_socket) = MainLoop::new_server(|_client| Router::<()>::new(()));
@@ -549,7 +559,51 @@ mod tests {
 
         assert_eq!(response.revision.id, 4);
         assert_eq!(response.revision.document_version, Some(4));
+        assert_eq!(response.revision.model_digest, None);
         assert_eq!(response.session.document_version, Some(4));
+
+        tokio::task::spawn_blocking(move || drop(backend))
+            .await
+            .expect("backend drop task panicked");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn trace_workbench_bootstrap_reports_latest_model_digest() {
+        let mut backend = test_backend();
+        let uri = Url::parse("file:///workspace/src/lib.fe").unwrap();
+        backend.set_document_version(uri.clone(), 9);
+        let session =
+            backend.create_trace_viewer_session(uri, "evm", "O2", "source-postopt-bytecode", None);
+        backend.record_trace_viewer_revision(
+            &session.id,
+            TraceViewerRevisionRecord {
+                revision: 9,
+                document_version: Some(9),
+                status: "ready".to_string(),
+                config_hash: "config".to_string(),
+                model_digest: "blake3:model".to_string(),
+                summary_digest: "blake3:summary".to_string(),
+                source_digest: "blake3:source".to_string(),
+                indexes_digest: "blake3:indexes".to_string(),
+                rail_components_digest: "blake3:rails".to_string(),
+                pane_digests: BTreeMap::new(),
+                report_digests: BTreeMap::new(),
+            },
+        );
+
+        let response = handle_trace_workbench_bootstrap(
+            &mut backend,
+            TraceWorkbenchSessionRequest {
+                session_id: session.id,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            response.revision.model_digest.as_deref(),
+            Some("blake3:model")
+        );
 
         tokio::task::spawn_blocking(move || drop(backend))
             .await

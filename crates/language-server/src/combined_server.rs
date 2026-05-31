@@ -773,7 +773,7 @@ async fn handle_trace_workbench_events_http(
             Box::pin(futures::stream::once(async move { Ok(event) }))
         } else {
             let revision_stream = futures::stream::unfold(
-                (session_id, actor_rx, None::<u64>),
+                (session_id, actor_rx, None::<(u64, Option<String>)>),
                 |(session_id, actor_rx, mut last_revision)| async move {
                     loop {
                         match trace_workbench_bootstrap_for_event(
@@ -784,8 +784,10 @@ async fn handle_trace_workbench_events_http(
                         {
                             Ok(response) => {
                                 let revision = response.revision.id;
-                                if last_revision != Some(revision) {
-                                    last_revision = Some(revision);
+                                let model_digest = response.revision.model_digest.clone();
+                                let next_revision = (revision, model_digest.clone());
+                                if last_revision != Some(next_revision.clone()) {
+                                    last_revision = Some(next_revision);
                                     let event = Event::default()
                                         .event("trace/revision")
                                         .json_data(serde_json::json!({
@@ -794,6 +796,7 @@ async fn handle_trace_workbench_events_http(
                                             "revision": revision,
                                             "documentVersion": response.revision.document_version,
                                             "status": response.revision.status,
+                                            "modelDigest": model_digest,
                                             "modelDeltas": response.capabilities.model_deltas,
                                             "chunks": response.capabilities.chunks,
                                         }))
