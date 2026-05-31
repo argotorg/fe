@@ -1815,11 +1815,13 @@ pub fn trace_workbench_report_projection(
         snapshot,
         &classes_by_key,
     );
+    let missing_lineage = trace_workbench_missing_lineage_index(attribution_audit.as_ref());
     let panels = trace_workbench_panes(
         snapshot,
         &request.input_path,
         request.source_text.as_deref(),
         &classes_by_key,
+        &missing_lineage,
     );
     let indexes = trace_workbench_projection_indexes(&source, &panels);
     let source_lines_for_audit = request
@@ -2048,6 +2050,30 @@ struct TraceWorkbenchRowDebugInfo {
     raw_text: String,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct TraceWorkbenchMissingLineageIndex {
+    origins: BTreeSet<String>,
+}
+
+impl TraceWorkbenchMissingLineageIndex {
+    fn contains(&self, key: &OriginExportKey) -> bool {
+        self.origins.contains(&key.canonical_storage_key())
+    }
+}
+
+fn trace_workbench_missing_lineage_index(
+    attribution_audit: Option<&AttributionAuditReport>,
+) -> TraceWorkbenchMissingLineageIndex {
+    let mut origins = BTreeSet::new();
+    if let Some(attribution_audit) = attribution_audit {
+        for gap in &attribution_audit.lineage_gaps {
+            origins.insert(gap.bytecode_pc.canonical_storage_key());
+            origins.insert(gap.prepared_origin.canonical_storage_key());
+        }
+    }
+    TraceWorkbenchMissingLineageIndex { origins }
+}
+
 fn trace_workbench_source_projection(
     input_path: &str,
     source_text: Option<&str>,
@@ -2246,6 +2272,7 @@ fn trace_workbench_panes(
     input_path: &str,
     source_text: Option<&str>,
     component_classes_by_key: &BTreeMap<String, Vec<String>>,
+    missing_lineage: &TraceWorkbenchMissingLineageIndex,
 ) -> Vec<TraceWorkbenchPane> {
     let index = TraceWorkbenchProjectionIndex::new(snapshot, input_path, source_text);
     [
@@ -2270,7 +2297,8 @@ fn trace_workbench_panes(
     ]
     .into_iter()
     .filter_map(|(id, title, summary)| {
-        let rows = trace_workbench_panel_rows(id, &index, component_classes_by_key);
+        let rows =
+            trace_workbench_panel_rows(id, &index, component_classes_by_key, missing_lineage);
         (!rows.is_empty()).then_some(TraceWorkbenchPane {
             id,
             title,
@@ -2358,6 +2386,7 @@ fn trace_workbench_panel_rows(
     panel: &str,
     index: &TraceWorkbenchProjectionIndex<'_>,
     component_classes_by_key: &BTreeMap<String, Vec<String>>,
+    missing_lineage: &TraceWorkbenchMissingLineageIndex,
 ) -> Vec<TraceWorkbenchPaneRow> {
     let mut keys = index
         .origin_nodes
@@ -2367,7 +2396,9 @@ fn trace_workbench_panel_rows(
         .collect::<Vec<_>>();
     keys.sort_by(|left, right| trace_workbench_compare_panel_keys(left, right, index));
     keys.into_iter()
-        .map(|key| trace_workbench_panel_row(&key, index, component_classes_by_key))
+        .map(|key| {
+            trace_workbench_panel_row(&key, index, component_classes_by_key, missing_lineage)
+        })
         .collect()
 }
 
@@ -2465,6 +2496,7 @@ fn trace_workbench_panel_row(
     key: &OriginExportKey,
     index: &TraceWorkbenchProjectionIndex<'_>,
     component_classes_by_key: &BTreeMap<String, Vec<String>>,
+    missing_lineage: &TraceWorkbenchMissingLineageIndex,
 ) -> TraceWorkbenchPaneRow {
     let storage_key = key.canonical_storage_key();
     let instruction = index.instructions.get(key).copied();
@@ -2493,7 +2525,7 @@ fn trace_workbench_panel_row(
         meta: trace_workbench_compact_origin_meta(key),
         text: compact_text.clone(),
         compact_text,
-        display_status: trace_workbench_status_for_row(key, kind, &classes),
+        display_status: trace_workbench_status_for_row(key, kind, &classes, missing_lineage),
         rail_classes: trace_workbench_split_rail_classes(&classes),
         classes,
         debug: TraceWorkbenchRowDebugInfo {
@@ -2578,9 +2610,13 @@ fn trace_workbench_status_for_row(
     key: &OriginExportKey,
     kind: TraceWorkbenchPaneRowKind,
     classes: &[String],
+    missing_lineage: &TraceWorkbenchMissingLineageIndex,
 ) -> Option<TraceWorkbenchDisplayStatus> {
     if classes.iter().any(|class| class.starts_with("exact-c-")) {
         return Some(TraceWorkbenchDisplayStatus::Exact);
+    }
+    if missing_lineage.contains(key) {
+        return Some(TraceWorkbenchDisplayStatus::MissingOptimizedToPrepared);
     }
     if kind == TraceWorkbenchPaneRowKind::Instruction
         && key.kind() == "bytecode.pc"
@@ -5137,10 +5173,12 @@ mod tests {
         LoopCostRequest, OptimizedCodeHonestyRequest, RuntimeGasBySourceRequest,
         RuntimeTraceFilterRequest, StorageAccessesBySlotRequest, TraceIntrospectionService,
         TraceQueryHttpRequest, TraceQueryHttpResponse, TraceQueryReport, TraceQueryRequest,
+        TraceWorkbenchDisplayStatus, TraceWorkbenchMissingLineageIndex, TraceWorkbenchPaneRowKind,
         TraceWorkbenchProjectionIndex, TraceWorkbenchProjectionRequest, ValueFlowAtPcRequest,
         VariablesAtPcRequest, run_trace_query, trace_workbench_compact_mir_text,
         trace_workbench_compact_origin_text, trace_workbench_manifest,
         trace_workbench_natural_key_cmp, trace_workbench_report_projection,
+        trace_workbench_status_for_row,
     };
 
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -6434,6 +6472,35 @@ mod tests {
         assert_eq!(
             trace_workbench_natural_key_cmp("block:0:stmt:9", "block:0:stmt:10"),
             std::cmp::Ordering::Less
+        );
+    }
+
+    #[test]
+    fn trace_workbench_rows_surface_missing_optimized_to_prepared_lineage() {
+        let bytecode = key("bytecode.pc", "demo", "pc:68");
+        let mut missing_lineage = TraceWorkbenchMissingLineageIndex::default();
+        missing_lineage
+            .origins
+            .insert(bytecode.canonical_storage_key());
+        let classes = vec!["prepared-c-demo".to_string()];
+
+        assert_eq!(
+            trace_workbench_status_for_row(
+                &bytecode,
+                TraceWorkbenchPaneRowKind::Instruction,
+                &classes,
+                &missing_lineage,
+            ),
+            Some(TraceWorkbenchDisplayStatus::MissingOptimizedToPrepared)
+        );
+        assert_eq!(
+            trace_workbench_status_for_row(
+                &bytecode,
+                TraceWorkbenchPaneRowKind::Instruction,
+                &classes,
+                &TraceWorkbenchMissingLineageIndex::default(),
+            ),
+            Some(TraceWorkbenchDisplayStatus::PreparedLinked)
         );
     }
 
