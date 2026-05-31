@@ -757,6 +757,12 @@ mod tests {
     }
 
     #[test]
+    fn origin_trace_default_badges_use_product_language() {
+        assert!(!FE_ORIGIN_TRACE_JS.contains("label: \"compiler-generated\""));
+        assert!(FE_ORIGIN_TRACE_JS.contains("label: \"generated\""));
+    }
+
+    #[test]
     fn js_escape_handles_special_chars() {
         assert_eq!(js_escape_string("hello\nworld"), "hello\\nworld");
         assert_eq!(js_escape_string(r#"a"b"#), r#"a\"b"#);

@@ -1306,7 +1306,7 @@
       if (kind === "missing_optimized_to_prepared") return { kind: "warn", label: "missing link" };
       if (kind === "missing_downstream_lineage") return { kind: "warn", label: "missing downstream" };
       if (kind === "source_only") return { kind: "context", label: "source-only" };
-      if (kind === "compiler_generated") return { kind: "generated", label: "compiler-generated" };
+      if (kind === "compiler_generated") return { kind: "generated", label: "generated" };
       if (kind === "unmapped") return { kind: "warn", label: "unmapped" };
       if (kind === "ambiguous") return { kind: "warn", label: "ambiguous" };
       if (kind === "invalid") return { kind: "warn", label: "invalid" };
@@ -1338,7 +1338,7 @@
       if (primary === "optimized_attribution_gap") return { kind: "warn", label: "missing link" };
       if (primary === "lowered_no_target_unexplained") return { kind: "warn", label: "MIR-only" };
       if (primary === "preopt_elision_gap") return { kind: "warn", label: "preopt-only" };
-      if (primary === "expected_synthetic") return { kind: "generated", label: "compiler-generated" };
+      if (primary === "expected_synthetic") return { kind: "generated", label: "generated" };
       if (primary === "prepared_only") return { kind: "context", label: "prepared-linked" };
       if (primary === "source_span_sibling_unlowered" || primary === "source_only_expected") return { kind: "context", label: "source-only" };
       if (primary === "missing_source_unexplained") {
