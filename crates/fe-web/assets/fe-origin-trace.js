@@ -609,6 +609,7 @@
         if (marker) this._scrollToMarkerTarget(marker);
         var groups = traceClasses(row);
         this._selectedDisplayClasses = allClasses(row);
+        this._selectedTraceLabel = row.dataset.traceLabel || "";
         this._select(groups);
         this._scrollPeerPanesToSelection(groups, row);
         this._pinHashForRow(row);
@@ -1146,10 +1147,47 @@
       var status = this._displayStatus(entries, this._railStatus(displayClasses));
       if (!status) return null;
       var box = el("div", "status-card status-" + status.kind);
-      box.append(el("h3", "", "Selected row evidence"));
+      box.append(el("h3", "", this._selectedTraceLabel || "Selected row evidence"));
       box.append(el("p", "status-line", status.label));
       box.append(el("p", "muted", this._statusExplanation(status.kind, status.label)));
+      var reached = this._reachedSummary(entries);
+      if (reached) box.append(reached);
       box.append(this._railLegend());
+      return box;
+    }
+
+    _reachedSummary(entries) {
+      if (!entries || !entries.length) return null;
+      var counts = {
+        hir: 0,
+        mir: 0,
+        sonatina_pre: 0,
+        sonatina_post: 0,
+        sonatina_prepared: 0,
+        bytecode: 0,
+      };
+      entries.forEach(function (entry) {
+        Object.keys(counts).forEach(function (key) {
+          counts[key] += (entry.counts && entry.counts[key]) || 0;
+        });
+      });
+      var rows = [
+        ["Source/HIR", counts.hir],
+        ["MIR", counts.mir],
+        ["Sonatina pre-opt", counts.sonatina_pre],
+        ["Optimized Sonatina", counts.sonatina_post],
+        ["EVM prepared", counts.sonatina_prepared],
+        ["Bytecode", counts.bytecode],
+      ];
+      var box = el("div", "reached-summary");
+      box.append(el("h4", "", "Reached"));
+      rows.forEach(function (row) {
+        var item = el("span", "reach-chip" + (row[1] > 0 ? " reached" : ""));
+        item.append(el("b", "", row[0]), el("em", "", row[1] > 0 ? "yes" : "no"));
+        box.append(item);
+      });
+      var seam = el("p", "muted", this._provenanceCopy());
+      box.append(seam);
       return box;
     }
 
@@ -1547,6 +1585,14 @@ h1 { margin:0; color:var(--trace-text); font:700 15px/1.1 ui-sans-serif, system-
 .status-card.status-warn { border-left:3px solid var(--trace-warn); }
 .status-card h3 { margin:0 0 6px; color:var(--trace-text); font-size:13px; text-transform:uppercase; letter-spacing:.1em; }
 .status-line { margin:0 0 6px; color:var(--trace-accent); text-transform:uppercase; letter-spacing:.07em; font-size:11px; }
+.reached-summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px; margin:10px 0; }
+.reached-summary h4 { grid-column:1 / -1; margin:0; color:var(--trace-muted); font-size:10px; text-transform:uppercase; letter-spacing:.08em; }
+.reach-chip { display:flex; align-items:center; justify-content:space-between; gap:6px; padding:5px 6px; border:1px solid var(--trace-border); border-radius:6px; color:var(--trace-muted); background:var(--trace-panel); font-size:10px; min-width:0; }
+.reach-chip b { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+.reach-chip em { font-style:normal; color:var(--trace-muted); }
+.reach-chip.reached { color:var(--trace-text); border-color:color-mix(in srgb, var(--trace-accent) 35%, var(--trace-border)); background:color-mix(in srgb, var(--trace-accent) 8%, var(--trace-panel)); }
+.reach-chip.reached em { color:var(--trace-accent); }
+.reached-summary .muted { grid-column:1 / -1; font-size:10px; }
 .missing-link-summary { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:7px; margin:10px 0; }
 .metric { padding:7px 8px; border:1px solid var(--trace-border); border-radius:8px; background:var(--trace-bg); min-width:0; }
 .metric span { display:block; color:var(--trace-muted); font:600 9px/1.25 ui-sans-serif, system-ui, sans-serif; text-transform:uppercase; letter-spacing:.06em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
