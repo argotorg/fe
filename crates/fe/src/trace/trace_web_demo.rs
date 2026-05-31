@@ -518,6 +518,7 @@ struct DemoRelatedSource {
 
 #[derive(Debug, Serialize)]
 struct DemoSourceLine {
+    row_id: String,
     number: u32,
     text: String,
     classes: Vec<String>,
@@ -534,6 +535,7 @@ struct DemoPanel {
 
 #[derive(Debug, Serialize)]
 struct DemoPanelRow {
+    row_id: String,
     key: Option<String>,
     kind: DemoPaneRowKind,
     indent: u8,
@@ -997,6 +999,7 @@ fn source_lines(
                 .map(|classes| classes.iter().cloned().collect::<Vec<_>>())
                 .unwrap_or_default();
             DemoSourceLine {
+                row_id: demo_source_row_id(number),
                 number,
                 text: text.to_string(),
                 display_status: display_status_for_source_line(&classes),
@@ -1020,6 +1023,30 @@ fn display_status_for_source_line(classes: &[String]) -> Option<DemoDisplayStatu
         return Some(DemoDisplayStatus::Context);
     }
     None
+}
+
+fn demo_source_row_id(line_number: u32) -> String {
+    format!("source-main-line-{line_number}")
+}
+
+fn demo_related_source_row_id(file_key: &OriginExportKey, line_number: u32) -> String {
+    format!(
+        "source-related-{:08x}-line-{line_number}",
+        demo_stable_hash(&file_key.canonical_storage_key())
+    )
+}
+
+fn demo_origin_row_id(storage_key: &str) -> String {
+    format!("origin-{:08x}", demo_stable_hash(storage_key))
+}
+
+fn demo_stable_hash(value: &str) -> u32 {
+    let mut hash = 2166136261u32;
+    for byte in value.bytes() {
+        hash ^= u32::from(byte);
+        hash = hash.wrapping_mul(16777619);
+    }
+    hash
 }
 
 fn insert_source_span_classes(
@@ -1102,6 +1129,7 @@ fn related_source_sections(
                         .collect::<Vec<_>>();
                     let display_status = display_status_for_source_line(&classes);
                     Some(DemoSourceLine {
+                        row_id: demo_related_source_row_id(&file_key, number),
                         number,
                         text: text.to_string(),
                         classes,
@@ -1403,6 +1431,7 @@ fn origin_panel_row(
         .unwrap_or_else(|| key.canonical_storage_key());
     let display_status = display_status_for_row(key, kind, &classes);
     DemoPanelRow {
+        row_id: demo_origin_row_id(&storage_key),
         key: Some(storage_key.clone()),
         kind,
         indent: pane_row_indent(kind),
@@ -1826,6 +1855,7 @@ fn loop_panel(
         let mut block_classes = classes_by_key.get(&block_key).cloned().unwrap_or_default();
         block_classes.extend(rails_by_key.get(&block_key).cloned().unwrap_or_default());
         rows.push(DemoPanelRow {
+            row_id: demo_origin_row_id(&block_key),
             key: Some(block_key.clone()),
             kind: DemoPaneRowKind::BlockHeader,
             indent: pane_row_indent(DemoPaneRowKind::BlockHeader),
@@ -1852,6 +1882,7 @@ fn loop_panel(
                 compact_instruction_mnemonic(&instruction.mnemonic)
             );
             rows.push(DemoPanelRow {
+                row_id: demo_origin_row_id(&key),
                 key: Some(key.clone()),
                 kind: DemoPaneRowKind::Instruction,
                 indent: pane_row_indent(DemoPaneRowKind::Instruction),
@@ -2025,6 +2056,7 @@ mod tests {
                 display_name: "demo.fe".to_string(),
                 confidence: "coarse file-level fallback".to_string(),
                 lines: vec![DemoSourceLine {
+                    row_id: "source-main-line-1".to_string(),
                     number: 1,
                     text: "</script>".to_string(),
                     classes: Vec::new(),
@@ -2127,6 +2159,7 @@ mod tests {
         );
 
         assert_eq!(row.kind, DemoPaneRowKind::Statement);
+        assert_eq!(row.row_id, demo_origin_row_id(&storage_key));
         assert_eq!(row.indent, 2);
         assert_eq!(row.label, "bb2.s7");
         assert_eq!(row.compact_text, "%3 = const u32 1");
@@ -2326,6 +2359,7 @@ mod tests {
         assert_eq!(sections.len(), 1);
         assert_eq!(sections[0].display_name, "calldata.fe");
         assert_eq!(sections[0].lines.len(), 1);
+        assert!(sections[0].lines[0].row_id.starts_with("source-related-"));
         assert_eq!(sections[0].lines[0].number, 2);
         assert_eq!(sections[0].lines[0].text, "pulled in");
         assert_eq!(sections[0].lines[0].classes, vec!["exact-c-4", "trace-c-7"]);
