@@ -57,7 +57,7 @@ pub(crate) async fn handle_trace_workbench_bootstrap(
     backend: &mut Backend,
     request: TraceWorkbenchSessionRequest,
 ) -> Result<TraceWorkbenchBootstrapResponse, async_lsp::ResponseError> {
-    let session = backend
+    let mut session = backend
         .trace_viewer_session(&request.session_id)
         .ok_or_else(|| {
             internal_error(format!(
@@ -65,12 +65,18 @@ pub(crate) async fn handle_trace_workbench_bootstrap(
                 request.session_id
             ))
         })?;
+    let uri = Url::parse(&session.uri)
+        .map_err(|err| internal_error(format!("invalid session URI: {err}")))?;
+    let document_version = backend.document_version(&uri);
+    let config_hash = backend.tooling_config().stable_hash();
+    session.document_version = document_version;
+    session.config_hash = config_hash.clone();
     Ok(TraceWorkbenchBootstrapResponse {
         revision: TraceWorkbenchRevision {
-            id: session.document_version.unwrap_or_default().max(0) as u64,
-            document_version: session.document_version,
+            id: document_version.unwrap_or_default().max(0) as u64,
+            document_version,
             status: "ready".to_string(),
-            config_hash: session.config_hash.clone(),
+            config_hash,
         },
         session,
         capabilities: TraceWorkbenchCapabilities {

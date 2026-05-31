@@ -267,6 +267,7 @@ pub fn origin_trace_live_html_shell(title: &str) -> String {
     var loading = document.querySelector(".trace-live-loading");
     var authHeaders = token ? {{ "Authorization": "Bearer " + token }} : {{}};
     var storageKey = "fe.trace.workbench.lastReady." + (session || "");
+    var modelRefresh = null;
     function fail(message) {{
       if (loading) loading.textContent = message;
       console.error("[fe trace workbench]", message);
@@ -281,7 +282,13 @@ pub fn origin_trace_live_html_shell(title: &str) -> String {
       window.FE_ORIGIN_TRACE_DATA = model;
       window.FE_TRACE_WORKBENCH_REVISION = model && model.revision && model.revision.id || 0;
       if (loading) loading.remove();
-      document.body.appendChild(document.createElement("fe-origin-trace"));
+      var existing = document.querySelector("fe-origin-trace");
+      if (existing && typeof existing.setTraceData === "function") {{
+        existing.setTraceData(model);
+      }} else {{
+        if (existing) existing.remove();
+        document.body.appendChild(document.createElement("fe-origin-trace"));
+      }}
     }}
     function rememberModel(model) {{
       try {{
@@ -290,10 +297,10 @@ pub fn origin_trace_live_html_shell(title: &str) -> String {
     }}
     function renderCachedModel(reason) {{
       try {{
-        var cached = window.sessionStorage && window.sessionStorage.getItem(storageKey);
-        if (!cached) return false;
-        renderModel(JSON.parse(cached), "Showing last ready trace revision because live refresh failed: " + reason);
-        return true;
+      var cached = window.sessionStorage && window.sessionStorage.getItem(storageKey);
+      if (!cached) return false;
+      renderModel(JSON.parse(cached), "Showing last ready trace revision because live refresh failed: " + reason);
+      return true;
       }} catch (_) {{
         return false;
       }}
@@ -313,6 +320,23 @@ pub fn origin_trace_live_html_shell(title: &str) -> String {
         window.location.hash = nextHash;
       }}
     }}
+    function fetchAndRenderModel() {{
+      if (modelRefresh) return modelRefresh;
+      modelRefresh = fetch("/trace/session/" + encodeURIComponent(session) + "/model", {{ headers: authHeaders }})
+        .then(function (response) {{
+          if (!response.ok) throw new Error("model fetch failed: " + response.status);
+          return response.json();
+        }})
+        .then(function (model) {{
+          rememberModel(model);
+          renderModel(model);
+          return model;
+        }})
+        .finally(function () {{
+          modelRefresh = null;
+        }});
+      return modelRefresh;
+    }}
     if (!session) return fail("Missing trace workbench session.");
     fetch("/trace/session/" + encodeURIComponent(session) + "/bootstrap", {{ headers: authHeaders }})
       .then(function (response) {{
@@ -321,15 +345,7 @@ pub fn origin_trace_live_html_shell(title: &str) -> String {
       }})
       .then(function (bootstrap) {{
         applyInitialSelection(bootstrap);
-        return fetch("/trace/session/" + encodeURIComponent(session) + "/model", {{ headers: authHeaders }});
-      }})
-      .then(function (response) {{
-        if (!response.ok) throw new Error("model fetch failed: " + response.status);
-        return response.json();
-      }})
-      .then(function (model) {{
-        rememberModel(model);
-        renderModel(model);
+        return fetchAndRenderModel();
       }})
       .catch(function (err) {{
         var reason = String(err && err.message || err);
@@ -340,8 +356,11 @@ pub fn origin_trace_live_html_shell(title: &str) -> String {
       events.addEventListener("trace/revision", function (event) {{
         try {{
           var payload = JSON.parse(event.data || "{{}}");
-          if (payload.status === "ready" && payload.revision && payload.revision !== window.FE_TRACE_WORKBENCH_REVISION) {{
-            window.location.reload();
+          if (payload.status === "ready" && payload.revision && Number(payload.revision) !== Number(window.FE_TRACE_WORKBENCH_REVISION || 0)) {{
+            fetchAndRenderModel().catch(function (err) {{
+              var reason = String(err && err.message || err);
+              renderCachedModel(reason);
+            }});
           }}
         }} catch (_) {{}}
       }});

@@ -510,35 +510,67 @@ async fn handle_trace_workbench_events_http(
     actor_rx: watch::Receiver<Option<SharedActor>>,
     workspace_root: Option<String>,
 ) -> impl IntoResponse {
-    let event = if let Err(reason) = validate_trace_auth(
-        workspace_root.as_deref(),
-        query.get("token").map(String::as_str).unwrap_or_default(),
-    ) {
-        Event::default()
-            .event("trace/error")
-            .json_data(serde_json::json!({ "reason": reason }))
-            .unwrap_or_else(|_| Event::default().event("trace/error"))
-    } else {
-        match trace_workbench_bootstrap_for_event(session_id.clone(), actor_rx).await {
-            Ok(response) => Event::default()
-                .event("trace/revision")
-                .json_data(serde_json::json!({
-                    "event": "trace/revision",
-                    "sessionId": session_id,
-                    "revision": response.revision.id,
-                    "documentVersion": response.revision.document_version,
-                    "status": response.revision.status,
-                    "modelDeltas": response.capabilities.model_deltas,
-                    "chunks": response.capabilities.chunks,
-                }))
-                .unwrap_or_else(|_| Event::default().event("trace/revision")),
-            Err(reason) => Event::default()
+    let stream: Pin<Box<dyn futures::Stream<Item = Result<Event, Infallible>> + Send>> =
+        if let Err(reason) = validate_trace_auth(
+            workspace_root.as_deref(),
+            query.get("token").map(String::as_str).unwrap_or_default(),
+        ) {
+            let event = Event::default()
                 .event("trace/error")
                 .json_data(serde_json::json!({ "reason": reason }))
-                .unwrap_or_else(|_| Event::default().event("trace/error")),
-        }
-    };
-    let stream = futures::stream::once(async move { Ok::<_, Infallible>(event) });
+                .unwrap_or_else(|_| Event::default().event("trace/error"));
+            Box::pin(futures::stream::once(async move { Ok(event) }))
+        } else {
+            Box::pin(futures::stream::unfold(
+                (session_id, actor_rx, None::<u64>),
+                |(session_id, actor_rx, mut last_revision)| async move {
+                    loop {
+                        match trace_workbench_bootstrap_for_event(
+                            session_id.clone(),
+                            actor_rx.clone(),
+                        )
+                        .await
+                        {
+                            Ok(response) => {
+                                let revision = response.revision.id;
+                                if last_revision != Some(revision) {
+                                    last_revision = Some(revision);
+                                    let event = Event::default()
+                                        .event("trace/revision")
+                                        .json_data(serde_json::json!({
+                                            "event": "trace/revision",
+                                            "sessionId": session_id,
+                                            "revision": revision,
+                                            "documentVersion": response.revision.document_version,
+                                            "status": response.revision.status,
+                                            "modelDeltas": response.capabilities.model_deltas,
+                                            "chunks": response.capabilities.chunks,
+                                        }))
+                                        .unwrap_or_else(|_| {
+                                            Event::default().event("trace/revision")
+                                        });
+                                    return Some((
+                                        Ok::<_, Infallible>(event),
+                                        (session_id, actor_rx, last_revision),
+                                    ));
+                                }
+                            }
+                            Err(reason) => {
+                                let event = Event::default()
+                                    .event("trace/error")
+                                    .json_data(serde_json::json!({ "reason": reason }))
+                                    .unwrap_or_else(|_| Event::default().event("trace/error"));
+                                return Some((
+                                    Ok::<_, Infallible>(event),
+                                    (session_id, actor_rx, last_revision),
+                                ));
+                            }
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                    }
+                },
+            ))
+        };
     Sse::new(stream)
 }
 

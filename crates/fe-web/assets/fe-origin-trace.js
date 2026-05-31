@@ -78,6 +78,12 @@
       this._interactionsInstalled = false;
     }
 
+    setTraceData(data) {
+      var scrollState = this._capturePaneScrollState ? this._capturePaneScrollState() : null;
+      this._data = data || {};
+      this._render({ scrollState: scrollState, switchedPaneIndex: null });
+    }
+
     _render(scrollRestore) {
       var data = this._data;
       this.shadowRoot.textContent = "";
