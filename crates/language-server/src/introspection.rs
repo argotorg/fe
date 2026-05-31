@@ -7,8 +7,8 @@ use std::io::BufReader;
 use std::time::{Duration, Instant};
 use trace_facts::{CompilerPhase, TraceBundle, TraceMetadata, TraceSnapshot};
 use trace_query::{
-    IntrospectionService, TraceIntrospectionService, TraceQueryHttpResponse, TraceQueryRequest,
-    run_trace_query,
+    TraceIntrospectionService, TraceQueryHttpResponse, TraceQueryRequest,
+    TraceWorkbenchProjectionRequest, run_trace_query, trace_workbench_report_projection,
 };
 use url::Url;
 
@@ -126,113 +126,22 @@ pub(crate) async fn handle_trace_workbench_model(
         }
         service
     };
-    Ok(live_trace_workbench_model(
+    Ok(trace_workbench_report_projection(
         &service,
-        &session,
-        document_version,
-        elapsed_ms(started),
+        service.snapshot(),
+        TraceWorkbenchProjectionRequest {
+            input_path: session.uri.clone(),
+            target: session.target.clone(),
+            opt_level: session.opt_level.clone(),
+            view: session.view.clone(),
+            document_version,
+            query_duration_ms: elapsed_ms(started),
+            compiler_commit: option_env!("FE_GIT_COMMIT")
+                .unwrap_or("unknown")
+                .to_string(),
+            data_source: "lsp-live".to_string(),
+        },
     ))
-}
-
-fn live_trace_workbench_model(
-    service: &TraceIntrospectionService,
-    session: &crate::backend::TraceViewerSession,
-    document_version: Option<i32>,
-    query_duration_ms: u64,
-) -> serde_json::Value {
-    let snapshot = service.snapshot();
-    let status = service.status();
-    let attribution_audit = service.attribution_audit().ok();
-    let validation = snapshot.validation();
-    let optimized_linked = attribution_audit
-        .as_ref()
-        .map(|audit| audit.optimized_sonatina_linked_pcs)
-        .unwrap_or_default();
-    let prepared_linked = attribution_audit
-        .as_ref()
-        .map(|audit| audit.prepared_linked_pcs)
-        .unwrap_or_default();
-    let missing_prepared = attribution_audit
-        .as_ref()
-        .map(|audit| audit.missing_optimized_to_prepared_lineage_pcs)
-        .unwrap_or_default();
-    let bytecode_count = attribution_audit
-        .as_ref()
-        .map(|audit| audit.total_bytecode_pcs)
-        .unwrap_or_default();
-    let source_to_optimized = if optimized_linked > 0 {
-        "available"
-    } else {
-        "missing"
-    };
-    let optimized_to_prepared = if prepared_linked > 0 && missing_prepared == 0 {
-        "available"
-    } else {
-        "missing"
-    };
-    let prepared_to_bytecode = if prepared_linked > 0 {
-        "available"
-    } else {
-        "missing"
-    };
-    serde_json::json!({
-        "revision": {
-            "id": document_version.unwrap_or_default().max(0) as u64,
-            "document_version": document_version,
-            "status": "ready",
-            "config_hash": session.config_hash.clone(),
-        },
-        "metadata": {
-            "input_path": session.uri.clone(),
-            "target": status.target,
-            "data_source": "lsp-live",
-            "compiler_commit": option_env!("FE_GIT_COMMIT").unwrap_or("unknown"),
-            "flags": [
-                "source=lsp-live",
-                format!("target={}", session.target),
-                format!("optimize={}", session.opt_level),
-                format!("view={}", session.view),
-            ],
-            "document_version": document_version,
-            "query_duration_ms": query_duration_ms,
-        },
-        "provenance": {
-            "source_to_optimized": source_to_optimized,
-            "optimized_to_prepared": optimized_to_prepared,
-            "prepared_to_bytecode": prepared_to_bytecode,
-            "summary": if source_to_optimized == "available" && prepared_to_bytecode == "available" && optimized_to_prepared == "missing" {
-                "bytecode is prepared-linked; exact source attribution needs optimized to prepared lineage"
-            } else if source_to_optimized == "available" && optimized_to_prepared == "available" && prepared_to_bytecode == "available" {
-                "source to optimized to prepared to bytecode available"
-            } else {
-                "provenance is partial; inspect gaps for missing compiler evidence"
-            },
-        },
-        "counts": {
-            "facts": validation.summary.fact_count,
-            "origin_edges": validation.summary.edge_count,
-            "instructions": validation.summary.instruction_count,
-            "source_spans": snapshot.facts().iter().filter(|fact| matches!(fact, trace_facts::TraceFact::SourceSpan(_))).count(),
-        },
-        "salsa": null,
-        "audit": null,
-        "static_analysis": null,
-        "attribution_audit": attribution_audit,
-        "source": {
-            "display_name": session.uri.clone(),
-            "confidence": "live projection bootstrap; static pane projection is next",
-            "lines": [],
-            "related_sources": [],
-        },
-        "panels": [],
-        "closures": [],
-        "bytecode_count": bytecode_count,
-        "notes": [
-            "Live trace workbench is served from the LSP-owned compiler state.",
-            "This initial live endpoint returns the shared audit/report projection; typed pane chunks are the next live-sync slice.",
-            "The browser does not compute provenance or graph reachability."
-        ],
-    })
 }
 
 pub(crate) async fn handle_trace_query(

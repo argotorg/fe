@@ -1762,6 +1762,117 @@ pub fn run_trace_query(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TraceWorkbenchProjectionRequest {
+    pub input_path: String,
+    pub target: String,
+    pub opt_level: String,
+    pub view: String,
+    pub document_version: Option<i32>,
+    pub query_duration_ms: u64,
+    pub compiler_commit: String,
+    pub data_source: String,
+}
+
+pub fn trace_workbench_report_projection(
+    service: &impl IntrospectionService,
+    snapshot: &TraceSnapshot,
+    request: TraceWorkbenchProjectionRequest,
+) -> serde_json::Value {
+    let status = service.status();
+    let attribution_audit = service.attribution_audit().ok();
+    let validation = snapshot.validation();
+    let optimized_linked = attribution_audit
+        .as_ref()
+        .map(|audit| audit.optimized_sonatina_linked_pcs)
+        .unwrap_or_default();
+    let prepared_linked = attribution_audit
+        .as_ref()
+        .map(|audit| audit.prepared_linked_pcs)
+        .unwrap_or_default();
+    let missing_prepared = attribution_audit
+        .as_ref()
+        .map(|audit| audit.missing_optimized_to_prepared_lineage_pcs)
+        .unwrap_or_default();
+    let bytecode_count = attribution_audit
+        .as_ref()
+        .map(|audit| audit.total_bytecode_pcs)
+        .unwrap_or_default();
+    let source_to_optimized = if optimized_linked > 0 {
+        "available"
+    } else {
+        "missing"
+    };
+    let optimized_to_prepared = if prepared_linked > 0 && missing_prepared == 0 {
+        "available"
+    } else {
+        "missing"
+    };
+    let prepared_to_bytecode = if prepared_linked > 0 {
+        "available"
+    } else {
+        "missing"
+    };
+    serde_json::json!({
+        "revision": {
+            "id": request.document_version.unwrap_or_default().max(0) as u64,
+            "document_version": request.document_version,
+            "status": "ready",
+            "config_hash": status.config_hash,
+        },
+        "metadata": {
+            "input_path": request.input_path,
+            "target": status.target,
+            "data_source": request.data_source,
+            "compiler_commit": request.compiler_commit,
+            "flags": [
+                "source=lsp-live",
+                format!("target={}", request.target),
+                format!("optimize={}", request.opt_level),
+                format!("view={}", request.view),
+            ],
+            "document_version": request.document_version,
+            "query_duration_ms": request.query_duration_ms,
+        },
+        "provenance": {
+            "source_to_optimized": source_to_optimized,
+            "optimized_to_prepared": optimized_to_prepared,
+            "prepared_to_bytecode": prepared_to_bytecode,
+            "summary": if source_to_optimized == "available" && prepared_to_bytecode == "available" && optimized_to_prepared == "missing" {
+                "bytecode is prepared-linked; exact source attribution needs optimized to prepared lineage"
+            } else if source_to_optimized == "available" && optimized_to_prepared == "available" && prepared_to_bytecode == "available" {
+                "source to optimized to prepared to bytecode available"
+            } else {
+                "provenance is partial; inspect gaps for missing compiler evidence"
+            },
+        },
+        "counts": {
+            "facts": validation.summary.fact_count,
+            "origin_edges": validation.summary.edge_count,
+            "instructions": validation.summary.instruction_count,
+            "source_spans": snapshot.facts().iter().filter(|fact| matches!(fact, trace_facts::TraceFact::SourceSpan(_))).count(),
+        },
+        "salsa": null,
+        "audit": null,
+        "static_analysis": null,
+        "attribution_audit": attribution_audit,
+        "source": {
+            "display_name": request.input_path,
+            "confidence": "live projection bootstrap; typed pane chunks are next",
+            "lines": [],
+            "related_sources": [],
+        },
+        "panels": [],
+        "closures": [],
+        "bytecode_count": bytecode_count,
+        "notes": [
+            "Live trace workbench is served from the LSP-owned compiler state.",
+            "This initial live endpoint returns the shared audit/report projection; typed pane chunks are the next live-sync slice.",
+            "The browser does not compute provenance or graph reachability."
+        ],
+    })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoopCostReport {
     pub metadata: ReportMetadata,
     pub available: bool,
@@ -3892,7 +4003,8 @@ mod tests {
         LoopCostRequest, OptimizedCodeHonestyRequest, RuntimeGasBySourceRequest,
         RuntimeTraceFilterRequest, StorageAccessesBySlotRequest, TraceIntrospectionService,
         TraceQueryHttpRequest, TraceQueryHttpResponse, TraceQueryReport, TraceQueryRequest,
-        ValueFlowAtPcRequest, VariablesAtPcRequest, run_trace_query,
+        TraceWorkbenchProjectionRequest, ValueFlowAtPcRequest, VariablesAtPcRequest,
+        run_trace_query, trace_workbench_report_projection,
     };
 
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -5034,6 +5146,33 @@ mod tests {
                 cache_hit: false,
                 query_duration_ms: 0,
             }
+        );
+    }
+
+    #[test]
+    fn trace_workbench_report_projection_uses_shared_trace_query_reports() {
+        let service = demo_service();
+        let projection = trace_workbench_report_projection(
+            &service,
+            service.snapshot(),
+            TraceWorkbenchProjectionRequest {
+                input_path: "file:///tmp/fib.fe".to_string(),
+                target: "evm".to_string(),
+                opt_level: "O2".to_string(),
+                view: "source-postopt-bytecode".to_string(),
+                document_version: Some(3),
+                query_duration_ms: 9,
+                compiler_commit: "test".to_string(),
+                data_source: "lsp-live".to_string(),
+            },
+        );
+
+        assert_eq!(projection["revision"]["id"], 3);
+        assert_eq!(projection["metadata"]["data_source"], "lsp-live");
+        assert!(projection["attribution_audit"].is_object());
+        assert_eq!(
+            projection["notes"][2],
+            "The browser does not compute provenance or graph reachability."
         );
     }
 
