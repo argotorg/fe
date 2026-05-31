@@ -4,7 +4,10 @@ use std::fmt;
 use common::origin::OriginExportKey;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use trace_facts::{RelationBundleData, RelationRow, RelationSchema, TraceFact, TraceSnapshot};
+use trace_facts::{
+    OriginEdgeTraversalClass, RelationBundleData, RelationColumn, RelationColumnKind, RelationRow,
+    RelationSchema, TraceFact, TraceSnapshot,
+};
 
 use crate::{
     GasAttributionPolicy, GasBySourceRequest, IntrospectionService, RuntimeGasBySourceRequest,
@@ -12,12 +15,22 @@ use crate::{
 };
 
 pub const CORE_DATALOG_RULES: &str = r#"
-origin_reaches(a, b) :-
-  base_origin_edge(a, b, _, _).
+precise_reaches(a, b) :-
+  exact_attribution_edge(a, b).
 
-origin_reaches(a, c) :-
-  base_origin_edge(a, b, _, _),
-  origin_reaches(b, c).
+precise_reaches(a, b) :-
+  snapshot_alias_edge(a, b).
+
+precise_reaches(a, c) :-
+  exact_attribution_edge(a, b),
+  precise_reaches(b, c).
+
+precise_reaches(a, c) :-
+  snapshot_alias_edge(a, b),
+  precise_reaches(b, c).
+
+origin_reaches(a, b) :-
+  precise_reaches(a, b).
 "#;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,12 +94,102 @@ impl fmt::Display for DatalogRunError {
 impl std::error::Error for DatalogRunError {}
 
 pub fn emit_base_relations(snapshot: &TraceSnapshot) -> DatalogBaseExport {
-    let bundle = RelationBundleData::from_snapshot(snapshot);
+    let mut bundle = RelationBundleData::from_snapshot(snapshot);
+    append_semantic_edge_views(snapshot, &mut bundle.schemas, &mut bundle.rows);
     DatalogBaseExport {
         trace_hash: bundle.trace_hash,
         schemas: bundle.schemas,
         rows: bundle.rows,
         rules: CORE_DATALOG_RULES,
+    }
+}
+
+fn append_semantic_edge_views(
+    snapshot: &TraceSnapshot,
+    schemas: &mut Vec<RelationSchema>,
+    rows: &mut Vec<RelationRow>,
+) {
+    schemas.extend(semantic_edge_schemas());
+    for fact in snapshot.facts() {
+        let TraceFact::OriginEdge(edge) = fact else {
+            continue;
+        };
+        rows.push(RelationRow {
+            relation: semantic_edge_relation(edge),
+            values: vec![
+                edge.from.canonical_storage_key(),
+                edge.to.canonical_storage_key(),
+            ],
+        });
+        if matches!(edge.traversal_class(), OriginEdgeTraversalClass::Contextual)
+            && edge.has_transform_claim_label()
+        {
+            rows.push(RelationRow {
+                relation: "suspicious_edge",
+                values: vec![
+                    edge.from.canonical_storage_key(),
+                    edge.to.canonical_storage_key(),
+                    "exact_claim_classified_contextual".to_string(),
+                ],
+            });
+        }
+    }
+}
+
+fn semantic_edge_schemas() -> Vec<RelationSchema> {
+    let binary_schema = |name| RelationSchema {
+        name,
+        columns: vec![
+            RelationColumn {
+                name: "from",
+                kind: RelationColumnKind::Key,
+            },
+            RelationColumn {
+                name: "to",
+                kind: RelationColumnKind::Key,
+            },
+        ],
+    };
+    let mut schemas = vec![
+        binary_schema("exact_attribution_edge"),
+        binary_schema("snapshot_alias_edge"),
+        binary_schema("contextual_edge"),
+        binary_schema("structural_edge"),
+        binary_schema("backend_prepared_edge"),
+        binary_schema("synthetic_edge"),
+        binary_schema("unmapped_edge"),
+    ];
+    schemas.push(RelationSchema {
+        name: "suspicious_edge",
+        columns: vec![
+            RelationColumn {
+                name: "from",
+                kind: RelationColumnKind::Key,
+            },
+            RelationColumn {
+                name: "to",
+                kind: RelationColumnKind::Key,
+            },
+            RelationColumn {
+                name: "reason",
+                kind: RelationColumnKind::Text,
+            },
+        ],
+    });
+    schemas
+}
+
+fn semantic_edge_relation(edge: &trace_facts::OriginEdgeFact) -> &'static str {
+    match edge.traversal_class() {
+        OriginEdgeTraversalClass::ExactAttribution => "exact_attribution_edge",
+        OriginEdgeTraversalClass::SnapshotAlias => "snapshot_alias_edge",
+        OriginEdgeTraversalClass::Contextual if edge.is_generated_work_edge() => {
+            "backend_prepared_edge"
+        }
+        OriginEdgeTraversalClass::Contextual => "contextual_edge",
+        OriginEdgeTraversalClass::Structural => "structural_edge",
+        OriginEdgeTraversalClass::Synthetic => "synthetic_edge",
+        OriginEdgeTraversalClass::Unmapped => "unmapped_edge",
     }
 }
 
@@ -334,7 +437,13 @@ fn runtime_storage_after_call(snapshot: &TraceSnapshot) -> RuntimeStorageAfterCa
 pub fn origin_reaches(snapshot: &TraceSnapshot) -> BTreeSet<(OriginExportKey, OriginExportKey)> {
     let mut adjacency: BTreeMap<OriginExportKey, BTreeSet<OriginExportKey>> = BTreeMap::new();
     for fact in snapshot.facts() {
-        if let TraceFact::OriginEdge(edge) = fact {
+        if let TraceFact::OriginEdge(edge) = fact
+            && matches!(
+                edge.traversal_class(),
+                OriginEdgeTraversalClass::ExactAttribution
+                    | OriginEdgeTraversalClass::SnapshotAlias
+            )
+        {
             adjacency
                 .entry(edge.from.clone())
                 .or_default()
@@ -369,11 +478,11 @@ pub fn origin_reaches(snapshot: &TraceSnapshot) -> BTreeSet<(OriginExportKey, Or
 mod tests {
     use common::origin::OriginExportKey;
     use trace_facts::{
-        CodeObjectFact, CodeObjectKind, ExecutionStepFact, ExecutionTraceSessionFact, FunctionFact,
-        InstructionFact, OriginEdgeFact, OriginEdgeLabel, OriginNodeFact, OriginNodeKind,
-        RuntimeCaptureMode, RuntimeCodeObjectBindingFact, RuntimePcJoinConfidence,
-        RuntimeTraceDataSource, RuntimeValuePolicy, StorageAccessFact, StorageAccessKind,
-        TraceBundle, TraceFact, TraceMetadata, TraceSnapshot,
+        CodeObjectFact, CodeObjectKind, CompilerPhase, ExecutionStepFact,
+        ExecutionTraceSessionFact, FunctionFact, InstructionFact, OriginEdgeFact, OriginEdgeLabel,
+        OriginNodeFact, OriginNodeKind, RuntimeCaptureMode, RuntimeCodeObjectBindingFact,
+        RuntimePcJoinConfidence, RuntimeTraceDataSource, RuntimeValuePolicy, StorageAccessFact,
+        StorageAccessKind, TraceBundle, TraceFact, TraceMetadata, TraceSnapshot,
     };
 
     use super::{builtin_rulepack, emit_base_relations, origin_reaches, run_builtin_rulepack};
@@ -539,11 +648,98 @@ mod tests {
         );
         assert!(
             export
+                .schemas
+                .iter()
+                .any(|schema| schema.name == "exact_attribution_edge")
+        );
+        assert!(
+            export
                 .rows
                 .iter()
                 .any(|row| row.relation == "base_instruction")
         );
+        assert!(
+            export
+                .rows
+                .iter()
+                .any(|row| row.relation == "exact_attribution_edge")
+        );
         assert!(export.rules.contains("origin_reaches"));
+        assert!(!export.rules.contains("base_origin_edge"));
+    }
+
+    #[test]
+    fn base_relation_export_includes_semantic_edge_views() {
+        let pc = key("bytecode.pc", "demo", "pc:0");
+        let code_object = key("code.object", "demo", "runtime");
+        let hir = key("hir.expr", "demo", "expr:0");
+        let synthetic = key("runtime.stmt", "demo", "stmt:synthetic");
+        let snapshot = TraceSnapshot::new(TraceBundle::new(
+            TraceMetadata::compiler_emitted(
+                "abc123",
+                "evm/sonatina",
+                vec!["fe".to_string(), "trace".to_string()],
+                "demo.fe",
+                vec![],
+            ),
+            vec![
+                node(pc.clone()),
+                node(code_object.clone()),
+                node(hir.clone()),
+                node(synthetic.clone()),
+                TraceFact::OriginEdge(OriginEdgeFact::new(
+                    pc.clone(),
+                    code_object.clone(),
+                    OriginEdgeLabel::EmittedFrom,
+                    Some(CompilerPhase::BytecodeEmission),
+                )),
+                TraceFact::OriginEdge(OriginEdgeFact::new(
+                    pc.clone(),
+                    hir.clone(),
+                    OriginEdgeLabel::LoweredFrom,
+                    Some(CompilerPhase::BytecodeEmission),
+                )),
+                TraceFact::OriginEdge(OriginEdgeFact::new(
+                    synthetic.clone(),
+                    hir.clone(),
+                    OriginEdgeLabel::SyntheticFor,
+                    Some(CompilerPhase::Mir),
+                )),
+            ],
+        ))
+        .unwrap();
+        let export = emit_base_relations(&snapshot);
+
+        assert!(relation_row_exists(
+            &export,
+            "structural_edge",
+            &[
+                pc.canonical_storage_key(),
+                code_object.canonical_storage_key()
+            ]
+        ));
+        assert!(relation_row_exists(
+            &export,
+            "contextual_edge",
+            &[pc.canonical_storage_key(), hir.canonical_storage_key()]
+        ));
+        assert!(relation_row_exists(
+            &export,
+            "suspicious_edge",
+            &[
+                pc.canonical_storage_key(),
+                hir.canonical_storage_key(),
+                "exact_claim_classified_contextual".to_string(),
+            ]
+        ));
+        assert!(relation_row_exists(
+            &export,
+            "synthetic_edge",
+            &[
+                synthetic.canonical_storage_key(),
+                hir.canonical_storage_key()
+            ]
+        ));
     }
 
     #[test]
@@ -596,5 +792,16 @@ mod tests {
         assert_eq!(digest.len(), 64);
         assert!(digest.chars().all(|ch| ch.is_ascii_hexdigit()));
         assert!(!value.starts_with("fnv64:"));
+    }
+
+    fn relation_row_exists(
+        export: &super::DatalogBaseExport,
+        relation: &str,
+        values: &[String],
+    ) -> bool {
+        export
+            .rows
+            .iter()
+            .any(|row| row.relation == relation && row.values == values)
     }
 }
