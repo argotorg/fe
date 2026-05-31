@@ -275,6 +275,8 @@
           el("p", "analysis-status", "status: " + (check.status || "unknown") + " · confidence: " + (check.confidence || "unknown")),
           el("p", "muted", check.summary || "")
         );
+        var explanation = this._analysisExplanation(check);
+        if (explanation) card.append(el("p", "audit-note", explanation));
         if ((check.gaps || []).length) {
           card.append(el("p", "gap", "needs more compiler evidence: " + (check.gaps || []).length + " gap(s)"));
         }
@@ -300,6 +302,23 @@
         section.append(bloatBox);
       }
       return section;
+    }
+
+    _analysisExplanation(check) {
+      var id = (check && check.check_id) || "";
+      var audit = this._data && this._data.attribution_audit;
+      if (!audit) return "";
+      if (id.indexOf("provenance") >= 0) {
+        return (audit.source_exact_pcs || 0) + " source-exact · "
+          + (audit.optimized_sonatina_linked_pcs || 0) + " optimized-Sonatina-linked · "
+          + (audit.prepared_linked_pcs || 0) + " prepared-linked · "
+          + (audit.unmapped_pcs || 0) + " unmapped. Prepared-linked means EVM prepared/codegen reaches bytecode; it is not source-exact by itself.";
+      }
+      if (id.indexOf("postopt") >= 0 || id.indexOf("attribution_gap") >= 0) {
+        return (audit.missing_optimized_to_prepared_lineage_pcs || 0)
+          + " bytecode PC(s) are blocked by missing optimized Sonatina → EVM prepared lineage.";
+      }
+      return "";
     }
 
     _friendlyCheckTitle(check) {
