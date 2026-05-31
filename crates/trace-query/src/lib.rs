@@ -1798,14 +1798,47 @@ pub fn trace_workbench_report_projection(
         .as_ref()
         .map(|audit| audit.total_bytecode_pcs)
         .unwrap_or_default();
+    let loop_report = service.loop_contents(LoopContentsRequest::default()).ok();
+    let closure_set = loop_report.as_ref().map(|loop_report| {
+        origin_closure::build_origin_closure_set(&request.input_path, snapshot, loop_report)
+    });
     let component_classes_by_key = origin_closure::component_classes_by_origin_key(snapshot);
+    let mut classes_by_key = closure_set
+        .as_ref()
+        .map(|closure_set| origin_closure::classes_by_origin_key(&closure_set.closures))
+        .unwrap_or_default();
+    trace_workbench_merge_classes_by_key(&mut classes_by_key, component_classes_by_key.clone());
     let source = trace_workbench_source_projection(
         &request.input_path,
         request.source_text.as_deref(),
         snapshot,
-        &component_classes_by_key,
+        &classes_by_key,
     );
-    let panels = trace_workbench_panes(snapshot, &component_classes_by_key);
+    let panels = trace_workbench_panes(snapshot, &classes_by_key);
+    let source_lines_for_audit = request
+        .source_text
+        .as_deref()
+        .map(trace_workbench_source_lines_for_audit)
+        .unwrap_or_default();
+    let closure_audit = closure_set.as_ref().map(|closure_set| {
+        origin_closure::audit_origin_closures(
+            &request.input_path,
+            status.target.as_str(),
+            request.data_source.as_str(),
+            loop_report
+                .as_ref()
+                .map(|loop_report| loop_report.target_instructions.len())
+                .unwrap_or_default(),
+            &closure_set.closures,
+            &source_lines_for_audit,
+            snapshot,
+        )
+    });
+    let closures = closure_set
+        .as_ref()
+        .map(|closure_set| serde_json::to_value(&closure_set.closures).unwrap_or_default())
+        .unwrap_or_else(|| serde_json::json!([]));
+    let static_analysis = static_analysis::static_analysis_report(snapshot);
     let source_to_optimized = if optimized_linked > 0 {
         "available"
     } else {
@@ -1861,15 +1894,15 @@ pub fn trace_workbench_report_projection(
             "source_spans": snapshot.facts().iter().filter(|fact| matches!(fact, trace_facts::TraceFact::SourceSpan(_))).count(),
         },
         "salsa": null,
-        "audit": null,
-        "static_analysis": null,
+        "audit": closure_audit,
+        "static_analysis": static_analysis,
         "attribution_audit": attribution_audit,
         "source": source,
         "panels": panels,
         "rail_components": {
             "classes_by_origin": component_classes_by_key,
         },
-        "closures": [],
+        "closures": closures,
         "bytecode_count": bytecode_count,
         "notes": [
             "Live trace workbench is served from the LSP-owned compiler state.",
@@ -1987,6 +2020,34 @@ fn trace_workbench_source_projection(
         "lines": lines,
         "related_sources": [],
     })
+}
+
+fn trace_workbench_source_lines_for_audit(
+    source_text: &str,
+) -> Vec<origin_closure::OriginClosureSourceLine> {
+    source_text
+        .lines()
+        .enumerate()
+        .map(|(index, text)| origin_closure::OriginClosureSourceLine {
+            number: index as u32 + 1,
+            text: text.to_string(),
+        })
+        .collect()
+}
+
+fn trace_workbench_merge_classes_by_key(
+    classes_by_key: &mut BTreeMap<String, Vec<String>>,
+    extra_classes: BTreeMap<String, Vec<String>>,
+) {
+    for (key, classes) in extra_classes {
+        let entry = classes_by_key.entry(key).or_default();
+        let mut seen = entry.iter().cloned().collect::<BTreeSet<_>>();
+        for class in classes {
+            if seen.insert(class.clone()) {
+                entry.push(class);
+            }
+        }
+    }
 }
 
 fn trace_workbench_source_lines(
