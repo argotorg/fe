@@ -2614,9 +2614,43 @@ fn trace_workbench_compact_tail_label(value: &str) -> String {
 
 fn trace_workbench_compact_mir_text(text: &str) -> String {
     let normalized = trace_workbench_compact_instruction_mnemonic(text);
-    let with_locals = trace_workbench_replace_wrapped_ids(&normalized, "RLocalId(", "%");
+    let without_phantom = trace_workbench_strip_phantom_data(&normalized);
+    let with_locals = trace_workbench_replace_wrapped_ids(&without_phantom, "RLocalId(", "%");
     let with_layouts = trace_workbench_replace_wrapped_ids(&with_locals, "LayoutId(Id(", "layout#");
-    trace_workbench_replace_wrapped_ids(&with_layouts, "RuntimeInstance(Id(", "runtime#")
+    let with_runtime =
+        trace_workbench_replace_wrapped_ids(&with_layouts, "RuntimeInstance(Id(", "runtime#");
+    trace_workbench_compact_int_literals(&with_runtime)
+        .replace("))", ")")
+        .replace(")(", "(")
+        .replace("),", ",")
+        .replace("](", "]")
+}
+
+fn trace_workbench_strip_phantom_data(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find(", PhantomData<") {
+        out.push_str(&rest[..start]);
+        let skip = &rest[start + 2..];
+        let mut depth = 0usize;
+        let mut end = skip.len();
+        for (idx, ch) in skip.char_indices() {
+            match ch {
+                '<' => depth += 1,
+                '>' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        end = idx + ch.len_utf8();
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        rest = &skip[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn trace_workbench_replace_wrapped_ids(text: &str, marker: &str, prefix: &str) -> String {
@@ -2635,6 +2669,38 @@ fn trace_workbench_replace_wrapped_ids(text: &str, marker: &str, prefix: &str) -
         }
     }
     out.push_str(rest);
+    out
+}
+
+fn trace_workbench_compact_int_literals(text: &str) -> String {
+    let mut out = text.to_string();
+    let needle = "const Int { bits: ";
+    while let Some(start) = out.find(needle) {
+        let bits_start = start + needle.len();
+        let Some(bits_end) = out[bits_start..]
+            .find(", signed: ")
+            .map(|idx| bits_start + idx)
+        else {
+            break;
+        };
+        let signed_start = bits_end + ", signed: ".len();
+        let Some(signed_end) = out[signed_start..]
+            .find(", words: [")
+            .map(|idx| signed_start + idx)
+        else {
+            break;
+        };
+        let value_start = signed_end + ", words: [".len();
+        let Some(value_end) = out[value_start..].find("] }").map(|idx| value_start + idx) else {
+            break;
+        };
+        let bits = out[bits_start..bits_end].to_string();
+        let signed = out[signed_start..signed_end].trim() == "true";
+        let value = out[value_start..value_end].to_string();
+        let prefix = if signed { "i" } else { "u" };
+        let replacement = format!("const {prefix}{bits} {value}");
+        out.replace_range(start..value_end + 3, &replacement);
+    }
     out
 }
 
@@ -4852,7 +4918,8 @@ mod tests {
         RuntimeTraceFilterRequest, StorageAccessesBySlotRequest, TraceIntrospectionService,
         TraceQueryHttpRequest, TraceQueryHttpResponse, TraceQueryReport, TraceQueryRequest,
         TraceWorkbenchProjectionRequest, ValueFlowAtPcRequest, VariablesAtPcRequest,
-        run_trace_query, trace_workbench_manifest, trace_workbench_report_projection,
+        run_trace_query, trace_workbench_compact_mir_text, trace_workbench_manifest,
+        trace_workbench_report_projection,
     };
 
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -6056,6 +6123,31 @@ mod tests {
         assert_eq!(manifest.revision, 3);
         assert!(manifest.root_digest.starts_with("blake3:"));
         assert!(manifest.reports.contains_key("attribution"));
+    }
+
+    #[test]
+    fn trace_workbench_compact_mir_text_removes_debug_noise() {
+        let text = "RLocalId(7) = call RuntimeInstance(Id(1fc03), PhantomData<&salsa::tracked_struct::Value<fe_mir::instance::runtime::RuntimeInstance<'_>>>)([RLocalId(6)])";
+
+        assert_eq!(
+            trace_workbench_compact_mir_text(text),
+            "%7 = call runtime#1fc03([%6])"
+        );
+    }
+
+    #[test]
+    fn trace_workbench_compact_mir_text_simplifies_int_literals() {
+        let text = "RLocalId(22) = const Int { bits: 256, signed: false, words: [32] }";
+        let signed = "RLocalId(17) = const Int { bits: 32, signed: true, words: [0] }";
+
+        assert_eq!(
+            trace_workbench_compact_mir_text(text),
+            "%22 = const u256 32"
+        );
+        assert_eq!(
+            trace_workbench_compact_mir_text(signed),
+            "%17 = const i32 0"
+        );
     }
 
     #[test]
