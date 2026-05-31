@@ -48,10 +48,10 @@
       this._selectedDisplayClasses = [];
       this._paneChoices = null;
       this._displayMode = "compact";
-      this._traceNodeIndex = Object.create(null);
       this._hovered = [];
       this._pendingHover = null;
       this._hoverFrame = 0;
+      this._stateStyle = null;
       this._render();
     }
 
@@ -59,6 +59,8 @@
       var data = this._data;
       this.shadowRoot.textContent = "";
       this.shadowRoot.append(el("style", "", this._style()));
+      this._stateStyle = el("style");
+      this.shadowRoot.append(this._stateStyle);
 
       var page = el("div", "trace-page");
       var header = el("header", "trace-header");
@@ -115,13 +117,10 @@
       });
       page.append(notes);
       this.shadowRoot.append(page);
-      this._rebuildTraceNodeIndex();
       this._installInteractions();
-      this._restoreSelection();
       this._restorePaneScroll(scrollRestore);
       this._renderDetail(this._selected);
-      this._rebuildTraceNodeIndex();
-      this._restoreSelection();
+      this._syncStateStyles();
     }
 
     _card(parent, label, value) {
@@ -416,16 +415,6 @@
       if (groups.length) node.dataset.traceGroups = groups.join(" ");
     }
 
-    _rebuildTraceNodeIndex() {
-      var index = Object.create(null);
-      this.shadowRoot.querySelectorAll(".trace-region").forEach(function (node) {
-        traceClasses(node).forEach(function (group) {
-          (index[group] || (index[group] = [])).push(node);
-        });
-      });
-      this._traceNodeIndex = index;
-    }
-
     _isBoundaryRow(rowData) {
       return ((rowData && rowData.meta) || "").indexOf("block") >= 0;
     }
@@ -530,13 +519,8 @@
 
     _applyHover(groups) {
       if (this._sameGroups(this._hovered, groups)) return;
-      this._forGroups(this._hovered, function (node) {
-        node.classList.remove("trace-hover");
-      });
       this._hovered = groups.slice();
-      this._forGroups(this._hovered, function (node) {
-        node.classList.add("trace-hover");
-      });
+      this._syncStateStyles();
     }
 
     _sameGroups(left, right) {
@@ -551,18 +535,9 @@
     }
 
     _select(groups) {
-      this._forGroups(this._selected, function (node) {
-        node.classList.remove("trace-selected");
-      });
       this._selected = groups.slice();
-      this._forGroups(this._selected, function (node) {
-        node.classList.add("trace-selected");
-      });
       this._renderDetail(this._selected);
-      this._rebuildTraceNodeIndex();
-      this._forGroups(this._selected, function (node) {
-        node.classList.add("trace-selected");
-      });
+      this._syncStateStyles();
     }
 
     _capturePaneScrollState() {
@@ -719,32 +694,40 @@
       });
     }
 
-    _restoreSelection() {
-      this._forGroups(this._selected || [], function (node) {
-        node.classList.add("trace-selected");
-      });
+    _syncStateStyles() {
+      if (!this._stateStyle) return;
+      var hover = this._selectorForGroups(this._hovered, ".trace-region");
+      var selected = this._selectorForGroups(this._selected, ".trace-region");
+      var activeMarkers = this._selectorForGroups((this._hovered || []).concat(this._selected || []), ".overview-marker");
+      var rules = [];
+      if (hover) {
+        rules.push(hover + "{background:color-mix(in srgb, var(--trace-accent) 10%, transparent) !important;outline:1px solid color-mix(in srgb, var(--trace-accent) 45%, transparent);outline-offset:-1px;}");
+      }
+      if (selected) {
+        rules.push(selected + "{background:color-mix(in srgb, var(--trace-accent) 18%, transparent) !important;color:var(--trace-text) !important;outline:2px solid var(--trace-accent);outline-offset:-2px;}");
+      }
+      if (activeMarkers) {
+        rules.push(activeMarkers + "{left:-1px;width:12px;height:10px;outline:0;background:var(--trace-accent) !important;border:1px solid var(--trace-text);box-shadow:0 0 0 2px color-mix(in srgb, var(--trace-code-bg) 80%, transparent),0 0 14px color-mix(in srgb, var(--trace-accent) 55%, transparent);z-index:2;}");
+      }
+      this._stateStyle.textContent = rules.join("\n");
     }
 
-    _forGroups(groups, f) {
+    _selectorForGroups(groups, base) {
       var seen = Object.create(null);
-      var seenNodes = typeof WeakSet !== "undefined" ? new WeakSet() : null;
-      var index = this._traceNodeIndex || Object.create(null);
-      groups.forEach(function (group) {
+      var classes = [];
+      (groups || []).forEach(function (group) {
         if (!group || seen[group]) return;
         seen[group] = true;
-        var nodes = index[group];
-        if (!nodes) {
-          nodes = Array.prototype.slice.call(this.shadowRoot.querySelectorAll("." + group));
-          index[group] = nodes;
-        }
-        nodes.forEach(function (node) {
-          if (seenNodes) {
-            if (seenNodes.has(node)) return;
-            seenNodes.add(node);
-          }
-          f(node);
-        });
+        classes.push("." + this._escapeClass(group));
       }, this);
+      return classes.length ? base + ":is(" + classes.join(",") + ")" : "";
+    }
+
+    _escapeClass(name) {
+      if (window.CSS && window.CSS.escape) return window.CSS.escape(name);
+      return String(name).replace(/[^a-zA-Z0-9_-]/g, function (ch) {
+        return "\\" + ch;
+      });
     }
 
     _renderDetail(groups) {
@@ -1184,9 +1167,6 @@ h1 { margin:0; color:var(--trace-text); font:700 15px/1.1 ui-sans-serif, system-
 .row-meta { color:color-mix(in srgb, var(--trace-accent) 80%, var(--trace-text)); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .row-text { color:var(--trace-code-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 [class*="trace-c-"] { transition:background .16s ease-out, color .16s ease-out, outline-color .16s ease-out; }
-	.trace-hover { background:color-mix(in srgb, var(--trace-accent) 10%, transparent) !important; outline:1px solid color-mix(in srgb, var(--trace-accent) 45%, transparent); outline-offset:-1px; }
-	.trace-selected { background:color-mix(in srgb, var(--trace-accent) 18%, transparent) !important; color:var(--trace-text) !important; outline:2px solid var(--trace-accent); outline-offset:-2px; }
-	.overview-marker.trace-hover,.overview-marker.trace-selected { left:-1px; width:12px; height:10px; outline:0; background:var(--trace-accent) !important; border:1px solid var(--trace-text); box-shadow:0 0 0 2px color-mix(in srgb, var(--trace-code-bg) 80%, transparent),0 0 14px color-mix(in srgb, var(--trace-accent) 55%, transparent); z-index:2; }
 .audit-good { box-shadow:inset 3px 0 var(--trace-pass); }
 .audit-needs-evidence { box-shadow:inset 3px 0 var(--trace-danger); }
 .audit-optimized-attribution-gap { box-shadow:inset 3px 0 var(--trace-warn); }
