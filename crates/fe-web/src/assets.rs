@@ -266,9 +266,37 @@ pub fn origin_trace_live_html_shell(title: &str) -> String {
     var token = hash.get("token") || params.get("token") || "";
     var loading = document.querySelector(".trace-live-loading");
     var authHeaders = token ? {{ "Authorization": "Bearer " + token }} : {{}};
+    var storageKey = "fe.trace.workbench.lastReady." + (session || "");
     function fail(message) {{
       if (loading) loading.textContent = message;
       console.error("[fe trace workbench]", message);
+    }}
+    function renderModel(model, staleMessage) {{
+      model = model || {{}};
+      if (staleMessage) {{
+        model = Object.assign({{}}, model);
+        model.revision = Object.assign({{}}, model.revision || {{}}, {{ status: "stale_but_usable" }});
+        model.notes = (model.notes || []).concat([staleMessage]);
+      }}
+      window.FE_ORIGIN_TRACE_DATA = model;
+      window.FE_TRACE_WORKBENCH_REVISION = model && model.revision && model.revision.id || 0;
+      if (loading) loading.remove();
+      document.body.appendChild(document.createElement("fe-origin-trace"));
+    }}
+    function rememberModel(model) {{
+      try {{
+        window.sessionStorage && window.sessionStorage.setItem(storageKey, JSON.stringify(model));
+      }} catch (_) {{}}
+    }}
+    function renderCachedModel(reason) {{
+      try {{
+        var cached = window.sessionStorage && window.sessionStorage.getItem(storageKey);
+        if (!cached) return false;
+        renderModel(JSON.parse(cached), "Showing last ready trace revision because live refresh failed: " + reason);
+        return true;
+      }} catch (_) {{
+        return false;
+      }}
     }}
     function applyInitialSelection(bootstrap) {{
       var selection = bootstrap
@@ -300,12 +328,13 @@ pub fn origin_trace_live_html_shell(title: &str) -> String {
         return response.json();
       }})
       .then(function (model) {{
-        window.FE_ORIGIN_TRACE_DATA = model;
-        window.FE_TRACE_WORKBENCH_REVISION = model && model.revision && model.revision.id || 0;
-        if (loading) loading.remove();
-        document.body.appendChild(document.createElement("fe-origin-trace"));
+        rememberModel(model);
+        renderModel(model);
       }})
-      .catch(function (err) {{ fail(String(err && err.message || err)); }});
+      .catch(function (err) {{
+        var reason = String(err && err.message || err);
+        if (!renderCachedModel(reason)) fail(reason);
+      }});
     if (window.EventSource && token) {{
       var events = new EventSource("/trace/session/" + encodeURIComponent(session) + "/events?token=" + encodeURIComponent(token));
       events.addEventListener("trace/revision", function (event) {{
