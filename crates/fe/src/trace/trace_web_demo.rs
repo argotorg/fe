@@ -11,8 +11,8 @@ use camino::Utf8PathBuf;
 use common::{SalsaEventCounters, origin::OriginExportKey};
 use serde::Serialize;
 use trace_facts::{
-    InstructionFact, OriginEdgeFact, OriginEdgeTraversalClass, OriginNodeFact, SourceSpanFact,
-    TraceFact, TraceSnapshot,
+    InstructionFact, OriginEdgeFact, OriginEdgeTraversalClass, OriginNodeFact, SourceFileFact,
+    SourceSpanFact, TraceFact, TraceSnapshot,
 };
 use trace_query::{
     IntrospectionService, LoopContentsRequest, TraceIntrospectionService,
@@ -519,6 +519,14 @@ struct DemoSource {
     display_name: String,
     confidence: String,
     lines: Vec<DemoSourceLine>,
+    related_sources: Vec<DemoRelatedSource>,
+}
+
+#[derive(Debug, Serialize)]
+struct DemoRelatedSource {
+    display_name: String,
+    origin: String,
+    lines: Vec<DemoSourceLine>,
 }
 
 #[derive(Debug, Serialize)]
@@ -551,7 +559,9 @@ fn build_demo_model(snapshot: &TraceSnapshot, salsa: Option<DemoSalsaStats>) -> 
         .loop_contents(LoopContentsRequest::default())
         .expect("loop-contents query over validated snapshot should not fail");
     let source_text = read_source_text(&snapshot.metadata().input_path).unwrap_or_default();
-    let index = DemoIndex::new(snapshot, &source_text);
+    let source_texts =
+        source_texts_by_file(snapshot, &snapshot.metadata().input_path, &source_text);
+    let index = DemoIndex::new(snapshot, &source_texts);
     let exact_source_spans = index
         .source_spans
         .values()
@@ -576,6 +586,12 @@ fn build_demo_model(snapshot: &TraceSnapshot, salsa: Option<DemoSalsaStats>) -> 
     let source_lines = source_lines(
         snapshot.metadata().input_path.as_str(),
         &source_text,
+        &closures,
+    );
+    let related_sources = related_source_sections(
+        snapshot.metadata().input_path.as_str(),
+        &source_texts,
+        &index,
         &closures,
     );
     let audit_source_lines = source_lines
@@ -620,6 +636,7 @@ fn build_demo_model(snapshot: &TraceSnapshot, salsa: Option<DemoSalsaStats>) -> 
             display_name: snapshot.metadata().input_path.clone(),
             confidence: source_confidence,
             lines: source_lines,
+            related_sources,
         },
         panels,
         closures,
@@ -780,6 +797,7 @@ fn status_word(available: bool) -> String {
 struct DemoIndex<'a> {
     origin_nodes: BTreeMap<OriginExportKey, &'a OriginNodeFact>,
     instructions: BTreeMap<OriginExportKey, &'a InstructionFact>,
+    source_files: BTreeMap<OriginExportKey, &'a SourceFileFact>,
     source_spans: BTreeMap<OriginExportKey, &'a SourceSpanFact>,
     source_snippets: BTreeMap<OriginExportKey, DemoSourceSnippet>,
     edges_by_from: BTreeMap<OriginExportKey, Vec<&'a OriginEdgeFact>>,
@@ -787,9 +805,10 @@ struct DemoIndex<'a> {
 }
 
 impl<'a> DemoIndex<'a> {
-    fn new(snapshot: &'a TraceSnapshot, source_text: &str) -> Self {
+    fn new(snapshot: &'a TraceSnapshot, source_texts: &BTreeMap<OriginExportKey, String>) -> Self {
         let mut origin_nodes = BTreeMap::new();
         let mut instructions = BTreeMap::new();
+        let mut source_files = BTreeMap::new();
         let mut source_spans = BTreeMap::new();
         let mut edges_by_from = BTreeMap::<OriginExportKey, Vec<&OriginEdgeFact>>::new();
         let mut edges_by_to = BTreeMap::<OriginExportKey, Vec<&OriginEdgeFact>>::new();
@@ -801,6 +820,9 @@ impl<'a> DemoIndex<'a> {
                 }
                 TraceFact::Instruction(instruction) => {
                     instructions.insert(instruction.instruction.clone(), instruction);
+                }
+                TraceFact::SourceFile(source_file) => {
+                    source_files.insert(source_file.file_key.clone(), source_file);
                 }
                 TraceFact::SourceSpan(span) => {
                     source_spans.insert(span.origin.clone(), span);
@@ -818,13 +840,17 @@ impl<'a> DemoIndex<'a> {
         let source_snippets = source_spans
             .iter()
             .filter_map(|(origin, span)| {
-                source_snippet_for_span(source_text, span).map(|snippet| (origin.clone(), snippet))
+                source_texts
+                    .get(&span.file)
+                    .and_then(|source_text| source_snippet_for_span(source_text, span))
+                    .map(|snippet| (origin.clone(), snippet))
             })
             .collect();
 
         Self {
             origin_nodes,
             instructions,
+            source_files,
             source_spans,
             source_snippets,
             edges_by_from,
@@ -902,6 +928,77 @@ fn source_lines(
             }
         })
         .collect()
+}
+
+fn related_source_sections(
+    input_path: &str,
+    source_texts: &BTreeMap<OriginExportKey, String>,
+    index: &DemoIndex<'_>,
+    closures: &[DemoClosure],
+) -> Vec<DemoRelatedSource> {
+    let mut classes_by_file_line =
+        BTreeMap::<OriginExportKey, BTreeMap<u32, BTreeSet<String>>>::new();
+    for closure in closures {
+        for span in &closure.source_spans {
+            if span.confidence != "direct"
+                || source_owner_matches_input(&span.file_owner, input_path)
+            {
+                continue;
+            }
+            let Some(file_key) = source_file_key_for_owner(index, &span.file_owner) else {
+                continue;
+            };
+            for line in span.start_line..=span.end_line {
+                classes_by_file_line
+                    .entry(file_key.clone())
+                    .or_default()
+                    .entry(line)
+                    .or_default()
+                    .insert(closure.class_name.clone());
+            }
+        }
+    }
+
+    classes_by_file_line
+        .into_iter()
+        .filter_map(|(file_key, classes_by_line)| {
+            let source_text = source_texts.get(&file_key)?;
+            let lines = source_text
+                .lines()
+                .enumerate()
+                .filter_map(|(index, text)| {
+                    let number = index as u32 + 1;
+                    let classes = classes_by_line.get(&number)?;
+                    Some(DemoSourceLine {
+                        number,
+                        text: text.to_string(),
+                        classes: classes.iter().cloned().collect(),
+                    })
+                })
+                .collect::<Vec<_>>();
+            if lines.is_empty() {
+                return None;
+            }
+            let display_name = index
+                .source_files
+                .get(&file_key)
+                .map(|source| source.display_name.clone())
+                .unwrap_or_else(|| file_key.owner_key().to_string());
+            Some(DemoRelatedSource {
+                display_name,
+                origin: file_key.owner_key().to_string(),
+                lines,
+            })
+        })
+        .collect()
+}
+
+fn source_file_key_for_owner(index: &DemoIndex<'_>, owner: &str) -> Option<OriginExportKey> {
+    index
+        .source_files
+        .keys()
+        .find(|file_key| file_key.owner_key() == owner)
+        .cloned()
 }
 
 fn truncate_for_report(value: &str, max_chars: usize) -> String {
@@ -1531,6 +1628,54 @@ fn read_source_text(input_path: &str) -> Option<String> {
     fs::read_to_string(path).ok()
 }
 
+fn source_texts_by_file(
+    snapshot: &TraceSnapshot,
+    input_path: &str,
+    input_source_text: &str,
+) -> BTreeMap<OriginExportKey, String> {
+    let mut texts = BTreeMap::new();
+    for fact in snapshot.facts() {
+        let TraceFact::SourceFile(source_file) = fact else {
+            continue;
+        };
+        if source_owner_matches_input(source_file.file_key.owner_key(), input_path) {
+            texts.insert(source_file.file_key.clone(), input_source_text.to_string());
+            continue;
+        }
+        if let Some(text) = read_source_file_fact_text(source_file) {
+            texts.insert(source_file.file_key.clone(), text);
+        }
+    }
+    texts
+}
+
+fn read_source_file_fact_text(source_file: &SourceFileFact) -> Option<String> {
+    let uri = source_file.uri.as_str();
+    let path = if let Some(path) = uri.strip_prefix("builtin-std:/") {
+        std::env::current_dir()
+            .ok()?
+            .join("ingots")
+            .join("std")
+            .join(path)
+    } else if let Some(path) = uri.strip_prefix("builtin-core:/") {
+        std::env::current_dir()
+            .ok()?
+            .join("ingots")
+            .join("core")
+            .join(path)
+    } else if let Some(path) = uri.strip_prefix("file://") {
+        std::path::PathBuf::from(path)
+    } else {
+        let candidate = std::path::PathBuf::from(uri);
+        if candidate.is_absolute() {
+            candidate
+        } else {
+            std::env::current_dir().ok()?.join(candidate)
+        }
+    };
+    fs::read_to_string(path).ok()
+}
+
 fn render_origin_trace_html(model: &WebDemoModel, live_reload: bool) -> Result<String, String> {
     let data = serde_json::to_string(model)
         .map_err(|err| format!("failed to serialize web demo model: {err}"))?;
@@ -1600,6 +1745,7 @@ mod tests {
                     text: "</script>".to_string(),
                     classes: Vec::new(),
                 }],
+                related_sources: Vec::new(),
             },
             panels: Vec::new(),
             closures: Vec::new(),
@@ -1716,6 +1862,76 @@ mod tests {
         let lines = source_lines("fib_demo.fe", "x", &[closure]);
 
         assert_eq!(lines[0].classes, vec!["trace-c-0".to_string()]);
+    }
+
+    #[test]
+    fn related_source_sections_include_only_used_foreign_lines() {
+        let file_key = OriginExportKey::try_from_raw_parts(
+            "source.file",
+            "builtin-std:/src/evm/calldata.fe",
+            "file:0",
+        )
+        .unwrap();
+        let source_file = SourceFileFact::new(
+            file_key.clone(),
+            "builtin-std:/src/evm/calldata.fe",
+            "calldata.fe",
+            "blake3:0000000000000000000000000000000000000000000000000000000000000001",
+            None,
+        );
+        let mut source_files = BTreeMap::new();
+        source_files.insert(file_key.clone(), &source_file);
+        let index = DemoIndex {
+            origin_nodes: BTreeMap::new(),
+            instructions: BTreeMap::new(),
+            source_files,
+            source_spans: BTreeMap::new(),
+            source_snippets: BTreeMap::new(),
+            edges_by_from: BTreeMap::new(),
+            edges_by_to: BTreeMap::new(),
+        };
+        let mut source_texts = BTreeMap::new();
+        source_texts.insert(file_key, "unused\npulled in\nunused too\n".to_string());
+        let closure = DemoClosure {
+            class_name: "trace-c-7".to_string(),
+            label: "foreign".to_string(),
+            root_key: "root".to_string(),
+            keys: Vec::new(),
+            generated_keys: Vec::new(),
+            contextual_keys: Vec::new(),
+            structural_keys: Vec::new(),
+            counts: DemoClosureCounts {
+                hir: 1,
+                mir: 0,
+                sonatina_pre: 0,
+                sonatina_post: 0,
+                sonatina_prepared: 0,
+                bytecode: 0,
+            },
+            traversal: test_traversal(),
+            gap: None,
+            edges: Vec::new(),
+            source_spans: vec![DemoSourceSpan {
+                origin: "hir.expr:foreign:1".to_string(),
+                file: "calldata.fe".to_string(),
+                file_owner: "builtin-std:/src/evm/calldata.fe".to_string(),
+                lines: "2:2".to_string(),
+                start_byte: 7,
+                end_byte: 16,
+                start_line: 2,
+                end_line: 2,
+                confidence: "direct".to_string(),
+            }],
+        };
+
+        let sections = related_source_sections("entry.fe", &source_texts, &index, &[closure]);
+
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].display_name, "calldata.fe");
+        assert_eq!(sections[0].lines.len(), 1);
+        assert_eq!(sections[0].lines[0].number, 2);
+        assert_eq!(sections[0].lines[0].text, "pulled in");
+        assert_eq!(sections[0].lines[0].classes, vec!["trace-c-7"]);
     }
 
     fn test_traversal() -> trace_query::origin_closure::OriginClosureTraversalSummary {

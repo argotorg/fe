@@ -14,7 +14,8 @@ use trace_facts::{
 };
 
 use crate::{
-    MirDb, RuntimePackage,
+    MirDb, RuntimeInstance, RuntimePackage,
+    instance::RuntimeInstanceSource,
     origin::{
         RUNTIME_BLOCK_EXPORT_KIND, RUNTIME_FUNCTION_EXPORT_KIND, RUNTIME_LOCAL_EXPORT_KIND,
         RUNTIME_LOOP_EXPORT_KIND, RUNTIME_STMT_EXPORT_KIND, RUNTIME_TERMINATOR_EXPORT_KIND,
@@ -24,8 +25,8 @@ use crate::{
         RuntimeTerminatorSite,
     },
     runtime::{
-        RBlockId, RExpr, RLocalId, RStmt, RTerminator, RuntimeBody, RuntimeCarrier,
-        RuntimeLocalLowering, RuntimeLocalRoot,
+        DispatchDefault, RBlockId, RExpr, RLocalId, RStmt, RTerminator, RuntimeBody,
+        RuntimeCarrier, RuntimeLocalLowering, RuntimeLocalRoot, RuntimeSyntheticSpec,
     },
 };
 use hir::{
@@ -45,6 +46,7 @@ pub fn emit_mir_facts<'db>(db: &'db dyn MirDb, package: RuntimePackage<'db>) -> 
     let mut facts = Vec::new();
     let mut emitted_source_file_nodes = BTreeSet::new();
     let mut emitted_source_file_records = BTreeSet::new();
+    let mut emitted_hir_body_facts = BTreeSet::new();
     for function in package.functions(db) {
         let instance = function.instance(db);
         let owner_key = RuntimeInstanceOwnerKey::for_instance(db, instance);
@@ -52,13 +54,24 @@ pub fn emit_mir_facts<'db>(db: &'db dyn MirDb, package: RuntimePackage<'db>) -> 
         let hir_body = hir_body_for_instance(db, instance);
         let hir_owner_key = hir_origin_body_owner_key(&owner_key);
         if let Some(hir_body) = hir_body {
-            extend_with_deduped_source_files(
+            extend_with_hir_body_facts_once(
+                db,
                 &mut facts,
+                &mut emitted_hir_body_facts,
                 &mut emitted_source_file_nodes,
                 &mut emitted_source_file_records,
-                hir::trace::emit_hir_body_facts_with_source_spans(db, &hir_owner_key, hir_body),
+                &hir_owner_key,
+                hir_body,
             );
         }
+        let synthetic_context_hir_roots = synthetic_context_hir_roots(
+            db,
+            instance,
+            &mut facts,
+            &mut emitted_hir_body_facts,
+            &mut emitted_source_file_nodes,
+            &mut emitted_source_file_records,
+        );
         let function_key = RuntimeFunctionOrigin::new(instance).export_key(&owner_key);
         facts.push(origin_node(
             function_key.clone(),
@@ -192,6 +205,20 @@ pub fn emit_mir_facts<'db>(db: &'db dyn MirDb, package: RuntimePackage<'db>) -> 
                         OriginEdgeLabel::LoweredFrom,
                         Some(CompilerPhase::Mir),
                     )));
+                } else if body
+                    .stmt_origins
+                    .get(block_index)
+                    .and_then(|origins| origins.get(stmt_index))
+                    .is_some_and(|origin| matches!(origin, SemOrigin::Synthetic))
+                {
+                    for hir_key in &synthetic_context_hir_roots {
+                        facts.push(TraceFact::OriginEdge(OriginEdgeFact::new(
+                            stmt_key.clone(),
+                            hir_key.clone(),
+                            OriginEdgeLabel::SyntheticFor,
+                            Some(CompilerPhase::Mir),
+                        )));
+                    }
                 }
             }
             let terminator_site = RuntimeTerminatorSite::new(block);
@@ -219,6 +246,19 @@ pub fn emit_mir_facts<'db>(db: &'db dyn MirDb, package: RuntimePackage<'db>) -> 
                     OriginEdgeLabel::LoweredFrom,
                     Some(CompilerPhase::Mir),
                 )));
+            } else if body
+                .terminator_origins
+                .get(block_index)
+                .is_some_and(|origin| matches!(origin, SemOrigin::Synthetic))
+            {
+                for hir_key in &synthetic_context_hir_roots {
+                    facts.push(TraceFact::OriginEdge(OriginEdgeFact::new(
+                        terminator_key.clone(),
+                        hir_key.clone(),
+                        OriginEdgeLabel::SyntheticFor,
+                        Some(CompilerPhase::Mir),
+                    )));
+                }
             }
         }
         for edge in &cfg.edges {
@@ -934,11 +974,141 @@ fn extend_with_deduped_source_files(
     }
 }
 
+fn extend_with_hir_body_facts_once<'db>(
+    db: &'db dyn MirDb,
+    facts: &mut Vec<TraceFact>,
+    emitted_hir_body_facts: &mut BTreeSet<String>,
+    emitted_source_file_nodes: &mut BTreeSet<common::origin::OriginExportKey>,
+    emitted_source_file_records: &mut BTreeSet<common::origin::OriginExportKey>,
+    hir_owner_key: &HirOriginBodyOwnerKey,
+    hir_body: hir::hir_def::Body<'db>,
+) {
+    if !emitted_hir_body_facts.insert(hir_owner_key.as_str().to_string()) {
+        return;
+    }
+    extend_with_deduped_source_files(
+        facts,
+        emitted_source_file_nodes,
+        emitted_source_file_records,
+        hir::trace::emit_hir_body_facts_with_source_spans(db, hir_owner_key, hir_body),
+    );
+}
+
 fn hir_body_for_instance<'db>(
     db: &'db dyn MirDb,
     instance: crate::RuntimeInstance<'db>,
 ) -> Option<hir::hir_def::Body<'db>> {
     instance.key(db).semantic(db)?.key(db).typed_body(db).body()
+}
+
+fn synthetic_context_hir_roots<'db>(
+    db: &'db dyn MirDb,
+    instance: RuntimeInstance<'db>,
+    facts: &mut Vec<TraceFact>,
+    emitted_hir_body_facts: &mut BTreeSet<String>,
+    emitted_source_file_nodes: &mut BTreeSet<common::origin::OriginExportKey>,
+    emitted_source_file_records: &mut BTreeSet<common::origin::OriginExportKey>,
+) -> Vec<common::origin::OriginExportKey> {
+    let mut roots = Vec::new();
+    let mut visited = BTreeSet::new();
+    collect_synthetic_context_hir_roots(
+        db,
+        instance,
+        facts,
+        emitted_hir_body_facts,
+        emitted_source_file_nodes,
+        emitted_source_file_records,
+        &mut visited,
+        &mut roots,
+    );
+    roots
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_synthetic_context_hir_roots<'db>(
+    db: &'db dyn MirDb,
+    instance: RuntimeInstance<'db>,
+    facts: &mut Vec<TraceFact>,
+    emitted_hir_body_facts: &mut BTreeSet<String>,
+    emitted_source_file_nodes: &mut BTreeSet<common::origin::OriginExportKey>,
+    emitted_source_file_records: &mut BTreeSet<common::origin::OriginExportKey>,
+    visited: &mut BTreeSet<String>,
+    roots: &mut Vec<common::origin::OriginExportKey>,
+) {
+    let owner_key = RuntimeInstanceOwnerKey::for_instance(db, instance);
+    if !visited.insert(owner_key.as_str().to_string()) {
+        return;
+    }
+    match instance.key(db).source(db) {
+        RuntimeInstanceSource::Semantic(_) => {
+            let Some(hir_body) = hir_body_for_instance(db, instance) else {
+                return;
+            };
+            let hir_owner_key = hir_origin_body_owner_key(&owner_key);
+            extend_with_hir_body_facts_once(
+                db,
+                facts,
+                emitted_hir_body_facts,
+                emitted_source_file_nodes,
+                emitted_source_file_records,
+                &hir_owner_key,
+                hir_body,
+            );
+            roots.push(hir_root_expr_key(db, hir_body, &hir_owner_key));
+        }
+        RuntimeInstanceSource::Synthetic(synthetic) => {
+            for context in synthetic_context_instances(synthetic.spec(db).clone()) {
+                collect_synthetic_context_hir_roots(
+                    db,
+                    context,
+                    facts,
+                    emitted_hir_body_facts,
+                    emitted_source_file_nodes,
+                    emitted_source_file_records,
+                    visited,
+                    roots,
+                );
+            }
+        }
+    }
+}
+
+fn synthetic_context_instances<'db>(spec: RuntimeSyntheticSpec<'db>) -> Vec<RuntimeInstance<'db>> {
+    match spec {
+        RuntimeSyntheticSpec::MainRoot { callee, .. }
+        | RuntimeSyntheticSpec::TestRoot { callee, .. }
+        | RuntimeSyntheticSpec::ManualContractRoot { callee, .. }
+        | RuntimeSyntheticSpec::CodeRegionRoot { callee, .. } => vec![callee],
+        RuntimeSyntheticSpec::ContractInitAbi { plan } => plan.user_init.into_iter().collect(),
+        RuntimeSyntheticSpec::ContractRecvAbi { plan } => vec![plan.user_recv],
+        RuntimeSyntheticSpec::ContractInitRoot { init_abi, .. } => vec![init_abi],
+        RuntimeSyntheticSpec::ContractRuntimeRoot {
+            dispatch, default, ..
+        } => {
+            let mut contexts = dispatch
+                .into_vec()
+                .into_iter()
+                .map(|arm| arm.wrapper)
+                .collect::<Vec<_>>();
+            if let DispatchDefault::Call { wrapper } = default {
+                contexts.push(wrapper);
+            }
+            contexts
+        }
+    }
+}
+
+fn hir_root_expr_key(
+    db: &dyn MirDb,
+    hir_body: hir::hir_def::Body<'_>,
+    stable_body_key: &HirOriginBodyOwnerKey,
+) -> common::origin::OriginExportKey {
+    common::origin::OriginExportKey::try_from_raw_parts(
+        HIR_EXPR_EXPORT_KIND,
+        stable_body_key.as_str(),
+        hir_body.expr(db).index().to_string(),
+    )
+    .expect("HIR root expr origin key must be valid")
 }
 
 fn hir_origin_body_owner_key(owner_key: &RuntimeInstanceOwnerKey) -> HirOriginBodyOwnerKey {

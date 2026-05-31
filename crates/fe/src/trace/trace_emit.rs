@@ -855,6 +855,7 @@ mod tests {
     use trace_query::{
         GasAttributionPolicy, IntrospectionService, LoopContentsRequest, RuntimeGasBySourceRequest,
         RuntimeTraceFilterRequest, TraceIntrospectionService, datalog_emit,
+        static_analysis::ProvenanceCoverageReport,
     };
 
     #[test]
@@ -904,6 +905,18 @@ mod tests {
             "runtime MIR origins should link back to HIR expression/statement origins"
         );
         assert!(
+            bundle.facts.iter().any(|fact| matches!(
+                fact,
+                trace_facts::TraceFact::OriginEdge(edge)
+                    if matches!(edge.from.kind(), "runtime.stmt" | "runtime.terminator")
+                        && matches!(edge.to.kind(), "hir.expr" | "hir.stmt")
+                        && edge.label == trace_facts::OriginEdgeLabel::SyntheticFor
+                        && edge.traversal_class()
+                            == trace_facts::OriginEdgeTraversalClass::Synthetic
+            )),
+            "generated runtime MIR origins should expose synthetic HIR/source explanation edges"
+        );
+        assert!(
             bundle
                 .facts
                 .iter()
@@ -947,6 +960,30 @@ mod tests {
                         && edge.label == trace_facts::OriginEdgeLabel::LoweredFrom
             )),
             "bytecode PCs must not upgrade contextual MIR runtime origins to exact LoweredFrom edges"
+        );
+        let coverage =
+            ProvenanceCoverageReport::from_snapshot(&TraceSnapshot::new(bundle.clone()).unwrap());
+        let primary_inventory_total = coverage.primary_source_exact_pcs
+            + coverage.primary_source_ambiguous_pcs
+            + coverage.primary_optimized_sonatina_pcs
+            + coverage.primary_prepared_sonatina_pcs
+            + coverage.primary_synthetic_backend_pcs
+            + coverage.primary_unmapped_pcs;
+        assert_eq!(
+            primary_inventory_total,
+            coverage.total_instructions,
+            "bytecode provenance inventory must account for every instruction:\n{}",
+            render_bytecode_link_inventory(&coverage)
+        );
+        assert!(
+            coverage.prepared_sonatina_pcs > 0,
+            "real Fibonacci trace should inventory prepared-linked bytecode:\n{}",
+            render_bytecode_link_inventory(&coverage)
+        );
+        assert!(
+            coverage.unmapped_pcs < coverage.total_instructions,
+            "real Fibonacci trace should not inventory every bytecode instruction as unlinked:\n{}",
+            render_bytecode_link_inventory(&coverage)
         );
         let loop_cost =
             super::super::trace_render::render_loop_cost_bundle(bundle.clone()).unwrap();
@@ -1005,6 +1042,23 @@ mod tests {
         assert!(explain.contains("Why b is memory-backed in MIR"));
         assert!(explain.contains("Mir: memory place (MutableLocalLowering)"));
         assert!(!explain.contains("stack slot sp+24"));
+    }
+
+    fn render_bytecode_link_inventory(coverage: &ProvenanceCoverageReport) -> String {
+        format!(
+            "total={}\nprimary_source_exact={}\nprimary_source_ambiguous={}\nprimary_optimized_sonatina={}\nprimary_prepared_sonatina={}\nprimary_synthetic_backend={}\nprimary_unmapped={}\noptimized_linked={}\nprepared_linked={}\nsynthetic_backend_linked={}\nunmapped={}",
+            coverage.total_instructions,
+            coverage.primary_source_exact_pcs,
+            coverage.primary_source_ambiguous_pcs,
+            coverage.primary_optimized_sonatina_pcs,
+            coverage.primary_prepared_sonatina_pcs,
+            coverage.primary_synthetic_backend_pcs,
+            coverage.primary_unmapped_pcs,
+            coverage.optimized_sonatina_pcs,
+            coverage.prepared_sonatina_pcs,
+            coverage.synthetic_backend_pcs,
+            coverage.unmapped_pcs,
+        )
     }
 
     #[test]

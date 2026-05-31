@@ -254,6 +254,7 @@
       var selectedId = this._paneChoices[index] || (reps[0] && reps[0].id);
       var selected = reps.filter(function (rep) { return rep.id === selectedId; })[0] || reps[0];
       var panel = el("section", "panel workbench-pane");
+      panel.dataset.paneIndex = String(index);
       var head = el("div", "panel-head workbench-head");
       var select = el("select", "representation-select");
       select.dataset.paneIndex = String(index);
@@ -263,7 +264,15 @@
         option.selected = rep.id === selected.id;
         select.append(option);
       });
-      head.append(el("h2", "", selected ? selected.title : "Representation"), select);
+      var jump = el("div", "jump-controls");
+      var prev = el("button", "jump-button", "Prev match");
+      var next = el("button", "jump-button", "Next match");
+      prev.type = "button";
+      next.type = "button";
+      prev.dataset.paneJump = "prev";
+      next.dataset.paneJump = "next";
+      jump.append(prev, next);
+      head.append(el("h2", "", selected ? selected.title : "Representation"), select, jump);
       if (selected && selected.summary) head.append(el("p", "", selected.summary));
       panel.append(head);
       if (!selected) {
@@ -280,16 +289,39 @@
       var body = el("div", "source-lines");
       var markers = [];
       var lines = source.lines || [];
+      var related = source.related_sources || [];
+      var markerTotal = lines.length + related.reduce(function (sum, section) {
+        return sum + ((section && section.lines) || []).length;
+      }, 0);
+      var markerIndex = 0;
       lines.forEach(function (line, index) {
         var classes = line.classes || [];
         var row = el("div", "source-line trace-region " + classes.concat(this._auditClasses(classes)).join(" "));
+        row.id = this._rowId("source-main", index);
         row.dataset.traceLabel = "source line " + line.number;
         row.append(el("span", "ln", line.number), el("code", "", line.text), this._badges(classes));
         body.append(row);
-        var marker = this._overviewMarker(classes, index, lines.length, "source line " + line.number);
+        var marker = this._overviewMarker(classes, markerIndex, markerTotal, "source line " + line.number, row.id);
         if (marker) markers.push(marker);
+        markerIndex += 1;
       }, this);
-      if (!lines.length) {
+      related.forEach(function (section, sectionIndex) {
+        var header = el("div", "source-section-separator");
+        header.append(el("span", "", section.display_name || "related source"), el("small", "", section.origin || ""));
+        body.append(header);
+        ((section && section.lines) || []).forEach(function (line, lineIndex) {
+          var classes = line.classes || [];
+          var row = el("div", "source-line related-source-line trace-region " + classes.concat(this._auditClasses(classes)).join(" "));
+          row.id = this._rowId("source-related-" + sectionIndex, lineIndex);
+          row.dataset.traceLabel = (section.display_name || "related source") + " line " + line.number;
+          row.append(el("span", "ln", line.number), el("code", "", line.text), this._badges(classes));
+          body.append(row);
+          var marker = this._overviewMarker(classes, markerIndex, markerTotal, row.dataset.traceLabel, row.id);
+          if (marker) markers.push(marker);
+          markerIndex += 1;
+        }, this);
+      }, this);
+      if (!lines.length && !related.length) {
         body.append(el("p", "empty-pane", "No source rows available."));
       }
       return this._listingShell(body, markers);
@@ -309,6 +341,7 @@
         var rowKind = this._isBoundaryRow(rowData) ? "boundary-row " : "";
         var row = el("button", "trace-row trace-region " + rowKind + (hasTrace ? "" : "unlinked-row ") + classes.concat(this._auditClasses(classes)).join(" "));
         row.type = "button";
+        row.id = this._rowId("panel-" + (panelData.id || "panel"), index);
         if (rowData.key) {
           row.dataset.originKey = rowData.key;
           row.classList.add(keyClass(rowData.key));
@@ -321,7 +354,7 @@
           this._badges(classes)
         );
         rows.append(row);
-        var marker = this._overviewMarker(classes, index, panelRows.length, rowData.label || rowData.text || rowData.key || "");
+        var marker = this._overviewMarker(classes, index, panelRows.length, rowData.label || rowData.text || rowData.key || "", row.id);
         if (marker) markers.push(marker);
       }, this);
       if (!panelRows.length) {
@@ -342,7 +375,7 @@
       return shell;
     }
 
-    _overviewMarker(classes, index, total, label) {
+    _overviewMarker(classes, index, total, label, targetRowId) {
       var trace = (classes || []).filter(function (name) { return name.indexOf("trace-c-") === 0; });
       if (!trace.length || !total) return null;
       var markerClasses = ["overview-marker", "trace-region"].concat(classes || []);
@@ -350,8 +383,13 @@
       marker.type = "button";
       marker.title = label || "evidence match";
       marker.dataset.traceLabel = label || "evidence match";
+      if (targetRowId) marker.dataset.targetRow = targetRowId;
       marker.style.top = (((index + 0.5) / total) * 100).toFixed(3) + "%";
       return marker;
+    }
+
+    _rowId(prefix, index) {
+      return "trace-row-" + String(prefix).replace(/[^a-zA-Z0-9_-]/g, "-") + "-" + index;
     }
 
     _isBoundaryRow(rowData) {
@@ -409,11 +447,19 @@
         this._setHover(traceClasses(row), false);
       }.bind(this));
       root.addEventListener("click", function (event) {
+        var jump = event.target.closest && event.target.closest("[data-pane-jump]");
+        if (jump) {
+          this._jumpSelectedRun(jump);
+          return;
+        }
         var row = event.target.closest && event.target.closest(".trace-region");
         if (!row) return;
+        var marker = event.target.closest && event.target.closest(".overview-marker");
+        if (marker) this._scrollToMarkerTarget(marker);
         var groups = traceClasses(row);
         this._selectedDisplayClasses = allClasses(row);
         this._select(groups);
+        this._scrollPeerPanesToSelection(groups, row);
       }.bind(this));
       root.addEventListener("change", function (event) {
         var select = event.target.closest && event.target.closest(".representation-select");
@@ -445,6 +491,78 @@
         node.classList.add("trace-selected");
       });
       this._renderDetail(this._selected);
+    }
+
+    _scrollToMarkerTarget(marker) {
+      var targetId = marker && marker.dataset && marker.dataset.targetRow;
+      if (!targetId) return;
+      var target = this.shadowRoot.getElementById(targetId);
+      if (target) this._scrollRowIntoView(target);
+    }
+
+    _scrollPeerPanesToSelection(groups, origin) {
+      if (!groups || !groups.length) return;
+      var originShell = origin && origin.closest && origin.closest(".listing-shell");
+      this.shadowRoot.querySelectorAll(".listing-shell").forEach(function (shell) {
+        if (shell === originShell) return;
+        var runs = this._matchingRuns(shell, groups);
+        if (!runs.length) return;
+        shell.dataset.activeRun = "0";
+        this._scrollRunIntoView(runs[0], 1);
+      }, this);
+    }
+
+    _jumpSelectedRun(button) {
+      var pane = button.closest && button.closest(".workbench-pane");
+      var shell = pane && pane.querySelector(".listing-shell");
+      if (!shell || !this._selected || !this._selected.length) return;
+      var runs = this._matchingRuns(shell, this._selected);
+      if (!runs.length) return;
+      var direction = button.dataset.paneJump === "prev" ? -1 : 1;
+      var current = Number(shell.dataset.activeRun || "-1");
+      if (!Number.isFinite(current) || current < 0 || current >= runs.length) {
+        current = direction < 0 ? runs.length : -1;
+      }
+      var next = direction < 0 ? current - 1 : current + 1;
+      if (next < 0) next = runs.length - 1;
+      if (next >= runs.length) next = 0;
+      shell.dataset.activeRun = String(next);
+      this._scrollRunIntoView(runs[next], direction);
+    }
+
+    _matchingRuns(shell, groups) {
+      var wanted = Object.create(null);
+      (groups || []).forEach(function (group) { wanted[group] = true; });
+      var rows = Array.prototype.slice.call(shell.querySelectorAll(".source-line.trace-region,.trace-row.trace-region"));
+      var runs = [];
+      var current = null;
+      var lastMatchedIndex = -2;
+      rows.forEach(function (row, index) {
+        var matches = traceClasses(row).some(function (group) { return wanted[group]; });
+        if (!matches) {
+          current = null;
+          return;
+        }
+        if (current && index === lastMatchedIndex + 1) {
+          current.push(row);
+        } else {
+          current = [row];
+          runs.push(current);
+        }
+        lastMatchedIndex = index;
+      });
+      return runs;
+    }
+
+    _scrollRunIntoView(run, direction) {
+      if (!run || !run.length) return;
+      var boundary = run.filter(function (row) { return row.classList.contains("boundary-row"); })[0];
+      var target = boundary || (direction < 0 ? run[run.length - 1] : run[0]);
+      this._scrollRowIntoView(target);
+    }
+
+    _scrollRowIntoView(row) {
+      row.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
     }
 
     _restoreSelection() {
@@ -852,9 +970,12 @@ h1 { margin:0; color:var(--trace-text); font:700 18px/1.15 ui-sans-serif, system
 .pane-deck { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; min-width:0; }
 .bottom-deck { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:14px; padding:0 32px 24px; align-items:start; }
 .workbench-pane { min-width:0; }
-.workbench-head { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:center; }
+.workbench-head { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:10px; align-items:center; }
 .workbench-head p { grid-column:1 / -1; }
 .representation-select { max-width:150px; border:1px solid var(--trace-border); border-radius:6px; background:var(--trace-bg); color:var(--trace-text); padding:5px 7px; font:inherit; font-size:12px; }
+.jump-controls { display:flex; gap:5px; justify-content:flex-end; }
+.jump-button { border:1px solid var(--trace-border); border-radius:999px; background:var(--trace-bg); color:var(--trace-muted); padding:4px 7px; font:inherit; font-size:10px; text-transform:uppercase; letter-spacing:.06em; cursor:pointer; }
+.jump-button:hover { color:var(--trace-text); border-color:var(--trace-accent); background:color-mix(in srgb, var(--trace-accent) 10%, var(--trace-bg)); }
 .panel { overflow:hidden; min-height:260px; }
 .workbench-pane { background:var(--trace-code-bg); }
 .detail-panel { min-width:0; }
@@ -868,15 +989,18 @@ h1 { margin:0; color:var(--trace-text); font:700 18px/1.15 ui-sans-serif, system
 	.source-lines::-webkit-scrollbar-thumb,.rows::-webkit-scrollbar-thumb,.detail::-webkit-scrollbar-thumb { background:color-mix(in srgb, var(--trace-accent) 45%, var(--trace-border)); border-radius:999px; border:2px solid var(--trace-code-bg); }
 	.overview-rail { position:relative; width:10px; min-height:100%; border-left:1px solid var(--trace-border); background:color-mix(in srgb, var(--trace-code-bg) 82%, var(--trace-panel)); }
 	.overview-rail.empty { opacity:.35; }
-	.overview-marker { position:absolute; left:2px; width:6px; height:3px; min-height:3px; padding:0; border:0; border-radius:999px; transform:translateY(-50%); background:color-mix(in srgb, var(--trace-accent) 72%, var(--trace-text)); cursor:pointer; }
+	.overview-marker { position:absolute; left:1px; width:8px; height:5px; min-height:5px; padding:0; border:0; border-radius:999px; transform:translateY(-50%); background:color-mix(in srgb, var(--trace-accent) 82%, var(--trace-text)); box-shadow:0 0 0 1px color-mix(in srgb, var(--trace-code-bg) 80%, transparent),0 0 8px color-mix(in srgb, var(--trace-accent) 28%, transparent); cursor:pointer; }
 	.overview-marker.audit-needs-evidence { background:var(--trace-warn); }
 	.overview-marker.audit-good { background:var(--trace-pass); }
-	.overview-marker.origin-generated { height:5px; background:transparent; border:1px dashed var(--trace-warn); }
-	.overview-marker.origin-contextual { background:var(--trace-muted); opacity:.7; }
+	.overview-marker.origin-generated { height:7px; background:transparent; border:1px dashed var(--trace-warn); }
+	.overview-marker.origin-contextual { background:var(--trace-muted); opacity:.82; }
 	.overview-marker.origin-structural { background:transparent; border:1px solid var(--trace-muted); }
 	.detail { max-height:420px; overflow:auto; }
 .empty-pane { margin:12px; color:var(--trace-muted); }
 .source-line { display:grid; grid-template-columns:38px minmax(0,1fr) auto; gap:8px; padding:0 10px; white-space:pre; cursor:pointer; align-items:center; }
+.source-section-separator { display:flex; gap:8px; align-items:baseline; justify-content:space-between; margin-top:8px; padding:7px 10px 5px 48px; border-top:1px solid var(--trace-border); color:var(--trace-muted); background:color-mix(in srgb, var(--trace-panel) 84%, var(--trace-code-bg)); font:600 10px/1.3 ui-sans-serif, system-ui, sans-serif; text-transform:uppercase; letter-spacing:.07em; }
+.source-section-separator small { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:color-mix(in srgb, var(--trace-muted) 72%, var(--trace-code-text)); text-transform:none; letter-spacing:0; font-weight:500; }
+.related-source-line { color:color-mix(in srgb, var(--trace-code-text) 88%, var(--trace-muted)); }
 .source-line code { color:var(--trace-code-text); font:inherit; }
 .ln { color:var(--trace-line); text-align:right; user-select:none; }
 .trace-row { display:grid; grid-template-columns:minmax(52px,.22fr) minmax(58px,.28fr) minmax(120px,1fr) auto; width:100%; gap:6px; padding:7px 9px; border:0; border-bottom:1px solid var(--trace-border); background:transparent; color:var(--trace-code-text); text-align:left; font:inherit; cursor:pointer; align-items:center; }
@@ -894,7 +1018,7 @@ h1 { margin:0; color:var(--trace-text); font:700 18px/1.15 ui-sans-serif, system
 [class*="trace-c-"] { transition:background .16s ease-out, color .16s ease-out, outline-color .16s ease-out; }
 	.trace-hover { background:color-mix(in srgb, var(--trace-accent) 10%, transparent) !important; outline:1px solid color-mix(in srgb, var(--trace-accent) 45%, transparent); outline-offset:-1px; }
 	.trace-selected { background:color-mix(in srgb, var(--trace-accent) 18%, transparent) !important; color:var(--trace-text) !important; outline:2px solid var(--trace-accent); outline-offset:-2px; }
-	.overview-marker.trace-hover,.overview-marker.trace-selected { left:0; width:10px; height:7px; outline:0; background:var(--trace-accent) !important; border:1px solid var(--trace-text); z-index:2; }
+	.overview-marker.trace-hover,.overview-marker.trace-selected { left:-1px; width:12px; height:10px; outline:0; background:var(--trace-accent) !important; border:1px solid var(--trace-text); box-shadow:0 0 0 2px color-mix(in srgb, var(--trace-code-bg) 80%, transparent),0 0 14px color-mix(in srgb, var(--trace-accent) 55%, transparent); z-index:2; }
 .audit-good { box-shadow:inset 3px 0 var(--trace-pass); }
 .audit-needs-evidence { box-shadow:inset 3px 0 var(--trace-danger); }
 .audit-optimized-attribution-gap { box-shadow:inset 3px 0 var(--trace-warn); }
