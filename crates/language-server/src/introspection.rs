@@ -405,13 +405,30 @@ fn elapsed_ms(started: Instant) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use async_lsp::MainLoop;
+    use async_lsp::router::Router;
     use common::origin::OriginExportKey;
     use trace_facts::{
         InstructionFact, JsonlTraceSink, OriginNodeFact, OriginNodeKind, TraceBundle, TraceFact,
         TraceMetadata,
     };
+    use url::Url;
 
-    use super::attached_trace_service;
+    use super::{
+        TraceWorkbenchSessionRequest, attached_trace_service, handle_trace_workbench_bootstrap,
+    };
+    use crate::backend::Backend;
+
+    fn test_backend() -> Backend {
+        let (_main_loop, client_socket) = MainLoop::new_server(|_client| Router::<()>::new(()));
+        Backend::new(
+            client_socket,
+            None,
+            None,
+            None,
+            introspection_config::FeToolingConfig::default(),
+        )
+    }
 
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
         OriginExportKey::try_from_raw_parts(kind, owner, local).unwrap()
@@ -459,5 +476,38 @@ mod tests {
             vec!["runtime=attached"]
         );
         assert_eq!(service.snapshot().validation().summary.instruction_count, 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn trace_workbench_bootstrap_reports_current_document_revision() {
+        let mut backend = test_backend();
+        let uri = Url::parse("file:///workspace/src/lib.fe").unwrap();
+        backend.set_document_version(uri.clone(), 1);
+        let session = backend.create_trace_viewer_session(
+            uri.clone(),
+            "evm",
+            "O2",
+            "source-postopt-bytecode",
+            None,
+        );
+
+        backend.set_document_version(uri, 4);
+
+        let response = handle_trace_workbench_bootstrap(
+            &mut backend,
+            TraceWorkbenchSessionRequest {
+                session_id: session.id,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.revision.id, 4);
+        assert_eq!(response.revision.document_version, Some(4));
+        assert_eq!(response.session.document_version, Some(4));
+
+        tokio::task::spawn_blocking(move || drop(backend))
+            .await
+            .expect("backend drop task panicked");
     }
 }
