@@ -84,6 +84,7 @@ pub(crate) fn server_capabilities() -> ServerCapabilities {
                 "fe.viewSonatinaIr".into(),
                 "fe.openDocs".into(),
                 "fe.traceLoop".into(),
+                "fe.trace.openWorkbench".into(),
                 "fe.explainLocal".into(),
                 "fe.gasBreakdown".into(),
                 "fe.openOriginGraph".into(),

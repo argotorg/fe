@@ -1,12 +1,14 @@
 use common::InputDb;
 use driver::DriverDataBase;
 use hir::lower::map_file_to_mod;
+use serde::Serialize;
 use std::fs::File;
 use std::io::BufReader;
 use std::time::{Duration, Instant};
 use trace_facts::{CompilerPhase, TraceBundle, TraceMetadata, TraceSnapshot};
 use trace_query::{
-    TraceIntrospectionService, TraceQueryHttpResponse, TraceQueryRequest, run_trace_query,
+    IntrospectionService, TraceIntrospectionService, TraceQueryHttpResponse, TraceQueryRequest,
+    run_trace_query,
 };
 use url::Url;
 
@@ -17,6 +19,214 @@ pub(crate) struct TraceBackendQueryRequest {
     pub uri: String,
     pub config_hash: Option<String>,
     pub query: TraceQueryRequest,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TraceWorkbenchSessionRequest {
+    pub session_id: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TraceWorkbenchBootstrapResponse {
+    pub session: crate::backend::TraceViewerSession,
+    pub revision: TraceWorkbenchRevision,
+    pub capabilities: TraceWorkbenchCapabilities,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TraceWorkbenchRevision {
+    pub id: u64,
+    pub document_version: Option<i32>,
+    pub status: String,
+    pub config_hash: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TraceWorkbenchCapabilities {
+    pub events: &'static str,
+    pub model_deltas: bool,
+    pub chunks: bool,
+    pub selection_sync: bool,
+}
+
+pub(crate) async fn handle_trace_workbench_bootstrap(
+    backend: &mut Backend,
+    request: TraceWorkbenchSessionRequest,
+) -> Result<TraceWorkbenchBootstrapResponse, async_lsp::ResponseError> {
+    let session = backend
+        .trace_viewer_session(&request.session_id)
+        .ok_or_else(|| {
+            internal_error(format!(
+                "unknown trace workbench session {}",
+                request.session_id
+            ))
+        })?;
+    Ok(TraceWorkbenchBootstrapResponse {
+        revision: TraceWorkbenchRevision {
+            id: session.document_version.unwrap_or_default().max(0) as u64,
+            document_version: session.document_version,
+            status: "ready".to_string(),
+            config_hash: session.config_hash.clone(),
+        },
+        session,
+        capabilities: TraceWorkbenchCapabilities {
+            events: "sse",
+            model_deltas: false,
+            chunks: false,
+            selection_sync: true,
+        },
+    })
+}
+
+pub(crate) async fn handle_trace_workbench_model(
+    backend: &mut Backend,
+    request: TraceWorkbenchSessionRequest,
+) -> Result<serde_json::Value, async_lsp::ResponseError> {
+    let started = Instant::now();
+    let session = backend
+        .trace_viewer_session(&request.session_id)
+        .ok_or_else(|| {
+            internal_error(format!(
+                "unknown trace workbench session {}",
+                request.session_id
+            ))
+        })?;
+    let uri = Url::parse(&session.uri)
+        .map_err(|err| internal_error(format!("invalid session URI: {err}")))?;
+    ensure_workspace_file(backend, &uri).map_err(internal_error)?;
+    let current_config_hash = backend.tooling_config().stable_hash();
+    let document_version = backend.document_version(&uri);
+
+    let service = if let Some(version) = document_version
+        && let Some(service) = backend.cached_trace_service(&uri, version, &current_config_hash)
+    {
+        service
+    } else {
+        let config = backend.tooling_config().clone();
+        let worker_uri = uri.clone();
+        let worker = backend.spawn_on_workers(move |db| {
+            service_for_file(db, &worker_uri, config)?
+                .ok_or_else(|| format!("no Fe source file is loaded for URI {worker_uri}"))
+        });
+        let result = tokio::time::timeout(Duration::from_secs(30), worker)
+            .await
+            .map_err(|_| internal_error("live trace workbench model exceeded 30s budget"))?
+            .map_err(internal_error)?;
+        let service = result.map_err(internal_error)?;
+        if let Some(version) = document_version {
+            backend.cache_trace_service(
+                uri.clone(),
+                version,
+                current_config_hash.clone(),
+                service.clone(),
+            );
+        }
+        service
+    };
+    Ok(live_trace_workbench_model(
+        &service,
+        &session,
+        document_version,
+        elapsed_ms(started),
+    ))
+}
+
+fn live_trace_workbench_model(
+    service: &TraceIntrospectionService,
+    session: &crate::backend::TraceViewerSession,
+    document_version: Option<i32>,
+    query_duration_ms: u64,
+) -> serde_json::Value {
+    let snapshot = service.snapshot();
+    let status = service.status();
+    let attribution_audit = service.attribution_audit().ok();
+    let validation = snapshot.validation();
+    let optimized_linked = attribution_audit
+        .as_ref()
+        .map(|audit| audit.optimized_sonatina_linked_pcs)
+        .unwrap_or_default();
+    let prepared_linked = attribution_audit
+        .as_ref()
+        .map(|audit| audit.prepared_linked_pcs)
+        .unwrap_or_default();
+    let missing_prepared = attribution_audit
+        .as_ref()
+        .map(|audit| audit.missing_optimized_to_prepared_lineage_pcs)
+        .unwrap_or_default();
+    let bytecode_count = attribution_audit
+        .as_ref()
+        .map(|audit| audit.total_bytecode_pcs)
+        .unwrap_or_default();
+    let source_to_optimized = if optimized_linked > 0 {
+        "available"
+    } else {
+        "missing"
+    };
+    let optimized_to_prepared = if prepared_linked > 0 && missing_prepared == 0 {
+        "available"
+    } else {
+        "missing"
+    };
+    let prepared_to_bytecode = if prepared_linked > 0 {
+        "available"
+    } else {
+        "missing"
+    };
+    serde_json::json!({
+        "metadata": {
+            "input_path": session.uri,
+            "target": status.target,
+            "data_source": "lsp-live",
+            "compiler_commit": option_env!("FE_GIT_COMMIT").unwrap_or("unknown"),
+            "flags": [
+                "source=lsp-live",
+                format!("target={}", session.target),
+                format!("optimize={}", session.opt_level),
+                format!("view={}", session.view),
+            ],
+            "document_version": document_version,
+            "query_duration_ms": query_duration_ms,
+        },
+        "provenance": {
+            "source_to_optimized": source_to_optimized,
+            "optimized_to_prepared": optimized_to_prepared,
+            "prepared_to_bytecode": prepared_to_bytecode,
+            "summary": if source_to_optimized == "available" && prepared_to_bytecode == "available" && optimized_to_prepared == "missing" {
+                "bytecode is prepared-linked; exact source attribution needs optimized to prepared lineage"
+            } else if source_to_optimized == "available" && optimized_to_prepared == "available" && prepared_to_bytecode == "available" {
+                "source to optimized to prepared to bytecode available"
+            } else {
+                "provenance is partial; inspect gaps for missing compiler evidence"
+            },
+        },
+        "counts": {
+            "facts": validation.summary.fact_count,
+            "origin_edges": validation.summary.edge_count,
+            "instructions": validation.summary.instruction_count,
+            "source_spans": snapshot.facts().iter().filter(|fact| matches!(fact, trace_facts::TraceFact::SourceSpan(_))).count(),
+        },
+        "salsa": null,
+        "audit": null,
+        "static_analysis": null,
+        "attribution_audit": attribution_audit,
+        "source": {
+            "display_name": session.uri,
+            "confidence": "live projection bootstrap; static pane projection is next",
+            "lines": [],
+            "related_sources": [],
+        },
+        "panels": [],
+        "closures": [],
+        "bytecode_count": bytecode_count,
+        "notes": [
+            "Live trace workbench is served from the LSP-owned compiler state.",
+            "This initial live endpoint returns the shared audit/report projection; typed pane chunks are the next live-sync slice.",
+            "The browser does not compute provenance or graph reachability."
+        ],
+    })
 }
 
 pub(crate) async fn handle_trace_query(

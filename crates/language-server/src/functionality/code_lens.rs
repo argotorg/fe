@@ -123,6 +123,7 @@ pub async fn handle_code_lens(
     if code_lens.open_graph {
         static_lenses.push(("Open origin graph", "fe.openOriginGraph"));
     }
+    static_lenses.push(("Open trace workbench", "fe.trace.openWorkbench"));
     for (label, cmd) in static_lenses {
         lenses.push(CodeLens {
             range: codegen_range,

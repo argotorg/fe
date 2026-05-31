@@ -235,6 +235,74 @@ pub fn origin_trace_html_shell(title: &str, trace_view_json: &str) -> String {
     )
 }
 
+/// Generate an HTTP-backed shell for the live trace workbench.
+///
+/// The browser fetches the current session model from the local LSP HTTP server.
+/// The token is read from the URL fragment and is not embedded into the HTML.
+pub fn origin_trace_live_html_shell(title: &str) -> String {
+    let safe_title = escape_html_text(title);
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{title}</title>
+  <style>{css}</style>
+  <style>
+    html, body {{ margin: 0; min-height: 100%; background: var(--bg); }}
+    .trace-live-loading {{ color: #cdd6f4; font: 13px/1.4 ui-sans-serif, system-ui, sans-serif; padding: 18px; }}
+  </style>
+  <style>{highlight_css}</style>
+</head>
+<body>
+  <div class="trace-live-loading">Loading Fe trace workbench...</div>
+  <script>{origin_trace_js}</script>
+  <script>
+  (function () {{
+    var params = new URLSearchParams(window.location.search || "");
+    var hash = new URLSearchParams((window.location.hash || "").replace(/^#/, ""));
+    var session = params.get("session");
+    var token = hash.get("token") || params.get("token") || "";
+    var loading = document.querySelector(".trace-live-loading");
+    function fail(message) {{
+      if (loading) loading.textContent = message;
+      console.error("[fe trace workbench]", message);
+    }}
+    if (!session) return fail("Missing trace workbench session.");
+    fetch("/trace/session/" + encodeURIComponent(session) + "/model", {{
+      headers: token ? {{ "Authorization": "Bearer " + token }} : {{}}
+    }})
+      .then(function (response) {{
+        if (!response.ok) throw new Error("model fetch failed: " + response.status);
+        return response.json();
+      }})
+      .then(function (model) {{
+        window.FE_ORIGIN_TRACE_DATA = model;
+        if (loading) loading.remove();
+        document.body.appendChild(document.createElement("fe-origin-trace"));
+      }})
+      .catch(function (err) {{ fail(String(err && err.message || err)); }});
+    if (window.EventSource && token) {{
+      var events = new EventSource("/trace/session/" + encodeURIComponent(session) + "/events?token=" + encodeURIComponent(token));
+      events.addEventListener("trace/revision", function (event) {{
+        try {{
+          var payload = JSON.parse(event.data || "{{}}");
+          if (payload.status === "ready") window.location.reload();
+        }} catch (_) {{}}
+      }});
+    }}
+  }})();
+  </script>
+</body>
+</html>"#,
+        title = safe_title,
+        css = STYLES_CSS,
+        highlight_css = FE_HIGHLIGHT_CSS,
+        origin_trace_js = FE_ORIGIN_TRACE_JS,
+    )
+}
+
 /// Build a standalone fe-web.js bundle for external consumption.
 ///
 /// This is the single JS file that consumers load via:

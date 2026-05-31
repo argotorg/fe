@@ -2,6 +2,7 @@ use async_lsp::ClientSocket;
 use driver::DriverDataBase;
 use introspection_config::FeToolingConfig;
 use rustc_hash::{FxHashMap, FxHashSet};
+use serde::Serialize;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -56,6 +57,8 @@ pub struct Backend {
     pub(super) tooling_config: FeToolingConfig,
     document_versions: FxHashMap<Url, i32>,
     trace_cache: FxHashMap<TraceCacheKey, TraceIntrospectionService>,
+    trace_viewer_sessions: FxHashMap<String, TraceViewerSession>,
+    trace_viewer_generation: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -102,6 +105,8 @@ impl Backend {
             tooling_config,
             document_versions: FxHashMap::default(),
             trace_cache: FxHashMap::default(),
+            trace_viewer_sessions: FxHashMap::default(),
+            trace_viewer_generation: 0,
         }
     }
 
@@ -157,6 +162,36 @@ impl Backend {
 
     pub fn clear_trace_cache_for_uri(&mut self, uri: &Url) {
         self.trace_cache.retain(|key, _| &key.uri != uri);
+    }
+
+    pub(crate) fn create_trace_viewer_session(
+        &mut self,
+        uri: Url,
+        target: impl Into<String>,
+        opt_level: impl Into<String>,
+        view: impl Into<String>,
+        initial_selection: Option<TraceViewerSelection>,
+    ) -> TraceViewerSession {
+        self.trace_viewer_generation = self.trace_viewer_generation.saturating_add(1);
+        let id = format!("trace-session-{:x}", self.trace_viewer_generation);
+        let config_hash = self.tooling_config.stable_hash();
+        let document_version = self.document_version(&uri);
+        let session = TraceViewerSession {
+            id: id.clone(),
+            uri: uri.to_string(),
+            target: target.into(),
+            opt_level: opt_level.into(),
+            view: view.into(),
+            config_hash,
+            document_version,
+            initial_selection,
+        };
+        self.trace_viewer_sessions.insert(id, session.clone());
+        session
+    }
+
+    pub(crate) fn trace_viewer_session(&self, session_id: &str) -> Option<TraceViewerSession> {
+        self.trace_viewer_sessions.get(session_id).cloned()
     }
 
     /// Broadcast a doc-navigate event (path like "mylib::Foo/struct").
@@ -267,6 +302,28 @@ impl Backend {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TraceViewerSession {
+    pub id: String,
+    pub uri: String,
+    pub target: String,
+    pub opt_level: String,
+    pub view: String,
+    pub config_hash: String,
+    pub document_version: Option<i32>,
+    pub initial_selection: Option<TraceViewerSelection>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TraceViewerSelection {
+    pub start_line: u32,
+    pub start_character: u32,
+    pub end_line: u32,
+    pub end_character: u32,
+}
+
 fn normalize_file_uri(uri: Url) -> Url {
     if uri.scheme() != "file" {
         return uri;
@@ -326,6 +383,30 @@ mod tests {
         assert_eq!(backend.document_version(&uri), Some(7));
         backend.clear_document_version(&uri);
         assert_eq!(backend.document_version(&uri), None);
+
+        tokio::task::spawn_blocking(move || drop(backend))
+            .await
+            .expect("backend drop task panicked");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn trace_viewer_sessions_are_revisioned_and_retrievable() {
+        let mut backend = test_backend();
+        let uri = Url::parse("file:///workspace/src/lib.fe").unwrap();
+        backend.set_document_version(uri.clone(), 12);
+
+        let session = backend.create_trace_viewer_session(
+            uri.clone(),
+            "evm",
+            "O2",
+            "source-postopt-bytecode",
+            None,
+        );
+
+        assert!(session.id.starts_with("trace-session-"));
+        assert_eq!(session.uri, uri.to_string());
+        assert_eq!(session.document_version, Some(12));
+        assert_eq!(backend.trace_viewer_session(&session.id), Some(session));
 
         tokio::task::spawn_blocking(move || drop(backend))
             .await

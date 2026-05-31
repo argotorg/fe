@@ -5,6 +5,8 @@
 //! HTML on all HTTP routes and upgrades `/lsp` to a WebSocket LSP connection
 //! backed by the shared Backend actor.
 
+use std::collections::BTreeMap;
+use std::convert::Infallible;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -19,9 +21,10 @@ use async_lsp::panic::CatchUnwindLayer;
 use async_lsp::server::LifecycleLayer;
 use axum::Json;
 use axum::Router;
-use axum::extract::WebSocketUpgrade;
 use axum::extract::ws::{Message as AxumMessage, WebSocket};
-use axum::http::StatusCode;
+use axum::extract::{Path, Query, WebSocketUpgrade};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::sse::{Event, Sse};
 use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
 use futures::io::{AsyncRead, AsyncWrite};
@@ -147,6 +150,95 @@ pub async fn run(
             }),
         )
         .route(
+            "/trace/workbench",
+            get(|| async {
+                Html(fe_web::assets::origin_trace_live_html_shell(
+                    "Fe Trace Workbench",
+                ))
+            }),
+        )
+        .route(
+            "/trace/session/{session_id}/bootstrap",
+            get({
+                let actor_rx = actor_rx.clone();
+                let workspace_root = workspace_root.clone();
+                move |Path(session_id): Path<String>,
+                      Query(query): Query<BTreeMap<String, String>>,
+                      headers: HeaderMap| {
+                    let actor_rx = actor_rx.clone();
+                    let workspace_root = workspace_root.clone();
+                    async move {
+                        handle_trace_workbench_bootstrap_http(
+                            session_id,
+                            query,
+                            headers,
+                            actor_rx,
+                            workspace_root,
+                        )
+                        .await
+                    }
+                }
+            }),
+        )
+        .route(
+            "/trace/session/{session_id}/model",
+            get({
+                let actor_rx = actor_rx.clone();
+                let workspace_root = workspace_root.clone();
+                move |Path(session_id): Path<String>,
+                      Query(query): Query<BTreeMap<String, String>>,
+                      headers: HeaderMap| {
+                    let actor_rx = actor_rx.clone();
+                    let workspace_root = workspace_root.clone();
+                    async move {
+                        handle_trace_workbench_model_http(
+                            session_id,
+                            query,
+                            headers,
+                            actor_rx,
+                            workspace_root,
+                        )
+                        .await
+                    }
+                }
+            }),
+        )
+        .route(
+            "/trace/session/{session_id}/events",
+            get({
+                let workspace_root = workspace_root.clone();
+                move |Path(session_id): Path<String>,
+                      Query(query): Query<BTreeMap<String, String>>| {
+                    let workspace_root = workspace_root.clone();
+                    async move {
+                        handle_trace_workbench_events_http(session_id, query, workspace_root).await
+                    }
+                }
+            }),
+        )
+        .route(
+            "/trace/session/{session_id}/select",
+            post({
+                let workspace_root = workspace_root.clone();
+                move |Path(session_id): Path<String>,
+                      Query(query): Query<BTreeMap<String, String>>,
+                      headers: HeaderMap,
+                      Json(selection): Json<serde_json::Value>| {
+                    let workspace_root = workspace_root.clone();
+                    async move {
+                        handle_trace_workbench_select_http(
+                            session_id,
+                            query,
+                            headers,
+                            selection,
+                            workspace_root,
+                        )
+                        .await
+                    }
+                }
+            }),
+        )
+        .route(
             "/trace/query",
             post({
                 let actor_rx = actor_rx.clone();
@@ -243,6 +335,165 @@ async fn handle_trace_query_http(
     }
 }
 
+async fn handle_trace_workbench_bootstrap_http(
+    session_id: String,
+    query: BTreeMap<String, String>,
+    headers: HeaderMap,
+    actor_rx: watch::Receiver<Option<SharedActor>>,
+    workspace_root: Option<String>,
+) -> impl IntoResponse {
+    if let Err(reason) = validate_trace_auth(
+        workspace_root.as_deref(),
+        &trace_auth_token(&headers, &query).unwrap_or_default(),
+    ) {
+        return json_response(
+            StatusCode::UNAUTHORIZED,
+            serde_json::json!({ "reason": reason }),
+        );
+    }
+    let actor_ref = match ready_actor(actor_rx).await {
+        Ok(actor_ref) => actor_ref,
+        Err(reason) => {
+            return json_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                serde_json::json!({ "reason": reason }),
+            );
+        }
+    };
+    actor_ref.register_handler_async_mutating(
+        MessageKey(LspActorKey::of::<
+            crate::introspection::TraceWorkbenchSessionRequest,
+        >()),
+        crate::introspection::handle_trace_workbench_bootstrap,
+    );
+    let dispatcher = TraceQueryDispatcher;
+    let request = crate::introspection::TraceWorkbenchSessionRequest { session_id };
+    match actor_ref
+        .ask::<_, crate::introspection::TraceWorkbenchBootstrapResponse, _>(&dispatcher, request)
+        .await
+    {
+        Ok(response) => json_response(StatusCode::OK, serde_json::json!(response)),
+        Err(err) => json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            serde_json::json!({ "reason": format!("trace workbench bootstrap failed: {err:?}") }),
+        ),
+    }
+}
+
+async fn handle_trace_workbench_model_http(
+    session_id: String,
+    query: BTreeMap<String, String>,
+    headers: HeaderMap,
+    actor_rx: watch::Receiver<Option<SharedActor>>,
+    workspace_root: Option<String>,
+) -> impl IntoResponse {
+    if let Err(reason) = validate_trace_auth(
+        workspace_root.as_deref(),
+        &trace_auth_token(&headers, &query).unwrap_or_default(),
+    ) {
+        return json_response(
+            StatusCode::UNAUTHORIZED,
+            serde_json::json!({ "reason": reason }),
+        );
+    }
+    let actor_ref = match ready_actor(actor_rx).await {
+        Ok(actor_ref) => actor_ref,
+        Err(reason) => {
+            return json_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                serde_json::json!({ "reason": reason }),
+            );
+        }
+    };
+    actor_ref.register_handler_async_mutating(
+        MessageKey(LspActorKey::of::<
+            crate::introspection::TraceWorkbenchSessionRequest,
+        >()),
+        crate::introspection::handle_trace_workbench_model,
+    );
+    let dispatcher = TraceQueryDispatcher;
+    let request = crate::introspection::TraceWorkbenchSessionRequest { session_id };
+    match actor_ref
+        .ask::<_, serde_json::Value, _>(&dispatcher, request)
+        .await
+    {
+        Ok(response) => json_response(StatusCode::OK, response),
+        Err(err) => json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            serde_json::json!({ "reason": format!("trace workbench model failed: {err:?}") }),
+        ),
+    }
+}
+
+async fn handle_trace_workbench_events_http(
+    session_id: String,
+    query: BTreeMap<String, String>,
+    workspace_root: Option<String>,
+) -> impl IntoResponse {
+    let event = if let Err(reason) = validate_trace_auth(
+        workspace_root.as_deref(),
+        query.get("token").map(String::as_str).unwrap_or_default(),
+    ) {
+        Event::default()
+            .event("trace/error")
+            .json_data(serde_json::json!({ "reason": reason }))
+            .unwrap_or_else(|_| Event::default().event("trace/error"))
+    } else {
+        Event::default()
+            .event("trace/revision")
+            .json_data(serde_json::json!({
+                "event": "trace/revision",
+                "sessionId": session_id,
+                "revision": 0,
+                "status": "ready",
+                "modelDeltas": false,
+            }))
+            .unwrap_or_else(|_| Event::default().event("trace/revision"))
+    };
+    let stream = futures::stream::once(async move { Ok::<_, Infallible>(event) });
+    Sse::new(stream)
+}
+
+async fn handle_trace_workbench_select_http(
+    session_id: String,
+    query: BTreeMap<String, String>,
+    headers: HeaderMap,
+    selection: serde_json::Value,
+    workspace_root: Option<String>,
+) -> impl IntoResponse {
+    if let Err(reason) = validate_trace_auth(
+        workspace_root.as_deref(),
+        &trace_auth_token(&headers, &query).unwrap_or_default(),
+    ) {
+        return json_response(
+            StatusCode::UNAUTHORIZED,
+            serde_json::json!({ "reason": reason }),
+        );
+    }
+    json_response(
+        StatusCode::OK,
+        serde_json::json!({
+            "event": "trace/selection",
+            "sessionId": session_id,
+            "selection": selection,
+            "resolvedRows": [],
+        }),
+    )
+}
+
+fn json_response(status: StatusCode, value: serde_json::Value) -> axum::response::Response {
+    (status, Json(value)).into_response()
+}
+
+fn trace_auth_token(headers: &HeaderMap, query: &BTreeMap<String, String>) -> Option<String> {
+    headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(str::to_string)
+        .or_else(|| query.get("token").cloned())
+}
+
 async fn ready_actor(
     mut actor_rx: watch::Receiver<Option<SharedActor>>,
 ) -> Result<SharedActor, String> {
@@ -290,6 +541,10 @@ impl Dispatcher<LspActorKey> for TraceQueryDispatcher {
     fn message_key(&self, message: &dyn Message) -> Result<MessageKey<LspActorKey>, ActorError> {
         if message.is::<TraceBackendQueryRequest>() {
             Ok(MessageKey(LspActorKey::of::<TraceBackendQueryRequest>()))
+        } else if message.is::<crate::introspection::TraceWorkbenchSessionRequest>() {
+            Ok(MessageKey(LspActorKey::of::<
+                crate::introspection::TraceWorkbenchSessionRequest,
+            >()))
         } else {
             Err(ActorError::DispatchError)
         }
@@ -314,7 +569,9 @@ impl Dispatcher<LspActorKey> for TraceQueryDispatcher {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_trace_auth;
+    use super::{trace_auth_token, validate_trace_auth};
+    use axum::http::{HeaderMap, header};
+    use std::collections::BTreeMap;
 
     #[test]
     fn trace_query_auth_validates_workspace_token_file() {
@@ -324,6 +581,28 @@ mod tests {
         assert!(validate_trace_auth(tempdir.path().to_str(), "secret").is_ok());
         assert!(validate_trace_auth(tempdir.path().to_str(), "wrong").is_err());
         assert!(validate_trace_auth(None, "secret").is_err());
+    }
+
+    #[test]
+    fn trace_workbench_auth_accepts_bearer_or_query_token() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            "Bearer header-secret".parse().unwrap(),
+        );
+        let mut query = BTreeMap::new();
+        query.insert("token".to_string(), "query-secret".to_string());
+
+        assert_eq!(
+            trace_auth_token(&headers, &query).as_deref(),
+            Some("header-secret")
+        );
+
+        let headers = HeaderMap::new();
+        assert_eq!(
+            trace_auth_token(&headers, &query).as_deref(),
+            Some("query-secret")
+        );
     }
 }
 
