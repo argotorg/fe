@@ -265,14 +265,36 @@ pub fn origin_trace_live_html_shell(title: &str) -> String {
     var session = params.get("session");
     var token = hash.get("token") || params.get("token") || "";
     var loading = document.querySelector(".trace-live-loading");
+    var authHeaders = token ? {{ "Authorization": "Bearer " + token }} : {{}};
     function fail(message) {{
       if (loading) loading.textContent = message;
       console.error("[fe trace workbench]", message);
     }}
+    function applyInitialSelection(bootstrap) {{
+      var selection = bootstrap
+        && bootstrap.session
+        && bootstrap.session.initialSelection;
+      if (!selection) return;
+      var current = new URLSearchParams((window.location.hash || "").replace(/^#/, ""));
+      if (current.get("node") || current.get("source") || current.get("row")) return;
+      current.set("source", "main:" + (Number(selection.startLine || 0) + 1));
+      var nextHash = String.fromCharCode(35) + current.toString();
+      if (window.history && window.history.replaceState) {{
+        window.history.replaceState(null, "", nextHash);
+      }} else {{
+        window.location.hash = nextHash;
+      }}
+    }}
     if (!session) return fail("Missing trace workbench session.");
-    fetch("/trace/session/" + encodeURIComponent(session) + "/model", {{
-      headers: token ? {{ "Authorization": "Bearer " + token }} : {{}}
-    }})
+    fetch("/trace/session/" + encodeURIComponent(session) + "/bootstrap", {{ headers: authHeaders }})
+      .then(function (response) {{
+        if (!response.ok) throw new Error("bootstrap fetch failed: " + response.status);
+        return response.json();
+      }})
+      .then(function (bootstrap) {{
+        applyInitialSelection(bootstrap);
+        return fetch("/trace/session/" + encodeURIComponent(session) + "/model", {{ headers: authHeaders }});
+      }})
       .then(function (response) {{
         if (!response.ok) throw new Error("model fetch failed: " + response.status);
         return response.json();
