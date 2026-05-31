@@ -180,7 +180,7 @@
       var section = el("section", "analysis missing-link-audit");
       var count = (audit && audit.missing_optimized_to_prepared_lineage_pcs) || 0;
       section.append(
-        el("h2", "", "Missing Link Audit"),
+        el("h2", "", "Missing Link Report"),
         el(
           "p",
           "muted",
@@ -199,7 +199,7 @@
       if (count > 0) {
         section.append(el("p", "gap", "Prepared bytecode exists, but " + count + " bytecode PC(s) lack an explicit optimized Sonatina → EVM prepared bridge. This is missing evidence, not automatically a compiler bug."));
       } else {
-        section.append(el("p", "audit-note", "No optimized→prepared lineage gaps were detected by the attribution audit."));
+        section.append(el("p", "audit-note", "No optimized→prepared lineage gaps were detected by this report."));
       }
       var targets = (audit.missing_lineage_targets || []).slice(0, 5);
       if (targets.length) {
@@ -586,7 +586,7 @@
 
     _detailPanel() {
       var panel = el("section", "panel detail-panel");
-      panel.append(this._panelHead("Selection Details", "Click a highlighted source, IR, loop, or bytecode row to inspect exact trace roots, siblings, and gaps."));
+      panel.append(this._panelHead("Selection Details", "Click a highlighted source, IR, loop, or bytecode row to inspect evidence paths, siblings, and gaps."));
       panel.append(el("div", "detail", ""));
       return panel;
     }
