@@ -23,8 +23,12 @@
       return node.__traceClasses;
     }
     return Array.prototype.filter.call(node.classList || [], function (name) {
-      return name.indexOf("trace-c-") === 0;
+      return isTraceGroup(name);
     });
+  }
+
+  function isTraceGroup(name) {
+    return /^(trace|exact|generated|prepared|context|structural)-c-/.test(name || "");
   }
 
   function allClasses(node) {
@@ -52,7 +56,20 @@
       this._pendingHover = null;
       this._hoverFrame = 0;
       this._stateStyle = null;
+      if (!this._boundHashChange) {
+        this._boundHashChange = this._handleHashChange.bind(this);
+        window.addEventListener("hashchange", this._boundHashChange);
+      }
       this._render();
+      this._navigateToHash();
+    }
+
+    disconnectedCallback() {
+      if (this._boundHashChange) {
+        window.removeEventListener("hashchange", this._boundHashChange);
+        this._boundHashChange = null;
+      }
+      this._interactionsInstalled = false;
     }
 
     _render(scrollRestore) {
@@ -268,6 +285,7 @@
       var selected = reps.filter(function (rep) { return rep.id === selectedId; })[0] || reps[0];
       var panel = el("section", "panel workbench-pane");
       panel.dataset.paneIndex = String(index);
+      if (selected) panel.dataset.representationId = selected.id;
       var head = el("div", "panel-head workbench-head");
       var select = el("select", "representation-select");
       select.dataset.paneIndex = String(index);
@@ -312,6 +330,7 @@
         var row = el("div", "source-line trace-region " + classes.concat(this._auditClasses(classes)).join(" "));
         this._bindTraceGroups(row, classes);
         row.id = this._rowId("source-main", index);
+        row.dataset.sourceRef = "main:" + line.number;
         row.dataset.traceLabel = "source line " + line.number;
         row.append(el("span", "ln", line.number), el("code", "", line.text), this._badges(classes));
         body.append(row);
@@ -328,6 +347,7 @@
           var row = el("div", "source-line related-source-line trace-region " + classes.concat(this._auditClasses(classes)).join(" "));
           this._bindTraceGroups(row, classes);
           row.id = this._rowId("source-related-" + sectionIndex, lineIndex);
+          row.dataset.sourceRef = "related:" + sectionIndex + ":" + line.number;
           row.dataset.traceLabel = (section.display_name || "related source") + " line " + line.number;
           row.append(el("span", "ln", line.number), el("code", "", line.text), this._badges(classes));
           body.append(row);
@@ -392,7 +412,7 @@
     }
 
     _overviewMarker(classes, index, total, label, targetRowId) {
-      var trace = (classes || []).filter(function (name) { return name.indexOf("trace-c-") === 0; });
+      var trace = (classes || []).filter(isTraceGroup);
       if (!trace.length || !total) return null;
       var markerClasses = ["overview-marker", "trace-region"].concat(classes || []);
       var marker = el("button", markerClasses.join(" "));
@@ -410,7 +430,7 @@
     }
 
     _bindTraceGroups(node, classes) {
-      var groups = (classes || []).filter(function (name) { return name.indexOf("trace-c-") === 0; });
+      var groups = (classes || []).filter(isTraceGroup);
       node.__traceClasses = groups;
       if (groups.length) node.dataset.traceGroups = groups.join(" ");
     }
@@ -458,6 +478,8 @@
     }
 
     _installInteractions() {
+      if (this._interactionsInstalled) return;
+      this._interactionsInstalled = true;
       var root = this.shadowRoot;
       root.addEventListener("mouseover", function (event) {
         var row = event.target.closest && event.target.closest(".trace-region");
@@ -485,6 +507,7 @@
         this._selectedDisplayClasses = allClasses(row);
         this._select(groups);
         this._scrollPeerPanesToSelection(groups, row);
+        this._pinHashForRow(row);
       }.bind(this));
       root.addEventListener("change", function (event) {
         var select = event.target.closest && event.target.closest(".representation-select");
@@ -538,6 +561,83 @@
       this._selected = groups.slice();
       this._renderDetail(this._selected);
       this._syncStateStyles();
+    }
+
+    _handleHashChange() {
+      var hash = window.location.hash || "";
+      if (this._skipHashChange === hash) {
+        this._skipHashChange = "";
+        return;
+      }
+      this._navigateToHash();
+    }
+
+    _navigateToHash() {
+      var row = this._rowForHash(window.location.hash || "");
+      if (!row) {
+        if (!window.location.hash) {
+          this._selected = [];
+          this._selectedDisplayClasses = [];
+          this._renderDetail([]);
+          this._syncStateStyles();
+        }
+        return false;
+      }
+      var groups = traceClasses(row);
+      this._selectedDisplayClasses = allClasses(row);
+      this._select(groups);
+      this._scrollRowIntoView(row);
+      this._scrollPeerPanesToSelection(groups, row);
+      return true;
+    }
+
+    _rowForHash(hash) {
+      var params = this._hashParams(hash);
+      if (!params) return null;
+      if (params.node) {
+        var nodeClass = keyClass(params.node);
+        var byNode = this.shadowRoot.querySelector(".trace-region." + this._escapeClass(nodeClass));
+        if (byNode) return byNode;
+      }
+      if (params.source) {
+        var bySource = this.shadowRoot.querySelector('[data-source-ref="' + this._escapeAttribute(params.source) + '"]');
+        if (bySource) return bySource;
+      }
+      if (params.row) {
+        return this.shadowRoot.getElementById(params.row);
+      }
+      return null;
+    }
+
+    _pinHashForRow(row) {
+      var hash = this._hashForRow(row);
+      if (!hash || window.location.hash === hash) return;
+      this._skipHashChange = hash;
+      window.location.hash = hash;
+    }
+
+    _hashForRow(row) {
+      if (!row || !row.dataset) return "";
+      if (row.dataset.originKey) return "#node=" + encodeURIComponent(row.dataset.originKey);
+      if (row.dataset.sourceRef) return "#source=" + encodeURIComponent(row.dataset.sourceRef);
+      if (row.id) return "#row=" + encodeURIComponent(row.id);
+      return "";
+    }
+
+    _hashParams(hash) {
+      hash = String(hash || "").replace(/^#/, "");
+      if (!hash) return null;
+      var params = new URLSearchParams(hash.indexOf("=") >= 0 ? hash : "node=" + hash);
+      var out = Object.create(null);
+      ["node", "source", "row"].forEach(function (key) {
+        var value = params.get(key);
+        if (value) out[key] = value;
+      });
+      return out;
+    }
+
+    _escapeAttribute(value) {
+      return String(value).replace(/["\\]/g, "\\$&");
     }
 
     _capturePaneScrollState() {
@@ -628,6 +728,7 @@
     }
 
     _matchingRuns(shell, groups) {
+      groups = this._highlightGroups(groups);
       var wanted = Object.create(null);
       (groups || []).forEach(function (group) { wanted[group] = true; });
       var key = (groups || []).slice().sort().join("|");
@@ -664,8 +765,13 @@
 
     _scrollRunIntoView(run, direction) {
       if (!run || !run.length) return;
-      var boundary = run.filter(function (row) { return row.classList.contains("boundary-row"); })[0] || this._nearestSectionBoundary(run[0]);
-      var target = boundary || (direction < 0 ? run[run.length - 1] : run[0]);
+      var pane = run[0].closest && run[0].closest(".workbench-pane");
+      var representation = pane && pane.dataset && pane.dataset.representationId;
+      var target = direction < 0 ? run[run.length - 1] : run[0];
+      if (representation !== "bytecode") {
+        var boundary = run.filter(function (row) { return row.classList.contains("boundary-row"); })[0] || this._nearestSectionBoundary(run[0]);
+        target = boundary || target;
+      }
       this._scrollRowIntoView(target);
     }
 
@@ -696,9 +802,9 @@
 
     _syncStateStyles() {
       if (!this._stateStyle) return;
-      var hover = this._selectorForGroups(this._hovered, ".trace-region");
-      var selected = this._selectorForGroups(this._selected, ".trace-region");
-      var activeMarkers = this._selectorForGroups((this._hovered || []).concat(this._selected || []), ".overview-marker");
+      var hover = this._selectorForGroups(this._highlightGroups(this._hovered), ".trace-region");
+      var selected = this._selectorForGroups(this._highlightGroups(this._selected), ".trace-region");
+      var activeMarkers = this._selectorForGroups(this._highlightGroups((this._hovered || []).concat(this._selected || [])), ".overview-marker");
       var rules = [];
       if (hover) {
         rules.push(hover + "{background:color-mix(in srgb, var(--trace-accent) 10%, transparent) !important;outline:1px solid color-mix(in srgb, var(--trace-accent) 45%, transparent);outline-offset:-1px;}");
@@ -710,6 +816,38 @@
         rules.push(activeMarkers + "{left:-1px;width:12px;height:10px;outline:0;background:var(--trace-accent) !important;border:1px solid var(--trace-text);box-shadow:0 0 0 2px color-mix(in srgb, var(--trace-code-bg) 80%, transparent),0 0 14px color-mix(in srgb, var(--trace-accent) 55%, transparent);z-index:2;}");
       }
       this._stateStyle.textContent = rules.join("\n");
+    }
+
+    _highlightGroups(groups) {
+      var exact = [];
+      var generated = [];
+      var prepared = [];
+      var context = [];
+      var structural = [];
+      var fallback = [];
+      var seen = Object.create(null);
+      (groups || []).forEach(function (group) {
+        if (!isTraceGroup(group) || seen[group]) return;
+        seen[group] = true;
+        if (group.indexOf("exact-c-") === 0) {
+          exact.push(group);
+        } else if (group.indexOf("generated-c-") === 0) {
+          generated.push(group);
+        } else if (group.indexOf("prepared-c-") === 0) {
+          prepared.push(group);
+        } else if (group.indexOf("context-c-") === 0) {
+          context.push(group);
+        } else if (group.indexOf("structural-c-") === 0) {
+          structural.push(group);
+        } else {
+          fallback.push(group);
+        }
+      });
+      if (exact.length || generated.length) return exact.concat(generated);
+      if (prepared.length) return prepared;
+      if (context.length) return context;
+      if (structural.length) return structural;
+      return fallback;
     }
 
     _selectorForGroups(groups, base) {

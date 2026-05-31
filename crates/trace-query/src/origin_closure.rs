@@ -69,6 +69,8 @@ pub struct OriginClosureEdge {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct OriginClosureSourceSpan {
+    #[serde(skip_serializing)]
+    pub origin_key: String,
     pub origin: String,
     pub file: String,
     #[serde(skip_serializing)]
@@ -297,6 +299,11 @@ pub fn classes_by_origin_key(closures: &[OriginClosure]) -> BTreeMap<String, Vec
         .collect()
 }
 
+pub fn component_classes_by_origin_key(snapshot: &TraceSnapshot) -> BTreeMap<String, Vec<String>> {
+    let index = OriginClosureIndex::new(snapshot);
+    component_classes_for_index(&index)
+}
+
 pub fn source_owner_matches_input(owner: &str, input_path: &str) -> bool {
     owner == input_path || owner.ends_with(input_path)
 }
@@ -511,6 +518,170 @@ fn build_closures(
             }
         })
         .collect()
+}
+
+#[derive(Clone, Copy, Debug)]
+enum OriginComponentRail {
+    Exact,
+    Generated,
+    Prepared,
+    Contextual,
+    Structural,
+}
+
+impl OriginComponentRail {
+    const ALL: [Self; 5] = [
+        Self::Exact,
+        Self::Generated,
+        Self::Prepared,
+        Self::Contextual,
+        Self::Structural,
+    ];
+
+    const fn class_prefix(self) -> &'static str {
+        match self {
+            Self::Exact => "exact-c",
+            Self::Generated => "generated-c",
+            Self::Prepared => "prepared-c",
+            Self::Contextual => "context-c",
+            Self::Structural => "structural-c",
+        }
+    }
+
+    fn allows_edge(self, edge: &OriginEdgeFact) -> bool {
+        let class = edge.traversal_class();
+        let exact = matches!(
+            class,
+            OriginEdgeTraversalClass::ExactAttribution | OriginEdgeTraversalClass::SnapshotAlias
+        );
+        match self {
+            Self::Exact => exact,
+            Self::Generated => exact || matches!(class, OriginEdgeTraversalClass::Synthetic),
+            Self::Prepared => is_prepared_bytecode_edge(edge),
+            Self::Contextual => {
+                matches!(class, OriginEdgeTraversalClass::Contextual)
+                    && !is_prepared_bytecode_edge(edge)
+            }
+            Self::Structural => matches!(class, OriginEdgeTraversalClass::Structural),
+        }
+    }
+}
+
+fn component_classes_for_index(index: &OriginClosureIndex<'_>) -> BTreeMap<String, Vec<String>> {
+    let mut classes = BTreeMap::<String, BTreeSet<String>>::new();
+    for rail in OriginComponentRail::ALL {
+        for (ordinal, component) in connected_components_for_rail(index, rail)
+            .into_iter()
+            .enumerate()
+        {
+            let class_name = component_class_name(rail, ordinal, &component);
+            for key in component {
+                classes
+                    .entry(key.canonical_storage_key())
+                    .or_default()
+                    .insert(class_name.clone());
+            }
+        }
+    }
+    classes
+        .into_iter()
+        .map(|(key, value)| (key, value.into_iter().collect()))
+        .collect()
+}
+
+fn connected_components_for_rail(
+    index: &OriginClosureIndex<'_>,
+    rail: OriginComponentRail,
+) -> Vec<BTreeSet<OriginExportKey>> {
+    let mut candidates = BTreeSet::<OriginExportKey>::new();
+    for edges in index.edges_by_from.values() {
+        for edge in edges {
+            if rail.allows_edge(edge) {
+                candidates.insert(edge.from.clone());
+                candidates.insert(edge.to.clone());
+            }
+        }
+    }
+
+    let mut visited = BTreeSet::<OriginExportKey>::new();
+    let mut components = Vec::<BTreeSet<OriginExportKey>>::new();
+    for root in candidates.iter().cloned().collect::<Vec<_>>() {
+        if visited.contains(&root) {
+            continue;
+        }
+        let mut component = BTreeSet::new();
+        let mut queue = VecDeque::from([root.clone()]);
+        visited.insert(root);
+        while let Some(key) = queue.pop_front() {
+            component.insert(key.clone());
+            let outgoing = index.edges_by_from.get(&key).into_iter().flatten().copied();
+            let incoming = index.edges_by_to.get(&key).into_iter().flatten().copied();
+            for edge in outgoing.chain(incoming) {
+                if !rail.allows_edge(edge) {
+                    continue;
+                }
+                let other = if edge.from == key {
+                    &edge.to
+                } else {
+                    &edge.from
+                };
+                if visited.insert(other.clone()) {
+                    queue.push_back(other.clone());
+                }
+            }
+        }
+        if component.len() > 1 {
+            components.push(component);
+        }
+    }
+    components.sort_by(|left, right| {
+        component_sort_key(left)
+            .unwrap_or_default()
+            .cmp(&component_sort_key(right).unwrap_or_default())
+    });
+    components
+}
+
+fn component_sort_key(component: &BTreeSet<OriginExportKey>) -> Option<String> {
+    component
+        .iter()
+        .next()
+        .map(OriginExportKey::canonical_storage_key)
+}
+
+fn component_class_name(
+    rail: OriginComponentRail,
+    fallback_ordinal: usize,
+    component: &BTreeSet<OriginExportKey>,
+) -> String {
+    let mut hash = 2166136261u32;
+    for byte in rail.class_prefix().bytes() {
+        hash ^= u32::from(byte);
+        hash = hash.wrapping_mul(16777619);
+    }
+    for key in component {
+        for byte in key.canonical_storage_key().bytes() {
+            hash ^= u32::from(byte);
+            hash = hash.wrapping_mul(16777619);
+        }
+    }
+    if hash == 0 {
+        format!("{}-{fallback_ordinal}", rail.class_prefix())
+    } else {
+        format!("{}-{hash:08x}", rail.class_prefix())
+    }
+}
+
+fn is_prepared_bytecode_edge(edge: &OriginEdgeFact) -> bool {
+    (edge.from.kind().starts_with("bytecode.") && is_prepared_origin_kind(edge.to.kind()))
+        || (edge.to.kind().starts_with("bytecode.") && is_prepared_origin_kind(edge.from.kind()))
+}
+
+fn is_prepared_origin_kind(kind: &str) -> bool {
+    kind.starts_with("sonatina.evm.prepared.")
+        || kind.starts_with("sonatina.codegen.")
+        || kind.starts_with("evm.vcode.")
+        || kind.starts_with("vcode.")
 }
 
 fn closure_counts(keys: &BTreeSet<OriginExportKey>) -> OriginClosureCounts {
@@ -1032,6 +1203,7 @@ fn source_spans_for_keys(
         .filter(|(origin, _)| storage_keys.contains(&origin.canonical_storage_key()))
         .filter(|(_, span)| !has_finer_span(span, &storage_keys, index))
         .map(|(origin, span)| OriginClosureSourceSpan {
+            origin_key: origin.canonical_storage_key(),
             origin: origin.display_label(),
             file: span.file.display_label(),
             file_owner: span.file.owner_key().to_string(),
@@ -1279,6 +1451,64 @@ mod tests {
         assert!(exact_from_synthetic.keys.contains(&synthetic_mir));
         assert!(!exact_from_synthetic.keys.contains(&hir));
         assert!(synthetic_rails.generated.contains(&hir));
+    }
+
+    #[test]
+    fn component_classes_are_policy_specific_connected_islands() {
+        let source = test_key("source.span", "body", "span:0");
+        let hir = test_key("hir.expr", "body", "expr:0");
+        let synthetic_mir = test_key("runtime.stmt", "runtime", "block:0:stmt:0");
+        let bytecode = test_key("bytecode.pc", "runtime", "pc:0");
+        let prepared = test_key("sonatina.evm.prepared.inst", "runtime", "inst:0");
+        let code_object = test_key("code.object", "runtime", "runtime");
+        let edges = [
+            OriginEdgeFact::new(
+                hir.clone(),
+                source.clone(),
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::Hir),
+            ),
+            OriginEdgeFact::new(
+                synthetic_mir.clone(),
+                hir.clone(),
+                OriginEdgeLabel::SyntheticFor,
+                Some(CompilerPhase::Mir),
+            ),
+            OriginEdgeFact::new(
+                bytecode.clone(),
+                prepared.clone(),
+                OriginEdgeLabel::BackendPrepared,
+                Some(CompilerPhase::Backend),
+            ),
+            OriginEdgeFact::new(
+                bytecode.clone(),
+                code_object.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            ),
+        ];
+        let index = test_index(&edges, []);
+
+        let classes = component_classes_for_index(&index);
+
+        assert_eq!(
+            prefixed_classes(&classes, &source, "exact-c-"),
+            prefixed_classes(&classes, &hir, "exact-c-")
+        );
+        assert!(prefixed_classes(&classes, &synthetic_mir, "exact-c-").is_empty());
+        assert_eq!(
+            prefixed_classes(&classes, &source, "generated-c-"),
+            prefixed_classes(&classes, &synthetic_mir, "generated-c-")
+        );
+        assert_eq!(
+            prefixed_classes(&classes, &bytecode, "prepared-c-"),
+            prefixed_classes(&classes, &prepared, "prepared-c-")
+        );
+        assert!(prefixed_classes(&classes, &prepared, "context-c-").is_empty());
+        assert_eq!(
+            prefixed_classes(&classes, &bytecode, "structural-c-"),
+            prefixed_classes(&classes, &code_object, "structural-c-")
+        );
     }
 
     #[test]
@@ -1606,6 +1836,20 @@ mod tests {
         }
     }
 
+    fn prefixed_classes(
+        classes: &BTreeMap<String, Vec<String>>,
+        key: &OriginExportKey,
+        prefix: &str,
+    ) -> BTreeSet<String> {
+        classes
+            .get(&key.canonical_storage_key())
+            .into_iter()
+            .flatten()
+            .filter(|class| class.starts_with(prefix))
+            .cloned()
+            .collect()
+    }
+
     fn empty_loop_report() -> LoopContentsReport {
         LoopContentsReport {
             metadata: ReportMetadata {
@@ -1651,6 +1895,7 @@ mod tests {
             gap: None,
             edges: Vec::new(),
             source_spans: vec![OriginClosureSourceSpan {
+                origin_key: "hir.expr:body:11".to_string(),
                 origin: "hir.expr:body:11".to_string(),
                 file: "fib_demo.fe".to_string(),
                 file_owner: "fib_demo.fe".to_string(),

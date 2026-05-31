@@ -19,7 +19,7 @@ use trace_query::{
     origin_closure::{
         ClosureAuditReport, OriginClosure as DemoClosure, OriginClosureSourceLine,
         audit_origin_closures, build_origin_closure_set, classes_by_origin_key,
-        source_owner_matches_input,
+        component_classes_by_origin_key, source_owner_matches_input,
     },
     static_analysis::{StaticAnalysisReport, static_analysis_report},
 };
@@ -581,18 +581,24 @@ fn build_demo_model(snapshot: &TraceSnapshot, salsa: Option<DemoSalsaStats>) -> 
         &loop_report,
     );
     let closures = closure_set.closures;
-    let classes_by_key = classes_by_origin_key(&closures);
+    let mut classes_by_key = classes_by_origin_key(&closures);
+    merge_classes_by_key(
+        &mut classes_by_key,
+        component_classes_by_origin_key(snapshot),
+    );
     let rails_by_key = rails_by_origin_key(&closures);
     let source_lines = source_lines(
         snapshot.metadata().input_path.as_str(),
         &source_text,
         &closures,
+        &classes_by_key,
     );
     let related_sources = related_source_sections(
         snapshot.metadata().input_path.as_str(),
         &source_texts,
         &index,
         &closures,
+        &classes_by_key,
     );
     let audit_source_lines = source_lines
         .iter()
@@ -709,6 +715,21 @@ fn rails_by_origin_key(closures: &[DemoClosure]) -> BTreeMap<String, Vec<String>
         .into_iter()
         .map(|(key, value)| (key, value.into_iter().collect()))
         .collect()
+}
+
+fn merge_classes_by_key(
+    classes_by_key: &mut BTreeMap<String, Vec<String>>,
+    extra_classes: BTreeMap<String, Vec<String>>,
+) {
+    for (key, classes) in extra_classes {
+        let entry = classes_by_key.entry(key).or_default();
+        let mut seen = entry.iter().cloned().collect::<BTreeSet<_>>();
+        for class in classes {
+            if seen.insert(class.clone()) {
+                entry.push(class);
+            }
+        }
+    }
 }
 
 fn source_snippet_for_span(source_text: &str, span: &SourceSpanFact) -> Option<DemoSourceSnippet> {
@@ -883,6 +904,7 @@ fn source_lines(
     input_path: &str,
     source_text: &str,
     closures: &[DemoClosure],
+    classes_by_key: &BTreeMap<String, Vec<String>>,
 ) -> Vec<DemoSourceLine> {
     let mut exact_classes_by_line = BTreeMap::<u32, BTreeSet<String>>::new();
     let mut enclosing_classes_by_line = BTreeMap::<u32, BTreeSet<String>>::new();
@@ -894,16 +916,12 @@ fn source_lines(
                 continue;
             }
             if span.start_line == span.end_line {
-                exact_classes_by_line
-                    .entry(span.start_line)
-                    .or_default()
-                    .insert(closure.class_name.clone());
+                let classes = exact_classes_by_line.entry(span.start_line).or_default();
+                insert_source_span_classes(classes, span, closure, classes_by_key);
             } else {
                 for line in span.start_line..=span.end_line {
-                    enclosing_classes_by_line
-                        .entry(line)
-                        .or_default()
-                        .insert(closure.class_name.clone());
+                    let classes = enclosing_classes_by_line.entry(line).or_default();
+                    insert_source_span_classes(classes, span, closure, classes_by_key);
                 }
             }
         }
@@ -930,11 +948,24 @@ fn source_lines(
         .collect()
 }
 
+fn insert_source_span_classes(
+    classes: &mut BTreeSet<String>,
+    span: &trace_query::origin_closure::OriginClosureSourceSpan,
+    closure: &DemoClosure,
+    classes_by_key: &BTreeMap<String, Vec<String>>,
+) {
+    classes.insert(closure.class_name.clone());
+    if let Some(component_classes) = classes_by_key.get(&span.origin_key) {
+        classes.extend(component_classes.iter().cloned());
+    }
+}
+
 fn related_source_sections(
     input_path: &str,
     source_texts: &BTreeMap<OriginExportKey, String>,
     index: &DemoIndex<'_>,
     closures: &[DemoClosure],
+    classes_by_key: &BTreeMap<String, Vec<String>>,
 ) -> Vec<DemoRelatedSource> {
     let mut classes_by_file_line =
         BTreeMap::<OriginExportKey, BTreeMap<u32, BTreeSet<String>>>::new();
@@ -949,12 +980,12 @@ fn related_source_sections(
                 continue;
             };
             for line in span.start_line..=span.end_line {
-                classes_by_file_line
+                let classes = classes_by_file_line
                     .entry(file_key.clone())
                     .or_default()
                     .entry(line)
-                    .or_default()
-                    .insert(closure.class_name.clone());
+                    .or_default();
+                insert_source_span_classes(classes, span, closure, classes_by_key);
             }
         }
     }
@@ -1811,6 +1842,7 @@ mod tests {
             gap: None,
             edges: Vec::new(),
             source_spans: vec![DemoSourceSpan {
+                origin_key: "hir.expr:body:1".to_string(),
                 origin: "hir.expr:body:1".to_string(),
                 file: "std/foo.fe".to_string(),
                 file_owner: "std/foo.fe".to_string(),
@@ -1823,7 +1855,7 @@ mod tests {
             }],
         };
 
-        let lines = source_lines("fib_demo.fe", "x", &[closure]);
+        let lines = source_lines("fib_demo.fe", "x", &[closure], &BTreeMap::new());
 
         assert!(lines[0].classes.is_empty());
 
@@ -1847,6 +1879,7 @@ mod tests {
             gap: None,
             edges: Vec::new(),
             source_spans: vec![DemoSourceSpan {
+                origin_key: "hir.expr:body:1".to_string(),
                 origin: "hir.expr:body:1".to_string(),
                 file: "fib_demo.fe".to_string(),
                 file_owner: "fib_demo.fe".to_string(),
@@ -1859,9 +1892,17 @@ mod tests {
             }],
         };
 
-        let lines = source_lines("fib_demo.fe", "x", &[closure]);
+        let mut classes_by_key = BTreeMap::new();
+        classes_by_key.insert(
+            "hir.expr:body:1".to_string(),
+            vec!["trace-c-0".to_string(), "exact-c-0".to_string()],
+        );
+        let lines = source_lines("fib_demo.fe", "x", &[closure], &classes_by_key);
 
-        assert_eq!(lines[0].classes, vec!["trace-c-0".to_string()]);
+        assert_eq!(
+            lines[0].classes,
+            vec!["exact-c-0".to_string(), "trace-c-0".to_string()]
+        );
     }
 
     #[test]
@@ -1912,6 +1953,7 @@ mod tests {
             gap: None,
             edges: Vec::new(),
             source_spans: vec![DemoSourceSpan {
+                origin_key: "hir.expr:foreign:1".to_string(),
                 origin: "hir.expr:foreign:1".to_string(),
                 file: "calldata.fe".to_string(),
                 file_owner: "builtin-std:/src/evm/calldata.fe".to_string(),
@@ -1924,14 +1966,25 @@ mod tests {
             }],
         };
 
-        let sections = related_source_sections("entry.fe", &source_texts, &index, &[closure]);
+        let mut classes_by_key = BTreeMap::new();
+        classes_by_key.insert(
+            "hir.expr:foreign:1".to_string(),
+            vec!["trace-c-7".to_string(), "exact-c-4".to_string()],
+        );
+        let sections = related_source_sections(
+            "entry.fe",
+            &source_texts,
+            &index,
+            &[closure],
+            &classes_by_key,
+        );
 
         assert_eq!(sections.len(), 1);
         assert_eq!(sections[0].display_name, "calldata.fe");
         assert_eq!(sections[0].lines.len(), 1);
         assert_eq!(sections[0].lines[0].number, 2);
         assert_eq!(sections[0].lines[0].text, "pulled in");
-        assert_eq!(sections[0].lines[0].classes, vec!["trace-c-7"]);
+        assert_eq!(sections[0].lines[0].classes, vec!["exact-c-4", "trace-c-7"]);
     }
 
     fn test_traversal() -> trace_query::origin_closure::OriginClosureTraversalSummary {
