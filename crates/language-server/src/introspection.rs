@@ -2,10 +2,11 @@ use common::InputDb;
 use driver::DriverDataBase;
 use hir::lower::map_file_to_mod;
 use serde::Serialize;
-use std::fs::File;
+use std::collections::BTreeMap;
+use std::fs::{self, File};
 use std::io::BufReader;
 use std::time::{Duration, Instant};
-use trace_facts::{CompilerPhase, TraceBundle, TraceMetadata, TraceSnapshot};
+use trace_facts::{CompilerPhase, TraceBundle, TraceFact, TraceMetadata, TraceSnapshot};
 use trace_query::{
     TraceIntrospectionService, TraceQueryHttpResponse, TraceQueryRequest,
     TraceWorkbenchProjectionRequest, run_trace_query, trace_workbench_manifest,
@@ -156,6 +157,8 @@ pub(crate) async fn handle_trace_workbench_model(
         }
         service
     };
+    let related_source_texts =
+        trace_workbench_related_source_texts(backend, service.snapshot(), &uri);
     let projection = trace_workbench_report_projection(
         &service,
         service.snapshot(),
@@ -165,6 +168,7 @@ pub(crate) async fn handle_trace_workbench_model(
             opt_level: session.opt_level.clone(),
             view: session.view.clone(),
             source_text,
+            related_source_texts,
             document_version,
             query_duration_ms: elapsed_ms(started),
             compiler_commit: option_env!("FE_GIT_COMMIT")
@@ -191,6 +195,54 @@ pub(crate) async fn handle_trace_workbench_model(
         },
     );
     Ok(projection)
+}
+
+fn trace_workbench_related_source_texts(
+    backend: &Backend,
+    snapshot: &TraceSnapshot,
+    entry_uri: &Url,
+) -> BTreeMap<String, String> {
+    let mut sources = BTreeMap::new();
+    for fact in snapshot.facts() {
+        let TraceFact::SourceFile(source_file) = fact else {
+            continue;
+        };
+        let Ok(source_uri) = Url::parse(&source_file.uri) else {
+            continue;
+        };
+        if &source_uri == entry_uri {
+            continue;
+        }
+        let Some(text) = trace_workbench_workspace_source_text(backend, &source_uri)
+            .or_else(|| trace_workbench_file_source_text(&source_uri))
+        else {
+            continue;
+        };
+        sources.insert(source_file.file_key.canonical_storage_key(), text.clone());
+        sources.insert(source_file.uri.clone(), text);
+    }
+    sources
+}
+
+fn trace_workbench_workspace_source_text(backend: &Backend, uri: &Url) -> Option<String> {
+    let internal_uri = backend.map_client_uri_to_internal(uri.clone());
+    backend
+        .db
+        .workspace()
+        .get(&backend.db, &internal_uri)
+        .map(|file| file.text(&backend.db).to_string())
+}
+
+fn trace_workbench_file_source_text(uri: &Url) -> Option<String> {
+    const MAX_RELATED_SOURCE_TEXT_BYTES: u64 = 256 * 1024;
+    if uri.scheme() != "file" {
+        return None;
+    }
+    let path = uri.to_file_path().ok()?;
+    if fs::metadata(&path).ok()?.len() > MAX_RELATED_SOURCE_TEXT_BYTES {
+        return None;
+    }
+    fs::read_to_string(path).ok()
 }
 
 pub(crate) async fn handle_trace_workbench_manifest(

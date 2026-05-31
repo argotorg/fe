@@ -1769,6 +1769,7 @@ pub struct TraceWorkbenchProjectionRequest {
     pub opt_level: String,
     pub view: String,
     pub source_text: Option<String>,
+    pub related_source_texts: BTreeMap<String, String>,
     pub document_version: Option<i32>,
     pub query_duration_ms: u64,
     pub compiler_commit: String,
@@ -1812,6 +1813,7 @@ pub fn trace_workbench_report_projection(
     let source = trace_workbench_source_projection(
         &request.input_path,
         request.source_text.as_deref(),
+        &request.related_source_texts,
         snapshot,
         &classes_by_key,
     );
@@ -2077,6 +2079,7 @@ fn trace_workbench_missing_lineage_index(
 fn trace_workbench_source_projection(
     input_path: &str,
     source_text: Option<&str>,
+    related_source_texts: &BTreeMap<String, String>,
     snapshot: &TraceSnapshot,
     component_classes_by_key: &BTreeMap<String, Vec<String>>,
 ) -> serde_json::Value {
@@ -2094,7 +2097,7 @@ fn trace_workbench_source_projection(
         "display_name": input_path,
         "confidence": confidence,
         "lines": lines,
-        "related_sources": trace_workbench_related_sources(input_path, snapshot, component_classes_by_key),
+        "related_sources": trace_workbench_related_sources(input_path, snapshot, component_classes_by_key, related_source_texts),
     })
 }
 
@@ -2102,6 +2105,7 @@ fn trace_workbench_related_sources(
     input_path: &str,
     snapshot: &TraceSnapshot,
     component_classes_by_key: &BTreeMap<String, Vec<String>>,
+    related_source_texts: &BTreeMap<String, String>,
 ) -> Vec<serde_json::Value> {
     let mut source_files = BTreeMap::<OriginExportKey, &trace_facts::SourceFileFact>::new();
     let mut lines_by_file = BTreeMap::<OriginExportKey, BTreeMap<u32, BTreeSet<String>>>::new();
@@ -2139,14 +2143,20 @@ fn trace_workbench_related_sources(
             let source_file = source_files.get(&file)?;
             let line_numbers = lines.keys().copied().collect::<Vec<_>>();
             let row_prefix = trace_workbench_origin_row_id(&file.canonical_storage_key());
+            let source_text = related_source_texts
+                .get(&file.canonical_storage_key())
+                .or_else(|| related_source_texts.get(&source_file.uri));
             let rows = lines
                 .into_iter()
                 .map(|(number, classes)| {
                     let classes = classes.into_iter().collect::<Vec<_>>();
+                    let text = source_text
+                        .and_then(|source_text| trace_workbench_line_text(source_text, number))
+                        .unwrap_or("source text unavailable");
                     serde_json::json!({
                         "row_id": format!("{row_prefix}-line-{number}"),
                         "number": number,
-                        "text": "source text unavailable",
+                        "text": text,
                         "classes": classes,
                         "display_status": trace_workbench_status_for_source_line(&classes),
                     })
@@ -2158,10 +2168,16 @@ fn trace_workbench_related_sources(
                 "uri": source_file.uri,
                 "content_hash": source_file.content_hash,
                 "summary": trace_workbench_line_range_summary(&line_numbers),
+                "source_text_available": source_text.is_some(),
                 "lines": rows,
             }))
         })
         .collect()
+}
+
+fn trace_workbench_line_text(source_text: &str, line_number: u32) -> Option<&str> {
+    let index = usize::try_from(line_number.checked_sub(1)?).ok()?;
+    source_text.lines().nth(index)
 }
 
 fn trace_workbench_line_range_summary(lines: &[u32]) -> String {
@@ -5245,6 +5261,7 @@ fn format_storage_location(location: &StorageLocation) -> String {
 #[cfg(test)]
 mod tests {
     use common::origin::OriginExportKey;
+    use std::collections::BTreeMap;
     use trace_facts::{
         BlockFact, CallFact, CategorySource, CodeObjectFact, CodeObjectKind, CompilerEventFact,
         CompilerEventKind, CompilerPhase, CompilerReason, DisplayNameFact, DisplayNameKind,
@@ -6429,6 +6446,7 @@ mod tests {
                 opt_level: "O2".to_string(),
                 view: "source-postopt-bytecode".to_string(),
                 source_text: Some("fn fib() {\n  b + c\n}\n".to_string()),
+                related_source_texts: BTreeMap::new(),
                 document_version: Some(3),
                 query_duration_ms: 9,
                 compiler_commit: "test".to_string(),
@@ -6560,21 +6578,37 @@ mod tests {
                 "blake3:std",
                 None,
             )),
-            TraceFact::SourceSpan(SourceSpanFact::new(lib_hir, lib_file, 0, 12, 7, 1, 8, 3)),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                lib_hir,
+                lib_file.clone(),
+                0,
+                12,
+                7,
+                1,
+                8,
+                3,
+            )),
         ]);
+        let mut related_source_texts = BTreeMap::new();
+        related_source_texts.insert(
+            lib_file.canonical_storage_key(),
+            "one\ntwo\nthree\nfour\nfive\nsix\nabi line\nreturn line\n".to_string(),
+        );
         let source = trace_workbench_source_projection(
             "file:///main.fe",
             Some("fn main() {}\n"),
+            &related_source_texts,
             &snapshot,
-            &std::collections::BTreeMap::new(),
+            &BTreeMap::new(),
         );
         let related = source["related_sources"].as_array().unwrap();
 
         assert_eq!(related.len(), 1);
         assert_eq!(related[0]["display_name"], "std/lib.fe");
         assert_eq!(related[0]["summary"], "referenced lines 7-8");
+        assert_eq!(related[0]["source_text_available"], true);
         assert_eq!(related[0]["lines"][0]["number"], 7);
-        assert_eq!(related[0]["lines"][0]["text"], "source text unavailable");
+        assert_eq!(related[0]["lines"][0]["text"], "abi line");
     }
 
     #[test]
