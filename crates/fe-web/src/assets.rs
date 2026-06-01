@@ -801,6 +801,7 @@ mod tests {
         ));
         assert!(FE_ORIGIN_TRACE_JS.contains("if (kind === \"exact\") return null;"));
         assert!(FE_ORIGIN_TRACE_JS.contains("suppressExact"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("suppressExact: this._displayMode === \"compact\""));
         assert!(FE_ORIGIN_TRACE_JS.contains("label: \"exact link\""));
         assert!(FE_ORIGIN_TRACE_JS.contains("label: \"generated\""));
         assert!(FE_ORIGIN_TRACE_JS.contains("label: \"unmapped\""));

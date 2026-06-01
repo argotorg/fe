@@ -1656,7 +1656,7 @@
 
     _selectionStatusCard(groups, displayClasses) {
       var entries = this._auditForClasses(groups);
-      var status = this._displayStatus(entries, this._railStatus(displayClasses));
+      var status = this._displayStatus(entries, this._railStatus(displayClasses), { suppressExact: this._displayMode === "compact" });
       if (!status) return null;
       var box = el("div", "status-card status-" + status.kind);
       box.append(el("h3", "", this._selectedTraceLabel || "Selected row"));
@@ -1852,7 +1852,7 @@
     _auditHeader(audit, closure) {
       var head = el("div", "audit-header");
       head.append(el("span", "badge phase", this._phaseLabel(audit.highest_phase_reached || "unknown")));
-      var status = this._displayStatus(audit && audit.primary ? [audit] : [], null);
+      var status = this._displayStatus(audit && audit.primary ? [audit] : [], null, { suppressExact: this._displayMode === "compact" });
       if (status) head.append(el("span", "badge " + status.kind, status.label));
       if (this._displayMode !== "compact") {
         (audit.symptoms || []).forEach(function (symptom) {
