@@ -1016,7 +1016,7 @@
     _selectRow(row, options) {
       if (!row) return false;
       options = options || {};
-      var groups = this._expandSelectionGroups(selectionClasses(row));
+      var groups = selectionClasses(row);
       this._selectedDisplayClasses = allClasses(row);
       this._selectedStableIdentities = stableIdentityTokens(row);
       this._selectedTraceLabel = row.dataset.traceLabel || "";
@@ -1026,25 +1026,6 @@
       if (options.revealPeers !== false) this._scrollPeerPanesToSelection(groups, row, options);
       if (options.updateHash) this._pinHashForRow(row);
       return true;
-    }
-
-    _expandSelectionGroups(groups) {
-      groups = (groups || []).filter(isTraceGroup);
-      var expanded = groups.slice();
-      var seen = Object.create(null);
-      expanded.forEach(function (group) { seen[group] = true; });
-      var exactGroups = groups.filter(function (group) { return group.indexOf("exact-c-") === 0; });
-      if (!exactGroups.length || !this.shadowRoot) return expanded;
-      exactGroups.forEach(function (group) {
-        this.shadowRoot.querySelectorAll(".trace-region." + this._escapeClass(group)).forEach(function (row) {
-          allClasses(row).forEach(function (name) {
-            if (name.indexOf("prepared-c-") !== 0 || seen[name]) return;
-            seen[name] = true;
-            expanded.push(name);
-          });
-        });
-      }, this);
-      return expanded;
     }
 
     _clearSelection() {
