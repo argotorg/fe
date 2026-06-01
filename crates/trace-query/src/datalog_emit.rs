@@ -124,7 +124,7 @@ fn append_semantic_edge_views(
                 values: vec![
                     edge.from.canonical_storage_key(),
                     edge.to.canonical_storage_key(),
-                    "phase_contract_rejected".to_string(),
+                    phase_contract_rejection_reason(edge).to_string(),
                 ],
             });
             continue;
@@ -151,6 +151,18 @@ fn append_semantic_edge_views(
     }
     append_representation_diagnostic_views(snapshot, rows);
     append_prepared_lineage_views(snapshot, rows);
+}
+
+fn phase_contract_rejection_reason(edge: &trace_facts::OriginEdgeFact) -> &'static str {
+    if edge.from.kind() == "sonatina.evm.prepared.inst"
+        && edge.to.kind() == "sonatina.postopt.inst"
+        && edge.from.owner_key() == edge.to.owner_key()
+        && edge.from.local_key() == edge.to.local_key()
+    {
+        "raw_local_join_without_prepared_lineage"
+    } else {
+        "phase_contract_rejected"
+    }
 }
 
 fn semantic_edge_schemas() -> Vec<RelationSchema> {
@@ -1137,7 +1149,25 @@ mod tests {
             &[
                 prepared.canonical_storage_key(),
                 postopt.canonical_storage_key(),
-                "phase_contract_rejected".to_string(),
+                "raw_local_join_without_prepared_lineage".to_string(),
+            ]
+        ));
+        assert!(relation_row_exists(
+            &export,
+            "same_local_different_representation",
+            &[
+                prepared.canonical_storage_key(),
+                postopt.canonical_storage_key(),
+                "inst:0".to_string(),
+            ]
+        ));
+        assert!(relation_row_exists(
+            &export,
+            "candidate_lineage_hint",
+            &[
+                prepared.canonical_storage_key(),
+                postopt.canonical_storage_key(),
+                "same_raw_local_id".to_string(),
             ]
         ));
         assert!(origin_reaches(&snapshot).is_empty());
