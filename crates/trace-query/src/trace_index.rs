@@ -762,6 +762,79 @@ mod tests {
     }
 
     #[test]
+    fn compiler_explanation_does_not_silence_missing_prepared_lineage() {
+        let file = key("source.file", "demo", "demo.fe");
+        let hir = key("hir.expr", "demo", "expr:0");
+        let synthetic_mir = key("runtime.stmt", "demo", "block:0:stmt:0");
+        let postopt = key("sonatina.postopt.inst", "demo", "inst:postopt");
+        let prepared = key("sonatina.evm.prepared.inst", "demo", "inst:prepared");
+        let bytecode = key("bytecode.pc", "demo", "pc:0");
+        let facts = vec![
+            node(&file),
+            node(&hir),
+            node(&synthetic_mir),
+            node(&postopt),
+            node(&prepared),
+            node(&bytecode),
+            TraceFact::SourceFile(SourceFileFact::new(
+                file.clone(),
+                "file:///demo.fe",
+                "demo.fe",
+                "blake3:0000000000000000000000000000000000000000000000000000000000000001",
+                Some(0),
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(hir.clone(), file, 0, 1, 1, 1, 1, 2)),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                synthetic_mir.clone(),
+                hir.clone(),
+                OriginEdgeLabel::SyntheticFor,
+                Some(CompilerPhase::Mir),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                postopt.clone(),
+                hir.clone(),
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::SonatinaPostOpt),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                bytecode.clone(),
+                prepared.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                prepared.clone(),
+                postopt.clone(),
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::Backend),
+            )),
+        ];
+        let snapshot = snapshot(facts);
+        let index = TraceIndex::new(&snapshot);
+
+        assert!(index.origin_reaches(
+            &synthetic_mir,
+            &hir,
+            TraceReachabilityPolicy::CompilerExplanation
+        ));
+        assert!(!index.origin_reaches(&synthetic_mir, &hir, TraceReachabilityPolicy::ExactOnly));
+        assert!(index.origin_reaches(&bytecode, &prepared, TraceReachabilityPolicy::ExactOnly));
+        assert!(!index.origin_reaches(
+            &bytecode,
+            &postopt,
+            TraceReachabilityPolicy::CompilerExplanation
+        ));
+        assert!(
+            index
+                .source_candidates_for_instruction(
+                    &bytecode,
+                    TraceReachabilityPolicy::CompilerExplanation
+                )
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn exact_policy_crosses_snapshot_alias_for_optimized_attribution_continuity() {
         let post = key("sonatina.postopt.inst", "demo", "inst:post");
         let pre = key("sonatina.preopt.inst", "demo", "inst:pre");
