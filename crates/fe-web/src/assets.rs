@@ -316,6 +316,16 @@ pub fn origin_trace_live_html_shell(title: &str) -> String {
     function fetchChunk(digest) {{
       return fetchJson("/trace/session/" + encodeURIComponent(session) + "/chunk/" + encodeURIComponent(digest));
     }}
+    function fetchChunks(digests) {{
+      return fetch("/trace/session/" + encodeURIComponent(session) + "/chunks/missing", {{
+        method: "POST",
+        headers: Object.assign({{ "Content-Type": "application/json" }}, authHeaders),
+        body: JSON.stringify({{ digests: digests }})
+      }}).then(function (response) {{
+        if (!response.ok) throw new Error("chunk batch fetch failed: " + response.status);
+        return response.json();
+      }});
+    }}
     function refreshRevisionHistory() {{
       if (!session) return Promise.resolve(null);
       return fetchJson("/trace/session/" + encodeURIComponent(session) + "/revisions")
@@ -342,10 +352,7 @@ pub fn origin_trace_live_html_shell(title: &str) -> String {
       var requests = [];
       function useChunk(digest, previousDigest, apply) {{
         if (!digest || digest === previousDigest) return;
-        requests.push(fetchChunk(digest).then(function (chunk) {{
-          if (!chunk || chunk.digest !== digest) throw new Error("chunk digest mismatch");
-          apply(chunk.value);
-        }}));
+        requests.push({{ digest: digest, apply: apply }});
       }}
       useChunk(manifest.summary_digest, previous.summary_digest, function (value) {{
         value = value || {{}};
@@ -386,7 +393,21 @@ pub fn origin_trace_live_html_shell(title: &str) -> String {
           next[reportKeys[id]] = value;
         }});
       }});
-      return Promise.all(requests).then(function () {{
+      var chunkPromise = requests.length
+        ? fetchChunks(requests.map(function (request) {{ return request.digest; }})).then(function (response) {{
+            var chunksByDigest = Object.create(null);
+            (response.chunks || []).forEach(function (chunk) {{
+              if (chunk && chunk.digest) chunksByDigest[chunk.digest] = chunk;
+            }});
+            if ((response.missing || []).length) throw new Error("missing trace chunks: " + response.missing.join(","));
+            requests.forEach(function (request) {{
+              var chunk = chunksByDigest[request.digest];
+              if (!chunk || chunk.digest !== request.digest) throw new Error("chunk digest mismatch");
+              request.apply(chunk.value);
+            }});
+          }})
+        : Promise.resolve();
+      return chunkPromise.then(function () {{
         next.panels = Object.keys(nextPanes).map(function (id) {{
           return paneById[id];
         }}).filter(Boolean);
@@ -755,6 +776,7 @@ mod tests {
         assert!(html.contains("/trace/session/"));
         assert!(html.contains("/manifest"));
         assert!(html.contains("/chunk/"));
+        assert!(html.contains("/chunks/missing"));
         assert!(html.contains("/revisions"));
         assert!(html.contains("applyChunkedManifest"));
         assert!(html.contains("manifestCache"));
