@@ -32,7 +32,7 @@ use futures::{SinkExt, StreamExt};
 use tokio::sync::{Mutex, broadcast, watch};
 use tower::ServiceBuilder;
 use trace_query::{
-    TraceQueryHttpRequest, TraceQueryHttpResponse, trace_workbench_manifest,
+    TraceQueryHttpRequest, TraceQueryHttpResponse, TraceQueryRequest, trace_workbench_manifest,
     trace_workbench_summary_chunk,
 };
 use tracing::{info, warn};
@@ -355,6 +355,31 @@ pub async fn run(
             }),
         )
         .route(
+            "/trace/session/{session_id}/query",
+            post({
+                let actor_rx = actor_rx.clone();
+                let workspace_root = workspace_root.clone();
+                move |Path(session_id): Path<String>,
+                      Query(query): Query<BTreeMap<String, String>>,
+                      headers: HeaderMap,
+                      Json(request): Json<TraceQueryRequest>| {
+                    let actor_rx = actor_rx.clone();
+                    let workspace_root = workspace_root.clone();
+                    async move {
+                        handle_trace_workbench_query_http(
+                            session_id,
+                            query,
+                            headers,
+                            request,
+                            actor_rx,
+                            workspace_root,
+                        )
+                        .await
+                    }
+                }
+            }),
+        )
+        .route(
             "/trace/query",
             post({
                 let actor_rx = actor_rx.clone();
@@ -448,6 +473,96 @@ async fn handle_trace_query_http(
                 query_duration_ms: 0,
             }),
         ),
+    }
+}
+
+async fn handle_trace_workbench_query_http(
+    session_id: String,
+    query: BTreeMap<String, String>,
+    headers: HeaderMap,
+    request: TraceQueryRequest,
+    actor_rx: watch::Receiver<Option<SharedActor>>,
+    workspace_root: Option<String>,
+) -> impl IntoResponse {
+    if let Err(reason) = validate_trace_auth(
+        workspace_root.as_deref(),
+        &trace_auth_token(&headers, &query).unwrap_or_default(),
+    ) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(TraceQueryHttpResponse::Unauthorized { reason }),
+        );
+    }
+
+    let actor_ref = match ready_actor(actor_rx).await {
+        Ok(actor_ref) => actor_ref,
+        Err(reason) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(TraceQueryHttpResponse::Error {
+                    reason,
+                    cache_hit: false,
+                    query_duration_ms: 0,
+                }),
+            );
+        }
+    };
+    actor_ref.register_handler_async_mutating(
+        MessageKey(LspActorKey::of::<
+            crate::introspection::TraceWorkbenchSessionRequest,
+        >()),
+        crate::introspection::handle_trace_workbench_bootstrap,
+    );
+    actor_ref.register_handler_async_mutating(
+        MessageKey(LspActorKey::of::<TraceBackendQueryRequest>()),
+        crate::introspection::handle_trace_query,
+    );
+
+    let dispatcher = TraceQueryDispatcher;
+    let bootstrap = match actor_ref
+        .ask::<_, crate::introspection::TraceWorkbenchBootstrapResponse, _>(
+            &dispatcher,
+            crate::introspection::TraceWorkbenchSessionRequest { session_id },
+        )
+        .await
+    {
+        Ok(response) => response,
+        Err(err) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(TraceQueryHttpResponse::Error {
+                    reason: format!("trace workbench session lookup failed: {err:?}"),
+                    cache_hit: false,
+                    query_duration_ms: 0,
+                }),
+            );
+        }
+    };
+    let backend_request = trace_workbench_query_backend_request(&bootstrap, request);
+    match actor_ref
+        .ask::<_, TraceQueryHttpResponse, _>(&dispatcher, backend_request)
+        .await
+    {
+        Ok(response) => (StatusCode::OK, Json(response)),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(TraceQueryHttpResponse::Error {
+                reason: format!("live trace backend query failed: {err:?}"),
+                cache_hit: false,
+                query_duration_ms: 0,
+            }),
+        ),
+    }
+}
+
+fn trace_workbench_query_backend_request(
+    bootstrap: &crate::introspection::TraceWorkbenchBootstrapResponse,
+    query: TraceQueryRequest,
+) -> TraceBackendQueryRequest {
+    TraceBackendQueryRequest {
+        uri: bootstrap.session.uri.clone(),
+        config_hash: Some(bootstrap.revision.config_hash.clone()),
+        query,
     }
 }
 
@@ -1384,12 +1499,13 @@ impl Dispatcher<LspActorKey> for TraceQueryDispatcher {
 mod tests {
     use super::{
         trace_auth_token, trace_workbench_chunk_payload, trace_workbench_chunks_response,
-        trace_workbench_requested_chunk_digests, trace_workbench_resolved_rows_for_selection,
-        trace_workbench_revision_cursor, trace_workbench_selection_event, validate_trace_auth,
+        trace_workbench_query_backend_request, trace_workbench_requested_chunk_digests,
+        trace_workbench_resolved_rows_for_selection, trace_workbench_revision_cursor,
+        trace_workbench_selection_event, validate_trace_auth,
     };
     use axum::http::{HeaderMap, header};
     use std::collections::BTreeMap;
-    use trace_query::trace_workbench_manifest;
+    use trace_query::{TraceQueryRequest, trace_workbench_manifest};
 
     fn bootstrap_response(
         revision: u64,
@@ -1584,6 +1700,17 @@ mod tests {
         assert_eq!(event["sessionId"], "trace-session-1");
         assert_eq!(event["revision"], 42);
         assert_eq!(event["resolvedRows"][0], "source-main-line-17");
+    }
+
+    #[test]
+    fn trace_workbench_session_query_uses_session_uri_and_config() {
+        let bootstrap = bootstrap_response(12, "ready", Some("blake3:model"));
+        let request =
+            trace_workbench_query_backend_request(&bootstrap, TraceQueryRequest::loop_cost());
+
+        assert_eq!(request.uri, "file:///workspace/lib.fe");
+        assert_eq!(request.config_hash.as_deref(), Some("config"));
+        assert!(matches!(request.query, TraceQueryRequest::LoopCost { .. }));
     }
 
     #[test]
