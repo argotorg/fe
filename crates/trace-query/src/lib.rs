@@ -10980,6 +10980,128 @@ mod tests {
     }
 
     #[test]
+    fn trace_workbench_compact_listing_fields_do_not_leak_debug_jargon() {
+        let service = demo_service();
+        let projection = trace_workbench_report_projection(
+            &service,
+            service.snapshot(),
+            TraceWorkbenchProjectionRequest {
+                input_path: "file:///tmp/fib.fe".to_string(),
+                target: "evm".to_string(),
+                opt_level: "O2".to_string(),
+                view: "source-postopt-bytecode".to_string(),
+                include_legacy_closure_debug: false,
+                source_text: Some("fn fib() {\n  b + c\n}\n".to_string()),
+                related_source_texts: BTreeMap::new(),
+                document_version: Some(3),
+                query_duration_ms: 9,
+                compiler_commit: "test".to_string(),
+                data_source: "lsp-live".to_string(),
+            },
+        );
+
+        let visible_text = trace_workbench_compact_visible_text(&projection);
+        assert!(
+            !visible_text.is_empty(),
+            "compact projection should expose visible listing text"
+        );
+        for text in visible_text {
+            let lower = text.to_ascii_lowercase();
+            for forbidden in [
+                "suspicious",
+                "audit-",
+                "closure",
+                "connected-region walk",
+                "originexportkey",
+                "runtime-instance:semantic",
+            ] {
+                assert!(
+                    !lower.contains(forbidden),
+                    "compact listing text leaked {forbidden:?}: {text:?}"
+                );
+            }
+            for forbidden in [
+                "FuncRef(",
+                "InstId(",
+                "OriginExportKey",
+                "sonatina.postopt.inst\x1f",
+                "sonatina.evm.prepared.inst\x1f",
+                "bytecode.pc\x1f",
+                "package:",
+            ] {
+                assert!(
+                    !text.contains(forbidden),
+                    "compact listing text leaked {forbidden:?}: {text:?}"
+                );
+            }
+        }
+    }
+
+    fn trace_workbench_compact_visible_text(projection: &serde_json::Value) -> Vec<String> {
+        let mut text = Vec::new();
+        if let Some(summary) = projection["provenance"]["summary"].as_str() {
+            text.push(summary.to_string());
+        }
+        for note in projection["notes"].as_array().into_iter().flatten() {
+            if let Some(note) = note.as_str() {
+                text.push(note.to_string());
+            }
+        }
+        trace_workbench_collect_source_visible_text(&projection["source"], &mut text);
+        for panel in projection["panels"].as_array().into_iter().flatten() {
+            for field in ["title", "summary"] {
+                if let Some(value) = panel[field].as_str() {
+                    text.push(value.to_string());
+                }
+            }
+            for row in panel["rows"].as_array().into_iter().flatten() {
+                for field in ["label", "meta", "compact_text"] {
+                    if let Some(value) = row[field].as_str()
+                        && !value.is_empty()
+                    {
+                        text.push(value.to_string());
+                    }
+                }
+                if let Some(status) = row["display_status"].as_str() {
+                    text.push(status.to_string());
+                }
+            }
+        }
+        text
+    }
+
+    fn trace_workbench_collect_source_visible_text(
+        source: &serde_json::Value,
+        text: &mut Vec<String>,
+    ) {
+        for line in source["lines"].as_array().into_iter().flatten() {
+            if let Some(value) = line["text"].as_str() {
+                text.push(value.to_string());
+            }
+            if let Some(status) = line["display_status"].as_str() {
+                text.push(status.to_string());
+            }
+        }
+        for related in source["related_sources"].as_array().into_iter().flatten() {
+            for field in ["display_name", "summary"] {
+                if let Some(value) = related[field].as_str()
+                    && !value.is_empty()
+                {
+                    text.push(value.to_string());
+                }
+            }
+            for line in related["lines"].as_array().into_iter().flatten() {
+                if let Some(value) = line["text"].as_str() {
+                    text.push(value.to_string());
+                }
+                if let Some(status) = line["display_status"].as_str() {
+                    text.push(status.to_string());
+                }
+            }
+        }
+    }
+
+    #[test]
     fn trace_workbench_projection_expands_source_selection_to_prepared_bytecode_rail() {
         let service = demo_service();
         let projection = trace_workbench_report_projection(
