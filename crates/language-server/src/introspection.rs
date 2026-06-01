@@ -638,13 +638,14 @@ mod tests {
     use async_lsp::MainLoop;
     use async_lsp::router::Router;
     use common::{InputDb, origin::OriginExportKey};
+    use hir::lower::map_file_to_mod;
     use std::collections::BTreeMap;
     use trace_facts::{
         InstructionFact, JsonlTraceSink, OriginEdgeLabel, OriginNodeFact, OriginNodeKind,
-        TraceBundle, TraceFact, TraceMetadata,
+        TraceBundle, TraceFact, TraceMetadata, TraceSnapshot,
     };
     use trace_query::{
-        TraceQueryHttpResponse, TraceQueryReport, TraceQueryRequest,
+        TraceIntrospectionService, TraceQueryHttpResponse, TraceQueryReport, TraceQueryRequest,
         TraceWorkbenchProjectionRequest, trace_workbench_report_projection,
     };
     use url::Url;
@@ -654,7 +655,7 @@ mod tests {
         attached_trace_service, handle_trace_query, handle_trace_workbench_bootstrap,
         handle_trace_workbench_model, service_for_file_with_options,
         trace_workbench_parse_opt_level, trace_workbench_service_config_hash,
-        trace_workbench_target_config_hash,
+        trace_workbench_source_file_display_name, trace_workbench_target_config_hash,
     };
     use crate::backend::{Backend, TraceViewerRevisionRecord};
 
@@ -855,7 +856,7 @@ pub fn main() -> u64 {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-    async fn trace_workbench_live_projection_parity_summary_matches_direct_projection() {
+    async fn trace_workbench_live_projection_parity_summary_matches_static_builder_projection() {
         let mut backend = test_backend();
         let uri = Url::parse("file:///workspace/src/live_trace_parity.fe").unwrap();
         let source = r#"
@@ -885,7 +886,7 @@ pub fn main() -> u64 {
         )
         .await
         .unwrap();
-        let direct_service = service_for_file_with_options(
+        let direct_live_service = service_for_file_with_options(
             &backend.db,
             &uri,
             backend.tooling_config().clone(),
@@ -895,9 +896,57 @@ pub fn main() -> u64 {
         )
         .unwrap()
         .expect("direct trace service");
-        let direct_projection = trace_workbench_report_projection(
-            &direct_service,
-            direct_service.snapshot(),
+        let direct_live_projection = trace_workbench_report_projection(
+            &direct_live_service,
+            direct_live_service.snapshot(),
+            TraceWorkbenchProjectionRequest {
+                input_path: uri.to_string(),
+                target: "evm".to_string(),
+                opt_level: "O2".to_string(),
+                view: "source-postopt-bytecode".to_string(),
+                source_text: Some(source.clone()),
+                related_source_texts: BTreeMap::new(),
+                document_version: Some(17),
+                query_duration_ms: 0,
+                compiler_commit: option_env!("FE_GIT_COMMIT")
+                    .unwrap_or("unknown")
+                    .to_string(),
+                data_source: "lsp-live".to_string(),
+            },
+        );
+        let file = backend
+            .db
+            .workspace()
+            .get(&backend.db, &uri)
+            .expect("file should be loaded");
+        let top_mod = map_file_to_mod(&backend.db, file);
+        let static_facts = codegen::trace::emit_observable_module_trace_facts(
+            &backend.db,
+            top_mod,
+            uri.as_str(),
+            uri.to_string(),
+            trace_workbench_source_file_display_name(&uri),
+            &source,
+            codegen::OptLevel::O2,
+            None,
+        )
+        .expect("static-style observable trace facts");
+        let static_metadata = TraceMetadata::compiler_emitted(
+            option_env!("FE_GIT_COMMIT").unwrap_or("unknown"),
+            "evm/sonatina",
+            vec![
+                "fe-language-server".to_string(),
+                "trace-static-test".to_string(),
+            ],
+            uri.to_string(),
+            vec!["source=static-test".to_string(), "optimize=O2".to_string()],
+        );
+        let static_snapshot = TraceSnapshot::new(TraceBundle::new(static_metadata, static_facts))
+            .expect("static-style trace snapshot");
+        let static_service = TraceIntrospectionService::new(static_snapshot);
+        let static_projection = trace_workbench_report_projection(
+            &static_service,
+            static_service.snapshot(),
             TraceWorkbenchProjectionRequest {
                 input_path: uri.to_string(),
                 target: "evm".to_string(),
@@ -910,13 +959,17 @@ pub fn main() -> u64 {
                 compiler_commit: option_env!("FE_GIT_COMMIT")
                     .unwrap_or("unknown")
                     .to_string(),
-                data_source: "lsp-live".to_string(),
+                data_source: "static-test".to_string(),
             },
         );
 
         assert_eq!(
             live_model["parity_summary"],
-            direct_projection["parity_summary"]
+            direct_live_projection["parity_summary"]
+        );
+        assert_eq!(
+            live_model["parity_summary"], static_projection["parity_summary"],
+            "LSP live and static-style observable trace projections must stay semantically equivalent for the same source/config"
         );
 
         tokio::task::spawn_blocking(move || drop(backend))
