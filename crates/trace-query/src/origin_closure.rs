@@ -311,7 +311,16 @@ pub fn component_classes_by_origin_key(snapshot: &TraceSnapshot) -> BTreeMap<Str
 }
 
 pub fn source_owner_matches_input(owner: &str, input_path: &str) -> bool {
-    owner == input_path || owner.ends_with(input_path)
+    if owner == input_path {
+        return true;
+    }
+    let input_path = input_path.trim();
+    if input_path.is_empty() {
+        return false;
+    }
+    owner
+        .strip_suffix(input_path)
+        .is_some_and(|prefix| prefix.ends_with('/') || prefix.ends_with(':'))
 }
 
 pub fn highest_phase_reached(counts: &OriginClosureCounts) -> ClosureAuditPhase {
@@ -1393,6 +1402,30 @@ mod tests {
     use super::*;
     use crate::{Confidence, ReportMetadata};
     use trace_facts::{CompilerPhase, InstructionFact, OriginEdgeFact, OriginEdgeLabel};
+
+    #[test]
+    fn source_owner_matching_requires_suffix_boundary() {
+        assert!(source_owner_matches_input(
+            "file:///tmp/fib_demo.fe",
+            "fib_demo.fe"
+        ));
+        assert!(source_owner_matches_input(
+            "package:fib_demo.fe",
+            "fib_demo.fe"
+        ));
+        assert!(source_owner_matches_input(
+            "file:///tmp/contracts/fib_demo.fe",
+            "/tmp/contracts/fib_demo.fe"
+        ));
+        assert!(!source_owner_matches_input(
+            "file:///tmp/not_fib_demo.fe",
+            "fib_demo.fe"
+        ));
+        assert!(!source_owner_matches_input(
+            "package:not_fib_demo.fe",
+            "fib_demo.fe"
+        ));
+    }
 
     #[test]
     fn origin_closure_does_not_expand_through_code_object() {
