@@ -252,16 +252,24 @@ impl TracePhase {
             Some(Self::Mir)
         } else if kind.starts_with("sonatina.pre") {
             Some(Self::SonatinaPre)
+        } else if is_backend_phase_origin_kind(kind) {
+            Some(Self::Backend)
         } else if kind.starts_with("sonatina.post") || kind.starts_with("sonatina.") {
             Some(Self::SonatinaPost)
-        } else if kind.starts_with("backend.") {
-            Some(Self::Backend)
         } else if kind.starts_with("bytecode.") || kind == "code.object" {
             Some(Self::Bytecode)
         } else {
             None
         }
     }
+}
+
+fn is_backend_phase_origin_kind(kind: &str) -> bool {
+    kind.starts_with("backend.")
+        || kind.starts_with("sonatina.evm.prepared.")
+        || kind.starts_with("sonatina.codegen.")
+        || kind.starts_with("evm.vcode.")
+        || kind.starts_with("vcode.")
 }
 
 const fn is_exact_class(class: OriginEdgeTraversalClass) -> bool {
@@ -483,6 +491,24 @@ mod tests {
             Some(TracePhase::Runtime)
         );
         assert_eq!(TracePhase::from_key(&runtime_stmt), Some(TracePhase::Mir));
+    }
+
+    #[test]
+    fn prepared_codegen_and_vcode_origins_are_backend_phase() {
+        let prepared = key("sonatina.evm.prepared.inst", "demo", "inst:7");
+        let codegen = key("sonatina.codegen.inst", "demo", "inst:7");
+        let vcode = key("evm.vcode.inst", "demo", "inst:7");
+        let backend = key("backend.machine.inst", "demo", "inst:7");
+        let postopt = key("sonatina.postopt.inst", "demo", "inst:7");
+
+        assert_eq!(TracePhase::from_key(&prepared), Some(TracePhase::Backend));
+        assert_eq!(TracePhase::from_key(&codegen), Some(TracePhase::Backend));
+        assert_eq!(TracePhase::from_key(&vcode), Some(TracePhase::Backend));
+        assert_eq!(TracePhase::from_key(&backend), Some(TracePhase::Backend));
+        assert_eq!(
+            TracePhase::from_key(&postopt),
+            Some(TracePhase::SonatinaPost)
+        );
     }
 
     #[test]
