@@ -1034,15 +1034,46 @@
     _scrollRowIntoView(row, options) {
       var scroller = row && row.closest && row.closest(".source-lines,.rows");
       if (!scroller) return;
-      var scrollerRect = scroller.getBoundingClientRect();
-      var rowRect = row.getBoundingClientRect();
-      var top = scroller.scrollTop
-        + (rowRect.top - scrollerRect.top)
-        - Math.max(0, (scroller.clientHeight - rowRect.height) / 2);
+      var top = this._rowScrollTop(row, scroller);
+      var behavior = (options && options.behavior) || "smooth";
       scroller.scrollTo({
         top: Math.max(0, top),
-        behavior: (options && options.behavior) || "smooth",
+        behavior: behavior,
       });
+      this._confirmRowVisible(row, scroller, top, behavior);
+    }
+
+    _rowScrollTop(row, scroller) {
+      var rowTop = this._offsetTopWithin(row, scroller);
+      var rowHeight = row.offsetHeight || row.getBoundingClientRect().height || 0;
+      if (rowTop !== null) {
+        return rowTop - Math.max(0, (scroller.clientHeight - rowHeight) / 2);
+      }
+      var scrollerRect = scroller.getBoundingClientRect();
+      var rowRect = row.getBoundingClientRect();
+      return scroller.scrollTop
+        + (rowRect.top - scrollerRect.top)
+        - Math.max(0, (scroller.clientHeight - rowRect.height) / 2);
+    }
+
+    _offsetTopWithin(row, scroller) {
+      var top = 0;
+      var node = row;
+      while (node && node !== scroller) {
+        top += node.offsetTop || 0;
+        node = node.offsetParent;
+      }
+      return node === scroller ? top : null;
+    }
+
+    _confirmRowVisible(row, scroller, targetTop, behavior) {
+      var delay = behavior === "smooth" ? 260 : 0;
+      window.setTimeout(function () {
+        var scrollerRect = scroller.getBoundingClientRect();
+        var rowRect = row.getBoundingClientRect();
+        var visible = rowRect.top >= scrollerRect.top && rowRect.bottom <= scrollerRect.bottom;
+        if (!visible) scroller.scrollTop = Math.max(0, targetTop);
+      }, delay);
     }
 
     _syncStateStyles() {

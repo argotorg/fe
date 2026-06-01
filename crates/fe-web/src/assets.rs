@@ -811,6 +811,14 @@ mod tests {
     }
 
     #[test]
+    fn origin_trace_scroll_uses_pane_offsets_and_visibility_correction() {
+        assert!(FE_ORIGIN_TRACE_JS.contains("_rowScrollTop"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("_offsetTopWithin"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("_confirmRowVisible"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("scroller.scrollTop = Math.max(0, targetTop)"));
+    }
+
+    #[test]
     fn js_escape_handles_special_chars() {
         assert_eq!(js_escape_string("hello\nworld"), "hello\\nworld");
         assert_eq!(js_escape_string(r#"a"b"#), r#"a\"b"#);
