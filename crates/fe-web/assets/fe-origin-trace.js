@@ -1185,20 +1185,63 @@
 
     _syncStateStyles() {
       if (!this._stateStyle) return;
-      var hover = this._selectorForGroups(this._highlightGroups(this._hovered), ".trace-region");
-      var selected = this._selectorForGroups(this._highlightGroups(this._selected), ".trace-region");
-      var activeMarkers = this._selectorForGroups(this._highlightGroups((this._hovered || []).concat(this._selected || [])), ".overview-marker");
+      var hoverGroups = this._highlightGroups(this._hovered);
+      var selectedGroups = this._highlightGroups(this._selected);
+      var markerGroups = this._highlightGroups((this._hovered || []).concat(this._selected || []));
+      var hover = this._selectorForGroups(hoverGroups, ".trace-region");
+      var selectedRails = this._groupsByRail(selectedGroups);
+      var markerRails = this._groupsByRail(markerGroups);
       var rules = [];
       if (hover) {
         rules.push(hover + "{background:color-mix(in srgb, var(--trace-accent) 10%, transparent) !important;outline:1px solid color-mix(in srgb, var(--trace-accent) 45%, transparent);outline-offset:-1px;}");
       }
-      if (selected) {
-        rules.push(selected + "{background:color-mix(in srgb, var(--trace-accent) 18%, transparent) !important;color:var(--trace-text) !important;outline:2px solid var(--trace-accent);outline-offset:-2px;}");
-      }
-      if (activeMarkers) {
-        rules.push(activeMarkers + "{left:-1px;width:12px;height:10px;outline:0;background:var(--trace-accent) !important;border:1px solid var(--trace-text);box-shadow:0 0 0 2px color-mix(in srgb, var(--trace-code-bg) 80%, transparent),0 0 14px color-mix(in srgb, var(--trace-accent) 55%, transparent);z-index:2;}");
-      }
+      this._appendRailRules(rules, selectedRails.exact, ".trace-region", "{background:color-mix(in srgb, var(--trace-accent) 18%, transparent) !important;color:var(--trace-text) !important;outline:2px solid var(--trace-accent);outline-offset:-2px;}");
+      this._appendRailRules(rules, selectedRails.generated, ".trace-region", "{background:color-mix(in srgb, var(--trace-warn) 13%, transparent) !important;color:var(--trace-text) !important;outline:2px dashed var(--trace-warn);outline-offset:-2px;}");
+      this._appendRailRules(rules, selectedRails.prepared, ".trace-region", "{background:color-mix(in srgb, var(--trace-pass) 12%, transparent) !important;color:var(--trace-text) !important;outline:2px solid color-mix(in srgb, var(--trace-pass) 70%, var(--trace-accent));outline-offset:-2px;}");
+      this._appendRailRules(rules, selectedRails.context, ".trace-region", "{background:color-mix(in srgb, var(--trace-muted) 12%, transparent) !important;color:var(--trace-text) !important;outline:1px dotted var(--trace-muted);outline-offset:-1px;}");
+      this._appendRailRules(rules, selectedRails.structural, ".trace-region", "{box-shadow:inset 0 0 0 2px color-mix(in srgb, var(--trace-muted) 50%, transparent) !important;}");
+      this._appendRailRules(rules, selectedRails.fallback, ".trace-region", "{background:color-mix(in srgb, var(--trace-accent) 16%, transparent) !important;color:var(--trace-text) !important;outline:2px solid var(--trace-accent);outline-offset:-2px;}");
+      this._appendRailRules(rules, markerRails.exact, ".overview-marker", "{left:-1px;width:12px;height:10px;outline:0;background:var(--trace-accent) !important;border:1px solid var(--trace-text);box-shadow:0 0 0 2px color-mix(in srgb, var(--trace-code-bg) 80%, transparent),0 0 14px color-mix(in srgb, var(--trace-accent) 55%, transparent);z-index:2;}");
+      this._appendRailRules(rules, markerRails.generated, ".overview-marker", "{left:-1px;width:12px;height:10px;outline:0;background:transparent !important;border:2px dashed var(--trace-warn);box-shadow:0 0 0 2px color-mix(in srgb, var(--trace-code-bg) 80%, transparent),0 0 14px color-mix(in srgb, var(--trace-warn) 45%, transparent);z-index:2;}");
+      this._appendRailRules(rules, markerRails.prepared, ".overview-marker", "{left:-1px;width:12px;height:10px;outline:0;background:color-mix(in srgb, var(--trace-pass) 80%, var(--trace-accent)) !important;border:1px solid var(--trace-text);box-shadow:0 0 0 2px color-mix(in srgb, var(--trace-code-bg) 80%, transparent),0 0 14px color-mix(in srgb, var(--trace-pass) 45%, transparent);z-index:2;}");
+      this._appendRailRules(rules, markerRails.context, ".overview-marker", "{left:-1px;width:12px;height:9px;outline:0;background:var(--trace-muted) !important;border:1px solid var(--trace-text);box-shadow:0 0 0 2px color-mix(in srgb, var(--trace-code-bg) 80%, transparent);z-index:2;}");
+      this._appendRailRules(rules, markerRails.structural.concat(markerRails.fallback), ".overview-marker", "{left:-1px;width:12px;height:9px;outline:0;background:transparent !important;border:1px solid var(--trace-muted);box-shadow:0 0 0 2px color-mix(in srgb, var(--trace-code-bg) 80%, transparent);z-index:2;}");
       this._stateStyle.textContent = rules.join("\n");
+    }
+
+    _appendRailRules(rules, groups, base, css) {
+      var selector = this._selectorForGroups(groups, base);
+      if (selector) rules.push(selector + css);
+    }
+
+    _groupsByRail(groups) {
+      var rails = {
+        exact: [],
+        generated: [],
+        prepared: [],
+        context: [],
+        structural: [],
+        fallback: [],
+      };
+      var seen = Object.create(null);
+      (groups || []).forEach(function (group) {
+        if (!isTraceGroup(group) || seen[group]) return;
+        seen[group] = true;
+        if (group.indexOf("exact-c-") === 0) {
+          rails.exact.push(group);
+        } else if (group.indexOf("generated-c-") === 0) {
+          rails.generated.push(group);
+        } else if (group.indexOf("prepared-c-") === 0) {
+          rails.prepared.push(group);
+        } else if (group.indexOf("context-c-") === 0) {
+          rails.context.push(group);
+        } else if (group.indexOf("structural-c-") === 0) {
+          rails.structural.push(group);
+        } else {
+          rails.fallback.push(group);
+        }
+      });
+      return rails;
     }
 
     _highlightGroups(groups) {
