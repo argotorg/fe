@@ -304,7 +304,7 @@
         card.append(
           el("h3", "", this._friendlyCheckTitle(check)),
           el("p", "analysis-status", "status: " + (check.status || "unknown") + " · confidence: " + (check.confidence || "unknown")),
-          el("p", "muted", check.summary || "")
+          el("p", "muted", this._friendlyCheckSummary(check))
         );
         var explanation = this._analysisExplanation(check);
         if (explanation) card.append(el("p", "audit-note", explanation));
@@ -392,6 +392,30 @@
           + " bytecode PC(s) are blocked by missing optimized Sonatina → EVM prepared lineage.";
       }
       return "";
+    }
+
+    _friendlyCheckSummary(check) {
+      var id = (check && check.check_id) || "";
+      var audit = this._data && this._data.attribution_audit;
+      if (id.indexOf("provenance") >= 0 && audit) {
+        return (audit.total_bytecode_pcs || 0) + " bytecode instruction(s): "
+          + (audit.source_exact_pcs || 0) + " source-exact, "
+          + (audit.optimized_sonatina_linked_pcs || 0) + " optimized-Sonatina-linked, "
+          + (audit.prepared_linked_pcs || 0) + " prepared-linked, "
+          + (audit.unmapped_pcs || 0) + " unmapped.";
+      }
+      if (id.indexOf("postopt") >= 0 || id.indexOf("attribution_gap") >= 0) {
+        var postopt = check
+          && check.evidence
+          && check.evidence.postopt_attribution;
+        if (postopt) {
+          return (postopt.total_postopt_origins || 0) + " optimized origin(s): "
+            + (postopt.bytecode_attributed_origins || 0) + " exact bytecode-linked, "
+            + (postopt.explicitly_explained_origins || 0) + " optimizer-explained, "
+            + (postopt.gap_count || 0) + " missing evidence. Optimized-away code should be marked by explicit optimizer events.";
+        }
+      }
+      return (check && check.summary) || "";
     }
 
     _friendlyCheckTitle(check) {

@@ -781,6 +781,12 @@ mod tests {
         assert!(FE_ORIGIN_TRACE_JS.contains("linked phases, generated work, and gaps"));
         assert!(FE_ORIGIN_TRACE_JS.contains("linked regions"));
         assert!(FE_ORIGIN_TRACE_JS.contains("need compiler evidence"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("_friendlyCheckSummary"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("optimizer-explained"));
+        assert!(
+            FE_ORIGIN_TRACE_JS
+                .contains("Optimized-away code should be marked by explicit optimizer events.")
+        );
         assert!(!FE_ORIGIN_TRACE_JS.contains("inspect evidence paths"));
     }
 
