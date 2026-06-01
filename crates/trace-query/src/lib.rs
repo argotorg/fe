@@ -1989,10 +1989,10 @@ fn trace_workbench_provenance_status(
     missing_prepared: usize,
 ) -> TraceWorkbenchProvenanceStatus {
     let source_to_optimized = closure_set.is_some_and(|closure_set| {
-        closure_set.closures.iter().any(|closure| {
-            closure.counts.hir > 0
-                && (closure.counts.sonatina_post > 0 || closure.counts.sonatina_pre > 0)
-        })
+        closure_set
+            .closures
+            .iter()
+            .any(|closure| closure.counts.hir > 0 && closure.counts.sonatina_post > 0)
     }) || optimized_linked > 0;
     let optimized_to_prepared = closure_set.is_some_and(|closure_set| {
         closure_set.closures.iter().any(|closure| {
@@ -7360,6 +7360,52 @@ mod tests {
         assert!(manifest.indexes_digest.starts_with("blake3:"));
         assert!(manifest.reports.contains_key("attribution"));
         assert!(manifest.reports.contains_key("duplicate_shapes"));
+    }
+
+    #[test]
+    fn trace_workbench_provenance_does_not_claim_preopt_as_optimized() {
+        let closure_set = crate::origin_closure::OriginClosureSet {
+            closures: vec![crate::origin_closure::OriginClosure {
+                class_name: "trace-c-demo".to_string(),
+                label: "demo".to_string(),
+                root_key: "hir.expr:demo:expr:0".to_string(),
+                keys: vec![
+                    "hir.expr:demo:expr:0".to_string(),
+                    "sonatina.preopt.inst:demo:inst:0".to_string(),
+                ],
+                generated_keys: Vec::new(),
+                contextual_keys: Vec::new(),
+                structural_keys: Vec::new(),
+                counts: crate::origin_closure::OriginClosureCounts {
+                    hir: 1,
+                    mir: 0,
+                    sonatina_pre: 1,
+                    sonatina_post: 0,
+                    sonatina_prepared: 0,
+                    bytecode: 0,
+                },
+                traversal: crate::origin_closure::OriginClosureTraversalSummary {
+                    mode: "test".to_string(),
+                    max_depth: 0,
+                    max_nodes: 0,
+                    truncated: false,
+                    truncation_reason: None,
+                    skipped_hubs: Vec::new(),
+                },
+                gap: None,
+                edges: Vec::new(),
+                source_spans: Vec::new(),
+            }],
+            edge_count: 1,
+            instruction_count: 1,
+            source_span_count: 0,
+        };
+
+        let status = super::trace_workbench_provenance_status(Some(&closure_set), 0, 0, 0);
+
+        assert_eq!(status.source_to_optimized, "missing");
+        assert_eq!(status.optimized_to_prepared, "missing");
+        assert_eq!(status.prepared_to_bytecode, "missing");
     }
 
     #[test]
