@@ -994,15 +994,16 @@ fn is_prepared_lineage_event_edge(
     prepared: &OriginExportKey,
     postopt: &OriginExportKey,
 ) -> bool {
-    edge.from == *prepared
-        && edge.to == *postopt
-        && matches!(
-            edge.traversal_class(),
-            OriginEdgeTraversalClass::ExactAttribution
-                | OriginEdgeTraversalClass::SnapshotAlias
-                | OriginEdgeTraversalClass::Synthetic
-                | OriginEdgeTraversalClass::Contextual
-        )
+    if edge.from != *prepared || edge.to != *postopt {
+        return false;
+    }
+    match edge.traversal_class() {
+        OriginEdgeTraversalClass::ExactAttribution
+        | OriginEdgeTraversalClass::SnapshotAlias
+        | OriginEdgeTraversalClass::Synthetic => true,
+        OriginEdgeTraversalClass::Contextual => edge.is_backend_prepared_semantic_edge(),
+        OriginEdgeTraversalClass::Structural | OriginEdgeTraversalClass::Unmapped => false,
+    }
 }
 
 fn validate_instruction_category(
@@ -4439,6 +4440,59 @@ mod tests {
         let report = TraceValidator::check(&facts);
 
         assert_eq!(report.error_count(), 0);
+    }
+
+    #[test]
+    fn validator_rejects_prepared_lineage_event_with_non_lineage_context_edge() {
+        let event = key("compiler.event", "fib", "prepared-lineage:load-of");
+        let postopt = key(
+            "sonatina.postopt.inst",
+            "fib",
+            "function:FuncRef(0):inst:InstId(7)",
+        );
+        let prepared = key(
+            "sonatina.evm.prepared.inst",
+            "fib",
+            "function:FuncRef(0):inst:InstId(8)",
+        );
+        let facts = vec![
+            node("compiler.event", "fib", "prepared-lineage:load-of"),
+            node(
+                "sonatina.postopt.inst",
+                "fib",
+                "function:FuncRef(0):inst:InstId(7)",
+            ),
+            node(
+                "sonatina.evm.prepared.inst",
+                "fib",
+                "function:FuncRef(0):inst:InstId(8)",
+            ),
+            TraceFact::CompilerEvent(CompilerEventFact::new(
+                event.clone(),
+                CompilerPhase::Backend,
+                CompilerEventKind::PreparedLineage,
+                vec![postopt.clone()],
+                vec![prepared.clone()],
+                None,
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                prepared.clone(),
+                postopt.clone(),
+                OriginEdgeLabel::LoadOf,
+                Some(CompilerPhase::Backend),
+            )),
+        ];
+
+        assert_eq!(
+            TraceValidator::validate(&facts),
+            Err(
+                TraceValidationError::PreparedLineageEventMissingOriginEdge {
+                    event,
+                    prepared,
+                    postopt,
+                }
+            )
+        );
     }
 
     #[test]
