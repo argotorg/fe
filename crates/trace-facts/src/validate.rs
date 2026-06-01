@@ -119,6 +119,24 @@ pub enum TraceValidationWarning {
         label: OriginEdgeLabel,
         introduced_by: Option<CompilerPhase>,
     },
+    BytecodePostoptEdgeBypassesPrepared {
+        from: OriginExportKey,
+        to: OriginExportKey,
+        label: OriginEdgeLabel,
+        introduced_by: Option<CompilerPhase>,
+    },
+    BytecodePreparedEdgeWithoutBytecodeEmission {
+        from: OriginExportKey,
+        to: OriginExportKey,
+        label: OriginEdgeLabel,
+        introduced_by: Option<CompilerPhase>,
+    },
+    PreparedPostoptLineageWithoutBackendPhase {
+        from: OriginExportKey,
+        to: OriginExportKey,
+        label: OriginEdgeLabel,
+        introduced_by: Option<CompilerPhase>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -758,6 +776,62 @@ fn validate_edge_semantics(
             },
         ));
     }
+    if is_bytecode_origin_kind(edge.from.kind())
+        && is_sonatina_postopt_origin_kind(edge.to.kind())
+        && edge.has_transform_claim_label()
+    {
+        diagnostics.push(TraceValidationDiagnostic::Warning(
+            TraceValidationWarning::BytecodePostoptEdgeBypassesPrepared {
+                from: edge.from.clone(),
+                to: edge.to.clone(),
+                label: edge.label,
+                introduced_by: edge.introduced_by,
+            },
+        ));
+    }
+    if is_bytecode_origin_kind(edge.from.kind())
+        && is_prepared_codegen_origin_kind(edge.to.kind())
+        && edge.has_transform_claim_label()
+        && edge.introduced_by != Some(CompilerPhase::BytecodeEmission)
+    {
+        diagnostics.push(TraceValidationDiagnostic::Warning(
+            TraceValidationWarning::BytecodePreparedEdgeWithoutBytecodeEmission {
+                from: edge.from.clone(),
+                to: edge.to.clone(),
+                label: edge.label,
+                introduced_by: edge.introduced_by,
+            },
+        ));
+    }
+    if is_prepared_codegen_origin_kind(edge.from.kind())
+        && is_sonatina_postopt_origin_kind(edge.to.kind())
+        && edge.has_transform_claim_label()
+        && edge.introduced_by != Some(CompilerPhase::Backend)
+    {
+        diagnostics.push(TraceValidationDiagnostic::Warning(
+            TraceValidationWarning::PreparedPostoptLineageWithoutBackendPhase {
+                from: edge.from.clone(),
+                to: edge.to.clone(),
+                label: edge.label,
+                introduced_by: edge.introduced_by,
+            },
+        ));
+    }
+}
+
+fn is_bytecode_origin_kind(kind: &str) -> bool {
+    kind == "bytecode.pc" || kind.starts_with("bytecode.")
+}
+
+fn is_sonatina_postopt_origin_kind(kind: &str) -> bool {
+    kind.starts_with("sonatina.postopt.")
+}
+
+fn is_prepared_codegen_origin_kind(kind: &str) -> bool {
+    kind.starts_with("sonatina.evm.prepared.")
+        || kind.starts_with("sonatina.codegen.")
+        || kind.starts_with("evm.vcode.")
+        || kind.starts_with("vcode.")
 }
 
 fn validate_storage(
@@ -3961,6 +4035,137 @@ mod tests {
                         introduced_by: Some(CompilerPhase::BytecodeEmission),
                     },
                 ) if from == &instruction && to == &runtime_stmt
+            )
+        }));
+    }
+
+    #[test]
+    fn validator_warns_when_bytecode_bypasses_prepared_for_postopt() {
+        let instruction = key("bytecode.pc", "fib", "pc:17");
+        let postopt = key(
+            "sonatina.postopt.inst",
+            "fib",
+            "function:FuncRef(0):inst:InstId(7)",
+        );
+        let facts = vec![
+            node("bytecode.pc", "fib", "pc:17"),
+            node(
+                "sonatina.postopt.inst",
+                "fib",
+                "function:FuncRef(0):inst:InstId(7)",
+            ),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                instruction.clone(),
+                postopt.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+        ];
+
+        let report = TraceValidator::check(&facts);
+
+        assert_eq!(report.error_count(), 0);
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            matches!(
+                diagnostic,
+                TraceValidationDiagnostic::Warning(
+                    TraceValidationWarning::BytecodePostoptEdgeBypassesPrepared {
+                        from,
+                        to,
+                        label: OriginEdgeLabel::EmittedFrom,
+                        introduced_by: Some(CompilerPhase::BytecodeEmission),
+                    },
+                ) if from == &instruction && to == &postopt
+            )
+        }));
+    }
+
+    #[test]
+    fn validator_warns_when_prepared_bytecode_boundary_has_wrong_phase() {
+        let instruction = key("bytecode.pc", "fib", "pc:17");
+        let prepared = key(
+            "sonatina.evm.prepared.inst",
+            "fib",
+            "function:FuncRef(0):inst:InstId(7)",
+        );
+        let facts = vec![
+            node("bytecode.pc", "fib", "pc:17"),
+            node(
+                "sonatina.evm.prepared.inst",
+                "fib",
+                "function:FuncRef(0):inst:InstId(7)",
+            ),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                instruction.clone(),
+                prepared.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::Backend),
+            )),
+        ];
+
+        let report = TraceValidator::check(&facts);
+
+        assert_eq!(report.error_count(), 0);
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            matches!(
+                diagnostic,
+                TraceValidationDiagnostic::Warning(
+                    TraceValidationWarning::BytecodePreparedEdgeWithoutBytecodeEmission {
+                        from,
+                        to,
+                        label: OriginEdgeLabel::EmittedFrom,
+                        introduced_by: Some(CompilerPhase::Backend),
+                    },
+                ) if from == &instruction && to == &prepared
+            )
+        }));
+    }
+
+    #[test]
+    fn validator_warns_when_prepared_postopt_exact_lineage_has_wrong_phase() {
+        let prepared = key(
+            "sonatina.evm.prepared.inst",
+            "fib",
+            "function:FuncRef(0):inst:InstId(7)",
+        );
+        let postopt = key(
+            "sonatina.postopt.inst",
+            "fib",
+            "function:FuncRef(0):inst:InstId(7)",
+        );
+        let facts = vec![
+            node(
+                "sonatina.evm.prepared.inst",
+                "fib",
+                "function:FuncRef(0):inst:InstId(7)",
+            ),
+            node(
+                "sonatina.postopt.inst",
+                "fib",
+                "function:FuncRef(0):inst:InstId(7)",
+            ),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                prepared.clone(),
+                postopt.clone(),
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+        ];
+
+        let report = TraceValidator::check(&facts);
+
+        assert_eq!(report.error_count(), 0);
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            matches!(
+                diagnostic,
+                TraceValidationDiagnostic::Warning(
+                    TraceValidationWarning::PreparedPostoptLineageWithoutBackendPhase {
+                        from,
+                        to,
+                        label: OriginEdgeLabel::LoweredFrom,
+                        introduced_by: Some(CompilerPhase::BytecodeEmission),
+                    },
+                ) if from == &prepared && to == &postopt
             )
         }));
     }
