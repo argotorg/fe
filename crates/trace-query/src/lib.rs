@@ -6837,6 +6837,17 @@ fn invalid_direct_bytecode_to_postopt_edge(edge: &trace_facts::OriginEdgeFact) -
         && edge.has_transform_claim_label()
 }
 
+fn invalid_prepared_postopt_edge_issue_code(
+    prepared: &OriginExportKey,
+    postopt: &OriginExportKey,
+) -> LinkIssueCode {
+    if prepared.owner_key() == postopt.owner_key() && prepared.local_key() == postopt.local_key() {
+        LinkIssueCode::RawLocalIdJoinedAcrossSnapshots
+    } else {
+        LinkIssueCode::InvalidCrossRepresentationJoin
+    }
+}
+
 fn postopt_candidates_by_raw_local_id(
     snapshot: &TraceSnapshot,
 ) -> BTreeMap<(String, String), Vec<OriginExportKey>> {
@@ -7112,7 +7123,7 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
                     invalid_links.push(InvalidAttributionLink {
                         boundary: LinkBoundaryKind::PostOptToPrepared,
                         origin: prepared.clone(),
-                        issue_code: LinkIssueCode::InvalidCrossRepresentationJoin,
+                        issue_code: invalid_prepared_postopt_edge_issue_code(&prepared, postopt),
                         explanation: format!(
                             "prepared origin {} has an exact edge to optimized Sonatina {} but no matching PreparedLineage compiler event; exact cross-representation lineage must be owned by the backend phase contract",
                             prepared.display_label(),
@@ -9353,6 +9364,65 @@ mod tests {
             postopt_to_prepared
                 .top_issue_codes
                 .contains(&LinkIssueCode::InvalidCrossRepresentationJoin)
+        );
+    }
+
+    #[test]
+    fn missing_link_audit_flags_raw_local_join_across_prepared_postopt_snapshots() {
+        let function = key("function", "demo", "recv");
+        let hir = key("hir.expr", "demo", "expr:source");
+        let raw_inst = "function:FuncRef(1):inst:InstId(7)";
+        let postopt = key("sonatina.postopt.inst", "demo", raw_inst);
+        let prepared = key("sonatina.evm.prepared.inst", "demo", raw_inst);
+        let pc = key("bytecode.pc", "demo", "pc:0");
+        let snapshot = snapshot(vec![
+            node(function.clone()),
+            node(hir.clone()),
+            node(postopt.clone()),
+            node(prepared.clone()),
+            node(pc.clone()),
+            TraceFact::Instruction(InstructionFact::new(pc.clone(), function, 0, "ADD")),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                pc,
+                prepared.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                prepared,
+                postopt.clone(),
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::Backend),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                postopt,
+                hir,
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::SonatinaPostOpt),
+            )),
+        ]);
+        let report = TraceIntrospectionService::new(snapshot)
+            .attribution_audit()
+            .unwrap();
+        let missing_links = report.missing_links.as_ref().unwrap();
+
+        assert_eq!(report.prepared_linked_pcs, 1);
+        assert_eq!(report.source_exact_pcs, 0);
+        assert_eq!(missing_links.summary.status, LinkOverallStatus::Invalid);
+        assert_eq!(missing_links.summary.invalid_count, 1);
+        assert_eq!(
+            missing_links.invalid[0].issue_code,
+            LinkIssueCode::RawLocalIdJoinedAcrossSnapshots
+        );
+        let postopt_to_prepared = missing_links
+            .boundary_summaries
+            .iter()
+            .find(|summary| summary.boundary == LinkBoundaryKind::PostOptToPrepared)
+            .expect("postopt to prepared boundary summary");
+        assert!(
+            postopt_to_prepared
+                .top_issue_codes
+                .contains(&LinkIssueCode::RawLocalIdJoinedAcrossSnapshots)
         );
     }
 
