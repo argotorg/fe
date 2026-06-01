@@ -5641,6 +5641,7 @@ fn missing_link_audit_report(
     source_exact_pcs: usize,
     prepared_linked_pcs: usize,
     unmapped_pcs: usize,
+    prepared_target_count: usize,
     lineage_gap_targets: &BTreeMap<OriginExportKey, usize>,
     lineage_gaps: &[AttributionAuditLineageGap],
     invalid: Vec<InvalidAttributionLink>,
@@ -5664,14 +5665,16 @@ fn missing_link_audit_report(
     let mut boundary_summaries = Vec::new();
     if prepared_linked_pcs > 0 || missing_required_count > 0 || !invalid.is_empty() {
         let mut status_counts = BTreeMap::new();
+        let satisfied_prepared_lineage_count =
+            prepared_linked_pcs.saturating_sub(missing_required_count);
+        if satisfied_prepared_lineage_count > 0 {
+            status_counts.insert(LinkStatus::SatisfiedExact, satisfied_prepared_lineage_count);
+        }
         if !invalid.is_empty() {
             status_counts.insert(LinkStatus::Invalid, invalid.len());
         }
         if missing_required_count > 0 {
             status_counts.insert(LinkStatus::MissingRequired, missing_required_count);
-        }
-        if status_counts.is_empty() {
-            status_counts.insert(LinkStatus::SatisfiedExact, prepared_linked_pcs);
         }
         let top_issue_codes = [
             (!invalid.is_empty()).then_some(LinkIssueCode::PreparedKeyedAsPostopt),
@@ -5685,8 +5688,8 @@ fn missing_link_audit_report(
             boundary: LinkBoundaryKind::PostOptToPrepared,
             owner_phase: CompilerPhase::Backend,
             status_counts,
-            affected_origins: lineage_gap_targets.len() + invalid.len(),
-            affected_bytecode_pcs: missing_required_count + invalid.len(),
+            affected_origins: prepared_target_count + invalid.len(),
+            affected_bytecode_pcs: prepared_linked_pcs + invalid.len(),
             top_issue_codes,
         });
     }
@@ -5698,7 +5701,7 @@ fn missing_link_audit_report(
             boundary: LinkBoundaryKind::PreparedToBytecode,
             owner_phase: CompilerPhase::BytecodeEmission,
             status_counts: prepared_to_bytecode_counts,
-            affected_origins: lineage_gap_targets.len(),
+            affected_origins: prepared_target_count,
             affected_bytecode_pcs: prepared_linked_pcs,
             top_issue_codes: Vec::new(),
         });
@@ -6114,6 +6117,7 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
         source_exact_pcs,
         prepared_linked_pcs,
         unmapped_pcs,
+        prepared_targets.len(),
         &lineage_gap_targets,
         &lineage_gaps,
         invalid_links,
@@ -7432,6 +7436,92 @@ mod tests {
                 .get(&LinkStatus::MissingRequired),
             Some(&1)
         );
+    }
+
+    #[test]
+    fn missing_link_audit_reports_satisfied_prepared_lineage_boundaries() {
+        let function = key("function", "demo", "recv");
+        let source_file = key("source.file", "demo", "demo.fe");
+        let hir = key("hir.expr", "demo", "expr:source");
+        let postopt = key("sonatina.postopt.inst", "demo", "inst:postopt");
+        let prepared = key("sonatina.evm.prepared.inst", "demo", "inst:prepared");
+        let pc = key("bytecode.pc", "demo", "pc:0");
+        let snapshot = snapshot(vec![
+            node(function.clone()),
+            node(source_file.clone()),
+            node(hir.clone()),
+            node(postopt.clone()),
+            node(prepared.clone()),
+            node(pc.clone()),
+            TraceFact::SourceFile(SourceFileFact::new(
+                source_file.clone(),
+                "file:///demo.fe",
+                "demo.fe",
+                "blake3:0000000000000000000000000000000000000000000000000000000000000001",
+                Some(0),
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                hir.clone(),
+                source_file,
+                0,
+                1,
+                1,
+                1,
+                1,
+                2,
+            )),
+            TraceFact::Instruction(InstructionFact::new(pc.clone(), function, 0, "ADD")),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                pc,
+                prepared.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                prepared,
+                postopt.clone(),
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::Backend),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                postopt,
+                hir,
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::SonatinaPostOpt),
+            )),
+        ]);
+        let report = TraceIntrospectionService::new(snapshot)
+            .attribution_audit()
+            .unwrap();
+        let missing_links = report.missing_links.as_ref().unwrap();
+
+        assert_eq!(report.total_bytecode_pcs, 1);
+        assert_eq!(report.source_exact_pcs, 1);
+        assert_eq!(report.prepared_linked_pcs, 1);
+        assert_eq!(report.missing_optimized_to_prepared_lineage_pcs, 0);
+        assert_eq!(missing_links.summary.status, LinkOverallStatus::Pass);
+        assert_eq!(missing_links.summary.missing_required_count, 0);
+        assert_eq!(missing_links.summary.prepared_linked_bytecode_pcs, 1);
+        let postopt_to_prepared = missing_links
+            .boundary_summaries
+            .iter()
+            .find(|summary| summary.boundary == LinkBoundaryKind::PostOptToPrepared)
+            .expect("postopt to prepared boundary summary");
+        assert_eq!(postopt_to_prepared.affected_origins, 1);
+        assert_eq!(postopt_to_prepared.affected_bytecode_pcs, 1);
+        assert_eq!(
+            postopt_to_prepared
+                .status_counts
+                .get(&LinkStatus::SatisfiedExact),
+            Some(&1)
+        );
+        let prepared_to_bytecode = missing_links
+            .boundary_summaries
+            .iter()
+            .find(|summary| summary.boundary == LinkBoundaryKind::PreparedToBytecode)
+            .expect("prepared to bytecode boundary summary");
+        assert_eq!(prepared_to_bytecode.affected_origins, 1);
+        assert_eq!(prepared_to_bytecode.affected_bytecode_pcs, 1);
     }
 
     #[test]
