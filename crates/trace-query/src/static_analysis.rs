@@ -220,6 +220,7 @@ pub struct ProvenanceCoverageReport {
     pub optimized_sonatina_pcs: usize,
     pub prepared_sonatina_pcs: usize,
     pub sonatina_only_pcs: usize,
+    pub prepared_only_pcs: usize,
     pub synthetic_backend_pcs: usize,
     pub ambiguous_pcs: usize,
     pub unmapped_pcs: usize,
@@ -271,7 +272,15 @@ impl ProvenanceCoverageReport {
         let exact_sonatina_pcs = optimized_sonatina_pcs;
         let sonatina_only_pcs = rows
             .iter()
-            .filter(|row| row.has_sonatina_path && row.source_candidates == 0)
+            .filter(|row| row.has_optimized_sonatina_path && row.source_candidates == 0)
+            .count();
+        let prepared_only_pcs = rows
+            .iter()
+            .filter(|row| {
+                row.has_prepared_sonatina_path
+                    && !row.has_optimized_sonatina_path
+                    && row.source_candidates == 0
+            })
             .count();
         let synthetic_backend_pcs = rows
             .iter()
@@ -280,7 +289,11 @@ impl ProvenanceCoverageReport {
         let unmapped_pcs = rows.iter().filter(|row| row.is_unmapped).count();
         let confidence = if rows.is_empty() {
             Confidence::Unknown
-        } else if unmapped_pcs == 0 && ambiguous_pcs == 0 && sonatina_only_pcs == 0 {
+        } else if unmapped_pcs == 0
+            && ambiguous_pcs == 0
+            && sonatina_only_pcs == 0
+            && prepared_only_pcs == 0
+        {
             Confidence::Exact
         } else if exact_source_pcs > 0 || exact_sonatina_pcs > 0 || synthetic_backend_pcs > 0 {
             Confidence::Medium
@@ -301,6 +314,7 @@ impl ProvenanceCoverageReport {
             optimized_sonatina_pcs,
             prepared_sonatina_pcs,
             sonatina_only_pcs,
+            prepared_only_pcs,
             synthetic_backend_pcs,
             ambiguous_pcs,
             unmapped_pcs,
@@ -469,17 +483,41 @@ pub fn static_analysis_report(snapshot: &TraceSnapshot) -> StaticAnalysisReport 
             id: "gap:provenance_coverage:sonatina_only".to_string(),
             kind: AnalysisGapKind::MissingSourceAttribution,
             summary: format!(
-                "{} bytecode instruction(s) reach Sonatina but not source under exact attribution",
+                "{} bytecode instruction(s) reach optimized Sonatina but not source under exact attribution",
                 coverage.sonatina_only_pcs
             ),
             involved_origins: coverage
                 .rows
                 .iter()
-                .filter(|row| row.has_sonatina_path && row.source_candidates == 0)
+                .filter(|row| row.has_optimized_sonatina_path && row.source_candidates == 0)
                 .map(|row| row.instruction.clone())
                 .collect(),
             suggested_next_fact: Some(
                 "Preserve LoweredFrom/EmittedFrom origin edges across the Sonatina optimization boundary"
+                    .to_string(),
+            ),
+        });
+    }
+    if coverage.prepared_only_pcs > 0 {
+        gaps.push(AnalysisGap {
+            id: "gap:provenance_coverage:prepared_only".to_string(),
+            kind: AnalysisGapKind::MissingSourceAttribution,
+            summary: format!(
+                "{} bytecode instruction(s) are prepared-linked but not source-exact",
+                coverage.prepared_only_pcs
+            ),
+            involved_origins: coverage
+                .rows
+                .iter()
+                .filter(|row| {
+                    row.has_prepared_sonatina_path
+                        && !row.has_optimized_sonatina_path
+                        && row.source_candidates == 0
+                })
+                .map(|row| row.instruction.clone())
+                .collect(),
+            suggested_next_fact: Some(
+                "Emit explicit optimized Sonatina → EVM prepared lineage, then classify that edge by exact/generated/context semantics"
                     .to_string(),
             ),
         });
@@ -1246,7 +1284,8 @@ mod tests {
         assert_eq!(coverage["exact_sonatina_pcs"], 1);
         assert_eq!(coverage["optimized_sonatina_pcs"], 1);
         assert_eq!(coverage["prepared_sonatina_pcs"], 1);
-        assert_eq!(coverage["sonatina_only_pcs"], 2);
+        assert_eq!(coverage["sonatina_only_pcs"], 1);
+        assert_eq!(coverage["prepared_only_pcs"], 1);
         assert_eq!(coverage["synthetic_backend_pcs"], 1);
         assert_eq!(coverage["unmapped_pcs"], 1);
         assert_eq!(report.metadata.optimization_level.as_deref(), Some("2"));
@@ -1261,6 +1300,12 @@ mod tests {
                 .gaps
                 .iter()
                 .any(|gap| gap.id.contains("sonatina_only"))
+        );
+        assert!(
+            report
+                .gaps
+                .iter()
+                .any(|gap| gap.id.contains("prepared_only"))
         );
     }
 
