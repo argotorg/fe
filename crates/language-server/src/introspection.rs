@@ -565,18 +565,17 @@ mod tests {
 
     use super::{
         TraceWorkbenchSessionRequest, attached_trace_service, handle_trace_workbench_bootstrap,
+        handle_trace_workbench_model,
     };
     use crate::backend::{Backend, TraceViewerRevisionRecord};
 
     fn test_backend() -> Backend {
+        test_backend_with_config(introspection_config::FeToolingConfig::default())
+    }
+
+    fn test_backend_with_config(config: introspection_config::FeToolingConfig) -> Backend {
         let (_main_loop, client_socket) = MainLoop::new_server(|_client| Router::<()>::new(()));
-        Backend::new(
-            client_socket,
-            None,
-            None,
-            None,
-            introspection_config::FeToolingConfig::default(),
-        )
+        Backend::new(client_socket, None, None, None, config)
     }
 
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -625,6 +624,62 @@ mod tests {
             vec!["runtime=attached"]
         );
         assert_eq!(service.snapshot().validation().summary.instruction_count, 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn trace_workbench_model_uses_shared_projection_for_attached_trace() {
+        let dir = tempfile::tempdir().unwrap();
+        let trace_path = dir.path().join("combined.trace.jsonl");
+        let source_path = dir.path().join("lib.fe");
+        std::fs::write(&source_path, "contract Demo {}\n").unwrap();
+        let uri = Url::from_file_path(&source_path).unwrap();
+        let function = key("bytecode.function", uri.as_str(), "runtime");
+        let instruction = key("bytecode.pc", uri.as_str(), "pc:0");
+        let bundle = TraceBundle::new(
+            TraceMetadata::compiler_emitted(
+                "abc123",
+                "evm/sonatina",
+                vec!["fe".to_string(), "dev".to_string(), "trace".to_string()],
+                uri.as_str(),
+                vec!["runtime=attached".to_string()],
+            ),
+            vec![
+                node(function.clone()),
+                node(instruction.clone()),
+                TraceFact::Instruction(InstructionFact::new(instruction, function, 0, "STOP")),
+            ],
+        );
+        let mut sink = JsonlTraceSink::new(Vec::new());
+        sink.write_bundle(&bundle).unwrap();
+        std::fs::write(&trace_path, sink.into_inner()).unwrap();
+        let mut config = introspection_config::FeToolingConfig::default();
+        config.lsp.trace.attached_trace = Some(trace_path.display().to_string());
+        let mut backend = test_backend_with_config(config);
+        backend.set_document_version(uri.clone(), 11);
+        let session =
+            backend.create_trace_viewer_session(uri, "evm", "O2", "source-postopt-bytecode", None);
+
+        let model = handle_trace_workbench_model(
+            &mut backend,
+            TraceWorkbenchSessionRequest {
+                session_id: session.id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(model["metadata"]["data_source"], "lsp-live");
+        assert_eq!(model["revision"]["id"], 11);
+        assert!(model["notes"].as_array().unwrap().iter().any(|note| note
+            == "The live endpoint uses the shared trace-query workbench projection path."));
+        let revisions = backend.trace_viewer_revisions(&session.id).unwrap();
+        assert_eq!(revisions.len(), 1);
+        assert_eq!(revisions[0].status, "ready");
+        assert!(revisions[0].model_digest.starts_with("blake3:"));
+
+        tokio::task::spawn_blocking(move || drop(backend))
+            .await
+            .expect("backend drop task panicked");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
