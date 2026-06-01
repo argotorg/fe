@@ -6883,6 +6883,38 @@ fn exact_postopt_lineage_targets_by_prepared(
     targets
 }
 
+fn has_invalid_exact_source_lineage_for_pc(
+    snapshot: &TraceSnapshot,
+    instruction: &OriginExportKey,
+    exact_reachable: &BTreeSet<OriginExportKey>,
+    exact_postopt_lineage_by_prepared: &BTreeMap<OriginExportKey, BTreeSet<OriginExportKey>>,
+    prepared_lineage_events: &BTreeSet<(OriginExportKey, OriginExportKey)>,
+) -> bool {
+    if snapshot.facts().iter().any(|fact| {
+        matches!(
+            fact,
+            TraceFact::OriginEdge(edge)
+                if edge.from == *instruction && invalid_direct_bytecode_to_postopt_edge(edge)
+        )
+    }) {
+        return true;
+    }
+
+    exact_reachable
+        .iter()
+        .filter(|target| is_prepared_sonatina_audit_origin(target))
+        .any(|prepared| {
+            exact_postopt_lineage_by_prepared
+                .get(prepared)
+                .is_some_and(|postopt_targets| {
+                    !postopt_targets.is_empty()
+                        && !postopt_targets.iter().any(|postopt| {
+                            prepared_lineage_events.contains(&(prepared.clone(), postopt.clone()))
+                        })
+                })
+        })
+}
+
 struct NonExactPreparedLineage {
     postopt_origin: OriginExportKey,
     status: LinkStatus,
@@ -6968,14 +7000,29 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
             continue;
         }
         total_bytecode_pcs += 1;
-        let sources = semantic_index
-            .source_candidates_for_instruction(
-                &instruction,
-                trace_index::TraceReachabilityPolicy::ExactOnly,
-            )
-            .into_iter()
-            .filter_map(|origin| index.source_attribution(&origin))
-            .collect::<Vec<_>>();
+        let reachable = semantic_index.reachable_targets(
+            &instruction,
+            trace_index::TraceReachabilityPolicy::ExactOnly,
+        );
+        let has_invalid_exact_source_lineage = has_invalid_exact_source_lineage_for_pc(
+            snapshot,
+            &instruction,
+            &reachable,
+            &exact_postopt_lineage_by_prepared,
+            &prepared_lineage_events,
+        );
+        let sources = if has_invalid_exact_source_lineage {
+            Vec::new()
+        } else {
+            semantic_index
+                .source_candidates_for_instruction(
+                    &instruction,
+                    trace_index::TraceReachabilityPolicy::ExactOnly,
+                )
+                .into_iter()
+                .filter_map(|origin| index.source_attribution(&origin))
+                .collect::<Vec<_>>()
+        };
         match sources.len() {
             0 => unmapped_pcs += 1,
             1 => source_exact_pcs += 1,
@@ -6986,11 +7033,6 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
                 .entry((source.label, source.origin.kind().to_string()))
                 .or_default() += 1;
         }
-
-        let reachable = semantic_index.reachable_targets(
-            &instruction,
-            trace_index::TraceReachabilityPolicy::ExactOnly,
-        );
         let optimized_targets_for_pc = reachable
             .iter()
             .filter(|target| is_optimized_sonatina_audit_origin(target))
@@ -8491,9 +8533,9 @@ mod tests {
         let report = demo_service().attribution_audit().unwrap();
 
         assert_eq!(report.total_bytecode_pcs, 4);
-        assert_eq!(report.source_exact_pcs, 2);
+        assert_eq!(report.source_exact_pcs, 0);
         assert_eq!(report.source_ambiguous_pcs, 1);
-        assert_eq!(report.unmapped_pcs, 1);
+        assert_eq!(report.unmapped_pcs, 3);
         assert_eq!(report.optimized_sonatina_linked_pcs, 2);
         assert_eq!(report.prepared_linked_pcs, 0);
         assert_eq!(report.missing_optimized_to_prepared_lineage_pcs, 0);
@@ -9098,7 +9140,12 @@ mod tests {
         let missing_links = report.missing_links.as_ref().unwrap();
 
         assert_eq!(report.prepared_linked_pcs, 1);
+        assert_eq!(report.source_exact_pcs, 0);
+        assert_eq!(report.unmapped_pcs, 1);
+        assert!(report.source_lines.is_empty());
         assert_eq!(missing_links.summary.status, LinkOverallStatus::Invalid);
+        assert_eq!(missing_links.summary.exact_source_to_bytecode_pcs, 0);
+        assert_eq!(missing_links.summary.unmapped_bytecode_pcs, 1);
         assert_eq!(missing_links.summary.invalid_count, 1);
         assert_eq!(
             missing_links.invalid[0].issue_code,
