@@ -881,6 +881,27 @@ async fn trace_workbench_bootstrap_for_event(
         .map_err(|err| format!("trace workbench revision lookup failed: {err:?}"))
 }
 
+async fn trace_workbench_model_for_event(
+    session_id: String,
+    actor_rx: watch::Receiver<Option<SharedActor>>,
+) -> Result<serde_json::Value, String> {
+    let actor_ref = ready_actor(actor_rx).await?;
+    actor_ref.register_handler_async_mutating(
+        MessageKey(LspActorKey::of::<
+            crate::introspection::TraceWorkbenchSessionRequest,
+        >()),
+        crate::introspection::handle_trace_workbench_model,
+    );
+    let dispatcher = TraceQueryDispatcher;
+    actor_ref
+        .ask::<_, serde_json::Value, _>(
+            &dispatcher,
+            crate::introspection::TraceWorkbenchSessionRequest { session_id },
+        )
+        .await
+        .map_err(|err| format!("trace workbench model lookup failed: {err:?}"))
+}
+
 async fn handle_trace_workbench_select_http(
     session_id: String,
     query: BTreeMap<String, String>,
@@ -899,16 +920,20 @@ async fn handle_trace_workbench_select_http(
             serde_json::json!({ "reason": reason }),
         );
     }
-    let bootstrap = match trace_workbench_bootstrap_for_event(session_id.clone(), actor_rx).await {
-        Ok(response) => response,
-        Err(reason) => {
-            return json_response(
-                StatusCode::NOT_FOUND,
-                serde_json::json!({ "reason": reason }),
-            );
-        }
-    };
-    let resolved_rows = trace_workbench_resolved_rows_for_selection(&selection);
+    let bootstrap =
+        match trace_workbench_bootstrap_for_event(session_id.clone(), actor_rx.clone()).await {
+            Ok(response) => response,
+            Err(reason) => {
+                return json_response(
+                    StatusCode::NOT_FOUND,
+                    serde_json::json!({ "reason": reason }),
+                );
+            }
+        };
+    let model = trace_workbench_model_for_event(session_id.clone(), actor_rx)
+        .await
+        .ok();
+    let resolved_rows = trace_workbench_resolved_rows_for_selection(&selection, model.as_ref());
     let event = trace_workbench_selection_event(
         &session_id,
         bootstrap.revision.id,
@@ -934,11 +959,48 @@ fn trace_workbench_selection_event(
     })
 }
 
-fn trace_workbench_resolved_rows_for_selection(selection: &serde_json::Value) -> Vec<String> {
+fn trace_workbench_resolved_rows_for_selection(
+    selection: &serde_json::Value,
+    model: Option<&serde_json::Value>,
+) -> Vec<String> {
     if let Some(row) = selection.get("row").and_then(serde_json::Value::as_str)
         && !row.trim().is_empty()
     {
         return vec![row.to_string()];
+    }
+    if let Some(stable) = selection
+        .get("stableIdentity")
+        .or_else(|| selection.get("stable_identity"))
+        && let Some(rows) = trace_workbench_rows_for_stable_identity(stable, model)
+    {
+        return rows;
+    }
+    if let Some(token) = selection
+        .get("stableIdentityToken")
+        .or_else(|| selection.get("stable_identity_token"))
+        .and_then(serde_json::Value::as_str)
+        && let Some(rows) = trace_workbench_rows_for_stable_identity_token(token, model)
+    {
+        return rows;
+    }
+    if let Some(origin) = selection
+        .get("origin")
+        .or_else(|| selection.get("originKey"))
+        .or_else(|| selection.get("origin_key"))
+        .or_else(|| selection.get("node"))
+        .and_then(serde_json::Value::as_str)
+        && let Some(rows) = trace_workbench_index_rows(model, "origin_to_rows", origin)
+    {
+        return rows;
+    }
+    if let Some(pc) = selection
+        .get("bytecodePc")
+        .or_else(|| selection.get("bytecode_pc"))
+        .or_else(|| selection.get("pc"))
+        .and_then(trace_workbench_json_key_string)
+        && let Some(rows) = trace_workbench_index_rows(model, "bytecode_pcs", &pc)
+    {
+        return rows;
     }
     if let Some(source_ref) = selection
         .get("sourceRef")
@@ -947,6 +1009,9 @@ fn trace_workbench_resolved_rows_for_selection(selection: &serde_json::Value) ->
         && let Some(line) = source_ref.strip_prefix("main:")
         && let Ok(line) = line.parse::<u64>()
     {
+        if let Some(rows) = trace_workbench_index_rows(model, "source_lines", source_ref) {
+            return rows;
+        }
         return vec![trace_workbench_source_row_id(line)];
     }
     let Some(line) = selection
@@ -958,7 +1023,84 @@ fn trace_workbench_resolved_rows_for_selection(selection: &serde_json::Value) ->
     else {
         return Vec::new();
     };
-    vec![trace_workbench_source_row_id(line.saturating_add(1))]
+    let source_ref = format!("main:{}", line.saturating_add(1));
+    trace_workbench_index_rows(model, "source_lines", &source_ref)
+        .unwrap_or_else(|| vec![trace_workbench_source_row_id(line.saturating_add(1))])
+}
+
+fn trace_workbench_rows_for_stable_identity(
+    stable: &serde_json::Value,
+    model: Option<&serde_json::Value>,
+) -> Option<Vec<String>> {
+    let kind = stable.get("kind").and_then(serde_json::Value::as_str)?;
+    let value = stable
+        .get("value")
+        .and_then(trace_workbench_json_key_string)?;
+    trace_workbench_index_rows(model, "stable_identities", &format!("{kind}:{value}"))
+}
+
+fn trace_workbench_rows_for_stable_identity_token(
+    token: &str,
+    model: Option<&serde_json::Value>,
+) -> Option<Vec<String>> {
+    let (kind, value) = token.split_once('=')?;
+    let value = trace_workbench_percent_decode(value)?;
+    trace_workbench_index_rows(model, "stable_identities", &format!("{kind}:{value}"))
+}
+
+fn trace_workbench_percent_decode(value: &str) -> Option<String> {
+    let mut bytes = Vec::with_capacity(value.len());
+    let mut chars = value.as_bytes().iter().copied();
+    while let Some(byte) = chars.next() {
+        if byte == b'%' {
+            let high = chars.next()?;
+            let low = chars.next()?;
+            let high = trace_workbench_hex_value(high)?;
+            let low = trace_workbench_hex_value(low)?;
+            bytes.push((high << 4) | low);
+        } else if byte == b'+' {
+            bytes.push(b' ');
+        } else {
+            bytes.push(byte);
+        }
+    }
+    String::from_utf8(bytes).ok()
+}
+
+fn trace_workbench_hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn trace_workbench_index_rows(
+    model: Option<&serde_json::Value>,
+    index: &str,
+    key: &str,
+) -> Option<Vec<String>> {
+    let value = model?.get("indexes")?.get(index)?.get(key)?;
+    let mut rows = match value {
+        serde_json::Value::String(row) => vec![row.clone()],
+        serde_json::Value::Array(rows) => rows
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+        _ => Vec::new(),
+    };
+    rows.sort();
+    rows.dedup();
+    (!rows.is_empty()).then_some(rows)
+}
+
+fn trace_workbench_json_key_string(value: &serde_json::Value) -> Option<String> {
+    value
+        .as_str()
+        .map(str::to_string)
+        .or_else(|| value.as_u64().map(|value| value.to_string()))
 }
 
 fn trace_workbench_source_row_id(line_number: u64) -> String {
@@ -1138,20 +1280,78 @@ mod tests {
             }
         });
         assert_eq!(
-            trace_workbench_resolved_rows_for_selection(&selection),
+            trace_workbench_resolved_rows_for_selection(&selection, None),
             vec!["source-main-line-17".to_string()]
         );
 
         let selection = serde_json::json!({ "sourceRef": "main:94" });
         assert_eq!(
-            trace_workbench_resolved_rows_for_selection(&selection),
+            trace_workbench_resolved_rows_for_selection(&selection, None),
             vec!["source-main-line-94".to_string()]
         );
 
         let selection = serde_json::json!({ "row": "origin-abc123" });
         assert_eq!(
-            trace_workbench_resolved_rows_for_selection(&selection),
+            trace_workbench_resolved_rows_for_selection(&selection, None),
             vec!["origin-abc123".to_string()]
+        );
+    }
+
+    #[test]
+    fn trace_workbench_selection_resolves_projection_indexes() {
+        let model = serde_json::json!({
+            "indexes": {
+                "source_lines": { "main:17": "source-main-line-17-model" },
+                "origin_to_rows": { "bytecode.pc\u{1f}demo\u{1f}pc:68": ["origin-bytecode-68"] },
+                "bytecode_pcs": { "68": ["origin-bytecode-68"] },
+                "stable_identities": {
+                    "origin:bytecode.pc\u{1f}demo\u{1f}pc:68": ["origin-bytecode-68"],
+                    "source_line:main:17": ["source-main-line-17-model"]
+                }
+            }
+        });
+
+        assert_eq!(
+            trace_workbench_resolved_rows_for_selection(
+                &serde_json::json!({ "sourceRef": "main:17" }),
+                Some(&model),
+            ),
+            vec!["source-main-line-17-model".to_string()]
+        );
+        assert_eq!(
+            trace_workbench_resolved_rows_for_selection(
+                &serde_json::json!({ "pc": 68 }),
+                Some(&model),
+            ),
+            vec!["origin-bytecode-68".to_string()]
+        );
+        assert_eq!(
+            trace_workbench_resolved_rows_for_selection(
+                &serde_json::json!({ "origin": "bytecode.pc\u{1f}demo\u{1f}pc:68" }),
+                Some(&model),
+            ),
+            vec!["origin-bytecode-68".to_string()]
+        );
+        assert_eq!(
+            trace_workbench_resolved_rows_for_selection(
+                &serde_json::json!({
+                    "stableIdentity": {
+                        "kind": "origin",
+                        "value": "bytecode.pc\u{1f}demo\u{1f}pc:68"
+                    }
+                }),
+                Some(&model),
+            ),
+            vec!["origin-bytecode-68".to_string()]
+        );
+        assert_eq!(
+            trace_workbench_resolved_rows_for_selection(
+                &serde_json::json!({
+                    "stableIdentityToken": "origin=bytecode.pc%1Fdemo%1Fpc%3A68"
+                }),
+                Some(&model),
+            ),
+            vec!["origin-bytecode-68".to_string()]
         );
     }
 
