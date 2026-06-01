@@ -806,6 +806,9 @@ mod tests {
         assert!(FE_ORIGIN_TRACE_JS.contains("dataset.selectionGroups"));
         assert!(FE_ORIGIN_TRACE_JS.contains("hoverClasses(row)"));
         assert!(FE_ORIGIN_TRACE_JS.contains("selectionClasses(row)"));
+        assert!(!FE_ORIGIN_TRACE_JS.contains(
+            "_displayStatus(entries, this._railStatus(displayClasses)"
+        ));
         assert!(!FE_ORIGIN_TRACE_JS.contains("label: \"exact link\""));
         assert!(!FE_ORIGIN_TRACE_JS.contains("satisfied_exact: \"exact\""));
         assert!(FE_ORIGIN_TRACE_JS.contains("satisfied_exact: \"satisfied\""));

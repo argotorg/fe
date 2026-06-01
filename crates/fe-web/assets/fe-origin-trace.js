@@ -1589,7 +1589,7 @@
       if (!detail) return;
       detail.textContent = "";
       if (!groups || groups.length === 0) {
-        var statusCard = this._selectionStatusCard([], this._selectedDisplayClasses || []);
+        var statusCard = this._selectionStatusCard([]);
         if (statusCard) detail.append(statusCard);
         detail.append(el("p", "muted", "No row selected."));
         detail.append(el("p", "audit-note", this._provenanceCopy()));
@@ -1604,7 +1604,7 @@
       });
       var auditByClass = this._auditByClass();
       var selected = groups.map(function (group) { return closuresByClass[group]; }).filter(Boolean);
-      var statusCard = this._selectionStatusCard(groups, this._selectedDisplayClasses || []);
+      var statusCard = this._selectionStatusCard(groups);
       if (statusCard) detail.append(statusCard);
       var spanGroups = this._spanGroupsForClasses(groups);
       if (spanGroups.length && this._displayMode !== "compact") {
@@ -1695,9 +1695,9 @@
       return (classes || []).map(function (name) { return byClass[name]; }).filter(Boolean);
     }
 
-    _selectionStatusCard(groups, displayClasses) {
+    _selectionStatusCard(groups) {
       var entries = this._auditForClasses(groups);
-      var status = this._displayStatus(entries, this._railStatus(displayClasses), { suppressExact: true });
+      var status = this._displayStatus(entries, null, { suppressExact: true });
       if (!status) return null;
       var box = el("div", "status-card status-" + status.kind);
       box.append(el("h3", "", this._selectedTraceLabel || "Selected row"));
