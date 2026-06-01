@@ -844,6 +844,7 @@ fn demo_provenance_status(
         attribution_audit.optimized_sonatina_linked_pcs,
         attribution_audit.prepared_linked_pcs,
         attribution_audit.missing_optimized_to_prepared_lineage_pcs,
+        attribution_audit.non_exact_optimized_to_prepared_lineage_pcs,
     )
 }
 
@@ -854,13 +855,26 @@ fn demo_provenance_status_from_signals(
     optimized_linked_pcs: usize,
     prepared_linked_pcs: usize,
     missing_optimized_to_prepared_pcs: usize,
+    non_exact_optimized_to_prepared_pcs: usize,
 ) -> DemoProvenanceStatus {
     let source_to_optimized = closure_source_to_optimized || optimized_linked_pcs > 0;
-    let optimized_to_prepared = closure_optimized_to_prepared
-        || (prepared_linked_pcs > 0 && missing_optimized_to_prepared_pcs == 0);
+    let optimized_to_prepared = if closure_optimized_to_prepared {
+        "available"
+    } else if non_exact_optimized_to_prepared_pcs > 0 {
+        "non-exact"
+    } else if prepared_linked_pcs > 0 && missing_optimized_to_prepared_pcs == 0 {
+        "available"
+    } else {
+        "missing"
+    };
     let prepared_to_bytecode = closure_prepared_to_bytecode || prepared_linked_pcs > 0;
-    let summary = if source_to_optimized && optimized_to_prepared && prepared_to_bytecode {
+    let summary = if source_to_optimized
+        && optimized_to_prepared == "available"
+        && prepared_to_bytecode
+    {
         "source to optimized to prepared to bytecode available".to_string()
+    } else if source_to_optimized && optimized_to_prepared == "non-exact" && prepared_to_bytecode {
+        "bytecode has generated/context optimized to prepared explanation, but not exact source attribution".to_string()
     } else if source_to_optimized && prepared_to_bytecode {
         "bytecode is prepared-linked; exact source attribution needs optimized to prepared lineage"
             .to_string()
@@ -869,7 +883,7 @@ fn demo_provenance_status_from_signals(
     };
     DemoProvenanceStatus {
         source_to_optimized: status_word(source_to_optimized),
-        optimized_to_prepared: status_word(optimized_to_prepared),
+        optimized_to_prepared: optimized_to_prepared.to_string(),
         prepared_to_bytecode: status_word(prepared_to_bytecode),
         summary,
     }
@@ -2372,7 +2386,7 @@ mod tests {
 
     #[test]
     fn demo_provenance_uses_attribution_audit_when_closure_islands_are_disjoint() {
-        let status = demo_provenance_status_from_signals(false, false, false, 7, 11, 11);
+        let status = demo_provenance_status_from_signals(false, false, false, 7, 11, 11, 0);
 
         assert_eq!(status.source_to_optimized, "available");
         assert_eq!(status.optimized_to_prepared, "missing");
@@ -2380,6 +2394,19 @@ mod tests {
         assert_eq!(
             status.summary,
             "bytecode is prepared-linked; exact source attribution needs optimized to prepared lineage"
+        );
+    }
+
+    #[test]
+    fn demo_provenance_reports_non_exact_optimized_prepared_evidence() {
+        let status = demo_provenance_status_from_signals(false, false, false, 7, 11, 0, 3);
+
+        assert_eq!(status.source_to_optimized, "available");
+        assert_eq!(status.optimized_to_prepared, "non-exact");
+        assert_eq!(status.prepared_to_bytecode, "available");
+        assert_eq!(
+            status.summary,
+            "bytecode has generated/context optimized to prepared explanation, but not exact source attribution"
         );
     }
 
