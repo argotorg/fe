@@ -789,8 +789,21 @@ pub fn main() -> u64 {
             fact,
             TraceFact::OriginEdge(edge)
                 if edge.from.kind() == "bytecode.pc"
-                    && edge.to.kind() == codegen::trace::SONATINA_EVM_PREPARED_INST_KIND
+                    && edge.to.kind() == codegen::trace::EVM_VCODE_INST_KIND
                     && edge.label == OriginEdgeLabel::EmittedFrom
+        )));
+        assert!(snapshot.facts().iter().any(|fact| matches!(
+            fact,
+            TraceFact::OriginEdge(edge)
+                if edge.from.kind() == codegen::trace::EVM_VCODE_INST_KIND
+                    && edge.to.kind() == codegen::trace::SONATINA_EVM_PREPARED_INST_KIND
+                    && edge.label == OriginEdgeLabel::LoweredFrom
+        )));
+        assert!(!snapshot.facts().iter().any(|fact| matches!(
+            fact,
+            TraceFact::OriginEdge(edge)
+                if edge.from.kind() == "bytecode.pc"
+                    && edge.to.kind() == codegen::trace::SONATINA_EVM_PREPARED_INST_KIND
         )));
         assert!(!snapshot.facts().iter().any(|fact| matches!(
             fact,
@@ -840,6 +853,10 @@ pub fn main() -> u64 {
             true
         );
         assert_eq!(
+            model["parity_summary"]["trace_profile"]["has_evm_vcode"],
+            true
+        );
+        assert_eq!(
             model["parity_summary"]["trace_profile"]["has_bytecode"],
             true
         );
@@ -854,10 +871,21 @@ pub fn main() -> u64 {
                 .is_some_and(|count| count > 0)
         );
         assert!(
+            model["parity_summary"]["origin_counts"]["evm.vcode.inst"]
+                .as_u64()
+                .is_some_and(|count| count > 0)
+        );
+        assert!(
             model["parity_summary"]["origin_counts"]["bytecode.pc"]
                 .as_u64()
                 .is_some_and(|count| count > 0)
         );
+        assert!(model["panels"].as_array().unwrap().iter().any(|panel| {
+            panel["id"] == "evm-vcode"
+                && panel["rows"]
+                    .as_array()
+                    .is_some_and(|rows| !rows.is_empty())
+        }));
         assert!(model["notes"].as_array().unwrap().iter().any(|note| note
             == "The live endpoint uses the shared trace-query workbench projection path."));
 

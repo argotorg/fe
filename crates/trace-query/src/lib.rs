@@ -2010,6 +2010,7 @@ struct TraceWorkbenchTraceProfile {
     has_sonatina_preopt: bool,
     has_sonatina_postopt: bool,
     has_evm_prepared: bool,
+    has_evm_vcode: bool,
     has_bytecode: bool,
 }
 
@@ -2188,6 +2189,7 @@ fn trace_workbench_trace_profile(snapshot: &TraceSnapshot) -> TraceWorkbenchTrac
     let mut has_sonatina_preopt = false;
     let mut has_sonatina_postopt = false;
     let mut has_evm_prepared = false;
+    let mut has_evm_vcode = false;
     let mut has_bytecode = false;
     for fact in snapshot.facts() {
         let TraceFact::OriginNode(node) = fact else {
@@ -2197,6 +2199,9 @@ fn trace_workbench_trace_profile(snapshot: &TraceSnapshot) -> TraceWorkbenchTrac
             kind if kind.starts_with("sonatina.preopt.") => has_sonatina_preopt = true,
             kind if kind.starts_with("sonatina.postopt.") => has_sonatina_postopt = true,
             kind if kind.starts_with("sonatina.evm.prepared.") => has_evm_prepared = true,
+            kind if kind.starts_with("evm.vcode.") || kind.starts_with("vcode.") => {
+                has_evm_vcode = true
+            }
             kind if kind.starts_with("bytecode.") => has_bytecode = true,
             _ => {}
         }
@@ -2215,6 +2220,7 @@ fn trace_workbench_trace_profile(snapshot: &TraceSnapshot) -> TraceWorkbenchTrac
         has_sonatina_preopt,
         has_sonatina_postopt,
         has_evm_prepared,
+        has_evm_vcode,
         has_bytecode,
     }
 }
@@ -10364,6 +10370,25 @@ mod tests {
         assert_eq!(profile.profile, "partial_preopt");
         assert!(profile.has_sonatina_preopt);
         assert!(!profile.has_sonatina_postopt);
+        assert!(!profile.has_evm_vcode);
+        assert!(profile.has_bytecode);
+    }
+
+    #[test]
+    fn trace_workbench_trace_profile_reports_vcode_identity_layer() {
+        let snapshot = snapshot(vec![
+            node(key("sonatina.postopt.inst", "demo", "inst:0")),
+            node(key("sonatina.evm.prepared.inst", "demo", "inst:0")),
+            node(key("evm.vcode.inst", "demo", "inst:0")),
+            node(key("bytecode.pc", "demo", "pc:0")),
+        ]);
+
+        let profile = super::trace_workbench_trace_profile(&snapshot);
+
+        assert_eq!(profile.profile, "postopt_prepared_bytecode");
+        assert!(profile.has_sonatina_postopt);
+        assert!(profile.has_evm_prepared);
+        assert!(profile.has_evm_vcode);
         assert!(profile.has_bytecode);
     }
 
