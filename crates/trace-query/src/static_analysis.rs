@@ -588,6 +588,7 @@ pub fn static_analysis_report(snapshot: &TraceSnapshot) -> StaticAnalysisReport 
     } else if coverage.unmapped_pcs == 0
         && coverage.ambiguous_pcs == 0
         && coverage.sonatina_only_pcs == 0
+        && coverage.prepared_only_pcs == 0
     {
         CheckStatus::Pass
     } else {
@@ -1301,6 +1302,41 @@ mod tests {
                 .iter()
                 .any(|gap| gap.id.contains("sonatina_only"))
         );
+        assert!(
+            report
+                .gaps
+                .iter()
+                .any(|gap| gap.id.contains("prepared_only"))
+        );
+    }
+
+    #[test]
+    fn provenance_coverage_warns_for_prepared_only_bytecode() {
+        let function = key("function", "demo", "recv");
+        let prepared_inst = key("sonatina.evm.prepared.inst", "demo", "inst:prepared");
+        let pc = key("bytecode.pc", "demo", "pc:0");
+        let facts = vec![
+            node(function.clone()),
+            node(prepared_inst.clone()),
+            node(pc.clone()),
+            TraceFact::Instruction(InstructionFact::new(pc.clone(), function, 0, "ADD")),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                pc,
+                prepared_inst,
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+        ];
+
+        let report = static_analysis_report(&snapshot(facts));
+        let check = &report.checks[0];
+        let coverage = &check.evidence["coverage"];
+
+        assert_eq!(check.status, CheckStatus::Warning);
+        assert_eq!(coverage["total_instructions"], 1);
+        assert_eq!(coverage["primary_prepared_sonatina_pcs"], 1);
+        assert_eq!(coverage["prepared_only_pcs"], 1);
+        assert_eq!(coverage["sonatina_only_pcs"], 0);
         assert!(
             report
                 .gaps
