@@ -1233,7 +1233,7 @@
         spanBox.append(el("h3", "", "Source span group"));
         spanGroups.forEach(function (group) {
           var section = el("div", "span-group");
-          section.append(el("p", "span-title", (group.source_text || "unknown source") + " · " + group.closures + " evidence paths"));
+          section.append(el("p", "span-title", (group.source_text || "unknown source") + " · " + group.closures + " linked regions"));
           section.append(el("p", "muted", group.closures_with_targets + " target-connected · " + group.source_only_closures + " source-only sibling(s)"));
           section.append(this._memberList("Target-connected", group.target_connected_members || []));
           section.append(this._memberList("Source-only siblings", group.source_only_members || []));
@@ -1290,7 +1290,7 @@
       var audit = this._data.audit || {};
       var box = el("div", "audit-summary");
       box.append(el("h3", "", "Audit summary"));
-      box.append(el("p", "muted", (audit.total_closures || 0) + " evidence paths · " + (audit.suspicious_closures || 0) + " need evidence · " + ((audit.span_groups && audit.span_groups.mixed_connectivity_groups) || 0) + " mixed source spans"));
+      box.append(el("p", "muted", (audit.total_closures || 0) + " linked regions · " + (audit.suspicious_closures || 0) + " need compiler evidence · " + ((audit.span_groups && audit.span_groups.mixed_connectivity_groups) || 0) + " mixed source spans"));
       var counts = audit.primary_counts || {};
       Object.keys(counts).forEach(function (name) {
         var row = el("div", "audit-count");
