@@ -5676,7 +5676,11 @@ fn missing_link_audit_report(
 ) -> MissingLinkAuditReport {
     let hir_to_mir = hir_to_mir_boundary_audit(snapshot);
     let missing_hir_to_mir_count = hir_to_mir.missing.len();
-    let missing_required_count = lineage_gaps.len() + missing_hir_to_mir_count;
+    let mir_to_preopt = mir_to_preopt_boundary_audit(snapshot);
+    let missing_mir_to_preopt_count = mir_to_preopt.missing.len();
+    let missing_postopt_to_prepared_count = lineage_gaps.len();
+    let missing_required_count =
+        missing_postopt_to_prepared_count + missing_hir_to_mir_count + missing_mir_to_preopt_count;
     let expected_absent = expected_absent_links(snapshot);
     let overall_status = if !invalid.is_empty() {
         LinkOverallStatus::Invalid
@@ -5690,6 +5694,9 @@ fn missing_link_audit_report(
     let mut top_blockers = Vec::new();
     if missing_hir_to_mir_count > 0 {
         top_blockers.push(LinkBoundaryKind::HirToMir);
+    }
+    if missing_mir_to_preopt_count > 0 {
+        top_blockers.push(LinkBoundaryKind::MirToSonatinaPreOpt);
     }
     if !lineage_gaps.is_empty() || !invalid.is_empty() {
         top_blockers.push(LinkBoundaryKind::PostOptToPrepared);
@@ -5723,22 +5730,53 @@ fn missing_link_audit_report(
         });
     }
 
-    if prepared_linked_pcs > 0 || missing_required_count > 0 || !invalid.is_empty() {
+    if mir_to_preopt.total() > 0 {
+        let mut status_counts = BTreeMap::new();
+        if mir_to_preopt.exact > 0 {
+            status_counts.insert(LinkStatus::SatisfiedExact, mir_to_preopt.exact);
+        }
+        if mir_to_preopt.generated > 0 {
+            status_counts.insert(LinkStatus::SatisfiedGenerated, mir_to_preopt.generated);
+        }
+        if missing_mir_to_preopt_count > 0 {
+            status_counts.insert(LinkStatus::MissingRequired, missing_mir_to_preopt_count);
+        }
+        boundary_summaries.push(LinkBoundarySummary {
+            boundary: LinkBoundaryKind::MirToSonatinaPreOpt,
+            owner_phase: CompilerPhase::SonatinaPreOpt,
+            status_counts,
+            affected_origins: mir_to_preopt.total(),
+            affected_bytecode_pcs: 0,
+            top_issue_codes: [
+                (mir_to_preopt.generated > 0).then_some(LinkIssueCode::GeneratedExplanationOnly),
+                (missing_mir_to_preopt_count > 0)
+                    .then_some(LinkIssueCode::MissingMirToPreoptLowering),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+        });
+    }
+
+    if prepared_linked_pcs > 0 || !lineage_gaps.is_empty() || !invalid.is_empty() {
         let mut status_counts = BTreeMap::new();
         let satisfied_prepared_lineage_count =
-            prepared_linked_pcs.saturating_sub(missing_required_count);
+            prepared_linked_pcs.saturating_sub(missing_postopt_to_prepared_count);
         if satisfied_prepared_lineage_count > 0 {
             status_counts.insert(LinkStatus::SatisfiedExact, satisfied_prepared_lineage_count);
         }
         if !invalid.is_empty() {
             status_counts.insert(LinkStatus::Invalid, invalid.len());
         }
-        if missing_required_count > 0 {
-            status_counts.insert(LinkStatus::MissingRequired, missing_required_count);
+        if missing_postopt_to_prepared_count > 0 {
+            status_counts.insert(
+                LinkStatus::MissingRequired,
+                missing_postopt_to_prepared_count,
+            );
         }
         let top_issue_codes = [
             (!invalid.is_empty()).then_some(LinkIssueCode::PreparedKeyedAsPostopt),
-            (missing_required_count > 0)
+            (missing_postopt_to_prepared_count > 0)
                 .then_some(LinkIssueCode::MissingOptimizedToPreparedLineage),
         ]
         .into_iter()
@@ -5806,6 +5844,30 @@ fn missing_link_audit_report(
         })
         .collect::<Vec<_>>();
     details.extend(
+        mir_to_preopt
+            .missing
+            .iter()
+            .take(MISSING_LINK_DETAIL_LIMIT.saturating_sub(details.len()))
+            .map(|origin| LinkGap {
+                gap_id: stable_short_id(&format!(
+                    "{:?}\n{}",
+                    LinkBoundaryKind::MirToSonatinaPreOpt,
+                    origin.canonical_storage_key()
+                )),
+                boundary: LinkBoundaryKind::MirToSonatinaPreOpt,
+                status: LinkStatus::MissingRequired,
+                issue_code: LinkIssueCode::MissingMirToPreoptLowering,
+                severity: LinkSeverity::Warning,
+                from_origin: origin.clone(),
+                from_representation: Some("mir".to_string()),
+                expected_to_phase: "sonatina.preopt".to_string(),
+                reached_frontier: "mir".to_string(),
+                candidate_hints: Vec::new(),
+                required_evidence: required_mir_to_preopt_evidence(),
+                cluster_id: Some("mir-to-preopt:missing-lowering".to_string()),
+            }),
+    );
+    details.extend(
         lineage_gaps
             .iter()
             .take(MISSING_LINK_DETAIL_LIMIT.saturating_sub(details.len()))
@@ -5859,6 +5921,35 @@ fn missing_link_audit_report(
             required_evidence: required_hir_to_mir_evidence(),
         });
     }
+    if missing_mir_to_preopt_count > 0 {
+        clusters.push(LinkGapCluster {
+            cluster_id: "mir-to-preopt:missing-lowering".to_string(),
+            boundary: LinkBoundaryKind::MirToSonatinaPreOpt,
+            status: LinkStatus::MissingRequired,
+            issue_code: LinkIssueCode::MissingMirToPreoptLowering,
+            severity: LinkSeverity::Warning,
+            owner_phase: CompilerPhase::SonatinaPreOpt,
+            headline: "MIR origin has no Sonatina pre-opt lowering evidence".to_string(),
+            explanation: "Runtime MIR statements and terminators should be connected to Sonatina pre-opt instructions by exact lowering or generated/synthetic explanation edges.".to_string(),
+            affected_origins: mir_to_preopt
+                .missing
+                .iter()
+                .take(25)
+                .cloned()
+                .map(|target| AttributionAuditTargetCount { target, count: 1 })
+                .collect(),
+            affected_bytecode_pcs: Vec::new(),
+            gap_count: missing_mir_to_preopt_count,
+            sample_gap_ids: details
+                .iter()
+                .filter(|gap| gap.boundary == LinkBoundaryKind::MirToSonatinaPreOpt)
+                .take(MISSING_LINK_CLUSTER_SAMPLE_LIMIT)
+                .map(|gap| gap.gap_id.clone())
+                .collect(),
+            candidate_hints: Vec::new(),
+            required_evidence: required_mir_to_preopt_evidence(),
+        });
+    }
     if !lineage_gaps.is_empty() {
         let mut affected_origins = attribution_audit_target_counts(lineage_gap_targets.clone());
         affected_origins.truncate(25);
@@ -5878,9 +5969,10 @@ fn missing_link_audit_report(
             explanation: "Source and optimized Sonatina evidence may exist, and EVM prepared/bytecode evidence exists, but no explicit optimized→prepared lineage edge is present for these prepared origins.".to_string(),
             affected_origins,
             affected_bytecode_pcs,
-            gap_count: missing_required_count,
+            gap_count: missing_postopt_to_prepared_count,
             sample_gap_ids: details
                 .iter()
+                .filter(|gap| gap.boundary == LinkBoundaryKind::PostOptToPrepared)
                 .take(MISSING_LINK_CLUSTER_SAMPLE_LIMIT)
                 .map(|gap| gap.gap_id.clone())
                 .collect(),
@@ -5919,6 +6011,19 @@ struct HirToMirBoundaryAudit {
 }
 
 impl HirToMirBoundaryAudit {
+    fn total(&self) -> usize {
+        self.exact + self.generated + self.missing.len()
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct MirToPreoptBoundaryAudit {
+    exact: usize,
+    generated: usize,
+    missing: Vec<OriginExportKey>,
+}
+
+impl MirToPreoptBoundaryAudit {
     fn total(&self) -> usize {
         self.exact + self.generated + self.missing.len()
     }
@@ -5971,6 +6076,60 @@ fn hir_to_mir_boundary_audit(snapshot: &TraceSnapshot) -> HirToMirBoundaryAudit 
         .count();
 
     HirToMirBoundaryAudit {
+        exact: exact.len(),
+        generated: generated_only,
+        missing,
+    }
+}
+
+fn mir_to_preopt_boundary_audit(snapshot: &TraceSnapshot) -> MirToPreoptBoundaryAudit {
+    let mut mir_origins = BTreeSet::<OriginExportKey>::new();
+    let mut has_preopt_origin = false;
+    let mut exact = BTreeSet::<OriginExportKey>::new();
+    let mut generated = BTreeSet::<OriginExportKey>::new();
+
+    for fact in snapshot.facts() {
+        match fact {
+            TraceFact::OriginNode(node) if is_mir_audit_origin(&node.key) => {
+                mir_origins.insert(node.key.clone());
+            }
+            TraceFact::OriginNode(node) if is_sonatina_preopt_inst_audit_origin(&node.key) => {
+                has_preopt_origin = true;
+            }
+            TraceFact::OriginEdge(edge)
+                if is_sonatina_preopt_inst_audit_origin(&edge.from)
+                    && is_mir_audit_origin(&edge.to) =>
+            {
+                match edge.traversal_class() {
+                    OriginEdgeTraversalClass::ExactAttribution
+                    | OriginEdgeTraversalClass::SnapshotAlias => {
+                        exact.insert(edge.to.clone());
+                    }
+                    OriginEdgeTraversalClass::Synthetic => {
+                        generated.insert(edge.to.clone());
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if !has_preopt_origin {
+        return MirToPreoptBoundaryAudit::default();
+    }
+
+    let missing = mir_origins
+        .iter()
+        .filter(|origin| !exact.contains(*origin) && !generated.contains(*origin))
+        .cloned()
+        .collect::<Vec<_>>();
+    let generated_only = generated
+        .iter()
+        .filter(|origin| !exact.contains(*origin))
+        .count();
+
+    MirToPreoptBoundaryAudit {
         exact: exact.len(),
         generated: generated_only,
         missing,
@@ -6064,6 +6223,14 @@ fn required_hir_to_mir_evidence() -> Vec<RequiredEvidence> {
         kind: RequiredEvidenceKind::ExactOriginEdge,
         owner_phase: CompilerPhase::Mir,
         description: "Emit MIR statement/terminator → HIR origin evidence as exact lowering or generated/synthetic explanation.".to_string(),
+    }]
+}
+
+fn required_mir_to_preopt_evidence() -> Vec<RequiredEvidence> {
+    vec![RequiredEvidence {
+        kind: RequiredEvidenceKind::ExactOriginEdge,
+        owner_phase: CompilerPhase::SonatinaPreOpt,
+        description: "Emit Sonatina pre-opt instruction → MIR statement/terminator evidence as exact lowering or generated/synthetic explanation.".to_string(),
     }]
 }
 
@@ -6352,6 +6519,10 @@ fn is_optimized_sonatina_audit_origin(key: &OriginExportKey) -> bool {
 
 fn is_prepared_sonatina_audit_origin(key: &OriginExportKey) -> bool {
     key.kind().starts_with("sonatina.evm.prepared")
+}
+
+fn is_sonatina_preopt_inst_audit_origin(key: &OriginExportKey) -> bool {
+    key.kind() == "sonatina.preopt.inst"
 }
 
 fn is_hir_audit_origin(key: &OriginExportKey) -> bool {
@@ -7824,6 +7995,86 @@ mod tests {
         assert_eq!(
             missing_links.gaps[0].required_evidence[0].kind,
             RequiredEvidenceKind::ExactOriginEdge
+        );
+        assert!(
+            !missing_links
+                .boundary_summaries
+                .iter()
+                .any(|summary| summary.boundary == LinkBoundaryKind::PostOptToPrepared)
+        );
+    }
+
+    #[test]
+    fn missing_link_audit_reports_mir_to_preopt_exact_generated_and_missing() {
+        let mir_exact = key("runtime.stmt", "demo", "block:0:stmt:0");
+        let mir_generated = key("runtime.stmt", "demo", "block:0:stmt:1");
+        let mir_missing = key("runtime.terminator", "demo", "block:0:term");
+        let preopt_exact = key("sonatina.preopt.inst", "demo", "block:0:stmt:0");
+        let preopt_generated = key("sonatina.preopt.inst", "demo", "block:0:stmt:1");
+        let snapshot = snapshot(vec![
+            node(mir_exact.clone()),
+            node(mir_generated.clone()),
+            node(mir_missing.clone()),
+            node(preopt_exact.clone()),
+            node(preopt_generated.clone()),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                preopt_exact,
+                mir_exact,
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::SonatinaPreOpt),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                preopt_generated,
+                mir_generated,
+                OriginEdgeLabel::SyntheticFor,
+                Some(CompilerPhase::SonatinaPreOpt),
+            )),
+        ]);
+        let report = TraceIntrospectionService::new(snapshot)
+            .attribution_audit()
+            .unwrap();
+        let missing_links = report.missing_links.as_ref().unwrap();
+
+        assert_eq!(missing_links.summary.status, LinkOverallStatus::Warning);
+        assert_eq!(
+            missing_links.summary.top_blockers,
+            vec![LinkBoundaryKind::MirToSonatinaPreOpt]
+        );
+        assert_eq!(missing_links.summary.missing_required_count, 1);
+        let mir_summary = missing_links
+            .boundary_summaries
+            .iter()
+            .find(|summary| summary.boundary == LinkBoundaryKind::MirToSonatinaPreOpt)
+            .expect("MIR to preopt boundary summary");
+        assert_eq!(mir_summary.affected_origins, 3);
+        assert_eq!(
+            mir_summary.status_counts.get(&LinkStatus::SatisfiedExact),
+            Some(&1)
+        );
+        assert_eq!(
+            mir_summary
+                .status_counts
+                .get(&LinkStatus::SatisfiedGenerated),
+            Some(&1)
+        );
+        assert_eq!(
+            mir_summary.status_counts.get(&LinkStatus::MissingRequired),
+            Some(&1)
+        );
+        assert_eq!(
+            missing_links.gaps[0].issue_code,
+            LinkIssueCode::MissingMirToPreoptLowering
+        );
+        assert_eq!(missing_links.gaps[0].from_origin, mir_missing);
+        assert_eq!(
+            missing_links.gaps[0].required_evidence[0].owner_phase,
+            CompilerPhase::SonatinaPreOpt
+        );
+        assert!(
+            !missing_links
+                .boundary_summaries
+                .iter()
+                .any(|summary| summary.boundary == LinkBoundaryKind::PostOptToPrepared)
         );
     }
 
