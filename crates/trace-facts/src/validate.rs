@@ -972,13 +972,13 @@ fn validate_prepared_lineage_event(
             .iter()
             .filter(|origin| is_prepared_codegen_origin_kind(origin.kind()))
         {
-            let has_origin_edge = edges
+            let has_semantic_edge = edges
                 .iter()
                 .any(|edge| is_prepared_lineage_event_edge(edge, prepared, postopt));
-            if !has_origin_edge {
+            if !has_semantic_edge {
                 push_error(
                     diagnostics,
-                    TraceValidationError::PreparedLineageEventMissingOriginEdge {
+                    TraceValidationError::PreparedLineageEventMissingSemanticEdge {
                         event: event.event.clone(),
                         prepared: prepared.clone(),
                         postopt: postopt.clone(),
@@ -2829,7 +2829,7 @@ pub enum TraceValidationError {
         event: OriginExportKey,
         role: &'static str,
     },
-    PreparedLineageEventMissingOriginEdge {
+    PreparedLineageEventMissingSemanticEdge {
         event: OriginExportKey,
         prepared: OriginExportKey,
         postopt: OriginExportKey,
@@ -3202,13 +3202,13 @@ impl fmt::Display for TraceValidationError {
                 "prepared lineage event {} is missing required {role}",
                 event.display_label()
             ),
-            Self::PreparedLineageEventMissingOriginEdge {
+            Self::PreparedLineageEventMissingSemanticEdge {
                 event,
                 prepared,
                 postopt,
             } => write!(
                 f,
-                "prepared lineage event {} has no exact origin edge from prepared {} to postopt {}",
+                "prepared lineage event {} has no semantic origin edge from prepared {} to postopt {}",
                 event.display_label(),
                 prepared.display_label(),
                 postopt.display_label()
@@ -4486,7 +4486,7 @@ mod tests {
         assert_eq!(
             TraceValidator::validate(&facts),
             Err(
-                TraceValidationError::PreparedLineageEventMissingOriginEdge {
+                TraceValidationError::PreparedLineageEventMissingSemanticEdge {
                     event,
                     prepared,
                     postopt,
@@ -4540,7 +4540,7 @@ mod tests {
     }
 
     #[test]
-    fn validator_rejects_prepared_lineage_event_without_origin_edge() {
+    fn validator_rejects_prepared_lineage_event_without_semantic_origin_edge() {
         let event = key("compiler.event", "fib", "prepared-lineage:0");
         let postopt = key(
             "sonatina.postopt.inst",
@@ -4577,7 +4577,7 @@ mod tests {
         assert_eq!(
             TraceValidator::validate(&facts),
             Err(
-                TraceValidationError::PreparedLineageEventMissingOriginEdge {
+                TraceValidationError::PreparedLineageEventMissingSemanticEdge {
                     event,
                     prepared,
                     postopt,
