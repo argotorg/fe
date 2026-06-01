@@ -755,7 +755,12 @@
       lines.forEach(function (line, index) {
         var classes = line.classes || [];
         var row = el("div", "source-line trace-region " + classes.concat(this._auditClasses(classes)).join(" "));
-        this._bindTraceGroups(row, classes, line.hover_groups, line.selection_groups);
+        this._bindTraceGroups(
+          row,
+          classes,
+          this._explicitInteractionGroups(line.hover_groups),
+          this._explicitInteractionGroups(line.selection_groups)
+        );
         row.id = line.row_id || this._rowId("source-main", index);
         row.dataset.sourceRef = "main:" + line.number;
         row.dataset.traceLabel = "source line " + line.number;
@@ -773,7 +778,12 @@
         ((section && section.lines) || []).forEach(function (line, lineIndex) {
           var classes = line.classes || [];
           var row = el("div", "source-line related-source-line trace-region " + classes.concat(this._auditClasses(classes)).join(" "));
-          this._bindTraceGroups(row, classes, line.hover_groups, line.selection_groups);
+          this._bindTraceGroups(
+            row,
+            classes,
+            this._explicitInteractionGroups(line.hover_groups),
+            this._explicitInteractionGroups(line.selection_groups)
+          );
           row.id = line.row_id || this._rowId("source-related-" + sectionIndex, lineIndex);
           row.dataset.sourceRef = "related:" + sectionIndex + ":" + line.number;
           row.dataset.traceLabel = (section.display_name || "related source") + " line " + line.number;
@@ -805,7 +815,12 @@
         var kind = rowData.kind || (this._isBoundaryRow(rowData) ? "block_header" : "instruction");
         var rowKind = "row-kind-" + String(kind).replace(/_/g, "-") + " " + (this._isBoundaryKind(kind) ? "boundary-row " : "");
         var row = el("button", "trace-row trace-region " + rowKind + (hasTrace ? "" : "unlinked-row ") + classes.concat(this._auditClasses(classes)).join(" "));
-        this._bindTraceGroups(row, classes, rowData.hover_groups, rowData.selection_groups);
+        this._bindTraceGroups(
+          row,
+          classes,
+          this._explicitInteractionGroups(rowData.hover_groups),
+          this._explicitInteractionGroups(rowData.selection_groups)
+        );
         row.type = "button";
         row.id = rowData.row_id || this._rowId("panel-" + (panelData.id || "panel"), index);
         row.dataset.rowKind = kind;
@@ -871,6 +886,10 @@
 
     _rowId(prefix, index) {
       return "trace-row-" + String(prefix).replace(/[^a-zA-Z0-9_-]/g, "-") + "-" + index;
+    }
+
+    _explicitInteractionGroups(groups) {
+      return Array.isArray(groups) ? groups : [];
     }
 
     _bindTraceGroups(node, classes, hoverGroups, selectionGroups) {
