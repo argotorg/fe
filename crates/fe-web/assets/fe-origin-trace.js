@@ -1106,23 +1106,27 @@
       var key = this._highlightKey(groups);
       shell.__traceRunCache = shell.__traceRunCache || Object.create(null);
       if (shell.__traceRunCache[key]) return shell.__traceRunCache[key];
-      var rows = this._traceRows(shell);
+      var nodes = this._runScanNodes(shell);
       var runs = [];
       var current = null;
-      var lastMatchedIndex = -2;
-      rows.forEach(function (row, index) {
-        var matches = traceClasses(row).some(function (group) { return wanted[group]; });
+      nodes.forEach(function (node) {
+        if (node.classList && (node.classList.contains("boundary-marker") || node.classList.contains("source-section-separator"))) {
+          current = null;
+          return;
+        }
+        var matches = node.classList
+          && (node.classList.contains("source-line") || node.classList.contains("trace-row"))
+          && traceClasses(node).some(function (group) { return wanted[group]; });
         if (!matches) {
           current = null;
           return;
         }
-        if (current && index === lastMatchedIndex + 1) {
-          current.push(row);
+        if (current) {
+          current.push(node);
         } else {
-          current = [row];
+          current = [node];
           runs.push(current);
         }
-        lastMatchedIndex = index;
       });
       shell.__traceRunCache[key] = runs;
       return runs;
@@ -1224,6 +1228,15 @@
         shell.__traceRows = Array.prototype.slice.call(shell.querySelectorAll(".source-line.trace-region,.trace-row.trace-region"));
       }
       return shell.__traceRows;
+    }
+
+    _runScanNodes(shell) {
+      if (!shell.__traceRunScanNodes) {
+        shell.__traceRunScanNodes = Array.prototype.slice.call(
+          shell.querySelectorAll(".source-line,.trace-row,.boundary-marker,.source-section-separator")
+        );
+      }
+      return shell.__traceRunScanNodes;
     }
 
     _scrollRunIntoView(run, direction, options) {

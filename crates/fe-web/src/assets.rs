@@ -860,6 +860,8 @@ mod tests {
         assert!(FE_ORIGIN_TRACE_JS.contains("_runIndexNearestViewport"));
         assert!(FE_ORIGIN_TRACE_JS.contains("_bestRunIndexForSelection"));
         assert!(FE_ORIGIN_TRACE_JS.contains("_runGroupScore"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("_runScanNodes"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("source-section-separator"));
         assert!(FE_ORIGIN_TRACE_JS.contains("_markerTarget"));
         assert!(FE_ORIGIN_TRACE_JS.contains("preferSectionBoundary: false"));
         assert!(FE_ORIGIN_TRACE_JS.contains("_withBoundaryPreference(options, false)"));
