@@ -2241,6 +2241,33 @@ mod tests {
     }
 
     #[test]
+    fn rendered_web_demo_path_cannot_use_legacy_demo_model() {
+        let source = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/trace/trace_web_demo.rs"
+        ))
+        .expect("read trace web demo source");
+        let render_snapshot_body = source
+            .split("fn render_snapshot(")
+            .nth(1)
+            .and_then(|rest| rest.split("fn build_trace_workbench_model(").next())
+            .expect("render_snapshot body should precede build_trace_workbench_model");
+
+        assert!(
+            render_snapshot_body.contains("build_trace_workbench_model(snapshot, salsa.as_ref())"),
+            "web demo rendering must use the shared trace-query projection entry point"
+        );
+        assert!(
+            !render_snapshot_body.contains("build_demo_model("),
+            "legacy closure-audit model must not drive the rendered workbench path"
+        );
+        assert!(
+            source.contains("trace_workbench_report_projection("),
+            "shared trace-query workbench projection must remain the web demo source of truth"
+        );
+    }
+
+    #[test]
     fn live_reload_script_connects_to_event_stream() {
         let html = inject_live_reload_script("<html><body>x</body></html>");
 
