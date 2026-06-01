@@ -231,20 +231,25 @@
     _missingLinkSummary() {
       var audit = this._data && this._data.attribution_audit;
       if (!audit) return "unknown";
-      var count = audit.missing_optimized_to_prepared_lineage_pcs || 0;
+      var linkReport = audit.missing_links || {};
+      var summary = linkReport.summary || {};
+      var count = summary.missing_required_count || audit.missing_optimized_to_prepared_lineage_pcs || 0;
       if (count === 0) return "none detected";
-      return count + " prepared PC" + (count === 1 ? "" : "s");
+      var blockers = (summary.top_blockers || []).map(this._friendlyBoundaryName).join(", ");
+      return count + " missing " + (count === 1 ? "link" : "links") + (blockers ? " · " + blockers : "");
     }
 
     _missingLinkAudit(audit) {
       var section = el("section", "analysis missing-link-audit");
-      var count = (audit && audit.missing_optimized_to_prepared_lineage_pcs) || 0;
+      var linkReport = (audit && audit.missing_links) || {};
+      var summaryReport = linkReport.summary || {};
+      var count = summaryReport.missing_required_count || (audit && audit.missing_optimized_to_prepared_lineage_pcs) || 0;
       section.append(
-        el("h2", "", "Missing Optimized→Prepared Link"),
+        el("h2", "", "Missing Link Audit"),
         el(
           "p",
           "muted",
-          "Checks for prepared-linked bytecode whose EVM prepared/codegen origin lacks a validated optimized-Sonatina lineage edge."
+          "Boundary-contract audit for phase links. It separates exact evidence, generated/context explanations, expected absences, and missing required compiler evidence."
         )
       );
       var summary = el("div", "missing-link-summary");
@@ -257,9 +262,47 @@
       );
       section.append(summary);
       if (count > 0) {
-        section.append(el("p", "gap", "Prepared bytecode exists, but " + count + " bytecode PC(s) lack an explicit optimized Sonatina → EVM prepared bridge. This is missing evidence, not automatically a compiler bug."));
+        section.append(el("p", "gap", "Prepared bytecode exists, but " + count + " required phase link(s) are missing. This is missing evidence, not automatically a compiler bug."));
       } else {
-        section.append(el("p", "audit-note", "No optimized→prepared lineage gaps were detected by this report."));
+        section.append(el("p", "audit-note", "No required phase-link gaps were detected by this report."));
+      }
+      var boundaries = (linkReport.boundary_summaries || []).slice(0, 4);
+      if (boundaries.length) {
+        var boundaryBox = el("div", "missing-targets");
+        boundaryBox.append(el("h3", "", "Boundary status"));
+        boundaries.forEach(function (boundary) {
+          var row = el("div", "audit-count");
+          var counts = boundary.status_counts || {};
+          var statusText = Object.keys(counts).map(function (name) {
+            return this._friendlyLinkStatus(name) + " " + counts[name];
+          }, this).join(" · ");
+          row.append(
+            el("span", "", this._friendlyBoundaryName(boundary.boundary)),
+            el("b", "", statusText || "ok")
+          );
+          boundaryBox.append(row);
+        }, this);
+        section.append(boundaryBox);
+      }
+      var clusters = (linkReport.clusters || []).slice(0, 3);
+      if (clusters.length) {
+        var clusterBox = el("div", "missing-targets");
+        clusterBox.append(el("h3", "", "Top missing-link clusters"));
+        clusters.forEach(function (cluster) {
+          var row = el("div", "audit-count");
+          row.append(
+            el("span", "", cluster.headline || this._friendlyIssueCode(cluster.issue_code)),
+            el("b", "", cluster.gap_count || 0)
+          );
+          clusterBox.append(row);
+          if (cluster.explanation) {
+            clusterBox.append(el("p", "muted", cluster.explanation));
+          }
+          (cluster.required_evidence || []).slice(0, 1).forEach(function (evidence) {
+            clusterBox.append(el("p", "audit-note", evidence.description || this._friendlyRequiredEvidence(evidence.kind)));
+          }, this);
+        }, this);
+        section.append(clusterBox);
       }
       var targets = (audit.missing_lineage_targets || []).slice(0, 5);
       if (targets.length) {
@@ -273,6 +316,43 @@
         section.append(list);
       }
       return section;
+    }
+
+    _friendlyBoundaryName(boundary) {
+      var names = {
+        hir_to_mir: "HIR → MIR",
+        mir_to_sonatina_pre_opt: "MIR → Sonatina pre-opt",
+        pre_opt_to_post_opt: "Pre-opt → optimized",
+        post_opt_to_prepared: "Optimized → EVM prepared",
+        prepared_to_bytecode: "EVM prepared → bytecode",
+        bytecode_to_runtime: "Bytecode → runtime",
+      };
+      return names[boundary] || String(boundary || "boundary").replace(/_/g, " ");
+    }
+
+    _friendlyLinkStatus(status) {
+      var names = {
+        satisfied_exact: "exact",
+        satisfied_generated: "generated",
+        satisfied_elided: "elided",
+        context_only: "context",
+        candidate_only: "candidate",
+        expected_absent: "expected absent",
+        missing_required: "missing",
+        missing_optional: "optional gap",
+        missing_lineage_but_candidates_exist: "candidate-only gap",
+        ambiguous: "ambiguous",
+        invalid: "invalid",
+      };
+      return names[status] || String(status || "status").replace(/_/g, " ");
+    }
+
+    _friendlyIssueCode(code) {
+      return String(code || "missing evidence").replace(/_/g, " ");
+    }
+
+    _friendlyRequiredEvidence(kind) {
+      return "Required evidence: " + String(kind || "compiler fact").replace(/_/g, " ");
     }
 
     _originDisplay(origin) {

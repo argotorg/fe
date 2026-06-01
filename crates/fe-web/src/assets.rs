@@ -799,7 +799,8 @@ mod tests {
         assert!(FE_ORIGIN_TRACE_JS.contains("label: \"unmapped\""));
         assert!(FE_ORIGIN_TRACE_JS.contains("No row selected."));
         assert!(FE_ORIGIN_TRACE_JS.contains("Selected row"));
-        assert!(FE_ORIGIN_TRACE_JS.contains("Missing Optimized→Prepared Link"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("Missing Link Audit"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("Boundary status"));
         assert!(FE_ORIGIN_TRACE_JS.contains("linked phases, generated work, and gaps"));
         assert!(FE_ORIGIN_TRACE_JS.contains("linked regions"));
         assert!(FE_ORIGIN_TRACE_JS.contains("need compiler evidence"));
