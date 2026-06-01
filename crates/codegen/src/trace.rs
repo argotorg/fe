@@ -2362,6 +2362,108 @@ mod tests {
         )));
     }
 
+    #[test]
+    fn bytecode_frontend_provenance_fallback_is_contextual_not_exact() {
+        use sonatina_codegen::{
+            machinst::vcode::VCodeInst,
+            object::{OBSERVABILITY_SCHEMA_VERSION, PcMapEntry, SectionObservability},
+        };
+        use sonatina_ir::{
+            BlockId, InstId, Linkage, Signature, builder::ModuleBuilder, isa::evm::Evm,
+            module::ModuleCtx,
+        };
+        use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
+
+        let evm = Evm::new(TargetTriple::new(
+            Architecture::Evm,
+            Vendor::Ethereum,
+            OperatingSystem::Evm(EvmVersion::London),
+        ));
+        let mb = ModuleBuilder::new(ModuleCtx::new(&evm));
+        let func = mb
+            .declare_function(Signature::new_unit("runtime", Linkage::Public, &[]))
+            .unwrap();
+
+        let sonatina_owner = "package:fib:module:fib:sonatina";
+        let frontend_origin =
+            OriginExportKey::try_from_raw_parts("hir.expr", "package:fib:module:fib", "expr:0")
+                .unwrap();
+        let observability = SectionObservability {
+            schema_version: OBSERVABILITY_SCHEMA_VERSION,
+            section: "runtime".into(),
+            section_bytes: 1,
+            code_bytes: 1,
+            data_bytes: 0,
+            embed_bytes: 0,
+            mapped_code_bytes: 1,
+            unmapped_code_bytes: 0,
+            unmapped_reason_coverage: Default::default(),
+            pc_map: vec![PcMapEntry {
+                pc_start: 0,
+                pc_end: 1,
+                func,
+                func_name: "runtime".to_string(),
+                block: BlockId(0),
+                vcode_inst: VCodeInst(0),
+                ir_inst: Some(InstId(37)),
+                frontend_provenance: Some(
+                    serde_json::to_string(&frontend_origin)
+                        .expect("OriginExportKey serialization cannot fail"),
+                ),
+                unmapped_reason: None,
+            }],
+        };
+
+        let facts = emit_bytecode_instruction_facts_with_observability(
+            "contract:Fib",
+            "runtime",
+            &[0x5f],
+            Some(sonatina_owner),
+            Some(&observability),
+            None,
+            None,
+        );
+        let mut validated_facts = vec![TraceFact::OriginNode(OriginNodeFact::new(
+            frontend_origin.clone(),
+            OriginNodeKind::new("hir.expr"),
+        ))];
+        validated_facts.extend(facts.clone());
+        TraceValidator::validate(&validated_facts).unwrap();
+
+        let frontend_edges = facts
+            .iter()
+            .filter_map(|fact| match fact {
+                TraceFact::OriginEdge(edge)
+                    if edge.from.kind() == "bytecode.pc" && edge.to == frontend_origin =>
+                {
+                    Some(edge)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(frontend_edges.len(), 1);
+        assert_eq!(
+            frontend_edges[0].label,
+            trace_facts::OriginEdgeLabel::BackendPrepared
+        );
+        assert_eq!(
+            frontend_edges[0].traversal_class(),
+            trace_facts::OriginEdgeTraversalClass::Contextual
+        );
+        assert!(!facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::OriginEdge(edge)
+                if edge.from.kind() == "bytecode.pc"
+                    && edge.to == frontend_origin
+                    && edge.has_transform_claim_label()
+        )));
+        assert!(!facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::CompilerEvent(event)
+                if event.kind == CompilerEventKind::PreparedLineage
+        )));
+    }
+
     fn is_content_digest(value: &str) -> bool {
         let digest = value.strip_prefix("blake3:").unwrap_or(value);
         digest.len() == 64
