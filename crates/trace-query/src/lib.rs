@@ -1824,6 +1824,8 @@ pub fn trace_workbench_report_projection(
         &classes_by_key,
         &exact_prepared_selection_bridge,
     );
+    let exact_groups_with_visible_source_rows =
+        trace_workbench_exact_groups_with_visible_source_rows(&source);
     let missing_lineage = trace_workbench_missing_lineage_index(attribution_audit.as_ref());
     let panels = trace_workbench_panes(
         snapshot,
@@ -1832,7 +1834,7 @@ pub fn trace_workbench_report_projection(
         &request.related_source_texts,
         &classes_by_key,
         &exact_prepared_selection_bridge,
-        &trace_workbench_exact_groups_with_source_spans(snapshot, &classes_by_key),
+        &exact_groups_with_visible_source_rows,
         &missing_lineage,
     );
     let indexes = trace_workbench_projection_indexes(&source, &panels);
@@ -2656,25 +2658,41 @@ fn trace_workbench_merge_classes_by_key(
     }
 }
 
-fn trace_workbench_exact_groups_with_source_spans(
-    snapshot: &TraceSnapshot,
-    component_classes_by_key: &BTreeMap<String, Vec<String>>,
+fn trace_workbench_exact_groups_with_visible_source_rows(
+    source: &serde_json::Value,
 ) -> BTreeSet<String> {
     let mut groups = BTreeSet::new();
-    for fact in snapshot.facts() {
-        let TraceFact::SourceSpan(span) = fact else {
-            continue;
-        };
-        if let Some(classes) = component_classes_by_key.get(&span.origin.canonical_storage_key()) {
-            groups.extend(
-                classes
-                    .iter()
-                    .filter(|class| class.starts_with("exact-c-"))
-                    .cloned(),
-            );
-        }
+    trace_workbench_collect_exact_groups_from_source_rows(source.get("lines"), &mut groups);
+    for related in source
+        .get("related_sources")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        trace_workbench_collect_exact_groups_from_source_rows(related.get("lines"), &mut groups);
     }
     groups
+}
+
+fn trace_workbench_collect_exact_groups_from_source_rows(
+    rows: Option<&serde_json::Value>,
+    groups: &mut BTreeSet<String>,
+) {
+    for row in rows
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        groups.extend(
+            row.get("classes")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .filter(|class| class.starts_with("exact-c-"))
+                .map(str::to_string),
+        );
+    }
 }
 
 fn trace_workbench_source_lines(
@@ -8054,6 +8072,7 @@ mod tests {
         VariablesAtPcRequest, run_trace_query, trace_workbench_compact_mir_text,
         trace_workbench_compact_origin_fallback_text, trace_workbench_compact_origin_label,
         trace_workbench_compact_origin_meta, trace_workbench_compact_origin_text,
+        trace_workbench_exact_groups_with_visible_source_rows,
         trace_workbench_exact_prepared_selection_bridge, trace_workbench_hover_groups,
         trace_workbench_key_belongs_to_panel, trace_workbench_manifest,
         trace_workbench_missing_lineage_index, trace_workbench_natural_key_cmp,
@@ -11652,6 +11671,58 @@ mod tests {
                 &classes,
                 &classes,
                 &BTreeSet::from(["exact-c-demo".to_string()]),
+                &TraceWorkbenchMissingLineageIndex::default(),
+            ),
+            Some(TraceWorkbenchDisplayStatus::SourceExact)
+        );
+    }
+
+    #[test]
+    fn trace_workbench_source_exact_status_requires_visible_source_row() {
+        let source = serde_json::json!({
+            "lines": [
+                { "classes": ["exact-c-main"] }
+            ],
+            "related_sources": [
+                {
+                    "lines": [
+                        { "classes": ["exact-c-lib", "prepared-c-lib"] }
+                    ]
+                }
+            ]
+        });
+        let visible_groups = trace_workbench_exact_groups_with_visible_source_rows(&source);
+        let bytecode = key("bytecode.pc", "demo", "pc:68");
+        let missing_source_classes = vec!["prepared-c-hidden".to_string()];
+        let missing_source_selection = vec![
+            "prepared-c-hidden".to_string(),
+            "exact-c-hidden".to_string(),
+        ];
+        let visible_source_classes = vec!["prepared-c-lib".to_string()];
+        let visible_source_selection =
+            vec!["prepared-c-lib".to_string(), "exact-c-lib".to_string()];
+
+        assert!(visible_groups.contains("exact-c-main"));
+        assert!(visible_groups.contains("exact-c-lib"));
+        assert!(!visible_groups.contains("exact-c-hidden"));
+        assert_eq!(
+            trace_workbench_status_for_row(
+                &bytecode,
+                TraceWorkbenchPaneRowKind::Instruction,
+                &missing_source_classes,
+                &missing_source_selection,
+                &visible_groups,
+                &TraceWorkbenchMissingLineageIndex::default(),
+            ),
+            Some(TraceWorkbenchDisplayStatus::MissingSourceEvidence)
+        );
+        assert_eq!(
+            trace_workbench_status_for_row(
+                &bytecode,
+                TraceWorkbenchPaneRowKind::Instruction,
+                &visible_source_classes,
+                &visible_source_selection,
+                &visible_groups,
                 &TraceWorkbenchMissingLineageIndex::default(),
             ),
             Some(TraceWorkbenchDisplayStatus::SourceExact)
