@@ -30,6 +30,7 @@ pub const SONATINA_POSTOPT_BLOCK_KIND: &str = "sonatina.postopt.block";
 pub const SONATINA_POSTOPT_INST_KIND: &str = "sonatina.postopt.inst";
 pub const SONATINA_POSTOPT_LOOP_KIND: &str = "sonatina.postopt.loop";
 pub const SONATINA_EVM_PREPARED_INST_KIND: &str = "sonatina.evm.prepared.inst";
+pub const EVM_VCODE_INST_KIND: &str = "evm.vcode.inst";
 
 pub fn trace_source_file_key(source_owner: &str) -> OriginExportKey {
     OriginExportKey::try_from_raw_parts("source.file", source_owner, "file:0")
@@ -314,23 +315,36 @@ pub fn emit_bytecode_instruction_facts_with_observability(
         )));
         if let Some(entry) = pc_map.get(&(pc as u32)) {
             let mut prepared_inst = None;
-            if let (Some(sonatina_owner_key), Some(ir_inst)) = (sonatina_owner_key, entry.ir_inst) {
-                let key = sonatina_trace_inst_key(
-                    SONATINA_EVM_PREPARED_INST_KIND,
-                    sonatina_owner_key,
-                    entry.func,
-                    ir_inst,
-                );
-                if emitted_prepared_nodes.insert(key.clone()) {
-                    facts.push(origin_node(key.clone(), SONATINA_EVM_PREPARED_INST_KIND));
+            if let Some(sonatina_owner_key) = sonatina_owner_key {
+                let vcode_key =
+                    evm_vcode_inst_key(sonatina_owner_key, entry.func, entry.vcode_inst);
+                if emitted_prepared_nodes.insert(vcode_key.clone()) {
+                    facts.push(origin_node(vcode_key.clone(), EVM_VCODE_INST_KIND));
                 }
                 facts.push(TraceFact::OriginEdge(OriginEdgeFact::new(
                     instruction.clone(),
-                    key.clone(),
+                    vcode_key.clone(),
                     OriginEdgeLabel::EmittedFrom,
                     Some(CompilerPhase::BytecodeEmission),
                 )));
-                prepared_inst = Some(key);
+                if let Some(ir_inst) = entry.ir_inst {
+                    let key = sonatina_trace_inst_key(
+                        SONATINA_EVM_PREPARED_INST_KIND,
+                        sonatina_owner_key,
+                        entry.func,
+                        ir_inst,
+                    );
+                    if emitted_prepared_nodes.insert(key.clone()) {
+                        facts.push(origin_node(key.clone(), SONATINA_EVM_PREPARED_INST_KIND));
+                    }
+                    facts.push(TraceFact::OriginEdge(OriginEdgeFact::new(
+                        vcode_key,
+                        key.clone(),
+                        OriginEdgeLabel::LoweredFrom,
+                        Some(CompilerPhase::Backend),
+                    )));
+                    prepared_inst = Some(key);
+                }
             }
             if let Some(frontend_origin) = entry
                 .frontend_provenance
@@ -1438,6 +1452,19 @@ fn sonatina_trace_inst_key(
     .expect("Sonatina instruction trace key must be valid")
 }
 
+fn evm_vcode_inst_key(
+    owner_key: &str,
+    function: sonatina_ir::module::FuncRef,
+    vcode_inst: impl std::fmt::Debug,
+) -> OriginExportKey {
+    OriginExportKey::try_from_raw_parts(
+        EVM_VCODE_INST_KIND,
+        owner_key,
+        format!("function:{function:?}:vcode_inst:{vcode_inst:?}"),
+    )
+    .expect("EVM VCode instruction trace key must be valid")
+}
+
 fn sonatina_trace_loop_key(
     kind: &str,
     owner_key: &str,
@@ -1780,12 +1807,13 @@ mod tests {
     use crate::{
         BytecodePcRange, BytecodeSourceMapEntry,
         trace::{
-            SONATINA_EVM_PREPARED_INST_KIND, SONATINA_POSTOPT_INST_KIND, bytecode_code_object_key,
-            bytecode_runtime_owner_key, emit_bytecode_instruction_facts,
+            EVM_VCODE_INST_KIND, SONATINA_EVM_PREPARED_INST_KIND, SONATINA_POSTOPT_INST_KIND,
+            bytecode_code_object_key, bytecode_runtime_owner_key, emit_bytecode_instruction_facts,
             emit_bytecode_instruction_facts_with_observability, emit_codegen_facts,
-            emit_sonatina_trace_view_facts, frontend_origin_record_for_export_key,
-            push_standalone_source_file_facts, sonatina_postopt_inst_key,
-            standalone_source_file_facts, trace_source_file_key, whole_file_source_span,
+            emit_sonatina_trace_view_facts, evm_vcode_inst_key,
+            frontend_origin_record_for_export_key, push_standalone_source_file_facts,
+            sonatina_postopt_inst_key, standalone_source_file_facts, trace_source_file_key,
+            whole_file_source_span,
         },
     };
 
@@ -1898,6 +1926,7 @@ mod tests {
         let sonatina_owner = "package:fib:module:fib:sonatina";
         let postopt_inst_id = InstId(37);
         let postopt = sonatina_postopt_inst_key(sonatina_owner, func, postopt_inst_id);
+        let vcode = evm_vcode_inst_key(sonatina_owner, func, VCodeInst(0));
         let known = [postopt.clone()]
             .into_iter()
             .collect::<std::collections::BTreeSet<_>>();
@@ -1945,10 +1974,21 @@ mod tests {
 
         assert!(facts.iter().any(|fact| matches!(
             fact,
+            TraceFact::OriginNode(node) if node.key.kind() == EVM_VCODE_INST_KIND
+        )));
+        assert!(facts.iter().any(|fact| matches!(
+            fact,
             TraceFact::OriginEdge(edge)
                 if edge.from.kind() == "bytecode.pc"
-                    && edge.to.kind() == SONATINA_EVM_PREPARED_INST_KIND
+                    && edge.to == vcode
                     && edge.label == trace_facts::OriginEdgeLabel::EmittedFrom
+        )));
+        assert!(facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::OriginEdge(edge)
+                if edge.from == vcode
+                    && edge.to.kind() == SONATINA_EVM_PREPARED_INST_KIND
+                    && edge.label == trace_facts::OriginEdgeLabel::LoweredFrom
         )));
         assert!(facts.iter().any(|fact| matches!(
             fact,
@@ -1998,6 +2038,7 @@ mod tests {
 
         let sonatina_owner = "package:fib:module:fib:sonatina";
         let postopt = sonatina_postopt_inst_key(sonatina_owner, func, InstId(37));
+        let vcode = evm_vcode_inst_key(sonatina_owner, func, VCodeInst(0));
         let observability = SectionObservability {
             schema_version: OBSERVABILITY_SCHEMA_VERSION,
             section: "runtime".into(),
@@ -2039,8 +2080,15 @@ mod tests {
             fact,
             TraceFact::OriginEdge(edge)
                 if edge.from.kind() == "bytecode.pc"
-                    && edge.to.kind() == SONATINA_EVM_PREPARED_INST_KIND
+                    && edge.to == vcode
                     && edge.label == trace_facts::OriginEdgeLabel::EmittedFrom
+        )));
+        assert!(facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::OriginEdge(edge)
+                if edge.from == vcode
+                    && edge.to.kind() == SONATINA_EVM_PREPARED_INST_KIND
+                    && edge.label == trace_facts::OriginEdgeLabel::LoweredFrom
         )));
         assert!(!facts.iter().any(|fact| matches!(
             fact,
@@ -2182,6 +2230,7 @@ mod tests {
 
         let sonatina_owner = "package:fib:module:fib:sonatina";
         let unknown_postopt = sonatina_postopt_inst_key(sonatina_owner, func, InstId(37));
+        let vcode = evm_vcode_inst_key(sonatina_owner, func, VCodeInst(0));
         let known_postopt_nodes = std::collections::BTreeSet::new();
         let observability = SectionObservability {
             schema_version: OBSERVABILITY_SCHEMA_VERSION,
@@ -2224,8 +2273,15 @@ mod tests {
             fact,
             TraceFact::OriginEdge(edge)
                 if edge.from.kind() == "bytecode.pc"
-                    && edge.to.kind() == SONATINA_EVM_PREPARED_INST_KIND
+                    && edge.to == vcode
                     && edge.label == trace_facts::OriginEdgeLabel::EmittedFrom
+        )));
+        assert!(facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::OriginEdge(edge)
+                if edge.from == vcode
+                    && edge.to.kind() == SONATINA_EVM_PREPARED_INST_KIND
+                    && edge.label == trace_facts::OriginEdgeLabel::LoweredFrom
         )));
         assert!(!facts.iter().any(|fact| matches!(
             fact,
