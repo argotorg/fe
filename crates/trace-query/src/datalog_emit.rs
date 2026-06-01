@@ -12,7 +12,10 @@ use trace_facts::{
 use crate::{
     GasAttributionPolicy, GasBySourceRequest, IntrospectionService, RuntimeGasBySourceRequest,
     RuntimeTraceFilterRequest, StorageAccessesBySlotRequest, TraceIntrospectionService,
-    trace_index::{origin_edge_satisfies_phase_contract, prepared_lineage_event_pairs},
+    trace_index::{
+        is_prepared_codegen_origin_kind, origin_edge_satisfies_phase_contract,
+        prepared_lineage_event_pairs,
+    },
 };
 
 pub const CORE_DATALOG_RULES: &str = r#"
@@ -136,6 +139,15 @@ fn append_semantic_edge_views(
                 edge.to.canonical_storage_key(),
             ],
         });
+        if is_prepared_codegen_connectivity_edge(edge) {
+            rows.push(RelationRow {
+                relation: "prepared_codegen_edge",
+                values: vec![
+                    edge.from.canonical_storage_key(),
+                    edge.to.canonical_storage_key(),
+                ],
+            });
+        }
         if matches!(edge.traversal_class(), OriginEdgeTraversalClass::Contextual)
             && edge.has_transform_claim_label()
         {
@@ -185,6 +197,7 @@ fn semantic_edge_schemas() -> Vec<RelationSchema> {
         binary_schema("contextual_edge"),
         binary_schema("structural_edge"),
         binary_schema("backend_prepared_edge"),
+        binary_schema("prepared_codegen_edge"),
         binary_schema("synthetic_edge"),
         binary_schema("unmapped_edge"),
     ];
@@ -382,6 +395,21 @@ fn semantic_edge_relation(edge: &trace_facts::OriginEdgeFact) -> &'static str {
         OriginEdgeTraversalClass::Structural => "structural_edge",
         OriginEdgeTraversalClass::Synthetic => "synthetic_edge",
         OriginEdgeTraversalClass::Unmapped => "unmapped_edge",
+    }
+}
+
+fn is_prepared_codegen_connectivity_edge(edge: &trace_facts::OriginEdgeFact) -> bool {
+    !matches!(
+        edge.traversal_class(),
+        OriginEdgeTraversalClass::Structural | OriginEdgeTraversalClass::Unmapped
+    ) && {
+        let from_prepared = is_prepared_codegen_origin_kind(edge.from.kind());
+        let to_prepared = is_prepared_codegen_origin_kind(edge.to.kind());
+        let from_bytecode = edge.from.kind().starts_with("bytecode.");
+        let to_bytecode = edge.to.kind().starts_with("bytecode.");
+        (from_prepared && to_prepared)
+            || (from_bytecode && to_prepared)
+            || (from_prepared && to_bytecode)
     }
 }
 
@@ -935,6 +963,62 @@ mod tests {
                 hir.canonical_storage_key()
             ]
         ));
+    }
+
+    #[test]
+    fn base_relation_export_includes_prepared_codegen_edge_view() {
+        let pc = key("bytecode.pc", "demo", "pc:0");
+        let vcode = key("evm.vcode.inst", "demo", "inst:0");
+        let prepared = key("sonatina.evm.prepared.inst", "demo", "inst:0");
+        let snapshot = TraceSnapshot::new(TraceBundle::new(
+            TraceMetadata::compiler_emitted(
+                "abc123",
+                "evm/sonatina",
+                vec!["fe".to_string(), "trace".to_string()],
+                "demo.fe",
+                vec![],
+            ),
+            vec![
+                node(pc.clone()),
+                node(vcode.clone()),
+                node(prepared.clone()),
+                TraceFact::OriginEdge(OriginEdgeFact::new(
+                    pc.clone(),
+                    vcode.clone(),
+                    OriginEdgeLabel::EmittedFrom,
+                    Some(CompilerPhase::BytecodeEmission),
+                )),
+                TraceFact::OriginEdge(OriginEdgeFact::new(
+                    vcode.clone(),
+                    prepared.clone(),
+                    OriginEdgeLabel::LoweredFrom,
+                    Some(CompilerPhase::BytecodeEmission),
+                )),
+            ],
+        ))
+        .unwrap();
+        let export = emit_base_relations(&snapshot);
+
+        assert!(
+            export
+                .schemas
+                .iter()
+                .any(|schema| schema.name == "prepared_codegen_edge")
+        );
+        assert!(relation_row_exists(
+            &export,
+            "prepared_codegen_edge",
+            &[pc.canonical_storage_key(), vcode.canonical_storage_key()]
+        ));
+        assert!(relation_row_exists(
+            &export,
+            "prepared_codegen_edge",
+            &[
+                vcode.canonical_storage_key(),
+                prepared.canonical_storage_key()
+            ]
+        ));
+        assert!(!export.rules.contains("prepared_codegen_edge"));
     }
 
     #[test]
