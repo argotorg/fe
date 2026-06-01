@@ -404,29 +404,12 @@ pub(crate) async fn handle_trace_workbench_chunk(
 ) -> Result<Option<serde_json::Value>, async_lsp::ResponseError> {
     let (document_version, config_hash) =
         trace_workbench_session_cache_key(backend, &request.session_id)?;
-    if let Some(chunk) = backend.cached_trace_workbench_chunk(
+    Ok(backend.cached_trace_workbench_chunk(
         &request.session_id,
         document_version,
         &config_hash,
         &request.digest,
-    ) {
-        return Ok(Some(chunk));
-    }
-    let model = handle_trace_workbench_model(
-        backend,
-        TraceWorkbenchSessionRequest {
-            session_id: request.session_id.clone(),
-        },
-    )
-    .await?;
-    Ok(backend
-        .cached_trace_workbench_chunk(
-            &request.session_id,
-            document_version,
-            &config_hash,
-            &request.digest,
-        )
-        .or_else(|| trace_workbench_chunk_payload(&model, &request.digest)))
+    ))
 }
 
 pub(crate) async fn handle_trace_workbench_chunks(
@@ -435,21 +418,6 @@ pub(crate) async fn handle_trace_workbench_chunks(
 ) -> Result<serde_json::Value, async_lsp::ResponseError> {
     let (document_version, config_hash) =
         trace_workbench_session_cache_key(backend, &request.session_id)?;
-    if let Some(response) = backend.cached_trace_workbench_chunks_response(
-        &request.session_id,
-        document_version,
-        &config_hash,
-        request.digests.clone(),
-    ) {
-        return Ok(response);
-    }
-    let model = handle_trace_workbench_model(
-        backend,
-        TraceWorkbenchSessionRequest {
-            session_id: request.session_id.clone(),
-        },
-    )
-    .await?;
     Ok(backend
         .cached_trace_workbench_chunks_response(
             &request.session_id,
@@ -457,7 +425,12 @@ pub(crate) async fn handle_trace_workbench_chunks(
             &config_hash,
             request.digests.clone(),
         )
-        .unwrap_or_else(|| trace_workbench_chunks_response(&model, request.digests)))
+        .unwrap_or_else(|| {
+            serde_json::json!({
+                "chunks": [],
+                "missing": request.digests,
+            })
+        }))
 }
 
 pub(crate) async fn handle_trace_workbench_revisions(
@@ -604,24 +577,6 @@ pub(crate) fn trace_workbench_chunk_payload(
         }));
     }
     None
-}
-
-pub(crate) fn trace_workbench_chunks_response(
-    model: &serde_json::Value,
-    digests: Vec<String>,
-) -> serde_json::Value {
-    let mut chunks = Vec::new();
-    let mut missing = Vec::new();
-    for digest in digests {
-        match trace_workbench_chunk_payload(model, &digest) {
-            Some(payload) => chunks.push(payload),
-            None => missing.push(digest),
-        }
-    }
-    serde_json::json!({
-        "chunks": chunks,
-        "missing": missing,
-    })
 }
 
 pub(crate) async fn handle_trace_query(
@@ -1613,6 +1568,48 @@ pub fn main() -> u64 {
         .unwrap();
         assert_eq!(response["chunks"].as_array().unwrap().len(), 1);
         assert_eq!(response["missing"], serde_json::json!(["blake3:missing"]));
+
+        tokio::task::spawn_blocking(move || drop(backend))
+            .await
+            .expect("backend drop task panicked");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn trace_workbench_chunk_handlers_do_not_build_uncached_models() {
+        let mut backend = test_backend();
+        let uri = Url::parse("file:///workspace/src/uncached_chunks.fe").unwrap();
+        backend.set_document_version(uri.clone(), 13);
+        let session =
+            backend.create_trace_viewer_session(uri, "evm", "O2", "source-postopt-bytecode", None);
+
+        let chunk = handle_trace_workbench_chunk(
+            &mut backend,
+            TraceWorkbenchChunkRequest {
+                session_id: session.id.clone(),
+                digest: "blake3:summary".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(
+            chunk.is_none(),
+            "uncached chunk lookup should not build a full trace model"
+        );
+
+        let response = handle_trace_workbench_chunks(
+            &mut backend,
+            TraceWorkbenchChunksRequest {
+                session_id: session.id.clone(),
+                digests: vec!["blake3:summary".to_string(), "blake3:pane".to_string()],
+            },
+        )
+        .await
+        .unwrap();
+        assert!(response["chunks"].as_array().unwrap().is_empty());
+        assert_eq!(
+            response["missing"],
+            serde_json::json!(["blake3:summary", "blake3:pane"])
+        );
 
         tokio::task::spawn_blocking(move || drop(backend))
             .await

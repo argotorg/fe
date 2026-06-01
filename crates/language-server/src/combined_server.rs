@@ -1397,7 +1397,7 @@ mod tests {
         trace_workbench_requested_chunk_digests, trace_workbench_resolved_rows_for_selection,
         trace_workbench_revision_cursor, trace_workbench_selection_event, validate_trace_auth,
     };
-    use crate::introspection::{trace_workbench_chunk_payload, trace_workbench_chunks_response};
+    use crate::introspection::trace_workbench_chunk_payload;
     use axum::http::{HeaderMap, header};
     use std::collections::BTreeMap;
     use trace_query::{TraceQueryRequest, trace_workbench_manifest};
@@ -1682,10 +1682,12 @@ mod tests {
                 "blake3:missing"
             ]
         }));
-        let response = trace_workbench_chunks_response(&model, digests);
-        assert_eq!(response["chunks"].as_array().unwrap().len(), 1);
-        assert_eq!(response["chunks"][0]["kind"], "summary");
-        assert_eq!(response["missing"], serde_json::json!(["blake3:missing"]));
+        let resolved = digests
+            .into_iter()
+            .filter_map(|digest| trace_workbench_chunk_payload(&model, &digest))
+            .collect::<Vec<_>>();
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0]["kind"], "summary");
     }
 }
 
