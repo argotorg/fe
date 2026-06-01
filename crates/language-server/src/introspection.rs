@@ -21,6 +21,9 @@ use crate::backend::{Backend, TraceViewerRevisionRecord};
 pub(crate) struct TraceBackendQueryRequest {
     pub uri: String,
     pub config_hash: Option<String>,
+    pub target: Option<String>,
+    pub opt_level: Option<String>,
+    pub view: Option<String>,
     pub query: TraceQueryRequest,
 }
 
@@ -364,7 +367,24 @@ pub(crate) async fn handle_trace_query(
     request: TraceBackendQueryRequest,
 ) -> Result<TraceQueryHttpResponse, async_lsp::ResponseError> {
     let started = Instant::now();
-    let current_config_hash = backend.tooling_config().stable_hash();
+    let compiler_config_hash = backend.tooling_config().stable_hash();
+    let opt_level = request
+        .opt_level
+        .as_deref()
+        .map(trace_workbench_parse_opt_level)
+        .transpose()
+        .map_err(internal_error)?
+        .unwrap_or_else(|| TraceServiceOptions::default().opt_level);
+    let current_config_hash = if let (Some(target), Some(opt_level_text), Some(view)) = (
+        request.target.as_deref(),
+        request.opt_level.as_deref(),
+        request.view.as_deref(),
+    ) {
+        let target_config_hash = trace_workbench_target_config_hash(target, opt_level_text, view);
+        trace_workbench_service_config_hash(&compiler_config_hash, &target_config_hash)
+    } else {
+        compiler_config_hash
+    };
     if request
         .config_hash
         .as_deref()
@@ -413,9 +433,13 @@ pub(crate) async fn handle_trace_query(
 
     let internal_uri_for_worker = internal_uri.clone();
     let worker = backend.spawn_on_workers(move |db| {
-        let service = service_for_file(db, &internal_uri_for_worker, config)?.ok_or_else(|| {
-            format!("no Fe source file is loaded for URI {internal_uri_for_worker}")
-        })?;
+        let service = service_for_file_with_options(
+            db,
+            &internal_uri_for_worker,
+            config,
+            TraceServiceOptions { opt_level },
+        )?
+        .ok_or_else(|| format!("no Fe source file is loaded for URI {internal_uri_for_worker}"))?;
         Ok::<_, String>(service)
     });
     let result = tokio::time::timeout(
@@ -626,13 +650,15 @@ mod tests {
         InstructionFact, JsonlTraceSink, OriginEdgeLabel, OriginNodeFact, OriginNodeKind,
         TraceBundle, TraceFact, TraceMetadata,
     };
+    use trace_query::{TraceQueryHttpResponse, TraceQueryReport, TraceQueryRequest};
     use url::Url;
 
     use super::{
-        TraceServiceOptions, TraceWorkbenchSessionRequest, attached_trace_service,
-        handle_trace_workbench_bootstrap, handle_trace_workbench_model,
-        service_for_file_with_options, trace_workbench_parse_opt_level,
-        trace_workbench_service_config_hash, trace_workbench_target_config_hash,
+        TraceBackendQueryRequest, TraceServiceOptions, TraceWorkbenchSessionRequest,
+        attached_trace_service, handle_trace_query, handle_trace_workbench_bootstrap,
+        handle_trace_workbench_model, service_for_file_with_options,
+        trace_workbench_parse_opt_level, trace_workbench_service_config_hash,
+        trace_workbench_target_config_hash,
     };
     use crate::backend::{Backend, TraceViewerRevisionRecord};
 
@@ -790,6 +816,63 @@ pub fn main() -> u64 {
         );
         assert!(model["notes"].as_array().unwrap().iter().any(|note| note
             == "The live endpoint uses the shared trace-query workbench projection path."));
+
+        tokio::task::spawn_blocking(move || drop(backend))
+            .await
+            .expect("backend drop task panicked");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn trace_workbench_session_query_uses_session_opt_level_and_config_hash() {
+        let mut config = introspection_config::FeToolingConfig::default();
+        config.lsp.trace.max_query_ms = 30_000;
+        let mut backend = test_backend_with_config(config);
+        let uri = Url::parse("file:///workspace/src/live_trace_query.fe").unwrap();
+        backend.db.workspace().update(
+            &mut backend.db,
+            uri.clone(),
+            r#"
+pub fn main() -> u64 {
+    (10 - 3) * 2
+}
+"#
+            .to_string(),
+        );
+        backend.set_document_version(uri.clone(), 7);
+        let compiler_config_hash = backend.tooling_config().stable_hash();
+        let target_config_hash =
+            trace_workbench_target_config_hash("evm", "O2", "source-postopt-bytecode");
+        let service_config_hash =
+            trace_workbench_service_config_hash(&compiler_config_hash, &target_config_hash);
+
+        let response = handle_trace_query(
+            &mut backend,
+            TraceBackendQueryRequest {
+                uri: uri.to_string(),
+                config_hash: Some(service_config_hash),
+                target: Some("evm".to_string()),
+                opt_level: Some("O2".to_string()),
+                view: Some("source-postopt-bytecode".to_string()),
+                query: TraceQueryRequest::attribution_audit(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let TraceQueryHttpResponse::Ok {
+            report: TraceQueryReport::AttributionAudit(report),
+            ..
+        } = response
+        else {
+            panic!("expected successful attribution audit response");
+        };
+        assert!(
+            report
+                .metadata
+                .flags
+                .iter()
+                .any(|flag| flag == "optimize=O2")
+        );
 
         tokio::task::spawn_blocking(move || drop(backend))
             .await

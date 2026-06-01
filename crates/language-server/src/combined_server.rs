@@ -457,6 +457,9 @@ async fn handle_trace_query_http(
     let backend_request = TraceBackendQueryRequest {
         uri: request.uri,
         config_hash: request.config_hash,
+        target: None,
+        opt_level: None,
+        view: None,
         query: request.query,
     };
     let dispatcher = TraceQueryDispatcher;
@@ -562,6 +565,9 @@ fn trace_workbench_query_backend_request(
     TraceBackendQueryRequest {
         uri: bootstrap.session.uri.clone(),
         config_hash: Some(bootstrap.revision.config_hash.clone()),
+        target: Some(bootstrap.session.target.clone()),
+        opt_level: Some(bootstrap.session.opt_level.clone()),
+        view: Some(bootstrap.session.view.clone()),
         query,
     }
 }
@@ -1710,6 +1716,9 @@ mod tests {
 
         assert_eq!(request.uri, "file:///workspace/lib.fe");
         assert_eq!(request.config_hash.as_deref(), Some("config"));
+        assert_eq!(request.target.as_deref(), Some("evm"));
+        assert_eq!(request.opt_level.as_deref(), Some("O2"));
+        assert_eq!(request.view.as_deref(), Some("source-postopt-bytecode"));
         assert!(matches!(request.query, TraceQueryRequest::LoopCost { .. }));
     }
 
