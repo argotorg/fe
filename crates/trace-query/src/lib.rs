@@ -6840,36 +6840,6 @@ fn postopt_candidate_hints_for_prepared_raw_id(
         .collect()
 }
 
-fn prepared_lineage_event_pairs(
-    snapshot: &TraceSnapshot,
-) -> BTreeSet<(OriginExportKey, OriginExportKey)> {
-    snapshot
-        .facts()
-        .iter()
-        .filter_map(|fact| {
-            let TraceFact::CompilerEvent(event) = fact else {
-                return None;
-            };
-            (event.kind == CompilerEventKind::PreparedLineage
-                && event.phase == CompilerPhase::Backend)
-                .then_some(event)
-        })
-        .flat_map(|event| {
-            event
-                .outputs
-                .iter()
-                .filter(|origin| is_prepared_sonatina_audit_origin(origin))
-                .flat_map(|prepared| {
-                    event
-                        .inputs
-                        .iter()
-                        .filter(|origin| is_optimized_sonatina_audit_origin(origin))
-                        .map(move |postopt| (prepared.clone(), postopt.clone()))
-                })
-        })
-        .collect()
-}
-
 fn exact_postopt_lineage_targets_by_prepared(
     snapshot: &TraceSnapshot,
 ) -> BTreeMap<OriginExportKey, BTreeSet<OriginExportKey>> {
@@ -6972,7 +6942,7 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
     let index = TraceIndex::new(snapshot);
     let semantic_index = trace_index::TraceIndex::new(snapshot);
     let postopt_raw_local_candidates = postopt_candidates_by_raw_local_id(snapshot);
-    let prepared_lineage_events = prepared_lineage_event_pairs(snapshot);
+    let prepared_lineage_events = trace_index::prepared_lineage_event_pairs(snapshot);
     let exact_postopt_lineage_by_prepared = exact_postopt_lineage_targets_by_prepared(snapshot);
     let mut direct_edges = BTreeMap::<
         (
@@ -7319,11 +7289,11 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
 }
 
 fn is_optimized_sonatina_audit_origin(key: &OriginExportKey) -> bool {
-    key.kind().starts_with("sonatina.post")
+    trace_index::is_sonatina_postopt_origin_kind(key.kind())
 }
 
 fn is_prepared_sonatina_audit_origin(key: &OriginExportKey) -> bool {
-    key.kind().starts_with("sonatina.evm.prepared")
+    trace_index::is_prepared_codegen_origin_kind(key.kind())
 }
 
 fn is_sonatina_preopt_inst_audit_origin(key: &OriginExportKey) -> bool {
@@ -8753,6 +8723,83 @@ mod tests {
                 .get(&LinkStatus::MissingRequired),
             Some(&1)
         );
+    }
+
+    #[test]
+    fn attribution_audit_counts_vcode_as_prepared_codegen_identity() {
+        let function = key("function", "demo", "recv");
+        let source_file = key("source.file", "demo", "demo.fe");
+        let hir = key("hir.expr", "demo", "expr:source");
+        let postopt = key("sonatina.postopt.inst", "demo", "inst:postopt");
+        let vcode = key("evm.vcode.inst", "demo", "inst:vcode");
+        let lineage_event = key("compiler.event", "demo", "event:prepared-lineage-vcode");
+        let pc = key("bytecode.pc", "demo", "pc:0");
+        let snapshot = snapshot(vec![
+            node(function.clone()),
+            node(source_file.clone()),
+            node(hir.clone()),
+            node(postopt.clone()),
+            node(vcode.clone()),
+            node(lineage_event.clone()),
+            node(pc.clone()),
+            TraceFact::SourceFile(SourceFileFact::new(
+                source_file.clone(),
+                "file:///demo.fe",
+                "demo.fe",
+                "blake3:0000000000000000000000000000000000000000000000000000000000000001",
+                Some(0),
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                hir.clone(),
+                source_file,
+                0,
+                1,
+                1,
+                1,
+                1,
+                2,
+            )),
+            TraceFact::Instruction(InstructionFact::new(pc.clone(), function, 0, "ADD")),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                pc,
+                vcode.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                vcode.clone(),
+                postopt.clone(),
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::Backend),
+            )),
+            TraceFact::CompilerEvent(CompilerEventFact::new(
+                lineage_event,
+                CompilerPhase::Backend,
+                CompilerEventKind::PreparedLineage,
+                vec![postopt.clone()],
+                vec![vcode.clone()],
+                Some(CompilerReason::new("fixture vcode lineage")),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                postopt,
+                hir,
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::SonatinaPostOpt),
+            )),
+        ]);
+
+        let report = TraceIntrospectionService::new(snapshot)
+            .attribution_audit()
+            .unwrap();
+
+        assert_eq!(report.total_bytecode_pcs, 1);
+        assert_eq!(report.source_exact_pcs, 1);
+        assert_eq!(report.prepared_linked_pcs, 1);
+        assert_eq!(report.missing_optimized_to_prepared_lineage_pcs, 0);
+        let missing_links = report.missing_links.as_ref().unwrap();
+        assert_eq!(missing_links.invalid.len(), 0);
+        assert_eq!(missing_links.summary.prepared_linked_bytecode_pcs, 1);
+        assert_eq!(missing_links.summary.missing_required_count, 0);
     }
 
     #[test]

@@ -335,11 +335,11 @@ fn is_backend_phase_origin_kind(kind: &str) -> bool {
         || kind.starts_with("vcode.")
 }
 
-fn is_sonatina_postopt_origin_kind(kind: &str) -> bool {
+pub(crate) fn is_sonatina_postopt_origin_kind(kind: &str) -> bool {
     kind.starts_with("sonatina.post")
 }
 
-fn is_prepared_codegen_origin_kind(kind: &str) -> bool {
+pub(crate) fn is_prepared_codegen_origin_kind(kind: &str) -> bool {
     kind.starts_with("sonatina.evm.prepared.")
         || kind.starts_with("sonatina.codegen.")
         || kind.starts_with("evm.vcode.")
