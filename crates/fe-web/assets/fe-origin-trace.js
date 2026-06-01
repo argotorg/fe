@@ -42,6 +42,10 @@
       node[cacheKey] = node.dataset[datasetKey].split(/\s+/).filter(Boolean);
       return node[cacheKey];
     }
+    if (node.classList && node.classList.contains && node.classList.contains("trace-region")) {
+      node[cacheKey] = [];
+      return node[cacheKey];
+    }
     node[cacheKey] = fallbackScopedTraceClasses(node, datasetKey);
     return node[cacheKey];
   }

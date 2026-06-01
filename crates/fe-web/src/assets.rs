@@ -813,6 +813,7 @@ mod tests {
         assert!(
             FE_ORIGIN_TRACE_JS.contains("node.dataset.selectionGroups = selection.join(\" \");")
         );
+        assert!(FE_ORIGIN_TRACE_JS.contains("node.classList.contains(\"trace-region\")"));
         assert!(FE_ORIGIN_TRACE_JS.contains("hoverClasses(row)"));
         assert!(FE_ORIGIN_TRACE_JS.contains("selectionClasses(row)"));
         assert!(FE_ORIGIN_TRACE_JS.contains("var groups = selectionClasses(row);"));
