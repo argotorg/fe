@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
+use std::time::Instant;
 
 pub mod datalog_emit;
 pub mod origin_closure;
@@ -1781,9 +1782,25 @@ pub fn trace_workbench_report_projection(
     snapshot: &TraceSnapshot,
     request: TraceWorkbenchProjectionRequest,
 ) -> serde_json::Value {
+    let projection_started = Instant::now();
+    let mut projection_timings = BTreeMap::<&'static str, u64>::new();
+    let stage_started = Instant::now();
     let status = service.status();
+    trace_workbench_record_timing(&mut projection_timings, "status_ms", stage_started);
+    let stage_started = Instant::now();
     let attribution_audit = service.attribution_audit().ok();
+    trace_workbench_record_timing(
+        &mut projection_timings,
+        "attribution_audit_ms",
+        stage_started,
+    );
+    let stage_started = Instant::now();
     let validation = snapshot.validation();
+    trace_workbench_record_timing(
+        &mut projection_timings,
+        "validation_summary_ms",
+        stage_started,
+    );
     let optimized_linked = attribution_audit
         .as_ref()
         .map(|audit| audit.optimized_sonatina_linked_pcs)
@@ -1804,11 +1821,22 @@ pub fn trace_workbench_report_projection(
         .as_ref()
         .map(|audit| audit.total_bytecode_pcs)
         .unwrap_or_default();
+    let stage_started = Instant::now();
     let loop_report = service.loop_contents(LoopContentsRequest::default()).ok();
+    trace_workbench_record_timing(&mut projection_timings, "loop_report_ms", stage_started);
+    let stage_started = Instant::now();
     let closure_set = loop_report.as_ref().map(|loop_report| {
         origin_closure::build_origin_closure_set(&request.input_path, snapshot, loop_report)
     });
+    trace_workbench_record_timing(
+        &mut projection_timings,
+        "legacy_closure_set_ms",
+        stage_started,
+    );
+    let stage_started = Instant::now();
     let component_classes_by_key = origin_closure::component_classes_by_origin_key(snapshot);
+    trace_workbench_record_timing(&mut projection_timings, "rail_components_ms", stage_started);
+    let stage_started = Instant::now();
     let mut classes_by_key = closure_set
         .as_ref()
         .map(|closure_set| origin_closure::classes_by_origin_key(&closure_set.closures))
@@ -1816,6 +1844,8 @@ pub fn trace_workbench_report_projection(
     trace_workbench_merge_classes_by_key(&mut classes_by_key, component_classes_by_key.clone());
     let exact_prepared_selection_bridge =
         trace_workbench_exact_prepared_selection_bridge(&classes_by_key);
+    trace_workbench_record_timing(&mut projection_timings, "class_merge_ms", stage_started);
+    let stage_started = Instant::now();
     let source = trace_workbench_source_projection(
         &request.input_path,
         request.source_text.as_deref(),
@@ -1826,7 +1856,19 @@ pub fn trace_workbench_report_projection(
     );
     let exact_groups_with_visible_source_rows =
         trace_workbench_exact_groups_with_visible_source_rows(&source);
+    trace_workbench_record_timing(
+        &mut projection_timings,
+        "source_projection_ms",
+        stage_started,
+    );
+    let stage_started = Instant::now();
     let missing_lineage = trace_workbench_missing_lineage_index(attribution_audit.as_ref());
+    trace_workbench_record_timing(
+        &mut projection_timings,
+        "missing_lineage_index_ms",
+        stage_started,
+    );
+    let stage_started = Instant::now();
     let panels = trace_workbench_panes(
         snapshot,
         &request.input_path,
@@ -1837,7 +1879,11 @@ pub fn trace_workbench_report_projection(
         &exact_groups_with_visible_source_rows,
         &missing_lineage,
     );
+    trace_workbench_record_timing(&mut projection_timings, "pane_projection_ms", stage_started);
+    let stage_started = Instant::now();
     let indexes = trace_workbench_projection_indexes(&source, &panels);
+    trace_workbench_record_timing(&mut projection_timings, "indexes_ms", stage_started);
+    let stage_started = Instant::now();
     let source_lines_for_audit = request
         .source_text
         .as_deref()
@@ -1857,12 +1903,32 @@ pub fn trace_workbench_report_projection(
             snapshot,
         )
     });
+    trace_workbench_record_timing(
+        &mut projection_timings,
+        "legacy_closure_audit_ms",
+        stage_started,
+    );
+    let stage_started = Instant::now();
     let closures = closure_set
         .as_ref()
         .map(|closure_set| serde_json::to_value(&closure_set.closures).unwrap_or_default())
         .unwrap_or_else(|| serde_json::json!([]));
+    trace_workbench_record_timing(
+        &mut projection_timings,
+        "legacy_closure_json_ms",
+        stage_started,
+    );
+    let stage_started = Instant::now();
     let static_analysis = static_analysis::static_analysis_report(snapshot);
+    trace_workbench_record_timing(&mut projection_timings, "static_analysis_ms", stage_started);
+    let stage_started = Instant::now();
     let duplicate_shapes = trace_workbench_duplicate_shape_report(snapshot);
+    trace_workbench_record_timing(
+        &mut projection_timings,
+        "duplicate_shapes_ms",
+        stage_started,
+    );
+    let stage_started = Instant::now();
     let source_to_optimized_available = trace_workbench_source_to_optimized_available(snapshot);
     let provenance = trace_workbench_provenance_status(
         closure_set.as_ref(),
@@ -1872,6 +1938,12 @@ pub fn trace_workbench_report_projection(
         missing_prepared,
         non_exact_prepared,
     );
+    trace_workbench_record_timing(
+        &mut projection_timings,
+        "provenance_status_ms",
+        stage_started,
+    );
+    let stage_started = Instant::now();
     let trace_profile = trace_workbench_trace_profile(snapshot);
     let parity_summary = trace_workbench_projection_parity_summary(
         snapshot,
@@ -1882,7 +1954,14 @@ pub fn trace_workbench_report_projection(
         &panels,
         &component_classes_by_key,
     );
-    serde_json::json!({
+    trace_workbench_record_timing(&mut projection_timings, "parity_summary_ms", stage_started);
+    trace_workbench_record_timing(
+        &mut projection_timings,
+        "pre_json_projection_ms",
+        projection_started,
+    );
+    let stage_started = Instant::now();
+    let mut projection = serde_json::json!({
         "revision": {
             "id": request.document_version.unwrap_or_default().max(0) as u64,
             "document_version": request.document_version,
@@ -1903,6 +1982,7 @@ pub fn trace_workbench_report_projection(
             ],
             "document_version": request.document_version,
             "query_duration_ms": request.query_duration_ms,
+            "projection_timings": projection_timings,
         },
         "provenance": {
             "source_to_optimized": provenance.source_to_optimized,
@@ -1947,7 +2027,33 @@ pub fn trace_workbench_report_projection(
             "Static and live workbench entry points use the shared trace-query projection path.",
             "The browser does not compute provenance or graph reachability."
         ],
-    })
+    });
+    let json_assembly_ms = trace_workbench_elapsed_ms(stage_started);
+    let projection_total_ms = trace_workbench_elapsed_ms(projection_started);
+    if let Some(timings) = projection
+        .get_mut("metadata")
+        .and_then(|metadata| metadata.get_mut("projection_timings"))
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        timings.insert("json_assembly_ms".to_string(), json_assembly_ms.into());
+        timings.insert(
+            "projection_total_ms".to_string(),
+            projection_total_ms.into(),
+        );
+    }
+    projection
+}
+
+fn trace_workbench_record_timing(
+    timings: &mut BTreeMap<&'static str, u64>,
+    name: &'static str,
+    started: Instant,
+) {
+    timings.insert(name, trace_workbench_elapsed_ms(started));
+}
+
+fn trace_workbench_elapsed_ms(started: Instant) -> u64 {
+    started.elapsed().as_millis().try_into().unwrap_or(u64::MAX)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -10669,6 +10775,26 @@ mod tests {
         assert_eq!(projection["revision"]["id"], 3);
         assert_eq!(projection["metadata"]["data_source"], "lsp-live");
         assert_eq!(projection["metadata"]["flags"][0], "source=lsp-live");
+        let timings = projection["metadata"]["projection_timings"]
+            .as_object()
+            .expect("projection timings are emitted for debug/internals");
+        for key in [
+            "attribution_audit_ms",
+            "rail_components_ms",
+            "pane_projection_ms",
+            "static_analysis_ms",
+            "duplicate_shapes_ms",
+            "json_assembly_ms",
+            "projection_total_ms",
+        ] {
+            assert!(
+                timings
+                    .get(key)
+                    .and_then(serde_json::Value::as_u64)
+                    .is_some(),
+                "missing timing key {key}"
+            );
+        }
         assert_eq!(projection["provenance"]["source_to_optimized"], "available");
         assert_eq!(projection["parity_summary"]["target"], "evm");
         assert_eq!(projection["parity_summary"]["opt_level"], "O2");

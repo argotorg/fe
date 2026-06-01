@@ -187,6 +187,13 @@
         this._card(internals, "evidence paths", (data.closures || []).length);
         this._card(internals, "needs evidence", data.audit && data.audit.suspicious_closures);
         this._card(internals, "mixed spans", data.audit && data.audit.span_groups && data.audit.span_groups.mixed_connectivity_groups);
+        var timings = data.metadata && data.metadata.projection_timings;
+        if (timings) {
+          this._card(internals, "projection ms", timings.projection_total_ms);
+          this._card(internals, "pane ms", timings.pane_projection_ms);
+          this._card(internals, "rail ms", timings.rail_components_ms);
+          this._card(internals, "audit ms", timings.attribution_audit_ms);
+        }
         if (data.salsa) {
           this._card(internals, "salsa mode", data.salsa.mode);
           this._card(internals, "query execs", data.salsa.will_execute);
