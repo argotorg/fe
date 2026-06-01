@@ -2,7 +2,7 @@ use common::InputDb;
 use driver::DriverDataBase;
 use hir::lower::map_file_to_mod;
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::BufReader;
 use std::str::FromStr;
@@ -534,12 +534,43 @@ pub(crate) fn service_for_file_with_options(
         &sonatina_module,
         CompilerPhase::SonatinaPreOpt,
     ));
-    let bytecode = codegen::emit_module_sonatina_bytecode(db, top_mod, options.opt_level, None)
+    let (bytecode, postopt_sonatina_facts) =
+        codegen::emit_module_sonatina_bytecode_with_observability_and_trace(
+            db,
+            top_mod,
+            options.opt_level,
+            None,
+            &sonatina_owner,
+        )
         .map_err(|err| format!("bytecode emission for trace: {err}"))?;
+    let postopt_sonatina_nodes = postopt_sonatina_facts
+        .iter()
+        .filter_map(|fact| match fact {
+            TraceFact::OriginNode(node)
+                if node.key.kind() == codegen::trace::SONATINA_POSTOPT_INST_KIND =>
+            {
+                Some(node.key.clone())
+            }
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    let postopt_sonatina_aliases = postopt_sonatina_instruction_aliases(&postopt_sonatina_facts);
+    facts.extend(postopt_sonatina_facts);
     for (contract_name, artifact) in bytecode {
         let owner_key =
             codegen::trace::bytecode_runtime_owner_key(uri.as_str(), &module_key, &contract_name);
-        facts.extend(codegen::trace::emit_bytecode_instruction_facts(
+        facts.extend(
+            codegen::trace::emit_bytecode_instruction_facts_with_observability(
+                &owner_key,
+                "function:runtime",
+                &artifact.runtime,
+                Some(&sonatina_owner),
+                artifact.runtime_observability.as_ref(),
+                Some(&postopt_sonatina_nodes),
+                Some(&postopt_sonatina_aliases),
+            ),
+        );
+        facts.extend(codegen::trace::emit_bytecode_shape_facts(
             &owner_key,
             "function:runtime",
             &artifact.runtime,
@@ -562,6 +593,30 @@ pub(crate) fn service_for_file_with_options(
     Ok(Some(TraceIntrospectionService::with_config(
         snapshot, config,
     )))
+}
+
+fn postopt_sonatina_instruction_aliases(
+    facts: &[TraceFact],
+) -> BTreeMap<common::origin::OriginExportKey, common::origin::OriginExportKey> {
+    facts
+        .iter()
+        .filter_map(|fact| {
+            let TraceFact::Instruction(instruction) = fact else {
+                return None;
+            };
+            if instruction.instruction.kind() != codegen::trace::SONATINA_POSTOPT_INST_KIND {
+                return None;
+            }
+            let (function_prefix, _) = instruction.instruction.local_key().rsplit_once(":inst:")?;
+            let alias = common::origin::OriginExportKey::try_from_raw_parts(
+                instruction.instruction.kind(),
+                instruction.instruction.owner_key(),
+                format!("{function_prefix}:inst:InstId({})", instruction.index),
+            )
+            .ok()?;
+            (alias != instruction.instruction).then(|| (alias, instruction.instruction.clone()))
+        })
+        .collect()
 }
 
 fn attached_trace_service(
@@ -612,17 +667,18 @@ fn elapsed_ms(started: Instant) -> u64 {
 mod tests {
     use async_lsp::MainLoop;
     use async_lsp::router::Router;
-    use common::origin::OriginExportKey;
+    use common::{InputDb, origin::OriginExportKey};
     use std::collections::BTreeMap;
     use trace_facts::{
-        InstructionFact, JsonlTraceSink, OriginNodeFact, OriginNodeKind, TraceBundle, TraceFact,
-        TraceMetadata,
+        InstructionFact, JsonlTraceSink, OriginEdgeLabel, OriginNodeFact, OriginNodeKind,
+        TraceBundle, TraceFact, TraceMetadata,
     };
     use url::Url;
 
     use super::{
-        TraceWorkbenchSessionRequest, attached_trace_service, handle_trace_workbench_bootstrap,
-        handle_trace_workbench_model, trace_workbench_parse_opt_level,
+        TraceServiceOptions, TraceWorkbenchSessionRequest, attached_trace_service,
+        handle_trace_workbench_bootstrap, handle_trace_workbench_model,
+        service_for_file_with_options, trace_workbench_parse_opt_level,
         trace_workbench_service_config_hash, trace_workbench_target_config_hash,
     };
     use crate::backend::{Backend, TraceViewerRevisionRecord};
@@ -645,6 +701,72 @@ mod tests {
             key.clone(),
             OriginNodeKind::new(key.kind()),
         ))
+    }
+
+    #[test]
+    fn live_trace_service_emits_observable_postopt_bytecode_for_requested_opt_level() {
+        let mut backend = test_backend();
+        let uri = Url::parse("file:///workspace/src/live_trace.fe").unwrap();
+        backend.db.workspace().update(
+            &mut backend.db,
+            uri.clone(),
+            r#"
+pub fn main() -> u64 {
+    (10 - 3) * 2
+}
+"#
+            .to_string(),
+        );
+
+        let service = service_for_file_with_options(
+            &backend.db,
+            &uri,
+            backend.tooling_config().clone(),
+            TraceServiceOptions {
+                opt_level: codegen::OptLevel::O2,
+            },
+        )
+        .unwrap()
+        .expect("live trace service");
+        let snapshot = service.snapshot();
+
+        assert!(
+            snapshot
+                .metadata()
+                .flags
+                .iter()
+                .any(|flag| flag == "optimize=O2")
+        );
+        assert!(snapshot.facts().iter().any(|fact| matches!(
+            fact,
+            TraceFact::OriginNode(node)
+                if node.key.kind() == codegen::trace::SONATINA_POSTOPT_INST_KIND
+        )));
+        assert!(snapshot.facts().iter().any(|fact| matches!(
+            fact,
+            TraceFact::OriginNode(node) if node.key.kind() == "bytecode.pc"
+        )));
+        assert!(
+            snapshot
+                .facts()
+                .iter()
+                .any(|fact| matches!(fact, TraceFact::ShapeNodeHash(_)))
+        );
+        assert!(snapshot.facts().iter().any(|fact| matches!(
+            fact,
+            TraceFact::OriginEdge(edge)
+                if edge.from.kind() == "bytecode.pc"
+                    && edge.to.kind() == codegen::trace::SONATINA_EVM_PREPARED_INST_KIND
+                    && edge.label == OriginEdgeLabel::EmittedFrom
+        )));
+        assert!(!snapshot.facts().iter().any(|fact| matches!(
+            fact,
+            TraceFact::OriginEdge(edge)
+                if edge.from.kind() == "bytecode.pc"
+                    && edge.to.kind() == codegen::trace::SONATINA_POSTOPT_INST_KIND
+        )));
+
+        drop(backend);
     }
 
     #[test]
