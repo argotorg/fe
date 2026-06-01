@@ -682,6 +682,7 @@ fn suppress_row_level_component(
     component: &BTreeSet<OriginExportKey>,
 ) -> bool {
     match rail {
+        OriginComponentRail::Exact => component.iter().any(is_component_hub_origin),
         OriginComponentRail::Generated | OriginComponentRail::Contextual => {
             component.len() > 128
                 || component.iter().any(is_component_hub_origin)
@@ -696,9 +697,7 @@ fn suppress_row_level_component(
                     .count()
                     > 64
         }
-        OriginComponentRail::Exact
-        | OriginComponentRail::Prepared
-        | OriginComponentRail::Structural => false,
+        OriginComponentRail::Prepared | OriginComponentRail::Structural => false,
     }
 }
 
@@ -1692,6 +1691,24 @@ mod tests {
 
         assert!(prefixed_classes(&classes, &source_file, "generated-c-").is_empty());
         assert!(prefixed_classes(&classes, &synthetic_mir, "generated-c-").is_empty());
+    }
+
+    #[test]
+    fn exact_components_through_function_hubs_do_not_emit_row_level_classes() {
+        let function = test_key("runtime.function", "runtime", "function:0");
+        let stmt = test_key("runtime.stmt", "runtime", "block:0:stmt:0");
+        let edges = [OriginEdgeFact::new(
+            stmt.clone(),
+            function.clone(),
+            OriginEdgeLabel::LoweredFrom,
+            Some(CompilerPhase::Mir),
+        )];
+        let index = test_index(&edges, []);
+
+        let classes = component_classes_for_index(&index);
+
+        assert!(prefixed_classes(&classes, &function, "exact-c-").is_empty());
+        assert!(prefixed_classes(&classes, &stmt, "exact-c-").is_empty());
     }
 
     #[test]
