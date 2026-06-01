@@ -3995,6 +3995,7 @@ pub enum LinkIssueCode {
     ExpectedAbsentSyntax,
     ExpectedAbsentDeclaration,
     ExpectedAbsentNoRuntimeSession,
+    ExpectedAbsentOptimizerElision,
     GeneratedExplanationOnly,
     ContextOnlyEvidence,
     CandidateShapeMatchOnly,
@@ -5645,7 +5646,7 @@ fn missing_link_audit_report(
     invalid: Vec<InvalidAttributionLink>,
 ) -> MissingLinkAuditReport {
     let missing_required_count = lineage_gaps.len();
-    let expected_absent: Vec<ExpectedAbsentLink> = Vec::new();
+    let expected_absent = expected_absent_links(snapshot);
     let overall_status = if !invalid.is_empty() {
         LinkOverallStatus::Invalid
     } else if missing_required_count > 0 {
@@ -5700,6 +5701,19 @@ fn missing_link_audit_report(
             affected_origins: lineage_gap_targets.len(),
             affected_bytecode_pcs: prepared_linked_pcs,
             top_issue_codes: Vec::new(),
+        });
+    }
+
+    if !expected_absent.is_empty() {
+        let mut expected_absent_counts = BTreeMap::new();
+        expected_absent_counts.insert(LinkStatus::ExpectedAbsent, expected_absent.len());
+        boundary_summaries.push(LinkBoundarySummary {
+            boundary: LinkBoundaryKind::PreOptToPostOpt,
+            owner_phase: CompilerPhase::SonatinaPostOpt,
+            status_counts: expected_absent_counts,
+            affected_origins: expected_absent.len(),
+            affected_bytecode_pcs: 0,
+            top_issue_codes: vec![LinkIssueCode::ExpectedAbsentOptimizerElision],
         });
     }
 
@@ -5780,6 +5794,56 @@ fn missing_link_audit_report(
         expected_absent,
         invalid,
     }
+}
+
+fn expected_absent_links(snapshot: &TraceSnapshot) -> Vec<ExpectedAbsentLink> {
+    let mut entries = snapshot
+        .facts()
+        .iter()
+        .filter_map(|fact| {
+            let TraceFact::CompilerEvent(event) = fact else {
+                return None;
+            };
+            (event.kind == CompilerEventKind::OptimizerElidedOrRewritten
+                && event.outputs.is_empty())
+            .then_some(event)
+        })
+        .flat_map(|event| {
+            let explanation = event
+                .reason
+                .as_ref()
+                .map(|reason| {
+                    format!(
+                        "optimizer explicitly elided this origin before post-opt output: {}",
+                        reason.as_str()
+                    )
+                })
+                .unwrap_or_else(|| {
+                    "optimizer explicitly elided this origin before post-opt output".to_string()
+                });
+            event
+                .inputs
+                .iter()
+                .cloned()
+                .map(move |origin| ExpectedAbsentLink {
+                    boundary: LinkBoundaryKind::PreOptToPostOpt,
+                    origin,
+                    issue_code: LinkIssueCode::ExpectedAbsentOptimizerElision,
+                    explanation: explanation.clone(),
+                })
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| {
+        left.origin
+            .canonical_storage_key()
+            .cmp(&right.origin.canonical_storage_key())
+    });
+    entries.dedup_by(|left, right| {
+        left.boundary == right.boundary
+            && left.origin == right.origin
+            && left.issue_code == right.issue_code
+    });
+    entries
 }
 
 fn missing_link_artifact(snapshot: &TraceSnapshot) -> MissingLinkAuditArtifact {
@@ -7366,6 +7430,51 @@ mod tests {
             missing_links.boundary_summaries[0]
                 .status_counts
                 .get(&LinkStatus::MissingRequired),
+            Some(&1)
+        );
+    }
+
+    #[test]
+    fn missing_link_audit_treats_explicit_optimizer_elision_as_expected_absent() {
+        let preopt = key("sonatina.preopt.inst", "demo", "inst:folded");
+        let event = key("compiler.event", "demo", "event:elide-folded");
+        let snapshot = snapshot(vec![
+            node(preopt.clone()),
+            node(event.clone()),
+            TraceFact::CompilerEvent(CompilerEventFact::new(
+                event,
+                CompilerPhase::SonatinaPostOpt,
+                CompilerEventKind::OptimizerElidedOrRewritten,
+                vec![preopt.clone()],
+                Vec::new(),
+                Some(CompilerReason::new("constant folded")),
+            )),
+        ]);
+        let report = TraceIntrospectionService::new(snapshot)
+            .attribution_audit()
+            .unwrap();
+        let missing_links = report.missing_links.as_ref().unwrap();
+
+        assert_eq!(
+            missing_links.summary.status,
+            LinkOverallStatus::PassWithExpectedAbsences
+        );
+        assert_eq!(missing_links.summary.expected_absent_count, 1);
+        assert_eq!(missing_links.summary.missing_required_count, 0);
+        assert!(missing_links.summary.top_blockers.is_empty());
+        assert_eq!(missing_links.expected_absent[0].origin, preopt);
+        assert_eq!(
+            missing_links.expected_absent[0].issue_code,
+            LinkIssueCode::ExpectedAbsentOptimizerElision
+        );
+        assert_eq!(
+            missing_links.boundary_summaries[0].boundary,
+            LinkBoundaryKind::PreOptToPostOpt
+        );
+        assert_eq!(
+            missing_links.boundary_summaries[0]
+                .status_counts
+                .get(&LinkStatus::ExpectedAbsent),
             Some(&1)
         );
     }
