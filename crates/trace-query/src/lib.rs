@@ -4773,7 +4773,9 @@ impl<'a> TraceIndex<'a> {
                 continue;
             };
             if loop_members.contains(&edge.from)
-                && trace_index::TraceReachabilityPolicy::ExactOnly.allows_edge(edge)
+                && self
+                    .semantic_index
+                    .allows_edge(trace_index::TraceReachabilityPolicy::ExactOnly, edge)
             {
                 loop_member_origins.insert(edge.to.clone());
             }
@@ -4787,12 +4789,16 @@ impl<'a> TraceIndex<'a> {
             if edge.from.kind() != "bytecode.pc" {
                 continue;
             }
-            if trace_index::TraceReachabilityPolicy::ExactOnly.allows_edge(edge)
+            if self
+                .semantic_index
+                .allows_edge(trace_index::TraceReachabilityPolicy::ExactOnly, edge)
                 && loop_members.contains(&edge.to)
             {
                 bytecode.insert(edge.from.clone());
             }
-            if trace_index::TraceReachabilityPolicy::ExactOnly.allows_edge(edge)
+            if self
+                .semantic_index
+                .allows_edge(trace_index::TraceReachabilityPolicy::ExactOnly, edge)
                 && loop_member_origins.contains(&edge.to)
             {
                 bytecode.insert(edge.from.clone());
@@ -4808,7 +4814,9 @@ impl<'a> TraceIndex<'a> {
                 TraceFact::OriginEdge(edge)
                     if edge.from.kind() == "bytecode.pc"
                         && edge.to.kind() != "code.object"
-                        && trace_index::TraceReachabilityPolicy::ExactOnly.allows_edge(edge)
+                        && self
+                            .semantic_index
+                            .allows_edge(trace_index::TraceReachabilityPolicy::ExactOnly, edge)
             )
         })
     }
@@ -7446,7 +7454,7 @@ fn format_storage_location(location: &StorageLocation) -> String {
 #[cfg(test)]
 mod tests {
     use common::origin::OriginExportKey;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use trace_facts::{
         BlockFact, CallFact, CategorySource, CodeObjectFact, CodeObjectKind, CompilerEventFact,
         CompilerEventKind, CompilerPhase, CompilerReason, DisplayNameFact, DisplayNameKind,
@@ -10278,6 +10286,35 @@ mod tests {
                 &TraceWorkbenchMissingLineageIndex::default(),
             ),
             None
+        );
+    }
+
+    #[test]
+    fn query_index_rejects_direct_bytecode_postopt_exact_shortcut() {
+        let bytecode = key("bytecode.pc", "runtime", "pc:0");
+        let postopt = key(
+            "sonatina.postopt.inst",
+            "sonatina",
+            "function:FuncRef(0):inst:InstId(0)",
+        );
+        let snapshot = snapshot(vec![
+            node(bytecode.clone()),
+            node(postopt.clone()),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                bytecode.clone(),
+                postopt.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+        ]);
+        let index = super::TraceIndex::new(&snapshot);
+        let loop_members = BTreeSet::from([postopt]);
+
+        assert!(!index.has_bytecode_origin_edges());
+        assert!(
+            index
+                .bytecode_instructions_for_loop_members(&loop_members)
+                .is_empty()
         );
     }
 

@@ -177,7 +177,11 @@ impl<'a> TraceIndex<'a> {
         reachable
     }
 
-    fn allows_edge(&self, policy: TraceReachabilityPolicy, edge: &OriginEdgeFact) -> bool {
+    pub(crate) fn allows_edge(
+        &self,
+        policy: TraceReachabilityPolicy,
+        edge: &OriginEdgeFact,
+    ) -> bool {
         policy.allows_edge(edge) && self.edge_satisfies_phase_contract(edge)
     }
 
