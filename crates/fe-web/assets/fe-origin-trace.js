@@ -1428,6 +1428,7 @@
       var classes = Array.isArray(rowOrClasses) ? rowOrClasses : ((rowOrClasses && rowOrClasses.classes) || []);
       var entries = this._auditForClasses(classes);
       var wrap = el("span", "badges");
+      if (!rowStatus && rowOrClasses && rowOrClasses.suppress_rail_status) return wrap;
       var status = rowStatus || this._displayStatus(entries, this._railStatus(classes));
       if (!status) return wrap;
       wrap.append(el("span", "badge " + status.kind, status.label));

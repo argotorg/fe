@@ -2140,6 +2140,7 @@ struct TraceWorkbenchSourceLine {
     text: String,
     stable_identities: Vec<TraceWorkbenchRowStableIdentity>,
     classes: Vec<String>,
+    suppress_rail_status: bool,
     display_status: Option<TraceWorkbenchDisplayStatus>,
 }
 
@@ -2390,9 +2391,10 @@ fn trace_workbench_source_lines(
         .enumerate()
         .map(|(index, text)| {
             let number = index as u32 + 1;
-            let classes = exact_classes_by_line
-                .get(&number)
-                .or_else(|| enclosing_classes_by_line.get(&number))
+            let exact_classes = exact_classes_by_line.get(&number);
+            let enclosing_classes = enclosing_classes_by_line.get(&number);
+            let classes = exact_classes
+                .or(enclosing_classes)
                 .map(|classes| classes.iter().cloned().collect::<Vec<_>>())
                 .unwrap_or_default();
             TraceWorkbenchSourceLine {
@@ -2403,7 +2405,10 @@ fn trace_workbench_source_lines(
                     "source_line",
                     format!("main:{number}"),
                 )],
-                display_status: trace_workbench_status_for_source_line(&classes),
+                suppress_rail_status: exact_classes.is_none() && enclosing_classes.is_some(),
+                display_status: exact_classes
+                    .map(|_| trace_workbench_status_for_source_line(&classes))
+                    .unwrap_or_default(),
                 classes,
             }
         })
@@ -5539,7 +5544,8 @@ mod tests {
         VariablesAtPcRequest, run_trace_query, trace_workbench_compact_mir_text,
         trace_workbench_compact_origin_text, trace_workbench_manifest,
         trace_workbench_natural_key_cmp, trace_workbench_report_projection,
-        trace_workbench_source_projection, trace_workbench_status_for_row,
+        trace_workbench_source_lines, trace_workbench_source_projection,
+        trace_workbench_status_for_row,
     };
 
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -7008,6 +7014,42 @@ mod tests {
         assert_eq!(related[0]["source_text_available"], true);
         assert_eq!(related[0]["lines"][0]["number"], 7);
         assert_eq!(related[0]["lines"][0]["text"], "abi line");
+    }
+
+    #[test]
+    fn trace_workbench_broad_source_spans_do_not_badge_each_line() {
+        let source_file = key("source.file", "file:///main.fe", "file:main");
+        let hir = key("hir.expr", "file:///main.fe", "expr:function-body");
+        let snapshot = snapshot(vec![
+            node(source_file.clone()),
+            node(hir.clone()),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                hir.clone(),
+                source_file,
+                0,
+                28,
+                1,
+                1,
+                3,
+                2,
+            )),
+        ]);
+        let mut classes = BTreeMap::new();
+        classes.insert(
+            hir.canonical_storage_key(),
+            vec!["generated-c-broad".to_string()],
+        );
+
+        let lines = trace_workbench_source_lines(
+            "file:///main.fe",
+            "fn main() {\n  // comment\n}\n",
+            &snapshot,
+            &classes,
+        );
+
+        assert_eq!(lines[1].classes, vec!["generated-c-broad"]);
+        assert!(lines[1].suppress_rail_status);
+        assert_eq!(lines[1].display_status, None);
     }
 
     #[test]

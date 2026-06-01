@@ -832,6 +832,14 @@ mod tests {
     }
 
     #[test]
+    fn origin_trace_suppresses_broad_source_span_badges() {
+        assert!(FE_ORIGIN_TRACE_JS.contains("suppress_rail_status"));
+        assert!(FE_ORIGIN_TRACE_JS.contains(
+            "if (!rowStatus && rowOrClasses && rowOrClasses.suppress_rail_status) return wrap;"
+        ));
+    }
+
+    #[test]
     fn js_escape_handles_special_chars() {
         assert_eq!(js_escape_string("hello\nworld"), "hello\\nworld");
         assert_eq!(js_escape_string(r#"a"b"#), r#"a\"b"#);
