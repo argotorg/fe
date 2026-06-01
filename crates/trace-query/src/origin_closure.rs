@@ -8,7 +8,10 @@ use trace_facts::{
     TraceFact, TraceSnapshot,
 };
 
-use crate::LoopContentsReport;
+use crate::{
+    LoopContentsReport,
+    trace_index::{origin_edge_satisfies_phase_contract, prepared_lineage_event_pairs},
+};
 
 const CLOSURE_MAX_DEPTH: usize = 16;
 const CLOSURE_MAX_NODES: usize = 512;
@@ -435,6 +438,7 @@ struct OriginClosureIndex<'a> {
     edges_by_to: BTreeMap<OriginExportKey, Vec<&'a OriginEdgeFact>>,
     instructions: BTreeMap<OriginExportKey, &'a InstructionFact>,
     source_spans: BTreeMap<OriginExportKey, &'a SourceSpanFact>,
+    prepared_lineage_events: BTreeSet<(OriginExportKey, OriginExportKey)>,
     edge_count: usize,
     instruction_count: usize,
 }
@@ -474,6 +478,7 @@ impl<'a> OriginClosureIndex<'a> {
             edges_by_to,
             instructions,
             source_spans,
+            prepared_lineage_events: prepared_lineage_event_pairs(snapshot),
             edge_count,
             instruction_count,
         }
@@ -521,9 +526,9 @@ fn closure_roots(
 
 fn has_precise_audit_edge(key: &OriginExportKey, index: &OriginClosureIndex<'_>) -> bool {
     index.edges_by_from.get(key).is_some_and(|edges| {
-        edges
-            .iter()
-            .any(|edge| allows_origin_closure_edge(edge, OriginClosureTraversalMode::PreciseAudit))
+        edges.iter().any(|edge| {
+            allows_origin_closure_edge(edge, OriginClosureTraversalMode::PreciseAudit, index)
+        })
     })
 }
 
@@ -611,7 +616,10 @@ impl OriginComponentRail {
         }
     }
 
-    fn allows_edge(self, edge: &OriginEdgeFact) -> bool {
+    fn allows_edge(self, edge: &OriginEdgeFact, index: &OriginClosureIndex<'_>) -> bool {
+        if !origin_edge_satisfies_phase_contract(edge, &index.prepared_lineage_events) {
+            return false;
+        }
         let class = edge.traversal_class();
         let exact = matches!(
             class,
@@ -662,7 +670,7 @@ fn connected_components_for_rail(
     let mut candidates = BTreeSet::<OriginExportKey>::new();
     for edges in index.edges_by_from.values() {
         for edge in edges {
-            if rail.allows_edge(edge) {
+            if rail.allows_edge(edge, index) {
                 candidates.insert(edge.from.clone());
                 candidates.insert(edge.to.clone());
             }
@@ -683,7 +691,7 @@ fn connected_components_for_rail(
             let outgoing = index.edges_by_from.get(&key).into_iter().flatten().copied();
             let incoming = index.edges_by_to.get(&key).into_iter().flatten().copied();
             for edge in outgoing.chain(incoming) {
-                if !rail.allows_edge(edge) {
+                if !rail.allows_edge(edge, index) {
                     continue;
                 }
                 let other = if edge.from == key {
@@ -1280,7 +1288,7 @@ fn origin_closure(start: &OriginExportKey, index: &OriginClosureIndex<'_>) -> Ra
             if from_hub.is_some() || to_hub.is_some() {
                 continue;
             }
-            if !allows_origin_closure_edge(edge, OriginClosureTraversalMode::PreciseAudit) {
+            if !allows_origin_closure_edge(edge, OriginClosureTraversalMode::PreciseAudit, index) {
                 continue;
             }
             let edge_key = (
@@ -1330,7 +1338,14 @@ enum OriginClosureTraversalMode {
     PreciseAudit,
 }
 
-fn allows_origin_closure_edge(edge: &OriginEdgeFact, mode: OriginClosureTraversalMode) -> bool {
+fn allows_origin_closure_edge(
+    edge: &OriginEdgeFact,
+    mode: OriginClosureTraversalMode,
+    index: &OriginClosureIndex<'_>,
+) -> bool {
+    if !origin_edge_satisfies_phase_contract(edge, &index.prepared_lineage_events) {
+        return false;
+    }
     match mode {
         OriginClosureTraversalMode::PreciseAudit => matches!(
             edge.traversal_class(),
@@ -1502,6 +1517,7 @@ mod tests {
             edges_by_to,
             instructions: BTreeMap::new(),
             source_spans: BTreeMap::new(),
+            prepared_lineage_events: BTreeSet::new(),
             edge_count: edges.len(),
             instruction_count: 0,
         };
@@ -1519,7 +1535,7 @@ mod tests {
     fn closure_roots_include_bytecode_with_exact_trace_edges() {
         let pc = test_key("bytecode.pc", "runtime", "pc:0");
         let code_object = test_key("code.object", "runtime", "runtime");
-        let postopt = test_key("sonatina.postopt.inst", "sonatina", "inst:0");
+        let prepared = test_key("sonatina.evm.prepared.inst", "sonatina", "inst:0");
         let function = test_key("bytecode.function", "runtime", "function");
         let edges = [
             OriginEdgeFact::new(
@@ -1530,7 +1546,7 @@ mod tests {
             ),
             OriginEdgeFact::new(
                 pc.clone(),
-                postopt,
+                prepared,
                 OriginEdgeLabel::EmittedFrom,
                 Some(CompilerPhase::BytecodeEmission),
             ),
@@ -1550,6 +1566,7 @@ mod tests {
             edges_by_to,
             instructions: BTreeMap::from([(pc.clone(), &instruction)]),
             source_spans: BTreeMap::new(),
+            prepared_lineage_events: BTreeSet::new(),
             edge_count: edges.len(),
             instruction_count: 1,
         };
@@ -1557,6 +1574,27 @@ mod tests {
         let roots = closure_roots("fib_demo.fe", &index, &empty_loop_report());
 
         assert!(roots.contains(&pc));
+    }
+
+    #[test]
+    fn precise_closure_rejects_prepared_postopt_edge_without_lineage_event() {
+        let prepared = test_key("sonatina.evm.prepared.inst", "sonatina", "inst:0");
+        let postopt = test_key("sonatina.postopt.inst", "sonatina", "inst:0");
+        let edges = [OriginEdgeFact::new(
+            prepared.clone(),
+            postopt.clone(),
+            OriginEdgeLabel::LoweredFrom,
+            Some(CompilerPhase::Backend),
+        )];
+        let index = test_index(&edges, []);
+
+        let closure = origin_closure(&prepared, &index);
+        let classes = component_classes_for_index(&index);
+
+        assert!(closure.keys.contains(&prepared));
+        assert!(!closure.keys.contains(&postopt));
+        assert!(prefixed_classes(&classes, &prepared, "exact-c-").is_empty());
+        assert!(prefixed_classes(&classes, &postopt, "exact-c-").is_empty());
     }
 
     #[test]
@@ -2115,6 +2153,7 @@ mod tests {
             edges_by_to,
             instructions,
             source_spans: BTreeMap::new(),
+            prepared_lineage_events: BTreeSet::new(),
             edge_count: edges.len(),
             instruction_count: 0,
         }

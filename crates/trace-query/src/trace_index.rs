@@ -22,7 +22,7 @@ pub struct TraceIndex<'a> {
 impl<'a> TraceIndex<'a> {
     pub fn new(snapshot: &'a TraceSnapshot) -> Self {
         let mut edges_by_from = BTreeMap::<OriginExportKey, Vec<&OriginEdgeFact>>::new();
-        let mut prepared_lineage_events = BTreeSet::<(OriginExportKey, OriginExportKey)>::new();
+        let prepared_lineage_events = prepared_lineage_event_pairs(snapshot);
         let mut source_spans = BTreeMap::new();
         for fact in snapshot.facts() {
             match fact {
@@ -34,24 +34,6 @@ impl<'a> TraceIndex<'a> {
                 }
                 TraceFact::SourceSpan(span) => {
                     source_spans.insert(span.origin.clone(), span);
-                }
-                TraceFact::CompilerEvent(event)
-                    if event.kind == CompilerEventKind::PreparedLineage
-                        && event.phase == CompilerPhase::Backend =>
-                {
-                    for prepared in event
-                        .outputs
-                        .iter()
-                        .filter(|origin| is_prepared_codegen_origin_kind(origin.kind()))
-                    {
-                        for postopt in event
-                            .inputs
-                            .iter()
-                            .filter(|origin| is_sonatina_postopt_origin_kind(origin.kind()))
-                        {
-                            prepared_lineage_events.insert((prepared.clone(), postopt.clone()));
-                        }
-                    }
                 }
                 _ => {}
             }
@@ -200,22 +182,56 @@ impl<'a> TraceIndex<'a> {
     }
 
     fn edge_satisfies_phase_contract(&self, edge: &OriginEdgeFact) -> bool {
-        if edge.from.kind() == "bytecode.pc"
-            && is_sonatina_postopt_origin_kind(edge.to.kind())
-            && edge.has_transform_claim_label()
-        {
-            return false;
-        }
-        if is_prepared_codegen_origin_kind(edge.from.kind())
-            && is_sonatina_postopt_origin_kind(edge.to.kind())
-            && is_prepared_to_postopt_lineage_edge(edge)
-        {
-            return self
-                .prepared_lineage_events
-                .contains(&(edge.from.clone(), edge.to.clone()));
-        }
-        true
+        origin_edge_satisfies_phase_contract(edge, &self.prepared_lineage_events)
     }
+}
+
+pub(crate) fn prepared_lineage_event_pairs(
+    snapshot: &TraceSnapshot,
+) -> BTreeSet<(OriginExportKey, OriginExportKey)> {
+    let mut prepared_lineage_events = BTreeSet::<(OriginExportKey, OriginExportKey)>::new();
+    for fact in snapshot.facts() {
+        let TraceFact::CompilerEvent(event) = fact else {
+            continue;
+        };
+        if event.kind != CompilerEventKind::PreparedLineage || event.phase != CompilerPhase::Backend
+        {
+            continue;
+        }
+        for prepared in event
+            .outputs
+            .iter()
+            .filter(|origin| is_prepared_codegen_origin_kind(origin.kind()))
+        {
+            for postopt in event
+                .inputs
+                .iter()
+                .filter(|origin| is_sonatina_postopt_origin_kind(origin.kind()))
+            {
+                prepared_lineage_events.insert((prepared.clone(), postopt.clone()));
+            }
+        }
+    }
+    prepared_lineage_events
+}
+
+pub(crate) fn origin_edge_satisfies_phase_contract(
+    edge: &OriginEdgeFact,
+    prepared_lineage_events: &BTreeSet<(OriginExportKey, OriginExportKey)>,
+) -> bool {
+    if edge.from.kind() == "bytecode.pc"
+        && is_sonatina_postopt_origin_kind(edge.to.kind())
+        && edge.has_transform_claim_label()
+    {
+        return false;
+    }
+    if is_prepared_codegen_origin_kind(edge.from.kind())
+        && is_sonatina_postopt_origin_kind(edge.to.kind())
+        && is_prepared_to_postopt_lineage_edge(edge)
+    {
+        return prepared_lineage_events.contains(&(edge.from.clone(), edge.to.clone()));
+    }
+    true
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

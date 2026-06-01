@@ -12,6 +12,7 @@ use trace_facts::{
 use crate::{
     GasAttributionPolicy, GasBySourceRequest, IntrospectionService, RuntimeGasBySourceRequest,
     RuntimeTraceFilterRequest, StorageAccessesBySlotRequest, TraceIntrospectionService,
+    trace_index::{origin_edge_satisfies_phase_contract, prepared_lineage_event_pairs},
 };
 
 pub const CORE_DATALOG_RULES: &str = r#"
@@ -112,10 +113,22 @@ fn append_semantic_edge_views(
     schemas.extend(semantic_edge_schemas());
     schemas.extend(representation_diagnostic_schemas());
     schemas.extend(prepared_lineage_schemas());
+    let prepared_lineage_events = prepared_lineage_event_pairs(snapshot);
     for fact in snapshot.facts() {
         let TraceFact::OriginEdge(edge) = fact else {
             continue;
         };
+        if !origin_edge_satisfies_phase_contract(edge, &prepared_lineage_events) {
+            rows.push(RelationRow {
+                relation: "suspicious_edge",
+                values: vec![
+                    edge.from.canonical_storage_key(),
+                    edge.to.canonical_storage_key(),
+                    "phase_contract_rejected".to_string(),
+                ],
+            });
+            continue;
+        }
         rows.push(RelationRow {
             relation: semantic_edge_relation(edge),
             values: vec![
@@ -603,6 +616,7 @@ fn runtime_storage_after_call(snapshot: &TraceSnapshot) -> RuntimeStorageAfterCa
 
 pub fn origin_reaches(snapshot: &TraceSnapshot) -> BTreeSet<(OriginExportKey, OriginExportKey)> {
     let mut adjacency: BTreeMap<OriginExportKey, BTreeSet<OriginExportKey>> = BTreeMap::new();
+    let prepared_lineage_events = prepared_lineage_event_pairs(snapshot);
     for fact in snapshot.facts() {
         if let TraceFact::OriginEdge(edge) = fact
             && matches!(
@@ -610,6 +624,7 @@ pub fn origin_reaches(snapshot: &TraceSnapshot) -> BTreeSet<(OriginExportKey, Or
                 OriginEdgeTraversalClass::ExactAttribution
                     | OriginEdgeTraversalClass::SnapshotAlias
             )
+            && origin_edge_satisfies_phase_contract(edge, &prepared_lineage_events)
         {
             adjacency
                 .entry(edge.from.clone())
@@ -1080,6 +1095,52 @@ mod tests {
                 postopt.canonical_storage_key(),
             ]
         ));
+    }
+
+    #[test]
+    fn semantic_edge_views_reject_prepared_postopt_without_lineage_event() {
+        let postopt = key("sonatina.postopt.inst", "demo", "inst:0");
+        let prepared = key("sonatina.evm.prepared.inst", "demo", "inst:0");
+        let snapshot = TraceSnapshot::new(TraceBundle::new(
+            TraceMetadata::compiler_emitted(
+                "abc123",
+                "evm/sonatina",
+                vec!["fe".to_string(), "trace".to_string()],
+                "demo.fe",
+                vec![],
+            ),
+            vec![
+                node(postopt.clone()),
+                node(prepared.clone()),
+                TraceFact::OriginEdge(OriginEdgeFact::new(
+                    prepared.clone(),
+                    postopt.clone(),
+                    OriginEdgeLabel::LoweredFrom,
+                    Some(CompilerPhase::Backend),
+                )),
+            ],
+        ))
+        .unwrap();
+        let export = emit_base_relations(&snapshot);
+
+        assert!(!relation_row_exists(
+            &export,
+            "exact_attribution_edge",
+            &[
+                prepared.canonical_storage_key(),
+                postopt.canonical_storage_key()
+            ]
+        ));
+        assert!(relation_row_exists(
+            &export,
+            "suspicious_edge",
+            &[
+                prepared.canonical_storage_key(),
+                postopt.canonical_storage_key(),
+                "phase_contract_rejected".to_string(),
+            ]
+        ));
+        assert!(origin_reaches(&snapshot).is_empty());
     }
 
     #[test]
