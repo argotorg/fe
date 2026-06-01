@@ -503,12 +503,12 @@ impl<'a> DebugFactIndex<'a> {
         }
         self.source_candidate_walks
             .set(self.source_candidate_walks.get() + 1);
-        let mut visited = BTreeSet::new();
+        let mut visited = BTreeSet::<(OriginExportKey, bool)>::new();
         let mut result = SourceCandidateResult::default();
         let mut queue = VecDeque::from([(instruction.clone(), true)]);
 
         while let Some((current, precise)) = queue.pop_front() {
-            if !visited.insert(current.clone()) {
+            if !visited.insert((current.clone(), precise)) {
                 continue;
             }
             if current != *instruction
@@ -516,8 +516,9 @@ impl<'a> DebugFactIndex<'a> {
                 && self.source_spans.contains_key(&current)
             {
                 if precise {
+                    result.generated_origins.remove(&current);
                     result.exact_origins.insert(current.clone());
-                } else {
+                } else if !result.exact_origins.contains(&current) {
                     result.generated_origins.insert(current.clone());
                 }
             }
@@ -619,10 +620,9 @@ struct SourceCandidateResult {
 
 impl SourceCandidateResult {
     fn all_origins(self) -> Vec<OriginExportKey> {
-        self.exact_origins
-            .into_iter()
-            .chain(self.generated_origins)
-            .collect()
+        let mut origins = self.exact_origins;
+        origins.extend(self.generated_origins);
+        origins.into_iter().collect()
     }
 }
 
@@ -1081,6 +1081,48 @@ mod tests {
                 .all_origins
                 .contains(&generated_source)
         );
+    }
+
+    #[test]
+    fn exact_revisit_upgrades_source_reached_first_by_generated_edge() {
+        let source_file = key("source.file", "demo", "src/main.fe");
+        let source_expr = key("hir.expr", "demo", "expr:add");
+        let function = key("bytecode.function", "demo", "runtime");
+        let instruction = key("bytecode.pc", "demo", "pc:4");
+        let mut facts = source_file_and_span(source_file, source_expr.clone());
+        facts.extend([
+            node(function.clone()),
+            node(instruction.clone()),
+            TraceFact::Instruction(InstructionFact::new(
+                instruction.clone(),
+                function,
+                0,
+                "ADD",
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                instruction.clone(),
+                source_expr.clone(),
+                OriginEdgeLabel::SyntheticFor,
+                None,
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                instruction,
+                source_expr.clone(),
+                OriginEdgeLabel::LoweredFrom,
+                None,
+            )),
+        ]);
+        let bundle = DebugBundle::from_snapshot(&snapshot(facts));
+
+        assert_eq!(
+            bundle.instructions[0].classification,
+            InstructionClassification::SourceMapped
+        );
+        assert_eq!(
+            bundle.instructions[0].primary_source,
+            Some(source_expr.clone())
+        );
+        assert_eq!(bundle.instructions[0].all_origins, vec![source_expr]);
     }
 
     #[test]
