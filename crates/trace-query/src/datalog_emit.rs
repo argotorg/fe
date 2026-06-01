@@ -110,6 +110,7 @@ fn append_semantic_edge_views(
     rows: &mut Vec<RelationRow>,
 ) {
     schemas.extend(semantic_edge_schemas());
+    schemas.extend(representation_diagnostic_schemas());
     for fact in snapshot.facts() {
         let TraceFact::OriginEdge(edge) = fact else {
             continue;
@@ -134,6 +135,7 @@ fn append_semantic_edge_views(
             });
         }
     }
+    append_representation_diagnostic_views(snapshot, rows);
 }
 
 fn semantic_edge_schemas() -> Vec<RelationSchema> {
@@ -177,6 +179,94 @@ fn semantic_edge_schemas() -> Vec<RelationSchema> {
         ],
     });
     schemas
+}
+
+fn representation_diagnostic_schemas() -> Vec<RelationSchema> {
+    vec![
+        RelationSchema {
+            name: "same_local_different_representation",
+            columns: vec![
+                RelationColumn {
+                    name: "left",
+                    kind: RelationColumnKind::Key,
+                },
+                RelationColumn {
+                    name: "right",
+                    kind: RelationColumnKind::Key,
+                },
+                RelationColumn {
+                    name: "raw_local",
+                    kind: RelationColumnKind::Text,
+                },
+            ],
+        },
+        RelationSchema {
+            name: "candidate_lineage_hint",
+            columns: vec![
+                RelationColumn {
+                    name: "from",
+                    kind: RelationColumnKind::Key,
+                },
+                RelationColumn {
+                    name: "to",
+                    kind: RelationColumnKind::Key,
+                },
+                RelationColumn {
+                    name: "hint",
+                    kind: RelationColumnKind::Text,
+                },
+            ],
+        },
+    ]
+}
+
+fn append_representation_diagnostic_views(snapshot: &TraceSnapshot, rows: &mut Vec<RelationRow>) {
+    let mut postopt_by_raw_local = BTreeMap::<(String, String), Vec<OriginExportKey>>::new();
+    let mut prepared = BTreeSet::<OriginExportKey>::new();
+    for fact in snapshot.facts() {
+        let TraceFact::OriginNode(node) = fact else {
+            continue;
+        };
+        if node.key.kind() == "sonatina.postopt.inst" {
+            postopt_by_raw_local
+                .entry((
+                    node.key.owner_key().to_string(),
+                    node.key.local_key().to_string(),
+                ))
+                .or_default()
+                .push(node.key.clone());
+        } else if node.key.kind() == "sonatina.evm.prepared.inst" {
+            prepared.insert(node.key.clone());
+        }
+    }
+
+    for prepared in prepared {
+        let raw_local = (
+            prepared.owner_key().to_string(),
+            prepared.local_key().to_string(),
+        );
+        let Some(postopt_candidates) = postopt_by_raw_local.get(&raw_local) else {
+            continue;
+        };
+        for postopt in postopt_candidates {
+            rows.push(RelationRow {
+                relation: "same_local_different_representation",
+                values: vec![
+                    prepared.canonical_storage_key(),
+                    postopt.canonical_storage_key(),
+                    prepared.local_key().to_string(),
+                ],
+            });
+            rows.push(RelationRow {
+                relation: "candidate_lineage_hint",
+                values: vec![
+                    prepared.canonical_storage_key(),
+                    postopt.canonical_storage_key(),
+                    "same_raw_local_id".to_string(),
+                ],
+            });
+        }
+    }
 }
 
 fn semantic_edge_relation(edge: &trace_facts::OriginEdgeFact) -> &'static str {
@@ -740,6 +830,58 @@ mod tests {
                 hir.canonical_storage_key()
             ]
         ));
+    }
+
+    #[test]
+    fn base_relation_export_marks_same_raw_local_id_as_candidate_only() {
+        let raw_inst = "function:FuncRef(1):inst:InstId(7)";
+        let postopt = key("sonatina.postopt.inst", "demo", raw_inst);
+        let prepared = key("sonatina.evm.prepared.inst", "demo", raw_inst);
+        let snapshot = TraceSnapshot::new(TraceBundle::new(
+            TraceMetadata::compiler_emitted(
+                "abc123",
+                "evm/sonatina",
+                vec!["fe".to_string(), "trace".to_string()],
+                "demo.fe",
+                vec![],
+            ),
+            vec![node(postopt.clone()), node(prepared.clone())],
+        ))
+        .unwrap();
+        let export = emit_base_relations(&snapshot);
+
+        assert!(
+            export
+                .schemas
+                .iter()
+                .any(|schema| schema.name == "same_local_different_representation")
+        );
+        assert!(relation_row_exists(
+            &export,
+            "same_local_different_representation",
+            &[
+                prepared.canonical_storage_key(),
+                postopt.canonical_storage_key(),
+                raw_inst.to_string(),
+            ]
+        ));
+        assert!(relation_row_exists(
+            &export,
+            "candidate_lineage_hint",
+            &[
+                prepared.canonical_storage_key(),
+                postopt.canonical_storage_key(),
+                "same_raw_local_id".to_string(),
+            ]
+        ));
+        assert!(
+            !export
+                .rows
+                .iter()
+                .any(|row| row.relation == "exact_attribution_edge")
+        );
+        assert!(!export.rules.contains("same_local_different_representation"));
+        assert!(!export.rules.contains("candidate_lineage_hint"));
     }
 
     #[test]
