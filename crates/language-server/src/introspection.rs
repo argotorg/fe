@@ -697,6 +697,16 @@ pub fn main() -> u64 {
         )));
         assert!(snapshot.facts().iter().any(|fact| matches!(
             fact,
+            TraceFact::SourceFile(source) if source.uri == uri.as_str()
+        )));
+        assert!(
+            snapshot
+                .facts()
+                .iter()
+                .any(|fact| matches!(fact, TraceFact::SourceSpan(_)))
+        );
+        assert!(snapshot.facts().iter().any(|fact| matches!(
+            fact,
             TraceFact::OriginNode(node) if node.key.kind() == "bytecode.pc"
         )));
         assert!(
