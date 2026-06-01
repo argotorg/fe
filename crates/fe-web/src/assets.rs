@@ -846,6 +846,16 @@ mod tests {
     }
 
     #[test]
+    fn origin_trace_keeps_trace_notes_from_crowding_selection_details() {
+        assert!(FE_ORIGIN_TRACE_JS.contains("_traceNotes"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("Trace assumptions"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("trace-notes"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("flex:0 0 clamp(260px,38vh,520px)"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("flex:1 1 auto; min-height:220px"));
+        assert!(!FE_ORIGIN_TRACE_JS.contains("page.append(notes);"));
+    }
+
+    #[test]
     fn origin_trace_scroll_uses_pane_offsets_and_visibility_correction() {
         assert!(FE_ORIGIN_TRACE_JS.contains("_rowScrollTop"));
         assert!(FE_ORIGIN_TRACE_JS.contains("_offsetTopWithin"));
