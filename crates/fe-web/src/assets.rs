@@ -848,9 +848,9 @@ mod tests {
     fn origin_trace_scroll_uses_pane_offsets_and_visibility_correction() {
         assert!(FE_ORIGIN_TRACE_JS.contains("_rowScrollTop"));
         assert!(FE_ORIGIN_TRACE_JS.contains("_offsetTopWithin"));
-        assert!(FE_ORIGIN_TRACE_JS.contains("_confirmRowVisible"));
         assert!(FE_ORIGIN_TRACE_JS.contains("_clampScrollTop"));
-        assert!(FE_ORIGIN_TRACE_JS.contains("this._rowScrollTop(row, scroller)"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("scroller.scrollTo"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("behavior: behavior"));
     }
 
     #[test]

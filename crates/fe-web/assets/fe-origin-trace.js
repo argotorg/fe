@@ -1281,7 +1281,6 @@
         top: this._clampScrollTop(scroller, top),
         behavior: behavior,
       });
-      this._confirmRowVisible(row, scroller, behavior);
     }
 
     _rowScrollTop(row, scroller) {
@@ -1310,21 +1309,6 @@
         node = node.offsetParent;
       }
       return node === scroller ? top : null;
-    }
-
-    _confirmRowVisible(row, scroller, behavior) {
-      var correct = function () {
-        if (!row || !row.isConnected || !scroller || !scroller.isConnected) return;
-        var scrollerRect = scroller.getBoundingClientRect();
-        var rowRect = row.getBoundingClientRect();
-        var tolerance = 3;
-        var visible = rowRect.top >= scrollerRect.top - tolerance && rowRect.bottom <= scrollerRect.bottom + tolerance;
-        if (!visible) scroller.scrollTop = this._clampScrollTop(scroller, this._rowScrollTop(row, scroller));
-      }.bind(this);
-      var raf = window.requestAnimationFrame || function (fn) { return window.setTimeout(fn, 16); };
-      raf(function () { raf(correct); });
-      window.setTimeout(correct, behavior === "smooth" ? 320 : 40);
-      if (behavior === "smooth") window.setTimeout(correct, 700);
     }
 
     _syncStateStyles() {
