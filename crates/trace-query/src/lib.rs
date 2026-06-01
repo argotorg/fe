@@ -1832,6 +1832,7 @@ pub fn trace_workbench_report_projection(
         &request.related_source_texts,
         &classes_by_key,
         &exact_prepared_selection_bridge,
+        &trace_workbench_exact_groups_with_source_spans(snapshot, &classes_by_key),
         &missing_lineage,
     );
     let indexes = trace_workbench_projection_indexes(&source, &panels);
@@ -2350,6 +2351,7 @@ enum TraceWorkbenchPaneRowKind {
 #[serde(rename_all = "snake_case")]
 enum TraceWorkbenchDisplayStatus {
     Exact,
+    SourceExact,
     Generated,
     GeneratedDownstream,
     Context,
@@ -2459,6 +2461,12 @@ fn trace_workbench_missing_lineage_index(
 ) -> TraceWorkbenchMissingLineageIndex {
     let mut origins = BTreeSet::new();
     if let Some(attribution_audit) = attribution_audit {
+        origins.extend(
+            attribution_audit
+                .missing_optimized_to_prepared_lineage_pc_keys
+                .iter()
+                .map(OriginExportKey::canonical_storage_key),
+        );
         for gap in &attribution_audit.lineage_gaps {
             origins.insert(gap.bytecode_pc.canonical_storage_key());
             origins.insert(gap.prepared_origin.canonical_storage_key());
@@ -2641,6 +2649,27 @@ fn trace_workbench_merge_classes_by_key(
             }
         }
     }
+}
+
+fn trace_workbench_exact_groups_with_source_spans(
+    snapshot: &TraceSnapshot,
+    component_classes_by_key: &BTreeMap<String, Vec<String>>,
+) -> BTreeSet<String> {
+    let mut groups = BTreeSet::new();
+    for fact in snapshot.facts() {
+        let TraceFact::SourceSpan(span) = fact else {
+            continue;
+        };
+        if let Some(classes) = component_classes_by_key.get(&span.origin.canonical_storage_key()) {
+            groups.extend(
+                classes
+                    .iter()
+                    .filter(|class| class.starts_with("exact-c-"))
+                    .cloned(),
+            );
+        }
+    }
+    groups
 }
 
 fn trace_workbench_source_lines(
@@ -2937,6 +2966,7 @@ fn trace_workbench_panes(
     related_source_texts: &BTreeMap<String, String>,
     component_classes_by_key: &BTreeMap<String, Vec<String>>,
     prepared_groups_by_exact_group: &BTreeMap<String, Vec<String>>,
+    exact_groups_with_source_spans: &BTreeSet<String>,
     missing_lineage: &TraceWorkbenchMissingLineageIndex,
 ) -> Vec<TraceWorkbenchPane> {
     let index =
@@ -2969,6 +2999,7 @@ fn trace_workbench_panes(
             &index,
             component_classes_by_key,
             prepared_groups_by_exact_group,
+            exact_groups_with_source_spans,
             missing_lineage,
         );
         (!rows.is_empty()).then_some(TraceWorkbenchPane {
@@ -3084,6 +3115,7 @@ fn trace_workbench_panel_rows(
     index: &TraceWorkbenchProjectionIndex<'_>,
     component_classes_by_key: &BTreeMap<String, Vec<String>>,
     prepared_groups_by_exact_group: &BTreeMap<String, Vec<String>>,
+    exact_groups_with_source_spans: &BTreeSet<String>,
     missing_lineage: &TraceWorkbenchMissingLineageIndex,
 ) -> Vec<TraceWorkbenchPaneRow> {
     let mut keys = index
@@ -3100,6 +3132,7 @@ fn trace_workbench_panel_rows(
                 index,
                 component_classes_by_key,
                 prepared_groups_by_exact_group,
+                exact_groups_with_source_spans,
                 missing_lineage,
             )
         })
@@ -3201,6 +3234,7 @@ fn trace_workbench_panel_row(
     index: &TraceWorkbenchProjectionIndex<'_>,
     component_classes_by_key: &BTreeMap<String, Vec<String>>,
     prepared_groups_by_exact_group: &BTreeMap<String, Vec<String>>,
+    exact_groups_with_source_spans: &BTreeSet<String>,
     missing_lineage: &TraceWorkbenchMissingLineageIndex,
 ) -> TraceWorkbenchPaneRow {
     let storage_key = key.canonical_storage_key();
@@ -3221,6 +3255,8 @@ fn trace_workbench_panel_row(
     let raw_text = instruction
         .map(|instruction| instruction.mnemonic.clone())
         .unwrap_or_else(|| storage_key.clone());
+    let selection_groups =
+        trace_workbench_selection_groups_with_prepared(&classes, prepared_groups_by_exact_group);
     TraceWorkbenchPaneRow {
         row_id: trace_workbench_origin_row_id(&storage_key),
         key: Some(storage_key),
@@ -3231,13 +3267,17 @@ fn trace_workbench_panel_row(
         text: compact_text.clone(),
         compact_text,
         stable_identities: trace_workbench_panel_row_stable_identities(key),
-        display_status: trace_workbench_status_for_row(key, kind, &classes, missing_lineage),
+        display_status: trace_workbench_status_for_row(
+            key,
+            kind,
+            &classes,
+            &selection_groups,
+            exact_groups_with_source_spans,
+            missing_lineage,
+        ),
         rail_classes: trace_workbench_split_rail_classes(&classes),
         hover_groups: trace_workbench_hover_groups(&classes),
-        selection_groups: trace_workbench_selection_groups_with_prepared(
-            &classes,
-            prepared_groups_by_exact_group,
-        ),
+        selection_groups,
         classes,
         debug: TraceWorkbenchRowDebugInfo {
             origin_key: Some(key.canonical_storage_key()),
@@ -3336,16 +3376,31 @@ fn trace_workbench_status_for_row(
     key: &OriginExportKey,
     kind: TraceWorkbenchPaneRowKind,
     classes: &[String],
+    selection_groups: &[String],
+    exact_groups_with_source_spans: &BTreeSet<String>,
     missing_lineage: &TraceWorkbenchMissingLineageIndex,
 ) -> Option<TraceWorkbenchDisplayStatus> {
     if missing_lineage.contains(key) {
         return Some(TraceWorkbenchDisplayStatus::MissingOptimizedToPrepared);
     }
-    if kind == TraceWorkbenchPaneRowKind::Instruction
-        && key.kind() == "bytecode.pc"
-        && classes.iter().any(|class| class.starts_with("prepared-c-"))
-    {
-        return Some(TraceWorkbenchDisplayStatus::PreparedLinked);
+    if kind == TraceWorkbenchPaneRowKind::Instruction && key.kind() == "bytecode.pc" {
+        let has_prepared = classes.iter().any(|class| class.starts_with("prepared-c-"));
+        let has_exact = selection_groups
+            .iter()
+            .any(|class| class.starts_with("exact-c-"));
+        let has_source_exact = selection_groups
+            .iter()
+            .filter(|group| group.starts_with("exact-c-"))
+            .any(|group| exact_groups_with_source_spans.contains(group));
+        if has_source_exact {
+            return Some(TraceWorkbenchDisplayStatus::SourceExact);
+        }
+        if has_exact {
+            return Some(TraceWorkbenchDisplayStatus::MissingDownstreamLineage);
+        }
+        if has_prepared {
+            return Some(TraceWorkbenchDisplayStatus::PreparedLinked);
+        }
     }
     if trace_workbench_origin_key_is_generated(key)
         || classes.iter().any(|class| class == "origin-generated")
@@ -4116,6 +4171,10 @@ pub struct AttributionAuditReport {
     pub prepared_targets: Vec<AttributionAuditTargetCount>,
     pub missing_lineage_targets: Vec<AttributionAuditTargetCount>,
     pub non_exact_lineage_targets: Vec<AttributionAuditTargetCount>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing_optimized_to_prepared_lineage_pc_keys: Vec<OriginExportKey>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub non_exact_optimized_to_prepared_lineage_pc_keys: Vec<OriginExportKey>,
     pub lineage_gaps: Vec<AttributionAuditLineageGap>,
     pub suspicious_edges: Vec<AttributionAuditSuspiciousEdge>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -7454,6 +7513,8 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
     let mut non_exact_lineage_targets = BTreeMap::<OriginExportKey, usize>::new();
     let mut lineage_issue_targets = BTreeMap::<OriginExportKey, usize>::new();
     let mut lineage_gaps = Vec::new();
+    let mut missing_lineage_pc_keys = BTreeSet::<OriginExportKey>::new();
+    let mut non_exact_lineage_pc_keys = BTreeSet::<OriginExportKey>::new();
     let mut suspicious_edges = Vec::new();
     let mut invalid_links = Vec::new();
     let mut total_bytecode_pcs = 0usize;
@@ -7622,9 +7683,11 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
             }
             if has_missing_prepared_lineage {
                 missing_optimized_to_prepared_lineage_pcs += 1;
+                missing_lineage_pc_keys.insert(instruction.clone());
             }
             if has_non_exact_prepared_lineage {
                 non_exact_optimized_to_prepared_lineage_pcs += 1;
+                non_exact_lineage_pc_keys.insert(instruction.clone());
             }
         }
 
@@ -7777,6 +7840,12 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
         prepared_targets,
         missing_lineage_targets: lineage_gap_targets,
         non_exact_lineage_targets,
+        missing_optimized_to_prepared_lineage_pc_keys: missing_lineage_pc_keys
+            .into_iter()
+            .collect(),
+        non_exact_optimized_to_prepared_lineage_pc_keys: non_exact_lineage_pc_keys
+            .into_iter()
+            .collect(),
         lineage_gaps,
         suspicious_edges,
         missing_links: Some(missing_links),
@@ -7943,21 +8012,22 @@ mod tests {
     };
 
     use super::{
-        BytecodeRangeSummary, CallCostByCallsiteReport, CandidateConfidence, CandidateHintKind,
-        DynamicGasBySourceRequest, ExplainLocalRequest, ExplainPcRequest, GasBySourceRequest,
-        GasToSourceRequest, IntrospectionService, LinkBoundaryKind, LinkIssueCode,
-        LinkOverallStatus, LinkStatus, LoopContentsRequest, LoopCostRequest,
-        MISSING_LINK_AUDIT_SCHEMA_VERSION, OptimizedCodeHonestyRequest, RequiredEvidenceKind,
-        RuntimeGasBySourceRequest, RuntimeTraceFilterRequest, StorageAccessesBySlotRequest,
-        TraceIntrospectionService, TraceQueryHttpRequest, TraceQueryHttpResponse, TraceQueryReport,
-        TraceQueryRequest, TraceWorkbenchDisplayStatus, TraceWorkbenchMissingLineageIndex,
-        TraceWorkbenchPaneRowKind, TraceWorkbenchProjectionIndex, TraceWorkbenchProjectionRequest,
-        ValueFlowAtPcRequest, VariablesAtPcRequest, run_trace_query,
-        trace_workbench_compact_mir_text, trace_workbench_compact_origin_fallback_text,
-        trace_workbench_compact_origin_label, trace_workbench_compact_origin_meta,
-        trace_workbench_compact_origin_text, trace_workbench_hover_groups,
-        trace_workbench_exact_prepared_selection_bridge, trace_workbench_key_belongs_to_panel,
-        trace_workbench_manifest, trace_workbench_natural_key_cmp,
+        AttributionAuditReport, BytecodeRangeSummary, CallCostByCallsiteReport,
+        CandidateConfidence, CandidateHintKind, DynamicGasBySourceRequest, ExplainLocalRequest,
+        ExplainPcRequest, GasBySourceRequest, GasToSourceRequest, IntrospectionService,
+        LinkBoundaryKind, LinkIssueCode, LinkOverallStatus, LinkStatus, LoopContentsRequest,
+        LoopCostRequest, MISSING_LINK_AUDIT_SCHEMA_VERSION, OptimizedCodeHonestyRequest,
+        ReportMetadata, RequiredEvidenceKind, RuntimeGasBySourceRequest, RuntimeTraceFilterRequest,
+        StorageAccessesBySlotRequest, TraceIntrospectionService, TraceQueryHttpRequest,
+        TraceQueryHttpResponse, TraceQueryReport, TraceQueryRequest, TraceWorkbenchDisplayStatus,
+        TraceWorkbenchMissingLineageIndex, TraceWorkbenchPaneRowKind,
+        TraceWorkbenchProjectionIndex, TraceWorkbenchProjectionRequest, ValueFlowAtPcRequest,
+        VariablesAtPcRequest, run_trace_query, trace_workbench_compact_mir_text,
+        trace_workbench_compact_origin_fallback_text, trace_workbench_compact_origin_label,
+        trace_workbench_compact_origin_meta, trace_workbench_compact_origin_text,
+        trace_workbench_exact_prepared_selection_bridge, trace_workbench_hover_groups,
+        trace_workbench_key_belongs_to_panel, trace_workbench_manifest,
+        trace_workbench_missing_lineage_index, trace_workbench_natural_key_cmp,
         trace_workbench_report_projection, trace_workbench_selection_groups,
         trace_workbench_source_lines, trace_workbench_source_projection,
         trace_workbench_status_for_row, trace_workbench_status_for_source_line,
@@ -10836,12 +10906,7 @@ mod tests {
                 2,
                 4,
             )),
-            TraceFact::Instruction(InstructionFact::new(
-                bytecode.clone(),
-                function,
-                0,
-                "ADD",
-            )),
+            TraceFact::Instruction(InstructionFact::new(bytecode.clone(), function, 0, "ADD")),
             TraceFact::OriginEdge(OriginEdgeFact::new(
                 postopt,
                 source_expr,
@@ -11466,6 +11531,8 @@ mod tests {
                 &bytecode,
                 TraceWorkbenchPaneRowKind::Instruction,
                 &classes,
+                &classes,
+                &BTreeSet::new(),
                 &missing_lineage,
             ),
             Some(TraceWorkbenchDisplayStatus::MissingOptimizedToPrepared)
@@ -11475,10 +11542,46 @@ mod tests {
                 &bytecode,
                 TraceWorkbenchPaneRowKind::Instruction,
                 &classes,
+                &classes,
+                &BTreeSet::new(),
                 &TraceWorkbenchMissingLineageIndex::default(),
             ),
             Some(TraceWorkbenchDisplayStatus::PreparedLinked)
         );
+    }
+
+    #[test]
+    fn trace_workbench_missing_lineage_index_uses_full_pc_inventory() {
+        let bytecode = key("bytecode.pc", "demo", "pc:4096");
+        let snapshot = snapshot(vec![node(bytecode.clone())]);
+        let audit = AttributionAuditReport {
+            metadata: ReportMetadata::from_snapshot(&snapshot),
+            total_bytecode_pcs: 1,
+            source_exact_pcs: 0,
+            source_ambiguous_pcs: 0,
+            unmapped_pcs: 1,
+            optimized_sonatina_linked_pcs: 0,
+            prepared_linked_pcs: 1,
+            missing_optimized_to_prepared_lineage_pcs: 1,
+            non_exact_optimized_to_prepared_lineage_pcs: 0,
+            direct_bytecode_edges: Vec::new(),
+            direct_edges_by_class: Vec::new(),
+            source_lines: Vec::new(),
+            sonatina_targets: Vec::new(),
+            optimized_sonatina_targets: Vec::new(),
+            prepared_targets: Vec::new(),
+            missing_lineage_targets: Vec::new(),
+            non_exact_lineage_targets: Vec::new(),
+            missing_optimized_to_prepared_lineage_pc_keys: vec![bytecode.clone()],
+            non_exact_optimized_to_prepared_lineage_pc_keys: Vec::new(),
+            lineage_gaps: Vec::new(),
+            suspicious_edges: Vec::new(),
+            missing_links: None,
+        };
+
+        let index = trace_workbench_missing_lineage_index(Some(&audit));
+
+        assert!(index.contains(&bytecode));
     }
 
     #[test]
@@ -11492,9 +11595,22 @@ mod tests {
                 &bytecode,
                 TraceWorkbenchPaneRowKind::Instruction,
                 &classes,
+                &classes,
+                &BTreeSet::new(),
                 &TraceWorkbenchMissingLineageIndex::default(),
             ),
-            None
+            Some(TraceWorkbenchDisplayStatus::MissingDownstreamLineage)
+        );
+        assert_eq!(
+            trace_workbench_status_for_row(
+                &bytecode,
+                TraceWorkbenchPaneRowKind::Instruction,
+                &classes,
+                &classes,
+                &BTreeSet::from(["exact-c-demo".to_string()]),
+                &TraceWorkbenchMissingLineageIndex::default(),
+            ),
+            Some(TraceWorkbenchDisplayStatus::SourceExact)
         );
     }
 

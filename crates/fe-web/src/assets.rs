@@ -800,6 +800,7 @@ mod tests {
             "indexOf(\"exact-c-\") === 0; })) return { kind: \"ok\", label: \"exact\" }"
         ));
         assert!(FE_ORIGIN_TRACE_JS.contains("if (kind === \"exact\") return null;"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("if (kind === \"source_exact\")"));
         assert!(FE_ORIGIN_TRACE_JS.contains("suppressExact"));
         assert!(FE_ORIGIN_TRACE_JS.contains("suppressExact: true"));
         assert!(FE_ORIGIN_TRACE_JS.contains("dataset.hoverGroups"));
