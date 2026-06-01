@@ -5682,10 +5682,13 @@ fn missing_link_audit_report(
     let preopt_to_postopt = preopt_to_postopt_boundary_audit(snapshot, &expected_absent);
     let missing_preopt_to_postopt_count = preopt_to_postopt.missing.len();
     let missing_postopt_to_prepared_count = lineage_gaps.len();
+    let prepared_to_bytecode = prepared_to_bytecode_boundary_audit(snapshot);
+    let missing_prepared_to_bytecode_count = prepared_to_bytecode.missing.len();
     let missing_required_count = missing_postopt_to_prepared_count
         + missing_hir_to_mir_count
         + missing_mir_to_preopt_count
-        + missing_preopt_to_postopt_count;
+        + missing_preopt_to_postopt_count
+        + missing_prepared_to_bytecode_count;
     let overall_status = if !invalid.is_empty() {
         LinkOverallStatus::Invalid
     } else if missing_required_count > 0 {
@@ -5707,6 +5710,9 @@ fn missing_link_audit_report(
     }
     if !lineage_gaps.is_empty() || !invalid.is_empty() {
         top_blockers.push(LinkBoundaryKind::PostOptToPrepared);
+    }
+    if missing_prepared_to_bytecode_count > 0 {
+        top_blockers.push(LinkBoundaryKind::PreparedToBytecode);
     }
 
     let mut boundary_summaries = Vec::new();
@@ -5836,16 +5842,28 @@ fn missing_link_audit_report(
         });
     }
 
-    if prepared_linked_pcs > 0 {
+    if prepared_to_bytecode.total() > 0 {
         let mut prepared_to_bytecode_counts = BTreeMap::new();
-        prepared_to_bytecode_counts.insert(LinkStatus::SatisfiedExact, prepared_linked_pcs);
+        if prepared_to_bytecode.linked_pcs > 0 {
+            prepared_to_bytecode_counts
+                .insert(LinkStatus::SatisfiedExact, prepared_to_bytecode.linked_pcs);
+        }
+        if missing_prepared_to_bytecode_count > 0 {
+            prepared_to_bytecode_counts.insert(
+                LinkStatus::MissingRequired,
+                missing_prepared_to_bytecode_count,
+            );
+        }
         boundary_summaries.push(LinkBoundarySummary {
             boundary: LinkBoundaryKind::PreparedToBytecode,
             owner_phase: CompilerPhase::BytecodeEmission,
             status_counts: prepared_to_bytecode_counts,
-            affected_origins: prepared_target_count,
-            affected_bytecode_pcs: prepared_linked_pcs,
-            top_issue_codes: Vec::new(),
+            affected_origins: prepared_to_bytecode.affected_origins(),
+            affected_bytecode_pcs: prepared_to_bytecode.linked_pcs,
+            top_issue_codes: (missing_prepared_to_bytecode_count > 0)
+                .then_some(LinkIssueCode::MissingPreparedPcExtent)
+                .into_iter()
+                .collect(),
         });
     }
 
@@ -5943,6 +5961,30 @@ fn missing_link_audit_report(
                 candidate_hints: Vec::new(),
                 required_evidence: required_evidence.clone(),
                 cluster_id: Some(cluster_id.clone()),
+            }),
+    );
+    details.extend(
+        prepared_to_bytecode
+            .missing
+            .iter()
+            .take(MISSING_LINK_DETAIL_LIMIT.saturating_sub(details.len()))
+            .map(|origin| LinkGap {
+                gap_id: stable_short_id(&format!(
+                    "{:?}\n{}",
+                    LinkBoundaryKind::PreparedToBytecode,
+                    origin.canonical_storage_key()
+                )),
+                boundary: LinkBoundaryKind::PreparedToBytecode,
+                status: LinkStatus::MissingRequired,
+                issue_code: LinkIssueCode::MissingPreparedPcExtent,
+                severity: LinkSeverity::Warning,
+                from_origin: origin.clone(),
+                from_representation: Some("sonatina.evm.prepared".to_string()),
+                expected_to_phase: "bytecode.pc".to_string(),
+                reached_frontier: "sonatina.evm.prepared".to_string(),
+                candidate_hints: Vec::new(),
+                required_evidence: required_prepared_to_bytecode_evidence(),
+                cluster_id: Some("prepared-to-bytecode:missing-pc-extent".to_string()),
             }),
     );
 
@@ -6064,6 +6106,35 @@ fn missing_link_audit_report(
             required_evidence: required_evidence.clone(),
         });
     }
+    if missing_prepared_to_bytecode_count > 0 {
+        clusters.push(LinkGapCluster {
+            cluster_id: "prepared-to-bytecode:missing-pc-extent".to_string(),
+            boundary: LinkBoundaryKind::PreparedToBytecode,
+            status: LinkStatus::MissingRequired,
+            issue_code: LinkIssueCode::MissingPreparedPcExtent,
+            severity: LinkSeverity::Warning,
+            owner_phase: CompilerPhase::BytecodeEmission,
+            headline: "EVM prepared origin has no bytecode PC extent".to_string(),
+            explanation: "Prepared/codegen instructions should be linked to final bytecode PCs when they emit code, or have explicit non-emitting/elision evidence.".to_string(),
+            affected_origins: prepared_to_bytecode
+                .missing
+                .iter()
+                .take(25)
+                .cloned()
+                .map(|target| AttributionAuditTargetCount { target, count: 1 })
+                .collect(),
+            affected_bytecode_pcs: Vec::new(),
+            gap_count: missing_prepared_to_bytecode_count,
+            sample_gap_ids: details
+                .iter()
+                .filter(|gap| gap.boundary == LinkBoundaryKind::PreparedToBytecode)
+                .take(MISSING_LINK_CLUSTER_SAMPLE_LIMIT)
+                .map(|gap| gap.gap_id.clone())
+                .collect(),
+            candidate_hints: Vec::new(),
+            required_evidence: required_prepared_to_bytecode_evidence(),
+        });
+    }
 
     MissingLinkAuditReport {
         schema_version: MISSING_LINK_AUDIT_SCHEMA_VERSION.to_string(),
@@ -6124,6 +6195,23 @@ struct PreoptToPostoptBoundaryAudit {
 impl PreoptToPostoptBoundaryAudit {
     fn total(&self) -> usize {
         self.exact + self.generated + self.expected_absent + self.missing.len()
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct PreparedToBytecodeBoundaryAudit {
+    linked_pcs: usize,
+    linked_prepared_origins: usize,
+    missing: Vec<OriginExportKey>,
+}
+
+impl PreparedToBytecodeBoundaryAudit {
+    fn total(&self) -> usize {
+        self.linked_pcs + self.missing.len()
+    }
+
+    fn affected_origins(&self) -> usize {
+        self.linked_prepared_origins + self.missing.len()
     }
 }
 
@@ -6305,6 +6393,55 @@ fn preopt_to_postopt_boundary_audit(
     }
 }
 
+fn prepared_to_bytecode_boundary_audit(
+    snapshot: &TraceSnapshot,
+) -> PreparedToBytecodeBoundaryAudit {
+    let mut prepared_origins = BTreeSet::<OriginExportKey>::new();
+    let mut linked_prepared_origins = BTreeSet::<OriginExportKey>::new();
+    let mut linked_pcs = BTreeSet::<OriginExportKey>::new();
+    let mut has_bytecode_origin = false;
+
+    for fact in snapshot.facts() {
+        match fact {
+            TraceFact::OriginNode(node) if is_prepared_sonatina_audit_origin(&node.key) => {
+                prepared_origins.insert(node.key.clone());
+            }
+            TraceFact::OriginNode(node) if node.key.kind() == "bytecode.pc" => {
+                has_bytecode_origin = true;
+            }
+            TraceFact::OriginEdge(edge)
+                if edge.from.kind() == "bytecode.pc"
+                    && is_prepared_sonatina_audit_origin(&edge.to)
+                    && matches!(
+                        edge.traversal_class(),
+                        OriginEdgeTraversalClass::ExactAttribution
+                            | OriginEdgeTraversalClass::SnapshotAlias
+                    ) =>
+            {
+                linked_pcs.insert(edge.from.clone());
+                linked_prepared_origins.insert(edge.to.clone());
+            }
+            _ => {}
+        }
+    }
+
+    if !has_bytecode_origin && linked_pcs.is_empty() {
+        return PreparedToBytecodeBoundaryAudit::default();
+    }
+
+    let missing = prepared_origins
+        .iter()
+        .filter(|origin| !linked_prepared_origins.contains(*origin))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    PreparedToBytecodeBoundaryAudit {
+        linked_pcs: linked_pcs.len(),
+        linked_prepared_origins: linked_prepared_origins.len(),
+        missing,
+    }
+}
+
 fn expected_absent_links(snapshot: &TraceSnapshot) -> Vec<ExpectedAbsentLink> {
     let mut entries = snapshot
         .facts()
@@ -6408,6 +6545,14 @@ fn required_preopt_to_postopt_evidence() -> Vec<RequiredEvidence> {
         kind: RequiredEvidenceKind::OptimizerLineageFact,
         owner_phase: CompilerPhase::SonatinaPostOpt,
         description: "Emit optimizer lineage from optimized Sonatina output to pre-opt input, or emit an explicit optimizer elision/rewrite reason.".to_string(),
+    }]
+}
+
+fn required_prepared_to_bytecode_evidence() -> Vec<RequiredEvidence> {
+    vec![RequiredEvidence {
+        kind: RequiredEvidenceKind::PcExtentFact,
+        owner_phase: CompilerPhase::BytecodeEmission,
+        description: "Emit bytecode PC extent evidence linking final bytecode PCs to the prepared/codegen instruction that emitted them.".to_string(),
     }]
 }
 
@@ -8068,6 +8213,74 @@ mod tests {
             .expect("prepared to bytecode boundary summary");
         assert_eq!(prepared_to_bytecode.affected_origins, 1);
         assert_eq!(prepared_to_bytecode.affected_bytecode_pcs, 1);
+    }
+
+    #[test]
+    fn missing_link_audit_reports_prepared_without_bytecode_pc_extent() {
+        let function = key("function", "demo", "recv");
+        let prepared_linked = key("sonatina.evm.prepared.inst", "demo", "inst:linked");
+        let prepared_missing = key("sonatina.evm.prepared.inst", "demo", "inst:missing");
+        let postopt = key("sonatina.postopt.inst", "demo", "inst:postopt");
+        let pc = key("bytecode.pc", "demo", "pc:0");
+        let snapshot = snapshot(vec![
+            node(function.clone()),
+            node(prepared_linked.clone()),
+            node(prepared_missing.clone()),
+            node(postopt.clone()),
+            node(pc.clone()),
+            TraceFact::Instruction(InstructionFact::new(pc.clone(), function, 0, "ADD")),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                pc,
+                prepared_linked.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                prepared_linked,
+                postopt,
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::Backend),
+            )),
+        ]);
+        let report = TraceIntrospectionService::new(snapshot)
+            .attribution_audit()
+            .unwrap();
+        let missing_links = report.missing_links.as_ref().unwrap();
+
+        assert_eq!(missing_links.summary.status, LinkOverallStatus::Warning);
+        assert_eq!(
+            missing_links.summary.top_blockers,
+            vec![LinkBoundaryKind::PreparedToBytecode]
+        );
+        assert_eq!(missing_links.summary.missing_required_count, 1);
+        let prepared_to_bytecode = missing_links
+            .boundary_summaries
+            .iter()
+            .find(|summary| summary.boundary == LinkBoundaryKind::PreparedToBytecode)
+            .expect("prepared to bytecode boundary summary");
+        assert_eq!(prepared_to_bytecode.affected_origins, 2);
+        assert_eq!(prepared_to_bytecode.affected_bytecode_pcs, 1);
+        assert_eq!(
+            prepared_to_bytecode
+                .status_counts
+                .get(&LinkStatus::SatisfiedExact),
+            Some(&1)
+        );
+        assert_eq!(
+            prepared_to_bytecode
+                .status_counts
+                .get(&LinkStatus::MissingRequired),
+            Some(&1)
+        );
+        assert_eq!(
+            missing_links.gaps[0].issue_code,
+            LinkIssueCode::MissingPreparedPcExtent
+        );
+        assert_eq!(missing_links.gaps[0].from_origin, prepared_missing);
+        assert_eq!(
+            missing_links.gaps[0].required_evidence[0].kind,
+            RequiredEvidenceKind::PcExtentFact
+        );
     }
 
     #[test]
