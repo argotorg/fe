@@ -693,10 +693,14 @@ async fn handle_trace_workbench_manifest_http(
     let dispatcher = TraceQueryDispatcher;
     let request = crate::introspection::TraceWorkbenchSessionRequest { session_id };
     match actor_ref
-        .ask::<_, serde_json::Value, _>(&dispatcher, request)
+        .ask::<_, Option<serde_json::Value>, _>(&dispatcher, request)
         .await
     {
-        Ok(response) => json_response(StatusCode::OK, response),
+        Ok(Some(response)) => json_response(StatusCode::OK, response),
+        Ok(None) => json_response(
+            StatusCode::NOT_FOUND,
+            serde_json::json!({ "reason": "trace workbench manifest is not cached yet; fetch /model first" }),
+        ),
         Err(err) => json_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             serde_json::json!({ "reason": format!("trace workbench manifest failed: {err:?}") }),

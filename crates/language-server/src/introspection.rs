@@ -385,17 +385,16 @@ fn trace_workbench_file_source_text(uri: &Url) -> Option<String> {
 pub(crate) async fn handle_trace_workbench_manifest(
     backend: &mut Backend,
     request: TraceWorkbenchSessionRequest,
-) -> Result<serde_json::Value, async_lsp::ResponseError> {
+) -> Result<Option<serde_json::Value>, async_lsp::ResponseError> {
     let (document_version, config_hash) =
         trace_workbench_session_cache_key(backend, &request.session_id)?;
-    if let Some(manifest) =
-        backend.cached_trace_workbench_manifest(&request.session_id, document_version, &config_hash)
-    {
-        return Ok(manifest);
-    }
-    let model = handle_trace_workbench_model(backend, request).await?;
-    serde_json::to_value(trace_workbench_manifest(&model))
-        .map_err(|err| internal_error(format!("failed to serialize trace manifest: {err}")))
+    Ok(
+        backend.cached_trace_workbench_manifest(
+            &request.session_id,
+            document_version,
+            &config_hash,
+        ),
+    )
 }
 
 pub(crate) async fn handle_trace_workbench_chunk(
@@ -856,7 +855,8 @@ mod tests {
         TraceBackendQueryRequest, TraceServiceOptions, TraceWorkbenchChunkRequest,
         TraceWorkbenchChunksRequest, TraceWorkbenchSessionRequest, attached_trace_service,
         handle_trace_query, handle_trace_workbench_bootstrap, handle_trace_workbench_chunk,
-        handle_trace_workbench_chunks, handle_trace_workbench_model, service_for_file_with_options,
+        handle_trace_workbench_chunks, handle_trace_workbench_manifest,
+        handle_trace_workbench_model, service_for_file_with_options,
         trace_workbench_parse_opt_level, trace_workbench_service_config_hash,
         trace_workbench_source_file_display_name, trace_workbench_target_config_hash,
     };
@@ -1568,6 +1568,57 @@ pub fn main() -> u64 {
         .unwrap();
         assert_eq!(response["chunks"].as_array().unwrap().len(), 1);
         assert_eq!(response["missing"], serde_json::json!(["blake3:missing"]));
+
+        tokio::task::spawn_blocking(move || drop(backend))
+            .await
+            .expect("backend drop task panicked");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn trace_workbench_manifest_handler_is_cache_only() {
+        let mut backend = test_backend();
+        let uri = Url::parse("file:///workspace/src/cached_manifest.fe").unwrap();
+        backend.set_document_version(uri.clone(), 17);
+        let session =
+            backend.create_trace_viewer_session(uri, "evm", "O2", "source-postopt-bytecode", None);
+
+        let uncached = handle_trace_workbench_manifest(
+            &mut backend,
+            TraceWorkbenchSessionRequest {
+                session_id: session.id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(
+            uncached.is_none(),
+            "manifest lookup should not build a full trace model"
+        );
+
+        let compiler_config_hash = backend.tooling_config().stable_hash();
+        let target_config_hash =
+            trace_workbench_target_config_hash("evm", "O2", "source-postopt-bytecode");
+        let config_hash =
+            trace_workbench_service_config_hash(&compiler_config_hash, &target_config_hash);
+        backend.cache_trace_workbench_model(
+            &session.id,
+            Some(17),
+            config_hash,
+            serde_json::json!({ "revision": { "id": 17 } }),
+            serde_json::json!({ "revision": 17, "summaryDigest": "blake3:summary" }),
+            BTreeMap::new(),
+        );
+
+        let cached = handle_trace_workbench_manifest(
+            &mut backend,
+            TraceWorkbenchSessionRequest {
+                session_id: session.id.clone(),
+            },
+        )
+        .await
+        .unwrap()
+        .expect("cached manifest");
+        assert_eq!(cached["revision"], 17);
 
         tokio::task::spawn_blocking(move || drop(backend))
             .await
