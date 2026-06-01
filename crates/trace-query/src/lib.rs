@@ -2087,24 +2087,29 @@ fn trace_workbench_apply_expected_absent_syntax(
     if expected_absent.is_empty() {
         return;
     }
-    let invalid = attribution_audit
-        .missing_links
-        .as_ref()
-        .map(|links| links.invalid.clone())
-        .unwrap_or_default();
-    let lineage_issue_targets = trace_workbench_lineage_issue_targets(attribution_audit);
-    attribution_audit.missing_links = Some(missing_link_audit_report(
-        snapshot,
-        attribution_audit.source_exact_pcs,
-        attribution_audit.missing_source_evidence_pcs,
-        attribution_audit.prepared_linked_pcs,
-        attribution_audit.unmapped_pcs,
-        trace_workbench_prepared_target_count(snapshot),
-        &lineage_issue_targets,
-        &attribution_audit.lineage_gaps,
-        invalid,
-        expected_absent,
-    ));
+    let Some(missing_links) = attribution_audit.missing_links.as_mut() else {
+        return;
+    };
+    let converted_origins = expected_absent
+        .iter()
+        .map(|entry| entry.origin.clone())
+        .collect::<BTreeSet<_>>();
+    missing_links.expected_absent.extend(expected_absent);
+    sort_expected_absent_links(&mut missing_links.expected_absent);
+    missing_links.gaps.retain(|gap| {
+        !(gap.boundary == LinkBoundaryKind::HirToMir
+            && gap.issue_code == LinkIssueCode::MissingHirToMirLowering
+            && converted_origins.contains(&gap.from_origin))
+    });
+    let converted_count = converted_origins.len();
+    missing_links.summary.missing_required_count = missing_links
+        .summary
+        .missing_required_count
+        .saturating_sub(converted_count);
+    missing_links.summary.expected_absent_count = missing_links.expected_absent.len();
+    trace_workbench_apply_expected_absent_syntax_to_boundaries(missing_links, converted_count);
+    trace_workbench_apply_expected_absent_syntax_to_clusters(missing_links, &converted_origins);
+    trace_workbench_recompute_missing_link_summary_status(missing_links);
 }
 
 fn trace_workbench_expected_absent_syntax_links(
@@ -2113,6 +2118,10 @@ fn trace_workbench_expected_absent_syntax_links(
     source_text: Option<&str>,
     related_source_texts: &BTreeMap<String, String>,
 ) -> Vec<ExpectedAbsentLink> {
+    let missing_hir_origins = hir_to_mir_boundary_audit(snapshot, &[])
+        .missing
+        .into_iter()
+        .collect::<BTreeSet<_>>();
     let mut links = snapshot
         .facts()
         .iter()
@@ -2120,7 +2129,7 @@ fn trace_workbench_expected_absent_syntax_links(
             let TraceFact::SourceSpan(span) = fact else {
                 return None;
             };
-            if !is_hir_audit_origin(&span.origin) {
+            if !missing_hir_origins.contains(&span.origin) {
                 return None;
             }
             trace_workbench_origin_span_text(
@@ -2152,33 +2161,126 @@ fn trace_workbench_expected_absent_syntax_links(
     links
 }
 
-fn trace_workbench_prepared_target_count(snapshot: &TraceSnapshot) -> usize {
-    snapshot
-        .facts()
-        .iter()
-        .filter_map(|fact| match fact {
-            TraceFact::OriginNode(node) if is_prepared_sonatina_audit_origin(&node.key) => {
-                Some(node.key.clone())
-            }
-            TraceFact::Instruction(instruction)
-                if is_prepared_sonatina_audit_origin(&instruction.instruction) =>
-            {
-                Some(instruction.instruction.clone())
-            }
-            _ => None,
-        })
-        .collect::<BTreeSet<_>>()
-        .len()
+fn trace_workbench_apply_expected_absent_syntax_to_boundaries(
+    missing_links: &mut MissingLinkAuditReport,
+    converted_count: usize,
+) {
+    let Some(summary) = missing_links
+        .boundary_summaries
+        .iter_mut()
+        .find(|summary| summary.boundary == LinkBoundaryKind::HirToMir)
+    else {
+        return;
+    };
+    let remaining_missing = summary
+        .status_counts
+        .get(&LinkStatus::MissingRequired)
+        .copied()
+        .unwrap_or_default()
+        .saturating_sub(converted_count);
+    if remaining_missing == 0 {
+        summary.status_counts.remove(&LinkStatus::MissingRequired);
+        summary
+            .top_issue_codes
+            .retain(|issue| *issue != LinkIssueCode::MissingHirToMirLowering);
+    } else {
+        summary
+            .status_counts
+            .insert(LinkStatus::MissingRequired, remaining_missing);
+    }
+    *summary
+        .status_counts
+        .entry(LinkStatus::ExpectedAbsent)
+        .or_default() += converted_count;
+    if !summary
+        .top_issue_codes
+        .contains(&LinkIssueCode::ExpectedAbsentSyntax)
+    {
+        summary
+            .top_issue_codes
+            .push(LinkIssueCode::ExpectedAbsentSyntax);
+    }
 }
 
-fn trace_workbench_lineage_issue_targets(
-    attribution_audit: &AttributionAuditReport,
-) -> BTreeMap<OriginExportKey, usize> {
-    let mut targets = BTreeMap::new();
-    for gap in &attribution_audit.lineage_gaps {
-        *targets.entry(gap.prepared_origin.clone()).or_default() += 1;
+fn trace_workbench_apply_expected_absent_syntax_to_clusters(
+    missing_links: &mut MissingLinkAuditReport,
+    converted_origins: &BTreeSet<OriginExportKey>,
+) {
+    for cluster in &mut missing_links.clusters {
+        if cluster.boundary != LinkBoundaryKind::HirToMir
+            || cluster.issue_code != LinkIssueCode::MissingHirToMirLowering
+        {
+            continue;
+        }
+        cluster
+            .affected_origins
+            .retain(|entry| !converted_origins.contains(&entry.target));
+        cluster
+            .affected_source_ranges
+            .retain(|range| !converted_origins.contains(&range.origin));
+        cluster.gap_count = cluster.gap_count.saturating_sub(converted_origins.len());
+        cluster.sample_gap_ids = missing_links
+            .gaps
+            .iter()
+            .filter(|gap| gap.boundary == LinkBoundaryKind::HirToMir)
+            .map(|gap| gap.gap_id.clone())
+            .take(MISSING_LINK_CLUSTER_SAMPLE_LIMIT)
+            .collect();
     }
-    targets
+    missing_links.clusters.retain(|cluster| {
+        !(cluster.boundary == LinkBoundaryKind::HirToMir
+            && cluster.issue_code == LinkIssueCode::MissingHirToMirLowering
+            && cluster.gap_count == 0)
+    });
+}
+
+fn trace_workbench_recompute_missing_link_summary_status(
+    missing_links: &mut MissingLinkAuditReport,
+) {
+    missing_links.summary.top_blockers = missing_links
+        .boundary_summaries
+        .iter()
+        .filter(|summary| {
+            trace_workbench_boundary_summary_count(summary, LinkStatus::MissingRequired) > 0
+                || trace_workbench_boundary_summary_count(
+                    summary,
+                    LinkStatus::MissingLineageButCandidatesExist,
+                ) > 0
+                || trace_workbench_boundary_summary_count(summary, LinkStatus::Invalid) > 0
+                || trace_workbench_boundary_summary_count(summary, LinkStatus::ContextOnly) > 0
+                || trace_workbench_boundary_summary_count(summary, LinkStatus::SatisfiedGenerated)
+                    > 0
+        })
+        .map(|summary| summary.boundary)
+        .collect();
+    let has_non_exact_warning = missing_links.boundary_summaries.iter().any(|summary| {
+        trace_workbench_boundary_summary_count(summary, LinkStatus::ContextOnly) > 0
+            || trace_workbench_boundary_summary_count(summary, LinkStatus::SatisfiedGenerated) > 0
+            || trace_workbench_boundary_summary_count(
+                summary,
+                LinkStatus::MissingLineageButCandidatesExist,
+            ) > 0
+    });
+    missing_links.summary.status = if missing_links.summary.invalid_count > 0 {
+        LinkOverallStatus::Invalid
+    } else if missing_links.summary.missing_required_count > 0 || has_non_exact_warning {
+        LinkOverallStatus::Warning
+    } else if missing_links.summary.expected_absent_count > 0 {
+        LinkOverallStatus::PassWithExpectedAbsences
+    } else {
+        LinkOverallStatus::Pass
+    };
+}
+
+fn trace_workbench_boundary_summary_count(
+    summary: &LinkBoundarySummary,
+    status: LinkStatus,
+) -> usize {
+    summary
+        .status_counts
+        .get(&status)
+        .copied()
+        .unwrap_or_default()
 }
 
 fn trace_workbench_origin_span_text<'a>(
@@ -11377,6 +11479,109 @@ mod tests {
                 .unwrap()
                 .iter()
                 .all(|gap| gap["from_origin"]["local_key"] != serde_json::json!("expr:comment"))
+        );
+    }
+
+    #[test]
+    fn syntax_expected_absent_refinement_preserves_prepared_lineage_gaps() {
+        let source_text = "fn main() {\n  // syntax-only comment\n  value\n}\n";
+        let source_file = key("source.file", "demo.fe", "main");
+        let comment_hir = key("hir.expr", "demo", "expr:comment");
+        let value_hir = key("hir.expr", "demo", "expr:value");
+        let mir_stmt = key("runtime.stmt", "demo", "block:0:stmt:0");
+        let function = key("function", "demo", "main");
+        let bytecode = key("bytecode.pc", "demo", "pc:7");
+        let prepared = key("sonatina.evm.prepared.inst", "demo", "inst:7");
+        let comment_start = source_text.find("//").unwrap() as u32;
+        let comment_end = source_text.find("\n  value").unwrap() as u32;
+        let value_start = source_text.find("value").unwrap() as u32;
+        let value_end = value_start + "value".len() as u32;
+        let service = TraceIntrospectionService::new(snapshot(vec![
+            node(source_file.clone()),
+            node(comment_hir.clone()),
+            node(value_hir.clone()),
+            node(mir_stmt.clone()),
+            node(function.clone()),
+            node(bytecode.clone()),
+            node(prepared.clone()),
+            TraceFact::SourceFile(SourceFileFact::new(
+                source_file.clone(),
+                "file:///demo.fe",
+                "demo.fe",
+                "blake3:00000000000000000000000000000000000000000000000000000000000000bb",
+                Some(0),
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                comment_hir,
+                source_file.clone(),
+                comment_start,
+                comment_end,
+                2,
+                3,
+                2,
+                25,
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                value_hir.clone(),
+                source_file,
+                value_start,
+                value_end,
+                3,
+                3,
+                3,
+                8,
+            )),
+            TraceFact::Instruction(InstructionFact::new(bytecode.clone(), function, 7, "ADD")),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                mir_stmt,
+                value_hir,
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::Mir),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                bytecode.clone(),
+                prepared.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+        ]));
+
+        let projection = trace_workbench_report_projection(
+            &service,
+            service.snapshot(),
+            TraceWorkbenchProjectionRequest {
+                input_path: "demo.fe".to_string(),
+                target: "evm".to_string(),
+                opt_level: "O2".to_string(),
+                view: "source-postopt-bytecode".to_string(),
+                include_legacy_closure_debug: false,
+                source_text: Some(source_text.to_string()),
+                related_source_texts: BTreeMap::new(),
+                document_version: Some(1),
+                query_duration_ms: 1,
+                compiler_commit: "test".to_string(),
+                data_source: "test".to_string(),
+            },
+        );
+        let missing_links = &projection["attribution_audit"]["missing_links"];
+
+        assert_eq!(
+            missing_links["summary"]["status"],
+            serde_json::json!("warning")
+        );
+        assert!(
+            missing_links["gaps"].as_array().unwrap().iter().any(|gap| {
+                gap["issue_code"] == serde_json::json!("missing_optimized_to_prepared_lineage")
+                    && gap["from_origin"]["kind"] == serde_json::json!("sonatina.evm.prepared.inst")
+            }),
+            "syntax-only refinement must not discard optimized→prepared lineage gaps"
+        );
+        assert!(
+            missing_links["expected_absent"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["issue_code"] == serde_json::json!("expected_absent_syntax"))
         );
     }
 
