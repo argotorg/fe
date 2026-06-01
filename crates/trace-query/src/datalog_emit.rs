@@ -25,12 +25,19 @@ precise_reaches(a, b) :-
 precise_reaches(a, b) :-
   snapshot_alias_edge(a, b).
 
+precise_reaches(a, b) :-
+  prepared_codegen_edge(a, b).
+
 precise_reaches(a, c) :-
   exact_attribution_edge(a, b),
   precise_reaches(b, c).
 
 precise_reaches(a, c) :-
   snapshot_alias_edge(a, b),
+  precise_reaches(b, c).
+
+precise_reaches(a, c) :-
+  prepared_codegen_edge(a, b),
   precise_reaches(b, c).
 
 origin_reaches(a, b) :-
@@ -132,14 +139,18 @@ fn append_semantic_edge_views(
             });
             continue;
         }
-        rows.push(RelationRow {
-            relation: semantic_edge_relation(edge),
-            values: vec![
-                edge.from.canonical_storage_key(),
-                edge.to.canonical_storage_key(),
-            ],
-        });
-        if is_prepared_codegen_connectivity_edge(edge) {
+        let relation = semantic_edge_relation(edge);
+        let prepared_codegen_edge = is_prepared_codegen_connectivity_edge(edge);
+        if !prepared_codegen_edge || relation != "exact_attribution_edge" {
+            rows.push(RelationRow {
+                relation,
+                values: vec![
+                    edge.from.canonical_storage_key(),
+                    edge.to.canonical_storage_key(),
+                ],
+            });
+        }
+        if prepared_codegen_edge {
             rows.push(RelationRow {
                 relation: "prepared_codegen_edge",
                 values: vec![
@@ -1018,7 +1029,12 @@ mod tests {
                 prepared.canonical_storage_key()
             ]
         ));
-        assert!(!export.rules.contains("prepared_codegen_edge"));
+        assert!(!relation_row_exists(
+            &export,
+            "exact_attribution_edge",
+            &[pc.canonical_storage_key(), vcode.canonical_storage_key()]
+        ));
+        assert!(export.rules.contains("prepared_codegen_edge"));
     }
 
     #[test]
