@@ -7461,6 +7461,47 @@ mod tests {
         trace_workbench_status_for_source_line,
     };
 
+    fn scan_trace_query_sources_for_line(
+        needle: &str,
+        allow_filename: Option<&str>,
+        violations: &mut Vec<String>,
+    ) {
+        fn scan_dir(
+            path: &Path,
+            needle: &str,
+            allow_filename: Option<&str>,
+            violations: &mut Vec<String>,
+        ) {
+            for entry in fs::read_dir(path).expect("read trace-query source directory") {
+                let entry = entry.expect("read trace-query source entry");
+                let path = entry.path();
+                if path.is_dir() {
+                    scan_dir(&path, needle, allow_filename, violations);
+                    continue;
+                }
+                if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+                    continue;
+                }
+                if path.file_name().and_then(|name| name.to_str()) == allow_filename {
+                    continue;
+                }
+                let text = fs::read_to_string(&path).expect("read trace-query source file");
+                for (line_index, line) in text.lines().enumerate() {
+                    if line.contains(needle) {
+                        violations.push(format!("{}:{}: {line}", path.display(), line_index + 1));
+                    }
+                }
+            }
+        }
+
+        scan_dir(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            needle,
+            allow_filename,
+            violations,
+        );
+    }
+
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
         OriginExportKey::try_from_raw_parts(kind, owner, local).unwrap()
     }
@@ -10370,41 +10411,30 @@ mod tests {
     #[test]
     fn trace_query_consumers_do_not_bypass_trace_index_phase_contracts() {
         let forbidden_call = format!("{}{}", ".allows_edge", "(edge)");
-
-        fn scan_dir(path: &Path, violations: &mut Vec<String>) {
-            let forbidden_call = format!("{}{}", ".allows_edge", "(edge)");
-            for entry in fs::read_dir(path).expect("read trace-query source directory") {
-                let entry = entry.expect("read trace-query source entry");
-                let path = entry.path();
-                if path.is_dir() {
-                    scan_dir(&path, violations);
-                    continue;
-                }
-                if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
-                    continue;
-                }
-                if path.file_name().and_then(|name| name.to_str()) == Some("trace_index.rs") {
-                    continue;
-                }
-                let text = fs::read_to_string(&path).expect("read trace-query source file");
-                for (line_index, line) in text.lines().enumerate() {
-                    if line.contains(&forbidden_call) {
-                        violations.push(format!("{}:{}: {line}", path.display(), line_index + 1));
-                    }
-                }
-            }
-        }
-
         let mut violations = Vec::new();
         assert_eq!(forbidden_call, format!("{}{}", ".allows_edge", "(edge)"));
-        scan_dir(
-            &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        scan_trace_query_sources_for_line(&forbidden_call, Some("trace_index.rs"), &mut violations);
+
+        assert!(
+            violations.is_empty(),
+            "trace-query consumers must route edge checks through TraceIndex::allows_edge so phase-boundary contracts are applied:\n{}",
+            violations.join("\n")
+        );
+    }
+
+    #[test]
+    fn prepared_lineage_pair_extraction_has_one_trace_index_source_of_truth() {
+        let forbidden_definition = format!("{}{}", "fn prepared_lineage_event", "_pairs");
+        let mut violations = Vec::new();
+        scan_trace_query_sources_for_line(
+            &forbidden_definition,
+            Some("trace_index.rs"),
             &mut violations,
         );
 
         assert!(
             violations.is_empty(),
-            "trace-query consumers must route edge checks through TraceIndex::allows_edge so phase-boundary contracts are applied:\n{}",
+            "prepared lineage event extraction must remain centralized in trace_index.rs:\n{}",
             violations.join("\n")
         );
     }
