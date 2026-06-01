@@ -1859,6 +1859,15 @@ pub fn trace_workbench_report_projection(
         missing_prepared,
     );
     let trace_profile = trace_workbench_trace_profile(snapshot);
+    let parity_summary = trace_workbench_projection_parity_summary(
+        snapshot,
+        &request,
+        trace_profile,
+        &provenance,
+        attribution_audit.as_ref(),
+        &panels,
+        &component_classes_by_key,
+    );
     serde_json::json!({
         "revision": {
             "id": request.document_version.unwrap_or_default().max(0) as u64,
@@ -1896,6 +1905,7 @@ pub fn trace_workbench_report_projection(
                 "provenance is partial; inspect gaps for missing compiler evidence"
             },
         },
+        "parity_summary": parity_summary,
         "counts": {
             "facts": validation.summary.fact_count,
             "origin_edges": validation.summary.edge_count,
@@ -1994,6 +2004,149 @@ struct TraceWorkbenchTraceProfile {
     has_sonatina_postopt: bool,
     has_evm_prepared: bool,
     has_bytecode: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+struct TraceWorkbenchProjectionParitySummary {
+    target: String,
+    opt_level: String,
+    view: String,
+    trace_profile: TraceWorkbenchTraceProfile,
+    pane_rows: BTreeMap<&'static str, usize>,
+    origin_counts: BTreeMap<String, usize>,
+    edge_class_counts: BTreeMap<String, usize>,
+    rail_component_counts: BTreeMap<&'static str, usize>,
+    bytecode: TraceWorkbenchBytecodeParitySummary,
+    missing_link_status: Option<LinkOverallStatus>,
+    missing_required_count: usize,
+    invalid_count: usize,
+    source_to_optimized: &'static str,
+    optimized_to_prepared: &'static str,
+    prepared_to_bytecode: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+struct TraceWorkbenchBytecodeParitySummary {
+    total_pcs: usize,
+    source_exact_pcs: usize,
+    optimized_sonatina_linked_pcs: usize,
+    prepared_linked_pcs: usize,
+    unmapped_pcs: usize,
+}
+
+fn trace_workbench_projection_parity_summary(
+    snapshot: &TraceSnapshot,
+    request: &TraceWorkbenchProjectionRequest,
+    trace_profile: TraceWorkbenchTraceProfile,
+    provenance: &TraceWorkbenchProvenanceStatus,
+    attribution_audit: Option<&AttributionAuditReport>,
+    panels: &[TraceWorkbenchPane],
+    component_classes_by_key: &BTreeMap<String, Vec<String>>,
+) -> TraceWorkbenchProjectionParitySummary {
+    let mut pane_rows = BTreeMap::new();
+    for panel in panels {
+        pane_rows.insert(panel.id, panel.rows.len());
+    }
+
+    let mut origin_counts = BTreeMap::new();
+    let mut edge_class_counts = BTreeMap::new();
+    for fact in snapshot.facts() {
+        match fact {
+            TraceFact::OriginNode(node) => {
+                *origin_counts
+                    .entry(node.key.kind().to_string())
+                    .or_default() += 1;
+            }
+            TraceFact::OriginEdge(edge) => {
+                *edge_class_counts
+                    .entry(trace_workbench_edge_class_key(edge.traversal_class()).to_string())
+                    .or_default() += 1;
+            }
+            _ => {}
+        }
+    }
+
+    let mut rail_component_counts = BTreeMap::<&'static str, BTreeSet<String>>::new();
+    for classes in component_classes_by_key.values() {
+        for class in classes {
+            if let Some(rail) = trace_workbench_component_rail(class) {
+                rail_component_counts
+                    .entry(rail)
+                    .or_default()
+                    .insert(class.clone());
+            }
+        }
+    }
+    let rail_component_counts = rail_component_counts
+        .into_iter()
+        .map(|(rail, classes)| (rail, classes.len()))
+        .collect();
+
+    let missing_links = attribution_audit.and_then(|audit| audit.missing_links.as_ref());
+    TraceWorkbenchProjectionParitySummary {
+        target: request.target.clone(),
+        opt_level: request.opt_level.clone(),
+        view: request.view.clone(),
+        trace_profile,
+        pane_rows,
+        origin_counts,
+        edge_class_counts,
+        rail_component_counts,
+        bytecode: TraceWorkbenchBytecodeParitySummary {
+            total_pcs: attribution_audit
+                .map(|audit| audit.total_bytecode_pcs)
+                .unwrap_or_default(),
+            source_exact_pcs: attribution_audit
+                .map(|audit| audit.source_exact_pcs)
+                .unwrap_or_default(),
+            optimized_sonatina_linked_pcs: attribution_audit
+                .map(|audit| audit.optimized_sonatina_linked_pcs)
+                .unwrap_or_default(),
+            prepared_linked_pcs: attribution_audit
+                .map(|audit| audit.prepared_linked_pcs)
+                .unwrap_or_default(),
+            unmapped_pcs: attribution_audit
+                .map(|audit| audit.unmapped_pcs)
+                .unwrap_or_default(),
+        },
+        missing_link_status: missing_links.map(|report| report.summary.status),
+        missing_required_count: missing_links
+            .map(|report| report.summary.missing_required_count)
+            .unwrap_or_default(),
+        invalid_count: missing_links
+            .map(|report| report.summary.invalid_count)
+            .unwrap_or_default(),
+        source_to_optimized: provenance.source_to_optimized,
+        optimized_to_prepared: provenance.optimized_to_prepared,
+        prepared_to_bytecode: provenance.prepared_to_bytecode,
+    }
+}
+
+fn trace_workbench_edge_class_key(class: OriginEdgeTraversalClass) -> &'static str {
+    match class {
+        OriginEdgeTraversalClass::ExactAttribution => "exact_attribution",
+        OriginEdgeTraversalClass::Structural => "structural",
+        OriginEdgeTraversalClass::Contextual => "contextual",
+        OriginEdgeTraversalClass::Synthetic => "synthetic",
+        OriginEdgeTraversalClass::SnapshotAlias => "snapshot_alias",
+        OriginEdgeTraversalClass::Unmapped => "unmapped",
+    }
+}
+
+fn trace_workbench_component_rail(class: &str) -> Option<&'static str> {
+    if class.starts_with("exact-c-") {
+        Some("exact")
+    } else if class.starts_with("generated-c-") {
+        Some("generated")
+    } else if class.starts_with("prepared-c-") {
+        Some("prepared")
+    } else if class.starts_with("context-c-") {
+        Some("context")
+    } else if class.starts_with("structural-c-") {
+        Some("structural")
+    } else {
+        None
+    }
 }
 
 fn trace_workbench_trace_profile(snapshot: &TraceSnapshot) -> TraceWorkbenchTraceProfile {
@@ -7304,6 +7457,24 @@ mod tests {
         assert_eq!(projection["revision"]["id"], 3);
         assert_eq!(projection["metadata"]["data_source"], "lsp-live");
         assert_eq!(projection["provenance"]["source_to_optimized"], "available");
+        assert_eq!(projection["parity_summary"]["target"], "evm");
+        assert_eq!(projection["parity_summary"]["opt_level"], "O2");
+        assert_eq!(
+            projection["parity_summary"]["source_to_optimized"],
+            projection["provenance"]["source_to_optimized"]
+        );
+        assert_eq!(
+            projection["parity_summary"]["bytecode"]["total_pcs"],
+            projection["attribution_audit"]["total_bytecode_pcs"]
+        );
+        assert_eq!(
+            projection["parity_summary"]["missing_link_status"],
+            projection["attribution_audit"]["missing_links"]["summary"]["status"]
+        );
+        assert_eq!(
+            projection["parity_summary"]["edge_class_counts"]["exact_attribution"],
+            7
+        );
         assert!(projection["attribution_audit"].is_object());
         assert!(projection["duplicate_shapes"].is_object());
         assert_eq!(projection["source"]["lines"].as_array().unwrap().len(), 3);
