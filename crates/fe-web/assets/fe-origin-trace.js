@@ -353,7 +353,7 @@
             el("span", "bloat-split", this._bloatSplitText(finding.attribution_split))
           );
           bloatBox.append(row);
-        });
+        }, this);
         section.append(bloatBox);
       }
       return section;

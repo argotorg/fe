@@ -822,6 +822,7 @@ mod tests {
     #[test]
     fn origin_trace_bloat_rows_render_attribution_split() {
         assert!(FE_ORIGIN_TRACE_JS.contains("_bloatSplitText"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("bloatBox.append(row);\n        }, this);"));
         assert!(FE_ORIGIN_TRACE_JS.contains("source-exact"));
         assert!(FE_ORIGIN_TRACE_JS.contains("prepared-only"));
         assert!(FE_ORIGIN_TRACE_JS.contains("generated/backend"));
