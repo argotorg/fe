@@ -38,7 +38,7 @@
   function scopedTraceClasses(node, cacheKey, datasetKey) {
     if (!node) return [];
     if (node[cacheKey]) return node[cacheKey];
-    if (node.dataset && node.dataset[datasetKey]) {
+    if (node.dataset && Object.prototype.hasOwnProperty.call(node.dataset, datasetKey)) {
       node[cacheKey] = node.dataset[datasetKey].split(/\s+/).filter(Boolean);
       return node[cacheKey];
     }
@@ -875,10 +875,12 @@
       if (groups.length) node.dataset.traceGroups = groups.join(" ");
       var hover = (hoverGroups || this._preferredHoverGroups(groups)).filter(isTraceGroup);
       node.__hoverClasses = hover;
-      if (hover.length) node.dataset.hoverGroups = hover.join(" ");
       var selection = (selectionGroups || this._preferredSelectionGroups(groups)).filter(isTraceGroup);
       node.__selectionClasses = selection;
-      if (selection.length) node.dataset.selectionGroups = selection.join(" ");
+      if (groups.length) {
+        node.dataset.hoverGroups = hover.join(" ");
+        node.dataset.selectionGroups = selection.join(" ");
+      }
     }
 
     _preferredHoverGroups(groups) {

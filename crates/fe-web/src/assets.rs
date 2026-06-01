@@ -805,6 +805,14 @@ mod tests {
         assert!(FE_ORIGIN_TRACE_JS.contains("suppressExact: true"));
         assert!(FE_ORIGIN_TRACE_JS.contains("dataset.hoverGroups"));
         assert!(FE_ORIGIN_TRACE_JS.contains("dataset.selectionGroups"));
+        assert!(
+            FE_ORIGIN_TRACE_JS
+                .contains("Object.prototype.hasOwnProperty.call(node.dataset, datasetKey)")
+        );
+        assert!(FE_ORIGIN_TRACE_JS.contains("node.dataset.hoverGroups = hover.join(\" \");"));
+        assert!(
+            FE_ORIGIN_TRACE_JS.contains("node.dataset.selectionGroups = selection.join(\" \");")
+        );
         assert!(FE_ORIGIN_TRACE_JS.contains("hoverClasses(row)"));
         assert!(FE_ORIGIN_TRACE_JS.contains("selectionClasses(row)"));
         assert!(FE_ORIGIN_TRACE_JS.contains("var groups = selectionClasses(row);"));
