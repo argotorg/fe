@@ -2012,6 +2012,7 @@ struct TraceWorkbenchProjectionParitySummary {
     opt_level: String,
     view: String,
     trace_profile: TraceWorkbenchTraceProfile,
+    facts: TraceWorkbenchFactParitySummary,
     pane_rows: BTreeMap<&'static str, usize>,
     origin_counts: BTreeMap<String, usize>,
     edge_class_counts: BTreeMap<String, usize>,
@@ -2023,6 +2024,17 @@ struct TraceWorkbenchProjectionParitySummary {
     source_to_optimized: &'static str,
     optimized_to_prepared: &'static str,
     prepared_to_bytecode: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+struct TraceWorkbenchFactParitySummary {
+    total_facts: usize,
+    origin_nodes: usize,
+    origin_edges: usize,
+    instructions: usize,
+    source_files: usize,
+    source_spans: usize,
+    code_objects: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -2050,18 +2062,33 @@ fn trace_workbench_projection_parity_summary(
 
     let mut origin_counts = BTreeMap::new();
     let mut edge_class_counts = BTreeMap::new();
+    let mut fact_counts = TraceWorkbenchFactParitySummary {
+        total_facts: snapshot.facts().len(),
+        origin_nodes: 0,
+        origin_edges: 0,
+        instructions: 0,
+        source_files: 0,
+        source_spans: 0,
+        code_objects: 0,
+    };
     for fact in snapshot.facts() {
         match fact {
             TraceFact::OriginNode(node) => {
+                fact_counts.origin_nodes += 1;
                 *origin_counts
                     .entry(node.key.kind().to_string())
                     .or_default() += 1;
             }
             TraceFact::OriginEdge(edge) => {
+                fact_counts.origin_edges += 1;
                 *edge_class_counts
                     .entry(trace_workbench_edge_class_key(edge.traversal_class()).to_string())
                     .or_default() += 1;
             }
+            TraceFact::Instruction(_) => fact_counts.instructions += 1,
+            TraceFact::SourceFile(_) => fact_counts.source_files += 1,
+            TraceFact::SourceSpan(_) => fact_counts.source_spans += 1,
+            TraceFact::CodeObject(_) => fact_counts.code_objects += 1,
             _ => {}
         }
     }
@@ -2088,6 +2115,7 @@ fn trace_workbench_projection_parity_summary(
         opt_level: request.opt_level.clone(),
         view: request.view.clone(),
         trace_profile,
+        facts: fact_counts,
         pane_rows,
         origin_counts,
         edge_class_counts,
@@ -7666,6 +7694,14 @@ mod tests {
         assert_eq!(
             projection["parity_summary"]["bytecode"]["total_pcs"],
             projection["attribution_audit"]["total_bytecode_pcs"]
+        );
+        assert_eq!(
+            projection["parity_summary"]["facts"]["source_files"],
+            serde_json::json!(1)
+        );
+        assert_eq!(
+            projection["parity_summary"]["facts"]["source_spans"],
+            projection["counts"]["source_spans"]
         );
         assert_eq!(
             projection["parity_summary"]["missing_link_status"],
