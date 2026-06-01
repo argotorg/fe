@@ -7455,6 +7455,8 @@ fn format_storage_location(location: &StorageLocation) -> String {
 mod tests {
     use common::origin::OriginExportKey;
     use std::collections::{BTreeMap, BTreeSet};
+    use std::fs;
+    use std::path::Path;
     use trace_facts::{
         BlockFact, CallFact, CategorySource, CodeObjectFact, CodeObjectKind, CompilerEventFact,
         CompilerEventKind, CompilerPhase, CompilerReason, DisplayNameFact, DisplayNameKind,
@@ -10315,6 +10317,48 @@ mod tests {
             index
                 .bytecode_instructions_for_loop_members(&loop_members)
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn trace_query_consumers_do_not_bypass_trace_index_phase_contracts() {
+        let forbidden_call = format!("{}{}", ".allows_edge", "(edge)");
+
+        fn scan_dir(path: &Path, violations: &mut Vec<String>) {
+            let forbidden_call = format!("{}{}", ".allows_edge", "(edge)");
+            for entry in fs::read_dir(path).expect("read trace-query source directory") {
+                let entry = entry.expect("read trace-query source entry");
+                let path = entry.path();
+                if path.is_dir() {
+                    scan_dir(&path, violations);
+                    continue;
+                }
+                if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+                    continue;
+                }
+                if path.file_name().and_then(|name| name.to_str()) == Some("trace_index.rs") {
+                    continue;
+                }
+                let text = fs::read_to_string(&path).expect("read trace-query source file");
+                for (line_index, line) in text.lines().enumerate() {
+                    if line.contains(&forbidden_call) {
+                        violations.push(format!("{}:{}: {line}", path.display(), line_index + 1));
+                    }
+                }
+            }
+        }
+
+        let mut violations = Vec::new();
+        assert_eq!(forbidden_call, format!("{}{}", ".allows_edge", "(edge)"));
+        scan_dir(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut violations,
+        );
+
+        assert!(
+            violations.is_empty(),
+            "trace-query consumers must route edge checks through TraceIndex::allows_edge so phase-boundary contracts are applied:\n{}",
+            violations.join("\n")
         );
     }
 
