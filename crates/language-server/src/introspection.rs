@@ -887,7 +887,7 @@ pub fn main() -> u64 {
                     .is_some_and(|rows| !rows.is_empty())
         }));
         assert!(model["notes"].as_array().unwrap().iter().any(|note| note
-            == "The live endpoint uses the shared trace-query workbench projection path."));
+            == "Static and live workbench entry points use the shared trace-query projection path."));
 
         tokio::task::spawn_blocking(move || drop(backend))
             .await
@@ -1268,7 +1268,7 @@ pub fn main() -> u64 {
         assert_eq!(model["metadata"]["data_source"], "lsp-live");
         assert_eq!(model["revision"]["id"], 11);
         assert!(model["notes"].as_array().unwrap().iter().any(|note| note
-            == "The live endpoint uses the shared trace-query workbench projection path."));
+            == "Static and live workbench entry points use the shared trace-query projection path."));
         let revisions = backend.trace_viewer_revisions(&session.id).unwrap();
         assert_eq!(revisions.len(), 1);
         assert_eq!(revisions[0].status, "ready");

@@ -1934,8 +1934,8 @@ pub fn trace_workbench_report_projection(
         "closures": closures,
         "bytecode_count": bytecode_count,
         "notes": [
-            "Live trace workbench is served from the LSP-owned compiler state.",
-            "The live endpoint uses the shared trace-query workbench projection path.",
+            "Trace workbench data is projected from validated trace facts.",
+            "Static and live workbench entry points use the shared trace-query projection path.",
             "The browser does not compute provenance or graph reachability."
         ],
     })
@@ -2448,7 +2448,7 @@ fn trace_workbench_source_projection(
         })
         .unwrap_or_default();
     let confidence = if source_text.is_some() {
-        "live source text from LSP workspace"
+        "source text available"
     } else {
         "source text unavailable; showing trace reports only"
     };

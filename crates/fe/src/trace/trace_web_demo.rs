@@ -12,10 +12,11 @@ use common::{SalsaEventCounters, origin::OriginExportKey};
 use serde::Serialize;
 use trace_facts::{
     InstructionFact, OriginEdgeFact, OriginEdgeTraversalClass, OriginNodeFact, SourceFileFact,
-    SourceSpanFact, TraceFact, TraceSnapshot,
+    SourceSpanFact, TraceFact, TraceMetadata, TraceSnapshot,
 };
 use trace_query::{
     AttributionAuditReport, IntrospectionService, LoopContentsRequest, TraceIntrospectionService,
+    TraceWorkbenchProjectionRequest, trace_workbench_report_projection,
     origin_closure::{
         ClosureAuditReport, OriginClosure as DemoClosure, OriginClosureSourceLine,
         audit_origin_closures, build_origin_closure_set, classes_by_origin_key,
@@ -41,9 +42,9 @@ pub(super) fn run_trace_web_demo(args: &DevTraceWebDemoArgs) -> Result<String, S
     Ok(format!(
         "wrote origin trace web demo: {}\nData source: {}\nLoop bytecode PCs: {}\nSource confidence: {}\n{}\n",
         out,
-        rendered.model.metadata.data_source,
-        rendered.model.bytecode_count,
-        rendered.model.source.confidence,
+        rendered.data_source(),
+        rendered.bytecode_count(),
+        rendered.source_confidence(),
         rendered.salsa_summary(),
     ))
 }
@@ -66,20 +67,59 @@ pub(super) fn run_trace_audit_closures(args: &DevTraceAuditClosuresArgs) -> Resu
 
 struct RenderedWebDemo {
     html: String,
-    model: WebDemoModel,
+    model: serde_json::Value,
 }
 
 impl RenderedWebDemo {
     fn salsa_summary(&self) -> String {
-        self.model.salsa.as_ref().map_or_else(
+        self.model.get("salsa").map_or_else(
             || "Salsa: offline JSONL input".to_string(),
             |salsa| {
+                if salsa.is_null() {
+                    return "Salsa: offline JSONL input".to_string();
+                }
                 format!(
                     "Salsa: {} in {}ms, will_execute={}, memo_reuse={}",
-                    salsa.mode, salsa.elapsed_ms, salsa.will_execute, salsa.memo_reuse
+                    salsa
+                        .get("mode")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("unknown"),
+                    salsa
+                        .get("elapsed_ms")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or_default(),
+                    salsa
+                        .get("will_execute")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or_default(),
+                    salsa
+                        .get("memo_reuse")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or_default()
                 )
             },
         )
+    }
+
+    fn data_source(&self) -> &str {
+        self.model
+            .pointer("/metadata/data_source")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown")
+    }
+
+    fn bytecode_count(&self) -> usize {
+        self.model
+            .get("bytecode_count")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or_default() as usize
+    }
+
+    fn source_confidence(&self) -> &str {
+        self.model
+            .pointer("/source/confidence")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("source text unavailable")
     }
 }
 
@@ -143,8 +183,18 @@ fn render_trace_audit_model_once(args: &DevTraceAuditClosuresArgs) -> Result<Web
                 &args.optimize,
                 "audit-closures",
             )?;
-            let rendered = render_incremental_trace(&mut emitter, 1, false)?;
-            Ok(rendered.model)
+            let started = Instant::now();
+            let output = emitter.emit_from_disk()?;
+            let elapsed = started.elapsed();
+            let snapshot = TraceSnapshot::new(output.bundle)
+                .map_err(|err| format!("incremental trace validation failed: {err}"))?;
+            let salsa = Some(DemoSalsaStats::from_counters(
+                "long-lived DriverDataBase",
+                1,
+                elapsed,
+                output.salsa_events,
+            ));
+            Ok(build_demo_model(&snapshot, salsa))
         }
         (None, None) => Err("pass either --from TRACE_JSONL or --source FE_FILE".to_string()),
         (Some(_), Some(_)) => Err("pass only one of --from or --source".to_string()),
@@ -175,9 +225,65 @@ fn render_snapshot(
     salsa: Option<DemoSalsaStats>,
     live_reload: bool,
 ) -> Result<RenderedWebDemo, String> {
-    let model = build_demo_model(snapshot, salsa);
+    let model = build_trace_workbench_model(snapshot, salsa.as_ref())?;
     let html = render_origin_trace_html(&model, live_reload)?;
     Ok(RenderedWebDemo { html, model })
+}
+
+fn build_trace_workbench_model(
+    snapshot: &TraceSnapshot,
+    salsa: Option<&DemoSalsaStats>,
+) -> Result<serde_json::Value, String> {
+    let service = TraceIntrospectionService::new(snapshot.clone());
+    let input_path = snapshot.metadata().input_path.as_str();
+    let source_text = read_source_text(input_path);
+    let related_source_texts = source_text
+        .as_deref()
+        .map(|source_text| trace_workbench_related_source_texts(snapshot, input_path, source_text))
+        .unwrap_or_default();
+    let data_source = super::format_data_source(snapshot.metadata());
+    let mut projection = trace_workbench_report_projection(
+        &service,
+        snapshot,
+        TraceWorkbenchProjectionRequest {
+            input_path: snapshot.metadata().input_path.clone(),
+            target: snapshot.metadata().target.clone(),
+            opt_level: trace_web_demo_opt_level(snapshot.metadata()),
+            view: "source-postopt-bytecode".to_string(),
+            source_text,
+            related_source_texts,
+            document_version: None,
+            query_duration_ms: salsa.map(|salsa| salsa.elapsed_ms as u64).unwrap_or_default(),
+            compiler_commit: snapshot.metadata().compiler_commit.clone(),
+            data_source,
+        },
+    );
+    if let Some(salsa) = salsa {
+        projection["salsa"] = serde_json::to_value(salsa)
+            .map_err(|err| format!("failed to serialize Salsa stats: {err}"))?;
+    }
+    Ok(projection)
+}
+
+fn trace_web_demo_opt_level(metadata: &TraceMetadata) -> String {
+    metadata
+        .flags
+        .iter()
+        .find_map(|flag| {
+            flag.strip_prefix("optimize=")
+                .or_else(|| flag.strip_prefix("opt_level="))
+        })
+        .map(normalize_trace_web_demo_opt_level)
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn normalize_trace_web_demo_opt_level(value: &str) -> String {
+    match value {
+        "0" => "O0".to_string(),
+        "1" => "O1".to_string(),
+        "2" => "O2".to_string(),
+        other => other.to_string(),
+    }
 }
 
 impl DemoSalsaStats {
@@ -281,8 +387,8 @@ impl LiveWebDemoState {
         self.cached_summary = format!(
             "generation={} source_confidence={} loop_bytecode_pcs={} {}",
             self.generation,
-            rendered.model.source.confidence,
-            rendered.model.bytecode_count,
+            rendered.source_confidence(),
+            rendered.bytecode_count(),
             rendered.salsa_summary()
         );
         self.cached_html = rendered.html;
@@ -1982,6 +2088,27 @@ fn source_texts_by_file(
     texts
 }
 
+fn trace_workbench_related_source_texts(
+    snapshot: &TraceSnapshot,
+    input_path: &str,
+    input_source_text: &str,
+) -> BTreeMap<String, String> {
+    let texts = source_texts_by_file(snapshot, input_path, input_source_text);
+    let mut related = BTreeMap::new();
+    for fact in snapshot.facts() {
+        let TraceFact::SourceFile(source_file) = fact else {
+            continue;
+        };
+        let Some(text) = texts.get(&source_file.file_key) else {
+            continue;
+        };
+        related.insert(source_file.file_key.canonical_storage_key(), text.clone());
+        related.insert(source_file.file_key.owner_key().to_string(), text.clone());
+        related.insert(source_file.uri.clone(), text.clone());
+    }
+    related
+}
+
 fn read_source_file_fact_text(source_file: &SourceFileFact) -> Option<String> {
     let uri = source_file.uri.as_str();
     let path = if let Some(path) = uri.strip_prefix("builtin-std:/") {
@@ -2009,7 +2136,7 @@ fn read_source_file_fact_text(source_file: &SourceFileFact) -> Option<String> {
     fs::read_to_string(path).ok()
 }
 
-fn render_origin_trace_html(model: &WebDemoModel, live_reload: bool) -> Result<String, String> {
+fn render_origin_trace_html(model: &impl Serialize, live_reload: bool) -> Result<String, String> {
     let data = serde_json::to_string(model)
         .map_err(|err| format!("failed to serialize web demo model: {err}"))?;
     let html = fe_web::assets::origin_trace_html_shell("Fe Origin Trace Demo", &data);
@@ -2094,6 +2221,35 @@ mod tests {
         assert!(html.contains(r"<\/script>"));
         assert!(html.contains("fe-origin-trace"));
         assert!(html.contains("Fe Origin Trace Demo"));
+    }
+
+    #[test]
+    fn render_snapshot_uses_shared_trace_workbench_projection() {
+        let metadata = TraceMetadata::compiler_emitted(
+            "test",
+            "evm/sonatina",
+            vec!["fe".to_string(), "dev".to_string(), "trace".to_string()],
+            "demo.fe",
+            vec!["optimize=O2".to_string()],
+        );
+        let snapshot = TraceSnapshot::new(trace_facts::TraceBundle::new(metadata, Vec::new()))
+            .expect("empty trace snapshot should validate");
+
+        let rendered = render_snapshot(&snapshot, None, false).unwrap();
+
+        assert!(rendered.model.get("parity_summary").is_some());
+        assert!(rendered.model.get("indexes").is_some());
+        assert!(
+            rendered
+                .model
+                .get("notes")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .any(|note| note
+                    == "Static and live workbench entry points use the shared trace-query projection path.")
+        );
+        assert_eq!(rendered.model["parity_summary"]["opt_level"], "O2");
     }
 
     #[test]
