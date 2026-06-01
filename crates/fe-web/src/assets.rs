@@ -844,6 +844,16 @@ mod tests {
     }
 
     #[test]
+    fn origin_trace_renders_missing_link_context_from_report() {
+        assert!(FE_ORIGIN_TRACE_JS.contains("_appendMissingLinkClusterContext"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("affected_source_ranges"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("affected_bytecode_ranges"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("Where this shows up"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("_sourceRangeText"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("_bytecodeRangeText"));
+    }
+
+    #[test]
     fn origin_trace_pane_switches_do_not_rerun_hash_navigation() {
         assert!(FE_ORIGIN_TRACE_JS.contains("hashNavigation: false"));
         assert!(FE_ORIGIN_TRACE_JS.contains("hashNavigation: true"));

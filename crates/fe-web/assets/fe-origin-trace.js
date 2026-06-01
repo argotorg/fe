@@ -337,6 +337,7 @@
           if (cluster.explanation) {
             clusterBox.append(el("p", "muted", cluster.explanation));
           }
+          this._appendMissingLinkClusterContext(clusterBox, cluster);
           (cluster.required_evidence || []).slice(0, 1).forEach(function (evidence) {
             clusterBox.append(el("p", "audit-note", evidence.description || this._friendlyRequiredEvidence(evidence.kind)));
           }, this);
@@ -366,6 +367,42 @@
         section.append(nonExactList);
       }
       return section;
+    }
+
+    _appendMissingLinkClusterContext(box, cluster) {
+      var sources = (cluster && cluster.affected_source_ranges || []).slice(0, 3);
+      var bytecode = (cluster && cluster.affected_bytecode_ranges || []).slice(0, 3);
+      if (!sources.length && !bytecode.length) return;
+      var context = el("div", "missing-link-context");
+      context.append(el("h4", "", "Where this shows up"));
+      sources.forEach(function (range) {
+        var row = el("div", "audit-count");
+        row.append(el("span", "", "source"), el("b", "", this._sourceRangeText(range)));
+        context.append(row);
+      }, this);
+      bytecode.forEach(function (range) {
+        var row = el("div", "audit-count");
+        row.append(el("span", "", "bytecode"), el("b", "", this._bytecodeRangeText(range)));
+        context.append(row);
+      }, this);
+      box.append(context);
+    }
+
+    _sourceRangeText(range) {
+      if (!range) return "unknown source";
+      if (range.label) return range.label;
+      var line = range.start_line === range.end_line
+        ? "line " + range.start_line
+        : "lines " + range.start_line + "-" + range.end_line;
+      return line + ":" + (range.start_column || 0);
+    }
+
+    _bytecodeRangeText(range) {
+      if (!range) return "unknown PC";
+      var pc = range.pc_start === range.pc_end - 1
+        ? "pc " + range.pc_start
+        : "pc " + range.pc_start + "-" + range.pc_end;
+      return range.mnemonic ? pc + " · " + range.mnemonic : pc;
     }
 
     _friendlyBoundaryName(boundary) {
