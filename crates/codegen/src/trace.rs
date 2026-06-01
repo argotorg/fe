@@ -158,7 +158,6 @@ pub fn emit_bytecode_instruction_facts_with_observability(
         })
         .unwrap_or_default();
     let mut emitted_prepared_nodes = BTreeSet::new();
-    let mut emitted_postopt_lineage_nodes = BTreeSet::new();
     let mut emitted_prepared_lineage_events = BTreeSet::new();
     let mut facts = vec![
         origin_node(function.clone(), "bytecode.function"),
@@ -242,16 +241,7 @@ pub fn emit_bytecode_instruction_facts_with_observability(
                             .cloned()
                             .unwrap_or(frontend_origin);
                         let endpoint_is_known = known_sonatina_endpoint_nodes
-                            .is_none_or(|known| known.contains(&frontend_origin));
-                        if endpoint_is_known
-                            && known_sonatina_endpoint_nodes.is_none()
-                            && emitted_postopt_lineage_nodes.insert(frontend_origin.clone())
-                        {
-                            facts.push(origin_node(
-                                frontend_origin.clone(),
-                                SONATINA_POSTOPT_INST_KIND,
-                            ));
-                        }
+                            .is_some_and(|known| known.contains(&frontend_origin));
                         if endpoint_is_known {
                             emit_prepared_lineage_event(
                                 &mut facts,
@@ -1804,6 +1794,9 @@ mod tests {
         let sonatina_owner = "package:fib:module:fib:sonatina";
         let postopt_inst_id = InstId(37);
         let postopt = sonatina_postopt_inst_key(sonatina_owner, func, postopt_inst_id);
+        let known = [postopt.clone()]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
         let observability = SectionObservability {
             schema_version: OBSERVABILITY_SCHEMA_VERSION,
             section: "runtime".into(),
@@ -1836,10 +1829,15 @@ mod tests {
             &[0x5f],
             Some(sonatina_owner),
             Some(&observability),
-            None,
+            Some(&known),
             None,
         );
-        TraceValidator::validate(&facts).unwrap();
+        let mut validated_facts = vec![TraceFact::OriginNode(OriginNodeFact::new(
+            postopt.clone(),
+            OriginNodeKind::new(SONATINA_POSTOPT_INST_KIND),
+        ))];
+        validated_facts.extend(facts.clone());
+        TraceValidator::validate(&validated_facts).unwrap();
 
         assert!(facts.iter().any(|fact| matches!(
             fact,
@@ -1869,6 +1867,91 @@ mod tests {
             TraceFact::OriginEdge(edge)
                 if edge.from.kind() == "bytecode.pc"
                     && edge.to.kind() == SONATINA_POSTOPT_INST_KIND
+        )));
+    }
+
+    #[test]
+    fn bytecode_observability_does_not_invent_postopt_lineage_without_known_trace_nodes() {
+        use sonatina_codegen::{
+            machinst::vcode::VCodeInst,
+            object::{OBSERVABILITY_SCHEMA_VERSION, PcMapEntry, SectionObservability},
+        };
+        use sonatina_ir::{
+            BlockId, InstId, Linkage, Signature, builder::ModuleBuilder, isa::evm::Evm,
+            module::ModuleCtx,
+        };
+        use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
+
+        let evm = Evm::new(TargetTriple::new(
+            Architecture::Evm,
+            Vendor::Ethereum,
+            OperatingSystem::Evm(EvmVersion::London),
+        ));
+        let mb = ModuleBuilder::new(ModuleCtx::new(&evm));
+        let func = mb
+            .declare_function(Signature::new_unit("runtime", Linkage::Public, &[]))
+            .unwrap();
+
+        let sonatina_owner = "package:fib:module:fib:sonatina";
+        let postopt = sonatina_postopt_inst_key(sonatina_owner, func, InstId(37));
+        let observability = SectionObservability {
+            schema_version: OBSERVABILITY_SCHEMA_VERSION,
+            section: "runtime".into(),
+            section_bytes: 1,
+            code_bytes: 1,
+            data_bytes: 0,
+            embed_bytes: 0,
+            mapped_code_bytes: 1,
+            unmapped_code_bytes: 0,
+            unmapped_reason_coverage: Default::default(),
+            pc_map: vec![PcMapEntry {
+                pc_start: 0,
+                pc_end: 1,
+                func,
+                func_name: "runtime".to_string(),
+                block: BlockId(0),
+                vcode_inst: VCodeInst(0),
+                ir_inst: Some(InstId(37)),
+                frontend_provenance: Some(
+                    serde_json::to_string(&postopt)
+                        .expect("OriginExportKey serialization cannot fail"),
+                ),
+                unmapped_reason: None,
+            }],
+        };
+
+        let facts = emit_bytecode_instruction_facts_with_observability(
+            "contract:Fib",
+            "runtime",
+            &[0x5f],
+            Some(sonatina_owner),
+            Some(&observability),
+            None,
+            None,
+        );
+        TraceValidator::validate(&facts).unwrap();
+
+        assert!(facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::OriginEdge(edge)
+                if edge.from.kind() == "bytecode.pc"
+                    && edge.to.kind() == SONATINA_EVM_PREPARED_INST_KIND
+                    && edge.label == trace_facts::OriginEdgeLabel::EmittedFrom
+        )));
+        assert!(!facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::OriginNode(node) if node.key == postopt
+        )));
+        assert!(!facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::OriginEdge(edge)
+                if edge.from.kind() == SONATINA_EVM_PREPARED_INST_KIND
+                    && edge.to == postopt
+        )));
+        assert!(!facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::CompilerEvent(event)
+                if event.kind == CompilerEventKind::PreparedLineage
         )));
     }
 
