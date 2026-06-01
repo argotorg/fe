@@ -240,9 +240,10 @@ pub fn emit_bytecode_instruction_facts_with_observability(
                             .and_then(|aliases| aliases.get(&frontend_origin))
                             .cloned()
                             .unwrap_or(frontend_origin);
-                        let should_emit_endpoint_node = known_sonatina_endpoint_nodes
-                            .is_none_or(|known| !known.contains(&frontend_origin));
-                        if should_emit_endpoint_node
+                        let endpoint_is_known = known_sonatina_endpoint_nodes
+                            .is_none_or(|known| known.contains(&frontend_origin));
+                        if endpoint_is_known
+                            && known_sonatina_endpoint_nodes.is_none()
                             && emitted_postopt_lineage_nodes.insert(frontend_origin.clone())
                         {
                             facts.push(origin_node(
@@ -250,12 +251,14 @@ pub fn emit_bytecode_instruction_facts_with_observability(
                                 SONATINA_POSTOPT_INST_KIND,
                             ));
                         }
-                        facts.push(TraceFact::OriginEdge(OriginEdgeFact::new(
-                            prepared_inst,
-                            frontend_origin,
-                            OriginEdgeLabel::LoweredFrom,
-                            Some(CompilerPhase::Backend),
-                        )));
+                        if endpoint_is_known {
+                            facts.push(TraceFact::OriginEdge(OriginEdgeFact::new(
+                                prepared_inst,
+                                frontend_origin,
+                                OriginEdgeLabel::LoweredFrom,
+                                Some(CompilerPhase::Backend),
+                            )));
+                        }
                     }
                 } else {
                     facts.push(TraceFact::OriginEdge(OriginEdgeFact::new(
@@ -1893,6 +1896,87 @@ mod tests {
             TraceFact::OriginEdge(edge)
                 if edge.from.kind() == SONATINA_EVM_PREPARED_INST_KIND
                     && edge.to == alias_postopt
+        )));
+    }
+
+    #[test]
+    fn bytecode_observability_does_not_create_unknown_postopt_lineage() {
+        use sonatina_codegen::{
+            machinst::vcode::VCodeInst,
+            object::{OBSERVABILITY_SCHEMA_VERSION, PcMapEntry, SectionObservability},
+        };
+        use sonatina_ir::{
+            BlockId, InstId, Linkage, Signature, builder::ModuleBuilder, isa::evm::Evm,
+            module::ModuleCtx,
+        };
+        use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
+
+        let evm = Evm::new(TargetTriple::new(
+            Architecture::Evm,
+            Vendor::Ethereum,
+            OperatingSystem::Evm(EvmVersion::London),
+        ));
+        let mb = ModuleBuilder::new(ModuleCtx::new(&evm));
+        let func = mb
+            .declare_function(Signature::new_unit("runtime", Linkage::Public, &[]))
+            .unwrap();
+
+        let sonatina_owner = "package:fib:module:fib:sonatina";
+        let unknown_postopt = sonatina_postopt_inst_key(sonatina_owner, func, InstId(37));
+        let known_postopt_nodes = std::collections::BTreeSet::new();
+        let observability = SectionObservability {
+            schema_version: OBSERVABILITY_SCHEMA_VERSION,
+            section: "runtime".into(),
+            section_bytes: 1,
+            code_bytes: 1,
+            data_bytes: 0,
+            embed_bytes: 0,
+            mapped_code_bytes: 1,
+            unmapped_code_bytes: 0,
+            unmapped_reason_coverage: Default::default(),
+            pc_map: vec![PcMapEntry {
+                pc_start: 0,
+                pc_end: 1,
+                func,
+                func_name: "runtime".to_string(),
+                block: BlockId(0),
+                vcode_inst: VCodeInst(0),
+                ir_inst: Some(InstId(37)),
+                frontend_provenance: Some(
+                    serde_json::to_string(&unknown_postopt)
+                        .expect("OriginExportKey serialization cannot fail"),
+                ),
+                unmapped_reason: None,
+            }],
+        };
+
+        let facts = emit_bytecode_instruction_facts_with_observability(
+            "contract:Fib",
+            "runtime",
+            &[0x5f],
+            Some(sonatina_owner),
+            Some(&observability),
+            Some(&known_postopt_nodes),
+            None,
+        );
+        TraceValidator::validate(&facts).unwrap();
+
+        assert!(facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::OriginEdge(edge)
+                if edge.from.kind() == "bytecode.pc"
+                    && edge.to.kind() == SONATINA_EVM_PREPARED_INST_KIND
+                    && edge.label == trace_facts::OriginEdgeLabel::EmittedFrom
+        )));
+        assert!(!facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::OriginNode(node) if node.key == unknown_postopt
+        )));
+        assert!(!facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::OriginEdge(edge)
+                if edge.from.kind() == SONATINA_EVM_PREPARED_INST_KIND
+                    && edge.to == unknown_postopt
         )));
     }
 

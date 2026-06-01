@@ -3913,6 +3913,8 @@ pub struct AttributionAuditLineageGap {
     pub bytecode_pc: OriginExportKey,
     pub prepared_origin: OriginExportKey,
     pub reason: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidate_hints: Vec<CandidateHint>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -5686,6 +5688,12 @@ fn missing_link_audit_report(
         .count();
     let missing_preopt_to_postopt_count = preopt_to_postopt.missing.len();
     let missing_postopt_to_prepared_count = lineage_gaps.len();
+    let missing_postopt_to_prepared_with_candidates = lineage_gaps
+        .iter()
+        .filter(|gap| !gap.candidate_hints.is_empty())
+        .count();
+    let missing_postopt_to_prepared_without_candidates = missing_postopt_to_prepared_count
+        .saturating_sub(missing_postopt_to_prepared_with_candidates);
     let prepared_to_bytecode = prepared_to_bytecode_boundary_audit(snapshot);
     let missing_prepared_to_bytecode_count = prepared_to_bytecode.missing.len();
     let missing_required_count = missing_postopt_to_prepared_count
@@ -5822,10 +5830,16 @@ fn missing_link_audit_report(
         if !invalid.is_empty() {
             status_counts.insert(LinkStatus::Invalid, invalid.len());
         }
-        if missing_postopt_to_prepared_count > 0 {
+        if missing_postopt_to_prepared_with_candidates > 0 {
+            status_counts.insert(
+                LinkStatus::MissingLineageButCandidatesExist,
+                missing_postopt_to_prepared_with_candidates,
+            );
+        }
+        if missing_postopt_to_prepared_without_candidates > 0 {
             status_counts.insert(
                 LinkStatus::MissingRequired,
-                missing_postopt_to_prepared_count,
+                missing_postopt_to_prepared_without_candidates,
             );
         }
         let top_issue_codes = [
@@ -5968,14 +5982,18 @@ fn missing_link_audit_report(
                     &gap.prepared_origin,
                 ),
                 boundary: LinkBoundaryKind::PostOptToPrepared,
-                status: LinkStatus::MissingRequired,
+                status: if gap.candidate_hints.is_empty() {
+                    LinkStatus::MissingRequired
+                } else {
+                    LinkStatus::MissingLineageButCandidatesExist
+                },
                 issue_code: LinkIssueCode::MissingOptimizedToPreparedLineage,
                 severity: LinkSeverity::Warning,
                 from_origin: gap.prepared_origin.clone(),
                 from_representation: Some("sonatina.evm.prepared".to_string()),
                 expected_to_phase: "sonatina.postopt".to_string(),
                 reached_frontier: "evm.prepared.bytecode".to_string(),
-                candidate_hints: Vec::new(),
+                candidate_hints: gap.candidate_hints.clone(),
                 required_evidence: required_evidence.clone(),
                 cluster_id: Some(cluster_id.clone()),
             }),
@@ -6101,15 +6119,24 @@ fn missing_link_audit_report(
             .map(|gap| gap.bytecode_pc.clone())
             .take(25)
             .collect::<Vec<_>>();
+        let candidate_hints = lineage_gaps
+            .iter()
+            .flat_map(|gap| gap.candidate_hints.iter().cloned())
+            .take(25)
+            .collect::<Vec<_>>();
         clusters.push(LinkGapCluster {
             cluster_id: cluster_id.clone(),
             boundary: LinkBoundaryKind::PostOptToPrepared,
-            status: LinkStatus::MissingRequired,
+            status: if candidate_hints.is_empty() {
+                LinkStatus::MissingRequired
+            } else {
+                LinkStatus::MissingLineageButCandidatesExist
+            },
             issue_code: LinkIssueCode::MissingOptimizedToPreparedLineage,
             severity: LinkSeverity::Warning,
             owner_phase: CompilerPhase::Backend,
             headline: "Optimized Sonatina reaches no EVM prepared lineage".to_string(),
-            explanation: "Source and optimized Sonatina evidence may exist, and EVM prepared/bytecode evidence exists, but no explicit optimized→prepared lineage edge is present for these prepared origins.".to_string(),
+            explanation: "Source and optimized Sonatina evidence may exist, and EVM prepared/bytecode evidence exists, but no explicit optimized→prepared lineage edge is present for these prepared origins. Candidate hints are diagnostic only and never satisfy provenance.".to_string(),
             affected_origins,
             affected_bytecode_pcs,
             gap_count: missing_postopt_to_prepared_count,
@@ -6119,7 +6146,7 @@ fn missing_link_audit_report(
                 .take(MISSING_LINK_CLUSTER_SAMPLE_LIMIT)
                 .map(|gap| gap.gap_id.clone())
                 .collect(),
-            candidate_hints: Vec::new(),
+            candidate_hints,
             required_evidence: required_evidence.clone(),
         });
     }
@@ -6654,9 +6681,73 @@ fn invalid_direct_bytecode_to_postopt_edge(edge: &trace_facts::OriginEdgeFact) -
         && edge.has_transform_claim_label()
 }
 
+fn postopt_candidates_by_raw_local_id(
+    snapshot: &TraceSnapshot,
+) -> BTreeMap<(String, String), Vec<OriginExportKey>> {
+    let mut postopt_origins = BTreeSet::<OriginExportKey>::new();
+    for fact in snapshot.facts() {
+        match fact {
+            TraceFact::OriginNode(node) if is_sonatina_postopt_inst_audit_origin(&node.key) => {
+                postopt_origins.insert(node.key.clone());
+            }
+            TraceFact::Instruction(instruction)
+                if is_sonatina_postopt_inst_audit_origin(&instruction.instruction) =>
+            {
+                postopt_origins.insert(instruction.instruction.clone());
+            }
+            _ => {}
+        }
+    }
+
+    let mut candidates = BTreeMap::<(String, String), Vec<OriginExportKey>>::new();
+    for origin in postopt_origins {
+        candidates
+            .entry((
+                origin.owner_key().to_string(),
+                origin.local_key().to_string(),
+            ))
+            .or_default()
+            .push(origin);
+    }
+    candidates
+}
+
+fn postopt_candidate_hints_for_prepared_raw_id(
+    postopt_candidates: &BTreeMap<(String, String), Vec<OriginExportKey>>,
+    prepared_origin: &OriginExportKey,
+) -> Vec<CandidateHint> {
+    if !is_prepared_sonatina_audit_origin(prepared_origin) {
+        return Vec::new();
+    }
+
+    let lookup = (
+        prepared_origin.owner_key().to_string(),
+        prepared_origin.local_key().to_string(),
+    );
+    postopt_candidates
+        .get(&lookup)
+        .into_iter()
+        .flat_map(|matches| matches.iter())
+        .take(3)
+        .map(|postopt| CandidateHint {
+            kind: CandidateHintKind::SameRawLocalId,
+            confidence: CandidateConfidence::Weak,
+            from: Some(prepared_origin.clone()),
+            to: Some(postopt.clone()),
+            explanation: "EVM prepared and optimized Sonatina origins share the same owner/local instruction key. This is a candidate diagnostic only; explicit prepared→postopt lineage is still required.".to_string(),
+            dimensions: vec![
+                "owner_key".to_string(),
+                "local_key".to_string(),
+                "representation_kind".to_string(),
+            ],
+        })
+        .collect()
+}
+
 fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport {
     let index = TraceIndex::new(snapshot);
     let semantic_index = trace_index::TraceIndex::new(snapshot);
+    let postopt_raw_local_candidates = postopt_candidates_by_raw_local_id(snapshot);
     let mut direct_edges = BTreeMap::<
         (
             OriginEdgeLabel,
@@ -6745,10 +6836,15 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
                 }
                 has_missing_prepared_lineage = true;
                 *lineage_gap_targets.entry(prepared.clone()).or_default() += 1;
+                let candidate_hints = postopt_candidate_hints_for_prepared_raw_id(
+                    &postopt_raw_local_candidates,
+                    &prepared,
+                );
                 lineage_gaps.push(AttributionAuditLineageGap {
                     bytecode_pc: instruction.clone(),
                     prepared_origin: prepared,
                     reason: "missing_optimized_to_prepared_lineage".to_string(),
+                    candidate_hints,
                 });
             }
             if has_missing_prepared_lineage {
@@ -6855,6 +6951,7 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
         attribution_audit_target_counts(optimized_sonatina_targets);
     optimized_sonatina_targets.truncate(25);
 
+    let prepared_target_total_count = prepared_targets.len();
     let mut prepared_targets = attribution_audit_target_counts(prepared_targets);
     prepared_targets.truncate(25);
 
@@ -6863,7 +6960,7 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
         source_exact_pcs,
         prepared_linked_pcs,
         unmapped_pcs,
-        prepared_targets.len(),
+        prepared_target_total_count,
         &lineage_gap_targets,
         &lineage_gaps,
         invalid_links,
@@ -7060,9 +7157,10 @@ mod tests {
     };
 
     use super::{
-        CallCostByCallsiteReport, DynamicGasBySourceRequest, ExplainLocalRequest, ExplainPcRequest,
-        GasBySourceRequest, GasToSourceRequest, IntrospectionService, LinkBoundaryKind,
-        LinkIssueCode, LinkOverallStatus, LinkStatus, LoopContentsRequest, LoopCostRequest,
+        CallCostByCallsiteReport, CandidateConfidence, CandidateHintKind,
+        DynamicGasBySourceRequest, ExplainLocalRequest, ExplainPcRequest, GasBySourceRequest,
+        GasToSourceRequest, IntrospectionService, LinkBoundaryKind, LinkIssueCode,
+        LinkOverallStatus, LinkStatus, LoopContentsRequest, LoopCostRequest,
         MISSING_LINK_AUDIT_SCHEMA_VERSION, OptimizedCodeHonestyRequest, RequiredEvidenceKind,
         RuntimeGasBySourceRequest, RuntimeTraceFilterRequest, StorageAccessesBySlotRequest,
         TraceIntrospectionService, TraceQueryHttpRequest, TraceQueryHttpResponse, TraceQueryReport,
@@ -8198,6 +8296,80 @@ mod tests {
                 .get(&LinkStatus::MissingRequired),
             Some(&1)
         );
+    }
+
+    #[test]
+    fn missing_postopt_prepared_lineage_reports_raw_id_match_as_candidate_only() {
+        let function = key("function", "demo", "recv");
+        let raw_inst = "function:FuncRef(1):inst:InstId(7)";
+        let postopt = key("sonatina.postopt.inst", "demo", raw_inst);
+        let prepared = key("sonatina.evm.prepared.inst", "demo", raw_inst);
+        let pc = key("bytecode.pc", "demo", "pc:0");
+        let snapshot = snapshot(vec![
+            node(function.clone()),
+            node(postopt.clone()),
+            node(prepared.clone()),
+            node(pc.clone()),
+            TraceFact::Instruction(InstructionFact::new(pc.clone(), function, 0, "ADD")),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                pc,
+                prepared.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+        ]);
+        let report = TraceIntrospectionService::new(snapshot)
+            .attribution_audit()
+            .unwrap();
+
+        assert_eq!(report.source_exact_pcs, 0);
+        assert_eq!(report.optimized_sonatina_linked_pcs, 0);
+        assert_eq!(report.prepared_linked_pcs, 1);
+        assert_eq!(report.missing_optimized_to_prepared_lineage_pcs, 1);
+        assert_eq!(report.lineage_gaps.len(), 1);
+        assert_eq!(report.lineage_gaps[0].candidate_hints.len(), 1);
+        assert_eq!(
+            report.lineage_gaps[0].candidate_hints[0].kind,
+            CandidateHintKind::SameRawLocalId
+        );
+        assert_eq!(
+            report.lineage_gaps[0].candidate_hints[0].confidence,
+            CandidateConfidence::Weak
+        );
+        assert_eq!(
+            report.lineage_gaps[0].candidate_hints[0].to.as_ref(),
+            Some(&postopt)
+        );
+
+        let missing_links = report.missing_links.as_ref().unwrap();
+        let postopt_to_prepared = missing_links
+            .boundary_summaries
+            .iter()
+            .find(|summary| summary.boundary == LinkBoundaryKind::PostOptToPrepared)
+            .expect("postopt to prepared boundary summary");
+        assert_eq!(
+            postopt_to_prepared
+                .status_counts
+                .get(&LinkStatus::MissingLineageButCandidatesExist),
+            Some(&1)
+        );
+        assert_eq!(
+            postopt_to_prepared
+                .status_counts
+                .get(&LinkStatus::MissingRequired),
+            None
+        );
+        assert_eq!(
+            missing_links.gaps[0].status,
+            LinkStatus::MissingLineageButCandidatesExist
+        );
+        assert_eq!(missing_links.gaps[0].candidate_hints.len(), 1);
+        assert_eq!(
+            missing_links.clusters[0].status,
+            LinkStatus::MissingLineageButCandidatesExist
+        );
+        assert_eq!(missing_links.clusters[0].candidate_hints.len(), 1);
+        assert_eq!(missing_links.summary.missing_required_count, 1);
     }
 
     #[test]
