@@ -808,6 +808,8 @@ mod tests {
         assert!(FE_ORIGIN_TRACE_JS.contains("hoverClasses(row)"));
         assert!(FE_ORIGIN_TRACE_JS.contains("selectionClasses(row)"));
         assert!(FE_ORIGIN_TRACE_JS.contains("var groups = selectionClasses(row);"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("fallbackScopedTraceClasses"));
+        assert!(!FE_ORIGIN_TRACE_JS.contains("node[cacheKey] = traceClasses(node);"));
         assert!(!FE_ORIGIN_TRACE_JS.contains("_expandSelectionGroups"));
         assert!(FE_ORIGIN_TRACE_JS.contains("return exact.concat(generated, prepared);"));
         assert!(FE_ORIGIN_TRACE_JS.contains("return \"evm-vcode\""));

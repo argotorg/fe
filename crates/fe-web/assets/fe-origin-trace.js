@@ -42,8 +42,27 @@
       node[cacheKey] = node.dataset[datasetKey].split(/\s+/).filter(Boolean);
       return node[cacheKey];
     }
-    node[cacheKey] = traceClasses(node);
+    node[cacheKey] = fallbackScopedTraceClasses(node, datasetKey);
     return node[cacheKey];
+  }
+
+  function fallbackScopedTraceClasses(node, datasetKey) {
+    var groups = traceClasses(node);
+    var exact = [];
+    var generated = [];
+    var prepared = [];
+    groups.forEach(function (group) {
+      if (group.indexOf("exact-c-") === 0) exact.push(group);
+      else if (group.indexOf("generated-c-") === 0) generated.push(group);
+      else if (group.indexOf("prepared-c-") === 0) prepared.push(group);
+    });
+    if (datasetKey === "hoverGroups") {
+      if (exact.length) return exact;
+      if (prepared.length) return prepared;
+      if (generated.length) return generated.slice(0, 1);
+      return [];
+    }
+    return exact.concat(generated, prepared);
   }
 
   function isTraceGroup(name) {
