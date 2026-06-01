@@ -1158,12 +1158,6 @@ fn source_lines(
 }
 
 fn display_status_for_source_line(classes: &[String]) -> Option<DemoDisplayStatus> {
-    if classes
-        .iter()
-        .any(|class| class.starts_with("generated-c-"))
-    {
-        return Some(DemoDisplayStatus::GeneratedDownstream);
-    }
     if classes.iter().any(|class| class.starts_with("context-c-")) {
         return Some(DemoDisplayStatus::Context);
     }
@@ -2377,11 +2371,8 @@ mod tests {
     }
 
     #[test]
-    fn source_line_generated_component_is_downstream_status() {
-        assert!(matches!(
-            display_status_for_source_line(&["generated-c-a".to_string()]),
-            Some(DemoDisplayStatus::GeneratedDownstream)
-        ));
+    fn source_line_generated_component_does_not_badge_authored_source() {
+        assert!(display_status_for_source_line(&["generated-c-a".to_string()]).is_none());
     }
 
     #[test]

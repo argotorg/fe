@@ -3388,12 +3388,6 @@ fn trace_workbench_row_indent(kind: TraceWorkbenchPaneRowKind) -> u8 {
 fn trace_workbench_status_for_source_line(
     classes: &[String],
 ) -> Option<TraceWorkbenchDisplayStatus> {
-    if classes
-        .iter()
-        .any(|class| class.starts_with("generated-c-"))
-    {
-        return Some(TraceWorkbenchDisplayStatus::GeneratedDownstream);
-    }
     if classes.iter().any(|class| class.starts_with("context-c-")) {
         return Some(TraceWorkbenchDisplayStatus::Context);
     }
@@ -11674,6 +11668,14 @@ mod tests {
                 &TraceWorkbenchMissingLineageIndex::default(),
             ),
             Some(TraceWorkbenchDisplayStatus::SourceExact)
+        );
+    }
+
+    #[test]
+    fn trace_workbench_generated_source_line_classes_do_not_badge_authored_source() {
+        assert_eq!(
+            trace_workbench_status_for_source_line(&["generated-c-helper".to_string()]),
+            None
         );
     }
 

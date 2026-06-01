@@ -12,8 +12,8 @@ use driver::{
 };
 use salsa::Setter;
 use trace_facts::{
-    CodeObjectFact, CodeObjectKind, CompilerPhase, InstructionExtentFact, JsonlTraceReader,
-    JsonlTraceSink, TraceBundle, TraceFact, TraceSnapshot, TraceValidator,
+    CodeObjectFact, CodeObjectKind, InstructionExtentFact, JsonlTraceReader, JsonlTraceSink,
+    TraceBundle, TraceFact, TraceSnapshot, TraceValidator,
 };
 use url::Url;
 
@@ -617,63 +617,20 @@ fn emit_real_trace_bundle_from_top_mod<'db>(
     opt_level: codegen::OptLevel,
     command: Vec<String>,
 ) -> Result<TraceBundle, String> {
-    let package = mir::build_runtime_package(db, top_mod)
-        .map_err(|err| format!("failed to build runtime package for trace: {err}"))?;
-    let mut facts = mir::trace::emit_mir_facts(db, package);
-    let module_key = top_mod.name(db).data(db).to_string();
-    let sonatina_module =
-        codegen::compile_runtime_package_sonatina(db, &package, codegen::EVM_LAYOUT)
-            .map_err(|err| format!("failed to compile Sonatina IR for trace: {err}"))?;
-    let sonatina_owner =
-        codegen::trace::sonatina_module_owner_key(input_path.as_str(), &module_key);
-    facts.extend(codegen::trace::emit_sonatina_trace_view_facts(
-        &sonatina_owner,
-        &sonatina_module,
-        CompilerPhase::SonatinaPreOpt,
-    ));
-    let source_file = codegen::trace::trace_source_file_key(input_path.as_str());
-    facts.extend(codegen::trace::standalone_source_file_facts(
-        &source_file,
+    let facts = codegen::trace::emit_observable_module_trace_facts(
+        db,
+        top_mod,
+        input_path.as_str(),
         input_path.as_str(),
         input_path
             .file_name()
             .map_or(input_path.as_str(), |name| name)
             .to_string(),
         input_content,
-        Some(0),
-    ));
-    let (bytecode, postopt_sonatina_facts) =
-        codegen::emit_module_sonatina_bytecode_with_observability_and_trace(
-            db,
-            top_mod,
-            opt_level,
-            None,
-            &sonatina_owner,
-        )
-        .map_err(|err| format!("failed to compile bytecode for trace: {err}"))?;
-    let observed_bytecode_facts = codegen::trace::emit_observed_bytecode_trace_facts(
-        input_path.as_str(),
-        &module_key,
-        "function:runtime",
-        &sonatina_owner,
-        &bytecode,
-        &postopt_sonatina_facts,
-    );
-    facts.extend(postopt_sonatina_facts);
-    facts.extend(observed_bytecode_facts);
-    for contract_name in bytecode.keys() {
-        let owner_key = codegen::trace::bytecode_runtime_owner_key(
-            input_path.as_str(),
-            &module_key,
-            contract_name,
-        );
-        let code_object = codegen::trace::bytecode_code_object_key(&owner_key);
-        if let Some(span) =
-            codegen::trace::whole_file_source_span(code_object, source_file.clone(), input_content)
-        {
-            facts.push(TraceFact::SourceSpan(span));
-        }
-    }
+        opt_level,
+        None,
+    )
+    .map_err(|err| format!("failed to emit observable trace facts: {err}"))?;
 
     let metadata = trace_facts::TraceMetadata::compiler_emitted(
         super::compiler_commit(),
@@ -774,6 +731,46 @@ mod tests {
         assert_eq!(file_url.scheme(), "file");
         assert_eq!(content, "pub contract Demo {}\n");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn static_and_live_trace_paths_use_shared_observable_fact_builder() {
+        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let repo_root = manifest_dir
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("fe crate should live under crates/");
+        let files = [
+            repo_root.join("crates/fe/src/trace/trace_emit.rs"),
+            repo_root.join("crates/language-server/src/introspection.rs"),
+        ];
+        let forbidden = [
+            "emit_module_sonatina_bytecode_with_observability_and_trace(",
+            "compile_runtime_package_sonatina(",
+            "mir::trace::emit_mir_facts(",
+            "emit_observed_bytecode_trace_facts(",
+        ];
+
+        for file in files {
+            let source = std::fs::read_to_string(&file)
+                .unwrap_or_else(|err| panic!("failed to read {}: {err}", file.display()));
+            let production = source
+                .split("\n#[cfg(test)]")
+                .next()
+                .expect("split always yields one segment");
+            assert!(
+                production.contains("emit_observable_module_trace_facts("),
+                "{} must use the shared observable trace fact builder",
+                file.display()
+            );
+            for pattern in forbidden {
+                assert!(
+                    !production.contains(pattern),
+                    "{} must not reassemble observable trace facts outside codegen::trace; found {pattern}",
+                    file.display()
+                );
+            }
+        }
     }
 
     #[test]

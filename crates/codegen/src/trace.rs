@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use common::origin::OriginExportKey;
+use driver::DriverDataBase;
+use hir::hir_def::TopLevelMod;
+use mir::build_runtime_package;
 use shape_address::{
     ShapeCyclePolicy, ShapeDimension, ShapeGraph, ShapeGraphKey, ShapeHashPolicy, ShapeNodeKey,
     ShapeViewMode, hash_shape_graph,
@@ -20,6 +23,7 @@ use trace_facts::{
 };
 
 use crate::debug::BytecodeSourceMapEntry;
+use crate::{OptLevel, compile_runtime_package_sonatina};
 
 pub const SONATINA_PREOPT_FUNCTION_KIND: &str = "sonatina.preopt.function";
 pub const SONATINA_PREOPT_BLOCK_KIND: &str = "sonatina.preopt.block";
@@ -31,6 +35,63 @@ pub const SONATINA_POSTOPT_INST_KIND: &str = "sonatina.postopt.inst";
 pub const SONATINA_POSTOPT_LOOP_KIND: &str = "sonatina.postopt.loop";
 pub const SONATINA_EVM_PREPARED_INST_KIND: &str = "sonatina.evm.prepared.inst";
 pub const EVM_VCODE_INST_KIND: &str = "evm.vcode.inst";
+
+pub fn emit_observable_module_trace_facts(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    input_owner_key: &str,
+    source_uri: impl Into<String>,
+    source_display_name: impl Into<String>,
+    source_text: &str,
+    opt_level: OptLevel,
+    contract: Option<&str>,
+) -> Result<Vec<TraceFact>, crate::LowerError> {
+    let package = build_runtime_package(db, top_mod)?;
+    let mut facts = mir::trace::emit_mir_facts(db, package);
+    let source_file = trace_source_file_key(input_owner_key);
+    push_standalone_source_file_facts(
+        &mut facts,
+        &source_file,
+        source_uri,
+        source_display_name,
+        source_text,
+        Some(0),
+    );
+    let module_key = top_mod.name(db).data(db).to_string();
+    let sonatina_module = compile_runtime_package_sonatina(db, &package, crate::EVM_LAYOUT)?;
+    let sonatina_owner = sonatina_module_owner_key(input_owner_key, &module_key);
+    facts.extend(emit_sonatina_trace_view_facts(
+        &sonatina_owner,
+        &sonatina_module,
+        CompilerPhase::SonatinaPreOpt,
+    ));
+    let (bytecode, postopt_sonatina_facts) =
+        crate::emit_module_sonatina_bytecode_with_observability_and_trace(
+            db,
+            top_mod,
+            opt_level,
+            contract,
+            &sonatina_owner,
+        )?;
+    let observed_bytecode_facts = emit_observed_bytecode_trace_facts(
+        input_owner_key,
+        &module_key,
+        "function:runtime",
+        &sonatina_owner,
+        &bytecode,
+        &postopt_sonatina_facts,
+    );
+    facts.extend(postopt_sonatina_facts);
+    facts.extend(observed_bytecode_facts);
+    for contract_name in bytecode.keys() {
+        let owner_key = bytecode_runtime_owner_key(input_owner_key, &module_key, contract_name);
+        let code_object = bytecode_code_object_key(&owner_key);
+        if let Some(span) = whole_file_source_span(code_object, source_file.clone(), source_text) {
+            facts.push(TraceFact::SourceSpan(span));
+        }
+    }
+    Ok(facts)
+}
 
 pub fn trace_source_file_key(source_owner: &str) -> OriginExportKey {
     OriginExportKey::try_from_raw_parts("source.file", source_owner, "file:0")

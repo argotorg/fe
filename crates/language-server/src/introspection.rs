@@ -7,7 +7,7 @@ use std::fs::{self, File};
 use std::io::BufReader;
 use std::str::FromStr;
 use std::time::{Duration, Instant};
-use trace_facts::{CompilerPhase, TraceBundle, TraceFact, TraceMetadata, TraceSnapshot};
+use trace_facts::{TraceBundle, TraceFact, TraceMetadata, TraceSnapshot};
 use trace_query::{
     TraceIntrospectionService, TraceQueryHttpResponse, TraceQueryRequest,
     TraceWorkbenchProjectionRequest, run_trace_query, trace_workbench_manifest,
@@ -559,57 +559,17 @@ pub(crate) fn service_for_file_with_options(
     };
     let source_text = file.text(db).to_string();
     let top_mod = map_file_to_mod(db, file);
-    let package = mir::build_runtime_package(db, top_mod)
-        .map_err(|err| format!("runtime package lowering for trace: {err}"))?;
-    let mut facts = mir::trace::emit_mir_facts(db, package);
-    let source_file = codegen::trace::trace_source_file_key(uri.as_str());
-    codegen::trace::push_standalone_source_file_facts(
-        &mut facts,
-        &source_file,
+    let facts = codegen::trace::emit_observable_module_trace_facts(
+        db,
+        top_mod,
+        uri.as_str(),
         uri.to_string(),
         trace_workbench_source_file_display_name(uri),
         &source_text,
-        Some(0),
-    );
-    let module_key = top_mod.name(db).data(db).to_string();
-    let sonatina_module =
-        codegen::compile_runtime_package_sonatina(db, &package, codegen::EVM_LAYOUT)
-            .map_err(|err| format!("Sonatina IR lowering for trace: {err}"))?;
-    let sonatina_owner = codegen::trace::sonatina_module_owner_key(uri.as_str(), &module_key);
-    facts.extend(codegen::trace::emit_sonatina_trace_view_facts(
-        &sonatina_owner,
-        &sonatina_module,
-        CompilerPhase::SonatinaPreOpt,
-    ));
-    let (bytecode, postopt_sonatina_facts) =
-        codegen::emit_module_sonatina_bytecode_with_observability_and_trace(
-            db,
-            top_mod,
-            options.opt_level,
-            None,
-            &sonatina_owner,
-        )
-        .map_err(|err| format!("bytecode emission for trace: {err}"))?;
-    let observed_bytecode_facts = codegen::trace::emit_observed_bytecode_trace_facts(
-        uri.as_str(),
-        &module_key,
-        "function:runtime",
-        &sonatina_owner,
-        &bytecode,
-        &postopt_sonatina_facts,
-    );
-    facts.extend(postopt_sonatina_facts);
-    facts.extend(observed_bytecode_facts);
-    for contract_name in bytecode.keys() {
-        let owner_key =
-            codegen::trace::bytecode_runtime_owner_key(uri.as_str(), &module_key, contract_name);
-        let code_object = codegen::trace::bytecode_code_object_key(&owner_key);
-        if let Some(span) =
-            codegen::trace::whole_file_source_span(code_object, source_file.clone(), &source_text)
-        {
-            facts.push(TraceFact::SourceSpan(span));
-        }
-    }
+        options.opt_level,
+        None,
+    )
+    .map_err(|err| format!("observable trace fact emission for live trace: {err}"))?;
     enforce_trace_limits(&facts, &config)?;
 
     let metadata = TraceMetadata::compiler_emitted(
