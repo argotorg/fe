@@ -1905,6 +1905,7 @@ pub fn trace_workbench_report_projection(
         "source": source,
         "panels": panels,
         "indexes": indexes,
+        "selection_remap": trace_workbench_selection_remap(),
         "rail_components": {
             "classes_by_origin": component_classes_by_key,
         },
@@ -2025,6 +2026,25 @@ fn trace_workbench_status_word(available: bool) -> &'static str {
     if available { "available" } else { "missing" }
 }
 
+fn trace_workbench_selection_remap() -> serde_json::Value {
+    serde_json::json!({
+        "strategy_order": [
+            "origin",
+            "bytecode_pc",
+            "source_line",
+            "component",
+            "nearest_row",
+        ],
+        "indexes": [
+            "origin_to_rows",
+            "bytecode_pcs",
+            "source_lines",
+            "component_to_rows",
+            "stable_identities",
+        ],
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[allow(dead_code)]
 #[serde(rename_all = "snake_case")]
@@ -2069,6 +2089,26 @@ struct TraceWorkbenchRailClasses {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+struct TraceWorkbenchRowStableIdentity {
+    kind: &'static str,
+    value: String,
+}
+
+fn trace_workbench_stable_identity(
+    kind: &'static str,
+    value: impl Into<String>,
+) -> TraceWorkbenchRowStableIdentity {
+    TraceWorkbenchRowStableIdentity {
+        kind,
+        value: value.into(),
+    }
+}
+
+fn trace_workbench_stable_identity_index_key(identity: &TraceWorkbenchRowStableIdentity) -> String {
+    format!("{}:{}", identity.kind, identity.value)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 struct TraceWorkbenchPane {
     id: &'static str,
     title: &'static str,
@@ -2086,6 +2126,7 @@ struct TraceWorkbenchPaneRow {
     meta: String,
     text: String,
     compact_text: String,
+    stable_identities: Vec<TraceWorkbenchRowStableIdentity>,
     display_status: Option<TraceWorkbenchDisplayStatus>,
     rail_classes: TraceWorkbenchRailClasses,
     classes: Vec<String>,
@@ -2097,6 +2138,7 @@ struct TraceWorkbenchSourceLine {
     row_id: String,
     number: u32,
     text: String,
+    stable_identities: Vec<TraceWorkbenchRowStableIdentity>,
     classes: Vec<String>,
     display_status: Option<TraceWorkbenchDisplayStatus>,
 }
@@ -2216,6 +2258,12 @@ fn trace_workbench_related_sources(
                         "row_id": format!("{row_prefix}-line-{number}"),
                         "number": number,
                         "text": text,
+                        "stable_identities": [
+                            trace_workbench_stable_identity(
+                                "source_line",
+                                format!("{}:{number}", file.canonical_storage_key()),
+                            ),
+                        ],
                         "classes": classes,
                         "display_status": trace_workbench_status_for_source_line(&classes),
                     })
@@ -2351,6 +2399,10 @@ fn trace_workbench_source_lines(
                 row_id: trace_workbench_source_row_id(number),
                 number,
                 text: text.to_string(),
+                stable_identities: vec![trace_workbench_stable_identity(
+                    "source_line",
+                    format!("main:{number}"),
+                )],
                 display_status: trace_workbench_status_for_source_line(&classes),
                 classes,
             }
@@ -2366,6 +2418,7 @@ fn trace_workbench_projection_indexes(
     let mut origin_to_rows = BTreeMap::<String, BTreeSet<String>>::new();
     let mut component_to_rows = BTreeMap::<String, BTreeSet<String>>::new();
     let mut bytecode_pcs = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut stable_identities = BTreeMap::<String, BTreeSet<String>>::new();
 
     for line in source
         .get("lines")
@@ -2379,6 +2432,38 @@ fn trace_workbench_projection_indexes(
         if let Some(number) = line.get("number").and_then(serde_json::Value::as_u64) {
             source_lines.insert(format!("main:{number}"), row_id.to_string());
         }
+        trace_workbench_index_stable_identities(line, row_id, &mut stable_identities);
+        for class in line
+            .get("classes")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+        {
+            component_to_rows
+                .entry(class.to_string())
+                .or_default()
+                .insert(row_id.to_string());
+        }
+    }
+
+    for line in source
+        .get("related_sources")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .flat_map(|related_source| {
+            related_source
+                .get("lines")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+    {
+        let Some(row_id) = line.get("row_id").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        trace_workbench_index_stable_identities(line, row_id, &mut stable_identities);
         for class in line
             .get("classes")
             .and_then(serde_json::Value::as_array)
@@ -2410,6 +2495,12 @@ fn trace_workbench_projection_indexes(
                     .or_default()
                     .insert(row.row_id.clone());
             }
+            for identity in &row.stable_identities {
+                stable_identities
+                    .entry(trace_workbench_stable_identity_index_key(identity))
+                    .or_default()
+                    .insert(row.row_id.clone());
+            }
             for class in &row.classes {
                 component_to_rows
                     .entry(class.clone())
@@ -2424,7 +2515,32 @@ fn trace_workbench_projection_indexes(
         "origin_to_rows": trace_workbench_index_sets_to_lists(origin_to_rows),
         "component_to_rows": trace_workbench_index_sets_to_lists(component_to_rows),
         "bytecode_pcs": trace_workbench_index_sets_to_lists(bytecode_pcs),
+        "stable_identities": trace_workbench_index_sets_to_lists(stable_identities),
     })
+}
+
+fn trace_workbench_index_stable_identities(
+    row: &serde_json::Value,
+    row_id: &str,
+    stable_identities: &mut BTreeMap<String, BTreeSet<String>>,
+) {
+    for identity in row
+        .get("stable_identities")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(kind) = identity.get("kind").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let Some(value) = identity.get("value").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        stable_identities
+            .entry(format!("{kind}:{value}"))
+            .or_default()
+            .insert(row_id.to_string());
+    }
 }
 
 fn trace_workbench_index_sets_to_lists(
@@ -2721,6 +2837,7 @@ fn trace_workbench_panel_row(
         meta: trace_workbench_compact_origin_meta(key),
         text: compact_text.clone(),
         compact_text,
+        stable_identities: trace_workbench_panel_row_stable_identities(key),
         display_status: trace_workbench_status_for_row(key, kind, &classes, missing_lineage),
         rail_classes: trace_workbench_split_rail_classes(&classes),
         classes,
@@ -2733,6 +2850,24 @@ fn trace_workbench_panel_row(
             raw_text,
         },
     }
+}
+
+fn trace_workbench_panel_row_stable_identities(
+    key: &OriginExportKey,
+) -> Vec<TraceWorkbenchRowStableIdentity> {
+    let mut identities = vec![trace_workbench_stable_identity(
+        "origin",
+        key.canonical_storage_key(),
+    )];
+    if key.kind() == "bytecode.pc"
+        && let Some(pc) = key.local_key().strip_prefix("pc:")
+    {
+        identities.push(trace_workbench_stable_identity(
+            "bytecode_pc",
+            pc.to_string(),
+        ));
+    }
+    identities
 }
 
 fn trace_workbench_source_row_id(line_number: u32) -> String {
@@ -3257,6 +3392,7 @@ pub fn trace_workbench_summary_chunk(projection: &serde_json::Value) -> serde_js
         "counts": projection.get("counts").cloned().unwrap_or(serde_json::Value::Null),
         "salsa": projection.get("salsa").cloned().unwrap_or(serde_json::Value::Null),
         "bytecode_count": projection.get("bytecode_count").cloned().unwrap_or(serde_json::Value::Null),
+        "selection_remap": projection.get("selection_remap").cloned().unwrap_or(serde_json::Value::Null),
         "notes": projection.get("notes").cloned().unwrap_or(serde_json::Value::Null),
     })
 }
@@ -6605,12 +6741,63 @@ mod tests {
             projection["indexes"]["source_lines"]["main:2"],
             "source-main-line-2"
         );
+        assert_eq!(
+            projection["source"]["lines"][1]["stable_identities"][0]["kind"],
+            "source_line"
+        );
+        assert_eq!(
+            projection["source"]["lines"][1]["stable_identities"][0]["value"],
+            "main:2"
+        );
+        assert_eq!(
+            projection["indexes"]["stable_identities"]["source_line:main:2"][0],
+            "source-main-line-2"
+        );
         let first_bytecode_row = &bytecode_panel["rows"][0];
         let first_bytecode_key = first_bytecode_row["key"].as_str().unwrap();
         let first_bytecode_row_id = first_bytecode_row["row_id"].as_str().unwrap();
         assert_eq!(
             projection["indexes"]["origin_to_rows"][first_bytecode_key][0],
             first_bytecode_row_id
+        );
+        assert!(
+            first_bytecode_row["stable_identities"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|identity| {
+                    identity["kind"] == "origin" && identity["value"] == first_bytecode_key
+                })
+        );
+        assert!(
+            first_bytecode_row["stable_identities"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|identity| identity["kind"] == "bytecode_pc")
+        );
+        assert_eq!(
+            projection["selection_remap"]["strategy_order"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(serde_json::Value::as_str)
+                .collect::<Option<Vec<_>>>()
+                .unwrap(),
+            vec![
+                "origin",
+                "bytecode_pc",
+                "source_line",
+                "component",
+                "nearest_row"
+            ]
+        );
+        assert!(
+            projection["selection_remap"]["indexes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|index| index == "stable_identities")
         );
         assert_eq!(
             projection["notes"][2],
