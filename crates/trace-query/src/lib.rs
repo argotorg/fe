@@ -6477,7 +6477,7 @@ fn missing_link_audit_report(
                 && entry.issue_code == LinkIssueCode::PreparedKeyedAsPostopt
         })
         .count();
-    let prepared_to_bytecode = prepared_to_bytecode_boundary_audit(snapshot);
+    let prepared_to_bytecode = prepared_to_bytecode_boundary_audit(snapshot, &expected_absent);
     let missing_prepared_to_bytecode_count = prepared_to_bytecode.missing.len();
     let missing_required_count = missing_postopt_to_prepared_count
         + missing_hir_to_mir_count
@@ -6688,6 +6688,12 @@ fn missing_link_audit_report(
             prepared_to_bytecode_counts
                 .insert(LinkStatus::SatisfiedExact, prepared_to_bytecode.linked_pcs);
         }
+        if prepared_to_bytecode.expected_absent > 0 {
+            prepared_to_bytecode_counts.insert(
+                LinkStatus::ExpectedAbsent,
+                prepared_to_bytecode.expected_absent,
+            );
+        }
         if missing_prepared_to_bytecode_count > 0 {
             prepared_to_bytecode_counts.insert(
                 LinkStatus::MissingRequired,
@@ -6700,10 +6706,15 @@ fn missing_link_audit_report(
             status_counts: prepared_to_bytecode_counts,
             affected_origins: prepared_to_bytecode.affected_origins(),
             affected_bytecode_pcs: prepared_to_bytecode.linked_pcs,
-            top_issue_codes: (missing_prepared_to_bytecode_count > 0)
-                .then_some(LinkIssueCode::MissingPreparedPcExtent)
-                .into_iter()
-                .collect(),
+            top_issue_codes: [
+                (prepared_to_bytecode.expected_absent > 0)
+                    .then_some(LinkIssueCode::ExpectedAbsentPreparedElision),
+                (missing_prepared_to_bytecode_count > 0)
+                    .then_some(LinkIssueCode::MissingPreparedPcExtent),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
         });
     }
 
@@ -7142,16 +7153,17 @@ impl PreoptToPostoptBoundaryAudit {
 struct PreparedToBytecodeBoundaryAudit {
     linked_pcs: usize,
     linked_prepared_origins: usize,
+    expected_absent: usize,
     missing: Vec<OriginExportKey>,
 }
 
 impl PreparedToBytecodeBoundaryAudit {
     fn total(&self) -> usize {
-        self.linked_pcs + self.missing.len()
+        self.linked_pcs + self.expected_absent + self.missing.len()
     }
 
     fn affected_origins(&self) -> usize {
-        self.linked_prepared_origins + self.missing.len()
+        self.linked_prepared_origins + self.expected_absent + self.missing.len()
     }
 }
 
@@ -7348,8 +7360,14 @@ fn preopt_to_postopt_boundary_audit(
 
 fn prepared_to_bytecode_boundary_audit(
     snapshot: &TraceSnapshot,
+    expected_absent: &[ExpectedAbsentLink],
 ) -> PreparedToBytecodeBoundaryAudit {
     let index = trace_index::TraceIndex::new(snapshot);
+    let expected_absent_origins = expected_absent
+        .iter()
+        .filter(|entry| entry.boundary == LinkBoundaryKind::PreparedToBytecode)
+        .map(|entry| entry.origin.clone())
+        .collect::<BTreeSet<_>>();
     let mut prepared_origins = BTreeSet::<OriginExportKey>::new();
     let mut linked_prepared_origins = BTreeSet::<OriginExportKey>::new();
     let mut linked_pcs = BTreeSet::<OriginExportKey>::new();
@@ -7384,19 +7402,22 @@ fn prepared_to_bytecode_boundary_audit(
         }
     }
 
-    if bytecode_origins.is_empty() && linked_pcs.is_empty() {
+    if bytecode_origins.is_empty() && linked_pcs.is_empty() && expected_absent_origins.is_empty() {
         return PreparedToBytecodeBoundaryAudit::default();
     }
 
     let missing = prepared_origins
         .iter()
-        .filter(|origin| !linked_prepared_origins.contains(*origin))
+        .filter(|origin| {
+            !linked_prepared_origins.contains(*origin) && !expected_absent_origins.contains(*origin)
+        })
         .cloned()
         .collect::<Vec<_>>();
 
     PreparedToBytecodeBoundaryAudit {
         linked_pcs: linked_pcs.len(),
         linked_prepared_origins: linked_prepared_origins.len(),
+        expected_absent: expected_absent_origins.len(),
         missing,
     }
 }
@@ -7468,6 +7489,18 @@ fn expected_absent_links_for_elision_event(
                     explanation: expected_absent_elision_explanation(
                         event,
                         "backend preparation explicitly elided this optimized Sonatina origin before EVM prepared output",
+                    ),
+                })
+            } else if event.phase == CompilerPhase::BytecodeEmission
+                && is_prepared_sonatina_audit_origin(origin)
+            {
+                Some(ExpectedAbsentLink {
+                    boundary: LinkBoundaryKind::PreparedToBytecode,
+                    origin: origin.clone(),
+                    issue_code: LinkIssueCode::ExpectedAbsentPreparedElision,
+                    explanation: expected_absent_elision_explanation(
+                        event,
+                        "bytecode emission explicitly marked this EVM prepared origin as non-emitting before final bytecode output",
                     ),
                 })
             } else {
@@ -10831,6 +10864,61 @@ mod tests {
         assert_eq!(
             missing_links.gaps[0].required_evidence[0].kind,
             RequiredEvidenceKind::PcExtentFact
+        );
+    }
+
+    #[test]
+    fn missing_link_audit_treats_explicit_non_emitting_prepared_as_expected_absent() {
+        let prepared = key("sonatina.evm.prepared.inst", "demo", "inst:non-emitting");
+        let event = key("compiler.event", "demo", "event:non-emitting-prepared");
+        let snapshot = snapshot(vec![
+            node(prepared.clone()),
+            node(event.clone()),
+            TraceFact::CompilerEvent(CompilerEventFact::new(
+                event,
+                CompilerPhase::BytecodeEmission,
+                CompilerEventKind::OptimizerElidedOrRewritten,
+                vec![prepared.clone()],
+                Vec::new(),
+                Some(CompilerReason::new("pseudo-op emitted no bytes")),
+            )),
+        ]);
+        let report = TraceIntrospectionService::new(snapshot)
+            .attribution_audit()
+            .unwrap();
+        let missing_links = report.missing_links.as_ref().unwrap();
+
+        assert_eq!(
+            missing_links.summary.status,
+            LinkOverallStatus::PassWithExpectedAbsences
+        );
+        assert_eq!(missing_links.summary.expected_absent_count, 1);
+        assert_eq!(missing_links.summary.missing_required_count, 0);
+        assert!(missing_links.summary.top_blockers.is_empty());
+        assert_eq!(missing_links.expected_absent[0].origin, prepared);
+        assert_eq!(
+            missing_links.expected_absent[0].boundary,
+            LinkBoundaryKind::PreparedToBytecode
+        );
+        assert_eq!(
+            missing_links.expected_absent[0].issue_code,
+            LinkIssueCode::ExpectedAbsentPreparedElision
+        );
+        let prepared_to_bytecode = missing_links
+            .boundary_summaries
+            .iter()
+            .find(|summary| summary.boundary == LinkBoundaryKind::PreparedToBytecode)
+            .expect("prepared to bytecode boundary summary");
+        assert_eq!(
+            prepared_to_bytecode
+                .status_counts
+                .get(&LinkStatus::ExpectedAbsent),
+            Some(&1)
+        );
+        assert!(
+            prepared_to_bytecode
+                .top_issue_codes
+                .contains(&LinkIssueCode::ExpectedAbsentPreparedElision)
         );
     }
 
