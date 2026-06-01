@@ -6,17 +6,17 @@ use shape_address::{DimensionDigests, ShapeHashPolicy, ShapeLevel, ShapePolicyId
 
 use crate::fact::{
     BlockFact, CallFact, CategorySource, CfgEdgeFact, CodeObjectFact, CompilerEventFact,
-    CompilerPhase, DisplayNameFact, DisplayNameKind, DynamicGasStepFact, ExecutionStepFact,
-    ExecutionTraceSessionFact, FunctionFact, InlineContextFact, InstructionBlockFact,
-    InstructionCategoryFact, InstructionExtentFact, InstructionFact, LexicalScopeFact,
-    LocationExpr, LocationRangeFact, LogFact, LoopBlockFact, LoopBlockRole, LoopDerivation,
-    LoopFact, LoopMembershipFact, MemoryAccessFact, OpcodeFact, OriginEdgeFact, OriginEdgeLabel,
-    OriginEdgeTraversalClass, OriginNodeFact, PrecompileInvocationFact, ReturnDataFact, RevertFact,
-    RuntimeCodeObjectBindingFact, RuntimePcJoinConfidence, RuntimeValue, RuntimeValuePolicy,
-    SelfdestructFact, ShapeComponentHashFact, ShapeGraphHashFact, ShapeNodeHashFact,
-    ShapePolicyFact, SourceFileFact, SourceSpanFact, StackSampleFact, StaticGasFact,
-    StorageAccessFact, StorageFact, StorageLocation, TraceFact, TypeFact, ValueLocation,
-    ValueProperty, ValuePropertyFact, VariableFact,
+    CompilerEventKind, CompilerPhase, DisplayNameFact, DisplayNameKind, DynamicGasStepFact,
+    ExecutionStepFact, ExecutionTraceSessionFact, FunctionFact, InlineContextFact,
+    InstructionBlockFact, InstructionCategoryFact, InstructionExtentFact, InstructionFact,
+    LexicalScopeFact, LocationExpr, LocationRangeFact, LogFact, LoopBlockFact, LoopBlockRole,
+    LoopDerivation, LoopFact, LoopMembershipFact, MemoryAccessFact, OpcodeFact, OriginEdgeFact,
+    OriginEdgeLabel, OriginEdgeTraversalClass, OriginNodeFact, PrecompileInvocationFact,
+    ReturnDataFact, RevertFact, RuntimeCodeObjectBindingFact, RuntimePcJoinConfidence,
+    RuntimeValue, RuntimeValuePolicy, SelfdestructFact, ShapeComponentHashFact, ShapeGraphHashFact,
+    ShapeNodeHashFact, ShapePolicyFact, SourceFileFact, SourceSpanFact, StackSampleFact,
+    StaticGasFact, StorageAccessFact, StorageFact, StorageLocation, TraceFact, TypeFact,
+    ValueLocation, ValueProperty, ValuePropertyFact, VariableFact,
 };
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -892,6 +892,71 @@ fn validate_compiler_event(
             diagnostics,
             TraceValidationError::EmptyCompilerReason {
                 event: event.event.clone(),
+            },
+        );
+    }
+    if event.kind == CompilerEventKind::PreparedLineage {
+        validate_prepared_lineage_event(event, diagnostics);
+    }
+}
+
+fn validate_prepared_lineage_event(
+    event: &CompilerEventFact,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    if event.phase != CompilerPhase::Backend {
+        push_error(
+            diagnostics,
+            TraceValidationError::InvalidPreparedLineageEventPhase {
+                event: event.event.clone(),
+                phase: event.phase,
+            },
+        );
+    }
+    let mut has_postopt_input = false;
+    for input in &event.inputs {
+        if is_sonatina_postopt_origin_kind(input.kind()) {
+            has_postopt_input = true;
+        } else {
+            push_error(
+                diagnostics,
+                TraceValidationError::InvalidPreparedLineageEventInput {
+                    event: event.event.clone(),
+                    input: input.clone(),
+                },
+            );
+        }
+    }
+    if !has_postopt_input {
+        push_error(
+            diagnostics,
+            TraceValidationError::PreparedLineageEventMissingEndpoint {
+                event: event.event.clone(),
+                role: "postopt_input",
+            },
+        );
+    }
+
+    let mut has_prepared_output = false;
+    for output in &event.outputs {
+        if is_prepared_codegen_origin_kind(output.kind()) {
+            has_prepared_output = true;
+        } else {
+            push_error(
+                diagnostics,
+                TraceValidationError::InvalidPreparedLineageEventOutput {
+                    event: event.event.clone(),
+                    output: output.clone(),
+                },
+            );
+        }
+    }
+    if !has_prepared_output {
+        push_error(
+            diagnostics,
+            TraceValidationError::PreparedLineageEventMissingEndpoint {
+                event: event.event.clone(),
+                role: "prepared_output",
             },
         );
     }
@@ -2704,6 +2769,22 @@ pub enum TraceValidationError {
     EmptyCompilerReason {
         event: OriginExportKey,
     },
+    InvalidPreparedLineageEventPhase {
+        event: OriginExportKey,
+        phase: CompilerPhase,
+    },
+    InvalidPreparedLineageEventInput {
+        event: OriginExportKey,
+        input: OriginExportKey,
+    },
+    InvalidPreparedLineageEventOutput {
+        event: OriginExportKey,
+        output: OriginExportKey,
+    },
+    PreparedLineageEventMissingEndpoint {
+        event: OriginExportKey,
+        role: &'static str,
+    },
     EmptyRegisterName {
         subject: OriginExportKey,
         location_kind: &'static str,
@@ -3050,6 +3131,28 @@ impl fmt::Display for TraceValidationError {
                 "compiler event {} has an empty reason",
                 event.display_label()
             ),
+            Self::InvalidPreparedLineageEventPhase { event, phase } => write!(
+                f,
+                "prepared lineage event {} has invalid phase {phase:?}; expected Backend",
+                event.display_label()
+            ),
+            Self::InvalidPreparedLineageEventInput { event, input } => write!(
+                f,
+                "prepared lineage event {} has non-postopt input {}",
+                event.display_label(),
+                input.display_label()
+            ),
+            Self::InvalidPreparedLineageEventOutput { event, output } => write!(
+                f,
+                "prepared lineage event {} has non-prepared output {}",
+                event.display_label(),
+                output.display_label()
+            ),
+            Self::PreparedLineageEventMissingEndpoint { event, role } => write!(
+                f,
+                "prepared lineage event {} is missing required {role}",
+                event.display_label()
+            ),
             Self::EmptyRegisterName {
                 subject,
                 location_kind,
@@ -3269,19 +3372,20 @@ mod tests {
 
     use crate::{
         BlockFact, CallFact, CategorySource, CfgEdgeFact, CfgEdgeKind, CodeObjectFact,
-        CodeObjectKind, CompilerPhase, DisplayNameFact, DisplayNameKind, DynamicGasStepFact,
-        EvmSchedule, ExecutionStepFact, ExecutionTraceSessionFact, FunctionFact, GasConfidence,
-        GasCostFact, GasKind, GasSource, InlineContextFact, InstructionBlockFact,
-        InstructionCategory, InstructionCategoryFact, InstructionExtentFact, InstructionFact,
-        LoopBlockFact, LoopBlockRole, LoopConfidence, LoopDerivation, LoopFact, LoopMembershipFact,
-        MemoryAccessFact, MemoryAccessKind, OpcodeCategory, OpcodeFact, OriginEdgeFact,
-        OriginEdgeLabel, OriginNodeFact, OriginNodeKind, PcRange, RuntimeCallKind,
-        RuntimeCaptureMode, RuntimeCodeObjectBindingFact, RuntimePcJoinConfidence,
-        RuntimeTraceDataSource, RuntimeValue, RuntimeValuePolicy, ShapeComponentHashFact,
-        ShapeGraphHashFact, ShapeNodeHashFact, ShapePolicyFact, SourceFileFact, SourceSpanFact,
-        StackSampleFact, StaticGasFact, StorageAccessFact, StorageAccessKind, StorageFact,
-        StorageLocation, StorageReason, TraceFact, TraceValidationDiagnostic, TraceValidationError,
-        TraceValidationLevel, TraceValidationWarning, TraceValidator,
+        CodeObjectKind, CompilerEventFact, CompilerEventKind, CompilerPhase, DisplayNameFact,
+        DisplayNameKind, DynamicGasStepFact, EvmSchedule, ExecutionStepFact,
+        ExecutionTraceSessionFact, FunctionFact, GasConfidence, GasCostFact, GasKind, GasSource,
+        InlineContextFact, InstructionBlockFact, InstructionCategory, InstructionCategoryFact,
+        InstructionExtentFact, InstructionFact, LoopBlockFact, LoopBlockRole, LoopConfidence,
+        LoopDerivation, LoopFact, LoopMembershipFact, MemoryAccessFact, MemoryAccessKind,
+        OpcodeCategory, OpcodeFact, OriginEdgeFact, OriginEdgeLabel, OriginNodeFact,
+        OriginNodeKind, PcRange, RuntimeCallKind, RuntimeCaptureMode, RuntimeCodeObjectBindingFact,
+        RuntimePcJoinConfidence, RuntimeTraceDataSource, RuntimeValue, RuntimeValuePolicy,
+        ShapeComponentHashFact, ShapeGraphHashFact, ShapeNodeHashFact, ShapePolicyFact,
+        SourceFileFact, SourceSpanFact, StackSampleFact, StaticGasFact, StorageAccessFact,
+        StorageAccessKind, StorageFact, StorageLocation, StorageReason, TraceFact,
+        TraceValidationDiagnostic, TraceValidationError, TraceValidationLevel,
+        TraceValidationWarning, TraceValidator,
     };
 
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -4168,6 +4272,115 @@ mod tests {
                 ) if from == &prepared && to == &postopt
             )
         }));
+    }
+
+    #[test]
+    fn validator_accepts_well_formed_prepared_lineage_event() {
+        let event = key("compiler.event", "fib", "prepared-lineage:0");
+        let postopt = key(
+            "sonatina.postopt.inst",
+            "fib",
+            "function:FuncRef(0):inst:InstId(7)",
+        );
+        let prepared = key(
+            "sonatina.evm.prepared.inst",
+            "fib",
+            "function:FuncRef(0):inst:InstId(7)",
+        );
+        let facts = vec![
+            node("compiler.event", "fib", "prepared-lineage:0"),
+            node(
+                "sonatina.postopt.inst",
+                "fib",
+                "function:FuncRef(0):inst:InstId(7)",
+            ),
+            node(
+                "sonatina.evm.prepared.inst",
+                "fib",
+                "function:FuncRef(0):inst:InstId(7)",
+            ),
+            TraceFact::CompilerEvent(CompilerEventFact::new(
+                event,
+                CompilerPhase::Backend,
+                CompilerEventKind::PreparedLineage,
+                vec![postopt],
+                vec![prepared],
+                None,
+            )),
+        ];
+
+        let report = TraceValidator::check(&facts);
+
+        assert_eq!(report.error_count(), 0);
+    }
+
+    #[test]
+    fn validator_rejects_malformed_prepared_lineage_event_phase() {
+        let event = key("compiler.event", "fib", "prepared-lineage:0");
+        let postopt = key(
+            "sonatina.postopt.inst",
+            "fib",
+            "function:FuncRef(0):inst:InstId(7)",
+        );
+        let prepared = key(
+            "sonatina.evm.prepared.inst",
+            "fib",
+            "function:FuncRef(0):inst:InstId(7)",
+        );
+        let facts = vec![
+            node("compiler.event", "fib", "prepared-lineage:0"),
+            node(
+                "sonatina.postopt.inst",
+                "fib",
+                "function:FuncRef(0):inst:InstId(7)",
+            ),
+            node(
+                "sonatina.evm.prepared.inst",
+                "fib",
+                "function:FuncRef(0):inst:InstId(7)",
+            ),
+            TraceFact::CompilerEvent(CompilerEventFact::new(
+                event.clone(),
+                CompilerPhase::BytecodeEmission,
+                CompilerEventKind::PreparedLineage,
+                vec![postopt],
+                vec![prepared],
+                None,
+            )),
+        ];
+
+        assert_eq!(
+            TraceValidator::validate(&facts),
+            Err(TraceValidationError::InvalidPreparedLineageEventPhase {
+                event,
+                phase: CompilerPhase::BytecodeEmission,
+            })
+        );
+    }
+
+    #[test]
+    fn validator_rejects_malformed_prepared_lineage_event_endpoints() {
+        let event = key("compiler.event", "fib", "prepared-lineage:0");
+        let hir = key("hir.expr", "fib", "expr:0");
+        let bytecode = key("bytecode.pc", "fib", "pc:17");
+        let facts = vec![
+            node("compiler.event", "fib", "prepared-lineage:0"),
+            node("hir.expr", "fib", "expr:0"),
+            node("bytecode.pc", "fib", "pc:17"),
+            TraceFact::CompilerEvent(CompilerEventFact::new(
+                event.clone(),
+                CompilerPhase::Backend,
+                CompilerEventKind::PreparedLineage,
+                vec![hir.clone()],
+                vec![bytecode],
+                None,
+            )),
+        ];
+
+        assert_eq!(
+            TraceValidator::validate(&facts),
+            Err(TraceValidationError::InvalidPreparedLineageEventInput { event, input: hir })
+        );
     }
 
     #[test]
