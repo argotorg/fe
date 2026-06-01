@@ -15,7 +15,8 @@ use trace_facts::{
     InstructionBlockFact, InstructionCategory, InstructionCategoryFact, InstructionExtentFact,
     InstructionFact, LoopBlockFact, LoopBlockRole, LoopConfidence, LoopDerivation, LoopFact,
     LoopMembershipFact, OpcodeCategory, OpcodeFact, OriginEdgeFact, OriginEdgeLabel,
-    OriginNodeFact, OriginNodeKind, PcRange, StaticGasFact, TraceFact,
+    OriginNodeFact, OriginNodeKind, PcRange, SourceFileFact, SourceSpanFact, StaticGasFact,
+    TraceFact,
 };
 
 use crate::debug::BytecodeSourceMapEntry;
@@ -29,6 +30,108 @@ pub const SONATINA_POSTOPT_BLOCK_KIND: &str = "sonatina.postopt.block";
 pub const SONATINA_POSTOPT_INST_KIND: &str = "sonatina.postopt.inst";
 pub const SONATINA_POSTOPT_LOOP_KIND: &str = "sonatina.postopt.loop";
 pub const SONATINA_EVM_PREPARED_INST_KIND: &str = "sonatina.evm.prepared.inst";
+
+pub fn trace_source_file_key(source_owner: &str) -> OriginExportKey {
+    OriginExportKey::try_from_raw_parts("source.file", source_owner, "file:0")
+        .expect("trace source file key must be valid")
+}
+
+pub fn push_standalone_source_file_facts(
+    facts: &mut Vec<TraceFact>,
+    source_file: &OriginExportKey,
+    uri: impl Into<String>,
+    display_name: impl Into<String>,
+    content: &str,
+    source_id: Option<u32>,
+) {
+    let has_node = facts.iter().any(|fact| {
+        matches!(
+            fact,
+            TraceFact::OriginNode(node) if node.key == *source_file
+        )
+    });
+    if !has_node {
+        facts.push(TraceFact::OriginNode(OriginNodeFact::new(
+            source_file.clone(),
+            OriginNodeKind::new(source_file.kind()),
+        )));
+    }
+
+    let has_source_file = facts.iter().any(|fact| {
+        matches!(
+            fact,
+            TraceFact::SourceFile(source) if source.file_key == *source_file
+        )
+    });
+    if !has_source_file {
+        facts.push(TraceFact::SourceFile(SourceFileFact::new(
+            source_file.clone(),
+            uri.into(),
+            display_name.into(),
+            trace_content_hash(content.as_bytes()),
+            source_id,
+        )));
+    }
+}
+
+pub fn standalone_source_file_facts(
+    source_file: &OriginExportKey,
+    uri: impl Into<String>,
+    display_name: impl Into<String>,
+    content: &str,
+    source_id: Option<u32>,
+) -> Vec<TraceFact> {
+    let mut facts = Vec::new();
+    push_standalone_source_file_facts(
+        &mut facts,
+        source_file,
+        uri,
+        display_name,
+        content,
+        source_id,
+    );
+    facts
+}
+
+pub fn whole_file_source_span(
+    origin: OriginExportKey,
+    source_file: OriginExportKey,
+    content: &str,
+) -> Option<SourceSpanFact> {
+    let end_byte = u32::try_from(content.len()).ok()?;
+    if end_byte == 0 {
+        return None;
+    }
+    let (end_line, end_column) = source_end_position(content);
+    Some(SourceSpanFact::new(
+        origin,
+        source_file,
+        0,
+        end_byte,
+        1,
+        1,
+        end_line,
+        end_column,
+    ))
+}
+
+fn source_end_position(content: &str) -> (u32, u32) {
+    let mut line = 1u32;
+    let mut column = 1u32;
+    for ch in content.chars() {
+        if ch == '\n' {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+    }
+    (line, column)
+}
+
+fn trace_content_hash(bytes: &[u8]) -> String {
+    format!("blake3:{}", blake3::hash(bytes).to_hex())
+}
 
 pub fn sonatina_postopt_inst_key(
     owner_key: &str,
@@ -1677,11 +1780,12 @@ mod tests {
     use crate::{
         BytecodePcRange, BytecodeSourceMapEntry,
         trace::{
-            SONATINA_EVM_PREPARED_INST_KIND, SONATINA_POSTOPT_INST_KIND,
+            SONATINA_EVM_PREPARED_INST_KIND, SONATINA_POSTOPT_INST_KIND, bytecode_code_object_key,
             bytecode_runtime_owner_key, emit_bytecode_instruction_facts,
             emit_bytecode_instruction_facts_with_observability, emit_codegen_facts,
             emit_sonatina_trace_view_facts, frontend_origin_record_for_export_key,
-            sonatina_postopt_inst_key,
+            push_standalone_source_file_facts, sonatina_postopt_inst_key,
+            standalone_source_file_facts, trace_source_file_key, whole_file_source_span,
         },
     };
 
@@ -2310,6 +2414,52 @@ mod tests {
         assert!(first.contains("module:mod:fib"));
         assert!(first.contains("contract:Fib"));
         assert!(first.contains("section:runtime"));
+    }
+
+    #[test]
+    fn source_context_helpers_emit_stable_file_and_whole_file_span() {
+        let source_file = trace_source_file_key("file:///workspace/main.fe");
+        let mut facts = standalone_source_file_facts(
+            &source_file,
+            "file:///workspace/main.fe",
+            "main.fe",
+            "fn main() {}\n",
+            Some(0),
+        );
+        push_standalone_source_file_facts(
+            &mut facts,
+            &source_file,
+            "file:///workspace/main.fe",
+            "main.fe",
+            "fn main() {}\n",
+            Some(0),
+        );
+        let code_object = bytecode_code_object_key("package:file:///workspace/main.fe:runtime");
+        let span = whole_file_source_span(code_object.clone(), source_file.clone(), "a\nbc")
+            .expect("non-empty source has a whole-file span");
+
+        assert_eq!(
+            facts
+                .iter()
+                .filter(
+                    |fact| matches!(fact, TraceFact::OriginNode(node) if node.key == source_file)
+                )
+                .count(),
+            1
+        );
+        assert_eq!(
+            facts
+                .iter()
+                .filter(|fact| matches!(fact, TraceFact::SourceFile(source) if source.file_key == source_file))
+                .count(),
+            1
+        );
+        assert_eq!(span.origin, code_object);
+        assert_eq!(span.file, source_file);
+        assert_eq!(span.start_line, 1);
+        assert_eq!(span.end_line, 2);
+        assert_eq!(span.end_column, 3);
+        assert!(whole_file_source_span(code_object, span.file, "").is_none());
     }
 
     #[test]

@@ -13,8 +13,7 @@ use driver::{
 use salsa::Setter;
 use trace_facts::{
     CodeObjectFact, CodeObjectKind, CompilerPhase, InstructionExtentFact, JsonlTraceReader,
-    JsonlTraceSink, OriginNodeFact, OriginNodeKind, SourceFileFact, SourceSpanFact, TraceBundle,
-    TraceFact, TraceSnapshot, TraceValidator,
+    JsonlTraceSink, TraceBundle, TraceFact, TraceSnapshot, TraceValidator,
 };
 use url::Url;
 
@@ -632,11 +631,16 @@ fn emit_real_trace_bundle_from_top_mod<'db>(
         &sonatina_module,
         CompilerPhase::SonatinaPreOpt,
     ));
-    let source_file = source_file_key(input_path);
-    facts.extend(emit_standalone_source_file_facts(
-        input_path,
-        input_content,
+    let source_file = codegen::trace::trace_source_file_key(input_path.as_str());
+    facts.extend(codegen::trace::standalone_source_file_facts(
         &source_file,
+        input_path.as_str(),
+        input_path
+            .file_name()
+            .map_or(input_path.as_str(), |name| name)
+            .to_string(),
+        input_content,
+        Some(0),
     ));
     let (bytecode, postopt_sonatina_facts) =
         codegen::emit_module_sonatina_bytecode_with_observability_and_trace(
@@ -664,7 +668,8 @@ fn emit_real_trace_bundle_from_top_mod<'db>(
             contract_name,
         );
         let code_object = codegen::trace::bytecode_code_object_key(&owner_key);
-        if let Some(span) = whole_file_source_span(code_object, source_file.clone(), input_content)
+        if let Some(span) =
+            codegen::trace::whole_file_source_span(code_object, source_file.clone(), input_content)
         {
             facts.push(TraceFact::SourceSpan(span));
         }
@@ -681,74 +686,6 @@ fn emit_real_trace_bundle_from_top_mod<'db>(
         ],
     );
     Ok(TraceBundle::new(metadata, facts))
-}
-
-fn emit_standalone_source_file_facts(
-    input_path: &Utf8PathBuf,
-    content: &str,
-    source_file: &OriginExportKey,
-) -> Vec<TraceFact> {
-    vec![
-        TraceFact::OriginNode(OriginNodeFact::new(
-            source_file.clone(),
-            OriginNodeKind::new(source_file.kind()),
-        )),
-        TraceFact::SourceFile(SourceFileFact::new(
-            source_file.clone(),
-            input_path.as_str(),
-            input_path
-                .file_name()
-                .map_or(input_path.as_str(), |name| name)
-                .to_string(),
-            trace_content_hash(content.as_bytes()),
-            Some(0),
-        )),
-    ]
-}
-
-fn source_file_key(input_path: &Utf8PathBuf) -> OriginExportKey {
-    OriginExportKey::try_from_raw_parts("source.file", input_path.as_str(), "file:0")
-        .expect("trace source file key must be valid")
-}
-
-fn whole_file_source_span(
-    origin: OriginExportKey,
-    source_file: OriginExportKey,
-    content: &str,
-) -> Option<SourceSpanFact> {
-    let end_byte = u32::try_from(content.len()).ok()?;
-    if end_byte == 0 {
-        return None;
-    }
-    let (end_line, end_column) = source_end_position(content);
-    Some(SourceSpanFact::new(
-        origin,
-        source_file,
-        0,
-        end_byte,
-        1,
-        1,
-        end_line,
-        end_column,
-    ))
-}
-
-fn source_end_position(content: &str) -> (u32, u32) {
-    let mut line = 1u32;
-    let mut column = 1u32;
-    for ch in content.chars() {
-        if ch == '\n' {
-            line += 1;
-            column = 1;
-        } else {
-            column += 1;
-        }
-    }
-    (line, column)
-}
-
-fn trace_content_hash(bytes: &[u8]) -> String {
-    format!("blake3:{}", blake3::hash(bytes).to_hex())
 }
 
 fn standalone_file_input(file_path: &Utf8PathBuf) -> Result<(Url, String), String> {

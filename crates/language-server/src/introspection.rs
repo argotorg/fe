@@ -1,4 +1,4 @@
-use common::{InputDb, origin::OriginExportKey};
+use common::InputDb;
 use driver::DriverDataBase;
 use hir::lower::map_file_to_mod;
 use serde::Serialize;
@@ -7,10 +7,7 @@ use std::fs::{self, File};
 use std::io::BufReader;
 use std::str::FromStr;
 use std::time::{Duration, Instant};
-use trace_facts::{
-    CompilerPhase, OriginNodeFact, OriginNodeKind, SourceFileFact, SourceSpanFact, TraceBundle,
-    TraceFact, TraceMetadata, TraceSnapshot,
-};
+use trace_facts::{CompilerPhase, TraceBundle, TraceFact, TraceMetadata, TraceSnapshot};
 use trace_query::{
     TraceIntrospectionService, TraceQueryHttpResponse, TraceQueryRequest,
     TraceWorkbenchProjectionRequest, run_trace_query, trace_workbench_manifest,
@@ -297,89 +294,12 @@ fn trace_workbench_digest_text(text: &str) -> String {
     format!("blake3:{}", blake3::hash(text.as_bytes()).to_hex())
 }
 
-fn trace_workbench_source_file_key(uri: &Url) -> OriginExportKey {
-    OriginExportKey::try_from_raw_parts("source.file", uri.as_str(), "file:0")
-        .expect("live trace source file key must be valid")
-}
-
-fn trace_workbench_push_standalone_source_file_facts(
-    facts: &mut Vec<TraceFact>,
-    uri: &Url,
-    source_text: &str,
-    source_file: &OriginExportKey,
-) {
-    let has_node = facts.iter().any(|fact| {
-        matches!(
-            fact,
-            TraceFact::OriginNode(node) if node.key == *source_file
-        )
-    });
-    if !has_node {
-        facts.push(TraceFact::OriginNode(OriginNodeFact::new(
-            source_file.clone(),
-            OriginNodeKind::new(source_file.kind()),
-        )));
-    }
-
-    let has_source_file = facts.iter().any(|fact| {
-        matches!(
-            fact,
-            TraceFact::SourceFile(source) if source.file_key == *source_file
-        )
-    });
-    if !has_source_file {
-        facts.push(TraceFact::SourceFile(SourceFileFact::new(
-            source_file.clone(),
-            uri.to_string(),
-            trace_workbench_source_file_display_name(uri),
-            trace_workbench_digest_text(source_text),
-            Some(0),
-        )));
-    }
-}
-
 fn trace_workbench_source_file_display_name(uri: &Url) -> String {
     uri.path_segments()
         .and_then(|mut segments| segments.next_back())
         .filter(|segment| !segment.is_empty())
         .map(ToString::to_string)
         .unwrap_or_else(|| uri.to_string())
-}
-
-fn trace_workbench_whole_file_source_span(
-    origin: OriginExportKey,
-    source_file: OriginExportKey,
-    source_text: &str,
-) -> Option<SourceSpanFact> {
-    let end_byte = u32::try_from(source_text.len()).ok()?;
-    if end_byte == 0 {
-        return None;
-    }
-    let (end_line, end_column) = trace_workbench_source_end_position(source_text);
-    Some(SourceSpanFact::new(
-        origin,
-        source_file,
-        0,
-        end_byte,
-        1,
-        1,
-        end_line,
-        end_column,
-    ))
-}
-
-fn trace_workbench_source_end_position(source_text: &str) -> (u32, u32) {
-    let mut line = 1u32;
-    let mut column = 1u32;
-    for ch in source_text.chars() {
-        if ch == '\n' {
-            line += 1;
-            column = 1;
-        } else {
-            column += 1;
-        }
-    }
-    (line, column)
 }
 
 fn trace_workbench_related_source_texts(
@@ -642,8 +562,15 @@ pub(crate) fn service_for_file_with_options(
     let package = mir::build_runtime_package(db, top_mod)
         .map_err(|err| format!("runtime package lowering for trace: {err}"))?;
     let mut facts = mir::trace::emit_mir_facts(db, package);
-    let source_file = trace_workbench_source_file_key(uri);
-    trace_workbench_push_standalone_source_file_facts(&mut facts, uri, &source_text, &source_file);
+    let source_file = codegen::trace::trace_source_file_key(uri.as_str());
+    codegen::trace::push_standalone_source_file_facts(
+        &mut facts,
+        &source_file,
+        uri.to_string(),
+        trace_workbench_source_file_display_name(uri),
+        &source_text,
+        Some(0),
+    );
     let module_key = top_mod.name(db).data(db).to_string();
     let sonatina_module =
         codegen::compile_runtime_package_sonatina(db, &package, codegen::EVM_LAYOUT)
@@ -678,7 +605,7 @@ pub(crate) fn service_for_file_with_options(
             codegen::trace::bytecode_runtime_owner_key(uri.as_str(), &module_key, contract_name);
         let code_object = codegen::trace::bytecode_code_object_key(&owner_key);
         if let Some(span) =
-            trace_workbench_whole_file_source_span(code_object, source_file.clone(), &source_text)
+            codegen::trace::whole_file_source_span(code_object, source_file.clone(), &source_text)
         {
             facts.push(TraceFact::SourceSpan(span));
         }
