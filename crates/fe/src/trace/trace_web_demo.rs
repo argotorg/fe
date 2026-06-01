@@ -1158,9 +1158,7 @@ fn source_lines(
 }
 
 fn display_status_for_source_line(classes: &[String]) -> Option<DemoDisplayStatus> {
-    if classes.iter().any(|class| class.starts_with("context-c-")) {
-        return Some(DemoDisplayStatus::Context);
-    }
+    let _ = classes;
     None
 }
 
@@ -1635,31 +1633,10 @@ fn display_status_for_row(
         return Some(DemoDisplayStatus::PreparedLinked);
     }
     if origin_key_is_generated(key) {
-        return Some(match key.kind() {
-            kind if kind.starts_with("source.") => DemoDisplayStatus::GeneratedDownstream,
-            _ => DemoDisplayStatus::Generated,
-        });
+        return Some(DemoDisplayStatus::Generated);
     }
     if classes.iter().any(|class| class == "origin-generated") {
         return Some(DemoDisplayStatus::Generated);
-    }
-    if classes
-        .iter()
-        .any(|class| class.starts_with("generated-c-"))
-    {
-        return Some(DemoDisplayStatus::GeneratedDownstream);
-    }
-    if classes
-        .iter()
-        .any(|class| class.starts_with("context-c-") || class == "origin-contextual")
-    {
-        return Some(DemoDisplayStatus::Context);
-    }
-    if classes
-        .iter()
-        .any(|class| class.starts_with("structural-c-") || class == "origin-structural")
-    {
-        return None;
     }
     None
 }
@@ -2366,13 +2343,42 @@ mod tests {
 
         assert!(matches!(
             display_status_for_row(&key, DemoPaneRowKind::Statement, &[]),
-            Some(DemoDisplayStatus::GeneratedDownstream)
+            Some(DemoDisplayStatus::Generated)
         ));
     }
 
     #[test]
     fn source_line_generated_component_does_not_badge_authored_source() {
         assert!(display_status_for_source_line(&["generated-c-a".to_string()]).is_none());
+        assert!(display_status_for_source_line(&["context-c-a".to_string()]).is_none());
+    }
+
+    #[test]
+    fn rail_membership_does_not_create_generic_row_badges() {
+        let key = OriginExportKey::try_from_raw_parts(
+            "runtime.stmt",
+            "runtime-instance:demo",
+            "block:0:stmt:0",
+        )
+        .unwrap();
+        let classes = [
+            "generated-c-helper".to_string(),
+            "context-c-neighborhood".to_string(),
+            "structural-c-boundary".to_string(),
+        ];
+
+        assert!(display_status_for_row(&key, DemoPaneRowKind::Statement, &classes).is_none());
+
+        let synthetic = OriginExportKey::try_from_raw_parts(
+            "runtime.stmt",
+            "runtime-instance:demo",
+            "block:0:stmt:0:__synthetic",
+        )
+        .unwrap();
+        assert!(matches!(
+            display_status_for_row(&synthetic, DemoPaneRowKind::Statement, &classes),
+            Some(DemoDisplayStatus::Generated)
+        ));
     }
 
     #[test]

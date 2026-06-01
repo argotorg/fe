@@ -3386,11 +3386,8 @@ fn trace_workbench_row_indent(kind: TraceWorkbenchPaneRowKind) -> u8 {
 }
 
 fn trace_workbench_status_for_source_line(
-    classes: &[String],
+    _classes: &[String],
 ) -> Option<TraceWorkbenchDisplayStatus> {
-    if classes.iter().any(|class| class.starts_with("context-c-")) {
-        return Some(TraceWorkbenchDisplayStatus::Context);
-    }
     None
 }
 
@@ -3427,22 +3424,7 @@ fn trace_workbench_status_for_row(
     if trace_workbench_origin_key_is_generated(key)
         || classes.iter().any(|class| class == "origin-generated")
     {
-        return Some(match key.kind() {
-            kind if kind.starts_with("source.") => TraceWorkbenchDisplayStatus::GeneratedDownstream,
-            _ => TraceWorkbenchDisplayStatus::Generated,
-        });
-    }
-    if classes
-        .iter()
-        .any(|class| class.starts_with("generated-c-"))
-    {
-        return Some(TraceWorkbenchDisplayStatus::GeneratedDownstream);
-    }
-    if classes
-        .iter()
-        .any(|class| class.starts_with("context-c-") || class == "origin-contextual")
-    {
-        return Some(TraceWorkbenchDisplayStatus::Context);
+        return Some(TraceWorkbenchDisplayStatus::Generated);
     }
     None
 }
@@ -11678,6 +11660,45 @@ mod tests {
         assert_eq!(
             trace_workbench_status_for_source_line(&["generated-c-helper".to_string()]),
             None
+        );
+        assert_eq!(
+            trace_workbench_status_for_source_line(&["context-c-helper".to_string()]),
+            None
+        );
+    }
+
+    #[test]
+    fn trace_workbench_rail_membership_does_not_create_generic_row_badges() {
+        let mir_stmt = key("runtime.stmt", "demo", "block:0:stmt:0");
+        let classes = vec![
+            "generated-c-helper".to_string(),
+            "context-c-neighborhood".to_string(),
+            "structural-c-boundary".to_string(),
+        ];
+
+        assert_eq!(
+            trace_workbench_status_for_row(
+                &mir_stmt,
+                TraceWorkbenchPaneRowKind::Statement,
+                &classes,
+                &classes,
+                &BTreeSet::new(),
+                &TraceWorkbenchMissingLineageIndex::default(),
+            ),
+            None
+        );
+
+        let synthetic = key("runtime.stmt", "demo", "block:0:stmt:0:__synthetic");
+        assert_eq!(
+            trace_workbench_status_for_row(
+                &synthetic,
+                TraceWorkbenchPaneRowKind::Statement,
+                &classes,
+                &classes,
+                &BTreeSet::new(),
+                &TraceWorkbenchMissingLineageIndex::default(),
+            ),
+            Some(TraceWorkbenchDisplayStatus::Generated)
         );
     }
 
