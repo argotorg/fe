@@ -774,7 +774,7 @@ async fn handle_trace_workbench_events_http(
             Box::pin(futures::stream::once(async move { Ok(event) }))
         } else {
             let revision_stream = futures::stream::unfold(
-                (session_id, actor_rx, None::<(u64, Option<String>)>),
+                (session_id, actor_rx, None::<TraceWorkbenchRevisionCursor>),
                 |(session_id, actor_rx, mut last_revision)| async move {
                     loop {
                         match trace_workbench_bootstrap_for_event(
@@ -786,7 +786,7 @@ async fn handle_trace_workbench_events_http(
                             Ok(response) => {
                                 let revision = response.revision.id;
                                 let model_digest = response.revision.model_digest.clone();
-                                let next_revision = (revision, model_digest.clone());
+                                let next_revision = trace_workbench_revision_cursor(&response);
                                 if last_revision != Some(next_revision.clone()) {
                                     last_revision = Some(next_revision);
                                     let event = Event::default()
@@ -841,6 +841,23 @@ async fn handle_trace_workbench_events_http(
             Box::pin(futures::stream::select(revision_stream, selection_stream))
         };
     Sse::new(stream)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TraceWorkbenchRevisionCursor {
+    revision: u64,
+    status: String,
+    model_digest: Option<String>,
+}
+
+fn trace_workbench_revision_cursor(
+    response: &crate::introspection::TraceWorkbenchBootstrapResponse,
+) -> TraceWorkbenchRevisionCursor {
+    TraceWorkbenchRevisionCursor {
+        revision: response.revision.id,
+        status: response.revision.status.clone(),
+        model_digest: response.revision.model_digest.clone(),
+    }
 }
 
 async fn trace_workbench_bootstrap_for_event(
@@ -1038,12 +1055,45 @@ impl Dispatcher<LspActorKey> for TraceQueryDispatcher {
 mod tests {
     use super::{
         trace_auth_token, trace_workbench_chunk_payload,
-        trace_workbench_resolved_rows_for_selection, trace_workbench_selection_event,
-        validate_trace_auth,
+        trace_workbench_resolved_rows_for_selection, trace_workbench_revision_cursor,
+        trace_workbench_selection_event, validate_trace_auth,
     };
     use axum::http::{HeaderMap, header};
     use std::collections::BTreeMap;
     use trace_query::trace_workbench_manifest;
+
+    fn bootstrap_response(
+        revision: u64,
+        status: &str,
+        digest: Option<&str>,
+    ) -> crate::introspection::TraceWorkbenchBootstrapResponse {
+        crate::introspection::TraceWorkbenchBootstrapResponse {
+            session: crate::backend::TraceViewerSession {
+                id: "trace-session-1".to_string(),
+                uri: "file:///workspace/lib.fe".to_string(),
+                target: "evm".to_string(),
+                opt_level: "O2".to_string(),
+                view: "source-postopt-bytecode".to_string(),
+                config_hash: "config".to_string(),
+                document_version: Some(revision as i32),
+                initial_selection: None,
+            },
+            revision: crate::introspection::TraceWorkbenchRevision {
+                id: revision,
+                document_version: Some(revision as i32),
+                status: status.to_string(),
+                config_hash: "config".to_string(),
+                model_digest: digest.map(str::to_string),
+            },
+            capabilities: crate::introspection::TraceWorkbenchCapabilities {
+                events: "sse",
+                model_deltas: false,
+                chunks: true,
+                selection_sync: true,
+                revision_history: true,
+            },
+        }
+    }
 
     #[test]
     fn trace_query_auth_validates_workspace_token_file() {
@@ -1118,6 +1168,19 @@ mod tests {
         assert_eq!(event["sessionId"], "trace-session-1");
         assert_eq!(event["revision"], 42);
         assert_eq!(event["resolvedRows"][0], "source-main-line-17");
+    }
+
+    #[test]
+    fn trace_workbench_revision_cursor_includes_status() {
+        let stale = trace_workbench_revision_cursor(&bootstrap_response(
+            12,
+            "stale_but_usable",
+            Some("blake3:same"),
+        ));
+        let ready =
+            trace_workbench_revision_cursor(&bootstrap_response(12, "ready", Some("blake3:same")));
+
+        assert_ne!(stale, ready);
     }
 
     #[test]
