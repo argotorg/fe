@@ -474,6 +474,7 @@ pub enum CompilerEventKind {
     OptimizerSnapshotJoin,
     OptimizerCreated,
     OptimizerElidedOrRewritten,
+    PreparedLineage,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

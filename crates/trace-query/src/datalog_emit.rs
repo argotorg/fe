@@ -5,8 +5,8 @@ use common::origin::OriginExportKey;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use trace_facts::{
-    OriginEdgeTraversalClass, RelationBundleData, RelationColumn, RelationColumnKind, RelationRow,
-    RelationSchema, TraceFact, TraceSnapshot,
+    CompilerEventKind, OriginEdgeTraversalClass, RelationBundleData, RelationColumn,
+    RelationColumnKind, RelationRow, RelationSchema, TraceFact, TraceSnapshot,
 };
 
 use crate::{
@@ -111,6 +111,7 @@ fn append_semantic_edge_views(
 ) {
     schemas.extend(semantic_edge_schemas());
     schemas.extend(representation_diagnostic_schemas());
+    schemas.extend(prepared_lineage_schemas());
     for fact in snapshot.facts() {
         let TraceFact::OriginEdge(edge) = fact else {
             continue;
@@ -136,6 +137,7 @@ fn append_semantic_edge_views(
         }
     }
     append_representation_diagnostic_views(snapshot, rows);
+    append_prepared_lineage_views(snapshot, rows);
 }
 
 fn semantic_edge_schemas() -> Vec<RelationSchema> {
@@ -265,6 +267,55 @@ fn append_representation_diagnostic_views(snapshot: &TraceSnapshot, rows: &mut V
                     "same_raw_local_id".to_string(),
                 ],
             });
+        }
+    }
+}
+
+fn prepared_lineage_schemas() -> Vec<RelationSchema> {
+    vec![RelationSchema {
+        name: "prepared_lineage_fact",
+        columns: vec![
+            RelationColumn {
+                name: "prepared",
+                kind: RelationColumnKind::Key,
+            },
+            RelationColumn {
+                name: "postopt",
+                kind: RelationColumnKind::Key,
+            },
+            RelationColumn {
+                name: "kind",
+                kind: RelationColumnKind::Text,
+            },
+        ],
+    }]
+}
+
+fn append_prepared_lineage_views(snapshot: &TraceSnapshot, rows: &mut Vec<RelationRow>) {
+    for fact in snapshot.facts() {
+        let TraceFact::CompilerEvent(event) = fact else {
+            continue;
+        };
+        if event.kind != CompilerEventKind::PreparedLineage {
+            continue;
+        }
+        for postopt in &event.inputs {
+            if postopt.kind() != "sonatina.postopt.inst" {
+                continue;
+            }
+            for prepared in &event.outputs {
+                if prepared.kind() != "sonatina.evm.prepared.inst" {
+                    continue;
+                }
+                rows.push(RelationRow {
+                    relation: "prepared_lineage_fact",
+                    values: vec![
+                        prepared.canonical_storage_key(),
+                        postopt.canonical_storage_key(),
+                        "exact_lowering".to_string(),
+                    ],
+                });
+            }
         }
     }
 }
@@ -568,11 +619,12 @@ pub fn origin_reaches(snapshot: &TraceSnapshot) -> BTreeSet<(OriginExportKey, Or
 mod tests {
     use common::origin::OriginExportKey;
     use trace_facts::{
-        CodeObjectFact, CodeObjectKind, CompilerPhase, ExecutionStepFact,
-        ExecutionTraceSessionFact, FunctionFact, InstructionFact, OriginEdgeFact, OriginEdgeLabel,
-        OriginNodeFact, OriginNodeKind, RuntimeCaptureMode, RuntimeCodeObjectBindingFact,
-        RuntimePcJoinConfidence, RuntimeTraceDataSource, RuntimeValuePolicy, StorageAccessFact,
-        StorageAccessKind, TraceBundle, TraceFact, TraceMetadata, TraceSnapshot,
+        CodeObjectFact, CodeObjectKind, CompilerEventFact, CompilerEventKind, CompilerPhase,
+        ExecutionStepFact, ExecutionTraceSessionFact, FunctionFact, InstructionFact,
+        OriginEdgeFact, OriginEdgeLabel, OriginNodeFact, OriginNodeKind, RuntimeCaptureMode,
+        RuntimeCodeObjectBindingFact, RuntimePcJoinConfidence, RuntimeTraceDataSource,
+        RuntimeValuePolicy, StorageAccessFact, StorageAccessKind, TraceBundle, TraceFact,
+        TraceMetadata, TraceSnapshot,
     };
 
     use super::{builtin_rulepack, emit_base_relations, origin_reaches, run_builtin_rulepack};
@@ -882,6 +934,54 @@ mod tests {
         );
         assert!(!export.rules.contains("same_local_different_representation"));
         assert!(!export.rules.contains("candidate_lineage_hint"));
+    }
+
+    #[test]
+    fn base_relation_export_includes_prepared_lineage_fact_view() {
+        let raw_inst = "function:FuncRef(1):inst:InstId(7)";
+        let postopt = key("sonatina.postopt.inst", "demo", raw_inst);
+        let prepared = key("sonatina.evm.prepared.inst", "demo", raw_inst);
+        let event = key("compiler.event", "demo", "prepared-lineage:0");
+        let snapshot = TraceSnapshot::new(TraceBundle::new(
+            TraceMetadata::compiler_emitted(
+                "abc123",
+                "evm/sonatina",
+                vec!["fe".to_string(), "trace".to_string()],
+                "demo.fe",
+                vec![],
+            ),
+            vec![
+                node(postopt.clone()),
+                node(prepared.clone()),
+                node(event.clone()),
+                TraceFact::CompilerEvent(CompilerEventFact::new(
+                    event,
+                    CompilerPhase::Backend,
+                    CompilerEventKind::PreparedLineage,
+                    vec![postopt.clone()],
+                    vec![prepared.clone()],
+                    None,
+                )),
+            ],
+        ))
+        .unwrap();
+        let export = emit_base_relations(&snapshot);
+
+        assert!(
+            export
+                .schemas
+                .iter()
+                .any(|schema| schema.name == "prepared_lineage_fact")
+        );
+        assert!(relation_row_exists(
+            &export,
+            "prepared_lineage_fact",
+            &[
+                prepared.canonical_storage_key(),
+                postopt.canonical_storage_key(),
+                "exact_lowering".to_string(),
+            ]
+        ));
     }
 
     #[test]

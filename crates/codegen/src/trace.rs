@@ -11,11 +11,11 @@ use sonatina_ir::{
 };
 use trace_facts::{
     BlockFact, CategorySource, CfgEdgeFact, CfgEdgeKind, CodeObjectFact, CodeObjectKind,
-    CompilerPhase, EvmSchedule, FunctionFact, InstructionBlockFact, InstructionCategory,
-    InstructionCategoryFact, InstructionExtentFact, InstructionFact, LoopBlockFact, LoopBlockRole,
-    LoopConfidence, LoopDerivation, LoopFact, LoopMembershipFact, OpcodeCategory, OpcodeFact,
-    OriginEdgeFact, OriginEdgeLabel, OriginNodeFact, OriginNodeKind, PcRange, StaticGasFact,
-    TraceFact,
+    CompilerEventFact, CompilerEventKind, CompilerPhase, CompilerReason, EvmSchedule, FunctionFact,
+    InstructionBlockFact, InstructionCategory, InstructionCategoryFact, InstructionExtentFact,
+    InstructionFact, LoopBlockFact, LoopBlockRole, LoopConfidence, LoopDerivation, LoopFact,
+    LoopMembershipFact, OpcodeCategory, OpcodeFact, OriginEdgeFact, OriginEdgeLabel,
+    OriginNodeFact, OriginNodeKind, PcRange, StaticGasFact, TraceFact,
 };
 
 use crate::debug::BytecodeSourceMapEntry;
@@ -159,6 +159,7 @@ pub fn emit_bytecode_instruction_facts_with_observability(
         .unwrap_or_default();
     let mut emitted_prepared_nodes = BTreeSet::new();
     let mut emitted_postopt_lineage_nodes = BTreeSet::new();
+    let mut emitted_prepared_lineage_events = BTreeSet::new();
     let mut facts = vec![
         origin_node(function.clone(), "bytecode.function"),
         origin_node(code_object.clone(), "code.object"),
@@ -252,6 +253,13 @@ pub fn emit_bytecode_instruction_facts_with_observability(
                             ));
                         }
                         if endpoint_is_known {
+                            emit_prepared_lineage_event(
+                                &mut facts,
+                                owner_key,
+                                &prepared_inst,
+                                &frontend_origin,
+                                &mut emitted_prepared_lineage_events,
+                            );
                             facts.push(TraceFact::OriginEdge(OriginEdgeFact::new(
                                 prepared_inst,
                                 frontend_origin,
@@ -754,6 +762,53 @@ fn origin_node(key: OriginExportKey, kind: &str) -> TraceFact {
 
 fn push_node(facts: &mut Vec<TraceFact>, key: OriginExportKey) {
     facts.push(origin_node(key.clone(), key.kind()));
+}
+
+fn emit_prepared_lineage_event(
+    facts: &mut Vec<TraceFact>,
+    owner_key: &str,
+    prepared_inst: &OriginExportKey,
+    postopt_inst: &OriginExportKey,
+    emitted_events: &mut BTreeSet<(OriginExportKey, OriginExportKey)>,
+) {
+    let event_pair = (prepared_inst.clone(), postopt_inst.clone());
+    if !emitted_events.insert(event_pair) {
+        return;
+    }
+    let event = prepared_lineage_event_key(owner_key, prepared_inst, postopt_inst);
+    facts.push(origin_node(event.clone(), "compiler.event"));
+    facts.push(TraceFact::CompilerEvent(CompilerEventFact::new(
+        event,
+        CompilerPhase::Backend,
+        CompilerEventKind::PreparedLineage,
+        vec![postopt_inst.clone()],
+        vec![prepared_inst.clone()],
+        Some(CompilerReason::new(
+            "explicit EVM prepared to optimized Sonatina lineage",
+        )),
+    )));
+}
+
+fn prepared_lineage_event_key(
+    owner_key: &str,
+    prepared_inst: &OriginExportKey,
+    postopt_inst: &OriginExportKey,
+) -> OriginExportKey {
+    let digest = blake3::hash(
+        format!(
+            "{}\n{}",
+            prepared_inst.canonical_storage_key(),
+            postopt_inst.canonical_storage_key()
+        )
+        .as_bytes(),
+    );
+    let hex = digest.to_hex();
+    OriginExportKey::try_from_raw_parts(
+        "compiler.event",
+        owner_key,
+        format!("prepared-lineage:{}", &hex.as_str()[..16]),
+    )
+    .expect("prepared lineage compiler event key must be valid")
 }
 
 #[derive(Clone, Debug)]
@@ -1624,7 +1679,9 @@ fn evm_static_gas(opcode: u8) -> u64 {
 mod tests {
     use common::{InputDb, origin::OriginExportKey};
     use driver::DriverDataBase;
-    use trace_facts::{CompilerPhase, OriginNodeFact, OriginNodeKind, TraceFact, TraceValidator};
+    use trace_facts::{
+        CompilerEventKind, CompilerPhase, OriginNodeFact, OriginNodeKind, TraceFact, TraceValidator,
+    };
     use url::Url;
 
     use crate::{
@@ -1799,6 +1856,14 @@ mod tests {
                     && edge.label == trace_facts::OriginEdgeLabel::LoweredFrom
                     && edge.introduced_by == Some(trace_facts::CompilerPhase::Backend)
         )));
+        assert!(facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::CompilerEvent(event)
+                if event.kind == CompilerEventKind::PreparedLineage
+                    && event.phase == trace_facts::CompilerPhase::Backend
+                    && event.inputs == vec![postopt.clone()]
+                    && event.outputs.iter().any(|output| output.kind() == SONATINA_EVM_PREPARED_INST_KIND)
+        )));
         assert!(!facts.iter().any(|fact| matches!(
             fact,
             TraceFact::OriginEdge(edge)
@@ -1891,6 +1956,13 @@ mod tests {
                     && edge.to == actual_postopt
                     && edge.label == trace_facts::OriginEdgeLabel::LoweredFrom
         )));
+        assert!(facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::CompilerEvent(event)
+                if event.kind == CompilerEventKind::PreparedLineage
+                    && event.inputs == vec![actual_postopt.clone()]
+                    && event.outputs.iter().any(|output| output.kind() == SONATINA_EVM_PREPARED_INST_KIND)
+        )));
         assert!(!facts.iter().any(|fact| matches!(
             fact,
             TraceFact::OriginEdge(edge)
@@ -1977,6 +2049,11 @@ mod tests {
             TraceFact::OriginEdge(edge)
                 if edge.from.kind() == SONATINA_EVM_PREPARED_INST_KIND
                     && edge.to == unknown_postopt
+        )));
+        assert!(!facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::CompilerEvent(event)
+                if event.kind == CompilerEventKind::PreparedLineage
         )));
     }
 
