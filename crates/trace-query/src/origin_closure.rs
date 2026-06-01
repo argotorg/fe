@@ -839,6 +839,9 @@ fn origin_explanation_rails(
         let outgoing = index.edges_by_from.get(key).into_iter().flatten().copied();
         let incoming = index.edges_by_to.get(key).into_iter().flatten().copied();
         for edge in outgoing.chain(incoming) {
+            if !origin_edge_satisfies_phase_contract(edge, &index.prepared_lineage_events) {
+                continue;
+            }
             let other = if &edge.from == key {
                 &edge.to
             } else {
@@ -1695,6 +1698,26 @@ mod tests {
         assert!(exact_from_synthetic.keys.contains(&synthetic_mir));
         assert!(!exact_from_synthetic.keys.contains(&hir));
         assert!(synthetic_rails.generated.contains(&hir));
+    }
+
+    #[test]
+    fn generated_explanation_respects_prepared_lineage_contract() {
+        let postopt = test_key("sonatina.postopt.inst", "runtime", "inst:0");
+        let prepared = test_key("sonatina.evm.prepared.inst", "runtime", "inst:0");
+        let edges = [OriginEdgeFact::new(
+            prepared.clone(),
+            postopt.clone(),
+            OriginEdgeLabel::SyntheticFor,
+            Some(CompilerPhase::Backend),
+        )];
+        let index = test_index(&edges, []);
+        let exact_keys = BTreeSet::from([postopt]);
+
+        let rails = origin_explanation_rails(&exact_keys, &index);
+
+        assert!(rails.generated.is_empty());
+        assert!(!rails.generated.contains(&prepared));
+        assert!(rails.edges.is_empty());
     }
 
     #[test]
