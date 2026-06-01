@@ -138,6 +138,8 @@
         controls
       );
       page.append(header);
+      var revisionBanner = this._revisionBanner();
+      if (revisionBanner) page.append(revisionBanner);
 
       var cards = this._topCards();
       if (cards) page.append(cards);
@@ -191,6 +193,27 @@
       var card = el("div", "card");
       card.append(el("span", "", label), el("b", "", value == null ? "unknown" : value));
       parent.append(card);
+    }
+
+    _revisionBanner() {
+      var revision = (this._data && this._data.revision) || {};
+      var status = revision.status || "ready";
+      if (status === "ready") return null;
+      var banner = el("section", "revision-banner revision-" + String(status).replace(/_/g, "-"));
+      var title = "Trace revision " + status.replace(/_/g, " ");
+      var message = "The workbench is using the latest model available from the LSP session.";
+      if (status === "pending") {
+        title = "Trace update pending";
+        message = "Source changed and the compiler trace has not finished rebuilding yet.";
+      } else if (status === "stale_but_usable") {
+        title = "Showing last ready trace";
+        message = "The latest edit is not represented yet; panes remain usable from the last ready revision.";
+      } else if (String(status).indexOf("failed") === 0 || status === "timed_out") {
+        title = "Trace update failed";
+        message = "The previous ready revision remains visible while the current trace build reports " + status.replace(/_/g, " ") + ".";
+      }
+      banner.append(el("strong", "", title), el("span", "", message));
+      return banner;
     }
 
     _topCards() {
@@ -1679,6 +1702,11 @@ h1 { margin:0; color:var(--trace-text); font:700 15px/1.1 ui-sans-serif, system-
 .subtitle { max-width:980px; margin:0; color:var(--trace-muted); font:11px/1.3 ui-sans-serif, system-ui, sans-serif; text-align:right; }
 .header-controls { display:flex; justify-content:flex-end; }
 .display-mode-select { border:1px solid var(--trace-border); border-radius:6px; background:var(--trace-panel); color:var(--trace-text); padding:3px 6px; font:inherit; font-size:11px; }
+.revision-banner { display:flex; justify-content:space-between; gap:14px; align-items:center; margin:7px 20px 0; padding:7px 10px; border:1px solid color-mix(in srgb, var(--trace-warn) 55%, var(--trace-border)); border-radius:8px; background:color-mix(in srgb, var(--trace-warn) 10%, var(--trace-panel)); color:var(--trace-text); }
+.revision-banner strong { color:var(--trace-warn); font:700 12px/1.2 ui-sans-serif, system-ui, sans-serif; }
+.revision-banner span { color:var(--trace-muted); font:11px/1.25 ui-sans-serif, system-ui, sans-serif; }
+.revision-banner.revision-failed-parse,.revision-banner.revision-failed-lowering,.revision-banner.revision-failed-trace-validation,.revision-banner.revision-timed-out { border-color:color-mix(in srgb, var(--trace-danger) 65%, var(--trace-border)); background:color-mix(in srgb, var(--trace-danger) 10%, var(--trace-panel)); }
+.revision-banner.revision-failed-parse strong,.revision-banner.revision-failed-lowering strong,.revision-banner.revision-failed-trace-validation strong,.revision-banner.revision-timed-out strong { color:var(--trace-danger); }
 .cards { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:7px; padding:8px 20px; }
 .card,.panel { background:var(--trace-panel); border:1px solid var(--trace-border); border-radius:8px; box-shadow:none; }
 .card { padding:6px 8px; min-width:0; }

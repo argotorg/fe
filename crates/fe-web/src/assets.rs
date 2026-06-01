@@ -846,6 +846,15 @@ mod tests {
     }
 
     #[test]
+    fn origin_trace_shows_live_revision_state_banner() {
+        assert!(FE_ORIGIN_TRACE_JS.contains("_revisionBanner"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("Trace update pending"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("Showing last ready trace"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("Trace update failed"));
+        assert!(FE_ORIGIN_TRACE_JS.contains(".revision-banner"));
+    }
+
+    #[test]
     fn js_escape_handles_special_chars() {
         assert_eq!(js_escape_string("hello\nworld"), "hello\\nworld");
         assert_eq!(js_escape_string(r#"a"b"#), r#"a\"b"#);
