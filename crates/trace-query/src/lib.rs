@@ -3875,6 +3875,7 @@ pub struct AttributionAuditReport {
     pub optimized_sonatina_targets: Vec<AttributionAuditTargetCount>,
     pub prepared_targets: Vec<AttributionAuditTargetCount>,
     pub missing_lineage_targets: Vec<AttributionAuditTargetCount>,
+    pub non_exact_lineage_targets: Vec<AttributionAuditTargetCount>,
     pub lineage_gaps: Vec<AttributionAuditLineageGap>,
     pub suspicious_edges: Vec<AttributionAuditSuspiciousEdge>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -6853,6 +6854,8 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
     let mut optimized_sonatina_targets = BTreeMap::<OriginExportKey, usize>::new();
     let mut prepared_targets = BTreeMap::<OriginExportKey, usize>::new();
     let mut lineage_gap_targets = BTreeMap::<OriginExportKey, usize>::new();
+    let mut non_exact_lineage_targets = BTreeMap::<OriginExportKey, usize>::new();
+    let mut lineage_issue_targets = BTreeMap::<OriginExportKey, usize>::new();
     let mut lineage_gaps = Vec::new();
     let mut suspicious_edges = Vec::new();
     let mut invalid_links = Vec::new();
@@ -6956,10 +6959,14 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
                     LinkStatus::MissingRequired | LinkStatus::MissingLineageButCandidatesExist
                 ) {
                     has_missing_prepared_lineage = true;
+                    *lineage_gap_targets.entry(prepared.clone()).or_default() += 1;
                 } else {
                     has_non_exact_prepared_lineage = true;
+                    *non_exact_lineage_targets
+                        .entry(prepared.clone())
+                        .or_default() += 1;
                 }
-                *lineage_gap_targets.entry(prepared.clone()).or_default() += 1;
+                *lineage_issue_targets.entry(prepared.clone()).or_default() += 1;
                 lineage_gaps.push(AttributionAuditLineageGap {
                     bytecode_pc: instruction.clone(),
                     prepared_origin: prepared,
@@ -7086,13 +7093,15 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
         prepared_linked_pcs,
         unmapped_pcs,
         prepared_target_total_count,
-        &lineage_gap_targets,
+        &lineage_issue_targets,
         &lineage_gaps,
         invalid_links,
     );
 
     let mut lineage_gap_targets = attribution_audit_target_counts(lineage_gap_targets);
     lineage_gap_targets.truncate(25);
+    let mut non_exact_lineage_targets = attribution_audit_target_counts(non_exact_lineage_targets);
+    non_exact_lineage_targets.truncate(25);
     lineage_gaps.sort_by(|a, b| {
         a.bytecode_pc
             .canonical_storage_key()
@@ -7123,6 +7132,7 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
         optimized_sonatina_targets,
         prepared_targets,
         missing_lineage_targets: lineage_gap_targets,
+        non_exact_lineage_targets,
         lineage_gaps,
         suspicious_edges,
         missing_links: Some(missing_links),
@@ -8563,6 +8573,8 @@ mod tests {
         assert_eq!(report.prepared_linked_pcs, 2);
         assert_eq!(report.missing_optimized_to_prepared_lineage_pcs, 0);
         assert_eq!(report.non_exact_optimized_to_prepared_lineage_pcs, 2);
+        assert!(report.missing_lineage_targets.is_empty());
+        assert_eq!(report.non_exact_lineage_targets.len(), 2);
         assert_eq!(report.lineage_gaps.len(), 2);
         assert!(report.lineage_gaps.iter().any(|gap| {
             gap.prepared_origin == prepared_generated

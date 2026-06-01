@@ -335,6 +335,17 @@
         }, this);
         section.append(list);
       }
+      var nonExactTargets = (audit.non_exact_lineage_targets || []).slice(0, 5);
+      if (nonExactTargets.length) {
+        var nonExactList = el("div", "missing-targets");
+        nonExactList.append(el("h3", "", "Top prepared targets with non-exact lineage"));
+        nonExactTargets.forEach(function (target) {
+          var row = el("div", "audit-count");
+          row.append(el("span", "", this._compactLabel(this._originDisplay(target.target))), el("b", "", target.count || 0));
+          nonExactList.append(row);
+        }, this);
+        section.append(nonExactList);
+      }
       return section;
     }
 

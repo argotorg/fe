@@ -1169,14 +1169,26 @@ fn render_attribution_audit_report(report: &AttributionAuditReport) -> String {
         }
     }
 
+    if !report.non_exact_lineage_targets.is_empty() {
+        out.push_str("\nPrepared targets with non-exact optimized lineage:\n");
+        for row in report.non_exact_lineage_targets.iter().take(12) {
+            out.push_str(&format!(
+                "  {:>5} {}\n",
+                row.count,
+                row.target.display_label()
+            ));
+        }
+    }
+
     if !report.lineage_gaps.is_empty() {
-        out.push_str("\nSample missing optimized->prepared lineage gaps:\n");
+        out.push_str("\nSample optimized->prepared lineage findings:\n");
         for gap in report.lineage_gaps.iter().take(12) {
             out.push_str(&format!(
-                "  {} -> {}: {}\n",
+                "  {} -> {}: {} ({:?})\n",
                 gap.bytecode_pc.display_label(),
                 gap.prepared_origin.display_label(),
-                gap.reason
+                gap.reason,
+                gap.status
             ));
         }
     }
