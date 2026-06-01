@@ -452,7 +452,9 @@ async fn handle_open_docs(
 
 #[cfg(test)]
 mod tests {
-    use super::{handle_open_trace_workbench, parse_trace_open_workbench_args};
+    use super::{
+        handle_open_trace_workbench, parse_trace_open_workbench_args, validate_trace_workbench_uri,
+    };
     use crate::backend::Backend;
     use async_lsp::MainLoop;
     use async_lsp::router::Router;
@@ -538,6 +540,24 @@ mod tests {
         tokio::task::spawn_blocking(move || drop(backend))
             .await
             .expect("backend drop task panicked");
+    }
+
+    #[test]
+    fn trace_open_workbench_rejects_non_fe_and_outside_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let inside_txt = dir.path().join("demo.txt");
+        std::fs::write(&inside_txt, "not fe\n").unwrap();
+        let outside = tempfile::NamedTempFile::with_suffix(".fe").unwrap();
+        let mut backend = test_backend(Some("http://127.0.0.1:5179".to_string()));
+        backend.lsp_workspace_root = Some(dir.path().to_path_buf());
+
+        let inside_txt_uri = url::Url::from_file_path(&inside_txt).unwrap();
+        let err = validate_trace_workbench_uri(&backend, &inside_txt_uri).unwrap_err();
+        assert!(err.message.contains("must point to a .fe file"));
+
+        let outside_uri = url::Url::from_file_path(outside.path()).unwrap();
+        let err = validate_trace_workbench_uri(&backend, &outside_uri).unwrap_err();
+        assert!(err.message.contains("outside the LSP workspace root"));
     }
 }
 
