@@ -5678,10 +5678,14 @@ fn missing_link_audit_report(
     let missing_hir_to_mir_count = hir_to_mir.missing.len();
     let mir_to_preopt = mir_to_preopt_boundary_audit(snapshot);
     let missing_mir_to_preopt_count = mir_to_preopt.missing.len();
-    let missing_postopt_to_prepared_count = lineage_gaps.len();
-    let missing_required_count =
-        missing_postopt_to_prepared_count + missing_hir_to_mir_count + missing_mir_to_preopt_count;
     let expected_absent = expected_absent_links(snapshot);
+    let preopt_to_postopt = preopt_to_postopt_boundary_audit(snapshot, &expected_absent);
+    let missing_preopt_to_postopt_count = preopt_to_postopt.missing.len();
+    let missing_postopt_to_prepared_count = lineage_gaps.len();
+    let missing_required_count = missing_postopt_to_prepared_count
+        + missing_hir_to_mir_count
+        + missing_mir_to_preopt_count
+        + missing_preopt_to_postopt_count;
     let overall_status = if !invalid.is_empty() {
         LinkOverallStatus::Invalid
     } else if missing_required_count > 0 {
@@ -5697,6 +5701,9 @@ fn missing_link_audit_report(
     }
     if missing_mir_to_preopt_count > 0 {
         top_blockers.push(LinkBoundaryKind::MirToSonatinaPreOpt);
+    }
+    if missing_preopt_to_postopt_count > 0 {
+        top_blockers.push(LinkBoundaryKind::PreOptToPostOpt);
     }
     if !lineage_gaps.is_empty() || !invalid.is_empty() {
         top_blockers.push(LinkBoundaryKind::PostOptToPrepared);
@@ -5758,6 +5765,43 @@ fn missing_link_audit_report(
         });
     }
 
+    if preopt_to_postopt.total() > 0 {
+        let mut status_counts = BTreeMap::new();
+        if preopt_to_postopt.exact > 0 {
+            status_counts.insert(LinkStatus::SatisfiedExact, preopt_to_postopt.exact);
+        }
+        if preopt_to_postopt.generated > 0 {
+            status_counts.insert(LinkStatus::SatisfiedGenerated, preopt_to_postopt.generated);
+        }
+        if preopt_to_postopt.expected_absent > 0 {
+            status_counts.insert(
+                LinkStatus::ExpectedAbsent,
+                preopt_to_postopt.expected_absent,
+            );
+        }
+        if missing_preopt_to_postopt_count > 0 {
+            status_counts.insert(LinkStatus::MissingRequired, missing_preopt_to_postopt_count);
+        }
+        boundary_summaries.push(LinkBoundarySummary {
+            boundary: LinkBoundaryKind::PreOptToPostOpt,
+            owner_phase: CompilerPhase::SonatinaPostOpt,
+            status_counts,
+            affected_origins: preopt_to_postopt.total(),
+            affected_bytecode_pcs: 0,
+            top_issue_codes: [
+                (preopt_to_postopt.generated > 0)
+                    .then_some(LinkIssueCode::GeneratedExplanationOnly),
+                (preopt_to_postopt.expected_absent > 0)
+                    .then_some(LinkIssueCode::ExpectedAbsentOptimizerElision),
+                (missing_preopt_to_postopt_count > 0)
+                    .then_some(LinkIssueCode::MissingOptimizerLineage),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+        });
+    }
+
     if prepared_linked_pcs > 0 || !lineage_gaps.is_empty() || !invalid.is_empty() {
         let mut status_counts = BTreeMap::new();
         let satisfied_prepared_lineage_count =
@@ -5802,19 +5846,6 @@ fn missing_link_audit_report(
             affected_origins: prepared_target_count,
             affected_bytecode_pcs: prepared_linked_pcs,
             top_issue_codes: Vec::new(),
-        });
-    }
-
-    if !expected_absent.is_empty() {
-        let mut expected_absent_counts = BTreeMap::new();
-        expected_absent_counts.insert(LinkStatus::ExpectedAbsent, expected_absent.len());
-        boundary_summaries.push(LinkBoundarySummary {
-            boundary: LinkBoundaryKind::PreOptToPostOpt,
-            owner_phase: CompilerPhase::SonatinaPostOpt,
-            status_counts: expected_absent_counts,
-            affected_origins: expected_absent.len(),
-            affected_bytecode_pcs: 0,
-            top_issue_codes: vec![LinkIssueCode::ExpectedAbsentOptimizerElision],
         });
     }
 
@@ -5865,6 +5896,30 @@ fn missing_link_audit_report(
                 candidate_hints: Vec::new(),
                 required_evidence: required_mir_to_preopt_evidence(),
                 cluster_id: Some("mir-to-preopt:missing-lowering".to_string()),
+            }),
+    );
+    details.extend(
+        preopt_to_postopt
+            .missing
+            .iter()
+            .take(MISSING_LINK_DETAIL_LIMIT.saturating_sub(details.len()))
+            .map(|origin| LinkGap {
+                gap_id: stable_short_id(&format!(
+                    "{:?}\n{}",
+                    LinkBoundaryKind::PreOptToPostOpt,
+                    origin.canonical_storage_key()
+                )),
+                boundary: LinkBoundaryKind::PreOptToPostOpt,
+                status: LinkStatus::MissingRequired,
+                issue_code: LinkIssueCode::MissingOptimizerLineage,
+                severity: LinkSeverity::Warning,
+                from_origin: origin.clone(),
+                from_representation: Some("sonatina.preopt".to_string()),
+                expected_to_phase: "sonatina.postopt".to_string(),
+                reached_frontier: "sonatina.preopt".to_string(),
+                candidate_hints: Vec::new(),
+                required_evidence: required_preopt_to_postopt_evidence(),
+                cluster_id: Some("preopt-to-postopt:missing-optimizer-lineage".to_string()),
             }),
     );
     details.extend(
@@ -5950,6 +6005,35 @@ fn missing_link_audit_report(
             required_evidence: required_mir_to_preopt_evidence(),
         });
     }
+    if missing_preopt_to_postopt_count > 0 {
+        clusters.push(LinkGapCluster {
+            cluster_id: "preopt-to-postopt:missing-optimizer-lineage".to_string(),
+            boundary: LinkBoundaryKind::PreOptToPostOpt,
+            status: LinkStatus::MissingRequired,
+            issue_code: LinkIssueCode::MissingOptimizerLineage,
+            severity: LinkSeverity::Warning,
+            owner_phase: CompilerPhase::SonatinaPostOpt,
+            headline: "Sonatina pre-opt origin has no optimizer lineage".to_string(),
+            explanation: "Codegen-relevant Sonatina pre-opt instructions should either connect to optimized Sonatina output or have an explicit optimizer elision/rewrite reason.".to_string(),
+            affected_origins: preopt_to_postopt
+                .missing
+                .iter()
+                .take(25)
+                .cloned()
+                .map(|target| AttributionAuditTargetCount { target, count: 1 })
+                .collect(),
+            affected_bytecode_pcs: Vec::new(),
+            gap_count: missing_preopt_to_postopt_count,
+            sample_gap_ids: details
+                .iter()
+                .filter(|gap| gap.boundary == LinkBoundaryKind::PreOptToPostOpt)
+                .take(MISSING_LINK_CLUSTER_SAMPLE_LIMIT)
+                .map(|gap| gap.gap_id.clone())
+                .collect(),
+            candidate_hints: Vec::new(),
+            required_evidence: required_preopt_to_postopt_evidence(),
+        });
+    }
     if !lineage_gaps.is_empty() {
         let mut affected_origins = attribution_audit_target_counts(lineage_gap_targets.clone());
         affected_origins.truncate(25);
@@ -6026,6 +6110,20 @@ struct MirToPreoptBoundaryAudit {
 impl MirToPreoptBoundaryAudit {
     fn total(&self) -> usize {
         self.exact + self.generated + self.missing.len()
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct PreoptToPostoptBoundaryAudit {
+    exact: usize,
+    generated: usize,
+    expected_absent: usize,
+    missing: Vec<OriginExportKey>,
+}
+
+impl PreoptToPostoptBoundaryAudit {
+    fn total(&self) -> usize {
+        self.exact + self.generated + self.expected_absent + self.missing.len()
     }
 }
 
@@ -6136,6 +6234,77 @@ fn mir_to_preopt_boundary_audit(snapshot: &TraceSnapshot) -> MirToPreoptBoundary
     }
 }
 
+fn preopt_to_postopt_boundary_audit(
+    snapshot: &TraceSnapshot,
+    expected_absent: &[ExpectedAbsentLink],
+) -> PreoptToPostoptBoundaryAudit {
+    let expected_absent_origins = expected_absent
+        .iter()
+        .filter(|entry| entry.boundary == LinkBoundaryKind::PreOptToPostOpt)
+        .map(|entry| entry.origin.clone())
+        .collect::<BTreeSet<_>>();
+    let mut preopt_origins = BTreeSet::<OriginExportKey>::new();
+    let mut has_postopt_origin = false;
+    let mut exact = BTreeSet::<OriginExportKey>::new();
+    let mut generated = BTreeSet::<OriginExportKey>::new();
+
+    for fact in snapshot.facts() {
+        match fact {
+            TraceFact::OriginNode(node) if is_sonatina_preopt_inst_audit_origin(&node.key) => {
+                preopt_origins.insert(node.key.clone());
+            }
+            TraceFact::OriginNode(node) if is_sonatina_postopt_inst_audit_origin(&node.key) => {
+                has_postopt_origin = true;
+            }
+            TraceFact::OriginEdge(edge)
+                if is_sonatina_postopt_inst_audit_origin(&edge.from)
+                    && is_sonatina_preopt_inst_audit_origin(&edge.to) =>
+            {
+                match edge.traversal_class() {
+                    OriginEdgeTraversalClass::ExactAttribution
+                    | OriginEdgeTraversalClass::SnapshotAlias => {
+                        exact.insert(edge.to.clone());
+                    }
+                    OriginEdgeTraversalClass::Synthetic => {
+                        generated.insert(edge.to.clone());
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if !has_postopt_origin && expected_absent_origins.is_empty() {
+        return PreoptToPostoptBoundaryAudit::default();
+    }
+
+    let missing = if has_postopt_origin {
+        preopt_origins
+            .iter()
+            .filter(|origin| {
+                !exact.contains(*origin)
+                    && !generated.contains(*origin)
+                    && !expected_absent_origins.contains(*origin)
+            })
+            .cloned()
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    let generated_only = generated
+        .iter()
+        .filter(|origin| !exact.contains(*origin))
+        .count();
+
+    PreoptToPostoptBoundaryAudit {
+        exact: exact.len(),
+        generated: generated_only,
+        expected_absent: expected_absent_origins.len(),
+        missing,
+    }
+}
+
 fn expected_absent_links(snapshot: &TraceSnapshot) -> Vec<ExpectedAbsentLink> {
     let mut entries = snapshot
         .facts()
@@ -6231,6 +6400,14 @@ fn required_mir_to_preopt_evidence() -> Vec<RequiredEvidence> {
         kind: RequiredEvidenceKind::ExactOriginEdge,
         owner_phase: CompilerPhase::SonatinaPreOpt,
         description: "Emit Sonatina pre-opt instruction → MIR statement/terminator evidence as exact lowering or generated/synthetic explanation.".to_string(),
+    }]
+}
+
+fn required_preopt_to_postopt_evidence() -> Vec<RequiredEvidence> {
+    vec![RequiredEvidence {
+        kind: RequiredEvidenceKind::OptimizerLineageFact,
+        owner_phase: CompilerPhase::SonatinaPostOpt,
+        description: "Emit optimizer lineage from optimized Sonatina output to pre-opt input, or emit an explicit optimizer elision/rewrite reason.".to_string(),
     }]
 }
 
@@ -6523,6 +6700,10 @@ fn is_prepared_sonatina_audit_origin(key: &OriginExportKey) -> bool {
 
 fn is_sonatina_preopt_inst_audit_origin(key: &OriginExportKey) -> bool {
     key.kind() == "sonatina.preopt.inst"
+}
+
+fn is_sonatina_postopt_inst_audit_origin(key: &OriginExportKey) -> bool {
+    key.kind() == "sonatina.postopt.inst"
 }
 
 fn is_hir_audit_origin(key: &OriginExportKey) -> bool {
@@ -8120,6 +8301,103 @@ mod tests {
                 .status_counts
                 .get(&LinkStatus::ExpectedAbsent),
             Some(&1)
+        );
+    }
+
+    #[test]
+    fn missing_link_audit_reports_preopt_to_postopt_exact_generated_elided_and_missing() {
+        let preopt_exact = key("sonatina.preopt.inst", "demo", "inst:exact");
+        let preopt_generated = key("sonatina.preopt.inst", "demo", "inst:generated");
+        let preopt_elided = key("sonatina.preopt.inst", "demo", "inst:elided");
+        let preopt_missing = key("sonatina.preopt.inst", "demo", "inst:missing");
+        let postopt_exact = key("sonatina.postopt.inst", "demo", "inst:exact");
+        let postopt_generated = key("sonatina.postopt.inst", "demo", "inst:generated");
+        let event = key("compiler.event", "demo", "event:elide");
+        let snapshot = snapshot(vec![
+            node(preopt_exact.clone()),
+            node(preopt_generated.clone()),
+            node(preopt_elided.clone()),
+            node(preopt_missing.clone()),
+            node(postopt_exact.clone()),
+            node(postopt_generated.clone()),
+            node(event.clone()),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                postopt_exact,
+                preopt_exact,
+                OriginEdgeLabel::PreservedSnapshotIdentity,
+                Some(CompilerPhase::SonatinaPostOpt),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                postopt_generated,
+                preopt_generated,
+                OriginEdgeLabel::SyntheticFor,
+                Some(CompilerPhase::SonatinaPostOpt),
+            )),
+            TraceFact::CompilerEvent(CompilerEventFact::new(
+                event,
+                CompilerPhase::SonatinaPostOpt,
+                CompilerEventKind::OptimizerElidedOrRewritten,
+                vec![preopt_elided],
+                Vec::new(),
+                Some(CompilerReason::new("dead code")),
+            )),
+        ]);
+        let report = TraceIntrospectionService::new(snapshot)
+            .attribution_audit()
+            .unwrap();
+        let missing_links = report.missing_links.as_ref().unwrap();
+
+        assert_eq!(missing_links.summary.status, LinkOverallStatus::Warning);
+        assert_eq!(
+            missing_links.summary.top_blockers,
+            vec![LinkBoundaryKind::PreOptToPostOpt]
+        );
+        assert_eq!(missing_links.summary.missing_required_count, 1);
+        assert_eq!(missing_links.summary.expected_absent_count, 1);
+        let optimizer_summary = missing_links
+            .boundary_summaries
+            .iter()
+            .find(|summary| summary.boundary == LinkBoundaryKind::PreOptToPostOpt)
+            .expect("preopt to postopt boundary summary");
+        assert_eq!(optimizer_summary.affected_origins, 4);
+        assert_eq!(
+            optimizer_summary
+                .status_counts
+                .get(&LinkStatus::SatisfiedExact),
+            Some(&1)
+        );
+        assert_eq!(
+            optimizer_summary
+                .status_counts
+                .get(&LinkStatus::SatisfiedGenerated),
+            Some(&1)
+        );
+        assert_eq!(
+            optimizer_summary
+                .status_counts
+                .get(&LinkStatus::ExpectedAbsent),
+            Some(&1)
+        );
+        assert_eq!(
+            optimizer_summary
+                .status_counts
+                .get(&LinkStatus::MissingRequired),
+            Some(&1)
+        );
+        assert_eq!(
+            missing_links.gaps[0].issue_code,
+            LinkIssueCode::MissingOptimizerLineage
+        );
+        assert_eq!(missing_links.gaps[0].from_origin, preopt_missing);
+        assert_eq!(
+            missing_links.gaps[0].required_evidence[0].kind,
+            RequiredEvidenceKind::OptimizerLineageFact
+        );
+        assert!(
+            !missing_links
+                .boundary_summaries
+                .iter()
+                .any(|summary| summary.boundary == LinkBoundaryKind::PostOptToPrepared)
         );
     }
 
