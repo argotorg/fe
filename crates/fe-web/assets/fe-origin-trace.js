@@ -190,7 +190,7 @@
       var section = el("section", "analysis missing-link-audit");
       var count = (audit && audit.missing_optimized_to_prepared_lineage_pcs) || 0;
       section.append(
-        el("h2", "", "Missing Link Report"),
+        el("h2", "", "Missing Optimized→Prepared Link"),
         el(
           "p",
           "muted",
@@ -1121,7 +1121,7 @@
       if (!groups || groups.length === 0) {
         var statusCard = this._selectionStatusCard([], this._selectedDisplayClasses || []);
         if (statusCard) detail.append(statusCard);
-        detail.append(el("p", "muted", "No evidence path selected."));
+        detail.append(el("p", "muted", "No row selected."));
         detail.append(el("p", "audit-note", this._provenanceCopy()));
         if (this._data.audit && this._displayMode === "debug") {
           detail.append(this._auditSummary());
@@ -1191,7 +1191,7 @@
         detail.append(box);
       }, this);
       if (selected.length > 1) {
-        detail.insertBefore(el("p", "selection-note", selected.length + " evidence paths shown as a grouped view."), detail.firstChild);
+        detail.insertBefore(el("p", "selection-note", selected.length + " linked regions shown as a grouped view."), detail.firstChild);
       }
     }
 
@@ -1230,7 +1230,7 @@
       var status = this._displayStatus(entries, this._railStatus(displayClasses));
       if (!status) return null;
       var box = el("div", "status-card status-" + status.kind);
-      box.append(el("h3", "", this._selectedTraceLabel || "Selected row evidence"));
+      box.append(el("h3", "", this._selectedTraceLabel || "Selected row"));
       box.append(el("p", "status-line", status.label));
       box.append(el("p", "muted", this._statusExplanation(status.kind, status.label)));
       var reached = this._reachedSummary(entries);
@@ -1398,7 +1398,7 @@
         }
         return { kind: "warn", label: "missing source" };
       }
-      if (primary === "unclassified") return { kind: "warn", label: "needs evidence" };
+      if (primary === "unclassified") return { kind: "warn", label: "unmapped" };
       return { kind: top.suspicious ? "warn" : "context", label: this._shortPrimary(primary) };
     }
 
@@ -1470,8 +1470,8 @@
       if (audit && audit.source_spans && audit.source_spans.length) {
         return audit.source_spans[0].replace(/ .*$/, "");
       }
-      if (!closure) return "Selected evidence";
-      return this._compactLabel(closure.label || closure.root_key || "Selected evidence");
+      if (!closure) return "Selected row";
+      return this._compactLabel(closure.label || closure.root_key || "Selected row");
     }
 
     _compactLabel(label) {

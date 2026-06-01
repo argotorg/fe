@@ -765,7 +765,12 @@ mod tests {
     #[test]
     fn origin_trace_default_badges_use_product_language() {
         assert!(!FE_ORIGIN_TRACE_JS.contains("label: \"compiler-generated\""));
+        assert!(!FE_ORIGIN_TRACE_JS.contains("label: \"needs evidence\""));
         assert!(FE_ORIGIN_TRACE_JS.contains("label: \"generated\""));
+        assert!(FE_ORIGIN_TRACE_JS.contains("label: \"unmapped\""));
+        assert!(FE_ORIGIN_TRACE_JS.contains("No row selected."));
+        assert!(FE_ORIGIN_TRACE_JS.contains("Selected row"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("Missing Optimized→Prepared Link"));
     }
 
     #[test]
