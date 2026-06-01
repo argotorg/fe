@@ -1107,6 +1107,7 @@
       if (kind.indexOf("runtime.") === 0) return "mir";
       if (kind.indexOf("hir.") === 0) return "hir";
       if (kind.indexOf("sonatina.evm.prepared.") === 0) return "sonatina-prepared";
+      if (kind.indexOf("evm.vcode.") === 0 || kind.indexOf("vcode.") === 0) return "evm-vcode";
       if (kind.indexOf("sonatina.postopt.") === 0) return "sonatina-post";
       if (kind.indexOf("sonatina.preopt.") === 0) return "sonatina-pre";
       return null;

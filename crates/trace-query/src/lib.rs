@@ -2884,6 +2884,7 @@ fn trace_workbench_panes(
             "EVM prepared",
             "EVM prepared/codegen identity",
         ),
+        ("evm-vcode", "EVM VCode", "EVM VCode instruction order"),
         ("bytecode", "EVM bytecode", "Final bytecode disassembly"),
     ]
     .into_iter()
@@ -3389,6 +3390,9 @@ fn trace_workbench_compact_origin_label(
         "runtime.terminator" => trace_workbench_compact_runtime_terminator_label(key),
         kind if kind.starts_with("hir.") => trace_workbench_compact_hir_label(key),
         kind if kind.starts_with("sonatina.") => trace_workbench_compact_sonatina_label(key),
+        kind if kind.starts_with("evm.vcode.") || kind.starts_with("vcode.") => {
+            trace_workbench_compact_vcode_label(key)
+        }
         _ => trace_workbench_compact_tail_label(key.local_key()),
     }
 }
@@ -3403,6 +3407,9 @@ fn trace_workbench_compact_origin_meta(key: &OriginExportKey) -> String {
         kind if kind.starts_with("sonatina.postopt.") => "Optimized Sonatina".to_string(),
         kind if kind.starts_with("sonatina.preopt.") => "Sonatina pre-opt".to_string(),
         kind if kind.starts_with("sonatina.evm.prepared.") => "EVM prepared".to_string(),
+        kind if kind.starts_with("evm.vcode.") || kind.starts_with("vcode.") => {
+            "EVM VCode".to_string()
+        }
         "bytecode.pc" => "bytecode".to_string(),
         _ => key.kind().to_string(),
     }
@@ -3437,6 +3444,9 @@ fn trace_workbench_compact_origin_text(
             kind if kind.starts_with("sonatina.evm.prepared.") => {
                 "generated prepared code".to_string()
             }
+            kind if kind.starts_with("evm.vcode.") || kind.starts_with("vcode.") => {
+                "generated VCode".to_string()
+            }
             kind if kind.starts_with("sonatina.") => "generated Sonatina node".to_string(),
             _ => "generated compiler node".to_string(),
         }
@@ -3456,6 +3466,9 @@ fn trace_workbench_compact_origin_fallback_text(key: &OriginExportKey) -> String
         kind if kind.starts_with("sonatina.postopt.") => "optimized instruction".to_string(),
         kind if kind.starts_with("sonatina.preopt.") => "pre-opt instruction".to_string(),
         kind if kind.starts_with("sonatina.evm.prepared.") => "prepared instruction".to_string(),
+        kind if kind.starts_with("evm.vcode.") || kind.starts_with("vcode.") => {
+            "VCode instruction".to_string()
+        }
         "bytecode.pc" => "bytecode instruction".to_string(),
         _ => trace_workbench_compact_origin_meta(key),
     }
@@ -3517,6 +3530,14 @@ fn trace_workbench_compact_sonatina_label(key: &OriginExportKey) -> String {
     }
     if let Some(func) = trace_workbench_extract_wrapped_id(local, "FuncRef(") {
         return format!("fn {func}");
+    }
+    trace_workbench_compact_tail_label(local)
+}
+
+fn trace_workbench_compact_vcode_label(key: &OriginExportKey) -> String {
+    let local = key.local_key();
+    if let Some(inst) = trace_workbench_extract_wrapped_id(local, "VCodeInst(") {
+        return format!("v%{inst}");
     }
     trace_workbench_compact_tail_label(local)
 }
@@ -3639,6 +3660,7 @@ fn trace_workbench_key_belongs_to_panel(key: &OriginExportKey, panel: &str) -> b
         "sonatina-pre" => key.kind().starts_with("sonatina.preopt."),
         "sonatina-post" => key.kind().starts_with("sonatina.postopt."),
         "sonatina-prepared" => key.kind().starts_with("sonatina.evm.prepared."),
+        "evm-vcode" => key.kind().starts_with("evm.vcode.") || key.kind().starts_with("vcode."),
         "bytecode" => key.kind() == "bytecode.pc",
         _ => false,
     }
@@ -7553,11 +7575,14 @@ mod tests {
         TraceQueryRequest, TraceWorkbenchDisplayStatus, TraceWorkbenchMissingLineageIndex,
         TraceWorkbenchPaneRowKind, TraceWorkbenchProjectionIndex, TraceWorkbenchProjectionRequest,
         ValueFlowAtPcRequest, VariablesAtPcRequest, run_trace_query,
-        trace_workbench_compact_mir_text, trace_workbench_compact_origin_text,
-        trace_workbench_hover_groups, trace_workbench_manifest, trace_workbench_natural_key_cmp,
-        trace_workbench_report_projection, trace_workbench_selection_groups,
-        trace_workbench_source_lines, trace_workbench_source_projection,
-        trace_workbench_status_for_row, trace_workbench_status_for_source_line,
+        trace_workbench_compact_mir_text, trace_workbench_compact_origin_fallback_text,
+        trace_workbench_compact_origin_label, trace_workbench_compact_origin_meta,
+        trace_workbench_compact_origin_text, trace_workbench_hover_groups,
+        trace_workbench_key_belongs_to_panel, trace_workbench_manifest,
+        trace_workbench_natural_key_cmp, trace_workbench_report_projection,
+        trace_workbench_selection_groups, trace_workbench_source_lines,
+        trace_workbench_source_projection, trace_workbench_status_for_row,
+        trace_workbench_status_for_source_line,
     };
 
     fn scan_trace_query_sources_for_line(
@@ -10646,6 +10671,27 @@ mod tests {
         assert_eq!(
             trace_workbench_natural_key_cmp("block:0:stmt:9", "block:0:stmt:10"),
             std::cmp::Ordering::Less
+        );
+    }
+
+    #[test]
+    fn trace_workbench_surfaces_vcode_as_distinct_representation() {
+        let vcode = key(
+            "evm.vcode.inst",
+            "demo",
+            "function:FuncRef(1):vcode_inst:VCodeInst(42)",
+        );
+
+        assert!(trace_workbench_key_belongs_to_panel(&vcode, "evm-vcode"));
+        assert!(!trace_workbench_key_belongs_to_panel(
+            &vcode,
+            "sonatina-prepared"
+        ));
+        assert_eq!(trace_workbench_compact_origin_meta(&vcode), "EVM VCode");
+        assert_eq!(trace_workbench_compact_origin_label(&vcode, None), "v%42");
+        assert_eq!(
+            trace_workbench_compact_origin_fallback_text(&vcode),
+            "VCode instruction"
         );
     }
 
