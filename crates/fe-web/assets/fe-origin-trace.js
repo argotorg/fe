@@ -293,6 +293,7 @@
         this._metric("source-exact", audit.source_exact_pcs || 0),
         this._metric("optimized-linked", audit.optimized_sonatina_linked_pcs || 0),
         this._metric("prepared-linked", audit.prepared_linked_pcs || 0),
+        this._metric("missing source", audit.missing_source_evidence_pcs || 0),
         this._metric("lineage gaps", count),
         this._metric("non-exact lineage", nonExact),
         this._metric("unmapped", audit.unmapped_pcs || 0)
@@ -580,6 +581,7 @@
         return (audit.source_exact_pcs || 0) + " source-exact · "
           + (audit.optimized_sonatina_linked_pcs || 0) + " optimized-Sonatina-linked · "
           + (audit.prepared_linked_pcs || 0) + " prepared-linked · "
+          + (audit.missing_source_evidence_pcs || 0) + " missing source · "
           + (audit.non_exact_optimized_to_prepared_lineage_pcs || 0) + " non-exact lineage · "
           + (audit.unmapped_pcs || 0) + " unmapped. Prepared-linked means EVM prepared/codegen reaches bytecode; it is not source-exact by itself.";
       }
@@ -600,6 +602,7 @@
           + (audit.source_exact_pcs || 0) + " source-exact, "
           + (audit.optimized_sonatina_linked_pcs || 0) + " optimized-Sonatina-linked, "
           + (audit.prepared_linked_pcs || 0) + " prepared-linked, "
+          + (audit.missing_source_evidence_pcs || 0) + " missing source, "
           + (audit.non_exact_optimized_to_prepared_lineage_pcs || 0) + " non-exact lineage, "
           + (audit.unmapped_pcs || 0) + " unmapped.";
       }

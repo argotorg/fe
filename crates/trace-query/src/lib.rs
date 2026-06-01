@@ -2056,6 +2056,7 @@ struct TraceWorkbenchFactParitySummary {
 struct TraceWorkbenchBytecodeParitySummary {
     total_pcs: usize,
     source_exact_pcs: usize,
+    missing_source_evidence_pcs: usize,
     optimized_sonatina_linked_pcs: usize,
     prepared_linked_pcs: usize,
     unmapped_pcs: usize,
@@ -2141,6 +2142,9 @@ fn trace_workbench_projection_parity_summary(
                 .unwrap_or_default(),
             source_exact_pcs: attribution_audit
                 .map(|audit| audit.source_exact_pcs)
+                .unwrap_or_default(),
+            missing_source_evidence_pcs: attribution_audit
+                .map(|audit| audit.missing_source_evidence_pcs)
                 .unwrap_or_default(),
             optimized_sonatina_linked_pcs: attribution_audit
                 .map(|audit| audit.optimized_sonatina_linked_pcs)
@@ -4164,6 +4168,7 @@ pub struct AttributionAuditReport {
     pub total_bytecode_pcs: usize,
     pub source_exact_pcs: usize,
     pub source_ambiguous_pcs: usize,
+    pub missing_source_evidence_pcs: usize,
     pub unmapped_pcs: usize,
     pub optimized_sonatina_linked_pcs: usize,
     pub prepared_linked_pcs: usize,
@@ -4266,6 +4271,7 @@ pub struct MissingLinkSummary {
     pub status: LinkOverallStatus,
     pub top_blockers: Vec<LinkBoundaryKind>,
     pub exact_source_to_bytecode_pcs: usize,
+    pub missing_source_evidence_bytecode_pcs: usize,
     pub prepared_linked_bytecode_pcs: usize,
     pub unmapped_bytecode_pcs: usize,
     pub missing_required_count: usize,
@@ -6000,6 +6006,7 @@ fn primary_source(candidates: &[SourceAttribution]) -> Option<SourceAttribution>
 fn missing_link_audit_report(
     snapshot: &TraceSnapshot,
     source_exact_pcs: usize,
+    missing_source_evidence_pcs: usize,
     prepared_linked_pcs: usize,
     unmapped_pcs: usize,
     prepared_target_count: usize,
@@ -6659,6 +6666,7 @@ fn missing_link_audit_report(
             status: overall_status,
             top_blockers,
             exact_source_to_bytecode_pcs: source_exact_pcs,
+            missing_source_evidence_bytecode_pcs: missing_source_evidence_pcs,
             prepared_linked_bytecode_pcs: prepared_linked_pcs,
             unmapped_bytecode_pcs: unmapped_pcs,
             missing_required_count,
@@ -7526,6 +7534,7 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
     let mut total_bytecode_pcs = 0usize;
     let mut source_exact_pcs = 0usize;
     let mut source_ambiguous_pcs = 0usize;
+    let mut missing_source_evidence_pcs = 0usize;
     let mut unmapped_pcs = 0usize;
     let mut optimized_sonatina_linked_pcs = 0usize;
     let mut prepared_linked_pcs = 0usize;
@@ -7560,8 +7569,9 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
                 .filter_map(|origin| index.source_attribution(&origin))
                 .collect::<Vec<_>>()
         };
-        match sources.len() {
-            0 => unmapped_pcs += 1,
+        let source_candidate_count = sources.len();
+        match source_candidate_count {
+            0 => {}
             1 => source_exact_pcs += 1,
             _ => source_ambiguous_pcs += 1,
         }
@@ -7580,20 +7590,22 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
             .filter(|target| is_prepared_sonatina_audit_origin(target))
             .cloned()
             .collect::<Vec<_>>();
+        let has_optimized_sonatina_targets = !optimized_targets_for_pc.is_empty();
+        let has_prepared_targets = !prepared_targets_for_pc.is_empty();
 
-        if !optimized_targets_for_pc.is_empty() {
+        if has_optimized_sonatina_targets {
             optimized_sonatina_linked_pcs += 1;
             for target in optimized_targets_for_pc {
                 *optimized_sonatina_targets.entry(target).or_default() += 1;
             }
         }
+        let mut has_missing_prepared_lineage = false;
+        let mut has_non_exact_prepared_lineage = false;
         if !prepared_targets_for_pc.is_empty() {
             prepared_linked_pcs += 1;
             for target in &prepared_targets_for_pc {
                 *prepared_targets.entry(target.clone()).or_default() += 1;
             }
-            let mut has_missing_prepared_lineage = false;
-            let mut has_non_exact_prepared_lineage = false;
             for prepared in prepared_targets_for_pc
                 .into_iter()
                 .filter(is_postopt_lineage_carrier_origin)
@@ -7694,6 +7706,15 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
             if has_non_exact_prepared_lineage {
                 non_exact_optimized_to_prepared_lineage_pcs += 1;
                 non_exact_lineage_pc_keys.insert(instruction.clone());
+            }
+        }
+        if source_candidate_count == 0 {
+            if has_missing_prepared_lineage || has_non_exact_prepared_lineage {
+                // Counted by the optimized→prepared lineage buckets above.
+            } else if has_optimized_sonatina_targets {
+                missing_source_evidence_pcs += 1;
+            } else if !has_prepared_targets {
+                unmapped_pcs += 1;
             }
         }
 
@@ -7803,6 +7824,7 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
     let missing_links = missing_link_audit_report(
         snapshot,
         source_exact_pcs,
+        missing_source_evidence_pcs,
         prepared_linked_pcs,
         unmapped_pcs,
         prepared_target_total_count,
@@ -7833,6 +7855,7 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
         total_bytecode_pcs,
         source_exact_pcs,
         source_ambiguous_pcs,
+        missing_source_evidence_pcs,
         unmapped_pcs,
         optimized_sonatina_linked_pcs,
         prepared_linked_pcs,
@@ -9170,6 +9193,7 @@ mod tests {
         assert_eq!(report.total_bytecode_pcs, 4);
         assert_eq!(report.source_exact_pcs, 2);
         assert_eq!(report.source_ambiguous_pcs, 1);
+        assert_eq!(report.missing_source_evidence_pcs, 0);
         assert_eq!(report.unmapped_pcs, 1);
         assert_eq!(report.optimized_sonatina_linked_pcs, 2);
         assert_eq!(report.prepared_linked_pcs, 2);
@@ -9296,7 +9320,8 @@ mod tests {
         assert_eq!(report.total_bytecode_pcs, 2);
         assert_eq!(report.source_exact_pcs, 1);
         assert_eq!(report.source_ambiguous_pcs, 0);
-        assert_eq!(report.unmapped_pcs, 1);
+        assert_eq!(report.missing_source_evidence_pcs, 0);
+        assert_eq!(report.unmapped_pcs, 0);
         assert_eq!(report.optimized_sonatina_linked_pcs, 1);
         assert_eq!(report.prepared_linked_pcs, 2);
         assert_eq!(report.missing_optimized_to_prepared_lineage_pcs, 1);
@@ -9583,6 +9608,7 @@ mod tests {
         assert_eq!(report.source_exact_pcs, 0);
         assert_eq!(report.optimized_sonatina_linked_pcs, 0);
         assert_eq!(report.prepared_linked_pcs, 1);
+        assert_eq!(report.missing_source_evidence_pcs, 0);
         assert_eq!(report.missing_optimized_to_prepared_lineage_pcs, 1);
         assert_eq!(report.lineage_gaps.len(), 1);
         assert_eq!(report.lineage_gaps[0].candidate_hints.len(), 1);
@@ -10007,11 +10033,16 @@ mod tests {
 
         assert_eq!(report.prepared_linked_pcs, 1);
         assert_eq!(report.source_exact_pcs, 0);
-        assert_eq!(report.unmapped_pcs, 1);
+        assert_eq!(report.missing_source_evidence_pcs, 1);
+        assert_eq!(report.unmapped_pcs, 0);
         assert!(report.source_lines.is_empty());
         assert_eq!(missing_links.summary.status, LinkOverallStatus::Invalid);
         assert_eq!(missing_links.summary.exact_source_to_bytecode_pcs, 0);
-        assert_eq!(missing_links.summary.unmapped_bytecode_pcs, 1);
+        assert_eq!(
+            missing_links.summary.missing_source_evidence_bytecode_pcs,
+            1
+        );
+        assert_eq!(missing_links.summary.unmapped_bytecode_pcs, 0);
         assert_eq!(missing_links.summary.invalid_count, 1);
         assert_eq!(
             missing_links.invalid[0].issue_code,
@@ -11571,6 +11602,7 @@ mod tests {
             total_bytecode_pcs: 1,
             source_exact_pcs: 0,
             source_ambiguous_pcs: 0,
+            missing_source_evidence_pcs: 0,
             unmapped_pcs: 1,
             optimized_sonatina_linked_pcs: 0,
             prepared_linked_pcs: 1,

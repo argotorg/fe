@@ -823,6 +823,7 @@ mod tests {
         assert!(FE_ORIGIN_TRACE_JS.contains("missing downstream"));
         assert!(FE_ORIGIN_TRACE_JS.contains("missing_source_evidence"));
         assert!(FE_ORIGIN_TRACE_JS.contains("missing source"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("missing_source_evidence_pcs"));
         assert!(!FE_ORIGIN_TRACE_JS.contains("rail-legend"));
         assert!(!FE_ORIGIN_TRACE_JS.contains("legend-chip"));
         assert!(FE_ORIGIN_TRACE_JS.contains("label: \"generated\""));
