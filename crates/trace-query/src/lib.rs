@@ -1822,6 +1822,7 @@ pub fn trace_workbench_report_projection(
         snapshot,
         &request.input_path,
         request.source_text.as_deref(),
+        &request.related_source_texts,
         &classes_by_key,
         &missing_lineage,
     );
@@ -2439,10 +2440,12 @@ fn trace_workbench_panes(
     snapshot: &TraceSnapshot,
     input_path: &str,
     source_text: Option<&str>,
+    related_source_texts: &BTreeMap<String, String>,
     component_classes_by_key: &BTreeMap<String, Vec<String>>,
     missing_lineage: &TraceWorkbenchMissingLineageIndex,
 ) -> Vec<TraceWorkbenchPane> {
-    let index = TraceWorkbenchProjectionIndex::new(snapshot, input_path, source_text);
+    let index =
+        TraceWorkbenchProjectionIndex::new(snapshot, input_path, source_text, related_source_texts);
     [
         ("hir", "HIR", "High-level IR"),
         ("mir", "MIR", "Runtime MIR"),
@@ -2486,7 +2489,12 @@ struct TraceWorkbenchProjectionIndex<'a> {
 }
 
 impl<'a> TraceWorkbenchProjectionIndex<'a> {
-    fn new(snapshot: &'a TraceSnapshot, input_path: &str, source_text: Option<&str>) -> Self {
+    fn new(
+        snapshot: &'a TraceSnapshot,
+        input_path: &str,
+        source_text: Option<&str>,
+        related_source_texts: &BTreeMap<String, String>,
+    ) -> Self {
         let mut origin_nodes = BTreeSet::new();
         let mut instructions = BTreeMap::new();
         let mut source_spans = BTreeMap::new();
@@ -2503,9 +2511,12 @@ impl<'a> TraceWorkbenchProjectionIndex<'a> {
                 }
                 TraceFact::SourceSpan(span) => {
                     source_spans.insert(span.origin.clone(), span);
-                    if let Some(snippet) =
-                        trace_workbench_source_snippet(input_path, source_text, span)
-                    {
+                    if let Some(snippet) = trace_workbench_source_snippet(
+                        input_path,
+                        source_text,
+                        related_source_texts,
+                        span,
+                    ) {
                         source_snippets.insert(span.origin.clone(), snippet);
                     }
                 }
@@ -2529,12 +2540,22 @@ impl<'a> TraceWorkbenchProjectionIndex<'a> {
 fn trace_workbench_source_snippet(
     input_path: &str,
     source_text: Option<&str>,
+    related_source_texts: &BTreeMap<String, String>,
     span: &trace_facts::SourceSpanFact,
 ) -> Option<String> {
-    if !origin_closure::source_owner_matches_input(span.file.owner_key(), input_path) {
-        return None;
-    }
-    let source_text = source_text?;
+    let source_text =
+        if origin_closure::source_owner_matches_input(span.file.owner_key(), input_path) {
+            source_text
+        } else {
+            related_source_texts
+                .get(&span.file.canonical_storage_key())
+                .map(String::as_str)
+                .or_else(|| {
+                    related_source_texts
+                        .get(span.file.owner_key())
+                        .map(String::as_str)
+                })
+        }?;
     let start = span.start_byte as usize;
     let end = span.end_byte as usize;
     if start >= end || end > source_text.len() {
@@ -6648,13 +6669,43 @@ mod tests {
                 10,
             )),
         ]);
-        let index =
-            TraceWorkbenchProjectionIndex::new(&snapshot, "file:///demo.fe", Some("let x = y\n"));
+        let index = TraceWorkbenchProjectionIndex::new(
+            &snapshot,
+            "file:///demo.fe",
+            Some("let x = y\n"),
+            &BTreeMap::new(),
+        );
 
         assert_eq!(
             trace_workbench_compact_origin_text(&hir, &index),
             "let x = y"
         );
+    }
+
+    #[test]
+    fn trace_workbench_related_hir_rows_use_related_source_snippets() {
+        let source_file = key("source.file", "file:///std/lib.fe", "file:0");
+        let hir = key("hir.expr", "file:///std/lib.fe", "expr:0");
+        let snapshot = snapshot(vec![
+            node(source_file.clone()),
+            node(hir.clone()),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                hir.clone(),
+                source_file.clone(),
+                4,
+                7,
+                1,
+                5,
+                1,
+                8,
+            )),
+        ]);
+        let mut related = BTreeMap::new();
+        related.insert(source_file.canonical_storage_key(), "abc def\n".to_string());
+        let index =
+            TraceWorkbenchProjectionIndex::new(&snapshot, "file:///demo.fe", None, &related);
+
+        assert_eq!(trace_workbench_compact_origin_text(&hir, &index), "def");
     }
 
     #[test]
@@ -6675,7 +6726,8 @@ mod tests {
                 "balance",
             )),
         ]);
-        let index = TraceWorkbenchProjectionIndex::new(&snapshot, "demo.fe", None);
+        let index =
+            TraceWorkbenchProjectionIndex::new(&snapshot, "demo.fe", None, &BTreeMap::new());
 
         assert_eq!(
             trace_workbench_compact_origin_text(&hir, &index),
@@ -6705,7 +6757,8 @@ mod tests {
             node(postopt.clone()),
             node(generated_mir.clone()),
         ]);
-        let index = TraceWorkbenchProjectionIndex::new(&snapshot, "demo.fe", None);
+        let index =
+            TraceWorkbenchProjectionIndex::new(&snapshot, "demo.fe", None, &BTreeMap::new());
 
         assert_eq!(
             trace_workbench_compact_origin_text(&hir, &index),
