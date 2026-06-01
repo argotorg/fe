@@ -3197,9 +3197,6 @@ fn trace_workbench_row_indent(kind: TraceWorkbenchPaneRowKind) -> u8 {
 fn trace_workbench_status_for_source_line(
     classes: &[String],
 ) -> Option<TraceWorkbenchDisplayStatus> {
-    if classes.iter().any(|class| class.starts_with("exact-c-")) {
-        return Some(TraceWorkbenchDisplayStatus::Exact);
-    }
     if classes
         .iter()
         .any(|class| class.starts_with("generated-c-"))
@@ -3218,9 +3215,6 @@ fn trace_workbench_status_for_row(
     classes: &[String],
     missing_lineage: &TraceWorkbenchMissingLineageIndex,
 ) -> Option<TraceWorkbenchDisplayStatus> {
-    if classes.iter().any(|class| class.starts_with("exact-c-")) {
-        return Some(TraceWorkbenchDisplayStatus::Exact);
-    }
     if missing_lineage.contains(key) {
         return Some(TraceWorkbenchDisplayStatus::MissingOptimizedToPrepared);
     }
@@ -7305,6 +7299,7 @@ mod tests {
         trace_workbench_manifest, trace_workbench_natural_key_cmp,
         trace_workbench_report_projection, trace_workbench_source_lines,
         trace_workbench_source_projection, trace_workbench_status_for_row,
+        trace_workbench_status_for_source_line,
     };
 
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -9725,6 +9720,23 @@ mod tests {
                 &TraceWorkbenchMissingLineageIndex::default(),
             ),
             Some(TraceWorkbenchDisplayStatus::PreparedLinked)
+        );
+    }
+
+    #[test]
+    fn trace_workbench_exact_rail_does_not_create_generic_exact_badges() {
+        let bytecode = key("bytecode.pc", "demo", "pc:68");
+        let classes = vec!["exact-c-demo".to_string()];
+
+        assert_eq!(trace_workbench_status_for_source_line(&classes), None);
+        assert_eq!(
+            trace_workbench_status_for_row(
+                &bytecode,
+                TraceWorkbenchPaneRowKind::Instruction,
+                &classes,
+                &TraceWorkbenchMissingLineageIndex::default(),
+            ),
+            None
         );
     }
 

@@ -795,6 +795,10 @@ mod tests {
     fn origin_trace_default_badges_use_product_language() {
         assert!(!FE_ORIGIN_TRACE_JS.contains("label: \"compiler-generated\""));
         assert!(!FE_ORIGIN_TRACE_JS.contains("label: \"needs evidence\""));
+        assert!(!FE_ORIGIN_TRACE_JS.contains("box.append(this._railLegend());"));
+        assert!(!FE_ORIGIN_TRACE_JS.contains(
+            "indexOf(\"exact-c-\") === 0; })) return { kind: \"ok\", label: \"exact\" }"
+        ));
         assert!(FE_ORIGIN_TRACE_JS.contains("label: \"generated\""));
         assert!(FE_ORIGIN_TRACE_JS.contains("label: \"unmapped\""));
         assert!(FE_ORIGIN_TRACE_JS.contains("No row selected."));

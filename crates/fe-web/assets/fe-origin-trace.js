@@ -1664,7 +1664,6 @@
       box.append(el("p", "muted", this._statusExplanation(status.kind, status.label)));
       var reached = this._reachedSummary(entries);
       if (reached) box.append(reached);
-      box.append(this._railLegend());
       return box;
     }
 
@@ -1793,7 +1792,6 @@
 
     _railStatus(classes) {
       classes = classes || [];
-      if (classes.some(function (name) { return name.indexOf("exact-c-") === 0; })) return { kind: "ok", label: "exact" };
       if (classes.indexOf("origin-generated") >= 0) return { kind: "generated", label: "generated" };
       if (classes.some(function (name) { return name.indexOf("generated-c-") === 0; })) return { kind: "generated", label: "generated downstream" };
       if (classes.some(function (name) { return name.indexOf("prepared-c-") === 0; })) return { kind: "context", label: "prepared-linked" };
