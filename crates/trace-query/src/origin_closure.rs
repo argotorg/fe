@@ -626,12 +626,12 @@ impl OriginComponentRail {
             OriginEdgeTraversalClass::ExactAttribution | OriginEdgeTraversalClass::SnapshotAlias
         );
         match self {
-            Self::Exact => exact,
+            Self::Exact => exact && !is_prepared_codegen_connectivity_edge(edge),
             Self::Generated => matches!(class, OriginEdgeTraversalClass::Synthetic),
-            Self::Prepared => is_prepared_bytecode_edge(edge),
+            Self::Prepared => is_prepared_codegen_connectivity_edge(edge),
             Self::Contextual => {
                 matches!(class, OriginEdgeTraversalClass::Contextual)
-                    && !is_prepared_bytecode_edge(edge)
+                    && !is_prepared_codegen_connectivity_edge(edge)
             }
             Self::Structural => matches!(class, OriginEdgeTraversalClass::Structural),
         }
@@ -786,9 +786,14 @@ fn component_class_name(
     }
 }
 
-fn is_prepared_bytecode_edge(edge: &OriginEdgeFact) -> bool {
-    (edge.from.kind().starts_with("bytecode.") && is_prepared_origin_kind(edge.to.kind()))
-        || (edge.to.kind().starts_with("bytecode.") && is_prepared_origin_kind(edge.from.kind()))
+fn is_prepared_codegen_connectivity_edge(edge: &OriginEdgeFact) -> bool {
+    let from_prepared = is_prepared_origin_kind(edge.from.kind());
+    let to_prepared = is_prepared_origin_kind(edge.to.kind());
+    let from_bytecode = edge.from.kind().starts_with("bytecode.");
+    let to_bytecode = edge.to.kind().starts_with("bytecode.");
+    (from_bytecode && to_prepared)
+        || (to_bytecode && from_prepared)
+        || (from_prepared && to_prepared)
 }
 
 fn is_prepared_origin_kind(kind: &str) -> bool {
@@ -1777,6 +1782,52 @@ mod tests {
             prefixed_classes(&classes, &bytecode, "structural-c-"),
             prefixed_classes(&classes, &code_object, "structural-c-")
         );
+    }
+
+    #[test]
+    fn vcode_prepared_bytecode_connectivity_is_prepared_rail_not_exact_rail() {
+        let bytecode = test_key("bytecode.pc", "runtime", "pc:68");
+        let vcode = test_key(
+            "evm.vcode.inst",
+            "runtime",
+            "function:FuncRef(1):vcode_inst:VCodeInst(7)",
+        );
+        let prepared = test_key(
+            "sonatina.evm.prepared.inst",
+            "runtime",
+            "function:FuncRef(1):inst:InstId(7)",
+        );
+        let edges = [
+            OriginEdgeFact::new(
+                bytecode.clone(),
+                vcode.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            ),
+            OriginEdgeFact::new(
+                vcode.clone(),
+                prepared.clone(),
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::Backend),
+            ),
+        ];
+        let index = test_index(&edges, []);
+
+        let classes = component_classes_for_index(&index);
+
+        let prepared_class = prefixed_classes(&classes, &bytecode, "prepared-c-");
+        assert!(!prepared_class.is_empty());
+        assert_eq!(
+            prepared_class,
+            prefixed_classes(&classes, &vcode, "prepared-c-")
+        );
+        assert_eq!(
+            prepared_class,
+            prefixed_classes(&classes, &prepared, "prepared-c-")
+        );
+        assert!(prefixed_classes(&classes, &bytecode, "exact-c-").is_empty());
+        assert!(prefixed_classes(&classes, &vcode, "exact-c-").is_empty());
+        assert!(prefixed_classes(&classes, &prepared, "exact-c-").is_empty());
     }
 
     #[test]
