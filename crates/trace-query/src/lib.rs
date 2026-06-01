@@ -3867,6 +3867,7 @@ pub struct AttributionAuditReport {
     pub optimized_sonatina_linked_pcs: usize,
     pub prepared_linked_pcs: usize,
     pub missing_optimized_to_prepared_lineage_pcs: usize,
+    pub non_exact_optimized_to_prepared_lineage_pcs: usize,
     pub direct_bytecode_edges: Vec<AttributionAuditEdgeCount>,
     pub direct_edges_by_class: Vec<AttributionAuditClassCount>,
     pub source_lines: Vec<AttributionAuditSourceLineCount>,
@@ -3913,6 +3914,8 @@ pub struct AttributionAuditLineageGap {
     pub bytecode_pc: OriginExportKey,
     pub prepared_origin: OriginExportKey,
     pub reason: String,
+    pub status: LinkStatus,
+    pub issue_code: LinkIssueCode,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub candidate_hints: Vec<CandidateHint>,
 }
@@ -5687,10 +5690,28 @@ fn missing_link_audit_report(
         .filter(|entry| entry.boundary == LinkBoundaryKind::BytecodeToRuntime)
         .count();
     let missing_preopt_to_postopt_count = preopt_to_postopt.missing.len();
-    let missing_postopt_to_prepared_count = lineage_gaps.len();
+    let missing_postopt_to_prepared_count = lineage_gaps
+        .iter()
+        .filter(|gap| {
+            matches!(
+                gap.status,
+                LinkStatus::MissingRequired | LinkStatus::MissingLineageButCandidatesExist
+            )
+        })
+        .count();
+    let generated_postopt_to_prepared_count = lineage_gaps
+        .iter()
+        .filter(|gap| matches!(gap.status, LinkStatus::SatisfiedGenerated))
+        .count();
+    let context_only_postopt_to_prepared_count = lineage_gaps
+        .iter()
+        .filter(|gap| matches!(gap.status, LinkStatus::ContextOnly))
+        .count();
+    let non_exact_postopt_to_prepared_count =
+        generated_postopt_to_prepared_count + context_only_postopt_to_prepared_count;
     let missing_postopt_to_prepared_with_candidates = lineage_gaps
         .iter()
-        .filter(|gap| !gap.candidate_hints.is_empty())
+        .filter(|gap| matches!(gap.status, LinkStatus::MissingLineageButCandidatesExist))
         .count();
     let missing_postopt_to_prepared_without_candidates = missing_postopt_to_prepared_count
         .saturating_sub(missing_postopt_to_prepared_with_candidates);
@@ -5703,7 +5724,7 @@ fn missing_link_audit_report(
         + missing_prepared_to_bytecode_count;
     let overall_status = if !invalid.is_empty() {
         LinkOverallStatus::Invalid
-    } else if missing_required_count > 0 {
+    } else if missing_required_count > 0 || non_exact_postopt_to_prepared_count > 0 {
         LinkOverallStatus::Warning
     } else if !expected_absent.is_empty() {
         LinkOverallStatus::PassWithExpectedAbsences
@@ -5822,13 +5843,26 @@ fn missing_link_audit_report(
 
     if prepared_linked_pcs > 0 || !lineage_gaps.is_empty() || !invalid.is_empty() {
         let mut status_counts = BTreeMap::new();
-        let satisfied_prepared_lineage_count =
-            prepared_linked_pcs.saturating_sub(missing_postopt_to_prepared_count);
+        let satisfied_prepared_lineage_count = prepared_linked_pcs.saturating_sub(
+            missing_postopt_to_prepared_count + non_exact_postopt_to_prepared_count,
+        );
         if satisfied_prepared_lineage_count > 0 {
             status_counts.insert(LinkStatus::SatisfiedExact, satisfied_prepared_lineage_count);
         }
         if !invalid.is_empty() {
             status_counts.insert(LinkStatus::Invalid, invalid.len());
+        }
+        if generated_postopt_to_prepared_count > 0 {
+            status_counts.insert(
+                LinkStatus::SatisfiedGenerated,
+                generated_postopt_to_prepared_count,
+            );
+        }
+        if context_only_postopt_to_prepared_count > 0 {
+            status_counts.insert(
+                LinkStatus::ContextOnly,
+                context_only_postopt_to_prepared_count,
+            );
         }
         if missing_postopt_to_prepared_with_candidates > 0 {
             status_counts.insert(
@@ -5844,6 +5878,10 @@ fn missing_link_audit_report(
         }
         let top_issue_codes = [
             (!invalid.is_empty()).then_some(LinkIssueCode::PreparedKeyedAsPostopt),
+            (generated_postopt_to_prepared_count > 0)
+                .then_some(LinkIssueCode::GeneratedExplanationOnly),
+            (context_only_postopt_to_prepared_count > 0)
+                .then_some(LinkIssueCode::ContextOnlyEvidence),
             (missing_postopt_to_prepared_count > 0)
                 .then_some(LinkIssueCode::MissingOptimizedToPreparedLineage),
         ]
@@ -5982,12 +6020,8 @@ fn missing_link_audit_report(
                     &gap.prepared_origin,
                 ),
                 boundary: LinkBoundaryKind::PostOptToPrepared,
-                status: if gap.candidate_hints.is_empty() {
-                    LinkStatus::MissingRequired
-                } else {
-                    LinkStatus::MissingLineageButCandidatesExist
-                },
-                issue_code: LinkIssueCode::MissingOptimizedToPreparedLineage,
+                status: gap.status,
+                issue_code: gap.issue_code,
                 severity: LinkSeverity::Warning,
                 from_origin: gap.prepared_origin.clone(),
                 from_representation: Some("sonatina.evm.prepared".to_string()),
@@ -6124,15 +6158,31 @@ fn missing_link_audit_report(
             .flat_map(|gap| gap.candidate_hints.iter().cloned())
             .take(25)
             .collect::<Vec<_>>();
+        let cluster_status = if missing_postopt_to_prepared_count > 0 {
+            if missing_postopt_to_prepared_with_candidates > 0
+                && missing_postopt_to_prepared_without_candidates == 0
+            {
+                LinkStatus::MissingLineageButCandidatesExist
+            } else {
+                LinkStatus::MissingRequired
+            }
+        } else if generated_postopt_to_prepared_count > 0 {
+            LinkStatus::SatisfiedGenerated
+        } else {
+            LinkStatus::ContextOnly
+        };
+        let cluster_issue_code = if missing_postopt_to_prepared_count > 0 {
+            LinkIssueCode::MissingOptimizedToPreparedLineage
+        } else if generated_postopt_to_prepared_count > 0 {
+            LinkIssueCode::GeneratedExplanationOnly
+        } else {
+            LinkIssueCode::ContextOnlyEvidence
+        };
         clusters.push(LinkGapCluster {
             cluster_id: cluster_id.clone(),
             boundary: LinkBoundaryKind::PostOptToPrepared,
-            status: if candidate_hints.is_empty() {
-                LinkStatus::MissingRequired
-            } else {
-                LinkStatus::MissingLineageButCandidatesExist
-            },
-            issue_code: LinkIssueCode::MissingOptimizedToPreparedLineage,
+            status: cluster_status,
+            issue_code: cluster_issue_code,
             severity: LinkSeverity::Warning,
             owner_phase: CompilerPhase::Backend,
             headline: "Optimized Sonatina reaches no EVM prepared lineage".to_string(),
@@ -6744,6 +6794,46 @@ fn postopt_candidate_hints_for_prepared_raw_id(
         .collect()
 }
 
+struct NonExactPreparedLineage {
+    status: LinkStatus,
+    issue_code: LinkIssueCode,
+    reason: String,
+}
+
+fn non_exact_postopt_lineage_for_prepared(
+    snapshot: &TraceSnapshot,
+    prepared_origin: &OriginExportKey,
+) -> Option<NonExactPreparedLineage> {
+    let mut saw_context = false;
+    for fact in snapshot.facts() {
+        let TraceFact::OriginEdge(edge) = fact else {
+            continue;
+        };
+        if edge.from != *prepared_origin || !is_optimized_sonatina_audit_origin(&edge.to) {
+            continue;
+        }
+        match edge.traversal_class() {
+            OriginEdgeTraversalClass::Synthetic => {
+                return Some(NonExactPreparedLineage {
+                    status: LinkStatus::SatisfiedGenerated,
+                    issue_code: LinkIssueCode::GeneratedExplanationOnly,
+                    reason: "generated_optimized_to_prepared_explanation_only".to_string(),
+                });
+            }
+            OriginEdgeTraversalClass::Contextual => {
+                saw_context = true;
+            }
+            _ => {}
+        }
+    }
+
+    saw_context.then(|| NonExactPreparedLineage {
+        status: LinkStatus::ContextOnly,
+        issue_code: LinkIssueCode::ContextOnlyEvidence,
+        reason: "context_only_optimized_to_prepared_lineage".to_string(),
+    })
+}
+
 fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport {
     let index = TraceIndex::new(snapshot);
     let semantic_index = trace_index::TraceIndex::new(snapshot);
@@ -6773,6 +6863,7 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
     let mut optimized_sonatina_linked_pcs = 0usize;
     let mut prepared_linked_pcs = 0usize;
     let mut missing_optimized_to_prepared_lineage_pcs = 0usize;
+    let mut non_exact_optimized_to_prepared_lineage_pcs = 0usize;
 
     for instruction in index.all_instruction_keys() {
         if instruction.kind() != "bytecode.pc" {
@@ -6825,6 +6916,7 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
                 *prepared_targets.entry(target.clone()).or_default() += 1;
             }
             let mut has_missing_prepared_lineage = false;
+            let mut has_non_exact_prepared_lineage = false;
             for prepared in prepared_targets_for_pc {
                 let prepared_reachable = semantic_index
                     .reachable_targets(&prepared, trace_index::TraceReachabilityPolicy::ExactOnly);
@@ -6834,21 +6926,54 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
                 {
                     continue;
                 }
-                has_missing_prepared_lineage = true;
+                let non_exact_lineage = non_exact_postopt_lineage_for_prepared(snapshot, &prepared);
+                let (status, issue_code, reason, candidate_hints) =
+                    if let Some(non_exact_lineage) = non_exact_lineage {
+                        (
+                            non_exact_lineage.status,
+                            non_exact_lineage.issue_code,
+                            non_exact_lineage.reason,
+                            Vec::new(),
+                        )
+                    } else {
+                        let candidate_hints = postopt_candidate_hints_for_prepared_raw_id(
+                            &postopt_raw_local_candidates,
+                            &prepared,
+                        );
+                        (
+                            if candidate_hints.is_empty() {
+                                LinkStatus::MissingRequired
+                            } else {
+                                LinkStatus::MissingLineageButCandidatesExist
+                            },
+                            LinkIssueCode::MissingOptimizedToPreparedLineage,
+                            "missing_optimized_to_prepared_lineage".to_string(),
+                            candidate_hints,
+                        )
+                    };
+                if matches!(
+                    status,
+                    LinkStatus::MissingRequired | LinkStatus::MissingLineageButCandidatesExist
+                ) {
+                    has_missing_prepared_lineage = true;
+                } else {
+                    has_non_exact_prepared_lineage = true;
+                }
                 *lineage_gap_targets.entry(prepared.clone()).or_default() += 1;
-                let candidate_hints = postopt_candidate_hints_for_prepared_raw_id(
-                    &postopt_raw_local_candidates,
-                    &prepared,
-                );
                 lineage_gaps.push(AttributionAuditLineageGap {
                     bytecode_pc: instruction.clone(),
                     prepared_origin: prepared,
-                    reason: "missing_optimized_to_prepared_lineage".to_string(),
+                    reason,
+                    status,
+                    issue_code,
                     candidate_hints,
                 });
             }
             if has_missing_prepared_lineage {
                 missing_optimized_to_prepared_lineage_pcs += 1;
+            }
+            if has_non_exact_prepared_lineage {
+                non_exact_optimized_to_prepared_lineage_pcs += 1;
             }
         }
 
@@ -6990,6 +7115,7 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
         optimized_sonatina_linked_pcs,
         prepared_linked_pcs,
         missing_optimized_to_prepared_lineage_pcs,
+        non_exact_optimized_to_prepared_lineage_pcs,
         direct_bytecode_edges,
         direct_edges_by_class,
         source_lines,
@@ -8370,6 +8496,115 @@ mod tests {
         );
         assert_eq!(missing_links.clusters[0].candidate_hints.len(), 1);
         assert_eq!(missing_links.summary.missing_required_count, 1);
+    }
+
+    #[test]
+    fn non_exact_postopt_prepared_lineage_is_explanation_not_missing_required() {
+        let function = key("function", "demo", "recv");
+        let postopt_generated = key("sonatina.postopt.inst", "demo", "inst:postopt-generated");
+        let postopt_context = key("sonatina.postopt.inst", "demo", "inst:postopt-context");
+        let prepared_generated = key(
+            "sonatina.evm.prepared.inst",
+            "demo",
+            "inst:prepared-generated",
+        );
+        let prepared_context = key(
+            "sonatina.evm.prepared.inst",
+            "demo",
+            "inst:prepared-context",
+        );
+        let pc_generated = key("bytecode.pc", "demo", "pc:0");
+        let pc_context = key("bytecode.pc", "demo", "pc:1");
+        let snapshot = snapshot(vec![
+            node(function.clone()),
+            node(postopt_generated.clone()),
+            node(postopt_context.clone()),
+            node(prepared_generated.clone()),
+            node(prepared_context.clone()),
+            node(pc_generated.clone()),
+            node(pc_context.clone()),
+            TraceFact::Instruction(InstructionFact::new(
+                pc_generated.clone(),
+                function.clone(),
+                0,
+                "ADD",
+            )),
+            TraceFact::Instruction(InstructionFact::new(pc_context.clone(), function, 1, "MUL")),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                pc_generated,
+                prepared_generated.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                pc_context,
+                prepared_context.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                prepared_generated.clone(),
+                postopt_generated,
+                OriginEdgeLabel::SyntheticFor,
+                Some(CompilerPhase::Backend),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                prepared_context.clone(),
+                postopt_context,
+                OriginEdgeLabel::BackendPrepared,
+                Some(CompilerPhase::Backend),
+            )),
+        ]);
+        let report = TraceIntrospectionService::new(snapshot)
+            .attribution_audit()
+            .unwrap();
+
+        assert_eq!(report.source_exact_pcs, 0);
+        assert_eq!(report.prepared_linked_pcs, 2);
+        assert_eq!(report.missing_optimized_to_prepared_lineage_pcs, 0);
+        assert_eq!(report.non_exact_optimized_to_prepared_lineage_pcs, 2);
+        assert_eq!(report.lineage_gaps.len(), 2);
+        assert!(report.lineage_gaps.iter().any(|gap| {
+            gap.prepared_origin == prepared_generated
+                && gap.status == LinkStatus::SatisfiedGenerated
+                && gap.issue_code == LinkIssueCode::GeneratedExplanationOnly
+        }));
+        assert!(report.lineage_gaps.iter().any(|gap| {
+            gap.prepared_origin == prepared_context
+                && gap.status == LinkStatus::ContextOnly
+                && gap.issue_code == LinkIssueCode::ContextOnlyEvidence
+        }));
+
+        let missing_links = report.missing_links.as_ref().unwrap();
+        assert_eq!(missing_links.summary.status, LinkOverallStatus::Warning);
+        assert_eq!(missing_links.summary.missing_required_count, 0);
+        assert_eq!(
+            missing_links.summary.top_blockers,
+            vec![LinkBoundaryKind::PostOptToPrepared]
+        );
+        let postopt_to_prepared = missing_links
+            .boundary_summaries
+            .iter()
+            .find(|summary| summary.boundary == LinkBoundaryKind::PostOptToPrepared)
+            .expect("postopt to prepared boundary summary");
+        assert_eq!(
+            postopt_to_prepared
+                .status_counts
+                .get(&LinkStatus::SatisfiedGenerated),
+            Some(&1)
+        );
+        assert_eq!(
+            postopt_to_prepared
+                .status_counts
+                .get(&LinkStatus::ContextOnly),
+            Some(&1)
+        );
+        assert_eq!(
+            postopt_to_prepared
+                .status_counts
+                .get(&LinkStatus::MissingRequired),
+            None
+        );
     }
 
     #[test]
