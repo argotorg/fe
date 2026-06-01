@@ -79,20 +79,18 @@ pub(crate) async fn handle_trace_workbench_bootstrap(
         .map_err(|err| internal_error(format!("invalid session URI: {err}")))?;
     let document_version = backend.document_version(&uri);
     let config_hash = backend.tooling_config().stable_hash();
-    let latest_model_digest = backend
+    let latest_revision = backend
         .trace_viewer_revisions(&request.session_id)
-        .and_then(|revisions| {
-            revisions
-                .last()
-                .map(|revision| revision.model_digest.clone())
-        });
+        .and_then(|revisions| revisions.last().cloned());
+    let (revision_status, latest_model_digest) =
+        trace_workbench_revision_status(latest_revision.as_ref(), document_version, &config_hash);
     session.document_version = document_version;
     session.config_hash = config_hash.clone();
     Ok(TraceWorkbenchBootstrapResponse {
         revision: TraceWorkbenchRevision {
             id: document_version.unwrap_or_default().max(0) as u64,
             document_version,
-            status: "ready".to_string(),
+            status: revision_status,
             config_hash,
             model_digest: latest_model_digest,
         },
@@ -105,6 +103,29 @@ pub(crate) async fn handle_trace_workbench_bootstrap(
             revision_history: true,
         },
     })
+}
+
+fn trace_workbench_revision_status(
+    latest_revision: Option<&TraceViewerRevisionRecord>,
+    document_version: Option<i32>,
+    config_hash: &str,
+) -> (String, Option<String>) {
+    let Some(latest_revision) = latest_revision else {
+        return ("pending".to_string(), None);
+    };
+    if latest_revision.document_version == document_version
+        && latest_revision.config_hash == config_hash
+        && latest_revision.status == "ready"
+    {
+        return (
+            "ready".to_string(),
+            Some(latest_revision.model_digest.clone()),
+        );
+    }
+    (
+        "stale_but_usable".to_string(),
+        Some(latest_revision.model_digest.clone()),
+    )
 }
 
 pub(crate) async fn handle_trace_workbench_model(
@@ -632,6 +653,7 @@ mod tests {
 
         assert_eq!(response.revision.id, 4);
         assert_eq!(response.revision.document_version, Some(4));
+        assert_eq!(response.revision.status, "pending");
         assert_eq!(response.revision.model_digest, None);
         assert_eq!(response.session.document_version, Some(4));
 
@@ -647,14 +669,15 @@ mod tests {
         backend.set_document_version(uri.clone(), 9);
         let session =
             backend.create_trace_viewer_session(uri, "evm", "O2", "source-postopt-bytecode", None);
+        let config_hash = backend.tooling_config().stable_hash();
         backend.record_trace_viewer_revision(
             &session.id,
             TraceViewerRevisionRecord {
                 revision: 9,
                 document_version: Some(9),
                 status: "ready".to_string(),
-                config_hash: "config".to_string(),
-                compiler_config_hash: "config".to_string(),
+                config_hash: config_hash.clone(),
+                compiler_config_hash: config_hash,
                 target_config_hash: "blake3:target".to_string(),
                 target: "evm".to_string(),
                 opt_level: "O2".to_string(),
@@ -680,6 +703,66 @@ mod tests {
         .await
         .unwrap();
 
+        assert_eq!(response.revision.status, "ready");
+        assert_eq!(
+            response.revision.model_digest.as_deref(),
+            Some("blake3:model")
+        );
+
+        tokio::task::spawn_blocking(move || drop(backend))
+            .await
+            .expect("backend drop task panicked");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn trace_workbench_bootstrap_reports_stale_ready_revision() {
+        let mut backend = test_backend();
+        let uri = Url::parse("file:///workspace/src/lib.fe").unwrap();
+        backend.set_document_version(uri.clone(), 9);
+        let session = backend.create_trace_viewer_session(
+            uri.clone(),
+            "evm",
+            "O2",
+            "source-postopt-bytecode",
+            None,
+        );
+        backend.record_trace_viewer_revision(
+            &session.id,
+            TraceViewerRevisionRecord {
+                revision: 9,
+                document_version: Some(9),
+                status: "ready".to_string(),
+                config_hash: backend.tooling_config().stable_hash(),
+                compiler_config_hash: backend.tooling_config().stable_hash(),
+                target_config_hash: "blake3:target".to_string(),
+                target: "evm".to_string(),
+                opt_level: "O2".to_string(),
+                view: "source-postopt-bytecode".to_string(),
+                source_hash: Some("blake3:source-text".to_string()),
+                trace_snapshot_digest: "blake3:trace".to_string(),
+                model_digest: "blake3:model".to_string(),
+                summary_digest: "blake3:summary".to_string(),
+                source_digest: "blake3:source".to_string(),
+                indexes_digest: "blake3:indexes".to_string(),
+                rail_components_digest: "blake3:rails".to_string(),
+                pane_digests: BTreeMap::new(),
+                report_digests: BTreeMap::new(),
+            },
+        );
+        backend.set_document_version(uri, 10);
+
+        let response = handle_trace_workbench_bootstrap(
+            &mut backend,
+            TraceWorkbenchSessionRequest {
+                session_id: session.id,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.revision.id, 10);
+        assert_eq!(response.revision.document_version, Some(10));
+        assert_eq!(response.revision.status, "stale_but_usable");
         assert_eq!(
             response.revision.model_digest.as_deref(),
             Some("blake3:model")

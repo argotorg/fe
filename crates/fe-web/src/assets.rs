@@ -469,7 +469,10 @@ pub fn origin_trace_live_html_shell(title: &str) -> String {
           var payload = JSON.parse(event.data || "{{}}");
           var revisionChanged = payload.revision && Number(payload.revision) !== Number(window.FE_TRACE_WORKBENCH_REVISION || 0);
           var digestChanged = payload.modelDigest && payload.modelDigest !== window.FE_TRACE_WORKBENCH_MODEL_DIGEST;
-          if (payload.status === "ready" && (revisionChanged || digestChanged)) {{
+          var refreshableStatus = payload.status === "ready"
+            || payload.status === "stale_but_usable"
+            || payload.status === "pending";
+          if (refreshableStatus && (revisionChanged || digestChanged)) {{
             fetchAndRenderModel().catch(function (err) {{
               var reason = String(err && err.message || err);
               renderCachedModel(reason);
@@ -760,6 +763,9 @@ mod tests {
         assert!(html.contains("FE_TRACE_WORKBENCH_REVISIONS"));
         assert!(html.contains("trace/selection"));
         assert!(html.contains("resolvedRows"));
+        assert!(html.contains("refreshableStatus"));
+        assert!(html.contains("stale_but_usable"));
+        assert!(html.contains("pending"));
     }
 
     #[test]
