@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use common::origin::OriginExportKey;
@@ -311,16 +312,46 @@ pub fn component_classes_by_origin_key(snapshot: &TraceSnapshot) -> BTreeMap<Str
 }
 
 pub fn source_owner_matches_input(owner: &str, input_path: &str) -> bool {
+    let owner = owner.trim();
+    let input_path = input_path.trim();
     if owner == input_path {
         return true;
     }
-    let input_path = input_path.trim();
     if input_path.is_empty() {
         return false;
     }
-    owner
-        .strip_suffix(input_path)
-        .is_some_and(|prefix| prefix.ends_with('/') || prefix.ends_with(':'))
+    let owner_path = normalized_source_owner_path(owner);
+    let input_path = normalized_source_owner_path(input_path);
+    if owner_path == input_path {
+        return true;
+    }
+    if source_path_is_basename_only(&input_path) {
+        return false;
+    }
+    source_path_suffix_matches(&owner_path, &input_path)
+}
+
+fn normalized_source_owner_path(value: &str) -> Cow<'_, str> {
+    let value = value.trim();
+    if let Some(rest) = value.strip_prefix("file://localhost") {
+        Cow::Borrowed(rest)
+    } else if let Some(rest) = value.strip_prefix("file://") {
+        Cow::Borrowed(rest)
+    } else if let Some(rest) = value.strip_prefix("package:") {
+        Cow::Borrowed(rest)
+    } else {
+        Cow::Borrowed(value)
+    }
+}
+
+fn source_path_is_basename_only(path: &str) -> bool {
+    !path.contains('/') && !path.contains('\\')
+}
+
+fn source_path_suffix_matches(owner_path: &str, input_path: &str) -> bool {
+    owner_path.strip_suffix(input_path).is_some_and(|prefix| {
+        prefix.ends_with('/') || prefix.ends_with('\\') || prefix.ends_with(':')
+    })
 }
 
 pub fn highest_phase_reached(counts: &OriginClosureCounts) -> ClosureAuditPhase {
@@ -1403,8 +1434,8 @@ mod tests {
     use trace_facts::{CompilerPhase, InstructionFact, OriginEdgeFact, OriginEdgeLabel};
 
     #[test]
-    fn source_owner_matching_requires_suffix_boundary() {
-        assert!(source_owner_matches_input(
+    fn source_owner_matching_is_path_aware() {
+        assert!(!source_owner_matches_input(
             "file:///tmp/fib_demo.fe",
             "fib_demo.fe"
         ));
@@ -1416,12 +1447,24 @@ mod tests {
             "file:///tmp/contracts/fib_demo.fe",
             "/tmp/contracts/fib_demo.fe"
         ));
+        assert!(source_owner_matches_input(
+            "file://localhost/tmp/contracts/fib_demo.fe",
+            "/tmp/contracts/fib_demo.fe"
+        ));
+        assert!(source_owner_matches_input(
+            "file:///workspace/contracts/fib_demo.fe",
+            "contracts/fib_demo.fe"
+        ));
         assert!(!source_owner_matches_input(
             "file:///tmp/not_fib_demo.fe",
             "fib_demo.fe"
         ));
         assert!(!source_owner_matches_input(
             "package:not_fib_demo.fe",
+            "fib_demo.fe"
+        ));
+        assert!(!source_owner_matches_input(
+            "package:std/fib_demo.fe",
             "fib_demo.fe"
         ));
     }
