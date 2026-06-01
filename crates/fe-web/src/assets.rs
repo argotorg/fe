@@ -826,6 +826,9 @@ mod tests {
         assert!(FE_ORIGIN_TRACE_JS.contains("Missing Link Audit"));
         assert!(FE_ORIGIN_TRACE_JS.contains("Boundary status"));
         assert!(FE_ORIGIN_TRACE_JS.contains("linked phases, generated work, and gaps"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("_componentReachedSummary"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("Rail component reaches"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("exact phase link"));
         assert!(FE_ORIGIN_TRACE_JS.contains("linked regions"));
         assert!(FE_ORIGIN_TRACE_JS.contains("need compiler evidence"));
         assert!(FE_ORIGIN_TRACE_JS.contains("_friendlyCheckSummary"));
@@ -920,6 +923,8 @@ mod tests {
         assert!(FE_ORIGIN_TRACE_JS.contains(
             "if (!rowStatus && rowOrClasses && rowOrClasses.suppress_rail_status) return wrap;"
         ));
+        assert!(FE_ORIGIN_TRACE_JS.contains("if (!Array.isArray(rowOrClasses))"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("if (!rowStatus) return wrap;"));
     }
 
     #[test]

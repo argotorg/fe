@@ -1698,15 +1698,25 @@
 
     _selectionStatusCard(groups) {
       var entries = this._auditForClasses(groups);
-      var status = this._displayStatus(entries, null, { suppressExact: true });
+      var status = this._displayStatus(entries, null, { suppressExact: true }) || this._railSelectionStatus(groups);
       if (!status) return null;
       var box = el("div", "status-card status-" + status.kind);
       box.append(el("h3", "", this._selectedTraceLabel || "Selected row"));
       box.append(el("p", "status-line", status.label));
       box.append(el("p", "muted", this._statusExplanation(status.kind, status.label)));
-      var reached = this._reachedSummary(entries);
+      var reached = entries.length ? this._reachedSummary(entries) : this._componentReachedSummary(groups);
       if (reached) box.append(reached);
       return box;
+    }
+
+    _railSelectionStatus(groups) {
+      var rails = this._groupsByRail(this._highlightGroups(groups));
+      if (rails.exact.length) return { kind: "context", label: "exact phase link" };
+      if (rails.generated.length) return { kind: "generated", label: "generated explanation" };
+      if (rails.prepared.length) return { kind: "context", label: "prepared-linked" };
+      if (rails.context.length) return { kind: "context", label: "context" };
+      if (rails.structural.length) return { kind: "structural", label: "boundary" };
+      return null;
     }
 
     _reachedSummary(entries) {
@@ -1744,7 +1754,82 @@
       return box;
     }
 
+    _componentReachedSummary(groups) {
+      var counts = this._componentReachedCounts(groups);
+      var total = Object.keys(counts).reduce(function (sum, key) {
+        return sum + counts[key];
+      }, 0);
+      if (!total) return null;
+      var rows = [
+        ["Source", counts.source],
+        ["HIR", counts.hir],
+        ["MIR", counts.mir],
+        ["Sonatina pre-opt", counts.sonatina_pre],
+        ["Optimized Sonatina", counts.sonatina_post],
+        ["EVM prepared", counts.sonatina_prepared],
+        ["EVM VCode", counts.evm_vcode],
+        ["Bytecode", counts.bytecode],
+      ];
+      var box = el("div", "reached-summary");
+      box.append(el("h4", "", "Rail component reaches"));
+      rows.forEach(function (row) {
+        var item = el("span", "reach-chip" + (row[1] > 0 ? " reached" : ""));
+        item.append(el("b", "", row[0]), el("em", "", row[1] > 0 ? String(row[1]) : "no"));
+        box.append(item);
+      });
+      box.append(el("p", "muted", "This summary comes from selected rail classes when no legacy closure card exists for the component."));
+      return box;
+    }
+
+    _componentReachedCounts(groups) {
+      var wanted = Object.create(null);
+      this._highlightGroups(groups).forEach(function (group) { wanted[group] = true; });
+      var counts = {
+        source: 0,
+        hir: 0,
+        mir: 0,
+        sonatina_pre: 0,
+        sonatina_post: 0,
+        sonatina_prepared: 0,
+        evm_vcode: 0,
+        bytecode: 0,
+      };
+      function hasWanted(classes) {
+        return (classes || []).some(function (cls) { return wanted[cls]; });
+      }
+      ((this._data.source && this._data.source.lines) || []).forEach(function (line) {
+        if (hasWanted(line.classes)) counts.source += 1;
+      });
+      ((this._data.source && this._data.source.related_sources) || []).forEach(function (section) {
+        (section.lines || []).forEach(function (line) {
+          if (hasWanted(line.classes)) counts.source += 1;
+        });
+      });
+      (this._data.panels || []).forEach(function (panel) {
+        var key = this._componentCountKey(panel.id);
+        if (!key || counts[key] === undefined) return;
+        (panel.rows || []).forEach(function (row) {
+          if (hasWanted(row.classes)) counts[key] += 1;
+        });
+      }, this);
+      return counts;
+    }
+
+    _componentCountKey(panelId) {
+      return {
+        hir: "hir",
+        mir: "mir",
+        "sonatina-pre": "sonatina_pre",
+        "sonatina-post": "sonatina_post",
+        "sonatina-prepared": "sonatina_prepared",
+        "evm-vcode": "evm_vcode",
+        bytecode: "bytecode",
+      }[panelId] || null;
+    }
+
     _statusExplanation(kind, label) {
+      if (label === "exact phase link") return "This rail component has exact phase-local evidence, but it is not automatically a full source→bytecode attribution. The reached phases below show where this component stops.";
+      if (label === "generated explanation") return "Generated rail components show compiler-created synthetic work. They are useful explanation paths, but they do not count as exact source ownership.";
       if (kind === "generated") return "Generated highlights show compiler-created synthetic work. They are useful explanation paths, but they do not count as exact source ownership.";
       if (kind === "explained") return "The missing direct bytecode link is explained by optimizer evidence such as elision, rewrite, creation, or snapshot-join facts.";
       if (kind === "context") return "Context highlights are navigation or cause context. They are intentionally separate from exact attribution.";
@@ -1790,10 +1875,15 @@
     _badges(rowOrClasses) {
       var rowStatus = this._rowDisplayStatus(rowOrClasses);
       var classes = Array.isArray(rowOrClasses) ? rowOrClasses : ((rowOrClasses && rowOrClasses.classes) || []);
-      var entries = this._auditForClasses(classes);
       var wrap = el("span", "badges");
       if (!rowStatus && rowOrClasses && rowOrClasses.suppress_rail_status) return wrap;
-      var status = rowStatus || this._displayStatus(entries, this._railStatus(classes), { suppressExact: true });
+      if (!Array.isArray(rowOrClasses)) {
+        if (!rowStatus) return wrap;
+        wrap.append(el("span", "badge " + rowStatus.kind, rowStatus.label));
+        return wrap;
+      }
+      var entries = this._auditForClasses(classes);
+      var status = this._displayStatus(entries, this._railStatus(classes), { suppressExact: true });
       if (!status) return wrap;
       wrap.append(el("span", "badge " + status.kind, status.label));
       return wrap;
