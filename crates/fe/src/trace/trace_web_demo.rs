@@ -251,6 +251,7 @@ fn build_trace_workbench_model(
             target: snapshot.metadata().target.clone(),
             opt_level: trace_web_demo_opt_level(snapshot.metadata()),
             view: "source-postopt-bytecode".to_string(),
+            include_legacy_closure_debug: false,
             source_text,
             related_source_texts,
             document_version: None,

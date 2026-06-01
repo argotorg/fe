@@ -1769,6 +1769,7 @@ pub struct TraceWorkbenchProjectionRequest {
     pub target: String,
     pub opt_level: String,
     pub view: String,
+    pub include_legacy_closure_debug: bool,
     pub source_text: Option<String>,
     pub related_source_texts: BTreeMap<String, String>,
     pub document_version: Option<i32>,
@@ -1822,7 +1823,11 @@ pub fn trace_workbench_report_projection(
         .map(|audit| audit.total_bytecode_pcs)
         .unwrap_or_default();
     let stage_started = Instant::now();
-    let loop_report = service.loop_contents(LoopContentsRequest::default()).ok();
+    let loop_report = if request.include_legacy_closure_debug {
+        service.loop_contents(LoopContentsRequest::default()).ok()
+    } else {
+        None
+    };
     trace_workbench_record_timing(&mut projection_timings, "loop_report_ms", stage_started);
     let stage_started = Instant::now();
     let closure_set = loop_report.as_ref().map(|loop_report| {
@@ -1983,6 +1988,7 @@ pub fn trace_workbench_report_projection(
             "document_version": request.document_version,
             "query_duration_ms": request.query_duration_ms,
             "projection_timings": projection_timings,
+            "legacy_closure_debug": request.include_legacy_closure_debug,
         },
         "provenance": {
             "source_to_optimized": provenance.source_to_optimized,
@@ -4032,7 +4038,9 @@ pub fn trace_workbench_manifest(projection: &serde_json::Value) -> TraceViewMani
         ),
     ]
     .into_iter()
-    .filter_map(|(name, value)| value.map(|value| (name, digest_json(value))))
+    .filter_map(|(name, value)| {
+        value.and_then(|value| (!value.is_null()).then(|| (name, digest_json(value))))
+    })
     .collect();
     let panes = projection
         .get("panels")
@@ -10763,6 +10771,7 @@ mod tests {
                 target: "evm".to_string(),
                 opt_level: "O2".to_string(),
                 view: "source-postopt-bytecode".to_string(),
+                include_legacy_closure_debug: false,
                 source_text: Some("fn fib() {\n  b + c\n}\n".to_string()),
                 related_source_texts: BTreeMap::new(),
                 document_version: Some(3),
@@ -10775,6 +10784,9 @@ mod tests {
         assert_eq!(projection["revision"]["id"], 3);
         assert_eq!(projection["metadata"]["data_source"], "lsp-live");
         assert_eq!(projection["metadata"]["flags"][0], "source=lsp-live");
+        assert_eq!(projection["metadata"]["legacy_closure_debug"], false);
+        assert!(projection["audit"].is_null());
+        assert!(projection["closures"].as_array().unwrap().is_empty());
         let timings = projection["metadata"]["projection_timings"]
             .as_object()
             .expect("projection timings are emitted for debug/internals");
@@ -10963,6 +10975,7 @@ mod tests {
         assert!(manifest.source_digest.starts_with("blake3:"));
         assert!(manifest.indexes_digest.starts_with("blake3:"));
         assert!(manifest.reports.contains_key("attribution"));
+        assert!(!manifest.reports.contains_key("closure_audit"));
         assert!(manifest.reports.contains_key("duplicate_shapes"));
     }
 
@@ -10977,6 +10990,7 @@ mod tests {
                 target: "evm".to_string(),
                 opt_level: "O2".to_string(),
                 view: "source-postopt-bytecode".to_string(),
+                include_legacy_closure_debug: false,
                 source_text: Some("fn fib() {\n  b + c\n}\n".to_string()),
                 related_source_texts: BTreeMap::new(),
                 document_version: Some(3),
@@ -11165,6 +11179,7 @@ mod tests {
                 target: "evm".to_string(),
                 opt_level: "O2".to_string(),
                 view: "source-postopt-bytecode".to_string(),
+                include_legacy_closure_debug: false,
                 source_text: Some("fn f() {\n  x\n}\n".to_string()),
                 related_source_texts: BTreeMap::new(),
                 document_version: Some(3),
