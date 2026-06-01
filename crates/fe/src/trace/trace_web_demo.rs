@@ -16,13 +16,14 @@ use trace_facts::{
 };
 use trace_query::{
     AttributionAuditReport, IntrospectionService, LoopContentsRequest, TraceIntrospectionService,
-    TraceWorkbenchProjectionRequest, trace_workbench_report_projection,
+    TraceWorkbenchProjectionRequest,
     origin_closure::{
         ClosureAuditReport, OriginClosure as DemoClosure, OriginClosureSourceLine,
         audit_origin_closures, build_origin_closure_set, classes_by_origin_key,
         component_classes_by_origin_key, source_owner_matches_input,
     },
     static_analysis::{StaticAnalysisReport, static_analysis_report},
+    trace_workbench_report_projection,
 };
 
 use crate::{DevTraceAuditClosuresArgs, DevTraceWebDemoArgs, TraceReportFormat};
@@ -253,7 +254,9 @@ fn build_trace_workbench_model(
             source_text,
             related_source_texts,
             document_version: None,
-            query_duration_ms: salsa.map(|salsa| salsa.elapsed_ms as u64).unwrap_or_default(),
+            query_duration_ms: salsa
+                .map(|salsa| salsa.elapsed_ms as u64)
+                .unwrap_or_default(),
             compiler_commit: snapshot.metadata().compiler_commit.clone(),
             data_source,
         },

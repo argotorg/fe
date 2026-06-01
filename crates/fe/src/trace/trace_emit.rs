@@ -556,7 +556,7 @@ impl IncrementalTraceEmitter {
                 );
             }
         };
-        let (file_url, content) = standalone_file_input(&input_path)?;
+        let (input_path, file_url, content) = standalone_file_input(&input_path)?;
         db.workspace()
             .touch(&mut db, file_url.clone(), Some(content));
         let counters = Arc::new(Mutex::new(SalsaEventCounters::default()));
@@ -688,7 +688,7 @@ fn emit_real_trace_bundle_from_top_mod<'db>(
     Ok(TraceBundle::new(metadata, facts))
 }
 
-fn standalone_file_input(file_path: &Utf8PathBuf) -> Result<(Url, String), String> {
+fn standalone_file_input(file_path: &Utf8PathBuf) -> Result<(Utf8PathBuf, Url, String), String> {
     let canonical = file_path
         .canonicalize_utf8()
         .map_err(|err| format!("cannot canonicalize {file_path}: {err}"))?;
@@ -696,7 +696,7 @@ fn standalone_file_input(file_path: &Utf8PathBuf) -> Result<(Url, String), Strin
         .map_err(|_| format!("invalid trace input path: {file_path}"))?;
     let content = fs::read_to_string(file_path)
         .map_err(|err| format!("failed to read trace input {file_path}: {err}"))?;
-    Ok((file_url, content))
+    Ok((canonical, file_url, content))
 }
 
 pub(super) fn roundtrip_trace_bundle_jsonl(bundle: &TraceBundle) -> Result<TraceBundle, String> {
@@ -746,11 +746,35 @@ mod tests {
     use debug_export::{
         DebugBundle, emit_dwarf_line_table, emit_ethdebug_artifact, validate_ethdebug_artifact,
     };
+    use std::time::{SystemTime, UNIX_EPOCH};
     use trace_query::{
         GasAttributionPolicy, IntrospectionService, LoopContentsRequest, RuntimeGasBySourceRequest,
         RuntimeTraceFilterRequest, TraceIntrospectionService, datalog_emit,
         static_analysis::ProvenanceCoverageReport,
     };
+
+    #[test]
+    fn standalone_file_input_returns_canonical_trace_identity() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "fe-trace-standalone-canonical-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("input.fe");
+        std::fs::write(&path, "pub contract Demo {}\n").unwrap();
+        let relative = Utf8PathBuf::from_path_buf(path).unwrap();
+
+        let (canonical, file_url, content) = standalone_file_input(&relative).unwrap();
+
+        assert!(canonical.is_absolute());
+        assert_eq!(file_url.scheme(), "file");
+        assert_eq!(content, "pub contract Demo {}\n");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn real_trace_bundle_compiles_fib_demo_without_fixture_claims() {
