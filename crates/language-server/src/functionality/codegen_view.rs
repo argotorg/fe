@@ -452,7 +452,22 @@ async fn handle_open_docs(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_trace_open_workbench_args;
+    use super::{handle_open_trace_workbench, parse_trace_open_workbench_args};
+    use crate::backend::Backend;
+    use async_lsp::MainLoop;
+    use async_lsp::router::Router;
+    use introspection_config::FeToolingConfig;
+
+    fn test_backend(docs_url: Option<String>) -> Backend {
+        let (_main_loop, client_socket) = MainLoop::new_server(|_client| Router::<()>::new(()));
+        Backend::new(
+            client_socket,
+            None,
+            None,
+            docs_url,
+            FeToolingConfig::default(),
+        )
+    }
 
     #[test]
     fn trace_open_workbench_accepts_string_or_object_args() {
@@ -472,6 +487,57 @@ mod tests {
         assert_eq!(parsed.target.as_deref(), Some("evm"));
         assert_eq!(parsed.opt_level.as_deref(), Some("O2"));
         assert_eq!(parsed.view.as_deref(), Some("source-postopt-bytecode"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn trace_open_workbench_creates_tokenized_session_url() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".fe-lsp.token"), "test-token\n").unwrap();
+        let source = dir.path().join("demo.fe");
+        std::fs::write(&source, "contract Demo {}\n").unwrap();
+        let uri = url::Url::from_file_path(&source).unwrap();
+        let mut backend = test_backend(Some("http://127.0.0.1:5179".to_string()));
+        backend.lsp_workspace_root = Some(dir.path().to_path_buf());
+        backend.set_document_version(uri.clone(), 12);
+
+        let result = handle_open_trace_workbench(
+            &mut backend,
+            &[serde_json::json!({
+                "uri": uri.as_str(),
+                "target": "evm",
+                "optLevel": "O2",
+                "view": "source-postopt-bytecode",
+                "range": {
+                    "start": { "line": 3, "character": 4 },
+                    "end": { "line": 3, "character": 12 }
+                }
+            })],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        let session_id = result["sessionId"].as_str().unwrap();
+        assert!(session_id.starts_with("trace-session-"));
+        assert!(result["url"].as_str().unwrap().contains("/trace/workbench"));
+        assert!(
+            result["url"]
+                .as_str()
+                .unwrap()
+                .contains("#token=test-token")
+        );
+        assert_eq!(result["capabilities"]["events"], "sse");
+        assert_eq!(result["capabilities"]["chunks"], true);
+        assert_eq!(result["capabilities"]["selectionSync"], true);
+
+        let session = backend.trace_viewer_session(session_id).unwrap();
+        assert_eq!(session.uri, uri.as_str());
+        assert_eq!(session.document_version, Some(12));
+        assert_eq!(session.initial_selection.unwrap().start_line, 3);
+
+        tokio::task::spawn_blocking(move || drop(backend))
+            .await
+            .expect("backend drop task panicked");
     }
 }
 
