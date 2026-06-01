@@ -1856,8 +1856,10 @@ pub fn trace_workbench_report_projection(
         .unwrap_or_else(|| serde_json::json!([]));
     let static_analysis = static_analysis::static_analysis_report(snapshot);
     let duplicate_shapes = trace_workbench_duplicate_shape_report(snapshot);
+    let source_to_optimized_available = trace_workbench_source_to_optimized_available(snapshot);
     let provenance = trace_workbench_provenance_status(
         closure_set.as_ref(),
+        source_to_optimized_available,
         optimized_linked,
         prepared_linked,
         missing_prepared,
@@ -2227,17 +2229,20 @@ fn trace_workbench_trace_profile(snapshot: &TraceSnapshot) -> TraceWorkbenchTrac
 
 fn trace_workbench_provenance_status(
     closure_set: Option<&origin_closure::OriginClosureSet>,
+    source_to_optimized_graph: bool,
     optimized_linked: usize,
     prepared_linked: usize,
     missing_prepared: usize,
     non_exact_prepared: usize,
 ) -> TraceWorkbenchProvenanceStatus {
-    let source_to_optimized = closure_set.is_some_and(|closure_set| {
-        closure_set
-            .closures
-            .iter()
-            .any(|closure| closure.counts.hir > 0 && closure.counts.sonatina_post > 0)
-    }) || optimized_linked > 0;
+    let source_to_optimized = source_to_optimized_graph
+        || closure_set.is_some_and(|closure_set| {
+            closure_set
+                .closures
+                .iter()
+                .any(|closure| closure.counts.hir > 0 && closure.counts.sonatina_post > 0)
+        })
+        || optimized_linked > 0;
     let optimized_to_prepared_exact =
         prepared_linked > 0 && missing_prepared == 0 && non_exact_prepared == 0;
     let optimized_to_prepared_non_exact = !optimized_to_prepared_exact
@@ -2271,6 +2276,29 @@ fn trace_workbench_link_status_word(exact: bool, non_exact: bool) -> &'static st
     } else {
         "missing"
     }
+}
+
+fn trace_workbench_source_to_optimized_available(snapshot: &TraceSnapshot) -> bool {
+    let index = trace_index::TraceIndex::new(snapshot);
+    snapshot.facts().iter().any(|fact| {
+        let origin = match fact {
+            TraceFact::OriginNode(node) if is_sonatina_postopt_inst_audit_origin(&node.key) => {
+                &node.key
+            }
+            TraceFact::Instruction(instruction)
+                if is_sonatina_postopt_inst_audit_origin(&instruction.instruction) =>
+            {
+                &instruction.instruction
+            }
+            _ => return false,
+        };
+        !index
+            .source_candidates_for_instruction(
+                origin,
+                trace_index::TraceReachabilityPolicy::ExactOnly,
+            )
+            .is_empty()
+    })
 }
 
 fn trace_workbench_status_word(available: bool) -> &'static str {
@@ -10630,7 +10658,8 @@ mod tests {
             source_span_count: 0,
         };
 
-        let status = super::trace_workbench_provenance_status(Some(&closure_set), 0, 0, 0, 0);
+        let status =
+            super::trace_workbench_provenance_status(Some(&closure_set), false, 0, 0, 0, 0);
 
         assert_eq!(status.source_to_optimized, "missing");
         assert_eq!(status.optimized_to_prepared, "missing");
@@ -10639,11 +10668,61 @@ mod tests {
 
     #[test]
     fn trace_workbench_provenance_reports_non_exact_prepared_lineage_separately() {
-        let status = super::trace_workbench_provenance_status(None, 1, 2, 0, 2);
+        let status = super::trace_workbench_provenance_status(None, false, 1, 2, 0, 2);
 
         assert_eq!(status.source_to_optimized, "available");
         assert_eq!(status.optimized_to_prepared, "non-exact");
         assert_eq!(status.prepared_to_bytecode, "available");
+    }
+
+    #[test]
+    fn trace_workbench_provenance_detects_source_to_optimized_without_bytecode() {
+        let source_file = key("source.file", "demo", "demo.fe");
+        let hir = key("hir.expr", "demo", "expr:line");
+        let postopt = key("sonatina.postopt.inst", "demo", "inst:postopt");
+        let snapshot = snapshot(vec![
+            node(source_file.clone()),
+            node(hir.clone()),
+            node(postopt.clone()),
+            TraceFact::SourceFile(SourceFileFact::new(
+                source_file.clone(),
+                "file:///demo.fe",
+                "demo.fe",
+                "blake3:0000000000000000000000000000000000000000000000000000000000000001",
+                Some(0),
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                hir.clone(),
+                source_file,
+                0,
+                4,
+                2,
+                1,
+                2,
+                5,
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                postopt,
+                hir,
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::SonatinaPostOpt),
+            )),
+        ]);
+
+        assert!(super::trace_workbench_source_to_optimized_available(
+            &snapshot
+        ));
+        let status = super::trace_workbench_provenance_status(
+            None,
+            super::trace_workbench_source_to_optimized_available(&snapshot),
+            0,
+            0,
+            0,
+            0,
+        );
+        assert_eq!(status.source_to_optimized, "available");
+        assert_eq!(status.optimized_to_prepared, "missing");
+        assert_eq!(status.prepared_to_bytecode, "missing");
     }
 
     #[test]
