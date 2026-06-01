@@ -246,6 +246,8 @@ impl TracePhase {
             Some(Self::Source)
         } else if kind.starts_with("hir.") {
             Some(Self::Hir)
+        } else if kind.starts_with("execution.") || kind.starts_with("runtime.step") {
+            Some(Self::Runtime)
         } else if kind.starts_with("mir.") || kind.starts_with("runtime.") {
             Some(Self::Mir)
         } else if kind.starts_with("sonatina.pre") {
@@ -256,8 +258,6 @@ impl TracePhase {
             Some(Self::Backend)
         } else if kind.starts_with("bytecode.") || kind == "code.object" {
             Some(Self::Bytecode)
-        } else if kind.starts_with("execution.") || kind.starts_with("runtime.step") {
-            Some(Self::Runtime)
         } else {
             None
         }
@@ -469,6 +469,20 @@ mod tests {
                 .phase_frontier(&instruction, TraceReachabilityPolicy::ExactOnly)
                 .contains_key(&TracePhase::SonatinaPost)
         );
+    }
+
+    #[test]
+    fn runtime_steps_are_classified_as_runtime_phase() {
+        let step = key("runtime.step", "demo", "session:0:step:7");
+        let runtime_stmt = key("runtime.stmt", "demo", "block:0:stmt:0");
+        let execution_step = key("execution.step", "demo", "session:0:step:7");
+
+        assert_eq!(TracePhase::from_key(&step), Some(TracePhase::Runtime));
+        assert_eq!(
+            TracePhase::from_key(&execution_step),
+            Some(TracePhase::Runtime)
+        );
+        assert_eq!(TracePhase::from_key(&runtime_stmt), Some(TracePhase::Mir));
     }
 
     #[test]
