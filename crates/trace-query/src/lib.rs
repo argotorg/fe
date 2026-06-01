@@ -2686,7 +2686,7 @@ fn trace_workbench_source_lines(
                 .map(|classes| classes.iter().cloned().collect::<Vec<_>>())
                 .unwrap_or_default();
             let interaction_classes = if suppress_rail_status {
-                Vec::new()
+                trace_workbench_enclosing_source_interaction_classes(text, &classes)
             } else {
                 classes.clone()
             };
@@ -2708,6 +2708,30 @@ fn trace_workbench_source_lines(
             }
         })
         .collect()
+}
+
+fn trace_workbench_enclosing_source_interaction_classes(
+    text: &str,
+    classes: &[String],
+) -> Vec<String> {
+    if !trace_workbench_source_line_can_anchor_enclosing_span(text) {
+        return Vec::new();
+    }
+    classes
+        .iter()
+        .filter(|class| class.starts_with("exact-c-") || class.starts_with("prepared-c-"))
+        .cloned()
+        .collect()
+}
+
+fn trace_workbench_source_line_can_anchor_enclosing_span(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed.starts_with("//") {
+        return false;
+    }
+    trimmed
+        .chars()
+        .any(|ch| !matches!(ch, '{' | '}' | '(' | ')' | '[' | ']' | ';' | ',' | ':'))
 }
 
 fn trace_workbench_projection_indexes(
@@ -10992,6 +11016,54 @@ mod tests {
         assert_eq!(lines[1].display_status, None);
         assert!(lines[1].hover_groups.is_empty());
         assert!(lines[1].selection_groups.is_empty());
+    }
+
+    #[test]
+    fn trace_workbench_broad_exact_source_spans_remain_selectable_on_code_lines() {
+        let source_file = key("source.file", "file:///main.fe", "file:main");
+        let hir = key("hir.expr", "file:///main.fe", "expr:function-body");
+        let snapshot = snapshot(vec![
+            node(source_file.clone()),
+            node(hir.clone()),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                hir.clone(),
+                source_file,
+                0,
+                37,
+                1,
+                1,
+                4,
+                2,
+            )),
+        ]);
+        let mut classes = BTreeMap::new();
+        classes.insert(
+            hir.canonical_storage_key(),
+            vec![
+                "exact-c-source".to_string(),
+                "generated-c-broad".to_string(),
+                "prepared-c-bytecode".to_string(),
+            ],
+        );
+
+        let lines = trace_workbench_source_lines(
+            "file:///main.fe",
+            "fn main() {\n  assert owner == caller\n  // comment\n}\n",
+            &snapshot,
+            &classes,
+        );
+
+        assert!(lines[1].suppress_rail_status);
+        assert_eq!(lines[1].display_status, None);
+        assert_eq!(lines[1].hover_groups, vec!["exact-c-source"]);
+        assert_eq!(
+            lines[1].selection_groups,
+            vec!["exact-c-source", "prepared-c-bytecode"]
+        );
+        assert!(lines[2].hover_groups.is_empty());
+        assert!(lines[2].selection_groups.is_empty());
+        assert!(lines[3].hover_groups.is_empty());
+        assert!(lines[3].selection_groups.is_empty());
     }
 
     #[test]
