@@ -10791,6 +10791,125 @@ mod tests {
     }
 
     #[test]
+    fn trace_workbench_projection_keeps_source_selection_off_prepared_rail_when_lineage_missing() {
+        let source_file = key("source.file", "demo", "fib.fe");
+        let source_expr = key("hir.expr", "demo", "expr:x");
+        let postopt = key("sonatina.postopt.inst", "demo", "inst:0");
+        let prepared = key("sonatina.evm.prepared.inst", "demo", "inst:0");
+        let vcode = key("evm.vcode.inst", "demo", "inst:0");
+        let function = key("bytecode.function", "demo", "runtime");
+        let bytecode = key("bytecode.pc", "demo", "pc:0");
+        let snapshot = snapshot(vec![
+            node(source_file.clone()),
+            node(source_expr.clone()),
+            node(postopt.clone()),
+            node(prepared.clone()),
+            node(vcode.clone()),
+            node(function.clone()),
+            node(bytecode.clone()),
+            TraceFact::SourceFile(SourceFileFact::new(
+                source_file.clone(),
+                "file:///demo/fib.fe",
+                "fib.fe",
+                "blake3:000000000000000000000000000000000000000000000000000000000000abcd",
+                Some(0),
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                source_expr.clone(),
+                source_file,
+                11,
+                12,
+                2,
+                3,
+                2,
+                4,
+            )),
+            TraceFact::Instruction(InstructionFact::new(
+                bytecode.clone(),
+                function,
+                0,
+                "ADD",
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                postopt,
+                source_expr,
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::SonatinaPostOpt),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                bytecode.clone(),
+                vcode.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                vcode,
+                prepared,
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+        ]);
+        let service = TraceIntrospectionService::new(snapshot);
+        let projection = trace_workbench_report_projection(
+            &service,
+            service.snapshot(),
+            TraceWorkbenchProjectionRequest {
+                input_path: "demo".to_string(),
+                target: "evm".to_string(),
+                opt_level: "O2".to_string(),
+                view: "source-postopt-bytecode".to_string(),
+                source_text: Some("fn f() {\n  x\n}\n".to_string()),
+                related_source_texts: BTreeMap::new(),
+                document_version: Some(3),
+                query_duration_ms: 9,
+                compiler_commit: "test".to_string(),
+                data_source: "test".to_string(),
+            },
+        );
+        let source_line_groups = projection["source"]["lines"][1]["selection_groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(serde_json::Value::as_str)
+            .collect::<Option<Vec<_>>>()
+            .unwrap();
+
+        assert!(
+            source_line_groups
+                .iter()
+                .any(|group| group.starts_with("exact-c-")),
+            "source line should still expose exact source→postopt evidence"
+        );
+        assert!(
+            source_line_groups
+                .iter()
+                .all(|group| !group.starts_with("prepared-c-")),
+            "source selection must not include prepared rail groups without explicit optimized→prepared lineage"
+        );
+
+        let bytecode_panel = projection["panels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|panel| panel["id"] == "bytecode")
+            .unwrap();
+        let bytecode_groups = bytecode_panel["rows"][0]["selection_groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(serde_json::Value::as_str)
+            .collect::<Option<Vec<_>>>()
+            .unwrap();
+
+        assert!(
+            bytecode_groups
+                .iter()
+                .any(|group| group.starts_with("prepared-c-")),
+            "bytecode row should remain prepared-linked even when source attribution is blocked"
+        );
+    }
+
+    #[test]
     fn trace_workbench_provenance_does_not_claim_preopt_as_optimized() {
         let closure_set = crate::origin_closure::OriginClosureSet {
             closures: vec![crate::origin_closure::OriginClosure {
