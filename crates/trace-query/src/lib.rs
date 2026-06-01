@@ -7446,7 +7446,9 @@ fn expected_absent_links_for_elision_event(
         .inputs
         .iter()
         .filter_map(|origin| {
-            if is_sonatina_preopt_inst_audit_origin(origin) {
+            if event.phase == CompilerPhase::SonatinaPostOpt
+                && is_sonatina_preopt_inst_audit_origin(origin)
+            {
                 Some(ExpectedAbsentLink {
                     boundary: LinkBoundaryKind::PreOptToPostOpt,
                     origin: origin.clone(),
@@ -10874,6 +10876,60 @@ mod tests {
                 .status_counts
                 .get(&LinkStatus::ExpectedAbsent),
             Some(&1)
+        );
+    }
+
+    #[test]
+    fn missing_link_audit_requires_optimizer_owned_elision_for_preopt_absence() {
+        let preopt = key("sonatina.preopt.inst", "demo", "inst:wrong-phase-elided");
+        let postopt = key("sonatina.postopt.inst", "demo", "inst:other-postopt");
+        let event = key("compiler.event", "demo", "event:backend-elide-preopt");
+        let snapshot = snapshot(vec![
+            node(preopt.clone()),
+            node(postopt),
+            node(event.clone()),
+            TraceFact::CompilerEvent(CompilerEventFact::new(
+                event,
+                CompilerPhase::Backend,
+                CompilerEventKind::OptimizerElidedOrRewritten,
+                vec![preopt.clone()],
+                Vec::new(),
+                Some(CompilerReason::new("wrong phase for optimizer lineage")),
+            )),
+        ]);
+        let report = TraceIntrospectionService::new(snapshot)
+            .attribution_audit()
+            .unwrap();
+        let missing_links = report.missing_links.as_ref().unwrap();
+
+        assert_eq!(missing_links.summary.status, LinkOverallStatus::Warning);
+        assert_eq!(missing_links.summary.expected_absent_count, 0);
+        assert_eq!(missing_links.summary.missing_required_count, 1);
+        assert_eq!(
+            missing_links.summary.top_blockers,
+            vec![LinkBoundaryKind::PreOptToPostOpt]
+        );
+        assert!(missing_links.expected_absent.is_empty());
+        assert_eq!(missing_links.gaps[0].from_origin, preopt);
+        assert_eq!(
+            missing_links.gaps[0].issue_code,
+            LinkIssueCode::MissingOptimizerLineage
+        );
+        let preopt_to_postopt = missing_links
+            .boundary_summaries
+            .iter()
+            .find(|summary| summary.boundary == LinkBoundaryKind::PreOptToPostOpt)
+            .expect("preopt to postopt boundary summary");
+        assert_eq!(
+            preopt_to_postopt
+                .status_counts
+                .get(&LinkStatus::MissingRequired),
+            Some(&1)
+        );
+        assert!(
+            !preopt_to_postopt
+                .top_issue_codes
+                .contains(&LinkIssueCode::ExpectedAbsentOptimizerElision)
         );
     }
 
