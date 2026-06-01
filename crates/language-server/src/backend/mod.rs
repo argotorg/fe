@@ -76,6 +76,8 @@ pub(crate) struct TraceViewerModelCacheEntry {
     pub document_version: i32,
     pub config_hash: String,
     pub model: serde_json::Value,
+    pub manifest: serde_json::Value,
+    pub chunks: BTreeMap<String, serde_json::Value>,
 }
 
 impl Backend {
@@ -261,13 +263,51 @@ impl Backend {
         document_version: Option<i32>,
         config_hash: &str,
     ) -> Option<serde_json::Value> {
-        let document_version = document_version?;
-        let entry = self.trace_viewer_models.get(session_id)?;
-        if entry.document_version == document_version && entry.config_hash == config_hash {
-            Some(entry.model.clone())
-        } else {
-            None
+        self.cached_trace_workbench_entry(session_id, document_version, config_hash)
+            .map(|entry| entry.model.clone())
+    }
+
+    pub(crate) fn cached_trace_workbench_manifest(
+        &self,
+        session_id: &str,
+        document_version: Option<i32>,
+        config_hash: &str,
+    ) -> Option<serde_json::Value> {
+        self.cached_trace_workbench_entry(session_id, document_version, config_hash)
+            .map(|entry| entry.manifest.clone())
+    }
+
+    pub(crate) fn cached_trace_workbench_chunk(
+        &self,
+        session_id: &str,
+        document_version: Option<i32>,
+        config_hash: &str,
+        digest: &str,
+    ) -> Option<serde_json::Value> {
+        self.cached_trace_workbench_entry(session_id, document_version, config_hash)
+            .and_then(|entry| entry.chunks.get(digest).cloned())
+    }
+
+    pub(crate) fn cached_trace_workbench_chunks_response(
+        &self,
+        session_id: &str,
+        document_version: Option<i32>,
+        config_hash: &str,
+        digests: Vec<String>,
+    ) -> Option<serde_json::Value> {
+        let entry = self.cached_trace_workbench_entry(session_id, document_version, config_hash)?;
+        let mut chunks = Vec::new();
+        let mut missing = Vec::new();
+        for digest in digests {
+            match entry.chunks.get(&digest) {
+                Some(payload) => chunks.push(payload.clone()),
+                None => missing.push(digest),
+            }
         }
+        Some(serde_json::json!({
+            "chunks": chunks,
+            "missing": missing,
+        }))
     }
 
     pub(crate) fn cache_trace_workbench_model(
@@ -276,6 +316,8 @@ impl Backend {
         document_version: Option<i32>,
         config_hash: String,
         model: serde_json::Value,
+        manifest: serde_json::Value,
+        chunks: BTreeMap<String, serde_json::Value>,
     ) {
         let Some(document_version) = document_version else {
             return;
@@ -289,8 +331,22 @@ impl Backend {
                 document_version,
                 config_hash,
                 model,
+                manifest,
+                chunks,
             },
         );
+    }
+
+    fn cached_trace_workbench_entry(
+        &self,
+        session_id: &str,
+        document_version: Option<i32>,
+        config_hash: &str,
+    ) -> Option<&TraceViewerModelCacheEntry> {
+        let document_version = document_version?;
+        let entry = self.trace_viewer_models.get(session_id)?;
+        (entry.document_version == document_version && entry.config_hash == config_hash)
+            .then_some(entry)
     }
 
     fn clear_trace_viewer_model_cache_for_uri(&mut self, uri: &Url) {
@@ -614,17 +670,58 @@ mod tests {
             "revision": { "id": 7 },
             "metadata": { "dataSource": "lsp-live" }
         });
+        let manifest = serde_json::json!({
+            "revision": 7,
+            "rootDigest": "blake3:model",
+            "summaryDigest": "blake3:summary"
+        });
+        let chunks = BTreeMap::from([(
+            "blake3:summary".to_string(),
+            serde_json::json!({
+                "kind": "summary",
+                "digest": "blake3:summary",
+                "value": { "revision": { "id": 7 } }
+            }),
+        )]);
 
         backend.cache_trace_workbench_model(
             &session.id,
             Some(7),
             "config-a".to_string(),
             model.clone(),
+            manifest.clone(),
+            chunks,
         );
 
         assert_eq!(
             backend.cached_trace_workbench_model(&session.id, Some(7), "config-a"),
             Some(model)
+        );
+        assert_eq!(
+            backend.cached_trace_workbench_manifest(&session.id, Some(7), "config-a"),
+            Some(manifest)
+        );
+        assert_eq!(
+            backend
+                .cached_trace_workbench_chunk(&session.id, Some(7), "config-a", "blake3:summary")
+                .and_then(|chunk| chunk["kind"].as_str().map(str::to_string)),
+            Some("summary".to_string())
+        );
+        assert_eq!(
+            backend.cached_trace_workbench_chunks_response(
+                &session.id,
+                Some(7),
+                "config-a",
+                vec!["blake3:summary".to_string(), "blake3:missing".to_string()]
+            ),
+            Some(serde_json::json!({
+                "chunks": [{
+                    "kind": "summary",
+                    "digest": "blake3:summary",
+                    "value": { "revision": { "id": 7 } }
+                }],
+                "missing": ["blake3:missing"]
+            }))
         );
         assert_eq!(
             backend.cached_trace_workbench_model(&session.id, Some(7), "config-b"),

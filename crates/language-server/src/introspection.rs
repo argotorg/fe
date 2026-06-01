@@ -11,7 +11,7 @@ use trace_facts::{TraceBundle, TraceFact, TraceMetadata, TraceSnapshot};
 use trace_query::{
     TraceIntrospectionService, TraceQueryHttpResponse, TraceQueryRequest,
     TraceWorkbenchProjectionRequest, run_trace_query, trace_workbench_manifest,
-    trace_workbench_report_projection,
+    trace_workbench_report_projection, trace_workbench_summary_chunk,
 };
 use url::Url;
 
@@ -33,6 +33,18 @@ pub(crate) struct TraceBackendQueryRequest {
 #[derive(Clone, Debug)]
 pub(crate) struct TraceWorkbenchSessionRequest {
     pub session_id: String,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TraceWorkbenchChunkRequest {
+    pub session_id: String,
+    pub digest: String,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TraceWorkbenchChunksRequest {
+    pub session_id: String,
+    pub digests: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -243,6 +255,9 @@ pub(crate) async fn handle_trace_workbench_model(
     );
     let manifest = trace_workbench_manifest(&projection);
     let model_digest = manifest.root_digest.clone();
+    let manifest_value = serde_json::to_value(&manifest)
+        .map_err(|err| internal_error(format!("failed to serialize trace manifest: {err}")))?;
+    let chunks = trace_workbench_chunk_payloads(&projection, &manifest);
     backend.record_trace_viewer_revision(
         &request.session_id,
         TraceViewerRevisionRecord {
@@ -272,6 +287,8 @@ pub(crate) async fn handle_trace_workbench_model(
         document_version,
         service_config_hash,
         projection.clone(),
+        manifest_value,
+        chunks,
     );
     Ok(projection)
 }
@@ -368,9 +385,78 @@ pub(crate) async fn handle_trace_workbench_manifest(
     backend: &mut Backend,
     request: TraceWorkbenchSessionRequest,
 ) -> Result<serde_json::Value, async_lsp::ResponseError> {
+    let (document_version, config_hash) =
+        trace_workbench_session_cache_key(backend, &request.session_id)?;
+    if let Some(manifest) =
+        backend.cached_trace_workbench_manifest(&request.session_id, document_version, &config_hash)
+    {
+        return Ok(manifest);
+    }
     let model = handle_trace_workbench_model(backend, request).await?;
     serde_json::to_value(trace_workbench_manifest(&model))
         .map_err(|err| internal_error(format!("failed to serialize trace manifest: {err}")))
+}
+
+pub(crate) async fn handle_trace_workbench_chunk(
+    backend: &mut Backend,
+    request: TraceWorkbenchChunkRequest,
+) -> Result<Option<serde_json::Value>, async_lsp::ResponseError> {
+    let (document_version, config_hash) =
+        trace_workbench_session_cache_key(backend, &request.session_id)?;
+    if let Some(chunk) = backend.cached_trace_workbench_chunk(
+        &request.session_id,
+        document_version,
+        &config_hash,
+        &request.digest,
+    ) {
+        return Ok(Some(chunk));
+    }
+    let model = handle_trace_workbench_model(
+        backend,
+        TraceWorkbenchSessionRequest {
+            session_id: request.session_id.clone(),
+        },
+    )
+    .await?;
+    Ok(backend
+        .cached_trace_workbench_chunk(
+            &request.session_id,
+            document_version,
+            &config_hash,
+            &request.digest,
+        )
+        .or_else(|| trace_workbench_chunk_payload(&model, &request.digest)))
+}
+
+pub(crate) async fn handle_trace_workbench_chunks(
+    backend: &mut Backend,
+    request: TraceWorkbenchChunksRequest,
+) -> Result<serde_json::Value, async_lsp::ResponseError> {
+    let (document_version, config_hash) =
+        trace_workbench_session_cache_key(backend, &request.session_id)?;
+    if let Some(response) = backend.cached_trace_workbench_chunks_response(
+        &request.session_id,
+        document_version,
+        &config_hash,
+        request.digests.clone(),
+    ) {
+        return Ok(response);
+    }
+    let model = handle_trace_workbench_model(
+        backend,
+        TraceWorkbenchSessionRequest {
+            session_id: request.session_id.clone(),
+        },
+    )
+    .await?;
+    Ok(backend
+        .cached_trace_workbench_chunks_response(
+            &request.session_id,
+            document_version,
+            &config_hash,
+            request.digests.clone(),
+        )
+        .unwrap_or_else(|| trace_workbench_chunks_response(&model, request.digests)))
 }
 
 pub(crate) async fn handle_trace_workbench_revisions(
@@ -388,6 +474,152 @@ pub(crate) async fn handle_trace_workbench_revisions(
     Ok(TraceWorkbenchRevisionHistoryResponse {
         session_id: request.session_id,
         revisions,
+    })
+}
+
+fn trace_workbench_session_cache_key(
+    backend: &Backend,
+    session_id: &str,
+) -> Result<(Option<i32>, String), async_lsp::ResponseError> {
+    let session = backend
+        .trace_viewer_session(session_id)
+        .ok_or_else(|| internal_error(format!("unknown trace workbench session {session_id}")))?;
+    let uri = Url::parse(&session.uri)
+        .map_err(|err| internal_error(format!("invalid session URI: {err}")))?;
+    let compiler_config_hash = backend.tooling_config().stable_hash();
+    let target_config_hash =
+        trace_workbench_target_config_hash(&session.target, &session.opt_level, &session.view);
+    Ok((
+        backend.document_version(&uri),
+        trace_workbench_service_config_hash(&compiler_config_hash, &target_config_hash),
+    ))
+}
+
+fn trace_workbench_chunk_payloads(
+    model: &serde_json::Value,
+    manifest: &trace_query::TraceViewManifest,
+) -> BTreeMap<String, serde_json::Value> {
+    let mut chunks = BTreeMap::new();
+    let digests = std::iter::once(manifest.root_digest.clone())
+        .chain(std::iter::once(manifest.summary_digest.clone()))
+        .chain(std::iter::once(manifest.metadata_digest.clone()))
+        .chain(std::iter::once(manifest.source_digest.clone()))
+        .chain(std::iter::once(manifest.indexes_digest.clone()))
+        .chain(std::iter::once(manifest.rail_components_digest.clone()))
+        .chain(manifest.panes.values().cloned())
+        .chain(manifest.reports.values().cloned());
+    for digest in digests {
+        if let Some(payload) = trace_workbench_chunk_payload(model, &digest) {
+            chunks.insert(digest, payload);
+        }
+    }
+    chunks
+}
+
+pub(crate) fn trace_workbench_chunk_payload(
+    model: &serde_json::Value,
+    digest: &str,
+) -> Option<serde_json::Value> {
+    let manifest = trace_workbench_manifest(model);
+    if manifest.root_digest == digest {
+        return Some(serde_json::json!({
+            "kind": "model",
+            "digest": digest,
+            "value": model,
+        }));
+    }
+    if manifest.summary_digest == digest {
+        return Some(serde_json::json!({
+            "kind": "summary",
+            "digest": digest,
+            "value": trace_workbench_summary_chunk(model),
+        }));
+    }
+    if manifest.metadata_digest == digest {
+        return Some(serde_json::json!({
+            "kind": "metadata",
+            "digest": digest,
+            "value": model.get("metadata").cloned().unwrap_or(serde_json::Value::Null),
+        }));
+    }
+    if manifest.source_digest == digest {
+        return Some(serde_json::json!({
+            "kind": "source",
+            "digest": digest,
+            "value": model.get("source").cloned().unwrap_or(serde_json::Value::Null),
+        }));
+    }
+    if manifest.indexes_digest == digest {
+        return Some(serde_json::json!({
+            "kind": "indexes",
+            "digest": digest,
+            "value": model.get("indexes").cloned().unwrap_or(serde_json::Value::Null),
+        }));
+    }
+    if manifest.rail_components_digest == digest {
+        return Some(serde_json::json!({
+            "kind": "rail_components",
+            "digest": digest,
+            "value": model.get("rail_components").cloned().unwrap_or(serde_json::Value::Null),
+        }));
+    }
+    for (pane_id, pane_digest) in &manifest.panes {
+        if pane_digest != digest {
+            continue;
+        }
+        let pane = model
+            .get("panels")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .find(|pane| {
+                pane.get("id").and_then(serde_json::Value::as_str) == Some(pane_id.as_str())
+            })
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        return Some(serde_json::json!({
+            "kind": "pane",
+            "id": pane_id,
+            "digest": digest,
+            "value": pane,
+        }));
+    }
+    for (report_id, report_digest) in &manifest.reports {
+        if report_digest != digest {
+            continue;
+        }
+        let key = match report_id.as_str() {
+            "attribution" => "attribution_audit",
+            "static_analysis" => "static_analysis",
+            "closure_audit" => "audit",
+            "duplicate_shapes" => "duplicate_shapes",
+            _ => report_id.as_str(),
+        };
+        return Some(serde_json::json!({
+            "kind": "report",
+            "id": report_id,
+            "digest": digest,
+            "value": model.get(key).cloned().unwrap_or(serde_json::Value::Null),
+        }));
+    }
+    None
+}
+
+pub(crate) fn trace_workbench_chunks_response(
+    model: &serde_json::Value,
+    digests: Vec<String>,
+) -> serde_json::Value {
+    let mut chunks = Vec::new();
+    let mut missing = Vec::new();
+    for digest in digests {
+        match trace_workbench_chunk_payload(model, &digest) {
+            Some(payload) => chunks.push(payload),
+            None => missing.push(digest),
+        }
+    }
+    serde_json::json!({
+        "chunks": chunks,
+        "missing": missing,
     })
 }
 
@@ -665,9 +897,10 @@ mod tests {
     use url::Url;
 
     use super::{
-        TraceBackendQueryRequest, TraceServiceOptions, TraceWorkbenchSessionRequest,
-        attached_trace_service, handle_trace_query, handle_trace_workbench_bootstrap,
-        handle_trace_workbench_model, service_for_file_with_options,
+        TraceBackendQueryRequest, TraceServiceOptions, TraceWorkbenchChunkRequest,
+        TraceWorkbenchChunksRequest, TraceWorkbenchSessionRequest, attached_trace_service,
+        handle_trace_query, handle_trace_workbench_bootstrap, handle_trace_workbench_chunk,
+        handle_trace_workbench_chunks, handle_trace_workbench_model, service_for_file_with_options,
         trace_workbench_parse_opt_level, trace_workbench_service_config_hash,
         trace_workbench_source_file_display_name, trace_workbench_target_config_hash,
     };
@@ -1319,6 +1552,64 @@ pub fn main() -> u64 {
         .await
         .unwrap();
         assert_eq!(cached_model, model);
+
+        tokio::task::spawn_blocking(move || drop(backend))
+            .await
+            .expect("backend drop task panicked");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn trace_workbench_chunk_handlers_serve_cached_revision_payloads() {
+        let mut backend = test_backend();
+        let uri = Url::parse("file:///workspace/src/cached_chunks.fe").unwrap();
+        backend.set_document_version(uri.clone(), 11);
+        let session =
+            backend.create_trace_viewer_session(uri, "evm", "O2", "source-postopt-bytecode", None);
+        let compiler_config_hash = backend.tooling_config().stable_hash();
+        let target_config_hash =
+            trace_workbench_target_config_hash("evm", "O2", "source-postopt-bytecode");
+        let config_hash =
+            trace_workbench_service_config_hash(&compiler_config_hash, &target_config_hash);
+        backend.cache_trace_workbench_model(
+            &session.id,
+            Some(11),
+            config_hash,
+            serde_json::json!({ "revision": { "id": 11 } }),
+            serde_json::json!({ "revision": 11, "summaryDigest": "blake3:summary" }),
+            BTreeMap::from([(
+                "blake3:summary".to_string(),
+                serde_json::json!({
+                    "kind": "summary",
+                    "digest": "blake3:summary",
+                    "value": { "revision": { "id": 11 } }
+                }),
+            )]),
+        );
+
+        let chunk = handle_trace_workbench_chunk(
+            &mut backend,
+            TraceWorkbenchChunkRequest {
+                session_id: session.id.clone(),
+                digest: "blake3:summary".to_string(),
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(chunk["kind"], "summary");
+        assert_eq!(chunk["value"]["revision"]["id"], 11);
+
+        let response = handle_trace_workbench_chunks(
+            &mut backend,
+            TraceWorkbenchChunksRequest {
+                session_id: session.id.clone(),
+                digests: vec!["blake3:summary".to_string(), "blake3:missing".to_string()],
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(response["chunks"].as_array().unwrap().len(), 1);
+        assert_eq!(response["missing"], serde_json::json!(["blake3:missing"]));
 
         tokio::task::spawn_blocking(move || drop(backend))
             .await

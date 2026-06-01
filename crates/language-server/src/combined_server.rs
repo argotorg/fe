@@ -31,10 +31,7 @@ use futures::io::{AsyncRead, AsyncWrite};
 use futures::{SinkExt, StreamExt};
 use tokio::sync::{Mutex, broadcast, watch};
 use tower::ServiceBuilder;
-use trace_query::{
-    TraceQueryHttpRequest, TraceQueryHttpResponse, TraceQueryRequest, trace_workbench_manifest,
-    trace_workbench_summary_chunk,
-};
+use trace_query::{TraceQueryHttpRequest, TraceQueryHttpResponse, TraceQueryRequest};
 use tracing::{info, warn};
 
 use crate::backend::Backend;
@@ -783,31 +780,27 @@ async fn handle_trace_workbench_chunk_http(
     };
     actor_ref.register_handler_async_mutating(
         MessageKey(LspActorKey::of::<
-            crate::introspection::TraceWorkbenchSessionRequest,
+            crate::introspection::TraceWorkbenchChunkRequest,
         >()),
-        crate::introspection::handle_trace_workbench_model,
+        crate::introspection::handle_trace_workbench_chunk,
     );
     let dispatcher = TraceQueryDispatcher;
-    let model = match actor_ref
-        .ask::<_, serde_json::Value, _>(
-            &dispatcher,
-            crate::introspection::TraceWorkbenchSessionRequest { session_id },
-        )
+    let request = crate::introspection::TraceWorkbenchChunkRequest {
+        session_id,
+        digest: digest.clone(),
+    };
+    match actor_ref
+        .ask::<_, Option<serde_json::Value>, _>(&dispatcher, request)
         .await
     {
-        Ok(model) => model,
-        Err(err) => {
-            return json_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                serde_json::json!({ "reason": format!("trace workbench chunk model failed: {err:?}") }),
-            );
-        }
-    };
-    match trace_workbench_chunk_payload(&model, &digest) {
-        Some(payload) => json_response(StatusCode::OK, payload),
-        None => json_response(
+        Ok(Some(payload)) => json_response(StatusCode::OK, payload),
+        Ok(None) => json_response(
             StatusCode::NOT_FOUND,
             serde_json::json!({ "reason": format!("unknown trace workbench chunk digest {digest}") }),
+        ),
+        Err(err) => json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            serde_json::json!({ "reason": format!("trace workbench chunk failed: {err:?}") }),
         ),
     }
 }
@@ -840,119 +833,25 @@ async fn handle_trace_workbench_missing_chunks_http(
     };
     actor_ref.register_handler_async_mutating(
         MessageKey(LspActorKey::of::<
-            crate::introspection::TraceWorkbenchSessionRequest,
+            crate::introspection::TraceWorkbenchChunksRequest,
         >()),
-        crate::introspection::handle_trace_workbench_model,
+        crate::introspection::handle_trace_workbench_chunks,
     );
     let dispatcher = TraceQueryDispatcher;
-    let model = match actor_ref
-        .ask::<_, serde_json::Value, _>(
-            &dispatcher,
-            crate::introspection::TraceWorkbenchSessionRequest { session_id },
-        )
+    let request = crate::introspection::TraceWorkbenchChunksRequest {
+        session_id,
+        digests: trace_workbench_requested_chunk_digests(&request),
+    };
+    match actor_ref
+        .ask::<_, serde_json::Value, _>(&dispatcher, request)
         .await
     {
-        Ok(model) => model,
-        Err(err) => {
-            return json_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                serde_json::json!({ "reason": format!("trace workbench chunk model failed: {err:?}") }),
-            );
-        }
-    };
-    json_response(
-        StatusCode::OK,
-        trace_workbench_chunks_response(&model, trace_workbench_requested_chunk_digests(&request)),
-    )
-}
-
-fn trace_workbench_chunk_payload(
-    model: &serde_json::Value,
-    digest: &str,
-) -> Option<serde_json::Value> {
-    let manifest = trace_workbench_manifest(model);
-    if manifest.root_digest == digest {
-        return Some(serde_json::json!({
-            "kind": "model",
-            "digest": digest,
-            "value": model,
-        }));
+        Ok(response) => json_response(StatusCode::OK, response),
+        Err(err) => json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            serde_json::json!({ "reason": format!("trace workbench chunks failed: {err:?}") }),
+        ),
     }
-    if manifest.summary_digest == digest {
-        return Some(serde_json::json!({
-            "kind": "summary",
-            "digest": digest,
-            "value": trace_workbench_summary_chunk(model),
-        }));
-    }
-    if manifest.metadata_digest == digest {
-        return Some(serde_json::json!({
-            "kind": "metadata",
-            "digest": digest,
-            "value": model.get("metadata").cloned().unwrap_or(serde_json::Value::Null),
-        }));
-    }
-    if manifest.source_digest == digest {
-        return Some(serde_json::json!({
-            "kind": "source",
-            "digest": digest,
-            "value": model.get("source").cloned().unwrap_or(serde_json::Value::Null),
-        }));
-    }
-    if manifest.indexes_digest == digest {
-        return Some(serde_json::json!({
-            "kind": "indexes",
-            "digest": digest,
-            "value": model.get("indexes").cloned().unwrap_or(serde_json::Value::Null),
-        }));
-    }
-    if manifest.rail_components_digest == digest {
-        return Some(serde_json::json!({
-            "kind": "rail_components",
-            "digest": digest,
-            "value": model.get("rail_components").cloned().unwrap_or(serde_json::Value::Null),
-        }));
-    }
-    for (pane_id, pane_digest) in &manifest.panes {
-        if pane_digest != digest {
-            continue;
-        }
-        let pane = model
-            .get("panels")
-            .and_then(serde_json::Value::as_array)
-            .into_iter()
-            .flatten()
-            .find(|pane| {
-                pane.get("id").and_then(serde_json::Value::as_str) == Some(pane_id.as_str())
-            })
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
-        return Some(serde_json::json!({
-            "kind": "pane",
-            "id": pane_id,
-            "digest": digest,
-            "value": pane,
-        }));
-    }
-    for (report_id, report_digest) in &manifest.reports {
-        if report_digest != digest {
-            continue;
-        }
-        let key = match report_id.as_str() {
-            "attribution" => "attribution_audit",
-            "static_analysis" => "static_analysis",
-            "closure_audit" => "audit",
-            "duplicate_shapes" => "duplicate_shapes",
-            _ => report_id.as_str(),
-        };
-        return Some(serde_json::json!({
-            "kind": "report",
-            "id": report_id,
-            "digest": digest,
-            "value": model.get(key).cloned().unwrap_or(serde_json::Value::Null),
-        }));
-    }
-    None
 }
 
 fn trace_workbench_requested_chunk_digests(request: &serde_json::Value) -> Vec<String> {
@@ -971,24 +870,6 @@ fn trace_workbench_requested_chunk_digests(request: &serde_json::Value) -> Vec<S
     digests.sort();
     digests.dedup();
     digests
-}
-
-fn trace_workbench_chunks_response(
-    model: &serde_json::Value,
-    digests: Vec<String>,
-) -> serde_json::Value {
-    let mut chunks = Vec::new();
-    let mut missing = Vec::new();
-    for digest in digests {
-        match trace_workbench_chunk_payload(model, &digest) {
-            Some(payload) => chunks.push(payload),
-            None => missing.push(digest),
-        }
-    }
-    serde_json::json!({
-        "chunks": chunks,
-        "missing": missing,
-    })
 }
 
 async fn handle_trace_workbench_events_http(
@@ -1479,6 +1360,14 @@ impl Dispatcher<LspActorKey> for TraceQueryDispatcher {
             Ok(MessageKey(LspActorKey::of::<
                 crate::introspection::TraceWorkbenchSessionRequest,
             >()))
+        } else if message.is::<crate::introspection::TraceWorkbenchChunkRequest>() {
+            Ok(MessageKey(LspActorKey::of::<
+                crate::introspection::TraceWorkbenchChunkRequest,
+            >()))
+        } else if message.is::<crate::introspection::TraceWorkbenchChunksRequest>() {
+            Ok(MessageKey(LspActorKey::of::<
+                crate::introspection::TraceWorkbenchChunksRequest,
+            >()))
         } else {
             Err(ActorError::DispatchError)
         }
@@ -1504,11 +1393,11 @@ impl Dispatcher<LspActorKey> for TraceQueryDispatcher {
 #[cfg(test)]
 mod tests {
     use super::{
-        trace_auth_token, trace_workbench_chunk_payload, trace_workbench_chunks_response,
-        trace_workbench_query_backend_request, trace_workbench_requested_chunk_digests,
-        trace_workbench_resolved_rows_for_selection, trace_workbench_revision_cursor,
-        trace_workbench_selection_event, validate_trace_auth,
+        trace_auth_token, trace_workbench_query_backend_request,
+        trace_workbench_requested_chunk_digests, trace_workbench_resolved_rows_for_selection,
+        trace_workbench_revision_cursor, trace_workbench_selection_event, validate_trace_auth,
     };
+    use crate::introspection::{trace_workbench_chunk_payload, trace_workbench_chunks_response};
     use axum::http::{HeaderMap, header};
     use std::collections::BTreeMap;
     use trace_query::{TraceQueryRequest, trace_workbench_manifest};
