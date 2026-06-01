@@ -1708,8 +1708,7 @@
       if (kind === "context") return "Context highlights are navigation or cause context. They are intentionally separate from exact attribution.";
       if (kind === "structural") return "Boundary highlights show containment or derived block context, not provenance.";
       if (label === "missing link") return "This row reaches optimized compiler IR, but an exact downstream lineage edge is missing.";
-      if (label === "MIR-only") return "This source/MIR region has precise MIR evidence but no Sonatina or bytecode lowering evidence yet.";
-      if (label === "preopt-only") return "This region reaches Sonatina pre-opt but lacks a post-opt or bytecode explanation.";
+      if (label === "missing downstream") return "This row has upstream lowering evidence, but no explicit downstream compiler/codegen lineage reaches the next representation yet.";
       if (label === "prepared-linked") return "This final bytecode is linked to EVM prepared/codegen identity, but no optimized-Sonatina/source lineage is attached to that prepared instruction.";
       if (label === "library source") return "This row is attributed to std/core or other non-input source, not to the audited input file.";
       if (label === "compiler control") return "This row is compiler/runtime control-flow work without a direct user-source span.";
@@ -1801,8 +1800,8 @@
       }
       if (primary === "optimizer_explained") return { kind: "explained", label: "explained" };
       if (primary === "optimized_attribution_gap") return { kind: "warn", label: "missing link" };
-      if (primary === "lowered_no_target_unexplained") return { kind: "warn", label: "MIR-only" };
-      if (primary === "preopt_elision_gap") return { kind: "warn", label: "preopt-only" };
+      if (primary === "lowered_no_target_unexplained") return { kind: "warn", label: "missing downstream" };
+      if (primary === "preopt_elision_gap") return { kind: "warn", label: "missing downstream" };
       if (primary === "expected_synthetic") return { kind: "generated", label: "generated" };
       if (primary === "prepared_only") return { kind: "context", label: "prepared-linked" };
       if (primary === "source_span_sibling_unlowered" || primary === "source_only_expected") return { kind: "context", label: "source-only" };
@@ -1828,8 +1827,8 @@
         .replace("good_many_to_many", "many-to-many")
         .replace("good_exact", "exact")
         .replace("missing_source_unexplained", "missing source")
-        .replace("lowered_no_target_unexplained", "MIR-only")
-        .replace("preopt_elision_gap", "preopt-only")
+        .replace("lowered_no_target_unexplained", "missing downstream")
+        .replace("preopt_elision_gap", "missing downstream")
         .replace("prepared_only", "prepared-linked")
         .replace(/_/g, " ");
     }

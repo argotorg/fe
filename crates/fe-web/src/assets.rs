@@ -805,6 +805,9 @@ mod tests {
         assert!(!FE_ORIGIN_TRACE_JS.contains("label: \"exact link\""));
         assert!(!FE_ORIGIN_TRACE_JS.contains("satisfied_exact: \"exact\""));
         assert!(FE_ORIGIN_TRACE_JS.contains("satisfied_exact: \"satisfied\""));
+        assert!(!FE_ORIGIN_TRACE_JS.contains("MIR-only"));
+        assert!(!FE_ORIGIN_TRACE_JS.contains("preopt-only"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("missing downstream"));
         assert!(!FE_ORIGIN_TRACE_JS.contains("rail-legend"));
         assert!(!FE_ORIGIN_TRACE_JS.contains("legend-chip"));
         assert!(FE_ORIGIN_TRACE_JS.contains("label: \"generated\""));
