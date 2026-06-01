@@ -1775,7 +1775,7 @@
     _rowDisplayStatus(rowData) {
       if (!rowData || Array.isArray(rowData) || !rowData.display_status) return null;
       var kind = String(rowData.display_status || "");
-      if (kind === "exact") return { kind: "ok", label: "exact" };
+      if (kind === "exact") return null;
       if (kind === "generated") return { kind: "generated", label: "generated" };
       if (kind === "generated_downstream") return { kind: "generated", label: "generated downstream" };
       if (kind === "context") return { kind: "context", label: "context" };

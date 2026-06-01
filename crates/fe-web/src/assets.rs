@@ -799,6 +799,7 @@ mod tests {
         assert!(!FE_ORIGIN_TRACE_JS.contains(
             "indexOf(\"exact-c-\") === 0; })) return { kind: \"ok\", label: \"exact\" }"
         ));
+        assert!(FE_ORIGIN_TRACE_JS.contains("if (kind === \"exact\") return null;"));
         assert!(FE_ORIGIN_TRACE_JS.contains("suppressExact"));
         assert!(FE_ORIGIN_TRACE_JS.contains("label: \"exact link\""));
         assert!(FE_ORIGIN_TRACE_JS.contains("label: \"generated\""));
