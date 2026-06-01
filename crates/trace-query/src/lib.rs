@@ -5489,10 +5489,10 @@ fn missing_link_audit_report(
     unmapped_pcs: usize,
     lineage_gap_targets: &BTreeMap<OriginExportKey, usize>,
     lineage_gaps: &[AttributionAuditLineageGap],
+    invalid: Vec<InvalidAttributionLink>,
 ) -> MissingLinkAuditReport {
     let missing_required_count = lineage_gaps.len();
     let expected_absent: Vec<ExpectedAbsentLink> = Vec::new();
-    let invalid: Vec<InvalidAttributionLink> = Vec::new();
     let overall_status = if !invalid.is_empty() {
         LinkOverallStatus::Invalid
     } else if missing_required_count > 0 {
@@ -5503,30 +5503,41 @@ fn missing_link_audit_report(
         LinkOverallStatus::Pass
     };
     let mut top_blockers = Vec::new();
-    if missing_required_count > 0 {
+    if missing_required_count > 0 || !invalid.is_empty() {
         top_blockers.push(LinkBoundaryKind::PostOptToPrepared);
     }
 
     let mut boundary_summaries = Vec::new();
-    if prepared_linked_pcs > 0 {
+    if prepared_linked_pcs > 0 || missing_required_count > 0 || !invalid.is_empty() {
         let mut status_counts = BTreeMap::new();
+        if !invalid.is_empty() {
+            status_counts.insert(LinkStatus::Invalid, invalid.len());
+        }
         if missing_required_count > 0 {
             status_counts.insert(LinkStatus::MissingRequired, missing_required_count);
-        } else {
+        }
+        if status_counts.is_empty() {
             status_counts.insert(LinkStatus::SatisfiedExact, prepared_linked_pcs);
         }
+        let top_issue_codes = [
+            (!invalid.is_empty()).then_some(LinkIssueCode::PreparedKeyedAsPostopt),
+            (missing_required_count > 0)
+                .then_some(LinkIssueCode::MissingOptimizedToPreparedLineage),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
         boundary_summaries.push(LinkBoundarySummary {
             boundary: LinkBoundaryKind::PostOptToPrepared,
             owner_phase: CompilerPhase::Backend,
             status_counts,
-            affected_origins: lineage_gap_targets.len(),
-            affected_bytecode_pcs: missing_required_count,
-            top_issue_codes: (missing_required_count > 0)
-                .then_some(LinkIssueCode::MissingOptimizedToPreparedLineage)
-                .into_iter()
-                .collect(),
+            affected_origins: lineage_gap_targets.len() + invalid.len(),
+            affected_bytecode_pcs: missing_required_count + invalid.len(),
+            top_issue_codes,
         });
+    }
 
+    if prepared_linked_pcs > 0 {
         let mut prepared_to_bytecode_counts = BTreeMap::new();
         prepared_to_bytecode_counts.insert(LinkStatus::SatisfiedExact, prepared_linked_pcs);
         boundary_summaries.push(LinkBoundarySummary {
@@ -5671,6 +5682,12 @@ fn stable_short_id(input: &str) -> String {
     format!("gap-{hash:08x}")
 }
 
+fn invalid_direct_bytecode_to_postopt_edge(edge: &trace_facts::OriginEdgeFact) -> bool {
+    edge.from.kind() == "bytecode.pc"
+        && is_optimized_sonatina_audit_origin(&edge.to)
+        && edge.has_transform_claim_label()
+}
+
 fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport {
     let index = TraceIndex::new(snapshot);
     let semantic_index = trace_index::TraceIndex::new(snapshot);
@@ -5691,6 +5708,7 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
     let mut lineage_gap_targets = BTreeMap::<OriginExportKey, usize>::new();
     let mut lineage_gaps = Vec::new();
     let mut suspicious_edges = Vec::new();
+    let mut invalid_links = Vec::new();
     let mut total_bytecode_pcs = 0usize;
     let mut source_exact_pcs = 0usize;
     let mut source_ambiguous_pcs = 0usize;
@@ -5789,6 +5807,14 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
             if edge.to.kind().starts_with("sonatina.") {
                 *sonatina_targets.entry(edge.to.clone()).or_default() += 1;
             }
+            if invalid_direct_bytecode_to_postopt_edge(edge) {
+                invalid_links.push(InvalidAttributionLink {
+                    boundary: LinkBoundaryKind::PostOptToPrepared,
+                    origin: edge.to.clone(),
+                    issue_code: LinkIssueCode::PreparedKeyedAsPostopt,
+                    explanation: "bytecode PC is linked directly to optimized Sonatina; bytecode emission must use EVM prepared/VCode identity and explicit optimized→prepared lineage".to_string(),
+                });
+            }
             if matches!(class, OriginEdgeTraversalClass::Contextual)
                 && edge.has_transform_claim_label()
             {
@@ -5873,6 +5899,7 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
         unmapped_pcs,
         &lineage_gap_targets,
         &lineage_gaps,
+        invalid_links,
     );
 
     let mut lineage_gap_targets = attribution_audit_target_counts(lineage_gap_targets);
@@ -7042,8 +7069,18 @@ mod tests {
             missing_links.schema_version,
             MISSING_LINK_AUDIT_SCHEMA_VERSION
         );
-        assert_eq!(missing_links.summary.status, LinkOverallStatus::Pass);
-        assert!(missing_links.summary.top_blockers.is_empty());
+        assert_eq!(missing_links.summary.status, LinkOverallStatus::Invalid);
+        assert_eq!(missing_links.summary.invalid_count, 2);
+        assert_eq!(
+            missing_links.summary.top_blockers,
+            vec![LinkBoundaryKind::PostOptToPrepared]
+        );
+        assert!(
+            missing_links
+                .invalid
+                .iter()
+                .all(|entry| entry.issue_code == LinkIssueCode::PreparedKeyedAsPostopt)
+        );
         assert!(missing_links.clusters.is_empty());
     }
 
