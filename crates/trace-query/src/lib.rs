@@ -5680,6 +5680,10 @@ fn missing_link_audit_report(
     let missing_mir_to_preopt_count = mir_to_preopt.missing.len();
     let expected_absent = expected_absent_links(snapshot);
     let preopt_to_postopt = preopt_to_postopt_boundary_audit(snapshot, &expected_absent);
+    let expected_absent_runtime_count = expected_absent
+        .iter()
+        .filter(|entry| entry.boundary == LinkBoundaryKind::BytecodeToRuntime)
+        .count();
     let missing_preopt_to_postopt_count = preopt_to_postopt.missing.len();
     let missing_postopt_to_prepared_count = lineage_gaps.len();
     let prepared_to_bytecode = prepared_to_bytecode_boundary_audit(snapshot);
@@ -5864,6 +5868,19 @@ fn missing_link_audit_report(
                 .then_some(LinkIssueCode::MissingPreparedPcExtent)
                 .into_iter()
                 .collect(),
+        });
+    }
+
+    if expected_absent_runtime_count > 0 {
+        let mut runtime_counts = BTreeMap::new();
+        runtime_counts.insert(LinkStatus::ExpectedAbsent, expected_absent_runtime_count);
+        boundary_summaries.push(LinkBoundarySummary {
+            boundary: LinkBoundaryKind::BytecodeToRuntime,
+            owner_phase: CompilerPhase::BytecodeEmission,
+            status_counts: runtime_counts,
+            affected_origins: expected_absent_runtime_count,
+            affected_bytecode_pcs: 0,
+            top_issue_codes: vec![LinkIssueCode::ExpectedAbsentNoRuntimeSession],
         });
     }
 
@@ -6479,6 +6496,11 @@ fn expected_absent_links(snapshot: &TraceSnapshot) -> Vec<ExpectedAbsentLink> {
                 })
         })
         .collect::<Vec<_>>();
+
+    if !has_runtime_trace_evidence(snapshot) {
+        entries.extend(static_bytecode_runtime_expected_absences(snapshot));
+    }
+
     entries.sort_by(|left, right| {
         left.origin
             .canonical_storage_key()
@@ -6490,6 +6512,55 @@ fn expected_absent_links(snapshot: &TraceSnapshot) -> Vec<ExpectedAbsentLink> {
             && left.issue_code == right.issue_code
     });
     entries
+}
+
+fn has_runtime_trace_evidence(snapshot: &TraceSnapshot) -> bool {
+    snapshot.facts().iter().any(|fact| {
+        matches!(
+            fact,
+            TraceFact::ExecutionTraceSession(_)
+                | TraceFact::ExecutionStep(_)
+                | TraceFact::DynamicGasStep(_)
+                | TraceFact::RuntimeCodeObjectBinding(_)
+        )
+    })
+}
+
+fn static_bytecode_runtime_expected_absences(snapshot: &TraceSnapshot) -> Vec<ExpectedAbsentLink> {
+    let mut code_objects = snapshot
+        .facts()
+        .iter()
+        .filter_map(|fact| match fact {
+            TraceFact::CodeObject(code_object) => Some(code_object.code_object.clone()),
+            TraceFact::OriginNode(node) if node.key.kind() == "code.object" => {
+                Some(node.key.clone())
+            }
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    if code_objects.is_empty()
+        && snapshot.facts().iter().any(
+            |fact| matches!(fact, TraceFact::OriginNode(node) if node.key.kind() == "bytecode.pc"),
+        )
+        && let Some(bytecode_pc) = snapshot.facts().iter().find_map(|fact| match fact {
+            TraceFact::OriginNode(node) if node.key.kind() == "bytecode.pc" => {
+                Some(node.key.clone())
+            }
+            _ => None,
+        })
+    {
+        code_objects.insert(bytecode_pc);
+    }
+
+    code_objects
+        .into_iter()
+        .map(|origin| ExpectedAbsentLink {
+            boundary: LinkBoundaryKind::BytecodeToRuntime,
+            origin,
+            issue_code: LinkIssueCode::ExpectedAbsentNoRuntimeSession,
+            explanation: "runtime trace capture is absent; bytecode→runtime linkage is expected absent for this static trace bundle".to_string(),
+        })
+        .collect()
 }
 
 fn missing_link_artifact(snapshot: &TraceSnapshot) -> MissingLinkAuditArtifact {
@@ -8190,8 +8261,12 @@ mod tests {
         assert_eq!(report.source_exact_pcs, 1);
         assert_eq!(report.prepared_linked_pcs, 1);
         assert_eq!(report.missing_optimized_to_prepared_lineage_pcs, 0);
-        assert_eq!(missing_links.summary.status, LinkOverallStatus::Pass);
+        assert_eq!(
+            missing_links.summary.status,
+            LinkOverallStatus::PassWithExpectedAbsences
+        );
         assert_eq!(missing_links.summary.missing_required_count, 0);
+        assert_eq!(missing_links.summary.expected_absent_count, 1);
         assert_eq!(missing_links.summary.prepared_linked_bytecode_pcs, 1);
         let postopt_to_prepared = missing_links
             .boundary_summaries
@@ -8213,6 +8288,22 @@ mod tests {
             .expect("prepared to bytecode boundary summary");
         assert_eq!(prepared_to_bytecode.affected_origins, 1);
         assert_eq!(prepared_to_bytecode.affected_bytecode_pcs, 1);
+        let bytecode_to_runtime = missing_links
+            .boundary_summaries
+            .iter()
+            .find(|summary| summary.boundary == LinkBoundaryKind::BytecodeToRuntime)
+            .expect("bytecode to runtime boundary summary");
+        assert_eq!(bytecode_to_runtime.affected_origins, 1);
+        assert_eq!(
+            bytecode_to_runtime
+                .status_counts
+                .get(&LinkStatus::ExpectedAbsent),
+            Some(&1)
+        );
+        assert_eq!(
+            missing_links.expected_absent[0].issue_code,
+            LinkIssueCode::ExpectedAbsentNoRuntimeSession
+        );
     }
 
     #[test]
