@@ -392,7 +392,7 @@ mod tests {
     use trace_facts::{
         CompilerEventFact, CompilerEventKind, CompilerPhase, CompilerReason, OriginEdgeFact,
         OriginEdgeLabel, OriginNodeFact, OriginNodeKind, SourceFileFact, SourceSpanFact,
-        TraceBundle, TraceFact, TraceMetadata, TraceSnapshot,
+        TraceBundle, TraceFact, TraceMetadata, TraceSnapshot, TraceValidationError,
     };
 
     use super::{TraceIndex, TracePhase, TraceReachabilityPolicy};
@@ -966,6 +966,68 @@ mod tests {
                 .source_candidates_for_instruction(&instruction, TraceReachabilityPolicy::ExactOnly)
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn validation_rejects_prepared_lineage_event_without_origin_edge() {
+        let file = key("source.file", "demo", "demo.fe");
+        let instruction = key("bytecode.pc", "demo", "pc:0");
+        let prepared = key("sonatina.evm.prepared.inst", "demo", "inst:prepared");
+        let postopt = key("sonatina.postopt.inst", "demo", "inst:postopt");
+        let source = key("hir.expr", "demo", "expr:0");
+        let event = key("compiler.event", "demo", "event:prepared-lineage");
+        let facts = vec![
+            node(&file),
+            node(&instruction),
+            node(&prepared),
+            node(&postopt),
+            node(&source),
+            node(&event),
+            TraceFact::SourceFile(SourceFileFact::new(
+                file.clone(),
+                "file:///demo.fe",
+                "demo.fe",
+                "blake3:0000000000000000000000000000000000000000000000000000000000000001",
+                Some(0),
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(source.clone(), file, 0, 1, 1, 1, 1, 2)),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                instruction.clone(),
+                prepared.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+            TraceFact::CompilerEvent(CompilerEventFact::new(
+                event,
+                CompilerPhase::Backend,
+                CompilerEventKind::PreparedLineage,
+                vec![postopt.clone()],
+                vec![prepared],
+                Some(CompilerReason::new("fixture prepared lineage")),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                postopt.clone(),
+                source,
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::SonatinaPostOpt),
+            )),
+        ];
+        let err = TraceSnapshot::new(TraceBundle::new(
+            TraceMetadata::compiler_emitted(
+                "abc123",
+                "evm/sonatina",
+                vec!["fe".to_string()],
+                "demo.fe",
+                vec!["optimize=2".to_string()],
+            ),
+            facts,
+        ))
+        .expect_err("prepared lineage events must have a matching semantic edge");
+
+        assert!(matches!(
+            err,
+            TraceValidationError::PreparedLineageEventMissingSemanticEdge { .. }
+        ));
     }
 
     #[test]
