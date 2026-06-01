@@ -657,7 +657,7 @@
 
     _detailPanel() {
       var panel = el("section", "panel detail-panel");
-      panel.append(this._panelHead("Selection Details", "Click a highlighted source, IR, loop, or bytecode row to inspect evidence paths, siblings, and gaps."));
+      panel.append(this._panelHead("Selection Details", "Click a highlighted source, IR, loop, or bytecode row to inspect linked phases, generated work, and gaps."));
       panel.append(el("div", "detail", ""));
       return panel;
     }

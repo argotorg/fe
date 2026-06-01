@@ -777,6 +777,8 @@ mod tests {
         assert!(FE_ORIGIN_TRACE_JS.contains("No row selected."));
         assert!(FE_ORIGIN_TRACE_JS.contains("Selected row"));
         assert!(FE_ORIGIN_TRACE_JS.contains("Missing Optimized→Prepared Link"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("linked phases, generated work, and gaps"));
+        assert!(!FE_ORIGIN_TRACE_JS.contains("inspect evidence paths"));
     }
 
     #[test]
