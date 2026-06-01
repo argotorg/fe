@@ -5,6 +5,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::BufReader;
+use std::str::FromStr;
 use std::time::{Duration, Instant};
 use trace_facts::{CompilerPhase, TraceBundle, TraceFact, TraceMetadata, TraceSnapshot};
 use trace_query::{
@@ -26,6 +27,19 @@ pub(crate) struct TraceBackendQueryRequest {
 #[derive(Clone, Debug)]
 pub(crate) struct TraceWorkbenchSessionRequest {
     pub session_id: String,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TraceServiceOptions {
+    pub opt_level: codegen::OptLevel,
+}
+
+impl Default for TraceServiceOptions {
+    fn default() -> Self {
+        Self {
+            opt_level: codegen::OptLevel::O1,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -78,7 +92,11 @@ pub(crate) async fn handle_trace_workbench_bootstrap(
     let uri = Url::parse(&session.uri)
         .map_err(|err| internal_error(format!("invalid session URI: {err}")))?;
     let document_version = backend.document_version(&uri);
-    let config_hash = backend.tooling_config().stable_hash();
+    let compiler_config_hash = backend.tooling_config().stable_hash();
+    let target_config_hash =
+        trace_workbench_target_config_hash(&session.target, &session.opt_level, &session.view);
+    let config_hash =
+        trace_workbench_service_config_hash(&compiler_config_hash, &target_config_hash);
     let latest_revision = backend
         .trace_viewer_revisions(&request.session_id)
         .and_then(|revisions| revisions.last().cloned());
@@ -144,7 +162,12 @@ pub(crate) async fn handle_trace_workbench_model(
     let uri = Url::parse(&session.uri)
         .map_err(|err| internal_error(format!("invalid session URI: {err}")))?;
     ensure_workspace_file(backend, &uri).map_err(internal_error)?;
-    let current_config_hash = backend.tooling_config().stable_hash();
+    let compiler_config_hash = backend.tooling_config().stable_hash();
+    let target_config_hash =
+        trace_workbench_target_config_hash(&session.target, &session.opt_level, &session.view);
+    let service_config_hash =
+        trace_workbench_service_config_hash(&compiler_config_hash, &target_config_hash);
+    let opt_level = trace_workbench_parse_opt_level(&session.opt_level).map_err(internal_error)?;
     let document_version = backend.document_version(&uri);
     let source_text = backend
         .db
@@ -154,15 +177,20 @@ pub(crate) async fn handle_trace_workbench_model(
     let source_hash = source_text.as_deref().map(trace_workbench_digest_text);
 
     let service = if let Some(version) = document_version
-        && let Some(service) = backend.cached_trace_service(&uri, version, &current_config_hash)
+        && let Some(service) = backend.cached_trace_service(&uri, version, &service_config_hash)
     {
         service
     } else {
         let config = backend.tooling_config().clone();
         let worker_uri = uri.clone();
         let worker = backend.spawn_on_workers(move |db| {
-            service_for_file(db, &worker_uri, config)?
-                .ok_or_else(|| format!("no Fe source file is loaded for URI {worker_uri}"))
+            service_for_file_with_options(
+                db,
+                &worker_uri,
+                config,
+                TraceServiceOptions { opt_level },
+            )?
+            .ok_or_else(|| format!("no Fe source file is loaded for URI {worker_uri}"))
         });
         let result = tokio::time::timeout(Duration::from_secs(30), worker)
             .await
@@ -173,7 +201,7 @@ pub(crate) async fn handle_trace_workbench_model(
             backend.cache_trace_service(
                 uri.clone(),
                 version,
-                current_config_hash.clone(),
+                service_config_hash.clone(),
                 service.clone(),
             );
         }
@@ -182,8 +210,6 @@ pub(crate) async fn handle_trace_workbench_model(
     let related_source_texts =
         trace_workbench_related_source_texts(backend, service.snapshot(), &uri);
     let trace_snapshot_digest = service.snapshot().trace_hash().to_string();
-    let target_config_hash =
-        trace_workbench_target_config_hash(&session.target, &session.opt_level, &session.view);
     let projection = trace_workbench_report_projection(
         &service,
         service.snapshot(),
@@ -210,8 +236,8 @@ pub(crate) async fn handle_trace_workbench_model(
             previous_revision: None,
             document_version,
             status: "ready".to_string(),
-            config_hash: current_config_hash.clone(),
-            compiler_config_hash: current_config_hash,
+            config_hash: service_config_hash,
+            compiler_config_hash,
             target_config_hash,
             target: session.target,
             opt_level: session.opt_level,
@@ -234,6 +260,24 @@ fn trace_workbench_target_config_hash(target: &str, opt_level: &str, view: &str)
     trace_workbench_digest_text(&format!(
         "target={target}\nopt_level={opt_level}\nview={view}\n"
     ))
+}
+
+fn trace_workbench_service_config_hash(
+    compiler_config_hash: &str,
+    target_config_hash: &str,
+) -> String {
+    trace_workbench_digest_text(&format!(
+        "compiler_config={compiler_config_hash}\ntarget_config={target_config_hash}\n"
+    ))
+}
+
+fn trace_workbench_parse_opt_level(input: &str) -> Result<codegen::OptLevel, String> {
+    let normalized = input
+        .trim()
+        .strip_prefix('O')
+        .or_else(|| input.trim().strip_prefix('o'))
+        .unwrap_or_else(|| input.trim());
+    codegen::OptLevel::from_str(normalized)
 }
 
 fn trace_workbench_digest_text(text: &str) -> String {
@@ -458,6 +502,15 @@ pub(crate) fn service_for_file(
     uri: &Url,
     config: introspection_config::FeToolingConfig,
 ) -> Result<Option<TraceIntrospectionService>, String> {
+    service_for_file_with_options(db, uri, config, TraceServiceOptions::default())
+}
+
+pub(crate) fn service_for_file_with_options(
+    db: &DriverDataBase,
+    uri: &Url,
+    config: introspection_config::FeToolingConfig,
+    options: TraceServiceOptions,
+) -> Result<Option<TraceIntrospectionService>, String> {
     if let Some(attached_trace) = config.lsp.trace.attached_trace.as_deref()
         && !attached_trace.trim().is_empty()
     {
@@ -481,7 +534,7 @@ pub(crate) fn service_for_file(
         &sonatina_module,
         CompilerPhase::SonatinaPreOpt,
     ));
-    let bytecode = codegen::emit_module_sonatina_bytecode(db, top_mod, codegen::OptLevel::O1, None)
+    let bytecode = codegen::emit_module_sonatina_bytecode(db, top_mod, options.opt_level, None)
         .map_err(|err| format!("bytecode emission for trace: {err}"))?;
     for (contract_name, artifact) in bytecode {
         let owner_key =
@@ -499,7 +552,10 @@ pub(crate) fn service_for_file(
         "evm/sonatina",
         vec!["fe-language-server".to_string(), "trace".to_string()],
         uri.to_string(),
-        vec!["source=lsp-live".to_string()],
+        vec![
+            "source=lsp-live".to_string(),
+            format!("optimize=O{}", options.opt_level),
+        ],
     );
     let snapshot = TraceSnapshot::new(TraceBundle::new(metadata, facts))
         .map_err(|err| format!("live trace validation failed: {err}"))?;
@@ -566,7 +622,8 @@ mod tests {
 
     use super::{
         TraceWorkbenchSessionRequest, attached_trace_service, handle_trace_workbench_bootstrap,
-        handle_trace_workbench_model,
+        handle_trace_workbench_model, trace_workbench_parse_opt_level,
+        trace_workbench_service_config_hash, trace_workbench_target_config_hash,
     };
     use crate::backend::{Backend, TraceViewerRevisionRecord};
 
@@ -625,6 +682,71 @@ mod tests {
             vec!["runtime=attached"]
         );
         assert_eq!(service.snapshot().validation().summary.instruction_count, 1);
+    }
+
+    #[test]
+    fn trace_workbench_opt_level_accepts_session_spelling() {
+        assert_eq!(
+            trace_workbench_parse_opt_level("O0").unwrap(),
+            codegen::OptLevel::O0
+        );
+        assert_eq!(
+            trace_workbench_parse_opt_level("O1").unwrap(),
+            codegen::OptLevel::O1
+        );
+        assert_eq!(
+            trace_workbench_parse_opt_level("O2").unwrap(),
+            codegen::OptLevel::O2
+        );
+        assert_eq!(
+            trace_workbench_parse_opt_level("Os").unwrap(),
+            codegen::OptLevel::Os
+        );
+        assert_eq!(
+            trace_workbench_parse_opt_level("2").unwrap(),
+            codegen::OptLevel::O2
+        );
+        assert!(trace_workbench_parse_opt_level("O3").is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn trace_workbench_bootstrap_config_hash_includes_session_opt_level() {
+        let mut backend = test_backend();
+        let uri = Url::parse("file:///workspace/src/lib.fe").unwrap();
+        backend.set_document_version(uri.clone(), 1);
+        let o1 = backend.create_trace_viewer_session(
+            uri.clone(),
+            "evm",
+            "O1",
+            "source-postopt-bytecode",
+            None,
+        );
+        let o2 =
+            backend.create_trace_viewer_session(uri, "evm", "O2", "source-postopt-bytecode", None);
+
+        let o1_response = handle_trace_workbench_bootstrap(
+            &mut backend,
+            TraceWorkbenchSessionRequest { session_id: o1.id },
+        )
+        .await
+        .unwrap();
+        let o2_response = handle_trace_workbench_bootstrap(
+            &mut backend,
+            TraceWorkbenchSessionRequest { session_id: o2.id },
+        )
+        .await
+        .unwrap();
+
+        assert_ne!(
+            o1_response.revision.config_hash,
+            o2_response.revision.config_hash
+        );
+        assert_eq!(o1_response.session.opt_level, "O1");
+        assert_eq!(o2_response.session.opt_level, "O2");
+
+        tokio::task::spawn_blocking(move || drop(backend))
+            .await
+            .expect("backend drop task panicked");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -725,7 +847,11 @@ mod tests {
         backend.set_document_version(uri.clone(), 9);
         let session =
             backend.create_trace_viewer_session(uri, "evm", "O2", "source-postopt-bytecode", None);
-        let config_hash = backend.tooling_config().stable_hash();
+        let compiler_config_hash = backend.tooling_config().stable_hash();
+        let target_config_hash =
+            trace_workbench_target_config_hash("evm", "O2", "source-postopt-bytecode");
+        let config_hash =
+            trace_workbench_service_config_hash(&compiler_config_hash, &target_config_hash);
         backend.record_trace_viewer_revision(
             &session.id,
             TraceViewerRevisionRecord {
@@ -734,8 +860,8 @@ mod tests {
                 document_version: Some(9),
                 status: "ready".to_string(),
                 config_hash: config_hash.clone(),
-                compiler_config_hash: config_hash,
-                target_config_hash: "blake3:target".to_string(),
+                compiler_config_hash,
+                target_config_hash,
                 target: "evm".to_string(),
                 opt_level: "O2".to_string(),
                 view: "source-postopt-bytecode".to_string(),
@@ -783,6 +909,11 @@ mod tests {
             "source-postopt-bytecode",
             None,
         );
+        let compiler_config_hash = backend.tooling_config().stable_hash();
+        let target_config_hash =
+            trace_workbench_target_config_hash("evm", "O2", "source-postopt-bytecode");
+        let config_hash =
+            trace_workbench_service_config_hash(&compiler_config_hash, &target_config_hash);
         backend.record_trace_viewer_revision(
             &session.id,
             TraceViewerRevisionRecord {
@@ -790,9 +921,9 @@ mod tests {
                 previous_revision: None,
                 document_version: Some(9),
                 status: "ready".to_string(),
-                config_hash: backend.tooling_config().stable_hash(),
-                compiler_config_hash: backend.tooling_config().stable_hash(),
-                target_config_hash: "blake3:target".to_string(),
+                config_hash,
+                compiler_config_hash,
+                target_config_hash,
                 target: "evm".to_string(),
                 opt_level: "O2".to_string(),
                 view: "source-postopt-bytecode".to_string(),
