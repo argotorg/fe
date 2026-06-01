@@ -2530,6 +2530,7 @@ dependencies = [
  "blake3",
  "fe-common",
  "fe-introspection-config",
+ "fe-shape-address",
  "fe-trace-facts",
  "serde",
  "serde_json",

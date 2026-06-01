@@ -7843,6 +7843,88 @@ fn postopt_candidate_hints_for_prepared_raw_id(
         .collect()
 }
 
+fn postopt_candidates_by_shape_digest(
+    snapshot: &TraceSnapshot,
+) -> BTreeMap<(String, String, String), Vec<OriginExportKey>> {
+    let mut candidates = BTreeMap::<(String, String, String), BTreeSet<OriginExportKey>>::new();
+    for fact in snapshot.facts() {
+        let TraceFact::ShapeNodeHash(hash) = fact else {
+            continue;
+        };
+        if !is_sonatina_postopt_inst_audit_origin(&hash.node) {
+            continue;
+        }
+        for (dimension, digest) in hash.tree.iter() {
+            candidates
+                .entry((
+                    hash.policy.to_string(),
+                    dimension.as_str().to_string(),
+                    digest.to_string(),
+                ))
+                .or_default()
+                .insert(hash.node.clone());
+        }
+    }
+    candidates
+        .into_iter()
+        .map(|(shape, origins)| (shape, origins.into_iter().collect()))
+        .collect()
+}
+
+fn postopt_candidate_hints_for_prepared_shape_digest(
+    snapshot: &TraceSnapshot,
+    postopt_candidates: &BTreeMap<(String, String, String), Vec<OriginExportKey>>,
+    prepared_origin: &OriginExportKey,
+) -> Vec<CandidateHint> {
+    if !is_prepared_sonatina_audit_origin(prepared_origin) {
+        return Vec::new();
+    }
+
+    let mut hints = Vec::new();
+    let mut seen = BTreeSet::<(OriginExportKey, String, String)>::new();
+    for fact in snapshot.facts() {
+        let TraceFact::ShapeNodeHash(hash) = fact else {
+            continue;
+        };
+        if hash.node != *prepared_origin {
+            continue;
+        }
+        for (dimension, digest) in hash.tree.iter() {
+            let lookup = (
+                hash.policy.to_string(),
+                dimension.as_str().to_string(),
+                digest.to_string(),
+            );
+            for postopt in postopt_candidates
+                .get(&lookup)
+                .into_iter()
+                .flatten()
+                .take(3)
+            {
+                if !seen.insert((postopt.clone(), lookup.0.clone(), lookup.1.clone())) {
+                    continue;
+                }
+                hints.push(CandidateHint {
+                    kind: CandidateHintKind::SameShapeDigest,
+                    confidence: CandidateConfidence::Medium,
+                    from: Some(prepared_origin.clone()),
+                    to: Some(postopt.clone()),
+                    explanation: "EVM prepared and optimized Sonatina origins share a shape digest. This is a candidate diagnostic only; shape matches never satisfy provenance.".to_string(),
+                    dimensions: vec![
+                        format!("policy={}", lookup.0),
+                        format!("dimension={}", lookup.1),
+                        format!("digest={}", lookup.2),
+                    ],
+                });
+                if hints.len() >= 3 {
+                    return hints;
+                }
+            }
+        }
+    }
+    hints
+}
+
 fn exact_postopt_lineage_targets_by_prepared(
     snapshot: &TraceSnapshot,
 ) -> BTreeMap<OriginExportKey, BTreeSet<OriginExportKey>> {
@@ -7945,6 +8027,7 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
     let index = TraceIndex::new(snapshot);
     let semantic_index = trace_index::TraceIndex::new(snapshot);
     let postopt_raw_local_candidates = postopt_candidates_by_raw_local_id(snapshot);
+    let postopt_shape_candidates = postopt_candidates_by_shape_digest(snapshot);
     let prepared_lineage_events = trace_index::prepared_lineage_event_pairs(snapshot);
     let exact_postopt_lineage_by_prepared = exact_postopt_lineage_targets_by_prepared(snapshot);
     let mut direct_edges = BTreeMap::<
@@ -8099,10 +8182,16 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
                         )
                     }
                     None => {
-                        let candidate_hints = postopt_candidate_hints_for_prepared_raw_id(
+                        let mut candidate_hints = postopt_candidate_hints_for_prepared_raw_id(
                             &postopt_raw_local_candidates,
                             &prepared,
                         );
+                        candidate_hints.extend(postopt_candidate_hints_for_prepared_shape_digest(
+                            snapshot,
+                            &postopt_shape_candidates,
+                            &prepared,
+                        ));
+                        candidate_hints.truncate(6);
                         (
                             if candidate_hints.is_empty() {
                                 LinkStatus::MissingRequired
@@ -8464,6 +8553,10 @@ mod tests {
     use crate::{origin_closure, trace_index};
 
     use common::origin::OriginExportKey;
+    use shape_address::{
+        DimensionDigests, ShapeCyclePolicy, ShapeDigest, ShapeDimension, ShapeGraphKey,
+        ShapeHashPolicy, ShapeViewMode,
+    };
     use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
     use std::path::Path;
@@ -8477,10 +8570,11 @@ mod tests {
         LoopMembershipFact, MemoryAccessFact, MemoryAccessKind, OriginEdgeFact, OriginEdgeLabel,
         OriginEdgeTraversalClass, OriginNodeFact, OriginNodeKind, PcRange, RevertFact,
         RuntimeCallKind, RuntimeCaptureMode, RuntimeCodeObjectBindingFact, RuntimePcJoinConfidence,
-        RuntimeTraceDataSource, RuntimeValue, RuntimeValuePolicy, SourceFileFact, SourceSpanFact,
-        StackSampleFact, StaticGasFact, StorageAccessFact, StorageAccessKind, StorageFact,
-        StorageLocation, StorageReason, TraceBundle, TraceFact, TraceMetadata, TraceSnapshot,
-        TypeFact, TypeKind, ValueLocation, VariableFact, VariableStorageClass,
+        RuntimeTraceDataSource, RuntimeValue, RuntimeValuePolicy, ShapeNodeHashFact,
+        ShapePolicyFact, SourceFileFact, SourceSpanFact, StackSampleFact, StaticGasFact,
+        StorageAccessFact, StorageAccessKind, StorageFact, StorageLocation, StorageReason,
+        TraceBundle, TraceFact, TraceMetadata, TraceSnapshot, TypeFact, TypeKind, ValueLocation,
+        VariableFact, VariableStorageClass,
     };
 
     use super::{
@@ -8571,6 +8665,25 @@ mod tests {
             facts,
         ))
         .unwrap()
+    }
+
+    fn shape_policy() -> ShapeHashPolicy {
+        ShapeHashPolicy::with_dimensions(
+            "trace-candidate",
+            [ShapeDimension::Structure],
+            ShapeViewMode::AnonymousShape,
+            ShapeCyclePolicy::Reject,
+        )
+        .unwrap()
+    }
+
+    fn shape_digests(hex_digit: char) -> DimensionDigests {
+        let mut digests = DimensionDigests::default();
+        digests.insert(
+            ShapeDimension::Structure,
+            ShapeDigest::new(hex_digit.to_string().repeat(64)).unwrap(),
+        );
+        digests
     }
 
     fn demo_service() -> TraceIntrospectionService {
@@ -10122,6 +10235,82 @@ mod tests {
             0
         );
         assert_eq!(missing_links.summary.missing_required_count, 1);
+    }
+
+    #[test]
+    fn missing_postopt_prepared_lineage_reports_shape_match_as_candidate_only() {
+        let function = key("function", "demo", "recv");
+        let postopt = key("sonatina.postopt.inst", "demo", "inst:postopt-shape");
+        let prepared = key("sonatina.evm.prepared.inst", "demo", "inst:prepared-shape");
+        let pc = key("bytecode.pc", "demo", "pc:0");
+        let policy = shape_policy();
+        let graph = ShapeGraphKey::new(function.clone(), "backend-shape").unwrap();
+        let shared_shape = shape_digests('a');
+        let snapshot = snapshot(vec![
+            node(function.clone()),
+            node(postopt.clone()),
+            node(prepared.clone()),
+            node(pc.clone()),
+            TraceFact::Instruction(InstructionFact::new(pc.clone(), function.clone(), 0, "ADD")),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                pc.clone(),
+                prepared.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+            TraceFact::ShapePolicy(ShapePolicyFact::from_policy(&policy)),
+            TraceFact::ShapeNodeHash(ShapeNodeHashFact::new(
+                postopt.clone(),
+                graph.clone(),
+                policy.policy_id(),
+                shape_digests('b'),
+                shared_shape.clone(),
+                None,
+            )),
+            TraceFact::ShapeNodeHash(ShapeNodeHashFact::new(
+                prepared.clone(),
+                graph,
+                policy.policy_id(),
+                shape_digests('c'),
+                shared_shape,
+                None,
+            )),
+        ]);
+        let index = trace_index::TraceIndex::new(&snapshot);
+        let reaches_postopt = index.origin_reaches(
+            &pc,
+            &postopt,
+            trace_index::TraceReachabilityPolicy::ExactOnly,
+        );
+        let report = TraceIntrospectionService::new(snapshot)
+            .attribution_audit()
+            .unwrap();
+
+        assert!(!reaches_postopt);
+        assert_eq!(report.source_exact_pcs, 0);
+        assert_eq!(report.prepared_linked_pcs, 1);
+        assert_eq!(report.missing_optimized_to_prepared_lineage_pcs, 1);
+        assert_eq!(report.lineage_gaps.len(), 1);
+        assert_eq!(
+            report.lineage_gaps[0].status,
+            LinkStatus::MissingLineageButCandidatesExist
+        );
+        assert!(report.lineage_gaps[0].candidate_hints.iter().any(|hint| {
+            hint.kind == CandidateHintKind::SameShapeDigest
+                && hint.confidence == CandidateConfidence::Medium
+                && hint.to.as_ref() == Some(&postopt)
+        }));
+
+        let missing_links = report.missing_links.as_ref().unwrap();
+        assert_eq!(missing_links.summary.exact_source_to_bytecode_pcs, 0);
+        assert_eq!(missing_links.summary.prepared_linked_bytecode_pcs, 1);
+        assert_eq!(missing_links.summary.missing_required_count, 1);
+        assert!(
+            missing_links.gaps[0]
+                .candidate_hints
+                .iter()
+                .any(|hint| hint.kind == CandidateHintKind::SameShapeDigest)
+        );
     }
 
     #[test]
