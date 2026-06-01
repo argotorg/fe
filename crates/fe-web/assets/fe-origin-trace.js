@@ -248,7 +248,9 @@
       var linkReport = audit.missing_links || {};
       var summary = linkReport.summary || {};
       var count = summary.missing_required_count || audit.missing_optimized_to_prepared_lineage_pcs || 0;
-      if (count === 0) return "none detected";
+      var nonExact = audit.non_exact_optimized_to_prepared_lineage_pcs || 0;
+      if (count === 0 && nonExact === 0) return "none detected";
+      if (count === 0) return nonExact + " non-exact " + (nonExact === 1 ? "explanation" : "explanations");
       var blockers = (summary.top_blockers || []).map(this._friendlyBoundaryName).join(", ");
       return count + " missing " + (count === 1 ? "link" : "links") + (blockers ? " · " + blockers : "");
     }
@@ -258,6 +260,7 @@
       var linkReport = (audit && audit.missing_links) || {};
       var summaryReport = linkReport.summary || {};
       var count = summaryReport.missing_required_count || (audit && audit.missing_optimized_to_prepared_lineage_pcs) || 0;
+      var nonExact = (audit && audit.non_exact_optimized_to_prepared_lineage_pcs) || 0;
       section.append(
         el("h2", "", "Missing Link Audit"),
         el(
@@ -272,11 +275,14 @@
         this._metric("optimized-linked", audit.optimized_sonatina_linked_pcs || 0),
         this._metric("prepared-linked", audit.prepared_linked_pcs || 0),
         this._metric("lineage gaps", count),
+        this._metric("non-exact lineage", nonExact),
         this._metric("unmapped", audit.unmapped_pcs || 0)
       );
       section.append(summary);
       if (count > 0) {
         section.append(el("p", "gap", "Prepared bytecode exists, but " + count + " required phase link(s) are missing. This is missing evidence, not automatically a compiler bug."));
+      } else if (nonExact > 0) {
+        section.append(el("p", "audit-note", "No required phase-link gaps were detected, but " + nonExact + " prepared→optimized link(s) are generated/context explanations only. They help explain compiler work but do not create exact source attribution."));
       } else {
         section.append(el("p", "audit-note", "No required phase-link gaps were detected by this report."));
       }
@@ -507,11 +513,14 @@
         return (audit.source_exact_pcs || 0) + " source-exact · "
           + (audit.optimized_sonatina_linked_pcs || 0) + " optimized-Sonatina-linked · "
           + (audit.prepared_linked_pcs || 0) + " prepared-linked · "
+          + (audit.non_exact_optimized_to_prepared_lineage_pcs || 0) + " non-exact lineage · "
           + (audit.unmapped_pcs || 0) + " unmapped. Prepared-linked means EVM prepared/codegen reaches bytecode; it is not source-exact by itself.";
       }
       if (id.indexOf("postopt") >= 0 || id.indexOf("attribution_gap") >= 0) {
         return (audit.missing_optimized_to_prepared_lineage_pcs || 0)
-          + " bytecode PC(s) are blocked by missing optimized Sonatina → EVM prepared lineage.";
+          + " bytecode PC(s) are blocked by missing optimized Sonatina → EVM prepared lineage; "
+          + (audit.non_exact_optimized_to_prepared_lineage_pcs || 0)
+          + " have generated/context explanation only.";
       }
       return "";
     }
@@ -524,6 +533,7 @@
           + (audit.source_exact_pcs || 0) + " source-exact, "
           + (audit.optimized_sonatina_linked_pcs || 0) + " optimized-Sonatina-linked, "
           + (audit.prepared_linked_pcs || 0) + " prepared-linked, "
+          + (audit.non_exact_optimized_to_prepared_lineage_pcs || 0) + " non-exact lineage, "
           + (audit.unmapped_pcs || 0) + " unmapped.";
       }
       if (id.indexOf("postopt") >= 0 || id.indexOf("attribution_gap") >= 0) {

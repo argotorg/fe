@@ -1087,10 +1087,11 @@ fn render_attribution_audit_report(report: &AttributionAuditReport) -> String {
         report.source_exact_pcs, report.source_ambiguous_pcs, report.unmapped_pcs
     ));
     out.push_str(&format!(
-        "  optimized-Sonatina linked: {}\n  prepared-linked: {}\n  missing optimized->prepared lineage: {}\n\n",
+        "  optimized-Sonatina linked: {}\n  prepared-linked: {}\n  missing optimized->prepared lineage: {}\n  non-exact optimized->prepared explanation: {}\n\n",
         report.optimized_sonatina_linked_pcs,
         report.prepared_linked_pcs,
-        report.missing_optimized_to_prepared_lineage_pcs
+        report.missing_optimized_to_prepared_lineage_pcs,
+        report.non_exact_optimized_to_prepared_lineage_pcs
     ));
 
     out.push_str("Direct bytecode edge classes:\n");
