@@ -650,7 +650,10 @@ mod tests {
         InstructionFact, JsonlTraceSink, OriginEdgeLabel, OriginNodeFact, OriginNodeKind,
         TraceBundle, TraceFact, TraceMetadata,
     };
-    use trace_query::{TraceQueryHttpResponse, TraceQueryReport, TraceQueryRequest};
+    use trace_query::{
+        TraceQueryHttpResponse, TraceQueryReport, TraceQueryRequest,
+        TraceWorkbenchProjectionRequest, trace_workbench_report_projection,
+    };
     use url::Url;
 
     use super::{
@@ -816,6 +819,76 @@ pub fn main() -> u64 {
         );
         assert!(model["notes"].as_array().unwrap().iter().any(|note| note
             == "The live endpoint uses the shared trace-query workbench projection path."));
+
+        tokio::task::spawn_blocking(move || drop(backend))
+            .await
+            .expect("backend drop task panicked");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn trace_workbench_live_projection_parity_summary_matches_direct_projection() {
+        let mut backend = test_backend();
+        let uri = Url::parse("file:///workspace/src/live_trace_parity.fe").unwrap();
+        let source = r#"
+pub fn main() -> u64 {
+    (10 - 3) * 2
+}
+"#
+        .to_string();
+        backend
+            .db
+            .workspace()
+            .update(&mut backend.db, uri.clone(), source.clone());
+        backend.set_document_version(uri.clone(), 17);
+        let session = backend.create_trace_viewer_session(
+            uri.clone(),
+            "evm",
+            "O2",
+            "source-postopt-bytecode",
+            None,
+        );
+
+        let live_model = handle_trace_workbench_model(
+            &mut backend,
+            TraceWorkbenchSessionRequest {
+                session_id: session.id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        let direct_service = service_for_file_with_options(
+            &backend.db,
+            &uri,
+            backend.tooling_config().clone(),
+            TraceServiceOptions {
+                opt_level: codegen::OptLevel::O2,
+            },
+        )
+        .unwrap()
+        .expect("direct trace service");
+        let direct_projection = trace_workbench_report_projection(
+            &direct_service,
+            direct_service.snapshot(),
+            TraceWorkbenchProjectionRequest {
+                input_path: uri.to_string(),
+                target: "evm".to_string(),
+                opt_level: "O2".to_string(),
+                view: "source-postopt-bytecode".to_string(),
+                source_text: Some(source),
+                related_source_texts: BTreeMap::new(),
+                document_version: Some(17),
+                query_duration_ms: 0,
+                compiler_commit: option_env!("FE_GIT_COMMIT")
+                    .unwrap_or("unknown")
+                    .to_string(),
+                data_source: "lsp-live".to_string(),
+            },
+        );
+
+        assert_eq!(
+            live_model["parity_summary"],
+            direct_projection["parity_summary"]
+        );
 
         tokio::task::spawn_blocking(move || drop(backend))
             .await
