@@ -1049,7 +1049,7 @@
       if (!runs.length) return false;
       shell.dataset.activeRun = "0";
       shell.dataset.activeRunKey = this._highlightKey(this._selected);
-      this._scrollRunIntoView(runs[0], 1, this._withBoundaryPreference(options, true));
+      this._scrollRunIntoView(runs[0], 1, this._withBoundaryPreference(options, false));
       return true;
     }
 
@@ -1071,9 +1071,10 @@
         if (shell === originShell) return;
         var runs = this._matchingRuns(shell, groups);
         if (!runs.length) return;
-        shell.dataset.activeRun = "0";
+        var runIndex = this._bestRunIndexForSelection(shell, runs, groups);
+        shell.dataset.activeRun = String(runIndex);
         shell.dataset.activeRunKey = this._highlightKey(groups);
-        this._scrollRunIntoView(runs[0], 1, this._withBoundaryPreference(options, true));
+        this._scrollRunIntoView(runs[runIndex], 1, this._withBoundaryPreference(options, false));
       }, this);
     }
 
@@ -1167,6 +1168,50 @@
       return best;
     }
 
+    _bestRunIndexForSelection(shell, runs, groups) {
+      var best = 0;
+      var bestScore = -1;
+      var wanted = this._groupWeights(this._highlightGroups(groups));
+      (runs || []).forEach(function (run, index) {
+        var score = this._runGroupScore(run, wanted);
+        if (score > bestScore) {
+          best = index;
+          bestScore = score;
+        }
+      }, this);
+      return best;
+    }
+
+    _groupWeights(groups) {
+      var weights = Object.create(null);
+      (groups || []).forEach(function (group) {
+        weights[group] = this._railWeight(group);
+      }, this);
+      return weights;
+    }
+
+    _runGroupScore(run, weights) {
+      var seen = Object.create(null);
+      var score = 0;
+      (run || []).forEach(function (row) {
+        traceClasses(row).forEach(function (group) {
+          if (seen[group] || !weights[group]) return;
+          seen[group] = true;
+          score += weights[group];
+        });
+      });
+      return score;
+    }
+
+    _railWeight(group) {
+      if (group.indexOf("exact-c-") === 0) return 1000;
+      if (group.indexOf("generated-c-") === 0) return 160;
+      if (group.indexOf("prepared-c-") === 0) return 100;
+      if (group.indexOf("context-c-") === 0) return 40;
+      if (group.indexOf("structural-c-") === 0) return 5;
+      return 1;
+    }
+
     _withBoundaryPreference(options, prefer) {
       var out = {};
       Object.keys(options || {}).forEach(function (key) { out[key] = options[key]; });
@@ -1210,10 +1255,10 @@
       var top = this._rowScrollTop(row, scroller);
       var behavior = (options && options.behavior) || "smooth";
       scroller.scrollTo({
-        top: Math.max(0, top),
+        top: this._clampScrollTop(scroller, top),
         behavior: behavior,
       });
-      this._confirmRowVisible(row, scroller, top, behavior);
+      this._confirmRowVisible(row, scroller, behavior);
     }
 
     _rowScrollTop(row, scroller) {
@@ -1229,6 +1274,11 @@
         - Math.max(0, (scroller.clientHeight - rowRect.height) / 2);
     }
 
+    _clampScrollTop(scroller, top) {
+      var max = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+      return Math.min(max, Math.max(0, top || 0));
+    }
+
     _offsetTopWithin(row, scroller) {
       var top = 0;
       var node = row;
@@ -1239,14 +1289,19 @@
       return node === scroller ? top : null;
     }
 
-    _confirmRowVisible(row, scroller, targetTop, behavior) {
-      var delay = behavior === "smooth" ? 260 : 0;
-      window.setTimeout(function () {
+    _confirmRowVisible(row, scroller, behavior) {
+      var correct = function () {
+        if (!row || !row.isConnected || !scroller || !scroller.isConnected) return;
         var scrollerRect = scroller.getBoundingClientRect();
         var rowRect = row.getBoundingClientRect();
-        var visible = rowRect.top >= scrollerRect.top && rowRect.bottom <= scrollerRect.bottom;
-        if (!visible) scroller.scrollTop = Math.max(0, targetTop);
-      }, delay);
+        var tolerance = 3;
+        var visible = rowRect.top >= scrollerRect.top - tolerance && rowRect.bottom <= scrollerRect.bottom + tolerance;
+        if (!visible) scroller.scrollTop = this._clampScrollTop(scroller, this._rowScrollTop(row, scroller));
+      }.bind(this);
+      var raf = window.requestAnimationFrame || function (fn) { return window.setTimeout(fn, 16); };
+      raf(function () { raf(correct); });
+      window.setTimeout(correct, behavior === "smooth" ? 320 : 40);
+      if (behavior === "smooth") window.setTimeout(correct, 700);
     }
 
     _syncStateStyles() {

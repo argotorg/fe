@@ -849,7 +849,8 @@ mod tests {
         assert!(FE_ORIGIN_TRACE_JS.contains("_rowScrollTop"));
         assert!(FE_ORIGIN_TRACE_JS.contains("_offsetTopWithin"));
         assert!(FE_ORIGIN_TRACE_JS.contains("_confirmRowVisible"));
-        assert!(FE_ORIGIN_TRACE_JS.contains("scroller.scrollTop = Math.max(0, targetTop)"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("_clampScrollTop"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("this._rowScrollTop(row, scroller)"));
     }
 
     #[test]
@@ -857,9 +858,11 @@ mod tests {
         assert!(FE_ORIGIN_TRACE_JS.contains("activeRunKey"));
         assert!(FE_ORIGIN_TRACE_JS.contains("_setActiveRunForRow"));
         assert!(FE_ORIGIN_TRACE_JS.contains("_runIndexNearestViewport"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("_bestRunIndexForSelection"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("_runGroupScore"));
         assert!(FE_ORIGIN_TRACE_JS.contains("_markerTarget"));
         assert!(FE_ORIGIN_TRACE_JS.contains("preferSectionBoundary: false"));
-        assert!(FE_ORIGIN_TRACE_JS.contains("_withBoundaryPreference(options, true)"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("_withBoundaryPreference(options, false)"));
     }
 
     #[test]
