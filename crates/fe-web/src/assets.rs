@@ -856,6 +856,10 @@ mod tests {
     #[test]
     fn origin_trace_jump_controls_are_selection_scoped() {
         assert!(FE_ORIGIN_TRACE_JS.contains("activeRunKey"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("_selectRow"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("_selectGroups"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("_clearSelection"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("_revealSelectionInShell"));
         assert!(FE_ORIGIN_TRACE_JS.contains("_setActiveRunForRow"));
         assert!(FE_ORIGIN_TRACE_JS.contains("_runIndexNearestViewport"));
         assert!(FE_ORIGIN_TRACE_JS.contains("_bestRunIndexForSelection"));

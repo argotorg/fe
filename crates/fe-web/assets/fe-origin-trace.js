@@ -766,25 +766,16 @@
           this._jumpSelectedRun(jump);
           return;
         }
-        var row = event.target.closest && event.target.closest(".trace-region");
+        var marker = event.target.closest && event.target.closest(".overview-marker");
+        var row = marker ? this._markerTarget(marker) : null;
+        if (!row) row = event.target.closest && event.target.closest(".trace-region");
         if (!row) return;
         event.preventDefault();
-        var marker = event.target.closest && event.target.closest(".overview-marker");
-        if (marker) {
-          var markerTarget = this._markerTarget(marker);
-          if (markerTarget) {
-            this._scrollRowIntoView(markerTarget);
-            row = markerTarget;
-          }
-        }
-        var groups = traceClasses(row);
-        this._selectedDisplayClasses = allClasses(row);
-        this._selectedStableIdentities = stableIdentityTokens(row);
-        this._selectedTraceLabel = row.dataset.traceLabel || "";
-        this._select(groups);
-        this._setActiveRunForRow(row.closest && row.closest(".listing-shell"), groups, row);
-        this._scrollPeerPanesToSelection(groups, row);
-        this._pinHashForRow(row);
+        this._selectRow(row, {
+          revealSelf: !!marker,
+          revealPeers: true,
+          updateHash: true,
+        });
       }.bind(this));
       root.addEventListener("change", function (event) {
         var select = event.target.closest && event.target.closest(".representation-select");
@@ -835,9 +826,33 @@
       });
     }
 
-    _select(groups) {
+    _selectGroups(groups) {
       this._selected = groups.slice();
       this._renderDetail(this._selected);
+      this._syncStateStyles();
+    }
+
+    _selectRow(row, options) {
+      if (!row) return false;
+      options = options || {};
+      var groups = traceClasses(row);
+      this._selectedDisplayClasses = allClasses(row);
+      this._selectedStableIdentities = stableIdentityTokens(row);
+      this._selectedTraceLabel = row.dataset.traceLabel || "";
+      this._selectGroups(groups);
+      this._setActiveRunForRow(row.closest && row.closest(".listing-shell"), groups, row);
+      if (options.revealSelf) this._scrollRowIntoView(row, options);
+      if (options.revealPeers !== false) this._scrollPeerPanesToSelection(groups, row, options);
+      if (options.updateHash) this._pinHashForRow(row);
+      return true;
+    }
+
+    _clearSelection() {
+      this._selected = [];
+      this._selectedDisplayClasses = [];
+      this._selectedStableIdentities = [];
+      this._selectedTraceLabel = "";
+      this._renderDetail([]);
       this._syncStateStyles();
     }
 
@@ -882,23 +897,15 @@
         }
       }
       if (!row) {
-        if (!window.location.hash) {
-          this._selected = [];
-          this._selectedDisplayClasses = [];
-          this._selectedStableIdentities = [];
-          this._renderDetail([]);
-          this._syncStateStyles();
-        }
+        if (!window.location.hash) this._clearSelection();
         return false;
       }
-      var groups = traceClasses(row);
-      this._selectedDisplayClasses = allClasses(row);
-      this._selectedStableIdentities = stableIdentityTokens(row);
-      this._select(groups);
-      this._setActiveRunForRow(row.closest && row.closest(".listing-shell"), groups, row);
-      this._scrollRowIntoView(row, options);
-      this._scrollPeerPanesToSelection(groups, row, options);
-      return true;
+      return this._selectRow(row, {
+        behavior: options && options.behavior,
+        revealSelf: true,
+        revealPeers: true,
+        updateHash: false,
+      });
     }
 
     _rowForHash(hash) {
@@ -1044,13 +1051,7 @@
     _scrollPaneToFirstSelectedRun(pane, options) {
       if (!this._selected || !this._selected.length) return false;
       var shell = pane && pane.querySelector(".listing-shell");
-      if (!shell) return false;
-      var runs = this._matchingRuns(shell, this._selected);
-      if (!runs.length) return false;
-      shell.dataset.activeRun = "0";
-      shell.dataset.activeRunKey = this._highlightKey(this._selected);
-      this._scrollRunIntoView(runs[0], 1, this._withBoundaryPreference(options, false));
-      return true;
+      return this._revealSelectionInShell(shell, this._selected, options, 0);
     }
 
     _scrollToMarkerTarget(marker) {
@@ -1069,13 +1070,22 @@
       var originShell = origin && origin.closest && origin.closest(".listing-shell");
       this.shadowRoot.querySelectorAll(".listing-shell").forEach(function (shell) {
         if (shell === originShell) return;
-        var runs = this._matchingRuns(shell, groups);
-        if (!runs.length) return;
-        var runIndex = this._bestRunIndexForSelection(shell, runs, groups);
-        shell.dataset.activeRun = String(runIndex);
-        shell.dataset.activeRunKey = this._highlightKey(groups);
-        this._scrollRunIntoView(runs[runIndex], 1, this._withBoundaryPreference(options, false));
+        this._revealSelectionInShell(shell, groups, options, null);
       }, this);
+    }
+
+    _revealSelectionInShell(shell, groups, options, preferredRunIndex) {
+      if (!shell || !groups || !groups.length) return false;
+      var runs = this._matchingRuns(shell, groups);
+      if (!runs.length) return false;
+      var runIndex = preferredRunIndex;
+      if (!Number.isFinite(runIndex) || runIndex < 0 || runIndex >= runs.length) {
+        runIndex = this._bestRunIndexForSelection(shell, runs, groups);
+      }
+      shell.dataset.activeRun = String(runIndex);
+      shell.dataset.activeRunKey = this._highlightKey(groups);
+      this._scrollRunIntoView(runs[runIndex], 1, this._withBoundaryPreference(options, false));
+      return true;
     }
 
     _jumpSelectedRun(button) {
