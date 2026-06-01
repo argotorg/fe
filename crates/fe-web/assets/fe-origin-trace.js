@@ -884,25 +884,8 @@
 
     _rowBoundaryLabel(panelData, rowData, index) {
       var kind = rowData && rowData.kind;
-      if (kind === "file_header" || kind === "function_header" || kind === "block_header" || kind === "boundary_marker" || kind === "derived_bytecode_block_header") {
-        return this._typedBoundaryLabel(panelData, rowData, index);
-      }
+      if (this._isBoundaryKind(kind)) return null;
       return this._boundaryLabel(panelData, rowData, index);
-    }
-
-    _typedBoundaryLabel(panelData, rowData, index) {
-      var kind = rowData && rowData.kind;
-      var meta = (rowData && rowData.meta) || "";
-      var label = (rowData && (rowData.label || rowData.compact_text || rowData.text)) || "";
-      var role = this._loopRole(meta);
-      if (kind === "file_header") return label || "source file";
-      if (kind === "function_header") return label || (panelData && panelData.title ? panelData.title + " function" : "function");
-      if (kind === "boundary_marker") return label || "boundary";
-      if (kind === "derived_bytecode_block_header") return label || "derived bytecode block";
-      if (panelData && panelData.id === "bytecode") return label || "derived bytecode block";
-      if (panelData && panelData.id === "mir") return "MIR block" + (role ? " · " + role : "") + (label ? " · " + label : "");
-      if (panelData && panelData.id && panelData.id.indexOf("sonatina") === 0) return (panelData.title || "Sonatina") + " block" + (role ? " · " + role : "") + (label ? " · " + label : "");
-      return (label || "block") + (role ? " · " + role : "");
     }
 
     _boundaryLabel(panelData, rowData, index) {

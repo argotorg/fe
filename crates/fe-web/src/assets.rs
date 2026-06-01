@@ -854,6 +854,14 @@ mod tests {
     }
 
     #[test]
+    fn origin_trace_uses_typed_boundary_rows_without_duplicate_markers() {
+        assert!(FE_ORIGIN_TRACE_JS.contains("if (this._isBoundaryKind(kind)) return null;"));
+        assert!(!FE_ORIGIN_TRACE_JS.contains("_typedBoundaryLabel"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("row-kind-"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("boundary-row"));
+    }
+
+    #[test]
     fn origin_trace_pane_switches_do_not_rerun_hash_navigation() {
         assert!(FE_ORIGIN_TRACE_JS.contains("hashNavigation: false"));
         assert!(FE_ORIGIN_TRACE_JS.contains("hashNavigation: true"));
