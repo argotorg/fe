@@ -1882,7 +1882,7 @@ pub fn trace_workbench_report_projection(
             "compiler_commit": request.compiler_commit,
             "trace_profile": trace_profile,
             "flags": [
-                "source=lsp-live",
+                format!("source={}", request.data_source),
                 format!("target={}", request.target),
                 format!("optimize={}", request.opt_level),
                 format!("view={}", request.view),
@@ -7456,6 +7456,7 @@ mod tests {
 
         assert_eq!(projection["revision"]["id"], 3);
         assert_eq!(projection["metadata"]["data_source"], "lsp-live");
+        assert_eq!(projection["metadata"]["flags"][0], "source=lsp-live");
         assert_eq!(projection["provenance"]["source_to_optimized"], "available");
         assert_eq!(projection["parity_summary"]["target"], "evm");
         assert_eq!(projection["parity_summary"]["opt_level"], "O2");
