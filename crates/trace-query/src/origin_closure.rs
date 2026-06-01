@@ -1238,7 +1238,7 @@ fn closure_edge(edge: &OriginEdgeFact) -> OriginClosureEdge {
         from: display_key(&edge.from),
         to: display_key(&edge.to),
         traversal_class: edge.traversal_class(),
-        generated_work: edge.is_generated_work_edge(),
+        generated_work: edge.is_generated_work_display_hint(),
     }
 }
 

@@ -324,7 +324,12 @@ impl OriginEdgeFact {
         )
     }
 
-    pub fn is_generated_work_edge(&self) -> bool {
+    pub fn is_backend_prepared_semantic_edge(&self) -> bool {
+        matches!(self.traversal_class(), OriginEdgeTraversalClass::Contextual)
+            && matches!(self.label, OriginEdgeLabel::BackendPrepared)
+    }
+
+    pub fn is_generated_work_display_hint(&self) -> bool {
         matches!(
             self.label,
             OriginEdgeLabel::SyntheticFor | OriginEdgeLabel::BackendPrepared

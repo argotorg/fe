@@ -183,7 +183,7 @@ fn semantic_edge_relation(edge: &trace_facts::OriginEdgeFact) -> &'static str {
     match edge.traversal_class() {
         OriginEdgeTraversalClass::ExactAttribution => "exact_attribution_edge",
         OriginEdgeTraversalClass::SnapshotAlias => "snapshot_alias_edge",
-        OriginEdgeTraversalClass::Contextual if edge.is_generated_work_edge() => {
+        OriginEdgeTraversalClass::Contextual if edge.is_backend_prepared_semantic_edge() => {
             "backend_prepared_edge"
         }
         OriginEdgeTraversalClass::Contextual => "contextual_edge",
