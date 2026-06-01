@@ -2339,7 +2339,6 @@ fn trace_workbench_source_span_is_expected_absent_syntax(text: &str) -> bool {
         }
         if trimmed.starts_with("//")
             || trimmed.starts_with("///")
-            || trimmed.starts_with('#')
             || (trimmed.starts_with("/*") && trimmed.ends_with("*/"))
         {
             saw_expected_absent_segment = true;
@@ -11480,6 +11479,91 @@ mod tests {
                 .iter()
                 .all(|gap| gap["from_origin"]["local_key"] != serde_json::json!("expr:comment"))
         );
+    }
+
+    #[test]
+    fn trace_workbench_keeps_attribute_like_hir_gaps_required() {
+        let source_text = "#[payable]\nfn main() {\n  value\n}\n";
+        let source_file = key("source.file", "demo.fe", "main");
+        let attribute_hir = key("hir.expr", "demo", "expr:attribute");
+        let value_hir = key("hir.expr", "demo", "expr:value");
+        let mir_stmt = key("runtime.stmt", "demo", "block:0:stmt:0");
+        let attribute_start = source_text.find("#[payable]").unwrap() as u32;
+        let attribute_end = attribute_start + "#[payable]".len() as u32;
+        let value_start = source_text.find("value").unwrap() as u32;
+        let value_end = value_start + "value".len() as u32;
+        let service = TraceIntrospectionService::new(snapshot(vec![
+            node(source_file.clone()),
+            node(attribute_hir.clone()),
+            node(value_hir.clone()),
+            node(mir_stmt.clone()),
+            TraceFact::SourceFile(SourceFileFact::new(
+                source_file.clone(),
+                "file:///demo.fe",
+                "demo.fe",
+                "blake3:00000000000000000000000000000000000000000000000000000000000000cc",
+                Some(0),
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                attribute_hir,
+                source_file.clone(),
+                attribute_start,
+                attribute_end,
+                1,
+                1,
+                1,
+                10,
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                value_hir.clone(),
+                source_file,
+                value_start,
+                value_end,
+                3,
+                3,
+                3,
+                8,
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                mir_stmt,
+                value_hir,
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::Mir),
+            )),
+        ]));
+        assert!(!super::trace_workbench_source_span_is_expected_absent_syntax("#[payable]"));
+
+        let projection = trace_workbench_report_projection(
+            &service,
+            service.snapshot(),
+            TraceWorkbenchProjectionRequest {
+                input_path: "demo.fe".to_string(),
+                target: "evm".to_string(),
+                opt_level: "O2".to_string(),
+                view: "source-postopt-bytecode".to_string(),
+                include_legacy_closure_debug: false,
+                source_text: Some(source_text.to_string()),
+                related_source_texts: BTreeMap::new(),
+                document_version: Some(1),
+                query_duration_ms: 1,
+                compiler_commit: "test".to_string(),
+                data_source: "test".to_string(),
+            },
+        );
+        let missing_links = &projection["attribution_audit"]["missing_links"];
+
+        assert_eq!(
+            missing_links["summary"]["missing_required_count"],
+            serde_json::json!(1)
+        );
+        assert_eq!(
+            missing_links["summary"]["expected_absent_count"],
+            serde_json::json!(0)
+        );
+        assert!(missing_links["gaps"].as_array().unwrap().iter().any(|gap| {
+            gap["issue_code"] == serde_json::json!("missing_hir_to_mir_lowering")
+                && gap["from_origin"]["local_key"] == serde_json::json!("expr:attribute")
+        }));
     }
 
     #[test]
