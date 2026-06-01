@@ -278,6 +278,31 @@ pub async fn run(
             }),
         )
         .route(
+            "/trace/session/{session_id}/chunks/missing",
+            post({
+                let actor_rx = actor_rx.clone();
+                let workspace_root = workspace_root.clone();
+                move |Path(session_id): Path<String>,
+                      Query(query): Query<BTreeMap<String, String>>,
+                      headers: HeaderMap,
+                      Json(request): Json<serde_json::Value>| {
+                    let actor_rx = actor_rx.clone();
+                    let workspace_root = workspace_root.clone();
+                    async move {
+                        handle_trace_workbench_missing_chunks_http(
+                            session_id,
+                            query,
+                            headers,
+                            request,
+                            actor_rx,
+                            workspace_root,
+                        )
+                        .await
+                    }
+                }
+            }),
+        )
+        .route(
             "/trace/session/{session_id}/events",
             get({
                 let actor_rx = actor_rx.clone();
@@ -666,6 +691,60 @@ async fn handle_trace_workbench_chunk_http(
     }
 }
 
+async fn handle_trace_workbench_missing_chunks_http(
+    session_id: String,
+    query: BTreeMap<String, String>,
+    headers: HeaderMap,
+    request: serde_json::Value,
+    actor_rx: watch::Receiver<Option<SharedActor>>,
+    workspace_root: Option<String>,
+) -> impl IntoResponse {
+    if let Err(reason) = validate_trace_auth(
+        workspace_root.as_deref(),
+        &trace_auth_token(&headers, &query).unwrap_or_default(),
+    ) {
+        return json_response(
+            StatusCode::UNAUTHORIZED,
+            serde_json::json!({ "reason": reason }),
+        );
+    }
+    let actor_ref = match ready_actor(actor_rx).await {
+        Ok(actor_ref) => actor_ref,
+        Err(reason) => {
+            return json_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                serde_json::json!({ "reason": reason }),
+            );
+        }
+    };
+    actor_ref.register_handler_async_mutating(
+        MessageKey(LspActorKey::of::<
+            crate::introspection::TraceWorkbenchSessionRequest,
+        >()),
+        crate::introspection::handle_trace_workbench_model,
+    );
+    let dispatcher = TraceQueryDispatcher;
+    let model = match actor_ref
+        .ask::<_, serde_json::Value, _>(
+            &dispatcher,
+            crate::introspection::TraceWorkbenchSessionRequest { session_id },
+        )
+        .await
+    {
+        Ok(model) => model,
+        Err(err) => {
+            return json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                serde_json::json!({ "reason": format!("trace workbench chunk model failed: {err:?}") }),
+            );
+        }
+    };
+    json_response(
+        StatusCode::OK,
+        trace_workbench_chunks_response(&model, trace_workbench_requested_chunk_digests(&request)),
+    )
+}
+
 fn trace_workbench_chunk_payload(
     model: &serde_json::Value,
     digest: &str,
@@ -753,6 +832,42 @@ fn trace_workbench_chunk_payload(
         }));
     }
     None
+}
+
+fn trace_workbench_requested_chunk_digests(request: &serde_json::Value) -> Vec<String> {
+    let values = request
+        .get("digests")
+        .or_else(|| request.get("missing"))
+        .unwrap_or(request);
+    let mut digests = values
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .filter(|digest| !digest.trim().is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    digests.sort();
+    digests.dedup();
+    digests
+}
+
+fn trace_workbench_chunks_response(
+    model: &serde_json::Value,
+    digests: Vec<String>,
+) -> serde_json::Value {
+    let mut chunks = Vec::new();
+    let mut missing = Vec::new();
+    for digest in digests {
+        match trace_workbench_chunk_payload(model, &digest) {
+            Some(payload) => chunks.push(payload),
+            None => missing.push(digest),
+        }
+    }
+    serde_json::json!({
+        "chunks": chunks,
+        "missing": missing,
+    })
 }
 
 async fn handle_trace_workbench_events_http(
@@ -1268,9 +1383,9 @@ impl Dispatcher<LspActorKey> for TraceQueryDispatcher {
 #[cfg(test)]
 mod tests {
     use super::{
-        trace_auth_token, trace_workbench_chunk_payload,
-        trace_workbench_resolved_rows_for_selection, trace_workbench_revision_cursor,
-        trace_workbench_selection_event, validate_trace_auth,
+        trace_auth_token, trace_workbench_chunk_payload, trace_workbench_chunks_response,
+        trace_workbench_requested_chunk_digests, trace_workbench_resolved_rows_for_selection,
+        trace_workbench_revision_cursor, trace_workbench_selection_event, validate_trace_auth,
     };
     use axum::http::{HeaderMap, header};
     use std::collections::BTreeMap;
@@ -1535,6 +1650,17 @@ mod tests {
         assert_eq!(report["value"]["prepared_linked_pcs"], 1);
 
         assert!(trace_workbench_chunk_payload(&model, "blake3:missing").is_none());
+        let digests = trace_workbench_requested_chunk_digests(&serde_json::json!({
+            "digests": [
+                manifest.summary_digest,
+                manifest.summary_digest,
+                "blake3:missing"
+            ]
+        }));
+        let response = trace_workbench_chunks_response(&model, digests);
+        assert_eq!(response["chunks"].as_array().unwrap().len(), 1);
+        assert_eq!(response["chunks"][0]["kind"], "summary");
+        assert_eq!(response["missing"], serde_json::json!(["blake3:missing"]));
     }
 }
 
