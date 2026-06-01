@@ -1814,15 +1814,15 @@ pub fn trace_workbench_report_projection(
         .map(|closure_set| origin_closure::classes_by_origin_key(&closure_set.closures))
         .unwrap_or_default();
     trace_workbench_merge_classes_by_key(&mut classes_by_key, component_classes_by_key.clone());
-    let prepared_groups_by_exact_group =
-        trace_workbench_prepared_groups_by_exact_group(&classes_by_key);
+    let exact_prepared_selection_bridge =
+        trace_workbench_exact_prepared_selection_bridge(&classes_by_key);
     let source = trace_workbench_source_projection(
         &request.input_path,
         request.source_text.as_deref(),
         &request.related_source_texts,
         snapshot,
         &classes_by_key,
-        &prepared_groups_by_exact_group,
+        &exact_prepared_selection_bridge,
     );
     let missing_lineage = trace_workbench_missing_lineage_index(attribution_audit.as_ref());
     let panels = trace_workbench_panes(
@@ -1831,7 +1831,7 @@ pub fn trace_workbench_report_projection(
         request.source_text.as_deref(),
         &request.related_source_texts,
         &classes_by_key,
-        &prepared_groups_by_exact_group,
+        &exact_prepared_selection_bridge,
         &missing_lineage,
     );
     let indexes = trace_workbench_projection_indexes(&source, &panels);
@@ -3419,10 +3419,10 @@ fn trace_workbench_selection_groups(classes: &[String]) -> Vec<String> {
     trace_workbench_unique_groups(groups)
 }
 
-fn trace_workbench_prepared_groups_by_exact_group(
+fn trace_workbench_exact_prepared_selection_bridge(
     component_classes_by_key: &BTreeMap<String, Vec<String>>,
 ) -> BTreeMap<String, Vec<String>> {
-    let mut prepared_by_exact = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut bridge = BTreeMap::<String, BTreeSet<String>>::new();
     for classes in component_classes_by_key.values() {
         let exact = classes
             .iter()
@@ -3440,32 +3440,38 @@ fn trace_workbench_prepared_groups_by_exact_group(
         if prepared.is_empty() {
             continue;
         }
-        for exact_group in exact {
-            prepared_by_exact
-                .entry(exact_group)
+        for exact_group in &exact {
+            bridge
+                .entry(exact_group.clone())
                 .or_default()
                 .extend(prepared.iter().cloned());
         }
+        for prepared_group in &prepared {
+            bridge
+                .entry(prepared_group.clone())
+                .or_default()
+                .extend(exact.iter().cloned());
+        }
     }
-    prepared_by_exact
+    bridge
         .into_iter()
-        .map(|(exact, prepared)| (exact, prepared.into_iter().collect()))
+        .map(|(group, linked)| (group, linked.into_iter().collect()))
         .collect()
 }
 
 fn trace_workbench_selection_groups_with_prepared(
     classes: &[String],
-    prepared_groups_by_exact_group: &BTreeMap<String, Vec<String>>,
+    exact_prepared_selection_bridge: &BTreeMap<String, Vec<String>>,
 ) -> Vec<String> {
     let mut groups = trace_workbench_selection_groups(classes);
-    let exact_groups = classes
+    let bridge_groups = classes
         .iter()
-        .filter(|class| class.starts_with("exact-c-"))
+        .filter(|class| class.starts_with("exact-c-") || class.starts_with("prepared-c-"))
         .cloned()
         .collect::<Vec<_>>();
-    for exact_group in exact_groups {
-        if let Some(prepared_groups) = prepared_groups_by_exact_group.get(&exact_group) {
-            groups.extend(prepared_groups.iter().cloned());
+    for group in bridge_groups {
+        if let Some(linked_groups) = exact_prepared_selection_bridge.get(&group) {
+            groups.extend(linked_groups.iter().cloned());
         }
     }
     trace_workbench_unique_groups(groups)
@@ -7950,9 +7956,9 @@ mod tests {
         trace_workbench_compact_mir_text, trace_workbench_compact_origin_fallback_text,
         trace_workbench_compact_origin_label, trace_workbench_compact_origin_meta,
         trace_workbench_compact_origin_text, trace_workbench_hover_groups,
-        trace_workbench_key_belongs_to_panel, trace_workbench_manifest,
-        trace_workbench_natural_key_cmp, trace_workbench_report_projection,
-        trace_workbench_prepared_groups_by_exact_group, trace_workbench_selection_groups,
+        trace_workbench_exact_prepared_selection_bridge, trace_workbench_key_belongs_to_panel,
+        trace_workbench_manifest, trace_workbench_natural_key_cmp,
+        trace_workbench_report_projection, trace_workbench_selection_groups,
         trace_workbench_source_lines, trace_workbench_source_projection,
         trace_workbench_status_for_row, trace_workbench_status_for_source_line,
     };
@@ -10788,6 +10794,12 @@ mod tests {
                 .any(|group| group.starts_with("prepared-c-")),
             "bytecode row should carry prepared-code selection rail"
         );
+        assert!(
+            first_bytecode_groups
+                .iter()
+                .any(|group| group.starts_with("exact-c-")),
+            "bytecode endpoint selection should include exact source/IR rails when explicit prepared lineage proves the seam"
+        );
     }
 
     #[test]
@@ -10906,6 +10918,12 @@ mod tests {
                 .iter()
                 .any(|group| group.starts_with("prepared-c-")),
             "bytecode row should remain prepared-linked even when source attribution is blocked"
+        );
+        assert!(
+            bytecode_groups
+                .iter()
+                .all(|group| !group.starts_with("exact-c-")),
+            "bytecode endpoint selection must not include exact source/IR rails when optimized→prepared lineage is missing"
         );
     }
 
@@ -11276,7 +11294,7 @@ mod tests {
             "fn main() {\n  // comment\n}\n",
             &snapshot,
             &classes,
-            &trace_workbench_prepared_groups_by_exact_group(&classes),
+            &trace_workbench_exact_prepared_selection_bridge(&classes),
         );
 
         assert_eq!(lines[1].classes, vec!["generated-c-broad"]);
@@ -11319,7 +11337,7 @@ mod tests {
             "fn main() {\n  assert owner == caller\n  // comment\n}\n",
             &snapshot,
             &classes,
-            &trace_workbench_prepared_groups_by_exact_group(&classes),
+            &trace_workbench_exact_prepared_selection_bridge(&classes),
         );
 
         assert!(lines[1].suppress_rail_status);
