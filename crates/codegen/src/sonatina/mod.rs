@@ -384,7 +384,7 @@ pub fn compile_runtime_package_sonatina(
     lower_runtime::compile_runtime_package_sonatina(db, package, layout)
 }
 
-fn select_runtime_package_contract<'db>(
+pub(crate) fn select_runtime_package_contract<'db>(
     db: &'db dyn mir::MirDb,
     package: RuntimePackage<'db>,
     contract: Option<&str>,

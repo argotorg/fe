@@ -771,6 +771,24 @@ mod tests {
                 );
             }
         }
+
+        let codegen_trace = repo_root.join("crates/codegen/src/trace.rs");
+        let source = std::fs::read_to_string(&codegen_trace)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", codegen_trace.display()));
+        let production = source
+            .split("\n#[cfg(test)]")
+            .next()
+            .expect("split always yields one segment");
+        assert!(
+            !production.contains("emit_module_sonatina_bytecode_with_observability_and_trace("),
+            "{} must not rebuild module-level bytecode state inside the shared observable builder",
+            codegen_trace.display()
+        );
+        assert!(
+            production.contains("select_runtime_package_contract("),
+            "{} must apply contract selection once before emitting MIR/Sonatina/bytecode facts",
+            codegen_trace.display()
+        );
     }
 
     #[test]

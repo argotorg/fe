@@ -47,6 +47,7 @@ pub fn emit_observable_module_trace_facts(
     contract: Option<&str>,
 ) -> Result<Vec<TraceFact>, crate::LowerError> {
     let package = build_runtime_package(db, top_mod)?;
+    let package = crate::sonatina::select_runtime_package_contract(db, package, contract)?;
     let mut facts = mir::trace::emit_mir_facts(db, package);
     let source_file = trace_source_file_key(input_owner_key);
     push_standalone_source_file_facts(
@@ -66,11 +67,11 @@ pub fn emit_observable_module_trace_facts(
         CompilerPhase::SonatinaPreOpt,
     ));
     let (bytecode, postopt_sonatina_facts) =
-        crate::emit_module_sonatina_bytecode_with_observability_and_trace(
+        crate::sonatina::emit_runtime_package_sonatina_bytecode_with_observability_and_trace(
             db,
-            top_mod,
+            &package,
+            crate::EVM_LAYOUT,
             opt_level,
-            contract,
             &sonatina_owner,
         )?;
     let observed_bytecode_facts = emit_observed_bytecode_trace_facts(
