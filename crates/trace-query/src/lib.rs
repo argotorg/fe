@@ -4572,6 +4572,7 @@ fn reject_call_policy(policy: GasAttributionPolicy) -> QueryResult<()> {
 
 struct TraceIndex<'a> {
     snapshot: &'a TraceSnapshot,
+    semantic_index: trace_index::TraceIndex<'a>,
     loop_key: Option<OriginExportKey>,
     loop_phases: BTreeMap<OriginExportKey, CompilerPhase>,
     loop_members: BTreeMap<OriginExportKey, BTreeSet<OriginExportKey>>,
@@ -4658,6 +4659,7 @@ impl<'a> TraceIndex<'a> {
         let loop_key = preferred_loop_key(&loop_members, &loop_phases).or(first_loop_key);
         Self {
             snapshot,
+            semantic_index: trace_index::TraceIndex::new(snapshot),
             loop_key,
             loop_phases,
             loop_members,
@@ -5181,31 +5183,16 @@ impl<'a> TraceIndex<'a> {
         &self,
         instruction: &OriginExportKey,
     ) -> Vec<SourceAttribution> {
-        let mut candidates = BTreeSet::new();
+        let mut candidates = self
+            .semantic_index
+            .source_candidates_for_instruction(
+                instruction,
+                trace_index::TraceReachabilityPolicy::ExactOnly,
+            )
+            .into_iter()
+            .collect::<BTreeSet<_>>();
         if self.source_attribution(instruction).is_some() {
             candidates.insert(instruction.clone());
-        }
-
-        let mut seen = BTreeSet::new();
-        let mut stack = vec![instruction.clone()];
-        while let Some(current) = stack.pop() {
-            if !seen.insert(current.clone()) {
-                continue;
-            }
-            for edge in self.snapshot.facts().iter().filter_map(|fact| match fact {
-                TraceFact::OriginEdge(edge)
-                    if edge.from == current
-                        && trace_index::TraceReachabilityPolicy::ExactOnly.allows_edge(edge) =>
-                {
-                    Some(edge)
-                }
-                _ => None,
-            }) {
-                if self.source_attribution(&edge.to).is_some() {
-                    candidates.insert(edge.to.clone());
-                }
-                stack.push(edge.to.clone());
-            }
         }
         candidates
             .into_iter()
@@ -8128,6 +8115,104 @@ mod tests {
                 .iter()
                 .all(|source| source.origin.kind() != "code.object")
         );
+    }
+
+    #[test]
+    fn explain_pc_source_candidates_use_canonical_exact_policy() {
+        let function = key("function", "demo", "recv");
+        let source_file = key("source.file", "demo", "demo.fe");
+        let exact_hir = key("hir.expr", "demo", "expr:exact");
+        let contextual_hir = key("hir.expr", "demo", "expr:context");
+        let postopt = key("sonatina.postopt.inst", "demo", "inst:postopt");
+        let prepared = key("sonatina.evm.prepared.inst", "demo", "inst:prepared");
+        let pc = key("bytecode.pc", "demo", "pc:0");
+        let event = key("compiler.event", "demo", "event:prepared-lineage");
+        let snapshot = snapshot(vec![
+            node(function.clone()),
+            node(source_file.clone()),
+            node(exact_hir.clone()),
+            node(contextual_hir.clone()),
+            node(postopt.clone()),
+            node(prepared.clone()),
+            node(pc.clone()),
+            node(event.clone()),
+            TraceFact::SourceFile(SourceFileFact::new(
+                source_file.clone(),
+                "file:///demo.fe",
+                "demo.fe",
+                "blake3:0000000000000000000000000000000000000000000000000000000000000001",
+                Some(0),
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                exact_hir.clone(),
+                source_file.clone(),
+                0,
+                1,
+                1,
+                1,
+                1,
+                2,
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                contextual_hir.clone(),
+                source_file,
+                2,
+                3,
+                1,
+                3,
+                1,
+                4,
+            )),
+            TraceFact::Instruction(InstructionFact::new(pc.clone(), function, 0, "ADD")),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                pc.clone(),
+                prepared.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                prepared.clone(),
+                postopt.clone(),
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::Backend),
+            )),
+            TraceFact::CompilerEvent(CompilerEventFact::new(
+                event,
+                CompilerPhase::Backend,
+                CompilerEventKind::PreparedLineage,
+                vec![postopt.clone()],
+                vec![prepared],
+                Some(CompilerReason::new("fixture prepared lineage")),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                postopt,
+                exact_hir.clone(),
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::SonatinaPostOpt),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                pc,
+                contextual_hir.clone(),
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+        ]);
+        let service = TraceIntrospectionService::new(snapshot.clone());
+        let report = service.explain_pc(ExplainPcRequest { pc: 0 }).unwrap();
+
+        assert_eq!(report.source_candidates.len(), 1);
+        assert_eq!(report.source_candidates[0].origin, exact_hir.clone());
+        assert!(
+            report
+                .source_candidates
+                .iter()
+                .all(|candidate| candidate.origin != contextual_hir)
+        );
+
+        let index = super::TraceIndex::new(&snapshot);
+        let direct_source_candidates = index.source_candidates_for_instruction(&exact_hir);
+        assert_eq!(direct_source_candidates.len(), 1);
+        assert_eq!(direct_source_candidates[0].origin, exact_hir);
     }
 
     #[test]
