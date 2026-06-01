@@ -732,6 +732,70 @@ pub fn main() -> u64 {
         drop(backend);
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn trace_workbench_model_uses_live_observable_projection_for_requested_opt_level() {
+        let mut backend = test_backend();
+        let uri = Url::parse("file:///workspace/src/live_trace_model.fe").unwrap();
+        backend.db.workspace().update(
+            &mut backend.db,
+            uri.clone(),
+            r#"
+pub fn main() -> u64 {
+    (10 - 3) * 2
+}
+"#
+            .to_string(),
+        );
+        backend.set_document_version(uri.clone(), 42);
+        let session =
+            backend.create_trace_viewer_session(uri, "evm", "O2", "source-postopt-bytecode", None);
+
+        let model = handle_trace_workbench_model(
+            &mut backend,
+            TraceWorkbenchSessionRequest {
+                session_id: session.id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(model["revision"]["id"], 42);
+        assert_eq!(model["parity_summary"]["opt_level"], "O2");
+        assert_eq!(
+            model["parity_summary"]["trace_profile"]["has_sonatina_postopt"],
+            true
+        );
+        assert_eq!(
+            model["parity_summary"]["trace_profile"]["has_evm_prepared"],
+            true
+        );
+        assert_eq!(
+            model["parity_summary"]["trace_profile"]["has_bytecode"],
+            true
+        );
+        assert!(
+            model["parity_summary"]["origin_counts"]["sonatina.postopt.inst"]
+                .as_u64()
+                .is_some_and(|count| count > 0)
+        );
+        assert!(
+            model["parity_summary"]["origin_counts"]["sonatina.evm.prepared.inst"]
+                .as_u64()
+                .is_some_and(|count| count > 0)
+        );
+        assert!(
+            model["parity_summary"]["origin_counts"]["bytecode.pc"]
+                .as_u64()
+                .is_some_and(|count| count > 0)
+        );
+        assert!(model["notes"].as_array().unwrap().iter().any(|note| note
+            == "The live endpoint uses the shared trace-query workbench projection path."));
+
+        tokio::task::spawn_blocking(move || drop(backend))
+            .await
+            .expect("backend drop task panicked");
+    }
+
     #[test]
     fn attached_trace_service_loads_validated_snapshot_without_running_compiler() {
         let dir = tempfile::tempdir().unwrap();
