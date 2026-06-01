@@ -1789,7 +1789,16 @@ pub fn trace_workbench_report_projection(
     let status = service.status();
     trace_workbench_record_timing(&mut projection_timings, "status_ms", stage_started);
     let stage_started = Instant::now();
-    let attribution_audit = service.attribution_audit().ok();
+    let mut attribution_audit = service.attribution_audit().ok();
+    if let Some(attribution_audit) = attribution_audit.as_mut() {
+        trace_workbench_apply_expected_absent_syntax(
+            attribution_audit,
+            snapshot,
+            &request.input_path,
+            request.source_text.as_deref(),
+            &request.related_source_texts,
+        );
+    }
     trace_workbench_record_timing(
         &mut projection_timings,
         "attribution_audit_ms",
@@ -2060,6 +2069,197 @@ fn trace_workbench_record_timing(
 
 fn trace_workbench_elapsed_ms(started: Instant) -> u64 {
     started.elapsed().as_millis().try_into().unwrap_or(u64::MAX)
+}
+
+fn trace_workbench_apply_expected_absent_syntax(
+    attribution_audit: &mut AttributionAuditReport,
+    snapshot: &TraceSnapshot,
+    input_path: &str,
+    source_text: Option<&str>,
+    related_source_texts: &BTreeMap<String, String>,
+) {
+    let expected_absent = trace_workbench_expected_absent_syntax_links(
+        snapshot,
+        input_path,
+        source_text,
+        related_source_texts,
+    );
+    if expected_absent.is_empty() {
+        return;
+    }
+    let invalid = attribution_audit
+        .missing_links
+        .as_ref()
+        .map(|links| links.invalid.clone())
+        .unwrap_or_default();
+    let lineage_issue_targets = trace_workbench_lineage_issue_targets(attribution_audit);
+    attribution_audit.missing_links = Some(missing_link_audit_report(
+        snapshot,
+        attribution_audit.source_exact_pcs,
+        attribution_audit.missing_source_evidence_pcs,
+        attribution_audit.prepared_linked_pcs,
+        attribution_audit.unmapped_pcs,
+        trace_workbench_prepared_target_count(snapshot),
+        &lineage_issue_targets,
+        &attribution_audit.lineage_gaps,
+        invalid,
+        expected_absent,
+    ));
+}
+
+fn trace_workbench_expected_absent_syntax_links(
+    snapshot: &TraceSnapshot,
+    input_path: &str,
+    source_text: Option<&str>,
+    related_source_texts: &BTreeMap<String, String>,
+) -> Vec<ExpectedAbsentLink> {
+    let mut links = snapshot
+        .facts()
+        .iter()
+        .filter_map(|fact| {
+            let TraceFact::SourceSpan(span) = fact else {
+                return None;
+            };
+            if !is_hir_audit_origin(&span.origin) {
+                return None;
+            }
+            trace_workbench_origin_span_text(
+                snapshot,
+                input_path,
+                source_text,
+                related_source_texts,
+                &span.origin,
+            )
+            .filter(|text| trace_workbench_source_span_is_expected_absent_syntax(text))
+            .map(|_| ExpectedAbsentLink {
+                boundary: LinkBoundaryKind::HirToMir,
+                origin: span.origin.clone(),
+                issue_code: LinkIssueCode::ExpectedAbsentSyntax,
+                explanation: "source text for this HIR span is blank, comment-only, or delimiter-only; no MIR lowering evidence is expected for syntax-only source".to_string(),
+            })
+        })
+        .collect::<Vec<_>>();
+    links.sort_by(|left, right| {
+        left.origin
+            .canonical_storage_key()
+            .cmp(&right.origin.canonical_storage_key())
+    });
+    links.dedup_by(|left, right| {
+        left.boundary == right.boundary
+            && left.origin == right.origin
+            && left.issue_code == right.issue_code
+    });
+    links
+}
+
+fn trace_workbench_prepared_target_count(snapshot: &TraceSnapshot) -> usize {
+    snapshot
+        .facts()
+        .iter()
+        .filter_map(|fact| match fact {
+            TraceFact::OriginNode(node) if is_prepared_sonatina_audit_origin(&node.key) => {
+                Some(node.key.clone())
+            }
+            TraceFact::Instruction(instruction)
+                if is_prepared_sonatina_audit_origin(&instruction.instruction) =>
+            {
+                Some(instruction.instruction.clone())
+            }
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>()
+        .len()
+}
+
+fn trace_workbench_lineage_issue_targets(
+    attribution_audit: &AttributionAuditReport,
+) -> BTreeMap<OriginExportKey, usize> {
+    let mut targets = BTreeMap::new();
+    for gap in &attribution_audit.lineage_gaps {
+        *targets.entry(gap.prepared_origin.clone()).or_default() += 1;
+    }
+    targets
+}
+
+fn trace_workbench_origin_span_text<'a>(
+    snapshot: &'a TraceSnapshot,
+    input_path: &str,
+    source_text: Option<&'a str>,
+    related_source_texts: &'a BTreeMap<String, String>,
+    origin: &OriginExportKey,
+) -> Option<&'a str> {
+    let span = snapshot.facts().iter().find_map(|fact| match fact {
+        TraceFact::SourceSpan(span) if span.origin == *origin => Some(span),
+        _ => None,
+    })?;
+    let text = if origin_closure::source_owner_matches_input(span.file.owner_key(), input_path) {
+        source_text
+    } else {
+        trace_workbench_related_source_text_for_span(snapshot, related_source_texts, span)
+    }?;
+    let start = span.start_byte as usize;
+    let end = span.end_byte as usize;
+    if start >= end || end > text.len() {
+        return None;
+    }
+    text.get(start..end)
+}
+
+fn trace_workbench_related_source_text_for_span<'a>(
+    snapshot: &TraceSnapshot,
+    related_source_texts: &'a BTreeMap<String, String>,
+    span: &trace_facts::SourceSpanFact,
+) -> Option<&'a str> {
+    related_source_texts
+        .get(&span.file.canonical_storage_key())
+        .map(String::as_str)
+        .or_else(|| {
+            related_source_texts
+                .get(span.file.owner_key())
+                .map(String::as_str)
+        })
+        .or_else(|| {
+            snapshot.facts().iter().find_map(|fact| match fact {
+                TraceFact::SourceFile(file) if file.file_key == span.file => {
+                    related_source_texts.get(&file.uri).map(String::as_str)
+                }
+                _ => None,
+            })
+        })
+}
+
+fn trace_workbench_source_span_is_expected_absent_syntax(text: &str) -> bool {
+    let mut saw_expected_absent_segment = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.starts_with("//")
+            || trimmed.starts_with("///")
+            || trimmed.starts_with('#')
+            || (trimmed.starts_with("/*") && trimmed.ends_with("*/"))
+        {
+            saw_expected_absent_segment = true;
+            continue;
+        }
+        if trimmed
+            .chars()
+            .all(trace_workbench_is_delimiter_syntax_char)
+        {
+            saw_expected_absent_segment = true;
+            continue;
+        }
+        return false;
+    }
+    saw_expected_absent_segment || text.trim().is_empty()
+}
+
+fn trace_workbench_is_delimiter_syntax_char(ch: char) -> bool {
+    matches!(
+        ch,
+        '{' | '}' | '(' | ')' | '[' | ']' | ',' | ';' | ':' | '.' | '|'
+    ) || ch.is_whitespace()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -6121,12 +6321,15 @@ fn missing_link_audit_report(
     lineage_gap_targets: &BTreeMap<OriginExportKey, usize>,
     lineage_gaps: &[AttributionAuditLineageGap],
     invalid: Vec<InvalidAttributionLink>,
+    extra_expected_absent: Vec<ExpectedAbsentLink>,
 ) -> MissingLinkAuditReport {
-    let hir_to_mir = hir_to_mir_boundary_audit(snapshot);
+    let mut expected_absent = expected_absent_links(snapshot);
+    expected_absent.extend(extra_expected_absent);
+    sort_expected_absent_links(&mut expected_absent);
+    let hir_to_mir = hir_to_mir_boundary_audit(snapshot, &expected_absent);
     let missing_hir_to_mir_count = hir_to_mir.missing.len();
     let mir_to_preopt = mir_to_preopt_boundary_audit(snapshot);
     let missing_mir_to_preopt_count = mir_to_preopt.missing.len();
-    let expected_absent = expected_absent_links(snapshot);
     let preopt_to_postopt = preopt_to_postopt_boundary_audit(snapshot, &expected_absent);
     let expected_absent_runtime_count = expected_absent
         .iter()
@@ -6215,6 +6418,9 @@ fn missing_link_audit_report(
         if hir_to_mir.generated > 0 {
             status_counts.insert(LinkStatus::SatisfiedGenerated, hir_to_mir.generated);
         }
+        if hir_to_mir.expected_absent > 0 {
+            status_counts.insert(LinkStatus::ExpectedAbsent, hir_to_mir.expected_absent);
+        }
         if missing_hir_to_mir_count > 0 {
             status_counts.insert(LinkStatus::MissingRequired, missing_hir_to_mir_count);
         }
@@ -6226,6 +6432,7 @@ fn missing_link_audit_report(
             affected_bytecode_pcs: 0,
             top_issue_codes: [
                 (hir_to_mir.generated > 0).then_some(LinkIssueCode::GeneratedExplanationOnly),
+                (hir_to_mir.expected_absent > 0).then_some(LinkIssueCode::ExpectedAbsentSyntax),
                 (missing_hir_to_mir_count > 0).then_some(LinkIssueCode::MissingHirToMirLowering),
             ]
             .into_iter()
@@ -6793,12 +7000,13 @@ fn missing_link_audit_report(
 struct HirToMirBoundaryAudit {
     exact: usize,
     generated: usize,
+    expected_absent: usize,
     missing: Vec<OriginExportKey>,
 }
 
 impl HirToMirBoundaryAudit {
     fn total(&self) -> usize {
-        self.exact + self.generated + self.missing.len()
+        self.exact + self.generated + self.expected_absent + self.missing.len()
     }
 }
 
@@ -6846,7 +7054,15 @@ impl PreparedToBytecodeBoundaryAudit {
     }
 }
 
-fn hir_to_mir_boundary_audit(snapshot: &TraceSnapshot) -> HirToMirBoundaryAudit {
+fn hir_to_mir_boundary_audit(
+    snapshot: &TraceSnapshot,
+    expected_absent: &[ExpectedAbsentLink],
+) -> HirToMirBoundaryAudit {
+    let expected_absent_origins = expected_absent
+        .iter()
+        .filter(|entry| entry.boundary == LinkBoundaryKind::HirToMir)
+        .map(|entry| entry.origin.clone())
+        .collect::<BTreeSet<_>>();
     let mut hir_origins = BTreeSet::<OriginExportKey>::new();
     let mut has_mir_origin = false;
     let mut exact = BTreeSet::<OriginExportKey>::new();
@@ -6884,7 +7100,11 @@ fn hir_to_mir_boundary_audit(snapshot: &TraceSnapshot) -> HirToMirBoundaryAudit 
 
     let missing = hir_origins
         .iter()
-        .filter(|origin| !exact.contains(*origin) && !generated.contains(*origin))
+        .filter(|origin| {
+            !exact.contains(*origin)
+                && !generated.contains(*origin)
+                && !expected_absent_origins.contains(*origin)
+        })
         .cloned()
         .collect::<Vec<_>>();
     let generated_only = generated
@@ -6895,6 +7115,7 @@ fn hir_to_mir_boundary_audit(snapshot: &TraceSnapshot) -> HirToMirBoundaryAudit 
     HirToMirBoundaryAudit {
         exact: exact.len(),
         generated: generated_only,
+        expected_absent: expected_absent_origins.len(),
         missing,
     }
 }
@@ -7098,17 +7319,23 @@ fn expected_absent_links(snapshot: &TraceSnapshot) -> Vec<ExpectedAbsentLink> {
         entries.extend(static_bytecode_runtime_expected_absences(snapshot));
     }
 
+    sort_expected_absent_links(&mut entries);
+    entries
+}
+
+fn sort_expected_absent_links(entries: &mut Vec<ExpectedAbsentLink>) {
     entries.sort_by(|left, right| {
         left.origin
             .canonical_storage_key()
             .cmp(&right.origin.canonical_storage_key())
+            .then_with(|| left.boundary.cmp(&right.boundary))
+            .then(left.issue_code.cmp(&right.issue_code))
     });
     entries.dedup_by(|left, right| {
         left.boundary == right.boundary
             && left.origin == right.origin
             && left.issue_code == right.issue_code
     });
-    entries
 }
 
 fn expected_absent_links_for_elision_event(
@@ -7941,6 +8168,7 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
         &lineage_issue_targets,
         &lineage_gaps,
         invalid_links,
+        Vec::new(),
     );
 
     let mut lineage_gap_targets = attribution_audit_target_counts(lineage_gap_targets);
@@ -11035,6 +11263,121 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn trace_workbench_marks_syntax_only_hir_gaps_expected_absent_with_source_text() {
+        let source_text = "fn main() {\n  // syntax-only comment\n  value\n}\n";
+        let source_file = key("source.file", "demo.fe", "main");
+        let comment_hir = key("hir.expr", "demo", "expr:comment");
+        let value_hir = key("hir.expr", "demo", "expr:value");
+        let mir_stmt = key("runtime.stmt", "demo", "block:0:stmt:0");
+        let comment_start = source_text.find("//").unwrap() as u32;
+        let comment_end = source_text.find("\n  value").unwrap() as u32;
+        let value_start = source_text.find("value").unwrap() as u32;
+        let value_end = value_start + "value".len() as u32;
+        let service = TraceIntrospectionService::new(snapshot(vec![
+            node(source_file.clone()),
+            node(comment_hir.clone()),
+            node(value_hir.clone()),
+            node(mir_stmt.clone()),
+            TraceFact::SourceFile(SourceFileFact::new(
+                source_file.clone(),
+                "file:///demo.fe",
+                "demo.fe",
+                "blake3:00000000000000000000000000000000000000000000000000000000000000aa",
+                Some(0),
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                comment_hir.clone(),
+                source_file.clone(),
+                comment_start,
+                comment_end,
+                2,
+                3,
+                2,
+                25,
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                value_hir.clone(),
+                source_file,
+                value_start,
+                value_end,
+                3,
+                3,
+                3,
+                8,
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                mir_stmt,
+                value_hir,
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::Mir),
+            )),
+        ]));
+        assert_eq!(
+            super::trace_workbench_origin_span_text(
+                service.snapshot(),
+                "demo.fe",
+                Some(source_text),
+                &BTreeMap::new(),
+                &comment_hir,
+            ),
+            Some("// syntax-only comment")
+        );
+        assert!(
+            super::trace_workbench_source_span_is_expected_absent_syntax("// syntax-only comment")
+        );
+
+        let projection = trace_workbench_report_projection(
+            &service,
+            service.snapshot(),
+            TraceWorkbenchProjectionRequest {
+                input_path: "demo.fe".to_string(),
+                target: "evm".to_string(),
+                opt_level: "O2".to_string(),
+                view: "source-postopt-bytecode".to_string(),
+                include_legacy_closure_debug: false,
+                source_text: Some(source_text.to_string()),
+                related_source_texts: BTreeMap::new(),
+                document_version: Some(1),
+                query_duration_ms: 1,
+                compiler_commit: "test".to_string(),
+                data_source: "test".to_string(),
+            },
+        );
+        let missing_links = &projection["attribution_audit"]["missing_links"];
+
+        assert_eq!(
+            missing_links["summary"]["missing_required_count"],
+            serde_json::json!(0)
+        );
+        assert_eq!(
+            missing_links["summary"]["expected_absent_count"],
+            serde_json::json!(1)
+        );
+        assert_eq!(
+            missing_links["summary"]["status"],
+            serde_json::json!("pass_with_expected_absences")
+        );
+        assert!(
+            missing_links["expected_absent"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| {
+                    entry["origin"]["kind"] == serde_json::json!("hir.expr")
+                        && entry["origin"]["local_key"] == serde_json::json!("expr:comment")
+                        && entry["issue_code"] == serde_json::json!("expected_absent_syntax")
+                })
+        );
+        assert!(
+            missing_links["gaps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|gap| gap["from_origin"]["local_key"] != serde_json::json!("expr:comment"))
+        );
     }
 
     fn trace_workbench_compact_visible_text(projection: &serde_json::Value) -> Vec<String> {
