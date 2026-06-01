@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::model::{
-    AttributionConfidence, DebugBundle, DebugCodeObject, DebugInstruction, DebugSourceSpan,
-    InstructionClassification,
+    AttributionConfidence, DebugBundle, DebugCodeObject, DebugInstruction, DebugSourceFile,
+    DebugSourceSpan, InstructionClassification,
 };
 
 pub const ETHDEBUG_SCHEMA_VERSION: &str = "ethdebug/format/draft-2020-12+fe-instruction-source-v1";
@@ -131,9 +131,8 @@ pub fn emit_ethdebug_artifact(bundle: &DebugBundle) -> Result<EthdebugArtifact, 
             name: "fe".to_string(),
             version: bundle.compiler.commit.clone(),
         },
-        sources: bundle
-            .sources
-            .iter()
+        sources: unique_sources(bundle)
+            .into_iter()
             .map(|source| EthdebugSourceMaterial {
                 id: *source_ids.get(&source.file_key).unwrap_or(&0),
                 path: source.display_name.clone(),
@@ -258,16 +257,33 @@ pub fn validate_ethdebug_artifact(artifact: &EthdebugArtifact) -> Result<(), Str
 }
 
 fn source_ids(bundle: &DebugBundle) -> BTreeMap<OriginExportKey, u32> {
+    let mut ids = BTreeMap::new();
+    let mut used = BTreeSet::new();
+    let mut next = 0u32;
+    for source in unique_sources(bundle) {
+        let id = source
+            .source_id
+            .filter(|id| used.insert(*id))
+            .unwrap_or_else(|| {
+                while used.contains(&next) {
+                    next = next.saturating_add(1);
+                }
+                let id = next;
+                used.insert(id);
+                next = next.saturating_add(1);
+                id
+            });
+        ids.insert(source.file_key.clone(), id);
+    }
+    ids
+}
+
+fn unique_sources(bundle: &DebugBundle) -> Vec<&DebugSourceFile> {
+    let mut seen = BTreeSet::new();
     bundle
         .sources
         .iter()
-        .enumerate()
-        .map(|(index, source)| {
-            (
-                source.file_key.clone(),
-                source.source_id.unwrap_or(index as u32),
-            )
-        })
+        .filter(|source| seen.insert(source.file_key.clone()))
         .collect()
 }
 
@@ -487,6 +503,29 @@ mod tests {
         assert_eq!(code.source.id, 7);
         assert_eq!(code.range.offset, 10);
         assert_eq!(code.range.length, 4);
+    }
+
+    #[test]
+    fn ethdebug_artifact_dedupes_source_files_and_allocates_unique_ids() {
+        let mut bundle = bundle();
+        let duplicate = bundle.sources[0].clone();
+        let mut conflicting = duplicate.clone();
+        conflicting.file_key = key("source.file", "demo", "src/lib.fe");
+        conflicting.uri = "file:///src/lib.fe".to_string();
+        conflicting.display_name = "src/lib.fe".to_string();
+        conflicting.source_id = duplicate.source_id;
+        bundle.sources.push(duplicate);
+        bundle.sources.push(conflicting);
+
+        let artifact = emit_ethdebug_artifact(&bundle).unwrap();
+        validate_ethdebug_artifact(&artifact).unwrap();
+
+        assert_eq!(artifact.compilation.sources.len(), 2);
+        assert_eq!(artifact.compilation.sources[0].id, 7);
+        assert_ne!(
+            artifact.compilation.sources[0].id,
+            artifact.compilation.sources[1].id
+        );
     }
 
     #[test]

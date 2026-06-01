@@ -74,6 +74,69 @@ pub fn emit_bytecode_instruction_facts(
     )
 }
 
+pub fn emit_observed_bytecode_trace_facts(
+    input_owner_key: &str,
+    module_key: &str,
+    function_local_key: &str,
+    sonatina_owner_key: &str,
+    bytecode: &BTreeMap<String, crate::SonatinaContractBytecode>,
+    postopt_sonatina_facts: &[TraceFact],
+) -> Vec<TraceFact> {
+    let postopt_sonatina_nodes = postopt_sonatina_facts
+        .iter()
+        .filter_map(|fact| match fact {
+            TraceFact::OriginNode(node) if node.key.kind() == SONATINA_POSTOPT_INST_KIND => {
+                Some(node.key.clone())
+            }
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    let postopt_sonatina_aliases = postopt_sonatina_instruction_aliases(postopt_sonatina_facts);
+    let mut facts = Vec::new();
+    for (contract_name, artifact) in bytecode {
+        let owner_key = bytecode_runtime_owner_key(input_owner_key, module_key, contract_name);
+        facts.extend(emit_bytecode_instruction_facts_with_observability(
+            &owner_key,
+            function_local_key,
+            &artifact.runtime,
+            Some(sonatina_owner_key),
+            artifact.runtime_observability.as_ref(),
+            Some(&postopt_sonatina_nodes),
+            Some(&postopt_sonatina_aliases),
+        ));
+        facts.extend(emit_bytecode_shape_facts(
+            &owner_key,
+            function_local_key,
+            &artifact.runtime,
+        ));
+    }
+    facts
+}
+
+pub fn postopt_sonatina_instruction_aliases(
+    facts: &[TraceFact],
+) -> BTreeMap<OriginExportKey, OriginExportKey> {
+    facts
+        .iter()
+        .filter_map(|fact| {
+            let TraceFact::Instruction(instruction) = fact else {
+                return None;
+            };
+            if instruction.instruction.kind() != SONATINA_POSTOPT_INST_KIND {
+                return None;
+            }
+            let (function_prefix, _) = instruction.instruction.local_key().rsplit_once(":inst:")?;
+            let alias = OriginExportKey::try_from_raw_parts(
+                instruction.instruction.kind(),
+                instruction.instruction.owner_key(),
+                format!("{function_prefix}:inst:InstId({})", instruction.index),
+            )
+            .ok()?;
+            (alias != instruction.instruction).then(|| (alias, instruction.instruction.clone()))
+        })
+        .collect()
+}
+
 pub fn emit_bytecode_instruction_facts_with_observability(
     owner_key: &str,
     function_local_key: &str,

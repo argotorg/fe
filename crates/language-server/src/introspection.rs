@@ -2,7 +2,7 @@ use common::InputDb;
 use driver::DriverDataBase;
 use hir::lower::map_file_to_mod;
 use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::BufReader;
 use std::str::FromStr;
@@ -543,39 +543,16 @@ pub(crate) fn service_for_file_with_options(
             &sonatina_owner,
         )
         .map_err(|err| format!("bytecode emission for trace: {err}"))?;
-    let postopt_sonatina_nodes = postopt_sonatina_facts
-        .iter()
-        .filter_map(|fact| match fact {
-            TraceFact::OriginNode(node)
-                if node.key.kind() == codegen::trace::SONATINA_POSTOPT_INST_KIND =>
-            {
-                Some(node.key.clone())
-            }
-            _ => None,
-        })
-        .collect::<BTreeSet<_>>();
-    let postopt_sonatina_aliases = postopt_sonatina_instruction_aliases(&postopt_sonatina_facts);
+    let observed_bytecode_facts = codegen::trace::emit_observed_bytecode_trace_facts(
+        uri.as_str(),
+        &module_key,
+        "function:runtime",
+        &sonatina_owner,
+        &bytecode,
+        &postopt_sonatina_facts,
+    );
     facts.extend(postopt_sonatina_facts);
-    for (contract_name, artifact) in bytecode {
-        let owner_key =
-            codegen::trace::bytecode_runtime_owner_key(uri.as_str(), &module_key, &contract_name);
-        facts.extend(
-            codegen::trace::emit_bytecode_instruction_facts_with_observability(
-                &owner_key,
-                "function:runtime",
-                &artifact.runtime,
-                Some(&sonatina_owner),
-                artifact.runtime_observability.as_ref(),
-                Some(&postopt_sonatina_nodes),
-                Some(&postopt_sonatina_aliases),
-            ),
-        );
-        facts.extend(codegen::trace::emit_bytecode_shape_facts(
-            &owner_key,
-            "function:runtime",
-            &artifact.runtime,
-        ));
-    }
+    facts.extend(observed_bytecode_facts);
     enforce_trace_limits(&facts, &config)?;
 
     let metadata = TraceMetadata::compiler_emitted(
@@ -593,30 +570,6 @@ pub(crate) fn service_for_file_with_options(
     Ok(Some(TraceIntrospectionService::with_config(
         snapshot, config,
     )))
-}
-
-fn postopt_sonatina_instruction_aliases(
-    facts: &[TraceFact],
-) -> BTreeMap<common::origin::OriginExportKey, common::origin::OriginExportKey> {
-    facts
-        .iter()
-        .filter_map(|fact| {
-            let TraceFact::Instruction(instruction) = fact else {
-                return None;
-            };
-            if instruction.instruction.kind() != codegen::trace::SONATINA_POSTOPT_INST_KIND {
-                return None;
-            }
-            let (function_prefix, _) = instruction.instruction.local_key().rsplit_once(":inst:")?;
-            let alias = common::origin::OriginExportKey::try_from_raw_parts(
-                instruction.instruction.kind(),
-                instruction.instruction.owner_key(),
-                format!("{function_prefix}:inst:InstId({})", instruction.index),
-            )
-            .ok()?;
-            (alias != instruction.instruction).then(|| (alias, instruction.instruction.clone()))
-        })
-        .collect()
 }
 
 fn attached_trace_service(

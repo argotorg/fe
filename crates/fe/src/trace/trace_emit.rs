@@ -647,41 +647,22 @@ fn emit_real_trace_bundle_from_top_mod<'db>(
             &sonatina_owner,
         )
         .map_err(|err| format!("failed to compile bytecode for trace: {err}"))?;
-    let postopt_sonatina_nodes = postopt_sonatina_facts
-        .iter()
-        .filter_map(|fact| match fact {
-            TraceFact::OriginNode(node)
-                if node.key.kind() == codegen::trace::SONATINA_POSTOPT_INST_KIND =>
-            {
-                Some(node.key.clone())
-            }
-            _ => None,
-        })
-        .collect::<std::collections::BTreeSet<_>>();
-    let postopt_sonatina_aliases = postopt_sonatina_instruction_aliases(&postopt_sonatina_facts);
+    let observed_bytecode_facts = codegen::trace::emit_observed_bytecode_trace_facts(
+        input_path.as_str(),
+        &module_key,
+        "function:runtime",
+        &sonatina_owner,
+        &bytecode,
+        &postopt_sonatina_facts,
+    );
     facts.extend(postopt_sonatina_facts);
-    for (contract_name, artifact) in bytecode {
+    facts.extend(observed_bytecode_facts);
+    for contract_name in bytecode.keys() {
         let owner_key = codegen::trace::bytecode_runtime_owner_key(
             input_path.as_str(),
             &module_key,
-            &contract_name,
+            contract_name,
         );
-        facts.extend(
-            codegen::trace::emit_bytecode_instruction_facts_with_observability(
-                &owner_key,
-                "function:runtime",
-                &artifact.runtime,
-                Some(&sonatina_owner),
-                artifact.runtime_observability.as_ref(),
-                Some(&postopt_sonatina_nodes),
-                Some(&postopt_sonatina_aliases),
-            ),
-        );
-        facts.extend(codegen::trace::emit_bytecode_shape_facts(
-            &owner_key,
-            "function:runtime",
-            &artifact.runtime,
-        ));
         let code_object = codegen::trace::bytecode_code_object_key(&owner_key);
         if let Some(span) = whole_file_source_span(code_object, source_file.clone(), input_content)
         {
@@ -700,30 +681,6 @@ fn emit_real_trace_bundle_from_top_mod<'db>(
         ],
     );
     Ok(TraceBundle::new(metadata, facts))
-}
-
-fn postopt_sonatina_instruction_aliases(
-    facts: &[TraceFact],
-) -> BTreeMap<OriginExportKey, OriginExportKey> {
-    facts
-        .iter()
-        .filter_map(|fact| {
-            let TraceFact::Instruction(instruction) = fact else {
-                return None;
-            };
-            if instruction.instruction.kind() != codegen::trace::SONATINA_POSTOPT_INST_KIND {
-                return None;
-            }
-            let (function_prefix, _) = instruction.instruction.local_key().rsplit_once(":inst:")?;
-            let alias = OriginExportKey::try_from_raw_parts(
-                instruction.instruction.kind(),
-                instruction.instruction.owner_key(),
-                format!("{function_prefix}:inst:InstId({})", instruction.index),
-            )
-            .ok()?;
-            (alias != instruction.instruction).then(|| (alias, instruction.instruction.clone()))
-        })
-        .collect()
 }
 
 fn emit_standalone_source_file_facts(
