@@ -7519,11 +7519,15 @@ mod tests {
         let ty = key("type", "demo", "u32");
         let inst = key("bytecode.pc", "demo", "pc:0");
         let zext = key("bytecode.pc", "demo", "pc:1");
+        let inst_prepared = key("sonatina.evm.prepared.inst", "demo", "inst:0");
+        let zext_prepared = key("sonatina.evm.prepared.inst", "demo", "inst:1");
         let inst_postopt = key("sonatina.postopt.inst", "demo", "inst:0");
         let zext_postopt = key("sonatina.postopt.inst", "demo", "inst:1");
         let ambiguous = key("bytecode.pc", "demo", "pc:2");
         let synthetic = key("bytecode.pc", "demo", "pc:3");
         let event = key("compiler.event", "demo", "event:0");
+        let inst_prepared_lineage_event = key("compiler.event", "demo", "event:prepared-lineage:0");
+        let zext_prepared_lineage_event = key("compiler.event", "demo", "event:prepared-lineage:1");
         let facts = vec![
             node(source_file.clone()),
             node(source_expr.clone()),
@@ -7536,11 +7540,15 @@ mod tests {
             node(ty.clone()),
             node(inst.clone()),
             node(zext.clone()),
+            node(inst_prepared.clone()),
+            node(zext_prepared.clone()),
             node(inst_postopt.clone()),
             node(zext_postopt.clone()),
             node(ambiguous.clone()),
             node(synthetic.clone()),
             node(event.clone()),
+            node(inst_prepared_lineage_event.clone()),
+            node(zext_prepared_lineage_event.clone()),
             TraceFact::SourceFile(SourceFileFact::new(
                 source_file.clone(),
                 "file:///demo/fib.fe",
@@ -7728,15 +7736,43 @@ mod tests {
             )),
             TraceFact::OriginEdge(OriginEdgeFact::new(
                 inst.clone(),
-                inst_postopt.clone(),
+                inst_prepared.clone(),
                 OriginEdgeLabel::EmittedFrom,
                 Some(CompilerPhase::BytecodeEmission),
             )),
             TraceFact::OriginEdge(OriginEdgeFact::new(
                 zext.clone(),
-                zext_postopt.clone(),
+                zext_prepared.clone(),
                 OriginEdgeLabel::EmittedFrom,
                 Some(CompilerPhase::BytecodeEmission),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                inst_prepared.clone(),
+                inst_postopt.clone(),
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::Backend),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                zext_prepared.clone(),
+                zext_postopt.clone(),
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::Backend),
+            )),
+            TraceFact::CompilerEvent(CompilerEventFact::new(
+                inst_prepared_lineage_event,
+                CompilerPhase::Backend,
+                CompilerEventKind::PreparedLineage,
+                vec![inst_postopt.clone()],
+                vec![inst_prepared],
+                Some(CompilerReason::new("fixture prepared lineage")),
+            )),
+            TraceFact::CompilerEvent(CompilerEventFact::new(
+                zext_prepared_lineage_event,
+                CompilerPhase::Backend,
+                CompilerEventKind::PreparedLineage,
+                vec![zext_postopt.clone()],
+                vec![zext_prepared],
+                Some(CompilerReason::new("fixture prepared lineage")),
             )),
             TraceFact::OriginEdge(OriginEdgeFact::new(
                 inst_postopt,
@@ -8533,11 +8569,11 @@ mod tests {
         let report = demo_service().attribution_audit().unwrap();
 
         assert_eq!(report.total_bytecode_pcs, 4);
-        assert_eq!(report.source_exact_pcs, 0);
+        assert_eq!(report.source_exact_pcs, 2);
         assert_eq!(report.source_ambiguous_pcs, 1);
-        assert_eq!(report.unmapped_pcs, 3);
+        assert_eq!(report.unmapped_pcs, 1);
         assert_eq!(report.optimized_sonatina_linked_pcs, 2);
-        assert_eq!(report.prepared_linked_pcs, 0);
+        assert_eq!(report.prepared_linked_pcs, 2);
         assert_eq!(report.missing_optimized_to_prepared_lineage_pcs, 0);
         assert!(report.direct_edges_by_class.iter().any(|row| {
             row.traversal_class == OriginEdgeTraversalClass::ExactAttribution && row.count >= 2
@@ -8556,17 +8592,12 @@ mod tests {
             missing_links.schema_version,
             MISSING_LINK_AUDIT_SCHEMA_VERSION
         );
-        assert_eq!(missing_links.summary.status, LinkOverallStatus::Invalid);
-        assert_eq!(missing_links.summary.invalid_count, 2);
-        assert_eq!(
-            missing_links.summary.top_blockers,
-            vec![LinkBoundaryKind::PostOptToPrepared]
-        );
+        assert_eq!(missing_links.summary.invalid_count, 0);
         assert!(
-            missing_links
+            !missing_links
                 .invalid
                 .iter()
-                .all(|entry| entry.issue_code == LinkIssueCode::PreparedKeyedAsPostopt)
+                .any(|entry| entry.issue_code == LinkIssueCode::PreparedKeyedAsPostopt)
         );
         assert!(missing_links.clusters.is_empty());
     }
@@ -9739,7 +9770,7 @@ mod tests {
         );
         assert_eq!(
             projection["parity_summary"]["edge_class_counts"]["exact_attribution"],
-            7
+            9
         );
         assert!(projection["attribution_audit"].is_object());
         assert!(projection["duplicate_shapes"].is_object());

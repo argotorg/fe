@@ -1098,9 +1098,9 @@ mod tests {
     use common::origin::OriginExportKey;
     use trace_facts::{
         CodeObjectFact, CodeObjectKind, CompilerEventFact, CompilerEventKind, CompilerPhase,
-        EvmSchedule, InstructionExtentFact, InstructionFact, OriginEdgeFact, OriginEdgeLabel,
-        OriginNodeFact, OriginNodeKind, PcRange, SourceFileFact, SourceSpanFact, StaticGasFact,
-        TraceBundle, TraceFact, TraceMetadata, TraceSnapshot,
+        CompilerReason, EvmSchedule, InstructionExtentFact, InstructionFact, OriginEdgeFact,
+        OriginEdgeLabel, OriginNodeFact, OriginNodeKind, PcRange, SourceFileFact, SourceSpanFact,
+        StaticGasFact, TraceBundle, TraceFact, TraceMetadata, TraceSnapshot,
     };
 
     use super::{CheckStatus, Confidence, RuntimeTraceSource, static_analysis_report};
@@ -1137,8 +1137,11 @@ mod tests {
         let source_file = key("source.file", "demo", "demo.fe");
         let hir_exact = key("hir.expr", "demo", "expr:exact");
         let hir_alt = key("hir.expr", "demo", "expr:alt");
-        let sonatina = key("sonatina.post.inst", "demo", "inst:0");
+        let sonatina = key("sonatina.postopt.inst", "demo", "inst:0");
+        let sonatina_only_prepared =
+            key("sonatina.evm.prepared.inst", "demo", "inst:sonatina-only");
         let prepared_inst = key("sonatina.evm.prepared.inst", "demo", "inst:prepared");
+        let prepared_lineage_event = key("compiler.event", "demo", "event:prepared-lineage");
         let exact = key("bytecode.pc", "demo", "pc:0");
         let ambiguous = key("bytecode.pc", "demo", "pc:1");
         let sonatina_only = key("bytecode.pc", "demo", "pc:2");
@@ -1152,7 +1155,9 @@ mod tests {
             node(hir_exact.clone()),
             node(hir_alt.clone()),
             node(sonatina.clone()),
+            node(sonatina_only_prepared.clone()),
             node(prepared_inst.clone()),
+            node(prepared_lineage_event.clone()),
             node(exact.clone()),
             node(ambiguous.clone()),
             node(sonatina_only.clone()),
@@ -1250,9 +1255,23 @@ mod tests {
             )),
             TraceFact::OriginEdge(OriginEdgeFact::new(
                 sonatina_only,
-                sonatina,
+                sonatina_only_prepared.clone(),
                 OriginEdgeLabel::EmittedFrom,
-                None,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                sonatina_only_prepared.clone(),
+                sonatina.clone(),
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::Backend),
+            )),
+            TraceFact::CompilerEvent(CompilerEventFact::new(
+                prepared_lineage_event,
+                CompilerPhase::Backend,
+                CompilerEventKind::PreparedLineage,
+                vec![sonatina],
+                vec![sonatina_only_prepared],
+                Some(CompilerReason::new("fixture prepared lineage")),
             )),
             TraceFact::OriginEdge(OriginEdgeFact::new(
                 synthetic,
@@ -1284,7 +1303,7 @@ mod tests {
         assert_eq!(coverage["ambiguous_pcs"], 1);
         assert_eq!(coverage["exact_sonatina_pcs"], 1);
         assert_eq!(coverage["optimized_sonatina_pcs"], 1);
-        assert_eq!(coverage["prepared_sonatina_pcs"], 1);
+        assert_eq!(coverage["prepared_sonatina_pcs"], 2);
         assert_eq!(coverage["sonatina_only_pcs"], 1);
         assert_eq!(coverage["prepared_only_pcs"], 1);
         assert_eq!(coverage["synthetic_backend_pcs"], 1);
@@ -1376,19 +1395,37 @@ mod tests {
     fn postopt_attribution_gap_reports_unattributed_postopt_origins() {
         let function = key("function", "demo", "recv");
         let bytecode = key("bytecode.pc", "demo", "pc:0");
-        let attributed = key("sonatina.post.inst", "demo", "inst:0");
-        let gap = key("sonatina.post.inst", "demo", "inst:1");
+        let prepared = key("sonatina.evm.prepared.inst", "demo", "inst:0");
+        let attributed = key("sonatina.postopt.inst", "demo", "inst:0");
+        let gap = key("sonatina.postopt.inst", "demo", "inst:1");
+        let event = key("compiler.event", "demo", "event:prepared-lineage");
         let facts = vec![
             node(function.clone()),
             node(bytecode.clone()),
+            node(prepared.clone()),
             node(attributed.clone()),
             node(gap.clone()),
+            node(event.clone()),
             TraceFact::Instruction(InstructionFact::new(bytecode.clone(), function, 0, "ADD")),
             TraceFact::OriginEdge(OriginEdgeFact::new(
                 bytecode,
-                attributed,
+                prepared.clone(),
                 OriginEdgeLabel::EmittedFrom,
-                None,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                prepared.clone(),
+                attributed.clone(),
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::Backend),
+            )),
+            TraceFact::CompilerEvent(CompilerEventFact::new(
+                event,
+                CompilerPhase::Backend,
+                CompilerEventKind::PreparedLineage,
+                vec![attributed],
+                vec![prepared],
+                Some(CompilerReason::new("fixture prepared lineage")),
             )),
         ];
 

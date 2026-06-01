@@ -4,13 +4,14 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use common::origin::OriginExportKey;
 use serde::{Deserialize, Serialize};
 use trace_facts::{
-    OriginEdgeFact, OriginEdgeLabel, OriginEdgeTraversalClass, SourceSpanFact, TraceFact,
-    TraceSnapshot,
+    CompilerEventKind, CompilerPhase, OriginEdgeFact, OriginEdgeLabel, OriginEdgeTraversalClass,
+    SourceSpanFact, TraceFact, TraceSnapshot,
 };
 
 #[derive(Debug)]
 pub struct TraceIndex<'a> {
     edges_by_from: BTreeMap<OriginExportKey, Vec<&'a OriginEdgeFact>>,
+    prepared_lineage_events: BTreeSet<(OriginExportKey, OriginExportKey)>,
     source_spans: BTreeMap<OriginExportKey, &'a SourceSpanFact>,
     reachable_cache:
         RefCell<BTreeMap<(OriginExportKey, TraceReachabilityPolicy), BTreeSet<OriginExportKey>>>,
@@ -21,6 +22,7 @@ pub struct TraceIndex<'a> {
 impl<'a> TraceIndex<'a> {
     pub fn new(snapshot: &'a TraceSnapshot) -> Self {
         let mut edges_by_from = BTreeMap::<OriginExportKey, Vec<&OriginEdgeFact>>::new();
+        let mut prepared_lineage_events = BTreeSet::<(OriginExportKey, OriginExportKey)>::new();
         let mut source_spans = BTreeMap::new();
         for fact in snapshot.facts() {
             match fact {
@@ -33,11 +35,30 @@ impl<'a> TraceIndex<'a> {
                 TraceFact::SourceSpan(span) => {
                     source_spans.insert(span.origin.clone(), span);
                 }
+                TraceFact::CompilerEvent(event)
+                    if event.kind == CompilerEventKind::PreparedLineage
+                        && event.phase == CompilerPhase::Backend =>
+                {
+                    for prepared in event
+                        .outputs
+                        .iter()
+                        .filter(|origin| is_prepared_codegen_origin_kind(origin.kind()))
+                    {
+                        for postopt in event
+                            .inputs
+                            .iter()
+                            .filter(|origin| is_sonatina_postopt_origin_kind(origin.kind()))
+                        {
+                            prepared_lineage_events.insert((prepared.clone(), postopt.clone()));
+                        }
+                    }
+                }
                 _ => {}
             }
         }
         Self {
             edges_by_from,
+            prepared_lineage_events,
             source_spans,
             reachable_cache: RefCell::new(BTreeMap::new()),
             cache_hits: Cell::new(0),
@@ -130,7 +151,7 @@ impl<'a> TraceIndex<'a> {
         let mut parent = BTreeMap::<OriginExportKey, TraceEdgeStep>::new();
         while let Some(key) = queue.pop_front() {
             for edge in self.edges_by_from.get(&key).into_iter().flatten() {
-                if !policy.allows_edge(edge) {
+                if !self.allows_edge(policy, edge) {
                     continue;
                 }
                 if !seen.insert(edge.to.clone()) {
@@ -165,13 +186,35 @@ impl<'a> TraceIndex<'a> {
                 continue;
             }
             for edge in self.edges_by_from.get(&key).into_iter().flatten() {
-                if policy.allows_edge(edge) {
+                if self.allows_edge(policy, edge) {
                     stack.push(edge.to.clone());
                 }
             }
         }
         reachable.remove(root);
         reachable
+    }
+
+    fn allows_edge(&self, policy: TraceReachabilityPolicy, edge: &OriginEdgeFact) -> bool {
+        policy.allows_edge(edge) && self.edge_satisfies_phase_contract(edge)
+    }
+
+    fn edge_satisfies_phase_contract(&self, edge: &OriginEdgeFact) -> bool {
+        if edge.from.kind() == "bytecode.pc"
+            && is_sonatina_postopt_origin_kind(edge.to.kind())
+            && edge.has_transform_claim_label()
+        {
+            return false;
+        }
+        if is_prepared_codegen_origin_kind(edge.from.kind())
+            && is_sonatina_postopt_origin_kind(edge.to.kind())
+            && is_prepared_to_postopt_lineage_edge(edge)
+        {
+            return self
+                .prepared_lineage_events
+                .contains(&(edge.from.clone(), edge.to.clone()));
+        }
+        true
     }
 }
 
@@ -272,6 +315,28 @@ fn is_backend_phase_origin_kind(kind: &str) -> bool {
         || kind.starts_with("vcode.")
 }
 
+fn is_sonatina_postopt_origin_kind(kind: &str) -> bool {
+    kind.starts_with("sonatina.post")
+}
+
+fn is_prepared_codegen_origin_kind(kind: &str) -> bool {
+    kind.starts_with("sonatina.evm.prepared.")
+        || kind.starts_with("sonatina.codegen.")
+        || kind.starts_with("evm.vcode.")
+        || kind.starts_with("vcode.")
+}
+
+fn is_prepared_to_postopt_lineage_edge(edge: &OriginEdgeFact) -> bool {
+    match edge.traversal_class() {
+        OriginEdgeTraversalClass::ExactAttribution | OriginEdgeTraversalClass::SnapshotAlias => {
+            true
+        }
+        OriginEdgeTraversalClass::Synthetic => true,
+        OriginEdgeTraversalClass::Contextual => edge.is_backend_prepared_semantic_edge(),
+        OriginEdgeTraversalClass::Structural | OriginEdgeTraversalClass::Unmapped => false,
+    }
+}
+
 const fn is_exact_class(class: OriginEdgeTraversalClass) -> bool {
     matches!(
         class,
@@ -305,8 +370,9 @@ fn reconstruct_path(
 mod tests {
     use common::origin::OriginExportKey;
     use trace_facts::{
-        CompilerPhase, OriginEdgeFact, OriginEdgeLabel, OriginNodeFact, OriginNodeKind,
-        SourceFileFact, SourceSpanFact, TraceBundle, TraceFact, TraceMetadata, TraceSnapshot,
+        CompilerEventFact, CompilerEventKind, CompilerPhase, CompilerReason, OriginEdgeFact,
+        OriginEdgeLabel, OriginNodeFact, OriginNodeKind, SourceFileFact, SourceSpanFact,
+        TraceBundle, TraceFact, TraceMetadata, TraceSnapshot,
     };
 
     use super::{TraceIndex, TracePhase, TraceReachabilityPolicy};
@@ -430,13 +496,17 @@ mod tests {
     fn source_candidates_and_phase_frontier_are_derived_from_exact_paths() {
         let file = key("source.file", "demo", "demo.fe");
         let instruction = key("bytecode.pc", "demo", "pc:0");
-        let sonatina = key("sonatina.post.inst", "demo", "inst:0");
+        let prepared = key("sonatina.evm.prepared.inst", "demo", "inst:prepared");
+        let sonatina = key("sonatina.postopt.inst", "demo", "inst:0");
         let source = key("hir.expr", "demo", "expr:0");
+        let event = key("compiler.event", "demo", "event:prepared-lineage");
         let facts = vec![
             node(&file),
             node(&instruction),
+            node(&prepared),
             node(&sonatina),
             node(&source),
+            node(&event),
             TraceFact::SourceFile(SourceFileFact::new(
                 file.clone(),
                 "file:///demo.fe",
@@ -447,12 +517,26 @@ mod tests {
             TraceFact::SourceSpan(SourceSpanFact::new(source.clone(), file, 0, 1, 1, 1, 1, 2)),
             TraceFact::OriginEdge(OriginEdgeFact::new(
                 instruction.clone(),
-                sonatina,
+                prepared.clone(),
                 OriginEdgeLabel::EmittedFrom,
-                None,
+                Some(CompilerPhase::BytecodeEmission),
             )),
             TraceFact::OriginEdge(OriginEdgeFact::new(
-                key("sonatina.post.inst", "demo", "inst:0"),
+                prepared.clone(),
+                sonatina.clone(),
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::Backend),
+            )),
+            TraceFact::CompilerEvent(CompilerEventFact::new(
+                event,
+                CompilerPhase::Backend,
+                CompilerEventKind::PreparedLineage,
+                vec![sonatina.clone()],
+                vec![prepared],
+                Some(CompilerReason::new("fixture prepared lineage")),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                sonatina,
                 source.clone(),
                 OriginEdgeLabel::LoweredFrom,
                 None,
@@ -675,5 +759,144 @@ mod tests {
         let index = TraceIndex::new(&snapshot);
 
         assert!(index.origin_reaches(&post, &pre, TraceReachabilityPolicy::ExactOnly));
+    }
+
+    #[test]
+    fn exact_policy_requires_prepared_lineage_event_for_postopt_bridge() {
+        let file = key("source.file", "demo", "demo.fe");
+        let instruction = key("bytecode.pc", "demo", "pc:0");
+        let prepared = key("sonatina.evm.prepared.inst", "demo", "inst:prepared");
+        let postopt = key("sonatina.postopt.inst", "demo", "inst:postopt");
+        let source = key("hir.expr", "demo", "expr:0");
+        let event = key("compiler.event", "demo", "event:prepared-lineage");
+        let facts = vec![
+            node(&file),
+            node(&instruction),
+            node(&prepared),
+            node(&postopt),
+            node(&source),
+            node(&event),
+            TraceFact::SourceFile(SourceFileFact::new(
+                file.clone(),
+                "file:///demo.fe",
+                "demo.fe",
+                "blake3:0000000000000000000000000000000000000000000000000000000000000001",
+                Some(0),
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(source.clone(), file, 0, 1, 1, 1, 1, 2)),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                instruction.clone(),
+                prepared.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                prepared.clone(),
+                postopt.clone(),
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::Backend),
+            )),
+            TraceFact::CompilerEvent(CompilerEventFact::new(
+                event,
+                CompilerPhase::Backend,
+                CompilerEventKind::PreparedLineage,
+                vec![postopt.clone()],
+                vec![prepared.clone()],
+                Some(CompilerReason::new("fixture prepared lineage")),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                postopt.clone(),
+                source.clone(),
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::SonatinaPostOpt),
+            )),
+        ];
+        let snapshot = snapshot(facts);
+        let index = TraceIndex::new(&snapshot);
+
+        assert!(index.origin_reaches(&instruction, &postopt, TraceReachabilityPolicy::ExactOnly));
+        assert_eq!(
+            index.source_candidates_for_instruction(
+                &instruction,
+                TraceReachabilityPolicy::ExactOnly
+            ),
+            vec![source]
+        );
+    }
+
+    #[test]
+    fn exact_policy_rejects_prepared_postopt_edge_without_lineage_event() {
+        let file = key("source.file", "demo", "demo.fe");
+        let instruction = key("bytecode.pc", "demo", "pc:0");
+        let prepared = key("sonatina.evm.prepared.inst", "demo", "inst:prepared");
+        let postopt = key("sonatina.postopt.inst", "demo", "inst:postopt");
+        let source = key("hir.expr", "demo", "expr:0");
+        let facts = vec![
+            node(&file),
+            node(&instruction),
+            node(&prepared),
+            node(&postopt),
+            node(&source),
+            TraceFact::SourceFile(SourceFileFact::new(
+                file.clone(),
+                "file:///demo.fe",
+                "demo.fe",
+                "blake3:0000000000000000000000000000000000000000000000000000000000000001",
+                Some(0),
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(source.clone(), file, 0, 1, 1, 1, 1, 2)),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                instruction.clone(),
+                prepared.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                prepared,
+                postopt.clone(),
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::Backend),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                postopt.clone(),
+                source,
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::SonatinaPostOpt),
+            )),
+        ];
+        let snapshot = snapshot(facts);
+        let index = TraceIndex::new(&snapshot);
+
+        assert!(!index.origin_reaches(&instruction, &postopt, TraceReachabilityPolicy::ExactOnly));
+        assert!(
+            index
+                .source_candidates_for_instruction(&instruction, TraceReachabilityPolicy::ExactOnly)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn semantic_reachability_rejects_direct_bytecode_postopt_edges() {
+        let instruction = key("bytecode.pc", "demo", "pc:0");
+        let postopt = key("sonatina.postopt.inst", "demo", "inst:postopt");
+        let facts = vec![
+            node(&instruction),
+            node(&postopt),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                instruction.clone(),
+                postopt.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+        ];
+        let snapshot = snapshot(facts);
+        let index = TraceIndex::new(&snapshot);
+
+        assert!(!index.origin_reaches(&instruction, &postopt, TraceReachabilityPolicy::ExactOnly));
+        assert!(!index.origin_reaches(
+            &instruction,
+            &postopt,
+            TraceReachabilityPolicy::DebugAttribution
+        ));
     }
 }
