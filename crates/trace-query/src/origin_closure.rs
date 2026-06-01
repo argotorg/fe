@@ -478,7 +478,7 @@ fn closure_roots(
         }
     }
     for (key, instruction) in &index.instructions {
-        if key.kind() == "bytecode.pc" && has_exact_trace_edge(key, index) {
+        if key.kind() == "bytecode.pc" && has_precise_audit_edge(key, index) {
             roots.insert(
                 instruction.instruction.canonical_storage_key(),
                 instruction.instruction.clone(),
@@ -488,7 +488,7 @@ fn closure_roots(
     roots.into_values().collect()
 }
 
-fn has_exact_trace_edge(key: &OriginExportKey, index: &OriginClosureIndex<'_>) -> bool {
+fn has_precise_audit_edge(key: &OriginExportKey, index: &OriginClosureIndex<'_>) -> bool {
     index.edges_by_from.get(key).is_some_and(|edges| {
         edges
             .iter()

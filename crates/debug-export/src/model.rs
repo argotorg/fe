@@ -1,6 +1,6 @@
 use std::{
     cell::{Cell, RefCell},
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet},
 };
 
 use common::origin::OriginExportKey;
@@ -10,6 +10,7 @@ use trace_facts::{
     InstructionFact, LocationRangeFact, OpcodeFact, OriginEdgeFact, OriginEdgeTraversalClass,
     PcRange, SourceSpanFact, StaticGasFact, TraceDataSource, TraceFact, TraceSnapshot,
 };
+use trace_query::trace_index::{TraceIndex as SemanticTraceIndex, TraceReachabilityPolicy};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DebugBundle {
@@ -206,6 +207,7 @@ pub enum InstructionClassification {
 
 struct DebugFactIndex<'a> {
     facts: &'a [TraceFact],
+    semantic_index: SemanticTraceIndex<'a>,
     source_spans: BTreeMap<OriginExportKey, &'a SourceSpanFact>,
     outgoing_edges: BTreeMap<OriginExportKey, Vec<&'a OriginEdgeFact>>,
     opcodes: BTreeMap<OriginExportKey, &'a OpcodeFact>,
@@ -260,6 +262,7 @@ impl<'a> DebugFactIndex<'a> {
 
         Self {
             facts: snapshot.facts(),
+            semantic_index: SemanticTraceIndex::new(snapshot),
             source_spans,
             outgoing_edges,
             opcodes,
@@ -503,34 +506,36 @@ impl<'a> DebugFactIndex<'a> {
         }
         self.source_candidate_walks
             .set(self.source_candidate_walks.get() + 1);
-        let mut visited = BTreeSet::<(OriginExportKey, bool)>::new();
         let mut result = SourceCandidateResult::default();
-        let mut queue = VecDeque::from([(instruction.clone(), true)]);
 
-        while let Some((current, precise)) = queue.pop_front() {
-            if !visited.insert((current.clone(), precise)) {
-                continue;
-            }
-            if current != *instruction
-                && is_precise_source_candidate(&current)
-                && self.source_spans.contains_key(&current)
-            {
-                if precise {
-                    result.generated_origins.remove(&current);
-                    result.exact_origins.insert(current.clone());
-                } else if !result.exact_origins.contains(&current) {
-                    result.generated_origins.insert(current.clone());
-                }
-            }
+        result.exact_origins = self
+            .semantic_index
+            .source_candidates_for_instruction(instruction, TraceReachabilityPolicy::ExactOnly)
+            .into_iter()
+            .collect();
+        if self.source_attribution_origin(instruction) {
+            result.exact_origins.insert(instruction.clone());
+        }
+
+        result.generated_origins = self
+            .semantic_index
+            .source_candidates_for_instruction(
+                instruction,
+                TraceReachabilityPolicy::ExactPlusSynthetic,
+            )
+            .into_iter()
+            .filter(|origin| !result.exact_origins.contains(origin))
+            .collect();
+
+        let mut explanation_frontier = self
+            .semantic_index
+            .reachable_targets(instruction, TraceReachabilityPolicy::ExactPlusSynthetic);
+        explanation_frontier.insert(instruction.clone());
+        for current in explanation_frontier {
             for edge in self.outgoing_edges.get(&current).into_iter().flatten() {
                 match edge.traversal_class() {
-                    OriginEdgeTraversalClass::ExactAttribution
-                    | OriginEdgeTraversalClass::SnapshotAlias => {
-                        queue.push_back((edge.to.clone(), precise));
-                    }
                     OriginEdgeTraversalClass::Synthetic => {
                         result.synthetic_reasons.insert("SyntheticFor".to_string());
-                        queue.push_back((edge.to.clone(), false));
                     }
                     OriginEdgeTraversalClass::Contextual
                         if edge.is_backend_prepared_semantic_edge() =>
@@ -551,6 +556,10 @@ impl<'a> DebugFactIndex<'a> {
             .borrow_mut()
             .insert(instruction.clone(), result.clone());
         result
+    }
+
+    fn source_attribution_origin(&self, origin: &OriginExportKey) -> bool {
+        is_precise_source_candidate(origin) && self.source_spans.contains_key(origin)
     }
 
     fn classification(
@@ -687,7 +696,7 @@ fn immediate_byte_len(opcode: &OpcodeFact) -> u32 {
 mod tests {
     use common::origin::OriginExportKey;
     use trace_facts::{
-        CodeObjectKind, EvmSchedule, FunctionFact, InstructionFact, OriginEdgeFact,
+        CodeObjectKind, CompilerPhase, EvmSchedule, FunctionFact, InstructionFact, OriginEdgeFact,
         OriginEdgeLabel, OriginNodeFact, OriginNodeKind, PcRange, SourceFileFact, SourceSpanFact,
         StaticGasFact, TraceBundle, TraceFact, TraceMetadata, TraceSnapshot, TraceValidator,
     };
@@ -742,6 +751,39 @@ mod tests {
                 13,
             )),
         ]
+    }
+
+    #[test]
+    fn debug_bundle_does_not_promote_contextual_bytecode_frontend_edge() {
+        let source_file = key("source.file", "demo", "src/main.fe");
+        let source_expr = key("hir.expr", "demo", "expr:add");
+        let function = key("bytecode.function", "demo", "runtime");
+        let instruction = key("bytecode.pc", "demo", "pc:4");
+        let mut facts = source_file_and_span(source_file, source_expr.clone());
+        facts.extend([
+            node(function.clone()),
+            node(instruction.clone()),
+            TraceFact::Instruction(InstructionFact::new(
+                instruction.clone(),
+                function,
+                0,
+                "ADD",
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                instruction,
+                source_expr,
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+        ]);
+        let bundle = DebugBundle::from_snapshot(&snapshot(facts));
+
+        assert_eq!(
+            bundle.instructions[0].classification,
+            InstructionClassification::Unmapped
+        );
+        assert_eq!(bundle.instructions[0].primary_source, None);
+        assert!(bundle.instructions[0].all_origins.is_empty());
     }
 
     #[test]
