@@ -8016,6 +8016,8 @@ fn format_storage_location(location: &StorageLocation) -> String {
 
 #[cfg(test)]
 mod tests {
+    use crate::{origin_closure, trace_index};
+
     use common::origin::OriginExportKey;
     use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
@@ -10956,7 +10958,7 @@ mod tests {
             TraceFact::Instruction(InstructionFact::new(bytecode.clone(), function, 0, "ADD")),
             TraceFact::OriginEdge(OriginEdgeFact::new(
                 postopt,
-                source_expr,
+                source_expr.clone(),
                 OriginEdgeLabel::LoweredFrom,
                 Some(CompilerPhase::SonatinaPostOpt),
             )),
@@ -10974,6 +10976,61 @@ mod tests {
             )),
         ]);
         let service = TraceIntrospectionService::new(snapshot);
+        let semantic_index = trace_index::TraceIndex::new(service.snapshot());
+        assert!(
+            semantic_index
+                .source_candidates_for_instruction(
+                    &bytecode,
+                    trace_index::TraceReachabilityPolicy::ExactOnly,
+                )
+                .is_empty(),
+            "TraceIndex must not bridge prepared bytecode to source without a PreparedLineage event",
+        );
+        let component_classes = origin_closure::component_classes_by_origin_key(service.snapshot());
+        let source_classes = component_classes
+            .get(&source_expr.canonical_storage_key())
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            source_classes
+                .iter()
+                .any(|class| class.starts_with("exact-c-")),
+            "source/postopt should remain exact-linked on their side of the seam",
+        );
+        assert!(
+            source_classes
+                .iter()
+                .all(|class| !class.starts_with("prepared-c-")),
+            "rail components must not cross into prepared bytecode without lineage",
+        );
+        let bytecode_classes = component_classes
+            .get(&bytecode.canonical_storage_key())
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            bytecode_classes
+                .iter()
+                .any(|class| class.starts_with("prepared-c-")),
+            "prepared/VCode bytecode connectivity should remain visible as a prepared rail",
+        );
+        assert!(
+            bytecode_classes
+                .iter()
+                .all(|class| !class.starts_with("exact-c-")),
+            "bytecode row classes must not acquire exact rail membership without lineage",
+        );
+        let audit = service.attribution_audit().unwrap();
+        assert_eq!(audit.total_bytecode_pcs, 1);
+        assert_eq!(audit.source_exact_pcs, 0);
+        assert_eq!(audit.prepared_linked_pcs, 1);
+        assert_eq!(audit.missing_optimized_to_prepared_lineage_pcs, 1);
+        let missing_links = audit.missing_links.as_ref().unwrap();
+        assert_eq!(
+            missing_links.summary.top_blockers,
+            vec![LinkBoundaryKind::PostOptToPrepared],
+        );
+        assert_eq!(missing_links.summary.missing_required_count, 1);
+
         let projection = trace_workbench_report_projection(
             &service,
             service.snapshot(),
