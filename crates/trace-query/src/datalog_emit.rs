@@ -292,6 +292,14 @@ fn prepared_lineage_schemas() -> Vec<RelationSchema> {
 }
 
 fn append_prepared_lineage_views(snapshot: &TraceSnapshot, rows: &mut Vec<RelationRow>) {
+    let origin_edges = snapshot
+        .facts()
+        .iter()
+        .filter_map(|fact| match fact {
+            TraceFact::OriginEdge(edge) => Some(edge),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
     for fact in snapshot.facts() {
         let TraceFact::CompilerEvent(event) = fact else {
             continue;
@@ -307,16 +315,34 @@ fn append_prepared_lineage_views(snapshot: &TraceSnapshot, rows: &mut Vec<Relati
                 if prepared.kind() != "sonatina.evm.prepared.inst" {
                     continue;
                 }
+                let kind = origin_edges
+                    .iter()
+                    .find(|edge| edge.from == *prepared && edge.to == *postopt)
+                    .and_then(|edge| prepared_lineage_kind_for_edge(edge))
+                    .unwrap_or("unknown");
                 rows.push(RelationRow {
                     relation: "prepared_lineage_fact",
                     values: vec![
                         prepared.canonical_storage_key(),
                         postopt.canonical_storage_key(),
-                        "exact_lowering".to_string(),
+                        kind.to_string(),
                     ],
                 });
             }
         }
+    }
+}
+
+fn prepared_lineage_kind_for_edge(edge: &trace_facts::OriginEdgeFact) -> Option<&'static str> {
+    match edge.traversal_class() {
+        OriginEdgeTraversalClass::ExactAttribution => Some("exact_lowering"),
+        OriginEdgeTraversalClass::SnapshotAlias => Some("snapshot_alias"),
+        OriginEdgeTraversalClass::Synthetic => Some("synthetic_for"),
+        OriginEdgeTraversalClass::Contextual if edge.is_backend_prepared_semantic_edge() => {
+            Some("backend_prepared_for")
+        }
+        OriginEdgeTraversalClass::Contextual => Some("context_only"),
+        OriginEdgeTraversalClass::Structural | OriginEdgeTraversalClass::Unmapped => None,
     }
 }
 
@@ -941,6 +967,16 @@ mod tests {
         let raw_inst = "function:FuncRef(1):inst:InstId(7)";
         let postopt = key("sonatina.postopt.inst", "demo", raw_inst);
         let prepared = key("sonatina.evm.prepared.inst", "demo", raw_inst);
+        let generated = key(
+            "sonatina.evm.prepared.inst",
+            "demo",
+            "function:FuncRef(1):inst:InstId(8)",
+        );
+        let backend = key(
+            "sonatina.evm.prepared.inst",
+            "demo",
+            "function:FuncRef(1):inst:InstId(9)",
+        );
         let event = key("compiler.event", "demo", "prepared-lineage:0");
         let snapshot = TraceSnapshot::new(TraceBundle::new(
             TraceMetadata::compiler_emitted(
@@ -953,19 +989,33 @@ mod tests {
             vec![
                 node(postopt.clone()),
                 node(prepared.clone()),
+                node(generated.clone()),
+                node(backend.clone()),
                 node(event.clone()),
                 TraceFact::CompilerEvent(CompilerEventFact::new(
                     event,
                     CompilerPhase::Backend,
                     CompilerEventKind::PreparedLineage,
                     vec![postopt.clone()],
-                    vec![prepared.clone()],
+                    vec![prepared.clone(), generated.clone(), backend.clone()],
                     None,
                 )),
                 TraceFact::OriginEdge(OriginEdgeFact::new(
                     prepared.clone(),
                     postopt.clone(),
                     OriginEdgeLabel::LoweredFrom,
+                    Some(CompilerPhase::Backend),
+                )),
+                TraceFact::OriginEdge(OriginEdgeFact::new(
+                    generated.clone(),
+                    postopt.clone(),
+                    OriginEdgeLabel::SyntheticFor,
+                    Some(CompilerPhase::Backend),
+                )),
+                TraceFact::OriginEdge(OriginEdgeFact::new(
+                    backend.clone(),
+                    postopt.clone(),
+                    OriginEdgeLabel::BackendPrepared,
                     Some(CompilerPhase::Backend),
                 )),
             ],
@@ -986,6 +1036,48 @@ mod tests {
                 prepared.canonical_storage_key(),
                 postopt.canonical_storage_key(),
                 "exact_lowering".to_string(),
+            ]
+        ));
+        assert!(relation_row_exists(
+            &export,
+            "prepared_lineage_fact",
+            &[
+                generated.canonical_storage_key(),
+                postopt.canonical_storage_key(),
+                "synthetic_for".to_string(),
+            ]
+        ));
+        assert!(relation_row_exists(
+            &export,
+            "prepared_lineage_fact",
+            &[
+                backend.canonical_storage_key(),
+                postopt.canonical_storage_key(),
+                "backend_prepared_for".to_string(),
+            ]
+        ));
+        assert!(relation_row_exists(
+            &export,
+            "exact_attribution_edge",
+            &[
+                prepared.canonical_storage_key(),
+                postopt.canonical_storage_key(),
+            ]
+        ));
+        assert!(relation_row_exists(
+            &export,
+            "synthetic_edge",
+            &[
+                generated.canonical_storage_key(),
+                postopt.canonical_storage_key(),
+            ]
+        ));
+        assert!(relation_row_exists(
+            &export,
+            "backend_prepared_edge",
+            &[
+                backend.canonical_storage_key(),
+                postopt.canonical_storage_key(),
             ]
         ));
     }
