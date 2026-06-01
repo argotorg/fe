@@ -2361,6 +2361,8 @@ struct TraceWorkbenchPaneRow {
     stable_identities: Vec<TraceWorkbenchRowStableIdentity>,
     display_status: Option<TraceWorkbenchDisplayStatus>,
     rail_classes: TraceWorkbenchRailClasses,
+    hover_groups: Vec<String>,
+    selection_groups: Vec<String>,
     classes: Vec<String>,
     debug: TraceWorkbenchRowDebugInfo,
 }
@@ -2372,6 +2374,8 @@ struct TraceWorkbenchSourceLine {
     text: String,
     stable_identities: Vec<TraceWorkbenchRowStableIdentity>,
     classes: Vec<String>,
+    hover_groups: Vec<String>,
+    selection_groups: Vec<String>,
     suppress_rail_status: bool,
     display_status: Option<TraceWorkbenchDisplayStatus>,
 }
@@ -2488,16 +2492,18 @@ fn trace_workbench_related_sources(
                         .and_then(|source_text| trace_workbench_line_text(source_text, number))
                         .unwrap_or("source text unavailable");
                     serde_json::json!({
-                        "row_id": format!("{row_prefix}-line-{number}"),
-                        "number": number,
-                        "text": text,
-                        "stable_identities": [
-                            trace_workbench_stable_identity(
-                                "source_line",
-                                format!("{}:{number}", file.canonical_storage_key()),
-                            ),
-                        ],
-                        "classes": classes,
+                            "row_id": format!("{row_prefix}-line-{number}"),
+                            "number": number,
+                            "text": text,
+                            "stable_identities": [
+                                trace_workbench_stable_identity(
+                                    "source_line",
+                                    format!("{}:{number}", file.canonical_storage_key()),
+                                ),
+                            ],
+                            "classes": classes,
+                        "hover_groups": trace_workbench_hover_groups(&classes),
+                        "selection_groups": trace_workbench_selection_groups(&classes),
                         "display_status": trace_workbench_status_for_source_line(&classes),
                     })
                 })
@@ -2625,10 +2631,16 @@ fn trace_workbench_source_lines(
             let number = index as u32 + 1;
             let exact_classes = exact_classes_by_line.get(&number);
             let enclosing_classes = enclosing_classes_by_line.get(&number);
+            let suppress_rail_status = exact_classes.is_none() && enclosing_classes.is_some();
             let classes = exact_classes
                 .or(enclosing_classes)
                 .map(|classes| classes.iter().cloned().collect::<Vec<_>>())
                 .unwrap_or_default();
+            let interaction_classes = if suppress_rail_status {
+                Vec::new()
+            } else {
+                classes.clone()
+            };
             TraceWorkbenchSourceLine {
                 row_id: trace_workbench_source_row_id(number),
                 number,
@@ -2637,7 +2649,9 @@ fn trace_workbench_source_lines(
                     "source_line",
                     format!("main:{number}"),
                 )],
-                suppress_rail_status: exact_classes.is_none() && enclosing_classes.is_some(),
+                hover_groups: trace_workbench_hover_groups(&interaction_classes),
+                selection_groups: trace_workbench_selection_groups(&interaction_classes),
+                suppress_rail_status,
                 display_status: exact_classes
                     .map(|_| trace_workbench_status_for_source_line(&classes))
                     .unwrap_or_default(),
@@ -3115,6 +3129,8 @@ fn trace_workbench_panel_row(
         stable_identities: trace_workbench_panel_row_stable_identities(key),
         display_status: trace_workbench_status_for_row(key, kind, &classes, missing_lineage),
         rail_classes: trace_workbench_split_rail_classes(&classes),
+        hover_groups: trace_workbench_hover_groups(&classes),
+        selection_groups: trace_workbench_selection_groups(&classes),
         classes,
         debug: TraceWorkbenchRowDebugInfo {
             origin_key: Some(key.canonical_storage_key()),
@@ -3265,6 +3281,50 @@ fn trace_workbench_split_rail_classes(classes: &[String]) -> TraceWorkbenchRailC
         }
     }
     rails
+}
+
+fn trace_workbench_hover_groups(classes: &[String]) -> Vec<String> {
+    let rails = trace_workbench_split_rail_classes(classes);
+    if !rails.exact.is_empty() {
+        return trace_workbench_unique_groups(rails.exact);
+    }
+    if !rails.prepared.is_empty() {
+        return trace_workbench_unique_groups(rails.prepared);
+    }
+    if let Some(group) = rails.generated.into_iter().next() {
+        return vec![group];
+    }
+    trace_workbench_unique_groups(rails.legacy)
+}
+
+fn trace_workbench_selection_groups(classes: &[String]) -> Vec<String> {
+    let rails = trace_workbench_split_rail_classes(classes);
+    let mut groups = Vec::new();
+    groups.extend(rails.exact);
+    groups.extend(rails.generated);
+    groups.extend(rails.prepared);
+    if groups.is_empty() {
+        groups.extend(rails.context);
+    }
+    if groups.is_empty() {
+        groups.extend(rails.legacy);
+    }
+    trace_workbench_unique_groups(groups)
+}
+
+fn trace_workbench_unique_groups(groups: Vec<String>) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    let mut unique = Vec::new();
+    for group in groups {
+        if trace_workbench_is_interaction_group(&group) && seen.insert(group.clone()) {
+            unique.push(group);
+        }
+    }
+    unique
+}
+
+fn trace_workbench_is_interaction_group(class: &str) -> bool {
+    trace_workbench_is_component_class(class) || class.starts_with("trace-c-")
 }
 
 fn trace_workbench_is_component_class(class: &str) -> bool {
@@ -7455,10 +7515,10 @@ mod tests {
         TraceWorkbenchPaneRowKind, TraceWorkbenchProjectionIndex, TraceWorkbenchProjectionRequest,
         ValueFlowAtPcRequest, VariablesAtPcRequest, run_trace_query,
         trace_workbench_compact_mir_text, trace_workbench_compact_origin_text,
-        trace_workbench_manifest, trace_workbench_natural_key_cmp,
-        trace_workbench_report_projection, trace_workbench_source_lines,
-        trace_workbench_source_projection, trace_workbench_status_for_row,
-        trace_workbench_status_for_source_line,
+        trace_workbench_hover_groups, trace_workbench_manifest, trace_workbench_natural_key_cmp,
+        trace_workbench_report_projection, trace_workbench_selection_groups,
+        trace_workbench_source_lines, trace_workbench_source_projection,
+        trace_workbench_status_for_row, trace_workbench_status_for_source_line,
     };
 
     fn scan_trace_query_sources_for_line(
@@ -10306,6 +10366,55 @@ mod tests {
         assert_eq!(lines[1].classes, vec!["generated-c-broad"]);
         assert!(lines[1].suppress_rail_status);
         assert_eq!(lines[1].display_status, None);
+        assert!(lines[1].hover_groups.is_empty());
+        assert!(lines[1].selection_groups.is_empty());
+    }
+
+    #[test]
+    fn trace_workbench_interaction_groups_are_policy_scoped() {
+        let classes = vec![
+            "context-c-soft".to_string(),
+            "exact-c-source".to_string(),
+            "generated-c-helper".to_string(),
+            "prepared-c-bytecode".to_string(),
+            "structural-c-block".to_string(),
+        ];
+
+        assert_eq!(
+            trace_workbench_hover_groups(&classes),
+            vec!["exact-c-source".to_string()]
+        );
+        assert_eq!(
+            trace_workbench_selection_groups(&classes),
+            vec![
+                "exact-c-source".to_string(),
+                "generated-c-helper".to_string(),
+                "prepared-c-bytecode".to_string()
+            ]
+        );
+
+        let prepared_only = vec![
+            "prepared-c-bytecode".to_string(),
+            "context-c-debug".to_string(),
+        ];
+        assert_eq!(
+            trace_workbench_hover_groups(&prepared_only),
+            vec!["prepared-c-bytecode".to_string()]
+        );
+        assert_eq!(
+            trace_workbench_selection_groups(&prepared_only),
+            vec!["prepared-c-bytecode".to_string()]
+        );
+
+        let context_only = vec![
+            "context-c-debug".to_string(),
+            "structural-c-block".to_string(),
+        ];
+        assert!(trace_workbench_hover_groups(&context_only).is_empty());
+        assert_eq!(
+            trace_workbench_selection_groups(&context_only),
+            vec!["context-c-debug".to_string()]
+        );
     }
 
     #[test]

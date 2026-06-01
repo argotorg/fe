@@ -27,6 +27,25 @@
     });
   }
 
+  function hoverClasses(node) {
+    return scopedTraceClasses(node, "__hoverClasses", "hoverGroups");
+  }
+
+  function selectionClasses(node) {
+    return scopedTraceClasses(node, "__selectionClasses", "selectionGroups");
+  }
+
+  function scopedTraceClasses(node, cacheKey, datasetKey) {
+    if (!node) return [];
+    if (node[cacheKey]) return node[cacheKey];
+    if (node.dataset && node.dataset[datasetKey]) {
+      node[cacheKey] = node.dataset[datasetKey].split(/\s+/).filter(Boolean);
+      return node[cacheKey];
+    }
+    node[cacheKey] = traceClasses(node);
+    return node[cacheKey];
+  }
+
   function isTraceGroup(name) {
     return /^(trace|exact|generated|prepared|context|structural)-c-/.test(name || "");
   }
@@ -666,7 +685,7 @@
       lines.forEach(function (line, index) {
         var classes = line.classes || [];
         var row = el("div", "source-line trace-region " + classes.concat(this._auditClasses(classes)).join(" "));
-        this._bindTraceGroups(row, classes);
+        this._bindTraceGroups(row, classes, line.hover_groups, line.selection_groups);
         row.id = line.row_id || this._rowId("source-main", index);
         row.dataset.sourceRef = "main:" + line.number;
         row.dataset.traceLabel = "source line " + line.number;
@@ -684,7 +703,7 @@
         ((section && section.lines) || []).forEach(function (line, lineIndex) {
           var classes = line.classes || [];
           var row = el("div", "source-line related-source-line trace-region " + classes.concat(this._auditClasses(classes)).join(" "));
-          this._bindTraceGroups(row, classes);
+          this._bindTraceGroups(row, classes, line.hover_groups, line.selection_groups);
           row.id = line.row_id || this._rowId("source-related-" + sectionIndex, lineIndex);
           row.dataset.sourceRef = "related:" + sectionIndex + ":" + line.number;
           row.dataset.traceLabel = (section.display_name || "related source") + " line " + line.number;
@@ -716,7 +735,7 @@
         var kind = rowData.kind || (this._isBoundaryRow(rowData) ? "block_header" : "instruction");
         var rowKind = "row-kind-" + String(kind).replace(/_/g, "-") + " " + (this._isBoundaryKind(kind) ? "boundary-row " : "");
         var row = el("button", "trace-row trace-region " + rowKind + (hasTrace ? "" : "unlinked-row ") + classes.concat(this._auditClasses(classes)).join(" "));
-        this._bindTraceGroups(row, classes);
+        this._bindTraceGroups(row, classes, rowData.hover_groups, rowData.selection_groups);
         row.type = "button";
         row.id = rowData.row_id || this._rowId("panel-" + (panelData.id || "panel"), index);
         row.dataset.rowKind = kind;
@@ -784,10 +803,32 @@
       return "trace-row-" + String(prefix).replace(/[^a-zA-Z0-9_-]/g, "-") + "-" + index;
     }
 
-    _bindTraceGroups(node, classes) {
+    _bindTraceGroups(node, classes, hoverGroups, selectionGroups) {
       var groups = (classes || []).filter(isTraceGroup);
       node.__traceClasses = groups;
       if (groups.length) node.dataset.traceGroups = groups.join(" ");
+      var hover = (hoverGroups || this._preferredHoverGroups(groups)).filter(isTraceGroup);
+      node.__hoverClasses = hover;
+      if (hover.length) node.dataset.hoverGroups = hover.join(" ");
+      var selection = (selectionGroups || this._preferredSelectionGroups(groups)).filter(isTraceGroup);
+      node.__selectionClasses = selection;
+      if (selection.length) node.dataset.selectionGroups = selection.join(" ");
+    }
+
+    _preferredHoverGroups(groups) {
+      var rails = this._groupsByRail(groups);
+      if (rails.exact.length) return rails.exact;
+      if (rails.prepared.length) return rails.prepared;
+      if (rails.generated.length) return rails.generated.slice(0, 1);
+      return rails.fallback;
+    }
+
+    _preferredSelectionGroups(groups) {
+      var rails = this._groupsByRail(groups);
+      var scoped = rails.exact.concat(rails.generated, rails.prepared);
+      if (scoped.length) return scoped;
+      if (rails.context.length) return rails.context;
+      return rails.fallback;
     }
 
     _bindStableIdentities(node, identities) {
@@ -872,7 +913,7 @@
       root.addEventListener("mouseover", function (event) {
         var row = event.target.closest && event.target.closest(".trace-region");
         if (!row || (event.relatedTarget && row.contains(event.relatedTarget))) return;
-        this._queueHover(traceClasses(row));
+        this._queueHover(hoverClasses(row));
       }.bind(this));
       root.addEventListener("mouseout", function (event) {
         var row = event.target.closest && event.target.closest(".trace-region");
@@ -955,7 +996,7 @@
     _selectRow(row, options) {
       if (!row) return false;
       options = options || {};
-      var groups = traceClasses(row);
+      var groups = selectionClasses(row);
       this._selectedDisplayClasses = allClasses(row);
       this._selectedStableIdentities = stableIdentityTokens(row);
       this._selectedTraceLabel = row.dataset.traceLabel || "";
@@ -1151,7 +1192,7 @@
       this._selectedDisplayClasses = allClasses(row);
       this._selectedStableIdentities = stableIdentityTokens(row);
       this._selectedTraceLabel = row.dataset.traceLabel || "";
-      this._selected = traceClasses(row);
+      this._selected = selectionClasses(row);
       return true;
     }
 

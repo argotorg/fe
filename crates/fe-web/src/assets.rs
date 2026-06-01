@@ -802,6 +802,10 @@ mod tests {
         assert!(FE_ORIGIN_TRACE_JS.contains("if (kind === \"exact\") return null;"));
         assert!(FE_ORIGIN_TRACE_JS.contains("suppressExact"));
         assert!(FE_ORIGIN_TRACE_JS.contains("suppressExact: true"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("dataset.hoverGroups"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("dataset.selectionGroups"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("hoverClasses(row)"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("selectionClasses(row)"));
         assert!(!FE_ORIGIN_TRACE_JS.contains("label: \"exact link\""));
         assert!(!FE_ORIGIN_TRACE_JS.contains("satisfied_exact: \"exact\""));
         assert!(FE_ORIGIN_TRACE_JS.contains("satisfied_exact: \"satisfied\""));
