@@ -363,10 +363,10 @@
 
     _friendlyLinkStatus(status) {
       var names = {
-        satisfied_exact: "exact",
-        satisfied_generated: "generated",
+        satisfied_exact: "satisfied",
+        satisfied_generated: "generated explanation",
         satisfied_elided: "elided",
-        context_only: "context",
+        context_only: "context only",
         candidate_only: "candidate",
         expected_absent: "expected absent",
         missing_required: "missing",
