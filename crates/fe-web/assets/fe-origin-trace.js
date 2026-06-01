@@ -35,6 +35,25 @@
     return Array.prototype.slice.call(node.classList || []);
   }
 
+  function stableIdentityToken(identity) {
+    if (!identity || !identity.kind || identity.value === undefined || identity.value === null) return "";
+    return String(identity.kind) + "=" + encodeURIComponent(String(identity.value));
+  }
+
+  function stableIdentityTokensFromData(identities) {
+    return (identities || []).map(stableIdentityToken).filter(Boolean);
+  }
+
+  function stableIdentityTokens(node) {
+    if (!node) return [];
+    if (node.__stableIdentityTokens) return node.__stableIdentityTokens;
+    if (node.dataset && node.dataset.stableIdentities) {
+      node.__stableIdentityTokens = node.dataset.stableIdentities.split(/\s+/).filter(Boolean);
+      return node.__stableIdentityTokens;
+    }
+    return [];
+  }
+
   function keyClass(key) {
     var hash = 2166136261;
     for (var i = 0; i < key.length; i++) {
@@ -50,6 +69,7 @@
       this._data = window.FE_ORIGIN_TRACE_DATA || {};
       this._selected = [];
       this._selectedDisplayClasses = [];
+      this._selectedStableIdentities = [];
       this._paneChoices = null;
       this._displayMode = "compact";
       this._hovered = [];
@@ -80,8 +100,14 @@
 
     setTraceData(data) {
       var scrollState = this._capturePaneScrollState ? this._capturePaneScrollState() : null;
+      var stableIdentities = (this._selectedStableIdentities || []).slice();
       this._data = data || {};
-      this._render({ scrollState: scrollState, switchedPaneIndex: null, hashNavigation: true });
+      this._render({
+        scrollState: scrollState,
+        switchedPaneIndex: null,
+        hashNavigation: true,
+        stableIdentities: stableIdentities,
+      });
     }
 
     _render(scrollRestore) {
@@ -154,6 +180,7 @@
       this.shadowRoot.append(page);
       this._installInteractions();
       this._restorePaneScroll(scrollRestore);
+      this._restoreSelectionByStableIdentity(scrollRestore);
       this._renderDetail(this._selected);
       this._syncStateStyles();
       var allowHashNavigation = !scrollRestore || scrollRestore.hashNavigation !== false;
@@ -476,6 +503,7 @@
         row.id = line.row_id || this._rowId("source-main", index);
         row.dataset.sourceRef = "main:" + line.number;
         row.dataset.traceLabel = "source line " + line.number;
+        this._bindStableIdentities(row, line.stable_identities || []);
         row.append(el("span", "ln", line.number), el("code", "", line.text), this._badges(line));
         body.append(row);
         var marker = this._overviewMarker(classes, markerIndex, markerTotal, "source line " + line.number, row.id);
@@ -493,6 +521,7 @@
           row.id = line.row_id || this._rowId("source-related-" + sectionIndex, lineIndex);
           row.dataset.sourceRef = "related:" + sectionIndex + ":" + line.number;
           row.dataset.traceLabel = (section.display_name || "related source") + " line " + line.number;
+          this._bindStableIdentities(row, line.stable_identities || []);
           row.append(el("span", "ln", line.number), el("code", "", line.text), this._badges(line));
           body.append(row);
           var marker = this._overviewMarker(classes, markerIndex, markerTotal, row.dataset.traceLabel, row.id);
@@ -529,6 +558,7 @@
           row.dataset.originKey = rowData.key;
           row.classList.add(keyClass(rowData.key));
         }
+        this._bindStableIdentities(row, rowData.stable_identities || []);
         var text = rowData.compact_text || rowData.text || "";
         row.dataset.traceLabel = rowData.label || text || rowData.key || "";
         row.append(
@@ -591,6 +621,12 @@
       var groups = (classes || []).filter(isTraceGroup);
       node.__traceClasses = groups;
       if (groups.length) node.dataset.traceGroups = groups.join(" ");
+    }
+
+    _bindStableIdentities(node, identities) {
+      var tokens = stableIdentityTokensFromData(identities);
+      node.__stableIdentityTokens = tokens;
+      if (tokens.length) node.dataset.stableIdentities = tokens.join(" ");
     }
 
     _isBoundaryRow(rowData) {
@@ -690,6 +726,7 @@
         if (marker) this._scrollToMarkerTarget(marker);
         var groups = traceClasses(row);
         this._selectedDisplayClasses = allClasses(row);
+        this._selectedStableIdentities = stableIdentityTokens(row);
         this._selectedTraceLabel = row.dataset.traceLabel || "";
         this._select(groups);
         this._scrollPeerPanesToSelection(groups, row);
@@ -794,6 +831,7 @@
         if (!window.location.hash) {
           this._selected = [];
           this._selectedDisplayClasses = [];
+          this._selectedStableIdentities = [];
           this._renderDetail([]);
           this._syncStateStyles();
         }
@@ -801,6 +839,7 @@
       }
       var groups = traceClasses(row);
       this._selectedDisplayClasses = allClasses(row);
+      this._selectedStableIdentities = stableIdentityTokens(row);
       this._select(groups);
       this._scrollRowIntoView(row, options);
       this._scrollPeerPanesToSelection(groups, row, options);
@@ -918,6 +957,27 @@
         scroller.scrollTop = saved.scrollTop || 0;
         if (saved.activeRun) shell.dataset.activeRun = saved.activeRun;
       }, this);
+    }
+
+    _restoreSelectionByStableIdentity(restore) {
+      var identities = restore && restore.stableIdentities || this._selectedStableIdentities || [];
+      if (!identities.length) return false;
+      var row = this._rowForStableIdentities(identities);
+      if (!row) return false;
+      this._selectedDisplayClasses = allClasses(row);
+      this._selectedStableIdentities = stableIdentityTokens(row);
+      this._selectedTraceLabel = row.dataset.traceLabel || "";
+      this._selected = traceClasses(row);
+      return true;
+    }
+
+    _rowForStableIdentities(identities) {
+      for (var i = 0; i < identities.length; i++) {
+        var token = identities[i];
+        var row = this.shadowRoot.querySelector('[data-stable-identities~="' + this._escapeAttribute(token) + '"]');
+        if (row) return row;
+      }
+      return null;
     }
 
     _scrollContainer(shell) {

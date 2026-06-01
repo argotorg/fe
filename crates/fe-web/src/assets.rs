@@ -349,7 +349,7 @@ pub fn origin_trace_live_html_shell(title: &str) -> String {
       }}
       useChunk(manifest.summary_digest, previous.summary_digest, function (value) {{
         value = value || {{}};
-        ["revision", "metadata", "provenance", "counts", "salsa", "bytecode_count", "notes"].forEach(function (key) {{
+        ["revision", "metadata", "provenance", "counts", "salsa", "bytecode_count", "selection_remap", "notes"].forEach(function (key) {{
           if (Object.prototype.hasOwnProperty.call(value, key)) next[key] = value[key];
         }});
       }});
@@ -766,6 +766,7 @@ mod tests {
         assert!(html.contains("refreshableStatus"));
         assert!(html.contains("stale_but_usable"));
         assert!(html.contains("pending"));
+        assert!(html.contains("selection_remap"));
     }
 
     #[test]
@@ -818,6 +819,14 @@ mod tests {
         assert!(FE_ORIGIN_TRACE_JS.contains("_offsetTopWithin"));
         assert!(FE_ORIGIN_TRACE_JS.contains("_confirmRowVisible"));
         assert!(FE_ORIGIN_TRACE_JS.contains("scroller.scrollTop = Math.max(0, targetTop)"));
+    }
+
+    #[test]
+    fn origin_trace_preserves_selection_by_stable_identity() {
+        assert!(FE_ORIGIN_TRACE_JS.contains("stableIdentityToken"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("dataset.stableIdentities"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("_restoreSelectionByStableIdentity"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("[data-stable-identities~="));
     }
 
     #[test]
