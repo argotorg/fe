@@ -787,6 +787,57 @@ mod tests {
     }
 
     #[test]
+    fn debug_bundle_does_not_promote_prepared_bytecode_without_postopt_lineage() {
+        let source_file = key("source.file", "demo", "src/main.fe");
+        let source_expr = key("hir.expr", "demo", "expr:add");
+        let postopt = key("sonatina.postopt.inst", "demo", "inst:7");
+        let prepared = key("sonatina.evm.prepared.inst", "demo", "inst:7");
+        let vcode = key("evm.vcode.inst", "demo", "inst:7");
+        let function = key("bytecode.function", "demo", "runtime");
+        let instruction = key("bytecode.pc", "demo", "pc:4");
+        let mut facts = source_file_and_span(source_file, source_expr.clone());
+        facts.extend([
+            node(postopt.clone()),
+            node(prepared.clone()),
+            node(vcode.clone()),
+            node(function.clone()),
+            node(instruction.clone()),
+            TraceFact::Instruction(InstructionFact::new(
+                instruction.clone(),
+                function,
+                0,
+                "ADD",
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                postopt,
+                source_expr,
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::SonatinaPostOpt),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                instruction,
+                vcode.clone(),
+                OriginEdgeLabel::EmittedFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                vcode,
+                prepared,
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::BytecodeEmission),
+            )),
+        ]);
+        let bundle = DebugBundle::from_snapshot(&snapshot(facts));
+
+        assert_eq!(
+            bundle.instructions[0].classification,
+            InstructionClassification::Unmapped
+        );
+        assert_eq!(bundle.instructions[0].primary_source, None);
+        assert!(bundle.instructions[0].all_origins.is_empty());
+    }
+
+    #[test]
     fn debug_bundle_maps_instruction_to_primary_source_without_inventing_identity() {
         let source_file = key("source.file", "demo", "src/main.fe");
         let source_expr = key("hir.expr", "demo", "expr:add");
