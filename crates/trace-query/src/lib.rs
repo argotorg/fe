@@ -10884,6 +10884,13 @@ mod tests {
             .iter()
             .find(|panel| panel["id"] == "bytecode")
             .unwrap();
+        let first_bytecode_classes = bytecode_panel["rows"][0]["classes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(serde_json::Value::as_str)
+            .collect::<Option<Vec<_>>>()
+            .unwrap();
         let first_bytecode_groups = bytecode_panel["rows"][0]["selection_groups"]
             .as_array()
             .unwrap()
@@ -10892,6 +10899,12 @@ mod tests {
             .collect::<Option<Vec<_>>>()
             .unwrap();
 
+        assert!(
+            first_bytecode_classes
+                .iter()
+                .all(|group| !group.starts_with("exact-c-")),
+            "bytecode row CSS classes should stay prepared-scoped; exact source/IR peers are exposed through selection_groups"
+        );
         assert!(
             first_bytecode_groups
                 .iter()
