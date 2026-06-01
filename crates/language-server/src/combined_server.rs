@@ -998,18 +998,26 @@ fn trace_workbench_resolved_rows_for_selection(
         .or_else(|| selection.get("bytecode_pc"))
         .or_else(|| selection.get("pc"))
         .and_then(trace_workbench_json_key_string)
-        && let Some(rows) = trace_workbench_index_rows(model, "bytecode_pcs", &pc)
     {
-        return rows;
+        if let Some(rows) = trace_workbench_index_rows(model, "bytecode_pcs", &pc) {
+            return rows;
+        }
+        if let Ok(pc) = pc.parse::<u64>()
+            && let Some(rows) = trace_workbench_rows_for_pc_interval(model, pc)
+        {
+            return rows;
+        }
     }
     if let Some(source_ref) = selection
         .get("sourceRef")
         .or_else(|| selection.get("source_ref"))
         .and_then(serde_json::Value::as_str)
-        && let Some(line) = source_ref.strip_prefix("main:")
-        && let Ok(line) = line.parse::<u64>()
+        && let Some((source, line)) = trace_workbench_parse_source_ref(source_ref)
     {
         if let Some(rows) = trace_workbench_index_rows(model, "source_lines", source_ref) {
+            return rows;
+        }
+        if let Some(rows) = trace_workbench_rows_for_source_interval(model, source, line) {
             return rows;
         }
         return vec![trace_workbench_source_row_id(line)];
@@ -1024,8 +1032,16 @@ fn trace_workbench_resolved_rows_for_selection(
         return Vec::new();
     };
     let source_ref = format!("main:{}", line.saturating_add(1));
+    let one_based_line = line.saturating_add(1);
     trace_workbench_index_rows(model, "source_lines", &source_ref)
-        .unwrap_or_else(|| vec![trace_workbench_source_row_id(line.saturating_add(1))])
+        .or_else(|| trace_workbench_rows_for_source_interval(model, "main", one_based_line))
+        .unwrap_or_else(|| vec![trace_workbench_source_row_id(one_based_line)])
+}
+
+fn trace_workbench_parse_source_ref(source_ref: &str) -> Option<(&str, u64)> {
+    let (source, line) = source_ref.rsplit_once(':')?;
+    let line = line.parse::<u64>().ok()?;
+    Some((source, line))
 }
 
 fn trace_workbench_rows_for_stable_identity(
@@ -1091,6 +1107,62 @@ fn trace_workbench_index_rows(
             .collect::<Vec<_>>(),
         _ => Vec::new(),
     };
+    rows.sort();
+    rows.dedup();
+    (!rows.is_empty()).then_some(rows)
+}
+
+fn trace_workbench_rows_for_source_interval(
+    model: Option<&serde_json::Value>,
+    source: &str,
+    line: u64,
+) -> Option<Vec<String>> {
+    let mut rows = model?
+        .get("indexes")?
+        .get("source_intervals")?
+        .as_array()?
+        .iter()
+        .filter(|interval| {
+            interval.get("source").and_then(serde_json::Value::as_str) == Some(source)
+                && interval
+                    .get("start_line")
+                    .and_then(serde_json::Value::as_u64)
+                    .is_some_and(|start| start <= line)
+                && interval
+                    .get("end_line")
+                    .and_then(serde_json::Value::as_u64)
+                    .is_some_and(|end| line <= end)
+        })
+        .filter_map(|interval| interval.get("row_id").and_then(serde_json::Value::as_str))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    rows.sort();
+    rows.dedup();
+    (!rows.is_empty()).then_some(rows)
+}
+
+fn trace_workbench_rows_for_pc_interval(
+    model: Option<&serde_json::Value>,
+    pc: u64,
+) -> Option<Vec<String>> {
+    let mut rows = model?
+        .get("indexes")?
+        .get("pc_intervals")?
+        .as_array()?
+        .iter()
+        .filter(|interval| {
+            interval
+                .get("pc_start")
+                .and_then(serde_json::Value::as_u64)
+                .is_some_and(|start| start <= pc)
+                && interval
+                    .get("pc_end")
+                    .and_then(serde_json::Value::as_u64)
+                    .is_some_and(|end| pc < end)
+        })
+        .filter_map(|interval| interval.get("row_id").and_then(serde_json::Value::as_str))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
     rows.sort();
     rows.dedup();
     (!rows.is_empty()).then_some(rows)
@@ -1304,6 +1376,21 @@ mod tests {
                 "source_lines": { "main:17": "source-main-line-17-model" },
                 "origin_to_rows": { "bytecode.pc\u{1f}demo\u{1f}pc:68": ["origin-bytecode-68"] },
                 "bytecode_pcs": { "68": ["origin-bytecode-68"] },
+                "source_intervals": [
+                    {
+                        "source": "library:source",
+                        "start_line": 5,
+                        "end_line": 8,
+                        "row_id": "related-library-source-line-5"
+                    }
+                ],
+                "pc_intervals": [
+                    {
+                        "pc_start": 70,
+                        "pc_end": 73,
+                        "row_id": "origin-bytecode-70-72"
+                    }
+                ],
                 "stable_identities": {
                     "origin:bytecode.pc\u{1f}demo\u{1f}pc:68": ["origin-bytecode-68"],
                     "source_line:main:17": ["source-main-line-17-model"]
@@ -1324,6 +1411,20 @@ mod tests {
                 Some(&model),
             ),
             vec!["origin-bytecode-68".to_string()]
+        );
+        assert_eq!(
+            trace_workbench_resolved_rows_for_selection(
+                &serde_json::json!({ "pc": 72 }),
+                Some(&model),
+            ),
+            vec!["origin-bytecode-70-72".to_string()]
+        );
+        assert_eq!(
+            trace_workbench_resolved_rows_for_selection(
+                &serde_json::json!({ "sourceRef": "library:source:7" }),
+                Some(&model),
+            ),
+            vec!["related-library-source-line-5".to_string()]
         );
         assert_eq!(
             trace_workbench_resolved_rows_for_selection(
