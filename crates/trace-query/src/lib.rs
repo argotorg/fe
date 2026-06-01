@@ -4272,7 +4272,9 @@ impl<'a> TraceIndex<'a> {
             let TraceFact::OriginEdge(edge) = fact else {
                 continue;
             };
-            if loop_members.contains(&edge.from) && is_exact_edge(edge) {
+            if loop_members.contains(&edge.from)
+                && trace_index::TraceReachabilityPolicy::ExactOnly.allows_edge(edge)
+            {
                 loop_member_origins.insert(edge.to.clone());
             }
         }
@@ -4285,10 +4287,14 @@ impl<'a> TraceIndex<'a> {
             if edge.from.kind() != "bytecode.pc" {
                 continue;
             }
-            if is_exact_edge(edge) && loop_members.contains(&edge.to) {
+            if trace_index::TraceReachabilityPolicy::ExactOnly.allows_edge(edge)
+                && loop_members.contains(&edge.to)
+            {
                 bytecode.insert(edge.from.clone());
             }
-            if is_exact_edge(edge) && loop_member_origins.contains(&edge.to) {
+            if trace_index::TraceReachabilityPolicy::ExactOnly.allows_edge(edge)
+                && loop_member_origins.contains(&edge.to)
+            {
                 bytecode.insert(edge.from.clone());
             }
         }
@@ -4302,7 +4308,7 @@ impl<'a> TraceIndex<'a> {
                 TraceFact::OriginEdge(edge)
                     if edge.from.kind() == "bytecode.pc"
                         && edge.to.kind() != "code.object"
-                        && is_exact_edge(edge)
+                        && trace_index::TraceReachabilityPolicy::ExactOnly.allows_edge(edge)
             )
         })
     }
@@ -4691,7 +4697,10 @@ impl<'a> TraceIndex<'a> {
                 continue;
             }
             for edge in self.snapshot.facts().iter().filter_map(|fact| match fact {
-                TraceFact::OriginEdge(edge) if edge.from == current && is_exact_edge(edge) => {
+                TraceFact::OriginEdge(edge)
+                    if edge.from == current
+                        && trace_index::TraceReachabilityPolicy::ExactOnly.allows_edge(edge) =>
+                {
                     Some(edge)
                 }
                 _ => None,
@@ -5018,13 +5027,6 @@ impl<'a> TraceIndex<'a> {
             _ => key.display_label(),
         }
     }
-}
-
-fn is_exact_edge(edge: &trace_facts::OriginEdgeFact) -> bool {
-    matches!(
-        edge.traversal_class(),
-        OriginEdgeTraversalClass::ExactAttribution | OriginEdgeTraversalClass::SnapshotAlias
-    )
 }
 
 fn is_precise_source_candidate(origin: &OriginExportKey) -> bool {
