@@ -972,9 +972,9 @@ fn validate_prepared_lineage_event(
             .iter()
             .filter(|origin| is_prepared_codegen_origin_kind(origin.kind()))
         {
-            let has_origin_edge = edges.iter().any(|edge| {
-                edge.from == *prepared && edge.to == *postopt && edge.is_exact_attribution_edge()
-            });
+            let has_origin_edge = edges
+                .iter()
+                .any(|edge| is_prepared_lineage_event_edge(edge, prepared, postopt));
             if !has_origin_edge {
                 push_error(
                     diagnostics,
@@ -987,6 +987,22 @@ fn validate_prepared_lineage_event(
             }
         }
     }
+}
+
+fn is_prepared_lineage_event_edge(
+    edge: &OriginEdgeFact,
+    prepared: &OriginExportKey,
+    postopt: &OriginExportKey,
+) -> bool {
+    edge.from == *prepared
+        && edge.to == *postopt
+        && matches!(
+            edge.traversal_class(),
+            OriginEdgeTraversalClass::ExactAttribution
+                | OriginEdgeTraversalClass::SnapshotAlias
+                | OriginEdgeTraversalClass::Synthetic
+                | OriginEdgeTraversalClass::Contextual
+        )
 }
 
 fn validate_instruction_category(
@@ -4354,6 +4370,68 @@ mod tests {
                 prepared,
                 postopt,
                 OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::Backend),
+            )),
+        ];
+
+        let report = TraceValidator::check(&facts);
+
+        assert_eq!(report.error_count(), 0);
+    }
+
+    #[test]
+    fn validator_accepts_non_exact_prepared_lineage_event_edges() {
+        let event = key("compiler.event", "fib", "prepared-lineage:non-exact");
+        let postopt = key(
+            "sonatina.postopt.inst",
+            "fib",
+            "function:FuncRef(0):inst:InstId(7)",
+        );
+        let generated_prepared = key(
+            "sonatina.evm.prepared.inst",
+            "fib",
+            "function:FuncRef(0):inst:InstId(8)",
+        );
+        let contextual_prepared = key(
+            "sonatina.evm.prepared.inst",
+            "fib",
+            "function:FuncRef(0):inst:InstId(9)",
+        );
+        let facts = vec![
+            node("compiler.event", "fib", "prepared-lineage:non-exact"),
+            node(
+                "sonatina.postopt.inst",
+                "fib",
+                "function:FuncRef(0):inst:InstId(7)",
+            ),
+            node(
+                "sonatina.evm.prepared.inst",
+                "fib",
+                "function:FuncRef(0):inst:InstId(8)",
+            ),
+            node(
+                "sonatina.evm.prepared.inst",
+                "fib",
+                "function:FuncRef(0):inst:InstId(9)",
+            ),
+            TraceFact::CompilerEvent(CompilerEventFact::new(
+                event,
+                CompilerPhase::Backend,
+                CompilerEventKind::PreparedLineage,
+                vec![postopt.clone()],
+                vec![generated_prepared.clone(), contextual_prepared.clone()],
+                None,
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                generated_prepared,
+                postopt.clone(),
+                OriginEdgeLabel::SyntheticFor,
+                Some(CompilerPhase::Backend),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                contextual_prepared,
+                postopt,
+                OriginEdgeLabel::BackendPrepared,
                 Some(CompilerPhase::Backend),
             )),
         ];
