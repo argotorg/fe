@@ -679,7 +679,7 @@ fn build_demo_model(snapshot: &TraceSnapshot, salsa: Option<DemoSalsaStats>) -> 
             compiler_commit: snapshot.metadata().compiler_commit.clone(),
             flags: snapshot.metadata().flags.clone(),
         },
-        provenance: demo_provenance_status(&closures),
+        provenance: demo_provenance_status(&closures, &attribution_audit),
         counts: DemoCounts {
             facts: snapshot.facts().len(),
             origin_edges: closure_set.edge_count,
@@ -703,12 +703,15 @@ fn build_demo_model(snapshot: &TraceSnapshot, salsa: Option<DemoSalsaStats>) -> 
     }
 }
 
-fn demo_provenance_status(closures: &[DemoClosure]) -> DemoProvenanceStatus {
-    let source_to_optimized = closures.iter().any(|closure| {
+fn demo_provenance_status(
+    closures: &[DemoClosure],
+    attribution_audit: &AttributionAuditReport,
+) -> DemoProvenanceStatus {
+    let closure_source_to_optimized = closures.iter().any(|closure| {
         closure.counts.hir > 0
             && (closure.counts.sonatina_post > 0 || closure.counts.sonatina_pre > 0)
     });
-    let optimized_to_prepared = closures.iter().any(|closure| {
+    let closure_optimized_to_prepared = closures.iter().any(|closure| {
         closure
             .keys
             .iter()
@@ -718,13 +721,35 @@ fn demo_provenance_status(closures: &[DemoClosure]) -> DemoProvenanceStatus {
                 .iter()
                 .any(|key| key.contains("sonatina.evm.prepared."))
     });
-    let prepared_to_bytecode = closures.iter().any(|closure| {
+    let closure_prepared_to_bytecode = closures.iter().any(|closure| {
         closure
             .keys
             .iter()
             .any(|key| key.contains("sonatina.evm.prepared."))
             && closure.keys.iter().any(|key| key.contains("bytecode.pc"))
     });
+    demo_provenance_status_from_signals(
+        closure_source_to_optimized,
+        closure_optimized_to_prepared,
+        closure_prepared_to_bytecode,
+        attribution_audit.optimized_sonatina_linked_pcs,
+        attribution_audit.prepared_linked_pcs,
+        attribution_audit.missing_optimized_to_prepared_lineage_pcs,
+    )
+}
+
+fn demo_provenance_status_from_signals(
+    closure_source_to_optimized: bool,
+    closure_optimized_to_prepared: bool,
+    closure_prepared_to_bytecode: bool,
+    optimized_linked_pcs: usize,
+    prepared_linked_pcs: usize,
+    missing_optimized_to_prepared_pcs: usize,
+) -> DemoProvenanceStatus {
+    let source_to_optimized = closure_source_to_optimized || optimized_linked_pcs > 0;
+    let optimized_to_prepared = closure_optimized_to_prepared
+        || (prepared_linked_pcs > 0 && missing_optimized_to_prepared_pcs == 0);
+    let prepared_to_bytecode = closure_prepared_to_bytecode || prepared_linked_pcs > 0;
     let summary = if source_to_optimized && optimized_to_prepared && prepared_to_bytecode {
         "source to optimized to prepared to bytecode available".to_string()
     } else if source_to_optimized && prepared_to_bytecode {
@@ -2190,6 +2215,19 @@ mod tests {
             display_status_for_source_line(&["generated-c-a".to_string()]),
             Some(DemoDisplayStatus::GeneratedDownstream)
         ));
+    }
+
+    #[test]
+    fn demo_provenance_uses_attribution_audit_when_closure_islands_are_disjoint() {
+        let status = demo_provenance_status_from_signals(false, false, false, 7, 11, 11);
+
+        assert_eq!(status.source_to_optimized, "available");
+        assert_eq!(status.optimized_to_prepared, "missing");
+        assert_eq!(status.prepared_to_bytecode, "available");
+        assert_eq!(
+            status.summary,
+            "bytecode is prepared-linked; exact source attribution needs optimized to prepared lineage"
+        );
     }
 
     #[test]
