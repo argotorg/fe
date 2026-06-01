@@ -1920,6 +1920,7 @@
       if (kind === "prepared_linked") return { kind: "context", label: "prepared-linked" };
       if (kind === "missing_optimized_to_prepared") return { kind: "warn", label: "missing link" };
       if (kind === "missing_downstream_lineage") return { kind: "warn", label: "missing downstream" };
+      if (kind === "missing_source_evidence") return { kind: "warn", label: "missing source" };
       if (kind === "source_only") return { kind: "context", label: "source-only" };
       if (kind === "compiler_generated") return { kind: "generated", label: "generated" };
       if (kind === "unmapped") return { kind: "warn", label: "unmapped" };

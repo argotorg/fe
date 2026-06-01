@@ -2358,6 +2358,7 @@ enum TraceWorkbenchDisplayStatus {
     PreparedLinked,
     MissingOptimizedToPrepared,
     MissingDownstreamLineage,
+    MissingSourceEvidence,
     SourceOnly,
     CompilerGenerated,
     Unmapped,
@@ -3401,7 +3402,7 @@ fn trace_workbench_status_for_row(
             return Some(TraceWorkbenchDisplayStatus::SourceExact);
         }
         if has_exact {
-            return Some(TraceWorkbenchDisplayStatus::MissingDownstreamLineage);
+            return Some(TraceWorkbenchDisplayStatus::MissingSourceEvidence);
         }
         if has_prepared {
             return Some(TraceWorkbenchDisplayStatus::PreparedLinked);
@@ -11610,7 +11611,7 @@ mod tests {
                 &BTreeSet::new(),
                 &TraceWorkbenchMissingLineageIndex::default(),
             ),
-            Some(TraceWorkbenchDisplayStatus::MissingDownstreamLineage)
+            Some(TraceWorkbenchDisplayStatus::MissingSourceEvidence)
         );
         assert_eq!(
             trace_workbench_status_for_row(
