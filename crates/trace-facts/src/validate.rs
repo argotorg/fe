@@ -495,7 +495,7 @@ impl TraceValidator {
             validate_storage(storage_fact, &nodes, &mut diagnostics);
         }
         for event in compiler_events {
-            validate_compiler_event(event, &nodes, &mut diagnostics);
+            validate_compiler_event(event, &nodes, &edges, &mut diagnostics);
         }
         let mut instruction_categories_by_instruction = BTreeMap::new();
         for category in instruction_categories {
@@ -876,6 +876,7 @@ fn validate_storage(
 fn validate_compiler_event(
     event: &CompilerEventFact,
     nodes: &BTreeSet<OriginExportKey>,
+    edges: &[&OriginEdgeFact],
     diagnostics: &mut Vec<TraceValidationDiagnostic>,
 ) {
     require_node(nodes, &event.event, "compiler_event.event", diagnostics);
@@ -896,12 +897,13 @@ fn validate_compiler_event(
         );
     }
     if event.kind == CompilerEventKind::PreparedLineage {
-        validate_prepared_lineage_event(event, diagnostics);
+        validate_prepared_lineage_event(event, edges, diagnostics);
     }
 }
 
 fn validate_prepared_lineage_event(
     event: &CompilerEventFact,
+    edges: &[&OriginEdgeFact],
     diagnostics: &mut Vec<TraceValidationDiagnostic>,
 ) {
     if event.phase != CompilerPhase::Backend {
@@ -959,6 +961,31 @@ fn validate_prepared_lineage_event(
                 role: "prepared_output",
             },
         );
+    }
+    for postopt in event
+        .inputs
+        .iter()
+        .filter(|origin| is_sonatina_postopt_origin_kind(origin.kind()))
+    {
+        for prepared in event
+            .outputs
+            .iter()
+            .filter(|origin| is_prepared_codegen_origin_kind(origin.kind()))
+        {
+            let has_origin_edge = edges.iter().any(|edge| {
+                edge.from == *prepared && edge.to == *postopt && edge.is_exact_attribution_edge()
+            });
+            if !has_origin_edge {
+                push_error(
+                    diagnostics,
+                    TraceValidationError::PreparedLineageEventMissingOriginEdge {
+                        event: event.event.clone(),
+                        prepared: prepared.clone(),
+                        postopt: postopt.clone(),
+                    },
+                );
+            }
+        }
     }
 }
 
@@ -2785,6 +2812,11 @@ pub enum TraceValidationError {
         event: OriginExportKey,
         role: &'static str,
     },
+    PreparedLineageEventMissingOriginEdge {
+        event: OriginExportKey,
+        prepared: OriginExportKey,
+        postopt: OriginExportKey,
+    },
     EmptyRegisterName {
         subject: OriginExportKey,
         location_kind: &'static str,
@@ -3152,6 +3184,17 @@ impl fmt::Display for TraceValidationError {
                 f,
                 "prepared lineage event {} is missing required {role}",
                 event.display_label()
+            ),
+            Self::PreparedLineageEventMissingOriginEdge {
+                event,
+                prepared,
+                postopt,
+            } => write!(
+                f,
+                "prepared lineage event {} has no exact origin edge from prepared {} to postopt {}",
+                event.display_label(),
+                prepared.display_label(),
+                postopt.display_label()
             ),
             Self::EmptyRegisterName {
                 subject,
@@ -4303,9 +4346,15 @@ mod tests {
                 event,
                 CompilerPhase::Backend,
                 CompilerEventKind::PreparedLineage,
-                vec![postopt],
-                vec![prepared],
+                vec![postopt.clone()],
+                vec![prepared.clone()],
                 None,
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                prepared,
+                postopt,
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::Backend),
             )),
         ];
 
@@ -4355,6 +4404,53 @@ mod tests {
                 event,
                 phase: CompilerPhase::BytecodeEmission,
             })
+        );
+    }
+
+    #[test]
+    fn validator_rejects_prepared_lineage_event_without_origin_edge() {
+        let event = key("compiler.event", "fib", "prepared-lineage:0");
+        let postopt = key(
+            "sonatina.postopt.inst",
+            "fib",
+            "function:FuncRef(0):inst:InstId(7)",
+        );
+        let prepared = key(
+            "sonatina.evm.prepared.inst",
+            "fib",
+            "function:FuncRef(0):inst:InstId(7)",
+        );
+        let facts = vec![
+            node("compiler.event", "fib", "prepared-lineage:0"),
+            node(
+                "sonatina.postopt.inst",
+                "fib",
+                "function:FuncRef(0):inst:InstId(7)",
+            ),
+            node(
+                "sonatina.evm.prepared.inst",
+                "fib",
+                "function:FuncRef(0):inst:InstId(7)",
+            ),
+            TraceFact::CompilerEvent(CompilerEventFact::new(
+                event.clone(),
+                CompilerPhase::Backend,
+                CompilerEventKind::PreparedLineage,
+                vec![postopt.clone()],
+                vec![prepared.clone()],
+                None,
+            )),
+        ];
+
+        assert_eq!(
+            TraceValidator::validate(&facts),
+            Err(
+                TraceValidationError::PreparedLineageEventMissingOriginEdge {
+                    event,
+                    prepared,
+                    postopt,
+                }
+            )
         );
     }
 

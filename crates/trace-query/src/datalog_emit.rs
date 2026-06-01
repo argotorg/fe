@@ -962,6 +962,12 @@ mod tests {
                     vec![prepared.clone()],
                     None,
                 )),
+                TraceFact::OriginEdge(OriginEdgeFact::new(
+                    prepared.clone(),
+                    postopt.clone(),
+                    OriginEdgeLabel::LoweredFrom,
+                    Some(CompilerPhase::Backend),
+                )),
             ],
         ))
         .unwrap();
