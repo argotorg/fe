@@ -207,6 +207,7 @@ pub(crate) async fn handle_trace_workbench_model(
         &request.session_id,
         TraceViewerRevisionRecord {
             revision: manifest.revision,
+            previous_revision: None,
             document_version,
             status: "ready".to_string(),
             config_hash: current_config_hash.clone(),
@@ -729,6 +730,7 @@ mod tests {
             &session.id,
             TraceViewerRevisionRecord {
                 revision: 9,
+                previous_revision: None,
                 document_version: Some(9),
                 status: "ready".to_string(),
                 config_hash: config_hash.clone(),
@@ -785,6 +787,7 @@ mod tests {
             &session.id,
             TraceViewerRevisionRecord {
                 revision: 9,
+                previous_revision: None,
                 document_version: Some(9),
                 status: "ready".to_string(),
                 config_hash: backend.tooling_config().stable_hash(),

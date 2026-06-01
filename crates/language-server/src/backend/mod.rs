@@ -202,7 +202,7 @@ impl Backend {
     pub(crate) fn record_trace_viewer_revision(
         &mut self,
         session_id: &str,
-        record: TraceViewerRevisionRecord,
+        mut record: TraceViewerRevisionRecord,
     ) -> bool {
         if !self.trace_viewer_sessions.contains_key(session_id) {
             return false;
@@ -211,6 +211,9 @@ impl Backend {
             .trace_viewer_revisions
             .entry(session_id.to_string())
             .or_default();
+        if record.previous_revision.is_none() {
+            record.previous_revision = revisions.last().map(|revision| revision.revision);
+        }
         if let Some(last) = revisions.last_mut()
             && last.revision == record.revision
             && last.model_digest == record.model_digest
@@ -374,6 +377,7 @@ pub(crate) struct TraceViewerSelection {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TraceViewerRevisionRecord {
     pub revision: u64,
+    pub previous_revision: Option<u64>,
     pub document_version: Option<i32>,
     pub status: String,
     pub config_hash: String,
@@ -521,7 +525,9 @@ mod tests {
         let revisions = backend.trace_viewer_revisions(&session.id).unwrap();
         assert_eq!(revisions.len(), 64);
         assert_eq!(revisions.first().unwrap().revision, 3);
+        assert_eq!(revisions.first().unwrap().previous_revision, Some(2));
         assert_eq!(revisions.last().unwrap().revision, 66);
+        assert_eq!(revisions.last().unwrap().previous_revision, Some(65));
 
         tokio::task::spawn_blocking(move || drop(backend))
             .await
@@ -534,6 +540,7 @@ mod tests {
     ) -> TraceViewerRevisionRecord {
         TraceViewerRevisionRecord {
             revision,
+            previous_revision: None,
             document_version: Some(revision as i32),
             status: "ready".to_string(),
             config_hash: "config".to_string(),
