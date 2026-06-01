@@ -3620,6 +3620,13 @@ pub struct SyntheticOverheadRow {
     pub confidence: Confidence,
 }
 
+const MISSING_LINK_AUDIT_SCHEMA_VERSION: &str = "missing_link_audit_v0";
+const MISSING_LINK_QUERY_PACK: &str = "argot_static_checks_v0";
+const TRACE_SCHEMA_VERSION: &str = "trace_v0";
+const EDGE_SEMANTICS_VERSION: &str = "origin_edge_semantics_v0";
+const MISSING_LINK_DETAIL_LIMIT: usize = 100;
+const MISSING_LINK_CLUSTER_SAMPLE_LIMIT: usize = 5;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AttributionAuditReport {
     pub metadata: ReportMetadata,
@@ -3639,6 +3646,8 @@ pub struct AttributionAuditReport {
     pub missing_lineage_targets: Vec<AttributionAuditTargetCount>,
     pub lineage_gaps: Vec<AttributionAuditLineageGap>,
     pub suspicious_edges: Vec<AttributionAuditSuspiciousEdge>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub missing_links: Option<MissingLinkAuditReport>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -3684,6 +3693,223 @@ pub struct AttributionAuditSuspiciousEdge {
     pub introduced_by: Option<CompilerPhase>,
     pub traversal_class: OriginEdgeTraversalClass,
     pub reason: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MissingLinkAuditReport {
+    pub schema_version: String,
+    pub query_pack: String,
+    pub artifact: MissingLinkAuditArtifact,
+    pub summary: MissingLinkSummary,
+    pub boundary_summaries: Vec<LinkBoundarySummary>,
+    pub clusters: Vec<LinkGapCluster>,
+    pub gaps: Vec<LinkGap>,
+    pub expected_absent: Vec<ExpectedAbsentLink>,
+    pub invalid: Vec<InvalidAttributionLink>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MissingLinkAuditArtifact {
+    pub source_uri: String,
+    pub compiler_commit: String,
+    pub sonatina_commit: Option<String>,
+    pub opt_level: Option<String>,
+    pub target: String,
+    pub trace_schema_version: String,
+    pub relation_schema_version: Option<String>,
+    pub edge_semantics_version: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MissingLinkSummary {
+    pub status: LinkOverallStatus,
+    pub top_blockers: Vec<LinkBoundaryKind>,
+    pub exact_source_to_bytecode_pcs: usize,
+    pub prepared_linked_bytecode_pcs: usize,
+    pub unmapped_bytecode_pcs: usize,
+    pub missing_required_count: usize,
+    pub invalid_count: usize,
+    pub expected_absent_count: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkOverallStatus {
+    Pass,
+    PassWithExpectedAbsences,
+    Warning,
+    Invalid,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinkBoundarySummary {
+    pub boundary: LinkBoundaryKind,
+    pub owner_phase: CompilerPhase,
+    pub status_counts: BTreeMap<LinkStatus, usize>,
+    pub affected_origins: usize,
+    pub affected_bytecode_pcs: usize,
+    pub top_issue_codes: Vec<LinkIssueCode>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkBoundaryKind {
+    HirToMir,
+    MirToSonatinaPreOpt,
+    PreOptToPostOpt,
+    PostOptToPrepared,
+    PreparedToBytecode,
+    BytecodeToRuntime,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkStatus {
+    SatisfiedExact,
+    SatisfiedGenerated,
+    SatisfiedElided,
+    ContextOnly,
+    CandidateOnly,
+    ExpectedAbsent,
+    MissingRequired,
+    MissingOptional,
+    MissingLineageButCandidatesExist,
+    Ambiguous,
+    Invalid,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkSeverity {
+    Info,
+    Notice,
+    Warning,
+    Error,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkIssueCode {
+    ExpectedAbsentSyntax,
+    ExpectedAbsentDeclaration,
+    ExpectedAbsentNoRuntimeSession,
+    GeneratedExplanationOnly,
+    ContextOnlyEvidence,
+    CandidateShapeMatchOnly,
+    MissingHirToMirLowering,
+    MissingMirToPreoptLowering,
+    MissingOptimizerLineage,
+    MissingOptimizedToPreparedLineage,
+    MissingPreparedPcExtent,
+    MissingRuntimeJoin,
+    ElidedWithoutReason,
+    AmbiguousLineageCandidates,
+    InvalidCrossRepresentationJoin,
+    PreparedKeyedAsPostopt,
+    PcMapInstNotInClaimedRepresentation,
+    RawLocalIdJoinedAcrossSnapshots,
+    DebugContextUsedAsExact,
+    ShapeMatchUsedAsProvenance,
+    StructuralEdgeUsedForAttribution,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinkGapCluster {
+    pub cluster_id: String,
+    pub boundary: LinkBoundaryKind,
+    pub status: LinkStatus,
+    pub issue_code: LinkIssueCode,
+    pub severity: LinkSeverity,
+    pub owner_phase: CompilerPhase,
+    pub headline: String,
+    pub explanation: String,
+    pub affected_origins: Vec<AttributionAuditTargetCount>,
+    pub affected_bytecode_pcs: Vec<OriginExportKey>,
+    pub gap_count: usize,
+    pub sample_gap_ids: Vec<String>,
+    pub candidate_hints: Vec<CandidateHint>,
+    pub required_evidence: Vec<RequiredEvidence>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinkGap {
+    pub gap_id: String,
+    pub boundary: LinkBoundaryKind,
+    pub status: LinkStatus,
+    pub issue_code: LinkIssueCode,
+    pub severity: LinkSeverity,
+    pub from_origin: OriginExportKey,
+    pub from_representation: Option<String>,
+    pub expected_to_phase: String,
+    pub reached_frontier: String,
+    pub candidate_hints: Vec<CandidateHint>,
+    pub required_evidence: Vec<RequiredEvidence>,
+    pub cluster_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExpectedAbsentLink {
+    pub boundary: LinkBoundaryKind,
+    pub origin: OriginExportKey,
+    pub issue_code: LinkIssueCode,
+    pub explanation: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvalidAttributionLink {
+    pub boundary: LinkBoundaryKind,
+    pub origin: OriginExportKey,
+    pub issue_code: LinkIssueCode,
+    pub explanation: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CandidateHint {
+    pub kind: CandidateHintKind,
+    pub confidence: CandidateConfidence,
+    pub from: Option<OriginExportKey>,
+    pub to: Option<OriginExportKey>,
+    pub explanation: String,
+    pub dimensions: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CandidateHintKind {
+    SameRawLocalId,
+    SameDebugFrontendOrigin,
+    SameSourceSpan,
+    SameShapeDigest,
+    SimilarShapeDigest,
+    SameBlockNeighborhood,
+    SameOpcodeCategoryPattern,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CandidateConfidence {
+    Weak,
+    Medium,
+    Strong,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequiredEvidence {
+    pub kind: RequiredEvidenceKind,
+    pub owner_phase: CompilerPhase,
+    pub description: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequiredEvidenceKind {
+    ExactOriginEdge,
+    PreparedLineageFact,
+    OptimizerLineageFact,
+    PcExtentFact,
+    RuntimeCodeHashJoin,
+    ElisionReason,
+    RepresentationIdentity,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -5207,6 +5433,195 @@ fn primary_source(candidates: &[SourceAttribution]) -> Option<SourceAttribution>
     (candidates.len() == 1).then(|| candidates[0].clone())
 }
 
+fn missing_link_audit_report(
+    snapshot: &TraceSnapshot,
+    source_exact_pcs: usize,
+    prepared_linked_pcs: usize,
+    unmapped_pcs: usize,
+    lineage_gap_targets: &BTreeMap<OriginExportKey, usize>,
+    lineage_gaps: &[AttributionAuditLineageGap],
+) -> MissingLinkAuditReport {
+    let missing_required_count = lineage_gaps.len();
+    let expected_absent: Vec<ExpectedAbsentLink> = Vec::new();
+    let invalid: Vec<InvalidAttributionLink> = Vec::new();
+    let overall_status = if !invalid.is_empty() {
+        LinkOverallStatus::Invalid
+    } else if missing_required_count > 0 {
+        LinkOverallStatus::Warning
+    } else if !expected_absent.is_empty() {
+        LinkOverallStatus::PassWithExpectedAbsences
+    } else {
+        LinkOverallStatus::Pass
+    };
+    let mut top_blockers = Vec::new();
+    if missing_required_count > 0 {
+        top_blockers.push(LinkBoundaryKind::PostOptToPrepared);
+    }
+
+    let mut boundary_summaries = Vec::new();
+    if prepared_linked_pcs > 0 {
+        let mut status_counts = BTreeMap::new();
+        if missing_required_count > 0 {
+            status_counts.insert(LinkStatus::MissingRequired, missing_required_count);
+        } else {
+            status_counts.insert(LinkStatus::SatisfiedExact, prepared_linked_pcs);
+        }
+        boundary_summaries.push(LinkBoundarySummary {
+            boundary: LinkBoundaryKind::PostOptToPrepared,
+            owner_phase: CompilerPhase::Backend,
+            status_counts,
+            affected_origins: lineage_gap_targets.len(),
+            affected_bytecode_pcs: missing_required_count,
+            top_issue_codes: (missing_required_count > 0)
+                .then_some(LinkIssueCode::MissingOptimizedToPreparedLineage)
+                .into_iter()
+                .collect(),
+        });
+
+        let mut prepared_to_bytecode_counts = BTreeMap::new();
+        prepared_to_bytecode_counts.insert(LinkStatus::SatisfiedExact, prepared_linked_pcs);
+        boundary_summaries.push(LinkBoundarySummary {
+            boundary: LinkBoundaryKind::PreparedToBytecode,
+            owner_phase: CompilerPhase::BytecodeEmission,
+            status_counts: prepared_to_bytecode_counts,
+            affected_origins: lineage_gap_targets.len(),
+            affected_bytecode_pcs: prepared_linked_pcs,
+            top_issue_codes: Vec::new(),
+        });
+    }
+
+    let required_evidence = required_optimized_to_prepared_evidence();
+    let cluster_id = "postopt-to-prepared:missing-optimized-to-prepared-lineage".to_string();
+    let details = lineage_gaps
+        .iter()
+        .take(MISSING_LINK_DETAIL_LIMIT)
+        .map(|gap| LinkGap {
+            gap_id: link_gap_id(
+                LinkBoundaryKind::PostOptToPrepared,
+                &gap.bytecode_pc,
+                &gap.prepared_origin,
+            ),
+            boundary: LinkBoundaryKind::PostOptToPrepared,
+            status: LinkStatus::MissingRequired,
+            issue_code: LinkIssueCode::MissingOptimizedToPreparedLineage,
+            severity: LinkSeverity::Warning,
+            from_origin: gap.prepared_origin.clone(),
+            from_representation: Some("sonatina.evm.prepared".to_string()),
+            expected_to_phase: "sonatina.postopt".to_string(),
+            reached_frontier: "evm.prepared.bytecode".to_string(),
+            candidate_hints: Vec::new(),
+            required_evidence: required_evidence.clone(),
+            cluster_id: Some(cluster_id.clone()),
+        })
+        .collect::<Vec<_>>();
+
+    let clusters = if missing_required_count == 0 {
+        Vec::new()
+    } else {
+        let mut affected_origins = attribution_audit_target_counts(lineage_gap_targets.clone());
+        affected_origins.truncate(25);
+        let affected_bytecode_pcs = lineage_gaps
+            .iter()
+            .map(|gap| gap.bytecode_pc.clone())
+            .take(25)
+            .collect::<Vec<_>>();
+        vec![LinkGapCluster {
+            cluster_id: cluster_id.clone(),
+            boundary: LinkBoundaryKind::PostOptToPrepared,
+            status: LinkStatus::MissingRequired,
+            issue_code: LinkIssueCode::MissingOptimizedToPreparedLineage,
+            severity: LinkSeverity::Warning,
+            owner_phase: CompilerPhase::Backend,
+            headline: "Optimized Sonatina reaches no EVM prepared lineage".to_string(),
+            explanation: "Source and optimized Sonatina evidence may exist, and EVM prepared/bytecode evidence exists, but no explicit optimized→prepared lineage edge is present for these prepared origins.".to_string(),
+            affected_origins,
+            affected_bytecode_pcs,
+            gap_count: missing_required_count,
+            sample_gap_ids: details
+                .iter()
+                .take(MISSING_LINK_CLUSTER_SAMPLE_LIMIT)
+                .map(|gap| gap.gap_id.clone())
+                .collect(),
+            candidate_hints: Vec::new(),
+            required_evidence: required_evidence.clone(),
+        }]
+    };
+
+    MissingLinkAuditReport {
+        schema_version: MISSING_LINK_AUDIT_SCHEMA_VERSION.to_string(),
+        query_pack: MISSING_LINK_QUERY_PACK.to_string(),
+        artifact: missing_link_artifact(snapshot),
+        summary: MissingLinkSummary {
+            status: overall_status,
+            top_blockers,
+            exact_source_to_bytecode_pcs: source_exact_pcs,
+            prepared_linked_bytecode_pcs: prepared_linked_pcs,
+            unmapped_bytecode_pcs: unmapped_pcs,
+            missing_required_count,
+            invalid_count: invalid.len(),
+            expected_absent_count: expected_absent.len(),
+        },
+        boundary_summaries,
+        clusters,
+        gaps: details,
+        expected_absent,
+        invalid,
+    }
+}
+
+fn missing_link_artifact(snapshot: &TraceSnapshot) -> MissingLinkAuditArtifact {
+    let metadata = snapshot.metadata();
+    MissingLinkAuditArtifact {
+        source_uri: metadata.input_path.clone(),
+        compiler_commit: metadata.compiler_commit.clone(),
+        sonatina_commit: trace_metadata_flag_value(metadata, "sonatina_commit")
+            .or_else(|| trace_metadata_flag_value(metadata, "sonatina")),
+        opt_level: trace_metadata_flag_value(metadata, "optimize")
+            .or_else(|| trace_metadata_flag_value(metadata, "opt_level")),
+        target: metadata.target.clone(),
+        trace_schema_version: TRACE_SCHEMA_VERSION.to_string(),
+        relation_schema_version: None,
+        edge_semantics_version: EDGE_SEMANTICS_VERSION.to_string(),
+    }
+}
+
+fn trace_metadata_flag_value(metadata: &TraceMetadata, name: &str) -> Option<String> {
+    let prefix = format!("{name}=");
+    metadata
+        .flags
+        .iter()
+        .find_map(|flag| flag.strip_prefix(&prefix).map(str::to_string))
+}
+
+fn required_optimized_to_prepared_evidence() -> Vec<RequiredEvidence> {
+    vec![RequiredEvidence {
+        kind: RequiredEvidenceKind::PreparedLineageFact,
+        owner_phase: CompilerPhase::Backend,
+        description: "Emit explicit EVM prepared/codegen → optimized Sonatina lineage with exact, backend-prepared, synthetic, debug-context, split/merge, or elision semantics.".to_string(),
+    }]
+}
+
+fn link_gap_id(
+    boundary: LinkBoundaryKind,
+    bytecode_pc: &OriginExportKey,
+    prepared_origin: &OriginExportKey,
+) -> String {
+    stable_short_id(&format!(
+        "{boundary:?}\n{}\n{}",
+        bytecode_pc.canonical_storage_key(),
+        prepared_origin.canonical_storage_key()
+    ))
+}
+
+fn stable_short_id(input: &str) -> String {
+    let mut hash = 2166136261u32;
+    for byte in input.bytes() {
+        hash ^= u32::from(byte);
+        hash = hash.wrapping_mul(16777619);
+    }
+    format!("gap-{hash:08x}")
+}
+
 fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport {
     let index = TraceIndex::new(snapshot);
     let semantic_index = trace_index::TraceIndex::new(snapshot);
@@ -5402,6 +5817,15 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
     let mut prepared_targets = attribution_audit_target_counts(prepared_targets);
     prepared_targets.truncate(25);
 
+    let missing_links = missing_link_audit_report(
+        snapshot,
+        source_exact_pcs,
+        prepared_linked_pcs,
+        unmapped_pcs,
+        &lineage_gap_targets,
+        &lineage_gaps,
+    );
+
     let mut lineage_gap_targets = attribution_audit_target_counts(lineage_gap_targets);
     lineage_gap_targets.truncate(25);
     lineage_gaps.sort_by(|a, b| {
@@ -5435,6 +5859,7 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
         missing_lineage_targets: lineage_gap_targets,
         lineage_gaps,
         suspicious_edges,
+        missing_links: Some(missing_links),
     }
 }
 
@@ -5577,17 +6002,18 @@ mod tests {
 
     use super::{
         CallCostByCallsiteReport, DynamicGasBySourceRequest, ExplainLocalRequest, ExplainPcRequest,
-        GasBySourceRequest, GasToSourceRequest, IntrospectionService, LoopContentsRequest,
-        LoopCostRequest, OptimizedCodeHonestyRequest, RuntimeGasBySourceRequest,
-        RuntimeTraceFilterRequest, StorageAccessesBySlotRequest, TraceIntrospectionService,
-        TraceQueryHttpRequest, TraceQueryHttpResponse, TraceQueryReport, TraceQueryRequest,
-        TraceWorkbenchDisplayStatus, TraceWorkbenchMissingLineageIndex, TraceWorkbenchPaneRowKind,
-        TraceWorkbenchProjectionIndex, TraceWorkbenchProjectionRequest, ValueFlowAtPcRequest,
-        VariablesAtPcRequest, run_trace_query, trace_workbench_compact_mir_text,
-        trace_workbench_compact_origin_text, trace_workbench_manifest,
-        trace_workbench_natural_key_cmp, trace_workbench_report_projection,
-        trace_workbench_source_lines, trace_workbench_source_projection,
-        trace_workbench_status_for_row,
+        GasBySourceRequest, GasToSourceRequest, IntrospectionService, LinkBoundaryKind,
+        LinkIssueCode, LinkOverallStatus, LinkStatus, LoopContentsRequest, LoopCostRequest,
+        MISSING_LINK_AUDIT_SCHEMA_VERSION, OptimizedCodeHonestyRequest, RequiredEvidenceKind,
+        RuntimeGasBySourceRequest, RuntimeTraceFilterRequest, StorageAccessesBySlotRequest,
+        TraceIntrospectionService, TraceQueryHttpRequest, TraceQueryHttpResponse, TraceQueryReport,
+        TraceQueryRequest, TraceWorkbenchDisplayStatus, TraceWorkbenchMissingLineageIndex,
+        TraceWorkbenchPaneRowKind, TraceWorkbenchProjectionIndex, TraceWorkbenchProjectionRequest,
+        ValueFlowAtPcRequest, VariablesAtPcRequest, run_trace_query,
+        trace_workbench_compact_mir_text, trace_workbench_compact_origin_text,
+        trace_workbench_manifest, trace_workbench_natural_key_cmp,
+        trace_workbench_report_projection, trace_workbench_source_lines,
+        trace_workbench_source_projection, trace_workbench_status_for_row,
     };
 
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -6562,6 +6988,14 @@ mod tests {
                 .iter()
                 .any(|row| { row.label == "fib.fe:2:8-2:9" && row.origin_kind == "hir.expr" })
         );
+        let missing_links = report.missing_links.as_ref().unwrap();
+        assert_eq!(
+            missing_links.schema_version,
+            MISSING_LINK_AUDIT_SCHEMA_VERSION
+        );
+        assert_eq!(missing_links.summary.status, LinkOverallStatus::Pass);
+        assert!(missing_links.summary.top_blockers.is_empty());
+        assert!(missing_links.clusters.is_empty());
     }
 
     #[test]
@@ -6665,6 +7099,35 @@ mod tests {
                 .missing_lineage_targets
                 .iter()
                 .any(|row| row.target == report.lineage_gaps[0].prepared_origin && row.count == 1)
+        );
+
+        let missing_links = report.missing_links.as_ref().unwrap();
+        assert_eq!(missing_links.summary.status, LinkOverallStatus::Warning);
+        assert_eq!(
+            missing_links.summary.top_blockers,
+            vec![LinkBoundaryKind::PostOptToPrepared]
+        );
+        assert_eq!(missing_links.summary.missing_required_count, 1);
+        assert_eq!(missing_links.summary.prepared_linked_bytecode_pcs, 2);
+        assert_eq!(missing_links.gaps.len(), 1);
+        assert_eq!(
+            missing_links.gaps[0].issue_code,
+            LinkIssueCode::MissingOptimizedToPreparedLineage
+        );
+        assert_eq!(
+            missing_links.gaps[0].required_evidence[0].kind,
+            RequiredEvidenceKind::PreparedLineageFact
+        );
+        assert_eq!(missing_links.clusters.len(), 1);
+        assert_eq!(
+            missing_links.clusters[0].boundary,
+            LinkBoundaryKind::PostOptToPrepared
+        );
+        assert_eq!(
+            missing_links.boundary_summaries[0]
+                .status_counts
+                .get(&LinkStatus::MissingRequired),
+            Some(&1)
         );
     }
 
