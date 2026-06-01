@@ -4159,7 +4159,11 @@ pub struct LinkGapCluster {
     pub headline: String,
     pub explanation: String,
     pub affected_origins: Vec<AttributionAuditTargetCount>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub affected_source_ranges: Vec<SourceSpanSummary>,
     pub affected_bytecode_pcs: Vec<OriginExportKey>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub affected_bytecode_ranges: Vec<BytecodeRangeSummary>,
     pub gap_count: usize,
     pub sample_gap_ids: Vec<String>,
     pub candidate_hints: Vec<CandidateHint>,
@@ -4177,9 +4181,33 @@ pub struct LinkGap {
     pub from_representation: Option<String>,
     pub expected_to_phase: String,
     pub reached_frontier: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_context: Option<SourceSpanSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytecode_context: Option<BytecodeRangeSummary>,
     pub candidate_hints: Vec<CandidateHint>,
     pub required_evidence: Vec<RequiredEvidence>,
     pub cluster_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct SourceSpanSummary {
+    pub origin: OriginExportKey,
+    pub file: OriginExportKey,
+    pub label: String,
+    pub start_line: u32,
+    pub start_column: u32,
+    pub end_line: u32,
+    pub end_column: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct BytecodeRangeSummary {
+    pub instruction: OriginExportKey,
+    pub code_object: Option<OriginExportKey>,
+    pub pc_start: u32,
+    pub pc_end: u32,
+    pub mnemonic: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -6063,6 +6091,7 @@ fn missing_link_audit_report(
 
     let required_evidence = required_optimized_to_prepared_evidence();
     let cluster_id = "postopt-to-prepared:missing-optimized-to-prepared-lineage".to_string();
+    let source_context_index = trace_index::TraceIndex::new(snapshot);
     let mut details = hir_to_mir
         .missing
         .iter()
@@ -6081,6 +6110,8 @@ fn missing_link_audit_report(
             from_representation: Some("hir".to_string()),
             expected_to_phase: "mir".to_string(),
             reached_frontier: "hir.source".to_string(),
+            source_context: missing_link_source_context(snapshot, &source_context_index, origin),
+            bytecode_context: None,
             candidate_hints: Vec::new(),
             required_evidence: required_hir_to_mir_evidence(),
             cluster_id: Some("hir-to-mir:missing-lowering".to_string()),
@@ -6105,6 +6136,12 @@ fn missing_link_audit_report(
                 from_representation: Some("mir".to_string()),
                 expected_to_phase: "sonatina.preopt".to_string(),
                 reached_frontier: "mir".to_string(),
+                source_context: missing_link_source_context(
+                    snapshot,
+                    &source_context_index,
+                    origin,
+                ),
+                bytecode_context: None,
                 candidate_hints: Vec::new(),
                 required_evidence: required_mir_to_preopt_evidence(),
                 cluster_id: Some("mir-to-preopt:missing-lowering".to_string()),
@@ -6129,6 +6166,12 @@ fn missing_link_audit_report(
                 from_representation: Some("sonatina.preopt".to_string()),
                 expected_to_phase: "sonatina.postopt".to_string(),
                 reached_frontier: "sonatina.preopt".to_string(),
+                source_context: missing_link_source_context(
+                    snapshot,
+                    &source_context_index,
+                    origin,
+                ),
+                bytecode_context: None,
                 candidate_hints: Vec::new(),
                 required_evidence: required_preopt_to_postopt_evidence(),
                 cluster_id: Some("preopt-to-postopt:missing-optimizer-lineage".to_string()),
@@ -6152,6 +6195,12 @@ fn missing_link_audit_report(
                 from_representation: Some("sonatina.evm.prepared".to_string()),
                 expected_to_phase: "sonatina.postopt".to_string(),
                 reached_frontier: "evm.prepared.bytecode".to_string(),
+                source_context: missing_link_source_context_for_lineage_gap(
+                    snapshot,
+                    &source_context_index,
+                    gap,
+                ),
+                bytecode_context: missing_link_bytecode_context(snapshot, &gap.bytecode_pc),
                 candidate_hints: gap.candidate_hints.clone(),
                 required_evidence: required_evidence.clone(),
                 cluster_id: Some(cluster_id.clone()),
@@ -6176,6 +6225,12 @@ fn missing_link_audit_report(
                 from_representation: Some("sonatina.evm.prepared".to_string()),
                 expected_to_phase: "bytecode.pc".to_string(),
                 reached_frontier: "sonatina.evm.prepared".to_string(),
+                source_context: missing_link_source_context(
+                    snapshot,
+                    &source_context_index,
+                    origin,
+                ),
+                bytecode_context: None,
                 candidate_hints: Vec::new(),
                 required_evidence: required_prepared_to_bytecode_evidence(),
                 cluster_id: Some("prepared-to-bytecode:missing-pc-extent".to_string()),
@@ -6200,7 +6255,13 @@ fn missing_link_audit_report(
                 .cloned()
                 .map(|target| AttributionAuditTargetCount { target, count: 1 })
                 .collect(),
+            affected_source_ranges: missing_link_source_contexts(
+                snapshot,
+                &source_context_index,
+                hir_to_mir.missing.iter(),
+            ),
             affected_bytecode_pcs: Vec::new(),
+            affected_bytecode_ranges: Vec::new(),
             gap_count: missing_hir_to_mir_count,
             sample_gap_ids: details
                 .iter()
@@ -6229,7 +6290,13 @@ fn missing_link_audit_report(
                 .cloned()
                 .map(|target| AttributionAuditTargetCount { target, count: 1 })
                 .collect(),
+            affected_source_ranges: missing_link_source_contexts(
+                snapshot,
+                &source_context_index,
+                mir_to_preopt.missing.iter(),
+            ),
             affected_bytecode_pcs: Vec::new(),
+            affected_bytecode_ranges: Vec::new(),
             gap_count: missing_mir_to_preopt_count,
             sample_gap_ids: details
                 .iter()
@@ -6258,7 +6325,13 @@ fn missing_link_audit_report(
                 .cloned()
                 .map(|target| AttributionAuditTargetCount { target, count: 1 })
                 .collect(),
+            affected_source_ranges: missing_link_source_contexts(
+                snapshot,
+                &source_context_index,
+                preopt_to_postopt.missing.iter(),
+            ),
             affected_bytecode_pcs: Vec::new(),
+            affected_bytecode_ranges: Vec::new(),
             gap_count: missing_preopt_to_postopt_count,
             sample_gap_ids: details
                 .iter()
@@ -6313,7 +6386,16 @@ fn missing_link_audit_report(
             headline: "Optimized Sonatina reaches no EVM prepared lineage".to_string(),
             explanation: "Source and optimized Sonatina evidence may exist, and EVM prepared/bytecode evidence exists, but no explicit optimized→prepared lineage edge is present for these prepared origins. Candidate hints are diagnostic only and never satisfy provenance.".to_string(),
             affected_origins,
+            affected_source_ranges: missing_link_source_contexts_for_lineage_gaps(
+                snapshot,
+                &source_context_index,
+                lineage_gaps,
+            ),
             affected_bytecode_pcs,
+            affected_bytecode_ranges: missing_link_bytecode_contexts(
+                snapshot,
+                lineage_gaps.iter().map(|gap| &gap.bytecode_pc),
+            ),
             gap_count: missing_postopt_to_prepared_count,
             sample_gap_ids: details
                 .iter()
@@ -6342,7 +6424,13 @@ fn missing_link_audit_report(
                 .cloned()
                 .map(|target| AttributionAuditTargetCount { target, count: 1 })
                 .collect(),
+            affected_source_ranges: missing_link_source_contexts(
+                snapshot,
+                &source_context_index,
+                prepared_to_bytecode.missing.iter(),
+            ),
             affected_bytecode_pcs: Vec::new(),
+            affected_bytecode_ranges: Vec::new(),
             gap_count: missing_prepared_to_bytecode_count,
             sample_gap_ids: details
                 .iter()
@@ -6878,6 +6966,147 @@ fn stable_short_id(input: &str) -> String {
         hash = hash.wrapping_mul(16777619);
     }
     format!("gap-{hash:08x}")
+}
+
+fn missing_link_source_context(
+    snapshot: &TraceSnapshot,
+    index: &trace_index::TraceIndex<'_>,
+    origin: &OriginExportKey,
+) -> Option<SourceSpanSummary> {
+    if let Some(summary) = missing_link_direct_source_context(snapshot, origin) {
+        return Some(summary);
+    }
+
+    index
+        .reachable_targets(origin, trace_index::TraceReachabilityPolicy::ExactOnly)
+        .into_iter()
+        .find_map(|target| missing_link_direct_source_context(snapshot, &target))
+}
+
+fn missing_link_direct_source_context(
+    snapshot: &TraceSnapshot,
+    origin: &OriginExportKey,
+) -> Option<SourceSpanSummary> {
+    let span = snapshot.facts().iter().find_map(|fact| match fact {
+        TraceFact::SourceSpan(span) if span.origin == *origin => Some(span),
+        _ => None,
+    })?;
+    Some(SourceSpanSummary {
+        origin: span.origin.clone(),
+        file: span.file.clone(),
+        label: missing_link_source_span_label(snapshot, span),
+        start_line: span.start_line,
+        start_column: span.start_column,
+        end_line: span.end_line,
+        end_column: span.end_column,
+    })
+}
+
+fn missing_link_source_context_for_lineage_gap(
+    snapshot: &TraceSnapshot,
+    index: &trace_index::TraceIndex<'_>,
+    gap: &AttributionAuditLineageGap,
+) -> Option<SourceSpanSummary> {
+    gap.candidate_hints
+        .iter()
+        .filter_map(|hint| hint.to.as_ref().or(hint.from.as_ref()))
+        .find_map(|origin| missing_link_source_context(snapshot, index, origin))
+}
+
+fn missing_link_source_contexts<'a>(
+    snapshot: &TraceSnapshot,
+    index: &trace_index::TraceIndex<'_>,
+    origins: impl IntoIterator<Item = &'a OriginExportKey>,
+) -> Vec<SourceSpanSummary> {
+    origins
+        .into_iter()
+        .filter_map(|origin| missing_link_source_context(snapshot, index, origin))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .take(25)
+        .collect()
+}
+
+fn missing_link_source_contexts_for_lineage_gaps(
+    snapshot: &TraceSnapshot,
+    index: &trace_index::TraceIndex<'_>,
+    gaps: &[AttributionAuditLineageGap],
+) -> Vec<SourceSpanSummary> {
+    gaps.iter()
+        .filter_map(|gap| missing_link_source_context_for_lineage_gap(snapshot, index, gap))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .take(25)
+        .collect()
+}
+
+fn missing_link_source_span_label(
+    snapshot: &TraceSnapshot,
+    span: &trace_facts::SourceSpanFact,
+) -> String {
+    let file = snapshot
+        .facts()
+        .iter()
+        .find_map(|fact| match fact {
+            TraceFact::SourceFile(file) if file.file_key == span.file => {
+                Some(file.display_name.as_str())
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| span.file.local_key());
+    format!(
+        "{file}:{}:{}-{}:{}",
+        span.start_line, span.start_column, span.end_line, span.end_column
+    )
+}
+
+fn missing_link_bytecode_context(
+    snapshot: &TraceSnapshot,
+    instruction: &OriginExportKey,
+) -> Option<BytecodeRangeSummary> {
+    let mnemonic = snapshot.facts().iter().find_map(|fact| match fact {
+        TraceFact::Instruction(row) if row.instruction == *instruction => {
+            Some(row.mnemonic.clone())
+        }
+        _ => None,
+    });
+    if let Some(extent) = snapshot.facts().iter().find_map(|fact| match fact {
+        TraceFact::InstructionExtent(extent) if extent.instruction == *instruction => Some(extent),
+        _ => None,
+    }) {
+        return Some(BytecodeRangeSummary {
+            instruction: instruction.clone(),
+            code_object: Some(extent.code_object.clone()),
+            pc_start: extent.pc_range.start,
+            pc_end: extent.pc_range.end,
+            mnemonic,
+        });
+    }
+    snapshot.facts().iter().find_map(|fact| match fact {
+        TraceFact::Instruction(row) if row.instruction == *instruction => {
+            Some(BytecodeRangeSummary {
+                instruction: instruction.clone(),
+                code_object: None,
+                pc_start: row.index,
+                pc_end: row.index.saturating_add(1),
+                mnemonic: Some(row.mnemonic.clone()),
+            })
+        }
+        _ => None,
+    })
+}
+
+fn missing_link_bytecode_contexts<'a>(
+    snapshot: &TraceSnapshot,
+    instructions: impl IntoIterator<Item = &'a OriginExportKey>,
+) -> Vec<BytecodeRangeSummary> {
+    instructions
+        .into_iter()
+        .filter_map(|instruction| missing_link_bytecode_context(snapshot, instruction))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .take(25)
+        .collect()
 }
 
 fn invalid_direct_bytecode_to_postopt_edge(edge: &trace_facts::OriginEdgeFact) -> bool {
@@ -7571,7 +7800,7 @@ mod tests {
     };
 
     use super::{
-        CallCostByCallsiteReport, CandidateConfidence, CandidateHintKind,
+        BytecodeRangeSummary, CallCostByCallsiteReport, CandidateConfidence, CandidateHintKind,
         DynamicGasBySourceRequest, ExplainLocalRequest, ExplainPcRequest, GasBySourceRequest,
         GasToSourceRequest, IntrospectionService, LinkBoundaryKind, LinkIssueCode,
         LinkOverallStatus, LinkStatus, LoopContentsRequest, LoopCostRequest,
@@ -9076,21 +9305,56 @@ mod tests {
     #[test]
     fn missing_postopt_prepared_lineage_reports_raw_id_match_as_candidate_only() {
         let function = key("function", "demo", "recv");
+        let code_object = key("code.object", "demo", "runtime");
+        let source_file = key("source.file", "demo", "demo.fe");
+        let hir = key("hir.expr", "demo", "expr:source");
         let raw_inst = "function:FuncRef(1):inst:InstId(7)";
         let postopt = key("sonatina.postopt.inst", "demo", raw_inst);
         let prepared = key("sonatina.evm.prepared.inst", "demo", raw_inst);
         let pc = key("bytecode.pc", "demo", "pc:0");
         let snapshot = snapshot(vec![
             node(function.clone()),
+            node(code_object.clone()),
+            node(source_file.clone()),
+            node(hir.clone()),
             node(postopt.clone()),
             node(prepared.clone()),
             node(pc.clone()),
+            TraceFact::SourceFile(SourceFileFact::new(
+                source_file.clone(),
+                "file:///demo.fe",
+                "demo.fe",
+                "blake3:0000000000000000000000000000000000000000000000000000000000000001",
+                Some(0),
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                hir.clone(),
+                source_file,
+                24,
+                36,
+                7,
+                5,
+                7,
+                17,
+            )),
             TraceFact::Instruction(InstructionFact::new(pc.clone(), function, 0, "ADD")),
+            TraceFact::InstructionExtent(InstructionExtentFact::new(
+                pc.clone(),
+                code_object.clone(),
+                PcRange::new(0, 1),
+                1,
+            )),
             TraceFact::OriginEdge(OriginEdgeFact::new(
-                pc,
+                pc.clone(),
                 prepared.clone(),
                 OriginEdgeLabel::EmittedFrom,
                 Some(CompilerPhase::BytecodeEmission),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                postopt.clone(),
+                hir,
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::SonatinaPostOpt),
             )),
         ]);
         let report = TraceIntrospectionService::new(snapshot)
@@ -9138,12 +9402,36 @@ mod tests {
             missing_links.gaps[0].status,
             LinkStatus::MissingLineageButCandidatesExist
         );
+        assert_eq!(
+            missing_links.gaps[0].source_context.as_ref().unwrap().label,
+            "demo.fe:7:5-7:17"
+        );
+        assert_eq!(
+            missing_links.gaps[0].bytecode_context.as_ref().unwrap(),
+            &BytecodeRangeSummary {
+                instruction: pc.clone(),
+                code_object: Some(code_object),
+                pc_start: 0,
+                pc_end: 1,
+                mnemonic: Some("ADD".to_string()),
+            }
+        );
         assert_eq!(missing_links.gaps[0].candidate_hints.len(), 1);
         assert_eq!(
             missing_links.clusters[0].status,
             LinkStatus::MissingLineageButCandidatesExist
         );
         assert_eq!(missing_links.clusters[0].candidate_hints.len(), 1);
+        assert_eq!(missing_links.clusters[0].affected_source_ranges.len(), 1);
+        assert_eq!(
+            missing_links.clusters[0].affected_source_ranges[0].start_line,
+            7
+        );
+        assert_eq!(missing_links.clusters[0].affected_bytecode_ranges.len(), 1);
+        assert_eq!(
+            missing_links.clusters[0].affected_bytecode_ranges[0].pc_start,
+            0
+        );
         assert_eq!(missing_links.summary.missing_required_count, 1);
     }
 
