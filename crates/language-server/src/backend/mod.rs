@@ -60,6 +60,7 @@ pub struct Backend {
     trace_cache: FxHashMap<TraceCacheKey, TraceIntrospectionService>,
     trace_viewer_sessions: FxHashMap<String, TraceViewerSession>,
     trace_viewer_revisions: FxHashMap<String, Vec<TraceViewerRevisionRecord>>,
+    trace_viewer_models: FxHashMap<String, TraceViewerModelCacheEntry>,
     trace_viewer_generation: u64,
 }
 
@@ -68,6 +69,13 @@ struct TraceCacheKey {
     uri: Url,
     document_version: i32,
     config_hash: String,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TraceViewerModelCacheEntry {
+    pub document_version: i32,
+    pub config_hash: String,
+    pub model: serde_json::Value,
 }
 
 impl Backend {
@@ -109,6 +117,7 @@ impl Backend {
             trace_cache: FxHashMap::default(),
             trace_viewer_sessions: FxHashMap::default(),
             trace_viewer_revisions: FxHashMap::default(),
+            trace_viewer_models: FxHashMap::default(),
             trace_viewer_generation: 0,
         }
     }
@@ -120,11 +129,13 @@ impl Backend {
     pub fn set_document_version(&mut self, uri: Url, version: i32) {
         self.document_versions.insert(uri.clone(), version);
         self.clear_trace_cache_for_uri(&uri);
+        self.clear_trace_viewer_model_cache_for_uri(&uri);
     }
 
     pub fn clear_document_version(&mut self, uri: &Url) {
         self.document_versions.remove(uri);
         self.clear_trace_cache_for_uri(uri);
+        self.clear_trace_viewer_model_cache_for_uri(uri);
     }
 
     pub fn document_version(&self, uri: &Url) -> Option<i32> {
@@ -192,6 +203,7 @@ impl Backend {
         self.trace_viewer_sessions.insert(id, session.clone());
         self.trace_viewer_revisions
             .insert(session.id.clone(), Vec::new());
+        self.trace_viewer_models.remove(&session.id);
         session
     }
 
@@ -241,6 +253,58 @@ impl Backend {
                 .cloned()
                 .unwrap_or_default(),
         )
+    }
+
+    pub(crate) fn cached_trace_workbench_model(
+        &self,
+        session_id: &str,
+        document_version: Option<i32>,
+        config_hash: &str,
+    ) -> Option<serde_json::Value> {
+        let document_version = document_version?;
+        let entry = self.trace_viewer_models.get(session_id)?;
+        if entry.document_version == document_version && entry.config_hash == config_hash {
+            Some(entry.model.clone())
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn cache_trace_workbench_model(
+        &mut self,
+        session_id: &str,
+        document_version: Option<i32>,
+        config_hash: String,
+        model: serde_json::Value,
+    ) {
+        let Some(document_version) = document_version else {
+            return;
+        };
+        if !self.trace_viewer_sessions.contains_key(session_id) {
+            return;
+        }
+        self.trace_viewer_models.insert(
+            session_id.to_string(),
+            TraceViewerModelCacheEntry {
+                document_version,
+                config_hash,
+                model,
+            },
+        );
+    }
+
+    fn clear_trace_viewer_model_cache_for_uri(&mut self, uri: &Url) {
+        let uri_text = uri.to_string();
+        let stale_sessions = self
+            .trace_viewer_sessions
+            .iter()
+            .filter_map(|(session_id, session)| {
+                (session.uri == uri_text).then(|| session_id.clone())
+            })
+            .collect::<Vec<_>>();
+        for session_id in stale_sessions {
+            self.trace_viewer_models.remove(&session_id);
+        }
     }
 
     /// Broadcast a doc-navigate event (path like "mylib::Foo/struct").
@@ -528,6 +592,54 @@ mod tests {
         assert_eq!(revisions.first().unwrap().previous_revision, Some(2));
         assert_eq!(revisions.last().unwrap().revision, 66);
         assert_eq!(revisions.last().unwrap().previous_revision, Some(65));
+
+        tokio::task::spawn_blocking(move || drop(backend))
+            .await
+            .expect("backend drop task panicked");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn trace_viewer_model_cache_is_revision_scoped_and_invalidated_on_change() {
+        let mut backend = test_backend();
+        let uri = Url::parse("file:///workspace/src/lib.fe").unwrap();
+        backend.set_document_version(uri.clone(), 7);
+        let session = backend.create_trace_viewer_session(
+            uri.clone(),
+            "evm",
+            "O2",
+            "source-postopt-bytecode",
+            None,
+        );
+        let model = serde_json::json!({
+            "revision": { "id": 7 },
+            "metadata": { "dataSource": "lsp-live" }
+        });
+
+        backend.cache_trace_workbench_model(
+            &session.id,
+            Some(7),
+            "config-a".to_string(),
+            model.clone(),
+        );
+
+        assert_eq!(
+            backend.cached_trace_workbench_model(&session.id, Some(7), "config-a"),
+            Some(model)
+        );
+        assert_eq!(
+            backend.cached_trace_workbench_model(&session.id, Some(7), "config-b"),
+            None
+        );
+        assert_eq!(
+            backend.cached_trace_workbench_model(&session.id, Some(8), "config-a"),
+            None
+        );
+
+        backend.set_document_version(uri, 8);
+        assert_eq!(
+            backend.cached_trace_workbench_model(&session.id, Some(7), "config-a"),
+            None
+        );
 
         tokio::task::spawn_blocking(move || drop(backend))
             .await

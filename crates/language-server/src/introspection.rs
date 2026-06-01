@@ -175,6 +175,13 @@ pub(crate) async fn handle_trace_workbench_model(
         trace_workbench_service_config_hash(&compiler_config_hash, &target_config_hash);
     let opt_level = trace_workbench_parse_opt_level(&session.opt_level).map_err(internal_error)?;
     let document_version = backend.document_version(&uri);
+    if let Some(cached_model) = backend.cached_trace_workbench_model(
+        &request.session_id,
+        document_version,
+        &service_config_hash,
+    ) {
+        return Ok(cached_model);
+    }
     let source_text = backend
         .db
         .workspace()
@@ -235,6 +242,7 @@ pub(crate) async fn handle_trace_workbench_model(
         },
     );
     let manifest = trace_workbench_manifest(&projection);
+    let model_digest = manifest.root_digest.clone();
     backend.record_trace_viewer_revision(
         &request.session_id,
         TraceViewerRevisionRecord {
@@ -242,7 +250,7 @@ pub(crate) async fn handle_trace_workbench_model(
             previous_revision: None,
             document_version,
             status: "ready".to_string(),
-            config_hash: service_config_hash,
+            config_hash: service_config_hash.clone(),
             compiler_config_hash,
             target_config_hash,
             target: session.target,
@@ -250,7 +258,7 @@ pub(crate) async fn handle_trace_workbench_model(
             view: session.view,
             source_hash,
             trace_snapshot_digest,
-            model_digest: manifest.root_digest,
+            model_digest: model_digest.clone(),
             summary_digest: manifest.summary_digest,
             source_digest: manifest.source_digest,
             indexes_digest: manifest.indexes_digest,
@@ -258,6 +266,12 @@ pub(crate) async fn handle_trace_workbench_model(
             pane_digests: manifest.panes,
             report_digests: manifest.reports,
         },
+    );
+    backend.cache_trace_workbench_model(
+        &request.session_id,
+        document_version,
+        service_config_hash,
+        projection.clone(),
     );
     Ok(projection)
 }
@@ -1286,6 +1300,25 @@ pub fn main() -> u64 {
         assert_eq!(revisions.len(), 1);
         assert_eq!(revisions[0].status, "ready");
         assert!(revisions[0].model_digest.starts_with("blake3:"));
+        let compiler_config_hash = backend.tooling_config().stable_hash();
+        let target_config_hash =
+            trace_workbench_target_config_hash("evm", "O2", "source-postopt-bytecode");
+        let config_hash =
+            trace_workbench_service_config_hash(&compiler_config_hash, &target_config_hash);
+        assert!(
+            backend
+                .cached_trace_workbench_model(&session.id, Some(11), &config_hash)
+                .is_some()
+        );
+        let cached_model = handle_trace_workbench_model(
+            &mut backend,
+            TraceWorkbenchSessionRequest {
+                session_id: session.id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(cached_model, model);
 
         tokio::task::spawn_blocking(move || drop(backend))
             .await
