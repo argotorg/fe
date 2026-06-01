@@ -17,6 +17,9 @@ use url::Url;
 
 use crate::backend::{Backend, TraceViewerRevisionRecord};
 
+const DEFAULT_TRACE_TARGET: &str = "evm";
+const DEFAULT_TRACE_VIEW: &str = "source-postopt-bytecode";
+
 #[derive(Clone, Debug)]
 pub(crate) struct TraceBackendQueryRequest {
     pub uri: String,
@@ -265,6 +268,10 @@ fn trace_workbench_target_config_hash(target: &str, opt_level: &str, view: &str)
     ))
 }
 
+fn trace_workbench_opt_level_label(opt_level: codegen::OptLevel) -> String {
+    format!("O{opt_level}")
+}
+
 fn trace_workbench_service_config_hash(
     compiler_config_hash: &str,
     target_config_hash: &str,
@@ -375,16 +382,14 @@ pub(crate) async fn handle_trace_query(
         .transpose()
         .map_err(internal_error)?
         .unwrap_or_else(|| TraceServiceOptions::default().opt_level);
-    let current_config_hash = if let (Some(target), Some(opt_level_text), Some(view)) = (
-        request.target.as_deref(),
-        request.opt_level.as_deref(),
-        request.view.as_deref(),
-    ) {
-        let target_config_hash = trace_workbench_target_config_hash(target, opt_level_text, view);
-        trace_workbench_service_config_hash(&compiler_config_hash, &target_config_hash)
-    } else {
-        compiler_config_hash
-    };
+    let opt_level_text = trace_workbench_opt_level_label(opt_level);
+    let target_config_hash = trace_workbench_target_config_hash(
+        request.target.as_deref().unwrap_or(DEFAULT_TRACE_TARGET),
+        &opt_level_text,
+        request.view.as_deref().unwrap_or(DEFAULT_TRACE_VIEW),
+    );
+    let current_config_hash =
+        trace_workbench_service_config_hash(&compiler_config_hash, &target_config_hash);
     if request
         .config_hash
         .as_deref()
@@ -945,6 +950,106 @@ pub fn main() -> u64 {
                 .flags
                 .iter()
                 .any(|flag| flag == "optimize=O2")
+        );
+
+        tokio::task::spawn_blocking(move || drop(backend))
+            .await
+            .expect("backend drop task panicked");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn trace_query_cache_key_uses_effective_opt_level_without_full_view_tuple() {
+        let mut config = introspection_config::FeToolingConfig::default();
+        config.lsp.trace.max_query_ms = 30_000;
+        let mut backend = test_backend_with_config(config);
+        let uri = Url::parse("file:///workspace/src/live_trace_query_cache.fe").unwrap();
+        backend.db.workspace().update(
+            &mut backend.db,
+            uri.clone(),
+            r#"
+pub fn main() -> u64 {
+    (10 - 3) * 2
+}
+"#
+            .to_string(),
+        );
+        backend.set_document_version(uri.clone(), 11);
+        let compiler_config_hash = backend.tooling_config().stable_hash();
+        let o1_config_hash = trace_workbench_service_config_hash(
+            &compiler_config_hash,
+            &trace_workbench_target_config_hash("evm", "O1", "source-postopt-bytecode"),
+        );
+        let o2_config_hash = trace_workbench_service_config_hash(
+            &compiler_config_hash,
+            &trace_workbench_target_config_hash("evm", "O2", "source-postopt-bytecode"),
+        );
+
+        let o1_response = handle_trace_query(
+            &mut backend,
+            TraceBackendQueryRequest {
+                uri: uri.to_string(),
+                config_hash: Some(o1_config_hash),
+                target: None,
+                opt_level: None,
+                view: None,
+                query: TraceQueryRequest::attribution_audit(),
+            },
+        )
+        .await
+        .unwrap();
+        let TraceQueryHttpResponse::Ok {
+            report: TraceQueryReport::AttributionAudit(o1_report),
+            ..
+        } = o1_response
+        else {
+            panic!("expected successful O1 attribution audit response");
+        };
+        assert!(
+            o1_report
+                .metadata
+                .flags
+                .iter()
+                .any(|flag| flag == "optimize=O1")
+        );
+
+        let o2_response = handle_trace_query(
+            &mut backend,
+            TraceBackendQueryRequest {
+                uri: uri.to_string(),
+                config_hash: Some(o2_config_hash),
+                target: None,
+                opt_level: Some("O2".to_string()),
+                view: None,
+                query: TraceQueryRequest::attribution_audit(),
+            },
+        )
+        .await
+        .unwrap();
+        let TraceQueryHttpResponse::Ok {
+            report: TraceQueryReport::AttributionAudit(o2_report),
+            cache_hit,
+            ..
+        } = o2_response
+        else {
+            panic!("expected successful O2 attribution audit response");
+        };
+        assert!(
+            !cache_hit,
+            "O2 query must not reuse the cached O1 trace service"
+        );
+        assert!(
+            o2_report
+                .metadata
+                .flags
+                .iter()
+                .any(|flag| flag == "optimize=O2")
+        );
+        assert!(
+            !o2_report
+                .metadata
+                .flags
+                .iter()
+                .any(|flag| flag == "optimize=O1")
         );
 
         tokio::task::spawn_blocking(move || drop(backend))
