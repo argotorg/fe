@@ -806,6 +806,9 @@ mod tests {
         assert!(FE_ORIGIN_TRACE_JS.contains("dataset.selectionGroups"));
         assert!(FE_ORIGIN_TRACE_JS.contains("hoverClasses(row)"));
         assert!(FE_ORIGIN_TRACE_JS.contains("selectionClasses(row)"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("_expandSelectionGroups(selectionClasses(row))"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("name.indexOf(\"prepared-c-\") !== 0"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("return exact.concat(generated, prepared);"));
         assert!(FE_ORIGIN_TRACE_JS.contains("return \"evm-vcode\""));
         assert!(
             !FE_ORIGIN_TRACE_JS
