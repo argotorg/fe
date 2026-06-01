@@ -2732,6 +2732,11 @@ fn trace_workbench_source_lines(
             } else {
                 classes.clone()
             };
+            let display_classes = if suppress_rail_status {
+                interaction_classes.clone()
+            } else {
+                classes.clone()
+            };
             TraceWorkbenchSourceLine {
                 row_id: trace_workbench_source_row_id(number),
                 number,
@@ -2749,7 +2754,7 @@ fn trace_workbench_source_lines(
                 display_status: exact_classes
                     .map(|_| trace_workbench_status_for_source_line(&classes))
                     .unwrap_or_default(),
-                classes,
+                classes: display_classes,
             }
         })
         .collect()
@@ -11362,7 +11367,7 @@ mod tests {
             &trace_workbench_exact_prepared_selection_bridge(&classes),
         );
 
-        assert_eq!(lines[1].classes, vec!["generated-c-broad"]);
+        assert!(lines[1].classes.is_empty());
         assert!(lines[1].suppress_rail_status);
         assert_eq!(lines[1].display_status, None);
         assert!(lines[1].hover_groups.is_empty());
@@ -11407,13 +11412,19 @@ mod tests {
 
         assert!(lines[1].suppress_rail_status);
         assert_eq!(lines[1].display_status, None);
+        assert_eq!(
+            lines[1].classes,
+            vec!["exact-c-source", "prepared-c-bytecode"]
+        );
         assert_eq!(lines[1].hover_groups, vec!["exact-c-source"]);
         assert_eq!(
             lines[1].selection_groups,
             vec!["exact-c-source", "prepared-c-bytecode"]
         );
+        assert!(lines[2].classes.is_empty());
         assert!(lines[2].hover_groups.is_empty());
         assert!(lines[2].selection_groups.is_empty());
+        assert!(lines[3].classes.is_empty());
         assert!(lines[3].hover_groups.is_empty());
         assert!(lines[3].selection_groups.is_empty());
     }
