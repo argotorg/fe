@@ -2039,8 +2039,10 @@ fn trace_workbench_selection_remap() -> serde_json::Value {
             "origin_to_rows",
             "bytecode_pcs",
             "source_lines",
+            "source_intervals",
             "component_to_rows",
             "stable_identities",
+            "pc_intervals",
         ],
     })
 }
@@ -2424,6 +2426,8 @@ fn trace_workbench_projection_indexes(
     let mut component_to_rows = BTreeMap::<String, BTreeSet<String>>::new();
     let mut bytecode_pcs = BTreeMap::<String, BTreeSet<String>>::new();
     let mut stable_identities = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut source_intervals = Vec::<serde_json::Value>::new();
+    let mut pc_intervals = Vec::<serde_json::Value>::new();
 
     for line in source
         .get("lines")
@@ -2436,6 +2440,12 @@ fn trace_workbench_projection_indexes(
         };
         if let Some(number) = line.get("number").and_then(serde_json::Value::as_u64) {
             source_lines.insert(format!("main:{number}"), row_id.to_string());
+            source_intervals.push(serde_json::json!({
+                "source": "main",
+                "start_line": number,
+                "end_line": number,
+                "row_id": row_id,
+            }));
         }
         trace_workbench_index_stable_identities(line, row_id, &mut stable_identities);
         for class in line
@@ -2468,6 +2478,26 @@ fn trace_workbench_projection_indexes(
         let Some(row_id) = line.get("row_id").and_then(serde_json::Value::as_str) else {
             continue;
         };
+        let source = line
+            .get("stable_identities")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .find_map(|identity| {
+                (identity.get("kind").and_then(serde_json::Value::as_str) == Some("source_line"))
+                    .then(|| identity.get("value").and_then(serde_json::Value::as_str))
+                    .flatten()
+            })
+            .and_then(|value| value.rsplit_once(':').map(|(source, _)| source.to_string()))
+            .unwrap_or_else(|| "related".to_string());
+        if let Some(number) = line.get("number").and_then(serde_json::Value::as_u64) {
+            source_intervals.push(serde_json::json!({
+                "source": source,
+                "start_line": number,
+                "end_line": number,
+                "row_id": row_id,
+            }));
+        }
         trace_workbench_index_stable_identities(line, row_id, &mut stable_identities);
         for class in line
             .get("classes")
@@ -2499,6 +2529,14 @@ fn trace_workbench_projection_indexes(
                     .entry(pc.to_string())
                     .or_default()
                     .insert(row.row_id.clone());
+                if let Ok(pc) = pc.parse::<u64>() {
+                    pc_intervals.push(serde_json::json!({
+                        "pc_start": pc,
+                        "pc_end": pc.saturating_add(1),
+                        "row_id": row.row_id.clone(),
+                        "origin": row.key.clone(),
+                    }));
+                }
             }
             for identity in &row.stable_identities {
                 stable_identities
@@ -2521,6 +2559,8 @@ fn trace_workbench_projection_indexes(
         "component_to_rows": trace_workbench_index_sets_to_lists(component_to_rows),
         "bytecode_pcs": trace_workbench_index_sets_to_lists(bytecode_pcs),
         "stable_identities": trace_workbench_index_sets_to_lists(stable_identities),
+        "source_intervals": source_intervals,
+        "pc_intervals": pc_intervals,
     })
 }
 
@@ -6761,6 +6801,18 @@ mod tests {
             projection["indexes"]["stable_identities"]["source_line:main:2"][0],
             "source-main-line-2"
         );
+        assert!(
+            projection["indexes"]["source_intervals"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|interval| {
+                    interval["source"] == "main"
+                        && interval["start_line"] == 2
+                        && interval["end_line"] == 2
+                        && interval["row_id"] == "source-main-line-2"
+                })
+        );
         let first_bytecode_row = &bytecode_panel["rows"][0];
         let first_bytecode_key = first_bytecode_row["key"].as_str().unwrap();
         let first_bytecode_row_id = first_bytecode_row["row_id"].as_str().unwrap();
@@ -6784,6 +6836,18 @@ mod tests {
                 .iter()
                 .any(|identity| identity["kind"] == "bytecode_pc")
         );
+        assert!(
+            projection["indexes"]["pc_intervals"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|interval| {
+                    interval["row_id"] == first_bytecode_row_id
+                        && interval["origin"] == first_bytecode_key
+                        && interval["pc_start"].as_u64().is_some()
+                        && interval["pc_end"].as_u64().is_some_and(|end| end > 0)
+                })
+        );
         assert_eq!(
             projection["selection_remap"]["strategy_order"]
                 .as_array()
@@ -6806,6 +6870,20 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|index| index == "stable_identities")
+        );
+        assert!(
+            projection["selection_remap"]["indexes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|index| index == "source_intervals")
+        );
+        assert!(
+            projection["selection_remap"]["indexes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|index| index == "pc_intervals")
         );
         assert_eq!(
             projection["notes"][2],
