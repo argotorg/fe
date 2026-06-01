@@ -853,6 +853,16 @@ mod tests {
     }
 
     #[test]
+    fn origin_trace_jump_controls_are_selection_scoped() {
+        assert!(FE_ORIGIN_TRACE_JS.contains("activeRunKey"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("_setActiveRunForRow"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("_runIndexNearestViewport"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("_markerTarget"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("preferSectionBoundary: false"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("_withBoundaryPreference(options, true)"));
+    }
+
+    #[test]
     fn origin_trace_preserves_selection_by_stable_identity() {
         assert!(FE_ORIGIN_TRACE_JS.contains("stableIdentityToken"));
         assert!(FE_ORIGIN_TRACE_JS.contains("dataset.stableIdentities"));

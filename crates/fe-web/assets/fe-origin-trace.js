@@ -770,12 +770,19 @@
         if (!row) return;
         event.preventDefault();
         var marker = event.target.closest && event.target.closest(".overview-marker");
-        if (marker) this._scrollToMarkerTarget(marker);
+        if (marker) {
+          var markerTarget = this._markerTarget(marker);
+          if (markerTarget) {
+            this._scrollRowIntoView(markerTarget);
+            row = markerTarget;
+          }
+        }
         var groups = traceClasses(row);
         this._selectedDisplayClasses = allClasses(row);
         this._selectedStableIdentities = stableIdentityTokens(row);
         this._selectedTraceLabel = row.dataset.traceLabel || "";
         this._select(groups);
+        this._setActiveRunForRow(row.closest && row.closest(".listing-shell"), groups, row);
         this._scrollPeerPanesToSelection(groups, row);
         this._pinHashForRow(row);
       }.bind(this));
@@ -888,6 +895,7 @@
       this._selectedDisplayClasses = allClasses(row);
       this._selectedStableIdentities = stableIdentityTokens(row);
       this._select(groups);
+      this._setActiveRunForRow(row.closest && row.closest(".listing-shell"), groups, row);
       this._scrollRowIntoView(row, options);
       this._scrollPeerPanesToSelection(groups, row, options);
       return true;
@@ -982,6 +990,7 @@
           representation: this._paneChoices && this._paneChoices[Number(index)],
           scrollTop: scroller.scrollTop,
           activeRun: shell && shell.dataset.activeRun || "",
+          activeRunKey: shell && shell.dataset.activeRunKey || "",
         };
       }, this);
       return state;
@@ -1003,6 +1012,7 @@
         if (!saved) return;
         scroller.scrollTop = saved.scrollTop || 0;
         if (saved.activeRun) shell.dataset.activeRun = saved.activeRun;
+        if (saved.activeRunKey) shell.dataset.activeRunKey = saved.activeRunKey;
       }, this);
     }
 
@@ -1038,15 +1048,20 @@
       var runs = this._matchingRuns(shell, this._selected);
       if (!runs.length) return false;
       shell.dataset.activeRun = "0";
-      this._scrollRunIntoView(runs[0], 1, options);
+      shell.dataset.activeRunKey = this._highlightKey(this._selected);
+      this._scrollRunIntoView(runs[0], 1, this._withBoundaryPreference(options, true));
       return true;
     }
 
     _scrollToMarkerTarget(marker) {
-      var targetId = marker && marker.dataset && marker.dataset.targetRow;
-      if (!targetId) return;
-      var target = this.shadowRoot.getElementById(targetId);
+      var target = this._markerTarget(marker);
       if (target) this._scrollRowIntoView(target);
+    }
+
+    _markerTarget(marker) {
+      var targetId = marker && marker.dataset && marker.dataset.targetRow;
+      if (!targetId) return null;
+      return this.shadowRoot.getElementById(targetId);
     }
 
     _scrollPeerPanesToSelection(groups, origin, options) {
@@ -1057,7 +1072,8 @@
         var runs = this._matchingRuns(shell, groups);
         if (!runs.length) return;
         shell.dataset.activeRun = "0";
-        this._scrollRunIntoView(runs[0], 1, options);
+        shell.dataset.activeRunKey = this._highlightKey(groups);
+        this._scrollRunIntoView(runs[0], 1, this._withBoundaryPreference(options, true));
       }, this);
     }
 
@@ -1068,22 +1084,25 @@
       var runs = this._matchingRuns(shell, this._selected);
       if (!runs.length) return;
       var direction = button.dataset.paneJump === "prev" ? -1 : 1;
+      var key = this._highlightKey(this._selected);
       var current = Number(shell.dataset.activeRun || "-1");
-      if (!Number.isFinite(current) || current < 0 || current >= runs.length) {
-        current = direction < 0 ? runs.length : -1;
+      if (shell.dataset.activeRunKey !== key || !Number.isFinite(current) || current < 0 || current >= runs.length) {
+        current = this._runIndexNearestViewport(shell, runs);
+        if (current < 0) current = direction < 0 ? runs.length : -1;
       }
       var next = direction < 0 ? current - 1 : current + 1;
       if (next < 0) next = runs.length - 1;
       if (next >= runs.length) next = 0;
       shell.dataset.activeRun = String(next);
-      this._scrollRunIntoView(runs[next], direction);
+      shell.dataset.activeRunKey = key;
+      this._scrollRunIntoView(runs[next], direction, { preferSectionBoundary: false });
     }
 
     _matchingRuns(shell, groups) {
       groups = this._highlightGroups(groups);
       var wanted = Object.create(null);
       (groups || []).forEach(function (group) { wanted[group] = true; });
-      var key = (groups || []).slice().sort().join("|");
+      var key = this._highlightKey(groups);
       shell.__traceRunCache = shell.__traceRunCache || Object.create(null);
       if (shell.__traceRunCache[key]) return shell.__traceRunCache[key];
       var rows = this._traceRows(shell);
@@ -1108,6 +1127,53 @@
       return runs;
     }
 
+    _highlightKey(groups) {
+      return (this._highlightGroups(groups) || []).slice().sort().join("|");
+    }
+
+    _setActiveRunForRow(shell, groups, row) {
+      if (!shell || !row) return;
+      var runs = this._matchingRuns(shell, groups);
+      var index = this._runIndexContainingRow(runs, row);
+      if (index < 0) return;
+      shell.dataset.activeRun = String(index);
+      shell.dataset.activeRunKey = this._highlightKey(groups);
+    }
+
+    _runIndexContainingRow(runs, row) {
+      for (var i = 0; i < (runs || []).length; i++) {
+        if (runs[i].indexOf(row) >= 0) return i;
+      }
+      return -1;
+    }
+
+    _runIndexNearestViewport(shell, runs) {
+      var scroller = this._scrollContainer(shell);
+      if (!scroller) return -1;
+      var viewportCenter = scroller.getBoundingClientRect().top + scroller.clientHeight / 2;
+      var best = -1;
+      var bestDistance = Infinity;
+      (runs || []).forEach(function (run, index) {
+        if (!run || !run.length) return;
+        var first = run[0].getBoundingClientRect();
+        var last = run[run.length - 1].getBoundingClientRect();
+        var center = (first.top + last.bottom) / 2;
+        var distance = Math.abs(center - viewportCenter);
+        if (distance < bestDistance) {
+          best = index;
+          bestDistance = distance;
+        }
+      });
+      return best;
+    }
+
+    _withBoundaryPreference(options, prefer) {
+      var out = {};
+      Object.keys(options || {}).forEach(function (key) { out[key] = options[key]; });
+      out.preferSectionBoundary = prefer;
+      return out;
+    }
+
     _traceRows(shell) {
       if (!shell.__traceRows) {
         shell.__traceRows = Array.prototype.slice.call(shell.querySelectorAll(".source-line.trace-region,.trace-row.trace-region"));
@@ -1120,7 +1186,7 @@
       var pane = run[0].closest && run[0].closest(".workbench-pane");
       var representation = pane && pane.dataset && pane.dataset.representationId;
       var target = direction < 0 ? run[run.length - 1] : run[0];
-      if (representation !== "bytecode") {
+      if (options && options.preferSectionBoundary && representation !== "bytecode") {
         var boundary = run.filter(function (row) { return row.classList.contains("boundary-row"); })[0] || this._nearestSectionBoundary(run[0]);
         target = boundary || target;
       }
