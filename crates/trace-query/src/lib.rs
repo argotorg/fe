@@ -10630,6 +10630,7 @@ mod tests {
     #[test]
     fn trace_workbench_interaction_groups_are_policy_scoped() {
         let classes = vec![
+            "trace-c-legacy".to_string(),
             "context-c-soft".to_string(),
             "exact-c-source".to_string(),
             "generated-c-helper".to_string(),
@@ -10648,6 +10649,11 @@ mod tests {
                 "generated-c-helper".to_string(),
                 "prepared-c-bytecode".to_string()
             ]
+        );
+        assert!(
+            !trace_workbench_selection_groups(&classes)
+                .iter()
+                .any(|group| group == "trace-c-legacy")
         );
 
         let prepared_only = vec![
