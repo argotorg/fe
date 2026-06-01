@@ -5134,14 +5134,18 @@ impl<'a> TraceIndex<'a> {
         }
     }
 
+    fn synthetic_overhead_edge(edge: &trace_facts::OriginEdgeFact) -> bool {
+        matches!(
+            edge.traversal_class(),
+            OriginEdgeTraversalClass::Synthetic | OriginEdgeTraversalClass::Unmapped
+        ) || edge.is_backend_prepared_semantic_edge()
+    }
+
     fn synthetic_edge_labels(&self, instruction: &OriginExportKey) -> bool {
         self.snapshot.facts().iter().any(|fact| match fact {
-            TraceFact::OriginEdge(edge) if &edge.from == instruction => matches!(
-                edge.label,
-                OriginEdgeLabel::SyntheticFor
-                    | OriginEdgeLabel::BackendPrepared
-                    | OriginEdgeLabel::Unmapped
-            ),
+            TraceFact::OriginEdge(edge) if &edge.from == instruction => {
+                Self::synthetic_overhead_edge(edge)
+            }
             _ => false,
         })
     }
@@ -5155,13 +5159,7 @@ impl<'a> TraceIndex<'a> {
             .iter()
             .filter_map(|fact| match fact {
                 TraceFact::OriginEdge(edge)
-                    if &edge.from == instruction
-                        && matches!(
-                            edge.label,
-                            OriginEdgeLabel::SyntheticFor
-                                | OriginEdgeLabel::BackendPrepared
-                                | OriginEdgeLabel::Unmapped
-                        ) =>
+                    if &edge.from == instruction && Self::synthetic_overhead_edge(edge) =>
                 {
                     Some(edge)
                 }
