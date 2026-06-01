@@ -792,6 +792,14 @@ mod tests {
     }
 
     #[test]
+    fn origin_trace_shell_keeps_scroll_pane_local() {
+        assert!(FE_ORIGIN_TRACE_JS.contains("height:100vh"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("overflow:hidden"));
+        assert!(FE_ORIGIN_TRACE_JS.contains("overscroll-behavior:contain"));
+        assert!(FE_ORIGIN_TRACE_JS.contains(".bottom-deck::-webkit-scrollbar"));
+    }
+
+    #[test]
     fn js_escape_handles_special_chars() {
         assert_eq!(js_escape_string("hello\nworld"), "hello\\nworld");
         assert_eq!(js_escape_string(r#"a"b"#), r#"a\"b"#);
