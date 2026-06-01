@@ -5674,7 +5674,9 @@ fn missing_link_audit_report(
     lineage_gaps: &[AttributionAuditLineageGap],
     invalid: Vec<InvalidAttributionLink>,
 ) -> MissingLinkAuditReport {
-    let missing_required_count = lineage_gaps.len();
+    let hir_to_mir = hir_to_mir_boundary_audit(snapshot);
+    let missing_hir_to_mir_count = hir_to_mir.missing.len();
+    let missing_required_count = lineage_gaps.len() + missing_hir_to_mir_count;
     let expected_absent = expected_absent_links(snapshot);
     let overall_status = if !invalid.is_empty() {
         LinkOverallStatus::Invalid
@@ -5686,11 +5688,41 @@ fn missing_link_audit_report(
         LinkOverallStatus::Pass
     };
     let mut top_blockers = Vec::new();
-    if missing_required_count > 0 || !invalid.is_empty() {
+    if missing_hir_to_mir_count > 0 {
+        top_blockers.push(LinkBoundaryKind::HirToMir);
+    }
+    if !lineage_gaps.is_empty() || !invalid.is_empty() {
         top_blockers.push(LinkBoundaryKind::PostOptToPrepared);
     }
 
     let mut boundary_summaries = Vec::new();
+    if hir_to_mir.total() > 0 {
+        let mut status_counts = BTreeMap::new();
+        if hir_to_mir.exact > 0 {
+            status_counts.insert(LinkStatus::SatisfiedExact, hir_to_mir.exact);
+        }
+        if hir_to_mir.generated > 0 {
+            status_counts.insert(LinkStatus::SatisfiedGenerated, hir_to_mir.generated);
+        }
+        if missing_hir_to_mir_count > 0 {
+            status_counts.insert(LinkStatus::MissingRequired, missing_hir_to_mir_count);
+        }
+        boundary_summaries.push(LinkBoundarySummary {
+            boundary: LinkBoundaryKind::HirToMir,
+            owner_phase: CompilerPhase::Mir,
+            status_counts,
+            affected_origins: hir_to_mir.total(),
+            affected_bytecode_pcs: 0,
+            top_issue_codes: [
+                (hir_to_mir.generated > 0).then_some(LinkIssueCode::GeneratedExplanationOnly),
+                (missing_hir_to_mir_count > 0).then_some(LinkIssueCode::MissingHirToMirLowering),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+        });
+    }
+
     if prepared_linked_pcs > 0 || missing_required_count > 0 || !invalid.is_empty() {
         let mut status_counts = BTreeMap::new();
         let satisfied_prepared_lineage_count =
@@ -5750,32 +5782,84 @@ fn missing_link_audit_report(
 
     let required_evidence = required_optimized_to_prepared_evidence();
     let cluster_id = "postopt-to-prepared:missing-optimized-to-prepared-lineage".to_string();
-    let details = lineage_gaps
+    let mut details = hir_to_mir
+        .missing
         .iter()
         .take(MISSING_LINK_DETAIL_LIMIT)
-        .map(|gap| LinkGap {
-            gap_id: link_gap_id(
-                LinkBoundaryKind::PostOptToPrepared,
-                &gap.bytecode_pc,
-                &gap.prepared_origin,
-            ),
-            boundary: LinkBoundaryKind::PostOptToPrepared,
+        .map(|origin| LinkGap {
+            gap_id: stable_short_id(&format!(
+                "{:?}\n{}",
+                LinkBoundaryKind::HirToMir,
+                origin.canonical_storage_key()
+            )),
+            boundary: LinkBoundaryKind::HirToMir,
             status: LinkStatus::MissingRequired,
-            issue_code: LinkIssueCode::MissingOptimizedToPreparedLineage,
+            issue_code: LinkIssueCode::MissingHirToMirLowering,
             severity: LinkSeverity::Warning,
-            from_origin: gap.prepared_origin.clone(),
-            from_representation: Some("sonatina.evm.prepared".to_string()),
-            expected_to_phase: "sonatina.postopt".to_string(),
-            reached_frontier: "evm.prepared.bytecode".to_string(),
+            from_origin: origin.clone(),
+            from_representation: Some("hir".to_string()),
+            expected_to_phase: "mir".to_string(),
+            reached_frontier: "hir.source".to_string(),
             candidate_hints: Vec::new(),
-            required_evidence: required_evidence.clone(),
-            cluster_id: Some(cluster_id.clone()),
+            required_evidence: required_hir_to_mir_evidence(),
+            cluster_id: Some("hir-to-mir:missing-lowering".to_string()),
         })
         .collect::<Vec<_>>();
+    details.extend(
+        lineage_gaps
+            .iter()
+            .take(MISSING_LINK_DETAIL_LIMIT.saturating_sub(details.len()))
+            .map(|gap| LinkGap {
+                gap_id: link_gap_id(
+                    LinkBoundaryKind::PostOptToPrepared,
+                    &gap.bytecode_pc,
+                    &gap.prepared_origin,
+                ),
+                boundary: LinkBoundaryKind::PostOptToPrepared,
+                status: LinkStatus::MissingRequired,
+                issue_code: LinkIssueCode::MissingOptimizedToPreparedLineage,
+                severity: LinkSeverity::Warning,
+                from_origin: gap.prepared_origin.clone(),
+                from_representation: Some("sonatina.evm.prepared".to_string()),
+                expected_to_phase: "sonatina.postopt".to_string(),
+                reached_frontier: "evm.prepared.bytecode".to_string(),
+                candidate_hints: Vec::new(),
+                required_evidence: required_evidence.clone(),
+                cluster_id: Some(cluster_id.clone()),
+            }),
+    );
 
-    let clusters = if missing_required_count == 0 {
-        Vec::new()
-    } else {
+    let mut clusters = Vec::new();
+    if missing_hir_to_mir_count > 0 {
+        clusters.push(LinkGapCluster {
+            cluster_id: "hir-to-mir:missing-lowering".to_string(),
+            boundary: LinkBoundaryKind::HirToMir,
+            status: LinkStatus::MissingRequired,
+            issue_code: LinkIssueCode::MissingHirToMirLowering,
+            severity: LinkSeverity::Warning,
+            owner_phase: CompilerPhase::Mir,
+            headline: "HIR source origin has no MIR lowering evidence".to_string(),
+            explanation: "Executable HIR origins should be connected to MIR statements or terminators by exact lowering or generated/synthetic explanation edges.".to_string(),
+            affected_origins: hir_to_mir
+                .missing
+                .iter()
+                .take(25)
+                .cloned()
+                .map(|target| AttributionAuditTargetCount { target, count: 1 })
+                .collect(),
+            affected_bytecode_pcs: Vec::new(),
+            gap_count: missing_hir_to_mir_count,
+            sample_gap_ids: details
+                .iter()
+                .filter(|gap| gap.boundary == LinkBoundaryKind::HirToMir)
+                .take(MISSING_LINK_CLUSTER_SAMPLE_LIMIT)
+                .map(|gap| gap.gap_id.clone())
+                .collect(),
+            candidate_hints: Vec::new(),
+            required_evidence: required_hir_to_mir_evidence(),
+        });
+    }
+    if !lineage_gaps.is_empty() {
         let mut affected_origins = attribution_audit_target_counts(lineage_gap_targets.clone());
         affected_origins.truncate(25);
         let affected_bytecode_pcs = lineage_gaps
@@ -5783,7 +5867,7 @@ fn missing_link_audit_report(
             .map(|gap| gap.bytecode_pc.clone())
             .take(25)
             .collect::<Vec<_>>();
-        vec![LinkGapCluster {
+        clusters.push(LinkGapCluster {
             cluster_id: cluster_id.clone(),
             boundary: LinkBoundaryKind::PostOptToPrepared,
             status: LinkStatus::MissingRequired,
@@ -5802,8 +5886,8 @@ fn missing_link_audit_report(
                 .collect(),
             candidate_hints: Vec::new(),
             required_evidence: required_evidence.clone(),
-        }]
-    };
+        });
+    }
 
     MissingLinkAuditReport {
         schema_version: MISSING_LINK_AUDIT_SCHEMA_VERSION.to_string(),
@@ -5824,6 +5908,72 @@ fn missing_link_audit_report(
         gaps: details,
         expected_absent,
         invalid,
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct HirToMirBoundaryAudit {
+    exact: usize,
+    generated: usize,
+    missing: Vec<OriginExportKey>,
+}
+
+impl HirToMirBoundaryAudit {
+    fn total(&self) -> usize {
+        self.exact + self.generated + self.missing.len()
+    }
+}
+
+fn hir_to_mir_boundary_audit(snapshot: &TraceSnapshot) -> HirToMirBoundaryAudit {
+    let mut hir_origins = BTreeSet::<OriginExportKey>::new();
+    let mut has_mir_origin = false;
+    let mut exact = BTreeSet::<OriginExportKey>::new();
+    let mut generated = BTreeSet::<OriginExportKey>::new();
+
+    for fact in snapshot.facts() {
+        match fact {
+            TraceFact::SourceSpan(span) if is_hir_audit_origin(&span.origin) => {
+                hir_origins.insert(span.origin.clone());
+            }
+            TraceFact::OriginNode(node) if is_mir_audit_origin(&node.key) => {
+                has_mir_origin = true;
+            }
+            TraceFact::OriginEdge(edge)
+                if is_mir_audit_origin(&edge.from) && is_hir_audit_origin(&edge.to) =>
+            {
+                match edge.traversal_class() {
+                    OriginEdgeTraversalClass::ExactAttribution
+                    | OriginEdgeTraversalClass::SnapshotAlias => {
+                        exact.insert(edge.to.clone());
+                    }
+                    OriginEdgeTraversalClass::Synthetic => {
+                        generated.insert(edge.to.clone());
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if !has_mir_origin {
+        return HirToMirBoundaryAudit::default();
+    }
+
+    let missing = hir_origins
+        .iter()
+        .filter(|origin| !exact.contains(*origin) && !generated.contains(*origin))
+        .cloned()
+        .collect::<Vec<_>>();
+    let generated_only = generated
+        .iter()
+        .filter(|origin| !exact.contains(*origin))
+        .count();
+
+    HirToMirBoundaryAudit {
+        exact: exact.len(),
+        generated: generated_only,
+        missing,
     }
 }
 
@@ -5906,6 +6056,14 @@ fn required_optimized_to_prepared_evidence() -> Vec<RequiredEvidence> {
         kind: RequiredEvidenceKind::PreparedLineageFact,
         owner_phase: CompilerPhase::Backend,
         description: "Emit explicit EVM prepared/codegen → optimized Sonatina lineage with exact, backend-prepared, synthetic, debug-context, split/merge, or elision semantics.".to_string(),
+    }]
+}
+
+fn required_hir_to_mir_evidence() -> Vec<RequiredEvidence> {
+    vec![RequiredEvidence {
+        kind: RequiredEvidenceKind::ExactOriginEdge,
+        owner_phase: CompilerPhase::Mir,
+        description: "Emit MIR statement/terminator → HIR origin evidence as exact lowering or generated/synthetic explanation.".to_string(),
     }]
 }
 
@@ -6194,6 +6352,14 @@ fn is_optimized_sonatina_audit_origin(key: &OriginExportKey) -> bool {
 
 fn is_prepared_sonatina_audit_origin(key: &OriginExportKey) -> bool {
     key.kind().starts_with("sonatina.evm.prepared")
+}
+
+fn is_hir_audit_origin(key: &OriginExportKey) -> bool {
+    matches!(key.kind(), "hir.expr" | "hir.stmt")
+}
+
+fn is_mir_audit_origin(key: &OriginExportKey) -> bool {
+    matches!(key.kind(), "runtime.stmt" | "runtime.terminator")
 }
 
 fn attribution_audit_target_counts(
@@ -7550,6 +7716,115 @@ mod tests {
             .expect("prepared to bytecode boundary summary");
         assert_eq!(prepared_to_bytecode.affected_origins, 1);
         assert_eq!(prepared_to_bytecode.affected_bytecode_pcs, 1);
+    }
+
+    #[test]
+    fn missing_link_audit_reports_hir_to_mir_exact_generated_and_missing() {
+        let source_file = key("source.file", "demo", "demo.fe");
+        let hir_exact = key("hir.expr", "demo", "expr:exact");
+        let hir_generated = key("hir.expr", "demo", "expr:generated");
+        let hir_missing = key("hir.expr", "demo", "expr:missing");
+        let mir_exact = key("runtime.stmt", "demo", "block:0:stmt:0");
+        let mir_generated = key("runtime.stmt", "demo", "block:0:stmt:1");
+        let mir_other = key("runtime.terminator", "demo", "block:0:term");
+        let snapshot = snapshot(vec![
+            node(source_file.clone()),
+            node(hir_exact.clone()),
+            node(hir_generated.clone()),
+            node(hir_missing.clone()),
+            node(mir_exact.clone()),
+            node(mir_generated.clone()),
+            node(mir_other.clone()),
+            TraceFact::SourceFile(SourceFileFact::new(
+                source_file.clone(),
+                "file:///demo.fe",
+                "demo.fe",
+                "blake3:0000000000000000000000000000000000000000000000000000000000000001",
+                Some(0),
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                hir_exact.clone(),
+                source_file.clone(),
+                0,
+                1,
+                1,
+                1,
+                1,
+                2,
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                hir_generated.clone(),
+                source_file.clone(),
+                2,
+                3,
+                2,
+                1,
+                2,
+                2,
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                hir_missing.clone(),
+                source_file,
+                4,
+                5,
+                3,
+                1,
+                3,
+                2,
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                mir_exact,
+                hir_exact,
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::Mir),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                mir_generated,
+                hir_generated,
+                OriginEdgeLabel::SyntheticFor,
+                Some(CompilerPhase::Mir),
+            )),
+        ]);
+        let report = TraceIntrospectionService::new(snapshot)
+            .attribution_audit()
+            .unwrap();
+        let missing_links = report.missing_links.as_ref().unwrap();
+
+        assert_eq!(missing_links.summary.status, LinkOverallStatus::Warning);
+        assert_eq!(
+            missing_links.summary.top_blockers,
+            vec![LinkBoundaryKind::HirToMir]
+        );
+        assert_eq!(missing_links.summary.missing_required_count, 1);
+        let hir_summary = missing_links
+            .boundary_summaries
+            .iter()
+            .find(|summary| summary.boundary == LinkBoundaryKind::HirToMir)
+            .expect("HIR to MIR boundary summary");
+        assert_eq!(hir_summary.affected_origins, 3);
+        assert_eq!(
+            hir_summary.status_counts.get(&LinkStatus::SatisfiedExact),
+            Some(&1)
+        );
+        assert_eq!(
+            hir_summary
+                .status_counts
+                .get(&LinkStatus::SatisfiedGenerated),
+            Some(&1)
+        );
+        assert_eq!(
+            hir_summary.status_counts.get(&LinkStatus::MissingRequired),
+            Some(&1)
+        );
+        assert_eq!(
+            missing_links.gaps[0].issue_code,
+            LinkIssueCode::MissingHirToMirLowering
+        );
+        assert_eq!(missing_links.gaps[0].from_origin, hir_missing);
+        assert_eq!(
+            missing_links.gaps[0].required_evidence[0].kind,
+            RequiredEvidenceKind::ExactOriginEdge
+        );
     }
 
     #[test]
