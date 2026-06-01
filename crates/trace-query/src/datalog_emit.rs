@@ -669,19 +669,23 @@ pub fn origin_reaches(snapshot: &TraceSnapshot) -> BTreeSet<(OriginExportKey, Or
     let mut adjacency: BTreeMap<OriginExportKey, BTreeSet<OriginExportKey>> = BTreeMap::new();
     let prepared_lineage_events = prepared_lineage_event_pairs(snapshot);
     for fact in snapshot.facts() {
-        if let TraceFact::OriginEdge(edge) = fact
-            && matches!(
-                edge.traversal_class(),
-                OriginEdgeTraversalClass::ExactAttribution
-                    | OriginEdgeTraversalClass::SnapshotAlias
-            )
-            && origin_edge_satisfies_phase_contract(edge, &prepared_lineage_events)
-        {
-            adjacency
-                .entry(edge.from.clone())
-                .or_default()
-                .insert(edge.to.clone());
+        let TraceFact::OriginEdge(edge) = fact else {
+            continue;
+        };
+        if !origin_edge_satisfies_phase_contract(edge, &prepared_lineage_events) {
+            continue;
         }
+        let exact_or_snapshot = matches!(
+            edge.traversal_class(),
+            OriginEdgeTraversalClass::ExactAttribution | OriginEdgeTraversalClass::SnapshotAlias
+        );
+        if !exact_or_snapshot && !is_prepared_codegen_connectivity_edge(edge) {
+            continue;
+        }
+        adjacency
+            .entry(edge.from.clone())
+            .or_default()
+            .insert(edge.to.clone());
     }
 
     let mut reaches = BTreeSet::new();
@@ -1271,6 +1275,119 @@ mod tests {
             ]
         ));
         assert!(origin_reaches(&snapshot).is_empty());
+    }
+
+    #[test]
+    fn origin_reaches_prepared_bytecode_without_source_when_lineage_missing() {
+        let source = key("hir.expr", "demo", "expr:0");
+        let postopt = key("sonatina.postopt.inst", "demo", "inst:0");
+        let prepared = key("sonatina.evm.prepared.inst", "demo", "inst:0");
+        let vcode = key("evm.vcode.inst", "demo", "inst:0");
+        let pc = key("bytecode.pc", "demo", "pc:0");
+        let snapshot = TraceSnapshot::new(TraceBundle::new(
+            TraceMetadata::compiler_emitted(
+                "abc123",
+                "evm/sonatina",
+                vec!["fe".to_string(), "trace".to_string()],
+                "demo.fe",
+                vec![],
+            ),
+            vec![
+                node(source.clone()),
+                node(postopt.clone()),
+                node(prepared.clone()),
+                node(vcode.clone()),
+                node(pc.clone()),
+                TraceFact::OriginEdge(OriginEdgeFact::new(
+                    postopt.clone(),
+                    source.clone(),
+                    OriginEdgeLabel::LoweredFrom,
+                    Some(CompilerPhase::SonatinaPostOpt),
+                )),
+                TraceFact::OriginEdge(OriginEdgeFact::new(
+                    pc.clone(),
+                    vcode.clone(),
+                    OriginEdgeLabel::EmittedFrom,
+                    Some(CompilerPhase::BytecodeEmission),
+                )),
+                TraceFact::OriginEdge(OriginEdgeFact::new(
+                    vcode.clone(),
+                    prepared.clone(),
+                    OriginEdgeLabel::LoweredFrom,
+                    Some(CompilerPhase::BytecodeEmission),
+                )),
+            ],
+        ))
+        .unwrap();
+        let reaches = origin_reaches(&snapshot);
+
+        assert!(reaches.contains(&(pc.clone(), vcode)));
+        assert!(reaches.contains(&(pc.clone(), prepared)));
+        assert!(reaches.contains(&(postopt, source.clone())));
+        assert!(!reaches.contains(&(pc, source)));
+    }
+
+    #[test]
+    fn origin_reaches_source_through_prepared_bytecode_only_with_lineage_event() {
+        let source = key("hir.expr", "demo", "expr:0");
+        let postopt = key("sonatina.postopt.inst", "demo", "inst:0");
+        let prepared = key("sonatina.evm.prepared.inst", "demo", "inst:0");
+        let vcode = key("evm.vcode.inst", "demo", "inst:0");
+        let pc = key("bytecode.pc", "demo", "pc:0");
+        let event = key("compiler.event", "demo", "prepared-lineage:0");
+        let snapshot = TraceSnapshot::new(TraceBundle::new(
+            TraceMetadata::compiler_emitted(
+                "abc123",
+                "evm/sonatina",
+                vec!["fe".to_string(), "trace".to_string()],
+                "demo.fe",
+                vec![],
+            ),
+            vec![
+                node(source.clone()),
+                node(postopt.clone()),
+                node(prepared.clone()),
+                node(vcode.clone()),
+                node(pc.clone()),
+                node(event.clone()),
+                TraceFact::CompilerEvent(CompilerEventFact::new(
+                    event,
+                    CompilerPhase::Backend,
+                    CompilerEventKind::PreparedLineage,
+                    vec![postopt.clone()],
+                    vec![prepared.clone()],
+                    None,
+                )),
+                TraceFact::OriginEdge(OriginEdgeFact::new(
+                    postopt.clone(),
+                    source.clone(),
+                    OriginEdgeLabel::LoweredFrom,
+                    Some(CompilerPhase::SonatinaPostOpt),
+                )),
+                TraceFact::OriginEdge(OriginEdgeFact::new(
+                    prepared.clone(),
+                    postopt,
+                    OriginEdgeLabel::LoweredFrom,
+                    Some(CompilerPhase::Backend),
+                )),
+                TraceFact::OriginEdge(OriginEdgeFact::new(
+                    pc.clone(),
+                    vcode.clone(),
+                    OriginEdgeLabel::EmittedFrom,
+                    Some(CompilerPhase::BytecodeEmission),
+                )),
+                TraceFact::OriginEdge(OriginEdgeFact::new(
+                    vcode,
+                    prepared.clone(),
+                    OriginEdgeLabel::LoweredFrom,
+                    Some(CompilerPhase::BytecodeEmission),
+                )),
+            ],
+        ))
+        .unwrap();
+        let reaches = origin_reaches(&snapshot);
+
+        assert!(reaches.contains(&(pc, source)));
     }
 
     #[test]
