@@ -1035,9 +1035,6 @@ fn source_lines(
 }
 
 fn display_status_for_source_line(classes: &[String]) -> Option<DemoDisplayStatus> {
-    if classes.iter().any(|class| class.starts_with("exact-c-")) {
-        return Some(DemoDisplayStatus::Exact);
-    }
     if classes
         .iter()
         .any(|class| class.starts_with("generated-c-"))
@@ -1346,7 +1343,7 @@ fn build_origin_panels(
         (
             "bytecode",
             "Bytecode",
-            "final runtime bytecode PCs; highlighted rows have exact trace links",
+            "final runtime bytecode PCs; highlighted rows show prepared/source evidence rails",
         ),
     ]
     .into_iter()
@@ -1514,9 +1511,6 @@ fn display_status_for_row(
     kind: DemoPaneRowKind,
     classes: &[String],
 ) -> Option<DemoDisplayStatus> {
-    if classes.iter().any(|class| class.starts_with("exact-c-")) {
-        return Some(DemoDisplayStatus::Exact);
-    }
     if kind == DemoPaneRowKind::Instruction
         && key.kind() == "bytecode.pc"
         && classes.iter().any(|class| class.starts_with("prepared-c-"))
@@ -1942,7 +1936,7 @@ fn loop_panel(
 fn demo_notes(bytecode_count: usize, exact_source_spans: bool) -> Vec<String> {
     let mut notes = vec![
         "This page is a derived view over validated trace JSONL; it does not define compiler identity.".to_string(),
-        "The bytecode pane shows final bytecode instruction facts; highlighted bytecode rows are the subset with exact trace links.".to_string(),
+        "The bytecode pane shows final bytecode instruction facts; highlights show evidence rails, not source ownership by themselves.".to_string(),
     ];
     if bytecode_count == 0 {
         notes.push(
@@ -2188,7 +2182,7 @@ mod tests {
         assert_eq!(row.indent, 2);
         assert_eq!(row.label, "bb2.s7");
         assert_eq!(row.compact_text, "%3 = const u32 1");
-        assert!(matches!(row.display_status, Some(DemoDisplayStatus::Exact)));
+        assert!(row.display_status.is_none());
         assert_eq!(row.rail_classes.exact, vec!["exact-c-abc"]);
         assert_eq!(row.debug.origin_key.as_deref(), Some(storage_key.as_str()));
         assert!(row.debug.raw_text.contains("RLocalId(3)"));
@@ -2314,10 +2308,7 @@ mod tests {
             lines[0].classes,
             vec!["exact-c-0".to_string(), "trace-c-0".to_string()]
         );
-        assert!(matches!(
-            lines[0].display_status,
-            Some(DemoDisplayStatus::Exact)
-        ));
+        assert!(lines[0].display_status.is_none());
     }
 
     #[test]

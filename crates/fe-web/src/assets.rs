@@ -801,8 +801,10 @@ mod tests {
         ));
         assert!(FE_ORIGIN_TRACE_JS.contains("if (kind === \"exact\") return null;"));
         assert!(FE_ORIGIN_TRACE_JS.contains("suppressExact"));
-        assert!(FE_ORIGIN_TRACE_JS.contains("suppressExact: this._displayMode === \"compact\""));
-        assert!(FE_ORIGIN_TRACE_JS.contains("label: \"exact link\""));
+        assert!(FE_ORIGIN_TRACE_JS.contains("suppressExact: true"));
+        assert!(!FE_ORIGIN_TRACE_JS.contains("label: \"exact link\""));
+        assert!(!FE_ORIGIN_TRACE_JS.contains("rail-legend"));
+        assert!(!FE_ORIGIN_TRACE_JS.contains("legend-chip"));
         assert!(FE_ORIGIN_TRACE_JS.contains("label: \"generated\""));
         assert!(FE_ORIGIN_TRACE_JS.contains("label: \"unmapped\""));
         assert!(FE_ORIGIN_TRACE_JS.contains("No row selected."));

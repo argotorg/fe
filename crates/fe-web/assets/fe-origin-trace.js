@@ -1656,7 +1656,7 @@
 
     _selectionStatusCard(groups, displayClasses) {
       var entries = this._auditForClasses(groups);
-      var status = this._displayStatus(entries, this._railStatus(displayClasses), { suppressExact: this._displayMode === "compact" });
+      var status = this._displayStatus(entries, this._railStatus(displayClasses), { suppressExact: true });
       if (!status) return null;
       var box = el("div", "status-card status-" + status.kind);
       box.append(el("h3", "", this._selectedTraceLabel || "Selected row"));
@@ -1703,7 +1703,6 @@
     }
 
     _statusExplanation(kind, label) {
-      if (kind === "ok") return "Solid highlights use local exact attribution or snapshot-alias continuity. This is not a source-exact bytecode claim unless the audit says source-exact.";
       if (kind === "generated") return "Generated highlights show compiler-created synthetic work. They are useful explanation paths, but they do not count as exact source ownership.";
       if (kind === "explained") return "The missing direct bytecode link is explained by optimizer evidence such as elision, rewrite, creation, or snapshot-join facts.";
       if (kind === "context") return "Context highlights are navigation or cause context. They are intentionally separate from exact attribution.";
@@ -1716,19 +1715,6 @@
       if (label === "compiler control") return "This row is compiler/runtime control-flow work without a direct user-source span.";
       if (label === "missing source") return "This row reaches compiler or bytecode artifacts without a direct source span. It may be generated or needs a better source edge.";
       return "This status is derived from the shared trace-query classifier and audit report, not from browser-side edge traversal.";
-    }
-
-    _railLegend() {
-      var legend = el("div", "rail-legend");
-      [
-        ["ok", "exact"],
-        ["generated", "generated"],
-        ["context", "context"],
-        ["structural", "boundary"],
-      ].forEach(function (item) {
-        legend.append(el("span", "legend-chip badge " + item[0], item[1]));
-      });
-      return legend;
     }
 
     _auditClasses(classes) {
@@ -1811,8 +1797,7 @@
       }.bind(this))[0];
       var primary = top.primary || "unknown";
       if (primary.indexOf("good_") === 0) {
-        if (options.suppressExact) return null;
-        return { kind: "ok", label: "exact link" };
+        return null;
       }
       if (primary === "optimizer_explained") return { kind: "explained", label: "explained" };
       if (primary === "optimized_attribution_gap") return { kind: "warn", label: "missing link" };
@@ -1852,7 +1837,7 @@
     _auditHeader(audit, closure) {
       var head = el("div", "audit-header");
       head.append(el("span", "badge phase", this._phaseLabel(audit.highest_phase_reached || "unknown")));
-      var status = this._displayStatus(audit && audit.primary ? [audit] : [], null, { suppressExact: this._displayMode === "compact" });
+      var status = this._displayStatus(audit && audit.primary ? [audit] : [], null, { suppressExact: true });
       if (status) head.append(el("span", "badge " + status.kind, status.label));
       if (this._displayMode !== "compact") {
         (audit.symptoms || []).forEach(function (symptom) {
@@ -2154,8 +2139,6 @@ h1 { margin:0; color:var(--trace-text); font:700 15px/1.1 ui-sans-serif, system-
 .metric span { display:block; color:var(--trace-muted); font:600 9px/1.25 ui-sans-serif, system-ui, sans-serif; text-transform:uppercase; letter-spacing:.06em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .metric b { display:block; margin-top:3px; color:var(--trace-accent); font-size:13px; }
 .missing-targets h3 { margin:12px 0 6px; color:var(--trace-text); font-size:12px; text-transform:uppercase; letter-spacing:.08em; }
-.rail-legend { display:flex; flex-wrap:wrap; gap:5px; margin-top:10px; }
-.legend-chip { max-width:none; }
 .span-group { padding:9px 0; border-top:1px solid var(--trace-border); }
 .span-group:first-of-type { border-top:0; }
 .span-title { margin:0 0 4px; color:var(--trace-accent); overflow-wrap:anywhere; }
