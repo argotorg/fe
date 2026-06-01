@@ -1814,12 +1814,15 @@ pub fn trace_workbench_report_projection(
         .map(|closure_set| origin_closure::classes_by_origin_key(&closure_set.closures))
         .unwrap_or_default();
     trace_workbench_merge_classes_by_key(&mut classes_by_key, component_classes_by_key.clone());
+    let prepared_groups_by_exact_group =
+        trace_workbench_prepared_groups_by_exact_group(&classes_by_key);
     let source = trace_workbench_source_projection(
         &request.input_path,
         request.source_text.as_deref(),
         &request.related_source_texts,
         snapshot,
         &classes_by_key,
+        &prepared_groups_by_exact_group,
     );
     let missing_lineage = trace_workbench_missing_lineage_index(attribution_audit.as_ref());
     let panels = trace_workbench_panes(
@@ -1828,6 +1831,7 @@ pub fn trace_workbench_report_projection(
         request.source_text.as_deref(),
         &request.related_source_texts,
         &classes_by_key,
+        &prepared_groups_by_exact_group,
         &missing_lineage,
     );
     let indexes = trace_workbench_projection_indexes(&source, &panels);
@@ -2469,10 +2473,17 @@ fn trace_workbench_source_projection(
     related_source_texts: &BTreeMap<String, String>,
     snapshot: &TraceSnapshot,
     component_classes_by_key: &BTreeMap<String, Vec<String>>,
+    prepared_groups_by_exact_group: &BTreeMap<String, Vec<String>>,
 ) -> serde_json::Value {
     let lines = source_text
         .map(|text| {
-            trace_workbench_source_lines(input_path, text, snapshot, component_classes_by_key)
+            trace_workbench_source_lines(
+                input_path,
+                text,
+                snapshot,
+                component_classes_by_key,
+                prepared_groups_by_exact_group,
+            )
         })
         .unwrap_or_default();
     let confidence = if source_text.is_some() {
@@ -2484,7 +2495,7 @@ fn trace_workbench_source_projection(
         "display_name": input_path,
         "confidence": confidence,
         "lines": lines,
-        "related_sources": trace_workbench_related_sources(input_path, snapshot, component_classes_by_key, related_source_texts),
+        "related_sources": trace_workbench_related_sources(input_path, snapshot, component_classes_by_key, prepared_groups_by_exact_group, related_source_texts),
     })
 }
 
@@ -2492,6 +2503,7 @@ fn trace_workbench_related_sources(
     input_path: &str,
     snapshot: &TraceSnapshot,
     component_classes_by_key: &BTreeMap<String, Vec<String>>,
+    prepared_groups_by_exact_group: &BTreeMap<String, Vec<String>>,
     related_source_texts: &BTreeMap<String, String>,
 ) -> Vec<serde_json::Value> {
     let mut source_files = BTreeMap::<OriginExportKey, &trace_facts::SourceFileFact>::new();
@@ -2552,7 +2564,7 @@ fn trace_workbench_related_sources(
                             ],
                             "classes": classes,
                         "hover_groups": trace_workbench_hover_groups(&classes),
-                        "selection_groups": trace_workbench_selection_groups(&classes),
+                        "selection_groups": trace_workbench_selection_groups_with_prepared(&classes, prepared_groups_by_exact_group),
                         "display_status": trace_workbench_status_for_source_line(&classes),
                     })
                 })
@@ -2636,6 +2648,7 @@ fn trace_workbench_source_lines(
     source_text: &str,
     snapshot: &TraceSnapshot,
     component_classes_by_key: &BTreeMap<String, Vec<String>>,
+    prepared_groups_by_exact_group: &BTreeMap<String, Vec<String>>,
 ) -> Vec<TraceWorkbenchSourceLine> {
     let mut exact_classes_by_line = BTreeMap::<u32, BTreeSet<String>>::new();
     let mut enclosing_classes_by_line = BTreeMap::<u32, BTreeSet<String>>::new();
@@ -2699,7 +2712,10 @@ fn trace_workbench_source_lines(
                     format!("main:{number}"),
                 )],
                 hover_groups: trace_workbench_hover_groups(&interaction_classes),
-                selection_groups: trace_workbench_selection_groups(&interaction_classes),
+                selection_groups: trace_workbench_selection_groups_with_prepared(
+                    &interaction_classes,
+                    prepared_groups_by_exact_group,
+                ),
                 suppress_rail_status,
                 display_status: exact_classes
                     .map(|_| trace_workbench_status_for_source_line(&classes))
@@ -2920,6 +2936,7 @@ fn trace_workbench_panes(
     source_text: Option<&str>,
     related_source_texts: &BTreeMap<String, String>,
     component_classes_by_key: &BTreeMap<String, Vec<String>>,
+    prepared_groups_by_exact_group: &BTreeMap<String, Vec<String>>,
     missing_lineage: &TraceWorkbenchMissingLineageIndex,
 ) -> Vec<TraceWorkbenchPane> {
     let index =
@@ -2947,8 +2964,13 @@ fn trace_workbench_panes(
     ]
     .into_iter()
     .filter_map(|(id, title, summary)| {
-        let rows =
-            trace_workbench_panel_rows(id, &index, component_classes_by_key, missing_lineage);
+        let rows = trace_workbench_panel_rows(
+            id,
+            &index,
+            component_classes_by_key,
+            prepared_groups_by_exact_group,
+            missing_lineage,
+        );
         (!rows.is_empty()).then_some(TraceWorkbenchPane {
             id,
             title,
@@ -3061,6 +3083,7 @@ fn trace_workbench_panel_rows(
     panel: &str,
     index: &TraceWorkbenchProjectionIndex<'_>,
     component_classes_by_key: &BTreeMap<String, Vec<String>>,
+    prepared_groups_by_exact_group: &BTreeMap<String, Vec<String>>,
     missing_lineage: &TraceWorkbenchMissingLineageIndex,
 ) -> Vec<TraceWorkbenchPaneRow> {
     let mut keys = index
@@ -3072,7 +3095,13 @@ fn trace_workbench_panel_rows(
     keys.sort_by(|left, right| trace_workbench_compare_panel_keys(left, right, index));
     keys.into_iter()
         .map(|key| {
-            trace_workbench_panel_row(&key, index, component_classes_by_key, missing_lineage)
+            trace_workbench_panel_row(
+                &key,
+                index,
+                component_classes_by_key,
+                prepared_groups_by_exact_group,
+                missing_lineage,
+            )
         })
         .collect()
 }
@@ -3171,6 +3200,7 @@ fn trace_workbench_panel_row(
     key: &OriginExportKey,
     index: &TraceWorkbenchProjectionIndex<'_>,
     component_classes_by_key: &BTreeMap<String, Vec<String>>,
+    prepared_groups_by_exact_group: &BTreeMap<String, Vec<String>>,
     missing_lineage: &TraceWorkbenchMissingLineageIndex,
 ) -> TraceWorkbenchPaneRow {
     let storage_key = key.canonical_storage_key();
@@ -3204,7 +3234,10 @@ fn trace_workbench_panel_row(
         display_status: trace_workbench_status_for_row(key, kind, &classes, missing_lineage),
         rail_classes: trace_workbench_split_rail_classes(&classes),
         hover_groups: trace_workbench_hover_groups(&classes),
-        selection_groups: trace_workbench_selection_groups(&classes),
+        selection_groups: trace_workbench_selection_groups_with_prepared(
+            &classes,
+            prepared_groups_by_exact_group,
+        ),
         classes,
         debug: TraceWorkbenchRowDebugInfo {
             origin_key: Some(key.canonical_storage_key()),
@@ -3382,6 +3415,58 @@ fn trace_workbench_selection_groups(classes: &[String]) -> Vec<String> {
     }
     if groups.is_empty() {
         groups.extend(rails.legacy);
+    }
+    trace_workbench_unique_groups(groups)
+}
+
+fn trace_workbench_prepared_groups_by_exact_group(
+    component_classes_by_key: &BTreeMap<String, Vec<String>>,
+) -> BTreeMap<String, Vec<String>> {
+    let mut prepared_by_exact = BTreeMap::<String, BTreeSet<String>>::new();
+    for classes in component_classes_by_key.values() {
+        let exact = classes
+            .iter()
+            .filter(|class| class.starts_with("exact-c-"))
+            .cloned()
+            .collect::<Vec<_>>();
+        if exact.is_empty() {
+            continue;
+        }
+        let prepared = classes
+            .iter()
+            .filter(|class| class.starts_with("prepared-c-"))
+            .cloned()
+            .collect::<Vec<_>>();
+        if prepared.is_empty() {
+            continue;
+        }
+        for exact_group in exact {
+            prepared_by_exact
+                .entry(exact_group)
+                .or_default()
+                .extend(prepared.iter().cloned());
+        }
+    }
+    prepared_by_exact
+        .into_iter()
+        .map(|(exact, prepared)| (exact, prepared.into_iter().collect()))
+        .collect()
+}
+
+fn trace_workbench_selection_groups_with_prepared(
+    classes: &[String],
+    prepared_groups_by_exact_group: &BTreeMap<String, Vec<String>>,
+) -> Vec<String> {
+    let mut groups = trace_workbench_selection_groups(classes);
+    let exact_groups = classes
+        .iter()
+        .filter(|class| class.starts_with("exact-c-"))
+        .cloned()
+        .collect::<Vec<_>>();
+    for exact_group in exact_groups {
+        if let Some(prepared_groups) = prepared_groups_by_exact_group.get(&exact_group) {
+            groups.extend(prepared_groups.iter().cloned());
+        }
     }
     trace_workbench_unique_groups(groups)
 }
@@ -7867,9 +7952,9 @@ mod tests {
         trace_workbench_compact_origin_text, trace_workbench_hover_groups,
         trace_workbench_key_belongs_to_panel, trace_workbench_manifest,
         trace_workbench_natural_key_cmp, trace_workbench_report_projection,
-        trace_workbench_selection_groups, trace_workbench_source_lines,
-        trace_workbench_source_projection, trace_workbench_status_for_row,
-        trace_workbench_status_for_source_line,
+        trace_workbench_prepared_groups_by_exact_group, trace_workbench_selection_groups,
+        trace_workbench_source_lines, trace_workbench_source_projection,
+        trace_workbench_status_for_row, trace_workbench_status_for_source_line,
     };
 
     fn scan_trace_query_sources_for_line(
@@ -10644,6 +10729,68 @@ mod tests {
     }
 
     #[test]
+    fn trace_workbench_projection_expands_source_selection_to_prepared_bytecode_rail() {
+        let service = demo_service();
+        let projection = trace_workbench_report_projection(
+            &service,
+            service.snapshot(),
+            TraceWorkbenchProjectionRequest {
+                input_path: "demo".to_string(),
+                target: "evm".to_string(),
+                opt_level: "O2".to_string(),
+                view: "source-postopt-bytecode".to_string(),
+                source_text: Some("fn fib() {\n  b + c\n}\n".to_string()),
+                related_source_texts: BTreeMap::new(),
+                document_version: Some(3),
+                query_duration_ms: 9,
+                compiler_commit: "test".to_string(),
+                data_source: "test".to_string(),
+            },
+        );
+        let source_line_groups = projection["source"]["lines"][1]["selection_groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(serde_json::Value::as_str)
+            .collect::<Option<Vec<_>>>()
+            .unwrap();
+
+        assert!(
+            source_line_groups
+                .iter()
+                .any(|group| group.starts_with("exact-c-")),
+            "source line should carry exact compiler phase evidence"
+        );
+        assert!(
+            source_line_groups
+                .iter()
+                .any(|group| group.starts_with("prepared-c-")),
+            "source line selection should include prepared rail groups connected through explicit prepared lineage"
+        );
+
+        let bytecode_panel = projection["panels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|panel| panel["id"] == "bytecode")
+            .unwrap();
+        let first_bytecode_groups = bytecode_panel["rows"][0]["selection_groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(serde_json::Value::as_str)
+            .collect::<Option<Vec<_>>>()
+            .unwrap();
+
+        assert!(
+            first_bytecode_groups
+                .iter()
+                .any(|group| group.starts_with("prepared-c-")),
+            "bytecode row should carry prepared-code selection rail"
+        );
+    }
+
+    #[test]
     fn trace_workbench_provenance_does_not_claim_preopt_as_optimized() {
         let closure_set = crate::origin_closure::OriginClosureSet {
             closures: vec![crate::origin_closure::OriginClosure {
@@ -10969,6 +11116,7 @@ mod tests {
             &related_source_texts,
             &snapshot,
             &BTreeMap::new(),
+            &BTreeMap::new(),
         );
         let related = source["related_sources"].as_array().unwrap();
 
@@ -11009,6 +11157,7 @@ mod tests {
             "fn main() {\n  // comment\n}\n",
             &snapshot,
             &classes,
+            &trace_workbench_prepared_groups_by_exact_group(&classes),
         );
 
         assert_eq!(lines[1].classes, vec!["generated-c-broad"]);
@@ -11051,6 +11200,7 @@ mod tests {
             "fn main() {\n  assert owner == caller\n  // comment\n}\n",
             &snapshot,
             &classes,
+            &trace_workbench_prepared_groups_by_exact_group(&classes),
         );
 
         assert!(lines[1].suppress_rail_status);
