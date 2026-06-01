@@ -293,9 +293,14 @@
     _provenanceCopy() {
       var data = this._data || {};
       var p = data.provenance || {};
-      return "Source → Optimized Sonatina: " + (p.source_to_optimized || "unknown")
+      var profile = p.trace_profile && p.trace_profile.profile;
+      var copy = "Source → Optimized Sonatina: " + (p.source_to_optimized || "unknown")
         + " · Optimized Sonatina → EVM prepared: " + (p.optimized_to_prepared || "unknown")
         + " · EVM prepared → Bytecode: " + (p.prepared_to_bytecode || "unknown");
+      if (profile === "partial_preopt") {
+        copy += " · trace profile: pre-opt partial";
+      }
+      return copy;
     }
 
     _optimizationFlag() {

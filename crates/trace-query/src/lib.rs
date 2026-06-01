@@ -1858,6 +1858,7 @@ pub fn trace_workbench_report_projection(
         prepared_linked,
         missing_prepared,
     );
+    let trace_profile = trace_workbench_trace_profile(snapshot);
     serde_json::json!({
         "revision": {
             "id": request.document_version.unwrap_or_default().max(0) as u64,
@@ -1870,6 +1871,7 @@ pub fn trace_workbench_report_projection(
             "target": status.target,
             "data_source": request.data_source,
             "compiler_commit": request.compiler_commit,
+            "trace_profile": trace_profile,
             "flags": [
                 "source=lsp-live",
                 format!("target={}", request.target),
@@ -1883,8 +1885,11 @@ pub fn trace_workbench_report_projection(
             "source_to_optimized": provenance.source_to_optimized,
             "optimized_to_prepared": provenance.optimized_to_prepared,
             "prepared_to_bytecode": provenance.prepared_to_bytecode,
+            "trace_profile": trace_profile,
             "summary": if provenance.source_to_optimized == "available" && provenance.prepared_to_bytecode == "available" && provenance.optimized_to_prepared == "missing" {
                 "bytecode is prepared-linked; exact source attribution needs optimized to prepared lineage"
+            } else if trace_profile.profile == "partial_preopt" {
+                "live trace is partial: MIR and Sonatina pre-opt are available, but optimized/prepared lineage is not emitted in this model"
             } else if provenance.source_to_optimized == "available" && provenance.optimized_to_prepared == "available" && provenance.prepared_to_bytecode == "available" {
                 "source to optimized to prepared to bytecode available"
             } else {
@@ -1980,6 +1985,50 @@ struct TraceWorkbenchProvenanceStatus {
     source_to_optimized: &'static str,
     optimized_to_prepared: &'static str,
     prepared_to_bytecode: &'static str,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+struct TraceWorkbenchTraceProfile {
+    profile: &'static str,
+    has_sonatina_preopt: bool,
+    has_sonatina_postopt: bool,
+    has_evm_prepared: bool,
+    has_bytecode: bool,
+}
+
+fn trace_workbench_trace_profile(snapshot: &TraceSnapshot) -> TraceWorkbenchTraceProfile {
+    let mut has_sonatina_preopt = false;
+    let mut has_sonatina_postopt = false;
+    let mut has_evm_prepared = false;
+    let mut has_bytecode = false;
+    for fact in snapshot.facts() {
+        let TraceFact::OriginNode(node) = fact else {
+            continue;
+        };
+        match node.key.kind() {
+            kind if kind.starts_with("sonatina.preopt.") => has_sonatina_preopt = true,
+            kind if kind.starts_with("sonatina.postopt.") => has_sonatina_postopt = true,
+            kind if kind.starts_with("sonatina.evm.prepared.") => has_evm_prepared = true,
+            kind if kind.starts_with("bytecode.") => has_bytecode = true,
+            _ => {}
+        }
+    }
+    let profile = if has_sonatina_preopt && !has_sonatina_postopt {
+        "partial_preopt"
+    } else if has_sonatina_postopt && has_evm_prepared && has_bytecode {
+        "postopt_prepared_bytecode"
+    } else if has_sonatina_postopt {
+        "postopt"
+    } else {
+        "partial"
+    };
+    TraceWorkbenchTraceProfile {
+        profile,
+        has_sonatina_preopt,
+        has_sonatina_postopt,
+        has_evm_prepared,
+        has_bytecode,
+    }
 }
 
 fn trace_workbench_provenance_status(
@@ -7406,6 +7455,21 @@ mod tests {
         assert_eq!(status.source_to_optimized, "missing");
         assert_eq!(status.optimized_to_prepared, "missing");
         assert_eq!(status.prepared_to_bytecode, "missing");
+    }
+
+    #[test]
+    fn trace_workbench_trace_profile_marks_preopt_only_model_partial() {
+        let snapshot = snapshot(vec![
+            node(key("sonatina.preopt.inst", "demo", "inst:0")),
+            node(key("bytecode.pc", "demo", "pc:0")),
+        ]);
+
+        let profile = super::trace_workbench_trace_profile(&snapshot);
+
+        assert_eq!(profile.profile, "partial_preopt");
+        assert!(profile.has_sonatina_preopt);
+        assert!(!profile.has_sonatina_postopt);
+        assert!(profile.has_bytecode);
     }
 
     #[test]
