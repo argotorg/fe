@@ -7721,7 +7721,9 @@ fn attribution_audit_report(snapshot: &TraceSnapshot) -> AttributionAuditReport 
             }
         }
         if source_candidate_count == 0 {
-            if has_missing_prepared_lineage || has_non_exact_prepared_lineage {
+            if has_invalid_exact_source_lineage {
+                missing_source_evidence_pcs += 1;
+            } else if has_missing_prepared_lineage || has_non_exact_prepared_lineage {
                 // Counted by the optimized→prepared lineage buckets above.
             } else if has_optimized_sonatina_targets {
                 missing_source_evidence_pcs += 1;
