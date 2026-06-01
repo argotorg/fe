@@ -1796,6 +1796,10 @@ pub fn trace_workbench_report_projection(
         .as_ref()
         .map(|audit| audit.missing_optimized_to_prepared_lineage_pcs)
         .unwrap_or_default();
+    let non_exact_prepared = attribution_audit
+        .as_ref()
+        .map(|audit| audit.non_exact_optimized_to_prepared_lineage_pcs)
+        .unwrap_or_default();
     let bytecode_count = attribution_audit
         .as_ref()
         .map(|audit| audit.total_bytecode_pcs)
@@ -1857,6 +1861,7 @@ pub fn trace_workbench_report_projection(
         optimized_linked,
         prepared_linked,
         missing_prepared,
+        non_exact_prepared,
     );
     let trace_profile = trace_workbench_trace_profile(snapshot);
     let parity_summary = trace_workbench_projection_parity_summary(
@@ -1897,6 +1902,8 @@ pub fn trace_workbench_report_projection(
             "trace_profile": trace_profile,
             "summary": if provenance.source_to_optimized == "available" && provenance.prepared_to_bytecode == "available" && provenance.optimized_to_prepared == "missing" {
                 "bytecode is prepared-linked; exact source attribution needs optimized to prepared lineage"
+            } else if provenance.source_to_optimized == "available" && provenance.prepared_to_bytecode == "available" && provenance.optimized_to_prepared == "non-exact" {
+                "bytecode has generated/context optimized to prepared explanation, but not exact source attribution"
             } else if trace_profile.profile == "partial_preopt" {
                 "live trace is partial: MIR and Sonatina pre-opt are available, but optimized/prepared lineage is not emitted in this model"
             } else if provenance.source_to_optimized == "available" && provenance.optimized_to_prepared == "available" && provenance.prepared_to_bytecode == "available" {
@@ -2217,6 +2224,7 @@ fn trace_workbench_provenance_status(
     optimized_linked: usize,
     prepared_linked: usize,
     missing_prepared: usize,
+    non_exact_prepared: usize,
 ) -> TraceWorkbenchProvenanceStatus {
     let source_to_optimized = closure_set.is_some_and(|closure_set| {
         closure_set
@@ -2224,18 +2232,12 @@ fn trace_workbench_provenance_status(
             .iter()
             .any(|closure| closure.counts.hir > 0 && closure.counts.sonatina_post > 0)
     }) || optimized_linked > 0;
-    let optimized_to_prepared = closure_set.is_some_and(|closure_set| {
-        closure_set.closures.iter().any(|closure| {
-            closure
-                .keys
-                .iter()
-                .any(|key| key.contains("sonatina.postopt."))
-                && closure
-                    .keys
-                    .iter()
-                    .any(|key| key.contains("sonatina.evm.prepared."))
-        })
-    }) || (prepared_linked > 0 && missing_prepared == 0);
+    let optimized_to_prepared_exact =
+        prepared_linked > 0 && missing_prepared == 0 && non_exact_prepared == 0;
+    let optimized_to_prepared_non_exact = !optimized_to_prepared_exact
+        && prepared_linked > 0
+        && missing_prepared == 0
+        && non_exact_prepared > 0;
     let prepared_to_bytecode = closure_set.is_some_and(|closure_set| {
         closure_set.closures.iter().any(|closure| {
             closure
@@ -2247,8 +2249,21 @@ fn trace_workbench_provenance_status(
     }) || prepared_linked > 0;
     TraceWorkbenchProvenanceStatus {
         source_to_optimized: trace_workbench_status_word(source_to_optimized),
-        optimized_to_prepared: trace_workbench_status_word(optimized_to_prepared),
+        optimized_to_prepared: trace_workbench_link_status_word(
+            optimized_to_prepared_exact,
+            optimized_to_prepared_non_exact,
+        ),
         prepared_to_bytecode: trace_workbench_status_word(prepared_to_bytecode),
+    }
+}
+
+fn trace_workbench_link_status_word(exact: bool, non_exact: bool) -> &'static str {
+    if exact {
+        "available"
+    } else if non_exact {
+        "non-exact"
+    } else {
+        "missing"
     }
 }
 
@@ -10183,11 +10198,20 @@ mod tests {
             source_span_count: 0,
         };
 
-        let status = super::trace_workbench_provenance_status(Some(&closure_set), 0, 0, 0);
+        let status = super::trace_workbench_provenance_status(Some(&closure_set), 0, 0, 0, 0);
 
         assert_eq!(status.source_to_optimized, "missing");
         assert_eq!(status.optimized_to_prepared, "missing");
         assert_eq!(status.prepared_to_bytecode, "missing");
+    }
+
+    #[test]
+    fn trace_workbench_provenance_reports_non_exact_prepared_lineage_separately() {
+        let status = super::trace_workbench_provenance_status(None, 1, 2, 0, 2);
+
+        assert_eq!(status.source_to_optimized, "available");
+        assert_eq!(status.optimized_to_prepared, "non-exact");
+        assert_eq!(status.prepared_to_bytecode, "available");
     }
 
     #[test]
