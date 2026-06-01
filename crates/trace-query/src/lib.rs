@@ -4024,6 +4024,7 @@ pub enum LinkIssueCode {
     ExpectedAbsentDeclaration,
     ExpectedAbsentNoRuntimeSession,
     ExpectedAbsentOptimizerElision,
+    ExpectedAbsentPreparedElision,
     GeneratedExplanationOnly,
     ContextOnlyEvidence,
     CandidateShapeMatchOnly,
@@ -5682,6 +5683,10 @@ fn missing_link_audit_report(
         .iter()
         .filter(|entry| entry.boundary == LinkBoundaryKind::BytecodeToRuntime)
         .count();
+    let expected_absent_postopt_to_prepared_count = expected_absent
+        .iter()
+        .filter(|entry| entry.boundary == LinkBoundaryKind::PostOptToPrepared)
+        .count();
     let missing_preopt_to_postopt_count = preopt_to_postopt.missing.len();
     let missing_postopt_to_prepared_count = lineage_gaps
         .iter()
@@ -5834,13 +5839,23 @@ fn missing_link_audit_report(
         });
     }
 
-    if prepared_linked_pcs > 0 || !lineage_gaps.is_empty() || !invalid.is_empty() {
+    if prepared_linked_pcs > 0
+        || !lineage_gaps.is_empty()
+        || !invalid.is_empty()
+        || expected_absent_postopt_to_prepared_count > 0
+    {
         let mut status_counts = BTreeMap::new();
         let satisfied_prepared_lineage_count = prepared_linked_pcs.saturating_sub(
             missing_postopt_to_prepared_count + non_exact_postopt_to_prepared_count,
         );
         if satisfied_prepared_lineage_count > 0 {
             status_counts.insert(LinkStatus::SatisfiedExact, satisfied_prepared_lineage_count);
+        }
+        if expected_absent_postopt_to_prepared_count > 0 {
+            status_counts.insert(
+                LinkStatus::ExpectedAbsent,
+                expected_absent_postopt_to_prepared_count,
+            );
         }
         if !invalid.is_empty() {
             status_counts.insert(LinkStatus::Invalid, invalid.len());
@@ -5877,6 +5892,8 @@ fn missing_link_audit_report(
                 .then_some(LinkIssueCode::ContextOnlyEvidence),
             (missing_postopt_to_prepared_count > 0)
                 .then_some(LinkIssueCode::MissingOptimizedToPreparedLineage),
+            (expected_absent_postopt_to_prepared_count > 0)
+                .then_some(LinkIssueCode::ExpectedAbsentPreparedElision),
         ]
         .into_iter()
         .flatten()
@@ -6541,30 +6558,7 @@ fn expected_absent_links(snapshot: &TraceSnapshot) -> Vec<ExpectedAbsentLink> {
                 && event.outputs.is_empty())
             .then_some(event)
         })
-        .flat_map(|event| {
-            let explanation = event
-                .reason
-                .as_ref()
-                .map(|reason| {
-                    format!(
-                        "optimizer explicitly elided this origin before post-opt output: {}",
-                        reason.as_str()
-                    )
-                })
-                .unwrap_or_else(|| {
-                    "optimizer explicitly elided this origin before post-opt output".to_string()
-                });
-            event
-                .inputs
-                .iter()
-                .cloned()
-                .map(move |origin| ExpectedAbsentLink {
-                    boundary: LinkBoundaryKind::PreOptToPostOpt,
-                    origin,
-                    issue_code: LinkIssueCode::ExpectedAbsentOptimizerElision,
-                    explanation: explanation.clone(),
-                })
-        })
+        .flat_map(expected_absent_links_for_elision_event)
         .collect::<Vec<_>>();
 
     if !has_runtime_trace_evidence(snapshot) {
@@ -6582,6 +6576,53 @@ fn expected_absent_links(snapshot: &TraceSnapshot) -> Vec<ExpectedAbsentLink> {
             && left.issue_code == right.issue_code
     });
     entries
+}
+
+fn expected_absent_links_for_elision_event(
+    event: &trace_facts::CompilerEventFact,
+) -> Vec<ExpectedAbsentLink> {
+    event
+        .inputs
+        .iter()
+        .filter_map(|origin| {
+            if is_sonatina_preopt_inst_audit_origin(origin) {
+                Some(ExpectedAbsentLink {
+                    boundary: LinkBoundaryKind::PreOptToPostOpt,
+                    origin: origin.clone(),
+                    issue_code: LinkIssueCode::ExpectedAbsentOptimizerElision,
+                    explanation: expected_absent_elision_explanation(
+                        event,
+                        "optimizer explicitly elided this origin before post-opt output",
+                    ),
+                })
+            } else if event.phase == CompilerPhase::Backend
+                && is_sonatina_postopt_inst_audit_origin(origin)
+            {
+                Some(ExpectedAbsentLink {
+                    boundary: LinkBoundaryKind::PostOptToPrepared,
+                    origin: origin.clone(),
+                    issue_code: LinkIssueCode::ExpectedAbsentPreparedElision,
+                    explanation: expected_absent_elision_explanation(
+                        event,
+                        "backend preparation explicitly elided this optimized Sonatina origin before EVM prepared output",
+                    ),
+                })
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn expected_absent_elision_explanation(
+    event: &trace_facts::CompilerEventFact,
+    base: &str,
+) -> String {
+    event
+        .reason
+        .as_ref()
+        .map(|reason| format!("{base}: {}", reason.as_str()))
+        .unwrap_or_else(|| base.to_string())
 }
 
 fn has_runtime_trace_evidence(snapshot: &TraceSnapshot) -> bool {
@@ -9017,6 +9058,57 @@ mod tests {
                 .status_counts
                 .get(&LinkStatus::ExpectedAbsent),
             Some(&1)
+        );
+    }
+
+    #[test]
+    fn missing_link_audit_treats_explicit_backend_elision_as_expected_absent() {
+        let postopt = key("sonatina.postopt.inst", "demo", "inst:backend-elided");
+        let event = key("compiler.event", "demo", "event:elide-prepared");
+        let snapshot = snapshot(vec![
+            node(postopt.clone()),
+            node(event.clone()),
+            TraceFact::CompilerEvent(CompilerEventFact::new(
+                event,
+                CompilerPhase::Backend,
+                CompilerEventKind::OptimizerElidedOrRewritten,
+                vec![postopt.clone()],
+                Vec::new(),
+                Some(CompilerReason::new("non-emitting backend helper")),
+            )),
+        ]);
+        let report = TraceIntrospectionService::new(snapshot)
+            .attribution_audit()
+            .unwrap();
+        let missing_links = report.missing_links.as_ref().unwrap();
+
+        assert_eq!(
+            missing_links.summary.status,
+            LinkOverallStatus::PassWithExpectedAbsences
+        );
+        assert_eq!(missing_links.summary.expected_absent_count, 1);
+        assert_eq!(missing_links.summary.missing_required_count, 0);
+        assert!(missing_links.summary.top_blockers.is_empty());
+        assert_eq!(missing_links.expected_absent[0].origin, postopt);
+        assert_eq!(
+            missing_links.expected_absent[0].issue_code,
+            LinkIssueCode::ExpectedAbsentPreparedElision
+        );
+        let postopt_to_prepared = missing_links
+            .boundary_summaries
+            .iter()
+            .find(|summary| summary.boundary == LinkBoundaryKind::PostOptToPrepared)
+            .expect("postopt to prepared boundary summary");
+        assert_eq!(
+            postopt_to_prepared
+                .status_counts
+                .get(&LinkStatus::ExpectedAbsent),
+            Some(&1)
+        );
+        assert!(
+            postopt_to_prepared
+                .top_issue_codes
+                .contains(&LinkIssueCode::ExpectedAbsentPreparedElision)
         );
     }
 
