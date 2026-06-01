@@ -1703,7 +1703,7 @@
     }
 
     _statusExplanation(kind, label) {
-      if (kind === "ok") return "Solid highlights use validated exact attribution or snapshot-alias continuity.";
+      if (kind === "ok") return "Solid highlights use local exact attribution or snapshot-alias continuity. This is not a source-exact bytecode claim unless the audit says source-exact.";
       if (kind === "generated") return "Generated highlights show compiler-created synthetic work. They are useful explanation paths, but they do not count as exact source ownership.";
       if (kind === "explained") return "The missing direct bytecode link is explained by optimizer evidence such as elision, rewrite, creation, or snapshot-join facts.";
       if (kind === "context") return "Context highlights are navigation or cause context. They are intentionally separate from exact attribution.";
@@ -1766,7 +1766,7 @@
       var entries = this._auditForClasses(classes);
       var wrap = el("span", "badges");
       if (!rowStatus && rowOrClasses && rowOrClasses.suppress_rail_status) return wrap;
-      var status = rowStatus || this._displayStatus(entries, this._railStatus(classes));
+      var status = rowStatus || this._displayStatus(entries, this._railStatus(classes), { suppressExact: true });
       if (!status) return wrap;
       wrap.append(el("span", "badge " + status.kind, status.label));
       return wrap;
@@ -1802,14 +1802,18 @@
       return null;
     }
 
-    _displayStatus(entries, railStatus) {
+    _displayStatus(entries, railStatus, options) {
+      options = options || {};
       if (railStatus) return railStatus;
       if (!entries || !entries.length) return null;
       var top = entries.slice().sort(function (a, b) {
         return this._severityRank(b) - this._severityRank(a);
       }.bind(this))[0];
       var primary = top.primary || "unknown";
-      if (primary.indexOf("good_") === 0) return { kind: "ok", label: "exact" };
+      if (primary.indexOf("good_") === 0) {
+        if (options.suppressExact) return null;
+        return { kind: "ok", label: "exact link" };
+      }
       if (primary === "optimizer_explained") return { kind: "explained", label: "explained" };
       if (primary === "optimized_attribution_gap") return { kind: "warn", label: "missing link" };
       if (primary === "lowered_no_target_unexplained") return { kind: "warn", label: "MIR-only" };
