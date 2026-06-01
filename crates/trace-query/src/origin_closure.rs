@@ -597,6 +597,9 @@ fn component_classes_for_index(index: &OriginClosureIndex<'_>) -> BTreeMap<Strin
             .into_iter()
             .enumerate()
         {
+            if suppress_row_level_component(rail, &component) {
+                continue;
+            }
             let class_name = component_class_name(rail, ordinal, &component);
             for key in component {
                 classes
@@ -663,6 +666,47 @@ fn connected_components_for_rail(
             .cmp(&component_sort_key(right).unwrap_or_default())
     });
     components
+}
+
+fn suppress_row_level_component(
+    rail: OriginComponentRail,
+    component: &BTreeSet<OriginExportKey>,
+) -> bool {
+    match rail {
+        OriginComponentRail::Generated | OriginComponentRail::Contextual => {
+            component.len() > 128
+                || component.iter().any(is_component_hub_origin)
+                || component
+                    .iter()
+                    .filter(|key| is_source_like_origin_kind(key.kind()))
+                    .count()
+                    > 8
+                || component
+                    .iter()
+                    .filter(|key| key.kind().starts_with("bytecode."))
+                    .count()
+                    > 64
+        }
+        OriginComponentRail::Exact
+        | OriginComponentRail::Prepared
+        | OriginComponentRail::Structural => false,
+    }
+}
+
+fn is_component_hub_origin(key: &OriginExportKey) -> bool {
+    let kind = key.kind();
+    kind == "source.file"
+        || kind == "code.object"
+        || kind == "package"
+        || kind == "module"
+        || kind.ends_with(".module")
+        || kind.ends_with(".contract")
+        || kind.ends_with(".function")
+        || kind.ends_with(".body")
+}
+
+fn is_source_like_origin_kind(kind: &str) -> bool {
+    kind.starts_with("source.") || kind.starts_with("hir.")
 }
 
 fn component_sort_key(component: &BTreeSet<OriginExportKey>) -> Option<String> {
@@ -1597,6 +1641,24 @@ mod tests {
             prefixed_classes(&classes, &bytecode, "structural-c-"),
             prefixed_classes(&classes, &code_object, "structural-c-")
         );
+    }
+
+    #[test]
+    fn broad_generated_components_do_not_emit_row_level_classes() {
+        let source_file = test_key("source.file", "body", "file:0");
+        let synthetic_mir = test_key("runtime.stmt", "runtime", "block:0:stmt:0");
+        let edges = [OriginEdgeFact::new(
+            synthetic_mir.clone(),
+            source_file.clone(),
+            OriginEdgeLabel::SyntheticFor,
+            Some(CompilerPhase::Mir),
+        )];
+        let index = test_index(&edges, []);
+
+        let classes = component_classes_for_index(&index);
+
+        assert!(prefixed_classes(&classes, &source_file, "generated-c-").is_empty());
+        assert!(prefixed_classes(&classes, &synthetic_mir, "generated-c-").is_empty());
     }
 
     #[test]
