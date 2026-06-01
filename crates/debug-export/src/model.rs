@@ -7,9 +7,8 @@ use common::origin::OriginExportKey;
 use serde::{Deserialize, Serialize};
 use trace_facts::{
     CodeObjectFact, FunctionFact, GasCostFact, GasKind, InstructionCategory, InstructionExtentFact,
-    InstructionFact, LocationRangeFact, OpcodeFact, OriginEdgeFact, OriginEdgeLabel,
-    OriginEdgeTraversalClass, PcRange, SourceSpanFact, StaticGasFact, TraceDataSource, TraceFact,
-    TraceSnapshot,
+    InstructionFact, LocationRangeFact, OpcodeFact, OriginEdgeFact, OriginEdgeTraversalClass,
+    PcRange, SourceSpanFact, StaticGasFact, TraceDataSource, TraceFact, TraceSnapshot,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -440,8 +439,8 @@ impl<'a> DebugFactIndex<'a> {
         let source_candidates = self.source_candidates(&instruction.instruction);
         let (classification, classification_reason) = self.classification(&source_candidates);
         let primary_source = (classification == InstructionClassification::SourceMapped
-            && source_candidates.origins.len() == 1)
-            .then(|| source_candidates.origins.iter().next().cloned())
+            && source_candidates.exact_origins.len() == 1)
+            .then(|| source_candidates.exact_origins.iter().next().cloned())
             .flatten();
         let confidence = match classification {
             InstructionClassification::SourceMapped => AttributionConfidence::High,
@@ -461,7 +460,7 @@ impl<'a> DebugFactIndex<'a> {
             pc_range: self.instruction_pc_range(instruction),
             opcode_or_mnemonic: instruction.mnemonic.clone(),
             primary_source,
-            all_origins: source_candidates.origins.into_iter().collect(),
+            all_origins: source_candidates.all_origins(),
             classification,
             classification_reason,
             category: self.categories.get(&instruction.instruction).copied(),
@@ -506,9 +505,9 @@ impl<'a> DebugFactIndex<'a> {
             .set(self.source_candidate_walks.get() + 1);
         let mut visited = BTreeSet::new();
         let mut result = SourceCandidateResult::default();
-        let mut queue = VecDeque::from([instruction.clone()]);
+        let mut queue = VecDeque::from([(instruction.clone(), true)]);
 
-        while let Some(current) = queue.pop_front() {
+        while let Some((current, precise)) = queue.pop_front() {
             if !visited.insert(current.clone()) {
                 continue;
             }
@@ -516,20 +515,24 @@ impl<'a> DebugFactIndex<'a> {
                 && is_precise_source_candidate(&current)
                 && self.source_spans.contains_key(&current)
             {
-                result.origins.insert(current.clone());
+                if precise {
+                    result.exact_origins.insert(current.clone());
+                } else {
+                    result.generated_origins.insert(current.clone());
+                }
             }
             for edge in self.outgoing_edges.get(&current).into_iter().flatten() {
                 match edge.traversal_class() {
                     OriginEdgeTraversalClass::ExactAttribution
                     | OriginEdgeTraversalClass::SnapshotAlias => {
-                        queue.push_back(edge.to.clone());
+                        queue.push_back((edge.to.clone(), precise));
                     }
                     OriginEdgeTraversalClass::Synthetic => {
                         result.synthetic_reasons.insert("SyntheticFor".to_string());
-                        queue.push_back(edge.to.clone());
+                        queue.push_back((edge.to.clone(), false));
                     }
                     OriginEdgeTraversalClass::Contextual
-                        if edge.label == OriginEdgeLabel::BackendPrepared =>
+                        if edge.is_backend_prepared_semantic_edge() =>
                     {
                         result
                             .synthetic_reasons
@@ -553,12 +556,12 @@ impl<'a> DebugFactIndex<'a> {
         &self,
         source_candidates: &SourceCandidateResult,
     ) -> (InstructionClassification, Option<String>) {
-        if let Some(reason) = source_candidates.synthetic_reasons.iter().next() {
-            return (InstructionClassification::Synthetic, Some(reason.clone()));
-        }
-        match source_candidates.origins.len() {
+        match source_candidates.exact_origins.len() {
             1 => (InstructionClassification::SourceMapped, None),
             n if n > 1 => (InstructionClassification::Ambiguous, None),
+            _ if let Some(reason) = source_candidates.synthetic_reasons.iter().next() => {
+                (InstructionClassification::Synthetic, Some(reason.clone()))
+            }
             _ if source_candidates.saw_unmapped => (
                 InstructionClassification::Unmapped,
                 Some("Unmapped".to_string()),
@@ -608,9 +611,19 @@ impl<'a> DebugFactIndex<'a> {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct SourceCandidateResult {
-    origins: BTreeSet<OriginExportKey>,
+    exact_origins: BTreeSet<OriginExportKey>,
+    generated_origins: BTreeSet<OriginExportKey>,
     synthetic_reasons: BTreeSet<String>,
     saw_unmapped: bool,
+}
+
+impl SourceCandidateResult {
+    fn all_origins(self) -> Vec<OriginExportKey> {
+        self.exact_origins
+            .into_iter()
+            .chain(self.generated_origins)
+            .collect()
+    }
 }
 
 fn is_precise_source_candidate(origin: &OriginExportKey) -> bool {
@@ -997,6 +1010,80 @@ mod tests {
     }
 
     #[test]
+    fn exact_source_mapping_wins_over_generated_explanation() {
+        let source_file = key("source.file", "demo", "src/main.fe");
+        let exact_source = key("hir.expr", "demo", "expr:exact");
+        let generated_source = key("hir.expr", "demo", "expr:generated");
+        let function = key("bytecode.function", "demo", "runtime");
+        let instruction = key("bytecode.pc", "demo", "pc:4");
+        let facts = vec![
+            node(source_file.clone()),
+            node(exact_source.clone()),
+            node(generated_source.clone()),
+            node(function.clone()),
+            node(instruction.clone()),
+            TraceFact::SourceFile(SourceFileFact::new(
+                source_file.clone(),
+                "file:///src/main.fe",
+                "src/main.fe",
+                "blake3:0000000000000000000000000000000000000000000000000000000000001234",
+                Some(0),
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                exact_source.clone(),
+                source_file.clone(),
+                10,
+                13,
+                1,
+                10,
+                1,
+                13,
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                generated_source.clone(),
+                source_file,
+                20,
+                24,
+                2,
+                1,
+                2,
+                5,
+            )),
+            TraceFact::Instruction(InstructionFact::new(
+                instruction.clone(),
+                function,
+                0,
+                "DUP1",
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                instruction.clone(),
+                exact_source.clone(),
+                OriginEdgeLabel::LoweredFrom,
+                None,
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                instruction,
+                generated_source.clone(),
+                OriginEdgeLabel::SyntheticFor,
+                None,
+            )),
+        ];
+        let bundle = DebugBundle::from_snapshot(&snapshot(facts));
+
+        assert_eq!(
+            bundle.instructions[0].classification,
+            InstructionClassification::SourceMapped
+        );
+        assert_eq!(bundle.instructions[0].primary_source, Some(exact_source));
+        assert_eq!(bundle.instructions[0].classification_reason, None);
+        assert!(
+            bundle.instructions[0]
+                .all_origins
+                .contains(&generated_source)
+        );
+    }
+
+    #[test]
     fn repeated_source_candidate_query_hits_cache() {
         let source_file = key("source.file", "demo", "src/main.fe");
         let source_expr = key("hir.expr", "demo", "expr:add");
@@ -1023,9 +1110,9 @@ mod tests {
         let index = DebugFactIndex::new(&snapshot);
 
         assert_eq!(index.source_candidate_walks.get(), 0);
-        assert_eq!(index.source_candidates(&instruction).origins.len(), 1);
+        assert_eq!(index.source_candidates(&instruction).exact_origins.len(), 1);
         assert_eq!(index.source_candidate_walks.get(), 1);
-        assert_eq!(index.source_candidates(&instruction).origins.len(), 1);
+        assert_eq!(index.source_candidates(&instruction).exact_origins.len(), 1);
         assert_eq!(index.source_candidate_walks.get(), 1);
         assert_eq!(index.source_candidate_cache.borrow().len(), 1);
     }
