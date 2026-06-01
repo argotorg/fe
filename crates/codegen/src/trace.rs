@@ -113,7 +113,7 @@ pub fn emit_observed_bytecode_trace_facts(
     facts
 }
 
-pub fn postopt_sonatina_instruction_aliases(
+fn postopt_sonatina_instruction_aliases(
     facts: &[TraceFact],
 ) -> BTreeMap<OriginExportKey, OriginExportKey> {
     facts
