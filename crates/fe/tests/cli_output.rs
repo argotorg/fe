@@ -386,6 +386,874 @@ fn test_cli_build_emit_abi_writes_json_artifact() {
 }
 
 #[test]
+fn test_cli_build_emit_metadata_standalone_writes_single_source() {
+    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_output/emit_abi/abi_contract.fe");
+    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
+    let fixture_contents = fs::read_to_string(&fixture_path).expect("read fixture");
+
+    let temp = tempdir().expect("tempdir");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "metadata",
+        "--contract",
+        "Foo",
+        "--out-dir",
+        out_dir_str.as_str(),
+        fixture_path_str,
+    ]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+
+    let metadata_path = out_dir.join("Foo.metadata.json");
+    assert!(
+        metadata_path.is_file(),
+        "missing metadata artifact:\n{output}"
+    );
+    assert!(
+        output.contains("Foo.metadata.json"),
+        "expected metadata filename in output:\n{output}"
+    );
+
+    let value: Value =
+        serde_json::from_str(&fs::read_to_string(&metadata_path).expect("read metadata"))
+            .expect("parse metadata");
+    assert_eq!(value["version"], 1);
+    assert_eq!(value["language"], "Fe");
+    assert!(
+        value["compiler"]["version"].is_string(),
+        "compiler.version must be a string: {value:?}"
+    );
+    assert_eq!(
+        value["settings"]["compilationTarget"]["abi_contract.fe"],
+        "Foo"
+    );
+    assert_eq!(value["settings"]["evmVersion"], "osaka");
+    let sources = value["sources"].as_object().expect("sources object");
+    assert_eq!(sources.len(), 1, "expected exactly one source: {sources:?}");
+    assert_eq!(sources["abi_contract.fe"]["content"], fixture_contents);
+    assert!(
+        sources["abi_contract.fe"]["keccak256"]
+            .as_str()
+            .is_some_and(|h| h.starts_with("0x") && h.len() == 66),
+        "expected 0x-prefixed keccak256: {sources:?}"
+    );
+}
+
+#[test]
+fn test_cli_build_emit_metadata_compiler_commit_matches_version_output() {
+    // `compiler.commit` must mirror the git hash embedded in `fe --version` (present iff that is).
+    let (version_output, version_code) = run_fe_main(&["--version"]);
+    assert_eq!(version_code, 0, "fe --version failed:\n{version_output}");
+    let expected_commit = version_output
+        .split_once('(')
+        .and_then(|(_, rest)| rest.split_once(')'))
+        .map(|(hash, _)| hash.trim().to_string());
+
+    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_output/emit_abi/abi_contract.fe");
+    let temp = tempdir().expect("tempdir");
+    let out_dir = temp.path().join("out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "metadata",
+        "--contract",
+        "Foo",
+        "--out-dir",
+        out_dir.to_str().expect("out utf8"),
+        fixture_path.to_str().expect("fixture utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+
+    let value: Value = serde_json::from_str(
+        &fs::read_to_string(out_dir.join("Foo.metadata.json")).expect("read metadata"),
+    )
+    .expect("parse metadata");
+    assert!(value["compiler"]["version"].is_string());
+    match expected_commit {
+        Some(hash) => assert_eq!(
+            value["compiler"]["commit"], hash,
+            "compiler.commit must equal the hash in `fe --version`"
+        ),
+        None => assert!(
+            value["compiler"].get("commit").is_none(),
+            "compiler.commit must be absent when no git hash is embedded"
+        ),
+    }
+}
+
+#[test]
+fn test_cli_build_emit_metadata_ingot_includes_all_sources() {
+    let temp = tempdir().expect("tempdir");
+    let src_dir = temp.path().join("src");
+    fs::create_dir_all(&src_dir).expect("create src dir");
+    fs::write(
+        temp.path().join("fe.toml"),
+        "[ingot]\nname = \"metadata_ingot\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write fe.toml");
+    let lib_src = "use ingot::counter::Counter\n";
+    let counter_src = "pub contract Counter {\n}\n";
+    fs::write(src_dir.join("lib.fe"), lib_src).expect("write lib.fe");
+    fs::write(src_dir.join("counter.fe"), counter_src).expect("write counter.fe");
+
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+    let project_path = temp.path().to_str().expect("project path utf8");
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "metadata",
+        "--out-dir",
+        out_dir_str.as_str(),
+        project_path,
+    ]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+
+    let metadata_path = out_dir.join("Counter.metadata.json");
+    assert!(
+        metadata_path.is_file(),
+        "missing metadata artifact:\n{output}"
+    );
+    let value: Value =
+        serde_json::from_str(&fs::read_to_string(&metadata_path).expect("read metadata"))
+            .expect("parse metadata");
+    assert_eq!(
+        value["settings"]["compilationTarget"]["src/counter.fe"],
+        "Counter"
+    );
+    let sources = value["sources"].as_object().expect("sources object");
+    assert_eq!(sources["src/lib.fe"]["content"], lib_src);
+    assert_eq!(sources["src/counter.fe"]["content"], counter_src);
+    assert!(
+        !sources
+            .keys()
+            .any(|k| k.starts_with("std/") || k.starts_with("core/")),
+        "std/core must not appear in sources: {sources:?}"
+    );
+}
+
+#[test]
+fn test_cli_build_emit_metadata_includes_transitive_dependency() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path();
+    write_app_with_path_dependency(root);
+
+    let out_dir = root.join("app/out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "metadata",
+        "--out-dir",
+        out_dir.to_str().expect("out utf8"),
+        root.join("app").to_str().expect("app utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+
+    let value: Value = serde_json::from_str(
+        &fs::read_to_string(out_dir.join("Foo.metadata.json")).expect("read metadata"),
+    )
+    .expect("parse metadata");
+
+    let sources = value["sources"].as_object().expect("sources object");
+    assert!(
+        sources.contains_key("src/main.fe"),
+        "root source missing: {sources:?}"
+    );
+    assert!(
+        sources.contains_key("mylib/src/lib.fe"),
+        "dependency source must be alias-namespaced: {sources:?}"
+    );
+    assert!(
+        !sources
+            .keys()
+            .any(|k| k.starts_with("std/") || k.starts_with("core/")),
+        "std/core must not appear in sources: {sources:?}"
+    );
+
+    let ingots = value["settings"]["ingots"]
+        .as_array()
+        .expect("ingots array");
+    let app = ingots
+        .iter()
+        .find(|i| i["name"] == "app")
+        .expect("app ingot entry");
+    assert_eq!(app["namespace"], "");
+    assert_eq!(app["dependencies"]["mylib"], "mylib");
+    let mylib = ingots
+        .iter()
+        .find(|i| i["name"] == "mylib")
+        .expect("mylib ingot entry");
+    assert_eq!(mylib["namespace"], "mylib");
+    assert_eq!(mylib["version"], "1.2.0");
+    // mylib's fe.toml sets `arithmetic = "unchecked"`; the resolved effective value is recorded.
+    assert_eq!(mylib["arithmetic"], "unchecked");
+}
+
+#[test]
+fn test_cli_build_emit_metadata_settings_reflect_optimize_and_arithmetic() {
+    let temp = tempdir().expect("tempdir");
+    let src_dir = temp.path().join("src");
+    fs::create_dir_all(&src_dir).expect("create src dir");
+    fs::write(
+        temp.path().join("fe.toml"),
+        "[ingot]\nname = \"metadata_settings\"\nversion = \"0.1.0\"\narithmetic = \"unchecked\"\n",
+    )
+    .expect("write fe.toml");
+    fs::write(src_dir.join("lib.fe"), "pub contract Foo {\n}\n").expect("write lib.fe");
+
+    let out_dir = temp.path().join("out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "metadata",
+        "--optimize",
+        "2",
+        "--out-dir",
+        out_dir.to_str().expect("out utf8"),
+        temp.path().to_str().expect("project utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+
+    let value: Value = serde_json::from_str(
+        &fs::read_to_string(out_dir.join("Foo.metadata.json")).expect("read metadata"),
+    )
+    .expect("parse metadata");
+    assert_eq!(value["settings"]["optimizer"]["level"], "2");
+    assert_eq!(value["settings"]["arithmetic"], "unchecked");
+    // `dependencyArithmetic` defaults to `defer` when unset.
+    assert_eq!(value["settings"]["dependencyArithmetic"], "defer");
+}
+
+#[test]
+fn test_cli_build_emit_metadata_combined_with_other_artifacts() {
+    let temp = tempdir().expect("tempdir");
+    let src_dir = temp.path().join("src");
+    fs::create_dir_all(&src_dir).expect("create src dir");
+    fs::write(
+        temp.path().join("fe.toml"),
+        "[ingot]\nname = \"metadata_combined\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write fe.toml");
+    fs::write(
+        src_dir.join("lib.fe"),
+        "pub msg FooMsg {\n    #[selector = sol(\"run()\")]\n    Run -> u256,\n}\n\npub contract Foo {\n    recv FooMsg {\n        Run -> u256 {\n            1\n        }\n    }\n}\n",
+    )
+    .expect("write lib.fe");
+
+    let out_dir = temp.path().join("out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "bytecode,runtime-bytecode,abi,metadata",
+        "--out-dir",
+        out_dir.to_str().expect("out utf8"),
+        temp.path().to_str().expect("project utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+    for artifact in [
+        "Foo.bin",
+        "Foo.runtime.bin",
+        "Foo.abi.json",
+        "Foo.metadata.json",
+    ] {
+        assert!(
+            out_dir.join(artifact).is_file(),
+            "missing {artifact}:\n{output}"
+        );
+    }
+
+    // `output.abi` in the metadata must match the standalone `.abi.json` artifact.
+    let metadata: Value = serde_json::from_str(
+        &fs::read_to_string(out_dir.join("Foo.metadata.json")).expect("read metadata"),
+    )
+    .expect("parse metadata");
+    let abi_json: Value = serde_json::from_str(
+        &fs::read_to_string(out_dir.join("Foo.abi.json")).expect("read abi.json"),
+    )
+    .expect("parse abi.json");
+    assert_eq!(
+        metadata["output"]["abi"], abi_json,
+        "metadata output.abi must equal the .abi.json artifact"
+    );
+}
+
+#[test]
+fn test_cli_build_metadata_round_trip_reproduces_runtime_bytecode() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path();
+    write_app_with_path_dependency(root);
+
+    // Original build: emit metadata + runtime bytecode.
+    let out_dir = root.join("app/out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "metadata,runtime-bytecode",
+        "--out-dir",
+        out_dir.to_str().expect("out utf8"),
+        root.join("app").to_str().expect("app utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "original build failed:\n{output}");
+    let original_runtime =
+        fs::read_to_string(out_dir.join("Foo.runtime.bin")).expect("read original runtime.bin");
+    let metadata: Value = serde_json::from_str(
+        &fs::read_to_string(out_dir.join("Foo.metadata.json")).expect("read metadata"),
+    )
+    .expect("parse metadata");
+
+    // Reconstruct a fresh project solely from the metadata, then rebuild.
+    let recon = tempdir().expect("recon tempdir");
+    let root_dir = reconstruct_project_from_metadata(&metadata, recon.path());
+    let recon_out = recon.path().join("out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "runtime-bytecode",
+        "--out-dir",
+        recon_out.to_str().expect("out utf8"),
+        root_dir.to_str().expect("root utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "rebuild from metadata failed:\n{output}");
+    let rebuilt_runtime =
+        fs::read_to_string(recon_out.join("Foo.runtime.bin")).expect("read rebuilt runtime.bin");
+
+    assert_eq!(
+        original_runtime, rebuilt_runtime,
+        "runtime bytecode rebuilt from metadata.json must be byte-identical"
+    );
+}
+
+#[test]
+fn test_cli_build_emit_metadata_workspace_collisions_are_rejected() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path();
+    fs::create_dir_all(root.join("ingots/a/src")).expect("create ingot a");
+    fs::create_dir_all(root.join("ingots/b/src")).expect("create ingot b");
+    fs::write(
+        root.join("fe.toml"),
+        r#"[workspace]
+name = "metadata_workspace_collision"
+version = "0.1.0"
+members = [
+  { path = "ingots/a", name = "a" },
+  { path = "ingots/b", name = "b" },
+]
+"#,
+    )
+    .expect("write workspace fe.toml");
+    fs::write(
+        root.join("ingots/a/fe.toml"),
+        "[ingot]\nname = \"a\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write ingot a fe.toml");
+    fs::write(
+        root.join("ingots/b/fe.toml"),
+        "[ingot]\nname = \"b\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write ingot b fe.toml");
+    fs::write(root.join("ingots/a/src/lib.fe"), "pub contract Foo {\n}\n")
+        .expect("write ingot a source");
+    fs::write(root.join("ingots/b/src/lib.fe"), "pub contract Foo {\n}\n")
+        .expect("write ingot b source");
+
+    let (output, exit_code) = run_fe_main_in_dir(&["build", "--emit", "metadata"], root);
+    assert_ne!(exit_code, 0, "expected non-zero exit code:\n{output}");
+    assert!(
+        output.contains("Contract names collide in a flat workspace output directory"),
+        "expected collision error:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_build_emit_metadata_workspace_scopes_each_contract_to_its_member() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path();
+    fs::create_dir_all(root.join("ingots/a/src")).expect("create ingot a");
+    fs::create_dir_all(root.join("ingots/b/src")).expect("create ingot b");
+    fs::write(
+        root.join("fe.toml"),
+        r#"[workspace]
+name = "metadata_workspace_scope"
+version = "0.1.0"
+members = [
+  { path = "ingots/a", name = "a" },
+  { path = "ingots/b", name = "b" },
+]
+"#,
+    )
+    .expect("write workspace fe.toml");
+    fs::write(
+        root.join("ingots/a/fe.toml"),
+        "[ingot]\nname = \"a\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write ingot a fe.toml");
+    fs::write(
+        root.join("ingots/b/fe.toml"),
+        "[ingot]\nname = \"b\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write ingot b fe.toml");
+    let foo_src = "pub contract Foo {\n}\n";
+    let bar_src = "pub contract Bar {\n}\n";
+    fs::write(root.join("ingots/a/src/lib.fe"), foo_src).expect("write a source");
+    fs::write(root.join("ingots/b/src/lib.fe"), bar_src).expect("write b source");
+
+    let out_dir = root.join("out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "metadata",
+        "--out-dir",
+        out_dir.to_str().expect("out utf8"),
+        root.to_str().expect("root utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+
+    let foo: Value = serde_json::from_str(
+        &fs::read_to_string(out_dir.join("Foo.metadata.json")).expect("read Foo metadata"),
+    )
+    .expect("parse Foo metadata");
+    let bar: Value = serde_json::from_str(
+        &fs::read_to_string(out_dir.join("Bar.metadata.json")).expect("read Bar metadata"),
+    )
+    .expect("parse Bar metadata");
+
+    // Each contract's metadata references only its own member's sources.
+    assert_eq!(foo["settings"]["compilationTarget"]["src/lib.fe"], "Foo");
+    let foo_sources = foo["sources"].as_object().expect("Foo sources");
+    assert_eq!(foo_sources["src/lib.fe"]["content"], foo_src);
+    assert!(
+        !foo_sources
+            .values()
+            .any(|s| s["content"].as_str().is_some_and(|c| c.contains("Bar"))),
+        "Foo metadata must not contain member b's sources: {foo_sources:?}"
+    );
+
+    assert_eq!(bar["settings"]["compilationTarget"]["src/lib.fe"], "Bar");
+    let bar_sources = bar["sources"].as_object().expect("Bar sources");
+    assert_eq!(bar_sources["src/lib.fe"]["content"], bar_src);
+    assert!(
+        !bar_sources
+            .values()
+            .any(|s| s["content"].as_str().is_some_and(|c| c.contains("Foo"))),
+        "Bar metadata must not contain member a's sources: {bar_sources:?}"
+    );
+}
+
+#[test]
+fn test_cli_build_emit_metadata_disambiguates_same_named_dependencies() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path();
+    // Two distinct ingots both named "util" (different versions) must not collide.
+    for (dir, version, func) in [
+        ("util_a", "1.0.0", "helper_one"),
+        ("util_b", "2.0.0", "helper_two"),
+    ] {
+        fs::create_dir_all(root.join(dir).join("src")).expect("create util src");
+        fs::write(
+            root.join(dir).join("fe.toml"),
+            format!("[ingot]\nname = \"util\"\nversion = \"{version}\"\n"),
+        )
+        .expect("write util fe.toml");
+        fs::write(
+            root.join(dir).join("src/lib.fe"),
+            format!("pub fn {func}() -> u256 {{\n    return 1\n}}\n"),
+        )
+        .expect("write util source");
+    }
+    fs::create_dir_all(root.join("app/src")).expect("create app/src");
+    fs::write(
+        root.join("app/fe.toml"),
+        "[ingot]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nu1 = { path = \"../util_a\" }\nu2 = { path = \"../util_b\" }\n",
+    )
+    .expect("write app/fe.toml");
+    fs::write(
+        root.join("app/src/main.fe"),
+        "use u1::helper_one\nuse u2::helper_two\n\npub msg FooMsg {\n    #[selector = sol(\"run()\")]\n    Run -> u256,\n}\n\npub contract Foo {\n    recv FooMsg {\n        Run -> u256 {\n            helper_one() + helper_two()\n        }\n    }\n}\n",
+    )
+    .expect("write app/src/main.fe");
+
+    let out_dir = root.join("app/out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "metadata,runtime-bytecode",
+        "--out-dir",
+        out_dir.to_str().expect("out utf8"),
+        root.join("app").to_str().expect("app utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+
+    let value: Value = serde_json::from_str(
+        &fs::read_to_string(out_dir.join("Foo.metadata.json")).expect("read metadata"),
+    )
+    .expect("parse metadata");
+
+    // Both same-named ingots must appear under distinct namespaces, with both sources retained.
+    let ingots = value["settings"]["ingots"]
+        .as_array()
+        .expect("ingots array");
+    let util_namespaces: Vec<&str> = ingots
+        .iter()
+        .filter(|i| i["name"] == "util")
+        .map(|i| i["namespace"].as_str().expect("namespace"))
+        .collect();
+    assert_eq!(
+        util_namespaces.len(),
+        2,
+        "expected two `util` ingots: {ingots:?}"
+    );
+    assert_ne!(
+        util_namespaces[0], util_namespaces[1],
+        "same-named ingots must get distinct namespaces: {util_namespaces:?}"
+    );
+
+    let sources = value["sources"].as_object().expect("sources object");
+    for ns in &util_namespaces {
+        assert!(
+            sources.contains_key(&format!("{ns}/src/lib.fe")),
+            "missing source for namespace {ns}: {:?}",
+            sources.keys().collect::<Vec<_>>()
+        );
+    }
+    // The two helpers prove neither dependency's source overwrote the other.
+    let all_content: String = sources
+        .values()
+        .filter_map(|s| s["content"].as_str())
+        .collect();
+    assert!(all_content.contains("helper_one") && all_content.contains("helper_two"));
+
+    // Round-trip: reconstruct from metadata and rebuild to byte-identical runtime bytecode.
+    let original_runtime =
+        fs::read_to_string(out_dir.join("Foo.runtime.bin")).expect("read original runtime.bin");
+    let recon = tempdir().expect("recon tempdir");
+    let root_dir = reconstruct_project_from_metadata(&value, recon.path());
+    let recon_out = recon.path().join("out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "runtime-bytecode",
+        "--out-dir",
+        recon_out.to_str().expect("out utf8"),
+        root_dir.to_str().expect("root utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "rebuild from metadata failed:\n{output}");
+    let rebuilt_runtime =
+        fs::read_to_string(recon_out.join("Foo.runtime.bin")).expect("read rebuilt runtime.bin");
+    assert_eq!(
+        original_runtime, rebuilt_runtime,
+        "runtime bytecode must reproduce even with same-named dependencies"
+    );
+}
+
+#[test]
+fn test_cli_build_emit_metadata_disambiguates_dependency_from_root_source_path() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path();
+    fs::create_dir_all(root.join("app/src/src")).expect("create app sources");
+    fs::create_dir_all(root.join("dep/src")).expect("create dependency sources");
+    fs::write(
+        root.join("app/fe.toml"),
+        "[ingot]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ndep = { path = \"../dep\" }\n",
+    )
+    .expect("write app fe.toml");
+    fs::write(
+        root.join("dep/fe.toml"),
+        "[ingot]\nname = \"src\"\nversion = \"1.0.0\"\n",
+    )
+    .expect("write dependency fe.toml");
+    let root_only_src = "pub fn root_only() -> u256 {\n    return 7\n}\n";
+    let dependency_src = "pub fn helper() -> u256 {\n    return 42\n}\n";
+    fs::write(root.join("app/src/src/lib.fe"), root_only_src).expect("write root source");
+    fs::write(root.join("dep/src/lib.fe"), dependency_src).expect("write dependency source");
+    fs::write(
+        root.join("app/src/main.fe"),
+        "use dep::helper\n\npub msg FooMsg {\n    #[selector = sol(\"run()\")]\n    Run -> u256,\n}\n\npub contract Foo {\n    recv FooMsg {\n        Run -> u256 {\n            helper()\n        }\n    }\n}\n",
+    )
+    .expect("write app main source");
+
+    let out_dir = root.join("app/out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "metadata,runtime-bytecode",
+        "--out-dir",
+        out_dir.to_str().expect("out utf8"),
+        root.join("app").to_str().expect("app utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+
+    let metadata: Value = serde_json::from_str(
+        &fs::read_to_string(out_dir.join("Foo.metadata.json")).expect("read metadata"),
+    )
+    .expect("parse metadata");
+    let sources = metadata["sources"].as_object().expect("sources object");
+    assert_eq!(sources["src/src/lib.fe"]["content"], root_only_src);
+    assert_eq!(sources["src-2/src/lib.fe"]["content"], dependency_src);
+    let dep = metadata["settings"]["ingots"]
+        .as_array()
+        .expect("ingots array")
+        .iter()
+        .find(|ingot| ingot["name"] == "src")
+        .expect("dependency ingot");
+    assert_eq!(dep["namespace"], "src-2");
+    assert_eq!(
+        metadata["settings"]["ingots"][0]["dependencies"]["dep"],
+        "src-2"
+    );
+
+    let original_runtime =
+        fs::read_to_string(out_dir.join("Foo.runtime.bin")).expect("read original runtime.bin");
+    let recon = tempdir().expect("recon tempdir");
+    let root_dir = reconstruct_project_from_metadata(&metadata, recon.path());
+    let recon_out = recon.path().join("out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "runtime-bytecode",
+        "--out-dir",
+        recon_out.to_str().expect("out utf8"),
+        root_dir.to_str().expect("root utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "rebuild from metadata failed:\n{output}");
+    let rebuilt_runtime =
+        fs::read_to_string(recon_out.join("Foo.runtime.bin")).expect("read rebuilt runtime.bin");
+    assert_eq!(original_runtime, rebuilt_runtime);
+}
+
+#[test]
+fn test_cli_build_emit_metadata_preserves_dependency_arithmetic_across_edge_types() {
+    // A workspace member's `dependency-arithmetic` is applied to EXTERNAL edges but not to
+    // workspace-internal ones. The metadata must capture the resulting per-ingot effective
+    // arithmetic so that a reconstructed (flattened) project still reproduces the bytecode.
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path();
+    fs::create_dir_all(root.join("ingots/app/src")).expect("create app");
+    fs::create_dir_all(root.join("ingots/internal_lib/src")).expect("create internal_lib");
+    fs::create_dir_all(root.join("ext_lib/src")).expect("create ext_lib");
+
+    fs::write(
+        root.join("fe.toml"),
+        "[workspace]\nname = \"ws\"\nversion = \"0.1.0\"\nmembers = [\n  { path = \"ingots/app\", name = \"app\" },\n  { path = \"ingots/internal_lib\", name = \"internal_lib\" },\n]\n",
+    )
+    .expect("write workspace fe.toml");
+    // `app` forces unchecked arithmetic onto its external dependencies.
+    fs::write(
+        root.join("ingots/app/fe.toml"),
+        "[ingot]\nname = \"app\"\nversion = \"0.1.0\"\ndependency-arithmetic = \"unchecked\"\n\n[dependencies]\ninternal_lib = true\next = { path = \"../../ext_lib\" }\n",
+    )
+    .expect("write app fe.toml");
+    fs::write(
+        root.join("ingots/app/src/main.fe"),
+        "use internal_lib::ilib\nuse ext::elib\n\npub msg M {\n    #[selector = sol(\"run(uint256,uint256)\")]\n    Run { a: u256, b: u256 } -> u256,\n}\n\npub contract App {\n    recv M {\n        Run { a, b } -> u256 {\n            ilib(x: a, y: b) + elib(x: a, y: b)\n        }\n    }\n}\n",
+    )
+    .expect("write app main.fe");
+    fs::write(
+        root.join("ingots/internal_lib/fe.toml"),
+        "[ingot]\nname = \"internal_lib\"\nversion = \"0.1.0\"\narithmetic = \"checked\"\n",
+    )
+    .expect("write internal_lib fe.toml");
+    fs::write(
+        root.join("ingots/internal_lib/src/lib.fe"),
+        "pub fn ilib(x: u256, y: u256) -> u256 {\n    return x + y\n}\n",
+    )
+    .expect("write internal_lib lib.fe");
+    fs::write(
+        root.join("ext_lib/fe.toml"),
+        "[ingot]\nname = \"ext_lib\"\nversion = \"0.1.0\"\narithmetic = \"checked\"\n",
+    )
+    .expect("write ext_lib fe.toml");
+    fs::write(
+        root.join("ext_lib/src/lib.fe"),
+        "pub fn elib(x: u256, y: u256) -> u256 {\n    return x + y\n}\n",
+    )
+    .expect("write ext_lib lib.fe");
+
+    let out_dir = root.join("out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "metadata,runtime-bytecode",
+        "--out-dir",
+        out_dir.to_str().expect("out utf8"),
+        root.to_str().expect("root utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+
+    let value: Value = serde_json::from_str(
+        &fs::read_to_string(out_dir.join("App.metadata.json")).expect("read metadata"),
+    )
+    .expect("parse metadata");
+    let ingots = value["settings"]["ingots"]
+        .as_array()
+        .expect("ingots array");
+    let arith = |name: &str| -> String {
+        ingots
+            .iter()
+            .find(|i| i["name"] == name)
+            .and_then(|i| i["arithmetic"].as_str())
+            .unwrap_or("<missing>")
+            .to_string()
+    };
+    // External edge is forced unchecked; internal (same-workspace) edge keeps its own checked.
+    assert_eq!(
+        arith("ext_lib"),
+        "unchecked",
+        "external dep must record forced arithmetic"
+    );
+    assert_eq!(
+        arith("internal_lib"),
+        "checked",
+        "internal edge must not be forced"
+    );
+
+    // Round-trip: the flattened reconstruction must still reproduce the exact bytecode.
+    let original_runtime =
+        fs::read_to_string(out_dir.join("App.runtime.bin")).expect("read original runtime.bin");
+    let recon = tempdir().expect("recon tempdir");
+    let root_dir = reconstruct_project_from_metadata(&value, recon.path());
+    let recon_out = recon.path().join("out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "runtime-bytecode",
+        "--out-dir",
+        recon_out.to_str().expect("out utf8"),
+        root_dir.to_str().expect("root utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "rebuild from metadata failed:\n{output}");
+    let rebuilt_runtime =
+        fs::read_to_string(recon_out.join("App.runtime.bin")).expect("read rebuilt runtime.bin");
+    assert_eq!(
+        original_runtime, rebuilt_runtime,
+        "runtime bytecode must reproduce across internal/external dependency-arithmetic edges"
+    );
+}
+
+/// Scaffold an `app` ingot with a third-party path dependency `mylib` under `root`.
+/// `app` defines `pub contract Foo` and uses `mylib::helper`; `mylib` is `arithmetic = "unchecked"`.
+fn write_app_with_path_dependency(root: &Path) {
+    fs::create_dir_all(root.join("app/src")).expect("create app/src");
+    fs::create_dir_all(root.join("mylib/src")).expect("create mylib/src");
+    fs::write(
+        root.join("app/fe.toml"),
+        "[ingot]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nmylib = { path = \"../mylib\" }\n",
+    )
+    .expect("write app/fe.toml");
+    fs::write(
+        root.join("app/src/main.fe"),
+        "use mylib::helper\n\npub msg FooMsg {\n    #[selector = sol(\"run()\")]\n    Run -> u256,\n}\n\npub contract Foo {\n    recv FooMsg {\n        Run -> u256 {\n            helper()\n        }\n    }\n}\n",
+    )
+    .expect("write app/src/main.fe");
+    fs::write(
+        root.join("mylib/fe.toml"),
+        "[ingot]\nname = \"mylib\"\nversion = \"1.2.0\"\narithmetic = \"unchecked\"\n",
+    )
+    .expect("write mylib/fe.toml");
+    fs::write(
+        root.join("mylib/src/lib.fe"),
+        "pub fn helper() -> u256 {\n    return 41 + 1\n}\n",
+    )
+    .expect("write mylib/src/lib.fe");
+}
+
+/// Reconstruct a buildable project under `dest` purely from a `metadata.json` value: one directory
+/// per `settings.ingots[]` entry (root at `dest/<name>`, deps at `dest/<namespace>`), regenerating
+/// each `fe.toml` and writing every `sources` entry into its namespaced layout. Returns the root
+/// ingot directory.
+fn reconstruct_project_from_metadata(metadata: &Value, dest: &Path) -> std::path::PathBuf {
+    let ingots = metadata["settings"]["ingots"]
+        .as_array()
+        .expect("ingots array");
+
+    let dir_for = |namespace: &str, name: &str| -> std::path::PathBuf {
+        if namespace.is_empty() {
+            dest.join(name)
+        } else {
+            dest.join(namespace)
+        }
+    };
+
+    // Non-root namespaces, used to route each source key to its owning ingot.
+    let non_root_namespaces: Vec<String> = ingots
+        .iter()
+        .filter_map(|i| {
+            let ns = i["namespace"].as_str().unwrap_or("");
+            (!ns.is_empty()).then(|| ns.to_string())
+        })
+        .collect();
+
+    let mut root_dir = dest.to_path_buf();
+
+    // 1. Regenerate each ingot's fe.toml.
+    for ingot in ingots {
+        let name = ingot["name"].as_str().expect("ingot name");
+        let namespace = ingot["namespace"].as_str().unwrap_or("");
+        let dir = dir_for(namespace, name);
+        fs::create_dir_all(dir.join("src")).expect("create ingot src");
+        if namespace.is_empty() {
+            root_dir = dir.clone();
+        }
+
+        let mut toml = format!("[ingot]\nname = \"{name}\"\n");
+        if let Some(version) = ingot["version"].as_str() {
+            toml.push_str(&format!("version = \"{version}\"\n"));
+        }
+        if let Some(arith) = ingot["arithmetic"].as_str() {
+            toml.push_str(&format!("arithmetic = \"{arith}\"\n"));
+        }
+        let deps = ingot["dependencies"].as_object().expect("dependencies");
+        let path_deps: Vec<(&String, &str)> = deps
+            .iter()
+            .filter_map(|(alias, target)| {
+                let target = target.as_str()?;
+                // std/core are provided by the compiler; only scaffold real path deps.
+                (target != "std" && target != "core").then_some((alias, target))
+            })
+            .collect();
+        if !path_deps.is_empty() {
+            toml.push_str("\n[dependencies]\n");
+            for (alias, target) in path_deps {
+                toml.push_str(&format!("{alias} = {{ path = \"../{target}\" }}\n"));
+            }
+        }
+        fs::write(dir.join("fe.toml"), toml).expect("write fe.toml");
+    }
+
+    // 2. Write every source into its owning ingot's namespaced src/ layout.
+    let sources = metadata["sources"].as_object().expect("sources object");
+    for (key, source) in sources {
+        let content = source["content"].as_str().unwrap_or("");
+        let (namespace, rel) = non_root_namespaces
+            .iter()
+            .find_map(|ns| {
+                key.strip_prefix(&format!("{ns}/"))
+                    .map(|rel| (ns.as_str(), rel))
+            })
+            .unwrap_or(("", key.as_str()));
+
+        // Find the owning ingot's directory (by namespace) to resolve its name for the root case.
+        let dir = ingots
+            .iter()
+            .find(|i| i["namespace"].as_str().unwrap_or("") == namespace)
+            .map(|i| dir_for(namespace, i["name"].as_str().unwrap_or("dep")))
+            .expect("owning ingot for source");
+        let target = dir.join(rel);
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).expect("create source parent");
+        }
+        fs::write(target, content).expect("write source");
+    }
+
+    root_dir
+}
+
+#[test]
 fn test_cli_build_emit_abi_includes_constructor_and_mutability_metadata() {
     let temp = tempdir().expect("tempdir");
     let src_dir = temp.path().join("src");

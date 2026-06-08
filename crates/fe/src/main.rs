@@ -40,6 +40,7 @@ pub enum BuildEmit {
     RuntimeBytecode,
     Ir,
     Abi,
+    Metadata,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
