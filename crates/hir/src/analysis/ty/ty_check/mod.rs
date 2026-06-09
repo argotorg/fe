@@ -321,20 +321,7 @@ fn typed_body_for_bodyless_func<'db>(
     db: &'db dyn HirAnalysisDb,
     func: Func<'db>,
 ) -> TypedBody<'db> {
-    let mut preds =
-        crate::analysis::ty::trait_resolution::constraint::collect_func_decl_constraints(
-            db,
-            func.into(),
-            true,
-        )
-        .instantiate_identity();
-    if let Some(ItemKind::Trait(trait_)) = func.scope().parent_item(db) {
-        let self_pred = TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
-        let mut merged = preds.list(db).to_vec();
-        merged.push(self_pred);
-        preds = PredicateListId::new(db, merged);
-    }
-    let assumptions = preds.extend_all_bounds(db);
+    let assumptions = crate::semantic::func_body_assumptions(db, func).extend_all_bounds(db);
     let mut result_ty = func.return_ty(db);
     if !result_ty.is_star_kind(db) || ty_contains_const_hole(db, result_ty) {
         result_ty = TyId::invalid(db, InvalidCause::Other);

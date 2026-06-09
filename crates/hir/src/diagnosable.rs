@@ -31,7 +31,7 @@ use crate::analysis::ty::trait_def::ImplementorId;
 use crate::semantic::{
     FieldView, FuncParamView, ImplAssocTypeView, InherentImplAdmissibility, SuperTraitRefView,
     VariantView, WherePredicateBoundView, WherePredicateView, constraints_for,
-    header_constraints_for, lower_hir_kind_local,
+    header_constraints_for, lower_hir_kind_local, param_env,
 };
 
 /// Unified "pull" diagnostics surface for HIR items and views.
@@ -140,7 +140,8 @@ impl<'db> SuperTraitRefView<'db> {
 
         match check_trait_inst_wf(
             db,
-            ty::trait_resolution::TraitSolveCx::new(db, scope).with_assumptions(assumptions),
+            ty::trait_resolution::TraitSolveCx::new(db, scope)
+                .with_assumptions(param_env(db, self.owner.into())),
             inst,
         ) {
             WellFormedness::WellFormed => None,
@@ -268,7 +269,7 @@ impl<'db> WherePredicateBoundView<'db> {
                     match check_trait_inst_wf(
                         db,
                         ty::trait_resolution::TraitSolveCx::new(db, scope)
-                            .with_assumptions(assumptions),
+                            .with_assumptions(param_env(db, owner_item)),
                         inst,
                     ) {
                         WellFormedness::WellFormed => {}
@@ -396,7 +397,7 @@ impl<'db> Trait<'db> {
     /// Diagnostics for associated type defaults (bounds satisfaction), in the trait's context.
     pub fn diags_assoc_defaults(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         let mut diags = Vec::new();
-        let assumptions = constraints_for(db, self.into());
+        let assumptions = param_env(db, self.into());
         for assoc in self.assoc_types(db) {
             let Some(default_ty) = assoc.default_ty(db) else {
                 continue;
@@ -457,7 +458,7 @@ impl<'db> Trait<'db> {
                 match check_trait_inst_wf(
                     db,
                     ty::trait_resolution::TraitSolveCx::new(db, self.scope())
-                        .with_assumptions(view.assumptions(db)),
+                        .with_assumptions(param_env(db, self.into())),
                     inst,
                 ) {
                     WellFormedness::WellFormed => {}
@@ -716,10 +717,7 @@ impl<'db> ImplTrait<'db> {
         let implementor = implementor.instantiate_identity();
         let trait_args = implementor.trait_(db).args(db);
         let trait_scope = implementor.trait_def(db).scope();
-        let impl_trait_hir = implementor.hir_impl_trait(db);
-        let assumptions =
-            ty::trait_resolution::constraint::collect_constraints(db, impl_trait_hir.into())
-                .instantiate_identity();
+        let assumptions = param_env(db, self.into());
 
         for assoc in implementor.assoc_type_views(db) {
             let Some(name) = assoc.name(db) else { continue };
@@ -772,9 +770,8 @@ impl<'db> ImplTrait<'db> {
         let trait_constraints =
             collect_constraints(db, trait_def.into()).instantiate(db, trait_inst.args(db));
 
-        let assumptions = collect_constraints(db, self.into()).instantiate_identity();
-        let solve_cx =
-            trait_resolution::TraitSolveCx::new(db, self.scope()).with_assumptions(assumptions);
+        let solve_cx = trait_resolution::TraitSolveCx::new(db, self.scope())
+            .with_assumptions(param_env(db, self.into()));
 
         let is_satisfied = |goal, span: DynLazySpan<'db>, out: &mut Vec<_>| {
             match trait_resolution::is_goal_satisfiable(db, solve_cx, goal) {
@@ -925,7 +922,7 @@ impl<'db> VariantView<'db> {
             // Trait-bound well-formedness for element type.
             match check_ty_wf(
                 db,
-                TraitSolveCx::new(db, scope).with_assumptions(assumptions),
+                TraitSolveCx::new(db, scope).with_assumptions(param_env(db, enum_.into())),
                 ty,
             ) {
                 WellFormedness::WellFormed => {}
@@ -1271,7 +1268,7 @@ impl<'db> GenericParamOwner<'db> {
                         match check_trait_inst_wf(
                             db,
                             ty::trait_resolution::TraitSolveCx::new(db, scope)
-                                .with_assumptions(assumptions),
+                                .with_assumptions(param_env(db, self.into())),
                             inst,
                         ) {
                             WellFormedness::WellFormed => {}

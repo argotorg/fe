@@ -15,10 +15,7 @@ use super::{
     fold::{AssocTySubst, TyFoldable},
     normalize::normalize_ty,
     trait_def::TraitInstId,
-    trait_resolution::{
-        TraitSolveCx,
-        constraint::{collect_constraints, collect_func_decl_constraints},
-    },
+    trait_resolution::{TraitSolveCx, constraint::collect_constraints},
     ty_check::{check_anon_const_body, check_const_body},
     ty_def::{InvalidCause, TyId, TyParam, TyVar},
     ty_lower::{ConstDefaultCompletion, collect_generic_params},
@@ -2105,15 +2102,7 @@ pub(crate) fn assumptions_for_body<'db>(
         _ => None,
     };
     if let Some(func) = containing_func {
-        let mut preds = collect_func_decl_constraints(db, func.into(), true).instantiate_identity();
-        if let Some(ItemKind::Trait(trait_)) = func.scope().parent_item(db) {
-            let self_pred =
-                TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
-            let mut merged = preds.list(db).to_vec();
-            merged.push(self_pred);
-            preds = PredicateListId::new(db, merged);
-        }
-        return preds.extend_all_bounds(db);
+        return crate::semantic::func_body_assumptions(db, func).extend_all_bounds(db);
     }
 
     let mut enclosing = body.scope();
@@ -2124,11 +2113,11 @@ pub(crate) fn assumptions_for_body<'db>(
     }
 
     match parent_item {
-        Some(ItemKind::Trait(trait_)) => {
-            let self_pred =
-                TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
-            PredicateListId::new(db, vec![self_pred]).extend_all_bounds(db)
-        }
+        Some(ItemKind::Trait(trait_)) => PredicateListId::new(
+            db,
+            vec![crate::semantic::trait_self_predicate(db, trait_)],
+        )
+        .extend_all_bounds(db),
         Some(ItemKind::ImplTrait(impl_trait)) => collect_constraints(db, impl_trait.into())
             .instantiate_identity()
             .extend_all_bounds(db),

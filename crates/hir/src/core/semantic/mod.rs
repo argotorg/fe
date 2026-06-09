@@ -130,6 +130,28 @@ pub(crate) fn lower_type_alias_body<'db>(
     lower_type_alias_from_hir(db, alias, hir_ty_opt)
 }
 
+/// The trait's implicit `Self: Trait` predicate.
+pub(crate) fn trait_self_predicate<'db>(
+    db: &'db dyn HirAnalysisDb,
+    trait_: Trait<'db>,
+) -> TraitInstId<'db> {
+    TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new())
+}
+
+/// Appends `pred` to `preds` unless it is already present.
+fn push_predicate<'db>(
+    db: &'db dyn HirAnalysisDb,
+    preds: PredicateListId<'db>,
+    pred: TraitInstId<'db>,
+) -> PredicateListId<'db> {
+    if preds.list(db).contains(&pred) {
+        return preds;
+    }
+    let mut merged = preds.list(db).to_vec();
+    merged.push(pred);
+    PredicateListId::new(db, merged)
+}
+
 /// Consolidated assumptions for any item kind.
 pub fn constraints_for<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -144,18 +166,53 @@ pub fn constraints_for<'db>(
             collect_func_def_constraints(db, f.into(), true).instantiate_identity()
         }
         ItemKind::Impl(i) => collect_constraints(db, i.into()).instantiate_identity(),
-        ItemKind::Trait(t) => {
-            let mut preds = collect_constraints(db, t.into()).instantiate_identity();
-            let self_pred = TraitInstId::new(db, t, t.params(db).to_vec(), IndexMap::new());
-            if !preds.list(db).contains(&self_pred) {
-                let mut merged = preds.list(db).to_vec();
-                merged.push(self_pred);
-                preds = PredicateListId::new(db, merged);
-            }
-            preds
-        }
+        ItemKind::Trait(t) => push_predicate(
+            db,
+            collect_constraints(db, t.into()).instantiate_identity(),
+            trait_self_predicate(db, t),
+        ),
         ItemKind::ImplTrait(i) => collect_constraints(db, i.into()).instantiate_identity(),
         _ => PredicateListId::empty_list(db),
+    }
+}
+
+/// The full assumption set in scope for proving obligations *inside* `item`:
+/// the item's declared constraints (including its parents'), the implicit
+/// `Self: Trait` predicate for traits and trait items, and all implied bounds
+/// (super-trait closure and associated-type bounds).
+///
+/// Use this for well-formedness and satisfiability *checks*. Lowering an
+/// item's own header (super-trait refs, where-clause subjects, generic-param
+/// bounds) must use [`header_constraints_for`] instead: assuming `Self: Trait`
+/// while the trait's own interface is still being lowered can recurse through
+/// the in-progress definition.
+pub fn param_env<'db>(db: &'db dyn HirAnalysisDb, item: ItemKind<'db>) -> PredicateListId<'db> {
+    let preds = constraints_for(db, item);
+    let preds = match item {
+        // The trait's own self-predicate is added by `constraints_for`.
+        ItemKind::Trait(_) => preds,
+        _ => match item.scope().parent_item(db) {
+            Some(ItemKind::Trait(trait_)) => {
+                push_predicate(db, preds, trait_self_predicate(db, trait_))
+            }
+            _ => preds,
+        },
+    };
+    preds.extend_all_bounds(db)
+}
+
+/// Unelaborated assumptions for checking `func`'s body: the declared
+/// constraints (including the parent item's) plus the implicit `Self: Trait`
+/// predicate for trait methods. Effect-derived bounds are layered on
+/// separately by the body checker.
+pub(crate) fn func_body_assumptions<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: Func<'db>,
+) -> PredicateListId<'db> {
+    let preds = collect_func_decl_constraints(db, func.into(), true).instantiate_identity();
+    match func.scope().parent_item(db) {
+        Some(ItemKind::Trait(trait_)) => push_predicate(db, preds, trait_self_predicate(db, trait_)),
+        _ => preds,
     }
 }
 
@@ -1251,7 +1308,7 @@ impl<'db> FuncParamView<'db> {
         // Well-formedness / trait-bound satisfaction for parameter type
         if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
             db,
-            TraitSolveCx::new(db, func.scope()).with_assumptions(assumptions),
+            TraitSolveCx::new(db, func.scope()).with_assumptions(param_env(db, func.into())),
             ty,
         ) {
             out.push(
@@ -3627,7 +3684,7 @@ impl<'db> TypeAlias<'db> {
         let ty = lower_hir_ty(db, hir_ty, self.scope(), assumptions);
         if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
             db,
-            TraitSolveCx::new(db, self.scope()).with_assumptions(assumptions),
+            TraitSolveCx::new(db, self.scope()).with_assumptions(param_env(db, self.into())),
             ty,
         ) {
             vec![
@@ -4040,10 +4097,9 @@ impl<'db> Impl<'db> {
             return InherentImplAdmissibility::InvalidTy { ty };
         }
 
-        let assumptions = constraints_for(db, self.into());
         match check_ty_wf(
             db,
-            TraitSolveCx::new(db, self.scope()).with_assumptions(assumptions),
+            TraitSolveCx::new(db, self.scope()).with_assumptions(param_env(db, self.into())),
             ty,
         ) {
             WellFormedness::WellFormed => InherentImplAdmissibility::Admissible { ty },
@@ -4568,7 +4624,8 @@ impl<'db> ImplAssocTypeView<'db> {
         let ty = lower_hir_ty(db, hir, self.owner.scope(), assumptions);
         if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
             db,
-            TraitSolveCx::new(db, self.owner.scope()).with_assumptions(assumptions),
+            TraitSolveCx::new(db, self.owner.scope())
+                .with_assumptions(param_env(db, self.owner.into())),
             ty,
         ) {
             return vec![
@@ -5126,10 +5183,9 @@ impl<'db> FieldView<'db> {
 
         // Trait-bound well-formedness for field type.
         let owner_item = self.owner_item();
-        let assumptions = constraints_for(db, owner_item);
         if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
             db,
-            TraitSolveCx::new(db, owner_item.scope()).with_assumptions(assumptions),
+            TraitSolveCx::new(db, owner_item.scope()).with_assumptions(param_env(db, owner_item)),
             ty,
         ) {
             out.push(
