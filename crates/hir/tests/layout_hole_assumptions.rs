@@ -1,6 +1,6 @@
 use camino::Utf8PathBuf;
 use fe_hir::analysis::ty::{
-    const_ty::ConstTyData,
+    const_ty::{ConstTyData, EvaluatedConstTy},
     corelib::resolve_lib_type_path,
     ty_check::{check_contract_recv_arm_body, check_func_body},
     ty_contains_const_hole,
@@ -11,6 +11,25 @@ use fe_hir::hir_def::{
     TopLevelMod,
 };
 use fe_hir::test_db::HirAnalysisTestDb;
+
+fn const_lit_usize<'db>(
+    db: &'db HirAnalysisTestDb,
+    ty: fe_hir::analysis::ty::ty_def::TyId<'db>,
+) -> usize {
+    let TyData::ConstTy(const_ty) = ty.data(db) else {
+        panic!("expected const type, got {ty:?}");
+    };
+    let ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int), _) = const_ty.data(db) else {
+        panic!(
+            "expected evaluated integer const type, got {:?}",
+            const_ty.data(db)
+        );
+    };
+    int.data(db)
+        .to_string()
+        .parse()
+        .expect("integer const should fit in usize")
+}
 
 fn find_func<'db>(db: &'db HirAnalysisTestDb, top_mod: TopLevelMod<'db>, name: &str) -> Func<'db> {
     top_mod
@@ -1710,6 +1729,70 @@ contract C {
         !ty_contains_const_hole(&db, field.target_ty),
         "unelaborated const hole remained in repeated target type: {:?}",
         field.target_ty
+    );
+}
+
+#[test]
+fn contract_field_layout_offsets_nested_holes_after_preceding_aggregate_fields() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from(
+            "contract_field_layout_offsets_nested_holes_after_preceding_aggregate_fields.fe",
+        ),
+        r#"
+use core::effect_ref::StorPtr
+
+struct Slot<const ROOT: u256 = _> {}
+
+struct TokenStore {
+    total_supply: u256,
+    balances: Slot,
+    allowances: Slot,
+}
+
+contract C {
+    store: StorPtr<TokenStore>
+    after: u256
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let contract = find_contract(&db, top_mod, "C");
+    let layout = contract.field_layout(&db);
+    let store = layout
+        .get(&IdentId::new(&db, "store".to_string()))
+        .expect("missing `store` field");
+    let after = layout
+        .get(&IdentId::new(&db, "after".to_string()))
+        .expect("missing `after` field");
+
+    let store_fields = store.target_ty.field_types(&db);
+    assert_eq!(store_fields.len(), 3);
+    let balances_root = store_fields[1]
+        .generic_args(&db)
+        .first()
+        .copied()
+        .expect("missing balances root const arg");
+    let allowances_root = store_fields[2]
+        .generic_args(&db)
+        .first()
+        .copied()
+        .expect("missing allowances root const arg");
+
+    // The holes must be offset past `total_supply`, which occupies the
+    // aggregate's first slot; assigning them the aggregate base would alias
+    // earlier storage.
+    assert_eq!(const_lit_usize(&db, balances_root), 1);
+    assert_eq!(const_lit_usize(&db, allowances_root), 2);
+    assert_eq!(store.slot_offset, 0);
+    assert_eq!(store.slot_count, 3);
+    assert_eq!(after.slot_offset, 3);
+    assert!(
+        !ty_contains_const_hole(&db, store.target_ty),
+        "unelaborated const hole remained in nested aggregate layout type: {:?}",
+        store.target_ty
     );
 }
 

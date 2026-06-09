@@ -66,7 +66,9 @@ use crate::analysis::ty::binder::Binder;
 use crate::hir_def::*;
 // When adding real methods, prefer calling internal lowering/normalization here
 // rather than exposing raw syntax.
-use crate::analysis::ty::adt_def::{AdtCycleMember, AdtDef, AdtField, AdtRef};
+use crate::analysis::ty::adt_def::{
+    AdtCycleMember, AdtDef, AdtField, AdtRef, instantiated_adt_field_ty,
+};
 use crate::analysis::ty::const_ty::{
     CallableInputLayoutHoleOrigin, ConstTyData, ConstTyId, EvaluatedConstTy,
 };
@@ -75,9 +77,10 @@ use crate::analysis::ty::effects::{
 };
 use crate::analysis::ty::layout_holes::{
     LayoutPlaceholderPolicy, callable_input_layout_bindings_by_origin,
-    collect_layout_hole_tys_in_order, collect_unique_layout_placeholders_in_order_with_policy,
-    layout_hole_fallback_ty, substitute_layout_holes_by_identity,
-    substitute_layout_holes_by_identity_in, substitute_layout_placeholders_by_identity,
+    collect_layout_hole_tys_in_order, collect_layout_placeholders_in_order_with_policy,
+    collect_unique_layout_placeholders_in_order_with_policy, layout_hole_fallback_ty,
+    substitute_layout_holes_by_identity, substitute_layout_holes_by_identity_in,
+    substitute_layout_placeholders_by_identity,
 };
 use crate::analysis::ty::trait_def::{
     ImplementorId, ImplementorOrigin, TraitInstId, does_impl_trait_conflict, ingot_trait_env,
@@ -1816,90 +1819,197 @@ fn const_ty_to_usize<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<u
     }
 }
 
-fn contract_field_base_slot_count<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> usize {
-    fn inner<'db>(
-        db: &'db dyn HirAnalysisDb,
-        ty: TyId<'db>,
-        visiting: &mut FxHashSet<TyId<'db>>,
-    ) -> usize {
-        if !visiting.insert(ty) {
-            return 1;
+/// Walks a contract field's slot layout in declaration order, assigning each
+/// placeholder in `placeholders` the slot offset of its structural position
+/// while accumulating the slot footprint of ordinary components.
+///
+/// Returns the number of slots `ty` occupies starting at `offset`. Counting
+/// and placeholder assignment are deliberately a single walk: a hole's value
+/// is the offset the walk has reached when it encounters the hole, so a hole
+/// can never overlap a storage-consuming component that precedes it.
+fn assign_contract_field_slots<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    offset: usize,
+    placeholders: &FxHashSet<TyId<'db>>,
+    offsets: &mut FxHashMap<TyId<'db>, usize>,
+    visiting: &mut FxHashSet<TyId<'db>>,
+) -> usize {
+    if placeholders.contains(&ty) {
+        // A repeated placeholder shares its first occurrence's slot.
+        if offsets.contains_key(&ty) {
+            return 0;
         }
-
-        let slots = if let TyData::ConstTy(const_ty) = ty.data(db) {
-            inner(db, const_ty.ty(db), visiting)
-        } else if ty.is_never(db) || ty.is_zero_sized(db) {
-            0
-        } else if let TyData::TyParam(param) = ty.data(db)
-            && (param.is_effect() || param.is_effect_provider() || param.is_trait_self())
-        {
-            0
-        } else if let TyData::TyBase(TyBase::Func(_) | TyBase::Contract(_)) =
-            ty.base_ty(db).data(db)
-        {
-            0
-        } else if ty.is_tuple(db) {
-            ty.field_types(db)
-                .into_iter()
-                .fold(0usize, |acc, field_ty| {
-                    acc.saturating_add(inner(db, field_ty, visiting))
-                })
-        } else if ty.is_array(db) {
-            let (_, args) = ty.decompose_ty_app(db);
-            let elem_slots = args
-                .first()
-                .copied()
-                .map(|elem_ty| inner(db, elem_ty, visiting))
-                .unwrap_or(1);
-            let len = args
-                .get(1)
-                .copied()
-                .and_then(|len_ty| const_ty_to_usize(db, len_ty))
-                .unwrap_or(1);
-            elem_slots.saturating_mul(len)
-        } else if let Some(adt_def) = ty.adt_def(db) {
-            match adt_def.adt_ref(db) {
-                AdtRef::Struct(_) => ty
-                    .field_types(db)
-                    .into_iter()
-                    .fold(0usize, |acc, field_ty| {
-                        acc.saturating_add(inner(db, field_ty, visiting))
-                    }),
-                AdtRef::Enum(_) => {
-                    let args = ty.generic_args(db);
-                    let max_payload = adt_def
-                        .fields(db)
-                        .iter()
-                        .enumerate()
-                        .map(|(variant_idx, variant)| {
-                            variant.iter_types(db).enumerate().fold(
-                                0usize,
-                                |payload, (field_idx, _)| {
-                                    let field_ty = instantiate_adt_field_ty(
-                                        db,
-                                        adt_def,
-                                        variant_idx,
-                                        field_idx,
-                                        args,
-                                    );
-                                    payload.saturating_add(inner(db, field_ty, visiting))
-                                },
-                            )
-                        })
-                        .max()
-                        .unwrap_or(0);
-                    1usize.saturating_add(max_payload)
-                }
-            }
-        } else {
-            1
-        };
-
-        visiting.remove(&ty);
-        slots
+        offsets.insert(ty, offset);
+        return 1;
     }
 
-    inner(db, ty, &mut FxHashSet::default())
+    if !visiting.insert(ty) {
+        return 1;
+    }
+
+    // Reserve a slot for each unassigned placeholder in the ADT's own generic
+    // args; holes carried by zero-sized aggregates like `StorageMap` and holes
+    // that don't flow into any field are only visible here.
+    let assign_own_arg_placeholders = |offsets: &mut FxHashMap<TyId<'db>, usize>, offset: usize| {
+        let mut next_offset = offset;
+        for &arg in ty.generic_args(db) {
+            for placeholder in collect_unique_layout_placeholders_in_order_with_policy(
+                db,
+                arg,
+                LayoutPlaceholderPolicy::HolesAndImplicitParams,
+            ) {
+                if placeholders.contains(&placeholder) && !offsets.contains_key(&placeholder) {
+                    offsets.insert(placeholder, next_offset);
+                    next_offset = next_offset.saturating_add(1);
+                }
+            }
+        }
+        next_offset
+    };
+
+    let slots = if let Some((_, inner_ty)) = ty.as_capability(db) {
+        assign_contract_field_slots(db, inner_ty, offset, placeholders, offsets, visiting)
+    } else if let TyData::ConstTy(const_ty) = ty.data(db) {
+        assign_contract_field_slots(db, const_ty.ty(db), offset, placeholders, offsets, visiting)
+    } else if ty.adt_def(db).is_none() && (ty.is_never(db) || ty.is_zero_sized(db)) {
+        0
+    } else if let TyData::TyParam(param) = ty.data(db)
+        && (param.is_effect() || param.is_effect_provider() || param.is_trait_self())
+    {
+        0
+    } else if let TyData::TyBase(TyBase::Func(_) | TyBase::Contract(_)) = ty.base_ty(db).data(db) {
+        0
+    } else if ty.is_tuple(db) {
+        let mut next_offset = offset;
+        for field_ty in ty.field_types(db) {
+            next_offset = next_offset.saturating_add(assign_contract_field_slots(
+                db,
+                field_ty,
+                next_offset,
+                placeholders,
+                offsets,
+                visiting,
+            ));
+        }
+        next_offset.saturating_sub(offset)
+    } else if ty.is_array(db) {
+        let (_, args) = ty.decompose_ty_app(db);
+        let elem_slots = args
+            .first()
+            .copied()
+            .map(|elem_ty| {
+                assign_contract_field_slots(db, elem_ty, offset, placeholders, offsets, visiting)
+            })
+            .unwrap_or(1);
+        let len = args
+            .get(1)
+            .copied()
+            .and_then(|len_ty| const_ty_to_usize(db, len_ty))
+            .unwrap_or(1);
+        elem_slots.saturating_mul(len)
+    } else if let Some(adt_def) = ty.adt_def(db) {
+        let args = ty.generic_args(db);
+        let explicit_len = adt_def.params(db).len();
+
+        // A placeholder written inside an explicit generic arg is aliased by a
+        // derived layout arg: `instantiate_adt_field_ty` substitutes the k-th
+        // placeholder occurrence in the template field types with layout arg
+        // k. Both spellings denote the same logical hole, so the arg-position
+        // placeholder must share the slot assigned through the field walk
+        // rather than reserve a second one.
+        let alias_explicit_arg_placeholders = |offsets: &mut FxHashMap<TyId<'db>, usize>| {
+            if args.len() <= explicit_len {
+                return;
+            }
+            let (explicit_args, layout_args) = args.split_at(explicit_len);
+            let mut occurrence = 0usize;
+            for (variant_idx, variant) in adt_def.fields(db).iter().enumerate() {
+                for (field_idx, _) in variant.iter_types(db).enumerate() {
+                    let template_ty = instantiated_adt_field_ty(
+                        db,
+                        adt_def,
+                        variant_idx,
+                        field_idx,
+                        explicit_args,
+                    );
+                    for placeholder in collect_layout_placeholders_in_order_with_policy(
+                        db,
+                        template_ty,
+                        LayoutPlaceholderPolicy::HolesAndImplicitParams,
+                    ) {
+                        let Some(&derived) = layout_args.get(occurrence) else {
+                            return;
+                        };
+                        occurrence += 1;
+                        if placeholders.contains(&placeholder)
+                            && !offsets.contains_key(&placeholder)
+                            && let Some(&derived_offset) = offsets.get(&derived)
+                        {
+                            offsets.insert(placeholder, derived_offset);
+                        }
+                    }
+                }
+            }
+        };
+
+        match adt_def.adt_ref(db) {
+            AdtRef::Struct(_) => {
+                let mut next_offset = offset;
+                for field_ty in ty.field_types(db) {
+                    next_offset = next_offset.saturating_add(assign_contract_field_slots(
+                        db,
+                        field_ty,
+                        next_offset,
+                        placeholders,
+                        offsets,
+                        visiting,
+                    ));
+                }
+                alias_explicit_arg_placeholders(offsets);
+                next_offset = assign_own_arg_placeholders(offsets, next_offset);
+                next_offset.saturating_sub(offset)
+            }
+            AdtRef::Enum(_) => {
+                // Variant payloads overlay each other, so placeholders in
+                // different variants may share slots within the payload span.
+                let max_payload = adt_def
+                    .fields(db)
+                    .iter()
+                    .enumerate()
+                    .map(|(variant_idx, variant)| {
+                        let payload_offset = offset.saturating_add(1);
+                        let mut next_offset = payload_offset;
+                        for (field_idx, _) in variant.iter_types(db).enumerate() {
+                            let field_ty =
+                                instantiate_adt_field_ty(db, adt_def, variant_idx, field_idx, args);
+                            next_offset = next_offset.saturating_add(assign_contract_field_slots(
+                                db,
+                                field_ty,
+                                next_offset,
+                                placeholders,
+                                offsets,
+                                visiting,
+                            ));
+                        }
+                        next_offset.saturating_sub(payload_offset)
+                    })
+                    .max()
+                    .unwrap_or(0);
+                alias_explicit_arg_placeholders(offsets);
+                let end_offset = assign_own_arg_placeholders(
+                    offsets,
+                    offset.saturating_add(1).saturating_add(max_payload),
+                );
+                end_offset.saturating_sub(offset)
+            }
+        }
+    } else {
+        1
+    };
+
+    visiting.remove(&ty);
+    slots
 }
 
 struct ContractFieldLayoutPlan<'db> {
@@ -1998,35 +2108,69 @@ impl<'db> ContractFieldEffectHandleCx<'db> {
     }
 }
 
+/// Assigns a slot value to every layout placeholder of a contract field and
+/// returns the assignments along with the field's total slot count.
+///
+/// Placeholders reachable in `slot_basis_ty` get the slot at their structural
+/// position, interleaved with ordinary storage-consuming components.
+/// Remaining placeholders (basis placeholders the walk could not reach, and
+/// `materialization_placeholders` that only occur in the declared or target
+/// type) are appended after the structural span; only basis placeholders
+/// contribute to the slot count.
 fn contract_field_layout_slot_assignments<'db>(
     db: &'db dyn HirAnalysisDb,
+    slot_basis_ty: TyId<'db>,
     slot_placeholders: &[TyId<'db>],
     materialization_placeholders: &[TyId<'db>],
     start_slot: usize,
-) -> FxHashMap<TyId<'db>, TyId<'db>> {
+) -> (FxHashMap<TyId<'db>, TyId<'db>>, usize) {
     debug_assert!(materialization_placeholders.starts_with(slot_placeholders));
-    materialization_placeholders
-        .iter()
-        .enumerate()
-        .filter_map(|(offset, hole)| {
-            let TyData::ConstTy(const_ty) = hole.data(db) else {
-                return None;
-            };
-            let hole_ty = match const_ty.data(db) {
-                ConstTyData::Hole(hole_ty, _) => *hole_ty,
-                ConstTyData::TyParam(param, hole_ty) if param.is_implicit() => *hole_ty,
-                _ => return None,
-            };
-            Some((
-                *hole,
-                slot_const_ty(
-                    db,
-                    start_slot.saturating_add(offset),
-                    layout_hole_fallback_ty(db, hole_ty),
-                ),
-            ))
-        })
-        .collect()
+
+    let placeholder_set = slot_placeholders.iter().copied().collect::<FxHashSet<_>>();
+    let mut offsets = FxHashMap::default();
+    let span = assign_contract_field_slots(
+        db,
+        slot_basis_ty,
+        0,
+        &placeholder_set,
+        &mut offsets,
+        &mut FxHashSet::default(),
+    );
+
+    let mut slot_count = span;
+    let mut next_extra_offset = span;
+    let mut assignments = FxHashMap::default();
+    for &placeholder in materialization_placeholders {
+        let TyData::ConstTy(const_ty) = placeholder.data(db) else {
+            continue;
+        };
+        let hole_ty = match const_ty.data(db) {
+            ConstTyData::Hole(hole_ty, _) => *hole_ty,
+            ConstTyData::TyParam(param, hole_ty) if param.is_implicit() => *hole_ty,
+            _ => continue,
+        };
+        let offset = match offsets.get(&placeholder) {
+            Some(&offset) => offset,
+            None => {
+                let offset = next_extra_offset;
+                next_extra_offset = next_extra_offset.saturating_add(1);
+                if placeholder_set.contains(&placeholder) {
+                    slot_count = slot_count.saturating_add(1);
+                }
+                offset
+            }
+        };
+        assignments.insert(
+            placeholder,
+            slot_const_ty(
+                db,
+                start_slot.saturating_add(offset),
+                layout_hole_fallback_ty(db, hole_ty),
+            ),
+        );
+    }
+
+    (assignments, slot_count)
 }
 
 fn materialize_contract_layout_holes<'db>(
@@ -2079,7 +2223,8 @@ impl<'db> Contract<'db> {
     /// - Each non-zero-sized primitive consumes one slot.
     /// - Aggregate types consume the sum of component slots.
     /// - Enum fields consume one discriminant slot plus the max payload slots.
-    /// - Each const layout hole (`_`) also consumes one slot.
+    /// - Each const layout hole (`_`) also consumes one slot, at its
+    ///   structural position within the field's layout.
     #[salsa::tracked(return_ref)]
     pub fn field_layout(
         self,
@@ -2129,8 +2274,9 @@ impl<'db> Contract<'db> {
                 .entry(plan.address_space)
                 .or_insert(0);
             let slot_offset = *next_slot;
-            let slot_assignments = contract_field_layout_slot_assignments(
+            let (slot_assignments, slot_count) = contract_field_layout_slot_assignments(
                 db,
+                plan.slot_basis_ty,
                 &plan.slot_placeholders,
                 &plan.materialization_placeholders,
                 slot_offset,
@@ -2147,8 +2293,6 @@ impl<'db> Contract<'db> {
                     && !ty_contains_const_hole(db, slot_basis_ty),
                 "contract field layout materialization left unresolved holes"
             );
-            let slot_count = contract_field_base_slot_count(db, slot_basis_ty)
-                .saturating_add(plan.slot_placeholders.len());
             *next_slot = slot_offset.saturating_add(slot_count);
 
             let name = field.name.unwrap();

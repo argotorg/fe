@@ -43,7 +43,7 @@ func private %__CoolCoin_init(v0.i256, v1.@layout_0, v2.i256, v3.i256) {
         br v12 block2 block3;
 
     block2:
-        call %standalone_erc20__erc20__mint__g5c3f_dd30 v1 v0 v2;
+        call %standalone_erc20__erc20__mint__gd6b1_ea5f v1 v0 v2;
         jump block4;
 
     block3:
@@ -59,7 +59,7 @@ func private %__CoolCoin_recv_0_0(v0.@layout_0, v1.i256, v2.i256) -> i1 {
 
     block1:
         v3.@layout_0 = call %caller;
-        call %standalone_erc20__erc20__transfer__g5c3f_3bfd v3 v0 v1 v2;
+        call %standalone_erc20__erc20__transfer__gd6b1_7042 v3 v0 v1 v2;
         return 1.i1;
 }
 
@@ -69,7 +69,7 @@ func private %__CoolCoin_recv_0_1(v0.@layout_0, v1.i256, v2.i256) -> i1 {
 
     block1:
         v3.@layout_0 = call %caller;
-        call %standalone_erc20__erc20__approve__g5c3f_7d3b v3 v0 v1 v2;
+        call %standalone_erc20__erc20__approve__gd6b1_5d3b v3 v0 v1 v2;
         return 1.i1;
 }
 
@@ -79,8 +79,8 @@ func private %__CoolCoin_recv_0_2(v0.@layout_0, v1.@layout_0, v2.i256, v3.i256) 
 
     block1:
         v4.@layout_0 = call %caller;
-        call %standalone_erc20__erc20__spend_allowance__ga033_1943 v0 v4 v2 v3;
-        call %standalone_erc20__erc20__transfer__g5c3f_d8a9 v0 v1 v2 v3;
+        call %standalone_erc20__erc20__spend_allowance__gaf82_8e7a v0 v4 v2 v3;
+        call %standalone_erc20__erc20__transfer__gd6b1_248c v0 v1 v2 v3;
         return 1.i1;
 }
 
@@ -89,7 +89,7 @@ func private %__CoolCoin_recv_0_3(v0.@layout_0, v1.i256) -> i256 {
         jump block1;
 
     block1:
-        v3.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__g2163_9a1d v0;
+        v3.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__g636d_33bc v0;
         return v3;
 }
 
@@ -100,7 +100,7 @@ func private %__CoolCoin_recv_0_4(v0.@layout_0, v1.@layout_0, v2.i256) -> i256 {
     block1:
         v6.@layout_22 = insert_value undef.@layout_22 0.i256 v0;
         v9.@layout_22 = insert_value v6 1.i256 v1;
-        v10.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__ga15b_cf04 v9;
+        v10.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__g94db_c935 v9;
         return v10;
 }
 
@@ -144,7 +144,7 @@ func private %__CoolCoin_recv_1_0(v0.@layout_0, v1.i256, v2.i256, v3.i256) -> i1
 
     block1:
         call %require 1.i256;
-        call %standalone_erc20__erc20__mint__g5c3f_3140 v0 v1 v2;
+        call %standalone_erc20__erc20__mint__gd6b1_e795 v0 v1 v2;
         return 1.i1;
 }
 
@@ -154,7 +154,7 @@ func private %__CoolCoin_recv_1_1(v0.i256, v1.i256) -> i1 {
 
     block1:
         v2.@layout_0 = call %caller;
-        call %standalone_erc20__erc20__burn__g5c3f_7f45 v2 v0 v1;
+        call %standalone_erc20__erc20__burn__gd6b1_98be v2 v0 v1;
         return 1.i1;
 }
 
@@ -164,8 +164,8 @@ func private %__CoolCoin_recv_1_2(v0.@layout_0, v1.i256, v2.i256) -> i1 {
 
     block1:
         v3.@layout_0 = call %caller;
-        call %standalone_erc20__erc20__spend_allowance__ga033_1943_0 v0 v3 v1 v2;
-        call %standalone_erc20__erc20__burn__g5c3f_97eb v0 v1 v2;
+        call %standalone_erc20__erc20__spend_allowance__gaf82_8e7a_0 v0 v3 v1 v2;
+        call %standalone_erc20__erc20__burn__gd6b1_c1f2 v0 v1 v2;
         return 1.i1;
 }
 
@@ -177,7 +177,7 @@ func private %__CoolCoin_recv_1_3(v0.@layout_0, v1.i256, v2.i256) -> i1 {
         v3.@layout_0 = call %caller;
         v6.@layout_22 = insert_value undef.@layout_22 0.i256 v3;
         v9.@layout_22 = insert_value v6 1.i256 v0;
-        v10.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__ga15b_b5d5_0 v9;
+        v10.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__g94db_bd89_0 v9;
         (v12.i256, v13.i1) = uaddo v10 v1;
         br v13 block2 block3;
 
@@ -187,7 +187,7 @@ func private %__CoolCoin_recv_1_3(v0.@layout_0, v1.i256, v2.i256) -> i1 {
         evm_revert 0.i256 36.i256;
 
     block3:
-        call %standalone_erc20__erc20__approve__g5c3f_1f37 v3 v0 v12 v2;
+        call %standalone_erc20__erc20__approve__gd6b1_d91a v3 v0 v12 v2;
         return 1.i1;
 }
 
@@ -200,7 +200,7 @@ func private %__CoolCoin_recv_1_4(v0.@layout_0, v1.i256, v2.i256) -> i1 {
         v4.@layout_0 = call %caller;
         v7.@layout_22 = insert_value undef.@layout_22 0.i256 v4;
         v10.@layout_22 = insert_value v7 1.i256 v0;
-        v11.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__ga15b_b5d5_0 v10;
+        v11.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__g94db_bd89_0 v10;
         mstore v3 v1 i256;
         v13.i256 = mload v3 i256;
         v14.i1 = lt v11 v13;
@@ -231,7 +231,7 @@ func private %__CoolCoin_recv_1_4(v0.@layout_0, v1.i256, v2.i256) -> i1 {
         evm_revert v19 36.i256;
 
     block7:
-        call %standalone_erc20__erc20__approve__g5c3f_43cb v4 v0 v33 v2;
+        call %standalone_erc20__erc20__approve__gd6b1_747f v4 v0 v33 v2;
         return 1.i1;
 }
 
@@ -559,7 +559,7 @@ func private %std__lib__evm__effects__impl_trait_Evm_c913__abort_cf57() {
         unreachable;
 }
 
-func private %standalone_erc20__erc20__approve__g5c3f_1f37(v0.@layout_0, v1.@layout_0, v2.i256, v3.i256) {
+func private %standalone_erc20__erc20__approve__gd6b1_5d3b(v0.@layout_0, v1.@layout_0, v2.i256, v3.i256) {
     block0:
         v4.objref<@layout_0> = obj.alloc @layout_0;
         v5.objref<@layout_0> = obj.alloc @layout_0;
@@ -606,7 +606,7 @@ func private %standalone_erc20__erc20__approve__g5c3f_1f37(v0.@layout_0, v1.@lay
     block7:
         v45.@layout_22 = insert_value undef.@layout_22 0.i256 v0;
         v47.@layout_22 = insert_value v45 1.i256 v1;
-        call %std__lib__evm__storage_map__impl_StorageMap_9f54__set__ga15b_f7f7_0 v47 v2;
+        call %std__lib__evm__storage_map__impl_StorageMap_9f54__set__g94db_9bfd_0 v47 v2;
         v51.@layout_20 = insert_value undef.@layout_20 0.i256 v0;
         v52.@layout_20 = insert_value v51 1.i256 v1;
         v54.@layout_20 = insert_value v52 2.i256 v2;
@@ -627,7 +627,7 @@ func private %standalone_erc20__erc20__approve__g5c3f_1f37(v0.@layout_0, v1.@lay
         evm_revert v35 36.i256;
 }
 
-func private %standalone_erc20__erc20__approve__g5c3f_43cb(v0.@layout_0, v1.@layout_0, v2.i256, v3.i256) {
+func private %standalone_erc20__erc20__approve__gd6b1_747f(v0.@layout_0, v1.@layout_0, v2.i256, v3.i256) {
     block0:
         v4.objref<@layout_0> = obj.alloc @layout_0;
         v5.objref<@layout_0> = obj.alloc @layout_0;
@@ -674,7 +674,7 @@ func private %standalone_erc20__erc20__approve__g5c3f_43cb(v0.@layout_0, v1.@lay
     block7:
         v45.@layout_22 = insert_value undef.@layout_22 0.i256 v0;
         v47.@layout_22 = insert_value v45 1.i256 v1;
-        call %std__lib__evm__storage_map__impl_StorageMap_9f54__set__ga15b_f7f7_0 v47 v2;
+        call %std__lib__evm__storage_map__impl_StorageMap_9f54__set__g94db_9bfd_0 v47 v2;
         v51.@layout_20 = insert_value undef.@layout_20 0.i256 v0;
         v52.@layout_20 = insert_value v51 1.i256 v1;
         v54.@layout_20 = insert_value v52 2.i256 v2;
@@ -695,7 +695,7 @@ func private %standalone_erc20__erc20__approve__g5c3f_43cb(v0.@layout_0, v1.@lay
         evm_revert v35 36.i256;
 }
 
-func private %standalone_erc20__erc20__approve__g5c3f_7d3b(v0.@layout_0, v1.@layout_0, v2.i256, v3.i256) {
+func private %standalone_erc20__erc20__approve__gd6b1_d91a(v0.@layout_0, v1.@layout_0, v2.i256, v3.i256) {
     block0:
         v4.objref<@layout_0> = obj.alloc @layout_0;
         v5.objref<@layout_0> = obj.alloc @layout_0;
@@ -742,7 +742,7 @@ func private %standalone_erc20__erc20__approve__g5c3f_7d3b(v0.@layout_0, v1.@lay
     block7:
         v45.@layout_22 = insert_value undef.@layout_22 0.i256 v0;
         v47.@layout_22 = insert_value v45 1.i256 v1;
-        call %std__lib__evm__storage_map__impl_StorageMap_9f54__set__ga15b_f7f7_0 v47 v2;
+        call %std__lib__evm__storage_map__impl_StorageMap_9f54__set__g94db_9bfd_0 v47 v2;
         v51.@layout_20 = insert_value undef.@layout_20 0.i256 v0;
         v52.@layout_20 = insert_value v51 1.i256 v1;
         v54.@layout_20 = insert_value v52 2.i256 v2;
@@ -961,7 +961,7 @@ func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_fd6f(v0.objre
         return v4;
 }
 
-func private %standalone_erc20__erc20__burn__g5c3f_7f45(v0.@layout_0, v1.i256, v2.i256) {
+func private %standalone_erc20__erc20__burn__gd6b1_98be(v0.@layout_0, v1.i256, v2.i256) {
     block0:
         v3.objref<@layout_0> = obj.alloc @layout_0;
         jump block1;
@@ -986,7 +986,7 @@ func private %standalone_erc20__erc20__burn__g5c3f_7f45(v0.@layout_0, v1.i256, v
         br v19 block8 block9;
 
     block4:
-        v27.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__g2163_8a15 v0;
+        v27.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__g636d_57d2 v0;
         v29.i1 = lt v27 v1;
         v30.i1 = is_zero v29;
         br v30 block5 block6;
@@ -1019,7 +1019,7 @@ func private %standalone_erc20__erc20__burn__g5c3f_7f45(v0.@layout_0, v1.i256, v
         evm_revert v32 36.i256;
 
     block11:
-        call %set__g2163 v0 v42;
+        call %set__g636d v0 v42;
         v48.i256 = evm_sload v2;
         (v49.i256, v50.i1) = usubo v48 v1;
         br v50 block8 block12;
@@ -1034,7 +1034,7 @@ func private %standalone_erc20__erc20__burn__g5c3f_7f45(v0.@layout_0, v1.i256, v
         return;
 }
 
-func private %standalone_erc20__erc20__burn__g5c3f_97eb(v0.@layout_0, v1.i256, v2.i256) {
+func private %standalone_erc20__erc20__burn__gd6b1_c1f2(v0.@layout_0, v1.i256, v2.i256) {
     block0:
         v3.objref<@layout_0> = obj.alloc @layout_0;
         jump block1;
@@ -1059,7 +1059,7 @@ func private %standalone_erc20__erc20__burn__g5c3f_97eb(v0.@layout_0, v1.i256, v
         br v19 block8 block9;
 
     block4:
-        v27.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__g2163_8a15 v0;
+        v27.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__g636d_57d2 v0;
         v29.i1 = lt v27 v1;
         v30.i1 = is_zero v29;
         br v30 block5 block6;
@@ -1092,7 +1092,7 @@ func private %standalone_erc20__erc20__burn__g5c3f_97eb(v0.@layout_0, v1.i256, v
         evm_revert v32 36.i256;
 
     block11:
-        call %set__g2163 v0 v42;
+        call %set__g636d v0 v42;
         v48.i256 = evm_sload v2;
         (v49.i256, v50.i1) = usubo v48 v1;
         br v50 block8 block12;
@@ -6504,52 +6504,52 @@ func private %std__lib__evm__word__impl_trait_u256_1f9e__from_word_c764(v0.i256)
         return v0;
 }
 
-func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__get__g2163_8a15(v0.@layout_0) -> i256 {
+func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__get__g636d_33bc(v0.@layout_0) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v3.i256 = call %std__lib__evm__storage_map__storagemap_get_word_with_salt__g67a8_7941 v0 0.i256;
-        v4.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__from_word_2f17 v3;
-        return v4;
-}
-
-func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__get__g2163_9a1d(v0.@layout_0) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.i256 = call %std__lib__evm__storage_map__storagemap_get_word_with_salt__g67a8_4599 v0 0.i256;
+        v3.i256 = call %std__lib__evm__storage_map__storagemap_get_word_with_salt__g67a8_4599 v0 1.i256;
         v4.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__from_word_c764 v3;
         return v4;
 }
 
-func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__get__ga15b_b5d5(v0.@layout_22) -> i256 {
+func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__get__g636d_57d2(v0.@layout_0) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v3.i256 = call %std__lib__evm__storage_map__storagemap_get_word_with_salt__g7bf4_09af v0 1.i256;
+        v3.i256 = call %std__lib__evm__storage_map__storagemap_get_word_with_salt__g67a8_7941 v0 1.i256;
+        v4.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__from_word_2f17 v3;
+        return v4;
+}
+
+func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__get__g94db_bd89(v0.@layout_22) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i256 = call %std__lib__evm__storage_map__storagemap_get_word_with_salt__g7bf4_09af v0 2.i256;
         v4.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__from_word_4030 v3;
         return v4;
 }
 
-func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__get__ga15b_b5d5_0(v0.@layout_22) -> i256 {
+func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__get__g94db_bd89_0(v0.@layout_22) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v3.i256 = call %std__lib__evm__storage_map__storagemap_get_word_with_salt__g7bf4_09af_0 v0 1.i256;
+        v3.i256 = call %std__lib__evm__storage_map__storagemap_get_word_with_salt__g7bf4_09af_0 v0 2.i256;
         v4.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__from_word_4030_0 v3;
         return v4;
 }
 
-func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__get__ga15b_cf04(v0.@layout_22) -> i256 {
+func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__get__g94db_c935(v0.@layout_22) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v3.i256 = call %std__lib__evm__storage_map__storagemap_get_word_with_salt__g7bf4_af75 v0 1.i256;
+        v3.i256 = call %std__lib__evm__storage_map__storagemap_get_word_with_salt__g7bf4_af75 v0 2.i256;
         v4.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__from_word_83e7 v3;
         return v4;
 }
@@ -7575,7 +7575,7 @@ func private %std__lib__evm__effects__impl_trait_Evm_476c__log3_fca8(v0.i256, v1
         return;
 }
 
-func private %standalone_erc20__erc20__mint__g5c3f_3140(v0.@layout_0, v1.i256, v2.i256) {
+func private %standalone_erc20__erc20__mint__gd6b1_e795(v0.@layout_0, v1.i256, v2.i256) {
     block0:
         v3.objref<@layout_0> = obj.alloc @layout_0;
         jump block1;
@@ -7615,12 +7615,12 @@ func private %standalone_erc20__erc20__mint__g5c3f_3140(v0.@layout_0, v1.i256, v
 
     block7:
         evm_sstore v2 v29;
-        v33.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__g2163_8a15 v0;
+        v33.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__g636d_57d2 v0;
         (v35.i256, v36.i1) = uaddo v33 v1;
         br v36 block5 block8;
 
     block8:
-        call %set__g2163 v0 v35;
+        call %set__g636d v0 v35;
         v39.@layout_0 = call %zero;
         v43.@layout_19 = insert_value undef.@layout_19 0.i256 v39;
         v45.@layout_19 = insert_value v43 1.i256 v0;
@@ -7629,7 +7629,7 @@ func private %standalone_erc20__erc20__mint__g5c3f_3140(v0.@layout_0, v1.i256, v
         return;
 }
 
-func private %standalone_erc20__erc20__mint__g5c3f_dd30(v0.@layout_0, v1.i256, v2.i256) {
+func private %standalone_erc20__erc20__mint__gd6b1_ea5f(v0.@layout_0, v1.i256, v2.i256) {
     block0:
         v3.objref<@layout_0> = obj.alloc @layout_0;
         jump block1;
@@ -7669,12 +7669,12 @@ func private %standalone_erc20__erc20__mint__g5c3f_dd30(v0.@layout_0, v1.i256, v
 
     block7:
         evm_sstore v2 v29;
-        v33.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__g2163_8a15 v0;
+        v33.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__g636d_57d2 v0;
         (v35.i256, v36.i1) = uaddo v33 v1;
         br v36 block5 block8;
 
     block8:
-        call %set__g2163 v0 v35;
+        call %set__g636d v0 v35;
         v39.@layout_0 = call %zero;
         v43.@layout_19 = insert_value undef.@layout_19 0.i256 v39;
         v45.@layout_19 = insert_value v43 1.i256 v0;
@@ -9039,13 +9039,23 @@ func private %core__lib__abi__round_up_words_b13c_0(v0.i256) -> i256 {
         return v19;
 }
 
-func inline(always) private %set__g2163(v0.@layout_0, v1.i256) {
+func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__set__g94db_9bfd(v0.@layout_22, v1.i256) {
     block0:
         jump block1;
 
     block1:
-        v4.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__to_word_3e9f v1;
-        call %storagemap_set_word_with_salt__g67a8 v0 0.i256 v4;
+        v4.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__to_word_05d2 v1;
+        call %std__lib__evm__storage_map__storagemap_set_word_with_salt__g7bf4_7aa4 v0 2.i256 v4;
+        return;
+}
+
+func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__set__g94db_9bfd_0(v0.@layout_22, v1.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__to_word_05d2_0 v1;
+        call %std__lib__evm__storage_map__storagemap_set_word_with_salt__g7bf4_7aa4_0 v0 2.i256 v4;
         return;
 }
 
@@ -9129,23 +9139,13 @@ func inline(always) private %set__gc9ba(v0.@layout_16, v1.i1) {
         return;
 }
 
-func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__set__ga15b_f7f7(v0.@layout_22, v1.i256) {
+func inline(always) private %set__g636d(v0.@layout_0, v1.i256) {
     block0:
         jump block1;
 
     block1:
-        v4.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__to_word_05d2 v1;
-        call %std__lib__evm__storage_map__storagemap_set_word_with_salt__g7bf4_7aa4 v0 1.i256 v4;
-        return;
-}
-
-func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__set__ga15b_f7f7_0(v0.@layout_22, v1.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        v4.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__to_word_05d2_0 v1;
-        call %std__lib__evm__storage_map__storagemap_set_word_with_salt__g7bf4_7aa4_0 v0 1.i256 v4;
+        v4.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__to_word_3e9f v1;
+        call %storagemap_set_word_with_salt__g67a8 v0 1.i256 v4;
         return;
 }
 
@@ -9221,14 +9221,14 @@ func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_pos_b6ef(v0.ob
         return;
 }
 
-func private %standalone_erc20__erc20__spend_allowance__ga033_1943(v0.@layout_0, v1.@layout_0, v2.i256, v3.i256) {
+func private %standalone_erc20__erc20__spend_allowance__gaf82_8e7a(v0.@layout_0, v1.@layout_0, v2.i256, v3.i256) {
     block0:
         jump block1;
 
     block1:
         v8.@layout_22 = insert_value undef.@layout_22 0.i256 v0;
         v10.@layout_22 = insert_value v8 1.i256 v1;
-        v11.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__ga15b_b5d5 v10;
+        v11.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__g94db_bd89 v10;
         v13.i1 = lt v11 v2;
         v14.i1 = is_zero v13;
         br v14 block2 block3;
@@ -9259,18 +9259,18 @@ func private %standalone_erc20__erc20__spend_allowance__ga033_1943(v0.@layout_0,
         evm_revert v18 36.i256;
 
     block7:
-        call %std__lib__evm__storage_map__impl_StorageMap_9f54__set__ga15b_f7f7 v34 v37;
+        call %std__lib__evm__storage_map__impl_StorageMap_9f54__set__g94db_9bfd v34 v37;
         return;
 }
 
-func private %standalone_erc20__erc20__spend_allowance__ga033_1943_0(v0.@layout_0, v1.@layout_0, v2.i256, v3.i256) {
+func private %standalone_erc20__erc20__spend_allowance__gaf82_8e7a_0(v0.@layout_0, v1.@layout_0, v2.i256, v3.i256) {
     block0:
         jump block1;
 
     block1:
         v8.@layout_22 = insert_value undef.@layout_22 0.i256 v0;
         v10.@layout_22 = insert_value v8 1.i256 v1;
-        v11.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__ga15b_b5d5 v10;
+        v11.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__g94db_bd89 v10;
         v13.i1 = lt v11 v2;
         v14.i1 = is_zero v13;
         br v14 block2 block3;
@@ -9301,7 +9301,7 @@ func private %standalone_erc20__erc20__spend_allowance__ga033_1943_0(v0.@layout_
         evm_revert v18 36.i256;
 
     block7:
-        call %std__lib__evm__storage_map__impl_StorageMap_9f54__set__ga15b_f7f7 v34 v37;
+        call %std__lib__evm__storage_map__impl_StorageMap_9f54__set__g94db_9bfd v34 v37;
         return;
 }
 
@@ -9710,7 +9710,7 @@ func private %impl_trait_bool__to_word(v0.i1) -> i256 {
         return v4;
 }
 
-func private %standalone_erc20__erc20__transfer__g5c3f_3bfd(v0.@layout_0, v1.@layout_0, v2.i256, v3.i256) {
+func private %standalone_erc20__erc20__transfer__gd6b1_248c(v0.@layout_0, v1.@layout_0, v2.i256, v3.i256) {
     block0:
         v4.objref<@layout_0> = obj.alloc @layout_0;
         v5.objref<@layout_0> = obj.alloc @layout_0;
@@ -9755,7 +9755,7 @@ func private %standalone_erc20__erc20__transfer__g5c3f_3bfd(v0.@layout_0, v1.@la
         br v38 block11 block13;
 
     block7:
-        v43.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__g2163_8a15 v0;
+        v43.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__g636d_57d2 v0;
         v45.i1 = lt v43 v2;
         v46.i1 = is_zero v45;
         br v46 block8 block9;
@@ -9792,13 +9792,13 @@ func private %standalone_erc20__erc20__transfer__g5c3f_3bfd(v0.@layout_0, v1.@la
         evm_revert v48 36.i256;
 
     block15:
-        call %set__g2163 v0 v58;
-        v63.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__g2163_8a15 v1;
+        call %set__g636d v0 v58;
+        v63.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__g636d_57d2 v1;
         (v65.i256, v66.i1) = uaddo v63 v2;
         br v66 block11 block16;
 
     block16:
-        call %set__g2163 v1 v65;
+        call %set__g636d v1 v65;
         v73.@layout_19 = insert_value undef.@layout_19 0.i256 v0;
         v75.@layout_19 = insert_value v73 1.i256 v1;
         v77.@layout_19 = insert_value v75 2.i256 v2;
@@ -9806,7 +9806,7 @@ func private %standalone_erc20__erc20__transfer__g5c3f_3bfd(v0.@layout_0, v1.@la
         return;
 }
 
-func private %standalone_erc20__erc20__transfer__g5c3f_d8a9(v0.@layout_0, v1.@layout_0, v2.i256, v3.i256) {
+func private %standalone_erc20__erc20__transfer__gd6b1_7042(v0.@layout_0, v1.@layout_0, v2.i256, v3.i256) {
     block0:
         v4.objref<@layout_0> = obj.alloc @layout_0;
         v5.objref<@layout_0> = obj.alloc @layout_0;
@@ -9851,7 +9851,7 @@ func private %standalone_erc20__erc20__transfer__g5c3f_d8a9(v0.@layout_0, v1.@la
         br v38 block11 block13;
 
     block7:
-        v43.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__g2163_8a15 v0;
+        v43.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__g636d_57d2 v0;
         v45.i1 = lt v43 v2;
         v46.i1 = is_zero v45;
         br v46 block8 block9;
@@ -9888,13 +9888,13 @@ func private %standalone_erc20__erc20__transfer__g5c3f_d8a9(v0.@layout_0, v1.@la
         evm_revert v48 36.i256;
 
     block15:
-        call %set__g2163 v0 v58;
-        v63.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__g2163_8a15 v1;
+        call %set__g636d v0 v58;
+        v63.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__g636d_57d2 v1;
         (v65.i256, v66.i1) = uaddo v63 v2;
         br v66 block11 block16;
 
     block16:
-        call %set__g2163 v1 v65;
+        call %set__g636d v1 v65;
         v73.@layout_19 = insert_value undef.@layout_19 0.i256 v0;
         v75.@layout_19 = insert_value v73 1.i256 v1;
         v77.@layout_19 = insert_value v75 2.i256 v2;
