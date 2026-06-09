@@ -30,7 +30,11 @@ fn main() {
 
 fn git_repo() -> Option<gix::Repository> {
     let manifest_dir = env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from)?;
-    gix::discover(manifest_dir).ok()
+    let workspace_root = manifest_dir.parent()?.parent()?;
+
+    // Open the expected Fe workspace root directly so source exports nested in
+    // another checkout do not inherit that checkout's HEAD.
+    gix::open(workspace_root).ok()
 }
 
 fn emit_git_rerun_paths(repo: &gix::Repository) {
