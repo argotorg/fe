@@ -21,8 +21,9 @@ use crate::analysis::ty::binder::Binder;
 use crate::analysis::ty::corelib::resolve_lib_type_path;
 use crate::analysis::ty::fold::TyFoldable;
 use crate::analysis::ty::provider::{ProviderKind, provider_semantics};
+use crate::analysis::ty::trait_lower::lower_impl_trait;
 use crate::analysis::ty::visitor::TyVisitable;
-use crate::hir_def::CallableDef;
+use crate::hir_def::{CallableDef, ImplTrait, Trait};
 use crate::{
     hir_def::{
         BinOp, Body, Const, Contract, ContractRecvArm, Expr, ExprId, Func, GenericParam,
@@ -123,6 +124,97 @@ pub fn check_anon_const_body<'db>(
     expected: TyId<'db>,
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
     check_body(db, BodyOwner::AnonConstBody { body, expected })
+}
+
+/// Type-checks the value bodies of an `impl Trait` block's associated consts.
+/// Bodies are checked against the trait's declared type for the const
+/// (instantiated with the impl's trait args) so a wrong impl-side header
+/// doesn't cascade; consts not declared in the trait fall back to their own
+/// header type. Header-vs-trait conformance itself is reported by the
+/// `ImplTrait` item diagnostics.
+#[salsa::tracked(return_ref)]
+pub fn check_impl_trait_const_bodies<'db>(
+    db: &'db dyn HirAnalysisDb,
+    impl_trait: ImplTrait<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    // Only check impls the user wrote; attribute-expanded impls (e.g.
+    // `#[event]`) would re-report their cascade failures at the expansion
+    // site on already-diagnosed code.
+    if !matches!(impl_trait.origin(db), crate::span::HirOrigin::Raw(_)) {
+        return Vec::new();
+    }
+    let Some(implementor) = lower_impl_trait(db, impl_trait) else {
+        return Vec::new();
+    };
+    let implementor = implementor.instantiate_identity();
+    let trait_hir = implementor.trait_def(db);
+    let trait_args = implementor.trait_(db).args(db);
+
+    let mut diags = Vec::new();
+    for impl_const in impl_trait.assoc_consts(db) {
+        let Some(body) = impl_const.value_body(db) else {
+            continue;
+        };
+        let expected_ty = impl_const
+            .name(db)
+            .and_then(|name| trait_hir.const_(db, name))
+            .and_then(|c| c.ty_binder(db))
+            .map(|binder| binder.instantiate(db, trait_args))
+            .or_else(|| impl_const.ty(db));
+        let Some(expected_ty) = expected_ty else {
+            continue;
+        };
+        if expected_ty.has_invalid(db) {
+            continue;
+        }
+        diags.extend(
+            check_anon_const_body(db, body, expected_ty)
+                .0
+                .iter()
+                .cloned(),
+        );
+    }
+    diags
+}
+
+/// Type-checks the default value bodies of a trait's associated consts
+/// against their declared types. Nothing else checks these: impls that don't
+/// override a default only force its evaluation transitively, and a trait
+/// with no concrete impl never checks it at all.
+#[salsa::tracked(return_ref)]
+pub fn check_trait_const_default_bodies<'db>(
+    db: &'db dyn HirAnalysisDb,
+    trait_: Trait<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    if !matches!(trait_.origin(db), crate::span::HirOrigin::Raw(_)) {
+        return Vec::new();
+    }
+
+    let mut diags = Vec::new();
+    for trait_const in trait_.assoc_consts(db) {
+        let Some(body) = trait_const.default_body(db) else {
+            continue;
+        };
+        let Some(expected_ty) = trait_const.ty(db) else {
+            continue;
+        };
+        // A declared type mentioning `Self` or generic params (`const C:
+        // Self::X = 1`) types the default per instantiation: impl overrides
+        // are checked with the impl's bindings, and the default value is
+        // retyped at use sites. Only concretely-typed defaults can be checked
+        // here.
+        let flags = expected_ty.flags(db);
+        if flags.contains(TyFlags::HAS_INVALID) || flags.contains(TyFlags::HAS_PARAM) {
+            continue;
+        }
+        diags.extend(
+            check_anon_const_body(db, body, expected_ty)
+                .0
+                .iter()
+                .cloned(),
+        );
+    }
+    diags
 }
 
 #[salsa::tracked(return_ref)]

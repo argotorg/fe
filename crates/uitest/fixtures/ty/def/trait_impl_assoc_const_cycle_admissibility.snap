@@ -3,4 +3,52 @@ source: crates/uitest/tests/ty.rs
 expression: diags
 input_file: fixtures/ty/def/trait_impl_assoc_const_cycle_admissibility.fe
 ---
+error[2-0018]: multiple trait candidates found
+    ┌─ trait_impl_assoc_const_cycle_admissibility.fe:120:35
+    │
+103 │ trait OtherNamedConst {
+    │       --------------- candidate: `<ShadowedConst as OtherNamedConst>::C`
+    ·
+107 │ trait CurrentNamedConst {
+    │       ----------------- candidate: `<ShadowedConst as CurrentNamedConst>::C`
+    ·
+120 │     const D: u32 = ShadowedConst::C
+    │                                   ^ `C` is ambiguous
+    │
+    = hint: specify the trait explicitly: `<ShadowedConst as CurrentNamedConst>::C`
 
+error[6-0017]: associated const `C` has a recursive definition
+  ┌─ trait_impl_assoc_const_cycle_admissibility.fe:8:11
+  │
+8 │     const C: u32 = RecursiveConst::C
+  │           ^ `C` cannot be evaluated to a concrete value
+
+error[6-0017]: associated const `A` has a recursive definition
+   ┌─ trait_impl_assoc_const_cycle_admissibility.fe:66:23
+   │
+66 │ impl DefaultCycle for DefaultRecursive {
+   │                       ^^^^^^^^^^^^^^^^ `A` cannot be evaluated to a concrete value
+
+error[6-0017]: associated const `B` has a recursive definition
+   ┌─ trait_impl_assoc_const_cycle_admissibility.fe:67:11
+   │
+67 │     const B: u32 = <DefaultRecursive as DefaultCycle>::A
+   │           ^ `B` cannot be evaluated to a concrete value
+
+error[6-0017]: associated const `C` has a recursive definition
+   ┌─ trait_impl_assoc_const_cycle_admissibility.fe:87:11
+   │
+87 │     const C: u32 = <CrossRecursive as RightCycle>::D
+   │           ^ `C` cannot be evaluated to a concrete value
+
+error[6-0017]: associated const `D` has a recursive definition
+   ┌─ trait_impl_assoc_const_cycle_admissibility.fe:91:11
+   │
+91 │     const D: u32 = <CrossRecursive as LeftCycle>::C
+   │           ^ `D` cannot be evaluated to a concrete value
+
+error[6-0017]: associated const `D` has a recursive definition
+    ┌─ trait_impl_assoc_const_cycle_admissibility.fe:120:11
+    │
+120 │     const D: u32 = ShadowedConst::C
+    │           ^ `D` cannot be evaluated to a concrete value

@@ -4982,6 +4982,11 @@ impl<'db> ImplAssocConstView<'db> {
         let assumptions = constraints_for(db, self.owner.into());
         Some(lower_hir_ty(db, hir, self.owner.scope(), assumptions))
     }
+
+    /// HIR type annotation of this associated const implementation.
+    pub fn hir_ty(self, db: &'db dyn HirDb) -> Option<TypeId<'db>> {
+        self.def(db).ty.to_opt()
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

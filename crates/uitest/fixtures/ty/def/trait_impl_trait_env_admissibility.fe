@@ -218,7 +218,3 @@ impl WithItem for MixedExtraItem {
 fn use_mixed_extra_item(value: MixedExtraItem) {
     needs_item(value)
 }
-
-// KNOWN GAP: impl const headers are not validated against the trait's
-// declaration (`const C: bool` where the trait declares `u32`, and an
-// unresolved header type `MissingType`, are accepted silently).

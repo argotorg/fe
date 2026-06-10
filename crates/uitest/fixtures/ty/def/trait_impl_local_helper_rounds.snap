@@ -11,3 +11,9 @@ error[5-0001]: conflicting trait implementations
    ·
 53 │ impl BaseRound for ValidRound {
    │                    ---------- conflicts with this trait implementation
+
+error[8-0012]: undefined variable
+   ┌─ trait_impl_local_helper_rounds.fe:54:20
+   │
+54 │     const C: u32 = missing()
+   │                    ^^^^^^^ undefined variable `missing`

@@ -125,6 +125,3 @@ fn needs_current_named_const<T: CurrentNamedConst>(_ value: T) {}
 fn use_shadowed_const(value: ShadowedConst) {
     needs_current_named_const(value)
 }
-
-// KNOWN GAP: cyclic/recursive trait-const definitions evaluate silently; no
-// recursion-limit diagnostic is emitted for `const C: u32 = RecursiveConst::C`.

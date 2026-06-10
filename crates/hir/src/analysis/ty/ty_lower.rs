@@ -52,13 +52,12 @@ fn lower_hir_ty_impl<'db>(
 ) -> TyId<'db> {
     let lower_child = |child_ty, slot| {
         let lowered = lower_opt_hir_ty_impl(db, child_ty, scope, assumptions);
+        // No `Lex(HirType(ty))` alongside: the component site already carries
+        // `ty`, so the extra node cannot distinguish any two chains.
         push_provenance(
             db,
             lowered,
-            &[
-                ProvenanceSite::Lex(LexSite::TypeComponent { ty, slot }),
-                ProvenanceSite::Lex(LexSite::HirType(ty)),
-            ],
+            &[ProvenanceSite::Lex(LexSite::TypeComponent { ty, slot })],
         )
     };
 

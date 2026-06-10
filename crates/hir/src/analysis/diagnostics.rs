@@ -4872,6 +4872,59 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                 notes: vec![],
                 error_code,
             },
+
+            Self::ConstTyMismatchWithTrait {
+                primary,
+                trait_decl_span,
+                const_name,
+                trait_ty,
+                impl_ty,
+            } => CompleteDiagnostic {
+                severity,
+                message: format!(
+                    "associated const `{}` has incompatible type",
+                    const_name.data(db)
+                ),
+                sub_diagnostics: vec![
+                    SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "expected `{}`, found `{}`",
+                            trait_ty.pretty_print(db),
+                            impl_ty.pretty_print(db),
+                        ),
+                        span: primary.resolve(db),
+                    },
+                    SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: "trait requires this type".to_string(),
+                        span: trait_decl_span.resolve(db),
+                    },
+                ],
+                notes: vec![],
+                error_code,
+            },
+
+            Self::RecursiveAssocConst {
+                primary,
+                const_name,
+            } => CompleteDiagnostic {
+                severity,
+                message: format!(
+                    "associated const `{}` has a recursive definition",
+                    const_name.data(db)
+                ),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "`{}` cannot be evaluated to a concrete value",
+                        const_name.data(db)
+                    ),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
         }
     }
 }
