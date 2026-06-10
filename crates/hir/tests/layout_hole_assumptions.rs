@@ -2117,3 +2117,267 @@ contract C {
         first.declared_ty
     );
 }
+
+/// One placeholder shared by multiple enum variants must get a slot past
+/// every variant's inline payload: variant payloads overlay, so a hole root
+/// assigned at one variant's structural position can alias another variant's
+/// inline data (here `B`'s `u256`), and the following field starts too early.
+#[test]
+fn contract_field_enum_variant_overlay_hole_past_inline_payload() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_enum_variant_overlay_hole_past_inline_payload.fe"),
+        r#"
+use core::effect_ref::StorPtr
+
+struct Slot<T, const ROOT: u256 = _> {}
+
+enum E<T> {
+    A(T),
+    B(u256, T),
+}
+
+contract C {
+    e: StorPtr<E<Slot<u256>>>,
+    after: StorPtr<u256>,
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let contract = find_contract(&db, top_mod, "C");
+    let layout = contract.field_layout(&db);
+    let e = layout
+        .get(&IdentId::new(&db, "e".to_string()))
+        .expect("missing `e` field");
+    let after = layout
+        .get(&IdentId::new(&db, "after".to_string()))
+        .expect("missing `after` field");
+
+    let root = e
+        .target_ty
+        .generic_args(&db)
+        .first()
+        .and_then(|arg| arg.generic_args(&db).get(1))
+        .copied()
+        .expect("missing ROOT const arg");
+
+    // Inline span: tag (0) + widest payload (B's u256 at 1); the hole root
+    // comes after, clear of both variants' inline data.
+    assert_eq!(const_lit_usize(&db, root), 2);
+    assert_eq!(e.slot_count, 3);
+    assert_eq!(after.slot_offset, 3);
+}
+
+/// Same layout regardless of which variant mentions the placeholder first.
+#[test]
+fn contract_field_enum_variant_overlay_holes_are_order_independent() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_enum_variant_overlay_holes_are_order_independent.fe"),
+        r#"
+use core::effect_ref::StorPtr
+
+struct Slot<T, const ROOT: u256 = _> {}
+
+enum E<T> {
+    B(u256, T),
+    A(T),
+}
+
+contract C {
+    e: StorPtr<E<Slot<u256>>>,
+    after: StorPtr<u256>,
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let contract = find_contract(&db, top_mod, "C");
+    let layout = contract.field_layout(&db);
+    let e = layout
+        .get(&IdentId::new(&db, "e".to_string()))
+        .expect("missing `e` field");
+    let after = layout
+        .get(&IdentId::new(&db, "after".to_string()))
+        .expect("missing `after` field");
+
+    let root = e
+        .target_ty
+        .generic_args(&db)
+        .first()
+        .and_then(|arg| arg.generic_args(&db).get(1))
+        .copied()
+        .expect("missing ROOT const arg");
+
+    assert_eq!(const_lit_usize(&db, root), 2);
+    assert_eq!(e.slot_count, 3);
+    assert_eq!(after.slot_offset, 3);
+}
+
+/// Inline data *following* a placeholder in the same variant must not be
+/// overlapped either: the root goes past the whole inline span, not just the
+/// components preceding it (a per-variant-maximum rule would fail here).
+#[test]
+fn contract_field_enum_variant_hole_before_trailing_inline_data() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_enum_variant_hole_before_trailing_inline_data.fe"),
+        r#"
+use core::effect_ref::StorPtr
+
+struct Slot<T, const ROOT: u256 = _> {}
+
+enum E<T> {
+    A(T, u256),
+    B(u256, T),
+}
+
+contract C {
+    e: StorPtr<E<Slot<u256>>>,
+    after: StorPtr<u256>,
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let contract = find_contract(&db, top_mod, "C");
+    let layout = contract.field_layout(&db);
+    let e = layout
+        .get(&IdentId::new(&db, "e".to_string()))
+        .expect("missing `e` field");
+    let after = layout
+        .get(&IdentId::new(&db, "after".to_string()))
+        .expect("missing `after` field");
+
+    let root = e
+        .target_ty
+        .generic_args(&db)
+        .first()
+        .and_then(|arg| arg.generic_args(&db).get(1))
+        .copied()
+        .expect("missing ROOT const arg");
+
+    assert_eq!(const_lit_usize(&db, root), 2);
+    assert_eq!(e.slot_count, 3);
+    assert_eq!(after.slot_offset, 3);
+}
+
+/// `[Slot<u256>; N]`: the element type is instantiated once, so all elements
+/// share one hole and one storage root. The array's inline span is zero
+/// (holes are out-of-line) and the field reserves exactly one slot for the
+/// shared root — elements alias by construction, they are not N independent
+/// slots.
+#[test]
+fn contract_field_array_of_slot_wrappers_shares_one_root() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_array_of_slot_wrappers_shares_one_root.fe"),
+        r#"
+use core::effect_ref::StorPtr
+
+struct Slot<T, const ROOT: u256 = _> {}
+
+contract C {
+    arr: StorPtr<[Slot<u256>; 3]>,
+    after: StorPtr<u256>,
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let contract = find_contract(&db, top_mod, "C");
+    let layout = contract.field_layout(&db);
+    let arr = layout
+        .get(&IdentId::new(&db, "arr".to_string()))
+        .expect("missing `arr` field");
+    let after = layout
+        .get(&IdentId::new(&db, "after".to_string()))
+        .expect("missing `after` field");
+
+    let elem = arr
+        .target_ty
+        .generic_args(&db)
+        .first()
+        .copied()
+        .expect("missing array element type");
+    let root = elem
+        .generic_args(&db)
+        .get(1)
+        .copied()
+        .expect("missing ROOT const arg");
+
+    assert_eq!(const_lit_usize(&db, root), 0);
+    assert_eq!(arr.slot_count, 1);
+    assert_eq!(after.slot_offset, 1);
+}
+
+/// Transient-storage fields get their own slot space: roots restart at zero
+/// independently of persistent storage, and an array of transient slot
+/// wrappers shares one root exactly like its persistent counterpart.
+#[test]
+fn contract_field_transient_array_of_slot_wrappers_uses_independent_space() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_transient_array_of_slot_wrappers.fe"),
+        r#"
+use core::effect_ref::StorPtr
+use std::evm::TStorPtr
+
+struct Slot<T, const ROOT: u256 = _> {}
+
+contract C {
+    persistent: StorPtr<Slot<u256>>,
+    tarr: TStorPtr<[Slot<u256>; 3]>,
+    tafter: TStorPtr<u256>,
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let contract = find_contract(&db, top_mod, "C");
+    let layout = contract.field_layout(&db);
+    let persistent = layout
+        .get(&IdentId::new(&db, "persistent".to_string()))
+        .expect("missing `persistent` field");
+    let tarr = layout
+        .get(&IdentId::new(&db, "tarr".to_string()))
+        .expect("missing `tarr` field");
+    let tafter = layout
+        .get(&IdentId::new(&db, "tafter".to_string()))
+        .expect("missing `tafter` field");
+
+    assert_ne!(persistent.address_space, tarr.address_space);
+
+    let persistent_root = persistent
+        .target_ty
+        .generic_args(&db)
+        .get(1)
+        .copied()
+        .expect("missing persistent ROOT const arg");
+    let tarr_elem = tarr
+        .target_ty
+        .generic_args(&db)
+        .first()
+        .copied()
+        .expect("missing transient array element type");
+    let tarr_root = tarr_elem
+        .generic_args(&db)
+        .get(1)
+        .copied()
+        .expect("missing transient ROOT const arg");
+
+    // Same numeric root in disjoint address spaces: the slot counters are
+    // independent, so the transient array starts at zero even though the
+    // persistent field already occupies storage slot zero.
+    assert_eq!(const_lit_usize(&db, persistent_root), 0);
+    assert_eq!(persistent.slot_count, 1);
+    assert_eq!(const_lit_usize(&db, tarr_root), 0);
+    assert_eq!(tarr.slot_count, 1);
+    assert_eq!(tafter.slot_offset, 1);
+}
