@@ -13,9 +13,9 @@ use salsa::Update;
 
 use super::{
     binder::Binder,
-    const_ty::{AppFrameId, ConstTyId},
+    const_ty::{ConstTyId, InstSite, ProvenanceSite},
     fold::{TyFoldable, TyFolder},
-    layout_holes::rebase_structural_holes_under_app,
+    layout_holes::push_provenance,
     trait_def::{ImplementorId, ImplementorOrigin, TraitInstId},
     trait_resolution::PredicateListId,
     ty_def::{InvalidCause, TyId},
@@ -294,7 +294,7 @@ fn lower_trait_ref_impl_inner<'db>(
 ) -> Result<TraitInstId<'db>, TraitArgError<'db>> {
     let trait_params: &[TyId<'db>] = t.params(db);
     let args = path.generic_args(db).data(db);
-    let arg_frame_root = AppFrameId::root_generic_arg_list(db, path.generic_args(db));
+    let arg_list = path.generic_args(db);
 
     // Lower provided explicit args (excluding Self)
     let mut provided_explicit = Vec::new();
@@ -302,13 +302,17 @@ fn lower_trait_ref_impl_inner<'db>(
     for (arg_idx, arg) in args.iter().enumerate() {
         match arg {
             GenericArg::Type(ty_arg) => {
-                let hole_frame = ty_arg
-                    .ty
-                    .to_opt()
-                    .map(|hir_ty| arg_frame_root.child_type_component(db, hir_ty, arg_idx));
+                let hole_sites = ty_arg.ty.to_opt().map(|hir_ty| {
+                    [
+                        ProvenanceSite::Inst(InstSite::TypeComponent {
+                            ty: hir_ty,
+                            slot: arg_idx,
+                        }),
+                        ProvenanceSite::Inst(InstSite::GenericArgList(arg_list)),
+                    ]
+                });
                 let ty = lower_opt_hir_ty(db, ty_arg.ty, scope, assumptions);
-                let ty =
-                    hole_frame.map_or(ty, |frame| rebase_structural_holes_under_app(db, ty, frame));
+                let ty = hole_sites.map_or(ty, |sites| push_provenance(db, ty, &sites));
                 provided_explicit.push(ty);
             }
             GenericArg::Const(const_arg) => match const_arg.value {

@@ -2,7 +2,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{
     const_ty::{
-        AppFrameId, CallableInputLayoutHoleOrigin, ConstTyData, ConstTyId, HoleId, LocalFrameId,
+        CallableInputLayoutHoleOrigin, ConstTyData, ConstTyId, HoleId, ProvenanceSite,
         StructuralHoleId,
     },
     fold::{TyFoldable, TyFolder},
@@ -319,7 +319,9 @@ where
 {
     let holes = collect_unique_structural_holes_in_order(db, value);
     assert!(
-        holes.iter().all(|hole_id| hole_id.app_frame(db).is_some()),
+        holes.iter().all(|hole_id| hole_id
+            .provenance(db)
+            .contains(db, |site| matches!(site, ProvenanceSite::Inst(_)))),
         "template-only structural hole escaped into semantic binding"
     );
     holes
@@ -374,50 +376,26 @@ where
     )
 }
 
-pub(crate) fn prepend_local_parent_to_structural_holes<'db, T>(
+/// Pushes the given provenance sites (innermost-first) onto every structural
+/// hole in `value`, giving holes from a shared (content-interned) lowering
+/// result a distinct identity per context.
+pub(crate) fn push_provenance<'db, T>(
     db: &'db dyn HirAnalysisDb,
     value: T,
-    parent: LocalFrameId<'db>,
+    sites: &[ProvenanceSite<'db>],
 ) -> T
 where
     T: TyFoldable<'db>,
 {
-    rewrite_structural_holes(db, value, |hole_id, hole_ty| {
-        Some(TyId::const_ty(
-            db,
-            ConstTyId::hole_with_id(
-                db,
-                hole_ty,
-                HoleId::Structural(hole_id.prepend_local_parent(db, parent)),
-            ),
-        ))
-    })
+    push_provenance_filtered(db, value, sites, |_| true)
 }
 
-pub(crate) fn rebase_structural_holes_under_app<'db, T>(
+/// Like [`push_provenance`], but only rewrites holes accepted by `owns_hole`
+/// (e.g. holes originating from a specific alias template).
+pub(crate) fn push_provenance_filtered<'db, T>(
     db: &'db dyn HirAnalysisDb,
     value: T,
-    parent: AppFrameId<'db>,
-) -> T
-where
-    T: TyFoldable<'db>,
-{
-    rewrite_structural_holes(db, value, |hole_id, hole_ty| {
-        Some(TyId::const_ty(
-            db,
-            ConstTyId::hole_with_id(
-                db,
-                hole_ty,
-                HoleId::Structural(hole_id.rebase_app_under(db, parent)),
-            ),
-        ))
-    })
-}
-
-pub(crate) fn rebase_owned_structural_holes_under_app<'db, T>(
-    db: &'db dyn HirAnalysisDb,
-    value: T,
-    parent: AppFrameId<'db>,
+    sites: &[ProvenanceSite<'db>],
     mut owns_hole: impl FnMut(StructuralHoleId<'db>) -> bool,
 ) -> T
 where
@@ -425,13 +403,13 @@ where
 {
     rewrite_structural_holes(db, value, |hole_id, hole_ty| {
         owns_hole(hole_id).then(|| {
+            let mut hole_id = hole_id;
+            for &site in sites {
+                hole_id = hole_id.push_provenance(db, site);
+            }
             TyId::const_ty(
                 db,
-                ConstTyId::hole_with_id(
-                    db,
-                    hole_ty,
-                    HoleId::Structural(hole_id.rebase_app_under(db, parent)),
-                ),
+                ConstTyId::hole_with_id(db, hole_ty, HoleId::Structural(hole_id)),
             )
         })
     })
@@ -459,6 +437,22 @@ pub(crate) fn collect_layout_placeholder_tys_in_order_with_policy<'db, T>(
 where
     T: TyVisitable<'db>,
 {
+    collect_layout_placeholder_pairs_in_order_with_policy(db, value, policy)
+        .into_iter()
+        .map(|(_, hole_ty)| hole_ty)
+        .collect()
+}
+
+/// Like [`collect_layout_placeholder_tys_in_order_with_policy`], but pairs
+/// each (fallbacked) placeholder value type with the placeholder itself.
+pub(crate) fn collect_layout_placeholder_pairs_in_order_with_policy<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    value: T,
+    policy: LayoutPlaceholderPolicy,
+) -> Vec<(TyId<'db>, TyId<'db>)>
+where
+    T: TyVisitable<'db>,
+{
     collect_layout_placeholders_in_order_with_policy(db, value, policy)
         .into_iter()
         .filter_map(|placeholder| {
@@ -466,8 +460,12 @@ where
                 return None;
             };
             match const_ty.data(db) {
-                ConstTyData::Hole(hole_ty, _) => Some(layout_hole_fallback_ty(db, *hole_ty)),
-                ConstTyData::TyParam(param, ty) if param.is_implicit() => Some(*ty),
+                ConstTyData::Hole(hole_ty, _) => {
+                    Some((placeholder, layout_hole_fallback_ty(db, *hole_ty)))
+                }
+                ConstTyData::TyParam(param, ty) if param.is_implicit() => {
+                    Some((placeholder, *ty))
+                }
                 _ => None,
             }
         })
@@ -525,14 +523,13 @@ mod tests {
 
     use super::{
         LayoutPlaceholderPolicy, alpha_rename_hidden_layout_placeholders,
-        collect_unique_app_bound_structural_holes_in_order,
-        prepend_local_parent_to_structural_holes, rebase_structural_holes_under_app,
+        collect_unique_app_bound_structural_holes_in_order, push_provenance,
         substitute_layout_placeholders_by_identity, substitute_layout_placeholders_in_order,
     };
     use crate::analysis::ty::{
         const_ty::{
-            AppFrameId, ConstTyData, ConstTyId, HoleId, LayoutHoleArgSite, LocalFrameId,
-            StructuralHoleOrigin,
+            ConstTyData, ConstTyId, HoleId, InstSite, LayoutHoleArgSite, LexSite, ProvenanceId,
+            ProvenanceSite, StructuralHoleOrigin,
         },
         ty_def::{Kind, PrimTy, TyBase, TyData, TyId, TyParam},
     };
@@ -563,20 +560,18 @@ mod tests {
 
     fn mk_structural_hole_ty<'db>(
         db: &'db HirAnalysisTestDb,
-        local_frame: LocalFrameId<'db>,
-        app_frame: Option<AppFrameId<'db>>,
+        provenance: ProvenanceId<'db>,
     ) -> TyId<'db> {
         TyId::const_ty(
             db,
-            ConstTyId::structural_hole_with_app(
+            ConstTyId::structural_hole(
                 db,
                 usize_ty(db),
                 StructuralHoleOrigin::ExplicitWildcard {
                     site: LayoutHoleArgSite::GenericArgList(GenericArgListId::none(db)),
                     arg_idx: 0,
                 },
-                local_frame,
-                app_frame,
+                provenance,
             ),
         )
     }
@@ -819,69 +814,87 @@ mod tests {
     }
 
     #[test]
-    fn prepend_local_parent_only_updates_local_provenance() {
+    fn push_provenance_extends_chain_and_changes_identity() {
         let db = HirAnalysisTestDb::default();
-        let local_root = LocalFrameId::root_generic_arg_list(&db, GenericArgListId::none(&db));
-        let app_root = AppFrameId::root_generic_arg_list(&db, GenericArgListId::given(&db, vec![]));
-        let parent = LocalFrameId::root_generic_arg_list(&db, GenericArgListId::given(&db, vec![]));
-
-        let rebound = prepend_local_parent_to_structural_holes(
+        let lex_root = ProvenanceId::root(
             &db,
-            mk_structural_hole_ty(&db, local_root, Some(app_root)),
-            parent,
+            ProvenanceSite::Lex(LexSite::GenericArgList(GenericArgListId::none(&db))),
         );
-        let hole_id = expect_structural_hole(&db, rebound);
+        let pushed_site =
+            ProvenanceSite::Inst(InstSite::GenericArgList(GenericArgListId::given(&db, vec![])));
 
-        assert_eq!(hole_id.local_frame(&db).parent(&db), Some(parent));
-        assert_eq!(hole_id.app_frame(&db), Some(app_root));
+        let original = mk_structural_hole_ty(&db, lex_root);
+        let pushed = push_provenance(&db, original, &[pushed_site]);
+        let hole_id = expect_structural_hole(&db, pushed);
+
+        assert_ne!(pushed, original);
+        assert_eq!(hole_id.provenance(&db).site(&db), pushed_site);
+        assert_eq!(hole_id.provenance(&db).parent(&db), Some(lex_root));
     }
 
     #[test]
-    fn rebase_under_app_only_updates_application_provenance() {
+    fn push_provenance_sites_with_distinct_tags_stay_distinct() {
         let db = HirAnalysisTestDb::default();
-        let local_root = LocalFrameId::root_generic_arg_list(&db, GenericArgListId::none(&db));
-        let first_app =
-            AppFrameId::root_generic_arg_list(&db, GenericArgListId::given(&db, vec![]));
-        let rebound_parent = AppFrameId::root_generic_arg_list(&db, GenericArgListId::none(&db));
-
-        let rebound = rebase_structural_holes_under_app(
+        let root = ProvenanceId::root(
             &db,
-            mk_structural_hole_ty(&db, local_root, Some(first_app)),
-            rebound_parent,
+            ProvenanceSite::Lex(LexSite::GenericArgList(GenericArgListId::none(&db))),
         );
-        let hole_id = expect_structural_hole(&db, rebound);
+        let shared_args = GenericArgListId::given(&db, vec![]);
 
-        assert_eq!(hole_id.local_frame(&db), local_root);
-        assert_eq!(
-            hole_id.app_frame(&db).unwrap().parent(&db),
-            Some(rebound_parent)
+        // The same payload pushed as a lexical vs an instantiation site must
+        // produce distinct hole identities.
+        let original = mk_structural_hole_ty(&db, root);
+        let lex_pushed = push_provenance(
+            &db,
+            original,
+            &[ProvenanceSite::Lex(LexSite::GenericArgList(shared_args))],
         );
+        let inst_pushed = push_provenance(
+            &db,
+            original,
+            &[ProvenanceSite::Inst(InstSite::GenericArgList(shared_args))],
+        );
+
+        assert_ne!(lex_pushed, inst_pushed);
     }
 
     #[test]
     fn collect_unique_app_bound_structural_holes_accepts_app_bound_holes() {
         let db = HirAnalysisTestDb::default();
-        let local_root = LocalFrameId::root_generic_arg_list(&db, GenericArgListId::none(&db));
-        let app_root = AppFrameId::root_generic_arg_list(&db, GenericArgListId::given(&db, vec![]));
+        let provenance = ProvenanceId::root(
+            &db,
+            ProvenanceSite::Lex(LexSite::GenericArgList(GenericArgListId::none(&db))),
+        )
+        .push(
+            &db,
+            ProvenanceSite::Inst(InstSite::GenericArgList(GenericArgListId::given(&db, vec![]))),
+        );
 
         let holes = collect_unique_app_bound_structural_holes_in_order(
             &db,
-            mk_structural_hole_ty(&db, local_root, Some(app_root)),
+            mk_structural_hole_ty(&db, provenance),
         );
 
         assert_eq!(holes.len(), 1);
-        assert_eq!(holes[0].app_frame(&db), Some(app_root));
+        assert!(
+            holes[0]
+                .provenance(&db)
+                .contains(&db, |site| matches!(site, ProvenanceSite::Inst(_)))
+        );
     }
 
     #[test]
     #[should_panic(expected = "template-only structural hole escaped into semantic binding")]
     fn collect_unique_app_bound_structural_holes_rejects_template_only_holes() {
         let db = HirAnalysisTestDb::default();
-        let local_root = LocalFrameId::root_generic_arg_list(&db, GenericArgListId::none(&db));
+        let lex_only = ProvenanceId::root(
+            &db,
+            ProvenanceSite::Lex(LexSite::GenericArgList(GenericArgListId::none(&db))),
+        );
 
         let _ = collect_unique_app_bound_structural_holes_in_order(
             &db,
-            mk_structural_hole_ty(&db, local_root, None),
+            mk_structural_hole_ty(&db, lex_only),
         );
     }
 }

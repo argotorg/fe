@@ -903,8 +903,7 @@ impl<'db> TyId<'db> {
 
             let (explicit_args, layout_args) = args.split_at(params.len().min(args.len()));
             let layout_plan = adt_layout_hole_plan_with_explicit_args(db, *adt_def, explicit_args);
-            if let Some(expected_const_ty) = layout_plan.hole_tys().get(layout_args.len()).copied()
-            {
+            if let Some(expected_const_ty) = layout_plan.hole_ty(layout_args.len()) {
                 return Some(ApplicableTyProp {
                     kind: expected_const_ty.kind(db).clone(),
                     const_ty: Some(expected_const_ty),
@@ -1046,7 +1045,6 @@ pub fn strip_derived_adt_layout_args<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'
                         let (explicit_args, layout_args) = args.split_at(explicit_len);
                         let retained_layout_len =
                             adt_layout_hole_plan_with_explicit_args(db, *adt_def, explicit_args)
-                                .hole_tys()
                                 .len();
                         &args[..explicit_len + layout_args.len().min(retained_layout_len)]
                     }

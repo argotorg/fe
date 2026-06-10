@@ -1732,6 +1732,107 @@ contract C {
     );
 }
 
+/// Sibling occurrences of the same hole-bearing type share content-interned
+/// HIR ids; their holes must still be distinct or storage slots alias.
+#[test]
+fn contract_field_sibling_identical_hole_types_get_distinct_slots() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_sibling_identical_hole_types_get_distinct_slots.fe"),
+        r#"
+use core::effect_ref::StorPtr
+
+struct Slot<T, const ROOT: u256 = _> {}
+
+struct Pair {
+    left: Slot<u256>,
+    right: Slot<u256>,
+}
+
+contract C {
+    pair: StorPtr<Pair>
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let contract = find_contract(&db, top_mod, "C");
+    let layout = contract.field_layout(&db);
+    let pair = layout
+        .get(&IdentId::new(&db, "pair".to_string()))
+        .expect("missing `pair` field");
+
+    let fields = pair.target_ty.field_types(&db);
+    assert_eq!(fields.len(), 2);
+    let left_root = fields[0]
+        .generic_args(&db)
+        .get(1)
+        .copied()
+        .expect("missing left root const arg");
+    let right_root = fields[1]
+        .generic_args(&db)
+        .get(1)
+        .copied()
+        .expect("missing right root const arg");
+
+    assert_eq!(const_lit_usize(&db, left_root), 0);
+    assert_eq!(const_lit_usize(&db, right_root), 1);
+    assert_eq!(pair.slot_count, 2);
+}
+
+/// Repeated uses of one alias expand the same template; the template's holes
+/// must split per use site.
+#[test]
+fn contract_field_repeated_alias_occurrences_get_distinct_slots() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_repeated_alias_occurrences_get_distinct_slots.fe"),
+        r#"
+use core::effect_ref::StorPtr
+
+struct Slot<T, const ROOT: u256 = _> {}
+
+type M = Slot<u256>
+
+struct Pair {
+    left: M,
+    right: M,
+}
+
+contract C {
+    pair: StorPtr<Pair>
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let contract = find_contract(&db, top_mod, "C");
+    let layout = contract.field_layout(&db);
+    let pair = layout
+        .get(&IdentId::new(&db, "pair".to_string()))
+        .expect("missing `pair` field");
+
+    let fields = pair.target_ty.field_types(&db);
+    assert_eq!(fields.len(), 2);
+    let left_root = fields[0]
+        .generic_args(&db)
+        .get(1)
+        .copied()
+        .expect("missing left root const arg");
+    let right_root = fields[1]
+        .generic_args(&db)
+        .get(1)
+        .copied()
+        .expect("missing right root const arg");
+
+    assert_ne!(left_root, right_root, "alias-expanded holes silently merged");
+    assert_eq!(const_lit_usize(&db, left_root), 0);
+    assert_eq!(const_lit_usize(&db, right_root), 1);
+    assert_eq!(pair.slot_count, 2);
+}
+
 #[test]
 fn contract_field_layout_offsets_nested_holes_after_preceding_aggregate_fields() {
     let mut db = HirAnalysisTestDb::default();

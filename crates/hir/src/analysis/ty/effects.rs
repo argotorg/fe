@@ -1,7 +1,8 @@
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution::PathRes;
 use crate::analysis::ty::const_ty::{
-    ConstCanonEnv, ConstCanonMode, ConstTyData, HoleId, LocalFrameId, StructuralHoleOrigin,
+    ConstCanonEnv, ConstCanonMode, ConstTyData, HoleId, LexSite, ProvenanceId, ProvenanceSite,
+    StructuralHoleOrigin,
     canonicalize_trait_inst_for_mode, canonicalize_ty_for_mode,
 };
 use crate::analysis::ty::fold::{AssocTySubst, TyFoldable, TyFolder};
@@ -271,7 +272,7 @@ pub(crate) fn existentialize_omitted_const_args_in_effect_key<'db>(
                     owner,
                     param_idx: explicit_idx,
                 },
-                LocalFrameId::root_path(db, key_path),
+                ProvenanceId::root(db, ProvenanceSite::Lex(LexSite::RootPath(key_path))),
             ),
         );
         if completed_args[arg_idx] != hole {

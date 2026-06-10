@@ -28,7 +28,7 @@ use crate::analysis::{
         adt_def::{AdtRef, adt_layout_hole_plan, adt_layout_hole_plan_with_explicit_args},
         binder::Binder,
         canonical::Canonicalized,
-        const_ty::{AppFrameId, HoleId, LayoutHoleArgSite, LocalFrameId, StructuralHoleOrigin},
+        const_ty::{HoleId, LayoutHoleArgSite, LexSite, ProvenanceId, ProvenanceSite, StructuralHoleOrigin},
         layout_holes::layout_hole_with_fallback_ty,
         normalize::normalize_ty,
         trait_def::{TraitInstId, impls_for_ty_with_constraints},
@@ -1629,8 +1629,7 @@ fn ty_from_adtref<'db>(
         None,
         explicit_args,
         assumptions,
-        ConstDefaultCompletion::metadata(Some(path))
-            .with_app_frame(Some(AppFrameId::root_path(db, path))),
+        ConstDefaultCompletion::metadata(Some(path)),
     );
     let layout_plan = if completed_args.len() == explicit_param_len {
         adt_layout_hole_plan_with_explicit_args(db, adt, &completed_args)
@@ -1640,26 +1639,32 @@ fn ty_from_adtref<'db>(
     completed_args.extend(layout_provided.iter().copied());
 
     let provided_layout_len = layout_provided.len();
-    for (layout_idx, hole_ty) in layout_plan
-        .hole_tys()
+    for (layout_idx, entry) in layout_plan
+        .entries()
         .iter()
         .copied()
         .enumerate()
         .skip(provided_layout_len)
     {
-        completed_args.push(layout_hole_with_fallback_ty(
-            db,
-            hole_ty,
-            HoleId::structural(
+        completed_args.push(match entry.source {
+            // The plan occurrence was substituted in from an explicit arg:
+            // reuse that hole's identity so one logical hole stays one TyId
+            // across the arg position and the instantiated field types.
+            Some(placeholder) => placeholder,
+            None => layout_hole_with_fallback_ty(
                 db,
-                hole_ty,
-                StructuralHoleOrigin::ExplicitWildcard {
-                    site: LayoutHoleArgSite::Path(path),
-                    arg_idx: explicit_param_len + layout_idx,
-                },
-                LocalFrameId::root_path(db, path),
+                entry.hole_ty,
+                HoleId::structural(
+                    db,
+                    entry.hole_ty,
+                    StructuralHoleOrigin::ExplicitWildcard {
+                        site: LayoutHoleArgSite::Path(path),
+                        arg_idx: explicit_param_len + layout_idx,
+                    },
+                    ProvenanceId::root(db, ProvenanceSite::Lex(LexSite::RootPath(path))),
+                ),
             ),
-        ));
+        });
     }
 
     let applied =

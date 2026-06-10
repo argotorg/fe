@@ -123,8 +123,10 @@ pub enum StructuralHoleOrigin<'db> {
     },
 }
 
+/// A site a hole's containing type was lowered at lexically (syntactic
+/// nesting and template membership).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum LocalFrameSite<'db> {
+pub enum LexSite<'db> {
     HirType(HirTypeId<'db>),
     TypeComponent { ty: HirTypeId<'db>, slot: usize },
     RootPath(PathId<'db>),
@@ -132,48 +134,10 @@ pub enum LocalFrameSite<'db> {
     AliasTemplate(HirTypeAlias<'db>),
 }
 
-#[salsa::interned]
-#[derive(Debug)]
-pub struct LocalFrameId<'db> {
-    pub parent: Option<LocalFrameId<'db>>,
-    pub site: LocalFrameSite<'db>,
-}
-
-impl<'db> LocalFrameId<'db> {
-    pub(crate) fn root_hir_ty(db: &'db dyn HirAnalysisDb, hir_ty: HirTypeId<'db>) -> Self {
-        Self::new(db, None, LocalFrameSite::HirType(hir_ty))
-    }
-
-    pub(crate) fn child_type_component(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        ty: HirTypeId<'db>,
-        slot: usize,
-    ) -> Self {
-        Self::new(db, Some(self), LocalFrameSite::TypeComponent { ty, slot })
-    }
-
-    pub(crate) fn root_path(db: &'db dyn HirAnalysisDb, path: PathId<'db>) -> Self {
-        Self::new(db, None, LocalFrameSite::RootPath(path))
-    }
-
-    pub(crate) fn root_generic_arg_list(
-        db: &'db dyn HirAnalysisDb,
-        args: GenericArgListId<'db>,
-    ) -> Self {
-        Self::new(db, None, LocalFrameSite::GenericArgList(args))
-    }
-
-    pub(crate) fn prepend_parent(self, db: &'db dyn HirAnalysisDb, parent: Self) -> Self {
-        let rebased_parent = self
-            .parent(db)
-            .map(|current| current.prepend_parent(db, parent));
-        Self::new(db, rebased_parent.or(Some(parent)), self.site(db))
-    }
-}
-
+/// A context a hole's containing type was instantiated/applied through
+/// (alias uses, generic-arg positions, callable inputs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum AppFrameSite<'db> {
+pub enum InstSite<'db> {
     CallableInput {
         func: Func<'db>,
         origin: CallableInputLayoutHoleOrigin,
@@ -186,47 +150,54 @@ pub enum AppFrameSite<'db> {
     GenericArgList(GenericArgListId<'db>),
 }
 
-#[salsa::interned]
-#[derive(Debug)]
-pub struct AppFrameId<'db> {
-    pub parent: Option<AppFrameId<'db>>,
-    pub site: AppFrameSite<'db>,
+/// One link of a hole's provenance chain. The `Lex`/`Inst` tag keeps the
+/// merged chain injective with respect to the lexical and instantiation
+/// histories it encodes: sites that exist in both kinds (`TypeComponent`,
+/// `RootPath`, `GenericArgList`) stay distinguishable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum ProvenanceSite<'db> {
+    Lex(LexSite<'db>),
+    Inst(InstSite<'db>),
 }
 
-impl<'db> AppFrameId<'db> {
-    pub(crate) fn root_callable_input(
-        db: &'db dyn HirAnalysisDb,
-        func: Func<'db>,
-        origin: CallableInputLayoutHoleOrigin,
-    ) -> Self {
-        Self::new(db, None, AppFrameSite::CallableInput { func, origin })
+/// Interned cons-list of provenance sites, newest site at the head.
+///
+/// HIR ids (`TypeId`, `PathId`, `GenericArgListId`) are content-interned, so
+/// a hole's creation site alone does not identify a syntactic occurrence:
+/// `(Slot<_>, Slot<_>)` shares one child HIR type and `(M, M)` one alias
+/// path. The provenance chain accumulates the lowering/instantiation
+/// contexts a hole's containing type passed through, giving each occurrence
+/// a distinct identity. Two holes silently merging means aliased storage
+/// slots, so pushes err on the side of distinctness.
+#[salsa::interned]
+#[derive(Debug)]
+pub struct ProvenanceId<'db> {
+    pub parent: Option<ProvenanceId<'db>>,
+    pub site: ProvenanceSite<'db>,
+}
+
+impl<'db> ProvenanceId<'db> {
+    pub(crate) fn root(db: &'db dyn HirAnalysisDb, site: ProvenanceSite<'db>) -> Self {
+        Self::new(db, None, site)
     }
 
-    pub(crate) fn child_type_component(
+    pub(crate) fn push(self, db: &'db dyn HirAnalysisDb, site: ProvenanceSite<'db>) -> Self {
+        Self::new(db, Some(self), site)
+    }
+
+    pub(crate) fn contains(
         self,
         db: &'db dyn HirAnalysisDb,
-        ty: HirTypeId<'db>,
-        slot: usize,
-    ) -> Self {
-        Self::new(db, Some(self), AppFrameSite::TypeComponent { ty, slot })
-    }
-
-    pub(crate) fn root_path(db: &'db dyn HirAnalysisDb, path: PathId<'db>) -> Self {
-        Self::new(db, None, AppFrameSite::RootPath(path))
-    }
-
-    pub(crate) fn root_generic_arg_list(
-        db: &'db dyn HirAnalysisDb,
-        args: GenericArgListId<'db>,
-    ) -> Self {
-        Self::new(db, None, AppFrameSite::GenericArgList(args))
-    }
-
-    pub(crate) fn prepend_parent(self, db: &'db dyn HirAnalysisDb, parent: Self) -> Self {
-        let rebased_parent = self
-            .parent(db)
-            .map(|current| current.prepend_parent(db, parent));
-        Self::new(db, rebased_parent.or(Some(parent)), self.site(db))
+        mut pred: impl FnMut(ProvenanceSite<'db>) -> bool,
+    ) -> bool {
+        let mut current = Some(self);
+        while let Some(link) = current {
+            if pred(link.site(db)) {
+                return true;
+            }
+            current = link.parent(db);
+        }
+        false
     }
 }
 
@@ -235,40 +206,20 @@ impl<'db> AppFrameId<'db> {
 pub struct StructuralHoleId<'db> {
     pub expected_ty: TyId<'db>,
     pub origin: StructuralHoleOrigin<'db>,
-    pub local_frame: LocalFrameId<'db>,
-    pub app_frame: Option<AppFrameId<'db>>,
+    pub provenance: ProvenanceId<'db>,
 }
 
 impl<'db> StructuralHoleId<'db> {
-    pub(crate) fn prepend_local_parent(
+    pub(crate) fn push_provenance(
         self,
         db: &'db dyn HirAnalysisDb,
-        parent: LocalFrameId<'db>,
+        site: ProvenanceSite<'db>,
     ) -> Self {
         Self::new(
             db,
             self.expected_ty(db),
             self.origin(db),
-            self.local_frame(db).prepend_parent(db, parent),
-            self.app_frame(db),
-        )
-    }
-
-    pub(crate) fn rebase_app_under(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        parent: AppFrameId<'db>,
-    ) -> Self {
-        let app_frame = self
-            .app_frame(db)
-            .map(|frame| frame.prepend_parent(db, parent))
-            .or(Some(parent));
-        Self::new(
-            db,
-            self.expected_ty(db),
-            self.origin(db),
-            self.local_frame(db),
-            app_frame,
+            self.provenance(db).push(db, site),
         )
     }
 }
@@ -294,31 +245,9 @@ impl<'db> HoleId<'db> {
         db: &'db dyn HirAnalysisDb,
         expected_ty: TyId<'db>,
         origin: StructuralHoleOrigin<'db>,
-        local_frame: LocalFrameId<'db>,
+        provenance: ProvenanceId<'db>,
     ) -> Self {
-        Self::Structural(StructuralHoleId::new(
-            db,
-            expected_ty,
-            origin,
-            local_frame,
-            None,
-        ))
-    }
-
-    pub(crate) fn structural_with_app(
-        db: &'db dyn HirAnalysisDb,
-        expected_ty: TyId<'db>,
-        origin: StructuralHoleOrigin<'db>,
-        local_frame: LocalFrameId<'db>,
-        app_frame: Option<AppFrameId<'db>>,
-    ) -> Self {
-        Self::Structural(StructuralHoleId::new(
-            db,
-            expected_ty,
-            origin,
-            local_frame,
-            app_frame,
-        ))
+        Self::Structural(StructuralHoleId::new(db, expected_ty, origin, provenance))
     }
 }
 
@@ -2435,23 +2364,9 @@ impl<'db> ConstTyId<'db> {
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
         origin: StructuralHoleOrigin<'db>,
-        local_frame: LocalFrameId<'db>,
+        provenance: ProvenanceId<'db>,
     ) -> Self {
-        Self::hole_with_id(db, ty, HoleId::structural(db, ty, origin, local_frame))
-    }
-
-    pub fn structural_hole_with_app(
-        db: &'db dyn HirAnalysisDb,
-        ty: TyId<'db>,
-        origin: StructuralHoleOrigin<'db>,
-        local_frame: LocalFrameId<'db>,
-        app_frame: Option<AppFrameId<'db>>,
-    ) -> Self {
-        Self::hole_with_id(
-            db,
-            ty,
-            HoleId::structural_with_app(db, ty, origin, local_frame, app_frame),
-        )
+        Self::hole_with_id(db, ty, HoleId::structural(db, ty, origin, provenance))
     }
 
     pub fn bound_callable_hole(
@@ -2475,8 +2390,7 @@ impl<'db> ConstTyId<'db> {
                         db,
                         ty,
                         hole_id.origin(db),
-                        hole_id.local_frame(db),
-                        hole_id.app_frame(db),
+                        hole_id.provenance(db),
                     )),
                     HoleId::Bound(hole_id) => HoleId::Bound(*hole_id),
                 },

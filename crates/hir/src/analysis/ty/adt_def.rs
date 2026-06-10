@@ -4,13 +4,17 @@ use crate::hir_def::{
 };
 use crate::span::DynLazySpan;
 use common::ingot::Ingot;
+use rustc_hash::FxHashSet;
 use salsa::Update;
 use std::ops::Range;
 
 use super::{
     binder::Binder,
     const_ty::ConstTyData,
-    layout_holes::{LayoutPlaceholderPolicy, collect_layout_placeholder_tys_in_order_with_policy},
+    layout_holes::{
+        LayoutPlaceholderPolicy, collect_layout_placeholder_pairs_in_order_with_policy,
+        collect_layout_placeholders_in_order_with_policy,
+    },
     trait_resolution::constraint::collect_constraints,
     ty_def::{InvalidCause, TyData, TyId},
     ty_lower::{GenericParamTypeSet, lower_hir_ty},
@@ -222,15 +226,34 @@ pub struct AdtCycleMember<'db> {
     pub ty_idx: u16,
 }
 
+/// One derived trailing layout arg of an ADT application.
+#[derive(Clone, Copy)]
+pub(crate) struct AdtLayoutHoleEntry<'db> {
+    /// The placeholder's (fallbacked) const value type.
+    pub(crate) hole_ty: TyId<'db>,
+    /// The placeholder itself, when the plan occurrence was substituted in
+    /// from an explicit generic arg. Reusing it as the trailing arg keeps one
+    /// logical hole as one `TyId` instead of minting a parallel identity.
+    pub(crate) source: Option<TyId<'db>>,
+}
+
 #[derive(Default)]
 pub(crate) struct AdtLayoutHolePlan<'db> {
-    hole_tys: Vec<TyId<'db>>,
+    entries: Vec<AdtLayoutHoleEntry<'db>>,
     field_ranges: Vec<Vec<Range<usize>>>,
 }
 
 impl<'db> AdtLayoutHolePlan<'db> {
-    pub(crate) fn hole_tys(&self) -> &[TyId<'db>] {
-        &self.hole_tys
+    pub(crate) fn entries(&self) -> &[AdtLayoutHoleEntry<'db>] {
+        &self.entries
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub(crate) fn hole_ty(&self, idx: usize) -> Option<TyId<'db>> {
+        self.entries.get(idx).map(|entry| entry.hole_ty)
     }
 
     pub(crate) fn field_range(&self, variant_idx: usize, field_idx: usize) -> Range<usize> {
@@ -254,7 +277,24 @@ pub(crate) fn adt_layout_hole_plan_with_explicit_args<'db>(
     adt: AdtDef<'db>,
     explicit_args: &[TyId<'db>],
 ) -> AdtLayoutHolePlan<'db> {
-    let mut hole_tys = Vec::new();
+    // Placeholders occurring inside the explicit args themselves: a plan
+    // occurrence matching one of these was substituted into the field
+    // template by instantiation, so the trailing arg can reuse its identity.
+    // Template-resident placeholders (minted in the ADT's own field lowering)
+    // must NOT be reused: their identity belongs to the definition, and each
+    // application needs a fresh trailing hole.
+    let explicit_arg_placeholders = explicit_args
+        .iter()
+        .flat_map(|&arg| {
+            collect_layout_placeholders_in_order_with_policy(
+                db,
+                arg,
+                LayoutPlaceholderPolicy::HolesAndImplicitParams,
+            )
+        })
+        .collect::<FxHashSet<_>>();
+
+    let mut entries = Vec::new();
     let field_ranges = adt
         .fields(db)
         .iter()
@@ -264,20 +304,36 @@ pub(crate) fn adt_layout_hole_plan_with_explicit_args<'db>(
                 .map(|field_idx| {
                     let field_ty =
                         instantiated_adt_field_ty(db, adt, variant_idx, field_idx, explicit_args);
-                    let start = hole_tys.len();
-                    hole_tys.extend(collect_layout_placeholder_tys_in_order_with_policy(
-                        db,
-                        field_ty,
-                        LayoutPlaceholderPolicy::HolesAndImplicitParams,
-                    ));
-                    start..hole_tys.len()
+                    let start = entries.len();
+                    entries.extend(
+                        collect_layout_placeholder_pairs_in_order_with_policy(
+                            db,
+                            field_ty,
+                            LayoutPlaceholderPolicy::HolesAndImplicitParams,
+                        )
+                        .into_iter()
+                        .map(|(placeholder, hole_ty)| AdtLayoutHoleEntry {
+                            hole_ty,
+                            // Every occurrence of an explicit-arg placeholder
+                            // reuses it: the user wrote one hole, so all of
+                            // its template occurrences are that hole. This
+                            // also keeps nested applications stable — an
+                            // outer ADT's plan sees the inner application's
+                            // already-reused trailing occurrence and must not
+                            // re-split it.
+                            source: explicit_arg_placeholders
+                                .contains(&placeholder)
+                                .then_some(placeholder),
+                        }),
+                    );
+                    start..entries.len()
                 })
                 .collect()
         })
         .collect();
 
     AdtLayoutHolePlan {
-        hole_tys,
+        entries,
         field_ranges,
     }
 }

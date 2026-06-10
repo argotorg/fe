@@ -67,7 +67,7 @@ use crate::hir_def::*;
 // When adding real methods, prefer calling internal lowering/normalization here
 // rather than exposing raw syntax.
 use crate::analysis::ty::adt_def::{
-    AdtCycleMember, AdtDef, AdtField, AdtRef, instantiated_adt_field_ty,
+    AdtCycleMember, AdtDef, AdtField, AdtRef,
 };
 use crate::analysis::ty::const_ty::{
     CallableInputLayoutHoleOrigin, ConstTyData, ConstTyId, EvaluatedConstTy,
@@ -77,8 +77,8 @@ use crate::analysis::ty::effects::{
 };
 use crate::analysis::ty::layout_holes::{
     LayoutPlaceholderPolicy, callable_input_layout_bindings_by_origin,
-    collect_layout_hole_tys_in_order, collect_layout_placeholders_in_order_with_policy,
-    collect_unique_layout_placeholders_in_order_with_policy, layout_hole_fallback_ty,
+    collect_layout_hole_tys_in_order, collect_unique_layout_placeholders_in_order_with_policy,
+    layout_hole_fallback_ty,
     substitute_layout_holes_by_identity, substitute_layout_holes_by_identity_in,
     substitute_layout_placeholders_by_identity,
 };
@@ -1967,48 +1967,6 @@ fn assign_contract_field_slots<'db>(
         elem_slots.saturating_mul(len)
     } else if let Some(adt_def) = ty.adt_def(db) {
         let args = ty.generic_args(db);
-        let explicit_len = adt_def.params(db).len();
-
-        // A placeholder written inside an explicit generic arg is aliased by a
-        // derived layout arg: `instantiate_adt_field_ty` substitutes the k-th
-        // placeholder occurrence in the template field types with layout arg
-        // k. Both spellings denote the same logical hole, so the arg-position
-        // placeholder must share the slot assigned through the field walk
-        // rather than reserve a second one.
-        let alias_explicit_arg_placeholders = |offsets: &mut FxHashMap<TyId<'db>, usize>| {
-            if args.len() <= explicit_len {
-                return;
-            }
-            let (explicit_args, layout_args) = args.split_at(explicit_len);
-            let mut occurrence = 0usize;
-            for (variant_idx, variant) in adt_def.fields(db).iter().enumerate() {
-                for (field_idx, _) in variant.iter_types(db).enumerate() {
-                    let template_ty = instantiated_adt_field_ty(
-                        db,
-                        adt_def,
-                        variant_idx,
-                        field_idx,
-                        explicit_args,
-                    );
-                    for placeholder in collect_layout_placeholders_in_order_with_policy(
-                        db,
-                        template_ty,
-                        LayoutPlaceholderPolicy::HolesAndImplicitParams,
-                    ) {
-                        let Some(&derived) = layout_args.get(occurrence) else {
-                            return;
-                        };
-                        occurrence += 1;
-                        if placeholders.contains(&placeholder)
-                            && !offsets.contains_key(&placeholder)
-                            && let Some(&derived_offset) = offsets.get(&derived)
-                        {
-                            offsets.insert(placeholder, derived_offset);
-                        }
-                    }
-                }
-            }
-        };
 
         match adt_def.adt_ref(db) {
             AdtRef::Struct(_) => {
@@ -2023,7 +1981,6 @@ fn assign_contract_field_slots<'db>(
                         visiting,
                     ));
                 }
-                alias_explicit_arg_placeholders(offsets);
                 next_offset = assign_own_arg_placeholders(offsets, next_offset);
                 next_offset.saturating_sub(offset)
             }
@@ -2053,7 +2010,6 @@ fn assign_contract_field_slots<'db>(
                     })
                     .max()
                     .unwrap_or(0);
-                alias_explicit_arg_placeholders(offsets);
                 let end_offset = assign_own_arg_placeholders(
                     offsets,
                     offset.saturating_add(1).saturating_add(max_payload),

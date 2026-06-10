@@ -11,17 +11,16 @@ use smallvec::smallvec;
 use super::{
     assoc_const::AssocConstUse,
     const_ty::{
-        AppFrameId, CallableInputLayoutHoleOrigin, ConstTyData, ConstTyId, EvaluatedConstTy,
-        HoleId, LayoutHoleArgSite, LocalFrameId, LocalFrameSite, StructuralHoleOrigin,
+        CallableInputLayoutHoleOrigin, ConstTyData, ConstTyId, EvaluatedConstTy, InstSite,
+        LayoutHoleArgSite, LexSite, ProvenanceId, ProvenanceSite, StructuralHoleOrigin,
     },
     effects::{ResolvedEffectKey, TraitKeySchema},
     fold::{TyFoldable, TyFolder},
     layout_holes::{
         callable_input_layout_bindings_by_origin,
         collect_unique_app_bound_structural_holes_in_order,
-        collect_unique_layout_placeholders_in_order, layout_hole_fallback_ty,
-        prepend_local_parent_to_structural_holes, rebase_owned_structural_holes_under_app,
-        rebase_structural_holes_under_app, rewrite_structural_holes,
+        collect_unique_layout_placeholders_in_order, layout_hole_fallback_ty, push_provenance,
+        push_provenance_filtered, rewrite_structural_holes,
     },
     trait_def::TraitInstId,
     trait_resolution::{
@@ -51,11 +50,16 @@ fn lower_hir_ty_impl<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> TyId<'db> {
-    let ty_frame = LocalFrameId::root_hir_ty(db, ty);
-    let child_frame = |slot| ty_frame.child_type_component(db, ty, slot);
     let lower_child = |child_ty, slot| {
         let lowered = lower_opt_hir_ty_impl(db, child_ty, scope, assumptions);
-        prepend_local_parent_to_structural_holes(db, lowered, child_frame(slot))
+        push_provenance(
+            db,
+            lowered,
+            &[
+                ProvenanceSite::Lex(LexSite::TypeComponent { ty, slot }),
+                ProvenanceSite::Lex(LexSite::HirType(ty)),
+            ],
+        )
     };
 
     match ty.data(db) {
@@ -74,10 +78,10 @@ fn lower_hir_ty_impl<'db>(
             }
         }
 
-        HirTyKind::Path(path) => prepend_local_parent_to_structural_holes(
+        HirTyKind::Path(path) => push_provenance(
             db,
             lower_path_impl(db, scope, *path, assumptions),
-            ty_frame,
+            &[ProvenanceSite::Lex(LexSite::HirType(ty))],
         ),
 
         HirTyKind::Tuple(tuple_id) => {
@@ -413,10 +417,13 @@ fn bind_callable_input_layout_holes<'db, T>(
 where
     T: TyFoldable<'db> + TyVisitable<'db> + Copy,
 {
-    let value = rebase_structural_holes_under_app(
+    let value = push_provenance(
         db,
         value,
-        AppFrameId::root_callable_input(db, func, origin),
+        &[ProvenanceSite::Inst(InstSite::CallableInput {
+            func,
+            origin,
+        })],
     );
     let ordinals = collect_unique_app_bound_structural_holes_in_order(db, value)
         .into_iter()
@@ -762,15 +769,14 @@ pub(crate) fn func_implicit_param_plan<'db>(
     }
 }
 
-fn local_frame_contains_alias_template<'db>(
+fn provenance_contains_alias_template<'db>(
     db: &'db dyn HirAnalysisDb,
-    frame: LocalFrameId<'db>,
+    provenance: ProvenanceId<'db>,
     alias: HirTypeAlias<'db>,
 ) -> bool {
-    matches!(frame.site(db), LocalFrameSite::AliasTemplate(found) if found == alias)
-        || frame
-            .parent(db)
-            .is_some_and(|parent| local_frame_contains_alias_template(db, parent, alias))
+    provenance.contains(db, |site| {
+        matches!(site, ProvenanceSite::Lex(LexSite::AliasTemplate(found)) if found == alias)
+    })
 }
 
 /// Lowers the given type alias to [`TyAlias`].
@@ -811,19 +817,11 @@ pub(crate) fn lower_type_alias_from_hir<'db>(
         // Should be reported by TypeAliasAnalysisPass
         TyId::invalid(db, InvalidCause::Other)
     } else {
-        rewrite_structural_holes(db, alias_to, |hole_id, hole_ty| {
-            Some(TyId::const_ty(
-                db,
-                ConstTyId::hole_with_id(
-                    db,
-                    hole_ty,
-                    HoleId::Structural(hole_id.prepend_local_parent(
-                        db,
-                        LocalFrameId::new(db, None, LocalFrameSite::AliasTemplate(alias)),
-                    )),
-                ),
-            ))
-        })
+        push_provenance(
+            db,
+            alias_to,
+            &[ProvenanceSite::Lex(LexSite::AliasTemplate(alias))],
+        )
     };
     TyAlias {
         alias,
@@ -922,8 +920,7 @@ impl<'db> TyAlias<'db> {
             None,
             args,
             assumptions,
-            ConstDefaultCompletion::metadata(Some(path))
-                .with_app_frame(Some(AppFrameId::root_path(db, path))),
+            ConstDefaultCompletion::metadata(Some(path)),
         );
         if completed.len() < expected {
             return TyId::invalid(
@@ -938,20 +935,20 @@ impl<'db> TyAlias<'db> {
             return TyId::invalid(db, cause);
         }
 
-        self.instantiate_completed_args(db, &completed, AppFrameId::root_path(db, path))
+        self.instantiate_completed_args(db, &completed, path)
     }
 
     fn instantiate_completed_args(
         &self,
         db: &'db dyn HirAnalysisDb,
         completed: &[TyId<'db>],
-        inst_app_frame: AppFrameId<'db>,
+        use_path: PathId<'db>,
     ) -> TyId<'db> {
-        rebase_owned_structural_holes_under_app(
+        push_provenance_filtered(
             db,
             self.alias_to.instantiate(db, completed),
-            inst_app_frame,
-            |hole_id| local_frame_contains_alias_template(db, hole_id.local_frame(db), self.alias),
+            &[ProvenanceSite::Inst(InstSite::RootPath(use_path))],
+            |hole_id| provenance_contains_alias_template(db, hole_id.provenance(db), self.alias),
         )
     }
 }
@@ -963,13 +960,19 @@ pub(crate) fn lower_generic_arg_list<'db>(
     assumptions: PredicateListId<'db>,
     hole_site: LayoutHoleArgSite<'db>,
 ) -> Vec<TyId<'db>> {
-    let hole_local_frame = match hole_site {
-        LayoutHoleArgSite::Path(path) => LocalFrameId::root_path(db, path),
-        LayoutHoleArgSite::GenericArgList(args) => LocalFrameId::root_generic_arg_list(db, args),
+    let hole_provenance_root = match hole_site {
+        LayoutHoleArgSite::Path(path) => {
+            ProvenanceId::root(db, ProvenanceSite::Lex(LexSite::RootPath(path)))
+        }
+        LayoutHoleArgSite::GenericArgList(args) => {
+            ProvenanceId::root(db, ProvenanceSite::Lex(LexSite::GenericArgList(args)))
+        }
     };
-    let hole_app_frame = match hole_site {
-        LayoutHoleArgSite::Path(path) => AppFrameId::root_path(db, path),
-        LayoutHoleArgSite::GenericArgList(args) => AppFrameId::root_generic_arg_list(db, args),
+    let inst_root_site = match hole_site {
+        LayoutHoleArgSite::Path(path) => ProvenanceSite::Inst(InstSite::RootPath(path)),
+        LayoutHoleArgSite::GenericArgList(args) => {
+            ProvenanceSite::Inst(InstSite::GenericArgList(args))
+        }
     };
 
     args.data(db)
@@ -977,10 +980,15 @@ pub(crate) fn lower_generic_arg_list<'db>(
         .enumerate()
         .map(|(arg_idx, arg)| match arg {
             GenericArg::Type(ty_arg) => {
-                let arg_frame = ty_arg
-                    .ty
-                    .to_opt()
-                    .map(|hir_ty| hole_app_frame.child_type_component(db, hir_ty, arg_idx));
+                let arg_sites = ty_arg.ty.to_opt().map(|hir_ty| {
+                    [
+                        ProvenanceSite::Inst(InstSite::TypeComponent {
+                            ty: hir_ty,
+                            slot: arg_idx,
+                        }),
+                        inst_root_site,
+                    ]
+                });
                 // Generic args are syntactically ambiguous: `String<N>` may parse `N` as a type
                 // even when `String` expects a const generic arg. When a type-arg is a path that
                 // resolves as a value const/trait-const, lower it as a const-ty argument so
@@ -1046,7 +1054,7 @@ pub(crate) fn lower_generic_arg_list<'db>(
                     }
                 }
                 let ty = lower_opt_hir_ty(db, ty_arg.ty, scope, assumptions);
-                arg_frame.map_or(ty, |frame| rebase_structural_holes_under_app(db, ty, frame))
+                arg_sites.map_or(ty, |sites| push_provenance(db, ty, &sites))
             }
             GenericArg::Const(const_arg) => match const_arg.value {
                 ConstGenericArgValue::Expr(body) => {
@@ -1062,7 +1070,7 @@ pub(crate) fn lower_generic_arg_list<'db>(
                             site: hole_site,
                             arg_idx,
                         },
-                        hole_local_frame,
+                        hole_provenance_root,
                     ),
                 ),
             },
@@ -1291,10 +1299,8 @@ impl<'db> GenericParamTypeSet<'db> {
                     lower_hir_ty(db, hir_ty, scope, assumptions)
                 };
                 let lowered = completion
-                    .default_type_frame(db, hir_ty, i)
-                    .map_or(lowered, |frame| {
-                        rebase_structural_holes_under_app(db, lowered, frame)
-                    });
+                    .default_type_sites(db, hir_ty, i)
+                    .map_or(lowered, |sites| push_provenance(db, lowered, &sites));
                 let lowered = substitute_known_params(&mapping, lowered);
                 mapping[i] = Some(lowered);
                 result.push(lowered);
@@ -1327,21 +1333,17 @@ impl<'db> GenericParamTypeSet<'db> {
                     ConstGenericArgValue::Hole => TyId::const_ty(
                         db,
                         completion
-                            .application_app_frame(db)
-                            .and_then(|frame| {
+                            .application_provenance(db)
+                            .and_then(|provenance| {
                                 let owner = prec.owner?;
                                 let param_idx = prec.original_idx?;
-                                completion.application_local_frame(db).map(|local_frame| {
-                                    ConstTyId::structural_hole_with_app(
-                                        db,
-                                        expected.unwrap_or_else(|| {
-                                            TyId::invalid(db, InvalidCause::Other)
-                                        }),
-                                        StructuralHoleOrigin::DefaultHoleParam { owner, param_idx },
-                                        local_frame,
-                                        Some(frame),
-                                    )
-                                })
+                                Some(ConstTyId::structural_hole(
+                                    db,
+                                    expected
+                                        .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other)),
+                                    StructuralHoleOrigin::DefaultHoleParam { owner, param_idx },
+                                    provenance,
+                                ))
                             })
                             .unwrap_or_else(|| {
                                 ConstTyId::hole_with_ty(
@@ -1377,7 +1379,6 @@ enum ConstDefaultCompletionMode {
 pub(crate) struct ConstDefaultCompletion<'db> {
     mode: ConstDefaultCompletionMode,
     application_path: Option<PathId<'db>>,
-    application_frame: Option<AppFrameId<'db>>,
 }
 
 impl<'db> ConstDefaultCompletion<'db> {
@@ -1385,7 +1386,6 @@ impl<'db> ConstDefaultCompletion<'db> {
         Self {
             mode: ConstDefaultCompletionMode::MetadataOnly,
             application_path,
-            application_frame: None,
         }
     }
 
@@ -1393,35 +1393,35 @@ impl<'db> ConstDefaultCompletion<'db> {
         Self {
             mode: ConstDefaultCompletionMode::Evaluate,
             application_path,
-            application_frame: None,
         }
     }
 
-    pub(crate) fn with_app_frame(mut self, application_frame: Option<AppFrameId<'db>>) -> Self {
-        self.application_frame = application_frame;
-        self
+    /// Provenance for a hole minted by completing a defaulted `= _` param at
+    /// this application: the use-site path lexically, plus the same path as
+    /// the instantiation context.
+    fn application_provenance(self, db: &'db dyn HirAnalysisDb) -> Option<ProvenanceId<'db>> {
+        let path = self.application_path?;
+        Some(
+            ProvenanceId::root(db, ProvenanceSite::Lex(LexSite::RootPath(path)))
+                .push(db, ProvenanceSite::Inst(InstSite::RootPath(path))),
+        )
     }
 
-    fn application_app_frame(self, db: &'db dyn HirAnalysisDb) -> Option<AppFrameId<'db>> {
-        self.application_frame.or_else(|| {
-            self.application_path
-                .map(|path| AppFrameId::root_path(db, path))
-        })
-    }
-
-    fn application_local_frame(self, db: &'db dyn HirAnalysisDb) -> Option<LocalFrameId<'db>> {
-        self.application_path
-            .map(|path| LocalFrameId::root_path(db, path))
-    }
-
-    fn default_type_frame(
+    fn default_type_sites(
         self,
         db: &'db dyn HirAnalysisDb,
         hir_ty: HirTyId<'db>,
         lowered_param_idx: usize,
-    ) -> Option<AppFrameId<'db>> {
-        self.application_app_frame(db)
-            .map(|frame| frame.child_type_component(db, hir_ty, lowered_param_idx))
+    ) -> Option<[ProvenanceSite<'db>; 2]> {
+        let _ = db;
+        let path = self.application_path?;
+        Some([
+            ProvenanceSite::Inst(InstSite::TypeComponent {
+                ty: hir_ty,
+                slot: lowered_param_idx,
+            }),
+            ProvenanceSite::Inst(InstSite::RootPath(path)),
+        ])
     }
 }
 
