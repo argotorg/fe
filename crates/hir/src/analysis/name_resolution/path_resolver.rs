@@ -1702,10 +1702,15 @@ fn ty_from_adtref<'db>(
                 HoleId::structural(
                     db,
                     entry.hole_ty,
-                    StructuralHoleOrigin::ExplicitWildcard {
-                        site: LayoutHoleArgSite::Path(path),
-                        arg_idx: explicit_param_len + layout_idx,
-                    },
+                    // Keep the template hole's origin so the trailing arg
+                    // stays attributable to the generic param that declared
+                    // it; identity comes from the freshly minted anchor.
+                    entry
+                        .template_origin
+                        .unwrap_or(StructuralHoleOrigin::ExplicitWildcard {
+                            site: LayoutHoleArgSite::Path(path),
+                            arg_idx: explicit_param_len + layout_idx,
+                        }),
                     minter.mint(),
                 ),
             ),

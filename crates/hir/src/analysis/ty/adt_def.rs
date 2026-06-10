@@ -10,10 +10,10 @@ use std::ops::Range;
 
 use super::{
     binder::Binder,
-    const_ty::ConstTyData,
+    const_ty::{ConstTyData, StructuralHoleOrigin},
     layout_holes::{
         LayoutPlaceholderPolicy, collect_layout_placeholder_pairs_in_order_with_policy,
-        collect_layout_placeholders_in_order_with_policy,
+        collect_layout_placeholders_in_order_with_policy, structural_hole_origin,
     },
     trait_resolution::constraint::collect_constraints,
     ty_def::{InvalidCause, TyData, TyId},
@@ -235,6 +235,12 @@ pub(crate) struct AdtLayoutHoleEntry<'db> {
     /// from an explicit generic arg. Reusing it as the trailing arg keeps one
     /// logical hole as one `TyId` instead of minting a parallel identity.
     pub(crate) source: Option<TyId<'db>>,
+    /// The template placeholder's origin, when it is a structural hole.
+    /// Freshly minted trailing args carry it forward so the hole stays
+    /// attributable to the generic param that declared it (e.g. a
+    /// `TSlot<bool>` field's slot param, which decides the slot's address
+    /// space at contract layout).
+    pub(crate) template_origin: Option<StructuralHoleOrigin<'db>>,
 }
 
 #[derive(Default)]
@@ -324,6 +330,7 @@ pub(crate) fn adt_layout_hole_plan_with_explicit_args<'db>(
                             source: explicit_arg_placeholders
                                 .contains(&placeholder)
                                 .then_some(placeholder),
+                            template_origin: structural_hole_origin(db, placeholder),
                         }),
                     );
                     start..entries.len()

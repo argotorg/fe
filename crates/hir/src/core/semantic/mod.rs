@@ -1988,6 +1988,10 @@ struct ContractFieldLayoutPlan<'db> {
     slot_basis_ty: TyId<'db>,
     slot_placeholders: Vec<TyId<'db>>,
     materialization_placeholders: Vec<TyId<'db>>,
+    /// Placeholders whose declaring param indexes a different address space
+    /// (`core::effect_ref::StaticSlot`); assigned from that space's contract
+    /// counter instead of the field's, and excluded from the field's span.
+    space_overrides: Vec<(TyId<'db>, TyId<'db>)>,
 }
 
 #[derive(Clone, Copy)]
@@ -1995,6 +1999,7 @@ struct ContractFieldEffectHandleCx<'db> {
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     effect_handle: Trait<'db>,
+    static_slot: Option<Trait<'db>>,
     address_space_ident: IdentId<'db>,
     target_ident: IdentId<'db>,
     fallback_space: TyId<'db>,
@@ -2030,6 +2035,60 @@ impl<'db> ContractFieldEffectHandleCx<'db> {
         }
     }
 
+    /// The address space a placeholder's slot indexes, when the generic
+    /// param that declared the hole belongs to an ADT implementing
+    /// `core::effect_ref::StaticSlot` (e.g. `TSlot`'s slot param indexes
+    /// transient storage regardless of where the `TSlot` is embedded).
+    fn placeholder_space_override(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        placeholder: TyId<'db>,
+    ) -> Option<TyId<'db>> {
+        use crate::analysis::name_resolution::PathRes;
+        use crate::analysis::ty::const_ty::{LayoutHoleArgSite, StructuralHoleOrigin};
+        use crate::analysis::ty::layout_holes::structural_hole_origin;
+
+        let static_slot = self.static_slot?;
+        let owner_item = match structural_hole_origin(db, placeholder)? {
+            StructuralHoleOrigin::DefaultHoleParam { owner, .. } => owner.scope().item(),
+            StructuralHoleOrigin::ExplicitWildcard {
+                site: LayoutHoleArgSite::Path(path),
+                ..
+            } => {
+                let res = crate::analysis::name_resolution::resolve_path(
+                    db,
+                    path,
+                    self.scope,
+                    self.assumptions,
+                    false,
+                )
+                .ok()?;
+                let (PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) = res else {
+                    return None;
+                };
+                let adt = ty.adt_def(db)?;
+                adt.adt_ref(db).as_item()
+            }
+            _ => return None,
+        };
+
+        let adt_ref = AdtRef::try_from_item(owner_item)?;
+        let adt = adt_ref.as_adt(db);
+        let mut self_ty = TyId::adt(db, adt);
+        for &param in adt.params(db) {
+            self_ty = TyId::app(db, self_ty, param);
+        }
+
+        let inst = TraitInstId::new(db, static_slot, vec![self_ty], IndexMap::new());
+        match is_goal_satisfiable(db, TraitSolveCx::new(db, self.scope), inst) {
+            GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation(_) => inst
+                .assoc_ty(db, self.address_space_ident)
+                .map(|assoc| normalize_ty(db, assoc, self.scope, self.assumptions))
+                .filter(|ty| !ty.has_invalid(db)),
+            GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => None,
+        }
+    }
+
     fn layout_plan(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -2039,7 +2098,7 @@ impl<'db> ContractFieldEffectHandleCx<'db> {
         // Provider slot order is defined by the normalized Target type. Contract
         // layout must not synthesize a positional equivalence with the wrapper.
         let slot_basis_ty = if is_provider { target_ty } else { field_ty };
-        let slot_placeholders = collect_unique_layout_placeholders_in_order_with_policy(
+        let mut slot_placeholders = collect_unique_layout_placeholders_in_order_with_policy(
             db,
             slot_basis_ty,
             LayoutPlaceholderPolicy::HolesAndImplicitParams,
@@ -2064,6 +2123,22 @@ impl<'db> ContractFieldEffectHandleCx<'db> {
                 .into_iter()
                 .filter(|placeholder| seen.insert(*placeholder)),
         );
+
+        let mut space_overrides = Vec::new();
+        let mut overridden = FxHashSet::default();
+        for &placeholder in &materialization_placeholders {
+            if let Some(space) = self.placeholder_space_override(db, placeholder)
+                && space != address_space
+            {
+                space_overrides.push((space, placeholder));
+                overridden.insert(placeholder);
+            }
+        }
+        if !overridden.is_empty() {
+            slot_placeholders.retain(|placeholder| !overridden.contains(placeholder));
+            materialization_placeholders.retain(|placeholder| !overridden.contains(placeholder));
+        }
+
         ContractFieldLayoutPlan {
             declared_ty: field_ty,
             is_provider,
@@ -2072,6 +2147,7 @@ impl<'db> ContractFieldEffectHandleCx<'db> {
             slot_basis_ty,
             slot_placeholders,
             materialization_placeholders,
+            space_overrides,
         }
     }
 }
@@ -2193,6 +2269,7 @@ impl<'db> Contract<'db> {
 
         let effect_handle = resolve_core_trait(db, scope, &["EffectHandle"])
             .expect("missing required core trait `core::EffectHandle`");
+        let static_slot = resolve_core_trait(db, scope, &["StaticSlot"]);
         let address_space_ident = IdentId::new(db, "AddressSpace".to_string());
         let target_ident = IdentId::new(db, "Target".to_string());
         let default_storage_address_space =
@@ -2204,6 +2281,7 @@ impl<'db> Contract<'db> {
             scope,
             assumptions,
             effect_handle,
+            static_slot,
             address_space_ident,
             target_ident,
             fallback_space: default_storage_address_space,
@@ -2228,17 +2306,36 @@ impl<'db> Contract<'db> {
                 ..effect_handle_cx_base
             };
             let plan = effect_handle_cx.layout_plan(db, lowered_ty);
-            let next_slot = next_slot_by_address_space
+            let slot_offset = *next_slot_by_address_space
                 .entry(plan.address_space)
                 .or_insert(0);
-            let slot_offset = *next_slot;
-            let (slot_assignments, slot_count) = contract_field_layout_slot_assignments(
+            let (mut slot_assignments, slot_count) = contract_field_layout_slot_assignments(
                 db,
                 plan.slot_basis_ty,
                 &plan.slot_placeholders,
                 &plan.materialization_placeholders,
                 slot_offset,
             );
+            // Placeholders indexing a different address space draw from that
+            // space's counter (shared with that space's fields), so e.g. a
+            // `TSlot` lock bit can never collide with `TStorPtr` state.
+            for &(space, placeholder) in &plan.space_overrides {
+                let TyData::ConstTy(const_ty) = placeholder.data(db) else {
+                    continue;
+                };
+                let hole_ty = match const_ty.data(db) {
+                    ConstTyData::Hole(hole_ty, _) => *hole_ty,
+                    ConstTyData::TyParam(param, hole_ty) if param.is_implicit() => *hole_ty,
+                    _ => continue,
+                };
+                let counter = next_slot_by_address_space.entry(space).or_insert(0);
+                let slot = *counter;
+                *counter = counter.saturating_add(1);
+                slot_assignments.insert(
+                    placeholder,
+                    slot_const_ty(db, slot, layout_hole_fallback_ty(db, hole_ty)),
+                );
+            }
             let declared_ty =
                 materialize_contract_layout_holes(db, plan.declared_ty, &slot_assignments);
             let target_ty =
@@ -2251,7 +2348,9 @@ impl<'db> Contract<'db> {
                     && !ty_contains_const_hole(db, slot_basis_ty),
                 "contract field layout materialization left unresolved holes"
             );
-            *next_slot = slot_offset.saturating_add(slot_count);
+            *next_slot_by_address_space
+                .entry(plan.address_space)
+                .or_insert(0) = slot_offset.saturating_add(slot_count);
 
             let name = field.name.unwrap();
             layout.insert(

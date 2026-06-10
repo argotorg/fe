@@ -3353,10 +3353,11 @@ uses (slot: Slot<u256>)
                 );
             };
             assert_eq!(layout_data.source_ty, binding_ty);
+            // The wrapped value plus the zero-sized `TSlot<bool>` lock field.
             assert_eq!(
                 layout_data.fields.len(),
-                1,
-                "guarded_balances Mutex layout should expose the wrapped value field for arm {arm_idx}"
+                2,
+                "guarded_balances Mutex layout should expose the wrapped value and lock fields for arm {arm_idx}"
             );
 
             assert!(

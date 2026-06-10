@@ -451,6 +451,21 @@ where
     })
 }
 
+/// The structural-hole origin of a layout placeholder, when it is a
+/// structural hole (implicit-param placeholders have none).
+pub(crate) fn structural_hole_origin<'db>(
+    db: &'db dyn HirAnalysisDb,
+    placeholder: TyId<'db>,
+) -> Option<super::const_ty::StructuralHoleOrigin<'db>> {
+    let TyData::ConstTy(const_ty) = placeholder.data(db) else {
+        return None;
+    };
+    let ConstTyData::Hole(_, HoleId::Structural(hole_id)) = const_ty.data(db) else {
+        return None;
+    };
+    Some(hole_id.origin(db))
+}
+
 pub(crate) fn collect_layout_hole_tys_in_order<'db, T>(
     db: &'db dyn HirAnalysisDb,
     value: T,

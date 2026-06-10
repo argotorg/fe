@@ -169,6 +169,27 @@ impl<T> EffectHandleMut for TStorPtr<T> {}
 impl<T> EffectRef<T> for TStorPtr<T> {}
 impl<T> EffectRefMut<T> for TStorPtr<T> {}
 
+/// Zero-sized pointer to a statically assigned transient storage slot.
+///
+/// `SLOT` defaults to a layout hole: when a type containing a `TSlot`
+/// reaches contract storage, the layout assigns the slot from the
+/// contract's transient slot counter — shared with `TStorPtr` provider
+/// fields, so static and runtime transient slots never collide.
+pub struct TSlot<T, const SLOT: u256 = _> {}
+
+impl<T, const SLOT: u256> Copy for TSlot<T, SLOT> {}
+
+impl<T, const SLOT: u256> core::effect_ref::StaticSlot for TSlot<T, SLOT> {
+    type AddressSpace = core::effect_ref::TransientStorage
+}
+
+impl<T, const SLOT: u256> TSlot<T, SLOT> {
+    /// Runtime pointer to the assigned slot.
+    pub fn ptr(self) -> TStorPtr<T> {
+        TStorPtr::from_raw(SLOT)
+    }
+}
+
 // -----------------------------------------------------------------------------
 // EVM effects
 // -----------------------------------------------------------------------------

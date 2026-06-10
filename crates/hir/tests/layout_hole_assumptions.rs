@@ -236,8 +236,8 @@ pub contract C {
         "{}",
         fe_hir::analysis::diagnostics::format_diags(&db, diags.iter())
     );
-    assert_eq!(field_ty, "Mutex<StorageMap<Address, u256, 0>, 1>");
-    assert_eq!(receiver_ty, "Mutex<StorageMap<Address, u256, 0>, 1>");
+    assert_eq!(field_ty, "Mutex<StorageMap<Address, u256, 0>, 0>");
+    assert_eq!(receiver_ty, "Mutex<StorageMap<Address, u256, 0>, 0>");
     assert_eq!(try_lock_ty, "Option<mut StorageMap<Address, u256, 0>>");
     assert_eq!(balances_ty, "mut StorageMap<Address, u256, 0>");
 }
@@ -334,7 +334,7 @@ pub contract C {
         .expect("missing `wrapped` field info");
     assert_eq!(
         field_info.target_ty.pretty_print(&db).to_string(),
-        "Wrapper<Mutex<StorageMap<Address, u256, 0>, 1>>"
+        "Wrapper<Mutex<StorageMap<Address, u256, 0>, 0>>"
     );
     assert_eq!(
         strip_derived_adt_layout_args(&db, field_layout.target_ty),
@@ -361,7 +361,7 @@ pub contract C {
             .expr_ty(&db, receiver_expr)
             .pretty_print(&db)
             .to_string(),
-        "Mutex<StorageMap<Address, u256, 0>, 1>"
+        "Mutex<StorageMap<Address, u256, 0>, 0>"
     );
     assert_eq!(
         typed_body
@@ -2380,4 +2380,61 @@ contract C {
     assert_eq!(const_lit_usize(&db, tarr_root), 0);
     assert_eq!(tarr.slot_count, 1);
     assert_eq!(tafter.slot_offset, 1);
+}
+
+/// `Mutex` carries its reentrancy lock as a zero-sized `TSlot<bool>` field:
+/// the lock slot is assigned from the contract's *transient* counter (the
+/// param's ADT implements `core::effect_ref::StaticSlot`), shared with
+/// `TStorPtr` provider fields, so lock bits can never collide with other
+/// transient state — and the mutex consumes no persistent slot for the lock.
+#[test]
+fn contract_field_mutex_lock_slots_share_transient_counter() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_mutex_lock_slots_share_transient_counter.fe"),
+        r#"
+use std::evm::Mutex
+use std::evm::effects::TStorPtr
+
+contract C {
+    t0: TStorPtr<bool>,
+    t1: TStorPtr<bool>,
+    mut m: Mutex<u256>,
+    mut m2: Mutex<u256>,
+    after: TStorPtr<bool>,
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let contract = find_contract(&db, top_mod, "C");
+    let layout = contract.field_layout(&db);
+    let field = |name: &str| {
+        layout
+            .get(&IdentId::new(&db, name.to_string()))
+            .expect("missing field")
+    };
+    let lock_slot = |name: &str| {
+        let arg = field(name)
+            .target_ty
+            .generic_args(&db)
+            .get(1)
+            .copied()
+            .expect("missing lock slot arg");
+        const_lit_usize(&db, arg)
+    };
+
+    // Transient provider fields take 0 and 1; the two lock bits continue the
+    // same counter; the next transient field lands after them.
+    assert_eq!(field("t0").slot_offset, 0);
+    assert_eq!(field("t1").slot_offset, 1);
+    assert_eq!(lock_slot("m"), 2);
+    assert_eq!(lock_slot("m2"), 3);
+    assert_eq!(field("after").slot_offset, 4);
+
+    // The lock consumes no persistent storage: one slot per mutex (the value).
+    assert_eq!(field("m").slot_count, 1);
+    assert_eq!(field("m").slot_offset, 0);
+    assert_eq!(field("m2").slot_offset, 1);
 }

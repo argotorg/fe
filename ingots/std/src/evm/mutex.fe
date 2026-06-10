@@ -1,12 +1,17 @@
-use core::effect_ref::EffectHandle
-
-use super::effects::TStorPtr
+use super::effects::{TSlot, TStorPtr}
 
 /// A storage-backed value guarded by a transient reentrancy lock.
 ///
-/// `LOCK_SLOT` identifies the transient storage slot used for the lock bit.
-pub struct Mutex<T, const LOCK_SLOT: u256 = _> {
-    pub value: T
+/// The lock bit lives in transient storage at a slot assigned by the
+/// contract layout (through the zero-sized `lock` field), alongside runtime
+/// `TStorPtr` provider fields, so lock slots never collide with other
+/// transient state. The protected value is only reachable through
+/// [`Mutex::lock`] / [`Mutex::try_lock`] borrows; [`Mutex::peek`] offers an
+/// unguarded read for `Copy` values (e.g. read-only handlers), which does
+/// not protect against read-only reentrancy.
+pub struct Mutex<T> {
+    value: T,
+    lock: TSlot<bool>,
 }
 
 fn lock_get() -> bool uses (lock: bool) {
@@ -17,13 +22,13 @@ fn lock_set(value: bool) uses (lock: mut bool) {
     lock = value
 }
 
-impl<T, const LOCK_SLOT: u256> Mutex<T, LOCK_SLOT> {
-    fn lock_ptr() -> TStorPtr<bool> {
-        TStorPtr::from_raw(LOCK_SLOT)
+impl<T> Mutex<T> {
+    fn lock_ptr(self) -> TStorPtr<bool> {
+        self.lock.ptr()
     }
 
     pub fn lock(mut self) -> mut T {
-        let mut lock = Self::lock_ptr()
+        let mut lock = self.lock_ptr()
         with (lock) {
             if lock_get() {
                 assert!(false)
@@ -34,7 +39,7 @@ impl<T, const LOCK_SLOT: u256> Mutex<T, LOCK_SLOT> {
     }
 
     pub fn try_lock(mut self) -> Option<mut T> {
-        let mut lock = Self::lock_ptr()
+        let mut lock = self.lock_ptr()
         with (lock) {
             if lock_get() {
                 Option::None
@@ -46,16 +51,29 @@ impl<T, const LOCK_SLOT: u256> Mutex<T, LOCK_SLOT> {
     }
 
     pub fn unlock(mut self) {
-        let mut lock = Self::lock_ptr()
+        let mut lock = self.lock_ptr()
         with (lock) {
             lock_set(value: false)
         }
     }
 
     pub fn is_locked(self) -> bool {
-        let lock = Self::lock_ptr()
+        let lock = self.lock_ptr()
         with (lock) {
             lock_get()
         }
+    }
+
+    /// Reads the protected value without taking the lock.
+    ///
+    /// The lock guards mutation windows across external calls; copies of
+    /// `Copy` values (scalars, zero-sized storage handles) can be read
+    /// without it. This does not protect against observing intermediate
+    /// state during reentrancy.
+    pub fn peek(self) -> T
+    where
+        T: Copy,
+    {
+        self.value
     }
 }

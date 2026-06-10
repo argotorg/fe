@@ -78,6 +78,18 @@ pub trait EffectHandle {
 /// Marker: a handle that supports mutable access.
 pub trait EffectHandleMut: EffectHandle {}
 
+/// Marker for zero-sized pointer types whose const slot parameter is
+/// assigned by the contract layout.
+///
+/// When a layout hole (`= _`) instantiates the slot parameter of an
+/// implementing type inside a contract field, the layout draws the slot
+/// number from `AddressSpace`'s slot counter instead of the containing
+/// field's, so statically assigned slots never collide with other state in
+/// that space.
+pub trait StaticSlot {
+    type AddressSpace
+}
+
 impl<T> EffectRef<T> for T {}
 // Mutability is checked at the term level.
 impl<T> EffectRefMut<T> for T {}

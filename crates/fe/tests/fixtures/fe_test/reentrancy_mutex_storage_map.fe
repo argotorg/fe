@@ -52,21 +52,21 @@ pub contract B {
     recv BMsg {
         Enter { a, user } -> u256 uses (mut guarded_balances, ctx: Ctx, call: mut Call) {
             guarded_balances.lock()
-            let pre = guarded_balances.value.get(key: user)
+            let pre = guarded_balances.peek().get(key: user)
             call.call(
                 addr: a,
                 gas: 150000,
                 value: 0,
                 message: AMsg::Callback { b: ctx.address(), user: user },
             )
-            let post = guarded_balances.value.get(key: user)
+            let post = guarded_balances.peek().get(key: user)
             assert!(post == pre)
             guarded_balances.unlock()
             post
         }
 
         Protected { user } -> u256 uses (mut guarded_balances) {
-            let mut result = guarded_balances.value.get(key: user)
+            let mut result = guarded_balances.peek().get(key: user)
             let mut did_lock = false
             match guarded_balances.try_lock() {
                 Option::Some(mut balances) => {
@@ -84,7 +84,7 @@ pub contract B {
         }
 
         Get { user } -> u256 uses (guarded_balances) {
-            guarded_balances.value.get(key: user)
+            guarded_balances.peek().get(key: user)
         }
 
         IsLocked -> bool uses (guarded_balances) {
