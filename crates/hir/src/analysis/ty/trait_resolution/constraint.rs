@@ -1,6 +1,6 @@
 use crate::core::hir_def::{
     GenericParam, GenericParamOwner, GenericParamView, ItemKind, Trait, TraitRefId, TypeBound,
-    scope_graph::ScopeId, types::TypeId as HirTypeId,
+    WhereClauseOwner, scope_graph::ScopeId, types::TypeId as HirTypeId,
 };
 use crate::hir_def::CallableDef;
 use common::indexmap::{IndexMap, IndexSet};
@@ -239,26 +239,50 @@ pub(crate) fn collect_func_decl_constraints<'db>(
         return func_constraints;
     }
 
-    let parent_constraints = match hir_func.scope().parent_item(db) {
-        Some(ItemKind::Trait(trait_)) => collect_constraints(db, trait_.into()),
+    Binder::bind(PredicateListId::new(
+        db,
+        collect_func_decl_constraint_pairs(db, func)
+            .into_iter()
+            .map(|(inst, _)| inst)
+            .collect::<Vec<_>>(),
+    ))
+}
 
-        Some(ItemKind::Impl(impl_)) => collect_constraints(db, impl_.into()),
+/// The constraints enforced on a call to `func` (parent constraints first,
+/// then the function's own — the list `collect_func_decl_constraints(..,
+/// true)` interns, in the same order), each paired with the written bound it
+/// was collected from.
+pub(crate) fn collect_func_decl_constraint_pairs<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: CallableDef<'db>,
+) -> Vec<(TraitInstId<'db>, PredicateSource<'db>)> {
+    let hir_func = match func {
+        CallableDef::Func(func) => func,
+        CallableDef::VariantCtor(var) => {
+            let adt = var.enum_.as_adt(db);
+            return match adt.as_generic_param_owner(db) {
+                Some(owner) => decl_constraint_pairs(db, owner).clone(),
+                None => Vec::new(),
+            };
+        }
+    };
+
+    let parent_pairs = match hir_func.scope().parent_item(db) {
+        Some(ItemKind::Trait(trait_)) => decl_constraint_pairs(db, trait_.into()),
+
+        Some(ItemKind::Impl(impl_)) => decl_constraint_pairs(db, impl_.into()),
 
         Some(ItemKind::ImplTrait(impl_trait)) => {
             if lower_impl_trait(db, impl_trait).is_none() {
-                return collect_decl_constraints(db, hir_func.into());
+                return decl_constraint_pairs(db, hir_func.into()).clone();
             }
-            collect_constraints(db, impl_trait.into())
+            decl_constraint_pairs(db, impl_trait.into())
         }
 
-        _ => return collect_decl_constraints(db, hir_func.into()),
+        _ => return decl_constraint_pairs(db, hir_func.into()).clone(),
     };
 
-    let parent_constraints = parent_constraints.instantiate_identity();
-    let func_constraints =
-        collect_decl_constraints_with_assumptions(db, hir_func.into(), parent_constraints);
-
-    Binder::bind(func_constraints)
+    collect_decl_constraint_pairs_impl(db, hir_func.into(), parent_pairs)
 }
 
 #[salsa::tracked(
@@ -308,6 +332,25 @@ fn collect_func_def_constraints_cycle_recover<'db>(
     salsa::CycleRecoveryAction::Iterate
 }
 
+/// Where a collected predicate was written. Recorded during constraint
+/// collection so diagnostics can point at the originating bound without
+/// re-deriving it from a list index: the final list is parent-first,
+/// deduplicated, and resolution-ordered, so indices don't map back to
+/// written bounds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub(crate) enum PredicateSource<'db> {
+    GenericParamBound {
+        owner: GenericParamOwner<'db>,
+        param_idx: usize,
+        bound_idx: usize,
+    },
+    WherePredicateBound {
+        owner: WhereClauseOwner<'db>,
+        pred_idx: usize,
+        bound_idx: usize,
+    },
+}
+
 #[salsa::tracked(
     cycle_fn=collect_constraints_cycle_recover,
     cycle_initial=collect_constraints_cycle_initial
@@ -316,18 +359,50 @@ pub(crate) fn collect_decl_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
 ) -> Binder<PredicateListId<'db>> {
-    Binder::bind(collect_decl_constraints_with_assumptions(
+    Binder::bind(PredicateListId::new(
         db,
-        owner,
-        PredicateListId::empty_list(db),
+        decl_constraint_pairs(db, owner)
+            .iter()
+            .map(|(inst, _)| *inst)
+            .collect::<Vec<_>>(),
     ))
 }
 
-fn collect_decl_constraints_with_assumptions<'db>(
+/// Declared constraints of `owner` paired with the bound each was collected
+/// from. The key sequence is exactly the `PredicateListId` order.
+#[salsa::tracked(
+    return_ref,
+    cycle_fn=decl_constraint_pairs_cycle_recover,
+    cycle_initial=decl_constraint_pairs_cycle_initial
+)]
+pub(crate) fn decl_constraint_pairs<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
-    initial_assumptions: PredicateListId<'db>,
-) -> PredicateListId<'db> {
+) -> Vec<(TraitInstId<'db>, PredicateSource<'db>)> {
+    collect_decl_constraint_pairs_impl(db, owner, &[])
+}
+
+fn decl_constraint_pairs_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _owner: GenericParamOwner<'db>,
+) -> Vec<(TraitInstId<'db>, PredicateSource<'db>)> {
+    Vec::new()
+}
+
+fn decl_constraint_pairs_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &Vec<(TraitInstId<'db>, PredicateSource<'db>)>,
+    _count: u32,
+    _owner: GenericParamOwner<'db>,
+) -> salsa::CycleRecoveryAction<Vec<(TraitInstId<'db>, PredicateSource<'db>)>> {
+    salsa::CycleRecoveryAction::Iterate
+}
+
+fn collect_decl_constraint_pairs_impl<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: GenericParamOwner<'db>,
+    initial: &[(TraitInstId<'db>, PredicateSource<'db>)],
+) -> Vec<(TraitInstId<'db>, PredicateSource<'db>)> {
     let mut deferred: Vec<Deferred<'db>> = Vec::new();
     let owner_scope = owner.scope();
 
@@ -341,12 +416,17 @@ fn collect_decl_constraints_with_assumptions<'db>(
         let Some(ty) = param_set.param_by_original_idx(db, idx) else {
             continue;
         };
-        for bound in &hir_param.bounds {
+        for (bound_idx, bound) in hir_param.bounds.iter().enumerate() {
             if let TypeBound::Trait(trait_ref) = bound {
                 deferred.push(Deferred {
                     bound_ty: Either::Right(ty),
                     trait_ref: *trait_ref,
                     scope: owner_scope,
+                    source: PredicateSource::GenericParamBound {
+                        owner,
+                        param_idx: idx,
+                        bound_idx,
+                    },
                 });
             }
         }
@@ -361,7 +441,7 @@ fn collect_decl_constraints_with_assumptions<'db>(
     // the main traversal API for other callers.
     if let Some(w_owner) = owner.where_clause_owner() {
         let where_clause = w_owner.where_clause(db);
-        for pred in where_clause.data(db).iter() {
+        for (pred_idx, pred) in where_clause.data(db).iter().enumerate() {
             let Some(hir_ty) = pred.ty.to_opt() else {
                 continue;
             };
@@ -372,30 +452,35 @@ fn collect_decl_constraints_with_assumptions<'db>(
                 continue;
             }
 
-            for bound in &pred.bounds {
+            for (bound_idx, bound) in pred.bounds.iter().enumerate() {
                 if let TypeBound::Trait(trait_ref) = *bound {
                     deferred.push(Deferred {
                         bound_ty: Either::Left(hir_ty),
                         trait_ref,
                         scope: owner_scope,
+                        source: PredicateSource::WherePredicateBound {
+                            owner: w_owner,
+                            pred_idx,
+                            bound_idx,
+                        },
                     });
                 }
             }
         }
     }
 
-    let mut all_predicates: IndexSet<TraitInstId<'db>> =
-        initial_assumptions.list(db).iter().copied().collect();
+    let mut all_predicates: IndexMap<TraitInstId<'db>, PredicateSource<'db>> =
+        initial.iter().copied().collect();
 
     // fixed-point iteration over deferred predicates
     while !deferred.is_empty() {
         let assumptions =
-            PredicateListId::new(db, all_predicates.iter().copied().collect::<Vec<_>>());
+            PredicateListId::new(db, all_predicates.keys().copied().collect::<Vec<_>>());
 
         let before = deferred.len();
         deferred.retain(|p| match try_resolve_type_bound(db, p, assumptions) {
             Some(inst) => {
-                all_predicates.insert(inst);
+                all_predicates.entry(inst).or_insert(p.source);
                 false
             }
             None => true,
@@ -405,7 +490,7 @@ fn collect_decl_constraints_with_assumptions<'db>(
         }
     }
 
-    PredicateListId::new(db, all_predicates.into_iter().collect::<Vec<_>>())
+    all_predicates.into_iter().collect()
 }
 
 fn collect_constraints_cycle_initial<'db>(
@@ -439,6 +524,7 @@ struct Deferred<'db> {
     bound_ty: Either<HirTypeId<'db>, TyId<'db>>,
     trait_ref: TraitRefId<'db>,
     scope: ScopeId<'db>,
+    source: PredicateSource<'db>,
 }
 
 /// What `Self` denotes in bounds written at `scope`: the nearest enclosing

@@ -341,7 +341,9 @@ pub enum CallableDef<'db> {
     VariantCtor(EnumVariant<'db>),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, derive_more::From)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, derive_more::From, salsa::Update,
+)]
 pub enum WhereClauseOwner<'db> {
     Func(Func<'db>),
     Struct(Struct<'db>),

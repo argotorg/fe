@@ -22,14 +22,16 @@ use crate::analysis::ty::corelib::resolve_lib_type_path;
 use crate::analysis::ty::fold::TyFoldable;
 use crate::analysis::ty::provider::{ProviderKind, provider_semantics};
 use crate::analysis::ty::trait_lower::lower_impl_trait;
+use crate::analysis::ty::trait_resolution::constraint::{
+    PredicateSource, collect_func_decl_constraint_pairs,
+};
 use crate::analysis::ty::visitor::TyVisitable;
 use crate::hir_def::{CallableDef, ImplTrait, Trait};
 use crate::{
     hir_def::{
-        BinOp, Body, Const, Contract, ContractRecvArm, Expr, ExprId, Func, GenericParam,
-        GenericParamOwner, ItemKind, LitKind, ManualContractRootAttr, Partial, Pat, PatId, PathId,
-        StaticAssert, StaticAssertComparison, Stmt, StmtId, StringId, TypeBound, TypeId as HirTyId,
-        WhereClauseOwner,
+        BinOp, Body, Const, Contract, ContractRecvArm, Expr, ExprId, Func, GenericParamOwner,
+        LitKind, ManualContractRootAttr, Partial, Pat, PatId, PathId, StaticAssert,
+        StaticAssertComparison, Stmt, StmtId, StringId, TypeId as HirTyId, WhereClauseOwner,
     },
     span::{
         DynLazySpan, expr::LazyExprSpan, pat::LazyPatSpan, path::LazyPathSpan, types::LazyTySpan,
@@ -499,11 +501,6 @@ enum TraitObligationOutcome<'db> {
     Discharged,
     Progressed,
     Requeue(env::TraitObligation<'db>),
-}
-
-enum CallConstraintBoundOwner<'db> {
-    GenericParam(GenericParamOwner<'db>, usize, usize),
-    WherePredicate(WhereClauseOwner<'db>, usize, usize),
 }
 
 impl<'db> TyChecker<'db> {
@@ -992,131 +989,18 @@ impl<'db> TyChecker<'db> {
         callable_def: CallableDef<'db>,
         constraint_idx: usize,
     ) -> Option<DynLazySpan<'db>> {
-        let db = self.db;
-        match callable_def {
-            CallableDef::Func(func) => {
-                let owner = GenericParamOwner::Func(func);
-                let func_constraint_count = self.call_constraint_source_count(owner);
-                if let Some(bound) = self.call_constraint_bound_in_owner(owner, constraint_idx) {
-                    return Some(self.call_constraint_owner_bound_span(bound));
-                }
-
-                let parent_owner = match func.scope().parent_item(db) {
-                    Some(ItemKind::Trait(trait_)) => Some(GenericParamOwner::Trait(trait_)),
-                    Some(ItemKind::Impl(impl_)) => Some(GenericParamOwner::Impl(impl_)),
-                    Some(ItemKind::ImplTrait(impl_trait)) => {
-                        Some(GenericParamOwner::ImplTrait(impl_trait))
-                    }
-                    _ => None,
-                }?;
-                let parent_idx = constraint_idx.checked_sub(func_constraint_count)?;
-                self.call_constraint_bound_in_owner(parent_owner, parent_idx)
-                    .map(|bound| self.call_constraint_owner_bound_span(bound))
-            }
-            CallableDef::VariantCtor(variant) => self
-                .call_constraint_bound_in_owner(
-                    GenericParamOwner::Enum(variant.enum_),
-                    constraint_idx,
-                )
-                .map(|bound| self.call_constraint_owner_bound_span(bound)),
-        }
+        let pairs = collect_func_decl_constraint_pairs(self.db, callable_def);
+        let (_, source) = pairs.get(constraint_idx)?;
+        Some(self.call_constraint_owner_bound_span(*source))
     }
 
-    fn call_constraint_source_count(&self, owner: GenericParamOwner<'db>) -> usize {
-        let db = self.db;
-        let param_bounds = owner
-            .params(db)
-            .filter_map(|view| match view.param {
-                GenericParam::Type(param) => Some(
-                    param
-                        .bounds
-                        .iter()
-                        .filter(|bound| matches!(bound, TypeBound::Trait(_)))
-                        .count(),
-                ),
-                GenericParam::Const(_) => None,
-            })
-            .sum::<usize>();
-
-        let where_bounds = owner
-            .where_clause_owner()
-            .map(|where_owner| {
-                where_owner
-                    .where_clause(db)
-                    .data(db)
-                    .iter()
-                    .filter(|pred| {
-                        pred.ty.to_opt().is_some()
-                            && !(pred.ty.to_opt().is_some_and(|ty| ty.is_self_ty(db))
-                                && matches!(owner, GenericParamOwner::Trait(_)))
-                    })
-                    .map(|pred| {
-                        pred.bounds
-                            .iter()
-                            .filter(|bound| matches!(bound, TypeBound::Trait(_)))
-                            .count()
-                    })
-                    .sum::<usize>()
-            })
-            .unwrap_or(0);
-
-        param_bounds + where_bounds
-    }
-
-    fn call_constraint_bound_in_owner(
-        &self,
-        owner: GenericParamOwner<'db>,
-        mut constraint_idx: usize,
-    ) -> Option<CallConstraintBoundOwner<'db>> {
-        let db = self.db;
-        for (param_idx, view) in owner.params(db).enumerate() {
-            let GenericParam::Type(param) = view.param else {
-                continue;
-            };
-            for (bound_idx, bound) in param.bounds.iter().enumerate() {
-                if matches!(bound, TypeBound::Trait(_)) {
-                    if constraint_idx == 0 {
-                        return Some(CallConstraintBoundOwner::GenericParam(
-                            owner, param_idx, bound_idx,
-                        ));
-                    }
-                    constraint_idx -= 1;
-                }
-            }
-        }
-
-        let where_owner = owner.where_clause_owner()?;
-        for (pred_idx, pred) in where_owner.where_clause(db).data(db).iter().enumerate() {
-            if pred.ty.to_opt().is_none()
-                || pred.ty.to_opt().is_some_and(|ty| ty.is_self_ty(db))
-                    && matches!(owner, GenericParamOwner::Trait(_))
-            {
-                continue;
-            }
-
-            for (bound_idx, bound) in pred.bounds.iter().enumerate() {
-                if matches!(bound, TypeBound::Trait(_)) {
-                    if constraint_idx == 0 {
-                        return Some(CallConstraintBoundOwner::WherePredicate(
-                            where_owner,
-                            pred_idx,
-                            bound_idx,
-                        ));
-                    }
-                    constraint_idx -= 1;
-                }
-            }
-        }
-
-        None
-    }
-
-    fn call_constraint_owner_bound_span(
-        &self,
-        bound: CallConstraintBoundOwner<'db>,
-    ) -> DynLazySpan<'db> {
+    fn call_constraint_owner_bound_span(&self, bound: PredicateSource<'db>) -> DynLazySpan<'db> {
         match bound {
-            CallConstraintBoundOwner::GenericParam(owner, param_idx, bound_idx) => match owner {
+            PredicateSource::GenericParamBound {
+                owner,
+                param_idx,
+                bound_idx,
+            } => match owner {
                 GenericParamOwner::Func(func) => func
                     .span()
                     .generic_params()
@@ -1181,7 +1065,11 @@ impl<'db> TyChecker<'db> {
                     .trait_bound()
                     .into(),
             },
-            CallConstraintBoundOwner::WherePredicate(owner, pred_idx, bound_idx) => match owner {
+            PredicateSource::WherePredicateBound {
+                owner,
+                pred_idx,
+                bound_idx,
+            } => match owner {
                 WhereClauseOwner::Func(func) => func
                     .span()
                     .where_clause()
