@@ -1,7 +1,7 @@
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution::PathRes;
 use crate::analysis::ty::const_ty::{
-    ConstCanonEnv, ConstCanonMode, ConstTyData, HoleId, LexSite, ProvenanceId, ProvenanceSite,
+    ConstCanonEnv, ConstCanonMode, ConstTyData, HoleAnchor, HoleId, HoleMinter,
     StructuralHoleOrigin, canonicalize_trait_inst_for_mode, canonicalize_ty_for_mode,
 };
 use crate::analysis::ty::fold::{AssocTySubst, TyFoldable, TyFolder};
@@ -165,7 +165,7 @@ pub(crate) fn resolve_effect_key<'db>(
     match crate::analysis::name_resolution::resolve_path(db, key_path, scope, assumptions, false) {
         Ok(PathRes::Ty(ty)) if ty.is_star_kind(db) => {
             let schema = TypeKeySchema {
-                carrier: existentialize_omitted_const_args_in_effect_key(db, key_path, ty),
+                carrier: existentialize_omitted_const_args_in_effect_key(db, key_path, scope, ty),
             };
             if type_key_schema_is_well_formed(db, schema) {
                 ResolvedEffectKey::Type(schema)
@@ -201,6 +201,7 @@ pub(crate) fn resolve_effect_key<'db>(
 pub(crate) fn existentialize_omitted_const_args_in_effect_key<'db>(
     db: &'db dyn HirAnalysisDb,
     key_path: PathId<'db>,
+    scope: ScopeId<'db>,
     ty: TyId<'db>,
 ) -> TyId<'db> {
     let (base, args) = ty.decompose_ty_app(db);
@@ -247,6 +248,10 @@ pub(crate) fn existentialize_omitted_const_args_in_effect_key<'db>(
         return ty;
     }
 
+    let minter = HoleMinter::new(HoleAnchor::TemplatePath {
+        path: key_path,
+        scope,
+    });
     let mut completed_args = args.to_vec();
     let mut changed = false;
     for explicit_idx in provided_explicit_len..explicit_param_count {
@@ -271,7 +276,7 @@ pub(crate) fn existentialize_omitted_const_args_in_effect_key<'db>(
                     owner,
                     param_idx: explicit_idx,
                 },
-                ProvenanceId::root(db, ProvenanceSite::Lex(LexSite::RootPath(key_path))),
+                minter.mint(),
             ),
         );
         if completed_args[arg_idx] != hole {

@@ -28,9 +28,7 @@ use crate::analysis::{
         adt_def::{AdtRef, adt_layout_hole_plan, adt_layout_hole_plan_with_explicit_args},
         binder::Binder,
         canonical::Canonicalized,
-        const_ty::{
-            HoleId, LayoutHoleArgSite, LexSite, ProvenanceId, ProvenanceSite, StructuralHoleOrigin,
-        },
+        const_ty::{HoleAnchor, HoleId, HoleMinter, LayoutHoleArgSite, StructuralHoleOrigin},
         layout_holes::layout_hole_with_fallback_ty,
         normalize::normalize_ty,
         trait_def::{TraitInstId, impls_for_ty_with_constraints},
@@ -39,7 +37,7 @@ use crate::analysis::{
         ty_def::{InvalidCause, Kind, TyData, TyId},
         ty_lower::{
             ConstDefaultCompletion, TyAlias, collect_generic_params, lower_generic_arg_list,
-            lower_hir_ty, lower_type_alias,
+            lower_hir_ty_with_minter, lower_type_alias,
         },
     },
 };
@@ -701,6 +699,22 @@ pub fn resolve_path<'db>(
     assumptions: PredicateListId<'db>,
     resolve_tail_as_value: bool,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
+    let minter = HoleMinter::new(HoleAnchor::TemplatePath { path, scope });
+    resolve_path_with_minter(db, path, scope, assumptions, resolve_tail_as_value, &minter)
+}
+
+/// Like [`resolve_path`], but mints structural-hole identities through the
+/// caller's minter so holes created during resolution (generic-arg wildcards,
+/// `= _` default completions, derived layout args) are keyed to the enclosing
+/// lowering execution rather than to this path's content-interned identity.
+pub(crate) fn resolve_path_with_minter<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    resolve_tail_as_value: bool,
+    minter: &HoleMinter<'db>,
+) -> PathResolutionResult<'db, PathRes<'db>> {
     let directive = QueryDirective::for_scope(db, scope);
     resolve_path_impl(
         db,
@@ -711,6 +725,7 @@ pub fn resolve_path<'db>(
         directive,
         true,
         &mut |_, _| {},
+        minter,
     )
 }
 
@@ -726,6 +741,7 @@ where
     F: FnMut(PathId<'db>, &PathRes<'db>),
 {
     let directive = QueryDirective::for_scope(db, scope);
+    let minter = HoleMinter::new(HoleAnchor::TemplatePath { path, scope });
     resolve_path_impl(
         db,
         path,
@@ -735,6 +751,7 @@ where
         directive,
         true,
         observer,
+        &minter,
     )
 }
 
@@ -748,6 +765,7 @@ fn resolve_path_impl<'db, F>(
     base_directive: QueryDirective,
     is_tail: bool,
     observer: &mut F,
+    minter: &HoleMinter<'db>,
 ) -> PathResolutionResult<'db, PathRes<'db>>
 where
     F: FnMut(PathId<'db>, &PathRes<'db>),
@@ -764,6 +782,7 @@ where
                 base_directive,
                 false,
                 observer,
+                minter,
             )
         })
         .transpose()?;
@@ -778,7 +797,7 @@ where
                 path,
             ));
         }
-        let ty = lower_hir_ty(db, type_, scope, assumptions);
+        let ty = lower_hir_ty_with_minter(db, type_, scope, assumptions, minter);
         if let Some(cause) = ty.invalid_cause(db) {
             match cause {
                 InvalidCause::NotAType(res) => {
@@ -979,6 +998,7 @@ where
                 scope,
                 assumptions,
                 LayoutHoleArgSite::Path(path),
+                minter,
             );
             let mut dedup: IndexMap<TyId<'db>, (TraitInstId<'db>, TyId<'db>)> = IndexMap::new();
             for (inst, ty_candidate) in assoc_tys.iter().copied() {
@@ -1070,7 +1090,7 @@ where
         pick_type_domain_from_bucket(parent_res, bucket, path, path.parent(db))?
     };
 
-    let r = resolve_name_res(db, &res, parent_ty, path, scope, assumptions)?;
+    let r = resolve_name_res_with_minter(db, &res, parent_ty, path, scope, assumptions, minter)?;
     observer(path, &r);
     Ok(r)
 }
@@ -1375,12 +1395,26 @@ pub fn resolve_name_res<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
+    let minter = HoleMinter::new(HoleAnchor::TemplatePath { path, scope });
+    resolve_name_res_with_minter(db, nameres, parent_ty, path, scope, assumptions, &minter)
+}
+
+pub(crate) fn resolve_name_res_with_minter<'db>(
+    db: &'db dyn HirAnalysisDb,
+    nameres: &NameRes<'db>,
+    parent_ty: Option<TyId<'db>>,
+    path: PathId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    minter: &HoleMinter<'db>,
+) -> PathResolutionResult<'db, PathRes<'db>> {
     let args = lower_generic_arg_list(
         db,
         path.generic_args(db),
         scope,
         assumptions,
         LayoutHoleArgSite::Path(path),
+        minter,
     );
     let res = match nameres.kind {
         NameResKind::Prim(prim) => {
@@ -1391,7 +1425,14 @@ pub fn resolve_name_res<'db>(
             ScopeId::Item(item) => match item {
                 ItemKind::Struct(_) | ItemKind::Enum(_) => {
                     let adt_ref = AdtRef::try_from_item(item).unwrap();
-                    PathRes::Ty(ty_from_adtref(db, path, adt_ref, &args, assumptions)?)
+                    PathRes::Ty(ty_from_adtref(
+                        db,
+                        path,
+                        adt_ref,
+                        &args,
+                        assumptions,
+                        minter,
+                    )?)
                 }
                 ItemKind::Contract(contract) => {
                     // Contracts have no generic parameters
@@ -1449,7 +1490,7 @@ pub fn resolve_name_res<'db>(
                     }
                     PathRes::TyAlias(
                         alias.clone(),
-                        alias.instantiate_from_path(db, path, &args, assumptions),
+                        alias.instantiate_from_path(db, path, &args, assumptions, minter),
                     )
                 }
 
@@ -1583,7 +1624,7 @@ pub fn resolve_name_res<'db>(
                 } else {
                     // The variant was imported via `use`.
                     debug_assert!(path.parent(db).is_none());
-                    ty_from_adtref(db, path, var.enum_.into(), &[], assumptions)?
+                    ty_from_adtref(db, path, var.enum_.into(), &[], assumptions, minter)?
                 };
                 // TODO report error if args isn't empty
                 PathRes::EnumVariant(ResolvedVariant {
@@ -1617,6 +1658,7 @@ fn ty_from_adtref<'db>(
     adt_ref: AdtRef<'db>,
     args: &[TyId<'db>],
     assumptions: PredicateListId<'db>,
+    minter: &HoleMinter<'db>,
 ) -> PathResolutionResult<'db, TyId<'db>> {
     let adt = adt_ref.as_adt(db);
     let ty = TyId::adt(db, adt);
@@ -1632,6 +1674,7 @@ fn ty_from_adtref<'db>(
         explicit_args,
         assumptions,
         ConstDefaultCompletion::metadata(Some(path)),
+        Some(minter),
     );
     let layout_plan = if completed_args.len() == explicit_param_len {
         adt_layout_hole_plan_with_explicit_args(db, adt, &completed_args)
@@ -1663,7 +1706,7 @@ fn ty_from_adtref<'db>(
                         site: LayoutHoleArgSite::Path(path),
                         arg_idx: explicit_param_len + layout_idx,
                     },
-                    ProvenanceId::root(db, ProvenanceSite::Lex(LexSite::RootPath(path))),
+                    minter.mint(),
                 ),
             ),
         });

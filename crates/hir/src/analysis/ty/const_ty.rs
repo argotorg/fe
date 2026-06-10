@@ -125,105 +125,92 @@ pub enum StructuralHoleOrigin<'db> {
     },
 }
 
-/// A site a hole's containing type was lowered at lexically (syntactic
-/// nesting and template membership).
+/// Where a structural hole's identity is anchored.
+///
+/// During the shared, content-keyed lowering a hole is anchored at the memo
+/// key of the execution that minted it (`Template*`); since distinct memo
+/// entries have distinct keys, ordinals from different executions can never
+/// collide. Anchored entry points re-anchor template holes at a genuinely
+/// unique item position (added in later phases).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum LexSite<'db> {
-    HirType(HirTypeId<'db>),
-    TypeComponent { ty: HirTypeId<'db>, slot: usize },
-    RootPath(PathId<'db>),
-    GenericArgList(GenericArgListId<'db>),
+pub enum HoleAnchor<'db> {
+    /// Minted while lowering a HIR type (the `lower_hir_ty` memo key).
+    TemplateTy {
+        ty: HirTypeId<'db>,
+        scope: ScopeId<'db>,
+    },
+    /// Minted while resolving a path outside any enclosing HIR-type lowering
+    /// (e.g. path expressions in bodies).
+    TemplatePath {
+        path: PathId<'db>,
+        scope: ScopeId<'db>,
+    },
+    /// Minted while lowering a standalone generic-arg list (e.g. explicit
+    /// call-site generic args).
+    TemplateArgs {
+        args: GenericArgListId<'db>,
+        scope: ScopeId<'db>,
+    },
+    /// A hole owned by a type alias's right-hand side. Instantiating the
+    /// alias at a use site replaces these with fresh holes minted from the
+    /// use site's minter.
     AliasTemplate(HirTypeAlias<'db>),
 }
 
-/// A context a hole's containing type was instantiated/applied through
-/// (alias uses, generic-arg positions, callable inputs).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum InstSite<'db> {
-    CallableInput {
-        func: Func<'db>,
-        origin: CallableInputLayoutHoleOrigin,
-    },
-    TypeComponent {
-        ty: HirTypeId<'db>,
-        slot: usize,
-    },
-    RootPath(PathId<'db>),
-    GenericArgList(GenericArgListId<'db>),
+impl<'db> HoleAnchor<'db> {
+    /// Whether this anchor is a content-keyed lowering template (as opposed
+    /// to an alias template or, in later phases, a unique item position).
+    pub(crate) fn is_lowering_template(self) -> bool {
+        matches!(
+            self,
+            Self::TemplateTy { .. } | Self::TemplatePath { .. } | Self::TemplateArgs { .. }
+        )
+    }
 }
 
-/// One link of a hole's provenance chain. The `Lex`/`Inst` tag keeps the
-/// merged chain injective with respect to the lexical and instantiation
-/// histories it encodes: sites that exist in both kinds (`TypeComponent`,
-/// `RootPath`, `GenericArgList`) stay distinguishable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum ProvenanceSite<'db> {
-    Lex(LexSite<'db>),
-    Inst(InstSite<'db>),
+/// Mints `(anchor, ordinal)` hole identities for one lowering execution.
+///
+/// Threaded by reference through the lowering descent so that every mint
+/// event within one execution receives a distinct ordinal; a hole cannot be
+/// minted without one, which makes "forgot to re-key after a memoized call"
+/// impossible by construction.
+#[derive(Debug)]
+pub(crate) struct HoleMinter<'db> {
+    anchor: HoleAnchor<'db>,
+    counter: std::cell::Cell<u32>,
 }
 
-/// Interned cons-list of provenance sites, newest site at the head.
+impl<'db> HoleMinter<'db> {
+    pub(crate) fn new(anchor: HoleAnchor<'db>) -> Self {
+        Self {
+            anchor,
+            counter: std::cell::Cell::new(0),
+        }
+    }
+
+    pub(crate) fn mint(&self) -> (HoleAnchor<'db>, u32) {
+        let ordinal = self.counter.get();
+        self.counter.set(ordinal + 1);
+        (self.anchor, ordinal)
+    }
+}
+
+/// Identity of a structural layout hole.
 ///
 /// HIR ids (`TypeId`, `PathId`, `GenericArgListId`) are content-interned, so
-/// a hole's creation site alone does not identify a syntactic occurrence:
+/// a hole's creation site alone cannot identify a syntactic occurrence:
 /// `(Slot<_>, Slot<_>)` shares one child HIR type and `(M, M)` one alias
-/// path. The provenance chain accumulates the lowering/instantiation
-/// contexts a hole's containing type passed through, giving each occurrence
-/// a distinct identity. Two holes silently merging means aliased storage
-/// slots, so pushes err on the side of distinctness.
-#[salsa::interned]
-#[derive(Debug)]
-pub struct ProvenanceId<'db> {
-    pub parent: Option<ProvenanceId<'db>>,
-    pub site: ProvenanceSite<'db>,
-}
-
-impl<'db> ProvenanceId<'db> {
-    pub(crate) fn root(db: &'db dyn HirAnalysisDb, site: ProvenanceSite<'db>) -> Self {
-        Self::new(db, None, site)
-    }
-
-    pub(crate) fn push(self, db: &'db dyn HirAnalysisDb, site: ProvenanceSite<'db>) -> Self {
-        Self::new(db, Some(self), site)
-    }
-
-    pub(crate) fn contains(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        mut pred: impl FnMut(ProvenanceSite<'db>) -> bool,
-    ) -> bool {
-        let mut current = Some(self);
-        while let Some(link) = current {
-            if pred(link.site(db)) {
-                return true;
-            }
-            current = link.parent(db);
-        }
-        false
-    }
-}
-
+/// path. Identity is therefore assigned at mint time: the `anchor` names the
+/// lowering execution (or alias template) that minted the hole and the
+/// `ordinal` distinguishes mint events within it. Two holes silently merging
+/// means aliased storage slots, so minting errs on the side of distinctness.
 #[salsa::interned]
 #[derive(Debug)]
 pub struct StructuralHoleId<'db> {
     pub expected_ty: TyId<'db>,
     pub origin: StructuralHoleOrigin<'db>,
-    pub provenance: ProvenanceId<'db>,
-}
-
-impl<'db> StructuralHoleId<'db> {
-    pub(crate) fn push_provenance(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        site: ProvenanceSite<'db>,
-    ) -> Self {
-        Self::new(
-            db,
-            self.expected_ty(db),
-            self.origin(db),
-            self.provenance(db).push(db, site),
-        )
-    }
+    pub anchor: HoleAnchor<'db>,
+    pub ordinal: u32,
 }
 
 impl<'db> HoleId<'db> {
@@ -247,9 +234,15 @@ impl<'db> HoleId<'db> {
         db: &'db dyn HirAnalysisDb,
         expected_ty: TyId<'db>,
         origin: StructuralHoleOrigin<'db>,
-        provenance: ProvenanceId<'db>,
+        identity: (HoleAnchor<'db>, u32),
     ) -> Self {
-        Self::Structural(StructuralHoleId::new(db, expected_ty, origin, provenance))
+        Self::Structural(StructuralHoleId::new(
+            db,
+            expected_ty,
+            origin,
+            identity.0,
+            identity.1,
+        ))
     }
 }
 
@@ -838,6 +831,9 @@ pub fn complete_default_const_args_for_identity<'db>(
         &args[explicit_offset..],
         assumptions,
         ConstDefaultCompletion::evaluate(None),
+        // No application path: `= _` defaults complete as opaque holes here,
+        // so there is no structural identity to mint.
+        None,
     );
     if completed_args.len() == args.len().saturating_sub(explicit_offset) {
         return ty;
@@ -2441,9 +2437,9 @@ impl<'db> ConstTyId<'db> {
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
         origin: StructuralHoleOrigin<'db>,
-        provenance: ProvenanceId<'db>,
+        identity: (HoleAnchor<'db>, u32),
     ) -> Self {
-        Self::hole_with_id(db, ty, HoleId::structural(db, ty, origin, provenance))
+        Self::hole_with_id(db, ty, HoleId::structural(db, ty, origin, identity))
     }
 
     pub fn bound_callable_hole(
@@ -2467,7 +2463,8 @@ impl<'db> ConstTyId<'db> {
                         db,
                         ty,
                         hole_id.origin(db),
-                        hole_id.provenance(db),
+                        hole_id.anchor(db),
+                        hole_id.ordinal(db),
                     )),
                     HoleId::Bound(hole_id) => HoleId::Bound(*hole_id),
                 },

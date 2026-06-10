@@ -13,13 +13,12 @@ use salsa::Update;
 
 use super::{
     binder::Binder,
-    const_ty::{ConstTyId, InstSite, ProvenanceSite},
+    const_ty::{ConstTyId, HoleAnchor, HoleMinter},
     fold::{TyFoldable, TyFolder},
-    layout_holes::push_provenance,
     trait_def::{ImplementorId, ImplementorOrigin, TraitInstId},
     trait_resolution::PredicateListId,
     ty_def::{InvalidCause, TyId},
-    ty_lower::{ConstDefaultCompletion, lower_hir_ty, lower_opt_hir_ty},
+    ty_lower::{ConstDefaultCompletion, lower_hir_ty_with_minter, lower_opt_hir_ty_with_minter},
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -289,7 +288,7 @@ fn lower_trait_ref_impl_inner<'db>(
 ) -> Result<TraitInstId<'db>, TraitArgError<'db>> {
     let trait_params: &[TyId<'db>] = t.params(db);
     let args = path.generic_args(db).data(db);
-    let arg_list = path.generic_args(db);
+    let minter = HoleMinter::new(HoleAnchor::TemplatePath { path, scope });
 
     // Lower provided explicit args (excluding Self)
     let mut provided_explicit = Vec::new();
@@ -297,17 +296,7 @@ fn lower_trait_ref_impl_inner<'db>(
     for (arg_idx, arg) in args.iter().enumerate() {
         match arg {
             GenericArg::Type(ty_arg) => {
-                let hole_sites = ty_arg.ty.to_opt().map(|hir_ty| {
-                    [
-                        ProvenanceSite::Inst(InstSite::TypeComponent {
-                            ty: hir_ty,
-                            slot: arg_idx,
-                        }),
-                        ProvenanceSite::Inst(InstSite::GenericArgList(arg_list)),
-                    ]
-                });
-                let ty = lower_opt_hir_ty(db, ty_arg.ty, scope, assumptions);
-                let ty = hole_sites.map_or(ty, |sites| push_provenance(db, ty, &sites));
+                let ty = lower_opt_hir_ty_with_minter(db, ty_arg.ty, scope, assumptions, &minter);
                 provided_explicit.push(ty);
             }
             GenericArg::Const(const_arg) => match const_arg.value {
@@ -320,7 +309,7 @@ fn lower_trait_ref_impl_inner<'db>(
             },
             GenericArg::AssocType(AssocTypeGenericArg { name, ty }) => {
                 if let (Some(name), Some(ty)) = (name.to_opt(), ty.to_opt()) {
-                    let ty = lower_hir_ty(db, ty, scope, assumptions);
+                    let ty = lower_hir_ty_with_minter(db, ty, scope, assumptions, &minter);
                     assoc_bindings.insert(name, ty);
                 }
             }
@@ -334,6 +323,7 @@ fn lower_trait_ref_impl_inner<'db>(
         &provided_explicit,
         assumptions,
         ConstDefaultCompletion::evaluate(Some(path)),
+        Some(&minter),
     );
 
     if non_self_completed.len() != trait_params.len() - 1 {

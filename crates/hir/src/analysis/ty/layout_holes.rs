@@ -2,7 +2,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{
     const_ty::{
-        CallableInputLayoutHoleOrigin, ConstTyData, ConstTyId, HoleId, ProvenanceSite,
+        CallableInputLayoutHoleOrigin, ConstTyData, ConstTyId, HoleAnchor, HoleId, HoleMinter,
         StructuralHoleId,
     },
     fold::{TyFoldable, TyFolder},
@@ -11,7 +11,7 @@ use super::{
     visitor::{TyVisitable, TyVisitor, walk_ty},
 };
 use crate::analysis::HirAnalysisDb;
-use crate::hir_def::CallableDef;
+use crate::hir_def::{CallableDef, TypeAlias as HirTypeAlias};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LayoutPlaceholderPolicy {
@@ -319,9 +319,9 @@ where
 {
     let holes = collect_unique_structural_holes_in_order(db, value);
     assert!(
-        holes.iter().all(|hole_id| hole_id
-            .provenance(db)
-            .contains(db, |site| matches!(site, ProvenanceSite::Inst(_)))),
+        holes
+            .iter()
+            .all(|hole_id| !matches!(hole_id.anchor(db), HoleAnchor::AliasTemplate(_))),
         "template-only structural hole escaped into semantic binding"
     );
     holes
@@ -376,42 +376,78 @@ where
     )
 }
 
-/// Pushes the given provenance sites (innermost-first) onto every structural
-/// hole in `value`, giving holes from a shared (content-interned) lowering
-/// result a distinct identity per context.
-pub(crate) fn push_provenance<'db, T>(
+/// Re-anchors every lowering-template hole in `value` at `anchor`, assigning
+/// fresh sequential ordinals in first-visit order. Sharing-preserving: all
+/// occurrences of one hole id map to one re-anchored id.
+pub(crate) fn reanchor_template_holes<'db, T>(
     db: &'db dyn HirAnalysisDb,
     value: T,
-    sites: &[ProvenanceSite<'db>],
+    anchor: HoleAnchor<'db>,
 ) -> T
 where
     T: TyFoldable<'db>,
 {
-    push_provenance_filtered(db, value, sites, |_| true)
-}
-
-/// Like [`push_provenance`], but only rewrites holes accepted by `owns_hole`
-/// (e.g. holes originating from a specific alias template).
-pub(crate) fn push_provenance_filtered<'db, T>(
-    db: &'db dyn HirAnalysisDb,
-    value: T,
-    sites: &[ProvenanceSite<'db>],
-    mut owns_hole: impl FnMut(StructuralHoleId<'db>) -> bool,
-) -> T
-where
-    T: TyFoldable<'db>,
-{
+    let mut next = 0u32;
+    let mut renumbered: FxHashMap<StructuralHoleId<'db>, TyId<'db>> = FxHashMap::default();
     rewrite_structural_holes(db, value, |hole_id, hole_ty| {
-        owns_hole(hole_id).then(|| {
-            let mut hole_id = hole_id;
-            for &site in sites {
-                hole_id = hole_id.push_provenance(db, site);
-            }
+        if !hole_id.anchor(db).is_lowering_template() {
+            return None;
+        }
+        Some(*renumbered.entry(hole_id).or_insert_with(|| {
+            let ordinal = next;
+            next += 1;
             TyId::const_ty(
                 db,
-                ConstTyId::hole_with_id(db, hole_ty, HoleId::Structural(hole_id)),
+                ConstTyId::hole_with_id(
+                    db,
+                    hole_ty,
+                    HoleId::Structural(StructuralHoleId::new(
+                        db,
+                        hole_id.expected_ty(db),
+                        hole_id.origin(db),
+                        anchor,
+                        ordinal,
+                    )),
+                ),
             )
-        })
+        }))
+    })
+}
+
+/// Replaces holes owned by `alias`'s template with fresh holes minted from
+/// the use site's minter. Sharing-preserving: all occurrences of one
+/// template hole map to one fresh hole.
+pub(crate) fn refresh_alias_template_holes<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    value: T,
+    alias: HirTypeAlias<'db>,
+    minter: &HoleMinter<'db>,
+) -> T
+where
+    T: TyFoldable<'db>,
+{
+    let mut refreshed: FxHashMap<StructuralHoleId<'db>, TyId<'db>> = FxHashMap::default();
+    rewrite_structural_holes(db, value, |hole_id, hole_ty| {
+        if hole_id.anchor(db) != HoleAnchor::AliasTemplate(alias) {
+            return None;
+        }
+        Some(*refreshed.entry(hole_id).or_insert_with(|| {
+            let (anchor, ordinal) = minter.mint();
+            TyId::const_ty(
+                db,
+                ConstTyId::hole_with_id(
+                    db,
+                    hole_ty,
+                    HoleId::Structural(StructuralHoleId::new(
+                        db,
+                        hole_id.expected_ty(db),
+                        hole_id.origin(db),
+                        anchor,
+                        ordinal,
+                    )),
+                ),
+            )
+        }))
     })
 }
 
@@ -521,13 +557,14 @@ mod tests {
 
     use super::{
         LayoutPlaceholderPolicy, alpha_rename_hidden_layout_placeholders,
-        collect_unique_app_bound_structural_holes_in_order, push_provenance,
-        substitute_layout_placeholders_by_identity, substitute_layout_placeholders_in_order,
+        collect_unique_app_bound_structural_holes_in_order, reanchor_template_holes,
+        refresh_alias_template_holes, substitute_layout_placeholders_by_identity,
+        substitute_layout_placeholders_in_order,
     };
     use crate::analysis::ty::{
         const_ty::{
-            ConstTyData, ConstTyId, HoleId, InstSite, LayoutHoleArgSite, LexSite, ProvenanceId,
-            ProvenanceSite, StructuralHoleOrigin,
+            ConstTyData, ConstTyId, HoleAnchor, HoleId, HoleMinter, LayoutHoleArgSite,
+            StructuralHoleOrigin,
         },
         ty_def::{Kind, PrimTy, TyBase, TyData, TyId, TyParam},
     };
@@ -558,7 +595,7 @@ mod tests {
 
     fn mk_structural_hole_ty<'db>(
         db: &'db HirAnalysisTestDb,
-        provenance: ProvenanceId<'db>,
+        identity: (HoleAnchor<'db>, u32),
     ) -> TyId<'db> {
         TyId::const_ty(
             db,
@@ -569,9 +606,16 @@ mod tests {
                     site: LayoutHoleArgSite::GenericArgList(GenericArgListId::none(db)),
                     arg_idx: 0,
                 },
-                provenance,
+                identity,
             ),
         )
+    }
+
+    fn template_anchor<'db>(db: &'db HirAnalysisTestDb, scope: ScopeId<'db>) -> HoleAnchor<'db> {
+        HoleAnchor::TemplateArgs {
+            args: GenericArgListId::none(db),
+            scope,
+        }
     }
 
     fn expect_structural_hole<'db>(
@@ -589,6 +633,14 @@ mod tests {
 
     fn mk_array_with_len<'db>(db: &'db HirAnalysisTestDb, len: TyId<'db>) -> TyId<'db> {
         TyId::app(db, TyId::array(db, TyId::u256(db)), len)
+    }
+
+    fn array_len_hole<'db>(
+        db: &'db HirAnalysisTestDb,
+        array_ty: TyId<'db>,
+    ) -> super::StructuralHoleId<'db> {
+        let (_, args) = array_ty.decompose_ty_app(db);
+        expect_structural_hole(db, args[1])
     }
 
     #[test]
@@ -812,92 +864,153 @@ mod tests {
     }
 
     #[test]
-    fn push_provenance_extends_chain_and_changes_identity() {
-        let db = HirAnalysisTestDb::default();
-        let lex_root = ProvenanceId::root(
-            &db,
-            ProvenanceSite::Lex(LexSite::GenericArgList(GenericArgListId::none(&db))),
+    fn reanchor_template_holes_changes_identity_and_preserves_sharing() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("reanchor_template_holes_changes_identity.fe"),
+            "type A = u256\nfn f() {}",
         );
-        let pushed_site = ProvenanceSite::Inst(InstSite::GenericArgList(GenericArgListId::given(
+        let (top_mod, _) = db.top_mod(file);
+        let scope = top_mod
+            .children_non_nested(&db)
+            .find_map(|item| match item {
+                ItemKind::Func(func) => Some(func.scope()),
+                _ => None,
+            })
+            .expect("missing `f` function");
+        let alias = top_mod
+            .children_non_nested(&db)
+            .find_map(|item| match item {
+                ItemKind::TypeAlias(alias) => Some(alias),
+                _ => None,
+            })
+            .expect("missing `A` alias");
+
+        // One template hole occurring twice plus a distinct sibling, embedded
+        // as array lengths (tuple elements must be star-kinded).
+        let shared = mk_structural_hole_ty(&db, (template_anchor(&db, scope), 0));
+        let sibling = mk_structural_hole_ty(&db, (template_anchor(&db, scope), 1));
+        let tuple = TyId::tuple_with_elems(
             &db,
-            vec![],
-        )));
+            &[
+                mk_array_with_len(&db, shared),
+                mk_array_with_len(&db, sibling),
+                mk_array_with_len(&db, shared),
+            ],
+        );
 
-        let original = mk_structural_hole_ty(&db, lex_root);
-        let pushed = push_provenance(&db, original, &[pushed_site]);
-        let hole_id = expect_structural_hole(&db, pushed);
+        let reanchored = reanchor_template_holes(&db, tuple, HoleAnchor::AliasTemplate(alias));
+        assert_ne!(reanchored, tuple);
 
-        assert_ne!(pushed, original);
-        assert_eq!(hole_id.provenance(&db).site(&db), pushed_site);
-        assert_eq!(hole_id.provenance(&db).parent(&db), Some(lex_root));
+        let (_, elems) = reanchored.decompose_ty_app(&db);
+        let ids: Vec<_> = elems
+            .iter()
+            .map(|elem| array_len_hole(&db, *elem))
+            .collect();
+        // Sharing preserved, distinctness preserved, anchors rewritten.
+        assert_eq!(ids[0], ids[2]);
+        assert_ne!(ids[0], ids[1]);
+        assert!(
+            ids.iter()
+                .all(|id| id.anchor(&db) == HoleAnchor::AliasTemplate(alias))
+        );
+        assert_ne!(ids[0].ordinal(&db), ids[1].ordinal(&db));
     }
 
     #[test]
-    fn push_provenance_sites_with_distinct_tags_stay_distinct() {
-        let db = HirAnalysisTestDb::default();
-        let root = ProvenanceId::root(
-            &db,
-            ProvenanceSite::Lex(LexSite::GenericArgList(GenericArgListId::none(&db))),
+    fn refresh_alias_template_holes_mints_per_use_identities() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("refresh_alias_template_holes_mints.fe"),
+            "type A = u256\nfn f() {}",
         );
-        let shared_args = GenericArgListId::given(&db, vec![]);
+        let (top_mod, _) = db.top_mod(file);
+        let scope = top_mod
+            .children_non_nested(&db)
+            .find_map(|item| match item {
+                ItemKind::Func(func) => Some(func.scope()),
+                _ => None,
+            })
+            .expect("missing `f` function");
+        let alias = top_mod
+            .children_non_nested(&db)
+            .find_map(|item| match item {
+                ItemKind::TypeAlias(alias) => Some(alias),
+                _ => None,
+            })
+            .expect("missing `A` alias");
 
-        // The same payload pushed as a lexical vs an instantiation site must
-        // produce distinct hole identities.
-        let original = mk_structural_hole_ty(&db, root);
-        let lex_pushed = push_provenance(
-            &db,
-            original,
-            &[ProvenanceSite::Lex(LexSite::GenericArgList(shared_args))],
-        );
-        let inst_pushed = push_provenance(
-            &db,
-            original,
-            &[ProvenanceSite::Inst(InstSite::GenericArgList(shared_args))],
-        );
+        let template = mk_structural_hole_ty(&db, (HoleAnchor::AliasTemplate(alias), 0));
+        let use_minter = HoleMinter::new(template_anchor(&db, scope));
 
-        assert_ne!(lex_pushed, inst_pushed);
+        // Two instantiations of the same template must produce distinct holes;
+        // within one instantiation, repeated occurrences stay shared.
+        let pair = TyId::tuple_with_elems(
+            &db,
+            &[
+                mk_array_with_len(&db, template),
+                mk_array_with_len(&db, template),
+            ],
+        );
+        let first = refresh_alias_template_holes(&db, pair, alias, &use_minter);
+        let second = refresh_alias_template_holes(&db, pair, alias, &use_minter);
+        assert_ne!(first, second);
+
+        let (_, first_elems) = first.decompose_ty_app(&db);
+        assert_eq!(
+            array_len_hole(&db, first_elems[0]),
+            array_len_hole(&db, first_elems[1]),
+        );
+        assert_ne!(
+            array_len_hole(&db, first_elems[0]),
+            array_len_hole(&db, second.decompose_ty_app(&db).1[0]),
+        );
     }
 
     #[test]
-    fn collect_unique_app_bound_structural_holes_accepts_app_bound_holes() {
-        let db = HirAnalysisTestDb::default();
-        let provenance = ProvenanceId::root(
-            &db,
-            ProvenanceSite::Lex(LexSite::GenericArgList(GenericArgListId::none(&db))),
-        )
-        .push(
-            &db,
-            ProvenanceSite::Inst(InstSite::GenericArgList(GenericArgListId::given(
-                &db,
-                vec![],
-            ))),
+    fn collect_unique_app_bound_structural_holes_accepts_use_site_holes() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("collect_unique_app_bound_accepts_use_site.fe"),
+            "fn f() {}",
         );
+        let (top_mod, _) = db.top_mod(file);
+        let scope = top_mod
+            .children_non_nested(&db)
+            .find_map(|item| match item {
+                ItemKind::Func(func) => Some(func.scope()),
+                _ => None,
+            })
+            .expect("missing `f` function");
 
         let holes = collect_unique_app_bound_structural_holes_in_order(
             &db,
-            mk_structural_hole_ty(&db, provenance),
+            mk_structural_hole_ty(&db, (template_anchor(&db, scope), 0)),
         );
 
         assert_eq!(holes.len(), 1);
-        assert!(
-            holes[0]
-                .provenance(&db)
-                .contains(&db, |site| matches!(site, ProvenanceSite::Inst(_)))
-        );
     }
 
     #[test]
     #[should_panic(expected = "template-only structural hole escaped into semantic binding")]
-    fn collect_unique_app_bound_structural_holes_rejects_template_only_holes() {
-        let db = HirAnalysisTestDb::default();
-        let lex_only = ProvenanceId::root(
-            &db,
-            ProvenanceSite::Lex(LexSite::GenericArgList(GenericArgListId::none(&db))),
+    fn collect_unique_app_bound_structural_holes_rejects_alias_template_holes() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("collect_unique_app_bound_rejects_alias_template.fe"),
+            "type A = u256",
         );
+        let (top_mod, _) = db.top_mod(file);
+        let alias = top_mod
+            .children_non_nested(&db)
+            .find_map(|item| match item {
+                ItemKind::TypeAlias(alias) => Some(alias),
+                _ => None,
+            })
+            .expect("missing `A` alias");
 
         let _ = collect_unique_app_bound_structural_holes_in_order(
             &db,
-            mk_structural_hole_ty(&db, lex_only),
+            mk_structural_hole_ty(&db, (HoleAnchor::AliasTemplate(alias), 0)),
         );
     }
 }
