@@ -199,3 +199,57 @@ contract InitViaConditionExitContinueLoop {
 contract MemorySpaceField {
     ptr: std::evm::MemPtr<u256>
 }
+
+contract InitViaAugAssign {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        x += v
+    }
+}
+
+fn own_write(mut v: own u256) {
+    v = 1
+}
+
+contract InitViaOwnParamHelperDoesNotCount {
+    x: u256
+
+    init() uses (mut x) {
+        own_write(v: x)
+    }
+}
+
+contract InitTerminatingLoopStillRequired {
+    x: u256
+    mut i: u256
+
+    init() uses (mut x, mut i) {
+        i = 0
+        while i < 2 {
+            i += 1
+        }
+    }
+}
+
+fn init_flag(v: bool) uses (flag: mut bool) {
+    flag = v
+}
+
+contract InitHelperAssignsOnlyOneField {
+    x: u256
+    flag: bool
+
+    init(v: bool) uses (mut x, mut flag) {
+        init_flag(v: v)
+    }
+}
+
+contract InitViaLocalMutBorrow {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        let r = mut x
+        r = v
+    }
+}

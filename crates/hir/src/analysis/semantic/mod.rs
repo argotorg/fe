@@ -1,6 +1,7 @@
 pub mod borrowck;
 pub mod consts;
 pub mod ctfe;
+pub mod definite_assignment;
 pub mod instance;
 pub mod ir;
 pub mod lower;
@@ -9,6 +10,7 @@ mod verify;
 pub use borrowck::*;
 pub use consts::*;
 pub use ctfe::*;
+pub use definite_assignment::contract_init_assigned_fields;
 pub(crate) use instance::CallSiteProviderRefinement;
 pub use instance::{
     EffectProviderSubst, GenericSubst, ImplEnv, InstantiatedEffectEnv, RootSemanticInstanceError,

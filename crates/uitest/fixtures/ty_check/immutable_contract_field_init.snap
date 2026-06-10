@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/immutable_contract_field_init.fe
 ---
@@ -97,6 +98,87 @@ error[8-0082]: immutable contract field is not initialized
     · │
 168 │ │         }
 169 │ │     }
+    │ ╰─────' this init block may finish without assigning `x`
+    │
+    = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
+
+error[8-0082]: immutable contract field is not initialized
+    ┌─ immutable_contract_field_init.fe:173:5
+    │
+173 │       x: u256
+    │       ^ `x` must be assigned in `init` on every successful path
+    ·
+176 │       init(v: u256) uses (mut x, mut i) {
+    │ ╭───────────────────────────────────────'
+177 │ │         i = 0
+178 │ │         while i < 1 {
+179 │ │             x = v
+180 │ │             i += 1
+181 │ │         }
+182 │ │     }
+    │ ╰─────' this init block may finish without assigning `x`
+    │
+    = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
+
+error[8-0082]: immutable contract field is not initialized
+    ┌─ immutable_contract_field_init.fe:186:5
+    │
+186 │       x: u256
+    │       ^ `x` must be assigned in `init` on every successful path
+    ·
+189 │       init(v: u256) uses (mut x, mut i) {
+    │ ╭───────────────────────────────────────'
+190 │ │         i = 0
+191 │ │         while i < 1 {
+192 │ │             x = v
+    · │
+195 │ │         }
+196 │ │     }
+    │ ╰─────' this init block may finish without assigning `x`
+    │
+    = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
+
+error[8-0082]: immutable contract field is not initialized
+    ┌─ immutable_contract_field_init.fe:216:5
+    │
+216 │       x: u256
+    │       ^ `x` must be assigned in `init` on every successful path
+217 │
+218 │       init() uses (mut x) {
+    │ ╭─────────────────────────'
+219 │ │         own_write(v: x)
+220 │ │     }
+    │ ╰─────' this init block may finish without assigning `x`
+    │
+    = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
+
+error[8-0082]: immutable contract field is not initialized
+    ┌─ immutable_contract_field_init.fe:224:5
+    │
+224 │       x: u256
+    │       ^ `x` must be assigned in `init` on every successful path
+    ·
+227 │       init() uses (mut x, mut i) {
+    │ ╭────────────────────────────────'
+228 │ │         i = 0
+229 │ │         while i < 2 {
+230 │ │             i += 1
+231 │ │         }
+232 │ │     }
+    │ ╰─────' this init block may finish without assigning `x`
+    │
+    = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
+
+error[8-0082]: immutable contract field is not initialized
+    ┌─ immutable_contract_field_init.fe:240:5
+    │
+240 │       x: u256
+    │       ^ `x` must be assigned in `init` on every successful path
+    ·
+243 │       init(v: bool) uses (mut x, mut flag) {
+    │ ╭──────────────────────────────────────────'
+244 │ │         init_flag(v: v)
+245 │ │     }
     │ ╰─────' this init block may finish without assigning `x`
     │
     = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
