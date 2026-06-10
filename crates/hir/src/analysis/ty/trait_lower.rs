@@ -125,21 +125,16 @@ fn lower_trait_ref_inner<'db>(
 
     let self_subst = owner_self.unwrap_or(self_ty);
 
-    let resolved = match crate::analysis::name_resolution::resolve_path(
-        db,
-        path,
-        scope,
-        assumptions,
-        false,
-    ) {
-        Ok(res @ PathRes::Ty(_)) => {
-            match resolve_shadowed_trait_ref(db, &res, path, scope, assumptions) {
-                Some(trait_res) => Ok(trait_res),
-                None => Ok(res),
+    let resolved =
+        match crate::analysis::name_resolution::resolve_path(db, path, scope, assumptions, false) {
+            Ok(res @ PathRes::Ty(_)) => {
+                match resolve_shadowed_trait_ref(db, &res, path, scope, assumptions) {
+                    Some(trait_res) => Ok(trait_res),
+                    None => Ok(res),
+                }
             }
-        }
-        other => other,
-    };
+            other => other,
+        };
 
     match resolved {
         Ok(PathRes::Trait(t)) => {

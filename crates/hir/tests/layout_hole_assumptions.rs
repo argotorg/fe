@@ -1827,7 +1827,10 @@ contract C {
         .copied()
         .expect("missing right root const arg");
 
-    assert_ne!(left_root, right_root, "alias-expanded holes silently merged");
+    assert_ne!(
+        left_root, right_root,
+        "alias-expanded holes silently merged"
+    );
     assert_eq!(const_lit_usize(&db, left_root), 0);
     assert_eq!(const_lit_usize(&db, right_root), 1);
     assert_eq!(pair.slot_count, 2);

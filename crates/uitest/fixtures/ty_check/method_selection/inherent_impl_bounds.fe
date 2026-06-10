@@ -61,6 +61,3 @@ fn assoc_fn_ok<T: FactoryInput>(item: own T) -> Factory<T> {
 fn assoc_fn_bad<T>(item: own T) {
     Factory::make(item)
 }
-
-// KNOWN GAP: `AssocBox<T::Item>` — projections from param bounds do not
-// resolve in inherent-impl self-type position ("`Item` is not found").

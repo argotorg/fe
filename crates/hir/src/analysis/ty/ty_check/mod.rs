@@ -17,6 +17,7 @@ pub use self::contract::{
 pub use self::path::RecordLike;
 use crate::analysis::name_resolution::ResolvedVariant;
 pub use crate::analysis::ty::ProviderAddressSpace;
+use crate::analysis::ty::binder::Binder;
 use crate::analysis::ty::corelib::resolve_lib_type_path;
 use crate::analysis::ty::fold::TyFoldable;
 use crate::analysis::ty::provider::{ProviderKind, provider_semantics};
@@ -2353,14 +2354,40 @@ impl<'db> TyChecker<'db> {
         method: CallableDef<'db>,
         receiver_ty: TyId<'db>,
     ) -> TyId<'db> {
-        let mut ty = TyId::func(self.db, method);
-        for &arg in receiver_ty.generic_args(self.db) {
-            if ty.applicable_ty(self.db).is_none() {
-                break;
+        let ty = TyId::func(self.db, method);
+        let ty = self.instantiate_callable_to_term(ty, method);
+
+        // Bind the impl-level params by unifying the candidate's probe key
+        // (self-param type for methods, the impl self type for path-called
+        // associated functions) against the receiver, mirroring the
+        // method-table probe that selected this candidate. Copying the
+        // receiver's generic args into the params positionally mis-binds
+        // impls whose self type mentions params through projections:
+        // `impl<T: Bound> Box<T::Item>` called on `Box<U::Item>` must bind
+        // `T := U`, not `T := U::Item`.
+        let probe_key_ty = if let Some(self_param) = method.receiver_ty(self.db) {
+            let self_param = self_param.instantiate(self.db, ty.generic_args(self.db));
+            Some(
+                self_param
+                    .as_capability(self.db)
+                    .map(|(_, inner)| inner)
+                    .unwrap_or(self_param),
+            )
+        } else if let CallableDef::Func(func) = method
+            && let Some(impl_) = func.containing_impl(self.db)
+            && let Some(impl_ty) = impl_.admissible_inherent_impl_ty(self.db)
+        {
+            Some(Binder::bind(impl_ty).instantiate(self.db, ty.generic_args(self.db)))
+        } else {
+            None
+        };
+        if let Some(key_ty) = probe_key_ty {
+            let snapshot = self.table.snapshot();
+            if self.table.unify(key_ty, receiver_ty).is_err() {
+                self.table.rollback_to(snapshot);
             }
-            ty = TyId::app(self.db, ty, arg);
         }
-        self.instantiate_callable_to_term(ty, method)
+        ty
     }
 
     fn instantiate_callable_to_term(
@@ -4106,14 +4133,17 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
         }
 
         // We need this additional check for method call because the callable type is
-        // not tied to the expression type.
+        // not tied to the expression type. Well-formedness is not re-checked
+        // here: the callable's declared constraints were already registered as
+        // call-constraint obligations (with a `required by this bound` note),
+        // so a WF check would report every unsatisfied bound a second time —
+        // the same reason direct-call callees are excluded above.
         if let Expr::MethodCall(..) = expr_data
             && let Some(callable) = self.body.callable_expr(expr)
         {
             let callable_ty = callable.ty(self.db);
             let span = ctxt.span().unwrap().into_method_call_expr().method_name();
-            self.check_unknown(callable_ty, span.clone().into());
-            self.check_wf(callable_ty, span.into())
+            self.check_unknown(callable_ty, span.into());
         }
 
         walk_expr(self, ctxt, expr);

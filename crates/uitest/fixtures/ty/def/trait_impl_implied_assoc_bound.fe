@@ -36,6 +36,3 @@ struct LocalCache<T: LocalBound> {
 }
 
 impl LocalFoo for LocalCache<Token> {}
-
-// KNOWN GAP: `T::Item` projections from param bounds do not resolve in impl
-// self-type and associated-type-value positions ("`Item` is not found").

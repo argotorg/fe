@@ -38,12 +38,6 @@ error[6-0003]: trait bound is not satisfied
    │                             --------------- required by this bound on `get`
 
 error[6-0003]: trait bound is not satisfied
-   ┌─ storage_packed_array_invalid_bits.fe:14:7
-   │
-14 │     a.get(0)
-   │       ^^^ `PackedBits<7>` doesn't implement `ValidPackedBits`
-
-error[6-0003]: trait bound is not satisfied
    ┌─ storage_packed_array_invalid_bits.fe:18:13
    │
 18 │     let a = StoragePackedArray<24, 0>::new()
@@ -76,12 +70,6 @@ error[6-0003]: trait bound is not satisfied
    │
 71 │     where PackedBits<BITS>: ValidPackedBits
    │                             --------------- required by this bound on `get`
-
-error[6-0003]: trait bound is not satisfied
-   ┌─ storage_packed_array_invalid_bits.fe:19:7
-   │
-19 │     a.get(0)
-   │       ^^^ `PackedBits<24>` doesn't implement `ValidPackedBits`
 
 error[6-0003]: trait bound is not satisfied
    ┌─ storage_packed_array_invalid_bits.fe:23:13
@@ -118,12 +106,6 @@ error[6-0003]: trait bound is not satisfied
    │                             --------------- required by this bound on `get`
 
 error[6-0003]: trait bound is not satisfied
-   ┌─ storage_packed_array_invalid_bits.fe:24:7
-   │
-24 │     a.get(0)
-   │       ^^^ `PackedBits<0>` doesn't implement `ValidPackedBits`
-
-error[6-0003]: trait bound is not satisfied
    ┌─ storage_packed_array_invalid_bits.fe:28:13
    │
 28 │     let a = StoragePackedArray<256, 0>::new()
@@ -156,9 +138,3 @@ error[6-0003]: trait bound is not satisfied
    │
 71 │     where PackedBits<BITS>: ValidPackedBits
    │                             --------------- required by this bound on `get`
-
-error[6-0003]: trait bound is not satisfied
-   ┌─ storage_packed_array_invalid_bits.fe:29:7
-   │
-29 │     a.get(0)
-   │       ^^^ `PackedBits<256>` doesn't implement `ValidPackedBits`

@@ -463,9 +463,7 @@ where
                 ConstTyData::Hole(hole_ty, _) => {
                     Some((placeholder, layout_hole_fallback_ty(db, *hole_ty)))
                 }
-                ConstTyData::TyParam(param, ty) if param.is_implicit() => {
-                    Some((placeholder, *ty))
-                }
+                ConstTyData::TyParam(param, ty) if param.is_implicit() => Some((placeholder, *ty)),
                 _ => None,
             }
         })
@@ -820,8 +818,10 @@ mod tests {
             &db,
             ProvenanceSite::Lex(LexSite::GenericArgList(GenericArgListId::none(&db))),
         );
-        let pushed_site =
-            ProvenanceSite::Inst(InstSite::GenericArgList(GenericArgListId::given(&db, vec![])));
+        let pushed_site = ProvenanceSite::Inst(InstSite::GenericArgList(GenericArgListId::given(
+            &db,
+            vec![],
+        )));
 
         let original = mk_structural_hole_ty(&db, lex_root);
         let pushed = push_provenance(&db, original, &[pushed_site]);
@@ -867,7 +867,10 @@ mod tests {
         )
         .push(
             &db,
-            ProvenanceSite::Inst(InstSite::GenericArgList(GenericArgListId::given(&db, vec![]))),
+            ProvenanceSite::Inst(InstSite::GenericArgList(GenericArgListId::given(
+                &db,
+                vec![],
+            ))),
         );
 
         let holes = collect_unique_app_bound_structural_holes_in_order(

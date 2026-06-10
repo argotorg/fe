@@ -28,7 +28,9 @@ use crate::analysis::{
         adt_def::{AdtRef, adt_layout_hole_plan, adt_layout_hole_plan_with_explicit_args},
         binder::Binder,
         canonical::Canonicalized,
-        const_ty::{HoleId, LayoutHoleArgSite, LexSite, ProvenanceId, ProvenanceSite, StructuralHoleOrigin},
+        const_ty::{
+            HoleId, LayoutHoleArgSite, LexSite, ProvenanceId, ProvenanceSite, StructuralHoleOrigin,
+        },
         layout_holes::layout_hole_with_fallback_ty,
         normalize::normalize_ty,
         trait_def::{TraitInstId, impls_for_ty_with_constraints},
@@ -1104,12 +1106,15 @@ fn select_assoc_const_candidate<'db>(
     // we don't know its concrete type yet, so probing impls would pull in many
     // unrelated candidates and frequently lead to spurious ambiguity.
     //
-    // In that case, rely on in-scope bounds (`assumptions`) to provide candidates.
+    // In that case, rely on in-scope bounds (`assumptions`) to provide
+    // candidates. The list is elaborated so constants inherited through
+    // transitive super-trait bounds are visible.
     let receiver_is_ty_param = matches!(
         receiver_ty.base_ty(db).data(db),
         TyData::TyParam(_) | TyData::AssocTy(_) | TyData::QualifiedTy(_)
     );
     if receiver_is_ty_param {
+        let assumptions = assumptions.extend_all_bounds(db);
         let mut matches: IndexSet<TraitInstId<'db>> = IndexSet::default();
         let receiver = Canonicalized::new(db, receiver_ty);
         receiver.with_materialized(db, |cx| {
@@ -1121,19 +1126,11 @@ fn select_assoc_const_candidate<'db>(
                 let pred = cx.materialize(pred);
                 if cx.unify::<TyId<'db>>(receiver, self_ty).is_ok()
                     && let Some(pred) = cx.try_extract::<TraitInstId<'db>>(pred)
+                    && pred.def(db).const_(db, name).is_some()
                 {
-                    if pred.def(db).const_(db, name).is_some() {
-                        matches.insert(pred);
-                    }
-
-                    // `T::CONST` should also see constants inherited through a
-                    // super-trait bound such as `T: SubTrait`.
-                    for super_trait in pred.def(db).super_traits(db) {
-                        let super_inst = super_trait.instantiate(db, pred.args(db));
-                        if super_inst.def(db).const_(db, name).is_some() {
-                            matches.insert(super_inst);
-                        }
-                    }
+                    // Constants inherited through super-trait bounds are
+                    // covered by the elaborated assumption list.
+                    matches.insert(pred);
                 }
 
                 cx.rollback_to(snapshot);
@@ -1218,6 +1215,11 @@ pub(crate) fn find_associated_type<'db>(
 ) -> Result<SmallVec<(TraitInstId<'db>, TyId<'db>), 4>, FindAssociatedTypeError> {
     let canonical_ty = ty.canonical();
     let original_ty = ty.original();
+
+    // Candidate discovery must see implied bounds: `T: Sub` with
+    // `trait Sub: Super { .. }` makes `Super`'s associated types reachable
+    // through `T::Item`.
+    let assumptions = assumptions.extend_all_bounds(db);
 
     // Qualified type: `<A as T>::B`. Always construct the associated type projection
     // against the qualified trait instance; bindings (if any) will be handled downstream.

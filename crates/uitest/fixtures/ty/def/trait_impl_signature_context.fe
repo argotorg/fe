@@ -1,10 +1,6 @@
-// SKIPPED (rename to .fe to enable): checking the impl of `fn take` panics in
-// semantic body lowering ("const ref should resolve to a semantic instance")
-// because the trait-const const-generic `Slot<{ Self::N }>` in the trait
-// method signature cannot be evaluated in the impl context yet.
 trait SignatureCtx {
     type Item
-    fn make(self, value: Self::Item) -> Self::Item
+    fn make(self, _ value: Self::Item) -> Self::Item
 }
 
 struct SignatureCtxStruct {}
@@ -12,7 +8,7 @@ struct SignatureCtxStruct {}
 impl SignatureCtx for SignatureCtxStruct {
     type Item = u32
 
-    fn make(self, value: Self::Item) -> Self::Item {
+    fn make(self, _ value: Self::Item) -> Self::Item {
         value
     }
 }
@@ -33,7 +29,7 @@ impl AssocRhsCtx for AssocRhsCtxStruct {
     type B = Self::A
 }
 
-fn needs_assoc_rhs<T: AssocRhsCtx<A = u32, B = u32>>(_value: T) {}
+fn needs_assoc_rhs<T: AssocRhsCtx<A = u32, B = u32>>(_ value: T) {}
 
 fn use_assoc_rhs(value: AssocRhsCtxStruct) {
     needs_assoc_rhs(value)
@@ -56,8 +52,8 @@ impl ConstSigCtx for ConstSigCtxStruct {
     }
 }
 
-fn needs_const_sig<T: ConstSigCtx>(_value: T) {}
+fn needs_const_sig<T: ConstSigCtx>(_ value: T) {}
 
-fn use_const_sig_ctx(value: ConstSigCtxStruct, _slot: Slot<{ ConstSigCtxStruct::N }>) {
+fn use_const_sig_ctx(value: ConstSigCtxStruct, _ slot: Slot<{ ConstSigCtxStruct::N }>) {
     needs_const_sig(value)
 }

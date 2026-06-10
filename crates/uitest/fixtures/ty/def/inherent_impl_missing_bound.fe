@@ -80,6 +80,3 @@ struct AssocBox<T> {
 impl<T: AssocStrong> AssocBox<T::Item> {
     fn touch(self) {}
 }
-
-// KNOWN GAP: `AssocBox<T::Item>` — projections from param bounds do not
-// resolve in inherent-impl self-type position ("`Item` is not found").

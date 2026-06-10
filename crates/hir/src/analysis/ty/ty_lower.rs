@@ -158,6 +158,40 @@ fn const_body_simple_path<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> O
     expr_simple_path(db, body, &expr)
 }
 
+/// Extends `assumptions` with the enclosing trait's implicit `Self: Trait`
+/// predicate, mirroring the body-checking environment. Signature-position
+/// const bodies like `Slot<{ Self::N }>` in a trait method must resolve
+/// `Self::N` to a trait const the same way the body checker later does, or
+/// the const falls back to an unevaluated body whose CTFE cannot resolve the
+/// trait const reference.
+fn with_enclosing_trait_self_predicate<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> PredicateListId<'db> {
+    let mut item = Some(scope.item());
+    while let Some(current) = item {
+        match current {
+            crate::hir_def::ItemKind::Trait(trait_) => {
+                let pred = crate::core::semantic::trait_self_predicate(db, trait_);
+                if assumptions.list(db).contains(&pred) {
+                    return assumptions;
+                }
+                let mut merged = assumptions.list(db).clone();
+                merged.push(pred);
+                return PredicateListId::new(db, merged);
+            }
+            // `Self` inside impls resolves to the implementor type directly.
+            crate::hir_def::ItemKind::Impl(_) | crate::hir_def::ItemKind::ImplTrait(_) => {
+                return assumptions;
+            }
+            _ => {}
+        }
+        item = current.scope().parent_item(db);
+    }
+    assumptions
+}
+
 fn lower_opt_const_body<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Partial<Body<'db>>,
@@ -171,6 +205,7 @@ fn lower_opt_const_body<'db>(
         return ConstTyId::from_body(db, body, None, None);
     };
 
+    let assumptions = with_enclosing_trait_self_predicate(db, scope, assumptions);
     match resolve_path(db, path, scope, assumptions, true) {
         Ok(PathRes::Const(const_def, ty)) => {
             if let Some(body) = const_def.body(db).to_opt() {
@@ -774,9 +809,10 @@ fn provenance_contains_alias_template<'db>(
     provenance: ProvenanceId<'db>,
     alias: HirTypeAlias<'db>,
 ) -> bool {
-    provenance.contains(db, |site| {
-        matches!(site, ProvenanceSite::Lex(LexSite::AliasTemplate(found)) if found == alias)
-    })
+    provenance.contains(
+        db,
+        |site| matches!(site, ProvenanceSite::Lex(LexSite::AliasTemplate(found)) if found == alias),
+    )
 }
 
 /// Lowers the given type alias to [`TyAlias`].

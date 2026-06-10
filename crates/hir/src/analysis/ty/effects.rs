@@ -2,8 +2,7 @@ use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution::PathRes;
 use crate::analysis::ty::const_ty::{
     ConstCanonEnv, ConstCanonMode, ConstTyData, HoleId, LexSite, ProvenanceId, ProvenanceSite,
-    StructuralHoleOrigin,
-    canonicalize_trait_inst_for_mode, canonicalize_ty_for_mode,
+    StructuralHoleOrigin, canonicalize_trait_inst_for_mode, canonicalize_ty_for_mode,
 };
 use crate::analysis::ty::fold::{AssocTySubst, TyFoldable, TyFolder};
 use crate::analysis::ty::layout_holes::layout_hole_with_fallback_ty;

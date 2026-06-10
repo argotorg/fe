@@ -66,9 +66,7 @@ use crate::analysis::ty::binder::Binder;
 use crate::hir_def::*;
 // When adding real methods, prefer calling internal lowering/normalization here
 // rather than exposing raw syntax.
-use crate::analysis::ty::adt_def::{
-    AdtCycleMember, AdtDef, AdtField, AdtRef,
-};
+use crate::analysis::ty::adt_def::{AdtCycleMember, AdtDef, AdtField, AdtRef};
 use crate::analysis::ty::const_ty::{
     CallableInputLayoutHoleOrigin, ConstTyData, ConstTyId, EvaluatedConstTy,
 };
@@ -78,9 +76,8 @@ use crate::analysis::ty::effects::{
 use crate::analysis::ty::layout_holes::{
     LayoutPlaceholderPolicy, callable_input_layout_bindings_by_origin,
     collect_layout_hole_tys_in_order, collect_unique_layout_placeholders_in_order_with_policy,
-    layout_hole_fallback_ty,
-    substitute_layout_holes_by_identity, substitute_layout_holes_by_identity_in,
-    substitute_layout_placeholders_by_identity,
+    layout_hole_fallback_ty, substitute_layout_holes_by_identity,
+    substitute_layout_holes_by_identity_in, substitute_layout_placeholders_by_identity,
 };
 use crate::analysis::ty::trait_def::{
     ImplementorId, ImplementorOrigin, TraitInstId, does_impl_trait_conflict, ingot_trait_env,
@@ -211,7 +208,9 @@ pub(crate) fn func_body_assumptions<'db>(
 ) -> PredicateListId<'db> {
     let preds = collect_func_decl_constraints(db, func.into(), true).instantiate_identity();
     match func.scope().parent_item(db) {
-        Some(ItemKind::Trait(trait_)) => push_predicate(db, preds, trait_self_predicate(db, trait_)),
+        Some(ItemKind::Trait(trait_)) => {
+            push_predicate(db, preds, trait_self_predicate(db, trait_))
+        }
         _ => preds,
     }
 }
