@@ -1,0 +1,25 @@
+trait Cap {
+    const V: u32
+}
+struct H {}
+impl Cap for H {
+    const V: u32 = 7
+}
+
+const fn pick() -> u32 {
+    H::V
+}
+
+struct S<const N: u32> {}
+trait Tr {}
+impl Tr for S<{ pick() }> {}
+
+fn needs_tr<T: Tr>(_ t: T) {}
+fn use_it(s: S<7>) {
+    needs_tr(s)
+}
+
+// Evaluating `pick()` selects `impl Cap for H` through the ingot trait env,
+// and building the trait env lowers this impl's header, which CTFE-forces
+// `pick()`. The `ingot_trait_env` salsa cycle must converge to the full env
+// (least-fixpoint from an empty initial), not silently drop the impl.

@@ -12,14 +12,15 @@ use crate::{
         HirAnalysisDb,
         semantic::instance::{
             GenericSubst, ImplEnv, SemanticInstance, SemanticInstanceKey,
-            get_or_build_semantic_instance, instantiate_with_generic_args,
+            get_or_build_semantic_instance,
         },
         semantic::{
             FieldIndex, SConst, SExpr, SLocalId, SOperand, SPlace, SStmt, SStmtKind,
             STerminatorKind, SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticBody,
-            SemanticConstRef, VariantIndex, array_const, bool_const, bytes_const, enum_const,
-            int_const, int_ty_shape, normalize_int_to_shape, runtime_size_bytes, sem_const_eq,
-            sem_const_from_ty, sem_const_ty, struct_const, tuple_const, unit_const,
+            SemanticConstRef, VariantIndex, array_const, bool_const, bytes_const,
+            consts::demand_concrete_const_ty, enum_const, int_const, int_ty_shape,
+            normalize_int_to_shape, runtime_size_bytes, sem_const_eq, sem_const_from_ty,
+            sem_const_ty, struct_const, tuple_const, unit_const,
         },
         ty::{
             const_expr::{ConstExpr, ConstExprId},
@@ -102,11 +103,30 @@ pub enum CtfeError<'db> {
     RecursionLimitExceeded {
         origin: SemOrigin<'db>,
     },
+    /// Evaluating the const required its own value (directly or through a
+    /// cycle of const items). Produced as the fixpoint-initial value of the
+    /// eval queries below, so a recursive definition converges to this error
+    /// instead of panicking on the salsa dependency cycle.
+    RecursiveConst {
+        origin: SemOrigin<'db>,
+    },
     CalleeError {
         origin: SemOrigin<'db>,
         callee: SemanticInstance<'db>,
         source: Box<CtfeError<'db>>,
     },
+}
+
+impl<'db> CtfeError<'db> {
+    /// Whether the root error (through any `CalleeError` chain) is a
+    /// recursive-const error.
+    pub fn root_is_recursive_const(&self) -> bool {
+        match self {
+            CtfeError::RecursiveConst { .. } => true,
+            CtfeError::CalleeError { source, .. } => source.root_is_recursive_const(),
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -135,7 +155,14 @@ enum SaturatingArithmetic {
     Mul,
 }
 
-#[salsa::tracked]
+// Const-item references are evaluated through these salsa queries (the
+// machine calls `eval_const_ref` when it hits an `SConst::Ref`), so a
+// recursive const definition is a salsa dependency cycle, not a deep machine
+// stack. Each query recovers with `Err(RecursiveConst)` as the fixpoint
+// initial value; the machine's ref site keeps that error shape stable across
+// iterations (see `SExpr::Const(SConst::Ref(..))` in `eval_expr`), so the
+// cycle converges to a recursion error instead of panicking.
+#[salsa::tracked(cycle_initial=eval_const_instance_cycle_initial, cycle_fn=eval_const_instance_cycle_recover)]
 pub fn eval_const_instance<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
@@ -148,7 +175,25 @@ pub fn eval_const_instance<'db>(
     )
 }
 
-#[salsa::tracked]
+fn eval_const_instance_cycle_initial<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> Result<SemConstId<'db>, CtfeError<'db>> {
+    Err(CtfeError::RecursiveConst {
+        origin: SemOrigin::Body(instance.key(db).owner(db)),
+    })
+}
+
+fn eval_const_instance_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &Result<SemConstId<'db>, CtfeError<'db>>,
+    _count: u32,
+    _instance: SemanticInstance<'db>,
+) -> salsa::CycleRecoveryAction<Result<SemConstId<'db>, CtfeError<'db>>> {
+    salsa::CycleRecoveryAction::Iterate
+}
+
+#[salsa::tracked(cycle_initial=eval_const_ref_cycle_initial, cycle_fn=eval_const_ref_cycle_recover)]
 pub fn eval_const_ref<'db>(
     db: &'db dyn HirAnalysisDb,
     cref: SemanticConstRef<'db>,
@@ -161,7 +206,25 @@ pub fn eval_const_ref<'db>(
     )
 }
 
-#[salsa::tracked]
+fn eval_const_ref_cycle_initial<'db>(
+    db: &'db dyn HirAnalysisDb,
+    cref: SemanticConstRef<'db>,
+) -> Result<SemConstId<'db>, CtfeError<'db>> {
+    Err(CtfeError::RecursiveConst {
+        origin: cref.origin(db),
+    })
+}
+
+fn eval_const_ref_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &Result<SemConstId<'db>, CtfeError<'db>>,
+    _count: u32,
+    _cref: SemanticConstRef<'db>,
+) -> salsa::CycleRecoveryAction<Result<SemConstId<'db>, CtfeError<'db>>> {
+    salsa::CycleRecoveryAction::Iterate
+}
+
+#[salsa::tracked(cycle_initial=eval_body_owner_const_cycle_initial, cycle_fn=eval_body_owner_const_cycle_recover)]
 pub fn eval_body_owner_const<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
@@ -177,7 +240,27 @@ pub fn eval_body_owner_const<'db>(
     eval_const_instance(db, get_or_build_semantic_instance(db, key))
 }
 
-#[salsa::tracked]
+fn eval_body_owner_const_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+    _generic_args: Vec<crate::analysis::ty::ty_def::TyId<'db>>,
+) -> Result<SemConstId<'db>, CtfeError<'db>> {
+    Err(CtfeError::RecursiveConst {
+        origin: SemOrigin::Body(owner),
+    })
+}
+
+fn eval_body_owner_const_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &Result<SemConstId<'db>, CtfeError<'db>>,
+    _count: u32,
+    _owner: BodyOwner<'db>,
+    _generic_args: Vec<crate::analysis::ty::ty_def::TyId<'db>>,
+) -> salsa::CycleRecoveryAction<Result<SemConstId<'db>, CtfeError<'db>>> {
+    salsa::CycleRecoveryAction::Iterate
+}
+
+#[salsa::tracked(cycle_initial=eval_body_owner_const_with_args_cycle_initial, cycle_fn=eval_body_owner_const_with_args_cycle_recover)]
 pub fn eval_body_owner_const_with_args<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
@@ -202,6 +285,28 @@ pub fn eval_body_owner_const_with_args<'db>(
     )
 }
 
+fn eval_body_owner_const_with_args_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+    _generic_args: Vec<crate::analysis::ty::ty_def::TyId<'db>>,
+    _args: Vec<SemConstId<'db>>,
+) -> Result<SemConstId<'db>, CtfeError<'db>> {
+    Err(CtfeError::RecursiveConst {
+        origin: SemOrigin::Body(owner),
+    })
+}
+
+fn eval_body_owner_const_with_args_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &Result<SemConstId<'db>, CtfeError<'db>>,
+    _count: u32,
+    _owner: BodyOwner<'db>,
+    _generic_args: Vec<crate::analysis::ty::ty_def::TyId<'db>>,
+    _args: Vec<SemConstId<'db>>,
+) -> salsa::CycleRecoveryAction<Result<SemConstId<'db>, CtfeError<'db>>> {
+    salsa::CycleRecoveryAction::Iterate
+}
+
 pub(super) fn try_eval_expr_to_const<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
@@ -223,6 +328,12 @@ struct CtfeMachine<'db> {
     instance_cache: FxHashMap<SemanticInstanceKey<'db>, SemanticInstance<'db>>,
     body_cache: FxHashMap<SemanticInstanceKey<'db>, Rc<SemanticBody<'db>>>,
     frames: Vec<CtfeFrame<'db>>,
+    /// Memoized results of const-item references evaluated by this machine.
+    const_results: FxHashMap<SemanticInstanceKey<'db>, Result<SemConstId<'db>, CtfeError<'db>>>,
+    /// Const items currently being evaluated, outermost first. A reference to
+    /// a const already on this stack is a recursive definition; the machine
+    /// owns this check so const recursion never becomes a salsa query cycle.
+    const_stack: Vec<SemanticInstanceKey<'db>>,
 }
 
 struct CtfeFrame<'db> {
@@ -875,6 +986,8 @@ impl<'db> CtfeMachine<'db> {
             instance_cache: FxHashMap::default(),
             body_cache: FxHashMap::default(),
             frames: Vec::new(),
+            const_results: FxHashMap::default(),
+            const_stack: Vec::new(),
         }
     }
 
@@ -941,6 +1054,37 @@ impl<'db> CtfeMachine<'db> {
         result
     }
 
+    /// Evaluates a const-item reference in this machine, pushing a frame for
+    /// the referenced instance instead of re-entering the salsa eval
+    /// queries. The const stack makes recursive definitions a detected
+    /// error (with the reference site as the origin) rather than a salsa
+    /// dependency cycle, and results are memoized per machine so shared
+    /// sub-consts are evaluated once.
+    fn eval_const_ref_value(
+        &mut self,
+        cref: SemanticConstRef<'db>,
+    ) -> Result<SemConstId<'db>, CtfeError<'db>> {
+        let key = cref.instance(self.db);
+        if let Some(result) = self.const_results.get(&key) {
+            return result.clone();
+        }
+        let origin = cref.origin(self.db);
+        if self.const_stack.contains(&key) {
+            return Err(CtfeError::RecursiveConst { origin });
+        }
+
+        self.const_stack.push(key);
+        let result = self
+            .eval_instance(SemanticInstance::new(self.db, key), Vec::new(), origin)
+            .and_then(|value| match value {
+                CtfeValue::Value(value) => Ok(value.materialize(self.db)),
+                CtfeValue::Ref(_) => Err(CtfeError::InvalidBorrow { origin }),
+            });
+        self.const_stack.pop();
+        self.const_results.insert(key, result.clone());
+        result
+    }
+
     fn eval_instance(
         &mut self,
         instance: SemanticInstance<'db>,
@@ -948,7 +1092,11 @@ impl<'db> CtfeMachine<'db> {
         origin: SemOrigin<'db>,
     ) -> Result<CtfeValue<'db>, CtfeError<'db>> {
         self.ensure_const_evaluable(instance, origin)?;
-        if self.frames.len() >= self.config.recursion_limit {
+        // Const-item frames are exempt from the limit: the const stack's
+        // cycle check already bounds them (each const is evaluated at most
+        // once per path), and a long but finite chain of const definitions
+        // is not call recursion.
+        if self.frames.len().saturating_sub(self.const_stack.len()) >= self.config.recursion_limit {
             return Err(CtfeError::RecursionLimitExceeded { origin });
         }
 
@@ -1099,12 +1247,26 @@ impl<'db> CtfeMachine<'db> {
             }
             SExpr::CodeRegionRef { .. } => Err(CtfeError::NotConstEvaluable { origin }),
             SExpr::Const(SConst::Value(value)) => Ok(CtfeValue::concrete(self.db, value)),
-            SExpr::Const(SConst::Ref(cref)) => eval_const_ref(self.db, cref)
+            SExpr::Const(SConst::Ref(cref)) => self
+                .eval_const_ref_value(cref)
                 .map(|value| CtfeValue::concrete(self.db, value))
-                .map_err(|err| CtfeError::CalleeError {
-                    origin: cref.origin(self.db),
-                    callee: SemanticInstance::new(self.db, cref.instance(self.db)),
-                    source: Box::new(err),
+                .map_err(|err| {
+                    // Re-originating recursion errors at the reference site
+                    // keeps the origin an expression of the body being
+                    // evaluated, so the eventual diagnostic anchors in the
+                    // right body. (It also keeps the error shape stable if
+                    // an outer salsa fixpoint iteration replays this site.)
+                    if err.root_is_recursive_const() {
+                        CtfeError::RecursiveConst {
+                            origin: cref.origin(self.db),
+                        }
+                    } else {
+                        CtfeError::CalleeError {
+                            origin: cref.origin(self.db),
+                            callee: SemanticInstance::new(self.db, cref.instance(self.db)),
+                            source: Box::new(err),
+                        }
+                    }
                 }),
             SExpr::Unary { op, value } => {
                 let value = self.load_value(frame_idx, value, origin)?;
@@ -2278,29 +2440,22 @@ impl<'db> CtfeMachine<'db> {
                     ..
                 } => Ok(value),
                 SemConstValue::TypeLevel { ty, const_ty } if ty == TyId::bool(self.db) => {
-                    let TyData::ConstTy(const_ty) = const_ty.data(self.db) else {
+                    let subst = self.frames[frame_idx]
+                        .body
+                        .owner
+                        .key(self.db)
+                        .subst(self.db);
+                    let Some(const_ty) = demand_concrete_const_ty(
+                        self.db,
+                        const_ty,
+                        ty,
+                        subst.generic_args(self.db),
+                    ) else {
                         return Err(CtfeError::InvalidOperation {
                             origin: value.error_origin(origin),
                             message: format!("expected bool, got {:?}", interned.value(self.db)),
                         });
                     };
-                    let mut const_ty = const_ty.evaluate(self.db, Some(ty));
-                    if matches!(const_ty.data(self.db), ConstTyData::Abstract(..)) {
-                        let subst = self.frames[frame_idx]
-                            .body
-                            .owner
-                            .key(self.db)
-                            .subst(self.db);
-                        let instantiated = instantiate_with_generic_args(
-                            self.db,
-                            TyId::const_ty(self.db, const_ty),
-                            subst.generic_args(self.db),
-                        );
-                        let TyData::ConstTy(instantiated) = instantiated.data(self.db) else {
-                            unreachable!("instantiating a const ty must yield a const ty");
-                        };
-                        const_ty = instantiated.evaluate(self.db, Some(ty));
-                    }
                     let ConstTyData::Evaluated(EvaluatedConstTy::LitBool(value), _) =
                         const_ty.data(self.db)
                     else {
@@ -2367,29 +2522,22 @@ impl<'db> CtfeMachine<'db> {
                     ..
                 } => Ok(value.clone()),
                 SemConstValue::TypeLevel { ty, const_ty } => {
-                    let TyData::ConstTy(const_ty) = const_ty.data(self.db) else {
+                    let subst = self.frames[frame_idx]
+                        .body
+                        .owner
+                        .key(self.db)
+                        .subst(self.db);
+                    let Some(const_ty) = demand_concrete_const_ty(
+                        self.db,
+                        const_ty,
+                        ty,
+                        subst.generic_args(self.db),
+                    ) else {
                         return Err(CtfeError::InvalidOperation {
                             origin: value.error_origin(origin),
                             message: format!("expected int, got {:?}", interned.value(self.db)),
                         });
                     };
-                    let mut const_ty = const_ty.evaluate(self.db, Some(ty));
-                    if matches!(const_ty.data(self.db), ConstTyData::Abstract(..)) {
-                        let subst = self.frames[frame_idx]
-                            .body
-                            .owner
-                            .key(self.db)
-                            .subst(self.db);
-                        let instantiated = instantiate_with_generic_args(
-                            self.db,
-                            TyId::const_ty(self.db, const_ty),
-                            subst.generic_args(self.db),
-                        );
-                        let TyData::ConstTy(instantiated) = instantiated.data(self.db) else {
-                            unreachable!("instantiating a const ty must yield a const ty");
-                        };
-                        const_ty = instantiated.evaluate(self.db, Some(ty));
-                    }
                     let ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int_id), _) =
                         const_ty.data(self.db)
                     else {

@@ -482,6 +482,12 @@ fn diag_from_invalid_cause<'db>(
             TyLowerDiag::ConstEvalRecursionLimitExceeded(expr.span(body).into()).into()
         }
 
+        InvalidCause::ConstEvalRecursiveConst { body, expr } => {
+            TyLowerDiag::ConstEvalRecursiveConst(expr.span(body).into()).into()
+        }
+
+        InvalidCause::TypeLoweringCycle => TyLowerDiag::TypeLoweringCycle(span).into(),
+
         InvalidCause::NotAType(_) => return None,
 
         // These errors should be caught and reported elsewhere

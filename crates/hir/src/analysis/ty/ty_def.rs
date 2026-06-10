@@ -1197,6 +1197,20 @@ pub enum InvalidCause<'db> {
         expr: ExprId,
     },
 
+    /// The const's definition requires its own value (directly or through a
+    /// cycle of const items).
+    ConstEvalRecursiveConst {
+        body: Body<'db>,
+        expr: ExprId,
+    },
+
+    /// Lowering this type re-entered itself (a `lower_hir_ty` salsa cycle
+    /// that converged without resolving). Most cyclic shapes are caught by
+    /// dedicated checks (alias cycles, recursive types, cyclic trait
+    /// bounds); this cause keeps any uncovered shape loud instead of
+    /// silently invalid.
+    TypeLoweringCycle,
+
     // TraitConstraintNotSat(PredicateId),
     ParseError,
 
@@ -1272,6 +1286,8 @@ impl InvalidCause<'_> {
             InvalidCause::ConstEvalRecursionLimitExceeded { .. } => {
                 "ConstEvalRecursionLimitExceeded".into()
             }
+            InvalidCause::ConstEvalRecursiveConst { .. } => "ConstEvalRecursiveConst".into(),
+            InvalidCause::TypeLoweringCycle => "TypeLoweringCycle".into(),
         }
     }
 }

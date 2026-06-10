@@ -1,0 +1,23 @@
+struct Helper {}
+impl Helper {
+    const fn give(self) -> u32 { 7 }
+}
+
+const fn bar() -> u32 {
+    Helper{}.give()
+}
+
+struct S<const N: u32> {}
+
+impl S<{ bar() }> {
+    fn m(self) -> u32 { 9 }
+}
+
+fn use_it(s: S<7>) -> u32 {
+    s.m()
+}
+
+// Checking `bar`'s body requires method selection (the ingot method table),
+// and building the method table lowers this impl's header, which CTFE-forces
+// `bar()`. The `collect_methods` salsa cycle must converge to the full table
+// (least-fixpoint from an empty initial), not silently drop the impl.

@@ -1,0 +1,12 @@
+const SELF_REF: u32 = SELF_REF
+
+const PING: u32 = PONG
+const PONG: u32 = PING
+
+// A valid chain through other consts must still evaluate.
+const BASE: u32 = 7
+const DERIVED: u32 = BASE + 1
+
+fn use_consts() -> u32 {
+    DERIVED
+}

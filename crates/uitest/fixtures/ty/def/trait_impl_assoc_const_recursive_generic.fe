@@ -1,0 +1,50 @@
+trait HasConst {
+    const C: u32
+}
+
+struct Wrap<T> {
+    inner: T,
+}
+
+impl<U> HasConst for Wrap<U> {
+    const C: u32 = Self::C
+}
+
+trait Mutual {
+    const M: u32
+}
+
+struct Left<T> {
+    inner: T,
+}
+
+struct Right<T> {
+    inner: T,
+}
+
+impl<U> Mutual for Left<U> {
+    const M: u32 = Right<U>::M
+}
+
+impl<U> Mutual for Right<U> {
+    const M: u32 = Left<U>::M
+}
+
+trait Forward {
+    const F: u32
+}
+
+struct Fwd<T> {
+    inner: T,
+}
+
+// Param-dependent consts on generic impls legitimately defer evaluation to
+// the instantiation site; only definitions whose resolution loops back to
+// themselves are recursive.
+impl<U: HasConst> Forward for Fwd<U> {
+    const F: u32 = U::C + 1
+}
+
+fn force_concrete() -> u32 {
+    Wrap<u8>::C
+}

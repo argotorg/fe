@@ -35,7 +35,7 @@ use crate::analysis::{
 };
 use crate::hir_def::{CallableDef, ItemKind, scope_graph::ScopeId};
 use common::indexmap::IndexMap;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub enum LayoutHoleArgSite<'db> {
@@ -1889,6 +1889,7 @@ pub(crate) fn invalid_cause_from_ctfe_error<'db>(
         CtfeError::RecursionLimitExceeded { .. } => {
             InvalidCause::ConstEvalRecursionLimitExceeded { body, expr }
         }
+        CtfeError::RecursiveConst { .. } => InvalidCause::ConstEvalRecursiveConst { body, expr },
         CtfeError::NonConstCall { .. } => InvalidCause::ConstEvalNonConstCall { body, expr },
         CtfeError::InvalidBody { .. } => InvalidCause::Other,
         CtfeError::NotConstEvaluable { .. }
@@ -1929,7 +1930,8 @@ fn root_ctfe_error<'a, 'db>(
         | CtfeError::VariantMismatch { origin }
         | CtfeError::UninitializedLocal { origin }
         | CtfeError::StepLimitExceeded { origin }
-        | CtfeError::RecursionLimitExceeded { origin } => (owner, err, *origin),
+        | CtfeError::RecursionLimitExceeded { origin }
+        | CtfeError::RecursiveConst { origin } => (owner, err, *origin),
     }
 }
 
@@ -2093,6 +2095,60 @@ pub(crate) fn const_ty_from_assoc_const_use<'db>(
     assoc: AssocConstUse<'db>,
 ) -> Option<ConstTyId<'db>> {
     const_ty_from_trait_const(db, assoc.solve_cx(db), assoc.inst(), assoc.name())
+}
+
+/// Whether `start_body`'s value definition can re-enter `start_body` when
+/// its const references (module consts and trait consts through their
+/// selected impls or defaults) are resolved transitively.
+///
+/// This detects recursive associated-const definitions on *generic* impls at
+/// the definition site: evaluation under the impl's own binder never errors
+/// (param-dependent consts legitimately stay symbolic, and the recursive
+/// fixpoint in `evaluate_const_ty` recovers with the unevaluated form), so
+/// recursion is invisible to the evaluation result. The typed body's
+/// registered const refs give the same resolution edges lowering will take;
+/// refs whose resolution depends on unknown params (no impl selected) end
+/// the walk — those are deferred to instantiation sites.
+pub(crate) fn const_body_resolution_reenters<'db>(
+    db: &'db dyn HirAnalysisDb,
+    start_body: Body<'db>,
+    start_expected: TyId<'db>,
+) -> bool {
+    use crate::analysis::ty::ty_check::ConstRef;
+
+    let mut visited = FxHashSet::default();
+    visited.insert(start_body);
+    let mut frontier = vec![(start_body, start_expected)];
+    while let Some((body, expected)) = frontier.pop() {
+        let typed_body = &check_anon_const_body(db, body, expected).1;
+        for cref in typed_body.const_refs() {
+            let next =
+                match cref {
+                    ConstRef::Const(const_) => const_
+                        .body(db)
+                        .to_opt()
+                        .map(|next_body| (next_body, const_.ty(db))),
+                    ConstRef::TraitConst(assoc) => const_ty_from_assoc_const_use(db, assoc)
+                        .and_then(|const_ty| match const_ty.data(db) {
+                            ConstTyData::UnEvaluated {
+                                body, ty: Some(ty), ..
+                            } => Some((*body, *ty)),
+                            _ => None,
+                        }),
+                };
+            let Some((next_body, next_expected)) = next else {
+                continue;
+            };
+            if next_body == start_body {
+                return true;
+            }
+            if next_expected.has_invalid(db) || !visited.insert(next_body) {
+                continue;
+            }
+            frontier.push((next_body, next_expected));
+        }
+    }
+    false
 }
 
 /// Builds the abstract (unevaluated) form of a trait-const use. Evaluation is

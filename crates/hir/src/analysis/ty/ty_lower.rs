@@ -336,9 +336,12 @@ fn lower_hir_ty_cycle_initial<'db>(
     _scope: ScopeId<'db>,
     _assumptions: PredicateListId<'db>,
 ) -> TyId<'db> {
-    // On cycles during type lowering, treat the type as invalid so that
-    // callers can emit a suitable diagnostic without recursing further.
-    TyId::invalid(db, InvalidCause::Other)
+    // On cycles during type lowering, treat the type as invalid. The cause
+    // renders a diagnostic at the use site: cyclic shapes are normally
+    // rejected by dedicated checks first (alias cycles, recursive types,
+    // cyclic trait bounds), so any cycle that converges to this value is a
+    // shape those checks missed and must not be silently invalid.
+    TyId::invalid(db, InvalidCause::TypeLoweringCycle)
 }
 
 fn lower_hir_ty_cycle_recover<'db>(

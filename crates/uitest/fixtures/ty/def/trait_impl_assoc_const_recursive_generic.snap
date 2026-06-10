@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/trait_impl_assoc_const_recursive_generic.fe
+---
+error[6-0017]: associated const `C` has a recursive definition
+   ┌─ trait_impl_assoc_const_recursive_generic.fe:10:11
+   │
+10 │     const C: u32 = Self::C
+   │           ^ `C` cannot be evaluated to a concrete value
+
+error[6-0017]: associated const `M` has a recursive definition
+   ┌─ trait_impl_assoc_const_recursive_generic.fe:26:11
+   │
+26 │     const M: u32 = Right<U>::M
+   │           ^ `M` cannot be evaluated to a concrete value
+
+error[6-0017]: associated const `M` has a recursive definition
+   ┌─ trait_impl_assoc_const_recursive_generic.fe:30:11
+   │
+30 │     const M: u32 = Left<U>::M
+   │           ^ `M` cannot be evaluated to a concrete value

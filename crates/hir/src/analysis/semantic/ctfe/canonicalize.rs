@@ -7,14 +7,11 @@ use crate::analysis::{
     HirAnalysisDb,
     semantic::{
         SBlock, SBlockId, SConst, SExpr, SStmt, SStmtKind, STerminatorKind, SemConstId,
-        SemConstValue, SemanticBody, SemanticCalleeRef, array_const, enum_const,
-        instance::SemanticInstance, instantiate_with_generic_args, reify_runtime_const_for_ty,
-        sem_const_from_ty, struct_const, tuple_const,
+        SemConstValue, SemanticBody, SemanticCalleeRef, array_const,
+        consts::demand_concrete_const_ty, enum_const, instance::SemanticInstance,
+        reify_runtime_const_for_ty, sem_const_from_ty, struct_const, tuple_const,
     },
-    ty::{
-        const_ty::{ConstTyData, evaluate_type_level_int_const_expr},
-        ty_def::{BorrowKind, CapabilityKind, TyData, TyId},
-    },
+    ty::ty_def::{BorrowKind, CapabilityKind, TyId},
 };
 
 use super::{eval_const_ref, machine::try_eval_expr_to_const};
@@ -375,37 +372,14 @@ fn canonicalize_const_value<'db>(
     match value.value(db) {
         SemConstValue::Unit | SemConstValue::Scalar { .. } => value,
         SemConstValue::TypeLevel { ty, const_ty } => {
-            let instantiated = instantiate_with_generic_args(
+            let Some(evaluated) = demand_concrete_const_ty(
                 db,
                 const_ty,
+                ty,
                 instance.key(db).subst(db).generic_args(db),
-            );
-            let TyData::ConstTy(const_ty) = instantiated.data(db) else {
+            ) else {
                 return value;
             };
-            let mut evaluated = const_ty.evaluate(db, Some(ty));
-            if let ConstTyData::Abstract(expr, expected_ty) = evaluated.data(db)
-                && let Some(concrete) = evaluate_type_level_int_const_expr(db, *expr, *expected_ty)
-            {
-                evaluated = concrete;
-            }
-            if matches!(evaluated.data(db), ConstTyData::Abstract(..)) {
-                let instantiated = instantiate_with_generic_args(
-                    db,
-                    TyId::const_ty(db, evaluated),
-                    instance.key(db).subst(db).generic_args(db),
-                );
-                let TyData::ConstTy(instantiated) = instantiated.data(db) else {
-                    unreachable!("instantiating a const ty must yield a const ty");
-                };
-                evaluated = instantiated.evaluate(db, Some(ty));
-                if let ConstTyData::Abstract(expr, expected_ty) = evaluated.data(db)
-                    && let Some(concrete) =
-                        evaluate_type_level_int_const_expr(db, *expr, *expected_ty)
-                {
-                    evaluated = concrete;
-                }
-            }
             sem_const_from_ty(db, TyId::const_ty(db, evaluated)).unwrap_or(value)
         }
         SemConstValue::Tuple { ty, elems } => tuple_const(

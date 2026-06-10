@@ -382,34 +382,54 @@ pub(super) fn check_body<'db>(
         ));
     }
 
-    if let BodyOwner::Const(const_) = owner
-        && diags.is_empty()
-        && let Some(body) = const_.body(db).to_opt()
-        && !const_.ty(db).has_invalid(db)
-    {
-        let const_owner = BodyOwner::AnonConstBody {
-            body,
-            expected: const_.ty(db),
-        };
-        match eval_body_owner_const(db, const_owner, Vec::new()) {
-            Ok(value) => {
-                if matches!(value.value(db), SemConstValue::TypeLevel { .. }) {
-                    diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into());
-                }
-            }
-            Err(crate::analysis::semantic::CtfeError::NotConstEvaluable { .. }) => {
+    (diags, typed_body)
+}
+
+/// Forces evaluation of a const item's value and reports failures
+/// (unknowable values, recursion, arithmetic errors). This is deliberately a
+/// separate query from `check_const_body`: forcing evaluates *other* consts
+/// the body references, and their `ensure_const_evaluable` checks call
+/// `check_const_body` back — if typing and forcing were one query, a
+/// recursive const definition would be an unrecoverable salsa cycle through
+/// body checking instead of converging to a `RecursiveConst` error in the
+/// eval queries.
+#[salsa::tracked(return_ref)]
+pub fn check_const_value<'db>(
+    db: &'db dyn HirAnalysisDb,
+    const_: Const<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    if !check_const_body(db, const_).0.is_empty() {
+        return Vec::new();
+    }
+    let Some(body) = const_.body(db).to_opt() else {
+        return Vec::new();
+    };
+    if const_.ty(db).has_invalid(db) {
+        return Vec::new();
+    }
+
+    let const_owner = BodyOwner::AnonConstBody {
+        body,
+        expected: const_.ty(db),
+    };
+    let mut diags = Vec::new();
+    match eval_body_owner_const(db, const_owner, Vec::new()) {
+        Ok(value) => {
+            if matches!(value.value(db), SemConstValue::TypeLevel { .. }) {
                 diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into());
             }
-            Err(err) => {
-                let ty = TyId::invalid(db, invalid_cause_from_ctfe_error(db, const_owner, err));
-                if let Some(diag) = ty.emit_diag(db, body.span().into()) {
-                    diags.push(diag.into());
-                }
+        }
+        Err(crate::analysis::semantic::CtfeError::NotConstEvaluable { .. }) => {
+            diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into());
+        }
+        Err(err) => {
+            let ty = TyId::invalid(db, invalid_cause_from_ctfe_error(db, const_owner, err));
+            if let Some(diag) = ty.emit_diag(db, body.span().into()) {
+                diags.push(diag.into());
             }
         }
     }
-
-    (diags, typed_body)
+    diags
 }
 
 fn typed_body_for_bodyless_func<'db>(
@@ -2852,6 +2872,11 @@ impl<'db> TypedBody<'db> {
 
     pub fn is_implicit_move(&self, expr: ExprId) -> bool {
         self.implicit_moves.contains(&expr)
+    }
+
+    /// All const references registered in this body, in arbitrary order.
+    pub fn const_refs(&self) -> impl Iterator<Item = ConstRef<'db>> + '_ {
+        self.const_refs.values().flatten().copied()
     }
 
     pub fn expr_const_ref(&self, expr: ExprId) -> Option<ConstRef<'db>> {

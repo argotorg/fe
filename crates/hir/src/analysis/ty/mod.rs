@@ -392,7 +392,12 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
                     ItemKind::Const(const_) => Some(*const_),
                     _ => None,
                 })
-                .flat_map(|const_| &ty_check::check_const_body(db, const_).0)
+                .flat_map(|const_| {
+                    ty_check::check_const_body(db, const_)
+                        .0
+                        .iter()
+                        .chain(ty_check::check_const_value(db, const_))
+                })
                 .map(|diag| diag.to_voucher()),
         );
 

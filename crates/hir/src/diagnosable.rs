@@ -720,17 +720,24 @@ impl<'db> ImplTrait<'db> {
         diags
     }
 
-    /// Diagnostics for associated consts that never reach a concrete value on
-    /// a fully concrete impl. Recursive definitions (`const C: u32 = Self::C`,
-    /// or cycles through other consts) "evaluate" to a symbolic
-    /// self-reference: the salsa cycle in `evaluate_const_ty` recovers with
-    /// the unevaluated form, so no error surfaces anywhere else.
+    /// Diagnostics for associated consts with recursive definitions
+    /// (`const C: u32 = Self::C`, or cycles through other consts).
+    ///
+    /// On concrete impls every const is forced and must reach a concrete
+    /// value: recursion either surfaces as a `RecursiveConst` evaluation
+    /// error (through the eval-query cycle recovery) or "evaluates" to a
+    /// symbolic self-reference (the salsa cycle in `evaluate_const_ty`
+    /// recovers with the unevaluated form). On generic impls a
+    /// param-dependent const legitimately stays abstract, so recursion is
+    /// instead detected by walking the abstract form's resolution chain.
     pub fn diags_assoc_const_evaluability(
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> Vec<TyDiagCollection<'db>> {
         use ty::assoc_const::AssocConstUse;
-        use ty::const_ty::{ConstTyData, const_ty_from_assoc_const_use};
+        use ty::const_ty::{
+            ConstTyData, const_body_resolution_reenters, const_ty_from_assoc_const_use,
+        };
         use ty::diagnostics::ImplDiag;
 
         // Recursion is user-written; expanded impls are compiler output.
@@ -741,11 +748,7 @@ impl<'db> ImplTrait<'db> {
             return Vec::new();
         };
         let implementor = implementor.instantiate_identity();
-        // Generic impls can't be evaluated here; their consts are forced (and
-        // retyped) at instantiation sites instead.
-        if !implementor.params(db).is_empty() {
-            return Vec::new();
-        }
+        let is_generic = !implementor.params(db).is_empty();
 
         let trait_hir = implementor.trait_def(db);
         let inst = implementor.trait_inst(db);
@@ -765,10 +768,36 @@ impl<'db> ImplTrait<'db> {
                 .ty_binder(db)
                 .map(|binder| binder.instantiate(db, inst.args(db)));
             let evaluated = const_ty.evaluate(db, declared_ty);
-            if matches!(evaluated.data(db), ConstTyData::Evaluated(..))
-                || evaluated.ty(db).has_invalid(db)
-            {
+            if matches!(evaluated.data(db), ConstTyData::Evaluated(..)) {
                 continue;
+            }
+            if evaluated.ty(db).has_invalid(db) {
+                // Other invalid causes are reported by the body/header
+                // checks; recursion surfacing as an eval error is this
+                // diagnostic's job.
+                if !matches!(
+                    evaluated.ty(db).invalid_cause(db),
+                    Some(ty::ty_def::InvalidCause::ConstEvalRecursiveConst { .. })
+                ) {
+                    continue;
+                }
+            } else if is_generic {
+                // A non-evaluated result on a generic impl is legitimate
+                // deferral unless the const-ref resolution chain loops back
+                // here.
+                let ConstTyData::UnEvaluated {
+                    body: start_body,
+                    ty: Some(start_ty),
+                    ..
+                } = const_ty.data(db)
+                else {
+                    continue;
+                };
+                if start_ty.has_invalid(db)
+                    || !const_body_resolution_reenters(db, *start_body, *start_ty)
+                {
+                    continue;
+                }
             }
             let primary = match self.const_(db, name) {
                 Some(impl_const) => impl_const.span().name().into(),
