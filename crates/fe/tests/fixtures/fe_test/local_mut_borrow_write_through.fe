@@ -1,0 +1,42 @@
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+#[test]
+fn scalar_store_through_local_mut_borrow() {
+    let mut y: u256 = 0
+    let r = mut y
+    r = 7
+    assert!(y == 7)
+}
+
+#[test]
+fn projected_store_through_local_mut_borrow() {
+    let mut p = Pair { a: 1, b: 2 }
+    let r = mut p
+    r.a = 9
+    assert!(p.a == 9)
+    assert!(p.b == 2)
+}
+
+#[test]
+fn whole_store_through_local_mut_borrow() {
+    let mut p = Pair { a: 1, b: 2 }
+    let r = mut p
+    r = Pair { a: 7, b: 8 }
+    assert!(p.a == 7)
+    assert!(p.b == 8)
+}
+
+fn bump(_ v: mut u256) {
+    v += 1
+}
+
+#[test]
+fn forward_local_mut_borrow_to_fn() {
+    let mut y: u256 = 1
+    let r = mut y
+    bump(r)
+    assert!(y == 2)
+}

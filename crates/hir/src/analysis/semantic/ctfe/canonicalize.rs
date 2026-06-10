@@ -162,6 +162,13 @@ fn canonicalize_stmt<'db>(
         }
         SStmtKind::Store { dst, src } => {
             locals[dst.local.index()] = None;
+            // A store through a mut-borrow carrier also mutates the borrowed
+            // locals, so their cached constants are stale.
+            let mut memo = vec![None; body.locals.len()];
+            let mut visiting = FxHashSet::default();
+            for root in writable_local_roots(dst.local, local_defs, &mut memo, &mut visiting) {
+                locals[root.index()] = None;
+            }
             SStmtKind::Store {
                 dst: dst.clone(),
                 src: *src,
