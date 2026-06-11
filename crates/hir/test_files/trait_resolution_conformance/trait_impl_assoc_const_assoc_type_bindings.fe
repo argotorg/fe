@@ -90,4 +90,3 @@ impl ConcreteNamedAssocTy for ConcreteNamedAssocTyStruct {
 fn use_concrete_named_assoc_ty() -> u32 {
     ConcreteNamedAssocTyStruct::C
 }
-

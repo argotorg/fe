@@ -1,7 +1,6 @@
 use camino::Utf8PathBuf;
 use fe_hir::analysis::ty::{
     const_ty::{ConstTyData, EvaluatedConstTy},
-    corelib::resolve_lib_type_path,
     ty_check::{check_contract_recv_arm_body, check_func_body},
     ty_contains_const_hole,
     ty_def::{TyData, strip_derived_adt_layout_args},

@@ -6,4 +6,3 @@ trait BoundConst {
 struct Slot<const N: u32> {}
 
 fn use_in_type<T: BoundConst<X = u32>>(_ slot: Slot<{ T::C }>) {}
-
