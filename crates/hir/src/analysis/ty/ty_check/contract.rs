@@ -846,8 +846,12 @@ pub fn check_contract_immutable_fields_initialized<'db>(
         .collect::<FxHashSet<_>>();
     let init = contract.init(db);
     let missing = if init.is_some() {
-        let (_, typed_body) = check_contract_init_body(db, contract);
-        if typed_body.body().is_some() {
+        let (init_diags, typed_body) = check_contract_init_body(db, contract);
+        if !init_diags.is_empty() {
+            // Type errors in `init` already block compilation; don't pile
+            // missing-field diagnostics on top of a body we can't analyze.
+            FxHashSet::default()
+        } else if typed_body.body().is_some() {
             match contract_init_assigned_fields(db, contract) {
                 Some(assigned) => required
                     .iter()

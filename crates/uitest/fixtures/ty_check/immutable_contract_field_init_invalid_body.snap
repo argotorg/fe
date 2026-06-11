@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/immutable_contract_field_init_invalid_body.fe
+---
+error[8-0012]: undefined variable
+  ┌─ immutable_contract_field_init_invalid_body.fe:5:9
+  │
+5 │         x = 1
+  │         ^ undefined variable `x`
+
+error[8-0012]: undefined variable
+   ┌─ immutable_contract_field_init_invalid_body.fe:10:5
+   │
+10 │     undefined_var = v
+   │     ^^^^^^^^^^^^^ undefined variable `undefined_var`

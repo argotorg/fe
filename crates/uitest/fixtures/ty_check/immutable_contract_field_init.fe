@@ -253,3 +253,47 @@ contract InitViaLocalMutBorrow {
         r = v
     }
 }
+
+contract InitBranchCondMutatedThroughBorrow {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        let mut b = true
+        let r = mut b
+        r = false
+        if b {
+            x = v
+        }
+    }
+}
+
+fn make_false(_ b: mut bool) {
+    b = false
+}
+
+contract InitBranchCondMutatedThroughCall {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        let mut b = true
+        make_false(b: mut b)
+        if b {
+            x = v
+        }
+    }
+}
+
+contract InitBranchCondMutatedBothArmsAssign {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        let mut b = true
+        let r = mut b
+        r = false
+        if b {
+            x = v
+        } else {
+            x = v + 1
+        }
+    }
+}

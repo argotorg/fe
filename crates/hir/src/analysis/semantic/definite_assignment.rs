@@ -28,8 +28,12 @@ use crate::{
             normalize_semantic_body,
         },
         ty::{
-            ty_check::{BodyOwner, EffectParamSite, EffectPassMode, LocalBinding, ParamSite},
-            ty_def::CapabilityKind,
+            ty_check::{
+                BodyOwner, EffectParamSite, EffectPassMode, LocalBinding, ParamSite,
+                check_const_body, check_contract_init_body, check_contract_recv_arm_body,
+                check_func_body,
+            },
+            ty_def::{BorrowKind, CapabilityKind},
         },
     },
     hir_def::{Contract, Func, FuncParamMode},
@@ -100,6 +104,11 @@ fn instance_assigned_targets<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> Option<Vec<AssignedTarget<'db>>> {
+    // Bodies with type errors cannot be lowered to semantic MIR; credit no
+    // writes instead of forcing a lowering that would panic.
+    if !owner_body_is_clean(db, instance.key(db).owner(db)) {
+        return Some(Vec::new());
+    }
     let body = normalize_semantic_body(db, instance).ok()?;
     if body.blocks.is_empty() {
         return None;
@@ -126,6 +135,24 @@ fn instance_assigned_targets<'db>(
         acc
     });
     Some(assigned.into_iter().collect())
+}
+
+fn owner_body_is_clean<'db>(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -> bool {
+    match owner {
+        BodyOwner::Func(func) => check_func_body(db, func).0.is_empty(),
+        BodyOwner::Const(const_) => check_const_body(db, const_).0.is_empty(),
+        BodyOwner::ContractInit { contract } => {
+            check_contract_init_body(db, contract).0.is_empty()
+        }
+        BodyOwner::ContractRecvArm {
+            contract,
+            recv_idx,
+            arm_idx,
+        } => check_contract_recv_arm_body(db, contract, recv_idx, arm_idx)
+            .0
+            .is_empty(),
+        BodyOwner::AnonConstBody { .. } => false,
+    }
 }
 
 fn assigned_targets_cycle_initial<'db>(
@@ -194,11 +221,13 @@ impl<'a, 'db> DefiniteAssignment<'a, 'db> {
             .filter(|(local, _)| assign_counts.get(local) == Some(&1))
             .collect();
 
+        let mut_aliased = mut_aliased_locals(body);
+
         let mut successors: SecondaryMap<SBlockId, Vec<SBlockId>> = SecondaryMap::new();
         successors.resize(body.blocks.len());
         for (idx, block) in body.blocks.iter().enumerate() {
             successors[SBlockId::new(idx)] =
-                block_successors(db, body, idx, &block.terminator.kind);
+                block_successors(db, body, idx, &block.terminator.kind, &mut_aliased);
         }
 
         Self {
@@ -218,7 +247,7 @@ impl<'a, 'db> DefiniteAssignment<'a, 'db> {
             match self.single_defs.get(&local)? {
                 NExpr::Borrow {
                     place,
-                    kind: crate::analysis::ty::ty_def::BorrowKind::Mut,
+                    kind: BorrowKind::Mut,
                     ..
                 } => return Some(place),
                 NExpr::Use(op) => {
@@ -408,11 +437,53 @@ impl<'db> dataflow::ForwardCfgAnalysis for DefiniteAssignment<'_, 'db> {
     }
 }
 
+/// Locals whose slot can be written other than by an `Assign` to the local
+/// itself: mut-borrow targets, mut effect-provider places, and direct store
+/// destinations. Branch folding must not trust `Assign`-visible constants
+/// for these, since an aliasing write between the constant definition and
+/// the branch would not show up as a later `Assign`.
+fn mut_aliased_locals(body: &NormalizedSemanticBody<'_>) -> FxHashSet<SLocalId> {
+    let mut aliased = FxHashSet::default();
+    let note_place = |place: &NSPlace<'_>, aliased: &mut FxHashSet<SLocalId>| {
+        if let NSPlaceRoot::Root(root_id) = &place.root
+            && let Some(
+                NBorrowRoot::Param { local, .. } | NBorrowRoot::LocalSlot { local },
+            ) = body.root(*root_id)
+        {
+            aliased.insert(*local);
+        }
+    };
+    for block in &body.blocks {
+        for stmt in &block.stmts {
+            match &stmt.kind {
+                NSStmtKind::Store { dst, .. } => note_place(dst, &mut aliased),
+                NSStmtKind::Assign { expr, .. } => match expr {
+                    NExpr::Borrow {
+                        place,
+                        kind: BorrowKind::Mut,
+                        ..
+                    } => note_place(place, &mut aliased),
+                    NExpr::Call { effect_args, .. } => {
+                        for arg in effect_args.iter().filter(|arg| arg.required_mut) {
+                            if let NEffectArgValue::Place(place) = &arg.arg {
+                                note_place(place, &mut aliased);
+                            }
+                        }
+                    }
+                    _ => {}
+                },
+            }
+        }
+    }
+    aliased
+}
+
 fn block_successors<'db>(
     db: &'db dyn HirAnalysisDb,
     body: &NormalizedSemanticBody<'db>,
     block_idx: usize,
     terminator: &NSTerminatorKind<'db>,
+    mut_aliased: &FxHashSet<SLocalId>,
 ) -> Vec<SBlockId> {
     match terminator {
         NSTerminatorKind::Goto(target) => vec![*target],
@@ -420,7 +491,7 @@ fn block_successors<'db>(
             cond,
             then_bb,
             else_bb,
-        } => match literal_bool_cond(db, body, block_idx, cond.local) {
+        } => match literal_bool_cond(db, body, block_idx, cond.local, mut_aliased) {
             Some(true) => vec![*then_bb],
             Some(false) => vec![*else_bb],
             None => vec![*then_bb, *else_bb],
@@ -435,13 +506,18 @@ fn block_successors<'db>(
 }
 
 /// The boolean value of `local` at `block_idx`'s terminator, when its
-/// dominating definition in the same block is a literal constant.
+/// dominating definition in the same block is a literal constant and the
+/// local cannot be mutated through an alias.
 fn literal_bool_cond<'db>(
     db: &'db dyn HirAnalysisDb,
     body: &NormalizedSemanticBody<'db>,
     block_idx: usize,
     local: SLocalId,
+    mut_aliased: &FxHashSet<SLocalId>,
 ) -> Option<bool> {
+    if mut_aliased.contains(&local) {
+        return None;
+    }
     let last_def = body.blocks[block_idx]
         .stmts
         .iter()
