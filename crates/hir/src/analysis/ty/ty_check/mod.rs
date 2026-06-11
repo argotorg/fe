@@ -661,20 +661,40 @@ impl<'db> TyChecker<'db> {
                 continue;
             }
 
-            if !matches!(
-                view.resolved_binding(self.db, idx),
+            match view.resolved_binding(self.db, idx) {
                 Some(binding)
                     if matches!(
                         binding.provider.source,
                         crate::core::semantic::ProviderSource::ContractField { .. }
                             | crate::core::semantic::ProviderSource::RootProvider { .. }
-                    )
-            ) {
-                self.push_diag(BodyDiag::InvalidEffectKey {
-                    owner,
-                    key: key_path,
-                    idx,
-                });
+                    ) =>
+                {
+                    // Contract fields are immutable unless declared `mut`. The
+                    // one exception — assigning immutable code-backed fields in
+                    // `init` — is already reflected in the provider's
+                    // site-specific mutability.
+                    if binding.requirement.is_mut
+                        && !binding.provider.is_mut
+                        && let crate::core::semantic::ProviderSource::ContractField {
+                            contract: field_contract,
+                            field_idx,
+                        } = binding.provider.source
+                    {
+                        self.push_diag(BodyDiag::ImmutableContractFieldMutBinding {
+                            primary: owner.effect_param_path_span(self.db, idx),
+                            field: binding.requirement.binding_name,
+                            field_span: crate::hir_def::FieldParent::Contract(field_contract)
+                                .field_name_span(field_idx as usize),
+                        });
+                    }
+                }
+                _ => {
+                    self.push_diag(BodyDiag::InvalidEffectKey {
+                        owner,
+                        key: key_path,
+                        idx,
+                    });
+                }
             }
         }
     }

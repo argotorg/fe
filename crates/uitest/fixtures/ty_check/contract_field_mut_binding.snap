@@ -1,0 +1,38 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/contract_field_mut_binding.fe
+---
+error[8-0085]: cannot bind immutable contract field as `mut`
+   ┌─ contract_field_mut_binding.fe:16:33
+   │
+ 9 │     x: u256
+   │     - `x` declared here
+   ·
+16 │         Touch -> u256 uses (mut x) {
+   │                                 ^ `x` is not declared `mut`
+   │
+   = immutable contract fields can only be assigned in `init`; mark the field `mut` to make it mutable contract state
+
+error[8-0085]: cannot bind immutable contract field as `mut`
+   ┌─ contract_field_mut_binding.fe:26:33
+   │
+23 │     cache: StorPtr<u256>
+   │     ----- `cache` declared here
+   ·
+26 │         Touch -> u256 uses (mut cache) {
+   │                                 ^^^^^ `cache` is not declared `mut`
+   │
+   = immutable contract fields can only be assigned in `init`; mark the field `mut` to make it mutable contract state
+
+error[8-0085]: cannot bind immutable contract field as `mut`
+   ┌─ contract_field_mut_binding.fe:36:22
+   │
+34 │     cache: StorPtr<u256>
+   │     ----- `cache` declared here
+35 │
+36 │     init() uses (mut cache) {
+   │                      ^^^^^ `cache` is not declared `mut`
+   │
+   = immutable contract fields can only be assigned in `init`; mark the field `mut` to make it mutable contract state

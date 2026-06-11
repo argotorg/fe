@@ -3299,6 +3299,31 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
+            Self::ImmutableContractFieldMutBinding {
+                primary,
+                field,
+                field_span,
+            } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "cannot bind immutable contract field as `mut`".to_string(),
+                sub_diagnostics: vec![
+                    SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!("`{}` is not declared `mut`", field.data(db)),
+                        span: primary.resolve(db),
+                    },
+                    SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{}` declared here", field.data(db)),
+                        span: field_span.resolve(db),
+                    },
+                ],
+                notes: vec![format!(
+                    "immutable contract fields can only be assigned in `init`; mark the field `mut` to make it mutable contract state",
+                )],
+                error_code,
+            },
+
             Self::LoopControlOutsideOfLoop { primary, is_break } => {
                 let stmt = if *is_break { "break" } else { "continue" };
 
