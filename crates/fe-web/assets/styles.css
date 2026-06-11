@@ -3,8 +3,11 @@
 /* Safari/WebKit needs this to suppress native disclosure triangles */
 summary::-webkit-details-marker { display: none; }
 
-/* Light mode (default) */
+/* Light mode (default).
+   Theming knobs for downstream consumers — override any of these in a
+   stylesheet loaded *after* this one to customize the doc viewer. */
 :root {
+    /* Palette */
     --bg: #ffffff;
     --bg-secondary: #f8fafc;
     --text: #1e293b;
@@ -15,6 +18,36 @@ summary::-webkit-details-marker { display: none; }
     --border: #e2e8f0;
     --code-bg: var(--fe-code-bg);
 
+    /* Fonts — these variables drive every text surface so themers can
+       swap a single value to retheme. */
+    --fe-body-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --fe-heading-font: var(--fe-body-font);
+    --fe-mono-font: "JetBrains Mono", "Fira Code", monospace;
+
+    /* Weights — pixel-style fonts may want 400 everywhere to avoid the
+       wider-at-bold jump that bitmap faces introduce. */
+    --fe-body-weight: 400;
+    --fe-heading-weight: 600;
+    /* Sidebar chrome (module names, kind headers, current-item accent).
+       Pixel themes pin to 400 and use --fe-emphasis-text-shadow for visual
+       weight instead, since bitmap bold faces change glyph advance. */
+    --fe-sidebar-weight: 600;
+    --fe-current-weight: 600;
+
+    /* Pixel / retro rendering knobs. Defaults are browser-native. */
+    --fe-font-smoothing: auto;          /* maps to -webkit-font-smoothing */
+    --fe-moz-font-smoothing: auto;      /* maps to -moz-osx-font-smoothing */
+    --fe-text-rendering: auto;
+    --fe-heading-text-shadow: none;
+    --fe-emphasis-text-shadow: none;    /* applied to current nav items */
+    --fe-letter-spacing: normal;
+
+    /* Layout */
+    --fe-content-max-width: 900px;
+    --fe-sidebar-min-width: 240px;
+    --fe-sidebar-max-width: 25vw;
+
+    /* Highlight colors driven by accent */
     --hl-ref-bg: rgba(79, 70, 229, 0.08);
     --hl-def-bg: rgba(79, 70, 229, 0.15);
     --hl-def-underline: rgba(79, 70, 229, 0.4);
@@ -62,16 +95,58 @@ summary::-webkit-details-marker { display: none; }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-family: var(--fe-body-font);
+    font-weight: var(--fe-body-weight);
+    letter-spacing: var(--fe-letter-spacing);
     background: var(--bg);
     color: var(--text);
     line-height: 1.6;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) var(--bg);
+    -webkit-font-smoothing: var(--fe-font-smoothing);
+    -moz-osx-font-smoothing: var(--fe-moz-font-smoothing);
+    text-rendering: var(--fe-text-rendering);
+}
+
+h1, h2, h3, h4, h5, h6 {
+    font-family: var(--fe-heading-font);
+    font-weight: var(--fe-heading-weight);
+    text-shadow: var(--fe-heading-text-shadow);
+}
+
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--bg);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+}
+
+::-webkit-scrollbar-corner {
+    background: var(--bg);
 }
 
 .doc-layout {
     display: grid;
-    grid-template-columns: 280px 1fr;
+    grid-template-columns: auto 1fr;
     min-height: 100vh;
+}
+
+.doc-layout > .doc-sidebar,
+.doc-layout > nav {
+    width: max-content;
+    min-width: var(--fe-sidebar-min-width);
+    max-width: var(--fe-sidebar-max-width);
 }
 
 .doc-sidebar {
@@ -203,12 +278,12 @@ body {
 
 .doc-content {
     padding: 1.5rem 2rem;
-    max-width: 900px;
+    max-width: var(--fe-content-max-width);
 }
 
 /* Breadcrumb navigation */
 .breadcrumb {
-    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-family: var(--fe-mono-font);
     font-size: 0.875rem;
     color: var(--text-muted);
     margin-bottom: 0.75rem;
@@ -254,7 +329,7 @@ body {
     font-size: 0.875rem;
     color: var(--text-muted);
     text-decoration: none;
-    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-family: var(--fe-mono-font);
 }
 
 .src-link:hover {
@@ -390,7 +465,7 @@ body {
     background: var(--code-bg);
     padding: 0.125rem 0.375rem;
     border-radius: 4px;
-    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-family: var(--fe-mono-font);
     font-size: 0.875em;
 }
 
@@ -468,7 +543,7 @@ h2 {
     background: var(--code-bg);
     padding: 0.25rem 0.5rem;
     border-radius: 4px;
-    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-family: var(--fe-mono-font);
 }
 
 .not-found-hint {
@@ -609,7 +684,7 @@ h2:hover .anchor {
 }
 
 .impl-header code {
-    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-family: var(--fe-mono-font);
     color: var(--accent);
 }
 
@@ -652,7 +727,7 @@ fe-code-block.impl-signature {
 }
 
 .code-header code {
-    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-family: var(--fe-mono-font);
     color: var(--text);
 }
 
@@ -713,7 +788,7 @@ fe-code-block.impl-signature {
 }
 
 .item-name code {
-    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-family: var(--fe-mono-font);
     font-size: 0.875rem;
 }
 
@@ -770,7 +845,7 @@ fe-code-block.impl-signature {
 }
 
 .implementor-sig {
-    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-family: var(--fe-mono-font);
     font-size: 0.875rem;
     color: var(--text);
 }
@@ -849,8 +924,14 @@ fe-code-block.impl-signature {
     align-items: baseline;
 }
 
+.member-header-link {
+    color: inherit;
+    text-decoration: none;
+    display: block;
+}
+
 .member-signature {
-    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-family: var(--fe-mono-font);
     font-size: 0.875rem;
     color: var(--text);
 }
@@ -921,7 +1002,7 @@ fe-code-block {
 
 /* <fe-signature> custom element */
 .fe-sig {
-    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-family: var(--fe-mono-font);
     font-size: 0.875rem;
     white-space: pre;
     color: var(--text);
@@ -1027,7 +1108,7 @@ fe-code-block {
 
 .outline-list li.outline-level-2 a {
     font-size: 0.75rem;
-    font-family: var(--font-mono, ui-monospace, monospace);
+    font-family: var(--fe-mono-font);
 }
 
 /* Doc sections (Examples, Panics, Safety, etc.) */
@@ -1070,7 +1151,7 @@ fe-code-block {
     background: var(--code-bg);
     padding: 0.125rem 0.375rem;
     border-radius: 4px;
-    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-family: var(--fe-mono-font);
     font-size: 0.875em;
 }
 
@@ -1126,7 +1207,7 @@ fe-code-block {
 
 .fe-doc-viewer-layout {
     display: grid;
-    grid-template-columns: 280px 1fr;
+    grid-template-columns: auto 1fr;
     height: calc(100vh - 3rem);
     width: 100%;
 }
@@ -1138,6 +1219,9 @@ fe-code-block {
     border-right: 1px solid var(--border);
     height: 100%;
     overflow-y: auto;
+    width: max-content;
+    min-width: var(--fe-sidebar-min-width);
+    max-width: var(--fe-sidebar-max-width);
 }
 
 .fe-doc-viewer-sidebar .fe-doc-nav {
@@ -1154,7 +1238,7 @@ fe-code-block {
 }
 
 .fe-doc-viewer-content > * {
-    max-width: 900px;
+    max-width: var(--fe-content-max-width);
 }
 
 fe-doc-viewer, .fe-doc-viewer {
@@ -1212,6 +1296,27 @@ fe-doc-viewer, .fe-doc-viewer {
     top: 0;
     height: 100vh;
     overflow-y: auto;
+    overflow-x: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) var(--bg-secondary);
+}
+
+.fe-doc-nav::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+.fe-doc-nav::-webkit-scrollbar-track {
+    background: var(--bg-secondary);
+}
+
+.fe-doc-nav::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 4px;
+}
+
+.fe-doc-nav::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
 }
 
 .fe-doc-nav-search {
@@ -1246,8 +1351,9 @@ fe-doc-viewer, .fe-doc-viewer {
 }
 
 .fe-nav-mod-name {
-    font-weight: 600;
+    font-weight: var(--fe-sidebar-weight);
     font-size: 0.9rem;
+    white-space: nowrap;
 }
 
 .fe-nav-mod-name a {
@@ -1274,7 +1380,7 @@ fe-doc-viewer, .fe-doc-viewer {
 
 .fe-nav-kind-header {
     font-size: 0.7rem;
-    font-weight: 600;
+    font-weight: var(--fe-sidebar-weight);
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.05em;
@@ -1301,6 +1407,7 @@ fe-doc-viewer, .fe-doc-viewer {
     gap: 0.4rem;
     padding: 0.1rem 0.25rem;
     border-radius: 3px;
+    white-space: nowrap;
 }
 
 .fe-nav-items a:hover {
@@ -1308,9 +1415,14 @@ fe-doc-viewer, .fe-doc-viewer {
     background: rgba(255, 255, 255, 0.05);
 }
 
+.fe-nav-items li.current a,
+.fe-nav-mod-name.current a {
+    font-weight: var(--fe-current-weight);
+    text-shadow: var(--fe-emphasis-text-shadow);
+}
+
 .fe-nav-items li.current a {
     color: var(--accent);
-    font-weight: 600;
 }
 
 .fe-nav-badge {
@@ -1380,7 +1492,10 @@ fe-doc-viewer, .fe-doc-viewer {
         position: fixed;
         top: 0;
         left: 0;
+        /* Reset the desktop max-content / minmax so mobile uses a fixed width */
         width: 280px;
+        min-width: 280px;
+        max-width: 280px;
         height: 100vh;
         z-index: 1000;
         border-right: 1px solid var(--border);

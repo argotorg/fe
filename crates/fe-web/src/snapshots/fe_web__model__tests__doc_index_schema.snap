@@ -1,6 +1,6 @@
 ---
 source: crates/fe-web/src/model.rs
-assertion_line: 1229
+assertion_line: 1241
 expression: value
 ---
 {
@@ -56,14 +56,32 @@ expression: value
     },
     "DocChildKind": {
       "description": "Kind of child item",
-      "enum": [
-        "field",
-        "variant",
-        "method",
-        "assoc_type",
-        "assoc_const"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "field",
+            "variant",
+            "method",
+            "assoc_type",
+            "assoc_const"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "A contract `init(...)` block.",
+          "enum": [
+            "init"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "A single arm of a contract `recv Msg { Variant ... }` block.",
+          "enum": [
+            "recv_handler"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "DocContent": {
       "description": "Parsed documentation content with sections",

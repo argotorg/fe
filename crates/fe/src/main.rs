@@ -198,6 +198,12 @@ pub enum Command {
         /// The directory should contain `core/` and `std/` subdirectories.
         #[arg(long)]
         stdlib_path: Option<Utf8PathBuf>,
+        /// Include `#[test]` functions in generated docs.
+        ///
+        /// Off by default to keep sidebars focused on the public API surface;
+        /// turn on for a test-centric overview of an ingot.
+        #[arg(long)]
+        include_tests: bool,
         #[command(subcommand)]
         action: Option<DocAction>,
     },
@@ -518,6 +524,7 @@ pub fn run(opts: &Options) {
             output,
             builtins,
             stdlib_path,
+            include_tests,
             action,
         } => {
             if let Some(DocAction::Bundle { with_css }) = action {
@@ -533,6 +540,7 @@ pub fn run(opts: &Options) {
                     output.as_ref(),
                     *builtins,
                     stdlib_path.as_ref(),
+                    *include_tests,
                     action.as_ref(),
                 );
             }

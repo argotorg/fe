@@ -92,6 +92,7 @@
     const: { str: "const", plural: "Constants", order: 7 },
     impl: { str: "impl", plural: "Implementations", order: 8 },
     impl_trait: { str: "impl", plural: "Trait Implementations", order: 9 },
+    msg: { str: "msg", plural: "Messages", order: 1 },
   };
 
   function kindStr(kind) {
@@ -140,9 +141,14 @@
   var CHILD_KIND_INFO = {
     field: { plural: "Fields", anchor: "field", order: 1 },
     variant: { plural: "Variants", anchor: "variant", order: 0 },
-    method: { plural: "Methods", anchor: "tymethod", order: 4 },
-    assoc_type: { plural: "Associated Types", anchor: "associatedtype", order: 2 },
-    assoc_const: { plural: "Associated Constants", anchor: "associatedconstant", order: 3 },
+    method: { plural: "Methods", anchor: "tymethod", order: 6 },
+    assoc_type: { plural: "Associated Types", anchor: "associatedtype", order: 4 },
+    assoc_const: { plural: "Associated Constants", anchor: "associatedconstant", order: 5 },
+    // Contract init block & recv arm handlers (see crates/fe/src/extract.rs
+    // DocChildKind::{Init,RecvHandler}). Kept in sync with _CHILD_KIND in
+    // fe-doc-item.js.
+    init: { plural: "Initializer", anchor: "init", order: 2 },
+    recv_handler: { plural: "Message Handlers", anchor: "handler", order: 3 },
   };
 
   // ============================================================================
@@ -313,6 +319,8 @@
 
   function renderBreadcrumbs(item) {
     var segments = item.path.split("::");
+    var index = window.FE_DOC_INDEX || { items: [] };
+    var items = index.items || [];
     var html = '<nav class="breadcrumb">';
     var accumulated = "";
     segments.forEach(function (seg, i) {
@@ -325,7 +333,16 @@
       if (isLast) {
         html += '<span class="breadcrumb-current">' + esc(seg) + "</span>";
       } else {
-        html += '<a href="' + itemHref(accumulated + "/mod") + '" class="breadcrumb-link">' + esc(seg) + "</a>";
+        // Use the ancestor item's real kind (e.g. `msg`) when it exists in
+        // the index; fall back to `mod` for pure module path segments.
+        var suffix = "mod";
+        for (var k = 0; k < items.length; k++) {
+          if (items[k].path === accumulated) {
+            suffix = kindStr(items[k].kind);
+            break;
+          }
+        }
+        html += '<a href="' + itemHref(accumulated + "/" + suffix) + '" class="breadcrumb-link">' + esc(seg) + "</a>";
       }
     });
     html += "</nav>";
@@ -726,6 +743,7 @@
         mod: "module", fn: "function", struct: "struct", enum: "enum",
         trait: "trait", contract: "contract", type: "type_alias",
         const: "const", impl: "impl",
+        msg: "msg", msg_variant: "msg_variant",
       };
       var kindName = kindMap[kindSuffix];
       if (kindName) {
