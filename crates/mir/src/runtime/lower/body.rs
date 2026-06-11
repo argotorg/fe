@@ -102,15 +102,34 @@ pub fn lower_to_rmir<'db>(
     });
     check_runtime_body_supported(db, semantic.key(db), &normalized_body)?;
     let facts = BodyStaticFacts::new(db, &normalized_body);
+    let signature = instance.interface_signature(db);
     let param_locals =
         crate::runtime::lower::interface::runtime_param_locals(db, semantic, key.params(db));
-    let inferred = LocalStateInferer::new(
+    let mut inferer = LocalStateInferer::new(
         BodyEnv::new(db, &normalized_body, &facts),
         key.params(db),
         &param_locals,
-    )
-    .run();
-    let signature = instance.interface_signature(db);
+    );
+    if let Some(ret_class) = signature
+        .ret
+        .clone()
+        .filter(|class| class.contains_transport(db))
+    {
+        let return_locals = normalized_body
+            .blocks
+            .iter()
+            .filter_map(|block| match &block.terminator.kind {
+                NSTerminatorKind::Return(Some(value)) => Some(value.local),
+                NSTerminatorKind::Goto(_)
+                | NSTerminatorKind::Branch { .. }
+                | NSTerminatorKind::MatchEnum { .. }
+                | NSTerminatorKind::Assert { .. }
+                | NSTerminatorKind::Return(None) => None,
+            })
+            .collect::<Vec<_>>();
+        inferer.seed_return_class(&return_locals, ret_class);
+    }
+    let inferred = inferer.run();
     let mut emitter = RmirEmitter::new(
         db,
         instance,

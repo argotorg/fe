@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/raw_storage_sealed.fe
+---
+error[6-0003]: trait bound is not satisfied
+  ┌─ raw_storage_sealed.fe:5:21
+  │
+5 │ impl RawStorage for FakeRawStorage {
+  │                     ^^^^^^^^^^^^^^ `FakeRawStorage` doesn't implement `EvmCapabilitySeal`

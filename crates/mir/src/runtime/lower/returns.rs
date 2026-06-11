@@ -23,7 +23,10 @@ use super::{
         AssignmentId, BodyEnv, BodyStaticFacts, InferClassCache, RuntimeVisibleReturnPlan,
         default_return_class, desired_runtime_return_plan, selected_visible_return_for_local,
     },
-    infer::{desired_runtime_value_carrier, merge_runtime_carrier, seed_root_provider_carriers},
+    infer::{
+        desired_runtime_value_carrier, merge_runtime_carrier, merge_runtime_class,
+        seed_root_provider_carriers,
+    },
     interface::runtime_visible_binding_plans,
 };
 use crate::runtime::synthetic::runtime_synthetic_exit_behavior;
@@ -282,14 +285,21 @@ pub(crate) fn evaluate_runtime_return_class<'db>(
         };
         returned.push(selected.class);
     }
-    let Some(first) = returned.pop() else {
+    let Some(class) = merged_return_class(db, returned) else {
         return summary.default_return_class.clone();
     };
-    if returned.iter().all(|class| class == &first) {
-        Some(first)
-    } else {
-        summary.default_return_class.clone()
+    Some(class)
+}
+
+fn merged_return_class<'db>(
+    db: &'db dyn MirDb,
+    mut returned: Vec<RuntimeClass<'db>>,
+) -> Option<RuntimeClass<'db>> {
+    let mut merged = returned.pop()?;
+    for class in returned {
+        merged = merge_runtime_class(db, &merged, &class)?;
     }
+    Some(merged)
 }
 
 struct ReturnSliceInferer<'summary, 'lookup, 'db> {
@@ -455,7 +465,10 @@ mod tests {
 
     use crate::{
         build_runtime_package,
-        runtime::{RExpr, RStmt, RTerminator, RuntimeCarrier, RuntimeClass, RuntimeExitBehavior},
+        runtime::{
+            AddressSpaceKind, Layout, RExpr, RStmt, RTerminator, RefKind, RuntimeCarrier,
+            RuntimeClass, RuntimeExitBehavior,
+        },
     };
 
     use super::*;
@@ -511,14 +524,10 @@ mod tests {
             };
             returned.push(selected.class);
         }
-        let Some(first) = returned.pop() else {
+        let Some(class) = merged_return_class(db, returned) else {
             return summary.default_return_class.clone();
         };
-        if returned.iter().all(|class| class == &first) {
-            Some(first)
-        } else {
-            summary.default_return_class.clone()
-        }
+        Some(class)
     }
 
     fn assert_static_exact_return_matches_full_inference(source: &str, name: &str) {
@@ -939,6 +948,64 @@ pub contract C {
             runtime_return_class(&db, key),
             legacy_return_class_for_key(&db, key),
             "provider-root return slice should match full-body carrier inference:\ninstance={key:#?}"
+        );
+    }
+
+    #[test]
+    fn return_class_merges_default_enum_with_storage_provider_variant() {
+        let mut db = DriverDataBase::default();
+        let file_url =
+            Url::parse("file:///return_class_merges_default_enum_with_storage_provider_variant.fe")
+                .unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                include_str!("../../../../fe/tests/fixtures/fe_test/reentrancy_mutex.fe")
+                    .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let package = build_runtime_package(&db, top_mod).expect("runtime package");
+        let function = package
+            .functions(&db)
+            .iter()
+            .copied()
+            .find(|function| function.symbol(&db).contains("try_lock"))
+            .expect("missing specialized try_lock runtime function");
+        let ret = function
+            .instance(&db)
+            .interface_signature(&db)
+            .ret
+            .expect("try_lock should return a runtime-visible Option");
+        let RuntimeClass::AggregateValue { layout } = ret else {
+            panic!("try_lock should return an aggregate enum: {ret:#?}");
+        };
+        let Layout::Enum(enum_layout) = layout.data(&db) else {
+            panic!("try_lock should return an enum layout: {layout:#?}");
+        };
+        let some_variant = enum_layout
+            .variants
+            .iter()
+            .find(|variant| variant.name == "Some")
+            .expect("Option layout should include Some");
+
+        assert!(
+            matches!(
+                some_variant.fields.first(),
+                Some(RuntimeClass::Ref {
+                    kind: RefKind::Provider {
+                        space: AddressSpaceKind::Storage,
+                        ..
+                    },
+                    ..
+                })
+            ),
+            "return class should preserve the storage provider variant:\n{ret:#?}"
         );
     }
 

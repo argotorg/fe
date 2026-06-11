@@ -142,7 +142,7 @@ note:
    │
 17 │   fn test_calldata_ptr_readonly() {
    │ ╭─────────────────────────────────^
-18 │ │     let c = std::evm::CalldataPtr<u256> { offset: 0 }
+18 │ │     let c: std::evm::CalldataPtr<u256> = std::evm::CalldataPtr::from_raw(0)
 19 │ │     with (c) {
 20 │ │         let _v = read_x()
 21 │ │     }
@@ -152,20 +152,26 @@ note:
 note:
    ┌─ effect_pointer_providers.fe:18:9
    │
-18 │     let c = std::evm::CalldataPtr<u256> { offset: 0 }
+18 │     let c: std::evm::CalldataPtr<u256> = std::evm::CalldataPtr::from_raw(0)
    │         ^ CalldataPtr<u256>
 
 note:
-   ┌─ effect_pointer_providers.fe:18:13
+   ┌─ effect_pointer_providers.fe:18:42
    │
-18 │     let c = std::evm::CalldataPtr<u256> { offset: 0 }
-   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ CalldataPtr<u256>
+18 │     let c: std::evm::CalldataPtr<u256> = std::evm::CalldataPtr::from_raw(0)
+   │                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ fn from_raw<CalldataPtr<u256>>
 
 note:
-   ┌─ effect_pointer_providers.fe:18:51
+   ┌─ effect_pointer_providers.fe:18:42
    │
-18 │     let c = std::evm::CalldataPtr<u256> { offset: 0 }
-   │                                                   ^ u256
+18 │     let c: std::evm::CalldataPtr<u256> = std::evm::CalldataPtr::from_raw(0)
+   │                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ CalldataPtr<u256>
+
+note:
+   ┌─ effect_pointer_providers.fe:18:74
+   │
+18 │     let c: std::evm::CalldataPtr<u256> = std::evm::CalldataPtr::from_raw(0)
+   │                                                                          ^ u256
 
 note:
    ┌─ effect_pointer_providers.fe:19:5
@@ -213,28 +219,28 @@ note:
    │
 24 │   fn read_calldata_triplet_ptr_offset() -> u256 uses (arr: std::evm::CalldataPtr<[u256; 3]>) {
    │ ╭────────────────────────────────────────────────────────────────────────────────────────────^
-25 │ │     arr.offset
+25 │ │     arr.raw()
 26 │ │ }
    │ ╰─^ u256
 
 note:
    ┌─ effect_pointer_providers.fe:25:5
    │
-25 │     arr.offset
+25 │     arr.raw()
    │     ^^^ CalldataPtr<[u256; 3]>
 
 note:
    ┌─ effect_pointer_providers.fe:25:5
    │
-25 │     arr.offset
-   │     ^^^^^^^^^^ u256
+25 │     arr.raw()
+   │     ^^^^^^^^^ u256
 
 note:
    ┌─ effect_pointer_providers.fe:28:39
    │
 28 │   fn test_calldata_ptr_array_provider() {
    │ ╭───────────────────────────────────────^
-29 │ │     let c = std::evm::CalldataPtr<[u256; 3]> { offset: 0 }
+29 │ │     let c: std::evm::CalldataPtr<[u256; 3]> = std::evm::CalldataPtr::from_raw(0)
 30 │ │     with (c) {
 31 │ │         let _v = read_calldata_triplet_ptr_offset()
 32 │ │     }
@@ -244,20 +250,26 @@ note:
 note:
    ┌─ effect_pointer_providers.fe:29:9
    │
-29 │     let c = std::evm::CalldataPtr<[u256; 3]> { offset: 0 }
+29 │     let c: std::evm::CalldataPtr<[u256; 3]> = std::evm::CalldataPtr::from_raw(0)
    │         ^ CalldataPtr<[u256; 3]>
 
 note:
-   ┌─ effect_pointer_providers.fe:29:13
+   ┌─ effect_pointer_providers.fe:29:47
    │
-29 │     let c = std::evm::CalldataPtr<[u256; 3]> { offset: 0 }
-   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ CalldataPtr<[u256; 3]>
+29 │     let c: std::evm::CalldataPtr<[u256; 3]> = std::evm::CalldataPtr::from_raw(0)
+   │                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ fn from_raw<CalldataPtr<[u256; 3]>>
 
 note:
-   ┌─ effect_pointer_providers.fe:29:56
+   ┌─ effect_pointer_providers.fe:29:47
    │
-29 │     let c = std::evm::CalldataPtr<[u256; 3]> { offset: 0 }
-   │                                                        ^ u256
+29 │     let c: std::evm::CalldataPtr<[u256; 3]> = std::evm::CalldataPtr::from_raw(0)
+   │                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ CalldataPtr<[u256; 3]>
+
+note:
+   ┌─ effect_pointer_providers.fe:29:79
+   │
+29 │     let c: std::evm::CalldataPtr<[u256; 3]> = std::evm::CalldataPtr::from_raw(0)
+   │                                                                               ^ u256
 
 note:
    ┌─ effect_pointer_providers.fe:30:5

@@ -626,9 +626,9 @@ fn test_it() {
         let file = db.new_stand_alone(
             Utf8PathBuf::from("storage_map_address_value_uses_wordrepr_impl.fe"),
             r#"
-use std::evm::StorageMap
+use std::evm::{RawStorage, StorageMap}
 
-fn test_it() {
+fn test_it() uses (storage: mut RawStorage) {
     let _map: StorageMap<Address, Address, 0> = StorageMap::new()
 }
 "#,

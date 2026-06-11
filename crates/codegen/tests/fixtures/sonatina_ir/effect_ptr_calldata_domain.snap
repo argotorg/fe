@@ -5,6 +5,14 @@ input_file: crates/codegen/tests/fixtures/effect_ptr_calldata_domain.fe
 ---
 target = "evm-ethereum-osaka"
 
+func private %from_raw(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
 func private %main_root() {
     block0:
         jump block1;
@@ -28,7 +36,8 @@ func private %test_calldata_ptr_domain() {
         jump block1;
 
     block1:
-        v1.i256 = call %read_x 0.i256;
+        v1.i256 = call %from_raw 0.i256;
+        v2.i256 = call %read_x v1;
         return;
 }
 

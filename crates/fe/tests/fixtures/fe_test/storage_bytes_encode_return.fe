@@ -10,14 +10,14 @@ msg BlobMsg {
 }
 
 pub contract Blob {
+    mut blobs: Blobs,
+
     recv BlobMsg {
-        Set { data } {
-            let blobs: Blobs = Blobs::new()
+        Set { data } uses (mut blobs) {
             blobs.store_view(key: 0, view: data.view())
         }
 
-        Get {} {
-            let blobs: Blobs = Blobs::new()
+        Get {} uses (blobs) {
             blobs.encode_return(key: 0)
         }
     }

@@ -38,8 +38,8 @@ use super::{
     source::local_read_places_extractable_from_value,
     type_info::{
         effect_handle_class_for_ty_in_context, provider_class_for_target_in_context,
-        runtime_repr_ty_in_context, stored_class_for_ty_in_context,
-        top_level_class_for_ty_in_context,
+        runtime_repr_ty_in_context, runtime_zero_sized_transport_ty,
+        stored_class_for_ty_in_context, top_level_class_for_ty_in_context,
     },
 };
 
@@ -73,6 +73,27 @@ impl<'a, 'db> LocalStateInferer<'a, 'db> {
             carriers,
             class_cache: InferClassCache::new(env.body().locals.len()),
             pending_dependents: Vec::new(),
+        }
+    }
+
+    pub(super) fn seed_return_class(
+        &mut self,
+        return_locals: &[SLocalId],
+        class: RuntimeClass<'db>,
+    ) {
+        for local in return_locals.iter().copied() {
+            if !matches!(self.carriers[local.index()], RuntimeCarrier::Erased) {
+                continue;
+            }
+            let local_data = &self.env.body().locals[local.index()];
+            let desired = desired_runtime_value_carrier(
+                self.env.db(),
+                local_data,
+                class.clone(),
+                self.env.scope(),
+                self.env.assumptions(),
+            );
+            self.set_carrier(local, desired);
         }
     }
 
@@ -287,6 +308,11 @@ pub(crate) fn desired_runtime_value_carrier<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> RuntimeCarrier<'db> {
+    if let Some(transport_class) =
+        effect_handle_class_for_ty_in_context(db, local.ty, scope, assumptions)
+    {
+        return RuntimeCarrier::Value(transport_class);
+    }
     if runtime_class_has_zero_sized_payload(db, &class) {
         return RuntimeCarrier::Erased;
     }
@@ -298,11 +324,6 @@ pub(crate) fn desired_runtime_value_carrier<'db>(
         )
     ) {
         return RuntimeCarrier::Erased;
-    }
-    if let Some(transport_class) =
-        effect_handle_class_for_ty_in_context(db, local.ty, scope, assumptions)
-    {
-        return RuntimeCarrier::Value(transport_class);
     }
     if !class.is_transport()
         && matches!(local.facts.interface, SemanticLocalKind::DirectCarrier)
@@ -916,6 +937,14 @@ pub(super) fn fallback_root_transport_class<'db>(
             let NormalizedBindingLowering::CarrierLocal { target_ty, .. } = &local.lowering else {
                 panic!("place-carrier local missing carrier lowering");
             };
+            let local_is_effect_handle =
+                effect_handle_class_for_ty_in_context(db, local.ty, scope, assumptions).is_some();
+            if runtime_zero_sized_transport_ty(db, local.ty, scope, assumptions)
+                || (!local_is_effect_handle
+                    && runtime_zero_sized_transport_ty(db, *target_ty, scope, assumptions))
+            {
+                return None;
+            }
             local
                 .facts
                 .origin
@@ -952,6 +981,14 @@ pub(super) fn fallback_root_transport_class<'db>(
             let NormalizedBindingLowering::CarrierLocal { target_ty, .. } = &local.lowering else {
                 panic!("direct-carrier local missing carrier lowering");
             };
+            let local_is_effect_handle =
+                effect_handle_class_for_ty_in_context(db, local.ty, scope, assumptions).is_some();
+            if runtime_zero_sized_transport_ty(db, local.ty, scope, assumptions)
+                || (!local_is_effect_handle
+                    && runtime_zero_sized_transport_ty(db, *target_ty, scope, assumptions))
+            {
+                return None;
+            }
             provider
                 .and_then(|provider| {
                     runtime_class_for_provider_binding(db, provider, scope, assumptions)

@@ -20,7 +20,10 @@ use crate::{
         AddressSpaceKind, ContractFieldBinding, ContractFieldSlot, EntryEffectArgPlan, RefKind,
         RefView, RuntimeClass, TargetRootProviderBinding, TargetRootProviderMaterialization,
         lower::{
-            classify::{provider_erases_runtime_root, runtime_effect_binding_plan},
+            classify::{
+                provider_erases_runtime_root, provider_source_erases_zero_sized_effect_value,
+                runtime_effect_binding_plan,
+            },
             type_info::RuntimeTypeEnv,
         },
         package::LowerError,
@@ -111,6 +114,12 @@ fn entry_effect_arg_plan_for_binding<'db>(
 ) -> Result<Option<EntryEffectArgPlan<'db>>, LowerError> {
     match provider.source.clone() {
         ProviderSource::ContractField { field_idx, .. } => {
+            let env = RuntimeTypeEnv::for_semantic(db, semantic);
+            if runtime_effect_binding_plan(db, semantic, binding).is_none()
+                && provider_erases_runtime_root(db, &provider, env.scope, env.assumptions)
+            {
+                return Ok(None);
+            }
             let Some(fields) = contract_fields else {
                 return Err(unsupported_entry_effect(
                     db,
@@ -152,8 +161,15 @@ fn entry_effect_arg_plan_for_binding<'db>(
         }
         ProviderSource::UsesParam { .. } => {
             let env = RuntimeTypeEnv::for_semantic(db, semantic);
+            let value_ty = provider.semantics.target_ty.unwrap_or(provider.provider_ty);
             if runtime_effect_binding_plan(db, semantic, binding).is_none()
-                && provider_erases_runtime_root(db, &provider, env.scope, env.assumptions)
+                && provider_source_erases_zero_sized_effect_value(
+                    db,
+                    &provider,
+                    value_ty,
+                    env.scope,
+                    env.assumptions,
+                )
             {
                 Ok(None)
             } else {

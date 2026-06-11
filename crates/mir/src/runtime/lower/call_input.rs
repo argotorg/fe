@@ -1,6 +1,6 @@
 use hir::analysis::{
-    semantic::{NEffectArg, NEffectArgValue, SemanticInstance},
-    ty::ty_check::EffectPassMode,
+    semantic::{NBorrowRoot, NEffectArg, NEffectArgValue, NSPlace, NSPlaceRoot, SemanticInstance},
+    ty::{ty_check::EffectPassMode, ty_def::TyId},
 };
 
 use crate::{
@@ -136,16 +136,12 @@ fn compile_effect_arg_plan<'db>(
     boundary_sites: &mut BoundarySiteAllocator,
 ) -> CompiledEffectArgPlan<'db> {
     let space = resolved_effect_arg_address_space(db, body, arg);
-    let boundary = desired_runtime_effect_arg_boundary(
-        db,
-        type_env,
-        arg,
-        runtime_effect_binding_plan_for_binding_idx(db, semantic, arg.binding_idx).as_ref(),
-        space,
-    );
-    if boundary.is_none() && effect_arg_is_runtime_zst(db, body, type_env, arg) {
+    let binding_plan = runtime_effect_binding_plan_for_binding_idx(db, semantic, arg.binding_idx);
+    if binding_plan.is_none() && effect_arg_is_runtime_zst(db, body, type_env, arg) {
         return CompiledEffectArgPlan::Erased;
     }
+    let boundary =
+        desired_runtime_effect_arg_boundary(db, type_env, arg, binding_plan.as_ref(), space);
     if boundary.is_none() && arg.provider.is_none() && arg.target_ty.is_none() {
         return match (&arg.pass_mode, &arg.arg) {
             (EffectPassMode::ByValue | EffectPassMode::Unknown, NEffectArgValue::Value(_)) => {
@@ -222,6 +218,22 @@ fn effect_arg_is_runtime_zst<'db>(
         NEffectArgValue::Value(value) => body.local(value.local).is_some_and(|local| {
             runtime_zero_sized_transport_ty(db, local.ty, type_env.scope, type_env.assumptions)
         }),
-        NEffectArgValue::Place(_) => false,
+        NEffectArgValue::Place(place) => place_root_ty(body, place).is_some_and(|ty| {
+            runtime_zero_sized_transport_ty(db, ty, type_env.scope, type_env.assumptions)
+        }),
     }
+}
+
+fn place_root_ty<'db>(
+    body: &hir::analysis::semantic::borrowck::NormalizedSemanticBody<'db>,
+    place: &NSPlace<'db>,
+) -> Option<TyId<'db>> {
+    let local = match place.root {
+        NSPlaceRoot::CarrierDerefLocal(local) => local,
+        NSPlaceRoot::Root(root) => match body.root(root)? {
+            NBorrowRoot::Param { local, .. } | NBorrowRoot::LocalSlot { local } => *local,
+            NBorrowRoot::Provider { .. } => return None,
+        },
+    };
+    body.local(local).map(|local| local.ty)
 }

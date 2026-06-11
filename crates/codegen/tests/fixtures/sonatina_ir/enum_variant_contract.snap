@@ -16,7 +16,7 @@ func private %abi_encode_u256(v0.i256) {
 
     block1:
         call %mstore 0.i256 v0;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_44fe 0.i256 32.i256;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_06c7 0.i256 32.i256;
         unreachable;
 }
 
@@ -79,6 +79,14 @@ func private %mstore(v0.i256, v1.i256) {
         return;
 }
 
+func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_06c7(v0.i256, v1.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        evm_return v0 v1;
+}
+
 func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_1461(v0.i256, v1.i256) {
     block0:
         jump block1;
@@ -88,14 +96,6 @@ func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_1461(v0.i
 }
 
 func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_1461_0(v0.i256, v1.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        evm_return v0 v1;
-}
-
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_44fe(v0.i256, v1.i256) {
     block0:
         jump block1;
 

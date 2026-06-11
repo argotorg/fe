@@ -20,7 +20,9 @@ pub contract C uses (ctx: Ctx, log: mut Log) {
             if value < amount {
                 return false
             }
-            store.values.set(key: caller, value: value + amount)
+            with (mut store.values) {
+                store.values.set(key: caller, value: value + amount)
+            }
             emit_transfer(value: amount)
             true
         }

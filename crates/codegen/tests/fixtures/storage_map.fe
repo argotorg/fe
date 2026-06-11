@@ -1,5 +1,10 @@
 use std::evm::StorageMap
 
+msg Msg {
+    #[selector = 0]
+    Get -> u256,
+}
+
 fn get_balance(addr: u256) -> u256
     uses (balances: StorageMap<u256, u256>)
 {
@@ -12,18 +17,17 @@ fn set_balance(addr: u256, value: u256)
     balances.set(key: addr, value)
 }
 
-pub fn main() -> u256 {
-    let mut balances = StorageMap<u256, u256, 0>::new()
-    with (balances) {
-        set_balance(1, 2)
-        get_balance(1)
-    }
-}
+contract C {
+    mut balances: StorageMap<u256, u256>
 
-#[test]
-fn foo() {
-    let mut st = StorageMap<u256, u256, 0>::new()
-    with (st) {
-        main()
+    recv Msg {
+        Get -> u256 uses (mut balances) {
+            with (mut balances) {
+                set_balance(addr: 1, value: 2)
+            }
+            with (balances) {
+                get_balance(addr: 1)
+            }
+        }
     }
 }

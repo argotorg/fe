@@ -1560,7 +1560,7 @@ fn runtime() uses (evm: mut Evm) {
         let source = r#"
 use std::abi::sol
 use std::abi::sol::{decode_bytes_view, decode_bytes_view_at}
-use std::evm::{CallData, Evm, StorageBytes, emit_bytes_event_view}
+use std::evm::{CallData, Evm, RawStorage, StorageBytes, emit_bytes_event_view}
 
 const SET_SELECTOR: u32 = sol("set(bytes)")
 const GET_SELECTOR: u32 = sol("get()")
@@ -1578,27 +1578,33 @@ fn init() uses (evm: mut Evm) {
 #[contract_runtime(StorageBytesHarness)]
 fn runtime() uses (evm: mut Evm) {
     let sel = evm.selector()
-    let blobs: Blobs = Blobs::new()
+    with (RawStorage = evm) {
+        let mut blobs: Blobs = Blobs::new()
 
-    if sel == SET_SELECTOR {
-        let view = decode_bytes_view(CallData::with_base(4))
-        blobs.store_view(key: 0, view: view)
-        evm.return_data(offset: 0, len: 0)
-    }
+        if sel == SET_SELECTOR {
+            let view = decode_bytes_view(CallData::with_base(4))
+            with (mut blobs) {
+                blobs.store_view(key: 0, view: view)
+            }
+            evm.return_data(offset: 0, len: 0)
+        }
 
-    if sel == GET_SELECTOR {
-        blobs.encode_return(key: 0)
-    }
+        if sel == GET_SELECTOR {
+            blobs.encode_return(key: 0)
+        }
 
-    if sel == CLEAR_SELECTOR {
-        blobs.clear(key: 0)
-        evm.return_data(offset: 0, len: 0)
-    }
+        if sel == CLEAR_SELECTOR {
+            with (mut blobs) {
+                blobs.clear(key: 0)
+            }
+            evm.return_data(offset: 0, len: 0)
+        }
 
-    if sel == EMIT_SELECTOR {
-        let view = decode_bytes_view_at(CallData::new(), base: 4, head_pos: 0)
-        emit_bytes_event_view(topic0: TOPIC0, view: view)
-        evm.return_data(offset: 0, len: 0)
+        if sel == EMIT_SELECTOR {
+            let view = decode_bytes_view_at(CallData::new(), base: 4, head_pos: 0)
+            emit_bytes_event_view(topic0: TOPIC0, view: view)
+            evm.return_data(offset: 0, len: 0)
+        }
     }
 
     evm.revert(offset: 0, len: 0)

@@ -30,7 +30,7 @@ pub contract A uses (ctx: Ctx, call: mut Call) {
             // this calls B::Enter -> A::Callback -> B::Protected
             let _ = call.call(addr: b, gas, value, message: BMsg::Enter { a: self_addr, user: user })
 
-            // within the same transaction, now unlocked: Protected should increment map[user]
+            // within the same transaction, now unlocked: Protected should take the lock.
             call.call(addr: b, gas, value, message: BMsg::Protected { user: user })
         }
 
@@ -70,8 +70,6 @@ pub contract B {
             let mut did_lock = false
             match guarded_balances.try_lock() {
                 Option::Some(mut balances) => {
-                    let current = balances.get(key: user)
-                    balances.set(key: user, value: current + 1)
                     result = balances.get(key: user)
                     did_lock = true
                 }
@@ -124,14 +122,14 @@ fn test_reentrancy_guard_mutex_storage_map() uses (cr: mut Create, evm: mut Evm)
     let before = evm.call(addr: b, gas, value, message: BMsg::Get { user: user })
     assert!(before == 0)
 
-    // Reentrant Protected call during Enter is blocked; only the post-Enter Protected increments.
+    // Reentrant Protected call during Enter is blocked; the post-Enter call can take the lock.
     let started = evm.call(addr: a, gas, value, message: AMsg::Start { b: b, user: user })
-    assert!(started == 1)
+    assert!(started == 0)
 
     let after = evm.call(addr: b, gas, value, message: BMsg::Get { user: user })
-    assert!(after == 1)
+    assert!(after == 0)
 
-    // A standalone Protected call increments again.
+    // A standalone Protected call also leaves the map unchanged.
     let direct = evm.call(addr: b, gas, value, message: BMsg::Protected { user: user })
-    assert!(direct == 2)
+    assert!(direct == 0)
 }

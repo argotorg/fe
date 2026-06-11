@@ -25,11 +25,10 @@ impl<T> Mutex<T> {
 
     pub fn try_lock(mut self) -> Option<mut T> {
         if self.lock.read() {
-            Option::None
-        } else {
-            self.lock.write(true)
-            Option::Some(mut self.value)
+            return Option::None
         }
+        self.lock.write(true)
+        Option::Some(mut self.value)
     }
 
     pub fn unlock(mut self) {
