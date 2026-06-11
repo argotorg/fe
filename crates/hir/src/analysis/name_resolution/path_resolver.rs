@@ -549,7 +549,7 @@ impl<'db> PathRes<'db> {
             PathRes::Mod(scope) => Some(*scope),
             PathRes::Method(_, cand) => {
                 let scope = match cand {
-                    MethodCandidate::InherentMethod(func_def) => func_def.scope(),
+                    MethodCandidate::InherentMethod(cand) => cand.def.scope(),
                     MethodCandidate::TraitMethod(c) | MethodCandidate::NeedsConfirmation(c) => {
                         c.method.scope()
                     }
@@ -577,7 +577,7 @@ impl<'db> PathRes<'db> {
                 // Method visibility depends on the method's defining scope
                 // (function or trait method), not the receiver type.
                 let method_scope = match cand {
-                    MethodCandidate::InherentMethod(func_def) => func_def.scope(),
+                    MethodCandidate::InherentMethod(cand) => cand.def.scope(),
                     MethodCandidate::TraitMethod(c) | MethodCandidate::NeedsConfirmation(c) => {
                         c.method.scope()
                     }

@@ -1553,11 +1553,11 @@ impl<'db> Diagnosable<'db> for Func<'db> {
                 Canonical::new(db, self_ty),
                 func_def.name(db).expect("impl methods have names"),
             ) {
-                if cand != func_def {
+                if cand.def != func_def {
                     out.push(
                         ty::diagnostics::ImplDiag::ConflictMethodImpl {
                             primary: func_def,
-                            conflict_with: cand,
+                            conflict_with: cand.def,
                         }
                         .into(),
                     );

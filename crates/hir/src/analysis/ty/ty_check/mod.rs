@@ -17,9 +17,9 @@ pub use self::contract::{
 pub use self::path::RecordLike;
 use crate::analysis::name_resolution::ResolvedVariant;
 pub use crate::analysis::ty::ProviderAddressSpace;
-use crate::analysis::ty::binder::Binder;
 use crate::analysis::ty::corelib::resolve_lib_type_path;
 use crate::analysis::ty::fold::TyFoldable;
+use crate::analysis::ty::method_table::ProbedMethod;
 use crate::analysis::ty::provider::{ProviderKind, provider_semantics};
 use crate::analysis::ty::trait_lower::lower_impl_trait;
 use crate::analysis::ty::trait_resolution::constraint::{
@@ -59,7 +59,7 @@ use crate::analysis::place::{Place, PlaceBase};
 
 use super::{
     assoc_const::AssocConstUse,
-    canonical::Canonical,
+    canonical::{Canonical, Canonicalized},
     diagnostics::{
         BodyDiag, CallConstraintDiagInfo, FuncBodyDiag, StaticAssertComparisonValues,
         TraitConstraintDiag, TyDiagCollection, TyLowerDiag,
@@ -2349,45 +2349,27 @@ impl<'db> TyChecker<'db> {
         self.instantiate_callable_to_term(ty, method)
     }
 
-    fn instantiate_inherent_method_to_term(
+    /// Brings a probed inherent-method candidate into this checker's
+    /// inference context: extracts the bound candidate from the probe's
+    /// solution, registers effect-provider inference keys for its args, and
+    /// unifies the bound probe key against the receiver so the solution's
+    /// bindings propagate into receiver inference variables (the inherent
+    /// analog of the trait path unifying the instance's self type). The
+    /// matching rule itself — key choice, normalization, binder application —
+    /// lives in the method-table probe; nothing is re-derived here.
+    fn extract_inherent_method_to_term(
         &mut self,
-        method: CallableDef<'db>,
+        canonical_receiver: &Canonicalized<'db, TyId<'db>>,
+        cand: ProbedMethod<'db>,
         receiver_ty: TyId<'db>,
     ) -> TyId<'db> {
-        let ty = TyId::func(self.db, method);
-        let ty = self.instantiate_callable_to_term(ty, method);
-
-        // Bind the impl-level params by unifying the candidate's probe key
-        // (self-param type for methods, the impl self type for path-called
-        // associated functions) against the receiver, mirroring the
-        // method-table probe that selected this candidate. Copying the
-        // receiver's generic args into the params positionally mis-binds
-        // impls whose self type mentions params through projections:
-        // `impl<T: Bound> Box<T::Item>` called on `Box<U::Item>` must bind
-        // `T := U`, not `T := U::Item`.
-        let probe_key_ty = if let Some(self_param) = method.receiver_ty(self.db) {
-            let self_param = self_param.instantiate(self.db, ty.generic_args(self.db));
-            Some(
-                self_param
-                    .as_capability(self.db)
-                    .map(|(_, inner)| inner)
-                    .unwrap_or(self_param),
-            )
-        } else if let CallableDef::Func(func) = method
-            && let Some(impl_) = func.containing_impl(self.db)
-            && let Some(impl_ty) = impl_.admissible_inherent_impl_ty(self.db)
-        {
-            Some(Binder::bind(impl_ty).instantiate(self.db, ty.generic_args(self.db)))
-        } else {
-            None
-        };
-        if let Some(key_ty) = probe_key_ty {
-            let snapshot = self.table.snapshot();
-            if self.table.unify(key_ty, receiver_ty).is_err() {
-                self.table.rollback_to(snapshot);
-            }
+        let bound = canonical_receiver.extract_solution(&mut self.table, cand.bound);
+        self.register_effect_provider_args(cand.def, bound.func_ty);
+        let snapshot = self.table.snapshot();
+        if self.table.unify(bound.key_ty, receiver_ty).is_err() {
+            self.table.rollback_to(snapshot);
         }
-        ty
+        bound.func_ty
     }
 
     fn instantiate_callable_to_term(
@@ -2405,15 +2387,7 @@ impl<'db> TyChecker<'db> {
             let param_ty = callable.params(self.db).get(param_index).copied();
             let arg = self.table.new_var_for(prop);
             if let Some(param_ty) = param_ty
-                && (matches!(param_ty.data(self.db), TyData::TyParam(p) if p.is_effect_provider())
-                    || matches!(
-                        param_ty.data(self.db),
-                        TyData::ConstTy(const_ty)
-                            if matches!(
-                                const_ty.data(self.db),
-                                ConstTyData::TyParam(param, _) if param.is_implicit()
-                            )
-                    ))
+                && self.is_effect_provider_param(param_ty)
             {
                 self.effect_provider_keys
                     .extend(inference_keys(self.db, &arg));
@@ -2422,6 +2396,34 @@ impl<'db> TyChecker<'db> {
         }
 
         ty
+    }
+
+    fn is_effect_provider_param(&self, param_ty: TyId<'db>) -> bool {
+        matches!(param_ty.data(self.db), TyData::TyParam(p) if p.is_effect_provider())
+            || matches!(
+                param_ty.data(self.db),
+                TyData::ConstTy(const_ty)
+                    if matches!(
+                        const_ty.data(self.db),
+                        ConstTyData::TyParam(param, _) if param.is_implicit()
+                    )
+            )
+    }
+
+    /// Registers effect-provider inference keys for the generic args of an
+    /// already-applied callable type (the applied counterpart of the
+    /// bookkeeping `instantiate_callable_to_term` does while applying).
+    fn register_effect_provider_args(&mut self, callable: CallableDef<'db>, ty: TyId<'db>) {
+        let params = callable.params(self.db);
+        for (param_index, arg) in ty.generic_args(self.db).iter().enumerate() {
+            let Some(&param_ty) = params.get(param_index) else {
+                break;
+            };
+            if self.is_effect_provider_param(param_ty) {
+                self.effect_provider_keys
+                    .extend(inference_keys(self.db, arg));
+            }
+        }
     }
 
     /// Resolve associated type to concrete type if possible
@@ -4055,6 +4057,13 @@ fn try_instantiate_trait_method<'db>(
     receiver_ty: TyId<'db>,
     inst: TraitInstId<'db>,
 ) -> Result<TyId<'db>, UnificationError> {
+    // Positional application is sound here because the args and the binder
+    // come from the same definition: a trait method's leading binder params
+    // are its trait's params in declaration order, and `inst.args` are
+    // exactly their instantiations. Positionally bridging *across*
+    // definitions (e.g. a receiver's type args into an impl's binder) is
+    // not — an impl's self type is an arbitrary pattern over its params;
+    // that binding comes from the method-table probe's unification.
     let ty = TyId::foldl(
         db,
         TyId::func(db, method.as_callable(db).unwrap()),
@@ -4087,6 +4096,8 @@ fn instantiate_trait_assoc_fn<'db>(
     method: CallableDef<'db>,
     inst: TraitInstId<'db>,
 ) -> TyId<'db> {
+    // Same-definition positional application: see
+    // `try_instantiate_trait_method`.
     let ty = TyId::foldl(db, TyId::func(db, method), inst.args(db));
 
     // Apply associated type substitutions from the trait instance

@@ -3166,8 +3166,8 @@ impl<'db> TyChecker<'db> {
         };
 
         let (func_ty, trait_inst) = match candidate {
-            MethodCandidate::InherentMethod(func_def) => (
-                self.instantiate_inherent_method_to_term(func_def, selected_receiver_ty),
+            MethodCandidate::InherentMethod(cand) => (
+                self.extract_inherent_method_to_term(&canonical_r_ty, cand, selected_receiver_ty),
                 None,
             ),
 
@@ -3428,8 +3428,12 @@ impl<'db> TyChecker<'db> {
                 PathRes::Method(receiver_ty, candidate) => {
                     let canonical_r_ty = Canonicalized::new(self.db, receiver_ty);
                     let (method_ty, trait_inst) = match candidate {
-                        MethodCandidate::InherentMethod(func_def) => (
-                            self.instantiate_inherent_method_to_term(func_def, receiver_ty),
+                        MethodCandidate::InherentMethod(cand) => (
+                            self.extract_inherent_method_to_term(
+                                &canonical_r_ty,
+                                cand,
+                                receiver_ty,
+                            ),
                             None,
                         ),
                         MethodCandidate::TraitMethod(cand)

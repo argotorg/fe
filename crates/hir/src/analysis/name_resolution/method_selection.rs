@@ -9,7 +9,7 @@ use crate::analysis::{
     ty::{
         binder::Binder,
         canonical::{Canonical, Canonicalized, Solution},
-        method_table::probe_method,
+        method_table::{ProbedMethod, probe_method},
         trait_def::{TraitInstId, impls_for_ty},
         trait_resolution::{
             CanonicalGoalQuery, GoalSatisfiability, PredicateListId, TraitSolveCx,
@@ -23,7 +23,7 @@ use crate::hir_def::{CallableDef, Func};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub enum MethodCandidate<'db> {
-    InherentMethod(CallableDef<'db>),
+    InherentMethod(ProbedMethod<'db>),
     TraitMethod(TraitMethodCand<'db>),
     NeedsConfirmation(TraitMethodCand<'db>),
 }
@@ -31,8 +31,8 @@ pub enum MethodCandidate<'db> {
 impl<'db> MethodCandidate<'db> {
     pub fn name(&self, db: &'db dyn HirAnalysisDb) -> IdentId<'db> {
         match self {
-            MethodCandidate::InherentMethod(func_def) => {
-                func_def.name(db).expect("inherent methods have names")
+            MethodCandidate::InherentMethod(cand) => {
+                cand.def.name(db).expect("inherent methods have names")
             }
             MethodCandidate::TraitMethod(cand) | MethodCandidate::NeedsConfirmation(cand) => cand
                 .method
@@ -247,7 +247,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
         let visible_inherent_methods: Vec<_> = inherent_methods
             .iter()
             .copied()
-            .filter(|cand| self.is_inherent_method_visible(*cand))
+            .filter(|cand| self.is_inherent_method_visible(cand.def))
             .collect();
 
         match visible_inherent_methods.len() {
@@ -256,7 +256,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                     None
                 } else {
                     Some(Err(MethodSelectionError::InvisibleInherentMethod(
-                        *inherent_methods.iter().next().unwrap(),
+                        inherent_methods.iter().next().unwrap().def,
                     )))
                 }
             }
@@ -265,7 +265,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
             ))),
 
             _ => Some(Err(MethodSelectionError::AmbiguousInherentMethod(
-                inherent_methods.iter().copied().collect(),
+                inherent_methods.iter().map(|cand| cand.def).collect(),
             ))),
         }
     }
@@ -513,12 +513,12 @@ pub enum MethodSelectionError<'db> {
 
 #[derive(Default)]
 struct AssembledCandidates<'db> {
-    inherent_methods: FxHashSet<CallableDef<'db>>,
+    inherent_methods: FxHashSet<ProbedMethod<'db>>,
     traits: IndexSet<(TraitInstId<'db>, Func<'db>)>,
 }
 
 impl<'db> AssembledCandidates<'db> {
-    fn insert_inherent_method(&mut self, method: CallableDef<'db>) {
+    fn insert_inherent_method(&mut self, method: ProbedMethod<'db>) {
         self.inherent_methods.insert(method);
     }
 }
