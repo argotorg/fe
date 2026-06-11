@@ -4,7 +4,15 @@ assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/immutable_contract_field_init.fe
 ---
-error[8-0082]: immutable contract field is not initialized
+error[8-0084]: memory-backed contract fields are not supported
+    ┌─ immutable_contract_field_init.fe:200:10
+    │
+200 │     ptr: std::evm::MemPtr<u256>
+    │          ^^^^^^^^^^^^^^^^^^^^^^ `ptr` has a memory-backed contract field type
+    │
+    = memory handles cannot be persisted as contract fields; use a plain immutable field for code-backed data or a plain `mut` field for storage-backed state
+
+error[8-0086]: immutable contract field is not initialized
   ┌─ immutable_contract_field_init.fe:2:5
   │
 2 │     x: u256
@@ -12,7 +20,7 @@ error[8-0082]: immutable contract field is not initialized
   │
   = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
 
-error[8-0082]: immutable contract field is not initialized
+error[8-0086]: immutable contract field is not initialized
   ┌─ immutable_contract_field_init.fe:6:5
   │
 6 │     x: u256
@@ -23,7 +31,7 @@ error[8-0082]: immutable contract field is not initialized
   │
   = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
 
-error[8-0082]: immutable contract field is not initialized
+error[8-0086]: immutable contract field is not initialized
    ┌─ immutable_contract_field_init.fe:12:5
    │
 12 │     x: u256
@@ -34,7 +42,7 @@ error[8-0082]: immutable contract field is not initialized
    │
    = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
 
-error[8-0082]: immutable contract field is not initialized
+error[8-0086]: immutable contract field is not initialized
    ┌─ immutable_contract_field_init.fe:18:5
    │
 18 │       x: u256
@@ -50,7 +58,7 @@ error[8-0082]: immutable contract field is not initialized
    │
    = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
 
-error[8-0082]: immutable contract field is not initialized
+error[8-0086]: immutable contract field is not initialized
     ┌─ immutable_contract_field_init.fe:136:5
     │
 136 │       x: u256
@@ -66,7 +74,7 @@ error[8-0082]: immutable contract field is not initialized
     │
     = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
 
-error[8-0082]: immutable contract field is not initialized
+error[8-0086]: immutable contract field is not initialized
     ┌─ immutable_contract_field_init.fe:146:5
     │
 146 │       x: u256
@@ -84,7 +92,7 @@ error[8-0082]: immutable contract field is not initialized
     │
     = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
 
-error[8-0082]: immutable contract field is not initialized
+error[8-0086]: immutable contract field is not initialized
     ┌─ immutable_contract_field_init.fe:158:5
     │
 158 │       x: u256
@@ -102,7 +110,7 @@ error[8-0082]: immutable contract field is not initialized
     │
     = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
 
-error[8-0082]: immutable contract field is not initialized
+error[8-0086]: immutable contract field is not initialized
     ┌─ immutable_contract_field_init.fe:173:5
     │
 173 │       x: u256
@@ -120,7 +128,7 @@ error[8-0082]: immutable contract field is not initialized
     │
     = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
 
-error[8-0082]: immutable contract field is not initialized
+error[8-0086]: immutable contract field is not initialized
     ┌─ immutable_contract_field_init.fe:186:5
     │
 186 │       x: u256
@@ -138,7 +146,7 @@ error[8-0082]: immutable contract field is not initialized
     │
     = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
 
-error[8-0082]: immutable contract field is not initialized
+error[8-0086]: immutable contract field is not initialized
     ┌─ immutable_contract_field_init.fe:216:5
     │
 216 │       x: u256
@@ -152,7 +160,7 @@ error[8-0082]: immutable contract field is not initialized
     │
     = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
 
-error[8-0082]: immutable contract field is not initialized
+error[8-0086]: immutable contract field is not initialized
     ┌─ immutable_contract_field_init.fe:224:5
     │
 224 │       x: u256
@@ -169,7 +177,7 @@ error[8-0082]: immutable contract field is not initialized
     │
     = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
 
-error[8-0082]: immutable contract field is not initialized
+error[8-0086]: immutable contract field is not initialized
     ┌─ immutable_contract_field_init.fe:240:5
     │
 240 │       x: u256
@@ -182,11 +190,3 @@ error[8-0082]: immutable contract field is not initialized
     │ ╰─────' this init block may finish without assigning `x`
     │
     = assign `x` in `init` with `uses (mut x)`, or mark the field `mut` to store it in contract storage
-
-error[8-0084]: memory-backed contract fields are not supported
-    ┌─ immutable_contract_field_init.fe:200:10
-    │
-200 │     ptr: std::evm::MemPtr<u256>
-    │          ^^^^^^^^^^^^^^^^^^^^^^ `ptr` has a memory-backed contract field type
-    │
-    = memory handles cannot be persisted as contract fields; use a plain immutable field for code-backed data or a plain `mut` field for storage-backed state

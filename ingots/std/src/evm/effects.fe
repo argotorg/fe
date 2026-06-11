@@ -121,7 +121,6 @@ pub use core::effect_ref::MemPtr
 
 /// Storage pointer/handle to a value of type `T`.
 pub use core::effect_ref::StorPtr
-pub use core::effect_ref::CodePtr
 
 /// Calldata pointer to a value of type `T` (read-only).
 pub struct CalldataPtr<T> { pub offset: u256 }

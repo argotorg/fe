@@ -831,7 +831,7 @@ impl<'db> BodyDiag<'db> {
             Self::ArrayRepeatRequiresCopy { .. } => 71,
             Self::NonAssignableExpr(..) => 17,
             Self::ImmutableAssignment { .. } => 18,
-            Self::ImmutableContractFieldNotInitialized { .. } => 82,
+            Self::ImmutableContractFieldNotInitialized { .. } => 86,
             Self::UnsupportedMemoryContractField { .. } => 84,
             Self::ImmutableContractFieldMutBinding { .. } => 85,
             Self::LoopControlOutsideOfLoop { .. } => 19,
