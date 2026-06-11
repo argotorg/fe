@@ -171,6 +171,26 @@ impl<T> EffectHandleMut for TStorPtr<T> {}
 impl<T> EffectRef<T> for TStorPtr<T> {}
 impl<T> EffectRefMut<T> for TStorPtr<T> {}
 
+impl<T> TStorPtr<T> {
+    /// Reads the pointed-at transient value.
+    pub fn read(self) -> T
+        where T: Copy
+    {
+        let mut ptr = self
+        with (ptr) {
+            core::effect_ref::read(ptr)
+        }
+    }
+
+    /// Writes the pointed-at transient value.
+    pub fn write(self, _ value: T) {
+        let mut ptr = self
+        with (ptr) {
+            core::effect_ref::write(ptr, value)
+        }
+    }
+}
+
 /// Zero-sized pointer to a statically assigned transient storage slot.
 ///
 /// `SLOT` defaults to a layout hole: when a type containing a `TSlot`
@@ -189,6 +209,18 @@ impl<T, const SLOT: u256> TSlot<T, SLOT> {
     /// Runtime pointer to the assigned slot.
     pub fn ptr(self) -> TStorPtr<T> {
         TStorPtr::from_raw(SLOT)
+    }
+
+    /// Reads the value at the assigned slot.
+    pub fn read(self) -> T
+        where T: Copy
+    {
+        self.ptr().read()
+    }
+
+    /// Writes the value at the assigned slot.
+    pub fn write(self, _ value: T) {
+        self.ptr().write(value)
     }
 }
 

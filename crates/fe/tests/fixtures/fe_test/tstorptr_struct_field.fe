@@ -13,35 +13,9 @@ struct Flagged {
     flag: TStorPtr<bool>,
 }
 
-fn flag_get() -> bool uses (flag: bool) {
-    flag
-}
-
-fn flag_set(value: bool) uses (flag: mut bool) {
-    flag = value
-}
-
 impl Flagged {
-    fn handle_slot(self) -> u256 {
-        self.flag.raw()
-    }
-
     fn attach(mut self, slot: u256) {
         self.flag = TStorPtr::from_raw(slot)
-    }
-
-    fn set_flag(mut self, value: bool) {
-        let mut flag = self.flag
-        with (flag) {
-            flag_set(value)
-        }
-    }
-
-    fn get_flag(mut self) -> bool {
-        let mut flag = self.flag
-        with (flag) {
-            flag_get()
-        }
     }
 }
 
@@ -62,17 +36,17 @@ pub contract C {
     recv CMsg {
         HandleSlot -> u256 uses (state) {
             // The handle written by `init` persists across transactions.
-            state.handle_slot()
+            state.flag.raw()
         }
 
         Bump -> u256 uses (mut state) {
             // Set and clear the transient flag through the persisted handle;
             // the persistent counter advances while the flag round-trips.
-            assert!(!state.get_flag())
-            state.set_flag(value: true)
-            assert!(state.get_flag())
-            state.set_flag(value: false)
-            assert!(!state.get_flag())
+            assert!(!state.flag.read())
+            state.flag.write(true)
+            assert!(state.flag.read())
+            state.flag.write(false)
+            assert!(!state.flag.read())
             state.count += 1
             state.count
         }

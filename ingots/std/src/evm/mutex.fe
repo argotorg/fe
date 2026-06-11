@@ -1,4 +1,4 @@
-use super::effects::{TSlot, TStorPtr}
+use super::effects::TSlot
 
 /// A storage-backed value guarded by a transient reentrancy lock.
 ///
@@ -14,54 +14,30 @@ pub struct Mutex<T> {
     lock: TSlot<bool>,
 }
 
-fn lock_get() -> bool uses (lock: bool) {
-    lock
-}
-
-fn lock_set(value: bool) uses (lock: mut bool) {
-    lock = value
-}
-
 impl<T> Mutex<T> {
-    fn lock_ptr(self) -> TStorPtr<bool> {
-        self.lock.ptr()
-    }
-
     pub fn lock(mut self) -> mut T {
-        let mut lock = self.lock_ptr()
-        with (lock) {
-            if lock_get() {
-                assert!(false)
-            }
-            lock_set(value: true)
-            mut self.value
+        if self.lock.read() {
+            assert!(false)
         }
+        self.lock.write(true)
+        mut self.value
     }
 
     pub fn try_lock(mut self) -> Option<mut T> {
-        let mut lock = self.lock_ptr()
-        with (lock) {
-            if lock_get() {
-                Option::None
-            } else {
-                lock_set(value: true)
-                Option::Some(mut self.value)
-            }
+        if self.lock.read() {
+            Option::None
+        } else {
+            self.lock.write(true)
+            Option::Some(mut self.value)
         }
     }
 
     pub fn unlock(mut self) {
-        let mut lock = self.lock_ptr()
-        with (lock) {
-            lock_set(value: false)
-        }
+        self.lock.write(false)
     }
 
     pub fn is_locked(self) -> bool {
-        let lock = self.lock_ptr()
-        with (lock) {
-            lock_get()
-        }
+        self.lock.read()
     }
 
     /// Reads the protected value without taking the lock.

@@ -1,0 +1,57 @@
+// Handles projected out of provider-backed struct fields are ordinary
+// values, not carriers of the enclosing provider: with-blocks over copies
+// taken under plain-self borrows or into non-mut locals, and direct in-arm
+// projections, must all lower. These shapes used to panic the Sonatina
+// backend ("runtime carrier classes have no common realizable join"): the
+// projected handle inherited the storage provider's carrier class while its
+// own type demanded the transient transport class.
+use core::effect_ref::EffectHandle
+use std::evm::effects::TStorPtr
+use std::evm::{Create, Evm}
+
+struct S {
+    flag: TStorPtr<bool>,
+}
+
+fn flag_get() -> bool uses (f: bool) {
+    f
+}
+
+impl S {
+    fn read_plain_self(self) -> bool {
+        let flag = self.flag
+        with (flag) {
+            flag_get()
+        }
+    }
+}
+
+msg M {
+    #[selector = 1]
+    Go -> u256,
+}
+
+pub contract C {
+    mut s: S,
+
+    recv M {
+        Go -> u256 uses (s) {
+            // direct projection into a local, non-mut, then with
+            let flag = s.flag
+            let direct = with (flag) { flag_get() }
+            let via_method = s.read_plain_self()
+            let raw_slot = s.flag.raw()
+            let mut result = raw_slot
+            if direct { result += 1 }
+            if via_method { result += 2 }
+            result
+        }
+    }
+}
+
+#[test]
+fn t() uses (cr: mut Create, evm: mut Evm) {
+    let c = cr.create2<C>(value: 0, args: (), salt: 1)
+    let r = evm.call(addr: c, gas: 200000, value: 0, message: M::Go {})
+    assert!(r == 0)
+}

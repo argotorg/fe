@@ -71,6 +71,22 @@ pub trait EffectHandle {
 /// Marker: a handle that supports mutable access.
 pub trait EffectHandleMut: EffectHandle {}
 
+/// Reads the value a handle points at.
+///
+/// The handle argument anchors the effect key to the handle's `Target`, so
+/// the provided effect resolves unambiguously; provide the handle with
+/// `with` or call through the handle's `read` method.
+pub fn read<H: EffectHandle>(_ handle: H) -> H::Target uses (value: H::Target)
+    where H::Target: Copy
+{
+    value
+}
+
+/// Writes the value a handle points at.
+pub fn write<H: EffectHandle>(_ handle: H, _ value: H::Target) uses (target: mut H::Target) {
+    target = value
+}
+
 /// Marker for zero-sized pointer types whose const slot parameter is
 /// assigned by the contract layout.
 ///
@@ -101,6 +117,26 @@ impl<T> EffectHandle for MemPtr<T> {
 }
 impl<T> EffectHandleMut for MemPtr<T> {}
 
+impl<T> MemPtr<T> {
+    /// Reads the pointed-at value.
+    pub fn read(self) -> T
+        where T: Copy
+    {
+        let mut ptr = self
+        with (ptr) {
+            read(ptr)
+        }
+    }
+
+    /// Writes the pointed-at value.
+    pub fn write(self, _ value: T) {
+        let mut ptr = self
+        with (ptr) {
+            write(ptr, value)
+        }
+    }
+}
+
 impl<T> EffectRef<T> for MemPtr<T> {}
 impl<T> EffectRefMut<T> for MemPtr<T> {}
 
@@ -118,6 +154,26 @@ impl<T> EffectHandle for StorPtr<T> {
     }
 }
 impl<T> EffectHandleMut for StorPtr<T> {}
+
+impl<T> StorPtr<T> {
+    /// Reads the pointed-at value.
+    pub fn read(self) -> T
+        where T: Copy
+    {
+        let mut ptr = self
+        with (ptr) {
+            read(ptr)
+        }
+    }
+
+    /// Writes the pointed-at value.
+    pub fn write(self, _ value: T) {
+        let mut ptr = self
+        with (ptr) {
+            write(ptr, value)
+        }
+    }
+}
 
 impl<T> EffectRef<T> for StorPtr<T> {}
 impl<T> EffectRefMut<T> for StorPtr<T> {}

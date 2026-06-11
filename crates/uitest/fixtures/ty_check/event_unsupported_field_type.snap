@@ -13,9 +13,9 @@ error[6-0003]: trait bound is not satisfied
   6 │ │ }
     │ ╰─^ `StorageMap<Address, u256, 0>` doesn't implement `Encode<Sol>`
     │
-    ┌─ src/evm/effects.fe:389:14
+    ┌─ src/evm/effects.fe:421:14
     │
-389 │     where T: Encode<Sol> + AbiSize
+421 │     where T: Encode<Sol> + AbiSize
     │              ----------- required by this bound on `encode_abi_payload`
 
 error[6-0003]: trait bound is not satisfied
@@ -27,7 +27,7 @@ error[6-0003]: trait bound is not satisfied
   6 │ │ }
     │ ╰─^ `StorageMap<Address, u256, 0>` doesn't implement `AbiSize`
     │
-    ┌─ src/evm/effects.fe:389:28
+    ┌─ src/evm/effects.fe:421:28
     │
-389 │     where T: Encode<Sol> + AbiSize
+421 │     where T: Encode<Sol> + AbiSize
     │                            ------- required by this bound on `encode_abi_payload`
