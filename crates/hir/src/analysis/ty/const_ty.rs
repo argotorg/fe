@@ -11,6 +11,7 @@ use salsa::Update;
 use super::const_expr::{ConstExpr, ConstExprId, pretty_print_un_op};
 use super::{
     assoc_const::AssocConstUse,
+    binder::Binder,
     diagnostics::{BodyDiag, FuncBodyDiag},
     fold::{AssocTySubst, TyFoldable},
     normalize::normalize_ty,
@@ -2109,30 +2110,46 @@ pub(crate) fn const_body_resolution_reenters<'db>(
     db: &'db dyn HirAnalysisDb,
     start_body: Body<'db>,
     start_expected: TyId<'db>,
+    start_args: &[TyId<'db>],
 ) -> bool {
     use crate::analysis::ty::ty_check::ConstRef;
 
     let mut visited = FxHashSet::default();
     visited.insert(start_body);
-    let mut frontier = vec![(start_body, start_expected)];
-    while let Some((body, expected)) = frontier.pop() {
+    let mut frontier = vec![(start_body, start_expected, start_args.to_vec())];
+    while let Some((body, expected, args)) = frontier.pop() {
         let typed_body = &check_anon_const_body(db, body, expected).1;
         for cref in typed_body.const_refs() {
-            let next =
-                match cref {
-                    ConstRef::Const(const_) => const_
-                        .body(db)
-                        .to_opt()
-                        .map(|next_body| (next_body, const_.ty(db))),
-                    ConstRef::TraitConst(assoc) => const_ty_from_assoc_const_use(db, assoc)
-                        .and_then(|const_ty| match const_ty.data(db) {
+            let next = match cref {
+                ConstRef::Const(const_) => const_
+                    .body(db)
+                    .to_opt()
+                    .map(|next_body| (next_body, const_.ty(db), Vec::new())),
+                ConstRef::TraitConst(assoc) => {
+                    // The recorded use is in the owning body's binder terms:
+                    // `Self::B` in a trait default keeps `Self` as a param.
+                    // Instantiate with the args this body is evaluated under
+                    // so impl overrides resolve (a default-body cycle only
+                    // closes through the concrete impl's override).
+                    let assoc = if args.is_empty() {
+                        assoc
+                    } else {
+                        assoc.with_inst(Binder::bind(assoc.inst()).instantiate(db, &args))
+                    };
+                    const_ty_from_assoc_const_use(db, assoc).and_then(|const_ty| {
+                        match const_ty.data(db) {
                             ConstTyData::UnEvaluated {
-                                body, ty: Some(ty), ..
-                            } => Some((*body, *ty)),
+                                body,
+                                ty: Some(ty),
+                                generic_args,
+                                ..
+                            } => Some((*body, *ty, generic_args.clone())),
                             _ => None,
-                        }),
-                };
-            let Some((next_body, next_expected)) = next else {
+                        }
+                    })
+                }
+            };
+            let Some((next_body, next_expected, next_args)) = next else {
                 continue;
             };
             if next_body == start_body {
@@ -2141,7 +2158,7 @@ pub(crate) fn const_body_resolution_reenters<'db>(
             if next_expected.has_invalid(db) || !visited.insert(next_body) {
                 continue;
             }
-            frontier.push((next_body, next_expected));
+            frontier.push((next_body, next_expected, next_args));
         }
     }
     false

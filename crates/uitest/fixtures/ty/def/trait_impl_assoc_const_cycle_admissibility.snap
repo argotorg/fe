@@ -46,9 +46,3 @@ error[6-0017]: associated const `D` has a recursive definition
    │
 91 │     const D: u32 = <CrossRecursive as LeftCycle>::C
    │           ^ `D` cannot be evaluated to a concrete value
-
-error[6-0017]: associated const `D` has a recursive definition
-    ┌─ trait_impl_assoc_const_cycle_admissibility.fe:120:11
-    │
-120 │     const D: u32 = ShadowedConst::C
-    │           ^ `D` cannot be evaluated to a concrete value

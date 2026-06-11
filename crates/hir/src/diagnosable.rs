@@ -748,8 +748,6 @@ impl<'db> ImplTrait<'db> {
             return Vec::new();
         };
         let implementor = implementor.instantiate_identity();
-        let is_generic = !implementor.params(db).is_empty();
-
         let trait_hir = implementor.trait_def(db);
         let inst = implementor.trait_inst(db);
         let scope = self.scope();
@@ -781,20 +779,22 @@ impl<'db> ImplTrait<'db> {
                 ) {
                     continue;
                 }
-            } else if is_generic {
-                // A non-evaluated result on a generic impl is legitimate
-                // deferral unless the const-ref resolution chain loops back
-                // here.
+            } else {
+                // A non-evaluated, non-invalid result is only recursion when
+                // the const-ref resolution chain actually loops back to this
+                // body. Anything else — generic-impl deferral, ambiguous or
+                // otherwise erroneous references — is the body checks' job.
                 let ConstTyData::UnEvaluated {
                     body: start_body,
                     ty: Some(start_ty),
+                    generic_args: start_args,
                     ..
                 } = const_ty.data(db)
                 else {
                     continue;
                 };
                 if start_ty.has_invalid(db)
-                    || !const_body_resolution_reenters(db, *start_body, *start_ty)
+                    || !const_body_resolution_reenters(db, *start_body, *start_ty, start_args)
                 {
                     continue;
                 }
