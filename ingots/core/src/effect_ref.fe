@@ -10,31 +10,22 @@ use ingot::Copy
 /// general-purpose provider types (`MemPtr<T>`, `StorPtr<T>`) that backends can map onto their
 /// runtime model.
 
-/// Effect provider address-space marker.
-pub struct Memory {}
-
-/// Effect provider address-space marker: indicates the provider points into immutable calldata.
+/// The address space an effect provider points into.
 ///
-/// Backends may interpret this as an input byte buffer (e.g. EVM calldata via CALLDATALOAD).
-pub struct Calldata {}
-
-/// Effect provider address-space marker: indicates the provider points into immutable code data.
-pub struct Code {}
-
-/// Effect provider address-space marker: indicates the provider points into the target's persistent
-/// storage/state.
-///
-/// Backends decide what "storage" means for their runtime model.
-pub struct Storage {}
-
-/// Effect provider address-space marker: indicates the provider points into transient storage.
-///
-/// Backends may interpret this as a temporary key/value store scoped to a call frame (e.g. EVM
-/// transient storage via TLOAD/TSTORE).
-pub struct TransientStorage {}
-
-/// Target-specific domain markers (e.g. calldata, transient storage) belong in the target's
-/// standard library, not in `core`.
+/// Backends decide how each space maps onto their runtime model:
+/// - `Memory`: transient linear memory.
+/// - `Calldata`: an immutable input byte buffer (e.g. EVM CALLDATALOAD).
+/// - `Code`: immutable code data.
+/// - `Storage`: the target's persistent storage/state.
+/// - `TransientStorage`: a temporary store scoped to a call frame or
+///   transaction (e.g. EVM TLOAD/TSTORE).
+pub enum AddressSpace {
+    Memory,
+    Calldata,
+    Code,
+    Storage,
+    TransientStorage,
+}
 
 /// Memory pointer to a value of type `T`.
 ///
@@ -66,7 +57,9 @@ pub trait EffectRefMut<Target>: EffectRef<Target> {}
 /// This is the place to keep `from_raw`/`raw` and address-space metadata.
 pub trait EffectHandle {
     type Target
-    type AddressSpace
+
+    /// The address space the raw handle points into.
+    const SPACE: AddressSpace
 
     /// Construct the effect provider from the raw pointer/handle used by the backend.
     fn from_raw(_ raw: u256) -> Self
@@ -83,11 +76,10 @@ pub trait EffectHandleMut: EffectHandle {}
 ///
 /// When a layout hole (`= _`) instantiates the slot parameter of an
 /// implementing type inside a contract field, the layout draws the slot
-/// number from `AddressSpace`'s slot counter instead of the containing
-/// field's, so statically assigned slots never collide with other state in
-/// that space.
+/// number from `SPACE`'s slot counter instead of the containing field's, so
+/// statically assigned slots never collide with other state in that space.
 pub trait StaticSlot {
-    type AddressSpace
+    const SPACE: AddressSpace
 }
 
 impl<T> EffectRef<T> for T {}
@@ -96,7 +88,8 @@ impl<T> EffectRefMut<T> for T {}
 
 impl<T> EffectHandle for MemPtr<T> {
     type Target = T
-    type AddressSpace = Memory
+
+    const SPACE: AddressSpace = AddressSpace::Memory
 
     fn from_raw(_ raw: u256) -> Self {
         Self { addr: raw }
@@ -113,7 +106,8 @@ impl<T> EffectRefMut<T> for MemPtr<T> {}
 
 impl<T> EffectHandle for StorPtr<T> {
     type Target = T
-    type AddressSpace = Storage
+
+    const SPACE: AddressSpace = AddressSpace::Storage
 
     fn from_raw(_ raw: u256) -> Self {
         Self { handle: raw }

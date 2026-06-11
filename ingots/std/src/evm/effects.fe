@@ -129,7 +129,8 @@ impl<T> Copy for CalldataPtr<T> {}
 
 impl<T> EffectHandle for CalldataPtr<T> {
     type Target = T
-    type AddressSpace = core::effect_ref::Calldata
+
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Calldata
 
     fn from_raw(_ raw: u256) -> Self {
         Self { offset: raw }
@@ -153,7 +154,8 @@ impl<T> Copy for TStorPtr<T> {}
 
 impl<T> EffectHandle for TStorPtr<T> {
     type Target = T
-    type AddressSpace = core::effect_ref::TransientStorage
+
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::TransientStorage
 
     fn from_raw(_ raw: u256) -> Self {
         Self { slot: raw }
@@ -180,7 +182,7 @@ pub struct TSlot<T, const SLOT: u256 = _> {}
 impl<T, const SLOT: u256> Copy for TSlot<T, SLOT> {}
 
 impl<T, const SLOT: u256> core::effect_ref::StaticSlot for TSlot<T, SLOT> {
-    type AddressSpace = core::effect_ref::TransientStorage
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::TransientStorage
 }
 
 impl<T, const SLOT: u256> TSlot<T, SLOT> {

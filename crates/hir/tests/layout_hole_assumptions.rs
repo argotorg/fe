@@ -1583,11 +1583,11 @@ contract C {
         .get(&field_name)
         .cloned()
         .expect("missing `value` field info");
-    let storage = resolve_lib_type_path(&db, contract.scope(), "core::effect_ref::Storage")
-        .expect("missing storage address space");
-
     assert!(field_layout.is_provider);
-    assert_eq!(field_layout.address_space, storage);
+    assert_eq!(
+        field_layout.address_space,
+        fe_hir::analysis::ty::ProviderAddressSpace::Storage
+    );
     assert_eq!(
         strip_derived_adt_layout_args(&db, field_layout.declared_ty),
         field_info.declared_ty
@@ -1645,11 +1645,6 @@ contract C {
         .expect("missing `C` contract");
 
     let layout = contract.field_layout(&db);
-    let storage = resolve_lib_type_path(&db, contract.scope(), "core::effect_ref::Storage")
-        .expect("missing storage address space");
-    let memory = resolve_lib_type_path(&db, contract.scope(), "core::effect_ref::Memory")
-        .expect("missing memory address space");
-
     let storage0 = layout
         .get(&IdentId::new(&db, "storage0".to_string()))
         .expect("missing `storage0` field");
@@ -1660,9 +1655,10 @@ contract C {
         .get(&IdentId::new(&db, "storage1".to_string()))
         .expect("missing `storage1` field");
 
-    assert_eq!(storage0.address_space, storage);
-    assert_eq!(memory0.address_space, memory);
-    assert_eq!(storage1.address_space, storage);
+    use fe_hir::analysis::ty::ProviderAddressSpace;
+    assert_eq!(storage0.address_space, ProviderAddressSpace::Storage);
+    assert_eq!(memory0.address_space, ProviderAddressSpace::Memory);
+    assert_eq!(storage1.address_space, ProviderAddressSpace::Storage);
     assert_eq!(storage0.slot_offset, 0);
     assert_eq!(memory0.slot_offset, 0);
     assert_eq!(storage1.slot_offset, 1);
@@ -1856,7 +1852,7 @@ struct TokenStore {
 
 contract C {
     store: StorPtr<TokenStore>
-    after: u256
+    mut after: u256
 }
 "#,
     );
@@ -1916,7 +1912,8 @@ struct Ptr<T> {
 
 impl<T> EffectHandle for Ptr<T> {
     type Target = Payload<T>
-    type AddressSpace = core::effect_ref::Storage
+
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Storage
 
     fn from_raw(_ raw: u256) -> Self {
         Self { raw }
@@ -1985,7 +1982,8 @@ struct Wrapper<const LEFT: u256 = _, const RIGHT: u256 = _> {
 
 impl<const LEFT: u256, const RIGHT: u256> EffectHandle for Wrapper<LEFT, RIGHT> {
     type Target = Pair<RIGHT, LEFT>
-    type AddressSpace = core::effect_ref::Storage
+
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Storage
 
     fn from_raw(_ raw: u256) -> Self {
         Self { raw }
@@ -2065,7 +2063,8 @@ struct Wrapper<const ROOT: u256 = _> {
 
 impl<const ROOT: u256> EffectHandle for Wrapper<ROOT> {
     type Target = u256
-    type AddressSpace = core::effect_ref::Storage
+
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Storage
 
     fn from_raw(_ raw: u256) -> Self {
         Self { raw }

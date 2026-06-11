@@ -11,7 +11,7 @@ pub use bytes::{AsBytes, keccak}
 pub use string::{self, concat}
 pub use intrinsic::{contract_field_slot, size_of}
 pub use functional::{Fn, Functor, Applicative, Monad}
-pub use effect_ref::{EffectHandle, EffectHandleMut, EffectRef, EffectRefMut, MemPtr, StaticSlot, StorPtr}
+pub use effect_ref::{AddressSpace, EffectHandle, EffectHandleMut, EffectRef, EffectRefMut, MemPtr, StaticSlot, StorPtr}
 pub use contracts::{self, *}
 pub use range::{Bound, Known, Unknown, Range}
 pub use seq::Seq

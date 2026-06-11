@@ -21,7 +21,7 @@ use crate::{
             canonical::Canonical,
             corelib::resolve_core_trait,
             diagnostics::{BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection},
-            provider::{ProviderAddressSpace, address_space_from_ty},
+            provider::ProviderAddressSpace,
             trait_def::TraitInstId,
             trait_def::impls_for_ty,
             trait_resolution::{
@@ -796,11 +796,7 @@ pub fn check_contract_immutable_fields_initialized<'db>(
         .field_layout(db)
         .values()
         .filter(|field| field.slot_count != 0)
-        .filter(|field| {
-            !field.declared_ty.has_invalid(db)
-                && !field.target_ty.has_invalid(db)
-                && !field.address_space.has_invalid(db)
-        })
+        .filter(|field| !field.declared_ty.has_invalid(db) && !field.target_ty.has_invalid(db))
         .filter(|field| {
             FieldView {
                 parent: FieldParent::Contract(contract),
@@ -813,10 +809,7 @@ pub fn check_contract_immutable_fields_initialized<'db>(
         .collect::<Vec<_>>();
     let mut diags = valid_fields
         .iter()
-        .filter(|field| {
-            address_space_from_ty(db, contract.scope(), field.address_space)
-                == Some(ProviderAddressSpace::Memory)
-        })
+        .filter(|field| field.address_space == ProviderAddressSpace::Memory)
         .map(|field| {
             BodyDiag::UnsupportedMemoryContractField {
                 primary: FieldView {
@@ -831,10 +824,7 @@ pub fn check_contract_immutable_fields_initialized<'db>(
         .collect::<Vec<_>>();
     let required_fields = valid_fields
         .into_iter()
-        .filter(|field| {
-            address_space_from_ty(db, contract.scope(), field.address_space)
-                == Some(ProviderAddressSpace::Code)
-        })
+        .filter(|field| field.address_space == ProviderAddressSpace::Code)
         .collect::<Vec<_>>();
     if required_fields.is_empty() {
         return diags;

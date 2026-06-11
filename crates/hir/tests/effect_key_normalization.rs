@@ -565,7 +565,8 @@ impl<T> Logger for Ptr<T> {
 
 impl<T> EffectHandle for Ptr<T> {
     type Target = T
-    type AddressSpace = core::effect_ref::Memory
+
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
 
     fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
@@ -774,7 +775,8 @@ struct Ptr<T> {
 
 impl<T> EffectHandle for Ptr<T> {
     type Target = T
-    type AddressSpace = core::effect_ref::Memory
+
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
 
     fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
@@ -1802,7 +1804,8 @@ struct Ptr<T> {
 
 impl<T> EffectHandle for Ptr<T> {
     type Target = T
-    type AddressSpace = core::effect_ref::Memory
+
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
 
     fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
@@ -2043,7 +2046,8 @@ struct Ptr<T> {
 
 impl EffectHandle for Ptr<Storage<u8>> {
     type Target = Storage<u8>
-    type AddressSpace = core::effect_ref::Memory
+
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
 
     fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
@@ -2111,7 +2115,8 @@ struct Ptr<T> {
 
 impl EffectHandle for Ptr<Storage<u8>> {
     type Target = Storage<u8>
-    type AddressSpace = core::effect_ref::Memory
+
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
 
     fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
@@ -2173,7 +2178,8 @@ struct Ptr<T> {
 
 impl EffectHandle for Ptr<Storage<u8>> {
     type Target = Storage<u8>
-    type AddressSpace = core::effect_ref::Memory
+
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
 
     fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
@@ -2236,7 +2242,8 @@ where
     T: HasTy
 {
     type Target = Storage<T::Assoc>
-    type AddressSpace = core::effect_ref::Memory
+
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
 
     fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
@@ -2306,7 +2313,8 @@ where
     T: HasTy
 {
     type Target = Storage<T::Assoc>
-    type AddressSpace = core::effect_ref::Memory
+
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
 
     fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
@@ -3687,7 +3695,8 @@ struct Ptr<T> {
 
 impl EffectHandle for Ptr<Storage<u8>> {
     type Target = Storage<u8>
-    type AddressSpace = core::effect_ref::Memory
+
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
 
     fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }

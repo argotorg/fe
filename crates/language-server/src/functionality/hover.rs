@@ -5,8 +5,8 @@ use common::file::File;
 use hir::{
     HirDb,
     analysis::ty::{
+        ProviderAddressSpace,
         ty_check::{EffectParamSite, LocalBinding, ParamSite},
-        ty_def::TyId,
     },
     core::semantic::{
         EffectEnvView, ProviderSource,
@@ -106,7 +106,7 @@ fn contract_field_layout_by_index<'db>(
     db: &'db DriverDataBase,
     contract: hir::hir_def::Contract<'db>,
     field_idx: u32,
-) -> Option<(usize, usize, TyId<'db>)> {
+) -> Option<(usize, usize, ProviderAddressSpace)> {
     let field = contract
         .field_layout(db)
         .values()
@@ -117,7 +117,7 @@ fn contract_field_layout_by_index<'db>(
 fn contract_field_layout_from_scope<'db>(
     db: &'db DriverDataBase,
     scope: ScopeId<'db>,
-) -> Option<(usize, usize, TyId<'db>)> {
+) -> Option<(usize, usize, ProviderAddressSpace)> {
     let ScopeId::Field(FieldParent::Contract(contract), idx) = scope else {
         return None;
     };
@@ -134,7 +134,7 @@ fn contract_field_layout_from_scope<'db>(
 fn contract_field_layout_from_local_binding<'db>(
     db: &'db DriverDataBase,
     binding: LocalBinding<'db>,
-) -> Option<(usize, usize, TyId<'db>)> {
+) -> Option<(usize, usize, ProviderAddressSpace)> {
     match binding {
         LocalBinding::Param {
             site: ParamSite::EffectField(effect_site),
@@ -170,7 +170,7 @@ fn contract_field_layout_footer<'db>(
     };
     Some(format!(
         "slot: {slot_offset} (count: {slot_count})\nspace: {}",
-        address_space.pretty_print(db)
+        address_space.pretty()
     ))
 }
 

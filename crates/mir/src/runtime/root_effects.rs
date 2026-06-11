@@ -4,7 +4,7 @@ use hir::{
             SemanticInstance, owner_effect_bindings, resolved_provider_binding_for_instance_effect,
         },
         ty::{
-            ProviderAddressSpace, address_space_from_ty,
+            ProviderAddressSpace,
             ty_check::{BodyOwner, LocalBinding},
             ty_def::TyId,
         },
@@ -177,11 +177,9 @@ fn contract_field_binding<'db>(
     total_code_slots: usize,
 ) -> Result<ContractFieldBinding<'db>, LowerError> {
     let binding_ty = semantic.binding_ty(db, binding);
-    let field_space = context
-        .contract()
-        .and_then(|contract| address_space_from_ty(db, contract.scope(), field.address_space));
+    let field_space = field.address_space;
     let init_immutable = matches!(semantic.key(db).owner(db), BodyOwner::ContractInit { .. })
-        && field_space == Some(ProviderAddressSpace::Code);
+        && field_space == ProviderAddressSpace::Code;
     let class = runtime_effect_binding_plan(db, semantic, binding)
         .map(|plan| plan.class)
         .ok_or_else(|| {

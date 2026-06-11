@@ -33,9 +33,7 @@ pub use symbol::{
 
 use crate::HirDb;
 use crate::analysis::HirAnalysisDb;
-use crate::analysis::ty::corelib::{
-    resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path,
-};
+use crate::analysis::ty::corelib::{resolve_core_trait, resolve_lib_func_path};
 use crate::analysis::ty::diagnostics::{ImplDiag, TyLowerDiag};
 use crate::analysis::ty::fold::TyFoldable;
 use crate::analysis::ty::normalize::normalize_ty;
@@ -1627,7 +1625,7 @@ pub struct ContractFieldLayoutInfo<'db> {
     pub is_provider: bool,
     pub target_ty: TyId<'db>,
     /// Semantic address space in which this field is allocated.
-    pub address_space: TyId<'db>,
+    pub address_space: crate::analysis::ty::ProviderAddressSpace,
     /// Slot offset from the start of `address_space`.
     pub slot_offset: usize,
     /// Total number of slots consumed by this field.
@@ -1983,7 +1981,7 @@ fn contract_field_inline_slot_span<'db>(
 struct ContractFieldLayoutPlan<'db> {
     declared_ty: TyId<'db>,
     is_provider: bool,
-    address_space: TyId<'db>,
+    address_space: crate::analysis::ty::ProviderAddressSpace,
     target_ty: TyId<'db>,
     slot_basis_ty: TyId<'db>,
     slot_placeholders: Vec<TyId<'db>>,
@@ -1991,7 +1989,7 @@ struct ContractFieldLayoutPlan<'db> {
     /// Placeholders whose declaring param indexes a different address space
     /// (`core::effect_ref::StaticSlot`); assigned from that space's contract
     /// counter instead of the field's, and excluded from the field's span.
-    space_overrides: Vec<(TyId<'db>, TyId<'db>)>,
+    space_overrides: Vec<(crate::analysis::ty::ProviderAddressSpace, TyId<'db>)>,
 }
 
 #[derive(Clone, Copy)]
@@ -2000,9 +1998,8 @@ struct ContractFieldEffectHandleCx<'db> {
     assumptions: PredicateListId<'db>,
     effect_handle: Trait<'db>,
     static_slot: Option<Trait<'db>>,
-    address_space_ident: IdentId<'db>,
     target_ident: IdentId<'db>,
-    fallback_space: TyId<'db>,
+    fallback_space: crate::analysis::ty::ProviderAddressSpace,
 }
 
 impl<'db> ContractFieldEffectHandleCx<'db> {
@@ -2010,27 +2007,27 @@ impl<'db> ContractFieldEffectHandleCx<'db> {
         self,
         db: &'db dyn HirAnalysisDb,
         field_ty: TyId<'db>,
-    ) -> (bool, TyId<'db>, TyId<'db>) {
+    ) -> (bool, crate::analysis::ty::ProviderAddressSpace, TyId<'db>) {
         let inst = TraitInstId::new(db, self.effect_handle, vec![field_ty], IndexMap::new());
         match is_goal_satisfiable(db, TraitSolveCx::new(db, self.scope), inst) {
             GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => {
                 (false, self.fallback_space, field_ty)
             }
             GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation(_) => {
-                let normalize_assoc = |name, fallback, allow_holes| {
-                    inst.assoc_ty(db, name)
-                        .map(|assoc| normalize_ty(db, assoc, self.scope, self.assumptions))
-                        .filter(|ty| {
-                            !ty.has_invalid(db) && (allow_holes || !ty_contains_const_hole(db, *ty))
-                        })
-                        .unwrap_or(fallback)
-                };
-
-                (
-                    true,
-                    normalize_assoc(self.address_space_ident, self.fallback_space, false),
-                    normalize_assoc(self.target_ident, field_ty, true),
+                let space = crate::analysis::ty::effect_space_from_trait_const(
+                    db,
+                    self.scope,
+                    self.assumptions,
+                    inst,
                 )
+                .unwrap_or(self.fallback_space);
+                let target_ty = inst
+                    .assoc_ty(db, self.target_ident)
+                    .map(|assoc| normalize_ty(db, assoc, self.scope, self.assumptions))
+                    .filter(|ty| !ty.has_invalid(db))
+                    .unwrap_or(field_ty);
+
+                (true, space, target_ty)
             }
         }
     }
@@ -2043,7 +2040,7 @@ impl<'db> ContractFieldEffectHandleCx<'db> {
         self,
         db: &'db dyn HirAnalysisDb,
         placeholder: TyId<'db>,
-    ) -> Option<TyId<'db>> {
+    ) -> Option<crate::analysis::ty::ProviderAddressSpace> {
         use crate::analysis::name_resolution::PathRes;
         use crate::analysis::ty::const_ty::{LayoutHoleArgSite, StructuralHoleOrigin};
         use crate::analysis::ty::layout_holes::structural_hole_origin;
@@ -2080,13 +2077,7 @@ impl<'db> ContractFieldEffectHandleCx<'db> {
         }
 
         let inst = TraitInstId::new(db, static_slot, vec![self_ty], IndexMap::new());
-        match is_goal_satisfiable(db, TraitSolveCx::new(db, self.scope), inst) {
-            GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation(_) => inst
-                .assoc_ty(db, self.address_space_ident)
-                .map(|assoc| normalize_ty(db, assoc, self.scope, self.assumptions))
-                .filter(|ty| !ty.has_invalid(db)),
-            GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => None,
-        }
+        crate::analysis::ty::effect_space_from_trait_const(db, self.scope, self.assumptions, inst)
     }
 
     fn layout_plan(
@@ -2270,25 +2261,21 @@ impl<'db> Contract<'db> {
         let effect_handle = resolve_core_trait(db, scope, &["EffectHandle"])
             .expect("missing required core trait `core::EffectHandle`");
         let static_slot = resolve_core_trait(db, scope, &["StaticSlot"]);
-        let address_space_ident = IdentId::new(db, "AddressSpace".to_string());
         let target_ident = IdentId::new(db, "Target".to_string());
-        let default_storage_address_space =
-            resolve_lib_type_path(db, scope, "core::effect_ref::Storage")
-                .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
-        let default_code_address_space = resolve_lib_type_path(db, scope, "core::effect_ref::Code")
-            .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
         let effect_handle_cx_base = ContractFieldEffectHandleCx {
             scope,
             assumptions,
             effect_handle,
             static_slot,
-            address_space_ident,
             target_ident,
-            fallback_space: default_storage_address_space,
+            fallback_space: crate::analysis::ty::ProviderAddressSpace::Storage,
         };
 
         let hir_fields = self.hir_fields(db).data(db);
-        let mut next_slot_by_address_space: FxHashMap<TyId<'db>, usize> = FxHashMap::default();
+        let mut next_slot_by_address_space: FxHashMap<
+            crate::analysis::ty::ProviderAddressSpace,
+            usize,
+        > = FxHashMap::default();
         let mut layout = IndexMap::new();
 
         for (idx, field) in hir_fields
@@ -2299,9 +2286,9 @@ impl<'db> Contract<'db> {
             let lowered_ty = lower_opt_hir_ty(db, field.type_ref(), scope, assumptions);
             let effect_handle_cx = ContractFieldEffectHandleCx {
                 fallback_space: if field.is_mut {
-                    default_storage_address_space
+                    crate::analysis::ty::ProviderAddressSpace::Storage
                 } else {
-                    default_code_address_space
+                    crate::analysis::ty::ProviderAddressSpace::Code
                 },
                 ..effect_handle_cx_base
             };
@@ -2379,10 +2366,7 @@ impl<'db> Contract<'db> {
     pub fn code_address_space_slot_count(self, db: &'db dyn HirAnalysisDb) -> usize {
         self.field_layout(db)
             .values()
-            .filter(|field| {
-                crate::analysis::ty::address_space_from_ty(db, self.scope(), field.address_space)
-                    == Some(crate::analysis::ty::ProviderAddressSpace::Code)
-            })
+            .filter(|field| field.address_space == crate::analysis::ty::ProviderAddressSpace::Code)
             .map(|field| field.slot_offset.saturating_add(field.slot_count))
             .max()
             .unwrap_or(0)
@@ -2742,8 +2726,7 @@ fn contract_provider_bindings_canonical<'db>(
             // They are materialized into memory during initialization and later embedded into code.
             is_mut: field.is_mut
                 || (is_init_site
-                    && crate::analysis::ty::address_space_from_ty(db, scope, field.address_space)
-                        == Some(crate::analysis::ty::ProviderAddressSpace::Code)),
+                    && field.address_space == crate::analysis::ty::ProviderAddressSpace::Code),
             source: ProviderSource::ContractField {
                 contract,
                 field_idx: field.index,
@@ -2759,12 +2742,7 @@ fn contract_provider_bindings_canonical<'db>(
                 } else {
                     crate::analysis::ty::ProviderKind::RawAddress
                 },
-                address_space: crate::analysis::ty::address_space_from_ty(
-                    db,
-                    scope,
-                    field.address_space,
-                )
-                .map(|space| {
+                address_space: Some(field.address_space).map(|space| {
                     if is_init_site && space == crate::analysis::ty::ProviderAddressSpace::Code {
                         crate::analysis::ty::ProviderAddressSpace::Memory
                     } else {
