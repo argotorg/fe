@@ -26,8 +26,9 @@ use super::{
 use crate::analysis::place::{Place, PlaceBase};
 use crate::analysis::ty::{
     adt_def::AdtRef,
-    assoc_const::AssocConstUse,
+    assoc_const::{AssocConstUse, InherentConstUse},
     canonical::{Canonicalized, Solution},
+    const_ty::instantiate_inherent_const_decl_ty,
     corelib::{
         resolve_core_range_types, resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path,
     },
@@ -3645,6 +3646,29 @@ impl<'db> TyChecker<'db> {
                         ExprProp::invalid(self.db)
                     }
                 }
+                PathRes::InherentConst(recv_ty, impl_, name) => {
+                    if let Some(ty) = instantiate_inherent_const_decl_ty(
+                        self.db,
+                        &mut self.table,
+                        impl_,
+                        recv_ty,
+                        name,
+                    ) {
+                        self.env.register_const_ref(
+                            expr,
+                            ConstRef::InherentConst(InherentConstUse::new(
+                                self.env.scope(),
+                                self.env.assumptions(),
+                                impl_,
+                                recv_ty,
+                                name,
+                            )),
+                        );
+                        ExprProp::new(ty, true)
+                    } else {
+                        ExprProp::invalid(self.db)
+                    }
+                }
                 PathRes::Mod(scope) => {
                     let diag = BodyDiag::NotValue {
                         primary: path_expr_span.clone().into(),
@@ -3715,7 +3739,10 @@ impl<'db> TyChecker<'db> {
                 }
             }
 
-            PathRes::Func(ty) | PathRes::Const(_, ty) | PathRes::TraitConst(ty, ..) => {
+            PathRes::Func(ty)
+            | PathRes::Const(_, ty)
+            | PathRes::TraitConst(ty, ..)
+            | PathRes::InherentConst(ty, ..) => {
                 let record_like = RecordLike::from_ty(ty);
                 let diag =
                     BodyDiag::record_expected(self.db, span.path().into(), Some(record_like));

@@ -1,0 +1,254 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/items/impl_const.fe
+---
+Root@0..333
+  ItemList@0..332
+    Item@0..169
+      Impl@0..169
+        ImplKw@0..4 "impl"
+        WhiteSpace@4..5 " "
+        PathType@5..8
+          Path@5..8
+            PathSegment@5..8
+              Ident@5..8 "Foo"
+        WhiteSpace@8..9 " "
+        ImplItemList@9..169
+          LBrace@9..10 "{"
+          Newline@10..11 "\n"
+          WhiteSpace@11..15 "    "
+          TraitConstItem@15..36
+            ConstKw@15..20 "const"
+            WhiteSpace@20..21 " "
+            Ident@21..25 "SIZE"
+            Colon@25..26 ":"
+            WhiteSpace@26..27 " "
+            PathType@27..32
+              Path@27..32
+                PathSegment@27..32
+                  Ident@27..32 "usize"
+            WhiteSpace@32..33 " "
+            Eq@33..34 "="
+            WhiteSpace@34..35 " "
+            LitExpr@35..36
+              Lit@35..36
+                Int@35..36 "4"
+          TraitConstItem@36..67
+            Newline@36..37 "\n"
+            WhiteSpace@37..41 "    "
+            PubKw@41..44 "pub"
+            WhiteSpace@44..45 " "
+            ConstKw@45..50 "const"
+            WhiteSpace@50..51 " "
+            Ident@51..56 "LIMIT"
+            Colon@56..57 ":"
+            WhiteSpace@57..58 " "
+            PathType@58..63
+              Path@58..63
+                PathSegment@58..63
+                  Ident@58..63 "usize"
+            WhiteSpace@63..64 " "
+            Eq@64..65 "="
+            WhiteSpace@65..66 " "
+            LitExpr@66..67
+              Lit@66..67
+                Int@66..67 "8"
+          TraitConstItem@67..112
+            Newline@67..68 "\n"
+            WhiteSpace@68..72 "    "
+            PubKw@72..75 "pub"
+            LParen@75..76 "("
+            VisRestriction@76..82
+              IngotKw@76..81 "ingot"
+              RParen@81..82 ")"
+            WhiteSpace@82..83 " "
+            ConstKw@83..88 "const"
+            WhiteSpace@88..89 " "
+            Ident@89..100 "INGOT_LIMIT"
+            Colon@100..101 ":"
+            WhiteSpace@101..102 " "
+            PathType@102..107
+              Path@102..107
+                PathSegment@102..107
+                  Ident@102..107 "usize"
+            WhiteSpace@107..108 " "
+            Eq@108..109 "="
+            WhiteSpace@109..110 " "
+            LitExpr@110..112
+              Lit@110..112
+                Int@110..112 "16"
+          Newline@112..114 "\n\n"
+          WhiteSpace@114..118 "    "
+          Func@118..167
+            FnKw@118..120 "fn"
+            WhiteSpace@120..121 " "
+            FuncSignature@121..140
+              Ident@121..125 "size"
+              FuncParamList@125..131
+                LParen@125..126 "("
+                FnParam@126..130
+                  SelfKw@126..130 "self"
+                RParen@130..131 ")"
+              WhiteSpace@131..132 " "
+              Arrow@132..134 "->"
+              WhiteSpace@134..135 " "
+              PathType@135..140
+                Path@135..140
+                  PathSegment@135..140
+                    Ident@135..140 "usize"
+            WhiteSpace@140..141 " "
+            BlockExpr@141..167
+              LBrace@141..142 "{"
+              Newline@142..143 "\n"
+              WhiteSpace@143..151 "        "
+              ExprStmt@151..161
+                PathExpr@151..161
+                  Path@151..161
+                    PathSegment@151..155
+                      SelfTypeKw@151..155 "Self"
+                    Colon2@155..157 "::"
+                    PathSegment@157..161
+                      Ident@157..161 "SIZE"
+              Newline@161..162 "\n"
+              WhiteSpace@162..166 "    "
+              RBrace@166..167 "}"
+          Newline@167..168 "\n"
+          RBrace@168..169 "}"
+    Newline@169..171 "\n\n"
+    Item@171..332
+      Impl@171..332
+        ImplKw@171..175 "impl"
+        GenericParamList@175..190
+          Lt@175..176 "<"
+          ConstGenericParam@176..189
+            ConstKw@176..181 "const"
+            WhiteSpace@181..182 " "
+            Ident@182..183 "N"
+            Colon@183..184 ":"
+            WhiteSpace@184..185 " "
+            PathType@185..189
+              Path@185..189
+                PathSegment@185..189
+                  Ident@185..189 "u256"
+          Gt@189..190 ">"
+        WhiteSpace@190..191 " "
+        PathType@191..197
+          Path@191..197
+            PathSegment@191..197
+              Ident@191..194 "Bar"
+              GenericArgList@194..197
+                Lt@194..195 "<"
+                TypeGenericArg@195..196
+                  PathType@195..196
+                    Path@195..196
+                      PathSegment@195..196
+                        Ident@195..196 "N"
+                Gt@196..197 ">"
+        WhiteSpace@197..198 " "
+        ImplItemList@198..332
+          LBrace@198..199 "{"
+          Newline@199..200 "\n"
+          WhiteSpace@200..204 "    "
+          TraitConstItem@204..230
+            ConstKw@204..209 "const"
+            WhiteSpace@209..210 " "
+            Ident@210..216 "DOUBLE"
+            Colon@216..217 ":"
+            WhiteSpace@217..218 " "
+            PathType@218..222
+              Path@218..222
+                PathSegment@218..222
+                  Ident@218..222 "u256"
+            WhiteSpace@222..223 " "
+            Eq@223..224 "="
+            WhiteSpace@224..225 " "
+            BinExpr@225..230
+              PathExpr@225..226
+                Path@225..226
+                  PathSegment@225..226
+                    Ident@225..226 "N"
+              WhiteSpace@226..227 " "
+              Star@227..228 "*"
+              WhiteSpace@228..229 " "
+              LitExpr@229..230
+                Lit@229..230
+                  Int@229..230 "2"
+          Newline@230..231 "\n"
+          WhiteSpace@231..235 "    "
+          TraitConstItem@235..266
+            ConstKw@235..240 "const"
+            WhiteSpace@240..241 " "
+            Ident@241..245 "MASK"
+            Colon@245..246 ":"
+            WhiteSpace@246..247 " "
+            PathType@247..251
+              Path@247..251
+                PathSegment@247..251
+                  Ident@247..251 "u256"
+            WhiteSpace@251..252 " "
+            Eq@252..253 "="
+            WhiteSpace@253..254 " "
+            BinExpr@254..266
+              ParenExpr@254..262
+                LParen@254..255 "("
+                BinExpr@255..261
+                  LitExpr@255..256
+                    Lit@255..256
+                      Int@255..256 "1"
+                  WhiteSpace@256..257 " "
+                  LShift@257..259
+                    Lt@257..258 "<"
+                    Lt@258..259 "<"
+                  WhiteSpace@259..260 " "
+                  PathExpr@260..261
+                    Path@260..261
+                      PathSegment@260..261
+                        Ident@260..261 "N"
+                RParen@261..262 ")"
+              WhiteSpace@262..263 " "
+              Minus@263..264 "-"
+              WhiteSpace@264..265 " "
+              LitExpr@265..266
+                Lit@265..266
+                  Int@265..266 "1"
+          Newline@266..268 "\n\n"
+          WhiteSpace@268..272 "    "
+          Func@272..330
+            ConstKw@272..277 "const"
+            WhiteSpace@277..278 " "
+            FnKw@278..280 "fn"
+            WhiteSpace@280..281 " "
+            FuncSignature@281..301
+              Ident@281..287 "double"
+              FuncParamList@287..293
+                LParen@287..288 "("
+                FnParam@288..292
+                  SelfKw@288..292 "self"
+                RParen@292..293 ")"
+              WhiteSpace@293..294 " "
+              Arrow@294..296 "->"
+              WhiteSpace@296..297 " "
+              PathType@297..301
+                Path@297..301
+                  PathSegment@297..301
+                    Ident@297..301 "u256"
+            WhiteSpace@301..302 " "
+            BlockExpr@302..330
+              LBrace@302..303 "{"
+              Newline@303..304 "\n"
+              WhiteSpace@304..312 "        "
+              ExprStmt@312..324
+                PathExpr@312..324
+                  Path@312..324
+                    PathSegment@312..316
+                      SelfTypeKw@312..316 "Self"
+                    Colon2@316..318 "::"
+                    PathSegment@318..324
+                      Ident@318..324 "DOUBLE"
+              Newline@324..325 "\n"
+              WhiteSpace@325..329 "    "
+              RBrace@329..330 "}"
+          Newline@330..331 "\n"
+          RBrace@331..332 "}"
+  Newline@332..333 "\n"

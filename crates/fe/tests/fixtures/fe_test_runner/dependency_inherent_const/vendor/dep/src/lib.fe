@@ -1,0 +1,5 @@
+pub struct Widget {}
+
+impl Widget {
+    pub const SIZE: usize = 8
+}

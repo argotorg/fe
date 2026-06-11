@@ -377,6 +377,7 @@ ast_node! {
     SK::TraitConstItem,
 }
 impl super::AttrListOwner for TraitConstItem {}
+impl super::ItemModifierOwner for TraitConstItem {}
 impl TraitConstItem {
     /// Returns the name of the associated const
     pub fn name(&self) -> Option<SyntaxToken> {
@@ -420,6 +421,27 @@ pub enum TraitItemKind {
 }
 
 ast_node! {
+    pub struct ImplItem,
+    SK::Func | SK::TraitConstItem
+}
+impl ImplItem {
+    pub fn kind(&self) -> ImplItemKind {
+        match self.syntax().kind() {
+            SK::Func => ImplItemKind::Func(AstNode::cast(self.syntax().clone()).unwrap()),
+            SK::TraitConstItem => {
+                ImplItemKind::Const(TraitConstItem::cast(self.syntax().clone()).unwrap())
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+pub enum ImplItemKind {
+    Func(Func),
+    Const(TraitConstItem),
+}
+
+ast_node! {
     /// `impl Foo::Bar<T> where .. { .. }`
     pub struct Impl,
     SK::Impl,
@@ -436,7 +458,7 @@ impl Impl {
 
     /// Returns the impl item list.
     /// `{ .. }` in `impl Foo::Bar<T> where .. { .. }`
-    /// NOTE: Currently only supports `fn` items.
+    /// Supports `fn` and associated `const` items.
     pub fn item_list(&self) -> Option<ImplItemList> {
         support::child(self.syntax())
     }
@@ -634,7 +656,7 @@ ast_node! {
 ast_node! {
     pub struct ImplItemList,
     SK::ImplItemList,
-    IntoIterator<Item=Func>, // TODO: ImplTraitItem
+    IntoIterator<Item=ImplItem>,
 }
 
 ast_node! {

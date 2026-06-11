@@ -1,0 +1,14 @@
+struct Counter {}
+
+impl Counter {
+    const MAX: u256 = 100
+    const MIN: u256 = 1
+
+    fn clamp_hi() -> u256 {
+        Self::MAX
+    }
+}
+
+fn use_consts() -> u256 {
+    Counter::MAX + Counter::MIN
+}

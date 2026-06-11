@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/inherent_const_overlap_constraints.fe
+---
+error[6-0019]: conflicting associated const definitions
+   ┌─ inherent_const_overlap_constraints.fe:21:11
+   │
+15 │     const C: u256 = 1
+   │           - previous definition here
+   ·
+21 │     const C: u256 = 2
+   │           ^ `C` is defined more than once

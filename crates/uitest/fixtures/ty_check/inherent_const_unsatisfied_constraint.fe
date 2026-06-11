@@ -1,0 +1,30 @@
+trait Marker {}
+
+struct Yes {}
+struct No {}
+
+impl Marker for Yes {}
+
+struct Wrap<T> {}
+
+impl<T> Wrap<T>
+where T: Marker
+{
+    const C: u256 = 1
+}
+
+fn ok() -> u256 {
+    Wrap<Yes>::C
+}
+
+fn bad() -> u256 {
+    Wrap<No>::C
+}
+
+fn generic_ok<T: Marker>() -> u256 {
+    Wrap<T>::C
+}
+
+fn generic_bad<T>() -> u256 {
+    Wrap<T>::C
+}

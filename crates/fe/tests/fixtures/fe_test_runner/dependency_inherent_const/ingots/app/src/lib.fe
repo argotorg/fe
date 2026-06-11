@@ -1,0 +1,12 @@
+use dep::Widget
+
+#[test]
+fn uses_dependency_inherent_const_value() {
+    assert(Widget::SIZE == 8)
+}
+
+#[test]
+fn uses_dependency_inherent_const_in_type_position() {
+    let arr: [u8; Widget::SIZE] = [3; 8]
+    assert(arr[7] == 3)
+}

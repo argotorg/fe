@@ -1,0 +1,8 @@
+struct S {}
+
+impl S {
+    const C: u256 = {
+        let flag: bool = 1
+        true
+    }
+}

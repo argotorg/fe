@@ -276,7 +276,7 @@ fn emit_scope_lsif<W: Write>(
     }
 
     // Moniker
-    if let Some(pretty_path) = scope.pretty_path(db) {
+    if let Some(pretty_path) = hir::core::semantic::scope_qualified_path(db, scope) {
         let identifier = format!("{}:{}:{pretty_path}", ctx.name, ctx.version);
         let moniker_id = emitter.emit_moniker("fe", &identifier)?;
         emitter.emit_edge("moniker/attach", result_set_id, moniker_id)?;
@@ -338,7 +338,28 @@ pub fn generate_lsif(
 
             let name_span = match item.name_span() {
                 Some(ns) => ns,
-                None => continue,
+                None => {
+                    // Anonymous impls have no name span, so the normal
+                    // definition path and the sub-item loop below are skipped.
+                    // Their associated consts still need defs/refs/monikers, so
+                    // emit them here (the SCIP path does the same).
+                    if matches!(item, ItemKind::Impl(_)) {
+                        for child in SymbolView::from_item(item).children(db) {
+                            if matches!(child.scope(), ScopeId::ImplConst(..)) {
+                                emit_scope_lsif(
+                                    db,
+                                    &ctx,
+                                    &mut emitter,
+                                    &mut documents,
+                                    &doc_url,
+                                    doc_id,
+                                    child.scope(),
+                                )?;
+                            }
+                        }
+                    }
+                    continue;
+                }
             };
             let resolved_name_span = match name_span.resolve(db) {
                 Some(s) => s,
@@ -411,7 +432,7 @@ pub fn generate_lsif(
             }
 
             // Moniker
-            if let Some(pretty_path) = scope.pretty_path(db) {
+            if let Some(pretty_path) = hir::core::semantic::scope_qualified_path(db, scope) {
                 let identifier = format!("{}:{}:{pretty_path}", ctx.name, ctx.version);
                 let moniker_id = emitter.emit_moniker("fe", &identifier)?;
                 emitter.emit_edge("moniker/attach", result_set_id, moniker_id)?;
@@ -700,6 +721,27 @@ fn make_point() -> Point {
         assert!(
             moniker.get("identifier").and_then(|s| s.as_str()).is_some(),
             "moniker should have identifier"
+        );
+    }
+
+    #[test]
+    fn test_lsif_indexes_inherent_const() {
+        // The enclosing inherent impl is anonymous; its const must still get a
+        // moniker (with the target-type-qualified path), not be dropped.
+        let output = generate_test_lsif(
+            "struct Counter {}\n\nimpl Counter {\n    pub const MAX: u256 = 100\n}\n",
+        );
+        let elements = parse_lsif(&output);
+
+        let has_const_moniker = elements.iter().any(|e| {
+            e.get("label").and_then(|l| l.as_str()) == Some("moniker")
+                && e.get("identifier")
+                    .and_then(|s| s.as_str())
+                    .is_some_and(|id| id.contains("Counter::MAX"))
+        });
+        assert!(
+            has_const_moniker,
+            "expected a moniker for the inherent const Counter::MAX"
         );
     }
 

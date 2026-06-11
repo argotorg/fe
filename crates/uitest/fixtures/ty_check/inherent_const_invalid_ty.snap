@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/inherent_const_invalid_ty.fe
+---
+error[2-0002]: `Nope` is not found
+  ┌─ inherent_const_invalid_ty.fe:4:14
+  │
+4 │     const C: Nope = 1
+  │              ^^^^ `Nope` is not found

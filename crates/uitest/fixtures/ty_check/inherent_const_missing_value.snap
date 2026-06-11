@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/inherent_const_missing_value.fe
+---
+error[6-0018]: missing value for associated const
+  ┌─ inherent_const_missing_value.fe:4:14
+  │
+4 │     const C: u32
+  │              ^^^ associated const `C` in an `impl` block must have a value

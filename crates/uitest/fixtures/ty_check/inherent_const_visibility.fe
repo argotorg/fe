@@ -1,0 +1,16 @@
+mod inner {
+    pub struct Foo {}
+
+    impl Foo {
+        pub const SIZE: u256 = 4
+        const HIDDEN: u256 = 5
+    }
+}
+
+fn visible() -> u256 {
+    inner::Foo::SIZE
+}
+
+fn hidden() -> u256 {
+    inner::Foo::HIDDEN
+}

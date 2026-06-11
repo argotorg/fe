@@ -1103,6 +1103,29 @@ pub enum ImplDiag<'db> {
         primary: DynLazySpan<'db>,
         const_name: IdentId<'db>,
     },
+
+    InherentConstMissingValue {
+        primary: DynLazySpan<'db>,
+        const_name: IdentId<'db>,
+    },
+
+    InherentConstConflict {
+        primary: DynLazySpan<'db>,
+        conflict_with: DynLazySpan<'db>,
+        const_name: IdentId<'db>,
+    },
+
+    InherentConstShadowsVariant {
+        primary: DynLazySpan<'db>,
+        variant_span: DynLazySpan<'db>,
+        const_name: IdentId<'db>,
+    },
+
+    InherentConstShadowsFn {
+        primary: DynLazySpan<'db>,
+        fn_span: DynLazySpan<'db>,
+        const_name: IdentId<'db>,
+    },
 }
 
 impl ImplDiag<'_> {
@@ -1126,6 +1149,10 @@ impl ImplDiag<'_> {
             Self::MissingAssociatedConst { .. } => 15,
             Self::ConstTyMismatchWithTrait { .. } => 16,
             Self::RecursiveAssocConst { .. } => 17,
+            Self::InherentConstMissingValue { .. } => 18,
+            Self::InherentConstConflict { .. } => 19,
+            Self::InherentConstShadowsVariant { .. } => 20,
+            Self::InherentConstShadowsFn { .. } => 21,
         }
     }
 }

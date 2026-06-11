@@ -1,0 +1,34 @@
+---
+source: crates/language-server/src/functionality/goto.rs
+expression: snapshot
+input_file: test_files/goto_trait_const_refs.fe
+---
+note: 
+  ┌─ goto_trait_const_refs.fe:4:17
+  │
+4 │     const MADE: Other
+  │                 ^^^^^ -> goto_trait_const_refs::Other
+
+note: 
+  ┌─ goto_trait_const_refs.fe:9:6
+  │
+9 │ impl HasC for S {
+  │      ^^^^ -> goto_trait_const_refs::HasC
+
+note: 
+  ┌─ goto_trait_const_refs.fe:9:15
+  │
+9 │ impl HasC for S {
+  │               ^ -> goto_trait_const_refs::S
+
+note: 
+   ┌─ goto_trait_const_refs.fe:10:17
+   │
+10 │     const MADE: Other = Other {}
+   │                 ^^^^^ -> goto_trait_const_refs::Other
+
+note: 
+   ┌─ goto_trait_const_refs.fe:10:25
+   │
+10 │     const MADE: Other = Other {}
+   │                         ^^^^^ -> goto_trait_const_refs::Other

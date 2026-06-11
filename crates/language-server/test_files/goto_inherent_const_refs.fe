@@ -1,0 +1,7 @@
+struct Other {}
+
+struct S {}
+
+impl S {
+    const MADE: Other = Other {}
+}

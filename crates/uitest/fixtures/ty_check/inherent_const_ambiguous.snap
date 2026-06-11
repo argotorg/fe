@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/inherent_const_ambiguous.fe
+---
+error[6-0019]: conflicting associated const definitions
+   ┌─ inherent_const_ambiguous.fe:12:11
+   │
+ 8 │     const X: u256 = 1
+   │           - previous definition here
+   ·
+12 │     const X: u256 = 2
+   │           ^ `X` is defined more than once

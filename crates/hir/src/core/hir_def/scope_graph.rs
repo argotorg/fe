@@ -91,6 +91,8 @@ pub enum ScopeId<'db> {
     TraitType(Trait<'db>, u16),
     /// Trait associated const scope.
     TraitConst(Trait<'db>, u16),
+    /// Inherent impl associated const scope.
+    ImplConst(Impl<'db>, u16),
 
     /// A function parameter scope.
     FuncParam(ItemKind<'db>, u16),
@@ -112,6 +114,7 @@ impl<'db> ScopeId<'db> {
             ScopeId::GenericParam(item, _) => item.top_mod(db),
             ScopeId::TraitType(t, _) => t.top_mod(db),
             ScopeId::TraitConst(t, _) => t.top_mod(db),
+            ScopeId::ImplConst(i, _) => i.top_mod(db),
             ScopeId::FuncParam(item, _) => item.top_mod(db),
             ScopeId::Field(p, _) => p.top_mod(db),
             ScopeId::Variant(v) => v.enum_.top_mod(db),
@@ -153,6 +156,7 @@ impl<'db> ScopeId<'db> {
             ScopeId::FuncParam(item, _) => item,
             ScopeId::TraitType(t, _) => t.into(),
             ScopeId::TraitConst(t, _) => t.into(),
+            ScopeId::ImplConst(i, _) => i.into(),
             ScopeId::Field(FieldParent::Struct(s), _) => s.into(),
             ScopeId::Field(FieldParent::Contract(c), _) => c.into(),
             ScopeId::Field(FieldParent::Variant(v), _) | ScopeId::Variant(v) => v.enum_.into(),
@@ -183,6 +187,7 @@ impl<'db> ScopeId<'db> {
             }
             ScopeId::TraitType(t, idx) => t.types(db).get(idx as usize).map(|d| d.attributes),
             ScopeId::TraitConst(t, idx) => t.consts(db).get(idx as usize).map(|d| d.attributes),
+            ScopeId::ImplConst(i, idx) => i.consts(db).get(idx as usize).map(|d| d.attributes),
             _ => None,
         }
     }
@@ -349,6 +354,7 @@ impl<'db> ScopeId<'db> {
 
             ScopeId::TraitType(t, idx) => t.assoc_ty_by_index(db, idx as usize).name.to_opt(),
             ScopeId::TraitConst(t, idx) => t.const_by_index(idx as usize).name(db),
+            ScopeId::ImplConst(i, idx) => i.consts(db).get(idx as usize)?.name.to_opt(),
 
             ScopeId::Block(..) => None,
         }
@@ -384,6 +390,9 @@ impl<'db> ScopeId<'db> {
             ScopeId::TraitConst(t, idx) => {
                 Some(t.span().item_list().assoc_const(idx as usize).name().into())
             }
+            ScopeId::ImplConst(i, idx) => {
+                Some(i.span().associated_const(idx as usize).name().into())
+            }
 
             ScopeId::Block(..) => None,
         }
@@ -395,6 +404,7 @@ impl<'db> ScopeId<'db> {
             ScopeId::GenericParam(_, _) => "type",
             ScopeId::TraitType(..) => "associated type",
             ScopeId::TraitConst(..) => "associated const",
+            ScopeId::ImplConst(..) => "associated const",
             ScopeId::FuncParam(_, _) => "value",
             ScopeId::Field(_, _) => "field",
             ScopeId::Variant(..) => "value",
@@ -403,6 +413,11 @@ impl<'db> ScopeId<'db> {
     }
 
     pub fn pretty_path(self, db: &dyn HirDb) -> Option<String> {
+        // NOTE: `ScopeId::ImplConst` resolves to `None` here. Its qualified path
+        // is `<target type>::<const name>`, but the target type may be imported
+        // from another module (`mod b { use a::Foo; impl Foo { const X } }`),
+        // which needs name resolution and thus `HirAnalysisDb`. Tooling must use
+        // `crate::core::semantic::scope_qualified_path` for inherent consts.
         let name = match self {
             ScopeId::Block(body, expr) => format!("{{block{}}}", body.iter_block(db)[&expr]),
             ScopeId::Item(ItemKind::Body(body)) => match body.body_kind(db) {

@@ -3,7 +3,10 @@ use std::{marker::PhantomData, mem};
 use crate::{
     HirDb,
     core::span::{
-        SpanDowncast, item::LazySuperTraitListSpan, lazy_spans::*, params::LazyTraitRefSpan,
+        SpanDowncast,
+        item::{LazySuperTraitListSpan, LazyTraitConstSpan},
+        lazy_spans::*,
+        params::LazyTraitRefSpan,
         transition::ChainRoot,
     },
     hir_def::{
@@ -965,6 +968,78 @@ pub fn walk_impl<'db, V>(
     for item in impl_.children_non_nested(ctxt.db) {
         visitor.visit_item(&mut VisitorCtxt::with_item(ctxt.db, item), item);
     }
+
+    // Associated consts are not `ItemKind` children, so traverse their type
+    // and value body explicitly (otherwise reference collection, goto-def and
+    // SCIP indexing miss everything inside `const C: Other = Other::X`).
+    walk_assoc_consts(visitor, ctxt, impl_.hir_consts(ctxt.db), |span, idx| {
+        span.associated_const(idx)
+    });
+}
+
+/// Common shape of an associated const for traversal: a name, a type and an
+/// optional value/default body. Lets `walk_assoc_consts` serve both inherent-
+/// impl/trait-impl consts (`AssocConstDef`) and trait-decl consts
+/// (`AssocConstDecl`) without duplicating the traversal.
+trait AssocConstItem<'db> {
+    fn name(&self) -> Partial<IdentId<'db>>;
+    fn ty(&self) -> Partial<TypeId<'db>>;
+    fn body(&self) -> Option<Body<'db>>;
+}
+
+impl<'db> AssocConstItem<'db> for crate::hir_def::AssocConstDef<'db> {
+    fn name(&self) -> Partial<IdentId<'db>> {
+        self.name
+    }
+    fn ty(&self) -> Partial<TypeId<'db>> {
+        self.ty
+    }
+    fn body(&self) -> Option<Body<'db>> {
+        self.value.to_opt()
+    }
+}
+
+impl<'db> AssocConstItem<'db> for crate::hir_def::AssocConstDecl<'db> {
+    fn name(&self) -> Partial<IdentId<'db>> {
+        self.name
+    }
+    fn ty(&self) -> Partial<TypeId<'db>> {
+        self.ty
+    }
+    fn body(&self) -> Option<Body<'db>> {
+        self.default.and_then(|d| d.to_opt())
+    }
+}
+
+/// Visits the name, type and value/default body of each associated const,
+/// entering the per-const span via `const_span`. Shared by `walk_impl`,
+/// `walk_trait` and `walk_impl_trait`.
+fn walk_assoc_consts<'db, V, S, C>(
+    visitor: &mut V,
+    ctxt: &mut VisitorCtxt<'db, S>,
+    consts: &[C],
+    const_span: impl Fn(S, usize) -> LazyTraitConstSpan<'db>,
+) where
+    V: Visitor<'db> + ?Sized,
+    S: SpanDowncast<'db> + LazySpan + Into<DynLazySpan<'db>>,
+    C: AssocConstItem<'db>,
+{
+    for (idx, assoc_const) in consts.iter().enumerate() {
+        ctxt.with_new_ctxt(
+            |span| const_span(span, idx),
+            |ctxt| {
+                if let Some(name) = assoc_const.name().to_opt() {
+                    ctxt.with_new_ctxt(|span| span.name(), |ctxt| visitor.visit_ident(ctxt, name));
+                }
+                if let Some(ty) = assoc_const.ty().to_opt() {
+                    ctxt.with_new_ctxt(|span| span.ty(), |ctxt| visitor.visit_ty(ctxt, ty));
+                }
+            },
+        );
+        if let Some(body) = assoc_const.body() {
+            visitor.visit_body(&mut VisitorCtxt::with_body(ctxt.db, body), body);
+        }
+    }
 }
 
 pub fn walk_trait<'db, V>(
@@ -1015,6 +1090,13 @@ pub fn walk_trait<'db, V>(
     for item in trait_.children_non_nested(ctxt.db) {
         visitor.visit_item(&mut VisitorCtxt::with_item(ctxt.db, item), item);
     }
+
+    // Trait associated consts (their type and optional default body) are not
+    // `ItemKind` children either; traverse them so their references are
+    // collected just like inherent-impl consts.
+    walk_assoc_consts(visitor, ctxt, trait_.consts(ctxt.db), |span, idx| {
+        span.associated_const(idx)
+    });
 }
 
 pub fn walk_impl_trait<'db, V>(
@@ -1069,6 +1151,15 @@ pub fn walk_impl_trait<'db, V>(
     for item in impl_trait.children_non_nested(ctxt.db) {
         visitor.visit_item(&mut VisitorCtxt::with_item(ctxt.db, item), item);
     }
+
+    // Trait-impl associated consts carry a type and value body with references;
+    // traverse them for parity with inherent-impl consts.
+    walk_assoc_consts(
+        visitor,
+        ctxt,
+        impl_trait.hir_consts(ctxt.db),
+        |span, idx| span.associated_const(idx),
+    );
 }
 
 pub fn walk_const<'db, V>(

@@ -416,6 +416,18 @@ module.exports = grammar({
       optional(seq('=', field('value', $._expression))),
     ),
 
+    // Like trait_const_item, but inherent impl consts may carry a
+    // visibility modifier.
+    impl_const_item: $ => seq(
+      optional($.attribute_list),
+      optional($.visibility),
+      'const',
+      field('name', $.identifier),
+      ':',
+      field('type', $._type),
+      optional(seq('=', field('value', $._expression))),
+    ),
+
     // Impl block
     impl_block: $ => seq(
       optional($.attribute_list),
@@ -439,7 +451,7 @@ module.exports = grammar({
 
     impl_item_list: $ => seq(
       '{',
-      repeat($.function_definition),
+      repeat(choice($.function_definition, $.impl_const_item)),
       '}',
     ),
 

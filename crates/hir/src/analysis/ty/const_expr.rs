@@ -1,5 +1,5 @@
 use crate::analysis::HirAnalysisDb;
-use crate::analysis::ty::assoc_const::AssocConstUse;
+use crate::analysis::ty::assoc_const::{AssocConstUse, InherentConstUse};
 use crate::analysis::ty::ty_check::LocalBinding;
 use crate::analysis::ty::ty_def::TyId;
 use crate::hir_def::{ArithBinOp, Func, UnOp};
@@ -38,6 +38,7 @@ pub enum ConstExpr<'db> {
         to: TyId<'db>,
     },
     TraitConst(AssocConstUse<'db>),
+    InherentConst(InherentConstUse<'db>),
     LocalBinding(LocalBinding<'db>),
 }
 
@@ -72,6 +73,13 @@ impl<'db> ConstExprId<'db> {
                 let inst = assoc.inst();
                 let name = assoc.name();
                 format!("{}::{}", inst.self_ty(db).pretty_print(db), name.data(db))
+            }
+            ConstExpr::InherentConst(use_) => {
+                format!(
+                    "{}::{}",
+                    use_.receiver_ty().pretty_print(db),
+                    use_.name().data(db)
+                )
             }
             ConstExpr::LocalBinding(binding) => format!("{binding:?}"),
         }

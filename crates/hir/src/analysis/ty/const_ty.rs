@@ -10,7 +10,7 @@ use salsa::Update;
 
 use super::const_expr::{ConstExpr, ConstExprId, pretty_print_un_op};
 use super::{
-    assoc_const::AssocConstUse,
+    assoc_const::{AssocConstUse, InherentConstUse},
     binder::Binder,
     diagnostics::{BodyDiag, FuncBodyDiag},
     fold::{AssocTySubst, TyFoldable},
@@ -592,6 +592,7 @@ fn const_expr_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, expr: ConstExprId
             ty_is_fully_ground(db, *expr)
         }
         ConstExpr::TraitConst(assoc) => trait_inst_is_fully_ground(db, assoc.inst()),
+        ConstExpr::InherentConst(use_) => ty_is_fully_ground(db, use_.receiver_ty()),
         ConstExpr::LocalBinding(_) => false,
     }
 }
@@ -673,6 +674,14 @@ fn canonicalize_const_expr_for_mode<'db>(
                 *assoc
             }),
         ),
+        ConstExpr::InherentConst(use_) => ConstExprId::new(
+            db,
+            ConstExpr::InherentConst(if let Some(inst) = env.assoc_ty_subst {
+                use_.fold_with(db, &mut AssocTySubst::new(inst))
+            } else {
+                *use_
+            }),
+        ),
         ConstExpr::LocalBinding(binding) => ConstExprId::new(db, ConstExpr::LocalBinding(*binding)),
     }
 }
@@ -720,6 +729,8 @@ pub fn evaluate_type_level_const_expr<'db>(
                 }
             }
             ConstExpr::TraitConst(assoc) => const_ty_from_assoc_const_use(db, *assoc)
+                .map(|const_ty| const_ty.evaluate(db, Some(expected_ty))),
+            ConstExpr::InherentConst(use_) => const_ty_from_inherent_const_use(db, *use_)
                 .map(|const_ty| const_ty.evaluate(db, Some(expected_ty))),
             ConstExpr::ExternConstFnCall { .. }
             | ConstExpr::ArithBinOp { .. }
@@ -1061,6 +1072,11 @@ fn display_const_canon_env<'db>(
                 assoc.assumptions(),
                 None,
             )),
+            ConstExpr::InherentConst(use_) => Some(ConstCanonEnv::new(
+                use_.origin_scope(),
+                use_.assumptions(),
+                None,
+            )),
             _ => None,
         },
         _ => None,
@@ -1229,6 +1245,16 @@ pub(crate) fn evaluate_const_ty<'db>(
     }
     if matches!(const_ty.data(db), ConstTyData::Hole(..)) {
         return const_ty;
+    }
+
+    if let ConstTyData::Abstract(expr, ty) = const_ty.data(db)
+        && let ConstExpr::InherentConst(use_) = expr.data(db)
+        && let Some(resolved) = const_ty_from_inherent_const_use(db, *use_)
+    {
+        let evaluated = resolved.evaluate(db, expected_ty.or(Some(*ty)));
+        if !evaluated.ty(db).has_invalid(db) {
+            return evaluated;
+        }
     }
 
     if let ConstTyData::Abstract(expr, ty) = const_ty.data(db)
@@ -1634,6 +1660,10 @@ pub(crate) fn evaluate_const_ty<'db>(
                         const_ty_from_trait_const(db, solve_cx, inst, name)
                             .ok_or(ConstIntError::NotIntExpr)?
                     }
+                    PathRes::InherentConst(recv_ty, impl_, name) => {
+                        const_ty_from_inherent_const(db, impl_, recv_ty, name)
+                            .ok_or(ConstIntError::NotIntExpr)?
+                    }
                     _ => return Err(ConstIntError::NotIntExpr),
                 };
 
@@ -1719,6 +1749,31 @@ pub(crate) fn evaluate_const_ty<'db>(
                     let solve_cx =
                         TraitSolveCx::new(db, body.scope()).with_assumptions(assumptions);
                     if let Some(const_ty) = const_ty_from_trait_const(db, solve_cx, inst, name) {
+                        let evaluated = const_ty.evaluate(db, expected_ty);
+                        if evaluated.ty(db).has_invalid(db) {
+                            return mk_abstract(expected_ty.unwrap_or_else(|| const_ty.ty(db)));
+                        }
+                        return evaluated;
+                    }
+
+                    if let Some(expected_ty) = expected_ty {
+                        return mk_abstract(expected_ty);
+                    }
+                }
+                PathRes::InherentConst(recv_ty, impl_, name) => {
+                    let mk_abstract = |expected_ty: TyId<'db>| {
+                        let use_ = super::assoc_const::InherentConstUse::new(
+                            body.scope(),
+                            assumptions,
+                            impl_,
+                            recv_ty,
+                            name,
+                        );
+                        let expr = ConstExprId::new(db, ConstExpr::InherentConst(use_));
+                        ConstTyId::new(db, ConstTyData::Abstract(expr, expected_ty))
+                    };
+
+                    if let Some(const_ty) = const_ty_from_inherent_const(db, impl_, recv_ty, name) {
                         let evaluated = const_ty.evaluate(db, expected_ty);
                         if evaluated.ty(db).has_invalid(db) {
                             return mk_abstract(expected_ty.unwrap_or_else(|| const_ty.ty(db)));
@@ -2093,7 +2148,7 @@ pub(crate) fn const_ty_from_assoc_const_use<'db>(
 }
 
 /// Whether `start_body`'s value definition can re-enter `start_body` when
-/// its const references (module consts and trait consts through their
+/// its const references (module consts and associated consts through their
 /// selected impls or defaults) are resolved transitively.
 ///
 /// This detects recursive associated-const definitions on *generic* impls at
@@ -2146,6 +2201,30 @@ pub(crate) fn const_body_resolution_reenters<'db>(
                         }
                     })
                 }
+                ConstRef::InherentConst(use_) => {
+                    let use_ = if args.is_empty() {
+                        use_
+                    } else {
+                        InherentConstUse::new(
+                            use_.origin_scope(),
+                            use_.assumptions(),
+                            use_.impl_(),
+                            Binder::bind(use_.receiver_ty()).instantiate(db, &args),
+                            use_.name(),
+                        )
+                    };
+                    const_ty_from_inherent_const_use(db, use_).and_then(|const_ty| {
+                        match const_ty.data(db) {
+                            ConstTyData::UnEvaluated {
+                                body,
+                                ty: Some(ty),
+                                generic_args,
+                                ..
+                            } => Some((*body, *ty, generic_args.clone())),
+                            _ => None,
+                        }
+                    })
+                }
             };
             let Some((next_body, next_expected, next_args)) = next else {
                 continue;
@@ -2181,27 +2260,44 @@ pub(crate) fn abstract_const_ty_from_assoc_const_use<'db>(
     )
 }
 
+/// Evaluates `evaluated` (the result of resolving an associated-const use) and
+/// returns it, falling back to an `Abstract` const built from `abstract_expr`
+/// when the use can't be evaluated yet (generic receiver) or evaluates to an
+/// invalid type. Shared by the trait-const and inherent-const entry points so
+/// the two paths can't drift.
+fn const_ty_or_abstract<'db>(
+    db: &'db dyn HirAnalysisDb,
+    abstract_expr: ConstExpr<'db>,
+    evaluated: Option<ConstTyId<'db>>,
+    expected_ty: TyId<'db>,
+) -> ConstTyId<'db> {
+    let to_abstract = |expr: ConstExpr<'db>| {
+        ConstTyId::new(
+            db,
+            ConstTyData::Abstract(ConstExprId::new(db, expr), expected_ty),
+        )
+    };
+    let Some(evaluated) = evaluated else {
+        return to_abstract(abstract_expr);
+    };
+    let evaluated = evaluated.evaluate(db, Some(expected_ty));
+    if evaluated.ty(db).has_invalid(db) {
+        return to_abstract(abstract_expr);
+    }
+    evaluated
+}
+
 pub(crate) fn const_ty_or_abstract_from_assoc_const_use<'db>(
     db: &'db dyn HirAnalysisDb,
     assoc: AssocConstUse<'db>,
     expected_ty: TyId<'db>,
 ) -> Option<ConstTyId<'db>> {
-    let Some(evaluated) = const_ty_from_assoc_const_use(db, assoc) else {
-        return Some(abstract_const_ty_from_assoc_const_use(
-            db,
-            assoc,
-            expected_ty,
-        ));
-    };
-    let evaluated = evaluated.evaluate(db, Some(expected_ty));
-    if evaluated.ty(db).has_invalid(db) {
-        return Some(abstract_const_ty_from_assoc_const_use(
-            db,
-            assoc,
-            expected_ty,
-        ));
-    }
-    Some(evaluated)
+    Some(const_ty_or_abstract(
+        db,
+        ConstExpr::TraitConst(assoc),
+        const_ty_from_assoc_const_use(db, assoc),
+        expected_ty,
+    ))
 }
 
 pub(super) fn const_ty_from_trait_const<'db>(
@@ -2242,6 +2338,126 @@ pub(super) fn const_ty_from_trait_const<'db>(
         declared_ty,
         None,
         generic_args,
+    ))
+}
+
+/// Recovers the instantiated generic arguments of an inherent `impl` for the
+/// given receiver type by unifying the impl self type with `receiver_ty` in
+/// `table`. The impl params and self type are instantiated under a single
+/// binder so the fresh inference vars are shared.
+///
+/// This is the single home for the receiver-unification logic shared by
+/// expression/pattern type checking and CTFE.
+pub(crate) fn unify_inherent_impl_receiver<'db>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut UnificationTable<'db>,
+    impl_: crate::hir_def::Impl<'db>,
+    receiver_ty: TyId<'db>,
+) -> Option<Vec<TyId<'db>>> {
+    let impl_ty = impl_.admissible_inherent_impl_ty(db)?;
+    let mut bound: Vec<TyId<'db>> = collect_generic_params(db, impl_.into()).params(db).to_vec();
+    bound.push(impl_ty);
+
+    let mut inst = table.instantiate_with_fresh_vars(super::binder::Binder::bind(bound));
+    let inst_ty = inst.pop().unwrap();
+    table.unify(inst_ty, receiver_ty).ok()?;
+    Some(inst.iter().map(|&ty| ty.fold_with(db, table)).collect())
+}
+
+/// The declared type of an inherent const, instantiated for `receiver_ty`
+/// within the given unification table (so inference vars stay connected to
+/// the caller's inference context).
+pub(crate) fn instantiate_inherent_const_decl_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut UnificationTable<'db>,
+    impl_: crate::hir_def::Impl<'db>,
+    receiver_ty: TyId<'db>,
+    name: IdentId<'db>,
+) -> Option<TyId<'db>> {
+    let impl_args = unify_inherent_impl_receiver(db, table, impl_, receiver_ty)?;
+    let decl_ty = inherent_const_decl_ty(db, impl_, name)?;
+    let decl_ty = super::binder::Binder::bind(decl_ty).instantiate(db, &impl_args);
+    Some(table.instantiate_to_term(decl_ty))
+}
+
+/// Looks up the HIR body for an associated const defined in an inherent
+/// `impl` block, returning both the body and the impl's instantiated generic
+/// arguments (recovered by unifying the impl self type with `receiver_ty`).
+pub(crate) fn inherent_const_body_and_impl_args<'db>(
+    db: &'db dyn HirAnalysisDb,
+    impl_: crate::hir_def::Impl<'db>,
+    receiver_ty: TyId<'db>,
+    name: IdentId<'db>,
+) -> Option<(Body<'db>, Vec<TyId<'db>>)> {
+    let body = impl_.const_(db, name)?.value_body(db)?;
+
+    let mut table = UnificationTable::new(db);
+    let impl_args = unify_inherent_impl_receiver(db, &mut table, impl_, receiver_ty)?;
+    Some((body, impl_args))
+}
+
+/// The declared type of an inherent-impl associated const, still referencing
+/// the impl's own generic parameters. Delegates to the const view so the
+/// declared-type lowering lives in one place.
+pub(crate) fn inherent_const_decl_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    impl_: crate::hir_def::Impl<'db>,
+    name: IdentId<'db>,
+) -> Option<TyId<'db>> {
+    impl_.const_(db, name)?.ty(db)
+}
+
+/// The declared type of an inherent const, instantiated for the given
+/// receiver type.
+pub(crate) fn inherent_const_expected_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    impl_: crate::hir_def::Impl<'db>,
+    receiver_ty: TyId<'db>,
+    name: IdentId<'db>,
+) -> Option<TyId<'db>> {
+    let (_, impl_args) = inherent_const_body_and_impl_args(db, impl_, receiver_ty, name)?;
+    inherent_const_decl_ty(db, impl_, name)
+        .map(|ty| super::binder::Binder::bind(ty).instantiate(db, &impl_args))
+}
+
+pub(crate) fn const_ty_from_inherent_const<'db>(
+    db: &'db dyn HirAnalysisDb,
+    impl_: crate::hir_def::Impl<'db>,
+    receiver_ty: TyId<'db>,
+    name: IdentId<'db>,
+) -> Option<ConstTyId<'db>> {
+    let (body, impl_args) = inherent_const_body_and_impl_args(db, impl_, receiver_ty, name)?;
+    let declared_ty = inherent_const_decl_ty(db, impl_, name)
+        .map(|ty| super::binder::Binder::bind(ty).instantiate(db, &impl_args));
+    Some(ConstTyId::from_body_with_generic_args(
+        db,
+        body,
+        declared_ty,
+        None,
+        impl_args,
+    ))
+}
+
+pub(crate) fn const_ty_from_inherent_const_use<'db>(
+    db: &'db dyn HirAnalysisDb,
+    use_: super::assoc_const::InherentConstUse<'db>,
+) -> Option<ConstTyId<'db>> {
+    const_ty_from_inherent_const(db, use_.impl_(), use_.receiver_ty(), use_.name())
+}
+
+/// Like [`const_ty_or_abstract_from_assoc_const_use`], but for inherent-impl
+/// consts: falls back to an abstract const when the receiver isn't concrete
+/// enough to evaluate yet (e.g. inside a generic impl).
+pub(crate) fn const_ty_or_abstract_from_inherent_const_use<'db>(
+    db: &'db dyn HirAnalysisDb,
+    use_: super::assoc_const::InherentConstUse<'db>,
+    expected_ty: TyId<'db>,
+) -> Option<ConstTyId<'db>> {
+    Some(const_ty_or_abstract(
+        db,
+        ConstExpr::InherentConst(use_),
+        const_ty_from_inherent_const_use(db, use_),
+        expected_ty,
     ))
 }
 

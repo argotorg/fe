@@ -1,0 +1,14 @@
+---
+source: crates/hir/tests/pretty_print.rs
+expression: output
+input_file: test_files/pretty_print/impl_assoc_const_missing_value.fe
+---
+use core::prelude::*
+use std::prelude::*
+
+pub struct Foo {}
+
+impl Foo {
+    const PRESENT: u256 = 1
+    const MISSING: u256
+}

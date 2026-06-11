@@ -17,7 +17,7 @@ use smallvec1::SmallVec;
 use trait_def::impls_for_trait_def;
 use trait_resolution::constraint::super_trait_cycle;
 use ty_def::{BorrowKind, InvalidCause, TyBase, TyData, TyId, instantiate_adt_field_ty};
-use ty_lower::lower_type_alias;
+use ty_lower::{collect_generic_params, lower_type_alias};
 
 use crate::analysis::name_resolution::{PathRes, resolve_path};
 use crate::analysis::{
@@ -426,6 +426,48 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
                 .flat_map(|assert_| ty_check::check_static_assert(db, *assert_).iter())
                 .map(|diag| diag.to_voucher()),
         );
+
+        // Associated const bodies in inherent impl blocks live inside the impl
+        // rather than as standalone items, so check them here. Type mismatches
+        // against the declared const type are skipped: `diags_assoc_consts`
+        // already reports those with a dedicated diagnostic. (Trait impl
+        // consts are not included: desugared `#[event]`/`#[error]` impls rely
+        // on cascaded body errors being suppressed.)
+        let not_const_ty_mismatch = |diag: &&diagnostics::FuncBodyDiag<'db>| {
+            !matches!(
+                diag,
+                diagnostics::FuncBodyDiag::Body(diagnostics::BodyDiag::TypeMismatch { .. })
+            )
+        };
+        for &impl_ in top_mod.all_impls(db) {
+            // Consts on generic impls have legitimately parametric values
+            // (e.g. `256 / BITS`), validated per instantiation; only flag a
+            // non-evaluable body, not a type-level result.
+            let allow_type_level = !collect_generic_params(db, impl_.into())
+                .params(db)
+                .is_empty();
+            for c in impl_.assoc_consts(db) {
+                let (Some(body), Some(expected_ty)) = (c.value_body(db), c.ty(db)) else {
+                    continue;
+                };
+                let (body_diags, _) = ty_check::check_anon_const_body(db, body, expected_ty);
+                diags.extend(
+                    body_diags
+                        .iter()
+                        .filter(not_const_ty_mismatch)
+                        .map(|diag| diag.to_voucher()),
+                );
+                // CTFE-validate the value, but only when it type-checks cleanly
+                // (otherwise the type error is the real diagnostic).
+                if body_diags.is_empty() {
+                    diags.extend(
+                        ty_check::const_body_ctfe_diags(db, body, expected_ty, allow_type_level)
+                            .iter()
+                            .map(|diag| diag.to_voucher()),
+                    );
+                }
+            }
+        }
 
         diags
     }

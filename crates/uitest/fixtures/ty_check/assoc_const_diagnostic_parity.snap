@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/assoc_const_diagnostic_parity.fe
+---
+error[3-0011]: given type doesn't match the expected const type
+   ┌─ assoc_const_diagnostic_parity.fe:20:21
+   │
+20 │     const C: u256 = true
+   │                     ^^^^ expected `u256` type here, but `bool` is given
+
+error[3-0011]: given type doesn't match the expected const type
+   ┌─ assoc_const_diagnostic_parity.fe:26:21
+   │
+26 │     const C: u256 = true
+   │                     ^^^^ expected `u256` type here, but `bool` is given

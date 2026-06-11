@@ -106,6 +106,7 @@ impl<'db> From<ScopeId<'db>> for SymbolKind {
             ScopeId::GenericParam(..) => SymbolKind::GenericParam,
             ScopeId::TraitType(..) => SymbolKind::TraitType,
             ScopeId::TraitConst(..) => SymbolKind::TraitConst,
+            ScopeId::ImplConst(..) => SymbolKind::TraitConst,
             ScopeId::FuncParam(..) => SymbolKind::FuncParam,
             ScopeId::Field(..) => SymbolKind::Field,
             ScopeId::Variant(_) => SymbolKind::Variant,
@@ -458,6 +459,9 @@ fn item_children<'db>(db: &'db dyn HirDb, item: ItemKind<'db>) -> Vec<SymbolView
         ItemKind::Impl(i) => {
             for func in i.funcs(db) {
                 children.push(SymbolView::from_item(ItemKind::Func(func)));
+            }
+            for idx in 0..i.consts(db).len() {
+                children.push(SymbolView::new(ScopeId::ImplConst(i, idx as u16)));
             }
         }
         ItemKind::ImplTrait(it) => {

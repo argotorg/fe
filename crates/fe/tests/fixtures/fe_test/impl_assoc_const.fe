@@ -1,0 +1,176 @@
+// Associated consts in inherent impl blocks.
+//
+// Consts may reference the impl's generic parameters and other consts of the
+// same impl; `Self::CONST` resolves per instantiation and is folded at
+// compile time.
+
+// Non-generic impl
+pub struct Buf {}
+
+impl Buf {
+    const SIZE: usize = 4
+
+    pub fn size(self) -> usize {
+        Self::SIZE
+    }
+
+    // Consts of the enclosing impl are in scope unqualified, like trait
+    // consts in trait default methods.
+    pub fn size_unqualified(self) -> usize {
+        SIZE
+    }
+}
+
+// Generic impl with a computed const (the original bug repro)
+pub struct Foo<const N: u256> {}
+
+impl<const N: u256> Foo<N> {
+    const DOUBLE: u256 = N * 2
+
+    pub fn get_double(self) -> u256 {
+        Self::DOUBLE
+    }
+}
+
+// Multi-param generic impl with multiple derived consts
+// (the StoragePackedArray shape)
+pub struct Packed<const BITS: u256, const SALT: u256> {}
+
+impl<const BITS: u256, const SALT: u256> Packed<BITS, SALT> {
+    const LANES: u256 = 256 / BITS
+    const LANE_MASK: u256 = (1 << BITS) - 1
+
+    pub fn lanes(self) -> u256 {
+        Self::LANES
+    }
+
+    pub fn mask(self) -> u256 {
+        Self::LANE_MASK
+    }
+}
+
+// Const depending on another const in the same impl
+pub struct Chain<const N: u256> {}
+
+impl<const N: u256> Chain<N> {
+    const BASE: u256 = N + 1
+    const DERIVED: u256 = Self::BASE * 10
+
+    pub fn derived(self) -> u256 {
+        Self::DERIVED
+    }
+}
+
+// Inherent consts take precedence over trait consts of the same name;
+// the trait const stays reachable through a qualified path.
+pub struct Both {}
+
+pub trait HasX {
+    const X: u256
+}
+
+impl HasX for Both {
+    const X: u256 = 1
+}
+
+impl Both {
+    const X: u256 = 2
+}
+
+#[test]
+fn non_generic_impl_const() {
+    let b: Buf = Buf {}
+    assert(b.size() == 4)
+    assert(b.size_unqualified() == 4)
+    assert(Buf::SIZE == 4)
+}
+
+#[test]
+fn generic_impl_const_per_instantiation() {
+    let f: Foo<7> = Foo {}
+    assert(f.get_double() == 14)
+    assert(Foo<3>::DOUBLE == 6)
+}
+
+#[test]
+fn packed_array_shape() {
+    let p: Packed<8, 0> = Packed {}
+    assert(p.lanes() == 32)
+    assert(p.mask() == 255)
+    let q: Packed<64, 1> = Packed {}
+    assert(q.lanes() == 4)
+    assert(q.mask() == 18446744073709551615)
+}
+
+#[test]
+fn const_in_array_size_position() {
+    let arr: [u8; Buf::SIZE] = [7; 4]
+    assert(arr[3] == 7)
+}
+
+#[test]
+fn chained_consts() {
+    let c: Chain<4> = Chain {}
+    assert(c.derived() == 50)
+}
+
+#[test]
+fn inherent_const_shadows_trait_const() {
+    assert(Both::X == 2)
+    assert(<Both as HasX>::X == 1)
+}
+
+// A const on a conditional inherent impl is available only when the receiver
+// satisfies the impl's `where` bound.
+pub trait MarkA {}
+
+pub struct OnlyA {}
+
+impl MarkA for OnlyA {}
+
+pub struct Constrained<T> {}
+
+impl<T> Constrained<T>
+where T: MarkA
+{
+    const WHICH: u256 = 1
+}
+
+#[test]
+fn constrained_impl_const() {
+    assert(Constrained<OnlyA>::WHICH == 1)
+}
+
+// `pub` consts are visible outside the defining module.
+mod nested {
+    pub struct Exported {}
+
+    impl Exported {
+        pub const LIMIT: u256 = 7
+        pub const SIZE: usize = 4
+    }
+}
+
+#[test]
+fn pub_const_cross_module() {
+    assert(nested::Exported::LIMIT == 7)
+}
+
+#[test]
+fn pub_const_cross_module_type_position() {
+    // A const from another module must resolve in type position (array size)
+    // as well as value position.
+    let arr: [u8; nested::Exported::SIZE] = [7; 4]
+    assert(arr[3] == 7)
+}
+
+// Inherent consts as const generic arguments.
+pub struct Holder<const N: usize> {
+    pub v: u256
+}
+
+#[test]
+fn const_as_generic_arg() {
+    let h: Holder<Buf::SIZE> = Holder { v: 1 }
+    assert(h.v == 1)
+}

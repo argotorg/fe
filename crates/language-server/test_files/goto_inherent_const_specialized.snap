@@ -1,0 +1,52 @@
+---
+source: crates/language-server/src/functionality/goto.rs
+expression: snapshot
+input_file: test_files/goto_inherent_const_specialized.fe
+---
+note: 
+  ┌─ goto_inherent_const_specialized.fe:3:6
+  │
+3 │ impl Foo<1> {
+  │      ^^^---
+  │      │
+  │      full segment (includes generics)
+  │      -> goto_inherent_const_specialized::Foo
+
+note: 
+  ┌─ goto_inherent_const_specialized.fe:7:6
+  │
+7 │ impl Foo<2> {
+  │      ^^^---
+  │      │
+  │      full segment (includes generics)
+  │      -> goto_inherent_const_specialized::Foo
+
+note: 
+   ┌─ goto_inherent_const_specialized.fe:12:5
+   │
+12 │     Foo<1>::X
+   │     ^^^---
+   │     │
+   │     full segment (includes generics)
+   │     -> goto_inherent_const_specialized::Foo
+
+note: 
+   ┌─ goto_inherent_const_specialized.fe:12:13
+   │
+12 │     Foo<1>::X
+   │             ^ -> goto_inherent_const_specialized::Foo<1>::X
+
+note: 
+   ┌─ goto_inherent_const_specialized.fe:16:5
+   │
+16 │     Foo<2>::X
+   │     ^^^---
+   │     │
+   │     full segment (includes generics)
+   │     -> goto_inherent_const_specialized::Foo
+
+note: 
+   ┌─ goto_inherent_const_specialized.fe:16:13
+   │
+16 │     Foo<2>::X
+   │             ^ -> goto_inherent_const_specialized::Foo<2>::X

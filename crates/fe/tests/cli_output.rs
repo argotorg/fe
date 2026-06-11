@@ -386,6 +386,44 @@ fn test_cli_build_emit_abi_writes_json_artifact() {
 }
 
 #[test]
+fn test_cli_build_emit_abi_follows_inherent_const_selector() {
+    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_output/emit_abi/abi_inherent_const_selector.fe");
+    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
+
+    let temp = tempdir().expect("tempdir");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "abi",
+        "--contract",
+        "Foo",
+        "--out-dir",
+        out_dir_str.as_str(),
+        fixture_path_str,
+    ]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+
+    let abi_path = out_dir.join("Foo.abi.json");
+    let abi: Value = serde_json::from_str(&fs::read_to_string(&abi_path).expect("read ABI"))
+        .expect("parse ABI JSON");
+
+    // The recv arm must survive ABI generation: the selector signature is
+    // resolved by following the inherent const's `sol(...)` body.
+    let function = abi
+        .as_array()
+        .expect("abi array")
+        .iter()
+        .find(|entry| entry["type"] == "function")
+        .expect("function entry derived from inherent-const selector");
+    assert_eq!(function["name"], "ping");
+    assert_eq!(function["inputs"][0]["type"], "uint256");
+}
+
+#[test]
 fn test_cli_build_emit_metadata_standalone_writes_single_source() {
     let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/cli_output/emit_abi/abi_contract.fe");
@@ -2132,6 +2170,23 @@ fn test_cli_test_profile_selects_workspace_arithmetic() {
     assert!(
         release_output.contains("1 failed"),
         "expected checked arithmetic failure in workspace release profile:\n{release_output}"
+    );
+}
+
+#[test]
+fn test_cli_test_dependency_inherent_const() {
+    // An inherent const defined in a dependency ingot must resolve and evaluate
+    // from a downstream ingot, in both value and type positions.
+    let fixture_dir = fe_test_runner_fixture_dir("dependency_inherent_const");
+    let fixture_dir_str = fixture_dir.to_str().expect("fixture dir utf8");
+
+    let (output, exit_code) = run_fe_main(&["test", "--jobs", "1", fixture_dir_str]);
+    assert_eq!(exit_code, 0, "fe test failed:\n{output}");
+    assert!(
+        output.contains("uses_dependency_inherent_const_value")
+            && output.contains("uses_dependency_inherent_const_in_type_position")
+            && output.contains("2 passed"),
+        "expected cross-ingot inherent const tests to pass, got:\n{output}"
     );
 }
 

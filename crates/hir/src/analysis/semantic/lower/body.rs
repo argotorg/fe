@@ -17,7 +17,10 @@ use crate::{
             runtime_size_bytes, sem_const_from_ty, unit_const,
         },
         ty::{
-            const_ty::{ConstTyData, EvaluatedConstTy, const_ty_or_abstract_from_assoc_const_use},
+            const_ty::{
+                ConstTyData, EvaluatedConstTy, const_ty_or_abstract_from_assoc_const_use,
+                const_ty_or_abstract_from_inherent_const_use,
+            },
             normalize::normalize_ty,
             ty_check::{
                 BodyOwner, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, LocalBinding,
@@ -682,9 +685,16 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     fn lower_const_ref(&mut self, expr: ExprId, const_ref: ConstRef<'db>) -> SValueId {
         let ty = self.expr_ty(expr);
         let mut type_level_fallback = None;
-        if let ConstRef::TraitConst(assoc) = const_ref
-            && let Some(const_ty) = const_ty_or_abstract_from_assoc_const_use(self.db, assoc, ty)
-                .map(|const_ty| TyId::const_ty(self.db, const_ty))
+        let symbolic_const_ty = match const_ref {
+            ConstRef::TraitConst(assoc) => {
+                const_ty_or_abstract_from_assoc_const_use(self.db, assoc, ty)
+            }
+            ConstRef::InherentConst(use_) => {
+                const_ty_or_abstract_from_inherent_const_use(self.db, use_, ty)
+            }
+            ConstRef::Const(_) => None,
+        };
+        if let Some(const_ty) = symbolic_const_ty.map(|const_ty| TyId::const_ty(self.db, const_ty))
             && let Some(mut symbolic) = sem_const_from_ty(self.db, const_ty)
         {
             if matches!(symbolic.value(self.db), SemConstValue::TypeLevel { .. })
@@ -723,11 +733,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             );
         }
 
-        // The trait const cannot be resolved to a concrete instance in this
-        // context (e.g. a trait const on a still-generic `Self` inside a
-        // CTFE-evaluated anon const body of a trait method signature). Emit
-        // the type-level symbolic value so const evaluation yields the
-        // abstract form instead of panicking.
+        // The associated const cannot be resolved to a concrete instance in
+        // this context (e.g. a const on a still-generic `Self` inside a
+        // CTFE-evaluated anon const body). Emit the type-level symbolic value
+        // so const evaluation yields the abstract form instead of panicking.
         if let Some(symbolic) = type_level_fallback {
             return self.emit_expr_with_origin(
                 SemOrigin::Expr(expr),

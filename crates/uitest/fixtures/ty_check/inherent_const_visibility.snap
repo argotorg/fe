@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/inherent_const_visibility.fe
+---
+error[2-0003]: `HIDDEN` is not visible
+   ┌─ inherent_const_visibility.fe:15:17
+   │
+ 6 │         const HIDDEN: u256 = 5
+   │               ------ `HIDDEN` is defined here
+   ·
+15 │     inner::Foo::HIDDEN
+   │                 ^^^^^^ `HIDDEN` is not visible

@@ -1,0 +1,19 @@
+// An inherent const whose initializer type-checks but is not const-evaluable
+// must be rejected at the definition site (like top-level consts), not only
+// when referenced. A parametric value on a generic impl stays valid.
+fn not_const() -> u256 {
+    42
+}
+
+struct S {}
+
+impl S {
+    const C: u256 = not_const()
+}
+
+struct Gen<const N: u256> {}
+
+impl<const N: u256> Gen<N> {
+    const OK: u256 = N * 2
+    const BAD: u256 = not_const()
+}

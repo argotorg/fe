@@ -1,0 +1,77 @@
+// Parity matrix: an inherent associated const and a trait associated const
+// must behave identically across every position. Most past bugs were of the
+// form "trait const handled X, inherent const forgot X" (or vice versa); these
+// paired assertions guard that whole class mechanically.
+
+pub struct Holder<const N: usize> {
+    pub v: u256
+}
+
+// --- inherent const ---
+pub struct Inh {}
+
+impl Inh {
+    const SIZE: usize = 3
+    const DOUBLE: u256 = 6
+}
+
+// --- trait const (same values) ---
+pub trait HasConsts {
+    const SIZE: usize
+    const DOUBLE: u256
+}
+
+pub struct Tr {}
+
+impl HasConsts for Tr {
+    const SIZE: usize = 3
+    const DOUBLE: u256 = 6
+}
+
+#[test]
+fn value_position_parity() {
+    assert(Inh::DOUBLE == 6)
+    assert(Tr::DOUBLE == 6)
+    assert(Inh::DOUBLE == Tr::DOUBLE)
+}
+
+#[test]
+fn array_size_parity() {
+    let a: [u8; Inh::SIZE] = [7; 3]
+    let b: [u8; Tr::SIZE] = [7; 3]
+    assert(a[2] == 7)
+    assert(b[2] == 7)
+}
+
+#[test]
+fn const_generic_arg_parity() {
+    let a: Holder<Inh::SIZE> = Holder { v: 1 }
+    let b: Holder<Tr::SIZE> = Holder { v: 1 }
+    assert(a.v == b.v)
+}
+
+// --- parity on generic containers: parametric const in value + type position ---
+pub struct GenInh<const N: u256> {}
+
+impl<const N: u256> GenInh<N> {
+    const TWICE: u256 = N * 2
+}
+
+pub trait HasTwice {
+    const TWICE: u256
+}
+
+pub struct GenTr<const N: u256> {}
+
+impl<const N: u256> HasTwice for GenTr<N> {
+    const TWICE: u256 = N * 2
+}
+
+#[test]
+fn generic_parametric_parity() {
+    let i: GenInh<5> = GenInh {}
+    let t: GenTr<5> = GenTr {}
+    assert(GenInh<5>::TWICE == 10)
+    assert(GenTr<5>::TWICE == 10)
+    assert(GenInh<5>::TWICE == GenTr<5>::TWICE)
+}

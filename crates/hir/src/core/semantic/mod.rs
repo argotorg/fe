@@ -3272,6 +3272,7 @@ fn selector_signature_from_body<'db>(
 /// Tracks already-visited items to prevent cycles when following const/fn references.
 struct SelectorSearchVisited<'db> {
     consts: FxHashSet<Const<'db>>,
+    inherent_consts: FxHashSet<Body<'db>>,
     funcs: FxHashSet<Func<'db>>,
     locals: FxHashSet<PatId>,
 }
@@ -3280,6 +3281,7 @@ impl<'db> SelectorSearchVisited<'db> {
     fn new() -> Self {
         Self {
             consts: FxHashSet::default(),
+            inherent_consts: FxHashSet::default(),
             funcs: FxHashSet::default(),
             locals: FxHashSet::default(),
         }
@@ -3373,6 +3375,35 @@ fn selector_signature_from_expr<'db>(
                 db,
                 const_body,
                 const_.scope(),
+                const_typed_body,
+                visited,
+            )
+        }
+        crate::analysis::ty::ty_check::ConstRef::InherentConst(use_) => {
+            // Follow the inherent const's value body so a selector that
+            // delegates to `Selectors::TRANSFER` resolves the underlying
+            // `sol("...")` signature, mirroring the top-level `Const` branch.
+            let (const_body, _) = crate::analysis::ty::const_ty::inherent_const_body_and_impl_args(
+                db,
+                use_.impl_(),
+                use_.receiver_ty(),
+                use_.name(),
+            )?;
+            if !visited.inherent_consts.insert(const_body) {
+                return None;
+            }
+            let expected = crate::analysis::ty::const_ty::inherent_const_expected_ty(
+                db,
+                use_.impl_(),
+                use_.receiver_ty(),
+                use_.name(),
+            )?;
+            let (_, const_typed_body) =
+                crate::analysis::ty::ty_check::check_anon_const_body(db, const_body, expected);
+            selector_signature_from_typed_body(
+                db,
+                const_body,
+                use_.impl_().scope(),
                 const_typed_body,
                 visited,
             )
@@ -4250,6 +4281,40 @@ impl<'db> Impl<'db> {
         )
     }
 
+    /// Iterate associated const definitions in this inherent impl block as views.
+    pub fn assoc_consts(
+        self,
+        db: &'db dyn HirDb,
+    ) -> impl Iterator<Item = InherentAssocConstView<'db>> + 'db {
+        let len = self.hir_consts(db).len();
+        (0..len).map(move |idx| InherentAssocConstView { owner: self, idx })
+    }
+
+    /// Get an associated const view by name, if it exists in this impl block.
+    pub fn const_(
+        self,
+        db: &'db dyn HirDb,
+        name: IdentId<'db>,
+    ) -> Option<InherentAssocConstView<'db>> {
+        self.assoc_consts(db).find(|c| c.name(db) == Some(name))
+    }
+
+    /// Get the index of an associated const by name, if it exists. Mirrors
+    /// `Trait::const_index` so `ScopeId::ImplConst` indices are computed in one
+    /// place instead of open-coded `hir_consts().position()` scans.
+    pub fn const_index(self, db: &'db dyn HirDb, name: IdentId<'db>) -> Option<usize> {
+        self.assoc_consts(db)
+            .enumerate()
+            .find_map(|(idx, c)| (c.name(db) == Some(name)).then_some(idx))
+    }
+
+    /// Get an associated const view by its index. Mirrors `Trait::const_by_index`
+    /// so `ScopeId::ImplConst` resolution routes through one helper instead of an
+    /// open-coded `hir_consts()[idx]` slice access.
+    pub fn const_by_index(self, idx: usize) -> InherentAssocConstView<'db> {
+        InherentAssocConstView { owner: self, idx }
+    }
+
     pub(crate) fn inherent_impl_admissibility(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -4297,6 +4362,41 @@ impl<'db> Impl<'db> {
     pub fn target_type_name(self, db: &dyn HirDb) -> Option<String> {
         self.type_ref(db).to_opt().map(|ty| ty.pretty_print(db))
     }
+}
+
+/// Qualified path for a scope, resolving inherent-impl consts to their target
+/// type's actual path. For `ScopeId::ImplConst` this yields e.g. `a::Foo::X`
+/// even when the impl is written in module `b` via `use a::Foo` — something
+/// `ScopeId::pretty_path` (which only has `HirDb`) cannot do, because the
+/// target type needs name resolution. Tooling (goto, LSIF monikers, SCIP) must
+/// use this instead of `scope.pretty_path` for inherent-const scopes.
+pub fn scope_qualified_path<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+) -> Option<String> {
+    if let ScopeId::ImplConst(impl_, _) = scope {
+        let self_ty = impl_.ty(db);
+        let name = scope.name(db)?;
+        let (_, args) = self_ty.decompose_ty_app(db);
+        // Build the target type's path. Named types keep their module-qualified
+        // path; specialized impls (`impl Foo<1>`) include their type arguments
+        // so distinct definitions don't collapse to the same path; primitives
+        // (`impl u256`) have no scope, so fall back to the type print.
+        let type_path = match self_ty.as_scope(db).and_then(|s| s.pretty_path(db)) {
+            Some(base) if args.is_empty() => base,
+            Some(base) => {
+                let arg_list = args
+                    .iter()
+                    .map(|arg| arg.pretty_print(db).to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{base}<{arg_list}>")
+            }
+            None => self_ty.pretty_print(db).to_string(),
+        };
+        return Some(format!("{type_path}::{}", name.data(db)));
+    }
+    scope.pretty_path(db)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -5159,6 +5259,48 @@ impl<'db> TraitAssocConstView<'db> {
 pub struct ImplAssocConstView<'db> {
     owner: ImplTrait<'db>,
     idx: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct InherentAssocConstView<'db> {
+    owner: Impl<'db>,
+    idx: usize,
+}
+
+impl<'db> InherentAssocConstView<'db> {
+    fn def(self, db: &'db dyn HirDb) -> &'db crate::core::hir_def::AssocConstDef<'db> {
+        &self.owner.hir_consts(db)[self.idx]
+    }
+
+    pub fn name(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
+        self.def(db).name.to_opt()
+    }
+
+    pub fn span(self) -> crate::span::item::LazyTraitConstSpan<'db> {
+        self.owner.span().associated_const(self.idx)
+    }
+
+    /// Returns true if this associated const has a value defined.
+    pub fn has_value(self, db: &'db dyn HirDb) -> bool {
+        self.def(db).value.to_opt().is_some()
+    }
+
+    pub fn value_body(self, db: &'db dyn HirDb) -> Option<crate::core::hir_def::Body<'db>> {
+        self.def(db).value.to_opt()
+    }
+
+    /// The HIR type annotation of this associated const.
+    pub fn hir_ty(self, db: &'db dyn HirDb) -> Option<crate::core::hir_def::TypeId<'db>> {
+        self.def(db).ty.to_opt()
+    }
+
+    /// Semantic type of this associated const, referencing the impl's own
+    /// generic parameters.
+    pub fn ty(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
+        let hir = self.def(db).ty.to_opt()?;
+        let assumptions = constraints_for(db, self.owner.into());
+        Some(lower_hir_ty(db, hir, self.owner.scope(), assumptions))
+    }
 }
 
 impl<'db> ImplAssocConstView<'db> {

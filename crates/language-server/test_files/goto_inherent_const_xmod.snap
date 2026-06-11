@@ -1,0 +1,28 @@
+---
+source: crates/language-server/src/functionality/goto.rs
+expression: snapshot
+input_file: test_files/goto_inherent_const_xmod.fe
+---
+note: 
+  ┌─ goto_inherent_const_xmod.fe:8:10
+  │
+8 │     impl Foo {
+  │          ^^^ -> goto_inherent_const_xmod::a::Foo
+
+note: 
+   ┌─ goto_inherent_const_xmod.fe:14:5
+   │
+14 │     b::Foo::X
+   │     ^ -> goto_inherent_const_xmod::b
+
+note: 
+   ┌─ goto_inherent_const_xmod.fe:14:8
+   │
+14 │     b::Foo::X
+   │        ^^^ -> goto_inherent_const_xmod::a::Foo
+
+note: 
+   ┌─ goto_inherent_const_xmod.fe:14:13
+   │
+14 │     b::Foo::X
+   │             ^ -> goto_inherent_const_xmod::a::Foo::X

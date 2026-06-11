@@ -434,6 +434,12 @@ fn check_const_expr_wf<'db>(
                 return wf;
             }
         }
+        ConstExpr::InherentConst(use_) => {
+            let wf = check_ty_wf(db, solve_cx, use_.receiver_ty());
+            if !wf.is_wf() {
+                return wf;
+            }
+        }
         ConstExpr::LocalBinding(_) => {}
     }
 

@@ -1,0 +1,17 @@
+---
+source: crates/hir/tests/pretty_print.rs
+expression: output
+input_file: test_files/pretty_print/impl_assoc_const.fe
+---
+use core::prelude::*
+use std::prelude::*
+
+pub struct Foo<const N: u256> {}
+
+impl<const N: u256> Foo<N> {
+    const DOUBLE: u256 = N * 2
+    pub fn get_double(self) -> u256 {
+        Self::DOUBLE
+    }
+
+}

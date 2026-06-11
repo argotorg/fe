@@ -1,0 +1,26 @@
+// Two inherent impls of the same type that define the same const conflict at
+// the definition site, regardless of their `where` clauses, exactly like
+// conflicting inherent methods.
+trait A {}
+trait B {}
+
+struct OnlyA {}
+impl A for OnlyA {}
+
+struct Wrap<T> {}
+
+impl<T> Wrap<T>
+where T: A
+{
+    const C: u256 = 1
+}
+
+impl<T> Wrap<T>
+where T: B
+{
+    const C: u256 = 2
+}
+
+fn pick() -> u256 {
+    Wrap<OnlyA>::C
+}

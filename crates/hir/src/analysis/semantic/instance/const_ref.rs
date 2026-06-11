@@ -8,7 +8,8 @@ use crate::{
         HirAnalysisDb,
         semantic::{SemOrigin, SemanticConstRef},
         ty::{
-            assoc_const::AssocConstUse,
+            assoc_const::{AssocConstUse, InherentConstUse},
+            const_ty::inherent_const_body_and_impl_args,
             effects::place_effect_provider_param_index_map,
             trait_def::{
                 assoc_const_body_and_impl_args_for_trait_inst, resolve_trait_method_instance,
@@ -263,6 +264,7 @@ pub(crate) fn resolve_semantic_const_ref<'db>(
     let instance = match const_ref {
         ConstRef::Const(const_) => semantic_const_key_for_const(db, const_),
         ConstRef::TraitConst(assoc) => semantic_const_key_for_assoc_const(db, assoc, ty),
+        ConstRef::InherentConst(use_) => semantic_const_key_for_inherent_const(db, use_, ty),
     }?;
     Some(SemanticConstRef::new(db, instance, ty, origin))
 }
@@ -278,6 +280,22 @@ fn semantic_const_key_for_const<'db>(
         GenericSubst::empty(db),
         EffectProviderSubst::empty(db),
         ImplEnv::empty(db, owner.scope()),
+    ))
+}
+
+fn semantic_const_key_for_inherent_const<'db>(
+    db: &'db dyn HirAnalysisDb,
+    use_: InherentConstUse<'db>,
+    ty: TyId<'db>,
+) -> Option<SemanticInstanceKey<'db>> {
+    let (body, impl_args) =
+        inherent_const_body_and_impl_args(db, use_.impl_(), use_.receiver_ty(), use_.name())?;
+    Some(SemanticInstanceKey::new(
+        db,
+        BodyOwner::AnonConstBody { body, expected: ty },
+        GenericSubst::new(db, impl_args),
+        EffectProviderSubst::empty(db),
+        ImplEnv::new(db, use_.origin_scope(), use_.assumptions(), vec![]),
     ))
 }
 
