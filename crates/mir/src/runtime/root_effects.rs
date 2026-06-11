@@ -5,7 +5,6 @@ use hir::{
         },
         ty::{
             ProviderAddressSpace, address_space_from_ty,
-            corelib::resolve_lib_type_path,
             ty_check::{BodyOwner, LocalBinding},
             ty_def::TyId,
         },
@@ -18,7 +17,8 @@ use rustc_hash::FxHashMap;
 use crate::{
     db::MirDb,
     runtime::{
-        AddressSpaceKind, ContractFieldBinding, EntryEffectArgPlan, RefKind, RefView, RuntimeClass,
+        AddressSpaceKind, ContractFieldBinding, ContractFieldSlot, EntryEffectArgPlan, RefKind,
+        RefView, RuntimeClass,
         TargetRootProviderBinding, TargetRootProviderMaterialization,
         lower::{
             classify::{provider_erases_runtime_root, runtime_effect_binding_plan},
@@ -43,28 +43,16 @@ pub(crate) fn entry_effect_arg_plans<'db>(
 ) -> Result<Vec<EntryEffectArgPlan<'db>>, LowerError> {
     let owner = semantic.key(db).owner(db);
     let (contract_fields, total_code_slots) = if let Some(contract) = context.contract() {
-        let scope = contract.scope();
-        let code_space = resolve_lib_type_path(db, scope, "core::effect_ref::Code");
-        let layout = contract.field_layout(db);
-        let total_code_slots = code_space
-            .map(|code_space| {
-                layout
-                    .values()
-                    .filter(|field| field.address_space == code_space)
-                    .map(|field| field.slot_offset.saturating_add(field.slot_count))
-                    .max()
-                    .unwrap_or(0)
-            })
-            .unwrap_or(0);
         (
             Some(
-                layout
+                contract
+                    .field_layout(db)
                     .values()
                     .cloned()
                     .map(|field| (field.index, field))
                     .collect::<FxHashMap<_, _>>(),
             ),
-            total_code_slots,
+            contract.code_address_space_slot_count(db),
         )
     } else {
         (None, 0)
@@ -229,10 +217,9 @@ fn contract_field_binding<'db>(
             let field_bytes = (i128::try_from(field.slot_offset)
                 .expect("code-backed slot offset fits in i128"))
             .saturating_mul(32);
-            let signed = field_bytes.saturating_sub(total_bytes);
-            signed as u128
+            ContractFieldSlot::CodeTailBytes(field_bytes.saturating_sub(total_bytes))
         }
-        _ => field.slot_offset as u128,
+        _ => ContractFieldSlot::Words(field.slot_offset as u128),
     };
     Ok(ContractFieldBinding {
         slot,

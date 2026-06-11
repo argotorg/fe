@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 449
 expression: output
 input_file: crates/codegen/tests/fixtures/immutable_contract_field_init_set.fe
 ---
@@ -176,19 +177,18 @@ func inline(always) private %contract_init_abi_ImmutableContractFieldInitSet() {
         v41.i256 = extract_value v40 0.i256;
         v43.*i8 = evm_malloc 32.i256;
         v44.i256 = ptr_to_int v43 i256;
-        mstore 0.i256 v44 i256;
-        v47.objref<i256> = obj.alloc i256;
-        call %__ImmutableContractFieldInitSet_init v41 v47;
-        v49.i256 = obj.load v47;
-        (v50.i256, v51.i1) = umulo 0.i256 32.i256;
-        br v51 block6 block8;
+        v45.objref<i256> = obj.alloc i256;
+        call %__ImmutableContractFieldInitSet_init v41 v45;
+        v47.i256 = obj.load v45;
+        (v48.i256, v49.i1) = umulo 0.i256 32.i256;
+        br v49 block6 block8;
 
     block8:
-        (v53.i256, v54.i1) = uaddo v44 v50;
-        br v54 block6 block9;
+        (v51.i256, v52.i1) = uaddo v44 v48;
+        br v52 block6 block9;
 
     block9:
-        mstore v53 v49 i256;
+        mstore v51 v47 i256;
         mstore 0.i256 v44 i256;
         return;
 }

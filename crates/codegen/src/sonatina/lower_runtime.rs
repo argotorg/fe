@@ -1871,19 +1871,30 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                         ..
                     } => {
                         // Code-backed contract fields are stored in a tail data section appended
-                        // to the deployed runtime bytecode. The MIR binding encodes `slot` as a
-                        // signed byte offset from the end of code, so we materialize the runtime
-                        // absolute offset as `codesize + slot`.
+                        // to the deployed runtime bytecode, so the runtime absolute offset is
+                        // `codesize + slot`.
+                        let mir::ContractFieldSlot::CodeTailBytes(tail_offset) = slot else {
+                            return Err(LowerError::Internal(format!(
+                                "code-backed contract field ref should carry a code-tail slot, got {slot}"
+                            )));
+                        };
                         let code_size = self
                             .fb
                             .insert_inst(EvmCodeSize::new(self.module.inst_set()), Type::I256);
-                        let offset = self.fb.make_imm_value(I256::from((*slot) as i128));
+                        let offset = self.fb.make_imm_value(I256::from(*tail_offset));
                         self.fb.insert_inst(
                             Add::new(self.module.inst_set(), code_size, offset),
                             Type::I256,
                         )
                     }
-                    _ => self.fb.make_imm_value(I256::from(*slot)),
+                    _ => {
+                        let mir::ContractFieldSlot::Words(words) = slot else {
+                            return Err(LowerError::Internal(format!(
+                                "contract field ref should carry a word slot, got {slot}"
+                            )));
+                        };
+                        self.fb.make_imm_value(I256::from(*words))
+                    }
                 }
             }
         })

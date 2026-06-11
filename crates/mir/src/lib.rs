@@ -7,7 +7,8 @@ pub use db::MirDb;
 pub use instance::{RuntimeInstance, RuntimeInstanceKey, get_or_build_runtime_instance};
 pub use runtime::{
     AddressSpaceKind, ArrayLayout, BorrowAccess, BorrowTransportSet, ConstNode, ConstRegion,
-    ConstRegionId, ConstScalar, EnumLayout, EnumVariantLayout, IntrinsicArithBinOp, Layout,
+    ConstRegionId, ConstScalar, ContractFieldSlot, EnumLayout, EnumVariantLayout,
+    IntrinsicArithBinOp, Layout,
     LayoutId, LowerError, LoweredRuntimeBody, PlaceElem, PlaceRoot, RBlock, RBlockId, RExpr,
     RLocal, RLocalId, RStmt, RTerminator, RValueId, RefKind, RefView, ResolvedCodeRegion,
     ResolvedPlaceElem, ResolvedPlaceRootKind, ResolvedRuntimePlace, RuntimeBody,

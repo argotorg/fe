@@ -24,8 +24,8 @@ use crate::{
     },
     layout_size_bytes,
     runtime::{
-        AddressSpaceKind, BorrowAccess, ConstScalar, ContractInitAbiPlan, ContractRecvAbiPlan,
-        DispatchDefault, EntryEffectArgPlan, InitArgsPlan, PlaceElem, PlaceRoot, RBlock, RBlockId,
+        AddressSpaceKind, BorrowAccess, ConstScalar, ContractFieldSlot, ContractInitAbiPlan,
+        ContractRecvAbiPlan, DispatchDefault, EntryEffectArgPlan, InitArgsPlan, PlaceElem, PlaceRoot, RBlock, RBlockId,
         RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView, RuntimeBody,
         RuntimeBoundarySpec, RuntimeBuiltin, RuntimeCarrier, RuntimeClass, RuntimeExitBehavior,
         RuntimeInputPlan, RuntimeInterfaceSignature, RuntimeLocalRoot, RuntimeParamPlan,
@@ -457,32 +457,20 @@ impl<'db> SyntheticBodyBuilder<'db> {
             }
         }
 
-        // If the contract has code-backed (immutable) fields, we allocate a contiguous buffer for
-        // their init-time values. The init root will later append this buffer to the returned
-        // runtime bytecode.
-        //
-        // We store `buf_ptr` into scratch memory (0x00) so that:
-        // - codegen lowering for init-time "memory contract field handles" can derive pointers, and
-        // - the contract init root can retrieve the buffer after `init_abi` returns.
+        // If the contract has code-backed (immutable) fields, allocate a contiguous buffer for
+        // their init-time values; the contract init root appends it to the returned runtime
+        // bytecode.
         let immut_slots = self.contract_code_address_space_slots(plan.contract);
         let immut_ptr = if immut_slots == 0 {
             None
         } else {
             let immut_len = self.push_const_word(cont_bb, immut_slots.saturating_mul(32));
-            let immut_ptr = self.push_builtin_value(
+            Some(self.push_builtin_value(
                 cont_bb,
                 TyId::u256(self.db),
                 RuntimeClass::Scalar(word_scalar_class()),
                 RuntimeBuiltin::Malloc { size: immut_len },
-            );
-            self.push_side_effect_builtin(
-                cont_bb,
-                RuntimeBuiltin::Mstore {
-                    addr: zero,
-                    value: immut_ptr,
-                },
-            );
-            Some(immut_ptr)
+            ))
         };
 
         if let Some(user_init) = plan.user_init {
@@ -504,8 +492,9 @@ impl<'db> SyntheticBodyBuilder<'db> {
             }
         }
 
-        // Re-store the immutable buffer pointer after the user init runs, since it may clobber
-        // scratch memory.
+        // Publish the immutable buffer pointer at scratch 0x00, where the contract init root
+        // reads it after `init_abi` returns. This must happen after the user init runs, since
+        // init may clobber scratch memory.
         if let Some(immut_ptr) = immut_ptr {
             self.push_side_effect_builtin(
                 cont_bb,
@@ -668,19 +657,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
     }
 
     fn contract_code_address_space_slots(&self, contract: Contract<'db>) -> u32 {
-        let scope = contract.scope();
-        let Some(code_space) = resolve_lib_type_path(self.db, scope, "core::effect_ref::Code")
-        else {
-            return 0;
-        };
-        let slots = contract
-            .field_layout(self.db)
-            .values()
-            .filter(|field| field.address_space == code_space)
-            .map(|field| field.slot_offset.saturating_add(field.slot_count))
-            .max()
-            .unwrap_or(0);
-        u32::try_from(slots).unwrap_or_else(|_| {
+        u32::try_from(contract.code_address_space_slot_count(self.db)).unwrap_or_else(|_| {
             panic!("contract requires too many code-backed slots for init-time immutables buffer")
         })
     }
@@ -726,7 +703,10 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 },
             );
 
-            let slot_words = u32::try_from(binding.slot).expect("contract field slot fits in u32");
+            let ContractFieldSlot::Words(slot_words) = binding.slot else {
+                panic!("init-time immutable field binding should carry a word slot offset");
+            };
+            let slot_words = u32::try_from(slot_words).expect("contract field slot fits in u32");
             let slot_words = self.push_const_word(bb, slot_words);
             let slot_bytes = self.push_binary_word(bb, ArithBinOp::Mul, slot_words, thirty_two);
             let dst_addr = self.push_binary_word(bb, ArithBinOp::Add, buffer_ptr, slot_bytes);

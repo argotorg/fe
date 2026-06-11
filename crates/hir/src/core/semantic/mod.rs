@@ -2171,6 +2171,22 @@ impl<'db> Contract<'db> {
         layout
     }
 
+    /// Total number of code-address-space slots occupied by this contract's
+    /// immutable fields. The init wrapper's immutables buffer size and the
+    /// end-of-code-relative offsets of code-backed field reads are both
+    /// derived from this value and must agree byte-for-byte.
+    pub fn code_address_space_slot_count(self, db: &'db dyn HirAnalysisDb) -> usize {
+        self.field_layout(db)
+            .values()
+            .filter(|field| {
+                crate::analysis::ty::address_space_from_ty(db, self.scope(), field.address_space)
+                    == Some(crate::analysis::ty::ProviderAddressSpace::Code)
+            })
+            .map(|field| field.slot_offset.saturating_add(field.slot_count))
+            .max()
+            .unwrap_or(0)
+    }
+
     #[salsa::tracked(return_ref)]
     pub fn fields(
         self,
