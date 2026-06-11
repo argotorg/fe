@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_eval/trait_default_param_typed.fe
+---
+error[8-0012]: undefined variable
+  ┌─ trait_default_param_typed.fe:5:18
+  │
+5 │     const C: T = missing()
+  │                  ^^^^^^^ undefined variable `missing`

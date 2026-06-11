@@ -200,23 +200,44 @@ pub fn check_trait_const_default_bodies<'db>(
         let Some(expected_ty) = trait_const.ty(db) else {
             continue;
         };
-        // A declared type mentioning `Self` or generic params (`const C:
-        // Self::X = 1`) types the default per instantiation: impl overrides
-        // are checked with the impl's bindings, and the default value is
-        // retyped at use sites. Only concretely-typed defaults can be checked
-        // here.
         let flags = expected_ty.flags(db);
-        if flags.contains(TyFlags::HAS_INVALID) || flags.contains(TyFlags::HAS_PARAM) {
+        if flags.contains(TyFlags::HAS_INVALID) {
             continue;
         }
-        diags.extend(
-            check_anon_const_body(db, body, expected_ty)
-                .0
-                .iter()
-                .cloned(),
-        );
+        let body_diags = &check_anon_const_body(db, body, expected_ty).0;
+        if flags.contains(TyFlags::HAS_PARAM) {
+            // A declared type mentioning `Self` or generic params (`const C:
+            // T = 1`) types the default per instantiation: impl overrides are
+            // checked with the impl's bindings, and the value is retyped at
+            // use sites. Mismatches against the rigid param are expected
+            // here; instantiation-independent errors (unresolved names, bad
+            // calls, ...) still must surface.
+            diags.extend(
+                body_diags
+                    .iter()
+                    .filter(|diag| !diag_depends_on_param_instantiation(db, diag))
+                    .cloned(),
+            );
+        } else {
+            diags.extend(body_diags.iter().cloned());
+        }
     }
     diags
+}
+
+/// Whether a default-body diagnostic could be an artifact of checking
+/// against a rigid generic param instead of a per-instantiation type.
+fn diag_depends_on_param_instantiation<'db>(
+    db: &'db dyn HirAnalysisDb,
+    diag: &FuncBodyDiag<'db>,
+) -> bool {
+    match diag {
+        FuncBodyDiag::Body(BodyDiag::TypeMismatch {
+            expected, given, ..
+        }) => expected.has_param(db) || given.has_param(db),
+        FuncBodyDiag::Body(BodyDiag::TypeAnnotationNeeded { .. }) => true,
+        _ => false,
+    }
 }
 
 #[salsa::tracked(return_ref)]
