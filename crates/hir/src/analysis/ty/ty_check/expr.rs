@@ -871,18 +871,16 @@ impl<'db> TyChecker<'db> {
             let index_ty = args[1].const_ty_ty(self.db).unwrap();
             self.check_expr(rhs_expr, index_ty);
             // Check the index for static array
-            if let Some(int_id) = self.try_get_literal_int(rhs_expr) {
-                if let Some(index) = int_id.data(self.db).to_usize() {
-                    if let Some(len) = lhs_place_ty.array_len(self.db) {
-                        if index >= len {
-                            self.push_diag(BodyDiag::ArrayIndexOutOfBounds {
-                                primary: rhs_expr.span(self.body()).into(),
-                                index,
-                                len,
-                            })
-                        }
-                    }
-                }
+            if let Some(int_id) = self.try_get_literal_int(rhs_expr)
+                && let Some(index) = int_id.data(self.db).to_usize()
+                && let Some(len) = lhs_place_ty.array_len(self.db)
+                && index >= len
+            {
+                self.push_diag(BodyDiag::ArrayIndexOutOfBounds {
+                    primary: rhs_expr.span(self.body()).into(),
+                    index,
+                    len,
+                })
             }
             return ExprProp::new(elem_ty, lhs.is_mut);
         } else if lhs.ty.is_integral_var(self.db) {
