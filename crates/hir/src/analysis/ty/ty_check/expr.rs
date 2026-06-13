@@ -875,7 +875,11 @@ impl<'db> TyChecker<'db> {
                 if let Some(index) = int_id.data(self.db).to_usize() {
                     if let Some(len) = lhs_place_ty.array_len(self.db) {
                         if index >= len {
-                            self.push_diag(BodyDiag::ArrayIndexOutOfBounds { primary: rhs_expr.span(self.body()).into(), index, len })
+                            self.push_diag(BodyDiag::ArrayIndexOutOfBounds {
+                                primary: rhs_expr.span(self.body()).into(),
+                                index,
+                                len,
+                            })
                         }
                     }
                 }

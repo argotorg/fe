@@ -492,10 +492,10 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
         ty: TyId<'db>,
     },
-    
+
     ArrayIndexOutOfBounds {
         primary: DynLazySpan<'db>,
-        index: usize, 
+        index: usize,
         len: usize,
     },
 
