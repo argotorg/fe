@@ -493,8 +493,8 @@ pub enum BodyDiag<'db> {
         ty: TyId<'db>,
     },
     
-    ArrayIndexOutOfBound {
-        primary: DynLazySpan<'db'>,
+    ArrayIndexOutOfBounds {
+        primary: DynLazySpan<'db>,
         index: usize, 
         len: usize,
     },
@@ -820,7 +820,7 @@ impl<'db> BodyDiag<'db> {
             Self::OwnArgMustBeOwnedMove { .. } => 72,
             Self::MutableBindingCannotBeCapability { .. } => 73,
             Self::ArrayRepeatRequiresCopy { .. } => 71,
-            Self::ArrayIndexOutOfBound { .. } => 84,
+            Self::ArrayIndexOutOfBounds { .. } => 84,
             Self::NonAssignableExpr(..) => 17,
             Self::ImmutableAssignment { .. } => 18,
             Self::LoopControlOutsideOfLoop { .. } => 19,

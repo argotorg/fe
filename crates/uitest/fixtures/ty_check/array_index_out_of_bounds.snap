@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/array_index_out_of_bounds.fe
+---
+error[8-0084]: index out of bounds
+  ┌─ array_index_out_of_bounds.fe:3:9
+  │
+3 │     arr[5]
+  │         ^ index `5` is out of bounds for array of length `3`
