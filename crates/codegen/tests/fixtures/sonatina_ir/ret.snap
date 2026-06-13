@@ -25,15 +25,10 @@ func private %main_root() {
 
 func private %retfoo(v0.i1, v1.i64) -> i64 {
     block0:
-        v2.*i1 = alloca i1;
-        v3.*i64 = alloca i64;
-        mstore v2 v0 i1;
-        mstore v3 v1 i64;
         jump block1;
 
     block1:
-        v4.i1 = mload v2 i1;
-        br v4 block2 block3;
+        br v0 block2 block3;
 
     block2:
         return 0.i64;
@@ -42,9 +37,8 @@ func private %retfoo(v0.i1, v1.i64) -> i64 {
         jump block4;
 
     block4:
-        v6.i64 = mload v3 i64;
-        v8.i1 = lt v6 5.i64;
-        br v8 block5 block6;
+        v6.i1 = lt v1 5.i64;
+        br v6 block5 block6;
 
     block5:
         return 1.i64;
@@ -53,9 +47,8 @@ func private %retfoo(v0.i1, v1.i64) -> i64 {
         jump block7;
 
     block7:
-        v10.i64 = mload v3 i64;
-        (v11.i64, v12.i1) = usubo v10 1.i64;
-        br v12 block11 block12;
+        (v9.i64, v10.i1) = usubo v1 1.i64;
+        br v10 block11 block12;
 
     block8:
         return 2.i64;
@@ -64,8 +57,8 @@ func private %retfoo(v0.i1, v1.i64) -> i64 {
         jump block10;
 
     block10:
-        (v22.i64, v23.i1) = uaddo v11 1.i64;
-        br v23 block11 block13;
+        (v20.i64, v21.i1) = uaddo v9 1.i64;
+        br v21 block11 block13;
 
     block11:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -73,11 +66,11 @@ func private %retfoo(v0.i1, v1.i64) -> i64 {
         evm_revert 0.i256 36.i256;
 
     block12:
-        v19.i1 = eq v11 42.i64;
-        br v19 block8 block9;
+        v17.i1 = eq v9 42.i64;
+        br v17 block8 block9;
 
     block13:
-        return v22;
+        return v20;
 }
 
 

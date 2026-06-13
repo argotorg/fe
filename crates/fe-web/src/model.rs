@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 /// any type reachable from them. When you bump it, you MUST also:
 ///   1. Update the snapshot test in this module (cargo test, accept new snap).
 ///   2. Add a migration case in fe-scip-store.js feMigrate().
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 4;
 
 // ============================================================================
 // Rich Signature Types (for rendering signatures with embedded links)
@@ -384,6 +384,10 @@ pub enum DocChildKind {
     Method,
     AssocType,
     AssocConst,
+    /// A contract `init(...)` block.
+    Init,
+    /// A single arm of a contract `recv Msg { Variant ... }` block.
+    RecvHandler,
 }
 
 impl DocChildKind {
@@ -394,6 +398,8 @@ impl DocChildKind {
             DocChildKind::Method => "Method",
             DocChildKind::AssocType => "Associated Type",
             DocChildKind::AssocConst => "Associated Constant",
+            DocChildKind::Init => "Initializer",
+            DocChildKind::RecvHandler => "Handler",
         }
     }
 
@@ -405,6 +411,8 @@ impl DocChildKind {
             DocChildKind::Method => "Methods",
             DocChildKind::AssocType => "Associated Types",
             DocChildKind::AssocConst => "Associated Constants",
+            DocChildKind::Init => "Initializer",
+            DocChildKind::RecvHandler => "Message Handlers",
         }
     }
 
@@ -413,9 +421,11 @@ impl DocChildKind {
         match self {
             DocChildKind::Variant => 0,
             DocChildKind::Field => 1,
-            DocChildKind::AssocType => 2,
-            DocChildKind::AssocConst => 3,
-            DocChildKind::Method => 4,
+            DocChildKind::Init => 2,
+            DocChildKind::RecvHandler => 3,
+            DocChildKind::AssocType => 4,
+            DocChildKind::AssocConst => 5,
+            DocChildKind::Method => 6,
         }
     }
 
@@ -427,6 +437,8 @@ impl DocChildKind {
             DocChildKind::Method => "tymethod",
             DocChildKind::AssocType => "associatedtype",
             DocChildKind::AssocConst => "associatedconstant",
+            DocChildKind::Init => "init",
+            DocChildKind::RecvHandler => "handler",
         }
     }
 }

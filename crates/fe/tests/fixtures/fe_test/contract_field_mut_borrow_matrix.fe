@@ -10,6 +10,8 @@ msg Msg {
     DoubleMutate -> u256,
     #[selector = 5]
     Snapshot -> u256,
+    #[selector = 6]
+    DecodeNameCollisions { input: u256, d: u256, base: u256 } -> u256,
 }
 
 struct Ledger {
@@ -110,6 +112,10 @@ pub contract C {
         Snapshot -> u256 uses (ledger) {
             ledger.a * 1000000 + ledger.b * 1000 + ledger.c
         }
+
+        DecodeNameCollisions { input, d, base } -> u256 {
+            input * 100 + d * 10 + base
+        }
     }
 }
 
@@ -147,6 +153,18 @@ fn test_contract_field_mut_borrow_matrix() uses (evm: mut Evm) {
         },
     )
     assert!(c1 == 45)
+
+    let collision = evm.call(
+        addr: c,
+        gas: 100000,
+        value: 0,
+        message: Msg::DecodeNameCollisions {
+            input: 2,
+            d: 3,
+            base: 4,
+        },
+    )
+    assert!(collision == 234)
 
     let d = evm.call(addr: c, gas: 100000, value: 0, message: Msg::DoubleMutate {})
     assert!(d == 116)

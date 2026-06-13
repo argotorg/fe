@@ -1,17 +1,27 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fs,
 };
 
 use camino::{Utf8Path, Utf8PathBuf};
 use codegen::{OptLevel, SonatinaContractBytecode};
-use common::{InputDb, config::Config, dependencies::WorkspaceMemberRecord, file::IngotFileKind};
+use common::{
+    InputDb,
+    config::{
+        ArithmeticMode, Config, DependencyArithmeticMode, resolve_dependency_arithmetic_mode,
+    },
+    dependencies::WorkspaceMemberRecord,
+    file::IngotFileKind,
+    ingot::{IngotBaseUrl, IngotKind},
+};
 use driver::DriverDataBase;
 use driver::cli_target::{CliTarget, resolve_cli_target};
 use hir::hir_def::{HirIngot, ManualContractRootAttr, TopLevelMod};
+use hir::lower::map_file_to_mod;
 use mir::build_runtime_package;
 use salsa::Setter;
 use smol_str::SmolStr;
+use tiny_keccak::{Hasher, Keccak};
 use url::Url;
 
 use crate::{
@@ -47,6 +57,7 @@ struct EmitSelection {
     runtime_bytecode: bool,
     ir: bool,
     abi: bool,
+    metadata: bool,
 }
 
 impl EmitSelection {
@@ -56,6 +67,7 @@ impl EmitSelection {
             runtime_bytecode: false,
             ir: false,
             abi: false,
+            metadata: false,
         };
         for emit in requested {
             match emit {
@@ -63,6 +75,7 @@ impl EmitSelection {
                 BuildEmit::RuntimeBytecode => selection.runtime_bytecode = true,
                 BuildEmit::Ir => selection.ir = true,
                 BuildEmit::Abi => selection.abi = true,
+                BuildEmit::Metadata => selection.metadata = true,
             }
         }
         selection
@@ -613,7 +626,7 @@ fn build_workspace(
         }
     }
 
-    if emit.writes_any_bytecode()
+    if (emit.writes_any_bytecode() || emit.metadata)
         && let Err(()) = check_workspace_artifact_name_collisions(&contract_names_by_member)
     {
         return true;
@@ -978,6 +991,11 @@ fn build_ingot(
         }
     }
 
+    if emit.metadata {
+        had_errors |=
+            write_metadata_artifacts(db, ingot, &names_to_build, opt_level, out_dir, report_dir);
+    }
+
     BuildSummary { had_errors }
 }
 
@@ -1058,6 +1076,12 @@ fn build_top_mod(
 
     if emit.abi {
         had_errors |= write_abi_artifacts(db, top_mod, &names_to_build, out_dir, report_dir);
+    }
+
+    if emit.metadata {
+        let ingot = top_mod.ingot(db);
+        had_errors |=
+            write_metadata_artifacts(db, ingot, &names_to_build, opt_level, out_dir, report_dir);
     }
 
     BuildSummary { had_errors }
@@ -1184,7 +1208,7 @@ fn ensure_output_dirs(
     out_dir: &Utf8Path,
     ir_out_dir: &Utf8Path,
 ) -> Result<(), String> {
-    if emit.writes_any_bytecode() || emit.abi {
+    if emit.writes_any_bytecode() || emit.abi || emit.metadata {
         fs::create_dir_all(out_dir.as_std_path())
             .map_err(|err| format!("Failed to create output directory {out_dir}: {err}"))?;
     }
@@ -1241,6 +1265,388 @@ fn write_abi_artifacts(
                 had_errors = true;
             }
         }
+    }
+    had_errors
+}
+
+/// keccak256 of `bytes` as a `0x`-prefixed lowercase hex string (matches Solidity's
+/// `sources[].keccak256`).
+fn keccak256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Keccak::v256();
+    hasher.update(bytes);
+    let mut out = [0u8; 32];
+    hasher.finalize(&mut out);
+    let mut s = String::with_capacity(2 + 64);
+    s.push_str("0x");
+    for byte in out {
+        s.push_str(&format!("{byte:02x}"));
+    }
+    s
+}
+
+fn arithmetic_str(mode: Option<ArithmeticMode>) -> &'static str {
+    match mode {
+        Some(ArithmeticMode::Unchecked) => "unchecked",
+        // `checked` is the default when unset.
+        Some(ArithmeticMode::Checked) | None => "checked",
+    }
+}
+
+fn dependency_arithmetic_str(mode: DependencyArithmeticMode) -> &'static str {
+    match mode {
+        DependencyArithmeticMode::Defer => "defer",
+        DependencyArithmeticMode::Checked => "checked",
+        DependencyArithmeticMode::Unchecked => "unchecked",
+    }
+}
+
+/// The ingot's declared name (falling back to the last segment of its base URL). This is the
+/// human-facing `name` and the *candidate* namespace; see [`assign_namespaces`] for the unique
+/// namespace actually used as a path prefix and dependency-map target.
+fn ingot_namespace(db: &DriverDataBase, ingot: hir::Ingot<'_>) -> String {
+    if let Some(name) = ingot.config(db).and_then(|config| config.metadata.name) {
+        return name.to_string();
+    }
+    ingot
+        .base(db)
+        .path()
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .filter(|segment| !segment.is_empty())
+        .unwrap_or("dep")
+        .to_string()
+}
+
+/// Collect one ingot's `.fe` source files keyed by ingot-relative path (basename for standalone),
+/// optionally namespaced with `prefix`, into `out`.
+fn collect_ingot_sources_prefixed<'db>(
+    db: &'db DriverDataBase,
+    ingot: hir::Ingot<'db>,
+    prefix: Option<&str>,
+    out: &mut BTreeMap<String, (TopLevelMod<'db>, String)>,
+) {
+    let standalone = ingot.standalone_file(db).is_some();
+    for (url, file) in ingot.files(db).iter() {
+        if file.kind(db) != Some(IngotFileKind::Source) {
+            continue;
+        }
+        let rel = if standalone {
+            url.path()
+                .rsplit('/')
+                .next()
+                .filter(|s| !s.is_empty())
+                .unwrap_or("input.fe")
+                .to_string()
+        } else {
+            match file.path(db).clone() {
+                Some(p) if !p.as_str().is_empty() => p.into_string(),
+                _ => continue,
+            }
+        };
+        let key = match prefix {
+            Some(ns) => format!("{ns}/{rel}"),
+            None => rel,
+        };
+        let top_mod = map_file_to_mod(db, file);
+        out.insert(key, (top_mod, file.text(db).clone()));
+    }
+}
+
+/// The non-builtin ingots needed to reproduce a build: the root ingot followed by its transitive
+/// dependencies, excluding the bundled `std`/`core` (pinned to `compiler.version`).
+fn non_builtin_closure<'db>(
+    db: &'db DriverDataBase,
+    root: hir::Ingot<'db>,
+) -> Vec<hir::Ingot<'db>> {
+    let mut closure = vec![root];
+    for dep_url in db.dependency_graph().dependency_urls(db, &root.base(db)) {
+        let Some(dep) = dep_url.ingot(db) else {
+            continue;
+        };
+        if matches!(dep.kind(db), IngotKind::Core | IngotKind::Std) {
+            continue;
+        }
+        closure.push(dep);
+    }
+    closure
+}
+
+/// Assign each non-builtin ingot in the closure a unique, deterministic namespace, used
+/// consistently for source-key prefixes, `settings.ingots[].namespace`, and the dependency map.
+/// The root ingot gets the empty namespace; others use their name, qualified by version (then an
+/// index) when two *distinct* ingots share a name (e.g. two versions of the same package). Without
+/// this, same-named-different-version dependencies would collide in the flat `sources` map.
+fn assign_namespaces(
+    db: &DriverDataBase,
+    root: hir::Ingot<'_>,
+    closure: &[hir::Ingot<'_>],
+    root_source_keys: &BTreeSet<String>,
+) -> HashMap<Url, String> {
+    let root_base = root.base(db);
+
+    // How many non-root ingots share each bare name?
+    let mut name_counts: HashMap<String, usize> = HashMap::new();
+    for &ing in closure {
+        if ing.base(db) == root_base {
+            continue;
+        }
+        *name_counts.entry(ingot_namespace(db, ing)).or_default() += 1;
+    }
+
+    let mut map: HashMap<Url, String> = HashMap::new();
+    map.insert(root_base.clone(), String::new());
+
+    // Reserve the root namespace and the builtin markers so a user ingot can never shadow them.
+    let mut used: HashSet<String> =
+        HashSet::from([String::new(), "std".to_string(), "core".to_string()]);
+
+    // Deterministic assignment order, independent of graph traversal.
+    let mut others: Vec<hir::Ingot<'_>> = closure
+        .iter()
+        .copied()
+        .filter(|ing| ing.base(db) != root_base)
+        .collect();
+    others.sort_by_key(|ing| ing.base(db).to_string());
+
+    for ing in others {
+        let name = ingot_namespace(db, ing);
+        // Bare name when unique; otherwise qualify by version (then index) for stable uniqueness.
+        let mut candidate = if name_counts.get(&name).copied().unwrap_or(0) > 1 {
+            match ing.version(db) {
+                Some(version) => format!("{name}-{}", sanitize_filename(&version.to_string())),
+                None => name.clone(),
+            }
+        } else {
+            name.clone()
+        };
+        let stem = candidate.clone();
+        let mut n = 2;
+        while used.contains(&candidate)
+            || ing.files(db).iter().any(|(_, file)| {
+                file.kind(db) == Some(IngotFileKind::Source)
+                    && file.path(db).as_ref().is_some_and(|path| {
+                        root_source_keys.contains(&format!("{candidate}/{path}"))
+                    })
+            })
+        {
+            candidate = format!("{stem}-{n}");
+            n += 1;
+        }
+        used.insert(candidate.clone());
+        map.insert(ing.base(db), candidate);
+    }
+    map
+}
+
+/// `{ alias: namespace }` for an ingot's direct dependencies; builtin `std`/`core` map to the
+/// literal markers `"std"`/`"core"` (the verifier's compiler provides them). Non-builtin targets
+/// resolve to the same unique namespace assigned in [`assign_namespaces`].
+fn ingot_dependencies_json(
+    db: &DriverDataBase,
+    ingot: hir::Ingot<'_>,
+    namespaces: &HashMap<Url, String>,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut map = serde_json::Map::new();
+    for (alias, url) in ingot.dependencies(db) {
+        let value = match url.ingot(db) {
+            Some(dep) if matches!(dep.kind(db), IngotKind::Std) => "std".to_string(),
+            Some(dep) if matches!(dep.kind(db), IngotKind::Core) => "core".to_string(),
+            Some(dep) => namespaces
+                .get(&dep.base(db))
+                .cloned()
+                .unwrap_or_else(|| ingot_namespace(db, dep)),
+            None => alias.to_string(),
+        };
+        map.insert(alias.to_string(), serde_json::Value::String(value));
+    }
+    map
+}
+
+/// Write one `<out>/<Contract>.metadata.json` per built contract, conforming to the Solidity
+/// Contract Metadata schema (`version: 1`) adapted to Fe. The artifact is a sufficient,
+/// deterministic recompilation input (see `openspec/changes/add-fe-metadata-json`).
+fn write_metadata_artifacts(
+    db: &DriverDataBase,
+    ingot: hir::Ingot<'_>,
+    names_to_build: &[String],
+    opt_level: OptLevel,
+    out_dir: &Utf8Path,
+    report_dir: Option<&Utf8Path>,
+) -> bool {
+    let mut had_errors = false;
+    let profile = db.compilation_settings().profile(db);
+    let profile = profile.as_str();
+
+    // Root sources (unprefixed) drive contract -> path/top_mod resolution.
+    let mut root_sources: BTreeMap<String, (TopLevelMod<'_>, String)> = BTreeMap::new();
+    collect_ingot_sources_prefixed(db, ingot, None, &mut root_sources);
+
+    // Full source set = root + transitive non-builtin dependencies, each under its unique namespace.
+    let closure = non_builtin_closure(db, ingot);
+    let root_source_keys = root_sources.keys().cloned().collect();
+    let namespaces = assign_namespaces(db, ingot, &closure, &root_source_keys);
+    let mut all_sources = root_sources.clone();
+    for &dep in &closure {
+        if dep.base(db) == ingot.base(db) {
+            continue;
+        }
+        let ns = namespaces.get(&dep.base(db)).cloned().unwrap_or_default();
+        collect_ingot_sources_prefixed(db, dep, Some(&ns), &mut all_sources);
+    }
+
+    // Map each root contract name to its source path and defining module.
+    let mut name_to_loc: BTreeMap<String, (String, TopLevelMod<'_>)> = BTreeMap::new();
+    for (path_key, (top_mod, _)) in &root_sources {
+        for contract in top_mod.all_contracts(db) {
+            if let Some(name) = contract.name(db).to_opt() {
+                name_to_loc
+                    .entry(name.data(db).to_string())
+                    .or_insert_with(|| (path_key.clone(), *top_mod));
+            }
+        }
+        for &func in top_mod.all_funcs(db) {
+            if func.top_mod(db) != *top_mod {
+                continue;
+            }
+            match func.manual_contract_root_attr(db) {
+                Some(ManualContractRootAttr::Init { contract_name })
+                | Some(ManualContractRootAttr::Runtime { contract_name }) => {
+                    name_to_loc
+                        .entry(contract_name.data(db).to_string())
+                        .or_insert_with(|| (path_key.clone(), *top_mod));
+                }
+                Some(ManualContractRootAttr::Error(_)) | None => {}
+            }
+        }
+    }
+
+    // `sources` object (shared across this ingot's contracts), with keccak256 + content.
+    let mut sources_obj = serde_json::Map::new();
+    for (key, (_, contents)) in &all_sources {
+        sources_obj.insert(
+            key.clone(),
+            serde_json::json!({
+                "keccak256": keccak256_hex(contents.as_bytes()),
+                "content": contents,
+            }),
+        );
+    }
+
+    // `settings.ingots` (shared): one entry per non-builtin ingot, with resolved effective values.
+    //
+    // `arithmetic` is the *effective* per-ingot value from `Ingot::arithmetic_mode`, which already
+    // folds in `dependency-arithmetic` forcing (forcing is applied only to external/workspace
+    // edges; see `forced_dependency_arithmetic_for`). Because the post-forcing result is recorded
+    // here, the `dependencies` map deliberately keeps only alias -> namespace and drops the
+    // internal-vs-external edge type: a verifier reproduces the bytecode by pinning each ingot's
+    // `arithmetic` and reconstructing dependencies as plain path edges WITHOUT re-applying
+    // `dependency-arithmetic`. Restoring faithful workspace edges + re-forcing would re-derive the
+    // same values, but only the pin-and-don't-force procedure is guaranteed sufficient. See
+    // `test_cli_build_emit_metadata_preserves_dependency_arithmetic_across_edge_types`.
+    let ingots_arr: Vec<serde_json::Value> = closure
+        .iter()
+        .map(|&ing| {
+            let namespace = namespaces.get(&ing.base(db)).cloned().unwrap_or_default();
+            let dep_arith = resolve_dependency_arithmetic_mode(
+                ing.config(db).as_ref(),
+                ing.workspace_config(db).as_ref(),
+                profile,
+            );
+            serde_json::json!({
+                "name": ingot_namespace(db, ing),
+                "version": ing.version(db).map(|v| v.to_string()),
+                "namespace": namespace,
+                "arithmetic": arithmetic_str(ing.arithmetic_mode(db)),
+                "dependencyArithmetic": dependency_arithmetic_str(dep_arith),
+                "dependencies": serde_json::Value::Object(ingot_dependencies_json(db, ing, &namespaces)),
+            })
+        })
+        .collect();
+
+    let root_arithmetic = arithmetic_str(ingot.arithmetic_mode(db));
+    let root_dep_arithmetic = dependency_arithmetic_str(resolve_dependency_arithmetic_mode(
+        ingot.config(db).as_ref(),
+        ingot.workspace_config(db).as_ref(),
+        profile,
+    ));
+
+    // Compiler identity (shared across contracts). `version` is the release SemVer; `commit` pins
+    // the exact source revision when available, disambiguating non-release builds that still carry
+    // the previous release's version number.
+    let mut compiler = serde_json::Map::new();
+    compiler.insert(
+        "version".to_string(),
+        serde_json::Value::String(env!("CARGO_PKG_VERSION").to_string()),
+    );
+    if let Some(hash) = option_env!("FE_GIT_HASH").filter(|hash| !hash.is_empty()) {
+        compiler.insert(
+            "commit".to_string(),
+            serde_json::Value::String(hash.to_string()),
+        );
+    }
+    let compiler = serde_json::Value::Object(compiler);
+
+    for name in names_to_build {
+        let Some((source_path, top_mod)) = name_to_loc.get(name) else {
+            continue;
+        };
+
+        let abi_value = match crate::abi::generate_contract_abi(db, *top_mod, name) {
+            Ok(Some(result)) => {
+                for warning in &result.warnings {
+                    eprintln!("Warning: {warning}");
+                }
+                serde_json::from_str::<serde_json::Value>(&result.json)
+                    .unwrap_or_else(|_| serde_json::json!([]))
+            }
+            Ok(None) => serde_json::json!([]),
+            Err(err) => {
+                eprintln!("Error: Failed to generate ABI for {name}: {err}");
+                had_errors = true;
+                serde_json::json!([])
+            }
+        };
+
+        let mut compilation_target = serde_json::Map::new();
+        compilation_target.insert(source_path.clone(), serde_json::Value::String(name.clone()));
+
+        let value = serde_json::json!({
+            "version": 1,
+            "language": "Fe",
+            "compiler": compiler.clone(),
+            "sources": serde_json::Value::Object(sources_obj.clone()),
+            "settings": {
+                "compilationTarget": serde_json::Value::Object(compilation_target),
+                "optimizer": { "level": opt_level.to_string() },
+                "arithmetic": root_arithmetic,
+                "dependencyArithmetic": root_dep_arithmetic,
+                "evmVersion": "osaka",
+                "ingots": ingots_arr.clone(),
+            },
+            "output": { "abi": abi_value },
+        });
+
+        let serialized = match serde_json::to_string_pretty(&value) {
+            Ok(s) => s,
+            Err(err) => {
+                eprintln!("Error: Failed to serialize metadata for {name}: {err}");
+                had_errors = true;
+                continue;
+            }
+        };
+        let base = sanitize_filename(name);
+        let path = out_dir.join(format!("{base}.metadata.json"));
+        let report_path = report_dir.map(|dir| dir.join(format!("{base}.metadata.json")));
+        if let Err(err) = fs::write(path.as_std_path(), &serialized) {
+            eprintln!("Error: Failed to write metadata: {err}");
+            had_errors = true;
+            continue;
+        }
+        if let Some(p) = report_path.as_ref() {
+            let _ = fs::write(p.as_std_path(), &serialized);
+        }
+        println!("Wrote {out_dir}/{base}.metadata.json");
     }
     had_errors
 }
@@ -1335,6 +1741,9 @@ fn describe_emit_selection(emit: EmitSelection) -> String {
     if emit.abi {
         parts.push("abi");
     }
+    if emit.metadata {
+        parts.push("metadata");
+    }
     parts.join(",")
 }
 
@@ -1421,6 +1830,7 @@ mod tests {
             runtime_bytecode: false,
             ir: false,
             abi: true,
+            metadata: false,
         };
         assert_eq!(describe_emit_selection(emit), "abi");
     }

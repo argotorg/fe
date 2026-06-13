@@ -9,28 +9,27 @@ global private const [i64; 25] $const_region_0 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
 
 func private %for_array_sum() -> i64 {
     block0:
-        v0.*i64 = alloca i64;
         jump block1;
 
     block1:
+        v25.constref<[i64; 25]> = const.ref $const_region_0;
         v26.constref<[i64; 25]> = const.ref $const_region_0;
-        v27.constref<[i64; 25]> = const.ref $const_region_0;
-        v30.i256 = call %len v27;
+        v29.i256 = call %len v26;
         jump block2;
 
     block2:
-        v54.i64 = phi (0.i64 block1) (v45 block7);
-        v31.i256 = phi (0.i256 block1) (v48 block7);
-        v33.i1 = lt v31 v30;
-        br v33 block3 block4;
+        v51.i64 = phi (0.i64 block1) (v37 block7);
+        v30.i256 = phi (0.i256 block1) (v45 block7);
+        v32.i1 = lt v30 v29;
+        br v32 block3 block4;
 
     block3:
-        v36.i64 = call %get v27 v31;
-        (v38.i64, v39.i1) = uaddo v54 v36;
-        br v39 block5 block6;
+        v35.i64 = call %get v26 v30;
+        (v37.i64, v38.i1) = uaddo v51 v35;
+        br v38 block5 block6;
 
     block4:
-        return v54;
+        return v51;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -38,11 +37,8 @@ func private %for_array_sum() -> i64 {
         evm_revert 0.i256 36.i256;
 
     block6:
-        mstore v0 v38 i64;
-        v44.i256 = mload v0 i256;
-        v45.i64 = trunc v44 i64;
-        (v48.i256, v49.i1) = uaddo v31 1.i256;
-        br v49 block5 block7;
+        (v45.i256, v46.i1) = uaddo v30 1.i256;
+        br v46 block5 block7;
 
     block7:
         jump block2;
@@ -50,23 +46,20 @@ func private %for_array_sum() -> i64 {
 
 func private %get(v0.constref<[i64; 25]>, v1.i256) -> i64 {
     block0:
-        v2.*i256 = alloca i256;
-        mstore v2 v1 i256;
         jump block1;
 
     block1:
-        v3.i256 = mload v2 i256;
-        v6.i1 = lt v3 25.i256;
-        v7.i1 = is_zero v6;
-        br v7 block2 block3;
+        v5.i1 = lt v1 25.i256;
+        v6.i1 = is_zero v5;
+        br v6 block2 block3;
 
     block2:
         evm_revert 0.i256 0.i256;
 
     block3:
-        v9.constref<i64> = const.index v0 v3;
-        v10.i64 = const.load v9;
-        return v10;
+        v8.constref<i64> = const.index v0 v1;
+        v9.i64 = const.load v8;
+        return v9;
 }
 
 func private %len(v0.constref<[i64; 25]>) -> i256 {

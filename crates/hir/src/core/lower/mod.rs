@@ -20,6 +20,7 @@ use crate::{
     },
     span::HirOrigin,
 };
+pub use abi_field::{AbiFieldContext, AbiFieldDiagnostic};
 pub use attr::{AttrMisuseError, AttrMisuseErrorKind};
 pub use error::{ErrorDiagnostic, ErrorDiagnosticKind};
 pub use event::{EventError, EventErrorKind};
@@ -28,6 +29,7 @@ pub use parse::parse_file_impl;
 
 pub(crate) mod parse;
 
+mod abi_field;
 mod attr;
 mod body;
 mod contract;

@@ -52,11 +52,18 @@ pub trait ContractHost {
 pub fn decode_runtime_args<H, A, T>(_ host: mut H) -> T
     where H: ContractHost,
           A: Abi,
-          T: Decode<A>,
+          T: Decode<A> + AbiSize,
           A::Decoder<H::Input>: AbiDecoder<A>
 {
-    let mut d = host.runtime_decoder<A>()
-    T::decode_payload(mut d)
+    let input = host.input()
+    let base = A::SELECTOR_SIZE
+    let len = input.len()
+    let end = base + T::HEAD_SIZE
+    if end < base || end > len {
+        host.abort()
+    }
+
+    T::decode_from_prechecked_head(input, base, len)
 }
 
 /// Target configuration used by compiler-generated contract entrypoints.

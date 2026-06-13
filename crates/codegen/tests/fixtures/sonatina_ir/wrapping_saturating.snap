@@ -18,49 +18,11 @@ func private %main() -> @layout_2 {
         v3.@layout_0 = call %saturating_ops_u64 1.i64 2.i64;
         v6.@layout_1 = call %wrapping_ops_u256 1.i256 2.i256;
         v7.@layout_1 = call %saturating_ops_u256 1.i256 2.i256;
-        v8.objref<@layout_2> = obj.alloc @layout_2;
-        v10.objref<@layout_0> = obj.proj v8 0.i256;
-        v11.objref<i64> = obj.proj v10 0.i256;
-        v12.i64 = extract_value v2 0.i256;
-        obj.store v11 v12;
-        v13.objref<i64> = obj.proj v10 1.i256;
-        v14.i64 = extract_value v2 1.i256;
-        obj.store v13 v14;
-        v15.objref<i64> = obj.proj v10 2.i256;
-        v16.i64 = extract_value v2 2.i256;
-        obj.store v15 v16;
-        v17.objref<@layout_0> = obj.proj v8 1.i256;
-        v18.objref<i64> = obj.proj v17 0.i256;
-        v19.i64 = extract_value v3 0.i256;
-        obj.store v18 v19;
-        v20.objref<i64> = obj.proj v17 1.i256;
-        v21.i64 = extract_value v3 1.i256;
-        obj.store v20 v21;
-        v22.objref<i64> = obj.proj v17 2.i256;
-        v23.i64 = extract_value v3 2.i256;
-        obj.store v22 v23;
-        v24.objref<@layout_1> = obj.proj v8 2.i256;
-        v25.objref<i256> = obj.proj v24 0.i256;
-        v26.i256 = extract_value v6 0.i256;
-        obj.store v25 v26;
-        v27.objref<i256> = obj.proj v24 1.i256;
-        v28.i256 = extract_value v6 1.i256;
-        obj.store v27 v28;
-        v29.objref<i256> = obj.proj v24 2.i256;
-        v30.i256 = extract_value v6 2.i256;
-        obj.store v29 v30;
-        v32.objref<@layout_1> = obj.proj v8 3.i256;
-        v33.objref<i256> = obj.proj v32 0.i256;
-        v34.i256 = extract_value v7 0.i256;
-        obj.store v33 v34;
-        v35.objref<i256> = obj.proj v32 1.i256;
-        v36.i256 = extract_value v7 1.i256;
-        obj.store v35 v36;
-        v37.objref<i256> = obj.proj v32 2.i256;
-        v38.i256 = extract_value v7 2.i256;
-        obj.store v37 v38;
-        v39.@layout_2 = obj.load v8;
-        return v39;
+        v10.@layout_2 = insert_value undef.@layout_2 0.i256 v2;
+        v11.@layout_2 = insert_value v10 1.i256 v3;
+        v12.@layout_2 = insert_value v11 2.i256 v6;
+        v14.@layout_2 = insert_value v12 3.i256 v7;
+        return v14;
 }
 
 func private %main_root() {
@@ -74,298 +36,166 @@ func private %main_root() {
 
 func private %impl_trait_u256__saturating_add(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        v6.i256 = uaddsat v4 v5;
-        return v6;
+        v4.i256 = uaddsat v0 v1;
+        return v4;
 }
 
 func private %impl_trait_u64__saturating_add(v0.i64, v1.i64) -> i64 {
     block0:
-        v2.*i64 = alloca i64;
-        v3.*i64 = alloca i64;
-        mstore v2 v0 i64;
-        mstore v3 v1 i64;
         jump block1;
 
     block1:
-        v4.i64 = mload v2 i64;
-        v5.i64 = mload v3 i64;
-        v6.i64 = uaddsat v4 v5;
-        return v6;
+        v4.i64 = uaddsat v0 v1;
+        return v4;
 }
 
 func private %impl_trait_u256__saturating_mul(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        v6.i256 = umulsat v4 v5;
-        return v6;
+        v4.i256 = umulsat v0 v1;
+        return v4;
 }
 
 func private %impl_trait_u64__saturating_mul(v0.i64, v1.i64) -> i64 {
     block0:
-        v2.*i64 = alloca i64;
-        v3.*i64 = alloca i64;
-        mstore v2 v0 i64;
-        mstore v3 v1 i64;
         jump block1;
 
     block1:
-        v4.i64 = mload v2 i64;
-        v5.i64 = mload v3 i64;
-        v6.i64 = umulsat v4 v5;
-        return v6;
+        v4.i64 = umulsat v0 v1;
+        return v4;
 }
 
 func private %saturating_ops_u256(v0.i256, v1.i256) -> @layout_1 {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        v6.i256 = call %impl_trait_u256__saturating_add v4 v5;
-        v7.i256 = mload v2 i256;
-        v8.i256 = mload v3 i256;
-        v9.i256 = call %impl_trait_u256__saturating_sub v7 v8;
-        v10.i256 = mload v2 i256;
-        v11.i256 = mload v3 i256;
-        v12.i256 = call %impl_trait_u256__saturating_mul v10 v11;
-        v13.objref<@layout_1> = obj.alloc @layout_1;
-        v15.objref<i256> = obj.proj v13 0.i256;
-        obj.store v15 v6;
-        v17.objref<i256> = obj.proj v13 1.i256;
-        obj.store v17 v9;
-        v19.objref<i256> = obj.proj v13 2.i256;
-        obj.store v19 v12;
-        v20.@layout_1 = obj.load v13;
-        return v20;
+        v4.i256 = call %impl_trait_u256__saturating_add v0 v1;
+        v5.i256 = call %impl_trait_u256__saturating_sub v0 v1;
+        v6.i256 = call %impl_trait_u256__saturating_mul v0 v1;
+        v9.@layout_1 = insert_value undef.@layout_1 0.i256 v4;
+        v11.@layout_1 = insert_value v9 1.i256 v5;
+        v13.@layout_1 = insert_value v11 2.i256 v6;
+        return v13;
 }
 
 func private %saturating_ops_u64(v0.i64, v1.i64) -> @layout_0 {
     block0:
-        v2.*i64 = alloca i64;
-        v3.*i64 = alloca i64;
-        mstore v2 v0 i64;
-        mstore v3 v1 i64;
         jump block1;
 
     block1:
-        v4.i64 = mload v2 i64;
-        v5.i64 = mload v3 i64;
-        v6.i64 = call %impl_trait_u64__saturating_add v4 v5;
-        v7.i64 = mload v2 i64;
-        v8.i64 = mload v3 i64;
-        v9.i64 = call %impl_trait_u64__saturating_sub v7 v8;
-        v10.i64 = mload v2 i64;
-        v11.i64 = mload v3 i64;
-        v12.i64 = call %impl_trait_u64__saturating_mul v10 v11;
-        v13.objref<@layout_0> = obj.alloc @layout_0;
-        v15.objref<i64> = obj.proj v13 0.i256;
-        obj.store v15 v6;
-        v17.objref<i64> = obj.proj v13 1.i256;
-        obj.store v17 v9;
-        v19.objref<i64> = obj.proj v13 2.i256;
-        obj.store v19 v12;
-        v20.@layout_0 = obj.load v13;
-        return v20;
+        v4.i64 = call %impl_trait_u64__saturating_add v0 v1;
+        v5.i64 = call %impl_trait_u64__saturating_sub v0 v1;
+        v6.i64 = call %impl_trait_u64__saturating_mul v0 v1;
+        v9.@layout_0 = insert_value undef.@layout_0 0.i256 v4;
+        v11.@layout_0 = insert_value v9 1.i256 v5;
+        v13.@layout_0 = insert_value v11 2.i256 v6;
+        return v13;
 }
 
 func private %impl_trait_u64__saturating_sub(v0.i64, v1.i64) -> i64 {
     block0:
-        v2.*i64 = alloca i64;
-        v3.*i64 = alloca i64;
-        mstore v2 v0 i64;
-        mstore v3 v1 i64;
         jump block1;
 
     block1:
-        v4.i64 = mload v2 i64;
-        v5.i64 = mload v3 i64;
-        v6.i64 = usubsat v4 v5;
-        return v6;
+        v4.i64 = usubsat v0 v1;
+        return v4;
 }
 
 func private %impl_trait_u256__saturating_sub(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        v6.i256 = usubsat v4 v5;
-        return v6;
+        v4.i256 = usubsat v0 v1;
+        return v4;
 }
 
 func private %impl_trait_u256__wrapping_add(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        v6.i256 = add v4 v5;
-        return v6;
+        v4.i256 = add v0 v1;
+        return v4;
 }
 
 func private %impl_trait_u64__wrapping_add(v0.i64, v1.i64) -> i64 {
     block0:
-        v2.*i64 = alloca i64;
-        v3.*i64 = alloca i64;
-        mstore v2 v0 i64;
-        mstore v3 v1 i64;
         jump block1;
 
     block1:
-        v4.i64 = mload v2 i64;
-        v5.i64 = mload v3 i64;
-        v6.i64 = add v4 v5;
-        return v6;
+        v4.i64 = add v0 v1;
+        return v4;
 }
 
 func private %impl_trait_u64__wrapping_mul(v0.i64, v1.i64) -> i64 {
     block0:
-        v2.*i64 = alloca i64;
-        v3.*i64 = alloca i64;
-        mstore v2 v0 i64;
-        mstore v3 v1 i64;
         jump block1;
 
     block1:
-        v4.i64 = mload v2 i64;
-        v5.i64 = mload v3 i64;
-        v6.i64 = mul v4 v5;
-        return v6;
+        v4.i64 = mul v0 v1;
+        return v4;
 }
 
 func private %impl_trait_u256__wrapping_mul(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        v6.i256 = mul v4 v5;
-        return v6;
+        v4.i256 = mul v0 v1;
+        return v4;
 }
 
 func private %wrapping_ops_u256(v0.i256, v1.i256) -> @layout_1 {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        v6.i256 = call %impl_trait_u256__wrapping_add v4 v5;
-        v7.i256 = mload v2 i256;
-        v8.i256 = mload v3 i256;
-        v9.i256 = call %impl_trait_u256__wrapping_sub v7 v8;
-        v10.i256 = mload v2 i256;
-        v11.i256 = mload v3 i256;
-        v12.i256 = call %impl_trait_u256__wrapping_mul v10 v11;
-        v13.objref<@layout_1> = obj.alloc @layout_1;
-        v15.objref<i256> = obj.proj v13 0.i256;
-        obj.store v15 v6;
-        v17.objref<i256> = obj.proj v13 1.i256;
-        obj.store v17 v9;
-        v19.objref<i256> = obj.proj v13 2.i256;
-        obj.store v19 v12;
-        v20.@layout_1 = obj.load v13;
-        return v20;
+        v4.i256 = call %impl_trait_u256__wrapping_add v0 v1;
+        v5.i256 = call %impl_trait_u256__wrapping_sub v0 v1;
+        v6.i256 = call %impl_trait_u256__wrapping_mul v0 v1;
+        v9.@layout_1 = insert_value undef.@layout_1 0.i256 v4;
+        v11.@layout_1 = insert_value v9 1.i256 v5;
+        v13.@layout_1 = insert_value v11 2.i256 v6;
+        return v13;
 }
 
 func private %wrapping_ops_u64(v0.i64, v1.i64) -> @layout_0 {
     block0:
-        v2.*i64 = alloca i64;
-        v3.*i64 = alloca i64;
-        mstore v2 v0 i64;
-        mstore v3 v1 i64;
         jump block1;
 
     block1:
-        v4.i64 = mload v2 i64;
-        v5.i64 = mload v3 i64;
-        v6.i64 = call %impl_trait_u64__wrapping_add v4 v5;
-        v7.i64 = mload v2 i64;
-        v8.i64 = mload v3 i64;
-        v9.i64 = call %impl_trait_u64__wrapping_sub v7 v8;
-        v10.i64 = mload v2 i64;
-        v11.i64 = mload v3 i64;
-        v12.i64 = call %impl_trait_u64__wrapping_mul v10 v11;
-        v13.objref<@layout_0> = obj.alloc @layout_0;
-        v15.objref<i64> = obj.proj v13 0.i256;
-        obj.store v15 v6;
-        v17.objref<i64> = obj.proj v13 1.i256;
-        obj.store v17 v9;
-        v19.objref<i64> = obj.proj v13 2.i256;
-        obj.store v19 v12;
-        v20.@layout_0 = obj.load v13;
-        return v20;
+        v4.i64 = call %impl_trait_u64__wrapping_add v0 v1;
+        v5.i64 = call %impl_trait_u64__wrapping_sub v0 v1;
+        v6.i64 = call %impl_trait_u64__wrapping_mul v0 v1;
+        v9.@layout_0 = insert_value undef.@layout_0 0.i256 v4;
+        v11.@layout_0 = insert_value v9 1.i256 v5;
+        v13.@layout_0 = insert_value v11 2.i256 v6;
+        return v13;
 }
 
 func private %impl_trait_u64__wrapping_sub(v0.i64, v1.i64) -> i64 {
     block0:
-        v2.*i64 = alloca i64;
-        v3.*i64 = alloca i64;
-        mstore v2 v0 i64;
-        mstore v3 v1 i64;
         jump block1;
 
     block1:
-        v4.i64 = mload v2 i64;
-        v5.i64 = mload v3 i64;
-        v6.i64 = sub v4 v5;
-        return v6;
+        v4.i64 = sub v0 v1;
+        return v4;
 }
 
 func private %impl_trait_u256__wrapping_sub(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        v6.i256 = sub v4 v5;
-        return v6;
+        v4.i256 = sub v0 v1;
+        return v4;
 }
 
 

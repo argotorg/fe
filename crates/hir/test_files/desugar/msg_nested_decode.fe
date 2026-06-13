@@ -1,0 +1,11 @@
+use std::abi::Bytes
+
+msg InnerMsg {
+    #[selector = 0x01]
+    Inner { marker: u256, data: Bytes },
+}
+
+msg OuterMsg {
+    #[selector = 0x02]
+    Outer { inner: InnerMsg::Inner },
+}

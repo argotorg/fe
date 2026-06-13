@@ -3,31 +3,31 @@ source: crates/fe/tests/differential_deposit.rs
 expression: report
 ---
 bytecode size
-path         fe-O2        sol     sol-IR    fe vs sol-IR
-------------------------------------------------------------
-init          5393       4819       3082  +2311 (+75.0%)
-runtime       5214       4445       2844  +2370 (+83.3%)
+path         fe-O2        sol     sol-IR   fe vs sol-IR
+-----------------------------------------------------------
+init          2562       4819       3082  -520 (-16.9%)
+runtime       2478       4445       2844  -366 (-12.9%)
 
 deployment gas
-path        fe-O2        sol     sol-IR      fe vs sol-IR
--------------------------------------------------------------
-deploy    1874777    1738847    1379411  +495366 (+35.9%)
+path        fe-O2        sol     sol-IR    fe vs sol-IR
+-----------------------------------------------------------
+deploy    1290072    1738847    1379411  -89339 (-6.5%)
 
 call gas
-path                            fe-O2        sol     sol-IR   fe vs sol-IR
-------------------------------------------------------------------------------
-supportsInterface(erc165)       21800      21603      21600   +200 (+0.9%)
-supportsInterface(deposit)      21828      21641      21600   +228 (+1.1%)
-supportsInterface(unknown)      21815      21641      21600   +215 (+1.0%)
-get_deposit_root(empty)        107882     117558     109178  -1296 (-1.2%)
-get_deposit_count(empty)        23750      24510      24099   -349 (-1.4%)
-deposit#0                       82982      84626      81089  +1893 (+2.3%)
-get_deposit_root(after#0)      107895     117570     109174  -1279 (-1.2%)
-get_deposit_count(after#0)      23750      24510      24099   -349 (-1.4%)
-deposit#1                       68424      70411      66629  +1795 (+2.7%)
-get_deposit_root(after#1)      107895     117570     109174  -1279 (-1.2%)
-get_deposit_count(after#1)      23750      24510      24099   -349 (-1.4%)
-deposit#2                       48770      50414      46877  +1893 (+4.0%)
-get_deposit_root(after#2)      107908     117582     109170  -1262 (-1.2%)
-get_deposit_count(after#2)      23750      24510      24099   -349 (-1.4%)
-TOTAL                          792199     838656     792487   -288 (-0.0%)
+path                            fe-O2        sol     sol-IR    fe vs sol-IR
+-------------------------------------------------------------------------------
+supportsInterface(erc165)       21600      21603      21600      +0 (+0.0%)
+supportsInterface(deposit)      21600      21641      21600      +0 (+0.0%)
+supportsInterface(unknown)      21600      21641      21600      +0 (+0.0%)
+get_deposit_root(empty)        102969     117558     109178   -6209 (-5.7%)
+get_deposit_count(empty)        23616      24510      24099    -483 (-2.0%)
+deposit#0                       79719      84626      81089   -1370 (-1.7%)
+get_deposit_root(after#0)      102977     117570     109174   -6197 (-5.7%)
+get_deposit_count(after#0)      23616      24510      24099    -483 (-2.0%)
+deposit#1                       65088      70411      66629   -1541 (-2.3%)
+get_deposit_root(after#1)      102977     117570     109174   -6197 (-5.7%)
+get_deposit_count(after#1)      23616      24510      24099    -483 (-2.0%)
+deposit#2                       45507      50414      46877   -1370 (-2.9%)
+get_deposit_root(after#2)      102985     117582     109170   -6185 (-5.7%)
+get_deposit_count(after#2)      23616      24510      24099    -483 (-2.0%)
+TOTAL                          761486     838656     792487  -31001 (-3.9%)

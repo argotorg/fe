@@ -24,15 +24,10 @@ func private %main() -> @layout_0 {
         v5.i8 = call %match_tuple_with_wildcard v4;
         v7.constref<@layout_2> = const.ref $const_region_2;
         v8.i8 = call %match_mixed_tuple v7;
-        v9.objref<@layout_0> = obj.alloc @layout_0;
-        v11.objref<i8> = obj.proj v9 0.i256;
-        obj.store v11 v3;
-        v13.objref<i8> = obj.proj v9 1.i256;
-        obj.store v13 v5;
-        v15.objref<i8> = obj.proj v9 2.i256;
-        obj.store v15 v8;
-        v16.@layout_0 = obj.load v9;
-        return v16;
+        v11.@layout_0 = insert_value undef.@layout_0 0.i256 v3;
+        v13.@layout_0 = insert_value v11 1.i256 v5;
+        v15.@layout_0 = insert_value v13 2.i256 v8;
+        return v15;
 }
 
 func private %main_root() {

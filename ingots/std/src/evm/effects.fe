@@ -6,8 +6,10 @@ use core::abi::{
     AbiEncoder,
     AbiSize,
     AbiSpan,
+    ByteInput,
     Decode,
     Encode,
+    EventAbiEncode,
     encode_alloc,
     encode_single_root_alloc,
 }
@@ -72,6 +74,15 @@ impl<A: Abi> Decode<A> for Address {
         }
         Address { inner: word }
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        let word = input.word_at(pos)
+        if word >> 160 != 0 {
+            ops::revert(offset: 0, len: 0)
+        }
+        Address { inner: word }
+    }
 }
 
 impl<A: Abi> Encode<A> for Address {
@@ -84,6 +95,10 @@ impl<A: Abi> Encode<A> for Address {
     fn encode_to_ptr(own self, _ ptr: u256) {
         A::store_word(ptr: ptr, value: self.inner)
     }
+}
+
+impl<A: Abi> EventAbiEncode<A> for Address {
+    const DIRECT_EVENT_ENCODE: bool = true
 }
 
 impl<A: Abi> AbiSpan<A> for Address {
@@ -353,6 +368,20 @@ pub fn encode_abi_payload<T>(_ value: own T) -> (u256, u256)
     encode_alloc<Sol, T>(value)
 }
 
+#[inline(always)]
+pub fn encode_event_payload<T>(_ value: own T) -> (u256, u256)
+    where T: EventAbiEncode<Sol>
+{
+    if T::DIRECT_EVENT_ENCODE {
+        let total = value.event_payload_size()
+        let base = mem::alloc(total)
+        value.encode_event_to_ptr(base)
+        return (base, total)
+    }
+
+    encode_alloc<Sol, T>(value)
+}
+
 /// High-level contract calls with ABI encoding/decoding.
 pub trait Call {
     /// Low-level `CALL` opcode.
@@ -443,7 +472,7 @@ impl Evm {
 
     /// Decode the current Solidity call arguments, skipping the 4-byte selector.
     pub fn decode_args<T>(self) -> T
-        where T: Decode<Sol>
+        where T: Decode<Sol> + AbiSize
     {
         decode_input_at(self.input(), size_of<Sol::Selector>())
     }
@@ -465,6 +494,8 @@ impl Ctx for Evm {
     fn balance(self, _ addr: Address) -> u256 {
         ops::balance(addr.inner)
     }
+
+    #[inline(always)]
     fn value(self) -> u256 {
         ops::callvalue()
     }
@@ -630,16 +661,23 @@ impl Create for Evm {
     }
 }
 
+#[arithmetic(unchecked)]
+#[inline(always)]
 fn encode_calldata<M>(_ selector: u32, _ message: own M) -> (u256, u256)
 where M: Encode<Sol>
 {
     let selector_size = size_of<Sol::Selector>()
+    let payload_len = message.payload_size()
+    let total_len = selector_size + payload_len
+    let ptr = mem::alloc(total_len)
     let selector_word = (selector as u256) << 224
-    let encoded = encode_abi_payload(message)
-    let ptr = mem::alloc(selector_size + encoded.1)
     ops::mstore(addr: ptr, value: selector_word)
-    copy_words(dest: ptr + selector_size, src: encoded.0, len: encoded.1)
-    (ptr, selector_size + encoded.1)
+
+    let payload_ptr = ptr + selector_size
+    let mut encoder = Sol::encoder_at(payload_ptr)
+    message.encode(mut encoder)
+
+    (ptr, total_len)
 }
 
 fn copy_returndata() -> MemoryBytes {

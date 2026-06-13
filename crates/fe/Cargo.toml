@@ -55,3 +55,6 @@ dir-test.workspace = true
 test-utils.workspace = true
 semantic-indexing.workspace = true
 sha2 = "0.10"
+
+[build-dependencies]
+gix = { workspace = true, features = ["sha1"] }

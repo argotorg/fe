@@ -19,8 +19,6 @@ global private const @layout_4 $const_region_4 = {100};
 
 func private %standalone_name_collisions__name_collisions____u32_as_u256_56b3(v0.i32) -> i256 {
     block0:
-        v1.*i32 = alloca i32;
-        mstore v1 v0 i32;
         jump block1;
 
     block1:
@@ -29,8 +27,6 @@ func private %standalone_name_collisions__name_collisions____u32_as_u256_56b3(v0
 
 func private %standalone_name_collisions__name_collisions____u32_as_u256_56b3_0(v0.i32) -> i256 {
     block0:
-        v1.*i32 = alloca i32;
-        mstore v1 v0 i32;
         jump block1;
 
     block1:
@@ -168,14 +164,11 @@ func private %main_root() {
 
 func private %standalone_name_collisions__name_collisions__param_local_collision_a1c4(v0.i32) -> i32 {
     block0:
-        v1.*i32 = alloca i32;
-        mstore v1 v0 i32;
         jump block1;
 
     block1:
-        v2.i32 = mload v1 i32;
-        (v4.i32, v5.i1) = uaddo v2 1.i32;
-        br v5 block2 block3;
+        (v3.i32, v4.i1) = uaddo v0 1.i32;
+        br v4 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -183,23 +176,20 @@ func private %standalone_name_collisions__name_collisions__param_local_collision
         evm_revert 0.i256 36.i256;
 
     block3:
-        (v12.i32, v13.i1) = uaddo v4 2.i32;
-        br v13 block2 block4;
+        (v11.i32, v12.i1) = uaddo v3 2.i32;
+        br v12 block2 block4;
 
     block4:
-        return v12;
+        return v11;
 }
 
 func private %standalone_name_collisions__name_collisions__param_local_collision_a1c4_0(v0.i32) -> i32 {
     block0:
-        v1.*i32 = alloca i32;
-        mstore v1 v0 i32;
         jump block1;
 
     block1:
-        v2.i32 = mload v1 i32;
-        (v4.i32, v5.i1) = uaddo v2 1.i32;
-        br v5 block2 block3;
+        (v3.i32, v4.i1) = uaddo v0 1.i32;
+        br v4 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -207,11 +197,11 @@ func private %standalone_name_collisions__name_collisions__param_local_collision
         evm_revert 0.i256 36.i256;
 
     block3:
-        (v12.i32, v13.i1) = uaddo v4 2.i32;
-        br v13 block2 block4;
+        (v11.i32, v12.i1) = uaddo v3 2.i32;
+        br v12 block2 block4;
 
     block4:
-        return v12;
+        return v11;
 }
 
 func private %standalone_name_collisions__name_collisions__impl_a__impl_Widget_8971__process_7ed1(v0.constref<@layout_2>) -> i32 {
@@ -292,14 +282,11 @@ func private %standalone_name_collisions__name_collisions__impl_b__impl_Widget_b
 
 func private %standalone_name_collisions__name_collisions__ret_param_collision_c303(v0.i32) -> i32 {
     block0:
-        v1.*i32 = alloca i32;
-        mstore v1 v0 i32;
         jump block1;
 
     block1:
-        v2.i32 = mload v1 i32;
-        (v4.i32, v5.i1) = uaddo v2 1.i32;
-        br v5 block2 block3;
+        (v3.i32, v4.i1) = uaddo v0 1.i32;
+        br v4 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -307,19 +294,16 @@ func private %standalone_name_collisions__name_collisions__ret_param_collision_c
         evm_revert 0.i256 36.i256;
 
     block3:
-        return v4;
+        return v3;
 }
 
 func private %standalone_name_collisions__name_collisions__ret_param_collision_c303_0(v0.i32) -> i32 {
     block0:
-        v1.*i32 = alloca i32;
-        mstore v1 v0 i32;
         jump block1;
 
     block1:
-        v2.i32 = mload v1 i32;
-        (v4.i32, v5.i1) = uaddo v2 1.i32;
-        br v5 block2 block3;
+        (v3.i32, v4.i1) = uaddo v0 1.i32;
+        br v4 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -327,7 +311,7 @@ func private %standalone_name_collisions__name_collisions__ret_param_collision_c
         evm_revert 0.i256 36.i256;
 
     block3:
-        return v4;
+        return v3;
 }
 
 func private %standalone_name_collisions__name_collisions__impl_trait_MultiTraitImpl_5bd8__same_method_133c(v0.constref<@layout_4>) -> i32 {

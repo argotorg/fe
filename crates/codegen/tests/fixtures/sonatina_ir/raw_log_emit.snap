@@ -7,27 +7,18 @@ target = "evm-ethereum-osaka"
 
 func private %from_raw(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        return v2;
+        return v0;
 }
 
 func private %log0(v0.i256, v1.i256) {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_log0 v4 v5;
+        evm_log0 v0 v1;
         return;
 }
 
@@ -51,14 +42,11 @@ func private %main_root() {
 
 func private %mem_ptr(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        v3.i256 = call %from_raw v2;
-        return v3;
+        v2.i256 = call %from_raw v0;
+        return v2;
 }
 
 func private %raw(v0.i256) -> i256 {

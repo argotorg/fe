@@ -1,0 +1,4 @@
+#[event]
+struct Bad {
+    value: (u256, bool),
+}

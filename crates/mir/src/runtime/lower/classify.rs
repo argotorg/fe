@@ -740,10 +740,10 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
     ) -> Option<RuntimeClass<'db>> {
         snapshot_source_place(self.body, local)
             .and_then(|place| self.normalized_place_class(carriers, place))
-            .and_then(|class| actual_aggregate_class_from_runtime_source(&class))
+            .and_then(|class| class.aggregate_value_class())
             .or_else(|| {
                 self.semantic_value_class(carriers, local)
-                    .and_then(|class| actual_aggregate_class_from_runtime_source(&class))
+                    .and_then(|class| class.aggregate_value_class())
             })
     }
 
@@ -2410,10 +2410,7 @@ pub(super) fn carrier_value_class_ref<'a, 'db>(
     local: SLocalId,
     carriers: &'a [RuntimeCarrier<'db>],
 ) -> Option<&'a RuntimeClass<'db>> {
-    match carriers.get(local.index())? {
-        RuntimeCarrier::Erased => None,
-        RuntimeCarrier::Value(class) => Some(class),
-    }
+    carriers.get(local.index())?.value_class()
 }
 
 fn normalized_place_root_transport_class_in_context<'db>(
@@ -2828,22 +2825,6 @@ pub(crate) fn desired_runtime_return_plan<'db>(
         RuntimeBoundarySpec::ExactTransport(RuntimeClass::AggregateValue { .. })
         | RuntimeBoundarySpec::ExactShape(_)
         | RuntimeBoundarySpec::BorrowLike { .. } => RuntimeVisibleReturnPlan::Constrained(boundary),
-    }
-}
-
-pub(crate) fn actual_aggregate_class_from_runtime_source<'db>(
-    class: &RuntimeClass<'db>,
-) -> Option<RuntimeClass<'db>> {
-    match class {
-        RuntimeClass::AggregateValue { .. } => Some(class.clone()),
-        RuntimeClass::Ref { pointee, .. } => pointee
-            .aggregate_layout()
-            .map(|layout| RuntimeClass::AggregateValue { layout }),
-        RuntimeClass::RawAddr {
-            target: Some(layout),
-            ..
-        } => Some(RuntimeClass::AggregateValue { layout: *layout }),
-        RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { target: None, .. } => None,
     }
 }
 

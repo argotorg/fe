@@ -1,0 +1,51 @@
+use std::abi::Bytes
+use std::evm::{Call, Evm, mem}
+
+msg InnerMsg {
+    #[selector = 0x01020304]
+    Inner { marker: u256, data: Bytes },
+}
+
+msg OuterMsg {
+    #[selector = 0xaabbccdd]
+    Outer { inner: InnerMsg::Inner } -> u256,
+}
+
+pub contract NestedMsgReceiver {
+    recv OuterMsg {
+        Outer { inner } -> u256 {
+            assert!(inner.marker == 0)
+            assert!(inner.data.len() == 0)
+            1
+        }
+    }
+}
+
+#[test]
+fn test_nested_msg_decode_valid() uses (evm: mut Evm) {
+    let receiver = evm.create2<NestedMsgReceiver>(value: 0, args: (), salt: 0)
+
+    let result: u256 = evm.call(
+        addr: receiver,
+        gas: 1000000,
+        value: 0,
+        message: OuterMsg::Outer {
+            inner: InnerMsg::Inner { marker: 0, data: Bytes::empty() },
+        },
+    )
+
+    assert!(result == 1)
+}
+
+#[test]
+fn test_nested_msg_decode_truncated_inner_head_reverts() uses (evm: mut Evm) {
+    let receiver = evm.create2<NestedMsgReceiver>(value: 0, args: (), salt: 1)
+
+    let ptr = mem::alloc(96)
+    evm.mstore(addr: ptr, value: (0xaabbccdd as u256) << 224)
+    evm.mstore(addr: ptr + 4, value: 32)
+    evm.mstore(addr: ptr + 36, value: 0)
+
+    let ok = evm.raw_call(addr: receiver, gas: 1000000, value: 0, args_offset: ptr, args_len: 68)
+    assert!(!ok)
+}

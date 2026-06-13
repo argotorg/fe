@@ -152,11 +152,6 @@ impl AstAttrSpec {
     }
 }
 
-pub(super) struct LoweredNamedAttrs<'db> {
-    pub retained: AttrListId<'db>,
-    pub removed: Vec<AstAttrSpec>,
-}
-
 pub(super) fn has_named_attr(attrs: Option<ast::AttrList>, name: &str) -> bool {
     attrs.is_some_and(|attrs| attrs.normal_attrs_named(name).next().is_some())
 }
@@ -295,28 +290,21 @@ pub(super) fn lower_attrs_without_named<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
     attrs: Option<ast::AttrList>,
     name: &str,
-) -> LoweredNamedAttrs<'db> {
+) -> AttrListId<'db> {
     let db = ctxt.db();
-    let mut removed = Vec::new();
 
     let retained: Vec<Attr<'db>> = attrs
         .into_iter()
         .flatten()
         .filter_map(|attr| match attr.kind() {
-            ast::AttrKind::Normal(normal_attr) if normal_attr.is_named(name) => {
-                removed.push(AstAttrSpec::lower_ast(normal_attr));
-                None
-            }
+            ast::AttrKind::Normal(normal_attr) if normal_attr.is_named(name) => None,
             ast::AttrKind::Normal(_) | ast::AttrKind::DocComment(_) => {
                 Some(Attr::lower_ast(ctxt, attr))
             }
         })
         .collect();
 
-    LoweredNamedAttrs {
-        retained: AttrListId::new(db, retained),
-        removed,
-    }
+    AttrListId::new(db, retained)
 }
 
 impl<'db> AttrListId<'db> {

@@ -1434,19 +1434,6 @@ impl<'db> SyntheticBodyBuilder<'db> {
     }
 }
 
-trait RuntimeCarrierExt<'db> {
-    fn value_class(&self) -> Option<&RuntimeClass<'db>>;
-}
-
-impl<'db> RuntimeCarrierExt<'db> for RuntimeCarrier<'db> {
-    fn value_class(&self) -> Option<&RuntimeClass<'db>> {
-        match self {
-            RuntimeCarrier::Erased => None,
-            RuntimeCarrier::Value(class) => Some(class),
-        }
-    }
-}
-
 fn bool_scalar_class<'db>() -> ScalarClass<'db> {
     ScalarClass {
         repr: ScalarRepr::Bool,

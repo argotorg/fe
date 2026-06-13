@@ -1,0 +1,6 @@
+type Pair = (u256, bool)
+
+#[error]
+struct Bad {
+    value: Pair,
+}

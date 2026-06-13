@@ -8,21 +8,15 @@ target = "evm-ethereum-osaka"
 func private %aug_assign(v0.i64, v1.i64) -> i64 {
     block0:
         v2.*i64 = alloca i64;
-        v3.*i64 = alloca i64;
-        v4.*i64 = alloca i64;
-        mstore v2 v0 i64;
-        mstore v3 v1 i64;
         jump block1;
 
     block1:
-        v5.i64 = mload v2 i64;
-        mstore v4 v5 i64;
-        v6.i256 = ptr_to_int v4 i256;
-        v7.i64 = mload v3 i64;
-        v8.i256 = mload v6 i256;
-        v9.i64 = trunc v8 i64;
-        (v10.i64, v11.i1) = uaddo v9 v7;
-        br v11 block2 block3;
+        mstore v2 v0 i64;
+        v4.i256 = ptr_to_int v2 i256;
+        v6.i256 = mload v4 i256;
+        v7.i64 = trunc v6 i64;
+        (v8.i64, v9.i1) = uaddo v7 v1;
+        br v9 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -30,20 +24,20 @@ func private %aug_assign(v0.i64, v1.i64) -> i64 {
         evm_revert 0.i256 36.i256;
 
     block3:
-        v18.i256 = zext v10 i256;
-        mstore v6 v18 i256;
-        v19.i256 = ptr_to_int v4 i256;
-        v21.i256 = mload v19 i256;
-        v22.i64 = trunc v21 i64;
-        (v23.i64, v24.i1) = umulo v22 2.i64;
-        br v24 block2 block4;
+        v16.i256 = zext v8 i256;
+        mstore v4 v16 i256;
+        v17.i256 = ptr_to_int v2 i256;
+        v19.i256 = mload v17 i256;
+        v20.i64 = trunc v19 i64;
+        (v21.i64, v22.i1) = umulo v20 2.i64;
+        br v22 block2 block4;
 
     block4:
-        v26.i256 = zext v23 i256;
-        mstore v19 v26 i256;
-        v27.i64 = mload v4 i64;
-        v29.i1 = eq 2.i64 0.i64;
-        br v29 block5 block6;
+        v24.i256 = zext v21 i256;
+        mstore v17 v24 i256;
+        v25.i64 = mload v2 i64;
+        v27.i1 = eq 2.i64 0.i64;
+        br v27 block5 block6;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -51,11 +45,11 @@ func private %aug_assign(v0.i64, v1.i64) -> i64 {
         evm_revert 0.i256 36.i256;
 
     block6:
-        (v31.i64, v32.i1) = evm_udivo v27 2.i64;
-        br v32 block2 block7;
+        (v29.i64, v30.i1) = evm_udivo v25 2.i64;
+        br v30 block2 block7;
 
     block7:
-        return v31;
+        return v29;
 }
 
 func private %main() -> i64 {

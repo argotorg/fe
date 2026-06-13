@@ -28,13 +28,9 @@ func private %foo(v0.constref<@layout_1>) -> @layout_0 {
     block1:
         v3.constref<i64> = const.proj v0 0.i256;
         v4.i64 = const.load v3;
-        v6.objref<@layout_0> = obj.alloc @layout_0;
-        v7.objref<i64> = obj.proj v6 0.i256;
-        obj.store v7 v4;
-        v9.objref<i64> = obj.proj v6 1.i256;
-        obj.store v9 1.i64;
-        v10.@layout_0 = obj.load v6;
-        return v10;
+        v7.@layout_0 = insert_value undef.@layout_0 0.i256 v4;
+        v9.@layout_0 = insert_value v7 1.i256 1.i64;
+        return v9;
 }
 
 func private %main_root() {

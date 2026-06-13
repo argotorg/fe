@@ -24,8 +24,6 @@ use std::abi::{
     Bytes,
     Bytes4,
     Bytes32,
-    BytesView,
-    MemoryInput,
     bytes_from_word,
     bytes_from_words,
     bytes_from_words_prefix,
@@ -106,10 +104,10 @@ pub contract DepositContract uses (ctx: Ctx, mem: mut RawMem, log: mut Log) {
             let amount_gwei: u64 = deposit_amount.downcast_truncate()
 
             let mut node: u256 = compute_deposit_data_root(
-                pubkey: pubkey.view(),
-                withdrawal_credentials: withdrawal_credentials.view(),
-                signature: signature.view(),
-                amount_gwei: amount_gwei,
+                pubkey,
+                withdrawal_credentials,
+                signature,
+                amount_gwei,
             )
             assert!(
                 node == deposit_data_root.val,
@@ -174,10 +172,11 @@ pub contract DepositContract uses (ctx: Ctx, mem: mut RawMem, log: mut Log) {
 
 // Reconstruct the deposit-data SSZ root from its constituent parts. Exposed at
 // module level so tests can precompute a valid `deposit_data_root` to pass in.
+#[inline(always)]
 pub fn compute_deposit_data_root(
-    pubkey: BytesView<MemoryInput>,
-    withdrawal_credentials: BytesView<MemoryInput>,
-    signature: BytesView<MemoryInput>,
+    pubkey: Bytes,
+    withdrawal_credentials: Bytes,
+    signature: Bytes,
     amount_gwei: u64,
 ) -> u256
 uses (mem: mut RawMem)
@@ -188,7 +187,8 @@ uses (mem: mut RawMem)
         withdrawal_credentials.word_at(0),
         ssz::u64_chunk(amount_gwei),
         ssz::hash_tree_root<ssz::ByteVector<96>>(signature),
-    ).merkleize()
+    )
+        .merkleize()
 }
 
 // Decode an 8-byte little-endian `Bytes` back into a `u64`. Used by tests to
@@ -304,9 +304,9 @@ fn test_deposit_rejects_non_gwei_amount() uses (evm: mut Evm, mem: mut RawMem) {
     let wc = word_bytes(w: WC)
     let sig = signature_bytes(s0: S0, s1: S1, s2: S2)
     let expected: u256 = compute_deposit_data_root(
-        pubkey: pk.view(),
-        withdrawal_credentials: wc.view(),
-        signature: sig.view(),
+        pubkey: pk,
+        withdrawal_credentials: wc,
+        signature: sig,
         amount_gwei: amount_gwei,
     )
     evm.call(
@@ -351,9 +351,9 @@ uses (evm: mut Evm, mem: mut RawMem)
     let wc = word_bytes(w: WC)
     let sig = signature_bytes(s0: S0, s1: S1, s2: S2)
     let expected_root: u256 = compute_deposit_data_root(
-        pubkey: pk.view(),
-        withdrawal_credentials: wc.view(),
-        signature: sig.view(),
+        pubkey: pk,
+        withdrawal_credentials: wc,
+        signature: sig,
         amount_gwei: amount_gwei,
     )
 
@@ -427,9 +427,9 @@ fn test_two_deposits_advance_state() uses (evm: mut Evm, mem: mut RawMem) {
     let wc = word_bytes(w: WC)
     let sig = signature_bytes(s0: S0, s1: S1, s2: S2)
     let expected: u256 = compute_deposit_data_root(
-        pubkey: pk.view(),
-        withdrawal_credentials: wc.view(),
-        signature: sig.view(),
+        pubkey: pk,
+        withdrawal_credentials: wc,
+        signature: sig,
         amount_gwei: amount_gwei,
     )
 

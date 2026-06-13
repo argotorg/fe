@@ -234,8 +234,8 @@ pub(crate) fn collect_func_decl_constraints<'db>(
         }
     };
 
-    let func_constraints = collect_decl_constraints(db, hir_func.into());
     if !include_parent {
+        let func_constraints = collect_decl_constraints(db, hir_func.into());
         return func_constraints;
     }
 
@@ -246,19 +246,19 @@ pub(crate) fn collect_func_decl_constraints<'db>(
 
         Some(ItemKind::ImplTrait(impl_trait)) => {
             if lower_impl_trait(db, impl_trait).is_none() {
-                return func_constraints;
+                return collect_decl_constraints(db, hir_func.into());
             }
             collect_constraints(db, impl_trait.into())
         }
 
-        _ => return func_constraints,
+        _ => return collect_decl_constraints(db, hir_func.into()),
     };
 
-    Binder::bind(
-        func_constraints
-            .instantiate_identity()
-            .merge(db, parent_constraints.instantiate_identity()),
-    )
+    let parent_constraints = parent_constraints.instantiate_identity();
+    let func_constraints =
+        collect_decl_constraints_with_assumptions(db, hir_func.into(), parent_constraints);
+
+    Binder::bind(func_constraints)
 }
 
 #[salsa::tracked(
@@ -316,6 +316,18 @@ pub(crate) fn collect_decl_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
 ) -> Binder<PredicateListId<'db>> {
+    Binder::bind(collect_decl_constraints_with_assumptions(
+        db,
+        owner,
+        PredicateListId::empty_list(db),
+    ))
+}
+
+fn collect_decl_constraints_with_assumptions<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: GenericParamOwner<'db>,
+    initial_assumptions: PredicateListId<'db>,
+) -> PredicateListId<'db> {
     let mut deferred: Vec<Deferred<'db>> = Vec::new();
     let owner_scope = owner.scope();
 
@@ -372,7 +384,8 @@ pub(crate) fn collect_decl_constraints<'db>(
         }
     }
 
-    let mut all_predicates: IndexSet<TraitInstId<'db>> = IndexSet::new();
+    let mut all_predicates: IndexSet<TraitInstId<'db>> =
+        initial_assumptions.list(db).iter().copied().collect();
 
     // fixed-point iteration over deferred predicates
     while !deferred.is_empty() {
@@ -392,10 +405,7 @@ pub(crate) fn collect_decl_constraints<'db>(
         }
     }
 
-    Binder::bind(PredicateListId::new(
-        db,
-        all_predicates.into_iter().collect::<Vec<_>>(),
-    ))
+    PredicateListId::new(db, all_predicates.into_iter().collect::<Vec<_>>())
 }
 
 fn collect_constraints_cycle_initial<'db>(
@@ -509,6 +519,35 @@ mod tests {
                 _ => None,
             })
             .expect("missing trait")
+    }
+
+    #[test]
+    fn method_where_clause_resolves_with_parent_constraints() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("method_where_clause_resolves_with_parent_constraints.fe"),
+            r#"
+trait Decoder<A> {}
+
+trait Abi {
+    type Decoder: * -> *
+}
+
+fn needs_decoder<A, D>()
+where D: Decoder<A>
+{}
+
+trait Decode<A: Abi> {
+    fn decode_from<I>()
+        where A::Decoder<I>: Decoder<A>
+    {
+        needs_decoder<A, A::Decoder<I>>()
+    }
+}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
     }
 
     #[test]

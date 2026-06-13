@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 403
 expression: output
 input_file: crates/codegen/tests/fixtures/match_fn_call.fe
 ---
@@ -8,38 +7,29 @@ target = "evm-ethereum-osaka"
 
 func private %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_7969(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        v3.i256 = evm_calldata_load v2;
-        return v3;
+        v2.i256 = evm_calldata_load v0;
+        return v2;
 }
 
 func private %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_7969_0(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        v3.i256 = evm_calldata_load v2;
-        return v3;
+        v2.i256 = evm_calldata_load v0;
+        return v2;
 }
 
 func private %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_7969_1(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        v3.i256 = evm_calldata_load v2;
-        return v3;
+        v2.i256 = evm_calldata_load v0;
+        return v2;
 }
 
 func private %standalone_match_fn_call__match_fn_call__example__gcd5c_4226() -> i256 {

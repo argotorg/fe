@@ -13,8 +13,9 @@ use core::abi::{
     Encode,
     StringView,
     abi_single_root_head_size,
-    decode_payload_root,
-    decode_single_root,
+    checked_frame_end,
+    decode_field_from_prechecked_head,
+    decode_frame_from,
 }
 use core::{AsBytes, keccak}
 use core::num::IntDowncast
@@ -157,7 +158,12 @@ impl Abi for Sol {
         SolDecoder::with_base(input, base)
     }
 
+    fn alloc(_ size: u256) -> u256 { mem::alloc(size) }
+
     fn encoder_new(_ size: u256) -> Self::Encoder { SolEncoder::new(size) }
+
+    #[inline(always)]
+    fn encoder_at(_ base: u256) -> Self::Encoder { SolEncoder::at(base) }
 
     fn store_word(ptr: u256, value: u256) {
         mstore(addr: ptr, value: value)
@@ -191,7 +197,7 @@ impl<I> SolDecoder<I>
 
 /// Decode a Solidity ABI payload from an arbitrary byte input starting at byte 0.
 pub fn decode_input<T, I>(_ input: own I) -> T
-    where T: Decode<Sol>, I: ByteInput
+    where T: Decode<Sol> + AbiSize, I: ByteInput
 {
     decode_input_at(input, 0)
 }
@@ -201,14 +207,10 @@ pub fn decode_input<T, I>(_ input: own I) -> T
 /// The input stays raw; `base` chooses where the ABI payload begins. Dynamic
 /// offsets remain relative to `base`, matching Solidity ABI rules.
 pub fn decode_input_at<T, I>(_ input: own I, _ base: u256) -> T
-    where T: Decode<Sol>, I: ByteInput
+    where T: Decode<Sol> + AbiSize, I: ByteInput
 {
-    if base > input.len() {
-        revert(offset: 0, len: 0)
-    }
-
-    let mut d = SolDecoder<I>::with_base(input, base)
-    decode_payload_root<Sol, T, SolDecoder<I>>(mut d)
+    let input_len = input.len()
+    decode_frame_from<Sol, T, I>(input, base, input_len)
 }
 
 /// Decode a Solidity ABI return/output payload from an arbitrary byte input at byte 0.
@@ -225,12 +227,9 @@ pub fn decode_output<T, I>(_ input: own I) -> T
 pub fn decode_output_at<T, I>(_ input: own I, _ base: u256) -> T
     where T: Decode<Sol> + AbiSize, I: ByteInput
 {
-    if base > input.len() {
-        revert(offset: 0, len: 0)
-    }
-
-    let mut d = SolDecoder<I>::with_base(input, base)
-    decode_single_root<Sol, T, SolDecoder<I>>(mut d)
+    let input_len = input.len()
+    checked_frame_end<Sol>(base, abi_single_root_head_size<T>(), input_len)
+    decode_field_from_prechecked_head<Sol, T, I>(input, base: base, head_pos: base, input_len: input_len)
 }
 
 /// Decode a Solidity ABI `bytes` payload view from `input` at byte 0.
@@ -378,6 +377,11 @@ pub struct SolEncoder {
 impl SolEncoder {
     pub fn new(_ size: u256) -> Self {
         let base = if size == 0 { 0 } else { mem::alloc(size) }
+        SolEncoder::at(base)
+    }
+
+    #[inline(always)]
+    pub fn at(_ base: u256) -> Self {
         SolEncoder {
             base,
             pos: base,

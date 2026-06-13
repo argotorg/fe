@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/event_tuple_alias_field.fe
+---
+error[10-0007]: unsupported ABI field type
+  ┌─ event_tuple_alias_field.fe:7:13
+  │
+7 │     schema: SchemaRecord,
+  │             ^^^^^^^^^^^^ `(u256, bool, DynString)` is not supported as an event field
+  │
+  = tuples are not supported in event or custom error fields; use a struct type for grouped data

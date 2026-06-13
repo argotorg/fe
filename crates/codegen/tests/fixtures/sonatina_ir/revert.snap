@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 403
 expression: output
 input_file: crates/codegen/tests/fixtures/revert.fe
 ---
@@ -46,60 +45,36 @@ func private %main_root() {
 
 func private %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_f3cd(v0.i256, v1.i256) {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        mstore v4 v5 i256;
+        mstore v0 v1 i256;
         return;
 }
 
 func private %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_f3cd_0(v0.i256, v1.i256) {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        mstore v4 v5 i256;
+        mstore v0 v1 i256;
         return;
 }
 
 func private %std__lib__evm__effects__impl_trait_Evm_0098__revert_8f03(v0.i256, v1.i256) {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_revert v4 v5;
+        evm_revert v0 v1;
 }
 
 func private %std__lib__evm__effects__impl_trait_Evm_0098__revert_8f03_0(v0.i256, v1.i256) {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_revert v4 v5;
+        evm_revert v0 v1;
 }
 
 

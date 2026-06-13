@@ -27,13 +27,9 @@ func private %main() -> @layout_0 {
         obj.init.const v9 v8;
         v10.@layout_1 = obj.load v9;
         v11.i8 = call %match_nested_extract v10;
-        v12.objref<@layout_0> = obj.alloc @layout_0;
-        v14.objref<i8> = obj.proj v12 0.i256;
-        obj.store v14 v5;
-        v16.objref<i8> = obj.proj v12 1.i256;
-        obj.store v16 v11;
-        v17.@layout_0 = obj.load v12;
-        return v17;
+        v14.@layout_0 = insert_value undef.@layout_0 0.i256 v5;
+        v16.@layout_0 = insert_value v14 1.i256 v11;
+        return v16;
 }
 
 func private %main_root() {
@@ -47,97 +43,69 @@ func private %main_root() {
 
 func private %match_nested_extract(v0.@layout_1) -> i8 {
     block0:
-        v1.objref<@layout_1> = obj.alloc @layout_1;
-        v3.objref<@layout_0> = obj.proj v1 0.i256;
-        v4.@layout_0 = extract_value v0 0.i256;
-        v5.objref<i8> = obj.proj v3 0.i256;
-        v6.i8 = extract_value v4 0.i256;
-        obj.store v5 v6;
-        v8.objref<i8> = obj.proj v3 1.i256;
-        v9.i8 = extract_value v4 1.i256;
-        obj.store v8 v9;
-        v10.objref<i8> = obj.proj v1 1.i256;
-        v11.i8 = extract_value v0 1.i256;
-        obj.store v10 v11;
         jump block1;
 
     block1:
         jump block3;
 
     block2:
-        v12.i8 = phi (v34 block8) (v40 block18) (v48 block19) (v54 block20) (v60 block21);
-        return v12;
+        v1.i8 = phi (v17 block8) (v23 block18) (v31 block19) (v36 block20) (v41 block21);
+        return v1;
 
     block3:
-        v13.objref<@layout_0> = obj.alloc @layout_0;
-        v14.objref<@layout_0> = obj.proj v1 0.i256;
-        v15.objref<i8> = obj.proj v13 0.i256;
-        v16.objref<i8> = obj.proj v14 0.i256;
-        v17.i8 = obj.load v16;
-        obj.store v15 v17;
-        v18.objref<i8> = obj.proj v13 1.i256;
-        v19.objref<i8> = obj.proj v14 1.i256;
-        v20.i8 = obj.load v19;
-        obj.store v18 v20;
+        v4.@layout_0 = extract_value v0 0.i256;
         jump block4;
 
     block4:
-        v22.objref<i8> = obj.proj v13 1.i256;
-        v23.i8 = obj.load v22;
-        v25.i1 = eq v23 0.i8;
-        br v25 block5 block7;
+        v7.i8 = extract_value v4 1.i256;
+        v9.i1 = eq v7 0.i8;
+        br v9 block5 block7;
 
     block5:
-        v27.objref<i8> = obj.proj v13 0.i256;
-        v28.i8 = obj.load v27;
-        v29.i1 = eq v28 0.i8;
-        br v29 block8 block10;
+        v11.i8 = extract_value v4 0.i256;
+        v12.i1 = eq v11 0.i8;
+        br v12 block8 block10;
 
     block6:
-        v30.objref<i8> = obj.proj v1 1.i256;
-        v31.i8 = obj.load v30;
-        v32.i1 = eq v31 0.i8;
-        br v32 block14 block16;
+        v14.i8 = extract_value v0 1.i256;
+        v15.i1 = eq v14 0.i8;
+        br v15 block14 block16;
 
     block7:
         jump block6;
 
     block8:
-        v33.objref<i8> = obj.proj v1 1.i256;
-        v34.i8 = obj.load v33;
+        v17.i8 = extract_value v0 1.i256;
         jump block2;
 
     block9:
-        v35.objref<i8> = obj.proj v1 1.i256;
-        v36.i8 = obj.load v35;
-        v37.i1 = eq v36 0.i8;
-        br v37 block11 block13;
+        v19.i8 = extract_value v0 1.i256;
+        v20.i1 = eq v19 0.i8;
+        br v20 block11 block13;
 
     block10:
         jump block9;
 
     block11:
-        (v40.i8, v41.i1) = uaddo v28 v23;
-        br v41 block17 block18;
+        (v23.i8, v24.i1) = uaddo v11 v7;
+        br v24 block17 block18;
 
     block12:
-        (v48.i8, v49.i1) = uaddo v28 v36;
-        br v49 block17 block19;
+        (v31.i8, v32.i1) = uaddo v11 v19;
+        br v32 block17 block19;
 
     block13:
         jump block12;
 
     block14:
-        v52.objref<i8> = obj.proj v13 0.i256;
-        v53.i8 = obj.load v52;
-        (v54.i8, v55.i1) = uaddo v53 v23;
-        br v55 block17 block20;
+        v35.i8 = extract_value v4 0.i256;
+        (v36.i8, v37.i1) = uaddo v35 v7;
+        br v37 block17 block20;
 
     block15:
-        v58.objref<i8> = obj.proj v13 0.i256;
-        v59.i8 = obj.load v58;
-        (v60.i8, v61.i1) = uaddo v59 v31;
-        br v61 block17 block21;
+        v40.i8 = extract_value v4 0.i256;
+        (v41.i8, v42.i1) = uaddo v40 v14;
+        br v42 block17 block21;
 
     block16:
         jump block15;
@@ -162,38 +130,28 @@ func private %match_nested_extract(v0.@layout_1) -> i8 {
 
 func private %match_tuple_extract(v0.@layout_0) -> i8 {
     block0:
-        v1.objref<@layout_0> = obj.alloc @layout_0;
-        v3.objref<i8> = obj.proj v1 0.i256;
-        v4.i8 = extract_value v0 0.i256;
-        obj.store v3 v4;
-        v6.objref<i8> = obj.proj v1 1.i256;
-        v7.i8 = extract_value v0 1.i256;
-        obj.store v6 v7;
         jump block1;
 
     block1:
         jump block3;
 
     block2:
-        v8.i8 = phi (v14 block4) (v10 block7) (v21 block11);
-        return v8;
+        v1.i8 = phi (v9 block4) (v4 block7) (v16 block11);
+        return v1;
 
     block3:
-        v9.objref<i8> = obj.proj v1 0.i256;
-        v10.i8 = obj.load v9;
-        v12.i1 = eq v10 0.i8;
-        br v12 block4 block6;
+        v4.i8 = extract_value v0 0.i256;
+        v6.i1 = eq v4 0.i8;
+        br v6 block4 block6;
 
     block4:
-        v13.objref<i8> = obj.proj v1 1.i256;
-        v14.i8 = obj.load v13;
+        v9.i8 = extract_value v0 1.i256;
         jump block2;
 
     block5:
-        v15.objref<i8> = obj.proj v1 1.i256;
-        v16.i8 = obj.load v15;
-        v17.i1 = eq v16 0.i8;
-        br v17 block7 block9;
+        v11.i8 = extract_value v0 1.i256;
+        v12.i1 = eq v11 0.i8;
+        br v12 block7 block9;
 
     block6:
         jump block5;
@@ -202,8 +160,8 @@ func private %match_tuple_extract(v0.@layout_0) -> i8 {
         jump block2;
 
     block8:
-        (v21.i8, v22.i1) = uaddo v10 v16;
-        br v22 block10 block11;
+        (v16.i8, v17.i1) = uaddo v4 v11;
+        br v17 block10 block11;
 
     block9:
         jump block8;

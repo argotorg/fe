@@ -12,39 +12,33 @@ type @layout_0 = enum {
 
 func private %abi_encode(v0.i256) {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v3.i256 = mload v1 i256;
-        call %mstore 0.i256 v3;
+        call %mstore 0.i256 v0;
         call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_2541 0.i256 32.i256;
         unreachable;
 }
 
 func private %balance_of_raw(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.*i256 = alloca i256;
-        mstore v2 v0 i256;
         jump block1;
 
     block1:
-        v3.i256 = mload v2 i256;
-        v5.i1 = eq v3 0.i256;
-        br v5 block3 block5;
+        v4.i1 = eq v0 0.i256;
+        br v4 block3 block5;
 
     block2:
-        v6.i256 = phi (v8 block3) (v12 block4);
-        return v6;
+        v5.i256 = phi (v7 block3) (v11 block4);
+        return v5;
 
     block3:
-        v8.i256 = evm_sload v1;
+        v7.i256 = evm_sload v1;
         jump block2;
 
     block4:
-        v11.i256 = add v1 1.i256;
-        v12.i256 = evm_sload v11;
+        v10.i256 = add v1 1.i256;
+        v11.i256 = evm_sload v10;
         jump block2;
 
     block5:
@@ -53,45 +47,30 @@ func private %balance_of_raw(v0.i256, v1.i256) -> i256 {
 
 func private %calldataload(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        v3.i256 = evm_calldata_load v2;
-        return v3;
+        v2.i256 = evm_calldata_load v0;
+        return v2;
 }
 
 func private %codecopy(v0.i256, v1.i256, v2.i256) {
     block0:
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        mstore v3 v0 i256;
-        mstore v4 v1 i256;
-        mstore v5 v2 i256;
         jump block1;
 
     block1:
-        v6.i256 = mload v3 i256;
-        v7.i256 = mload v4 i256;
-        v8.i256 = mload v5 i256;
-        evm_code_copy v6 v7 v8;
+        evm_code_copy v0 v1 v2;
         return;
 }
 
 func private %credit_alice(v0.i256, v1.i256, v2.i256) -> i256 {
     block0:
-        v3.*i256 = alloca i256;
-        mstore v3 v0 i256;
         jump block1;
 
     block1:
-        v5.i256 = evm_sload v1;
-        v6.i256 = mload v3 i256;
-        (v7.i256, v8.i1) = uaddo v5 v6;
-        br v8 block2 block3;
+        v4.i256 = evm_sload v1;
+        (v6.i256, v7.i1) = uaddo v4 v0;
+        br v7 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -99,30 +78,26 @@ func private %credit_alice(v0.i256, v1.i256, v2.i256) -> i256 {
         evm_revert 0.i256 36.i256;
 
     block3:
-        evm_sstore v1 v7;
-        v16.i256 = evm_sload v2;
-        v17.i256 = mload v3 i256;
-        (v18.i256, v19.i1) = uaddo v16 v17;
-        br v19 block2 block4;
+        evm_sstore v1 v6;
+        v15.i256 = evm_sload v2;
+        (v17.i256, v18.i1) = uaddo v15 v0;
+        br v18 block2 block4;
 
     block4:
-        evm_sstore v2 v18;
-        v22.i256 = evm_sload v1;
-        return v22;
+        evm_sstore v2 v17;
+        v21.i256 = evm_sload v1;
+        return v21;
 }
 
 func private %credit_bob(v0.i256, v1.i256, v2.i256) -> i256 {
     block0:
-        v3.*i256 = alloca i256;
-        mstore v3 v0 i256;
         jump block1;
 
     block1:
-        v6.i256 = add v1 1.i256;
-        v7.i256 = evm_sload v6;
-        v8.i256 = mload v3 i256;
-        (v9.i256, v10.i1) = uaddo v7 v8;
-        br v10 block2 block3;
+        v5.i256 = add v1 1.i256;
+        v6.i256 = evm_sload v5;
+        (v8.i256, v9.i1) = uaddo v6 v0;
+        br v9 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -130,40 +105,33 @@ func private %credit_bob(v0.i256, v1.i256, v2.i256) -> i256 {
         evm_revert 0.i256 36.i256;
 
     block3:
-        v17.i256 = add v1 1.i256;
-        evm_sstore v17 v9;
-        v19.i256 = evm_sload v2;
-        v20.i256 = mload v3 i256;
-        (v21.i256, v22.i1) = uaddo v19 v20;
-        br v22 block2 block4;
+        v16.i256 = add v1 1.i256;
+        evm_sstore v16 v8;
+        v18.i256 = evm_sload v2;
+        (v20.i256, v21.i1) = uaddo v18 v0;
+        br v21 block2 block4;
 
     block4:
-        evm_sstore v2 v21;
-        v25.i256 = add v1 1.i256;
-        v26.i256 = evm_sload v25;
-        return v26;
+        evm_sstore v2 v20;
+        v24.i256 = add v1 1.i256;
+        v25.i256 = evm_sload v24;
+        return v25;
 }
 
 func private %from_raw__g9438(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        return v2;
+        return v0;
 }
 
 func private %from_raw__gf198(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        return v2;
+        return v0;
 }
 
 func private %init() {
@@ -200,59 +168,35 @@ func private %manual_contract_runtime_root_Coin() {
 
 func private %mstore(v0.i256, v1.i256) {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        mstore v4 v5 i256;
+        mstore v0 v1 i256;
         return;
 }
 
 func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_2541(v0.i256, v1.i256) {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_return v4 v5;
+        evm_return v0 v1;
 }
 
 func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_e8fc(v0.i256, v1.i256) {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_return v4 v5;
+        evm_return v0 v1;
 }
 
 func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_e8fc_0(v0.i256, v1.i256) {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_return v4 v5;
+        evm_return v0 v1;
 }
 
 func private %runtime() {
@@ -345,26 +289,20 @@ func private %runtime() {
 
 func private %stor_ptr__g2c78(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        v3.i256 = call %from_raw__g9438 v2;
-        return v3;
+        v2.i256 = call %from_raw__g9438 v0;
+        return v2;
 }
 
 func private %stor_ptr__gd216(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        v3.i256 = call %from_raw__gf198 v2;
-        return v3;
+        v2.i256 = call %from_raw__gf198 v0;
+        return v2;
 }
 
 func private %total_supply(v0.i256) -> i256 {
@@ -378,28 +316,24 @@ func private %total_supply(v0.i256) -> i256 {
 
 func private %transfer_from_alice(v0.i256, v1.i256) -> @layout_0 {
     block0:
-        v2.*i256 = alloca i256;
-        mstore v2 v0 i256;
         jump block1;
 
     block1:
-        v4.i256 = evm_sload v1;
-        v5.i256 = mload v2 i256;
-        v6.i1 = lt v4 v5;
-        br v6 block2 block3;
+        v3.i256 = evm_sload v1;
+        v5.i1 = lt v3 v0;
+        br v5 block2 block3;
 
     block2:
-        v7.@layout_0 = enum.make @layout_0 #Insufficient;
-        return v7;
+        v6.@layout_0 = enum.make @layout_0 #Insufficient;
+        return v6;
 
     block3:
         jump block4;
 
     block4:
-        v9.i256 = evm_sload v1;
-        v10.i256 = mload v2 i256;
-        (v11.i256, v12.i1) = usubo v9 v10;
-        br v12 block5 block6;
+        v8.i256 = evm_sload v1;
+        (v10.i256, v11.i1) = usubo v8 v0;
+        br v11 block5 block6;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -407,46 +341,41 @@ func private %transfer_from_alice(v0.i256, v1.i256) -> @layout_0 {
         evm_revert 0.i256 36.i256;
 
     block6:
-        evm_sstore v1 v11;
-        v20.i256 = add v1 1.i256;
-        v21.i256 = evm_sload v20;
-        v22.i256 = mload v2 i256;
-        (v23.i256, v24.i1) = uaddo v21 v22;
-        br v24 block5 block7;
+        evm_sstore v1 v10;
+        v19.i256 = add v1 1.i256;
+        v20.i256 = evm_sload v19;
+        (v22.i256, v23.i1) = uaddo v20 v0;
+        br v23 block5 block7;
 
     block7:
-        v26.i256 = add v1 1.i256;
-        evm_sstore v26 v23;
-        v27.@layout_0 = enum.make @layout_0 #Ok;
-        return v27;
+        v25.i256 = add v1 1.i256;
+        evm_sstore v25 v22;
+        v26.@layout_0 = enum.make @layout_0 #Ok;
+        return v26;
 }
 
 func private %transfer_from_bob(v0.i256, v1.i256) -> @layout_0 {
     block0:
-        v2.*i256 = alloca i256;
-        mstore v2 v0 i256;
         jump block1;
 
     block1:
-        v5.i256 = add v1 1.i256;
-        v6.i256 = evm_sload v5;
-        v7.i256 = mload v2 i256;
-        v8.i1 = lt v6 v7;
-        br v8 block2 block3;
+        v4.i256 = add v1 1.i256;
+        v5.i256 = evm_sload v4;
+        v7.i1 = lt v5 v0;
+        br v7 block2 block3;
 
     block2:
-        v9.@layout_0 = enum.make @layout_0 #Insufficient;
-        return v9;
+        v8.@layout_0 = enum.make @layout_0 #Insufficient;
+        return v8;
 
     block3:
         jump block4;
 
     block4:
-        v11.i256 = add v1 1.i256;
-        v12.i256 = evm_sload v11;
-        v13.i256 = mload v2 i256;
-        (v14.i256, v15.i1) = usubo v12 v13;
-        br v15 block5 block6;
+        v10.i256 = add v1 1.i256;
+        v11.i256 = evm_sload v10;
+        (v13.i256, v14.i1) = usubo v11 v0;
+        br v14 block5 block6;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -454,17 +383,16 @@ func private %transfer_from_bob(v0.i256, v1.i256) -> @layout_0 {
         evm_revert 0.i256 36.i256;
 
     block6:
-        v22.i256 = add v1 1.i256;
-        evm_sstore v22 v14;
-        v23.i256 = evm_sload v1;
-        v24.i256 = mload v2 i256;
-        (v25.i256, v26.i1) = uaddo v23 v24;
-        br v26 block5 block7;
+        v21.i256 = add v1 1.i256;
+        evm_sstore v21 v13;
+        v22.i256 = evm_sload v1;
+        (v24.i256, v25.i1) = uaddo v22 v0;
+        br v25 block5 block7;
 
     block7:
-        evm_sstore v1 v25;
-        v28.@layout_0 = enum.make @layout_0 #Ok;
-        return v28;
+        evm_sstore v1 v24;
+        v27.@layout_0 = enum.make @layout_0 #Ok;
+        return v27;
 }
 
 func private %transfer_result_code(v0.@layout_0) -> i256 {

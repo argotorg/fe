@@ -22,15 +22,10 @@ func private %main() -> @layout_0 {
         v3.i8 = call %wildcard_not_last 1.i8;
         v4.@layout_1 = enum.make @layout_1 #Green;
         v5.i8 = call %multiple_before_wildcard v4;
-        v6.objref<@layout_0> = obj.alloc @layout_0;
-        v8.objref<i8> = obj.proj v6 0.i256;
-        obj.store v8 v1;
-        v10.objref<i8> = obj.proj v6 1.i256;
-        obj.store v10 v3;
-        v12.objref<i8> = obj.proj v6 2.i256;
-        obj.store v12 v5;
-        v13.@layout_0 = obj.load v6;
-        return v13;
+        v8.@layout_0 = insert_value undef.@layout_0 0.i256 v1;
+        v10.@layout_0 = insert_value v8 1.i256 v3;
+        v12.@layout_0 = insert_value v10 2.i256 v5;
+        return v12;
 }
 
 func private %main_root() {
@@ -85,18 +80,15 @@ func private %multiple_before_wildcard(v0.@layout_1) -> i8 {
 
 func private %wildcard_not_last(v0.i8) -> i8 {
     block0:
-        v1.*i8 = alloca i8;
-        mstore v1 v0 i8;
         jump block1;
 
     block1:
-        v2.i8 = mload v1 i8;
-        v4.i1 = eq v2 0.i8;
-        br v4 block3 block5;
+        v3.i1 = eq v0 0.i8;
+        br v3 block3 block5;
 
     block2:
-        v5.i8 = phi (10.i8 block3) (99.i8 block4);
-        return v5;
+        v4.i8 = phi (10.i8 block3) (99.i8 block4);
+        return v4;
 
     block3:
         jump block2;

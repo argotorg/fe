@@ -25,6 +25,99 @@ impl StorageKey for Address {
     }
 }
 
+// Unsigned integer keys — widening cast to u256 zero-extends, matching
+// Solidity's `mapping(uintN => V)` slot derivation (`keccak256(key ++ slot)`
+// with the key left-padded to 32 bytes).
+
+impl StorageKey for u8 {
+    fn write_key(ptr: u256, self) -> u256 {
+        u256::write_key(ptr: ptr, self.to_word())
+    }
+}
+
+impl StorageKey for u16 {
+    fn write_key(ptr: u256, self) -> u256 {
+        u256::write_key(ptr: ptr, self.to_word())
+    }
+}
+
+impl StorageKey for u32 {
+    fn write_key(ptr: u256, self) -> u256 {
+        u256::write_key(ptr: ptr, self.to_word())
+    }
+}
+
+impl StorageKey for u64 {
+    fn write_key(ptr: u256, self) -> u256 {
+        u256::write_key(ptr: ptr, self.to_word())
+    }
+}
+
+impl StorageKey for u128 {
+    fn write_key(ptr: u256, self) -> u256 {
+        u256::write_key(ptr: ptr, self.to_word())
+    }
+}
+
+impl StorageKey for usize {
+    fn write_key(ptr: u256, self) -> u256 {
+        u256::write_key(ptr: ptr, self.to_word())
+    }
+}
+
+// Signed integer keys — `to_word()` sign-extends, matching Solidity's
+// `mapping(intN => V)` convention.
+
+impl StorageKey for i8 {
+    fn write_key(ptr: u256, self) -> u256 {
+        u256::write_key(ptr: ptr, self.to_word())
+    }
+}
+
+impl StorageKey for i16 {
+    fn write_key(ptr: u256, self) -> u256 {
+        u256::write_key(ptr: ptr, self.to_word())
+    }
+}
+
+impl StorageKey for i32 {
+    fn write_key(ptr: u256, self) -> u256 {
+        u256::write_key(ptr: ptr, self.to_word())
+    }
+}
+
+impl StorageKey for i64 {
+    fn write_key(ptr: u256, self) -> u256 {
+        u256::write_key(ptr: ptr, self.to_word())
+    }
+}
+
+impl StorageKey for i128 {
+    fn write_key(ptr: u256, self) -> u256 {
+        u256::write_key(ptr: ptr, self.to_word())
+    }
+}
+
+impl StorageKey for i256 {
+    fn write_key(ptr: u256, self) -> u256 {
+        u256::write_key(ptr: ptr, self.to_word())
+    }
+}
+
+impl StorageKey for isize {
+    fn write_key(ptr: u256, self) -> u256 {
+        u256::write_key(ptr: ptr, self.to_word())
+    }
+}
+
+// `bool` — encoded as 1 (true) or 0 (false) in a 32-byte word.
+
+impl StorageKey for bool {
+    fn write_key(ptr: u256, self) -> u256 {
+        u256::write_key(ptr: ptr, self.to_word())
+    }
+}
+
 /// A storage-backed mapping from keys `K` to values `V`.
 ///
 /// `SALT` is the mapping's slot seed (the `slot` component in

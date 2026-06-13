@@ -110,17 +110,11 @@ func private %main() -> @layout_3 {
         v16.@layout_0 = enum.make @layout_0 #C;
         v17.@layout_1 = enum.make @layout_1 #First v16;
         v18.i8 = call %exhaustive_inner_outer_wildcard v17;
-        v19.objref<@layout_3> = obj.alloc @layout_3;
-        v21.objref<i8> = obj.proj v19 0.i256;
-        obj.store v21 v3;
-        v23.objref<i8> = obj.proj v19 1.i256;
-        obj.store v23 v7;
-        v25.objref<i8> = obj.proj v19 2.i256;
-        obj.store v25 v14;
-        v27.objref<i8> = obj.proj v19 3.i256;
-        obj.store v27 v18;
-        v28.@layout_3 = obj.load v19;
-        return v28;
+        v21.@layout_3 = insert_value undef.@layout_3 0.i256 v3;
+        v23.@layout_3 = insert_value v21 1.i256 v7;
+        v25.@layout_3 = insert_value v23 2.i256 v14;
+        v27.@layout_3 = insert_value v25 3.i256 v18;
+        return v27;
 }
 
 func private %main_root() {

@@ -18,32 +18,20 @@ func private %balance() {
 
 func private %calldatacopy(v0.i256, v1.i256, v2.i256) {
     block0:
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        mstore v3 v0 i256;
-        mstore v4 v1 i256;
-        mstore v5 v2 i256;
         jump block1;
 
     block1:
-        v6.i256 = mload v3 i256;
-        v7.i256 = mload v4 i256;
-        v8.i256 = mload v5 i256;
-        evm_calldata_copy v6 v7 v8;
+        evm_calldata_copy v0 v1 v2;
         return;
 }
 
 func private %calldataload(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        v3.i256 = evm_calldata_load v2;
-        return v3;
+        v2.i256 = evm_calldata_load v0;
+        return v2;
 }
 
 func private %child_init() {
@@ -72,63 +60,30 @@ func private %child_runtime() {
 
 func private %std__lib__evm__effects__impl_trait_Evm_0098__codecopy_7791(v0.i256, v1.i256, v2.i256) {
     block0:
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        mstore v3 v0 i256;
-        mstore v4 v1 i256;
-        mstore v5 v2 i256;
         jump block1;
 
     block1:
-        v6.i256 = mload v3 i256;
-        v7.i256 = mload v4 i256;
-        v8.i256 = mload v5 i256;
-        evm_code_copy v6 v7 v8;
+        evm_code_copy v0 v1 v2;
         return;
 }
 
 func private %std__lib__evm__effects__impl_trait_Evm_0098__codecopy_7791_0(v0.i256, v1.i256, v2.i256) {
     block0:
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        mstore v3 v0 i256;
-        mstore v4 v1 i256;
-        mstore v5 v2 i256;
         jump block1;
 
     block1:
-        v6.i256 = mload v3 i256;
-        v7.i256 = mload v4 i256;
-        v8.i256 = mload v5 i256;
-        evm_code_copy v6 v7 v8;
+        evm_code_copy v0 v1 v2;
         return;
 }
 
 func private %create2_raw(v0.i256, v1.i256, v2.i256, v3.i256) -> @layout_0 {
     block0:
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        v6.*i256 = alloca i256;
-        v7.*i256 = alloca i256;
-        mstore v4 v0 i256;
-        mstore v5 v1 i256;
-        mstore v6 v2 i256;
-        mstore v7 v3 i256;
         jump block1;
 
     block1:
-        v8.i256 = mload v4 i256;
-        v9.i256 = mload v5 i256;
-        v10.i256 = mload v6 i256;
-        v11.i256 = mload v7 i256;
-        v12.i256 = evm_create2 v8 v9 v10 v11;
-        v13.objref<@layout_0> = obj.alloc @layout_0;
-        v15.objref<i256> = obj.proj v13 0.i256;
-        obj.store v15 v12;
-        v16.@layout_0 = obj.load v13;
-        return v16;
+        v8.i256 = evm_create2 v0 v1 v2 v3;
+        v11.@layout_0 = insert_value undef.@layout_0 0.i256 v8;
+        return v11;
 }
 
 func private %init() {
@@ -199,72 +154,42 @@ func private %read_selector() -> i256 {
 
 func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_2757(v0.i256, v1.i256) {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_return v4 v5;
+        evm_return v0 v1;
 }
 
 func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25(v0.i256, v1.i256) {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_return v4 v5;
+        evm_return v0 v1;
 }
 
 func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25_0(v0.i256, v1.i256) {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_return v4 v5;
+        evm_return v0 v1;
 }
 
 func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25_1(v0.i256, v1.i256) {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_return v4 v5;
+        evm_return v0 v1;
 }
 
 func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25_2(v0.i256, v1.i256) {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_return v4 v5;
+        evm_return v0 v1;
 }
 
 func private %runtime() {

@@ -11,27 +11,26 @@ global private const @layout_0 $const_region_0 = {0, 10};
 
 func private %for_range_sum() -> i256 {
     block0:
-        v0.*i256 = alloca i256;
         jump block1;
 
     block1:
-        v3.constref<@layout_0> = const.ref $const_region_0;
-        v4.i256 = call %len v3;
+        v2.constref<@layout_0> = const.ref $const_region_0;
+        v3.i256 = call %len v2;
         jump block2;
 
     block2:
-        v27.i256 = phi (0.i256 block1) (v18 block7);
-        v5.i256 = phi (0.i256 block1) (v21 block7);
-        v7.i1 = lt v5 v4;
-        br v7 block3 block4;
+        v25.i256 = phi (0.i256 block1) (v11 block7);
+        v4.i256 = phi (0.i256 block1) (v19 block7);
+        v6.i1 = lt v4 v3;
+        br v6 block3 block4;
 
     block3:
-        v10.i256 = call %get v3 v5;
-        (v12.i256, v13.i1) = uaddo v27 v10;
-        br v13 block5 block6;
+        v9.i256 = call %get v2 v4;
+        (v11.i256, v12.i1) = uaddo v25 v9;
+        br v12 block5 block6;
 
     block4:
-        return v27;
+        return v25;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -39,10 +38,8 @@ func private %for_range_sum() -> i256 {
         evm_revert 0.i256 36.i256;
 
     block6:
-        mstore v0 v12 i256;
-        v18.i256 = mload v0 i256;
-        (v21.i256, v22.i1) = uaddo v5 1.i256;
-        br v22 block5 block7;
+        (v19.i256, v20.i1) = uaddo v4 1.i256;
+        br v20 block5 block7;
 
     block7:
         jump block2;
@@ -50,16 +47,13 @@ func private %for_range_sum() -> i256 {
 
 func private %get(v0.constref<@layout_0>, v1.i256) -> i256 {
     block0:
-        v2.*i256 = alloca i256;
-        mstore v2 v1 i256;
         jump block1;
 
     block1:
-        v5.constref<i256> = const.proj v0 0.i256;
-        v6.i256 = const.load v5;
-        v7.i256 = mload v2 i256;
-        (v8.i256, v9.i1) = uaddo v6 v7;
-        br v9 block2 block3;
+        v4.constref<i256> = const.proj v0 0.i256;
+        v5.i256 = const.load v4;
+        (v7.i256, v8.i1) = uaddo v5 v1;
+        br v8 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -67,7 +61,7 @@ func private %get(v0.constref<@layout_0>, v1.i256) -> i256 {
         evm_revert 0.i256 36.i256;
 
     block3:
-        return v8;
+        return v7;
 }
 
 func private %len(v0.constref<@layout_0>) -> i256 {

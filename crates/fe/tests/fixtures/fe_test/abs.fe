@@ -1,0 +1,236 @@
+// Tests for the `Abs` trait — magnitude variants on signed integers.
+//
+// The asymmetry of two's complement (|T::MIN| > T::MAX) is the only
+// interesting case; each variant takes a different stance on it:
+//   abs              -> panic
+//   checked_abs      -> None
+//   wrapping_abs     -> T::MIN
+//   saturating_abs   -> T::MAX
+//   overflowing_abs  -> (T::MIN, true)
+
+// ---- abs (panicking, the default) ----
+
+#[test]
+fn abs_positive_is_identity() {
+    let x: i32 = 42
+    assert(x.abs() == 42)
+}
+
+#[test]
+fn abs_zero_is_zero() {
+    let x: i32 = 0
+    assert(x.abs() == 0)
+}
+
+#[test]
+fn abs_negative_is_positive() {
+    let x: i32 = -42
+    assert(x.abs() == 42)
+}
+
+#[test]
+fn abs_max_is_max() {
+    assert(i32::max().abs() == 2147483647)
+}
+
+// ---- checked_abs ----
+
+#[test]
+fn checked_abs_min_is_none() {
+    match i32::min().checked_abs() {
+        Option::Some(_) => assert(false)
+        Option::None => assert(true)
+    }
+}
+
+#[test]
+fn checked_abs_negative_is_some_positive() {
+    match (-42 as i32).checked_abs() {
+        Option::Some(v) => assert(v == 42)
+        Option::None => assert(false)
+    }
+}
+
+#[test]
+fn checked_abs_positive_is_some_self() {
+    match (42 as i32).checked_abs() {
+        Option::Some(v) => assert(v == 42)
+        Option::None => assert(false)
+    }
+}
+
+// ---- wrapping_abs ----
+
+#[test]
+fn wrapping_abs_min_returns_min() {
+    // The bit pattern of |T::MIN| in T is T::MIN itself.
+    assert(i32::min().wrapping_abs() == i32::min())
+}
+
+#[test]
+fn wrapping_abs_negative_is_positive() {
+    let x: i32 = -42
+    assert(x.wrapping_abs() == 42)
+}
+
+#[test]
+fn wrapping_abs_positive_is_self() {
+    let x: i32 = 42
+    assert(x.wrapping_abs() == 42)
+}
+
+// ---- saturating_abs ----
+
+#[test]
+fn saturating_abs_min_saturates_to_max() {
+    assert(i32::min().saturating_abs() == i32::max())
+}
+
+#[test]
+fn saturating_abs_negative_is_positive() {
+    let x: i32 = -42
+    assert(x.saturating_abs() == 42)
+}
+
+#[test]
+fn saturating_abs_max_is_max() {
+    assert(i32::max().saturating_abs() == i32::max())
+}
+
+// ---- overflowing_abs ----
+
+#[test]
+fn overflowing_abs_min() {
+    let (v, overflow) = i32::min().overflowing_abs()
+    assert(v == i32::min())
+    assert(overflow)
+}
+
+#[test]
+fn overflowing_abs_negative_no_overflow() {
+    let (v, overflow) = (-42 as i32).overflowing_abs()
+    assert(v == 42)
+    assert(!overflow)
+}
+
+#[test]
+fn overflowing_abs_positive_no_overflow() {
+    let (v, overflow) = (42 as i32).overflowing_abs()
+    assert(v == 42)
+    assert(!overflow)
+}
+
+// ---- const-context evaluation ----
+
+const CONST_ABS: i32                  = (-42 as i32).abs()
+const CONST_CHECKED_MIN: Option<i32>  = i32::min().checked_abs()
+const CONST_WRAPPING_MIN: i32         = i32::min().wrapping_abs()
+const CONST_SATURATING_MIN: i32       = i32::min().saturating_abs()
+const CONST_OVERFLOWING_MIN: (i32, bool) = i32::min().overflowing_abs()
+
+#[test]
+fn const_abs() {
+    assert(CONST_ABS == 42)
+}
+
+#[test]
+fn const_checked_abs_min() {
+    match CONST_CHECKED_MIN {
+        Option::Some(_) => assert(false)
+        Option::None => assert(true)
+    }
+}
+
+#[test]
+fn const_wrapping_abs_min() {
+    assert(CONST_WRAPPING_MIN == i32::min())
+}
+
+#[test]
+fn const_saturating_abs_min() {
+    assert(CONST_SATURATING_MIN == i32::max())
+}
+
+#[test]
+fn const_overflowing_abs_min() {
+    let (v, overflow) = CONST_OVERFLOWING_MIN
+    assert(v == i32::min())
+    assert(overflow)
+}
+
+// ---- cross-type coverage ----
+//
+// Exercises the variants on each signed type's MIN edge case, where the
+// per-type literals in the impls could go wrong on copy-paste. i32 is
+// already covered comprehensively above.
+
+#[test]
+fn abs_i8() {
+    assert(i8::min().wrapping_abs() == i8::min())
+    assert(i8::min().saturating_abs() == i8::max())
+    assert((-7 as i8).abs() == 7)
+}
+
+#[test]
+fn abs_variants_i16() {
+    assert(i16::min().wrapping_abs() == i16::min())
+    assert(i16::min().saturating_abs() == i16::max())
+    match i16::min().checked_abs() {
+        Option::Some(_) => assert(false)
+        Option::None => assert(true)
+    }
+    let (v, o) = i16::min().overflowing_abs()
+    assert(v == i16::min())
+    assert(o)
+    assert((-7 as i16).abs() == 7)
+}
+
+#[test]
+fn abs_variants_i64() {
+    assert(i64::min().wrapping_abs() == i64::min())
+    assert(i64::min().saturating_abs() == i64::max())
+    match i64::min().checked_abs() {
+        Option::Some(_) => assert(false)
+        Option::None => assert(true)
+    }
+    let (v, o) = i64::min().overflowing_abs()
+    assert(v == i64::min())
+    assert(o)
+    assert((-7 as i64).abs() == 7)
+}
+
+#[test]
+fn abs_variants_i128() {
+    assert(i128::min().wrapping_abs() == i128::min())
+    assert(i128::min().saturating_abs() == i128::max())
+    match i128::min().checked_abs() {
+        Option::Some(_) => assert(false)
+        Option::None => assert(true)
+    }
+    let (v, o) = i128::min().overflowing_abs()
+    assert(v == i128::min())
+    assert(o)
+    assert((-7 as i128).abs() == 7)
+}
+
+#[test]
+fn abs_i256() {
+    assert(i256::min().wrapping_abs() == i256::min())
+    assert(i256::min().saturating_abs() == i256::max())
+    let x: i256 = -1
+    assert(x.abs() == 1)
+}
+
+#[test]
+fn abs_variants_isize() {
+    assert(isize::min().wrapping_abs() == isize::min())
+    assert(isize::min().saturating_abs() == isize::max())
+    match isize::min().checked_abs() {
+        Option::Some(_) => assert(false)
+        Option::None => assert(true)
+    }
+    let (v, o) = isize::min().overflowing_abs()
+    assert(v == isize::min())
+    assert(o)
+    assert((-7 as isize).abs() == 7)
+}

@@ -2,10 +2,10 @@ use parser::ast::{self, prelude::*};
 use salsa::Accumulator as _;
 
 use super::{
-    FileLowerCtxt,
+    AbiFieldContext, AbiFieldDiagnostic, FileLowerCtxt,
     attr::{
         AttrForm, AttrRule, AttrTarget, has_named_attr, lower_attrs_without_named,
-        validate_attr_rules,
+        named_attr_specs, validate_attr_rules,
     },
     hir_builder::HirBuilder,
 };
@@ -35,7 +35,6 @@ pub struct EventError {
 pub enum EventErrorKind {
     GenericEventStruct,
     TooManyIndexedFields { indexed_count: usize },
-    UnsupportedFieldType { ty: String },
 }
 
 pub(super) fn is_event_struct(ast: &ast::Struct) -> bool {
@@ -57,8 +56,7 @@ pub(super) fn lower_event_struct<'db>(
     let struct_name_token = ast.name();
     let struct_name = struct_name_token.as_ref().map(|n| n.text().to_string());
 
-    let stripped_event_attr = lower_attrs_without_named(builder.ctxt(), ast.attr_list(), "event");
-    let attributes = stripped_event_attr.retained;
+    let attributes = lower_attrs_without_named(builder.ctxt(), ast.attr_list(), "event");
 
     let vis = super::lower_visibility(&ast);
     let generic_params = GenericParamListId::lower_ast_opt(builder.ctxt(), ast.generic_params());
@@ -208,9 +206,9 @@ fn parse_event_fields<'db>(
                 "`#[indexed]`",
             )],
         );
-        let stripped_indexed_attr = lower_attrs_without_named(ctxt, field.attr_list(), "indexed");
-        let attrs = stripped_indexed_attr.retained;
-        let indexed_range = stripped_indexed_attr.removed.first().map(|attr| attr.range);
+        let indexed_attrs = named_attr_specs(field.attr_list(), "indexed");
+        let attrs = lower_attrs_without_named(ctxt, field.attr_list(), "indexed");
+        let indexed_range = indexed_attrs.first().map(|attr| attr.range);
         let is_indexed = indexed_range.is_some();
         if is_indexed {
             indexed_count += 1;
@@ -218,12 +216,7 @@ fn parse_event_fields<'db>(
                 indexed_ranges.push(r);
             }
         }
-        if stripped_indexed_attr
-            .removed
-            .iter()
-            .any(|attr| !attr.is_bare())
-            || stripped_indexed_attr.removed.len() > 1
-        {
+        if indexed_attrs.iter().any(|attr| !attr.is_bare()) || indexed_attrs.len() > 1 {
             is_valid = false;
         }
 
@@ -234,7 +227,7 @@ fn parse_event_fields<'db>(
 
         let vis = super::lower_field_visibility(&field);
 
-        hir_fields.push(FieldDef::new(attrs, name_ident, ty_ref, vis));
+        hir_fields.push(FieldDef::new(attrs, name_ident, ty_ref, vis, is_indexed));
 
         let (Some(name_ident), Some(ty)) = (name_ident.to_opt(), ty_ref.to_opt()) else {
             is_valid = false;
@@ -245,10 +238,9 @@ fn parse_event_fields<'db>(
         // in the TOPIC0 computation. Non-path types (tuples, etc.) are not
         // supported as event fields.
         let TypeKind::Path(Partial::Present(path)) = ty.data(db) else {
-            EventError {
-                kind: EventErrorKind::UnsupportedFieldType {
-                    ty: ty.pretty_print(db),
-                },
+            AbiFieldDiagnostic {
+                context: AbiFieldContext::Event,
+                ty: ty.pretty_print(db),
                 file,
                 primary_range: field
                     .ty()
@@ -458,7 +450,7 @@ fn lower_emit_method<'db>(
     let params = builder.params([self_param, log_param]);
     let modifiers = FuncModifiers::new(Visibility::Private, false, false, false);
 
-    builder.func_with_body(
+    builder.func_with_body_inline_always(
         emit_ident,
         generic_params,
         params,
@@ -484,9 +476,14 @@ fn lower_emit_method<'db>(
                     }
                     body.push_expr(Expr::Tuple(elems))
                 };
+                let encode_fn = if data_fields.len() == 1 {
+                    "encode_abi_payload"
+                } else {
+                    "encode_event_payload"
+                };
                 let encode_path = PathId::from_ident(db, roots.std)
                     .push_str(db, "evm")
-                    .push_str(db, "encode_abi_payload");
+                    .push_str(db, encode_fn);
                 let encode_expr = body.path_expr(encode_path);
                 let finish_call = body.call_expr(encode_expr, vec![payload_expr]);
                 let data_ptr_pat = body.push_pat(Pat::Path(

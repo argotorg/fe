@@ -91,6 +91,10 @@ where
         IdentId::new(self.db(), name.to_string())
     }
 
+    pub(super) fn generated_ident(&self, name: &str) -> IdentId<'db> {
+        IdentId::new(self.db(), format!("__fe_{name}"))
+    }
+
     pub(super) fn roots(&self) -> LibRoots<'db> {
         self.roots
     }
@@ -182,6 +186,14 @@ where
         let path = PathId::from_ident(db, self.roots.core)
             .push_str(db, "abi")
             .push_str_args(db, name, self.sol_args());
+        TraitRefId::new(db, Partial::Present(path))
+    }
+
+    pub(super) fn core_abi_trait_ref(&self, name: &str) -> TraitRefId<'db> {
+        let db = self.db();
+        let path = PathId::from_ident(db, self.roots.core)
+            .push_str(db, "abi")
+            .push_str(db, name);
         TraitRefId::new(db, Partial::Present(path))
     }
 
@@ -444,7 +456,7 @@ where
         })
     }
 
-    pub(super) fn func_with_body(
+    pub(super) fn func_with_body_inline_always(
         &mut self,
         name: IdentId<'db>,
         generic_params: GenericParamListId<'db>,
@@ -456,7 +468,7 @@ where
         self.func_with_body_spec(
             FuncBodySpec {
                 name,
-                attrs: self.empty_attrs(),
+                attrs: self.inline_always_attrs(),
                 generic_params,
                 params,
                 ret_ty,
@@ -504,25 +516,6 @@ where
         )
     }
 
-    pub(super) fn func_generic(
-        &mut self,
-        name: &str,
-        generic_params: GenericParamListId<'db>,
-        params: FuncParamListId<'db>,
-        ret_ty: Option<TypeId<'db>>,
-        modifiers: FuncModifiers,
-        build_body: impl FnOnce(&mut BodyBuilder<'_, 'db, O>),
-    ) -> Func<'db> {
-        self.func_with_body(
-            self.ident(name),
-            generic_params,
-            params,
-            ret_ty,
-            modifiers,
-            build_body,
-        )
-    }
-
     pub(super) fn func_generic_inline_always(
         &mut self,
         name: &str,
@@ -554,6 +547,14 @@ where
     roots: LibRoots<'db>,
     desugared: O,
     stmts: Vec<StmtId>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct DecodeInputBindings<'db> {
+    pub(super) input_ident: IdentId<'db>,
+    pub(super) input_ty: TypeId<'db>,
+    pub(super) base_ident: IdentId<'db>,
+    pub(super) input_len_ident: IdentId<'db>,
 }
 
 impl<'ctxt, 'db, O> BodyBuilder<'ctxt, 'db, O>
@@ -652,6 +653,16 @@ where
             None,
         );
         self.path_expr(qualified.push_str(self.db(), assoc_name))
+    }
+
+    pub(super) fn abi_field_head_size_expr(&mut self, ty: TypeId<'db>) -> ExprId {
+        let db = self.db();
+        let args = GenericArgListId::given1_type(db, ty);
+        let path = PathId::from_ident(db, self.roots.core)
+            .push_str(db, "abi")
+            .push_str_args(db, "abi_field_head_size", args);
+        let callee = self.path_expr(path);
+        self.call_expr(callee, vec![])
     }
 
     pub(super) fn call_expr(&mut self, callee: ExprId, args: Vec<ExprId>) -> ExprId {
@@ -772,6 +783,7 @@ where
         &mut self,
         target_ident: IdentId<'db>,
         ty: TypeId<'db>,
+        decoder_ident: IdentId<'db>,
         decoder_ty: TypeId<'db>,
     ) {
         let db = self.db();
@@ -793,14 +805,88 @@ where
             .push_str(db, "abi")
             .push_str_args(db, "decode_field", decode_args);
         let decode_callee = self.path_expr(decode_path);
-        let d_expr = self.path_expr(PathId::from_str(db, "d"));
-        let decode_call = self.call_expr(decode_callee, vec![d_expr]);
+        let decoder_expr = self.ident_expr(decoder_ident);
+        let decode_call = self.call_expr(decode_callee, vec![decoder_expr]);
 
         let bind_pat = self.push_pat(Pat::Path(
             Partial::Present(PathId::from_ident(db, target_ident)),
             false,
         ));
         self.emit_stmt(Stmt::Let(bind_pat, Some(ty), Some(decode_call)));
+    }
+
+    pub(super) fn decode_from_into(
+        &mut self,
+        target_ident: IdentId<'db>,
+        ty: TypeId<'db>,
+        input: DecodeInputBindings<'db>,
+        head_pos: ExprId,
+    ) {
+        let db = self.db();
+        let decode_args = GenericArgListId::given(
+            db,
+            vec![
+                GenericArg::Type(TypeGenericArg {
+                    ty: Partial::Present(self.sol_ty()),
+                }),
+                GenericArg::Type(TypeGenericArg {
+                    ty: Partial::Present(ty),
+                }),
+                GenericArg::Type(TypeGenericArg {
+                    ty: Partial::Present(input.input_ty),
+                }),
+            ],
+        );
+        let decode_path = PathId::from_ident(db, self.roots.core)
+            .push_str(db, "abi")
+            .push_str_args(db, "decode_msg_field_from", decode_args);
+        let decode_callee = self.path_expr(decode_path);
+        let input_expr = self.ident_expr(input.input_ident);
+        let base_expr = self.ident_expr(input.base_ident);
+        let args = vec![
+            CallArg {
+                label: None,
+                expr: input_expr,
+            },
+            CallArg {
+                label: Some(IdentId::new(db, "base".to_string())),
+                expr: base_expr,
+            },
+            CallArg {
+                label: Some(IdentId::new(db, "head_pos".to_string())),
+                expr: head_pos,
+            },
+            CallArg {
+                label: Some(IdentId::new(db, "input_len".to_string())),
+                expr: self.ident_expr(input.input_len_ident),
+            },
+        ];
+        let decode_call = self.call_expr_with_args(decode_callee, args);
+
+        let bind_pat = self.push_pat(Pat::Path(
+            Partial::Present(PathId::from_ident(db, target_ident)),
+            false,
+        ));
+        self.emit_stmt(Stmt::Let(bind_pat, Some(ty), Some(decode_call)));
+    }
+
+    pub(super) fn bind_input_len(&mut self, target_ident: IdentId<'db>, input_ident: IdentId<'db>) {
+        let db = self.db();
+        let input_expr = self.ident_expr(input_ident);
+        let len_call =
+            self.method_call_expr(input_expr, IdentId::new(db, "len".to_string()), vec![]);
+        let bind_pat = self.push_pat(Pat::Path(
+            Partial::Present(PathId::from_ident(db, target_ident)),
+            false,
+        ));
+        let u256_ty = TypeId::new(
+            db,
+            TypeKind::Path(Partial::Present(PathId::from_ident(
+                db,
+                IdentId::new(db, "u256".to_string()),
+            ))),
+        );
+        self.emit_stmt(Stmt::Let(bind_pat, Some(u256_ty), Some(len_call)));
     }
 
     pub(super) fn return_record_self(&mut self, fields: &[IdentId<'db>]) {

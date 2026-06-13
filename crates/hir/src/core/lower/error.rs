@@ -2,7 +2,7 @@ use parser::ast::{self, prelude::*};
 use salsa::Accumulator as _;
 
 use super::{
-    FileLowerCtxt,
+    AbiFieldContext, AbiFieldDiagnostic, FileLowerCtxt,
     attr::{has_named_attr, lower_attrs_without_named, named_attr_specs},
     hir_builder::HirBuilder,
     msg::{
@@ -33,7 +33,6 @@ pub struct ErrorDiagnostic {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ErrorDiagnosticKind {
     GenericErrorStruct,
-    UnsupportedFieldType { ty: String },
     EventErrorAttrConflict,
 }
 
@@ -77,8 +76,7 @@ pub(super) fn lower_error_struct<'db>(
     let struct_name = struct_name_token.as_ref().map(|n| n.text().to_string());
 
     // Strip #[error] attribute.
-    let stripped_error_attr = lower_attrs_without_named(builder.ctxt(), ast.attr_list(), "error");
-    let attributes = stripped_error_attr.retained;
+    let attributes = lower_attrs_without_named(builder.ctxt(), ast.attr_list(), "error");
 
     let vis = super::lower_visibility(&ast);
     let generic_params = GenericParamListId::lower_ast_opt(builder.ctxt(), ast.generic_params());
@@ -214,7 +212,7 @@ fn parse_error_fields<'db>(
         let ty_ref = TypeId::lower_ast_partial(ctxt, field.ty());
         let vis = super::lower_field_visibility(&field);
 
-        hir_fields.push(FieldDef::new(attrs, name_ident, ty_ref, vis));
+        hir_fields.push(FieldDef::new(attrs, name_ident, ty_ref, vis, false));
 
         let (Some(name_ident), Some(ty)) = (name_ident.to_opt(), ty_ref.to_opt()) else {
             is_valid = false;
@@ -222,10 +220,9 @@ fn parse_error_fields<'db>(
         };
 
         let TypeKind::Path(Partial::Present(path)) = ty.data(db) else {
-            ErrorDiagnostic {
-                kind: ErrorDiagnosticKind::UnsupportedFieldType {
-                    ty: ty.pretty_print(db),
-                },
+            AbiFieldDiagnostic {
+                context: AbiFieldContext::Error,
+                ty: ty.pretty_print(db),
                 file,
                 primary_range: field
                     .ty()
@@ -427,7 +424,7 @@ fn lower_error_encode_impl<'db>(
                 builder.param_mut_underscore_named(encoder_ident, e_ty),
             ]);
 
-            builder.func_generic(
+            builder.func_generic_inline_always(
                 "encode",
                 e_generic_params,
                 params,
@@ -445,7 +442,7 @@ fn lower_error_encode_impl<'db>(
             let params = builder.params([builder.param_own_self(), ptr_param]);
             let encode_to_ptr_ident = builder.ident("encode_to_ptr");
 
-            builder.func_with_body(
+            builder.func_with_body_inline_always(
                 encode_to_ptr_ident,
                 builder.empty_generic_params(),
                 params,

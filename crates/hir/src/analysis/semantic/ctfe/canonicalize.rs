@@ -283,8 +283,9 @@ fn canonicalize_expr<'db>(
     mode: ConstCanonicalizationMode,
 ) -> (SExpr<'db>, Option<SemConstId<'db>>) {
     if let SExpr::Const(SConst::Ref(cref)) = expr {
-        let value = eval_const_ref(db, *cref)
-            .unwrap_or_else(|err| panic!("CTFE failed for {cref:?}: {err:?}"));
+        let Ok(value) = eval_const_ref(db, *cref) else {
+            return (SExpr::Const(SConst::Ref(*cref)), None);
+        };
         let value = canonicalize_const_value(db, instance, value);
         let runtime = reify_runtime_const_for_ty(db, instance, result_ty, value);
         return (

@@ -16,11 +16,12 @@ use super::evm::{mem, ops}
 /// The returned value owns a memory tail with layout `(len = 32, word)`.
 /// Use this when an ABI `bytes` parameter or event field should contain one
 /// full 32-byte chunk, for example a `bytes`-typed wrapper around a `bytes32`.
+#[inline(always)]
 pub fn bytes_from_word(_ w: u256) -> Bytes uses (mem: mut RawMem) {
     let data = mem::alloc(64)
     mem.mstore(addr: data, value: 32)
     mem.mstore(addr: data + 32, value: w)
-    Bytes { data: data, len: 32, size: 64 }
+    Bytes::from_abi_tail(data: data, len: 32, size: 64)
 }
 
 /// Allocate a Solidity ABI `bytes` value from `N` full 32-byte words.
@@ -40,7 +41,7 @@ uses (mem: mut RawMem)
         mem.mstore(addr: data + 32 + (i as u256) * 32, value: words[i])
         i += 1
     }
-    Bytes { data: data, len: len, size: size }
+    Bytes::from_abi_tail(data: data, len: len, size: size)
 }
 
 /// Allocate a `Bytes` of byte length `LEN` from `N` u256 words.
@@ -71,5 +72,5 @@ uses (mem: mut RawMem)
         mem.mstore(addr: data + 32 + (i as u256) * 32, value: words[i])
         i += 1
     }
-    Bytes { data: data, len: len, size: size }
+    Bytes::from_abi_tail(data: data, len: len, size: size)
 }

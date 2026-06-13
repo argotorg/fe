@@ -43,6 +43,26 @@ impl<'db> RuntimeClass<'db> {
         matches!(self, Self::Ref { .. } | Self::RawAddr { .. })
     }
 
+    pub fn contains_transport(&self, db: &'db dyn MirDb) -> bool {
+        match self {
+            Self::Scalar(_) => false,
+            Self::Ref { .. } | Self::RawAddr { .. } => true,
+            Self::AggregateValue { layout } => match layout.data(db) {
+                Layout::Struct(layout) => layout
+                    .fields
+                    .iter()
+                    .any(|field| field.contains_transport(db)),
+                Layout::Array(layout) => layout.elem.contains_transport(db),
+                Layout::Enum(layout) => layout.variants.iter().any(|variant| {
+                    variant
+                        .fields
+                        .iter()
+                        .any(|field| field.contains_transport(db))
+                }),
+            },
+        }
+    }
+
     pub fn const_ref(layout: LayoutId<'db>) -> Self {
         Self::Ref {
             pointee: Box::new(Self::AggregateValue { layout }),
@@ -78,6 +98,11 @@ impl<'db> RuntimeClass<'db> {
             RuntimeClass::Ref { pointee, .. } => pointee.aggregate_layout(),
             RuntimeClass::RawAddr { target, .. } => *target,
         }
+    }
+
+    pub fn aggregate_value_class(&self) -> Option<Self> {
+        self.aggregate_layout()
+            .map(|layout| Self::AggregateValue { layout })
     }
 
     pub fn pointee(&self) -> Option<&RuntimeClass<'db>> {
@@ -357,6 +382,15 @@ fn ref_kinds_share_runtime_rep<'db>(actual: &RefKind<'db>, desired: &RefKind<'db
 pub enum RuntimeCarrier<'db> {
     Erased,
     Value(RuntimeClass<'db>),
+}
+
+impl<'db> RuntimeCarrier<'db> {
+    pub fn value_class(&self) -> Option<&RuntimeClass<'db>> {
+        match self {
+            RuntimeCarrier::Erased => None,
+            RuntimeCarrier::Value(class) => Some(class),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -1351,6 +1385,10 @@ pub enum RExpr<'db> {
     AggregateExtract {
         value: RValueId,
         index: u32,
+    },
+    AggregateMake {
+        layout: LayoutId<'db>,
+        fields: Box<[RValueId]>,
     },
     Call {
         callee: RuntimeInstance<'db>,

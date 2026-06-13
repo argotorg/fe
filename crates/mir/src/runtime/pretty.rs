@@ -488,6 +488,14 @@ fn format_expr<'db>(db: &'db dyn MirDb, expr: &RExpr<'db>) -> String {
         RExpr::AggregateExtract { value, index } => {
             format!("extract_value {}, {}", format_local_id(*value), index)
         }
+        RExpr::AggregateMake { layout, fields } => {
+            let fields = fields
+                .iter()
+                .map(|value| format_local_id(*value))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("aggregate_make {}({fields})", format_layout(db, *layout))
+        }
         RExpr::Call { callee, args } => {
             let args = args
                 .iter()

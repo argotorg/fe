@@ -4157,7 +4157,7 @@ impl<'db> ImplTrait<'db> {
         // Semantic associated type implementations in this impl-trait block.
         let mut types: IndexMap<_, _> = self
             .assoc_types(db)
-            .filter_map(|v| v.name(db).and_then(|name| v.ty(db).map(|ty| (name, ty))))
+            .filter_map(|v| v.name(db).zip(v.ty(db)))
             .collect();
 
         // Merge trait associated type defaults into the implementor, but evaluated in

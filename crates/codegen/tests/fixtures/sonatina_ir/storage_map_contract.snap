@@ -7,141 +7,102 @@ target = "evm-ethereum-osaka"
 
 func private %abi_encode(v0.i256) {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v3.i256 = mload v1 i256;
-        call %mstore 0.i256 v3;
+        call %mstore 0.i256 v0;
         call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_c635 0.i256 32.i256;
         unreachable;
 }
 
 func private %calldataload(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        v3.i256 = evm_calldata_load v2;
-        return v3;
+        v2.i256 = evm_calldata_load v0;
+        return v2;
 }
 
 func private %codecopy(v0.i256, v1.i256, v2.i256) {
     block0:
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        mstore v3 v0 i256;
-        mstore v4 v1 i256;
-        mstore v5 v2 i256;
         jump block1;
 
     block1:
-        v6.i256 = mload v3 i256;
-        v7.i256 = mload v4 i256;
-        v8.i256 = mload v5 i256;
-        evm_code_copy v6 v7 v8;
+        evm_code_copy v0 v1 v2;
         return;
 }
 
 func private %std__lib__evm__word__impl_trait_u256_1f9e__from_word_461b(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        return v2;
+        return v0;
 }
 
 func private %std__lib__evm__word__impl_trait_u256_1f9e__from_word_461b_0(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        return v2;
+        return v0;
 }
 
 func private %std__lib__evm__word__impl_trait_u256_1f9e__from_word_461b_1(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        return v2;
+        return v0;
 }
 
 func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__get__gcbe1_9b00(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v3.i256 = mload v1 i256;
-        v4.i256 = call %std__lib__evm__storage_map__storagemap_get_word_with_salt__ge513_a5dc_0 v3 0.i256;
-        v5.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__from_word_461b_0 v4;
-        return v5;
+        v3.i256 = call %std__lib__evm__storage_map__storagemap_get_word_with_salt__ge513_a5dc_0 v0 0.i256;
+        v4.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__from_word_461b_0 v3;
+        return v4;
 }
 
 func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__get__gcbe1_9b00_0(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v3.i256 = mload v1 i256;
-        v4.i256 = call %std__lib__evm__storage_map__storagemap_get_word_with_salt__ge513_a5dc_1 v3 0.i256;
-        v5.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__from_word_461b_1 v4;
-        return v5;
+        v3.i256 = call %std__lib__evm__storage_map__storagemap_get_word_with_salt__ge513_a5dc_1 v0 0.i256;
+        v4.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__from_word_461b_1 v3;
+        return v4;
 }
 
 func private %get_allowance(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        v3.i256 = call %get__g7fdf v2;
-        return v3;
+        v2.i256 = call %get__g7fdf v0;
+        return v2;
 }
 
 func private %get_balance(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        v3.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__gcbe1_9b00 v2;
-        return v3;
+        v2.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__gcbe1_9b00 v0;
+        return v2;
 }
 
 func inline(always) private %get__g7fdf(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v3.i256 = mload v1 i256;
-        v4.i256 = call %std__lib__evm__storage_map__storagemap_get_word_with_salt__ge513_a5dc v3 1.i256;
-        v5.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__from_word_461b v4;
-        return v5;
+        v3.i256 = call %std__lib__evm__storage_map__storagemap_get_word_with_salt__ge513_a5dc v0 1.i256;
+        v4.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__from_word_461b v3;
+        return v4;
 }
 
 func private %init() {
@@ -178,16 +139,10 @@ func private %manual_contract_runtime_root_BalanceMap() {
 
 func private %mstore(v0.i256, v1.i256) {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        mstore v4 v5 i256;
+        mstore v0 v1 i256;
         return;
 }
 
@@ -209,44 +164,26 @@ func private %new__g7fdf() {
 
 func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_ad81(v0.i256, v1.i256) {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_return v4 v5;
+        evm_return v0 v1;
 }
 
 func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_ad81_0(v0.i256, v1.i256) {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_return v4 v5;
+        evm_return v0 v1;
 }
 
 func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_c635(v0.i256, v1.i256) {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_return v4 v5;
+        evm_return v0 v1;
 }
 
 func private %runtime() {
@@ -321,161 +258,102 @@ func private %runtime() {
 
 func inline(always) private %set__g7fdf(v0.i256, v1.i256) {
     block0:
-        v2.*i256 = alloca i256;
-        mstore v2 v0 i256;
         jump block1;
 
     block1:
-        v5.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__to_word_1ead v1;
-        v6.i256 = mload v2 i256;
-        call %std__lib__evm__storage_map__storagemap_set_word_with_salt__ge513_d78d v6 1.i256 v5;
+        v4.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__to_word_1ead v1;
+        call %std__lib__evm__storage_map__storagemap_set_word_with_salt__ge513_d78d v0 1.i256 v4;
         return;
 }
 
 func inline(always) private %set__gcbe1(v0.i256, v1.i256) {
     block0:
-        v2.*i256 = alloca i256;
-        mstore v2 v0 i256;
         jump block1;
 
     block1:
-        v5.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__to_word_1ead_0 v1;
-        v6.i256 = mload v2 i256;
-        call %std__lib__evm__storage_map__storagemap_set_word_with_salt__ge513_d78d_0 v6 0.i256 v5;
+        v4.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__to_word_1ead_0 v1;
+        call %std__lib__evm__storage_map__storagemap_set_word_with_salt__ge513_d78d_0 v0 0.i256 v4;
         return;
 }
 
 func private %set_allowance(v0.i256, v1.i256) {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        call %set__g7fdf v4 v5;
+        call %set__g7fdf v0 v1;
         return;
 }
 
 func private %set_balance(v0.i256, v1.i256) {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        call %set__gcbe1 v4 v5;
+        call %set__gcbe1 v0 v1;
         return;
 }
 
 func inline(always) private %std__lib__evm__storage_map__storagemap_get_word_with_salt__ge513_a5dc(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v3 i256;
-        v5.i256 = mload v2 i256;
-        v6.i256 = call %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d v5 v4;
-        v7.i256 = evm_sload v6;
-        return v7;
+        v4.i256 = call %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d v0 v1;
+        v5.i256 = evm_sload v4;
+        return v5;
 }
 
 func inline(always) private %std__lib__evm__storage_map__storagemap_get_word_with_salt__ge513_a5dc_0(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v3 i256;
-        v5.i256 = mload v2 i256;
-        v6.i256 = call %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d_1 v5 v4;
-        v7.i256 = evm_sload v6;
-        return v7;
+        v4.i256 = call %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d_1 v0 v1;
+        v5.i256 = evm_sload v4;
+        return v5;
 }
 
 func inline(always) private %std__lib__evm__storage_map__storagemap_get_word_with_salt__ge513_a5dc_1(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v3 i256;
-        v5.i256 = mload v2 i256;
-        v6.i256 = call %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d_2 v5 v4;
-        v7.i256 = evm_sload v6;
-        return v7;
+        v4.i256 = call %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d_2 v0 v1;
+        v5.i256 = evm_sload v4;
+        return v5;
 }
 
 func inline(always) private %std__lib__evm__storage_map__storagemap_set_word_with_salt__ge513_d78d(v0.i256, v1.i256, v2.i256) {
     block0:
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        mstore v3 v0 i256;
-        mstore v4 v1 i256;
-        mstore v5 v2 i256;
         jump block1;
 
     block1:
-        v6.i256 = mload v4 i256;
-        v7.i256 = mload v3 i256;
-        v8.i256 = call %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d_0 v7 v6;
-        v9.i256 = mload v5 i256;
-        evm_sstore v8 v9;
+        v5.i256 = call %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d_0 v0 v1;
+        evm_sstore v5 v2;
         return;
 }
 
 func inline(always) private %std__lib__evm__storage_map__storagemap_set_word_with_salt__ge513_d78d_0(v0.i256, v1.i256, v2.i256) {
     block0:
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        mstore v3 v0 i256;
-        mstore v4 v1 i256;
-        mstore v5 v2 i256;
         jump block1;
 
     block1:
-        v6.i256 = mload v4 i256;
-        v7.i256 = mload v3 i256;
-        v8.i256 = call %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d_2 v7 v6;
-        v9.i256 = mload v5 i256;
-        evm_sstore v8 v9;
+        v5.i256 = call %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d_2 v0 v1;
+        evm_sstore v5 v2;
         return;
 }
 
 func inline(always) private %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v5.*i8 = evm_malloc 0.i256;
-        v6.i256 = ptr_to_int v5 i256;
-        v7.i256 = mload v2 i256;
-        v8.i256 = call %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_bd6c v6 v7;
-        (v9.i256, v10.i1) = uaddo v6 v8;
-        br v10 block2 block3;
+        v3.*i8 = evm_malloc 0.i256;
+        v4.i256 = ptr_to_int v3 i256;
+        v6.i256 = call %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_bd6c v4 v0;
+        (v7.i256, v8.i1) = uaddo v4 v6;
+        br v8 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -483,31 +361,25 @@ func inline(always) private %std__lib__evm__storage_map__storagemap_storage_slot
         evm_revert 0.i256 36.i256;
 
     block3:
-        v15.i256 = mload v3 i256;
-        mstore v9 v15 i256;
-        (v19.i256, v20.i1) = uaddo v8 32.i256;
-        br v20 block2 block4;
+        mstore v7 v1 i256;
+        (v17.i256, v18.i1) = uaddo v6 32.i256;
+        br v18 block2 block4;
 
     block4:
-        v22.i256 = evm_keccak256 v6 v19;
-        return v22;
+        v20.i256 = evm_keccak256 v4 v17;
+        return v20;
 }
 
 func inline(always) private %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d_0(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v5.*i8 = evm_malloc 0.i256;
-        v6.i256 = ptr_to_int v5 i256;
-        v7.i256 = mload v2 i256;
-        v8.i256 = call %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_bd6c_0 v6 v7;
-        (v9.i256, v10.i1) = uaddo v6 v8;
-        br v10 block2 block3;
+        v3.*i8 = evm_malloc 0.i256;
+        v4.i256 = ptr_to_int v3 i256;
+        v6.i256 = call %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_bd6c_0 v4 v0;
+        (v7.i256, v8.i1) = uaddo v4 v6;
+        br v8 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -515,31 +387,25 @@ func inline(always) private %std__lib__evm__storage_map__storagemap_storage_slot
         evm_revert 0.i256 36.i256;
 
     block3:
-        v15.i256 = mload v3 i256;
-        mstore v9 v15 i256;
-        (v19.i256, v20.i1) = uaddo v8 32.i256;
-        br v20 block2 block4;
+        mstore v7 v1 i256;
+        (v17.i256, v18.i1) = uaddo v6 32.i256;
+        br v18 block2 block4;
 
     block4:
-        v22.i256 = evm_keccak256 v6 v19;
-        return v22;
+        v20.i256 = evm_keccak256 v4 v17;
+        return v20;
 }
 
 func inline(always) private %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d_1(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v5.*i8 = evm_malloc 0.i256;
-        v6.i256 = ptr_to_int v5 i256;
-        v7.i256 = mload v2 i256;
-        v8.i256 = call %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_bd6c_1 v6 v7;
-        (v9.i256, v10.i1) = uaddo v6 v8;
-        br v10 block2 block3;
+        v3.*i8 = evm_malloc 0.i256;
+        v4.i256 = ptr_to_int v3 i256;
+        v6.i256 = call %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_bd6c_1 v4 v0;
+        (v7.i256, v8.i1) = uaddo v4 v6;
+        br v8 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -547,31 +413,25 @@ func inline(always) private %std__lib__evm__storage_map__storagemap_storage_slot
         evm_revert 0.i256 36.i256;
 
     block3:
-        v15.i256 = mload v3 i256;
-        mstore v9 v15 i256;
-        (v19.i256, v20.i1) = uaddo v8 32.i256;
-        br v20 block2 block4;
+        mstore v7 v1 i256;
+        (v17.i256, v18.i1) = uaddo v6 32.i256;
+        br v18 block2 block4;
 
     block4:
-        v22.i256 = evm_keccak256 v6 v19;
-        return v22;
+        v20.i256 = evm_keccak256 v4 v17;
+        return v20;
 }
 
 func inline(always) private %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d_2(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v5.*i8 = evm_malloc 0.i256;
-        v6.i256 = ptr_to_int v5 i256;
-        v7.i256 = mload v2 i256;
-        v8.i256 = call %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_bd6c_2 v6 v7;
-        (v9.i256, v10.i1) = uaddo v6 v8;
-        br v10 block2 block3;
+        v3.*i8 = evm_malloc 0.i256;
+        v4.i256 = ptr_to_int v3 i256;
+        v6.i256 = call %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_bd6c_2 v4 v0;
+        (v7.i256, v8.i1) = uaddo v4 v6;
+        br v8 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -579,14 +439,13 @@ func inline(always) private %std__lib__evm__storage_map__storagemap_storage_slot
         evm_revert 0.i256 36.i256;
 
     block3:
-        v15.i256 = mload v3 i256;
-        mstore v9 v15 i256;
-        (v19.i256, v20.i1) = uaddo v8 32.i256;
-        br v20 block2 block4;
+        mstore v7 v1 i256;
+        (v17.i256, v18.i1) = uaddo v6 32.i256;
+        br v18 block2 block4;
 
     block4:
-        v22.i256 = evm_keccak256 v6 v19;
-        return v22;
+        v20.i256 = evm_keccak256 v4 v17;
+        return v20;
 }
 
 func private %std__lib__evm__word__impl_trait_u256_1f9e__to_word_1ead(v0.i256) -> i256 {
@@ -607,20 +466,12 @@ func private %std__lib__evm__word__impl_trait_u256_1f9e__to_word_1ead_0(v0.i256)
 
 func private %transfer(v0.i256, v1.i256, v2.i256) -> i256 {
     block0:
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
-        mstore v3 v0 i256;
-        mstore v4 v1 i256;
-        mstore v5 v2 i256;
         jump block1;
 
     block1:
-        v6.i256 = mload v3 i256;
-        v7.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__gcbe1_9b00_0 v6;
-        v8.i256 = mload v5 i256;
-        v9.i1 = lt v7 v8;
-        br v9 block2 block3;
+        v4.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__gcbe1_9b00_0 v0;
+        v6.i1 = lt v4 v2;
+        br v6 block2 block3;
 
     block2:
         return 1.i256;
@@ -629,12 +480,9 @@ func private %transfer(v0.i256, v1.i256, v2.i256) -> i256 {
         jump block4;
 
     block4:
-        v11.i256 = mload v4 i256;
-        v12.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__gcbe1_9b00_0 v11;
-        v13.i256 = mload v3 i256;
-        v14.i256 = mload v5 i256;
-        (v16.i256, v17.i1) = usubo v7 v14;
-        br v17 block5 block6;
+        v9.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__gcbe1_9b00_0 v1;
+        (v13.i256, v14.i1) = usubo v4 v2;
+        br v14 block5 block6;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -642,74 +490,48 @@ func private %transfer(v0.i256, v1.i256, v2.i256) -> i256 {
         evm_revert 0.i256 36.i256;
 
     block6:
-        call %set__gcbe1 v13 v16;
-        v25.i256 = mload v4 i256;
-        v26.i256 = mload v5 i256;
-        (v28.i256, v29.i1) = uaddo v12 v26;
-        br v29 block5 block7;
+        call %set__gcbe1 v0 v13;
+        (v25.i256, v26.i1) = uaddo v9 v2;
+        br v26 block5 block7;
 
     block7:
-        call %set__gcbe1 v25 v28;
+        call %set__gcbe1 v1 v25;
         return 0.i256;
 }
 
 func inline(always) private %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_bd6c(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        mstore v4 v5 i256;
+        mstore v0 v1 i256;
         return 32.i256;
 }
 
 func inline(always) private %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_bd6c_0(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        mstore v4 v5 i256;
+        mstore v0 v1 i256;
         return 32.i256;
 }
 
 func inline(always) private %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_bd6c_1(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        mstore v4 v5 i256;
+        mstore v0 v1 i256;
         return 32.i256;
 }
 
 func inline(always) private %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_bd6c_2(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        mstore v4 v5 i256;
+        mstore v0 v1 i256;
         return 32.i256;
 }
 

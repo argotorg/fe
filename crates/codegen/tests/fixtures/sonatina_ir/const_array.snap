@@ -27,36 +27,30 @@ func private %main_root() {
 
 func private %sum_two(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.constref<[i256; 3]> = const.ref $const_region_0;
-        v5.i256 = mload v2 i256;
-        v7.i1 = lt v5 3.i256;
-        v8.i1 = is_zero v7;
-        br v8 block2 block3;
+        v2.constref<[i256; 3]> = const.ref $const_region_0;
+        v5.i1 = lt v0 3.i256;
+        v6.i1 = is_zero v5;
+        br v6 block2 block3;
 
     block2:
         evm_revert 0.i256 0.i256;
 
     block3:
-        v10.constref<i256> = const.index v4 v5;
-        v11.i256 = const.load v10;
-        v12.constref<[i256; 3]> = const.ref $const_region_0;
-        v13.i256 = mload v3 i256;
-        v14.i1 = lt v13 3.i256;
-        v15.i1 = is_zero v14;
-        br v15 block2 block4;
+        v8.constref<i256> = const.index v2 v0;
+        v9.i256 = const.load v8;
+        v10.constref<[i256; 3]> = const.ref $const_region_0;
+        v12.i1 = lt v1 3.i256;
+        v13.i1 = is_zero v12;
+        br v13 block2 block4;
 
     block4:
-        v16.constref<i256> = const.index v12 v13;
-        v17.i256 = const.load v16;
-        (v19.i256, v20.i1) = uaddo v11 v17;
-        br v20 block5 block6;
+        v14.constref<i256> = const.index v10 v1;
+        v15.i256 = const.load v14;
+        (v17.i256, v18.i1) = uaddo v9 v15;
+        br v18 block5 block6;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -64,7 +58,7 @@ func private %sum_two(v0.i256, v1.i256) -> i256 {
         evm_revert 0.i256 36.i256;
 
     block6:
-        return v19;
+        return v17;
 }
 
 

@@ -29,7 +29,7 @@ toml = "0.8"
 tempfile = "3.13"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-gix = { version = "0.83.0", default-features = false, features = [
+gix = { workspace = true, features = [
     "sha1",
     "worktree-mutation",
     "blocking-http-transport-reqwest-rust-tls",

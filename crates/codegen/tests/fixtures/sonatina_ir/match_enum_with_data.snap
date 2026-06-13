@@ -31,57 +31,32 @@ func private %main_root() {
 
 func private %make_some(v0.i64) -> @layout_0 {
     block0:
-        v1.*i64 = alloca i64;
-        mstore v1 v0 i64;
         jump block1;
 
     block1:
-        v2.i64 = mload v1 i64;
-        v3.@layout_0 = enum.make @layout_0 #Some v2;
-        return v3;
+        v2.@layout_0 = enum.make @layout_0 #Some v0;
+        return v2;
 }
 
 func private %match_option(v0.@layout_0) -> i64 {
     block0:
-        v1.objref<@layout_0> = obj.alloc @layout_0;
-        v2.enumtag(@layout_0) = enum.tag v0;
-        br_table v2 block6 (0.enumtag(@layout_0) block7) (1.enumtag(@layout_0) block8);
+        jump block1;
 
     block1:
-        v8.@layout_0 = obj.load v1;
-        v9.enumtag(@layout_0) = enum.tag v8;
-        br_table v9 (1.enumtag(@layout_0) block3) (0.enumtag(@layout_0) block4);
+        v2.enumtag(@layout_0) = enum.tag v0;
+        br_table v2 (1.enumtag(@layout_0) block3) (0.enumtag(@layout_0) block4);
 
     block2:
-        v10.i64 = phi (v12 block3) (0.i64 block4);
-        return v10;
+        v5.i64 = phi (v8 block3) (0.i64 block4);
+        return v5;
 
     block3:
-        v11.@layout_0 = obj.load v1;
-        enum.assert_variant v11 #Some;
-        v12.i64 = enum.extract v11 #Some 0.i256;
+        enum.assert_variant v0 #Some;
+        v8.i64 = enum.extract v0 #Some 0.i256;
         jump block2;
 
     block4:
         jump block2;
-
-    block5:
-        jump block1;
-
-    block6:
-        unreachable;
-
-    block7:
-        enum.set_tag v1 #None;
-        jump block5;
-
-    block8:
-        enum.set_tag v1 #Some;
-        enum.assert_variant v0 #Some;
-        v6.objref<i64> = enum.proj v1 #Some 0.i256;
-        v7.i64 = enum.extract v0 #Some 0.i256;
-        obj.store v6 v7;
-        jump block5;
 }
 
 

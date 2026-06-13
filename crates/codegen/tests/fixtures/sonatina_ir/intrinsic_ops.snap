@@ -7,50 +7,38 @@ target = "evm-ethereum-osaka"
 
 func private %calldataload(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        v3.i256 = evm_calldata_load v2;
-        return v3;
+        v2.i256 = evm_calldata_load v0;
+        return v2;
 }
 
 func private %load_calldata(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        v3.i256 = call %calldataload v2;
-        return v3;
+        v2.i256 = call %calldataload v0;
+        return v2;
 }
 
 func private %load_slot(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        v3.i256 = call %sload v2;
-        return v3;
+        v2.i256 = call %sload v0;
+        return v2;
 }
 
 func private %load_word(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        v3.i256 = call %mload v2;
-        return v3;
+        v2.i256 = call %mload v0;
+        return v2;
 }
 
 func private %main() -> i256 {
@@ -91,115 +79,73 @@ func private %main_root() {
 
 func private %mload(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        v3.i256 = mload v2 i256;
-        return v3;
+        v2.i256 = mload v0 i256;
+        return v2;
 }
 
 func private %mstore(v0.i256, v1.i256) {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        mstore v4 v5 i256;
+        mstore v0 v1 i256;
         return;
 }
 
 func private %mstore8(v0.i256, v1.i8) {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i8 = alloca i8;
-        mstore v2 v0 i256;
-        mstore v3 v1 i8;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i8 = mload v3 i8;
-        evm_mstore8 v4 v5;
+        evm_mstore8 v0 v1;
         return;
 }
 
 func private %sload(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        v3.i256 = evm_sload v2;
-        return v3;
+        v2.i256 = evm_sload v0;
+        return v2;
 }
 
 func private %sstore(v0.i256, v1.i256) {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        evm_sstore v4 v5;
+        evm_sstore v0 v1;
         return;
 }
 
 func private %store_byte(v0.i256, v1.i8) {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i8 = alloca i8;
-        mstore v2 v0 i256;
-        mstore v3 v1 i8;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i8 = mload v3 i8;
-        call %mstore8 v4 v5;
+        call %mstore8 v0 v1;
         return;
 }
 
 func private %store_slot(v0.i256, v1.i256) {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        call %sstore v4 v5;
+        call %sstore v0 v1;
         return;
 }
 
 func private %store_word(v0.i256, v1.i256) {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        call %mstore v4 v5;
+        call %mstore v0 v1;
         return;
 }
 

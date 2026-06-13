@@ -33,6 +33,7 @@ derive_more = { version = "1.0", default-features = false, features = [
 dir-test = "0.4"
 glob = "0.3.2"
 crossbeam-channel = "0.5.15"
+gix = { version = "0.83.0", default-features = false }
 rustc-hash = "2.1.0"
 num-bigint = "0.4"
 num-traits = "0.2"
@@ -49,10 +50,10 @@ tracing-tree = "0.4.0"
 wasm-bindgen-test = "0.3"
 semver = "1.0.26"
 petgraph = "0.8"
-sonatina-ir = { git = "https://github.com/fe-lang/sonatina", rev = "7711422" }
-sonatina-triple = { git = "https://github.com/fe-lang/sonatina", rev = "7711422" }
-sonatina-codegen = { git = "https://github.com/fe-lang/sonatina", rev = "7711422" }
-sonatina-verifier = { git = "https://github.com/fe-lang/sonatina", rev = "7711422" }
+sonatina-ir = { git = "https://github.com/fe-lang/sonatina", rev = "a74b939" }
+sonatina-triple = { git = "https://github.com/fe-lang/sonatina", rev = "a74b939" }
+sonatina-codegen = { git = "https://github.com/fe-lang/sonatina", rev = "a74b939" }
+sonatina-verifier = { git = "https://github.com/fe-lang/sonatina", rev = "a74b939" }
 
 [profile.dev]
 # Set to 0 to make the build faster and debugging more difficult.

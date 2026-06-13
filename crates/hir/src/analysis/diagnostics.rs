@@ -563,12 +563,6 @@ impl DiagnosticVoucher for crate::EventError {
                 format!("EVM supports at most 3 indexed fields (found {indexed_count})"),
                 vec!["remove `#[indexed]` from fields until there are at most 3".to_string()],
             ),
-            EventErrorKind::UnsupportedFieldType { ty } => (
-                7,
-                "unsupported event field type".to_string(),
-                format!("`{ty}` is not supported as an event field"),
-                vec!["event field types must be named types (e.g. `u256`, `Address`)".to_string()],
-            ),
         };
 
         let error_code = GlobalErrorCode::new(DiagnosticPass::EventLower, code);
@@ -587,6 +581,33 @@ impl DiagnosticVoucher for crate::EventError {
     }
 }
 
+impl DiagnosticVoucher for crate::AbiFieldDiagnostic {
+    fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
+        use crate::AbiFieldContext;
+
+        let primary_span = Span::new(self.file, self.primary_range, SpanKind::Original);
+        let (diagnostic_pass, code, field_context) = match self.context {
+            AbiFieldContext::Event => (DiagnosticPass::EventLower, 7, "an event"),
+            AbiFieldContext::Error => (DiagnosticPass::ErrorLower, 4, "a custom error"),
+        };
+
+        CompleteDiagnostic::new(
+            Severity::Error,
+            "unsupported ABI field type".to_string(),
+            vec![SubDiagnostic::new(
+                LabelStyle::Primary,
+                format!("`{}` is not supported as {field_context} field", self.ty),
+                Some(primary_span),
+            )],
+            vec![
+                "tuples are not supported in event or custom error fields; use a struct type for grouped data"
+                    .to_string(),
+            ],
+            GlobalErrorCode::new(diagnostic_pass, code),
+        )
+    }
+}
+
 impl DiagnosticVoucher for crate::ErrorDiagnostic {
     fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
         use crate::ErrorDiagnosticKind;
@@ -599,12 +620,6 @@ impl DiagnosticVoucher for crate::ErrorDiagnostic {
                 "`#[error]` structs must be non-generic".to_string(),
                 "generics are not supported on `#[error]` structs".to_string(),
                 vec!["remove generic parameters from the error struct".to_string()],
-            ),
-            ErrorDiagnosticKind::UnsupportedFieldType { ty } => (
-                4,
-                "unsupported error field type".to_string(),
-                format!("`{ty}` is not supported as an error field"),
-                vec!["error field types must be named types (e.g. `u256`, `Address`)".to_string()],
             ),
             ErrorDiagnosticKind::EventErrorAttrConflict => (
                 5,

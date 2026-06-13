@@ -153,7 +153,7 @@ fn lower_contract_field_def<'db>(
     let type_ref = TypeId::lower_ast_partial(ctxt, ast.ty());
     let vis = super::lower_field_visibility(&ast);
 
-    FieldDef::new(attributes, name, type_ref, vis)
+    FieldDef::new(attributes, name, type_ref, vis, false)
 }
 
 fn lower_contract_init<'db>(

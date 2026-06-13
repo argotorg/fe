@@ -14,7 +14,9 @@ completions:
   - AbiDecoder (Interface)
   - AbiEncoder (Interface)
   - AbiSize (Interface)
+  - Abs (Interface)
   - Address (Struct)
+  - Bounded (Interface)
   - Bytes (Struct)
   - Call (Interface)
   - Clone (Interface)
@@ -45,6 +47,7 @@ completions:
   - Some (EnumMember)
   - StorageMap (Struct)
   - Text (Class)
+  - UnsignedAbs (Interface)
   - Vec (Class)
   - another_func_with_args (Function) -> "another_func_with_args(${1:x}, ${2:y})$0" [fn another_func_with_args(x: i32, y: i32) -> i32]
   - assert (Function) -> "assert(${1:b})$0" [fn assert(b: bool)]

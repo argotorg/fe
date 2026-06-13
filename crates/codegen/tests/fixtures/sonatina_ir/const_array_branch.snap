@@ -9,20 +9,17 @@ global private const [i256; 1] $const_region_0 = [1];
 
 func private %const_array_branch(v0.i1) -> i256 {
     block0:
-        v1.*i1 = alloca i1;
-        mstore v1 v0 i1;
         jump block1;
 
     block1:
-        v2.i1 = mload v1 i1;
-        br v2 block2 block3;
+        br v0 block2 block3;
 
     block2:
-        v3.constref<[i256; 1]> = const.ref $const_region_0;
+        v2.constref<[i256; 1]> = const.ref $const_region_0;
         jump block4;
 
     block3:
-        v6.constref<[i256; 1]> = const.ref $const_region_0;
+        v5.constref<[i256; 1]> = const.ref $const_region_0;
         jump block4;
 
     block4:

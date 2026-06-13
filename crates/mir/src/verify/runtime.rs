@@ -365,6 +365,25 @@ fn verify_assign<'db>(
                 .ok_or(VerifyError::InvalidExprClass(dst))?;
             Some(field)
         }
+        RExpr::AggregateMake { layout, fields } => {
+            let expected_len = aggregate_field_count(program, *layout)
+                .ok_or(VerifyError::InvalidExprClass(dst))?;
+            if fields.len() != expected_len {
+                return Err(VerifyError::InvalidExprClass(dst));
+            }
+            for (idx, field) in fields.iter().enumerate() {
+                let expected = aggregate_index_class(program, *layout, idx)
+                    .ok_or(VerifyError::InvalidExprClass(dst))?;
+                body.local(*field)
+                    .ok_or(VerifyError::MissingRuntimeLocal(*field))?;
+                match body.value_class(*field) {
+                    Some(actual) if actual.shares_runtime_rep_with(db, &expected) => {}
+                    None if expected.span_words(db) == 0 => {}
+                    Some(_) | None => return Err(VerifyError::InvalidExprClass(dst)),
+                }
+            }
+            Some(RuntimeClass::AggregateValue { layout: *layout })
+        }
         RExpr::Call { callee, args } => {
             verify_call(db, program, body, *callee, args, RuntimeCallKind::Normal)?;
             program.interface_signature(*callee).ret.clone()
@@ -987,6 +1006,17 @@ fn aggregate_index_class<'db>(
     match program.layout(layout) {
         Layout::Struct(data) => data.fields.get(index).cloned(),
         Layout::Array(data) => (index < data.len as usize).then(|| data.elem.clone()),
+        Layout::Enum(_) => None,
+    }
+}
+
+fn aggregate_field_count<'db>(
+    program: &impl RuntimeProgramView<'db>,
+    layout: crate::runtime::LayoutId<'db>,
+) -> Option<usize> {
+    match program.layout(layout) {
+        Layout::Struct(data) => Some(data.fields.len()),
+        Layout::Array(data) => Some(data.len as usize),
         Layout::Enum(_) => None,
     }
 }

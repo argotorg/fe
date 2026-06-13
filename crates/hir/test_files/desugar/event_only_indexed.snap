@@ -16,6 +16,7 @@ struct Approval {
 impl std::evm::Event for Approval {
     const TOPIC0: u256 = core::keccak(("Approval", "(", Address::SOL_TYPE, ",", Address::SOL_TYPE, ",", u256::SOL_TYPE, ")"))
 
+    #[inline(always)]
     fn emit<L: std::evm::Log>(own self, _ log: mut L) {
         log.log4(offset: 0, len: 0, topic0: Self::TOPIC0, topic1: self.owner.as_topic(), topic2: self.spender.as_topic(), topic3: self.value.as_topic())
     }

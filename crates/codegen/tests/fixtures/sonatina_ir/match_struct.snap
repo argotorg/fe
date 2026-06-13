@@ -20,13 +20,9 @@ func private %main() -> @layout_0 {
         v3.i8 = call %match_struct_fields v2;
         v5.constref<@layout_1> = const.ref $const_region_1;
         v6.i8 = call %match_struct_wildcard v5;
-        v7.objref<@layout_0> = obj.alloc @layout_0;
-        v9.objref<i8> = obj.proj v7 0.i256;
-        obj.store v9 v3;
-        v11.objref<i8> = obj.proj v7 1.i256;
-        obj.store v11 v6;
-        v12.@layout_0 = obj.load v7;
-        return v12;
+        v9.@layout_0 = insert_value undef.@layout_0 0.i256 v3;
+        v11.@layout_0 = insert_value v9 1.i256 v6;
+        return v11;
 }
 
 func private %main_root() {

@@ -10,18 +10,11 @@ func private %main() -> i256 {
         jump block1;
 
     block1:
-        v4.objref<[i8; 5]> = obj.alloc [i8; 5];
-        v6.objref<i8> = obj.index v4 0.i256;
-        obj.store v6 104.i8;
-        v8.objref<i8> = obj.index v4 1.i256;
-        obj.store v8 101.i8;
-        v10.objref<i8> = obj.index v4 2.i256;
-        obj.store v10 108.i8;
-        v12.objref<i8> = obj.index v4 3.i256;
-        obj.store v12 108.i8;
-        v14.objref<i8> = obj.index v4 4.i256;
-        obj.store v14 111.i8;
-        v15.[i8; 5] = obj.load v4;
+        v6.[i8; 5] = insert_value undef.[i8; 5] 0.i256 104.i8;
+        v8.[i8; 5] = insert_value v6 1.i256 101.i8;
+        v10.[i8; 5] = insert_value v8 2.i256 108.i8;
+        v12.[i8; 5] = insert_value v10 3.i256 108.i8;
+        v14.[i8; 5] = insert_value v12 4.i256 111.i8;
         return 12910348618308260923200348219926901280687058984330794534952861439530514639560.i256;
 }
 

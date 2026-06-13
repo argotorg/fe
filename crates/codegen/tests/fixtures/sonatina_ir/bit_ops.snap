@@ -9,39 +9,20 @@ type @layout_0 = {i256, i256, i256, i256, i256};
 
 func private %bit_ops(v0.i256, v1.i256) -> @layout_0 {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
-        v6.i256 = and v4 v5;
-        v7.i256 = mload v2 i256;
-        v8.i256 = mload v3 i256;
-        v9.i256 = or v7 v8;
-        v10.i256 = mload v2 i256;
-        v11.i256 = mload v3 i256;
-        v12.i256 = xor v10 v11;
-        v13.i256 = mload v2 i256;
-        v15.i256 = shl 8.i256 v13;
-        v16.i256 = mload v2 i256;
-        v18.i256 = shr 2.i256 v16;
-        v19.objref<@layout_0> = obj.alloc @layout_0;
-        v21.objref<i256> = obj.proj v19 0.i256;
-        obj.store v21 v6;
-        v23.objref<i256> = obj.proj v19 1.i256;
-        obj.store v23 v9;
-        v24.objref<i256> = obj.proj v19 2.i256;
-        obj.store v24 v12;
-        v26.objref<i256> = obj.proj v19 3.i256;
-        obj.store v26 v15;
-        v28.objref<i256> = obj.proj v19 4.i256;
-        obj.store v28 v18;
-        v29.@layout_0 = obj.load v19;
-        return v29;
+        v4.i256 = and v0 v1;
+        v5.i256 = or v0 v1;
+        v6.i256 = xor v0 v1;
+        v8.i256 = shl 8.i256 v0;
+        v10.i256 = shr 2.i256 v0;
+        v13.@layout_0 = insert_value undef.@layout_0 0.i256 v4;
+        v15.@layout_0 = insert_value v13 1.i256 v5;
+        v16.@layout_0 = insert_value v15 2.i256 v6;
+        v18.@layout_0 = insert_value v16 3.i256 v8;
+        v20.@layout_0 = insert_value v18 4.i256 v10;
+        return v20;
 }
 
 func private %main() -> i256 {
@@ -65,29 +46,23 @@ func private %main_root() {
 
 func private %pow_op(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        mstore v2 v0 i256;
-        mstore v3 v1 i256;
         jump block1;
 
     block1:
-        v4.i256 = mload v2 i256;
-        v5.i256 = mload v3 i256;
         jump block2;
 
     block2:
-        v8.i256 = phi (1.i256 block1) (v11 block6);
-        v9.i256 = phi (0.i256 block1) (v17 block6);
-        v10.i1 = eq v9 v5;
-        br v10 block4 block3;
+        v6.i256 = phi (1.i256 block1) (v9 block6);
+        v7.i256 = phi (0.i256 block1) (v15 block6);
+        v8.i1 = eq v7 v1;
+        br v8 block4 block3;
 
     block3:
-        (v11.i256, v12.i1) = umulo v8 v4;
-        br v12 block5 block6;
+        (v9.i256, v10.i1) = umulo v6 v0;
+        br v10 block5 block6;
 
     block4:
-        return v8;
+        return v6;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -95,7 +70,7 @@ func private %pow_op(v0.i256, v1.i256) -> i256 {
         evm_revert 0.i256 36.i256;
 
     block6:
-        v17.i256 = add v9 1.i256;
+        v15.i256 = add v7 1.i256;
         jump block2;
 }
 

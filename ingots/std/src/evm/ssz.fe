@@ -46,7 +46,7 @@
 /// in current consensus types. For wider containers, extend the trait
 /// or pre-merkleize sub-trees yourself. Variable-length lists are
 /// supported via `mix_in_length` on top of a fixed-arity merkleization.
-use core::abi::{Bytes, BytesView, MemoryInput}
+use core::abi::Bytes
 use super::effects::RawMem
 use super::mem
 use super::ops
@@ -58,6 +58,8 @@ use super::ops
 /// use the higher-level `Merkleize` trait; reach for `hash_pair`
 /// directly when building an incremental tree (the deposit contract's
 /// `branch[]` accumulator is the canonical example).
+#[arithmetic(unchecked)]
+#[inline(always)]
 pub fn hash_pair(left: u256, right: u256) -> u256 uses (mem: mut RawMem) {
     let ptr = mem::alloc(64)
     mem.mstore(addr: ptr, value: left)
@@ -84,6 +86,7 @@ pub fn hash_pair(left: u256, right: u256) -> u256 uses (mem: mut RawMem) {
 /// required because the byte-swap relies on wrapping multiplication-
 /// free shifts that the bounds checker can't otherwise prove safe.
 #[arithmetic(unchecked)]
+#[inline(always)]
 pub fn u64_chunk(_ value: u64) -> u256 {
     let mut v = value as u256
     // Swap adjacent byte pairs:  AB CD EF GH  →  BA DC FE HG
@@ -105,6 +108,8 @@ pub fn u64_chunk(_ value: u64) -> u256 {
 ///
 /// Note: the on-wire layout matches `u64_chunk` (LE in the top 8
 /// bytes of a word), wrapped with `len = 8` and `size = 64`.
+#[arithmetic(unchecked)]
+#[inline(always)]
 pub fn serialize_u64(_ value: u64) -> Bytes uses (mem: mut RawMem) {
     let out: u256 = mem::alloc(64)
     mem.mstore(addr: out, value: 8)
@@ -122,25 +127,24 @@ pub fn serialize_u64(_ value: u64) -> Bytes uses (mem: mut RawMem) {
 /// add an `impl HashTreeRoot for ByteVector<X>` to support new sizes.
 pub struct ByteVector<const N: usize> {}
 
-/// Compute the SSZ hash-tree-root of a value given its in-memory view.
+/// Compute the SSZ hash-tree-root of a byte payload.
 ///
 /// Implementors decide how many chunks the value occupies and how to
-/// merkleize them. The view-based input avoids copying — callers
-/// pass an existing `BytesView` (typically from a calldata- or
-/// memory-backed `Bytes`).
+/// merkleize them.
 pub trait HashTreeRoot {
-    /// Compute the SSZ root for `view`.
-    fn hash_tree_root(_: BytesView<MemoryInput>) -> u256 uses (mem: mut RawMem)
+    /// Compute the SSZ root for `bytes`.
+    fn hash_tree_root(_: Bytes) -> u256 uses (mem: mut RawMem)
 }
 
 /// User-facing entry point for `HashTreeRoot`.
 ///
-/// Use as `ssz::hash_tree_root<ssz::ByteVector<48>>(view)`. The
-/// turbofish chooses the implementation; the view supplies the bytes.
-pub fn hash_tree_root<T>(_ view: BytesView<MemoryInput>) -> u256
+/// Use as `ssz::hash_tree_root<ssz::ByteVector<48>>(bytes)`. The
+/// turbofish chooses the implementation; the argument supplies the bytes.
+#[inline(always)]
+pub fn hash_tree_root<T>(_ bytes: Bytes) -> u256
 uses (mem: mut RawMem) where T: HashTreeRoot
 {
-    T::hash_tree_root(view)
+    T::hash_tree_root(bytes)
 }
 
 /// `ByteVector[48]` — packs into two chunks.
@@ -152,16 +156,18 @@ uses (mem: mut RawMem) where T: HashTreeRoot
 ///
 /// Used for BLS public keys.
 impl HashTreeRoot for ByteVector<48> {
-    fn hash_tree_root(_ view: BytesView<MemoryInput>) -> u256
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    fn hash_tree_root(_ bytes: Bytes) -> u256
     uses (mem: mut RawMem)
     {
-        assert!(view.len == 48)
+        assert!(bytes.len == 48)
         let ptr = mem::alloc(64)
-        mem.mstore(addr: ptr, value: view.word_at(0))
+        mem.mstore(addr: ptr, value: bytes.word_at(0))
         // Word at offset 32 holds bytes 32..48 in its top 16 bytes
         // followed by 16 bytes of slack. Mask the slack to zero by
         // shifting the high 128 bits down and back up.
-        let tail = view.word_at(32)
+        let tail = bytes.word_at(32)
         mem.mstore(addr: ptr + 32, value: (tail >> 128) << 128)
         sha256_64_to(ptr, ptr)
     }
@@ -187,15 +193,17 @@ impl HashTreeRoot for ByteVector<48> {
 ///
 /// Used for BLS signatures.
 impl HashTreeRoot for ByteVector<96> {
-    fn hash_tree_root(_ view: BytesView<MemoryInput>) -> u256
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    fn hash_tree_root(_ bytes: Bytes) -> u256
     uses (mem: mut RawMem)
     {
-        assert!(view.len == 96)
-        let base = view.input.base + view.start
+        assert!(bytes.len == 96)
+        let base = bytes.payload_ptr()
         let ptr = mem::alloc(64)
         let left = sha256_64_to(base, ptr)
 
-        mem.mstore(addr: ptr, value: view.word_at(64))
+        mem.mstore(addr: ptr, value: bytes.word_at(64))
         mem.mstore(addr: ptr + 32, value: 0)
         let right = sha256_64_to(ptr, ptr)
 
@@ -251,6 +259,7 @@ impl Merkleize for (u256, u256, u256) {
 }
 
 impl Merkleize for (u256, u256, u256, u256) {
+    #[inline(always)]
     fn merkleize(self) -> u256 uses (mem: mut RawMem) {
         merkleize4(self.0, self.1, self.2, self.3)
     }
@@ -373,6 +382,7 @@ impl Merkleize for (
 /// Call this on the merkleized capacity-padded root with the actual
 /// element count to get the canonical `List` root. The deposit
 /// contract uses it on `deposit_count` to finalize `get_deposit_root`.
+#[inline(always)]
 pub fn mix_in_length(root: u256, len: u64) -> u256 uses (mem: mut RawMem) {
     hash_pair(left: root, right: u64_chunk(len))
 }
@@ -386,6 +396,8 @@ pub fn mix_in_length(root: u256, len: u64) -> u256 uses (mem: mut RawMem) {
 // behavior centralized so the public `Merkleize` impls just route a tuple to
 // the right one.
 
+#[arithmetic(unchecked)]
+#[inline(always)]
 fn merkleize4(_ a: u256, _ b: u256, _ c: u256, _ d: u256) -> u256
 uses (mem: mut RawMem)
 {
@@ -440,6 +452,7 @@ uses (mem: mut RawMem)
 // then returns it loaded into a u256. Reverts on precompile failure
 // or short return (defensive — sha256 always returns 32 bytes on
 // real EVM, but we don't want to trust silent truncation).
+#[inline(always)]
 fn sha256_64_to(_ offset: u256, _ out: u256) -> u256 {
     let ok: u256 = ops::staticcall(
         gas: ops::gas(),

@@ -1,4 +1,4 @@
-use core::abi::{Abi, AbiDecoder, AbiEncoder, AbiSize, AbiSpan, Decode, Encode}
+use core::abi::{Abi, AbiDecoder, AbiEncoder, AbiSize, AbiSpan, ByteInput, Decode, Encode}
 use core::num::IntDowncast
 use ingot::evm::{TopicValue, ops::revert}
 
@@ -6,6 +6,7 @@ use super::types::SolCompat
 
 const FULL_WORD_MASK: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
 
+#[inline(always)]
 fn canonical_unsigned_word(word: u256, bits: u256) -> u256 {
     // Canonical Solidity ABI encoding for an unsigned integer of width `bits`
     // requires that all higher bits are zero.
@@ -18,6 +19,7 @@ fn canonical_unsigned_word(word: u256, bits: u256) -> u256 {
     revert(offset: 0, len: 0)
 }
 
+#[inline(always)]
 fn canonical_custom_signed_word(word: u256, bits: u256) -> u256 {
     // Canonical Solidity ABI encoding for a signed integer of width `bits`
     // requires that all higher bits are a sign-extension of the sign bit.
@@ -42,37 +44,45 @@ fn canonical_custom_signed_word(word: u256, bits: u256) -> u256 {
     revert(offset: 0, len: 0)
 }
 
+#[inline(always)]
 fn decode_uint_u32(word: u256, bits: u256) -> u32 {
     canonical_unsigned_word(word: word, bits: bits).downcast_unchecked()
 }
 
+#[inline(always)]
 fn decode_uint_u64(word: u256, bits: u256) -> u64 {
     canonical_unsigned_word(word: word, bits: bits).downcast_unchecked()
 }
 
+#[inline(always)]
 fn decode_uint_u128(word: u256, bits: u256) -> u128 {
     canonical_unsigned_word(word: word, bits: bits).downcast_unchecked()
 }
 
+#[inline(always)]
 fn decode_uint_u256(word: u256, bits: u256) -> u256 {
     canonical_unsigned_word(word: word, bits: bits)
 }
 
+#[inline(always)]
 fn decode_int_i32(word: u256, bits: u256) -> i32 {
     let signed_word: i256 = canonical_custom_signed_word(word: word, bits: bits).downcast_unchecked()
     signed_word.downcast_unchecked()
 }
 
+#[inline(always)]
 fn decode_int_i64(word: u256, bits: u256) -> i64 {
     let signed_word: i256 = canonical_custom_signed_word(word: word, bits: bits).downcast_unchecked()
     signed_word.downcast_unchecked()
 }
 
+#[inline(always)]
 fn decode_int_i128(word: u256, bits: u256) -> i128 {
     let signed_word: i256 = canonical_custom_signed_word(word: word, bits: bits).downcast_unchecked()
     signed_word.downcast_unchecked()
 }
 
+#[inline(always)]
 fn decode_int_i256(word: u256, bits: u256) -> i256 {
     canonical_custom_signed_word(word: word, bits: bits).downcast_unchecked()
 }
@@ -996,11 +1006,21 @@ impl<A: Abi> Decode<A> for Uint24 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Uint24 { val: decode_uint_u32(word: d.read_word(), bits: 24) }
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Uint24 { val: decode_uint_u32(word: input.word_at(pos), bits: 24) }
+    }
 }
 
 impl<A: Abi> Decode<A> for Uint40 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Uint40 { val: decode_uint_u64(word: d.read_word(), bits: 40) }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Uint40 { val: decode_uint_u64(word: input.word_at(pos), bits: 40) }
     }
 }
 
@@ -1008,11 +1028,21 @@ impl<A: Abi> Decode<A> for Uint48 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Uint48 { val: decode_uint_u64(word: d.read_word(), bits: 48) }
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Uint48 { val: decode_uint_u64(word: input.word_at(pos), bits: 48) }
+    }
 }
 
 impl<A: Abi> Decode<A> for Uint56 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Uint56 { val: decode_uint_u64(word: d.read_word(), bits: 56) }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Uint56 { val: decode_uint_u64(word: input.word_at(pos), bits: 56) }
     }
 }
 
@@ -1020,11 +1050,21 @@ impl<A: Abi> Decode<A> for Uint72 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Uint72 { val: decode_uint_u128(word: d.read_word(), bits: 72) }
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Uint72 { val: decode_uint_u128(word: input.word_at(pos), bits: 72) }
+    }
 }
 
 impl<A: Abi> Decode<A> for Uint80 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Uint80 { val: decode_uint_u128(word: d.read_word(), bits: 80) }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Uint80 { val: decode_uint_u128(word: input.word_at(pos), bits: 80) }
     }
 }
 
@@ -1032,11 +1072,21 @@ impl<A: Abi> Decode<A> for Uint88 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Uint88 { val: decode_uint_u128(word: d.read_word(), bits: 88) }
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Uint88 { val: decode_uint_u128(word: input.word_at(pos), bits: 88) }
+    }
 }
 
 impl<A: Abi> Decode<A> for Uint96 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Uint96 { val: decode_uint_u128(word: d.read_word(), bits: 96) }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Uint96 { val: decode_uint_u128(word: input.word_at(pos), bits: 96) }
     }
 }
 
@@ -1044,11 +1094,21 @@ impl<A: Abi> Decode<A> for Uint104 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Uint104 { val: decode_uint_u128(word: d.read_word(), bits: 104) }
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Uint104 { val: decode_uint_u128(word: input.word_at(pos), bits: 104) }
+    }
 }
 
 impl<A: Abi> Decode<A> for Uint112 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Uint112 { val: decode_uint_u128(word: d.read_word(), bits: 112) }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Uint112 { val: decode_uint_u128(word: input.word_at(pos), bits: 112) }
     }
 }
 
@@ -1056,11 +1116,21 @@ impl<A: Abi> Decode<A> for Uint120 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Uint120 { val: decode_uint_u128(word: d.read_word(), bits: 120) }
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Uint120 { val: decode_uint_u128(word: input.word_at(pos), bits: 120) }
+    }
 }
 
 impl<A: Abi> Decode<A> for Uint136 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Uint136 { val: decode_uint_u256(word: d.read_word(), bits: 136) }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Uint136 { val: decode_uint_u256(word: input.word_at(pos), bits: 136) }
     }
 }
 
@@ -1068,11 +1138,21 @@ impl<A: Abi> Decode<A> for Uint144 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Uint144 { val: decode_uint_u256(word: d.read_word(), bits: 144) }
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Uint144 { val: decode_uint_u256(word: input.word_at(pos), bits: 144) }
+    }
 }
 
 impl<A: Abi> Decode<A> for Uint152 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Uint152 { val: decode_uint_u256(word: d.read_word(), bits: 152) }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Uint152 { val: decode_uint_u256(word: input.word_at(pos), bits: 152) }
     }
 }
 
@@ -1080,11 +1160,21 @@ impl<A: Abi> Decode<A> for Uint160 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Uint160 { val: decode_uint_u256(word: d.read_word(), bits: 160) }
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Uint160 { val: decode_uint_u256(word: input.word_at(pos), bits: 160) }
+    }
 }
 
 impl<A: Abi> Decode<A> for Uint168 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Uint168 { val: decode_uint_u256(word: d.read_word(), bits: 168) }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Uint168 { val: decode_uint_u256(word: input.word_at(pos), bits: 168) }
     }
 }
 
@@ -1092,11 +1182,21 @@ impl<A: Abi> Decode<A> for Uint176 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Uint176 { val: decode_uint_u256(word: d.read_word(), bits: 176) }
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Uint176 { val: decode_uint_u256(word: input.word_at(pos), bits: 176) }
+    }
 }
 
 impl<A: Abi> Decode<A> for Uint184 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Uint184 { val: decode_uint_u256(word: d.read_word(), bits: 184) }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Uint184 { val: decode_uint_u256(word: input.word_at(pos), bits: 184) }
     }
 }
 
@@ -1104,11 +1204,21 @@ impl<A: Abi> Decode<A> for Uint192 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Uint192 { val: decode_uint_u256(word: d.read_word(), bits: 192) }
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Uint192 { val: decode_uint_u256(word: input.word_at(pos), bits: 192) }
+    }
 }
 
 impl<A: Abi> Decode<A> for Uint200 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Uint200 { val: decode_uint_u256(word: d.read_word(), bits: 200) }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Uint200 { val: decode_uint_u256(word: input.word_at(pos), bits: 200) }
     }
 }
 
@@ -1116,11 +1226,21 @@ impl<A: Abi> Decode<A> for Uint208 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Uint208 { val: decode_uint_u256(word: d.read_word(), bits: 208) }
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Uint208 { val: decode_uint_u256(word: input.word_at(pos), bits: 208) }
+    }
 }
 
 impl<A: Abi> Decode<A> for Uint216 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Uint216 { val: decode_uint_u256(word: d.read_word(), bits: 216) }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Uint216 { val: decode_uint_u256(word: input.word_at(pos), bits: 216) }
     }
 }
 
@@ -1128,11 +1248,21 @@ impl<A: Abi> Decode<A> for Uint224 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Uint224 { val: decode_uint_u256(word: d.read_word(), bits: 224) }
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Uint224 { val: decode_uint_u256(word: input.word_at(pos), bits: 224) }
+    }
 }
 
 impl<A: Abi> Decode<A> for Uint232 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Uint232 { val: decode_uint_u256(word: d.read_word(), bits: 232) }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Uint232 { val: decode_uint_u256(word: input.word_at(pos), bits: 232) }
     }
 }
 
@@ -1140,11 +1270,21 @@ impl<A: Abi> Decode<A> for Uint240 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Uint240 { val: decode_uint_u256(word: d.read_word(), bits: 240) }
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Uint240 { val: decode_uint_u256(word: input.word_at(pos), bits: 240) }
+    }
 }
 
 impl<A: Abi> Decode<A> for Uint248 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Uint248 { val: decode_uint_u256(word: d.read_word(), bits: 248) }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Uint248 { val: decode_uint_u256(word: input.word_at(pos), bits: 248) }
     }
 }
 
@@ -1152,11 +1292,21 @@ impl<A: Abi> Decode<A> for Int24 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Int24 { val: decode_int_i32(word: d.read_word(), bits: 24) }
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Int24 { val: decode_int_i32(word: input.word_at(pos), bits: 24) }
+    }
 }
 
 impl<A: Abi> Decode<A> for Int40 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Int40 { val: decode_int_i64(word: d.read_word(), bits: 40) }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Int40 { val: decode_int_i64(word: input.word_at(pos), bits: 40) }
     }
 }
 
@@ -1164,11 +1314,21 @@ impl<A: Abi> Decode<A> for Int48 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Int48 { val: decode_int_i64(word: d.read_word(), bits: 48) }
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Int48 { val: decode_int_i64(word: input.word_at(pos), bits: 48) }
+    }
 }
 
 impl<A: Abi> Decode<A> for Int56 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Int56 { val: decode_int_i64(word: d.read_word(), bits: 56) }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Int56 { val: decode_int_i64(word: input.word_at(pos), bits: 56) }
     }
 }
 
@@ -1176,11 +1336,21 @@ impl<A: Abi> Decode<A> for Int72 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Int72 { val: decode_int_i128(word: d.read_word(), bits: 72) }
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Int72 { val: decode_int_i128(word: input.word_at(pos), bits: 72) }
+    }
 }
 
 impl<A: Abi> Decode<A> for Int80 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Int80 { val: decode_int_i128(word: d.read_word(), bits: 80) }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Int80 { val: decode_int_i128(word: input.word_at(pos), bits: 80) }
     }
 }
 
@@ -1188,11 +1358,21 @@ impl<A: Abi> Decode<A> for Int88 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Int88 { val: decode_int_i128(word: d.read_word(), bits: 88) }
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Int88 { val: decode_int_i128(word: input.word_at(pos), bits: 88) }
+    }
 }
 
 impl<A: Abi> Decode<A> for Int96 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Int96 { val: decode_int_i128(word: d.read_word(), bits: 96) }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Int96 { val: decode_int_i128(word: input.word_at(pos), bits: 96) }
     }
 }
 
@@ -1200,11 +1380,21 @@ impl<A: Abi> Decode<A> for Int104 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Int104 { val: decode_int_i128(word: d.read_word(), bits: 104) }
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Int104 { val: decode_int_i128(word: input.word_at(pos), bits: 104) }
+    }
 }
 
 impl<A: Abi> Decode<A> for Int112 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Int112 { val: decode_int_i128(word: d.read_word(), bits: 112) }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Int112 { val: decode_int_i128(word: input.word_at(pos), bits: 112) }
     }
 }
 
@@ -1212,11 +1402,21 @@ impl<A: Abi> Decode<A> for Int120 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Int120 { val: decode_int_i128(word: d.read_word(), bits: 120) }
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Int120 { val: decode_int_i128(word: input.word_at(pos), bits: 120) }
+    }
 }
 
 impl<A: Abi> Decode<A> for Int136 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Int136 { val: decode_int_i256(word: d.read_word(), bits: 136) }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Int136 { val: decode_int_i256(word: input.word_at(pos), bits: 136) }
     }
 }
 
@@ -1224,11 +1424,21 @@ impl<A: Abi> Decode<A> for Int144 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Int144 { val: decode_int_i256(word: d.read_word(), bits: 144) }
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Int144 { val: decode_int_i256(word: input.word_at(pos), bits: 144) }
+    }
 }
 
 impl<A: Abi> Decode<A> for Int152 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Int152 { val: decode_int_i256(word: d.read_word(), bits: 152) }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Int152 { val: decode_int_i256(word: input.word_at(pos), bits: 152) }
     }
 }
 
@@ -1236,11 +1446,21 @@ impl<A: Abi> Decode<A> for Int160 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Int160 { val: decode_int_i256(word: d.read_word(), bits: 160) }
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Int160 { val: decode_int_i256(word: input.word_at(pos), bits: 160) }
+    }
 }
 
 impl<A: Abi> Decode<A> for Int168 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Int168 { val: decode_int_i256(word: d.read_word(), bits: 168) }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Int168 { val: decode_int_i256(word: input.word_at(pos), bits: 168) }
     }
 }
 
@@ -1248,11 +1468,21 @@ impl<A: Abi> Decode<A> for Int176 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Int176 { val: decode_int_i256(word: d.read_word(), bits: 176) }
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Int176 { val: decode_int_i256(word: input.word_at(pos), bits: 176) }
+    }
 }
 
 impl<A: Abi> Decode<A> for Int184 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Int184 { val: decode_int_i256(word: d.read_word(), bits: 184) }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Int184 { val: decode_int_i256(word: input.word_at(pos), bits: 184) }
     }
 }
 
@@ -1260,11 +1490,21 @@ impl<A: Abi> Decode<A> for Int192 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Int192 { val: decode_int_i256(word: d.read_word(), bits: 192) }
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Int192 { val: decode_int_i256(word: input.word_at(pos), bits: 192) }
+    }
 }
 
 impl<A: Abi> Decode<A> for Int200 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Int200 { val: decode_int_i256(word: d.read_word(), bits: 200) }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Int200 { val: decode_int_i256(word: input.word_at(pos), bits: 200) }
     }
 }
 
@@ -1272,11 +1512,21 @@ impl<A: Abi> Decode<A> for Int208 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Int208 { val: decode_int_i256(word: d.read_word(), bits: 208) }
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Int208 { val: decode_int_i256(word: input.word_at(pos), bits: 208) }
+    }
 }
 
 impl<A: Abi> Decode<A> for Int216 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Int216 { val: decode_int_i256(word: d.read_word(), bits: 216) }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Int216 { val: decode_int_i256(word: input.word_at(pos), bits: 216) }
     }
 }
 
@@ -1284,11 +1534,21 @@ impl<A: Abi> Decode<A> for Int224 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Int224 { val: decode_int_i256(word: d.read_word(), bits: 224) }
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Int224 { val: decode_int_i256(word: input.word_at(pos), bits: 224) }
+    }
 }
 
 impl<A: Abi> Decode<A> for Int232 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Int232 { val: decode_int_i256(word: d.read_word(), bits: 232) }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Int232 { val: decode_int_i256(word: input.word_at(pos), bits: 232) }
     }
 }
 
@@ -1296,11 +1556,21 @@ impl<A: Abi> Decode<A> for Int240 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Int240 { val: decode_int_i256(word: d.read_word(), bits: 240) }
     }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Int240 { val: decode_int_i256(word: input.word_at(pos), bits: 240) }
+    }
 }
 
 impl<A: Abi> Decode<A> for Int248 {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Int248 { val: decode_int_i256(word: d.read_word(), bits: 248) }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Int248 { val: decode_int_i256(word: input.word_at(pos), bits: 248) }
     }
 }
 

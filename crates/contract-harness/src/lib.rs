@@ -2023,6 +2023,25 @@ pub contract NestedTupleInit {
 "#
     }
 
+    fn tuple_head_guard_contract_source() -> &'static str {
+        r#"
+use std::abi::sol
+
+msg TupleHeadGuardMsg {
+    #[selector = sol("read((uint64,string))")]
+    Read { pair: (u64, Text) } -> u256,
+}
+
+pub contract TupleHeadGuard {
+    recv TupleHeadGuardMsg {
+        Read { pair } -> u256 {
+            (pair.0 as u256) + pair.1.len()
+        }
+    }
+}
+"#
+    }
+
     fn compile_nested_tuple_echo_contract() -> Option<FeContractHarness> {
         Some(
             FeContractHarness::compile_from_source(
@@ -2053,6 +2072,17 @@ pub contract NestedTupleInit {
                 CompileOptions::default(),
             )
             .expect("nested tuple init contract should compile"),
+        )
+    }
+
+    fn compile_tuple_head_guard_contract() -> Option<FeContractHarness> {
+        Some(
+            FeContractHarness::compile_from_source(
+                "TupleHeadGuard",
+                tuple_head_guard_contract_source(),
+                CompileOptions::default(),
+            )
+            .expect("tuple head guard contract should compile"),
         )
     }
 
@@ -3422,6 +3452,35 @@ pub contract FixedDynamicArrayBoundary {{
         let decoded = decode(&[nested_tuple_param_type()], &result.return_data)
             .expect("callEcho(address,(string,uint64)) should return ABI-encoded outputs");
         assert_eq!(decoded, vec![nested_tuple_token(&text, 9)]);
+    }
+
+    #[test]
+    fn truncated_dynamic_tuple_head_reverts_before_padded_offset_read() {
+        let Some(harness) = compile_tuple_head_guard_contract() else {
+            return;
+        };
+
+        let mut instance = harness
+            .deploy_with_init()
+            .expect("tuple head guard contract should deploy");
+        let mut call = encode_typed_function_call(
+            "read",
+            vec![ParamType::Tuple(vec![
+                ParamType::Uint(64),
+                ParamType::String,
+            ])],
+            &[Token::Tuple(vec![
+                Token::Uint(AbiU256::from(0u64)),
+                Token::String("missing-head".to_string()),
+            ])],
+        )
+        .expect("typed calldata should encode");
+
+        call.truncate(4 + 32 + 32);
+        let err = instance
+            .call_raw(&call, ExecutionOptions::default())
+            .expect_err("truncated tuple head should revert");
+        assert_empty_revert(err);
     }
 
     #[test]

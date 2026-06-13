@@ -1,0 +1,8 @@
+use std::abi::DynString
+
+type SchemaRecord = (u256, bool, DynString)
+
+#[event]
+struct Registered {
+    schema: SchemaRecord,
+}

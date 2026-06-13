@@ -94,24 +94,18 @@ func private %bump__gaab0(v0.i256) {
 
 func private %impl_trait_StorPtr__from_raw__gb2d8(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        return v2;
+        return v0;
 }
 
 func private %impl_trait_MemPtr__from_raw__gb2d8(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        return v2;
+        return v0;
 }
 
 func private %main_root() {
@@ -125,26 +119,20 @@ func private %main_root() {
 
 func private %mem_ptr(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        v3.i256 = call %impl_trait_MemPtr__from_raw__gb2d8 v2;
-        return v3;
+        v2.i256 = call %impl_trait_MemPtr__from_raw__gb2d8 v0;
+        return v2;
 }
 
 func private %stor_ptr(v0.i256) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        v3.i256 = call %impl_trait_StorPtr__from_raw__gb2d8 v2;
-        return v3;
+        v2.i256 = call %impl_trait_StorPtr__from_raw__gb2d8 v0;
+        return v2;
 }
 
 func private %test_effect_ptr_domains() {

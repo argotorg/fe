@@ -13,11 +13,8 @@ func private %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_5fc5() -> @lay
 
     block1:
         v0.i256 = evm_caller;
-        v1.objref<@layout_0> = obj.alloc @layout_0;
-        v3.objref<i256> = obj.proj v1 0.i256;
-        obj.store v3 v0;
-        v4.@layout_0 = obj.load v1;
-        return v4;
+        v3.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
+        return v3;
 }
 
 func private %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_5fc5_0() -> @layout_0 {
@@ -26,11 +23,8 @@ func private %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_5fc5_0() -> @l
 
     block1:
         v0.i256 = evm_caller;
-        v1.objref<@layout_0> = obj.alloc @layout_0;
-        v3.objref<i256> = obj.proj v1 0.i256;
-        obj.store v3 v0;
-        v4.@layout_0 = obj.load v1;
-        return v4;
+        v3.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
+        return v3;
 }
 
 func private %main() -> @layout_0 {

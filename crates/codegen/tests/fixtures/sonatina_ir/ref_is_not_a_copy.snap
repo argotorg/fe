@@ -17,13 +17,9 @@ func private %live_view(v0.constref<@layout_0>) -> @layout_1 {
     block1:
         v3.constref<i256> = const.proj v0 0.i256;
         v5.constref<i256> = const.proj v0 1.i256;
-        v6.objref<@layout_1> = obj.alloc @layout_1;
-        v7.objref<constref<i256>> = obj.proj v6 0.i256;
-        obj.store v7 v3;
-        v8.objref<constref<i256>> = obj.proj v6 1.i256;
-        obj.store v8 v5;
-        v9.@layout_1 = obj.load v6;
-        return v9;
+        v7.@layout_1 = insert_value undef.@layout_1 0.i256 v3;
+        v8.@layout_1 = insert_value v7 1.i256 v5;
+        return v8;
 }
 
 func private %main() {

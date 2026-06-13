@@ -444,14 +444,22 @@ fn process_module<'db>(
                 let child_kind = child_symbol_kind(child_scope);
 
                 // Compute child doc URL: parent_url~anchor_prefix.child_name
+                //
+                // If the parent URL already contains an anchor (e.g. msg variants,
+                // which live as `...msg~variant.Name`), we can't nest a second `~`
+                // because the viewer's anchor extraction uses the first tilde.
+                // In that case the field link degrades to the variant anchor —
+                // a click lands on the variant row rather than a specific field.
                 let child_sym_kind = SymbolKind::from(child_scope);
                 if let (Some(parent_url), Some(anchor)) =
                     (&item_doc_url, child_sym_kind.doc_anchor_prefix())
                 {
-                    doc_urls.insert(
-                        child_symbol.clone(),
-                        format!("{}~{}.{}", parent_url, anchor, child_name),
-                    );
+                    let url = if parent_url.contains('~') {
+                        parent_url.clone()
+                    } else {
+                        format!("{}~{}.{}", parent_url, anchor, child_name)
+                    };
+                    doc_urls.insert(child_symbol.clone(), url);
                 }
 
                 if let Some(doc) = documents.get_mut(&doc_url) {
@@ -995,6 +1003,7 @@ pub fn enrich_signatures_with_base(
     // Step 2: Build per-file byte-indexed occurrence lists from SCIP documents.
     // We need file text to convert SCIP line/col → byte offsets.
     let mut file_occurrences: HashMap<String, Vec<ByteOccurrence>> = HashMap::new();
+    let mut file_texts: HashMap<String, String> = HashMap::new();
     for doc in &scip_index.documents {
         let file_url = if let Some(base) = base_url {
             // Non-file URL base (e.g. builtin-core:///): join relative path onto it
@@ -1013,6 +1022,9 @@ pub fn enrich_signatures_with_base(
             continue;
         };
         let text = file.text(db);
+        file_texts
+            .entry(doc.relative_path.clone())
+            .or_insert_with(|| text.to_string());
         let line_index = LineIndex::new(text);
 
         let occs = file_occurrences
@@ -1046,6 +1058,7 @@ pub fn enrich_signatures_with_base(
                 &item.signature,
                 project_root,
                 &file_occurrences,
+                &file_texts,
                 &symbol_to_url,
             );
             if parts.iter().any(|p| p.link.is_some()) {
@@ -1061,6 +1074,7 @@ pub fn enrich_signatures_with_base(
                     &child.signature,
                     project_root,
                     &file_occurrences,
+                    &file_texts,
                     &symbol_to_url,
                 );
                 if parts.iter().any(|p| p.link.is_some()) {
@@ -1077,6 +1091,7 @@ pub fn enrich_signatures_with_base(
                     &trait_impl.signature,
                     project_root,
                     &file_occurrences,
+                    &file_texts,
                     &symbol_to_url,
                 );
                 if parts.iter().any(|p| p.link.is_some()) {
@@ -1090,6 +1105,7 @@ pub fn enrich_signatures_with_base(
                         &method.signature,
                         project_root,
                         &file_occurrences,
+                        &file_texts,
                         &symbol_to_url,
                     );
                     if parts.iter().any(|p| p.link.is_some()) {
@@ -1171,6 +1187,7 @@ pub fn enrich_signatures_with_base(
                 &item.signature,
                 project_root,
                 &file_occurrences,
+                &file_texts,
                 &self_extras,
             );
             if !occs.is_empty() {
@@ -1201,6 +1218,7 @@ pub fn enrich_signatures_with_base(
                     sig,
                     project_root,
                     &file_occurrences,
+                    &file_texts,
                     &parent_type_params,
                 );
                 if !occs.is_empty() {
@@ -1235,6 +1253,7 @@ pub fn enrich_signatures_with_base(
                     &trait_impl.signature,
                     project_root,
                     &file_occurrences,
+                    &file_texts,
                 );
                 if !occs.is_empty() {
                     trait_impl.sig_scope = Some(scope.clone());
@@ -1260,6 +1279,7 @@ pub fn enrich_signatures_with_base(
                         &method.signature,
                         project_root,
                         &file_occurrences,
+                        &file_texts,
                         &parent_type_params,
                     );
                     if !occs.is_empty() {
@@ -1287,6 +1307,7 @@ pub fn enrich_signatures_with_base(
                     &imp.signature,
                     project_root,
                     &file_occurrences,
+                    &file_texts,
                 );
                 if !occs.is_empty() {
                     imp.sig_scope = Some(scope.clone());
@@ -1341,6 +1362,82 @@ fn scip_range_to_byte_range(line_index: &LineIndex, range: &[i32]) -> (usize, us
     }
 }
 
+struct SignatureOffsetMapper<'a> {
+    raw_text: &'a str,
+    normalized_text: &'a str,
+}
+
+impl<'a> SignatureOffsetMapper<'a> {
+    fn new(raw_text: &'a str, normalized_text: &'a str) -> Option<Self> {
+        if raw_text == normalized_text || normalize_line_endings(raw_text) == normalized_text {
+            Some(Self {
+                raw_text,
+                normalized_text,
+            })
+        } else {
+            None
+        }
+    }
+
+    fn to_normalized(&self, raw_offset: usize) -> Option<usize> {
+        if raw_offset > self.raw_text.len() || !self.raw_text.is_char_boundary(raw_offset) {
+            return None;
+        }
+        if self.raw_text == self.normalized_text {
+            return Some(raw_offset);
+        }
+
+        let mut raw_pos = 0;
+        let mut normalized_pos = 0;
+        while raw_pos < raw_offset {
+            if self.raw_text.as_bytes().get(raw_pos..raw_pos + 2) == Some(b"\r\n") {
+                raw_pos += 2;
+                normalized_pos += 1;
+            } else {
+                let ch = self.raw_text[raw_pos..].chars().next()?;
+                raw_pos += ch.len_utf8();
+                normalized_pos += ch.len_utf8();
+            }
+        }
+
+        if normalized_pos <= self.normalized_text.len()
+            && self.normalized_text.is_char_boundary(normalized_pos)
+        {
+            Some(normalized_pos)
+        } else {
+            None
+        }
+    }
+}
+
+fn normalize_line_endings(text: &str) -> String {
+    text.replace("\r\n", "\n")
+}
+
+fn signature_offset_mapper<'a>(
+    span: &fe_web::model::SignatureSpanData,
+    sig_text: &'a str,
+    rel_path: &str,
+    file_texts: &'a HashMap<String, String>,
+) -> Option<SignatureOffsetMapper<'a>> {
+    let file_text = file_texts.get(rel_path)?;
+    let raw_text = file_text.get(span.byte_start..span.byte_end)?;
+    SignatureOffsetMapper::new(raw_text, sig_text)
+}
+
+/// Score a SCIP symbol by how specific its trailing descriptor is. Used as a
+/// tiebreaker when two occurrences share the same byte range so that, e.g.,
+/// `RegistryMsg::Claim#` wins over the enclosing `RegistryMsg:` namespace.
+fn symbol_specificity(symbol: &str) -> u8 {
+    match symbol.chars().last() {
+        Some('#') | Some('.') => 3, // type / term — most specific
+        Some(')') => 2,             // method signature
+        Some(']') => 1,             // type parameter
+        Some(':') | Some('/') => 0, // namespace / package — least specific
+        _ => 1,
+    }
+}
+
 /// Build `rich_signature` parts by overlaying SCIP occurrences on a signature span.
 ///
 /// Finds non-definition occurrences within the signature's byte range, maps their
@@ -1351,6 +1448,7 @@ fn overlay_occurrences(
     sig_text: &str,
     project_root: &Utf8Path,
     file_occurrences: &HashMap<String, Vec<ByteOccurrence>>,
+    file_texts: &HashMap<String, String>,
     symbol_urls: &HashMap<String, String>,
 ) -> Vec<fe_web::model::SignaturePart> {
     use fe_web::model::SignaturePart;
@@ -1366,19 +1464,55 @@ fn overlay_occurrences(
     let Some(occs) = file_occurrences.get(&rel_path) else {
         return vec![];
     };
+    let Some(offset_mapper) = signature_offset_mapper(span, sig_text, &rel_path, file_texts) else {
+        return vec![];
+    };
+
+    // Compute byte ranges of `#[...]` attribute regions within the signature
+    // text (relative to sig_text, i.e. offset 0 == span.byte_start).
+    //
+    // Attribute-internal occurrences — e.g. inside `#[selector = sol(...)]`,
+    // where the type checker may attribute the `sol(...)` call to an
+    // `Encode::encode_to_ptr` resolution — produce phantom rich-signature
+    // links that anchor to nothing on the target page. Exclude them so the
+    // attribute renders as plain text.
+    let attr_ranges: Vec<(usize, usize)> = find_attr_ranges(sig_text);
 
     // Filter to non-definition occurrences within the signature's byte range
-    // that have known doc URLs.
+    // that have known doc URLs, and that don't fall inside an attribute
+    // (`#[...]`) region.
     let mut sig_occs: Vec<&ByteOccurrence> = occs
         .iter()
         .filter(|o| {
-            o.byte_start >= span.byte_start
-                && o.byte_end <= span.byte_end
-                && !o.is_definition
-                && symbol_urls.contains_key(&o.symbol)
+            if o.byte_start < span.byte_start
+                || o.byte_end > span.byte_end
+                || o.is_definition
+                || !symbol_urls.contains_key(&o.symbol)
+            {
+                return false;
+            }
+            let rel_start = o.byte_start - span.byte_start;
+            // Drop any occurrence that starts inside a `#[...]` attribute.
+            // Simple `contained_in` isn't enough: the type checker sometimes
+            // attributes the `sol(...)` call to a range that extends past
+            // the closing `]` onto the following variant, producing a
+            // phantom `encode_to_ptr` link.
+            !attr_ranges
+                .iter()
+                .any(|&(s, e)| rel_start >= s && rel_start < e)
         })
         .collect();
-    sig_occs.sort_by_key(|o| o.byte_start);
+    // Sort by (byte_start asc, specificity desc). When two occurrences
+    // share a byte range the more specific symbol wins: SCIP descriptors
+    // ending in `#` (type) or `.` (term) target the concrete item, while
+    // ones ending in `:` are namespace-shaped (the enclosing msg mod).
+    // Without this tiebreak the namespace symbol lands first and the
+    // `occ_start < pos` guard below drops the variant/type link.
+    sig_occs.sort_by(|a, b| {
+        a.byte_start
+            .cmp(&b.byte_start)
+            .then_with(|| symbol_specificity(&b.symbol).cmp(&symbol_specificity(&a.symbol)))
+    });
 
     if sig_occs.is_empty() {
         return vec![];
@@ -1388,10 +1522,20 @@ fn overlay_occurrences(
     let mut pos = 0usize; // position within sig_text
 
     for occ in &sig_occs {
-        let occ_start = occ.byte_start.saturating_sub(span.byte_start);
-        let occ_end = occ.byte_end.saturating_sub(span.byte_start);
+        let raw_start = occ.byte_start.saturating_sub(span.byte_start);
+        let raw_end = occ.byte_end.saturating_sub(span.byte_start);
+        let Some(occ_start) = offset_mapper.to_normalized(raw_start) else {
+            continue;
+        };
+        let Some(occ_end) = offset_mapper.to_normalized(raw_end) else {
+            continue;
+        };
 
-        if occ_start > sig_text.len() || occ_end > sig_text.len() || occ_start < pos {
+        if occ_start > sig_text.len()
+            || occ_end > sig_text.len()
+            || occ_start < pos
+            || occ_end < occ_start
+        {
             continue;
         }
 
@@ -1414,6 +1558,58 @@ fn overlay_occurrences(
     }
 
     parts
+}
+
+/// Find byte ranges of `#[...]` attribute regions within `text`.
+///
+/// Returns `(start, end)` pairs (relative to `text`) where `end` is the byte
+/// offset just past the matching `]`. Brackets inside string literals are
+/// respected — `#[sel = sol("f()")]` nests fine. Unterminated attributes are
+/// skipped.
+///
+/// Used to mask occurrence overlays over attribute tokens so the rich
+/// signature renders them as plain text.
+fn find_attr_ranges(text: &str) -> Vec<(usize, usize)> {
+    let bytes = text.as_bytes();
+    let mut ranges = Vec::new();
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        if bytes[i] == b'#' && bytes[i + 1] == b'[' {
+            let start = i;
+            let mut depth: i32 = 1;
+            let mut j = i + 2;
+            let mut in_str: Option<u8> = None;
+            while j < bytes.len() && depth > 0 {
+                let c = bytes[j];
+                match (in_str, c) {
+                    (Some(q), x) if x == q => {
+                        in_str = None;
+                    }
+                    (Some(_), b'\\') => {
+                        // Skip escaped next char.
+                        j += 1;
+                    }
+                    (None, b'"') | (None, b'\'') => {
+                        in_str = Some(c);
+                    }
+                    (None, b'[') => depth += 1,
+                    (None, b']') => depth -= 1,
+                    _ => {}
+                }
+                j += 1;
+            }
+            if depth == 0 {
+                ranges.push((start, j));
+                i = j;
+                continue;
+            } else {
+                // Unterminated — stop scanning to avoid runaway masking.
+                break;
+            }
+        }
+        i += 1;
+    }
+    ranges
 }
 
 /// Convert a byte offset within a signature text to (line, col) relative to the
@@ -1458,8 +1654,16 @@ fn build_virtual_occurrences(
     sig_text: &str,
     project_root: &Utf8Path,
     file_occurrences: &HashMap<String, Vec<ByteOccurrence>>,
+    file_texts: &HashMap<String, String>,
 ) -> Vec<types::Occurrence> {
-    build_virtual_occurrences_with_extra(span, sig_text, project_root, file_occurrences, &[])
+    build_virtual_occurrences_with_extra(
+        span,
+        sig_text,
+        project_root,
+        file_occurrences,
+        file_texts,
+        &[],
+    )
 }
 
 fn build_virtual_occurrences_with_extra(
@@ -1467,6 +1671,7 @@ fn build_virtual_occurrences_with_extra(
     sig_text: &str,
     project_root: &Utf8Path,
     file_occurrences: &HashMap<String, Vec<ByteOccurrence>>,
+    file_texts: &HashMap<String, String>,
     extra_names: &[(String, String)],
 ) -> Vec<types::Occurrence> {
     let rel_path = match url::Url::parse(&span.file_url) {
@@ -1479,6 +1684,9 @@ fn build_virtual_occurrences_with_extra(
     let Some(occs) = file_occurrences.get(&rel_path) else {
         return vec![];
     };
+    let Some(offset_mapper) = signature_offset_mapper(span, sig_text, &rel_path, file_texts) else {
+        return vec![];
+    };
 
     // Deduplicate by position: multiple SCIP symbols can overlap at the same
     // source position (e.g. namespace-path vs item symbol).  Keep one per
@@ -1489,9 +1697,15 @@ fn build_virtual_occurrences_with_extra(
         if occ.byte_start < span.byte_start || occ.byte_end > span.byte_end {
             continue;
         }
-        let occ_start = occ.byte_start - span.byte_start;
-        let occ_end = occ.byte_end - span.byte_start;
-        if occ_end > sig_text.len() {
+        let raw_start = occ.byte_start - span.byte_start;
+        let raw_end = occ.byte_end - span.byte_start;
+        let Some(occ_start) = offset_mapper.to_normalized(raw_start) else {
+            continue;
+        };
+        let Some(occ_end) = offset_mapper.to_normalized(raw_end) else {
+            continue;
+        };
+        if occ_end > sig_text.len() || occ_end < occ_start {
             continue;
         }
 
@@ -1625,6 +1839,66 @@ mod tests {
             .touch(&mut db, url.clone(), Some(code.to_string()));
         let ingot_url = dir_url(temp.path());
         generate_scip(&db, &ingot_url).expect("generate scip index")
+    }
+
+    #[test]
+    fn signature_overlay_maps_raw_crlf_offsets_to_normalized_text() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let project_root =
+            Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).expect("utf8 temp path");
+        let file_path = project_root.join("test.fe");
+        let file_url = url::Url::from_file_path(file_path.as_std_path()).expect("file url");
+
+        let raw_sig = "a\r\nFoo—";
+        let sig_text = raw_sig.replace("\r\n", "\n");
+        let span = fe_web::model::SignatureSpanData {
+            file_url: file_url.to_string(),
+            byte_start: 0,
+            byte_end: raw_sig.len(),
+        };
+        let foo_start = raw_sig.find("Foo").expect("Foo in raw signature");
+        let mut file_occurrences = HashMap::new();
+        file_occurrences.insert(
+            "test.fe".to_string(),
+            vec![ByteOccurrence {
+                byte_start: foo_start,
+                byte_end: foo_start + "Foo".len(),
+                symbol: "test Foo".to_string(),
+                is_definition: false,
+            }],
+        );
+        let mut file_texts = HashMap::new();
+        file_texts.insert("test.fe".to_string(), raw_sig.to_string());
+        let mut symbol_urls = HashMap::new();
+        symbol_urls.insert("test Foo".to_string(), "test/Foo".to_string());
+
+        let parts = overlay_occurrences(
+            &span,
+            &sig_text,
+            &project_root,
+            &file_occurrences,
+            &file_texts,
+            &symbol_urls,
+        );
+        assert_eq!(
+            parts,
+            vec![
+                fe_web::model::SignaturePart::text("a\n"),
+                fe_web::model::SignaturePart::link("Foo", "test/Foo"),
+                fe_web::model::SignaturePart::text("—"),
+            ]
+        );
+
+        let virtual_occurrences = build_virtual_occurrences(
+            &span,
+            &sig_text,
+            &project_root,
+            &file_occurrences,
+            &file_texts,
+        );
+        assert_eq!(virtual_occurrences.len(), 1);
+        assert_eq!(virtual_occurrences[0].range, vec![1, 0, 3]);
+        assert_eq!(virtual_occurrences[0].symbol, "test Foo");
     }
 
     #[test]

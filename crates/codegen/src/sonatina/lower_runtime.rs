@@ -36,8 +36,8 @@ use sonatina_ir::{
         data::{
             Alloca, ConstIndex, ConstLoad, ConstProj, ConstRef, EnumAssertVariant,
             EnumAssertVariantRef, EnumExtract, EnumGetTag, EnumIsVariant, EnumMake, EnumProj,
-            EnumSetTag, EnumTag, EnumWriteVariant, Mload, Mstore, ObjAlloc, ObjIndex, ObjInitConst,
-            ObjLoad, ObjProj, ObjStore, SymAddr, SymSize, SymbolRef,
+            EnumSetTag, EnumTag, EnumWriteVariant, InsertValue, Mload, Mstore, ObjAlloc, ObjIndex,
+            ObjInitConst, ObjLoad, ObjProj, ObjStore, SymAddr, SymSize, SymbolRef,
         },
         evm::{
             EvmAddMod, EvmAddress, EvmBalance, EvmBaseFee, EvmBlobBaseFee, EvmBlobHash,
@@ -1232,6 +1232,9 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     LowerError::Internal("aggregate extract missing destination class".to_string())
                 })?;
                 self.extract_aggregate_field(value, *index as usize, &class)?
+            }
+            RExpr::AggregateMake { layout, fields } => {
+                self.make_aggregate_value(*layout, fields)?
             }
             RExpr::Call { callee, args } => {
                 if let Some(value) = self.lower_intrinsic_call(*callee, args, dst)? {
@@ -3728,6 +3731,77 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 self.module.ty_for_class(class)?,
             )
             .pipe(Ok)
+    }
+
+    fn make_aggregate_value(
+        &mut self,
+        layout: LayoutId<'db>,
+        fields: &[RLocalId],
+    ) -> Result<ValueId, LowerError> {
+        match layout.data(self.module.db) {
+            Layout::Struct(data) => {
+                if data.fields.len() != fields.len() {
+                    return Err(LowerError::Internal(format!(
+                        "aggregate make field count mismatch: layout={layout:?} expected={} actual={}",
+                        data.fields.len(),
+                        fields.len()
+                    )));
+                }
+                let ty = self.module.ty_for_layout(layout)?;
+                let mut value = self.fb.make_undef_value(ty);
+                for (idx, (field, class)) in fields.iter().zip(data.fields.iter()).enumerate() {
+                    let field_value = self.aggregate_make_field_value(*field, class)?;
+                    value = self.insert_aggregate_field(value, ty, idx, field_value);
+                }
+                Ok(value)
+            }
+            Layout::Array(data) => {
+                if data.len as usize != fields.len() {
+                    return Err(LowerError::Internal(format!(
+                        "aggregate make element count mismatch: layout={layout:?} expected={} actual={}",
+                        data.len,
+                        fields.len()
+                    )));
+                }
+                let ty = self.module.ty_for_layout(layout)?;
+                let mut value = self.fb.make_undef_value(ty);
+                for (idx, field) in fields.iter().enumerate() {
+                    let elem = self.aggregate_make_field_value(*field, &data.elem)?;
+                    value = self.insert_aggregate_field(value, ty, idx, elem);
+                }
+                Ok(value)
+            }
+            Layout::Enum(_) => Err(LowerError::Internal(
+                "aggregate make should not build enum layouts".to_string(),
+            )),
+        }
+    }
+
+    fn aggregate_make_field_value(
+        &mut self,
+        field: RLocalId,
+        class: &RuntimeClass<'db>,
+    ) -> Result<ValueId, LowerError> {
+        let ty = self.module.ty_for_class(class)?;
+        if self.body.value_class(field).is_none() {
+            return Ok(zero_for_type(&mut self.fb, ty));
+        }
+        let value = self.local_value(field)?;
+        self.coerce_value_to_ty(value, ty)
+    }
+
+    fn insert_aggregate_field(
+        &mut self,
+        value: ValueId,
+        ty: Type,
+        idx: usize,
+        field: ValueId,
+    ) -> ValueId {
+        let idx = self.index_value(idx as u64);
+        self.fb.insert_inst(
+            InsertValue::new(self.module.inst_set(), value, idx, field),
+            ty,
+        )
     }
 
     fn cast_scalar(&mut self, value: ValueId, ty: Type) -> Result<ValueId, LowerError> {

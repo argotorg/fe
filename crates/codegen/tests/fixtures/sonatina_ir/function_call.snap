@@ -7,14 +7,11 @@ target = "evm-ethereum-osaka"
 
 func private %add_one(v0.i64) -> i64 {
     block0:
-        v1.*i64 = alloca i64;
-        mstore v1 v0 i64;
         jump block1;
 
     block1:
-        v2.i64 = mload v1 i64;
-        (v4.i64, v5.i1) = uaddo v2 1.i64;
-        br v5 block2 block3;
+        (v3.i64, v4.i1) = uaddo v0 1.i64;
+        br v4 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -22,7 +19,7 @@ func private %add_one(v0.i64) -> i64 {
         evm_revert 0.i256 36.i256;
 
     block3:
-        return v4;
+        return v3;
 }
 
 func private %call_add_one() -> i64 {

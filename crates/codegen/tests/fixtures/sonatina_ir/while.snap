@@ -7,23 +7,22 @@ target = "evm-ethereum-osaka"
 
 func private %do_while() -> i64 {
     block0:
-        v0.*i64 = alloca i64;
         jump block1;
 
     block1:
         jump block2;
 
     block2:
-        v3.i64 = phi (0.i64 block1) (v15 block6);
-        v4.i1 = lt v3 10.i64;
-        br v4 block3 block4;
+        v2.i64 = phi (0.i64 block1) (v6 block6);
+        v3.i1 = lt v2 10.i64;
+        br v3 block3 block4;
 
     block3:
-        (v7.i64, v8.i1) = uaddo v3 1.i64;
-        br v8 block5 block6;
+        (v6.i64, v7.i1) = uaddo v2 1.i64;
+        br v7 block5 block6;
 
     block4:
-        return v3;
+        return v2;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -31,9 +30,6 @@ func private %do_while() -> i64 {
         evm_revert 0.i256 36.i256;
 
     block6:
-        mstore v0 v7 i64;
-        v14.i256 = mload v0 i256;
-        v15.i64 = trunc v14 i64;
         jump block2;
 }
 

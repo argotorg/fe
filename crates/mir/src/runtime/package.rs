@@ -1864,12 +1864,17 @@ fn runtime_function_for_instance<'db>(
         ),
         RuntimeInstanceSource::Synthetic(synthetic) => {
             let spec = synthetic.spec(db).clone();
+            let inline_hint = match &spec {
+                RuntimeSyntheticSpec::ContractInitAbi { .. }
+                | RuntimeSyntheticSpec::ContractRecvAbi { .. } => RuntimeInlineHint::Always,
+                _ => RuntimeInlineHint::Auto,
+            };
             make_runtime_function(
                 db,
                 instance,
                 symbol,
                 RuntimeLinkage::Private,
-                RuntimeInlineHint::Auto,
+                inline_hint,
                 RuntimeFunctionOwner::Synthetic(spec),
                 referenced_const_regions,
             )

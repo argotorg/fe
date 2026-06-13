@@ -121,6 +121,13 @@ impl NLocalRootDemand {
             || self.passed_by_place
     }
 
+    pub fn permits_unrooted_value_projection_reads(self) -> bool {
+        !self.written_by_place
+            && !self.borrowed_or_addr_taken
+            && !self.mut_borrowed_or_addr_taken
+            && !self.passed_by_place
+    }
+
     pub fn disallows_const_ref_storage(self) -> bool {
         self.written_by_place || self.mut_borrowed_or_addr_taken
     }

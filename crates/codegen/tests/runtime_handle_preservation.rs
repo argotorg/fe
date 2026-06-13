@@ -1,11 +1,12 @@
 use common::InputDb;
 use driver::DriverDataBase;
-use fe_codegen::emit_module_sonatina_ir;
+use fe_codegen::{OptLevel, emit_module_sonatina_ir, emit_runtime_package_sonatina_ir_optimized};
 use hir::hir_def::TopLevelMod;
 use mir::runtime::{AddressSpaceKind, RefKind};
 use mir::{
-    Layout, LayoutId, PlaceElem, PlaceRoot, RExpr, RLocalId, RStmt, RuntimeCarrier, RuntimeClass,
-    RuntimeInstance, RuntimeLocalRoot, build_runtime_package, build_test_runtime_package,
+    IntrinsicArithBinOp, Layout, LayoutId, PlaceElem, PlaceRoot, RExpr, RLocalId, RStmt,
+    RuntimeBody, RuntimeBuiltin, RuntimeCarrier, RuntimeClass, RuntimeInstance, RuntimeLocalRoot,
+    RuntimePackage, build_runtime_package, build_test_runtime_package,
 };
 use url::Url;
 
@@ -20,6 +21,23 @@ fn sonatina_function_body<'a>(ir: &'a str, name: &str) -> &'a str {
         .or_else(|| tail.find("\n\nobject "))
         .unwrap_or(tail.len());
     &tail[..end]
+}
+
+fn sonatina_ops(body: &str) -> Vec<&str> {
+    body.lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let rhs = line.split_once(" = ")?.1;
+            rhs.split_whitespace().next()
+        })
+        .collect()
+}
+
+fn contains_op_subsequence(body: &str, expected: &[&str]) -> bool {
+    let mut ops = sonatina_ops(body).into_iter();
+    expected
+        .iter()
+        .all(|expected| ops.any(|op| op == *expected))
 }
 
 fn with_top_mod_for_source<T>(
@@ -77,6 +95,96 @@ macro_rules! with_test_runtime_package {
     }};
 }
 
+fn runtime_body_for_symbol<'db>(
+    db: &'db DriverDataBase,
+    package: RuntimePackage<'db>,
+    symbol: &str,
+) -> RuntimeBody<'db> {
+    let function = package
+        .functions(db)
+        .iter()
+        .copied()
+        .find(|function| function.symbol(db).contains(symbol))
+        .unwrap_or_else(|| panic!("missing runtime function `{symbol}`"));
+    function.instance(db).body(db)
+}
+
+fn runtime_body_stmts<'a, 'db>(body: &'a RuntimeBody<'db>) -> impl Iterator<Item = &'a RStmt<'db>> {
+    body.blocks.iter().flat_map(|block| block.stmts.iter())
+}
+
+fn body_has_object_materialization(body: &RuntimeBody<'_>) -> bool {
+    runtime_body_stmts(body).any(|stmt| {
+        matches!(
+            stmt,
+            RStmt::Assign {
+                expr: RExpr::AllocObject { .. }
+                    | RExpr::MaterializeToObject { .. }
+                    | RExpr::MaterializePlaceToObject { .. },
+                ..
+            }
+        )
+    })
+}
+
+fn body_extracts_param_fields(body: &RuntimeBody<'_>, param: RLocalId, fields: &[u32]) -> bool {
+    fields.iter().all(|field| {
+        runtime_body_stmts(body).any(|stmt| {
+            matches!(
+                stmt,
+                RStmt::Assign {
+                    expr: RExpr::AggregateExtract { value, index },
+                    ..
+                } if *value == param && index == field
+            )
+        })
+    })
+}
+
+fn transported_local_from_param(body: &RuntimeBody<'_>, param: RLocalId) -> RLocalId {
+    runtime_body_stmts(body)
+        .find_map(|stmt| match stmt {
+            RStmt::Assign {
+                dst,
+                expr: RExpr::AddrOf { place },
+            } if matches!(
+                place.root,
+                PlaceRoot::Ptr { addr, .. } if addr == param && place.path.is_empty()
+            ) =>
+            {
+                Some(*dst)
+            }
+            RStmt::Assign {
+                dst,
+                expr: RExpr::RetagRef { value },
+            } if *value == param => Some(*dst),
+            RStmt::Assign {
+                dst,
+                expr: RExpr::Use(value),
+            } if *value == param => Some(*dst),
+            _ => None,
+        })
+        .unwrap_or(param)
+}
+
+fn body_preserves_handle_field(body: &RuntimeBody<'_>, param: RLocalId, field: u16) -> bool {
+    let transported = transported_local_from_param(body, param);
+    runtime_body_stmts(body).any(|stmt| match stmt {
+        RStmt::Assign {
+            expr: RExpr::AggregateMake { fields, .. },
+            ..
+        } => fields
+            .get(field as usize)
+            .is_some_and(|src| *src == transported),
+        RStmt::Store { dst, src } => {
+            *src == transported
+                && matches!(dst.root, PlaceRoot::Ref(_))
+                && matches!(dst.path.as_ref(), [PlaceElem::Field(stored)] if stored.0 == field)
+        }
+        _ => false,
+    })
+}
+
 fn storage_pair_ref_layout<'db>(class: &RuntimeClass<'db>) -> Option<LayoutId<'db>> {
     match class {
         RuntimeClass::Ref {
@@ -116,95 +224,30 @@ fn transparent_wrapper_returns_preserve_handle_fields_in_rmir() {
                 })
                 .collect::<Vec<_>>();
             let take_u256 = package
-        .functions(&db)
-        .iter()
-        .copied()
-        .find(|function| {
-            if !function.symbol(&db).contains("take") {
-                return false;
-            }
-            let body = function.instance(&db).body(&db);
-            let [_, param] = body.signature.params.as_slice() else {
-                return false;
-            };
-            if !matches!(param.class, RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. }) {
-                return false;
-            }
-            let transported = body
-                .blocks
+                .functions(&db)
                 .iter()
-                .flat_map(|block| block.stmts.iter())
-                .find_map(|stmt| match stmt {
-                    RStmt::Assign {
-                        dst,
-                        expr: RExpr::AddrOf { place },
-                    } if matches!(
-                        place.root,
-                        PlaceRoot::Ptr { addr, .. } if addr == param.local && place.path.is_empty()
-                    ) => Some(*dst),
-                    RStmt::Assign {
-                        dst,
-                        expr: RExpr::RetagRef { value },
-                    } if *value == param.local => Some(*dst),
-                    RStmt::Assign {
-                        dst,
-                        expr: RExpr::Use(value),
-                    } if *value == param.local => Some(*dst),
-                    RStmt::Assign { .. }
-                    | RStmt::EnumAssertVariant { .. }
-                    | RStmt::Store { .. }
-                    | RStmt::CopyInto { .. }
-                    | RStmt::EnumSetTag { .. }
-                    | RStmt::EnumWriteVariant { .. } => None,
+                .copied()
+                .find(|function| {
+                    if !function.symbol(&db).contains("take") {
+                        return false;
+                    }
+                    let body = function.instance(&db).body(&db);
+                    let [_, param] = body.signature.params.as_slice() else {
+                        return false;
+                    };
+                    matches!(
+                        param.class,
+                        RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. }
+                    ) && body_preserves_handle_field(&body, param.local, 1)
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "generated take helper that preserves the incoming handle field\n\n{}",
+                        take_debug.join("\n\n")
+                    )
                 });
-            body.blocks.iter().flat_map(|block| block.stmts.iter()).any(|stmt| {
-                matches!(
-                    stmt,
-                    RStmt::Store { dst, src }
-                        if (matches!(transported, Some(local) if *src == local)
-                            || (transported.is_none() && *src == param.local))
-                            && matches!(dst.root, PlaceRoot::Ref(_))
-                            && matches!(dst.path.as_ref(), [PlaceElem::Field(field)] if field.0 == 1)
-                )
-            })
-        })
-        .unwrap_or_else(|| panic!(
-            "generated take helper that preserves the incoming handle field\n\n{}",
-            take_debug.join("\n\n")
-        ));
             let body = take_u256.instance(&db).body(&db);
             let seq_param = body.signature.params[1].local;
-            let transported = body
-                .blocks
-                .iter()
-                .flat_map(|block| block.stmts.iter())
-                .find_map(|stmt| match stmt {
-                    RStmt::Assign {
-                        dst,
-                        expr: RExpr::AddrOf { place },
-                    } if matches!(
-                        place.root,
-                        PlaceRoot::Ptr { addr, .. } if addr == seq_param && place.path.is_empty()
-                    ) =>
-                    {
-                        Some(*dst)
-                    }
-                    RStmt::Assign {
-                        dst,
-                        expr: RExpr::RetagRef { value },
-                    } if *value == seq_param => Some(*dst),
-                    RStmt::Assign {
-                        dst,
-                        expr: RExpr::Use(value),
-                    } if *value == seq_param => Some(*dst),
-                    RStmt::Assign { .. }
-                    | RStmt::EnumAssertVariant { .. }
-                    | RStmt::Store { .. }
-                    | RStmt::CopyInto { .. }
-                    | RStmt::EnumSetTag { .. }
-                    | RStmt::EnumWriteVariant { .. } => None,
-                })
-                .unwrap_or(seq_param);
 
             assert!(
                 !body
@@ -221,17 +264,9 @@ fn transparent_wrapper_returns_preserve_handle_fields_in_rmir() {
                 "transparent wrapper returns should not materialize handle fields:\n{body:#?}"
             );
             assert!(
-        body.blocks.iter().flat_map(|block| block.stmts.iter()).any(|stmt| {
-            matches!(
-                stmt,
-                RStmt::Store { dst, src }
-                    if *src == transported
-                        && matches!(dst.root, PlaceRoot::Ref(_))
-                        && matches!(dst.path.as_ref(), [PlaceElem::Field(field)] if field.0 == 1)
-            )
-        }),
-        "transparent wrapper returns should store the incoming borrow transport directly into the wrapper field:\n{body:#?}"
-    );
+                body_preserves_handle_field(&body, seq_param, 1),
+                "transparent wrapper returns should carry the incoming borrow transport directly into the wrapper field:\n{body:#?}"
+            );
         }
     );
 }
@@ -496,6 +531,51 @@ fn mem_ptr_from_raw_helpers_use_raw_addr_transport_in_rmir() {
 }
 
 #[test]
+fn object_backed_nested_const_handle_fields_load_carriers_before_const_projection() {
+    let output = sonatina_ir_for_source(
+        "object_backed_nested_const_handle_fields_load_carriers_before_const_projection.fe",
+        r#"struct Data {
+    x: u256,
+}
+
+struct View {
+    d: ref Data,
+}
+
+fn read(v: own View) -> u256 {
+    v.d.x
+}
+
+pub fn entry() -> u256 {
+    let data = Data { x: 1 }
+    let view = View { d: ref data }
+    read(view)
+}
+"#,
+    );
+    let read = sonatina_function_body(&output, "read");
+
+    assert!(
+        contains_op_subsequence(read, &["obj.proj", "obj.load", "const.proj", "const.load"]),
+        "object-backed aggregates may store nested const refs, but field access must load the handle carrier before projecting through the const ref:\n{read}"
+    );
+}
+
+#[test]
+fn storage_backed_nested_handle_fields_follow_carriers_before_projecting_children() {
+    let output = sonatina_ir_for_source(
+        "storage_backed_nested_handle_fields_follow_carriers_before_projecting_children.fe",
+        include_str!("fixtures/effect_handle_field_deref.fe").to_string(),
+    );
+    let bump = sonatina_function_body(&output, "bump");
+
+    assert!(
+        contains_op_subsequence(bump, &["obj.proj", "obj.load", "evm_sload"]),
+        "nested storage-backed handle field access should load/follow the carrier before loading children:\n{bump}"
+    );
+}
+
+#[test]
 fn storage_backed_nested_handle_field_borrows_use_storage_transport() {
     with_runtime_package!(
         "storage_backed_nested_handle_field_borrows_use_storage_transport.fe",
@@ -553,6 +633,399 @@ fn storage_backed_nested_handle_field_borrows_use_storage_transport() {
                     }
                 ),
                 "nested storage-backed field borrow should use storage transport, not object/memory transport:\n{body:#?}"
+            );
+        }
+    );
+}
+
+#[test]
+fn projected_enum_field_snapshots_preserve_full_enum_payloads() {
+    let output = sonatina_ir_for_source(
+        "projected_enum_field_snapshots_preserve_full_enum_payloads.fe",
+        r#"enum Flag {
+    A(u256),
+    B(u256),
+}
+
+impl Copy for Flag {}
+
+struct Inner {
+    flag: Flag,
+}
+
+struct Wrapper {
+    inner: Inner,
+}
+
+fn repack(wrapper: Wrapper) -> Inner {
+    let flag = wrapper.inner.flag
+    let copy = flag
+    Inner { flag: copy }
+}
+
+fn entry() -> Inner {
+    repack(Wrapper {
+        inner: Inner { flag: Flag::A(42) },
+    })
+}
+"#,
+    );
+    let repack = sonatina_function_body(&output, "repack");
+
+    let repacks_full_payload =
+        contains_op_subsequence(repack, &["extract_value", "extract_value", "insert_value"])
+            || (repack.contains("obj.load") && repack.contains("obj.store"));
+    assert!(
+        repacks_full_payload,
+        "repack should preserve the full enum payload while rebuilding the wrapper:\n{repack}"
+    );
+    assert!(
+        !sonatina_ops(repack)
+            .into_iter()
+            .any(|op| op == "enum_tag" || op == "enum_tag_of"),
+        "projected enum field payload should stay a full enum value, not an enum tag:\n{repack}"
+    );
+}
+
+#[test]
+fn read_only_scalar_params_used_as_indices_stay_unrooted() {
+    let source = r#"
+const VALS: [u256; 3] = [10, 20, 30]
+
+fn sum_two(i: usize, j: usize) -> u256 {
+    VALS[i] + VALS[j]
+}
+
+fn entry() -> u256 {
+    sum_two(i: 0, j: 1)
+}
+"#;
+
+    with_runtime_package!(
+        "read_only_scalar_params_used_as_indices_stay_unrooted.fe",
+        source,
+        |db, package| {
+            let body = runtime_body_for_symbol(&db, package, "sum_two");
+
+            assert!(
+                matches!(body.locals[0].root, RuntimeLocalRoot::None),
+                "read-only scalar index param `i` should not get a runtime root:\n{body:#?}"
+            );
+            assert!(
+                matches!(body.locals[1].root, RuntimeLocalRoot::None),
+                "read-only scalar index param `j` should not get a runtime root:\n{body:#?}"
+            );
+        }
+    );
+
+    let ir = sonatina_ir_for_source(
+        "read_only_scalar_params_used_as_indices_stay_unrooted.fe",
+        source,
+    );
+    let sum_two = sonatina_function_body(&ir, "sum_two");
+
+    assert!(
+        !sum_two.contains("alloca i256"),
+        "read-only scalar index params should not allocate stack slots:\n{sum_two}"
+    );
+    assert!(
+        !sum_two.contains("mload"),
+        "read-only scalar index params should be used directly, not reloaded:\n{sum_two}"
+    );
+}
+
+#[test]
+fn mutated_scalar_locals_stay_rooted() {
+    with_runtime_package!(
+        "mutated_scalar_locals_stay_rooted.fe",
+        r#"
+fn bump(size: u256) -> u256 {
+    let mut value: u256 = size
+    value += 1
+    value
+}
+
+fn entry() -> u256 {
+    bump(size: 1)
+}
+"#,
+        |db, package| {
+            let body = runtime_body_for_symbol(&db, package, "bump");
+
+            assert!(
+                matches!(body.locals[0].root, RuntimeLocalRoot::None),
+                "read-only scalar param should not get a runtime root:\n{body:#?}"
+            );
+            let rooted_scalar = body
+                .locals
+                .iter()
+                .enumerate()
+                .find_map(|(idx, local)| {
+                    matches!(local.root, RuntimeLocalRoot::Slot(RuntimeClass::Scalar(_)))
+                        .then(|| RLocalId::from_u32(idx as u32))
+                })
+                .unwrap_or_else(|| {
+                    panic!("mutated scalar local should keep runtime storage:\n{body:#?}")
+                });
+            let rooted_ptr = runtime_body_stmts(&body)
+                .find_map(|stmt| match stmt {
+                    RStmt::Assign {
+                        dst,
+                        expr: RExpr::AddrOf { place },
+                    } if place.root == PlaceRoot::Slot(rooted_scalar) => Some(*dst),
+                    _ => None,
+                })
+                .unwrap_or_else(|| {
+                    panic!("mutated scalar local should take the address of its rooted slot:\n{body:#?}")
+                });
+            let stored_ptr = transported_local_from_param(&body, rooted_ptr);
+            assert!(
+                runtime_body_stmts(&body).any(|stmt| {
+                    matches!(
+                        stmt,
+                        RStmt::Store { dst, .. }
+                            if matches!(dst.root, PlaceRoot::Ptr { addr, .. } if addr == stored_ptr)
+                    )
+                }),
+                "mutated scalar local should store through the rooted slot pointer:\n{body:#?}"
+            );
+        }
+    );
+}
+
+#[test]
+fn immutable_own_aggregate_param_field_reads_stay_unrooted() {
+    with_runtime_package!(
+        "immutable_own_aggregate_param_field_reads_stay_unrooted.fe",
+        r#"struct Pair {
+    left: u256,
+    right: u256,
+}
+
+fn sum_pair(_ pair: own Pair) -> u256 {
+    pair.left + pair.right
+}
+
+fn entry() -> u256 {
+    sum_pair(Pair { left: 1, right: 2 })
+}
+"#,
+        |db, package| {
+            let body = runtime_body_for_symbol(&db, package, "sum_pair");
+            let pair = RLocalId::from_u32(0);
+
+            assert!(
+                matches!(
+                    body.signature.params[0].class,
+                    RuntimeClass::AggregateValue { .. }
+                ),
+                "owned aggregate param should be passed as an aggregate value:\n{body:#?}"
+            );
+            assert!(
+                matches!(body.locals[0].root, RuntimeLocalRoot::None),
+                "field-read-only owned aggregate param should not get a runtime root:\n{body:#?}"
+            );
+            assert!(
+                body_extracts_param_fields(&body, pair, &[0, 1]),
+                "field reads should extract directly from the aggregate param:\n{body:#?}"
+            );
+            assert!(
+                !body_has_object_materialization(&body),
+                "field-read-only owned aggregate param should not materialize to an object:\n{body:#?}"
+            );
+        }
+    );
+}
+
+#[test]
+fn read_only_mut_own_aggregate_receiver_field_reads_stay_unrooted() {
+    with_runtime_package!(
+        "read_only_mut_own_aggregate_receiver_field_reads_stay_unrooted.fe",
+        r#"struct Pair {
+    left: u256,
+    right: u256,
+}
+
+impl Pair {
+    fn sum(mut own self) -> u256 {
+        self.left + self.right
+    }
+}
+
+fn entry() -> u256 {
+    Pair { left: 1, right: 2 }.sum()
+}
+"#,
+        |db, package| {
+            let body = runtime_body_for_symbol(&db, package, "sum");
+            let receiver = RLocalId::from_u32(0);
+
+            assert!(
+                matches!(
+                    body.signature.params[0].class,
+                    RuntimeClass::AggregateValue { .. }
+                ),
+                "mut own receiver should still be passed as an aggregate value:\n{body:#?}"
+            );
+            assert!(
+                matches!(body.locals[0].root, RuntimeLocalRoot::None),
+                "read-only mut own aggregate receiver should not get a runtime root:\n{body:#?}"
+            );
+            assert!(
+                body_extracts_param_fields(&body, receiver, &[0, 1]),
+                "receiver field reads should extract directly from the aggregate param:\n{body:#?}"
+            );
+            assert!(
+                !body_has_object_materialization(&body),
+                "read-only mut own aggregate receiver should not materialize to an object:\n{body:#?}"
+            );
+        }
+    );
+}
+
+#[test]
+fn immutable_own_tuple_destructuring_field_reads_stay_unrooted() {
+    with_runtime_package!(
+        "immutable_own_tuple_destructuring_field_reads_stay_unrooted.fe",
+        r#"struct Pair {
+    left: u256,
+    right: u256,
+}
+
+fn sum_tuple(_ items: own (Pair, Pair)) -> u256 {
+    let (first, second) = items
+    first.left + second.right
+}
+
+fn entry() -> u256 {
+    sum_tuple((Pair { left: 1, right: 2 }, Pair { left: 3, right: 4 }))
+}
+"#,
+        |db, package| {
+            let body = runtime_body_for_symbol(&db, package, "sum_tuple");
+            let items = RLocalId::from_u32(0);
+
+            assert!(
+                matches!(
+                    body.signature.params[0].class,
+                    RuntimeClass::AggregateValue { .. }
+                ),
+                "owned tuple param should be passed as an aggregate value:\n{body:#?}"
+            );
+            assert!(
+                matches!(body.locals[0].root, RuntimeLocalRoot::None),
+                "field-read-only owned tuple param should not get a runtime root:\n{body:#?}"
+            );
+            assert!(
+                body_extracts_param_fields(&body, items, &[0, 1]),
+                "tuple destructuring should extract directly from the aggregate param:\n{body:#?}"
+            );
+            assert!(
+                !body_has_object_materialization(&body),
+                "tuple destructuring field reads should not materialize to an object:\n{body:#?}"
+            );
+        }
+    );
+}
+
+#[test]
+fn immutable_own_tuple_destructuring_call_args_stay_unrooted() {
+    with_runtime_package!(
+        "immutable_own_tuple_destructuring_call_args_stay_unrooted.fe",
+        r#"struct Pair {
+    left: u256,
+    right: u256,
+}
+
+fn consume(_ pair: own Pair) -> u256 {
+    pair.left + pair.right
+}
+
+fn sum_tuple(_ items: own (Pair, Pair)) -> u256 {
+    let (first, second) = items
+    consume(first) + consume(second)
+}
+
+fn entry() -> u256 {
+    sum_tuple((Pair { left: 1, right: 2 }, Pair { left: 3, right: 4 }))
+}
+"#,
+        |db, package| {
+            let body = runtime_body_for_symbol(&db, package, "sum_tuple");
+            let items = RLocalId::from_u32(0);
+
+            assert!(
+                matches!(
+                    body.signature.params[0].class,
+                    RuntimeClass::AggregateValue { .. }
+                ),
+                "owned tuple param should be passed as an aggregate value:\n{body:#?}"
+            );
+            assert!(
+                matches!(body.locals[0].root, RuntimeLocalRoot::None),
+                "owned tuple param should not get a runtime root for call-only destructured fields:\n{body:#?}"
+            );
+            assert!(
+                body_extracts_param_fields(&body, items, &[0, 1]),
+                "tuple destructuring call args should extract directly from the aggregate param:\n{body:#?}"
+            );
+            assert!(
+                !body_has_object_materialization(&body),
+                "tuple destructuring call args should not materialize to an object:\n{body:#?}"
+            );
+        }
+    );
+}
+
+#[test]
+fn mutating_mut_own_aggregate_receiver_stays_rooted() {
+    with_runtime_package!(
+        "mutating_mut_own_aggregate_receiver_stays_rooted.fe",
+        r#"struct Pair {
+    left: u256,
+    right: u256,
+}
+
+impl Pair {
+    fn bump(mut own self) -> Pair {
+        self.left += 1
+        self
+    }
+}
+
+fn entry() -> Pair {
+    Pair { left: 1, right: 2 }.bump()
+}
+"#,
+        |db, package| {
+            let body = runtime_body_for_symbol(&db, package, "bump");
+            let receiver = RLocalId::from_u32(0);
+
+            assert!(
+                matches!(body.locals[0].root, RuntimeLocalRoot::Slot(_)),
+                "mutated mut own aggregate receiver should keep object-backed runtime storage:\n{body:#?}"
+            );
+            assert!(
+                runtime_body_stmts(&body).any(|stmt| {
+                    matches!(
+                        stmt,
+                        RStmt::Assign {
+                            expr: RExpr::AddrOf { place },
+                            ..
+                        } if place.root == PlaceRoot::Slot(receiver)
+                                && matches!(place.path.as_ref(), [PlaceElem::Field(_)])
+                    )
+                }),
+                "field mutation should take the address of the rooted receiver field:\n{body:#?}"
+            );
+            assert!(
+                runtime_body_stmts(&body).any(|stmt| {
+                    matches!(
+                        stmt,
+                        RStmt::Store { dst, .. } if matches!(dst.root, PlaceRoot::Ref(_))
+                    )
+                }),
+                "field mutation should store through the rooted receiver field ref:\n{body:#?}"
             );
         }
     );
@@ -1354,6 +1827,28 @@ fn entry() -> u256 {
 }
 
 #[test]
+fn sonatina_enum_tag_matches_preserve_typed_tag_values() {
+    let _ = sonatina_ir_for_source(
+        "sonatina_enum_tag_matches_preserve_typed_tag_values.fe",
+        r#"enum Maybe {
+    None,
+    Some(u256),
+}
+
+pub fn code(x: Maybe) -> u256 {
+    match x {
+        Maybe::None => 0,
+        Maybe::Some(v) => v,
+    }
+}
+
+pub fn main() -> u256 {
+    code(Maybe::Some(1))
+}"#,
+    );
+}
+
+#[test]
 fn object_backed_scalar_field_borrows_lower_as_typed_refs() {
     with_runtime_package!(
         "object_backed_scalar_field_borrows_lower_as_typed_refs.fe",
@@ -1395,6 +1890,88 @@ fn object_backed_scalar_field_borrows_lower_as_typed_refs() {
                 saw_scalar_ref_borrow,
                 "expected at least one object-backed scalar field borrow to lower as RuntimeClass::Ref"
             );
+        }
+    );
+}
+
+#[test]
+fn checked_overflow_exprs_survive_into_rmir() {
+    with_runtime_package!(
+        "debug_checked_add_unused_local_rmir.fe",
+        r#"
+fn test_add_overflow_u8() {
+    let x: u8 = 255
+    let y: u8 = x + 1
+}
+"#,
+        |db, package| {
+            let func = package
+                .functions(&db)
+                .iter()
+                .copied()
+                .find(|function| function.symbol(&db).contains("test_add_overflow_u8"))
+                .expect("generated runtime function");
+            let body = func.instance(&db).body(&db);
+            assert!(
+                body.blocks
+                    .iter()
+                    .flat_map(|block| block.stmts.iter())
+                    .any(|stmt| {
+                        matches!(
+                            stmt,
+                            RStmt::Assign {
+                                expr: RExpr::Call { .. }
+                                    | RExpr::Builtin(RuntimeBuiltin::IntrinsicArith {
+                                        op: IntrinsicArithBinOp::Add,
+                                        checked: true,
+                                        ..
+                                    }),
+                                ..
+                            }
+                        )
+                    }),
+                "checked overflow expression should survive semantic const canonicalization and lower to executable rMIR arithmetic:\n{body:#?}"
+            );
+        }
+    );
+}
+
+#[test]
+fn unit_branch_mutations_do_not_use_erased_call_results() {
+    with_runtime_package!(
+        "unit_branch_mutations_do_not_use_erased_call_results.fe",
+        r#"
+#[test]
+fn unit_branch_add_assign() {
+    let mut x: usize = 0
+    if true {
+        x += 1
+    } else {
+        x += 1
+    }
+}
+"#,
+        |db, package| {
+            for function in package.functions(&db) {
+                let body = function.instance(&db).body(&db);
+                assert!(
+                    !body
+                        .blocks
+                        .iter()
+                        .flat_map(|block| block.stmts.iter())
+                        .any(|stmt| {
+                            matches!(
+                                stmt,
+                                RStmt::Assign {
+                                    expr: RExpr::Use(value),
+                                    ..
+                                } if body.value_class(*value).is_none()
+                            )
+                        }),
+                    "unit-valued mutation branches should not try to use erased call results:\n{}:\n{body:#?}",
+                    function.symbol(&db),
+                );
+            }
         }
     );
 }
@@ -1514,6 +2091,88 @@ fn use_returned_array() -> u8 {
                     Some(RuntimeClass::AggregateValue { .. })
                 )),
                 "by-value aggregate call results should stay visible aggregate values in callers, not object refs:\n{body:#?}"
+            );
+        }
+    );
+}
+
+#[test]
+fn by_value_array_return_materialization_structurally_copies_into_object_storage() {
+    with_runtime_package!(
+        "by_value_array_return_materialization_structurally_copies_into_object_storage.fe",
+        r#"
+fn return_array_after_projection(xs: [u256; 3]) -> [u256; 3] {
+    let ys = xs
+    let _ = ys[2]
+    ys
+}
+
+fn use_returned_array() -> u256 {
+    let mut xs: [u256; 3] = [1, 2, 3]
+    xs = return_array_after_projection(xs)
+    xs[0]
+}
+"#,
+        |db, package| {
+            let output = emit_runtime_package_sonatina_ir_optimized(
+                &db,
+                &package,
+                fe_codegen::EVM_LAYOUT,
+                OptLevel::O0,
+            )
+            .expect("Sonatina IR");
+            let body = sonatina_function_body(&output, "use_returned_array");
+
+            assert!(
+                body.contains("extract_value"),
+                "by-value aggregate materialization should structurally extract fields instead of whole-object obj.store:\n{body}"
+            );
+            assert!(
+                body.contains("obj.load"),
+                "object-backed aggregate copies should load leaf values from the source object before storing them:\n{body}"
+            );
+        }
+    );
+}
+
+#[test]
+fn fieldless_enum_fields_copy_into_object_storage_via_enum_ops() {
+    with_test_runtime_package!(
+        "fieldless_enum_fields_copy_into_object_storage_via_enum_ops.fe",
+        r#"
+enum E {
+    A,
+    B,
+}
+
+struct Pair {
+    xs: [u256; 3],
+    e: E,
+}
+
+fn build(flag: bool) -> Pair {
+    let xs: [u256; 3] = [1, 2, 3]
+    let e = if flag { E::A } else { E::B }
+    Pair { xs, e }
+}
+
+#[test]
+fn exercise() {
+    let pair = build(true)
+    assert(pair.xs[0] == 1)
+}
+"#,
+        |db, package| {
+            let output = emit_runtime_package_sonatina_ir_optimized(
+                &db,
+                &package,
+                fe_codegen::EVM_LAYOUT,
+                OptLevel::O0,
+            )
+            .expect("Sonatina IR");
+            assert!(
+                output.contains("enum.set_tag"),
+                "fieldless enum object copies should set the destination enum tag explicitly:\n{output}"
             );
         }
     );

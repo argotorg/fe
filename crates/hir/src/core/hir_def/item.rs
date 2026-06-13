@@ -1555,6 +1555,7 @@ impl<'db> FieldParent<'db> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FieldDef<'db> {
     pub attributes: AttrListId<'db>,
+    pub is_event_indexed: bool,
     pub name: Partial<IdentId<'db>>,
     pub(in crate::core) type_ref: Partial<TypeId<'db>>,
     pub vis: Visibility,
@@ -1566,9 +1567,11 @@ impl<'db> FieldDef<'db> {
         name: Partial<IdentId<'db>>,
         type_ref: Partial<TypeId<'db>>,
         vis: Visibility,
+        is_event_indexed: bool,
     ) -> Self {
         Self {
             attributes,
+            is_event_indexed,
             name,
             type_ref,
             vis,

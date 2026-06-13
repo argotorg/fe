@@ -55,9 +55,9 @@ use super::{
     call_input::{CompiledCallInputPlan, compile_call_input_plan_for_semantic},
     classify::{
         BodyEnv, BodyStaticFacts, ContractMetadataBuiltin, GenericNumericIntrinsicKind,
-        InferClassCache, RuntimeBodyCx, actual_aggregate_class_from_runtime_source,
-        contract_metadata_builtin, generic_numeric_intrinsic_kind, nonself_backing_value_place,
-        resolve_runtime_call_key, semantic_return_ty, snapshot_source_place,
+        InferClassCache, RuntimeBodyCx, contract_metadata_builtin, generic_numeric_intrinsic_kind,
+        nonself_backing_value_place, resolve_runtime_call_key, semantic_return_ty,
+        snapshot_source_place,
     },
     consts::{
         aggregate_const_ref_class, aggregate_const_ref_region, const_scalar_for_class,
@@ -1343,7 +1343,7 @@ impl<'db> RmirEmitter<'db> {
             RuntimeCarrier::Value(RuntimeClass::AggregateValue { layout }),
         );
         let ctor_elems = aggregate_ctor_elems_for_layout(self.db, layout, 3);
-        self.lower_aggregate_values(bb, dst, ty, layout, &ctor_elems, &[ptr, len, size]);
+        self.lower_aggregate_values(bb, dst, layout, &ctor_elems, &[ptr, len, size]);
         dst
     }
 
@@ -1637,7 +1637,7 @@ impl<'db> RmirEmitter<'db> {
             }
         };
         let dst = self.alloc_runtime_temp(ty, RuntimeCarrier::Value(dst_class));
-        self.lower_aggregate_values(bb, dst, ty, layout, &ctor_elems, field_values);
+        self.lower_aggregate_values(bb, dst, layout, &ctor_elems, field_values);
         dst
     }
 
@@ -1675,14 +1675,13 @@ impl<'db> RmirEmitter<'db> {
         }
         let layout = layout_for_aggregate_instance_in_env(self.db, self.env, ty, &field_classes);
         let ctor_elems = aggregate_ctor_elems_for_layout(self.db, layout, fields.len());
-        self.lower_aggregate_values(bb, dst, ty, layout, &ctor_elems, &field_values);
+        self.lower_aggregate_values(bb, dst, layout, &ctor_elems, &field_values);
     }
 
     fn lower_aggregate_values(
         &mut self,
         bb: RBlockId,
         dst: RLocalId,
-        ty: TyId<'db>,
         layout: LayoutId<'db>,
         ctor_elems: &[AggregateCtorElem<'db>],
         field_values: &[RLocalId],
@@ -1707,37 +1706,23 @@ impl<'db> RmirEmitter<'db> {
         self.refine_local_runtime_class(dst, dst_class.clone());
         match dst_class {
             RuntimeClass::AggregateValue { .. } => {
-                let temp = self.alloc_runtime_temp(
-                    ty,
-                    RuntimeCarrier::Value(RuntimeClass::object_ref(layout)),
-                );
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst: temp,
-                        expr: RExpr::AllocObject { layout },
-                    },
-                );
-                for (value, elem) in field_values.iter().copied().zip(ctor_elems.iter()) {
-                    if self.value_class(value).is_none() {
-                        continue;
-                    }
-                    let place = RuntimePlace {
-                        root: PlaceRoot::Ref(temp),
-                        path: vec![elem.elem.clone()].into_boxed_slice(),
-                    };
-                    self.write_value_to_place(bb, place, value, &elem.class);
-                }
+                let fields = field_values
+                    .iter()
+                    .copied()
+                    .zip(ctor_elems.iter())
+                    .map(|(value, elem)| {
+                        if self.class_is_runtime_zst(&elem.class) {
+                            value
+                        } else {
+                            self.coerce_value(bb, value, &elem.class)
+                        }
+                    })
+                    .collect();
                 self.push_stmt(
                     bb,
                     RStmt::Assign {
                         dst,
-                        expr: RExpr::Load {
-                            place: RuntimePlace {
-                                root: PlaceRoot::Ref(temp),
-                                path: Box::default(),
-                            },
-                        },
+                        expr: RExpr::AggregateMake { layout, fields },
                     },
                 );
             }
@@ -4424,7 +4409,7 @@ impl<'db> RmirEmitter<'db> {
             && let Some(place) = self.try_lower_place(bb, &place)
         {
             let class = self.project_place_class(&place);
-            let actual = actual_aggregate_class_from_runtime_source(&class)?;
+            let actual = class.aggregate_value_class()?;
             let value = self.alloc_runtime_temp(
                 self.locals[local.index()].semantic_ty,
                 RuntimeCarrier::Value(class.clone()),
@@ -4440,7 +4425,7 @@ impl<'db> RmirEmitter<'db> {
         }
         let value = self.read_semantic_value(bb, local);
         let class = self.value_class(value).cloned()?;
-        let actual = actual_aggregate_class_from_runtime_source(&class)?;
+        let actual = class.aggregate_value_class()?;
         Some(self.coerce_value_if_needed(bb, value, &actual))
     }
 

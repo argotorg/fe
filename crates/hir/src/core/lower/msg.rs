@@ -2,12 +2,15 @@ use num_bigint::BigUint;
 use parser::ast::{self, AttrListOwner as _};
 use salsa::Accumulator as _;
 
-use super::{attr::named_attr_specs, hir_builder::HirBuilder};
+use super::{
+    attr::named_attr_specs,
+    hir_builder::{BodyBuilder, DecodeInputBindings, HirBuilder},
+};
 
 use crate::{
     HirDb, SelectorError, SelectorErrorKind,
     hir_def::{
-        ArithBinOp, AssocConstDef, AttrListId, BinOp, Body, BodyKind, Expr, FieldDef,
+        ArithBinOp, AssocConstDef, AttrListId, BinOp, Body, BodyKind, Expr, ExprId, FieldDef,
         FieldDefListId, FieldIndex, FuncModifiers, FuncParam, FuncParamMode, FuncParamName,
         IdentId, ImplTrait, IntegerId, LitKind, LogicalBinOp, Mod, Partial, Pat, PathId, PathKind,
         Stmt, Struct, TrackedItemVariant, TraitRefId, TupleTypeId, TypeId, TypeKind, Visibility,
@@ -172,7 +175,7 @@ pub(super) fn create_payload_size_func<'db, O: Clone + Into<crate::span::Desugar
     }]);
     let ret_ty = builder.ty_ident(builder.ident("u256"));
     let roots = builder.roots();
-    builder.func_with_body(
+    builder.func_with_body_inline_always(
         payload_size_ident,
         builder.empty_generic_params(),
         params,
@@ -234,7 +237,7 @@ fn lower_msg_variant_encode_impl<'db>(
                 builder.param_mut_underscore_named(encoder_ident, e_ty),
             ]);
 
-            builder.func_generic(
+            builder.func_generic_inline_always(
                 "encode",
                 e_generic_params,
                 params,
@@ -251,7 +254,7 @@ fn lower_msg_variant_encode_impl<'db>(
             let params = builder.params([builder.param_own_self(), ptr_param]);
             let encode_to_ptr_ident = builder.ident("encode_to_ptr");
 
-            builder.func_with_body(
+            builder.func_with_body_inline_always(
                 encode_to_ptr_ident,
                 builder.empty_generic_params(),
                 params,
@@ -621,6 +624,36 @@ pub(super) fn build_head_size_body_expr<'db, O: Clone + Into<crate::span::Desuga
     }
 }
 
+fn build_decode_head_pos_expr<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
+    body: &mut BodyBuilder<'_, 'db, O>,
+    base_ident: IdentId<'db>,
+    prior_fields: &[(IdentId<'db>, TypeId<'db>)],
+) -> ExprId {
+    let mut expr = body.ident_expr(base_ident);
+    for (_, ty) in prior_fields.iter().copied() {
+        let field_head_size = body.abi_field_head_size_expr(ty);
+        expr = body.push_expr(Expr::Bin(
+            expr,
+            field_head_size,
+            BinOp::Arith(ArithBinOp::Add),
+        ));
+    }
+    expr
+}
+
+fn emit_msg_decode_from_fields<'db>(
+    body: &mut BodyBuilder<'_, 'db, MsgDesugared>,
+    fields: &[(IdentId<'db>, TypeId<'db>)],
+    field_names: &[IdentId<'db>],
+    decode_input: DecodeInputBindings<'db>,
+) {
+    for (idx, (name, ty)) in fields.iter().copied().enumerate() {
+        let head_pos = build_decode_head_pos_expr(body, decode_input.base_ident, &fields[..idx]);
+        body.decode_from_into(name, ty, decode_input, head_pos);
+    }
+    body.return_record_self(field_names);
+}
+
 fn lower_msg_variant_decode_trait_impl<'db>(
     builder: &mut HirBuilder<'_, 'db, MsgDesugared>,
     variant: &ast::MsgVariant,
@@ -638,7 +671,7 @@ fn lower_msg_variant_decode_trait_impl<'db>(
         let (d_generic_params, d_ty) =
             builder.type_param_with_trait_bound("D", abi_decoder_trait_ref);
 
-        let decoder_ident = builder.ident("d");
+        let decoder_ident = builder.generated_ident("msg_decode_decoder");
         let params = builder.params([builder.param_mut_underscore_named(decoder_ident, d_ty)]);
 
         builder.func_generic_inline_always(
@@ -649,9 +682,42 @@ fn lower_msg_variant_decode_trait_impl<'db>(
             FuncModifiers::new(Visibility::Private, false, false, false),
             |body| {
                 for (name, ty) in fields.iter().copied() {
-                    body.decode_into(name, ty, d_ty);
+                    body.decode_into(name, ty, decoder_ident, d_ty);
                 }
                 body.return_record_self(&field_names);
+            },
+        );
+
+        let byte_input_trait_ref = builder.core_abi_trait_ref("ByteInput");
+        let (i_generic_params, i_ty) =
+            builder.type_param_with_trait_bound("I", byte_input_trait_ref);
+
+        let input_ident = builder.generated_ident("msg_decode_input");
+        let base_ident = builder.generated_ident("msg_decode_base");
+        let input_len_ident = builder.generated_ident("msg_decode_input_len");
+        let u256_ty = builder.ty_ident(builder.ident("u256"));
+        let params = builder.params([
+            builder.param_underscore_named(input_ident, i_ty),
+            builder.param_underscore_named(base_ident, u256_ty),
+        ]);
+        let decode_input = DecodeInputBindings {
+            input_ident,
+            input_ty: i_ty,
+            base_ident,
+            input_len_ident,
+        };
+
+        builder.func_generic_inline_always(
+            "decode_from",
+            i_generic_params,
+            params,
+            Some(builder.self_ty()),
+            FuncModifiers::new(Visibility::Private, false, false, false),
+            |body| {
+                if !fields.is_empty() {
+                    body.bind_input_len(input_len_ident, input_ident);
+                }
+                emit_msg_decode_from_fields(body, &fields, &field_names, decode_input);
             },
         );
     })
@@ -695,7 +761,7 @@ fn lower_msg_variant_fields<'db>(
                     let name = IdentId::lower_token_partial(ctxt, field.name());
                     let type_ref = TypeId::lower_ast_partial(ctxt, field.ty());
                     // All msg variant fields are public
-                    FieldDef::new(attributes, name, type_ref, Visibility::Public)
+                    FieldDef::new(attributes, name, type_ref, Visibility::Public, false)
                 })
                 .collect::<Vec<_>>();
             FieldDefListId::new(db, fields)

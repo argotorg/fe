@@ -16,6 +16,7 @@ impl core::abi::AbiSize for Unauthorized {
     const HEAD_SIZE: u256 = 0
     const IS_DYNAMIC: bool = false
 
+    #[inline(always)]
     fn payload_size(self) -> u256 {
         return <Self as core::abi::AbiSize>::HEAD_SIZE
     }
@@ -24,7 +25,9 @@ impl core::abi::AbiSize for Unauthorized {
 impl core::abi::Encode<std::abi::Sol> for Unauthorized {
     const DIRECT_ENCODE: bool = true
 
+    #[inline(always)]
     fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {}
 
+    #[inline(always)]
     fn encode_to_ptr(own self, _ ptr: u256) {}
 }

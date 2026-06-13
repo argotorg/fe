@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 455
 expression: output
 input_file: crates/codegen/tests/fixtures/match_nested_enum.fe
 ---
@@ -37,79 +38,34 @@ func private %main_root() {
 
 func private %match_nested_enum(v0.@layout_1) -> i8 {
     block0:
-        v1.objref<@layout_1> = obj.alloc @layout_1;
-        v2.enumtag(@layout_1) = enum.tag v0;
-        br_table v2 block8 (0.enumtag(@layout_1) block9) (1.enumtag(@layout_1) block10);
+        jump block1;
 
     block1:
-        v15.@layout_1 = obj.load v1;
-        v16.enumtag(@layout_1) = enum.tag v15;
-        br_table v16 (0.enumtag(@layout_1) block3) (1.enumtag(@layout_1) block4);
+        v2.enumtag(@layout_1) = enum.tag v0;
+        br_table v2 (0.enumtag(@layout_1) block3) (1.enumtag(@layout_1) block4);
 
     block2:
-        v17.i8 = phi (v22 block4) (0.i8 block5) (v25 block6);
-        return v17;
+        v5.i8 = phi (v13 block4) (0.i8 block5) (v16 block6);
+        return v5;
 
     block3:
-        v18.@layout_1 = obj.load v1;
-        enum.assert_variant v18 #First;
-        v19.@layout_0 = enum.extract v18 #First 0.i256;
-        v20.enumtag(@layout_0) = enum.tag v19;
-        br_table v20 (0.enumtag(@layout_0) block5) (1.enumtag(@layout_0) block6);
+        enum.assert_variant v0 #First;
+        v8.@layout_0 = enum.extract v0 #First 0.i256;
+        v9.enumtag(@layout_0) = enum.tag v8;
+        br_table v9 (0.enumtag(@layout_0) block5) (1.enumtag(@layout_0) block6);
 
     block4:
-        v21.@layout_1 = obj.load v1;
-        enum.assert_variant v21 #Second;
-        v22.i8 = enum.extract v21 #Second 0.i256;
+        enum.assert_variant v0 #Second;
+        v13.i8 = enum.extract v0 #Second 0.i256;
         jump block2;
 
     block5:
         jump block2;
 
     block6:
-        enum.assert_variant v19 #Value;
-        v25.i8 = enum.extract v19 #Value 0.i256;
+        enum.assert_variant v8 #Value;
+        v16.i8 = enum.extract v8 #Value 0.i256;
         jump block2;
-
-    block7:
-        jump block1;
-
-    block8:
-        unreachable;
-
-    block9:
-        enum.set_tag v1 #First;
-        enum.assert_variant v0 #First;
-        v6.objref<@layout_0> = enum.proj v1 #First 0.i256;
-        v7.@layout_0 = enum.extract v0 #First 0.i256;
-        v8.enumtag(@layout_0) = enum.tag v7;
-        br_table v8 block12 (0.enumtag(@layout_0) block13) (1.enumtag(@layout_0) block14);
-
-    block10:
-        enum.set_tag v1 #Second;
-        enum.assert_variant v0 #Second;
-        v13.objref<i8> = enum.proj v1 #Second 0.i256;
-        v14.i8 = enum.extract v0 #Second 0.i256;
-        obj.store v13 v14;
-        jump block7;
-
-    block11:
-        jump block7;
-
-    block12:
-        unreachable;
-
-    block13:
-        enum.set_tag v6 #Unit;
-        jump block11;
-
-    block14:
-        enum.set_tag v6 #Value;
-        enum.assert_variant v7 #Value;
-        v11.objref<i8> = enum.proj v6 #Value 0.i256;
-        v12.i8 = enum.extract v7 #Value 0.i256;
-        obj.store v11 v12;
-        jump block11;
 }
 
 

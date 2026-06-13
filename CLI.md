@@ -174,12 +174,50 @@ Defaults:
 
 ### Artifacts and filenames
 
-For each built contract, `fe build` writes:
+For each built contract, `fe build` writes (depending on `--emit`):
 
 - `<out>/<contract>.bin` (deploy bytecode, hex + trailing newline)
 - `<out>/<contract>.runtime.bin` (runtime bytecode, hex + trailing newline)
+- `<out>/<contract>.abi.json` (Solidity-compatible ABI; only when `--emit abi`)
+- `<out>/<contract>.metadata.json` (Solidity-standard contract metadata for verifiers like Sourcify; only when `--emit metadata`)
 
 For the Sonatina backend, `.bin` is the **init section** bytes and `.runtime.bin` is the **runtime section** bytes.
+
+The `metadata.json` artifact follows the Solidity Contract Metadata schema (`version: 1`), adapted to Fe. It is a complete, deterministic recompilation input: rebuilding with the same compiler version, `sources`, and `settings` reproduces the same bytecode. Its shape:
+
+```
+{
+  "version": 1,
+  "language": "Fe",
+  "compiler": { "version": "<fe version>", "commit": "<git hash, if available>" },
+  "sources": {
+    "<source path>": { "keccak256": "0x...", "content": "..." }, ...
+  },
+  "settings": {
+    "compilationTarget": { "<source path>": "<ContractName>" },
+    "optimizer": { "level": "0|1|2|s" },
+    "arithmetic": "checked|unchecked",
+    "dependencyArithmetic": "defer|checked|unchecked",
+    "evmVersion": "osaka",
+    "ingots": [
+      {
+        "name": "<ingot>", "version": "<semver>|null", "namespace": "<prefix>",
+        "arithmetic": "checked|unchecked", "dependencyArithmetic": "defer|checked|unchecked",
+        "dependencies": { "<alias>": "<namespace|std|core>" }
+      }, ...
+    ]
+  },
+  "output": { "abi": [ ... ] }
+}
+```
+
+`<source path>` is the file's path relative to its owning ingot root (e.g. `src/counter.fe`); for a
+standalone `.fe` target, it is the file's basename. `sources` contains every `.fe` file of the
+contract's owning ingot **plus all transitive dependency ingots**, the latter namespaced by the
+ingot's dependency alias (e.g. `mylib/src/lib.fe`). The bundled `core` and `std` are excluded
+because they are pinned to `compiler.version` (a verifier re-runs the same compiler, which ships
+them). `settings.ingots[]` records, per non-builtin ingot, what a verifier needs to regenerate its
+`fe.toml` and `src/` layout.
 
 The on-screen output is per-artifact:
 

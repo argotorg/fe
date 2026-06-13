@@ -7,23 +7,14 @@ target = "evm-ethereum-osaka"
 
 func private %array_mut(v0.i8) -> [i8; 4] {
     block0:
-        v1.*i8 = alloca i8;
-        mstore v1 v0 i8;
         jump block1;
 
     block1:
-        v2.i8 = mload v1 i8;
-        v6.objref<[i8; 4]> = obj.alloc [i8; 4];
-        v8.objref<i8> = obj.index v6 0.i256;
-        obj.store v8 v2;
-        v10.objref<i8> = obj.index v6 1.i256;
-        obj.store v10 2.i8;
-        v12.objref<i8> = obj.index v6 2.i256;
-        obj.store v12 3.i8;
-        v14.objref<i8> = obj.index v6 3.i256;
-        obj.store v14 4.i8;
-        v15.[i8; 4] = obj.load v6;
-        return v15;
+        v7.[i8; 4] = insert_value undef.[i8; 4] 0.i256 v0;
+        v9.[i8; 4] = insert_value v7 1.i256 2.i8;
+        v11.[i8; 4] = insert_value v9 2.i256 3.i8;
+        v13.[i8; 4] = insert_value v11 3.i256 4.i8;
+        return v13;
 }
 
 func private %main() -> [i8; 4] {

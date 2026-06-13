@@ -9,67 +9,12 @@ type @layout_0 = {i1, i1};
 
 func private %logical_and(v0.i8) -> i1 {
     block0:
-        v1.*i8 = alloca i8;
-        mstore v1 v0 i8;
         jump block1;
 
     block1:
-        v2.i8 = mload v1 i8;
-        v4.i1 = eq v2 -1.i8;
-        v5.i1 = is_zero v4;
-        br v5 block5 block3;
-
-    block2:
-        jump block4;
-
-    block3:
-        jump block4;
-
-    block4:
-        v8.i1 = phi (1.i1 block2) (0.i1 block3);
-        return v8;
-
-    block5:
-        v9.i8 = mload v1 i8;
-        (v11.i8, v12.i1) = uaddo v9 1.i8;
-        br v12 block6 block7;
-
-    block6:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block7:
-        v19.i1 = gt v11 0.i8;
-        br v19 block2 block3;
-}
-
-func private %logical_ops() -> @layout_0 {
-    block0:
-        jump block1;
-
-    block1:
-        v1.i1 = call %logical_or -1.i8;
-        v2.i1 = call %logical_and -1.i8;
-        v3.objref<@layout_0> = obj.alloc @layout_0;
-        v5.objref<i1> = obj.proj v3 0.i256;
-        obj.store v5 v1;
-        v7.objref<i1> = obj.proj v3 1.i256;
-        obj.store v7 v2;
-        v8.@layout_0 = obj.load v3;
-        return v8;
-}
-
-func private %logical_or(v0.i8) -> i1 {
-    block0:
-        v1.*i8 = alloca i8;
-        mstore v1 v0 i8;
-        jump block1;
-
-    block1:
-        v2.i8 = mload v1 i8;
-        v4.i1 = eq v2 -1.i8;
-        br v4 block2 block5;
+        v3.i1 = eq v0 -1.i8;
+        v4.i1 = is_zero v3;
+        br v4 block5 block3;
 
     block2:
         jump block4;
@@ -82,8 +27,7 @@ func private %logical_or(v0.i8) -> i1 {
         return v7;
 
     block5:
-        v8.i8 = mload v1 i8;
-        (v10.i8, v11.i1) = uaddo v8 1.i8;
+        (v10.i8, v11.i1) = uaddo v0 1.i8;
         br v11 block6 block7;
 
     block6:
@@ -94,6 +38,50 @@ func private %logical_or(v0.i8) -> i1 {
     block7:
         v18.i1 = gt v10 0.i8;
         br v18 block2 block3;
+}
+
+func private %logical_ops() -> @layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i1 = call %logical_or -1.i8;
+        v2.i1 = call %logical_and -1.i8;
+        v5.@layout_0 = insert_value undef.@layout_0 0.i256 v1;
+        v7.@layout_0 = insert_value v5 1.i256 v2;
+        return v7;
+}
+
+func private %logical_or(v0.i8) -> i1 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i1 = eq v0 -1.i8;
+        br v3 block2 block5;
+
+    block2:
+        jump block4;
+
+    block3:
+        jump block4;
+
+    block4:
+        v6.i1 = phi (1.i1 block2) (0.i1 block3);
+        return v6;
+
+    block5:
+        (v9.i8, v10.i1) = uaddo v0 1.i8;
+        br v10 block6 block7;
+
+    block6:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block7:
+        v17.i1 = gt v9 0.i8;
+        br v17 block2 block3;
 }
 
 func private %main_root() {

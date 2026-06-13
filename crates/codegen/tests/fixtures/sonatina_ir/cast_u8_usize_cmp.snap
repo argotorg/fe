@@ -9,17 +9,12 @@ global private const [i8; 8] $const_region_0 = [1, 2, 3, 4, 5, 6, 7, 8];
 
 func private %cast_u8_usize_cmp(v0.constref<[i8; 8]>, v1.i256, v2.i256) -> i8 {
     block0:
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        mstore v3 v1 i256;
-        mstore v4 v2 i256;
         jump block1;
 
     block1:
-        v5.i256 = mload v3 i256;
-        v8.i1 = lt v5 8.i256;
-        v9.i1 = is_zero v8;
-        br v9 block11 block12;
+        v6.i1 = lt v1 8.i256;
+        v7.i1 = is_zero v6;
+        br v7 block11 block12;
 
     block2:
         return 1.i8;
@@ -28,10 +23,9 @@ func private %cast_u8_usize_cmp(v0.constref<[i8; 8]>, v1.i256, v2.i256) -> i8 {
         jump block4;
 
     block4:
-        v17.i256 = mload v4 i256;
-        v19.i256 = zext v12 i256;
-        v20.i1 = eq v17 v19;
-        br v20 block5 block6;
+        v17.i256 = zext v10 i256;
+        v18.i1 = eq v2 v17;
+        br v18 block5 block6;
 
     block5:
         return 2.i8;
@@ -40,10 +34,9 @@ func private %cast_u8_usize_cmp(v0.constref<[i8; 8]>, v1.i256, v2.i256) -> i8 {
         jump block7;
 
     block7:
-        v22.i256 = mload v4 i256;
-        v24.i256 = zext v12 i256;
-        v25.i1 = gt v22 v24;
-        br v25 block8 block9;
+        v22.i256 = zext v10 i256;
+        v23.i1 = gt v2 v22;
+        br v23 block8 block9;
 
     block8:
         return 3.i8;
@@ -58,12 +51,11 @@ func private %cast_u8_usize_cmp(v0.constref<[i8; 8]>, v1.i256, v2.i256) -> i8 {
         evm_revert 0.i256 0.i256;
 
     block12:
-        v11.constref<i8> = const.index v0 v5;
-        v12.i8 = const.load v11;
-        v13.i256 = mload v4 i256;
-        v14.i256 = zext v12 i256;
-        v15.i1 = lt v13 v14;
-        br v15 block2 block3;
+        v9.constref<i8> = const.index v0 v1;
+        v10.i8 = const.load v9;
+        v12.i256 = zext v10 i256;
+        v13.i1 = lt v2 v12;
+        br v13 block2 block3;
 }
 
 func private %main() -> i8 {

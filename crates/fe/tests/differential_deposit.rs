@@ -15,8 +15,10 @@ use contract_harness::{ExecutionOptions, HarnessError, RuntimeInstance, U256};
 use ethers_core::abi::{AbiParser, Token};
 use ethers_core::utils::keccak256;
 use fe::bench_support::{
-    FeSonatinaBytecode, SolidityPipeline, compile_fe_sonatina_bytecode,
-    compile_solidity_pipeline_bytecode, sol_variant_label,
+    FeSonatinaBytecode, SolOptBytecode, SolOptGasRow, SolOptRuntime, SolOptValues, SolOptVariant,
+    call_sol_opt_variants, compile_fe_sonatina_bytecode, compile_solidity_opt_variants,
+    deploy_solidity_opt_variants, primary_sol_runtime_mut, render_sol_opt_call_gas_report,
+    render_sol_opt_gas_rows, resolve_solc_path,
 };
 use sha2::{Digest, Sha256};
 use test_utils::snap_test;
@@ -30,21 +32,6 @@ type Wei = u128;
 
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/differential_deposit")
-}
-
-fn find_executable_in_path(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(name))
-        .find(|candidate| candidate.is_file())
-}
-
-fn resolve_solc_path() -> Option<String> {
-    std::env::var_os("FE_SOLC_PATH")
-        .map(PathBuf::from)
-        .filter(|p| p.is_file())
-        .or_else(|| find_executable_in_path("solc"))
-        .map(|p| p.to_string_lossy().into_owned())
 }
 
 // ---------------------------------------------------------------------------
@@ -187,61 +174,11 @@ fn compile_fe_deposit_bytecode() -> FeSonatinaBytecode {
         .expect("fe -> sonatina compile")
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SolVariant {
-    LegacyOpt,
-    ViaIrOpt,
-}
-
-impl SolVariant {
-    const ALL: [Self; 2] = [Self::LegacyOpt, Self::ViaIrOpt];
-
-    fn report_label(self) -> &'static str {
-        match self {
-            Self::LegacyOpt => "sol",
-            Self::ViaIrOpt => "sol-IR",
-        }
-    }
-
-    fn compile_label(self) -> &'static str {
-        let (pipeline, optimize) = self.compile_options();
-        sol_variant_label(pipeline, optimize)
-    }
-
-    fn compile_options(self) -> (SolidityPipeline, bool) {
-        match self {
-            Self::LegacyOpt => (SolidityPipeline::Legacy, true),
-            Self::ViaIrOpt => (SolidityPipeline::ViaIR, true),
-        }
-    }
-}
-
-struct SolBytecode {
-    variant: SolVariant,
-    bytecode: solc_runner::ContractBytecode,
-}
-
-fn compile_sol_deposit_bytecode(solc_path: Option<&str>) -> Vec<SolBytecode> {
+fn compile_sol_deposit_bytecode(solc_path: Option<&str>) -> Vec<SolOptBytecode> {
     let sol_source = std::fs::read_to_string(fixture_dir().join("OfficialDepositContract.sol"))
         .expect("read sol source");
-    SolVariant::ALL
-        .iter()
-        .map(|variant| {
-            let (pipeline, optimize) = variant.compile_options();
-            let bytecode = compile_solidity_pipeline_bytecode(
-                &sol_source,
-                "DepositContract",
-                optimize,
-                pipeline,
-                solc_path,
-            )
-            .unwrap_or_else(|e| panic!("{} compile deposit: {e}", variant.compile_label()));
-            SolBytecode {
-                variant: *variant,
-                bytecode,
-            }
-        })
-        .collect()
+    compile_solidity_opt_variants(&sol_source, "DepositContract", solc_path)
+        .unwrap_or_else(|e| panic!("compile deposit Solidity variants: {e}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -255,216 +192,79 @@ struct Vector {
     amount_wei: Wei,
 }
 
-#[derive(Clone, Copy, Default)]
-struct SolValues {
-    legacy_opt: u64,
-    via_ir_opt: u64,
-}
-
-impl SolValues {
-    fn get(self, variant: SolVariant) -> u64 {
-        match variant {
-            SolVariant::LegacyOpt => self.legacy_opt,
-            SolVariant::ViaIrOpt => self.via_ir_opt,
-        }
-    }
-
-    fn set(&mut self, variant: SolVariant, value: u64) {
-        match variant {
-            SolVariant::LegacyOpt => self.legacy_opt = value,
-            SolVariant::ViaIrOpt => self.via_ir_opt = value,
-        }
-    }
-}
-
 #[derive(Clone)]
-struct ReportRow {
-    label: String,
-    fe: u64,
-    sol: SolValues,
-}
-
 struct GasReport {
-    bytecode_rows: Vec<ReportRow>,
-    deploy_row: ReportRow,
-    call_rows: Vec<ReportRow>,
+    bytecode_rows: Vec<SolOptGasRow>,
+    deploy_row: SolOptGasRow,
+    call_rows: Vec<SolOptGasRow>,
 }
 
 impl GasReport {
     fn new(
         fe_bytecode: &FeSonatinaBytecode,
-        sol_bytecodes: &[SolBytecode],
+        sol_bytecodes: &[SolOptBytecode],
         fe_deploy_gas: u64,
-        sol_deploy_gas: SolValues,
+        sol_deploy_gas: SolOptValues,
     ) -> Self {
-        let mut init_sizes = SolValues::default();
-        let mut runtime_sizes = SolValues::default();
+        let mut init_sizes = SolOptValues::default();
+        let mut runtime_sizes = SolOptValues::default();
         for sol in sol_bytecodes {
-            init_sizes.set(sol.variant, hex_len(&sol.bytecode.bytecode) as u64);
-            runtime_sizes.set(sol.variant, hex_len(&sol.bytecode.runtime_bytecode) as u64);
+            init_sizes.set(sol.variant, sol.deploy_len() as u64);
+            runtime_sizes.set(sol.variant, sol.runtime_len() as u64);
         }
 
         Self {
             bytecode_rows: vec![
-                ReportRow {
-                    label: "init".into(),
-                    fe: fe_bytecode.deploy.len() as u64,
-                    sol: init_sizes,
-                },
-                ReportRow {
-                    label: "runtime".into(),
-                    fe: fe_bytecode.runtime.len() as u64,
-                    sol: runtime_sizes,
-                },
+                SolOptGasRow::new("init", fe_bytecode.deploy.len() as u64, init_sizes),
+                SolOptGasRow::new("runtime", fe_bytecode.runtime.len() as u64, runtime_sizes),
             ],
-            deploy_row: ReportRow {
-                label: "deploy".into(),
-                fe: fe_deploy_gas,
-                sol: sol_deploy_gas,
-            },
+            deploy_row: SolOptGasRow::new("deploy", fe_deploy_gas, sol_deploy_gas),
             call_rows: Vec::new(),
         }
     }
 
-    fn push_call(&mut self, label: impl Into<String>, fe: u64, sol: SolValues) {
-        self.call_rows.push(ReportRow {
-            label: label.into(),
-            fe,
-            sol,
-        });
+    fn push_call(&mut self, label: impl Into<String>, fe: u64, sol: SolOptValues) {
+        self.call_rows.push(SolOptGasRow::new(label, fe, sol));
     }
 
     fn render(&self) -> String {
         let mut out = String::new();
         out.push_str("bytecode size\n");
-        render_rows(&mut out, &self.bytecode_rows, "path", "fe-O2");
+        render_sol_opt_gas_rows(&mut out, &self.bytecode_rows, "path", "fe-O2", 6);
         out.push('\n');
         out.push_str("deployment gas\n");
-        render_rows(
+        render_sol_opt_gas_rows(
             &mut out,
             std::slice::from_ref(&self.deploy_row),
             "path",
             "fe-O2",
+            6,
         );
         out.push('\n');
-        out.push_str("call gas\n");
-        let mut call_rows = self.call_rows.clone();
-        let total_fe = call_rows.iter().map(|row| row.fe).sum();
-        let total_sol = call_rows
-            .iter()
-            .fold(SolValues::default(), |mut total, row| {
-                total.legacy_opt += row.sol.legacy_opt;
-                total.via_ir_opt += row.sol.via_ir_opt;
-                total
-            });
-        call_rows.push(ReportRow {
-            label: "TOTAL".into(),
-            fe: total_fe,
-            sol: total_sol,
-        });
-        render_rows(&mut out, &call_rows, "path", "fe-O2");
+        out.push_str(&render_sol_opt_call_gas_report(
+            &self.call_rows,
+            "path",
+            "fe-O2",
+            6,
+        ));
         out
     }
-}
-
-fn hex_len(hex: &str) -> usize {
-    assert_eq!(hex.len() % 2, 0, "bytecode hex length should be even");
-    hex.len() / 2
-}
-
-fn delta_pct(lhs: u64, rhs: u64) -> String {
-    if rhs == 0 {
-        return "-".into();
-    }
-    let pct = ((lhs as f64 - rhs as f64) / rhs as f64) * 100.0;
-    format!("{pct:+.1}%")
-}
-
-fn render_rows(out: &mut String, rows: &[ReportRow], label_header: &str, fe_header: &str) {
-    let label_width = rows
-        .iter()
-        .map(|row| row.label.len())
-        .chain(std::iter::once(label_header.len()))
-        .max()
-        .unwrap();
-    let delta_width = rows
-        .iter()
-        .map(|row| {
-            let sol_ir = row.sol.get(SolVariant::ViaIrOpt);
-            let delta_abs = row.fe as i64 - sol_ir as i64;
-            format!("{delta_abs:+} ({})", delta_pct(row.fe, sol_ir)).len()
-        })
-        .chain(std::iter::once("fe vs sol-IR".len()))
-        .max()
-        .unwrap();
-    out.push_str(&format!(
-        "{:<lw$} {:>10} {:>10} {:>10}  {:>dw$}\n",
-        label_header,
-        fe_header,
-        SolVariant::LegacyOpt.report_label(),
-        SolVariant::ViaIrOpt.report_label(),
-        "fe vs sol-IR",
-        lw = label_width,
-        dw = delta_width,
-    ));
-    out.push_str(&format!(
-        "{}\n",
-        "-".repeat(label_width + 1 + 10 * 3 + 2 + delta_width + 6)
-    ));
-    for row in rows {
-        let sol_ir = row.sol.get(SolVariant::ViaIrOpt);
-        let delta_abs = row.fe as i64 - sol_ir as i64;
-        let delta = format!("{delta_abs:+} ({})", delta_pct(row.fe, sol_ir));
-        out.push_str(&format!(
-            "{:<lw$} {:>10} {:>10} {:>10}  {:>dw$}\n",
-            row.label,
-            row.fe,
-            row.sol.get(SolVariant::LegacyOpt),
-            row.sol.get(SolVariant::ViaIrOpt),
-            delta,
-            lw = label_width,
-            dw = delta_width,
-        ));
-    }
-}
-
-struct SolRuntime {
-    variant: SolVariant,
-    instance: RuntimeInstance,
 }
 
 fn call_row(
     label: &str,
     fe: &mut RuntimeInstance,
-    sols: &mut [SolRuntime],
+    sols: &mut [SolOptRuntime],
     calldata: &[u8],
     options: ExecutionOptions,
-) -> (Vec<u8>, Vec<u8>, u64, SolValues) {
-    let fe_res = fe
-        .call_raw(calldata, options)
-        .unwrap_or_else(|e| panic!("fe {label}: {e:?}"));
-    let mut sol_gas = SolValues::default();
-    let mut primary_return = Vec::new();
-    for sol in sols {
-        let variant_label = sol.variant.compile_label();
-        let res = sol
-            .instance
-            .call_raw(calldata, options)
-            .unwrap_or_else(|e| panic!("{variant_label} {label}: {e:?}"));
-        sol_gas.set(sol.variant, res.gas_used);
-        if sol.variant == SolVariant::LegacyOpt {
-            primary_return = res.return_data;
-        }
-    }
-
-    (fe_res.return_data, primary_return, fe_res.gas_used, sol_gas)
-}
-
-fn primary_sol_mut(sols: &mut [SolRuntime]) -> &mut RuntimeInstance {
-    sols.iter_mut()
-        .find(|sol| sol.variant == SolVariant::LegacyOpt)
-        .map(|sol| &mut sol.instance)
-        .expect("primary Solidity variant should be tested")
+) -> (Vec<u8>, Vec<u8>, u64, SolOptValues) {
+    let result = call_sol_opt_variants(label, fe, sols, calldata, options);
+    (
+        result.fe_return,
+        result.primary_sol_return,
+        result.row.fe,
+        result.row.sol,
+    )
 }
 
 fn vectors() -> Vec<Vector> {
@@ -533,21 +333,8 @@ fn differential_deposit() {
 
     let (mut fe, fe_deploy_gas) =
         RuntimeInstance::deploy_tracked(&fe_deploy_bytecode).expect("deploy fe");
-    let mut sol_deploy_gas = SolValues::default();
-    let mut sols: Vec<SolRuntime> = sol_bytecodes
-        .iter()
-        .map(|sol| {
-            RuntimeInstance::deploy_tracked(&sol.bytecode.bytecode)
-                .map(|(instance, gas)| {
-                    sol_deploy_gas.set(sol.variant, gas);
-                    SolRuntime {
-                        variant: sol.variant,
-                        instance,
-                    }
-                })
-                .unwrap_or_else(|e| panic!("deploy {}: {e:?}", sol.variant.compile_label()))
-        })
-        .collect();
+    let (mut sols, sol_deploy_gas) = deploy_solidity_opt_variants(&sol_bytecodes)
+        .unwrap_or_else(|e| panic!("deploy Solidity variants: {e}"));
     let mut report = GasReport::new(&fe_bytecode, &sol_bytecodes, fe_deploy_gas, sol_deploy_gas);
 
     // Fund the default caller (Address::ZERO) so it can send ETH along with
@@ -605,7 +392,7 @@ fn differential_deposit() {
     );
 
     {
-        let sol = primary_sol_mut(&mut sols);
+        let sol = primary_sol_runtime_mut(&mut sols);
         assert_reverts_match(
             "invalid pubkey length",
             &mut fe,
@@ -731,7 +518,7 @@ fn differential_deposit() {
         // Drive every Solidity variant in lock-step so each one accumulates the
         // same deposit history. Correctness is asserted against the primary
         // variant only; the others share its source so logs/state must agree.
-        let mut sol_gas = SolValues::default();
+        let mut sol_gas = SolOptValues::default();
         for sol in &mut sols {
             let label = sol.variant.compile_label();
             let res = sol
@@ -740,7 +527,7 @@ fn differential_deposit() {
                 .unwrap_or_else(|e| panic!("{label} deposit #{i}: {e:?}"));
             sol_gas.set(sol.variant, res.result.gas_used);
 
-            if sol.variant == SolVariant::LegacyOpt {
+            if sol.variant == SolOptVariant::LegacyOpt {
                 assert_eq!(
                     fe_res.raw_logs.len(),
                     res.raw_logs.len(),
