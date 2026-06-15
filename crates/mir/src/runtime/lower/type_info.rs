@@ -455,6 +455,7 @@ pub(crate) fn provider_address_space_to_runtime(space: ProviderAddressSpace) -> 
         ProviderAddressSpace::Storage => AddressSpaceKind::Storage,
         ProviderAddressSpace::Transient => AddressSpaceKind::Transient,
         ProviderAddressSpace::Calldata => AddressSpaceKind::Calldata,
+        ProviderAddressSpace::Code => AddressSpaceKind::Code,
     }
 }
 

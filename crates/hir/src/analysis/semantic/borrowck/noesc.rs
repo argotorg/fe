@@ -106,6 +106,9 @@ impl<'db> NoEsc<'db> {
         if spaces.contains(&ProviderAddressSpace::Calldata) {
             return Err(self.noesc_diag(origin, "cannot write to calldata".to_string()));
         }
+        if spaces.contains(&ProviderAddressSpace::Code) {
+            return Err(self.noesc_diag(origin, "cannot write to code".to_string()));
+        }
 
         let Some(space) = spaces.iter().copied().find(|space| {
             matches!(
@@ -254,7 +257,8 @@ fn address_space_rank(space: ProviderAddressSpace) -> u8 {
     match space {
         ProviderAddressSpace::Memory => 0,
         ProviderAddressSpace::Calldata => 1,
-        ProviderAddressSpace::Storage => 2,
-        ProviderAddressSpace::Transient => 3,
+        ProviderAddressSpace::Code => 2,
+        ProviderAddressSpace::Storage => 3,
+        ProviderAddressSpace::Transient => 4,
     }
 }

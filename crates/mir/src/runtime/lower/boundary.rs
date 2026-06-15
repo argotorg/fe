@@ -790,6 +790,7 @@ pub(crate) fn default_borrow_transport_set(
     provider_spaces.insert(AddressSpaceKind::Transient);
     if matches!(access, BorrowAccess::ReadOnly) {
         provider_spaces.insert(AddressSpaceKind::Calldata);
+        provider_spaces.insert(AddressSpaceKind::Code);
     }
     BorrowTransportSet {
         allow_object: true,

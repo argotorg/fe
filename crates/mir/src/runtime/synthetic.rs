@@ -12,7 +12,7 @@ use hir::{
         },
     },
     hir_def::{
-        IdentId,
+        Contract, IdentId,
         expr::{ArithBinOp, BinOp, CompBinOp},
     },
 };
@@ -24,13 +24,13 @@ use crate::{
     },
     layout_size_bytes,
     runtime::{
-        AddressSpaceKind, BorrowAccess, ConstScalar, ContractInitAbiPlan, ContractRecvAbiPlan,
-        DispatchDefault, EntryEffectArgPlan, InitArgsPlan, PlaceElem, PlaceRoot, RBlock, RBlockId,
-        RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView, RuntimeBody,
-        RuntimeBoundarySpec, RuntimeBuiltin, RuntimeCarrier, RuntimeClass, RuntimeExitBehavior,
-        RuntimeInputPlan, RuntimeInterfaceSignature, RuntimeLocalRoot, RuntimeParamPlan,
-        RuntimePlace, RuntimeReturnPlan, RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole,
-        TargetRootProviderBinding, TargetRootProviderMaterialization,
+        AddressSpaceKind, BorrowAccess, ConstScalar, ContractFieldSlot, ContractInitAbiPlan,
+        ContractRecvAbiPlan, DispatchDefault, EntryEffectArgPlan, InitArgsPlan, PlaceElem,
+        PlaceRoot, RBlock, RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView,
+        RuntimeBody, RuntimeBoundarySpec, RuntimeBuiltin, RuntimeCarrier, RuntimeClass,
+        RuntimeExitBehavior, RuntimeInputPlan, RuntimeInterfaceSignature, RuntimeLocalRoot,
+        RuntimeParamPlan, RuntimePlace, RuntimeReturnPlan, RuntimeSyntheticSpec, ScalarClass,
+        ScalarRepr, ScalarRole, TargetRootProviderBinding, TargetRootProviderMaterialization,
         lower::{
             boundary::{RuntimeValueAddress, RuntimeValueSource},
             classify::{ref_class_for_place_result, semantic_return_ty},
@@ -100,10 +100,11 @@ pub(crate) fn lower_synthetic_runtime_body<'db>(
         RuntimeSyntheticSpec::ContractInitAbi { plan } => builder.build_contract_init_abi(plan),
         RuntimeSyntheticSpec::ContractRecvAbi { plan } => builder.build_contract_recv_abi(plan),
         RuntimeSyntheticSpec::ContractInitRoot {
+            contract,
             init_abi,
             runtime_region,
             ..
-        } => builder.build_contract_init_root(init_abi, runtime_region),
+        } => builder.build_contract_init_root(contract, init_abi, runtime_region),
         RuntimeSyntheticSpec::ContractRuntimeRoot {
             dispatch, default, ..
         } => builder.build_contract_runtime_root(&dispatch, default),
@@ -456,14 +457,52 @@ impl<'db> SyntheticBodyBuilder<'db> {
             }
         }
 
+        // If the contract has code-backed (immutable) fields, allocate a contiguous buffer for
+        // their init-time values; the contract init root appends it to the returned runtime
+        // bytecode.
+        let immut_slots = self.contract_code_address_space_slots(plan.contract);
+        let immut_ptr = if immut_slots == 0 {
+            None
+        } else {
+            let immut_len = self.push_const_word(cont_bb, immut_slots.saturating_mul(32));
+            Some(self.push_builtin_value(
+                cont_bb,
+                TyId::u256(self.db),
+                RuntimeClass::Scalar(word_scalar_class()),
+                RuntimeBuiltin::Malloc { size: immut_len },
+            ))
+        };
+
         if let Some(user_init) = plan.user_init {
-            call_args.extend(self.owner_effect_call_args(
+            let effect_args = self.owner_effect_call_args(
                 cont_bb,
                 user_init,
                 call_args.len(),
                 &plan.entry_effect_args,
-            ));
+            );
+            call_args.extend(effect_args.iter().copied());
             let _ = self.push_ignored_call(cont_bb, user_init, call_args);
+            if let Some(immut_ptr) = immut_ptr {
+                self.serialize_init_immutables_into_buffer(
+                    cont_bb,
+                    immut_ptr,
+                    &plan.entry_effect_args,
+                    &effect_args,
+                );
+            }
+        }
+
+        // Publish the immutable buffer pointer at scratch 0x00, where the contract init root
+        // reads it after `init_abi` returns. This must happen after the user init runs, since
+        // init may clobber scratch memory.
+        if let Some(immut_ptr) = immut_ptr {
+            self.push_side_effect_builtin(
+                cont_bb,
+                RuntimeBuiltin::Mstore {
+                    addr: zero,
+                    value: immut_ptr,
+                },
+            );
         }
         self.blocks[cont_bb.index()].terminator = RTerminator::Return(None);
     }
@@ -536,13 +575,17 @@ impl<'db> SyntheticBodyBuilder<'db> {
 
     fn build_contract_init_root(
         &mut self,
+        contract: Contract<'db>,
         init_abi: RuntimeInstance<'db>,
         runtime_region: crate::runtime::RuntimeCodeRegion<'db>,
     ) {
-        let zero = self.push_const_word(RBlockId::from_u32(0), 0);
-        let _ = self.push_ignored_call(RBlockId::from_u32(0), init_abi, Vec::new());
+        let entry = RBlockId::from_u32(0);
+        let zero = self.push_const_word(entry, 0);
+
+        let _ = self.push_ignored_call(entry, init_abi, Vec::new());
+
         let runtime_offset = self.push_builtin_value(
-            RBlockId::from_u32(0),
+            entry,
             TyId::u256(self.db),
             RuntimeClass::Scalar(word_scalar_class()),
             RuntimeBuiltin::CodeRegionOffset {
@@ -550,25 +593,159 @@ impl<'db> SyntheticBodyBuilder<'db> {
             },
         );
         let runtime_len = self.push_builtin_value(
-            RBlockId::from_u32(0),
+            entry,
             TyId::u256(self.db),
             RuntimeClass::Scalar(word_scalar_class()),
             RuntimeBuiltin::CodeRegionLen {
                 region: runtime_region,
             },
         );
+
+        let immut_slots = self.contract_code_address_space_slots(contract);
+        if immut_slots == 0 {
+            self.push_side_effect_builtin(
+                entry,
+                RuntimeBuiltin::CodeCopy {
+                    dst: zero,
+                    offset: runtime_offset,
+                    len: runtime_len,
+                },
+            );
+            self.blocks[entry.index()].terminator = RTerminator::ReturnData {
+                offset: zero,
+                len: runtime_len,
+            };
+            return;
+        }
+
+        let immut_ptr = self.push_builtin_value(
+            entry,
+            TyId::u256(self.db),
+            RuntimeClass::Scalar(word_scalar_class()),
+            RuntimeBuiltin::Mload { addr: zero },
+        );
+        let immut_len = self.push_const_word(entry, immut_slots.saturating_mul(32));
+
+        let out_len = self.push_binary_word(entry, ArithBinOp::Add, runtime_len, immut_len);
+        let out_ptr = self.push_builtin_value(
+            entry,
+            TyId::u256(self.db),
+            RuntimeClass::Scalar(word_scalar_class()),
+            RuntimeBuiltin::Malloc { size: out_len },
+        );
         self.push_side_effect_builtin(
-            RBlockId::from_u32(0),
+            entry,
             RuntimeBuiltin::CodeCopy {
-                dst: zero,
+                dst: out_ptr,
                 offset: runtime_offset,
                 len: runtime_len,
             },
         );
-        self.blocks[0].terminator = RTerminator::ReturnData {
-            offset: zero,
-            len: runtime_len,
+        let immut_dst = self.push_binary_word(entry, ArithBinOp::Add, out_ptr, runtime_len);
+        self.push_side_effect_builtin(
+            entry,
+            RuntimeBuiltin::Mcopy {
+                dst: immut_dst,
+                src: immut_ptr,
+                len: immut_len,
+            },
+        );
+        self.blocks[entry.index()].terminator = RTerminator::ReturnData {
+            offset: out_ptr,
+            len: out_len,
         };
+    }
+
+    fn contract_code_address_space_slots(&self, contract: Contract<'db>) -> u32 {
+        u32::try_from(contract.code_address_space_slot_count(self.db)).unwrap_or_else(|_| {
+            panic!("contract requires too many code-backed slots for init-time immutables buffer")
+        })
+    }
+
+    fn serialize_init_immutables_into_buffer(
+        &mut self,
+        bb: RBlockId,
+        buffer_ptr: RLocalId,
+        bindings: &[EntryEffectArgPlan<'db>],
+        args: &[RLocalId],
+    ) {
+        debug_assert_eq!(
+            bindings.len(),
+            args.len(),
+            "entry effect args should be in one-to-one correspondence with binding plans"
+        );
+        let thirty_two = self.push_const_word(bb, 32);
+        for (binding, arg) in bindings.iter().zip(args.iter().copied()) {
+            let EntryEffectArgPlan::ContractField(binding) = binding else {
+                continue;
+            };
+            if !binding.init_immutable {
+                continue;
+            }
+            let Some(pointee_class) = binding.class.deref_target() else {
+                continue;
+            };
+
+            let src_place = RuntimePlace {
+                root: PlaceRoot::Ref(arg),
+                path: Box::default(),
+            };
+            let value = self.push_local(
+                binding.declared_ty,
+                RuntimeCarrier::Value(pointee_class.clone()),
+                RuntimeLocalRoot::None,
+            );
+            self.push_stmt(
+                bb,
+                RStmt::Assign {
+                    dst: value,
+                    expr: RExpr::Load { place: src_place },
+                },
+            );
+
+            let ContractFieldSlot::Words(slot_words) = binding.slot else {
+                panic!("init-time immutable field binding should carry a word slot offset");
+            };
+            let slot_words = u32::try_from(slot_words).expect("contract field slot fits in u32");
+            let slot_words = self.push_const_word(bb, slot_words);
+            let slot_bytes = self.push_binary_word(bb, ArithBinOp::Mul, slot_words, thirty_two);
+            let dst_addr = self.push_binary_word(bb, ArithBinOp::Add, buffer_ptr, slot_bytes);
+            let dst_raw_class = RuntimeClass::RawAddr {
+                space: AddressSpaceKind::Memory,
+                target: pointee_class.aggregate_layout(),
+            };
+            let dst_raw_addr = self.push_local(
+                TyId::u256(self.db),
+                RuntimeCarrier::Value(dst_raw_class),
+                RuntimeLocalRoot::None,
+            );
+            self.push_stmt(
+                bb,
+                RStmt::Assign {
+                    dst: dst_raw_addr,
+                    expr: RExpr::WordToRawAddr {
+                        value: dst_addr,
+                        space: AddressSpaceKind::Memory,
+                        target: pointee_class.aggregate_layout(),
+                    },
+                },
+            );
+            let dst_place = RuntimePlace {
+                root: PlaceRoot::Ptr {
+                    addr: dst_raw_addr,
+                    space: AddressSpaceKind::Memory,
+                    class: pointee_class,
+                },
+                path: Box::default(),
+            };
+            self.push_stmt(
+                bb,
+                RStmt::CopyInto {
+                    dst: dst_place,
+                    src: value,
+                },
+            );
+        }
     }
 
     fn build_contract_runtime_root(

@@ -12,8 +12,8 @@ msg M {
 }
 
 contract C {
-    balances: StorageMap<u256, u256>
-    allowances: StorageMap<u256, u256>
+    mut balances: StorageMap<u256, u256>
+    mut allowances: StorageMap<u256, u256>
 
     recv M {
         Ping -> () uses (allowances) {

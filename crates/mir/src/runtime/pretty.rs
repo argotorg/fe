@@ -1090,6 +1090,7 @@ fn format_space(space: AddressSpaceKind) -> &'static str {
         AddressSpaceKind::Storage => "storage",
         AddressSpaceKind::Transient => "transient",
         AddressSpaceKind::Calldata => "calldata",
+        AddressSpaceKind::Code => "code",
     }
 }
 

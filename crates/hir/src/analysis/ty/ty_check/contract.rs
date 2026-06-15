@@ -2,6 +2,7 @@
 //!
 //! This module contains functions for checking contract init bodies,
 //! recv blocks, and recv arm bodies.
+
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{TypedBody, owner::BodyOwner};
@@ -12,12 +13,15 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         name_resolution::{ExpectedPathKind, PathRes, diagnostics::PathResDiag, resolve_path},
-        semantic::{SemConstScalar, SemConstValue, eval_body_owner_const},
+        semantic::{
+            SemConstScalar, SemConstValue, contract_init_assigned_fields, eval_body_owner_const,
+        },
         ty::{
             adt_def::AdtRef,
             canonical::Canonical,
             corelib::resolve_core_trait,
             diagnostics::{BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection},
+            provider::{ProviderAddressSpace, address_space_from_ty},
             trait_def::TraitInstId,
             trait_def::impls_for_ty,
             trait_resolution::{
@@ -27,7 +31,10 @@ use crate::{
             ty_def::{PrimTy, TyBase, TyData, TyId},
         },
     },
-    hir_def::{Contract, IdentId, ItemKind, Mod, PathId, Struct, scope_graph::ScopeId},
+    hir_def::{
+        Contract, FieldParent, IdentId, ItemKind, Mod, PathId, Struct, scope_graph::ScopeId,
+    },
+    semantic::FieldView,
     span::{DynLazySpan, path::LazyPathSpan},
 };
 use common::{indexmap::IndexMap, ingot::IngotKind};
@@ -778,6 +785,102 @@ pub fn check_contract_recv_arm_body<'db>(
             arm_idx,
         },
     )
+}
+
+#[salsa::tracked(return_ref)]
+pub fn check_contract_immutable_fields_initialized<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    let valid_fields = contract
+        .field_layout(db)
+        .values()
+        .filter(|field| field.slot_count != 0)
+        .filter(|field| {
+            !field.declared_ty.has_invalid(db)
+                && !field.target_ty.has_invalid(db)
+                && !field.address_space.has_invalid(db)
+        })
+        .filter(|field| {
+            FieldView {
+                parent: FieldParent::Contract(contract),
+                idx: field.index as usize,
+            }
+            .ty_diags(db)
+            .is_empty()
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut diags = valid_fields
+        .iter()
+        .filter(|field| {
+            address_space_from_ty(db, contract.scope(), field.address_space)
+                == Some(ProviderAddressSpace::Memory)
+        })
+        .map(|field| {
+            BodyDiag::UnsupportedMemoryContractField {
+                primary: FieldView {
+                    parent: FieldParent::Contract(contract),
+                    idx: field.index as usize,
+                }
+                .ty_span(),
+                field: field.name,
+            }
+            .into()
+        })
+        .collect::<Vec<_>>();
+    let required_fields = valid_fields
+        .into_iter()
+        .filter(|field| {
+            address_space_from_ty(db, contract.scope(), field.address_space)
+                == Some(ProviderAddressSpace::Code)
+        })
+        .collect::<Vec<_>>();
+    if required_fields.is_empty() {
+        return diags;
+    }
+
+    let required = required_fields
+        .iter()
+        .map(|field| field.index)
+        .collect::<FxHashSet<_>>();
+    let init = contract.init(db);
+    let missing = if init.is_some() {
+        let (init_diags, typed_body) = check_contract_init_body(db, contract);
+        if !init_diags.is_empty() {
+            // Type errors in `init` already block compilation; don't pile
+            // missing-field diagnostics on top of a body we can't analyze.
+            FxHashSet::default()
+        } else if typed_body.body().is_some() {
+            match contract_init_assigned_fields(db, contract) {
+                Some(assigned) => required
+                    .iter()
+                    .copied()
+                    .filter(|field| !assigned.contains(field))
+                    .collect(),
+                // No normal exit is reachable, so `init` can never complete
+                // and the contract can never be deployed with unset fields.
+                None => FxHashSet::default(),
+            }
+        } else {
+            required.clone()
+        }
+    } else {
+        required
+    };
+
+    let init_span = init.map(|_| contract.span().init_block().body().into());
+    diags.extend(required_fields.into_iter().filter_map(|field| {
+        missing.contains(&field.index).then(|| {
+            BodyDiag::ImmutableContractFieldNotInitialized {
+                primary: FieldParent::Contract(contract).field_name_span(field.index as usize),
+                field: field.name,
+                init: init_span.clone(),
+            }
+            .into()
+        })
+    }));
+    diags
 }
 
 #[salsa::tracked(return_ref)]

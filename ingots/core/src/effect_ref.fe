@@ -18,6 +18,9 @@ pub struct Memory {}
 /// Backends may interpret this as an input byte buffer (e.g. EVM calldata via CALLDATALOAD).
 pub struct Calldata {}
 
+/// Effect provider address-space marker: indicates the provider points into immutable code data.
+pub struct Code {}
+
 /// Effect provider address-space marker: indicates the provider points into the target's persistent
 /// storage/state.
 ///

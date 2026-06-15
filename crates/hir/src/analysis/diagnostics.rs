@@ -458,6 +458,37 @@ impl DiagnosticVoucher for crate::AttrMisuseError {
     }
 }
 
+impl DiagnosticVoucher for crate::FieldModifierError {
+    fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
+        use crate::FieldModifierErrorKind;
+
+        let span = Span::new(self.file, self.primary_range, SpanKind::Original);
+        let target = if let Some(name) = &self.field_name {
+            format!("{} `{}`", self.field_kind, name)
+        } else {
+            self.field_kind.to_string()
+        };
+
+        let (local_code, message, label, notes) = match self.kind {
+            FieldModifierErrorKind::UnsupportedMut => (
+                5,
+                format!("unsupported `mut` modifier on {target}"),
+                "`mut` is only supported on contract fields".to_string(),
+                vec!["remove `mut`, or move the field into a contract if it represents contract state"
+                    .to_string()],
+            ),
+        };
+
+        CompleteDiagnostic::new(
+            Severity::Error,
+            message,
+            vec![SubDiagnostic::new(LabelStyle::Primary, label, Some(span))],
+            notes,
+            GlobalErrorCode::new(DiagnosticPass::AttrMisuse, local_code),
+        )
+    }
+}
+
 impl DiagnosticVoucher for crate::SelectorError {
     fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
         use crate::SelectorErrorKind;
@@ -3242,6 +3273,87 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     error_code,
                 }
             }
+
+            Self::ImmutableContractFieldNotInitialized {
+                primary,
+                field,
+                init,
+            } => {
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "`{}` must be assigned in `init` on every successful path",
+                        field.data(db)
+                    ),
+                    span: primary.resolve(db),
+                }];
+
+                if let Some(init) = init {
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!(
+                            "this init block may finish without assigning `{}`",
+                            field.data(db)
+                        ),
+                        span: init.resolve(db),
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "immutable contract field is not initialized".to_string(),
+                    sub_diagnostics,
+                    notes: vec![format!(
+                        "assign `{}` in `init` with `uses (mut {})`, or mark the field `mut` to store it in contract storage",
+                        field.data(db),
+                        field.data(db)
+                    )],
+                    error_code,
+                }
+            }
+
+            Self::UnsupportedMemoryContractField { primary, field } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "memory-backed contract fields are not supported".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "`{}` has a memory-backed contract field type",
+                        field.data(db)
+                    ),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![
+                    "memory handles cannot be persisted as contract fields; use a plain immutable field for code-backed data or a plain `mut` field for storage-backed state"
+                        .to_string(),
+                ],
+                error_code,
+            },
+
+            Self::ImmutableContractFieldMutBinding {
+                primary,
+                field,
+                field_span,
+            } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "cannot bind immutable contract field as `mut`".to_string(),
+                sub_diagnostics: vec![
+                    SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!("`{}` is not declared `mut`", field.data(db)),
+                        span: primary.resolve(db),
+                    },
+                    SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{}` declared here", field.data(db)),
+                        span: field_span.resolve(db),
+                    },
+                ],
+                notes: vec![format!(
+                    "immutable contract fields can only be assigned in `init`; mark the field `mut` to make it mutable contract state",
+                )],
+                error_code,
+            },
 
             Self::LoopControlOutsideOfLoop { primary, is_break } => {
                 let stmt = if *is_break { "break" } else { "continue" };

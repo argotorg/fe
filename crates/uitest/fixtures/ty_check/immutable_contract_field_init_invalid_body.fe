@@ -1,0 +1,20 @@
+contract InitWritesFieldWithoutUses {
+    x: u256
+
+    init() {
+        x = 1
+    }
+}
+
+fn broken_helper(v: u256) uses (x: mut u256) {
+    undefined_var = v
+}
+
+contract InitCallsBrokenHelper {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        broken_helper(v: v)
+        x = v
+    }
+}

@@ -24,7 +24,7 @@ pub use abi_field::{AbiFieldContext, AbiFieldDiagnostic};
 pub use attr::{AttrMisuseError, AttrMisuseErrorKind};
 pub use error::{ErrorDiagnostic, ErrorDiagnosticKind};
 pub use event::{EventError, EventErrorKind};
-pub use item::{SelectorError, SelectorErrorKind};
+pub use item::{FieldModifierError, FieldModifierErrorKind, SelectorError, SelectorErrorKind};
 pub use parse::parse_file_impl;
 
 pub(crate) mod parse;

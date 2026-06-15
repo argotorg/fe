@@ -19,6 +19,7 @@ pub enum AddressSpaceKind {
     Storage,
     Transient,
     Calldata,
+    Code,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -878,12 +879,34 @@ pub enum EntryEffectArgPlan<'db> {
     TargetRootProvider(TargetRootProviderBinding<'db>),
 }
 
+/// Location of a contract field within its backing address space.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum ContractFieldSlot {
+    /// Word offset within the field's address space (storage, transient, or
+    /// the init-time memory immutables buffer).
+    Words(u128),
+    /// Byte offset relative to the end of the deployed code (always
+    /// negative), addressing the immutable data section appended after the
+    /// runtime bytecode.
+    CodeTailBytes(i128),
+}
+
+impl std::fmt::Display for ContractFieldSlot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Words(words) => write!(f, "words:{words}"),
+            Self::CodeTailBytes(bytes) => write!(f, "code_tail_bytes:{bytes}"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct ContractFieldBinding<'db> {
-    pub slot: u128,
+    pub slot: ContractFieldSlot,
     pub declared_ty: TyId<'db>,
     pub class: RuntimeClass<'db>,
     pub kind: RefKind<'db>,
+    pub init_immutable: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -1302,7 +1325,7 @@ pub enum RuntimeBuiltin<'db> {
     },
     CallDataSelector,
     MakeContractFieldRef {
-        slot: u128,
+        slot: ContractFieldSlot,
         class: RuntimeClass<'db>,
         kind: RefKind<'db>,
     },

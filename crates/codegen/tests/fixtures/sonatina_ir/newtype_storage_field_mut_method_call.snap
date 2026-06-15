@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 449
 expression: output
 input_file: crates/codegen/tests/fixtures/newtype_storage_field_mut_method_call.fe
 ---

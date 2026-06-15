@@ -500,6 +500,21 @@ pub enum BodyDiag<'db> {
         binding: Option<(IdentId<'db>, DynLazySpan<'db>)>,
     },
 
+    ImmutableContractFieldNotInitialized {
+        primary: DynLazySpan<'db>,
+        field: IdentId<'db>,
+        init: Option<DynLazySpan<'db>>,
+    },
+    UnsupportedMemoryContractField {
+        primary: DynLazySpan<'db>,
+        field: IdentId<'db>,
+    },
+    ImmutableContractFieldMutBinding {
+        primary: DynLazySpan<'db>,
+        field: IdentId<'db>,
+        field_span: DynLazySpan<'db>,
+    },
+
     LoopControlOutsideOfLoop {
         primary: DynLazySpan<'db>,
         is_break: bool,
@@ -816,6 +831,9 @@ impl<'db> BodyDiag<'db> {
             Self::ArrayRepeatRequiresCopy { .. } => 71,
             Self::NonAssignableExpr(..) => 17,
             Self::ImmutableAssignment { .. } => 18,
+            Self::ImmutableContractFieldNotInitialized { .. } => 86,
+            Self::UnsupportedMemoryContractField { .. } => 84,
+            Self::ImmutableContractFieldMutBinding { .. } => 85,
             Self::LoopControlOutsideOfLoop { .. } => 19,
             Self::TraitNotImplemented { .. } => 20,
             Self::NotCallable(..) => 21,

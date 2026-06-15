@@ -1,0 +1,299 @@
+contract NoInit {
+    x: u256
+}
+
+contract InitDoesNotUseField {
+    x: u256
+
+    init() {}
+}
+
+contract InitUsesButDoesNotAssign {
+    x: u256
+
+    init() uses (mut x) {}
+}
+
+contract InitMissesBranch {
+    x: u256
+
+    init(flag: bool) uses (mut x) {
+        if flag {
+            x = 1
+        }
+    }
+}
+
+contract InitAssignsAllPaths {
+    x: u256
+
+    init(flag: bool) uses (mut x) {
+        if flag {
+            x = 1
+        } else {
+            x = 2
+        }
+    }
+}
+
+contract InitViaLiteralTrueIf {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        if true {
+            x = v
+        }
+    }
+}
+
+contract InitViaKnownLocalIf {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        let ok = true
+        if ok {
+            x = v
+        }
+    }
+}
+
+contract MutableStorageField {
+    mut x: u256
+
+    init() {}
+}
+
+fn init_effect(v: u256) uses (x: mut u256) {
+    x = v
+}
+
+fn init_effect_forward(v: u256) uses (x: mut u256) {
+    init_effect(v: v)
+}
+
+fn init_arg(_ x: mut u256, v: u256) {
+    x = v
+}
+
+fn init_arg_forward(_ x: mut u256, v: u256) {
+    init_arg(x, v: v)
+}
+
+contract InitViaEffectHelper {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        init_effect(v: v)
+    }
+}
+
+contract InitViaWithHelper {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        with (x) {
+            init_effect(v: v)
+        }
+    }
+}
+
+contract InitViaForwardHelper {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        init_effect_forward(v: v)
+    }
+}
+
+contract InitViaMutArgHelper {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        init_arg(mut x, v: v)
+    }
+}
+
+contract InitViaMutArgForwardHelper {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        init_arg_forward(mut x, v: v)
+    }
+}
+
+contract InitViaBreakDrivenLoop {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        while true {
+            x = v
+            break
+        }
+    }
+}
+
+contract InitMaybeSkipsConditionExitLoop {
+    x: u256
+
+    init(flag: bool, v: u256) uses (mut x) {
+        while flag {
+            x = v
+        }
+    }
+}
+
+contract InitLetPatternConditionNeverRuns {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        let b = true
+        while let false = b {
+            x = v
+            break
+        }
+    }
+}
+
+contract InitForLoopInvalidatesConditionFact {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        let mut run = true
+        for _ in 0..1 {
+            run = false
+        }
+        while run {
+            x = v
+            break
+        }
+    }
+}
+
+contract InitViaConditionExitLoop {
+    x: u256
+    mut i: u256
+
+    init(v: u256) uses (mut x, mut i) {
+        i = 0
+        while i < 1 {
+            x = v
+            i += 1
+        }
+    }
+}
+
+contract InitViaConditionExitContinueLoop {
+    x: u256
+    mut i: u256
+
+    init(v: u256) uses (mut x, mut i) {
+        i = 0
+        while i < 1 {
+            x = v
+            i += 1
+            continue
+        }
+    }
+}
+
+contract MemorySpaceField {
+    ptr: std::evm::MemPtr<u256>
+}
+
+contract InitViaAugAssign {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        x += v
+    }
+}
+
+fn own_write(mut v: own u256) {
+    v = 1
+}
+
+contract InitViaOwnParamHelperDoesNotCount {
+    x: u256
+
+    init() uses (mut x) {
+        own_write(v: x)
+    }
+}
+
+contract InitTerminatingLoopStillRequired {
+    x: u256
+    mut i: u256
+
+    init() uses (mut x, mut i) {
+        i = 0
+        while i < 2 {
+            i += 1
+        }
+    }
+}
+
+fn init_flag(v: bool) uses (flag: mut bool) {
+    flag = v
+}
+
+contract InitHelperAssignsOnlyOneField {
+    x: u256
+    flag: bool
+
+    init(v: bool) uses (mut x, mut flag) {
+        init_flag(v: v)
+    }
+}
+
+contract InitViaLocalMutBorrow {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        let r = mut x
+        r = v
+    }
+}
+
+contract InitBranchCondMutatedThroughBorrow {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        let mut b = true
+        let r = mut b
+        r = false
+        if b {
+            x = v
+        }
+    }
+}
+
+fn make_false(_ b: mut bool) {
+    b = false
+}
+
+contract InitBranchCondMutatedThroughCall {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        let mut b = true
+        make_false(b: mut b)
+        if b {
+            x = v
+        }
+    }
+}
+
+contract InitBranchCondMutatedBothArmsAssign {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        let mut b = true
+        let r = mut b
+        r = false
+        if b {
+            x = v
+        } else {
+            x = v + 1
+        }
+    }
+}

@@ -152,8 +152,9 @@ fn lower_contract_field_def<'db>(
     let name = IdentId::lower_token_partial(ctxt, ast.name());
     let type_ref = TypeId::lower_ast_partial(ctxt, ast.ty());
     let vis = super::lower_field_visibility(&ast);
+    let is_mut = ast.mut_kw().is_some();
 
-    FieldDef::new(attributes, name, type_ref, vis, false)
+    FieldDef::new(attributes, name, type_ref, vis, false, is_mut)
 }
 
 fn lower_contract_init<'db>(

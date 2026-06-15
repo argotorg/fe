@@ -17,7 +17,7 @@ msg PrefixSelectorMsg {
 }
 
 pub contract GuardedFallback {
-    count: u256,
+    mut count: u256,
 
     recv {
         ZeroSelectorMsg::Hit {} -> u256 {

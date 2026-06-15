@@ -70,6 +70,7 @@ pub(super) fn address_space_from_provider(provider: ProviderAddressSpace) -> Add
         ProviderAddressSpace::Storage => AddressSpaceKind::Storage,
         ProviderAddressSpace::Transient => AddressSpaceKind::Transient,
         ProviderAddressSpace::Calldata => AddressSpaceKind::Calldata,
+        ProviderAddressSpace::Code => AddressSpaceKind::Code,
     }
 }
 

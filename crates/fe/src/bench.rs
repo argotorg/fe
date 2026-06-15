@@ -66,6 +66,7 @@ struct ManifestCall {
 // Entry point
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::print_stdout)]
 pub fn run_benchmarks(
     path: &Utf8Path,
     filter: Option<&str>,
@@ -170,6 +171,7 @@ fn resolve_fixtures_dir(path: &Utf8Path) -> Result<Utf8PathBuf, String> {
     Err(format!("fixtures directory does not exist: {path}"))
 }
 
+#[allow(clippy::print_stderr)]
 fn discover_fixtures(dir: &Utf8Path, filter: Option<&str>) -> Result<Vec<BenchFixture>, String> {
     if !dir.exists() {
         return Err(format!("fixtures directory does not exist: {dir}"));
@@ -337,6 +339,7 @@ fn fmt_delta_pct_csv(lhs: u64, rhs: u64) -> String {
     format!("{:.2}", ((lhs as f64 - rhs as f64) / rhs as f64) * 100.0)
 }
 
+#[allow(clippy::print_stdout)]
 fn write_csv(results: &[BenchResult], out_dir: &Utf8Path) -> Result<(), String> {
     fs::create_dir_all(out_dir.as_std_path()).map_err(|e| format!("create dir {out_dir}: {e}"))?;
 

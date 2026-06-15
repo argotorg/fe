@@ -319,6 +319,7 @@ fn vectors() -> Vec<Vector> {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[allow(clippy::print_stdout, clippy::print_stderr)]
 fn differential_deposit() {
     let solc_path = resolve_solc_path();
     if solc_path.is_none() {

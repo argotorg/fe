@@ -206,13 +206,14 @@ fn parse_error_fields<'db>(
     };
 
     for field in fields {
+        super::item::report_unsupported_field_mut(ctxt, &field, "error field");
         let attrs = AttrListId::lower_ast_opt(ctxt, field.attr_list());
         let name_tok = field.name();
         let name_ident = IdentId::lower_token_partial(ctxt, name_tok.clone());
         let ty_ref = TypeId::lower_ast_partial(ctxt, field.ty());
         let vis = super::lower_field_visibility(&field);
 
-        hir_fields.push(FieldDef::new(attrs, name_ident, ty_ref, vis, false));
+        hir_fields.push(FieldDef::new(attrs, name_ident, ty_ref, vis, false, false));
 
         let (Some(name_ident), Some(ty)) = (name_ident.to_opt(), ty_ref.to_opt()) else {
             is_valid = false;

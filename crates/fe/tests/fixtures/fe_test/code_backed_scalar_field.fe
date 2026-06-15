@@ -1,0 +1,27 @@
+msg CodeScalarMsg {
+    #[selector = 0x4f33c2a1]
+    Get -> u256,
+}
+
+pub contract CodeScalarStore {
+    value: u256
+
+    init(v: u256) uses (mut value) {
+        value = v
+    }
+
+    recv CodeScalarMsg {
+        Get -> u256 uses (value) {
+            value
+        }
+    }
+}
+
+#[test]
+fn test_code_backed_scalar_field() uses (evm: mut Evm) {
+    let addr = evm.create2<CodeScalarStore>(value: 0, args: (123,), salt: 0)
+    assert!(addr.inner != 0)
+
+    let value: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: CodeScalarMsg::Get {})
+    assert!(value == 123)
+}

@@ -206,6 +206,7 @@ fn parse_event_fields<'db>(
                 "`#[indexed]`",
             )],
         );
+        super::item::report_unsupported_field_mut(ctxt, &field, "event field");
         let indexed_attrs = named_attr_specs(field.attr_list(), "indexed");
         let attrs = lower_attrs_without_named(ctxt, field.attr_list(), "indexed");
         let indexed_range = indexed_attrs.first().map(|attr| attr.range);
@@ -227,7 +228,9 @@ fn parse_event_fields<'db>(
 
         let vis = super::lower_field_visibility(&field);
 
-        hir_fields.push(FieldDef::new(attrs, name_ident, ty_ref, vis, is_indexed));
+        hir_fields.push(FieldDef::new(
+            attrs, name_ident, ty_ref, vis, is_indexed, false,
+        ));
 
         let (Some(name_ident), Some(ty)) = (name_ident.to_opt(), ty_ref.to_opt()) else {
             is_valid = false;

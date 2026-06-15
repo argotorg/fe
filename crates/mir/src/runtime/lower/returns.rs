@@ -904,7 +904,7 @@ msg Msg {
 }
 
 pub contract C {
-    ctx: Pair
+    mut ctx: Pair
 
     init() uses (mut ctx) {
         ctx = Pair { a: 1, b: 2 }

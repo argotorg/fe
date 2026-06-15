@@ -10,7 +10,7 @@ pub enum NotAMsgEither {
 }
 
 pub contract BadContract {
-    data: u64,
+    mut data: u64,
 
     // Error: recv block expects a msg type, but struct is given
     recv NotAMsg {
@@ -21,7 +21,7 @@ pub contract BadContract {
 }
 
 pub contract BadContract2 {
-    data: u64,
+    mut data: u64,
 
     // Error: recv block expects a msg type, but enum is given
     recv NotAMsgEither {

@@ -461,6 +461,7 @@ fn hex_byte_len(hex: &str) -> usize {
 /// `label_header` and `label_width` control the leftmost column (the rest is
 /// fixed-width). Designed for shared use between the bench CLI and the
 /// differential-deposit gas report.
+#[allow(clippy::print_stdout)]
 pub fn print_sol_gas_table(rows: &[SolGasRow], label_header: &str, label_width: usize) {
     let variant_headers: Vec<&'static str> = SOL_VARIANTS
         .iter()

@@ -297,7 +297,7 @@ struct Store {
 }
 
 pub contract Test {
-    store: Store
+    mut store: Store
 
     recv Msg {
         Check { key, next, initialized } uses (store) {

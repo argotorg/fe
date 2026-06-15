@@ -119,10 +119,17 @@ fn format_field_def<'db>(field: &FieldDef<'db>, db: &dyn HirDb, indent_level: us
     write_attrs(&mut result, field.attributes, db, indent_level);
 
     let vis = field.vis.pretty_print();
+    let mut_kw = if field.is_mut { "mut " } else { "" };
     let name = unwrap_partial(field.name, "FieldDef::name");
     let ty = unwrap_partial(field.type_ref, "FieldDef::type_ref");
     result.push_str(&indent_text(
-        &format!("{}{}: {}", vis, name.data(db), ty.pretty_print(db)),
+        &format!(
+            "{}{}{}: {}",
+            vis,
+            mut_kw,
+            name.data(db),
+            ty.pretty_print(db)
+        ),
         indent_level,
     ));
 
