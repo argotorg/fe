@@ -1,0 +1,22 @@
+#[event]
+struct BadEvent {
+    mut amount: u256,
+}
+
+#[error]
+struct BadError {
+    mut code: u256,
+}
+
+struct BadStruct {
+    mut value: u256,
+}
+
+enum BadEnum {
+    Variant { mut value: u256 },
+}
+
+msg BadMsg {
+    #[selector = 0]
+    Bad { mut value: u256 },
+}

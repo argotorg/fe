@@ -458,6 +458,37 @@ impl DiagnosticVoucher for crate::AttrMisuseError {
     }
 }
 
+impl DiagnosticVoucher for crate::FieldModifierError {
+    fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
+        use crate::FieldModifierErrorKind;
+
+        let span = Span::new(self.file, self.primary_range, SpanKind::Original);
+        let target = if let Some(name) = &self.field_name {
+            format!("{} `{}`", self.field_kind, name)
+        } else {
+            self.field_kind.to_string()
+        };
+
+        let (local_code, message, label, notes) = match self.kind {
+            FieldModifierErrorKind::UnsupportedMut => (
+                5,
+                format!("unsupported `mut` modifier on {target}"),
+                "`mut` is only supported on contract fields".to_string(),
+                vec!["remove `mut`, or move the field into a contract if it represents contract state"
+                    .to_string()],
+            ),
+        };
+
+        CompleteDiagnostic::new(
+            Severity::Error,
+            message,
+            vec![SubDiagnostic::new(LabelStyle::Primary, label, Some(span))],
+            notes,
+            GlobalErrorCode::new(DiagnosticPass::AttrMisuse, local_code),
+        )
+    }
+}
+
 impl DiagnosticVoucher for crate::SelectorError {
     fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
         use crate::SelectorErrorKind;

@@ -1,0 +1,44 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/field_mut_modifier.fe
+---
+error[12-0005]: unsupported `mut` modifier on event field `amount`
+  ┌─ field_mut_modifier.fe:3:5
+  │
+3 │     mut amount: u256,
+  │     ^^^ `mut` is only supported on contract fields
+  │
+  = remove `mut`, or move the field into a contract if it represents contract state
+
+error[12-0005]: unsupported `mut` modifier on error field `code`
+  ┌─ field_mut_modifier.fe:8:5
+  │
+8 │     mut code: u256,
+  │     ^^^ `mut` is only supported on contract fields
+  │
+  = remove `mut`, or move the field into a contract if it represents contract state
+
+error[12-0005]: unsupported `mut` modifier on struct field `value`
+   ┌─ field_mut_modifier.fe:12:5
+   │
+12 │     mut value: u256,
+   │     ^^^ `mut` is only supported on contract fields
+   │
+   = remove `mut`, or move the field into a contract if it represents contract state
+
+error[12-0005]: unsupported `mut` modifier on enum variant field `value`
+   ┌─ field_mut_modifier.fe:16:15
+   │
+16 │     Variant { mut value: u256 },
+   │               ^^^ `mut` is only supported on contract fields
+   │
+   = remove `mut`, or move the field into a contract if it represents contract state
+
+error[12-0005]: unsupported `mut` modifier on msg variant field `value`
+   ┌─ field_mut_modifier.fe:21:11
+   │
+21 │     Bad { mut value: u256 },
+   │           ^^^ `mut` is only supported on contract fields
+   │
+   = remove `mut`, or move the field into a contract if it represents contract state

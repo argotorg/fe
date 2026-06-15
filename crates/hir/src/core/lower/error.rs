@@ -206,6 +206,7 @@ fn parse_error_fields<'db>(
     };
 
     for field in fields {
+        super::item::report_unsupported_field_mut(ctxt, &field, "error field");
         let attrs = AttrListId::lower_ast_opt(ctxt, field.attr_list());
         let name_tok = field.name();
         let name_ident = IdentId::lower_token_partial(ctxt, name_tok.clone());

@@ -1,4 +1,5 @@
 use parser::ast::{self, WhereClauseOwner as _, prelude::*};
+use salsa::Accumulator as _;
 
 use super::{
     FileLowerCtxt,
@@ -42,6 +43,22 @@ pub enum SelectorErrorKind {
         first_variant_name: String,
         selector: u32,
     },
+}
+
+/// Field modifier errors accumulated during record-field lowering.
+#[salsa::accumulator]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FieldModifierError {
+    pub kind: FieldModifierErrorKind,
+    pub file: common::file::File,
+    pub primary_range: parser::TextRange,
+    pub field_kind: &'static str,
+    pub field_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum FieldModifierErrorKind {
+    UnsupportedMut,
 }
 
 pub(crate) fn lower_module_items(ctxt: &mut FileLowerCtxt<'_>, items: ast::ItemList) {
@@ -221,6 +238,25 @@ pub(super) fn report_payable_on_unsupported_target<'db>(
     name: Option<String>,
 ) {
     report_unsupported_attr(ctxt, attrs, "payable", target(kind, name), PAYABLE_TARGETS);
+}
+
+pub(super) fn report_unsupported_field_mut<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    field: &ast::RecordFieldDef,
+    field_kind: &'static str,
+) {
+    let Some(mut_kw) = field.mut_kw() else {
+        return;
+    };
+    let db = ctxt.db();
+    FieldModifierError {
+        kind: FieldModifierErrorKind::UnsupportedMut,
+        file: ctxt.top_mod().file(db),
+        primary_range: mut_kw.text_range(),
+        field_kind,
+        field_name: field.name().map(|name| name.text().to_string()),
+    }
+    .accumulate(db);
 }
 
 fn report_indexed_attrs_outside_event_struct<'db>(
@@ -472,7 +508,7 @@ impl<'db> Struct<'db> {
         let vis = super::lower_visibility(&ast);
         let generic_params = GenericParamListId::lower_ast_opt(ctxt, ast.generic_params());
         let where_clause = WhereClauseId::lower_ast_opt(ctxt, ast.where_clause());
-        let fields = FieldDefListId::lower_ast_opt(ctxt, ast.fields());
+        let fields = FieldDefListId::lower_ast_opt_with_context(ctxt, ast.fields(), "struct field");
         let origin = HirOrigin::raw(&ast);
 
         let struct_ = Self::new(
@@ -933,30 +969,42 @@ fn peel_parens(mut expr: ast::Expr) -> ast::Expr {
 }
 
 impl<'db> FieldDefListId<'db> {
-    fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::RecordFieldDefList) -> Self {
+    fn lower_ast_with_context(
+        ctxt: &mut FileLowerCtxt<'db>,
+        ast: ast::RecordFieldDefList,
+        field_kind: &'static str,
+    ) -> Self {
         let fields = ast
             .into_iter()
-            .map(|field| FieldDef::lower_ast(ctxt, field))
+            .map(|field| FieldDef::lower_ast_with_context(ctxt, field, field_kind))
             .collect::<Vec<_>>();
         Self::new(ctxt.db(), fields)
     }
 
-    fn lower_ast_opt(ctxt: &mut FileLowerCtxt<'db>, ast: Option<ast::RecordFieldDefList>) -> Self {
-        ast.map(|ast| Self::lower_ast(ctxt, ast))
+    fn lower_ast_opt_with_context(
+        ctxt: &mut FileLowerCtxt<'db>,
+        ast: Option<ast::RecordFieldDefList>,
+        field_kind: &'static str,
+    ) -> Self {
+        ast.map(|ast| Self::lower_ast_with_context(ctxt, ast, field_kind))
             .unwrap_or(Self::new(ctxt.db(), Vec::new()))
     }
 }
 
 impl<'db> FieldDef<'db> {
-    pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::RecordFieldDef) -> Self {
+    fn lower_ast_with_context(
+        ctxt: &mut FileLowerCtxt<'db>,
+        ast: ast::RecordFieldDef,
+        field_kind: &'static str,
+    ) -> Self {
         report_payable_on_unsupported_target(ctxt, ast.attr_list(), "field", None);
+        report_unsupported_field_mut(ctxt, &ast, field_kind);
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         let name = IdentId::lower_token_partial(ctxt, ast.name());
         let type_ref = TypeId::lower_ast_partial(ctxt, ast.ty());
         let vis = super::lower_field_visibility(&ast);
-        let is_mut = ast.mut_kw().is_some();
 
-        Self::new(attributes, name, type_ref, vis, false, is_mut)
+        Self::new(attributes, name, type_ref, vis, false, false)
     }
 }
 
@@ -983,7 +1031,9 @@ impl<'db> VariantDef<'db> {
         let kind = match ast.kind() {
             ast::VariantKind::Unit => VariantKind::Unit,
             ast::VariantKind::Tuple(t) => VariantKind::Tuple(TupleTypeId::lower_ast(ctxt, t)),
-            ast::VariantKind::Record(r) => VariantKind::Record(FieldDefListId::lower_ast(ctxt, r)),
+            ast::VariantKind::Record(r) => VariantKind::Record(
+                FieldDefListId::lower_ast_with_context(ctxt, r, "enum variant field"),
+            ),
         };
 
         Self {

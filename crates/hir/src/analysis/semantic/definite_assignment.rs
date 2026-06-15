@@ -141,9 +141,7 @@ fn owner_body_is_clean<'db>(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -
     match owner {
         BodyOwner::Func(func) => check_func_body(db, func).0.is_empty(),
         BodyOwner::Const(const_) => check_const_body(db, const_).0.is_empty(),
-        BodyOwner::ContractInit { contract } => {
-            check_contract_init_body(db, contract).0.is_empty()
-        }
+        BodyOwner::ContractInit { contract } => check_contract_init_body(db, contract).0.is_empty(),
         BodyOwner::ContractRecvArm {
             contract,
             recv_idx,
@@ -446,9 +444,8 @@ fn mut_aliased_locals(body: &NormalizedSemanticBody<'_>) -> FxHashSet<SLocalId> 
     let mut aliased = FxHashSet::default();
     let note_place = |place: &NSPlace<'_>, aliased: &mut FxHashSet<SLocalId>| {
         if let NSPlaceRoot::Root(root_id) = &place.root
-            && let Some(
-                NBorrowRoot::Param { local, .. } | NBorrowRoot::LocalSlot { local },
-            ) = body.root(*root_id)
+            && let Some(NBorrowRoot::Param { local, .. } | NBorrowRoot::LocalSlot { local }) =
+                body.root(*root_id)
         {
             aliased.insert(*local);
         }

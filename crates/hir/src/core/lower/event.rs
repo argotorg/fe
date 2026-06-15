@@ -206,6 +206,7 @@ fn parse_event_fields<'db>(
                 "`#[indexed]`",
             )],
         );
+        super::item::report_unsupported_field_mut(ctxt, &field, "event field");
         let indexed_attrs = named_attr_specs(field.attr_list(), "indexed");
         let attrs = lower_attrs_without_named(ctxt, field.attr_list(), "indexed");
         let indexed_range = indexed_attrs.first().map(|attr| attr.range);

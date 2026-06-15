@@ -4,8 +4,8 @@ use crate::analysis::{
     ty::{adt_def::AdtRef, ty_lower::lower_hir_ty},
 };
 use crate::{
-    AbiFieldContext, AbiFieldDiagnostic, AttrMisuseError, ErrorDiagnostic, EventError, ParserError,
-    SelectorError,
+    AbiFieldContext, AbiFieldDiagnostic, AttrMisuseError, ErrorDiagnostic, EventError,
+    FieldModifierError, ParserError, SelectorError,
     hir_def::{ModuleTree, TopLevelMod},
     lower::{parse_file_impl, scope_graph_impl, top_mod_ast},
     semantic::constraints_for,
@@ -271,9 +271,15 @@ impl ModuleAnalysisPass for AttrMisusePass {
         db: &'db dyn HirAnalysisDb,
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher>> {
-        scope_graph_impl::accumulated::<AttrMisuseError>(db, top_mod)
+        let mut diags = scope_graph_impl::accumulated::<AttrMisuseError>(db, top_mod)
             .into_iter()
             .map(|d| Box::new(d.clone()) as _)
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        diags.extend(
+            scope_graph_impl::accumulated::<FieldModifierError>(db, top_mod)
+                .into_iter()
+                .map(|d| Box::new(d.clone()) as _),
+        );
+        diags
     }
 }

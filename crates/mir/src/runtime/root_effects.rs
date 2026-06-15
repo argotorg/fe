@@ -18,8 +18,7 @@ use crate::{
     db::MirDb,
     runtime::{
         AddressSpaceKind, ContractFieldBinding, ContractFieldSlot, EntryEffectArgPlan, RefKind,
-        RefView, RuntimeClass,
-        TargetRootProviderBinding, TargetRootProviderMaterialization,
+        RefView, RuntimeClass, TargetRootProviderBinding, TargetRootProviderMaterialization,
         lower::{
             classify::{provider_erases_runtime_root, runtime_effect_binding_plan},
             type_info::RuntimeTypeEnv,

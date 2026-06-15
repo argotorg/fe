@@ -757,6 +757,7 @@ fn lower_msg_variant_fields<'db>(
                         "field",
                         None,
                     );
+                    super::item::report_unsupported_field_mut(ctxt, &field, "msg variant field");
                     let attributes = AttrListId::lower_ast_opt(ctxt, field.attr_list());
                     let name = IdentId::lower_token_partial(ctxt, field.name());
                     let type_ref = TypeId::lower_ast_partial(ctxt, field.ty());
