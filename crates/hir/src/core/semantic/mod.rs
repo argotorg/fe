@@ -23,15 +23,6 @@
 pub mod index;
 pub mod reference;
 pub mod symbol;
-pub use reference::{
-    FieldAccessView, HasReferences, MethodCallView, PathView, ReferenceView, Target, UsePathView,
-};
-pub use symbol::{
-    IndexedReference, ReferenceIndex, SignatureWithSpan, SourceLocation, SymbolKind, SymbolView,
-    item_kind_to_url_suffix, qualify_path_with_ingot_name, scope_to_doc_path,
-};
-
-use crate::HirDb;
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::ty::corelib::{resolve_core_trait, resolve_lib_func_path};
 use crate::analysis::ty::diagnostics::{ImplDiag, TyLowerDiag};
@@ -41,7 +32,15 @@ use crate::analysis::ty::ty_def::Kind;
 use crate::analysis::ty::ty_error::collect_hir_ty_diags;
 use crate::hir_def::params::KindBound as HirKindBound;
 use crate::hir_def::scope_graph::ScopeId;
+use crate::{HirDb, SpannedHirDb};
+pub use reference::{
+    FieldAccessView, HasReferences, MethodCallView, PathView, ReferenceView, Target, UsePathView,
+};
 use rustc_hash::{FxHashMap, FxHashSet};
+pub use symbol::{
+    IndexedReference, ReferenceIndex, SignatureWithSpan, SourceLocation, SymbolKind, SymbolView,
+    item_kind_to_url_suffix, qualify_path_with_ingot_name, scope_to_doc_path,
+};
 
 pub fn lower_hir_kind_local(k: &HirKindBound) -> Kind {
     use crate::hir_def::Partial;
@@ -5314,6 +5313,14 @@ impl<'db> ImplAssocConstView<'db> {
 
     pub fn span(self) -> crate::span::item::LazyTraitConstSpan<'db> {
         self.owner.span().associated_const(self.idx)
+    }
+
+    pub fn docs(self, db: &'db dyn HirDb) -> Option<String> {
+        symbol::docs_from_attrs(db, self.def(db).attributes)
+    }
+
+    pub fn signature_with_span(self, db: &'db dyn SpannedHirDb) -> Option<SignatureWithSpan> {
+        symbol::get_assoc_const_signature_with_span(db, self.span())
     }
 
     /// Returns true if this associated const has a value defined.
