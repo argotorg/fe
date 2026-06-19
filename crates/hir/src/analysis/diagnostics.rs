@@ -1900,7 +1900,7 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                     message: "contract field has an unresolved non-slot const generic".to_string(),
                     sub_diagnostics,
                     notes: vec![
-                        "only storage-slot (`u256`) const generics may be left inferred (`_`) in a contract field; provide an explicit value".to_string(),
+                        "only storage-slot (`u256` or `usize`) const generics may be left inferred (`_`) in a contract field; provide an explicit value".to_string(),
                     ],
                     error_code,
                 }

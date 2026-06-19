@@ -12,4 +12,4 @@ error[3-0040]: contract field has an unresolved non-slot const generic
 10 │     value: Foo,
    │            ^^^ this contract field has an inferred const (`_`) that is not a storage slot
    │
-   = only storage-slot (`u256`) const generics may be left inferred (`_`) in a contract field; provide an explicit value
+   = only storage-slot (`u256` or `usize`) const generics may be left inferred (`_`) in a contract field; provide an explicit value

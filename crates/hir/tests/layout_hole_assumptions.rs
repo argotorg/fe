@@ -2521,6 +2521,38 @@ contract C {
     assert_eq!(field.slot_count, 1);
 }
 
+/// A `usize` const hole is also a valid storage-slot index and must be accepted.
+#[test]
+fn contract_field_usize_slot_hole_is_not_rejected() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_usize_slot_hole_is_not_rejected.fe"),
+        r#"
+use core::effect_ref::StorPtr
+
+struct Slot<const ROOT: usize = _> {}
+
+contract C {
+    value: StorPtr<Slot>,
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let contract = find_contract(&db, top_mod, "C");
+    let field = contract
+        .field_layout(&db)
+        .get(&IdentId::new(&db, "value".to_string()))
+        .cloned()
+        .expect("missing `value` field");
+    assert!(
+        !field.non_slot_const_hole,
+        "usize slot hole must not be flagged"
+    );
+    assert_eq!(field.slot_count, 1);
+}
+
 /// A plain (non-provider) field with a defaulted non-slot const generic
 /// (`const SP: AddressSpace = _`) is flagged: the hole is not a storage slot.
 /// (`ContractAnalysisPass` turns the flag into `error[3-0040]`, covered
@@ -2552,6 +2584,40 @@ contract C {
         "an AddressSpace `_` hole is not a storage slot and must be flagged"
     );
     assert!(!field.is_provider);
+    // The non-slot hole is neither counted (only `value: u256` is a real slot)
+    // nor materialized as a bogus slot value: it is left unnumbered.
+    assert_eq!(field.slot_count, 1);
+    assert!(ty_contains_const_hole(&db, field.declared_ty));
+}
+
+/// A non-`u256` integer hole (`const TAG: u8 = _`) is not a storage-slot index,
+/// so it must be rejected rather than silently numbered as a slot.
+#[test]
+fn contract_field_non_u256_integer_hole_is_flagged() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_non_u256_integer_hole_is_flagged.fe"),
+        r#"
+struct Foo<const TAG: u8 = _> { value: u256 }
+
+contract C {
+    value: Foo,
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let contract = find_contract(&db, top_mod, "C");
+    let field = contract
+        .field_layout(&db)
+        .get(&IdentId::new(&db, "value".to_string()))
+        .cloned()
+        .expect("missing `value` field");
+    assert!(
+        field.non_slot_const_hole,
+        "a `u8` `_` hole is not a storage-slot index and must be flagged"
+    );
+    assert_eq!(field.slot_count, 1);
+    assert!(ty_contains_const_hole(&db, field.declared_ty));
 }
 
 /// An `EffectHandle` field whose address space is left inferred (`const SPACE =

@@ -2212,15 +2212,16 @@ impl<'db> ContractFieldEffectHandleCx<'db> {
 
         let mut space_overrides = Vec::new();
         let mut overridden = FxHashSet::default();
+        let mut non_slot_holes = FxHashSet::default();
         let mut static_slot_space_unresolved = false;
-        let mut non_slot_const_hole = false;
         for &placeholder in &materialization_placeholders {
-            // A contract-field hole is a storage slot only if its const type is a
-            // slot index (integral). A hole of any other type (e.g. `AddressSpace`)
-            // is an under-specified const, not a slot; flag it for rejection rather
-            // than numbering it into a counter.
+            // A contract-field hole is a storage slot only if its const type is
+            // the slot index type (`u256`). A hole of any other type (e.g.
+            // `AddressSpace`, or a non-`u256` integer) is an under-specified
+            // const, not a slot: drop it from the slot lists so it is neither
+            // counted nor numbered, and flag the field for rejection.
             if !placeholder_is_slot_hole(db, placeholder) {
-                non_slot_const_hole = true;
+                non_slot_holes.insert(placeholder);
                 continue;
             }
             match self.placeholder_space_resolution(db, placeholder) {
@@ -2237,9 +2238,14 @@ impl<'db> ContractFieldEffectHandleCx<'db> {
                 StaticSlotSpace::Unresolvable => static_slot_space_unresolved = true,
             }
         }
-        if !overridden.is_empty() {
-            slot_placeholders.retain(|placeholder| !overridden.contains(placeholder));
-            materialization_placeholders.retain(|placeholder| !overridden.contains(placeholder));
+        let non_slot_const_hole = !non_slot_holes.is_empty();
+        if !overridden.is_empty() || non_slot_const_hole {
+            slot_placeholders.retain(|placeholder| {
+                !overridden.contains(placeholder) && !non_slot_holes.contains(placeholder)
+            });
+            materialization_placeholders.retain(|placeholder| {
+                !overridden.contains(placeholder) && !non_slot_holes.contains(placeholder)
+            });
         }
 
         ContractFieldLayoutPlan {
@@ -2259,10 +2265,11 @@ impl<'db> ContractFieldEffectHandleCx<'db> {
 }
 
 /// Whether a contract-field layout placeholder is a genuine storage slot, i.e.
-/// its const type is a slot index (integral). A hole of any other type (e.g.
-/// `AddressSpace`) is an under-specified const that must not be numbered as a
-/// slot. An invalid hole type is treated as a `u256` slot (it is diagnosed
-/// elsewhere), matching `layout_hole_fallback_ty`.
+/// its const type is a storage-slot index type (`u256` or `usize`). A hole of
+/// any other type — including a narrower integer such as `u8` — is an
+/// under-specified const, not a slot, and must not be numbered. An invalid hole
+/// type is treated as a `u256` slot (it is diagnosed elsewhere), matching
+/// `layout_hole_fallback_ty`.
 fn placeholder_is_slot_hole<'db>(db: &'db dyn HirAnalysisDb, placeholder: TyId<'db>) -> bool {
     let TyData::ConstTy(const_ty) = placeholder.data(db) else {
         return false;
@@ -2272,7 +2279,10 @@ fn placeholder_is_slot_hole<'db>(db: &'db dyn HirAnalysisDb, placeholder: TyId<'
         ConstTyData::TyParam(param, hole_ty) if param.is_implicit() => *hole_ty,
         _ => return false,
     };
-    layout_hole_fallback_ty(db, hole_ty).is_integral(db)
+    matches!(
+        layout_hole_fallback_ty(db, hole_ty).data(db),
+        TyData::TyBase(TyBase::Prim(PrimTy::U256 | PrimTy::Usize))
+    )
 }
 
 /// Assigns a slot value to every layout placeholder of a contract field and
@@ -2461,10 +2471,14 @@ impl<'db> Contract<'db> {
                 materialize_contract_layout_holes(db, plan.target_ty, &slot_assignments);
             let slot_basis_ty =
                 materialize_contract_layout_holes(db, plan.slot_basis_ty, &slot_assignments);
+            // A field with a non-slot const hole is rejected by `ty_diags`; its
+            // hole is intentionally left unnumbered (not materialized as a bogus
+            // slot), so it legitimately remains here.
             debug_assert!(
-                !ty_contains_const_hole(db, declared_ty)
-                    && !ty_contains_const_hole(db, target_ty)
-                    && !ty_contains_const_hole(db, slot_basis_ty),
+                plan.non_slot_const_hole
+                    || (!ty_contains_const_hole(db, declared_ty)
+                        && !ty_contains_const_hole(db, target_ty)
+                        && !ty_contains_const_hole(db, slot_basis_ty)),
                 "contract field layout materialization left unresolved holes"
             );
             *next_slot_by_address_space
