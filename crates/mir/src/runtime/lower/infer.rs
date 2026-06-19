@@ -1209,10 +1209,13 @@ pub(super) fn merge_runtime_class<'db>(
                 space: desired_space,
                 target: desired_target,
             },
-        ) if current_target == desired_target => Some(RuntimeClass::RawAddr {
-            space: preferred_address_space(*current_space, *desired_space),
-            target: *current_target,
-        }),
+        ) if current_target == desired_target => {
+            let space = preferred_address_space(*current_space, *desired_space)?;
+            Some(RuntimeClass::RawAddr {
+                space,
+                target: *current_target,
+            })
+        }
         (
             RuntimeClass::Ref {
                 pointee,
@@ -1238,7 +1241,7 @@ pub(super) fn merge_runtime_class<'db>(
                 })
             } else {
                 Some(RuntimeClass::RawAddr {
-                    space: preferred_address_space(ref_space, *space),
+                    space: preferred_address_space(ref_space, *space)?,
                     target: *target,
                 })
             }
@@ -1342,7 +1345,7 @@ fn merge_ref_kind<'db>(current: &RefKind<'db>, desired: &RefKind<'db>) -> Option
                 space: desired_space,
             },
         ) => {
-            let space = preferred_address_space(*current_space, *desired_space);
+            let space = preferred_address_space(*current_space, *desired_space)?;
             let provider_ty = if current_provider_ty == desired_provider_ty {
                 *current_provider_ty
             } else if *current_space == AddressSpaceKind::Memory
@@ -1365,11 +1368,16 @@ fn merge_ref_kind<'db>(current: &RefKind<'db>, desired: &RefKind<'db>) -> Option
 fn preferred_address_space(
     current: AddressSpaceKind,
     desired: AddressSpaceKind,
-) -> AddressSpaceKind {
+) -> Option<AddressSpaceKind> {
     match (current, desired) {
-        (AddressSpaceKind::Memory, desired) => desired,
-        (current, AddressSpaceKind::Memory) => current,
-        (current, _) => current,
+        (AddressSpaceKind::Memory, other) | (other, AddressSpaceKind::Memory) => Some(other),
+        (current, desired) if current == desired => Some(current),
+        // Two distinct non-Memory spaces (e.g. Storage vs Transient) name physically
+        // different regions and cannot be reconciled into a single returned pointer.
+        // Returning None keeps `merge_runtime_class` a commutative partial meet, so
+        // folding it over return sites is order-independent and a genuine conflict
+        // falls back to the default return class.
+        _ => None,
     }
 }
 
@@ -1603,5 +1611,86 @@ mod tests {
             Some(provider.clone())
         );
         assert_eq!(merge_runtime_class(&db, &provider, &object), Some(provider));
+    }
+
+    #[test]
+    fn preferred_address_space_is_commutative() {
+        use AddressSpaceKind::{Calldata, Code, Memory, Storage, Transient};
+        let spaces = [Memory, Storage, Transient, Calldata, Code];
+        for a in spaces {
+            for b in spaces {
+                assert_eq!(
+                    preferred_address_space(a, b),
+                    preferred_address_space(b, a),
+                    "preferred_address_space must be commutative for {a:?} and {b:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn merge_runtime_class_merges_memory_raw_addr_into_non_memory_space() {
+        let db = DriverDataBase::default();
+        let memory = RuntimeClass::RawAddr {
+            space: AddressSpaceKind::Memory,
+            target: None,
+        };
+        let storage = RuntimeClass::RawAddr {
+            space: AddressSpaceKind::Storage,
+            target: None,
+        };
+
+        // Memory always yields to the concrete space, and the result must not depend
+        // on which side is `current`.
+        assert_eq!(
+            merge_runtime_class(&db, &memory, &storage),
+            Some(storage.clone())
+        );
+        assert_eq!(merge_runtime_class(&db, &storage, &memory), Some(storage));
+    }
+
+    #[test]
+    fn merge_runtime_class_rejects_conflicting_non_memory_raw_addr_spaces() {
+        let db = DriverDataBase::default();
+        let storage = RuntimeClass::RawAddr {
+            space: AddressSpaceKind::Storage,
+            target: None,
+        };
+        let transient = RuntimeClass::RawAddr {
+            space: AddressSpaceKind::Transient,
+            target: None,
+        };
+
+        // Two distinct non-Memory spaces cannot be reconciled; the merge must fail
+        // symmetrically rather than silently picking the left operand.
+        assert_eq!(merge_runtime_class(&db, &storage, &transient), None);
+        assert_eq!(merge_runtime_class(&db, &transient, &storage), None);
+    }
+
+    #[test]
+    fn merge_runtime_class_rejects_conflicting_non_memory_provider_refs() {
+        let db = DriverDataBase::default();
+        let pointee = RuntimeClass::Scalar(ScalarClass {
+            repr: ScalarRepr::Int {
+                bits: 256,
+                signed: false,
+            },
+            role: ScalarRole::Plain,
+        });
+        let provider = |space| RuntimeClass::Ref {
+            pointee: Box::new(pointee.clone()),
+            kind: RefKind::Provider {
+                provider_ty: TyId::u256(&db),
+                space,
+            },
+            view: RefView::Whole,
+        };
+        let storage = provider(AddressSpaceKind::Storage);
+        let transient = provider(AddressSpaceKind::Transient);
+
+        // Same provider type, irreconcilable spaces: `merge_ref_kind` must propagate
+        // the conflict as `None` in both orders.
+        assert_eq!(merge_runtime_class(&db, &storage, &transient), None);
+        assert_eq!(merge_runtime_class(&db, &transient, &storage), None);
     }
 }
