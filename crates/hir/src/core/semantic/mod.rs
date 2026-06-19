@@ -1634,6 +1634,13 @@ pub struct ContractFieldLayoutInfo<'db> {
     /// be resolved to a concrete address space. The layout is unsound and the
     /// field is reported as an error by `FieldView::ty_diags`.
     pub static_slot_space_unresolved: bool,
+    /// True when this field has an unresolved const hole (`_`) that is not a
+    /// storage-slot index (e.g. a defaulted `const SP: AddressSpace = _`). The
+    /// hole was numbered as a bogus slot; the field is reported as an error.
+    pub non_slot_const_hole: bool,
+    /// True when this field is a selected `EffectHandle` whose `SPACE` did not
+    /// resolve to a concrete address space; the field is reported as an error.
+    pub handle_space_unresolved: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
@@ -1999,6 +2006,21 @@ struct ContractFieldLayoutPlan<'db> {
     /// be laid out soundly (a silent fallback to the field's own counter risks
     /// a cross-space slot collision), so it is rejected with a diagnostic.
     static_slot_space_unresolved: bool,
+    /// True when the field carries an unresolved const hole (`_`) whose type is
+    /// not a storage-slot index (e.g. a defaulted `const SP: AddressSpace = _`).
+    /// Such a hole is not a slot and must not be numbered; the field is rejected.
+    non_slot_const_hole: bool,
+    /// True when the field is a selected `EffectHandle` whose `const SPACE` did
+    /// not resolve to a concrete address space (so its slot space is unknown).
+    handle_space_unresolved: bool,
+}
+
+/// Result of probing a contract field's `EffectHandle` implementation.
+struct ContractFieldMetadata<'db> {
+    is_provider: bool,
+    address_space: crate::analysis::ty::ProviderAddressSpace,
+    target_ty: TyId<'db>,
+    handle_space_unresolved: bool,
 }
 
 /// Whether a layout placeholder's slot is governed by a `StaticSlot`
@@ -2029,27 +2051,39 @@ impl<'db> ContractFieldEffectHandleCx<'db> {
         self,
         db: &'db dyn HirAnalysisDb,
         field_ty: TyId<'db>,
-    ) -> (bool, crate::analysis::ty::ProviderAddressSpace, TyId<'db>) {
+    ) -> ContractFieldMetadata<'db> {
         let inst = TraitInstId::new(db, self.effect_handle, vec![field_ty], IndexMap::new());
         match is_goal_satisfiable(db, TraitSolveCx::new(db, self.scope), inst) {
             GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => {
-                (false, self.fallback_space, field_ty)
+                ContractFieldMetadata {
+                    is_provider: false,
+                    address_space: self.fallback_space,
+                    target_ty: field_ty,
+                    handle_space_unresolved: false,
+                }
             }
             GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation(_) => {
-                let space = crate::analysis::ty::effect_space_from_trait_const(
+                // A selected handle must name a concrete address space via its
+                // `const SPACE`. If it does not, record it: the field is rejected
+                // rather than silently classified into the fallback space.
+                let resolved = crate::analysis::ty::effect_space_from_trait_const(
                     db,
                     self.scope,
                     self.assumptions,
                     inst,
-                )
-                .unwrap_or(self.fallback_space);
+                );
                 let target_ty = inst
                     .assoc_ty(db, self.target_ident)
                     .map(|assoc| normalize_ty(db, assoc, self.scope, self.assumptions))
                     .filter(|ty| !ty.has_invalid(db))
                     .unwrap_or(field_ty);
 
-                (true, space, target_ty)
+                ContractFieldMetadata {
+                    is_provider: true,
+                    address_space: resolved.unwrap_or(self.fallback_space),
+                    target_ty,
+                    handle_space_unresolved: resolved.is_none(),
+                }
             }
         }
     }
@@ -2141,7 +2175,12 @@ impl<'db> ContractFieldEffectHandleCx<'db> {
         db: &'db dyn HirAnalysisDb,
         field_ty: TyId<'db>,
     ) -> ContractFieldLayoutPlan<'db> {
-        let (is_provider, address_space, target_ty) = self.metadata(db, field_ty);
+        let ContractFieldMetadata {
+            is_provider,
+            address_space,
+            target_ty,
+            handle_space_unresolved,
+        } = self.metadata(db, field_ty);
         // Provider slot order is defined by the normalized Target type. Contract
         // layout must not synthesize a positional equivalence with the wrapper.
         let slot_basis_ty = if is_provider { target_ty } else { field_ty };
@@ -2174,7 +2213,16 @@ impl<'db> ContractFieldEffectHandleCx<'db> {
         let mut space_overrides = Vec::new();
         let mut overridden = FxHashSet::default();
         let mut static_slot_space_unresolved = false;
+        let mut non_slot_const_hole = false;
         for &placeholder in &materialization_placeholders {
+            // A contract-field hole is a storage slot only if its const type is a
+            // slot index (integral). A hole of any other type (e.g. `AddressSpace`)
+            // is an under-specified const, not a slot; flag it for rejection rather
+            // than numbering it into a counter.
+            if !placeholder_is_slot_hole(db, placeholder) {
+                non_slot_const_hole = true;
+                continue;
+            }
             match self.placeholder_space_resolution(db, placeholder) {
                 StaticSlotSpace::Resolved(space) if space != address_space => {
                     space_overrides.push((space, placeholder));
@@ -2204,8 +2252,27 @@ impl<'db> ContractFieldEffectHandleCx<'db> {
             materialization_placeholders,
             space_overrides,
             static_slot_space_unresolved,
+            non_slot_const_hole,
+            handle_space_unresolved,
         }
     }
+}
+
+/// Whether a contract-field layout placeholder is a genuine storage slot, i.e.
+/// its const type is a slot index (integral). A hole of any other type (e.g.
+/// `AddressSpace`) is an under-specified const that must not be numbered as a
+/// slot. An invalid hole type is treated as a `u256` slot (it is diagnosed
+/// elsewhere), matching `layout_hole_fallback_ty`.
+fn placeholder_is_slot_hole<'db>(db: &'db dyn HirAnalysisDb, placeholder: TyId<'db>) -> bool {
+    let TyData::ConstTy(const_ty) = placeholder.data(db) else {
+        return false;
+    };
+    let hole_ty = match const_ty.data(db) {
+        ConstTyData::Hole(hole_ty, _) => *hole_ty,
+        ConstTyData::TyParam(param, hole_ty) if param.is_implicit() => *hole_ty,
+        _ => return false,
+    };
+    layout_hole_fallback_ty(db, hole_ty).is_integral(db)
 }
 
 /// Assigns a slot value to every layout placeholder of a contract field and
@@ -2418,6 +2485,8 @@ impl<'db> Contract<'db> {
                     slot_offset,
                     slot_count,
                     static_slot_space_unresolved: plan.static_slot_space_unresolved,
+                    non_slot_const_hole: plan.non_slot_const_hole,
+                    handle_space_unresolved: plan.handle_space_unresolved,
                 },
             );
         }
@@ -5276,16 +5345,30 @@ impl<'db> FieldView<'db> {
             return out;
         }
 
-        // A contract field whose layout hole instantiates a `StaticSlot` slot
-        // param with an unresolvable `SPACE` cannot be assigned to a known
-        // address-space counter; reject it rather than risk a slot collision.
+        // Contract-field layout rejections: a field whose storage placement
+        // cannot be determined is an error rather than a silent mis-assignment.
+        // At most one of these fires per field (a non-slot `AddressSpace` hole on
+        // a handle is reported as a handle-space error; on a plain field as a
+        // non-slot const error).
         if let FieldParent::Contract(contract) = self.parent
             && let Some(name) = self.name(db)
             && let Some(info) = contract.field_layout(db).get(&name)
-            && info.static_slot_space_unresolved
         {
-            out.push(TyLowerDiag::StaticSlotSpaceUnresolved { span, ty }.into());
-            return out;
+            // A selected `EffectHandle` whose `SPACE` did not resolve.
+            if info.handle_space_unresolved {
+                out.push(TyLowerDiag::ContractFieldHandleSpaceUnresolved { span, ty }.into());
+                return out;
+            }
+            // A `StaticSlot` hole whose `SPACE` did not resolve.
+            if info.static_slot_space_unresolved {
+                out.push(TyLowerDiag::StaticSlotSpaceUnresolved { span, ty }.into());
+                return out;
+            }
+            // An unresolved const `_` that is not a storage slot.
+            if info.non_slot_const_hole {
+                out.push(TyLowerDiag::ContractFieldNonSlotConstHole { span, ty }.into());
+                return out;
+            }
         }
 
         // Const type parameter mismatch check: if field name matches a const type parameter.

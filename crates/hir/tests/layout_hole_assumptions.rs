@@ -2485,3 +2485,118 @@ contract C {
         "param-dependent StaticSlot SPACE should be marked unresolvable"
     );
 }
+
+/// A storage-slot (`u256`) const hole is a legitimate contract-field layout
+/// hole: it is numbered as a slot and the field is accepted. Guards the
+/// non-slot rejection below from over-rejecting real slots.
+#[test]
+fn contract_field_u256_slot_hole_is_not_rejected() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_u256_slot_hole_is_not_rejected.fe"),
+        r#"
+use core::effect_ref::StorPtr
+
+struct Slot<const ROOT: u256 = _> {}
+
+contract C {
+    value: StorPtr<Slot>,
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let contract = find_contract(&db, top_mod, "C");
+    let field = contract
+        .field_layout(&db)
+        .get(&IdentId::new(&db, "value".to_string()))
+        .cloned()
+        .expect("missing `value` field");
+    assert!(
+        !field.non_slot_const_hole,
+        "u256 slot hole must not be flagged"
+    );
+    assert!(!field.handle_space_unresolved);
+    assert_eq!(field.slot_count, 1);
+}
+
+/// A plain (non-provider) field with a defaulted non-slot const generic
+/// (`const SP: AddressSpace = _`) is flagged: the hole is not a storage slot.
+/// (`ContractAnalysisPass` turns the flag into `error[3-0040]`, covered
+/// end-to-end by the `contract_field_nonprovider_addrspace_hole` uitest.)
+#[test]
+fn contract_field_nonprovider_addrspace_hole_is_flagged() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_nonprovider_addrspace_hole_is_flagged.fe"),
+        r#"
+use core::effect_ref::AddressSpace
+
+struct Foo<const SP: AddressSpace = _> { value: u256 }
+
+contract C {
+    value: Foo,
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let contract = find_contract(&db, top_mod, "C");
+    let field = contract
+        .field_layout(&db)
+        .get(&IdentId::new(&db, "value".to_string()))
+        .cloned()
+        .expect("missing `value` field");
+    assert!(
+        field.non_slot_const_hole,
+        "an AddressSpace `_` hole is not a storage slot and must be flagged"
+    );
+    assert!(!field.is_provider);
+}
+
+/// An `EffectHandle` field whose address space is left inferred (`const SPACE =
+/// SP` with `SP` defaulted to `_`) is flagged: the field's storage space is
+/// unknown. (`ContractAnalysisPass` turns the flag into `error[3-0041]`,
+/// covered end-to-end by the `contract_field_handle_space_unresolved` uitest.)
+#[test]
+fn contract_field_handle_space_hole_is_flagged() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_handle_space_hole_is_flagged.fe"),
+        r#"
+use core::effect_ref::{AddressSpace, EffectHandle}
+
+struct Ptr<T, const SP: AddressSpace = _> { raw: u256 }
+
+impl<T, const SP: AddressSpace> EffectHandle for Ptr<T, SP> {
+    type Target = T
+
+    const SPACE: AddressSpace = SP
+
+    fn from_raw(_ raw: u256) -> Self {
+        Ptr { raw }
+    }
+
+    fn raw(self) -> u256 {
+        self.raw
+    }
+}
+
+contract C {
+    mut value: Ptr<u256>,
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let contract = find_contract(&db, top_mod, "C");
+    let field = contract
+        .field_layout(&db)
+        .get(&IdentId::new(&db, "value".to_string()))
+        .cloned()
+        .expect("missing `value` field");
+    assert!(field.is_provider, "Ptr implements EffectHandle");
+    assert!(
+        field.handle_space_unresolved,
+        "an EffectHandle with an inferred SPACE must be flagged"
+    );
+}

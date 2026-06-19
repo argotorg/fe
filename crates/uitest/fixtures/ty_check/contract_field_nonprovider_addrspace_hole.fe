@@ -1,0 +1,11 @@
+// A plain (non-provider) contract field whose type leaves a non-slot const
+// generic inferred (`const SP: AddressSpace = _`) must be rejected: contract
+// layout only numbers storage-slot (`u256`) holes, so an `AddressSpace` hole
+// would otherwise be materialized as a bogus integer slot.
+use core::effect_ref::AddressSpace
+
+struct Foo<const SP: AddressSpace = _> { value: u256 }
+
+contract C {
+    value: Foo,
+}

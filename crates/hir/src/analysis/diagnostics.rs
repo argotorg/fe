@@ -1878,6 +1878,62 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 }
             }
 
+            Self::ContractFieldNonSlotConstHole { span, ty } => {
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message:
+                        "this contract field has an inferred const (`_`) that is not a storage slot"
+                            .to_string(),
+                    span: span.resolve(db),
+                }];
+                if let Some(name_span) = ty.name_span(db) {
+                    let type_name = ty.base_ty(db).pretty_print(db);
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{type_name}` is defined here"),
+                        span: name_span.resolve(db),
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "contract field has an unresolved non-slot const generic".to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "only storage-slot (`u256`) const generics may be left inferred (`_`) in a contract field; provide an explicit value".to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
+            Self::ContractFieldHandleSpaceUnresolved { span, ty } => {
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message:
+                        "the address space of this contract field's handle could not be determined"
+                            .to_string(),
+                    span: span.resolve(db),
+                }];
+                if let Some(name_span) = ty.name_span(db) {
+                    let type_name = ty.base_ty(db).pretty_print(db);
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{type_name}` is defined here"),
+                        span: name_span.resolve(db),
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "cannot determine the address space of a contract field".to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "the `EffectHandle` implementation's `const SPACE: AddressSpace` must resolve to a concrete address space; it cannot be left inferred (`_`) or depend on an unresolved generic parameter".to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
             Self::ConstHoleInValuePosition { span, ty } => {
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,

@@ -190,6 +190,23 @@ pub enum TyLowerDiag<'db> {
         span: DynLazySpan<'db>,
         ty: TyId<'db>,
     },
+
+    /// A contract field carries an unresolved const hole (`_`) whose type is not
+    /// a storage-slot index (e.g. a defaulted `const SP: AddressSpace = _`).
+    /// Contract layout only assigns slots to slot-index const holes; any other
+    /// unresolved const would be numbered as a bogus slot.
+    ContractFieldNonSlotConstHole {
+        span: DynLazySpan<'db>,
+        ty: TyId<'db>,
+    },
+
+    /// A contract field is a selected `EffectHandle` whose `const SPACE` did not
+    /// resolve to a concrete `AddressSpace`, so the field's storage space is
+    /// unknown (a silent fallback would mis-place the field).
+    ContractFieldHandleSpaceUnresolved {
+        span: DynLazySpan<'db>,
+        ty: TyId<'db>,
+    },
 }
 
 impl TyLowerDiag<'_> {
@@ -234,6 +251,8 @@ impl TyLowerDiag<'_> {
             Self::NonTrailingDefaultGenericParam(_) => 21,
             Self::GenericDefaultForwardRef { .. } => 22,
             Self::StaticSlotSpaceUnresolved { .. } => 39,
+            Self::ContractFieldNonSlotConstHole { .. } => 40,
+            Self::ContractFieldHandleSpaceUnresolved { .. } => 41,
         }
     }
 }
