@@ -2462,7 +2462,7 @@ impl<const SP: AddressSpace, const SLOT: u256> StaticSlot for ParamSlot<SP, SLOT
 }
 
 contract C {
-    lock: ParamSlot<AddressSpace::TransientStorage, _>,
+    lock: ParamSlot<AddressSpace::TransientStorage>,
 }
 "#,
     );
@@ -2665,4 +2665,30 @@ contract C {
         field.handle_space_unresolved,
         "an EffectHandle with an inferred SPACE must be flagged"
     );
+}
+
+/// An explicit `_` const argument (here `String<_>`, whose `usize` length is a
+/// byte capacity, not a storage slot) must be rejected: layout holes may only
+/// come from a `= _` parameter default, not an explicit use-site argument.
+#[test]
+fn contract_field_explicit_const_hole_is_flagged() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_explicit_const_hole_is_flagged.fe"),
+        "contract C { value: String<_> }",
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let contract = find_contract(&db, top_mod, "C");
+    let field = contract
+        .field_layout(&db)
+        .get(&IdentId::new(&db, "value".to_string()))
+        .cloned()
+        .expect("missing `value` field");
+    assert!(
+        field.explicit_const_hole,
+        "an explicit `_` argument must be flagged"
+    );
+    assert!(!field.non_slot_const_hole);
+    // The explicit hole is not numbered as a slot (only the inline string word).
+    assert_eq!(field.slot_count, 1);
 }

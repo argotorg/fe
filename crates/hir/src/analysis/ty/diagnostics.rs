@@ -207,6 +207,14 @@ pub enum TyLowerDiag<'db> {
         span: DynLazySpan<'db>,
         ty: TyId<'db>,
     },
+
+    /// A contract field uses an explicit `_` const argument (e.g. `String<_>`).
+    /// Storage-slot layout holes must be declared by the type author via a `= _`
+    /// parameter default, not requested with an explicit `_` at the use site.
+    ContractFieldExplicitConstHole {
+        span: DynLazySpan<'db>,
+        ty: TyId<'db>,
+    },
 }
 
 impl TyLowerDiag<'_> {
@@ -253,6 +261,7 @@ impl TyLowerDiag<'_> {
             Self::StaticSlotSpaceUnresolved { .. } => 39,
             Self::ContractFieldNonSlotConstHole { .. } => 40,
             Self::ContractFieldHandleSpaceUnresolved { .. } => 41,
+            Self::ContractFieldExplicitConstHole { .. } => 42,
         }
     }
 }

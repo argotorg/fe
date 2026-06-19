@@ -1634,9 +1634,13 @@ pub struct ContractFieldLayoutInfo<'db> {
     /// be resolved to a concrete address space. The layout is unsound and the
     /// field is reported as an error by `FieldView::ty_diags`.
     pub static_slot_space_unresolved: bool,
+    /// True when this field carries an explicit `_` const argument (e.g.
+    /// `String<_>`); a layout hole must come from a `= _` parameter default. The
+    /// field is reported as an error.
+    pub explicit_const_hole: bool,
     /// True when this field has an unresolved const hole (`_`) that is not a
     /// storage-slot index (e.g. a defaulted `const SP: AddressSpace = _`). The
-    /// hole was numbered as a bogus slot; the field is reported as an error.
+    /// hole is left unnumbered; the field is reported as an error.
     pub non_slot_const_hole: bool,
     /// True when this field is a selected `EffectHandle` whose `SPACE` did not
     /// resolve to a concrete address space; the field is reported as an error.
@@ -2006,6 +2010,10 @@ struct ContractFieldLayoutPlan<'db> {
     /// be laid out soundly (a silent fallback to the field's own counter risks
     /// a cross-space slot collision), so it is rejected with a diagnostic.
     static_slot_space_unresolved: bool,
+    /// True when the field carries an explicit `_` const argument (e.g.
+    /// `String<_>`). A layout hole must come from a `= _` parameter default, not
+    /// an explicit argument; the field is rejected.
+    explicit_const_hole: bool,
     /// True when the field carries an unresolved const hole (`_`) whose type is
     /// not a storage-slot index (e.g. a defaulted `const SP: AddressSpace = _`).
     /// Such a hole is not a slot and must not be numbered; the field is rejected.
@@ -2212,16 +2220,27 @@ impl<'db> ContractFieldEffectHandleCx<'db> {
 
         let mut space_overrides = Vec::new();
         let mut overridden = FxHashSet::default();
-        let mut non_slot_holes = FxHashSet::default();
+        let mut rejected_holes = FxHashSet::default();
         let mut static_slot_space_unresolved = false;
+        let mut explicit_const_hole = false;
+        let mut non_slot_const_hole = false;
         for &placeholder in &materialization_placeholders {
-            // A contract-field hole is a storage slot only if its const type is
-            // the slot index type (`u256`). A hole of any other type (e.g.
-            // `AddressSpace`, or a non-`u256` integer) is an under-specified
-            // const, not a slot: drop it from the slot lists so it is neither
-            // counted nor numbered, and flag the field for rejection.
+            // A storage-slot layout hole must be declared by the type author via
+            // a `= _` parameter default. An explicit `_` argument (e.g.
+            // `String<_>`) is not a way to request a slot: reject it.
+            if placeholder_is_explicit_hole(db, placeholder) {
+                explicit_const_hole = true;
+                rejected_holes.insert(placeholder);
+                continue;
+            }
+            // A defaulted hole is a storage slot only if its const type is a slot
+            // index (`u256`/`usize`). A hole of any other type (e.g.
+            // `AddressSpace`, or a narrower integer) is an under-specified const,
+            // not a slot. Rejected holes are dropped from the slot lists so they
+            // are neither counted nor numbered, and the field is flagged.
             if !placeholder_is_slot_hole(db, placeholder) {
-                non_slot_holes.insert(placeholder);
+                non_slot_const_hole = true;
+                rejected_holes.insert(placeholder);
                 continue;
             }
             match self.placeholder_space_resolution(db, placeholder) {
@@ -2238,13 +2257,12 @@ impl<'db> ContractFieldEffectHandleCx<'db> {
                 StaticSlotSpace::Unresolvable => static_slot_space_unresolved = true,
             }
         }
-        let non_slot_const_hole = !non_slot_holes.is_empty();
-        if !overridden.is_empty() || non_slot_const_hole {
+        if !overridden.is_empty() || !rejected_holes.is_empty() {
             slot_placeholders.retain(|placeholder| {
-                !overridden.contains(placeholder) && !non_slot_holes.contains(placeholder)
+                !overridden.contains(placeholder) && !rejected_holes.contains(placeholder)
             });
             materialization_placeholders.retain(|placeholder| {
-                !overridden.contains(placeholder) && !non_slot_holes.contains(placeholder)
+                !overridden.contains(placeholder) && !rejected_holes.contains(placeholder)
             });
         }
 
@@ -2258,6 +2276,7 @@ impl<'db> ContractFieldEffectHandleCx<'db> {
             materialization_placeholders,
             space_overrides,
             static_slot_space_unresolved,
+            explicit_const_hole,
             non_slot_const_hole,
             handle_space_unresolved,
         }
@@ -2282,6 +2301,19 @@ fn placeholder_is_slot_hole<'db>(db: &'db dyn HirAnalysisDb, placeholder: TyId<'
     matches!(
         layout_hole_fallback_ty(db, hole_ty).data(db),
         TyData::TyBase(TyBase::Prim(PrimTy::U256 | PrimTy::Usize))
+    )
+}
+
+/// Whether a contract-field layout placeholder came from an explicit `_`
+/// argument (e.g. `String<_>`) rather than a `= _` parameter default. A storage
+/// slot must be declared by the type author via a parameter default; an explicit
+/// `_` is not a valid way to request one.
+fn placeholder_is_explicit_hole<'db>(db: &'db dyn HirAnalysisDb, placeholder: TyId<'db>) -> bool {
+    use crate::analysis::ty::const_ty::StructuralHoleOrigin;
+    use crate::analysis::ty::layout_holes::structural_hole_origin;
+    matches!(
+        structural_hole_origin(db, placeholder),
+        Some(StructuralHoleOrigin::ExplicitWildcard { .. })
     )
 }
 
@@ -2471,11 +2503,13 @@ impl<'db> Contract<'db> {
                 materialize_contract_layout_holes(db, plan.target_ty, &slot_assignments);
             let slot_basis_ty =
                 materialize_contract_layout_holes(db, plan.slot_basis_ty, &slot_assignments);
-            // A field with a non-slot const hole is rejected by `ty_diags`; its
-            // hole is intentionally left unnumbered (not materialized as a bogus
-            // slot), so it legitimately remains here.
+            // A field with a rejected const hole (explicit `_`, or a non-slot
+            // type) is reported by `ty_diags`; its hole is intentionally left
+            // unnumbered (not materialized as a bogus slot), so it legitimately
+            // remains here.
             debug_assert!(
-                plan.non_slot_const_hole
+                plan.explicit_const_hole
+                    || plan.non_slot_const_hole
                     || (!ty_contains_const_hole(db, declared_ty)
                         && !ty_contains_const_hole(db, target_ty)
                         && !ty_contains_const_hole(db, slot_basis_ty)),
@@ -2499,6 +2533,7 @@ impl<'db> Contract<'db> {
                     slot_offset,
                     slot_count,
                     static_slot_space_unresolved: plan.static_slot_space_unresolved,
+                    explicit_const_hole: plan.explicit_const_hole,
                     non_slot_const_hole: plan.non_slot_const_hole,
                     handle_space_unresolved: plan.handle_space_unresolved,
                 },
@@ -5361,13 +5396,17 @@ impl<'db> FieldView<'db> {
 
         // Contract-field layout rejections: a field whose storage placement
         // cannot be determined is an error rather than a silent mis-assignment.
-        // At most one of these fires per field (a non-slot `AddressSpace` hole on
-        // a handle is reported as a handle-space error; on a plain field as a
-        // non-slot const error).
+        // At most one fires per field.
         if let FieldParent::Contract(contract) = self.parent
             && let Some(name) = self.name(db)
             && let Some(info) = contract.field_layout(db).get(&name)
         {
+            // An explicit `_` const argument (layout holes must be parameter
+            // defaults).
+            if info.explicit_const_hole {
+                out.push(TyLowerDiag::ContractFieldExplicitConstHole { span, ty }.into());
+                return out;
+            }
             // A selected `EffectHandle` whose `SPACE` did not resolve.
             if info.handle_space_unresolved {
                 out.push(TyLowerDiag::ContractFieldHandleSpaceUnresolved { span, ty }.into());
@@ -5378,7 +5417,7 @@ impl<'db> FieldView<'db> {
                 out.push(TyLowerDiag::StaticSlotSpaceUnresolved { span, ty }.into());
                 return out;
             }
-            // An unresolved const `_` that is not a storage slot.
+            // A defaulted const `_` that is not a storage slot.
             if info.non_slot_const_hole {
                 out.push(TyLowerDiag::ContractFieldNonSlotConstHole { span, ty }.into());
                 return out;

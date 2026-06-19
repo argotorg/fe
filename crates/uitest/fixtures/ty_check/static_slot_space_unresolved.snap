@@ -4,12 +4,12 @@ expression: diags
 input_file: fixtures/ty_check/static_slot_space_unresolved.fe
 ---
 error[3-0039]: cannot determine the address space of a static-slot field
-   ┌─ static_slot_space_unresolved.fe:15:11
+   ┌─ static_slot_space_unresolved.fe:17:11
    │
  8 │ struct ParamSlot<const SP: AddressSpace, const SLOT: u256 = _> {}
    │        --------- `ParamSlot` is defined here
    ·
-15 │     lock: ParamSlot<AddressSpace::TransientStorage, _>,
-   │           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this field embeds a `StaticSlot` type whose `SPACE` does not evaluate to a concrete address space
+17 │     lock: ParamSlot<AddressSpace::TransientStorage>,
+   │           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this field embeds a `StaticSlot` type whose `SPACE` does not evaluate to a concrete address space
    │
    = `StaticSlot::SPACE` must evaluate to a concrete `core::effect_ref::AddressSpace` variant; it cannot depend on an unresolved generic parameter

@@ -12,5 +12,7 @@ impl<const SP: AddressSpace, const SLOT: u256> StaticSlot for ParamSlot<SP, SLOT
 }
 
 contract C {
-    lock: ParamSlot<AddressSpace::TransientStorage, _>,
+    // `SLOT` is left to its `= _` default (a storage-slot hole); `SP` is fixed,
+    // but the impl's `SPACE = SP` cannot be resolved from the generic form.
+    lock: ParamSlot<AddressSpace::TransientStorage>,
 }

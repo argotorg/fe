@@ -1934,6 +1934,34 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 }
             }
 
+            Self::ContractFieldExplicitConstHole { span, ty } => {
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "this contract field uses an explicit inferred const (`_`)"
+                        .to_string(),
+                    span: span.resolve(db),
+                }];
+                if let Some(name_span) = ty.name_span(db) {
+                    let type_name = ty.base_ty(db).pretty_print(db);
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{type_name}` is defined here"),
+                        span: name_span.resolve(db),
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "explicit `_` const argument is not allowed in a contract field"
+                        .to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "a storage-slot layout hole must come from the type's `= _` parameter default; provide an explicit value here instead".to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
             Self::ConstHoleInValuePosition { span, ty } => {
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
