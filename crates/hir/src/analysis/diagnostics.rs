@@ -1850,6 +1850,34 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             },
 
+            Self::StaticSlotSpaceUnresolved { span, ty } => {
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message:
+                        "this field embeds a `StaticSlot` type whose `SPACE` does not evaluate to a concrete address space"
+                            .to_string(),
+                    span: span.resolve(db),
+                }];
+                if let Some(name_span) = ty.name_span(db) {
+                    let type_name = ty.base_ty(db).pretty_print(db);
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{type_name}` is defined here"),
+                        span: name_span.resolve(db),
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "cannot determine the address space of a static-slot field".to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "`StaticSlot::SPACE` must evaluate to a concrete `core::effect_ref::AddressSpace` variant; it cannot depend on an unresolved generic parameter".to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
             Self::ConstHoleInValuePosition { span, ty } => {
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,

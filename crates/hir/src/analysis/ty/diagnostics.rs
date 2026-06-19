@@ -180,6 +180,16 @@ pub enum TyLowerDiag<'db> {
         span: LazyGenericParamSpan<'db>,
         name: IdentId<'db>,
     },
+
+    /// A contract field's layout hole (`_`) instantiates the slot parameter of a
+    /// `core::effect_ref::StaticSlot` type whose `const SPACE` does not evaluate
+    /// to a concrete `AddressSpace`, so the slot cannot be assigned from a known
+    /// address-space counter (a silent fallback would risk a cross-space slot
+    /// collision).
+    StaticSlotSpaceUnresolved {
+        span: DynLazySpan<'db>,
+        ty: TyId<'db>,
+    },
 }
 
 impl TyLowerDiag<'_> {
@@ -223,6 +233,7 @@ impl TyLowerDiag<'_> {
             Self::DuplicateGenericParamName(..) => 19,
             Self::NonTrailingDefaultGenericParam(_) => 21,
             Self::GenericDefaultForwardRef { .. } => 22,
+            Self::StaticSlotSpaceUnresolved { .. } => 39,
         }
     }
 }

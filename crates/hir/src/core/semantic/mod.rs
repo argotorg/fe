@@ -1630,6 +1630,10 @@ pub struct ContractFieldLayoutInfo<'db> {
     pub slot_offset: usize,
     /// Total number of slots consumed by this field.
     pub slot_count: usize,
+    /// True when this field embeds a `StaticSlot` type whose `SPACE` could not
+    /// be resolved to a concrete address space. The layout is unsound and the
+    /// field is reported as an error by `FieldView::ty_diags`.
+    pub static_slot_space_unresolved: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
@@ -1990,6 +1994,24 @@ struct ContractFieldLayoutPlan<'db> {
     /// (`core::effect_ref::StaticSlot`); assigned from that space's contract
     /// counter instead of the field's, and excluded from the field's span.
     space_overrides: Vec<(crate::analysis::ty::ProviderAddressSpace, TyId<'db>)>,
+    /// True when a placeholder's owner implements `StaticSlot` but its `SPACE`
+    /// could not be resolved to a concrete address space. Such a field cannot
+    /// be laid out soundly (a silent fallback to the field's own counter risks
+    /// a cross-space slot collision), so it is rejected with a diagnostic.
+    static_slot_space_unresolved: bool,
+}
+
+/// Whether a layout placeholder's slot is governed by a `StaticSlot`
+/// implementation, and if so which address space it indexes.
+enum StaticSlotSpace {
+    /// The placeholder's owner does not implement `StaticSlot`; it is an
+    /// ordinary layout hole numbered from the field's own address space.
+    NotStaticSlot,
+    /// The owner implements `StaticSlot` and `SPACE` resolved to this space.
+    Resolved(crate::analysis::ty::ProviderAddressSpace),
+    /// The owner implements `StaticSlot` but `SPACE` could not be evaluated to a
+    /// concrete address space.
+    Unresolvable,
 }
 
 #[derive(Clone, Copy)]
@@ -2036,40 +2058,56 @@ impl<'db> ContractFieldEffectHandleCx<'db> {
     /// param that declared the hole belongs to an ADT implementing
     /// `core::effect_ref::StaticSlot` (e.g. `TSlot`'s slot param indexes
     /// transient storage regardless of where the `TSlot` is embedded).
-    fn placeholder_space_override(
+    ///
+    /// Distinguishes "not a `StaticSlot` hole" (an ordinary layout hole) from
+    /// "a `StaticSlot` hole whose `SPACE` is unresolvable": the latter must be
+    /// rejected rather than silently numbered from the field's own counter,
+    /// which would risk a cross-space slot collision.
+    fn placeholder_space_resolution(
         self,
         db: &'db dyn HirAnalysisDb,
         placeholder: TyId<'db>,
-    ) -> Option<crate::analysis::ty::ProviderAddressSpace> {
+    ) -> StaticSlotSpace {
         use crate::analysis::name_resolution::PathRes;
         use crate::analysis::ty::const_ty::{LayoutHoleArgSite, StructuralHoleOrigin};
         use crate::analysis::ty::layout_holes::structural_hole_origin;
 
-        let static_slot = self.static_slot?;
-        let owner_item = match structural_hole_origin(db, placeholder)? {
-            StructuralHoleOrigin::DefaultHoleParam { owner, .. } => owner.scope().item(),
-            StructuralHoleOrigin::ExplicitWildcard {
+        let Some(static_slot) = self.static_slot else {
+            return StaticSlotSpace::NotStaticSlot;
+        };
+        // Recover the ADT that declared the hole. The `StaticSlot::SPACE` of a
+        // slot type is a property of the type's impl, so it is read from the
+        // owner's generic form (uniform across explicit `_` args and defaulted
+        // holes); `SPACE` must therefore not depend on the impl's parameters.
+        let owner_item = match structural_hole_origin(db, placeholder) {
+            Some(StructuralHoleOrigin::DefaultHoleParam { owner, .. }) => owner.scope().item(),
+            Some(StructuralHoleOrigin::ExplicitWildcard {
                 site: LayoutHoleArgSite::Path(path),
                 ..
-            } => {
-                let res = crate::analysis::name_resolution::resolve_path(
+            }) => {
+                let Ok(res) = crate::analysis::name_resolution::resolve_path(
                     db,
                     path,
                     self.scope,
                     self.assumptions,
                     false,
-                )
-                .ok()?;
-                let (PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) = res else {
-                    return None;
+                ) else {
+                    return StaticSlotSpace::NotStaticSlot;
                 };
-                let adt = ty.adt_def(db)?;
+                let (PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) = res else {
+                    return StaticSlotSpace::NotStaticSlot;
+                };
+                let Some(adt) = ty.adt_def(db) else {
+                    return StaticSlotSpace::NotStaticSlot;
+                };
                 adt.adt_ref(db).as_item()
             }
-            _ => return None,
+            _ => return StaticSlotSpace::NotStaticSlot,
         };
 
-        let adt_ref = AdtRef::try_from_item(owner_item)?;
+        let Some(adt_ref) = AdtRef::try_from_item(owner_item) else {
+            return StaticSlotSpace::NotStaticSlot;
+        };
         let adt = adt_ref.as_adt(db);
         let mut self_ty = TyId::adt(db, adt);
         for &param in adt.params(db) {
@@ -2077,7 +2115,25 @@ impl<'db> ContractFieldEffectHandleCx<'db> {
         }
 
         let inst = TraitInstId::new(db, static_slot, vec![self_ty], IndexMap::new());
-        crate::analysis::ty::effect_space_from_trait_const(db, self.scope, self.assumptions, inst)
+        let solve_cx = TraitSolveCx::new(db, self.scope).with_assumptions(self.assumptions);
+        match is_goal_satisfiable(db, solve_cx, inst) {
+            // The owner does not implement `StaticSlot`: an ordinary layout hole.
+            GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => {
+                StaticSlotSpace::NotStaticSlot
+            }
+            // The owner implements `StaticSlot`, so `SPACE` must resolve.
+            GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation(_) => {
+                match crate::analysis::ty::effect_space_from_trait_const(
+                    db,
+                    self.scope,
+                    self.assumptions,
+                    inst,
+                ) {
+                    Some(space) => StaticSlotSpace::Resolved(space),
+                    None => StaticSlotSpace::Unresolvable,
+                }
+            }
+        }
     }
 
     fn layout_plan(
@@ -2117,12 +2173,20 @@ impl<'db> ContractFieldEffectHandleCx<'db> {
 
         let mut space_overrides = Vec::new();
         let mut overridden = FxHashSet::default();
+        let mut static_slot_space_unresolved = false;
         for &placeholder in &materialization_placeholders {
-            if let Some(space) = self.placeholder_space_override(db, placeholder)
-                && space != address_space
-            {
-                space_overrides.push((space, placeholder));
-                overridden.insert(placeholder);
+            match self.placeholder_space_resolution(db, placeholder) {
+                StaticSlotSpace::Resolved(space) if space != address_space => {
+                    space_overrides.push((space, placeholder));
+                    overridden.insert(placeholder);
+                }
+                // `Resolved` matching the field's own space already draws from
+                // the correct counter; non-`StaticSlot` holes are ordinary.
+                StaticSlotSpace::Resolved(_) | StaticSlotSpace::NotStaticSlot => {}
+                // Keep the hole in the field's counter so the layout stays
+                // materializable; the recorded flag makes the field a hard error
+                // so this unsound layout never reaches codegen.
+                StaticSlotSpace::Unresolvable => static_slot_space_unresolved = true,
             }
         }
         if !overridden.is_empty() {
@@ -2139,6 +2203,7 @@ impl<'db> ContractFieldEffectHandleCx<'db> {
             slot_placeholders,
             materialization_placeholders,
             space_overrides,
+            static_slot_space_unresolved,
         }
     }
 }
@@ -2352,6 +2417,7 @@ impl<'db> Contract<'db> {
                     address_space: plan.address_space,
                     slot_offset,
                     slot_count,
+                    static_slot_space_unresolved: plan.static_slot_space_unresolved,
                 },
             );
         }
@@ -5207,6 +5273,18 @@ impl<'db> FieldView<'db> {
                 }
                 .into(),
             );
+            return out;
+        }
+
+        // A contract field whose layout hole instantiates a `StaticSlot` slot
+        // param with an unresolvable `SPACE` cannot be assigned to a known
+        // address-space counter; reject it rather than risk a slot collision.
+        if let FieldParent::Contract(contract) = self.parent
+            && let Some(name) = self.name(db)
+            && let Some(info) = contract.field_layout(db).get(&name)
+            && info.static_slot_space_unresolved
+        {
+            out.push(TyLowerDiag::StaticSlotSpaceUnresolved { span, ty }.into());
             return out;
         }
 

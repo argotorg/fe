@@ -1,0 +1,16 @@
+// A `StaticSlot` whose `SPACE` depends on a generic parameter cannot have its
+// address space resolved from the impl's generic form, so a contract field
+// using it as a layout hole is rejected rather than silently numbered from the
+// field's own (possibly wrong) address-space counter — which would risk a
+// cross-space slot collision.
+use core::effect_ref::{AddressSpace, StaticSlot}
+
+struct ParamSlot<const SP: AddressSpace, const SLOT: u256 = _> {}
+
+impl<const SP: AddressSpace, const SLOT: u256> StaticSlot for ParamSlot<SP, SLOT> {
+    const SPACE: AddressSpace = SP
+}
+
+contract C {
+    lock: ParamSlot<AddressSpace::TransientStorage, _>,
+}

@@ -2435,4 +2435,53 @@ contract C {
     assert_eq!(field("m").slot_count, 1);
     assert_eq!(field("m").slot_offset, 0);
     assert_eq!(field("m2").slot_offset, 1);
+
+    // The TSlot lock's `SPACE` is a concrete constant, so it resolves cleanly
+    // (no field is left with an unresolvable static-slot space).
+    assert!(!field("m").static_slot_space_unresolved);
+    assert!(!field("m2").static_slot_space_unresolved);
+}
+
+/// A user-defined `StaticSlot` whose `SPACE` depends on a generic parameter
+/// cannot be resolved from the impl's generic form, so the slot's address
+/// space is unknown. Numbering it from the field's own counter would risk a
+/// cross-space collision (the bug `StaticSlot` routing exists to prevent), so
+/// the field is rejected with a diagnostic instead of falling through silently.
+#[test]
+fn contract_field_param_dependent_static_slot_space_is_rejected() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_param_dependent_static_slot_space_is_rejected.fe"),
+        r#"
+use core::effect_ref::{AddressSpace, StaticSlot}
+
+struct ParamSlot<const SP: AddressSpace, const SLOT: u256 = _> {}
+
+impl<const SP: AddressSpace, const SLOT: u256> StaticSlot for ParamSlot<SP, SLOT> {
+    const SPACE: AddressSpace = SP
+}
+
+contract C {
+    lock: ParamSlot<AddressSpace::TransientStorage, _>,
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+
+    // The layout flags the field: its StaticSlot `SPACE` could not be resolved.
+    // The placeholder still receives a fallback field-space slot so the layout
+    // stays materializable, but `ContractAnalysisPass` turns this flag into a
+    // hard error (covered end-to-end by the `uitest` fixture
+    // `static_slot_space_unresolved`); the test harness here does not run that
+    // pass, so we assert the detection directly.
+    let contract = find_contract(&db, top_mod, "C");
+    let field = contract
+        .field_layout(&db)
+        .get(&IdentId::new(&db, "lock".to_string()))
+        .cloned()
+        .expect("missing `lock` field");
+    assert!(
+        field.static_slot_space_unresolved,
+        "param-dependent StaticSlot SPACE should be marked unresolvable"
+    );
 }
