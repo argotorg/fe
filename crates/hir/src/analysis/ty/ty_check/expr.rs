@@ -75,6 +75,7 @@ use crate::analysis::{
     },
     place::resolve_place_field_index,
     ty::{
+        const_expr::ConstExpr,
         const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
         normalize::normalize_ty,
         ty_check::{RecordInitLowering, TyChecker, path::RecordInitChecker},
@@ -3965,11 +3966,7 @@ impl<'db> TyChecker<'db> {
                 && let (_, args) = array_ty.decompose_ty_app(self.db)
                 && let Some(len_ty) = args.get(1)
                 && let TyData::ConstTy(const_ty) = len_ty.data(self.db)
-                && !matches!(
-                    const_ty.data(self.db),
-                    ConstTyData::Evaluated(EvaluatedConstTy::LitInt(_), _)
-                        | ConstTyData::TyParam(..)
-                )
+                && !self.array_len_const_is_acceptable(*const_ty)
             {
                 requires_known_const = true;
                 self.push_diag(BodyDiag::ConstValueMustBeKnown(len_body.span().into()));
@@ -3987,6 +3984,23 @@ impl<'db> TyChecker<'db> {
         };
 
         ExprProp::new(ty, true)
+    }
+
+    /// Whether `const_ty` is acceptable as an array-repeat length: a known
+    /// literal, or a symbolic const that resolves per monomorphization — a bare
+    /// const param (`N`) or a bare trait-const projection (`T::N`). The latter
+    /// two stay symbolic during checking and become concrete once the owning
+    /// type parameters are.
+    fn array_len_const_is_acceptable(&self, const_ty: ConstTyId<'db>) -> bool {
+        match const_ty.data(self.db) {
+            ConstTyData::Evaluated(EvaluatedConstTy::LitInt(_), _) | ConstTyData::TyParam(..) => {
+                true
+            }
+            ConstTyData::Abstract(expr, _) => {
+                matches!(expr.data(self.db), ConstExpr::TraitConst(_))
+            }
+            _ => false,
+        }
     }
 
     fn check_if(

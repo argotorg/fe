@@ -16,9 +16,7 @@ use super::{
     fold::{AssocTySubst, TyFoldable},
     normalize::normalize_ty,
     trait_def::TraitInstId,
-    trait_resolution::{
-        GoalSatisfiability, TraitSolveCx, constraint::collect_constraints, is_goal_satisfiable,
-    },
+    trait_resolution::{TraitSolveCx, constraint::collect_constraints},
     ty_check::{check_anon_const_body, check_const_body},
     ty_def::{InvalidCause, TyId, TyParam, TyVar},
     ty_lower::{ConstDefaultCompletion, collect_generic_params},
@@ -2218,10 +2216,13 @@ pub(super) fn const_ty_from_trait_const<'db>(
     );
     let (body, generic_args) = if let Some(selected) = selected {
         selected
-    } else if matches!(
-        is_goal_satisfiable(db, solve_cx, inst),
-        GoalSatisfiability::Satisfied(_)
-    ) {
+    } else if crate::analysis::ty::trait_def::trait_inst_selects_concrete_impl(db, solve_cx, inst) {
+        // A concrete impl is selected but inherits the trait default for this
+        // const, so the default is its value. (When the instance is satisfied
+        // only by an assumption, e.g. `T: Trait`, no concrete impl is selected:
+        // fall through to `None` so the const stays abstract and a later
+        // overriding impl specializes correctly instead of being fixed to the
+        // default.)
         trait_
             .const_(db, name)
             .and_then(|c| c.default_body(db))
