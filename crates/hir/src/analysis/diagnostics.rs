@@ -2993,6 +2993,19 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 notes: vec![],
                 error_code,
             },
+            Self::ArrayIndexOutOfBounds { primary, index, len } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "index out of bounds".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "index `{index}` is out of bounds for array of length `{len}`"
+                    ),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
             Self::AccessedFieldNotFound {
                 primary,
                 given_ty,

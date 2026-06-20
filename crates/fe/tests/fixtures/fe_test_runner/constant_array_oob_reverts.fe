@@ -1,17 +1,20 @@
 #[test(should_revert)]
 fn test_const_oob_read_reverts() {
+    let id = 10
     let arr: [u256; 2] = [10, 20]
-    let val = arr[2]
+    let val = arr[id]
 }
 
 #[test(should_revert)]
 fn test_const_oob_write_reverts() {
+    let id = 10
     let mut arr: [u256; 2] = [10, 20]
-    arr[2] = 99
+    arr[id] = 99
 }
 
 #[test(should_revert)]
 fn test_const_oob_dead_read_reverts() {
+    let id = 10
     let arr: [u256; 2] = [10, 20]
-    let _val = arr[2]
+    let _val = arr[id]
 }
