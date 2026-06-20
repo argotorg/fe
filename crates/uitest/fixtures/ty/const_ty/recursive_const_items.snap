@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/const_ty/recursive_const_items.fe
+---
+error[3-0037]: recursive constant definition
+  ┌─ recursive_const_items.fe:1:23
+  │
+1 │ const SELF_REF: u32 = SELF_REF
+  │                       ^^^^^^^^ this constant requires its own value
+
+error[3-0037]: recursive constant definition
+  ┌─ recursive_const_items.fe:3:19
+  │
+3 │ const PING: u32 = PONG
+  │                   ^^^^ this constant requires its own value
+
+error[3-0037]: recursive constant definition
+  ┌─ recursive_const_items.fe:4:19
+  │
+4 │ const PONG: u32 = PING
+  │                   ^^^^ this constant requires its own value

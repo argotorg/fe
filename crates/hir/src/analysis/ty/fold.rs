@@ -470,6 +470,42 @@ impl<'db> TyFoldable<'db> for ResolvedEffectArg<'db> {
     }
 }
 
+/// Returns true if `needle` occurs anywhere within `haystack`.
+fn ty_contains<'db>(db: &'db dyn HirAnalysisDb, haystack: TyId<'db>, needle: TyId<'db>) -> bool {
+    use super::visitor::{TyVisitor, walk_ty};
+
+    struct ContainsVisitor<'db> {
+        db: &'db dyn HirAnalysisDb,
+        needle: TyId<'db>,
+        found: bool,
+    }
+
+    impl<'db> TyVisitor<'db> for ContainsVisitor<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_ty(&mut self, ty: TyId<'db>) {
+            if self.found {
+                return;
+            }
+            if ty == self.needle {
+                self.found = true;
+                return;
+            }
+            walk_ty(self, ty);
+        }
+    }
+
+    let mut visitor = ContainsVisitor {
+        db,
+        needle,
+        found: false,
+    };
+    haystack.visit_with(&mut visitor);
+    visitor.found
+}
+
 /// A type folder that substitutes associated types based on a trait instance's bindings
 pub struct AssocTySubst<'db> {
     trait_inst: TraitInstId<'db>,
@@ -498,6 +534,14 @@ impl<'db> TyFolder<'db> for AssocTySubst<'db> {
                         // Avoid infinite recursion when the instance `Self` is the same param.
                         if self_ty == ty {
                             return ty;
+                        }
+                        // Occurs check: when the replacement itself contains this `Self`
+                        // param (e.g. the instance's self type is a projection rooted at
+                        // `Self`, as in a `Self::Item: Trait` assumption), re-folding it
+                        // would substitute forever. The replacement is already expressed
+                        // in the outer context, so return it as-is.
+                        if ty_contains(db, self_ty, ty) {
+                            return self_ty;
                         }
                         return self_ty.fold_with(db, self);
                     }

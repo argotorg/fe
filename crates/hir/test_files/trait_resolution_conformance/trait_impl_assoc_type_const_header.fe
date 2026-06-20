@@ -1,0 +1,19 @@
+struct Slot<const N: u32> {}
+
+trait AssocConstHeader {
+    const N: u32
+    type Out
+}
+
+struct AssocConstHeaderStruct {}
+
+impl AssocConstHeader for AssocConstHeaderStruct {
+    const N: u32 = 3
+    type Out = Slot<{ Self::N }>
+}
+
+fn needs_assoc_const_header<T: AssocConstHeader<Out = Slot<{ 3 }>>>(_ value: T) {}
+
+fn use_assoc_const_header(value: AssocConstHeaderStruct) {
+    needs_assoc_const_header(value)
+}

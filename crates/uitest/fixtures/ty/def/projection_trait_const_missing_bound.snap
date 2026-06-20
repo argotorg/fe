@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/projection_trait_const_missing_bound.fe
+---
+error[6-0003]: trait bound is not satisfied
+  ┌─ projection_trait_const_missing_bound.fe:8:11
+  │
+8 │     item: Slot<{ <T as HasN>::N }>,
+  │           ^^^^^^^^^^^^^^^^^^^^^^^^ `T` doesn't implement `HasN`

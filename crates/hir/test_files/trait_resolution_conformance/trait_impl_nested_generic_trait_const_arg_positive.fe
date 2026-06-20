@@ -1,0 +1,11 @@
+trait HasN {
+    const N: u32
+}
+
+struct Slot<const N: u32> {}
+
+trait Foo<T> {}
+
+struct S<T> {}
+
+impl<T: HasN> Foo<Slot<{ <T as HasN>::N }>> for S<T> {}

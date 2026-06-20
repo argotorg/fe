@@ -1,0 +1,27 @@
+// Defaults with param-typed declarations are retyped per instantiation, so
+// rigid-param mismatches are not errors here — but instantiation-independent
+// errors in the body must still surface.
+trait BadCall<T> {
+    const C: T = missing()
+}
+
+trait ShapeOk<T> {
+    const C: T = 1
+}
+
+trait SelfTyped {
+    const C: Self::Item = 1
+    type Item
+}
+
+struct S {}
+
+impl ShapeOk<u8> for S {}
+impl SelfTyped for S {
+    type Item = u32
+}
+
+fn use_them() -> u8 {
+    let a: u8 = <S as ShapeOk<u8>>::C
+    a
+}

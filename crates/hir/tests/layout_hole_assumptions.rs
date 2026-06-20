@@ -1,7 +1,6 @@
 use camino::Utf8PathBuf;
 use fe_hir::analysis::ty::{
-    const_ty::ConstTyData,
-    corelib::resolve_lib_type_path,
+    const_ty::{ConstTyData, EvaluatedConstTy},
     ty_check::{check_contract_recv_arm_body, check_func_body},
     ty_contains_const_hole,
     ty_def::{TyData, strip_derived_adt_layout_args},
@@ -11,6 +10,25 @@ use fe_hir::hir_def::{
     TopLevelMod,
 };
 use fe_hir::test_db::HirAnalysisTestDb;
+
+fn const_lit_usize<'db>(
+    db: &'db HirAnalysisTestDb,
+    ty: fe_hir::analysis::ty::ty_def::TyId<'db>,
+) -> usize {
+    let TyData::ConstTy(const_ty) = ty.data(db) else {
+        panic!("expected const type, got {ty:?}");
+    };
+    let ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int), _) = const_ty.data(db) else {
+        panic!(
+            "expected evaluated integer const type, got {:?}",
+            const_ty.data(db)
+        );
+    };
+    int.data(db)
+        .to_string()
+        .parse()
+        .expect("integer const should fit in usize")
+}
 
 fn find_func<'db>(db: &'db HirAnalysisTestDb, top_mod: TopLevelMod<'db>, name: &str) -> Func<'db> {
     top_mod
@@ -217,8 +235,8 @@ pub contract C {
         "{}",
         fe_hir::analysis::diagnostics::format_diags(&db, diags.iter())
     );
-    assert_eq!(field_ty, "Mutex<StorageMap<Address, u256, 0>, 1>");
-    assert_eq!(receiver_ty, "Mutex<StorageMap<Address, u256, 0>, 1>");
+    assert_eq!(field_ty, "Mutex<StorageMap<Address, u256, 0>, 0>");
+    assert_eq!(receiver_ty, "Mutex<StorageMap<Address, u256, 0>, 0>");
     assert_eq!(try_lock_ty, "Option<mut StorageMap<Address, u256, 0>>");
     assert_eq!(balances_ty, "mut StorageMap<Address, u256, 0>");
 }
@@ -315,7 +333,7 @@ pub contract C {
         .expect("missing `wrapped` field info");
     assert_eq!(
         field_info.target_ty.pretty_print(&db).to_string(),
-        "Wrapper<Mutex<StorageMap<Address, u256, 0>, 1>>"
+        "Wrapper<Mutex<StorageMap<Address, u256, 0>, 0>>"
     );
     assert_eq!(
         strip_derived_adt_layout_args(&db, field_layout.target_ty),
@@ -342,7 +360,7 @@ pub contract C {
             .expr_ty(&db, receiver_expr)
             .pretty_print(&db)
             .to_string(),
-        "Mutex<StorageMap<Address, u256, 0>, 1>"
+        "Mutex<StorageMap<Address, u256, 0>, 0>"
     );
     assert_eq!(
         typed_body
@@ -1564,11 +1582,11 @@ contract C {
         .get(&field_name)
         .cloned()
         .expect("missing `value` field info");
-    let storage = resolve_lib_type_path(&db, contract.scope(), "core::effect_ref::Storage")
-        .expect("missing storage address space");
-
     assert!(field_layout.is_provider);
-    assert_eq!(field_layout.address_space, storage);
+    assert_eq!(
+        field_layout.address_space,
+        fe_hir::analysis::ty::ProviderAddressSpace::Storage
+    );
     assert_eq!(
         strip_derived_adt_layout_args(&db, field_layout.declared_ty),
         field_info.declared_ty
@@ -1626,11 +1644,6 @@ contract C {
         .expect("missing `C` contract");
 
     let layout = contract.field_layout(&db);
-    let storage = resolve_lib_type_path(&db, contract.scope(), "core::effect_ref::Storage")
-        .expect("missing storage address space");
-    let memory = resolve_lib_type_path(&db, contract.scope(), "core::effect_ref::Memory")
-        .expect("missing memory address space");
-
     let storage0 = layout
         .get(&IdentId::new(&db, "storage0".to_string()))
         .expect("missing `storage0` field");
@@ -1641,9 +1654,10 @@ contract C {
         .get(&IdentId::new(&db, "storage1".to_string()))
         .expect("missing `storage1` field");
 
-    assert_eq!(storage0.address_space, storage);
-    assert_eq!(memory0.address_space, memory);
-    assert_eq!(storage1.address_space, storage);
+    use fe_hir::analysis::ty::ProviderAddressSpace;
+    assert_eq!(storage0.address_space, ProviderAddressSpace::Storage);
+    assert_eq!(memory0.address_space, ProviderAddressSpace::Memory);
+    assert_eq!(storage1.address_space, ProviderAddressSpace::Storage);
     assert_eq!(storage0.slot_offset, 0);
     assert_eq!(memory0.slot_offset, 0);
     assert_eq!(storage1.slot_offset, 1);
@@ -1713,6 +1727,174 @@ contract C {
     );
 }
 
+/// Sibling occurrences of the same hole-bearing type share content-interned
+/// HIR ids; their holes must still be distinct or storage slots alias.
+#[test]
+fn contract_field_sibling_identical_hole_types_get_distinct_slots() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_sibling_identical_hole_types_get_distinct_slots.fe"),
+        r#"
+use core::effect_ref::StorPtr
+
+struct Slot<T, const ROOT: u256 = _> {}
+
+struct Pair {
+    left: Slot<u256>,
+    right: Slot<u256>,
+}
+
+contract C {
+    pair: StorPtr<Pair>
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let contract = find_contract(&db, top_mod, "C");
+    let layout = contract.field_layout(&db);
+    let pair = layout
+        .get(&IdentId::new(&db, "pair".to_string()))
+        .expect("missing `pair` field");
+
+    let fields = pair.target_ty.field_types(&db);
+    assert_eq!(fields.len(), 2);
+    let left_root = fields[0]
+        .generic_args(&db)
+        .get(1)
+        .copied()
+        .expect("missing left root const arg");
+    let right_root = fields[1]
+        .generic_args(&db)
+        .get(1)
+        .copied()
+        .expect("missing right root const arg");
+
+    assert_eq!(const_lit_usize(&db, left_root), 0);
+    assert_eq!(const_lit_usize(&db, right_root), 1);
+    assert_eq!(pair.slot_count, 2);
+}
+
+/// Repeated uses of one alias expand the same template; the template's holes
+/// must split per use site.
+#[test]
+fn contract_field_repeated_alias_occurrences_get_distinct_slots() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_repeated_alias_occurrences_get_distinct_slots.fe"),
+        r#"
+use core::effect_ref::StorPtr
+
+struct Slot<T, const ROOT: u256 = _> {}
+
+type M = Slot<u256>
+
+struct Pair {
+    left: M,
+    right: M,
+}
+
+contract C {
+    pair: StorPtr<Pair>
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let contract = find_contract(&db, top_mod, "C");
+    let layout = contract.field_layout(&db);
+    let pair = layout
+        .get(&IdentId::new(&db, "pair".to_string()))
+        .expect("missing `pair` field");
+
+    let fields = pair.target_ty.field_types(&db);
+    assert_eq!(fields.len(), 2);
+    let left_root = fields[0]
+        .generic_args(&db)
+        .get(1)
+        .copied()
+        .expect("missing left root const arg");
+    let right_root = fields[1]
+        .generic_args(&db)
+        .get(1)
+        .copied()
+        .expect("missing right root const arg");
+
+    assert_ne!(
+        left_root, right_root,
+        "alias-expanded holes silently merged"
+    );
+    assert_eq!(const_lit_usize(&db, left_root), 0);
+    assert_eq!(const_lit_usize(&db, right_root), 1);
+    assert_eq!(pair.slot_count, 2);
+}
+
+#[test]
+fn contract_field_layout_offsets_nested_holes_after_preceding_aggregate_fields() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from(
+            "contract_field_layout_offsets_nested_holes_after_preceding_aggregate_fields.fe",
+        ),
+        r#"
+use core::effect_ref::StorPtr
+
+struct Slot<const ROOT: u256 = _> {}
+
+struct TokenStore {
+    total_supply: u256,
+    balances: Slot,
+    allowances: Slot,
+}
+
+contract C {
+    store: StorPtr<TokenStore>
+    mut after: u256
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let contract = find_contract(&db, top_mod, "C");
+    let layout = contract.field_layout(&db);
+    let store = layout
+        .get(&IdentId::new(&db, "store".to_string()))
+        .expect("missing `store` field");
+    let after = layout
+        .get(&IdentId::new(&db, "after".to_string()))
+        .expect("missing `after` field");
+
+    let store_fields = store.target_ty.field_types(&db);
+    assert_eq!(store_fields.len(), 3);
+    let balances_root = store_fields[1]
+        .generic_args(&db)
+        .first()
+        .copied()
+        .expect("missing balances root const arg");
+    let allowances_root = store_fields[2]
+        .generic_args(&db)
+        .first()
+        .copied()
+        .expect("missing allowances root const arg");
+
+    // The holes must be offset past `total_supply`, which occupies the
+    // aggregate's first slot; assigning them the aggregate base would alias
+    // earlier storage.
+    assert_eq!(const_lit_usize(&db, balances_root), 1);
+    assert_eq!(const_lit_usize(&db, allowances_root), 2);
+    assert_eq!(store.slot_offset, 0);
+    assert_eq!(store.slot_count, 3);
+    assert_eq!(after.slot_offset, 3);
+    assert!(
+        !ty_contains_const_hole(&db, store.target_ty),
+        "unelaborated const hole remained in nested aggregate layout type: {:?}",
+        store.target_ty
+    );
+}
+
 #[test]
 fn contract_field_layout_counts_target_only_holes() {
     let mut db = HirAnalysisTestDb::default();
@@ -1729,7 +1911,8 @@ struct Ptr<T> {
 
 impl<T> EffectHandle for Ptr<T> {
     type Target = Payload<T>
-    type AddressSpace = core::effect_ref::Storage
+
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Storage
 
     fn from_raw(_ raw: u256) -> Self {
         Self { raw }
@@ -1798,7 +1981,8 @@ struct Wrapper<const LEFT: u256 = _, const RIGHT: u256 = _> {
 
 impl<const LEFT: u256, const RIGHT: u256> EffectHandle for Wrapper<LEFT, RIGHT> {
     type Target = Pair<RIGHT, LEFT>
-    type AddressSpace = core::effect_ref::Storage
+
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Storage
 
     fn from_raw(_ raw: u256) -> Self {
         Self { raw }
@@ -1878,7 +2062,8 @@ struct Wrapper<const ROOT: u256 = _> {
 
 impl<const ROOT: u256> EffectHandle for Wrapper<ROOT> {
     type Target = u256
-    type AddressSpace = core::effect_ref::Storage
+
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Storage
 
     fn from_raw(_ raw: u256) -> Self {
         Self { raw }
@@ -1929,4 +2114,581 @@ contract C {
         "unelaborated const hole remained in wrapper-only layout type: {:?}",
         first.declared_ty
     );
+}
+
+/// One placeholder shared by multiple enum variants must get a slot past
+/// every variant's inline payload: variant payloads overlay, so a hole root
+/// assigned at one variant's structural position can alias another variant's
+/// inline data (here `B`'s `u256`), and the following field starts too early.
+#[test]
+fn contract_field_enum_variant_overlay_hole_past_inline_payload() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_enum_variant_overlay_hole_past_inline_payload.fe"),
+        r#"
+use core::effect_ref::StorPtr
+
+struct Slot<T, const ROOT: u256 = _> {}
+
+enum E<T> {
+    A(T),
+    B(u256, T),
+}
+
+contract C {
+    e: StorPtr<E<Slot<u256>>>,
+    after: StorPtr<u256>,
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let contract = find_contract(&db, top_mod, "C");
+    let layout = contract.field_layout(&db);
+    let e = layout
+        .get(&IdentId::new(&db, "e".to_string()))
+        .expect("missing `e` field");
+    let after = layout
+        .get(&IdentId::new(&db, "after".to_string()))
+        .expect("missing `after` field");
+
+    let root = e
+        .target_ty
+        .generic_args(&db)
+        .first()
+        .and_then(|arg| arg.generic_args(&db).get(1))
+        .copied()
+        .expect("missing ROOT const arg");
+
+    // Inline span: tag (0) + widest payload (B's u256 at 1); the hole root
+    // comes after, clear of both variants' inline data.
+    assert_eq!(const_lit_usize(&db, root), 2);
+    assert_eq!(e.slot_count, 3);
+    assert_eq!(after.slot_offset, 3);
+}
+
+/// Same layout regardless of which variant mentions the placeholder first.
+#[test]
+fn contract_field_enum_variant_overlay_holes_are_order_independent() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_enum_variant_overlay_holes_are_order_independent.fe"),
+        r#"
+use core::effect_ref::StorPtr
+
+struct Slot<T, const ROOT: u256 = _> {}
+
+enum E<T> {
+    B(u256, T),
+    A(T),
+}
+
+contract C {
+    e: StorPtr<E<Slot<u256>>>,
+    after: StorPtr<u256>,
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let contract = find_contract(&db, top_mod, "C");
+    let layout = contract.field_layout(&db);
+    let e = layout
+        .get(&IdentId::new(&db, "e".to_string()))
+        .expect("missing `e` field");
+    let after = layout
+        .get(&IdentId::new(&db, "after".to_string()))
+        .expect("missing `after` field");
+
+    let root = e
+        .target_ty
+        .generic_args(&db)
+        .first()
+        .and_then(|arg| arg.generic_args(&db).get(1))
+        .copied()
+        .expect("missing ROOT const arg");
+
+    assert_eq!(const_lit_usize(&db, root), 2);
+    assert_eq!(e.slot_count, 3);
+    assert_eq!(after.slot_offset, 3);
+}
+
+/// Inline data *following* a placeholder in the same variant must not be
+/// overlapped either: the root goes past the whole inline span, not just the
+/// components preceding it (a per-variant-maximum rule would fail here).
+#[test]
+fn contract_field_enum_variant_hole_before_trailing_inline_data() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_enum_variant_hole_before_trailing_inline_data.fe"),
+        r#"
+use core::effect_ref::StorPtr
+
+struct Slot<T, const ROOT: u256 = _> {}
+
+enum E<T> {
+    A(T, u256),
+    B(u256, T),
+}
+
+contract C {
+    e: StorPtr<E<Slot<u256>>>,
+    after: StorPtr<u256>,
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let contract = find_contract(&db, top_mod, "C");
+    let layout = contract.field_layout(&db);
+    let e = layout
+        .get(&IdentId::new(&db, "e".to_string()))
+        .expect("missing `e` field");
+    let after = layout
+        .get(&IdentId::new(&db, "after".to_string()))
+        .expect("missing `after` field");
+
+    let root = e
+        .target_ty
+        .generic_args(&db)
+        .first()
+        .and_then(|arg| arg.generic_args(&db).get(1))
+        .copied()
+        .expect("missing ROOT const arg");
+
+    assert_eq!(const_lit_usize(&db, root), 2);
+    assert_eq!(e.slot_count, 3);
+    assert_eq!(after.slot_offset, 3);
+}
+
+/// `[Slot<u256>; N]`: the element type is instantiated once, so all elements
+/// share one hole and one storage root. The array's inline span is zero
+/// (holes are out-of-line) and the field reserves exactly one slot for the
+/// shared root — elements alias by construction, they are not N independent
+/// slots.
+#[test]
+fn contract_field_array_of_slot_wrappers_shares_one_root() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_array_of_slot_wrappers_shares_one_root.fe"),
+        r#"
+use core::effect_ref::StorPtr
+
+struct Slot<T, const ROOT: u256 = _> {}
+
+contract C {
+    arr: StorPtr<[Slot<u256>; 3]>,
+    after: StorPtr<u256>,
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let contract = find_contract(&db, top_mod, "C");
+    let layout = contract.field_layout(&db);
+    let arr = layout
+        .get(&IdentId::new(&db, "arr".to_string()))
+        .expect("missing `arr` field");
+    let after = layout
+        .get(&IdentId::new(&db, "after".to_string()))
+        .expect("missing `after` field");
+
+    let elem = arr
+        .target_ty
+        .generic_args(&db)
+        .first()
+        .copied()
+        .expect("missing array element type");
+    let root = elem
+        .generic_args(&db)
+        .get(1)
+        .copied()
+        .expect("missing ROOT const arg");
+
+    assert_eq!(const_lit_usize(&db, root), 0);
+    assert_eq!(arr.slot_count, 1);
+    assert_eq!(after.slot_offset, 1);
+}
+
+/// Transient-storage fields get their own slot space: roots restart at zero
+/// independently of persistent storage, and an array of transient slot
+/// wrappers shares one root exactly like its persistent counterpart.
+#[test]
+fn contract_field_transient_array_of_slot_wrappers_uses_independent_space() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_transient_array_of_slot_wrappers.fe"),
+        r#"
+use core::effect_ref::StorPtr
+use std::evm::TStorPtr
+
+struct Slot<T, const ROOT: u256 = _> {}
+
+contract C {
+    persistent: StorPtr<Slot<u256>>,
+    tarr: TStorPtr<[Slot<u256>; 3]>,
+    tafter: TStorPtr<u256>,
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let contract = find_contract(&db, top_mod, "C");
+    let layout = contract.field_layout(&db);
+    let persistent = layout
+        .get(&IdentId::new(&db, "persistent".to_string()))
+        .expect("missing `persistent` field");
+    let tarr = layout
+        .get(&IdentId::new(&db, "tarr".to_string()))
+        .expect("missing `tarr` field");
+    let tafter = layout
+        .get(&IdentId::new(&db, "tafter".to_string()))
+        .expect("missing `tafter` field");
+
+    assert_ne!(persistent.address_space, tarr.address_space);
+
+    let persistent_root = persistent
+        .target_ty
+        .generic_args(&db)
+        .get(1)
+        .copied()
+        .expect("missing persistent ROOT const arg");
+    let tarr_elem = tarr
+        .target_ty
+        .generic_args(&db)
+        .first()
+        .copied()
+        .expect("missing transient array element type");
+    let tarr_root = tarr_elem
+        .generic_args(&db)
+        .get(1)
+        .copied()
+        .expect("missing transient ROOT const arg");
+
+    // Same numeric root in disjoint address spaces: the slot counters are
+    // independent, so the transient array starts at zero even though the
+    // persistent field already occupies storage slot zero.
+    assert_eq!(const_lit_usize(&db, persistent_root), 0);
+    assert_eq!(persistent.slot_count, 1);
+    assert_eq!(const_lit_usize(&db, tarr_root), 0);
+    assert_eq!(tarr.slot_count, 1);
+    assert_eq!(tafter.slot_offset, 1);
+}
+
+/// `Mutex` carries its reentrancy lock as a zero-sized `TSlot<bool>` field:
+/// the lock slot is assigned from the contract's *transient* counter (the
+/// param's ADT implements `core::effect_ref::StaticSlot`), shared with
+/// `TStorPtr` provider fields, so lock bits can never collide with other
+/// transient state — and the mutex consumes no persistent slot for the lock.
+#[test]
+fn contract_field_mutex_lock_slots_share_transient_counter() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_mutex_lock_slots_share_transient_counter.fe"),
+        r#"
+use std::evm::Mutex
+use std::evm::effects::TStorPtr
+
+contract C {
+    t0: TStorPtr<bool>,
+    t1: TStorPtr<bool>,
+    mut m: Mutex<u256>,
+    mut m2: Mutex<u256>,
+    after: TStorPtr<bool>,
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let contract = find_contract(&db, top_mod, "C");
+    let layout = contract.field_layout(&db);
+    let field = |name: &str| {
+        layout
+            .get(&IdentId::new(&db, name.to_string()))
+            .expect("missing field")
+    };
+    let lock_slot = |name: &str| {
+        let arg = field(name)
+            .target_ty
+            .generic_args(&db)
+            .get(1)
+            .copied()
+            .expect("missing lock slot arg");
+        const_lit_usize(&db, arg)
+    };
+
+    // Transient provider fields take 0 and 1; the two lock bits continue the
+    // same counter; the next transient field lands after them.
+    assert_eq!(field("t0").slot_offset, 0);
+    assert_eq!(field("t1").slot_offset, 1);
+    assert_eq!(lock_slot("m"), 2);
+    assert_eq!(lock_slot("m2"), 3);
+    assert_eq!(field("after").slot_offset, 4);
+
+    // The lock consumes no persistent storage: one slot per mutex (the value).
+    assert_eq!(field("m").slot_count, 1);
+    assert_eq!(field("m").slot_offset, 0);
+    assert_eq!(field("m2").slot_offset, 1);
+
+    // The TSlot lock's `SPACE` is a concrete constant, so it resolves cleanly
+    // (no field is left with an unresolvable static-slot space).
+    assert!(!field("m").static_slot_space_unresolved);
+    assert!(!field("m2").static_slot_space_unresolved);
+}
+
+/// A user-defined `StaticSlot` whose `SPACE` depends on a generic parameter
+/// cannot be resolved from the impl's generic form, so the slot's address
+/// space is unknown. Numbering it from the field's own counter would risk a
+/// cross-space collision (the bug `StaticSlot` routing exists to prevent), so
+/// the field is rejected with a diagnostic instead of falling through silently.
+#[test]
+fn contract_field_param_dependent_static_slot_space_is_rejected() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_param_dependent_static_slot_space_is_rejected.fe"),
+        r#"
+use core::effect_ref::{AddressSpace, StaticSlot}
+
+struct ParamSlot<const SP: AddressSpace, const SLOT: u256 = _> {}
+
+impl<const SP: AddressSpace, const SLOT: u256> StaticSlot for ParamSlot<SP, SLOT> {
+    const SPACE: AddressSpace = SP
+}
+
+contract C {
+    lock: ParamSlot<AddressSpace::TransientStorage>,
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+
+    // The layout flags the field: its StaticSlot `SPACE` could not be resolved.
+    // The placeholder still receives a fallback field-space slot so the layout
+    // stays materializable, but `ContractAnalysisPass` turns this flag into a
+    // hard error (covered end-to-end by the `uitest` fixture
+    // `static_slot_space_unresolved`); the test harness here does not run that
+    // pass, so we assert the detection directly.
+    let contract = find_contract(&db, top_mod, "C");
+    let field = contract
+        .field_layout(&db)
+        .get(&IdentId::new(&db, "lock".to_string()))
+        .cloned()
+        .expect("missing `lock` field");
+    assert!(
+        field.static_slot_space_unresolved,
+        "param-dependent StaticSlot SPACE should be marked unresolvable"
+    );
+}
+
+/// A storage-slot (`u256`) const hole is a legitimate contract-field layout
+/// hole: it is numbered as a slot and the field is accepted. Guards the
+/// non-slot rejection below from over-rejecting real slots.
+#[test]
+fn contract_field_u256_slot_hole_is_not_rejected() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_u256_slot_hole_is_not_rejected.fe"),
+        r#"
+use core::effect_ref::StorPtr
+
+struct Slot<const ROOT: u256 = _> {}
+
+contract C {
+    value: StorPtr<Slot>,
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let contract = find_contract(&db, top_mod, "C");
+    let field = contract
+        .field_layout(&db)
+        .get(&IdentId::new(&db, "value".to_string()))
+        .cloned()
+        .expect("missing `value` field");
+    assert!(
+        !field.non_slot_const_hole,
+        "u256 slot hole must not be flagged"
+    );
+    assert!(!field.handle_space_unresolved);
+    assert_eq!(field.slot_count, 1);
+}
+
+/// A `usize` const hole is also a valid storage-slot index and must be accepted.
+#[test]
+fn contract_field_usize_slot_hole_is_not_rejected() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_usize_slot_hole_is_not_rejected.fe"),
+        r#"
+use core::effect_ref::StorPtr
+
+struct Slot<const ROOT: usize = _> {}
+
+contract C {
+    value: StorPtr<Slot>,
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let contract = find_contract(&db, top_mod, "C");
+    let field = contract
+        .field_layout(&db)
+        .get(&IdentId::new(&db, "value".to_string()))
+        .cloned()
+        .expect("missing `value` field");
+    assert!(
+        !field.non_slot_const_hole,
+        "usize slot hole must not be flagged"
+    );
+    assert_eq!(field.slot_count, 1);
+}
+
+/// A plain (non-provider) field with a defaulted non-slot const generic
+/// (`const SP: AddressSpace = _`) is flagged: the hole is not a storage slot.
+/// (`ContractAnalysisPass` turns the flag into `error[3-0040]`, covered
+/// end-to-end by the `contract_field_nonprovider_addrspace_hole` uitest.)
+#[test]
+fn contract_field_nonprovider_addrspace_hole_is_flagged() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_nonprovider_addrspace_hole_is_flagged.fe"),
+        r#"
+use core::effect_ref::AddressSpace
+
+struct Foo<const SP: AddressSpace = _> { value: u256 }
+
+contract C {
+    value: Foo,
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let contract = find_contract(&db, top_mod, "C");
+    let field = contract
+        .field_layout(&db)
+        .get(&IdentId::new(&db, "value".to_string()))
+        .cloned()
+        .expect("missing `value` field");
+    assert!(
+        field.non_slot_const_hole,
+        "an AddressSpace `_` hole is not a storage slot and must be flagged"
+    );
+    assert!(!field.is_provider);
+    // The non-slot hole is neither counted (only `value: u256` is a real slot)
+    // nor materialized as a bogus slot value: it is left unnumbered.
+    assert_eq!(field.slot_count, 1);
+    assert!(ty_contains_const_hole(&db, field.declared_ty));
+}
+
+/// A non-`u256` integer hole (`const TAG: u8 = _`) is not a storage-slot index,
+/// so it must be rejected rather than silently numbered as a slot.
+#[test]
+fn contract_field_non_u256_integer_hole_is_flagged() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_non_u256_integer_hole_is_flagged.fe"),
+        r#"
+struct Foo<const TAG: u8 = _> { value: u256 }
+
+contract C {
+    value: Foo,
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let contract = find_contract(&db, top_mod, "C");
+    let field = contract
+        .field_layout(&db)
+        .get(&IdentId::new(&db, "value".to_string()))
+        .cloned()
+        .expect("missing `value` field");
+    assert!(
+        field.non_slot_const_hole,
+        "a `u8` `_` hole is not a storage-slot index and must be flagged"
+    );
+    assert_eq!(field.slot_count, 1);
+    assert!(ty_contains_const_hole(&db, field.declared_ty));
+}
+
+/// An `EffectHandle` field whose address space is left inferred (`const SPACE =
+/// SP` with `SP` defaulted to `_`) is flagged: the field's storage space is
+/// unknown. (`ContractAnalysisPass` turns the flag into `error[3-0041]`,
+/// covered end-to-end by the `contract_field_handle_space_unresolved` uitest.)
+#[test]
+fn contract_field_handle_space_hole_is_flagged() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_handle_space_hole_is_flagged.fe"),
+        r#"
+use core::effect_ref::{AddressSpace, EffectHandle}
+
+struct Ptr<T, const SP: AddressSpace = _> { raw: u256 }
+
+impl<T, const SP: AddressSpace> EffectHandle for Ptr<T, SP> {
+    type Target = T
+
+    const SPACE: AddressSpace = SP
+
+    fn from_raw(_ raw: u256) -> Self {
+        Ptr { raw }
+    }
+
+    fn raw(self) -> u256 {
+        self.raw
+    }
+}
+
+contract C {
+    mut value: Ptr<u256>,
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let contract = find_contract(&db, top_mod, "C");
+    let field = contract
+        .field_layout(&db)
+        .get(&IdentId::new(&db, "value".to_string()))
+        .cloned()
+        .expect("missing `value` field");
+    assert!(field.is_provider, "Ptr implements EffectHandle");
+    assert!(
+        field.handle_space_unresolved,
+        "an EffectHandle with an inferred SPACE must be flagged"
+    );
+}
+
+/// An explicit `_` const argument (here `String<_>`, whose `usize` length is a
+/// byte capacity, not a storage slot) must be rejected: layout holes may only
+/// come from a `= _` parameter default, not an explicit use-site argument.
+#[test]
+fn contract_field_explicit_const_hole_is_flagged() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_explicit_const_hole_is_flagged.fe"),
+        "contract C { value: String<_> }",
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let contract = find_contract(&db, top_mod, "C");
+    let field = contract
+        .field_layout(&db)
+        .get(&IdentId::new(&db, "value".to_string()))
+        .cloned()
+        .expect("missing `value` field");
+    assert!(
+        field.explicit_const_hole,
+        "an explicit `_` argument must be flagged"
+    );
+    assert!(!field.non_slot_const_hole);
+    // The explicit hole is not numbered as a slot (only the inline string word).
+    assert_eq!(field.slot_count, 1);
 }

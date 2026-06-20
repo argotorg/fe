@@ -123,13 +123,14 @@ pub use core::effect_ref::MemPtr
 pub use core::effect_ref::StorPtr
 
 /// Calldata pointer to a value of type `T` (read-only).
-pub struct CalldataPtr<T> { pub offset: u256 }
+pub struct CalldataPtr<T> { offset: u256 }
 
 impl<T> Copy for CalldataPtr<T> {}
 
 impl<T> EffectHandle for CalldataPtr<T> {
     type Target = T
-    type AddressSpace = core::effect_ref::Calldata
+
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Calldata
 
     fn from_raw(_ raw: u256) -> Self {
         Self { offset: raw }
@@ -147,13 +148,14 @@ impl<T> EffectRef<T> for CalldataPtr<T> {}
 ///
 /// This is like `StorPtr<T>`, but reads/writes are intended to compile to
 /// EVM transient storage operations (TLOAD/TSTORE).
-pub struct TStorPtr<T> { pub slot: u256 }
+pub struct TStorPtr<T> { slot: u256 }
 
 impl<T> Copy for TStorPtr<T> {}
 
 impl<T> EffectHandle for TStorPtr<T> {
     type Target = T
-    type AddressSpace = core::effect_ref::TransientStorage
+
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::TransientStorage
 
     fn from_raw(_ raw: u256) -> Self {
         Self { slot: raw }
@@ -169,12 +171,75 @@ impl<T> EffectHandleMut for TStorPtr<T> {}
 impl<T> EffectRef<T> for TStorPtr<T> {}
 impl<T> EffectRefMut<T> for TStorPtr<T> {}
 
+impl<T> TStorPtr<T> {
+    /// Reads the pointed-at transient value.
+    pub fn read(self) -> T
+        where T: Copy
+    {
+        let mut ptr = self
+        with (ptr) {
+            core::effect_ref::read(ptr)
+        }
+    }
+
+    /// Writes the pointed-at transient value.
+    pub fn write(self, _ value: T) {
+        let mut ptr = self
+        with (ptr) {
+            core::effect_ref::write(ptr, value)
+        }
+    }
+}
+
+/// Zero-sized pointer to a statically assigned transient storage slot.
+///
+/// `SLOT` defaults to a layout hole: when a type containing a `TSlot`
+/// reaches contract storage, the layout assigns the slot from the
+/// contract's transient slot counter — shared with `TStorPtr` provider
+/// fields, so static and runtime transient slots never collide.
+struct TSlotSeal {}
+
+pub struct TSlot<T, const SLOT: u256 = _> {
+    seal: TSlotSeal,
+}
+
+impl<T, const SLOT: u256> Copy for TSlot<T, SLOT> {}
+
+impl<T, const SLOT: u256> core::effect_ref::StaticSlot for TSlot<T, SLOT> {
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::TransientStorage
+}
+
+impl<T, const SLOT: u256> TSlot<T, SLOT> {
+    pub(ingot) fn ptr_unchecked(self) -> TStorPtr<T> {
+        TStorPtr::from_raw(SLOT)
+    }
+
+    /// Runtime pointer to the assigned slot.
+    pub fn ptr(mut self) -> TStorPtr<T> {
+        self.ptr_unchecked()
+    }
+
+    /// Reads the value at the assigned slot.
+    pub fn read(self) -> T
+        where T: Copy
+    {
+        self.ptr_unchecked().read()
+    }
+
+    /// Writes the value at the assigned slot.
+    pub fn write(mut self, _ value: T) {
+        self.ptr_unchecked().write(value)
+    }
+}
+
 // -----------------------------------------------------------------------------
 // EVM effects
 // -----------------------------------------------------------------------------
 
+trait EvmCapabilitySeal {}
+
 /// EVM execution context (env access).
-pub trait Ctx {
+pub trait Ctx: EvmCapabilitySeal {
     fn address(self) -> Address
     fn caller(self) -> Address
     fn origin(self) -> Address
@@ -199,7 +264,7 @@ pub trait Ctx {
 }
 
 /// Low-level raw memory operations.
-pub trait RawMem {
+pub trait RawMem: EvmCapabilitySeal {
     fn mload(self, _: u256) -> u256
     fn mstore(mut self, addr: u256, value: u256)
     fn mstore8(mut self, addr: u256, value: u8)
@@ -209,7 +274,7 @@ pub trait RawMem {
 }
 
 /// Low-level raw storage operations.
-pub trait RawStorage {
+pub trait RawStorage: EvmCapabilitySeal {
     fn sload(self, _: u256) -> u256
     fn sstore(mut self, slot: u256, value: u256)
     fn stor_ptr<T>(self, _ slot: u256) -> StorPtr<T> {
@@ -238,7 +303,7 @@ pub trait RawOps: RawMem + RawStorage {
     fn code_region_len<F>(self, _: F) -> u256
 }
 
-pub trait Log {
+pub trait Log: EvmCapabilitySeal {
     fn log0(mut self, offset: u256, len: u256)
     fn log1(mut self, offset: u256, len: u256, topic0: u256)
     fn log2(mut self, offset: u256, len: u256, topic0: u256, topic1: u256)
@@ -280,7 +345,7 @@ pub trait Contract {
     fn init_code_len() -> u256
 }
 
-pub trait Create {
+pub trait Create: EvmCapabilitySeal {
     /// Low-level `CREATE` opcode.
     fn create_raw(mut self, value: u256, offset: u256, len: u256) -> Address {
         Address { inner: ops::create(value: value, offset: offset, len: len) }
@@ -383,7 +448,7 @@ pub fn encode_event_payload<T>(_ value: own T) -> (u256, u256)
 }
 
 /// High-level contract calls with ABI encoding/decoding.
-pub trait Call {
+pub trait Call: EvmCapabilitySeal {
     /// Low-level `CALL` opcode.
     ///
     /// Returns `true` on success and `false` on failure. Any returndata is left
@@ -458,6 +523,8 @@ struct Private {}
 
 /// Default EVM effect provider (zero-sized).
 pub struct Evm { seal: Private }
+
+impl EvmCapabilitySeal for Evm {}
 
 impl Evm {
     /// Return the current Solidity selector from raw calldata.

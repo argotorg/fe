@@ -1,0 +1,38 @@
+trait AssocSuper {
+    type Item
+}
+
+trait AssocStrong: AssocSuper {}
+
+trait Foo {}
+
+struct Box<T> {
+    item: T,
+}
+
+impl<T: AssocStrong> Foo for Box<T::Item> {}
+
+trait AssocOutput {
+    type X
+}
+
+struct Holder<T> {
+    item: T,
+}
+
+impl<T: AssocStrong> AssocOutput for Holder<T> {
+    type X = T::Item
+}
+
+trait LocalBound {}
+trait LocalFoo {}
+
+struct Token {}
+
+impl LocalBound for Token {}
+
+struct LocalCache<T: LocalBound> {
+    item: T,
+}
+
+impl LocalFoo for LocalCache<Token> {}

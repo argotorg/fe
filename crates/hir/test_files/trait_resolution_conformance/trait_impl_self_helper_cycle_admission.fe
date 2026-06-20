@@ -1,0 +1,23 @@
+trait SelfHelperCycle {}
+
+trait SelfFooCycle {
+    type X: SelfHelperCycle
+}
+
+struct SelfWrapCycle<T> {
+    item: T,
+}
+
+struct SelfCycle {}
+
+impl<T: SelfFooCycle> SelfHelperCycle for SelfWrapCycle<T> {}
+
+impl SelfFooCycle for SelfCycle {
+    type X = SelfWrapCycle<SelfCycle>
+}
+
+fn needs_self_foo_cycle<T: SelfFooCycle>(_ value: T) {}
+
+fn use_self_foo_cycle(value: SelfCycle) {
+    needs_self_foo_cycle(value)
+}

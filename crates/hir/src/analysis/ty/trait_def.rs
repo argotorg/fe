@@ -406,6 +406,30 @@ pub fn assoc_const_body_and_impl_args_for_trait_inst<'db>(
     Some((body, impl_args))
 }
 
+/// Whether `inst` is satisfied by a uniquely-selected concrete impl rather than
+/// only by an assumption (e.g. `T: Trait` inside a generic function).
+///
+/// This gates use of a trait associated const's default value: the default may
+/// stand in for the const only when a concrete impl is selected (and inherits
+/// it). For an assumption-satisfied instance the const must stay abstract, so a
+/// concrete impl that overrides it specializes correctly instead of being fixed
+/// to the default.
+pub fn trait_inst_selects_concrete_impl<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    inst: TraitInstId<'db>,
+) -> bool {
+    let assumptions = solve_cx.assumptions();
+    let norm_scope = solve_cx.normalization_scope_for_trait_inst(db, inst);
+    let inst = normalize_trait_inst_preserving_validity(db, inst, norm_scope, assumptions);
+    match solve_cx.select_impl(db, inst) {
+        Selection::Unique(implementor) => {
+            !matches!(implementor.origin(db), ImplementorOrigin::Assumption)
+        }
+        Selection::Ambiguous(_) | Selection::NotFound => false,
+    }
+}
+
 /// Represents the trait environment of an ingot, which maintain all trait
 /// implementors which can be used in the ingot.
 #[derive(Debug, PartialEq, Eq, Clone, Update)]

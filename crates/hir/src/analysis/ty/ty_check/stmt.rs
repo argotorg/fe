@@ -10,6 +10,7 @@ use crate::analysis::ty::{
     diagnostics::BodyDiag,
     fold::{TyFoldable, TyFolder},
     trait_def::{TraitInstId, impls_for_ty},
+    trait_resolution::TraitSolveCx,
     ty_def::{InvalidCause, TyId},
     visitor::TyVisitable,
 };
@@ -90,7 +91,7 @@ impl<'db> TyChecker<'db> {
 
         let span = stmt.span(self.env.body()).into_let_stmt();
 
-        let ascription = ascription.map(|ty| self.lower_ty(ty, span.ty(), true));
+        let ascription = ascription.map(|ty| self.lower_ty(ty, span.clone().ty(), true));
 
         if let Some(expr) = expr {
             let prop = if let Some(ascription) = ascription {
@@ -117,6 +118,14 @@ impl<'db> TyChecker<'db> {
             }
         } else {
             let ascription = ascription.unwrap_or_else(|| self.fresh_ty());
+            if let Some(diag) = ascription.emit_wf_diag(
+                self.db,
+                TraitSolveCx::new(self.db, self.env.scope()),
+                self.env.assumptions(),
+                span.ty().into(),
+            ) {
+                self.push_diag(diag);
+            }
             self.check_pat(*pat, ascription);
         }
         self.check_mutable_pattern_bindings(*pat);

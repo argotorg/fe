@@ -1,6 +1,7 @@
 use core::keccak
 use core::option::Option
 
+use super::effects::RawStorage
 use super::ops::{sload, sstore}
 
 const U256_MASK: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
@@ -38,10 +39,16 @@ const U256_MASK: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffff
 ///
 /// // With an explicit namespaced salt:
 /// const ORDERS_NS: u256 = keccak("myapp.storage.order_status")
-/// let order_status: StoragePackedArray<8, ORDERS_NS> = StoragePackedArray::new()
-/// order_status.set(42, 1)
+/// fn write_order_status() uses (storage: mut RawStorage) {
+///     let mut order_status: StoragePackedArray<8, ORDERS_NS> = StoragePackedArray::new()
+///     order_status.set(42, 1)
+/// }
 /// ```
-pub struct StoragePackedArray<const BITS: u256, const SALT: u256 = _> {}
+struct StoragePackedArraySeal {}
+
+pub struct StoragePackedArray<const BITS: u256, const SALT: u256 = _> {
+    seal: StoragePackedArraySeal,
+}
 
 /// Marker trait for `BITS` values that produce a well-formed packed layout
 /// — power of two ≤ 128, so 256 divides evenly into `256 / BITS` lanes.
@@ -70,8 +77,14 @@ impl<const BITS: u256, const SALT: u256> Copy for StoragePackedArray<BITS, SALT>
 impl<const BITS: u256, const SALT: u256> StoragePackedArray<BITS, SALT>
     where PackedBits<BITS>: ValidPackedBits
 {
-    pub fn new() -> Self {
-        Self {}
+    pub(ingot) fn new_unchecked() -> Self {
+        Self { seal: StoragePackedArraySeal {} }
+    }
+
+    pub fn new() -> Self
+    uses (storage: mut RawStorage)
+    {
+        Self::new_unchecked()
     }
 
     /// Read the lane at index `i`. Returns the lane value zero-extended to `u256`.
@@ -89,7 +102,7 @@ impl<const BITS: u256, const SALT: u256> StoragePackedArray<BITS, SALT>
     /// `value` are silently dropped.
     #[arithmetic(unchecked)]
     #[inline(always)]
-    pub fn set(self, i: u256, value: u256) {
+    pub fn set(mut self, i: u256, value: u256) {
         let lanes_per_slot: u256 = 256 / BITS
         let lane_mask: u256 = (1 << BITS) - 1
         let slot: u256 = keccak(SALT) + (i / lanes_per_slot)

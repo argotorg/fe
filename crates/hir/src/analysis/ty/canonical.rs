@@ -91,19 +91,24 @@ where
         // Make the substitution so that it maps back from probed type variable to
         // canonical type variables.
         // `Probed type variable -> Canonical type variable`.
-        let canonical_vars = collect_variables(db, &self.value)
-            .into_iter()
-            .filter_map(|var| {
-                let ty = TyId::ty_var(db, var.sort, var.kind, var.key);
-                let probed = ty.fold_with(db, table);
-                if probed.is_ty_var(db) {
-                    Some((probed, ty))
-                } else {
-                    None
-                }
-            });
+        let query_vars = collect_variables(db, &self.value);
+        // Fresh canonical vars for solution-only variables must be numbered
+        // past every query var: keying them from the count of *unsolved*
+        // query vars would collide with (and be conflated into) a live query
+        // var whenever another query var was solved during probing.
+        let next_key = query_vars.len() as u32;
+        let canonical_vars = query_vars.into_iter().filter_map(|var| {
+            let ty = TyId::ty_var(db, var.sort, var.kind, var.key);
+            let probed = ty.fold_with(db, table);
+            if probed.is_ty_var(db) {
+                Some((probed, ty))
+            } else {
+                None
+            }
+        });
         let mut canonicalizer = Canonicalizer {
             subst: canonical_vars.collect(),
+            next_key,
         };
 
         Solution {
@@ -217,11 +222,14 @@ where
 struct Canonicalizer<'db> {
     // A substitution from original type variables to canonical variables.
     subst: FxHashMap<TyId<'db>, TyId<'db>>,
+    // The key for the next canonical var this folder mints.
+    next_key: u32,
 }
 
 impl<'db> Canonicalizer<'db> {
     fn canonical_var(&mut self, var: &TyVar<'db>) -> TyVar<'db> {
-        let key = self.subst.len() as u32;
+        let key = self.next_key;
+        self.next_key += 1;
         TyVar {
             sort: var.sort,
             kind: var.kind.clone(),
@@ -323,9 +331,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::Canonical;
+    use super::{Canonical, Canonicalized};
     use crate::analysis::ty::{
-        ty_def::{Kind, TyVarSort},
+        ty_def::{Kind, TyId, TyVarSort},
         unify::UnificationTable,
     };
     use crate::test_db::HirAnalysisTestDb;
@@ -341,5 +349,41 @@ mod tests {
         let _ = scratch.new_var(TyVarSort::General, &Kind::Star);
 
         assert!(canonical.extract_identity(&mut scratch).is_ty_var(&db));
+    }
+
+    /// When a query variable is solved during probing, fresh solution-only
+    /// variables must not reuse a live query variable's canonical key —
+    /// otherwise extraction conflates the fresh variable with the query
+    /// variable.
+    #[test]
+    fn canonicalize_solution_fresh_vars_do_not_collide_with_query_vars() {
+        let db = HirAnalysisTestDb::default();
+        let mut table = UnificationTable::new(&db);
+        let v0 = table.new_var(TyVarSort::General, &Kind::Star);
+        let v1 = table.new_var(TyVarSort::General, &Kind::Star);
+        let query = TyId::tuple_with_elems(&db, &[v0, v1]);
+        let canonicalized = Canonicalized::new(&db, query);
+
+        // Probe environment, seeded the way method selection seeds it.
+        let mut probe = UnificationTable::new(&db);
+        let extracted = canonicalized.canonical().extract_identity(&mut probe);
+        let (_, probe_elems) = extracted.decompose_ty_app(&db);
+        let (p0, p1) = (probe_elems[0], probe_elems[1]);
+
+        // Solve the first query var; the second stays live.
+        probe.unify(p0, TyId::bool(&db)).unwrap();
+        // The solution mentions the live query var and a fresh probe var.
+        let fresh = probe.new_var(TyVarSort::General, &Kind::Star);
+        let solution_value = TyId::tuple_with_elems(&db, &[p1, fresh]);
+        let solution = canonicalized.canonicalize_solution(&db, &mut probe, solution_value);
+
+        let out = canonicalized.extract_solution(&mut table, solution);
+        let (_, out_elems) = out.decompose_ty_app(&db);
+        assert_eq!(out_elems[0], v1, "live query var must map back to itself");
+        assert!(out_elems[1].is_ty_var(&db));
+        assert_ne!(
+            out_elems[1], v1,
+            "fresh solution var must not be conflated with a query var"
+        );
     }
 }

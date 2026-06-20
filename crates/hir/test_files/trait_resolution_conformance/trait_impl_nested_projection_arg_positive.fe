@@ -1,0 +1,20 @@
+trait Bound {
+    type Item
+}
+
+trait Foo<T> {}
+
+struct Present {}
+struct S {}
+
+impl Bound for Present {
+    type Item = u32
+}
+
+impl Foo< <Present as Bound>::Item > for S {}
+
+fn needs_foo<T: Foo< <Present as Bound>::Item >>(_ value: T) {}
+
+fn use_it(value: S) {
+    needs_foo(value)
+}

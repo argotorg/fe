@@ -15,18 +15,18 @@ fn test_mem_ptr() uses (mem: std::evm::RawMem) {
 }
 
 fn test_calldata_ptr_readonly() {
-    let c = std::evm::CalldataPtr<u256> { offset: 0 }
+    let c: std::evm::CalldataPtr<u256> = std::evm::CalldataPtr::from_raw(0)
     with (c) {
         let _v = read_x()
     }
 }
 
 fn read_calldata_triplet_ptr_offset() -> u256 uses (arr: std::evm::CalldataPtr<[u256; 3]>) {
-    arr.offset
+    arr.raw()
 }
 
 fn test_calldata_ptr_array_provider() {
-    let c = std::evm::CalldataPtr<[u256; 3]> { offset: 0 }
+    let c: std::evm::CalldataPtr<[u256; 3]> = std::evm::CalldataPtr::from_raw(0)
     with (c) {
         let _v = read_calldata_triplet_ptr_offset()
     }

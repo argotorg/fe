@@ -1,0 +1,52 @@
+trait Assoc {
+    type Item
+}
+
+struct Box<T> {
+    inner: T,
+}
+
+// The impl's self type mentions its param only through a projection. Binding
+// the impl param positionally from the receiver's type args would produce
+// `T := U::Item` instead of `T := U` (and a spurious `U::Item: Assoc`
+// failure); the binding must come from unifying the probe key against the
+// receiver, which happens once, in the method-table probe.
+impl<T: Assoc> Box<T::Item> {
+    fn get(self) -> u32 {
+        1
+    }
+}
+
+fn call_projection_impl<U: Assoc>(b: Box<U::Item>) -> u32 {
+    b.get()
+}
+
+fn call_projection_impl_path<U: Assoc>(b: Box<U::Item>) -> u32 {
+    Box::get(b)
+}
+
+struct Pair<T> {
+    a: T,
+}
+
+impl Pair<u32> {
+    fn only_u32(self) -> u32 {
+        7
+    }
+}
+
+fn mk<T>() -> Pair<T> {
+    todo()
+}
+
+extern {
+    fn todo() -> !
+}
+
+// The selected impl determines the receiver's type argument: the probe
+// solution's bindings must propagate into the receiver inference var
+// (`Pair<_> := Pair<u32>`), or this reports a needless annotation.
+fn infer_receiver_from_method() -> u32 {
+    let p = mk()
+    p.only_u32()
+}

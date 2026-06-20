@@ -1,0 +1,17 @@
+---
+source: crates/uitest/tests/ty.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty/def/trait_impl_nested_trait_const_arg_missing_bound.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_nested_trait_const_arg_missing_bound.fe:12:6
+   │
+12 │ impl Foo<Slot<{ <Missing as HasN>::N }>> for S {}
+   │      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Missing` doesn't implement `HasN`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_nested_trait_const_arg_missing_bound.fe:14:17
+   │
+14 │ fn needs_foo<T: Foo<Slot<{ <Missing as HasN>::N }>>>(value: T) {}
+   │                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Missing` doesn't implement `HasN`

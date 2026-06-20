@@ -1,0 +1,10 @@
+trait HasN {
+    const N: u32
+}
+
+fn bad<T>(value: u32) -> bool {
+    match value {
+        <T as HasN>::N => true,
+        _ => false,
+    }
+}

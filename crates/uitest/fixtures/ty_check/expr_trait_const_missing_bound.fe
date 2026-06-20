@@ -1,0 +1,7 @@
+trait HasN {
+    const N: u32
+}
+
+fn bad<T>() -> u32 {
+    <T as HasN>::N
+}

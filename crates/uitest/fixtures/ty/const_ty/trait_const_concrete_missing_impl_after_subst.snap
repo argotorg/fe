@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/const_ty/trait_const_concrete_missing_impl_after_subst.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_const_concrete_missing_impl_after_subst.fe:19:11
+   │
+19 │     slot: <Holder<Missing> as Carrier>::Out,
+   │           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   │           │
+   │           `Holder<Missing>` doesn't implement `Carrier`
+   │           trait bound `Missing: HasN` is not satisfied

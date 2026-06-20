@@ -1,0 +1,15 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/contract_field_nonprovider_addrspace_hole.fe
+---
+error[3-0040]: contract field has an unresolved non-slot const generic
+   ┌─ contract_field_nonprovider_addrspace_hole.fe:10:12
+   │
+ 7 │ struct Foo<const SP: AddressSpace = _> { value: u256 }
+   │        --- `Foo` is defined here
+   ·
+10 │     value: Foo,
+   │            ^^^ this contract field has an inferred const (`_`) that is not a storage slot
+   │
+   = only storage-slot (`u256` or `usize`) const generics may be left inferred (`_`) in a contract field; provide an explicit value

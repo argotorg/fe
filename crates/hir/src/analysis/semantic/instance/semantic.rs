@@ -1085,7 +1085,6 @@ fn provisional_provider_binding_for_effect<'db>(
                 .enumerate()
                 .find(|(idx, _)| *idx as u32 == provider_idx)
             {
-                let scope = contract.scope();
                 let provider_ty = field.target_ty;
                 return Some(ProviderBinding {
                     provider_idx,
@@ -1106,11 +1105,7 @@ fn provisional_provider_binding_for_effect<'db>(
                         } else {
                             ProviderKind::RawAddress
                         },
-                        address_space: crate::analysis::ty::address_space_from_ty(
-                            db,
-                            scope,
-                            field.address_space,
-                        ),
+                        address_space: Some(field.address_space),
                         target_ty: Some(field.target_ty),
                         transport: ProviderTransport::ByValue,
                     },

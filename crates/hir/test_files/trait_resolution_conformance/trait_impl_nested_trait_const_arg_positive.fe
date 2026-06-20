@@ -1,0 +1,22 @@
+trait HasN {
+    const N: u32
+}
+
+struct Slot<const N: u32> {}
+
+trait Foo<T> {}
+
+struct Present {}
+struct S {}
+
+impl HasN for Present {
+    const N: u32 = 1
+}
+
+impl Foo<Slot<{ <Present as HasN>::N }>> for S {}
+
+fn needs_foo<T: Foo<Slot<{ <Present as HasN>::N }>>>(_ value: T) {}
+
+fn use_it(value: S) {
+    needs_foo(value)
+}

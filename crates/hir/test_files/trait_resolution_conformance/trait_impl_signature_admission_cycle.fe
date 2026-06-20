@@ -1,0 +1,37 @@
+trait Abi {
+    type Decoder: * -> *
+    type Encoder: AbiEncoder<Self>
+
+    fn decoder_new<I>(input: own I) -> Self::Decoder<I>
+    fn encoder_new() -> Self::Encoder
+}
+
+trait AbiEncoder<A: Abi> {
+    fn finish(self)
+}
+
+struct Sol {}
+struct SolDecoder<I> { value: I }
+struct SolEncoder {}
+
+impl Abi for Sol {
+    type Decoder = SolDecoder
+    type Encoder = SolEncoder
+
+    fn decoder_new<I>(input: own I) -> Self::Decoder<I> {
+        SolDecoder { value: input }
+    }
+
+    fn encoder_new() -> Self::Encoder {
+        SolEncoder {}
+    }
+}
+
+impl AbiEncoder<Sol> for SolEncoder {
+    fn finish(self) {}
+}
+
+fn use_encoder() {
+    let enc = Sol::encoder_new()
+    enc.finish()
+}

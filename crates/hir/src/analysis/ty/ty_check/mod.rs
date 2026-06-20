@@ -19,15 +19,19 @@ use crate::analysis::name_resolution::ResolvedVariant;
 pub use crate::analysis::ty::ProviderAddressSpace;
 use crate::analysis::ty::corelib::resolve_lib_type_path;
 use crate::analysis::ty::fold::TyFoldable;
+use crate::analysis::ty::method_table::ProbedMethod;
 use crate::analysis::ty::provider::{ProviderKind, provider_semantics};
+use crate::analysis::ty::trait_lower::lower_impl_trait;
+use crate::analysis::ty::trait_resolution::constraint::{
+    PredicateSource, collect_func_decl_constraint_pairs,
+};
 use crate::analysis::ty::visitor::TyVisitable;
-use crate::hir_def::CallableDef;
+use crate::hir_def::{CallableDef, ImplTrait, Trait};
 use crate::{
     hir_def::{
-        BinOp, Body, Const, Contract, ContractRecvArm, Expr, ExprId, Func, GenericParam,
-        GenericParamOwner, ItemKind, LitKind, ManualContractRootAttr, Partial, Pat, PatId, PathId,
-        StaticAssert, StaticAssertComparison, Stmt, StmtId, StringId, TypeBound, TypeId as HirTyId,
-        WhereClauseOwner,
+        BinOp, Body, Const, Contract, ContractRecvArm, Expr, ExprId, Func, GenericParamOwner,
+        LitKind, ManualContractRootAttr, Partial, Pat, PatId, PathId, StaticAssert,
+        StaticAssertComparison, Stmt, StmtId, StringId, TypeId as HirTyId, WhereClauseOwner,
     },
     span::{
         DynLazySpan, expr::LazyExprSpan, pat::LazyPatSpan, path::LazyPathSpan, types::LazyTySpan,
@@ -55,7 +59,7 @@ use crate::analysis::place::{Place, PlaceBase};
 
 use super::{
     assoc_const::AssocConstUse,
-    canonical::Canonical,
+    canonical::{Canonical, Canonicalized},
     diagnostics::{
         BodyDiag, CallConstraintDiagInfo, FuncBodyDiag, StaticAssertComparisonValues,
         TraitConstraintDiag, TyDiagCollection, TyLowerDiag,
@@ -122,6 +126,118 @@ pub fn check_anon_const_body<'db>(
     expected: TyId<'db>,
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
     check_body(db, BodyOwner::AnonConstBody { body, expected })
+}
+
+/// Type-checks the value bodies of an `impl Trait` block's associated consts.
+/// Bodies are checked against the trait's declared type for the const
+/// (instantiated with the impl's trait args) so a wrong impl-side header
+/// doesn't cascade; consts not declared in the trait fall back to their own
+/// header type. Header-vs-trait conformance itself is reported by the
+/// `ImplTrait` item diagnostics.
+#[salsa::tracked(return_ref)]
+pub fn check_impl_trait_const_bodies<'db>(
+    db: &'db dyn HirAnalysisDb,
+    impl_trait: ImplTrait<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    // Only check impls the user wrote; attribute-expanded impls (e.g.
+    // `#[event]`) would re-report their cascade failures at the expansion
+    // site on already-diagnosed code.
+    if !matches!(impl_trait.origin(db), crate::span::HirOrigin::Raw(_)) {
+        return Vec::new();
+    }
+    let Some(implementor) = lower_impl_trait(db, impl_trait) else {
+        return Vec::new();
+    };
+    let implementor = implementor.instantiate_identity();
+    let trait_hir = implementor.trait_def(db);
+    let trait_args = implementor.trait_(db).args(db);
+
+    let mut diags = Vec::new();
+    for impl_const in impl_trait.assoc_consts(db) {
+        let Some(body) = impl_const.value_body(db) else {
+            continue;
+        };
+        let expected_ty = impl_const
+            .name(db)
+            .and_then(|name| trait_hir.const_(db, name))
+            .and_then(|c| c.ty_binder(db))
+            .map(|binder| binder.instantiate(db, trait_args))
+            .or_else(|| impl_const.ty(db));
+        let Some(expected_ty) = expected_ty else {
+            continue;
+        };
+        if expected_ty.has_invalid(db) {
+            continue;
+        }
+        diags.extend(
+            check_anon_const_body(db, body, expected_ty)
+                .0
+                .iter()
+                .cloned(),
+        );
+    }
+    diags
+}
+
+/// Type-checks the default value bodies of a trait's associated consts
+/// against their declared types. Nothing else checks these: impls that don't
+/// override a default only force its evaluation transitively, and a trait
+/// with no concrete impl never checks it at all.
+#[salsa::tracked(return_ref)]
+pub fn check_trait_const_default_bodies<'db>(
+    db: &'db dyn HirAnalysisDb,
+    trait_: Trait<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    if !matches!(trait_.origin(db), crate::span::HirOrigin::Raw(_)) {
+        return Vec::new();
+    }
+
+    let mut diags = Vec::new();
+    for trait_const in trait_.assoc_consts(db) {
+        let Some(body) = trait_const.default_body(db) else {
+            continue;
+        };
+        let Some(expected_ty) = trait_const.ty(db) else {
+            continue;
+        };
+        let flags = expected_ty.flags(db);
+        if flags.contains(TyFlags::HAS_INVALID) {
+            continue;
+        }
+        let body_diags = &check_anon_const_body(db, body, expected_ty).0;
+        if flags.contains(TyFlags::HAS_PARAM) {
+            // A declared type mentioning `Self` or generic params (`const C:
+            // T = 1`) types the default per instantiation: impl overrides are
+            // checked with the impl's bindings, and the value is retyped at
+            // use sites. Mismatches against the rigid param are expected
+            // here; instantiation-independent errors (unresolved names, bad
+            // calls, ...) still must surface.
+            diags.extend(
+                body_diags
+                    .iter()
+                    .filter(|diag| !diag_depends_on_param_instantiation(db, diag))
+                    .cloned(),
+            );
+        } else {
+            diags.extend(body_diags.iter().cloned());
+        }
+    }
+    diags
+}
+
+/// Whether a default-body diagnostic could be an artifact of checking
+/// against a rigid generic param instead of a per-instantiation type.
+fn diag_depends_on_param_instantiation<'db>(
+    db: &'db dyn HirAnalysisDb,
+    diag: &FuncBodyDiag<'db>,
+) -> bool {
+    match diag {
+        FuncBodyDiag::Body(BodyDiag::TypeMismatch {
+            expected, given, ..
+        }) => expected.has_param(db) || given.has_param(db),
+        FuncBodyDiag::Body(BodyDiag::TypeAnnotationNeeded { .. }) => true,
+        _ => false,
+    }
 }
 
 #[salsa::tracked(return_ref)]
@@ -287,54 +403,61 @@ pub(super) fn check_body<'db>(
         ));
     }
 
-    if let BodyOwner::Const(const_) = owner
-        && diags.is_empty()
-        && let Some(body) = const_.body(db).to_opt()
-        && !const_.ty(db).has_invalid(db)
-    {
-        let const_owner = BodyOwner::AnonConstBody {
-            body,
-            expected: const_.ty(db),
-        };
-        match eval_body_owner_const(db, const_owner, Vec::new()) {
-            Ok(value) => {
-                if matches!(value.value(db), SemConstValue::TypeLevel { .. }) {
-                    diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into());
-                }
-            }
-            Err(crate::analysis::semantic::CtfeError::NotConstEvaluable { .. }) => {
+    (diags, typed_body)
+}
+
+/// Forces evaluation of a const item's value and reports failures
+/// (unknowable values, recursion, arithmetic errors). This is deliberately a
+/// separate query from `check_const_body`: forcing evaluates *other* consts
+/// the body references, and their `ensure_const_evaluable` checks call
+/// `check_const_body` back — if typing and forcing were one query, a
+/// recursive const definition would be an unrecoverable salsa cycle through
+/// body checking instead of converging to a `RecursiveConst` error in the
+/// eval queries.
+#[salsa::tracked(return_ref)]
+pub fn check_const_value<'db>(
+    db: &'db dyn HirAnalysisDb,
+    const_: Const<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    if !check_const_body(db, const_).0.is_empty() {
+        return Vec::new();
+    }
+    let Some(body) = const_.body(db).to_opt() else {
+        return Vec::new();
+    };
+    if const_.ty(db).has_invalid(db) {
+        return Vec::new();
+    }
+
+    let const_owner = BodyOwner::AnonConstBody {
+        body,
+        expected: const_.ty(db),
+    };
+    let mut diags = Vec::new();
+    match eval_body_owner_const(db, const_owner, Vec::new()) {
+        Ok(value) => {
+            if matches!(value.value(db), SemConstValue::TypeLevel { .. }) {
                 diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into());
             }
-            Err(err) => {
-                let ty = TyId::invalid(db, invalid_cause_from_ctfe_error(db, const_owner, err));
-                if let Some(diag) = ty.emit_diag(db, body.span().into()) {
-                    diags.push(diag.into());
-                }
+        }
+        Err(crate::analysis::semantic::CtfeError::NotConstEvaluable { .. }) => {
+            diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into());
+        }
+        Err(err) => {
+            let ty = TyId::invalid(db, invalid_cause_from_ctfe_error(db, const_owner, err));
+            if let Some(diag) = ty.emit_diag(db, body.span().into()) {
+                diags.push(diag.into());
             }
         }
     }
-
-    (diags, typed_body)
+    diags
 }
 
 fn typed_body_for_bodyless_func<'db>(
     db: &'db dyn HirAnalysisDb,
     func: Func<'db>,
 ) -> TypedBody<'db> {
-    let mut preds =
-        crate::analysis::ty::trait_resolution::constraint::collect_func_decl_constraints(
-            db,
-            func.into(),
-            true,
-        )
-        .instantiate_identity();
-    if let Some(ItemKind::Trait(trait_)) = func.scope().parent_item(db) {
-        let self_pred = TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
-        let mut merged = preds.list(db).to_vec();
-        merged.push(self_pred);
-        preds = PredicateListId::new(db, merged);
-    }
-    let assumptions = preds.extend_all_bounds(db);
+    let assumptions = crate::semantic::func_body_assumptions(db, func).extend_all_bounds(db);
     let mut result_ty = func.return_ty(db);
     if !result_ty.is_star_kind(db) || ty_contains_const_hole(db, result_ty) {
         result_ty = TyId::invalid(db, InvalidCause::Other);
@@ -419,11 +542,6 @@ enum TraitObligationOutcome<'db> {
     Discharged,
     Progressed,
     Requeue(env::TraitObligation<'db>),
-}
-
-enum CallConstraintBoundOwner<'db> {
-    GenericParam(GenericParamOwner<'db>, usize, usize),
-    WherePredicate(WhereClauseOwner<'db>, usize, usize),
 }
 
 impl<'db> TyChecker<'db> {
@@ -912,131 +1030,18 @@ impl<'db> TyChecker<'db> {
         callable_def: CallableDef<'db>,
         constraint_idx: usize,
     ) -> Option<DynLazySpan<'db>> {
-        let db = self.db;
-        match callable_def {
-            CallableDef::Func(func) => {
-                let owner = GenericParamOwner::Func(func);
-                let func_constraint_count = self.call_constraint_source_count(owner);
-                if let Some(bound) = self.call_constraint_bound_in_owner(owner, constraint_idx) {
-                    return Some(self.call_constraint_owner_bound_span(bound));
-                }
-
-                let parent_owner = match func.scope().parent_item(db) {
-                    Some(ItemKind::Trait(trait_)) => Some(GenericParamOwner::Trait(trait_)),
-                    Some(ItemKind::Impl(impl_)) => Some(GenericParamOwner::Impl(impl_)),
-                    Some(ItemKind::ImplTrait(impl_trait)) => {
-                        Some(GenericParamOwner::ImplTrait(impl_trait))
-                    }
-                    _ => None,
-                }?;
-                let parent_idx = constraint_idx.checked_sub(func_constraint_count)?;
-                self.call_constraint_bound_in_owner(parent_owner, parent_idx)
-                    .map(|bound| self.call_constraint_owner_bound_span(bound))
-            }
-            CallableDef::VariantCtor(variant) => self
-                .call_constraint_bound_in_owner(
-                    GenericParamOwner::Enum(variant.enum_),
-                    constraint_idx,
-                )
-                .map(|bound| self.call_constraint_owner_bound_span(bound)),
-        }
+        let pairs = collect_func_decl_constraint_pairs(self.db, callable_def);
+        let (_, source) = pairs.get(constraint_idx)?;
+        Some(self.call_constraint_owner_bound_span(*source))
     }
 
-    fn call_constraint_source_count(&self, owner: GenericParamOwner<'db>) -> usize {
-        let db = self.db;
-        let param_bounds = owner
-            .params(db)
-            .filter_map(|view| match view.param {
-                GenericParam::Type(param) => Some(
-                    param
-                        .bounds
-                        .iter()
-                        .filter(|bound| matches!(bound, TypeBound::Trait(_)))
-                        .count(),
-                ),
-                GenericParam::Const(_) => None,
-            })
-            .sum::<usize>();
-
-        let where_bounds = owner
-            .where_clause_owner()
-            .map(|where_owner| {
-                where_owner
-                    .where_clause(db)
-                    .data(db)
-                    .iter()
-                    .filter(|pred| {
-                        pred.ty.to_opt().is_some()
-                            && !(pred.ty.to_opt().is_some_and(|ty| ty.is_self_ty(db))
-                                && matches!(owner, GenericParamOwner::Trait(_)))
-                    })
-                    .map(|pred| {
-                        pred.bounds
-                            .iter()
-                            .filter(|bound| matches!(bound, TypeBound::Trait(_)))
-                            .count()
-                    })
-                    .sum::<usize>()
-            })
-            .unwrap_or(0);
-
-        param_bounds + where_bounds
-    }
-
-    fn call_constraint_bound_in_owner(
-        &self,
-        owner: GenericParamOwner<'db>,
-        mut constraint_idx: usize,
-    ) -> Option<CallConstraintBoundOwner<'db>> {
-        let db = self.db;
-        for (param_idx, view) in owner.params(db).enumerate() {
-            let GenericParam::Type(param) = view.param else {
-                continue;
-            };
-            for (bound_idx, bound) in param.bounds.iter().enumerate() {
-                if matches!(bound, TypeBound::Trait(_)) {
-                    if constraint_idx == 0 {
-                        return Some(CallConstraintBoundOwner::GenericParam(
-                            owner, param_idx, bound_idx,
-                        ));
-                    }
-                    constraint_idx -= 1;
-                }
-            }
-        }
-
-        let where_owner = owner.where_clause_owner()?;
-        for (pred_idx, pred) in where_owner.where_clause(db).data(db).iter().enumerate() {
-            if pred.ty.to_opt().is_none()
-                || pred.ty.to_opt().is_some_and(|ty| ty.is_self_ty(db))
-                    && matches!(owner, GenericParamOwner::Trait(_))
-            {
-                continue;
-            }
-
-            for (bound_idx, bound) in pred.bounds.iter().enumerate() {
-                if matches!(bound, TypeBound::Trait(_)) {
-                    if constraint_idx == 0 {
-                        return Some(CallConstraintBoundOwner::WherePredicate(
-                            where_owner,
-                            pred_idx,
-                            bound_idx,
-                        ));
-                    }
-                    constraint_idx -= 1;
-                }
-            }
-        }
-
-        None
-    }
-
-    fn call_constraint_owner_bound_span(
-        &self,
-        bound: CallConstraintBoundOwner<'db>,
-    ) -> DynLazySpan<'db> {
+    fn call_constraint_owner_bound_span(&self, bound: PredicateSource<'db>) -> DynLazySpan<'db> {
         match bound {
-            CallConstraintBoundOwner::GenericParam(owner, param_idx, bound_idx) => match owner {
+            PredicateSource::GenericParamBound {
+                owner,
+                param_idx,
+                bound_idx,
+            } => match owner {
                 GenericParamOwner::Func(func) => func
                     .span()
                     .generic_params()
@@ -1101,7 +1106,11 @@ impl<'db> TyChecker<'db> {
                     .trait_bound()
                     .into(),
             },
-            CallConstraintBoundOwner::WherePredicate(owner, pred_idx, bound_idx) => match owner {
+            PredicateSource::WherePredicateBound {
+                owner,
+                pred_idx,
+                bound_idx,
+            } => match owner {
                 WhereClauseOwner::Func(func) => func
                     .span()
                     .where_clause()
@@ -2361,19 +2370,27 @@ impl<'db> TyChecker<'db> {
         self.instantiate_callable_to_term(ty, method)
     }
 
-    fn instantiate_inherent_method_to_term(
+    /// Brings a probed inherent-method candidate into this checker's
+    /// inference context: extracts the bound candidate from the probe's
+    /// solution, registers effect-provider inference keys for its args, and
+    /// unifies the bound probe key against the receiver so the solution's
+    /// bindings propagate into receiver inference variables (the inherent
+    /// analog of the trait path unifying the instance's self type). The
+    /// matching rule itself — key choice, normalization, binder application —
+    /// lives in the method-table probe; nothing is re-derived here.
+    fn extract_inherent_method_to_term(
         &mut self,
-        method: CallableDef<'db>,
+        canonical_receiver: &Canonicalized<'db, TyId<'db>>,
+        cand: ProbedMethod<'db>,
         receiver_ty: TyId<'db>,
     ) -> TyId<'db> {
-        let mut ty = TyId::func(self.db, method);
-        for &arg in receiver_ty.generic_args(self.db) {
-            if ty.applicable_ty(self.db).is_none() {
-                break;
-            }
-            ty = TyId::app(self.db, ty, arg);
+        let bound = canonical_receiver.extract_solution(&mut self.table, cand.bound);
+        self.register_effect_provider_args(cand.def, bound.func_ty);
+        let snapshot = self.table.snapshot();
+        if self.table.unify(bound.key_ty, receiver_ty).is_err() {
+            self.table.rollback_to(snapshot);
         }
-        self.instantiate_callable_to_term(ty, method)
+        bound.func_ty
     }
 
     fn instantiate_callable_to_term(
@@ -2391,15 +2408,7 @@ impl<'db> TyChecker<'db> {
             let param_ty = callable.params(self.db).get(param_index).copied();
             let arg = self.table.new_var_for(prop);
             if let Some(param_ty) = param_ty
-                && (matches!(param_ty.data(self.db), TyData::TyParam(p) if p.is_effect_provider())
-                    || matches!(
-                        param_ty.data(self.db),
-                        TyData::ConstTy(const_ty)
-                            if matches!(
-                                const_ty.data(self.db),
-                                ConstTyData::TyParam(param, _) if param.is_implicit()
-                            )
-                    ))
+                && self.is_effect_provider_param(param_ty)
             {
                 self.effect_provider_keys
                     .extend(inference_keys(self.db, &arg));
@@ -2408,6 +2417,34 @@ impl<'db> TyChecker<'db> {
         }
 
         ty
+    }
+
+    fn is_effect_provider_param(&self, param_ty: TyId<'db>) -> bool {
+        matches!(param_ty.data(self.db), TyData::TyParam(p) if p.is_effect_provider())
+            || matches!(
+                param_ty.data(self.db),
+                TyData::ConstTy(const_ty)
+                    if matches!(
+                        const_ty.data(self.db),
+                        ConstTyData::TyParam(param, _) if param.is_implicit()
+                    )
+            )
+    }
+
+    /// Registers effect-provider inference keys for the generic args of an
+    /// already-applied callable type (the applied counterpart of the
+    /// bookkeeping `instantiate_callable_to_term` does while applying).
+    fn register_effect_provider_args(&mut self, callable: CallableDef<'db>, ty: TyId<'db>) {
+        let params = callable.params(self.db);
+        for (param_index, arg) in ty.generic_args(self.db).iter().enumerate() {
+            let Some(&param_ty) = params.get(param_index) else {
+                break;
+            };
+            if self.is_effect_provider_param(param_ty) {
+                self.effect_provider_keys
+                    .extend(inference_keys(self.db, arg));
+            }
+        }
     }
 
     /// Resolve associated type to concrete type if possible
@@ -2858,6 +2895,11 @@ impl<'db> TypedBody<'db> {
 
     pub fn is_implicit_move(&self, expr: ExprId) -> bool {
         self.implicit_moves.contains(&expr)
+    }
+
+    /// All const references registered in this body, in arbitrary order.
+    pub fn const_refs(&self) -> impl Iterator<Item = ConstRef<'db>> + '_ {
+        self.const_refs.values().flatten().copied()
     }
 
     pub fn expr_const_ref(&self, expr: ExprId) -> Option<ConstRef<'db>> {
@@ -3905,6 +3947,83 @@ pub(super) fn manual_contract_root_ref_from_ty<'db>(
     }
 }
 
+/// Returns true if the trait-const goal's args contain generic params that
+/// are not in scope at `scope`. Such params come from the selected impl's or
+/// trait's own binder and are existentials awaiting inference (e.g.
+/// `GenericForwardStruct<7>::B` selecting through
+/// `impl<const N> GenericForward<N> for GenericForwardStruct<N>`); checking
+/// the goal with them treated as rigid universals produces false
+/// "unsatisfied bound" errors.
+pub(super) fn trait_const_goal_has_foreign_params<'db>(
+    db: &'db dyn HirAnalysisDb,
+    inst: TraitInstId<'db>,
+    scope: crate::hir_def::scope_graph::ScopeId<'db>,
+) -> bool {
+    use crate::analysis::ty::visitor::{TyVisitable, TyVisitor, walk_ty};
+
+    fn is_enclosing_item<'db>(
+        db: &'db dyn HirAnalysisDb,
+        scope: crate::hir_def::scope_graph::ScopeId<'db>,
+        owner: crate::hir_def::scope_graph::ScopeId<'db>,
+    ) -> bool {
+        let owner_item = owner.item();
+        let mut item = Some(scope.item());
+        while let Some(current) = item {
+            if current == owner_item {
+                return true;
+            }
+            item = current.scope().parent_item(db);
+        }
+        false
+    }
+
+    struct ForeignParamFinder<'db> {
+        db: &'db dyn HirAnalysisDb,
+        scope: crate::hir_def::scope_graph::ScopeId<'db>,
+        found: bool,
+    }
+
+    impl<'db> TyVisitor<'db> for ForeignParamFinder<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_ty(&mut self, ty: TyId<'db>) {
+            if self.found {
+                return;
+            }
+            let param = match ty.data(self.db) {
+                TyData::TyParam(param) => Some(param),
+                TyData::ConstTy(const_ty) => match const_ty.data(self.db) {
+                    crate::analysis::ty::const_ty::ConstTyData::TyParam(param, _) => Some(param),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(param) = param
+                && !is_enclosing_item(self.db, self.scope, param.owner)
+            {
+                self.found = true;
+                return;
+            }
+            walk_ty(self, ty);
+        }
+    }
+
+    let mut finder = ForeignParamFinder {
+        db,
+        scope,
+        found: false,
+    };
+    for &arg in inst.args(db) {
+        arg.visit_with(&mut finder);
+        if finder.found {
+            return true;
+        }
+    }
+    false
+}
+
 pub(super) fn ty_may_be_code_region_token<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
     let ty = strip_code_region_token_wrapper(db, ty);
     manual_contract_root_ref_from_ty(db, ty).is_some()
@@ -3959,6 +4078,13 @@ fn try_instantiate_trait_method<'db>(
     receiver_ty: TyId<'db>,
     inst: TraitInstId<'db>,
 ) -> Result<TyId<'db>, UnificationError> {
+    // Positional application is sound here because the args and the binder
+    // come from the same definition: a trait method's leading binder params
+    // are its trait's params in declaration order, and `inst.args` are
+    // exactly their instantiations. Positionally bridging *across*
+    // definitions (e.g. a receiver's type args into an impl's binder) is
+    // not — an impl's self type is an arbitrary pattern over its params;
+    // that binding comes from the method-table probe's unification.
     let ty = TyId::foldl(
         db,
         TyId::func(db, method.as_callable(db).unwrap()),
@@ -3991,6 +4117,8 @@ fn instantiate_trait_assoc_fn<'db>(
     method: CallableDef<'db>,
     inst: TraitInstId<'db>,
 ) -> TyId<'db> {
+    // Same-definition positional application: see
+    // `try_instantiate_trait_method`.
     let ty = TyId::foldl(db, TyId::func(db, method), inst.args(db));
 
     // Apply associated type substitutions from the trait instance
@@ -4042,14 +4170,17 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
         }
 
         // We need this additional check for method call because the callable type is
-        // not tied to the expression type.
+        // not tied to the expression type. Well-formedness is not re-checked
+        // here: the callable's declared constraints were already registered as
+        // call-constraint obligations (with a `required by this bound` note),
+        // so a WF check would report every unsatisfied bound a second time —
+        // the same reason direct-call callees are excluded above.
         if let Expr::MethodCall(..) = expr_data
             && let Some(callable) = self.body.callable_expr(expr)
         {
             let callable_ty = callable.ty(self.db);
             let span = ctxt.span().unwrap().into_method_call_expr().method_name();
-            self.check_unknown(callable_ty, span.clone().into());
-            self.check_wf(callable_ty, span.into())
+            self.check_unknown(callable_ty, span.into());
         }
 
         walk_expr(self, ctxt, expr);

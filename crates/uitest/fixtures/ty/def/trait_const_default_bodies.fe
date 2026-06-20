@@ -1,0 +1,53 @@
+trait WrongTypedDefault {
+    const C: u32 = true
+}
+
+trait UnresolvedDefault {
+    const D: u32 = missing()
+}
+
+trait ValidDefault {
+    const C: u32 = 1
+}
+
+trait SelfReferencingDefault {
+    const BASE: u32
+    const DOUBLED: u32 = Self::BASE * 2
+}
+
+trait GenericTraitDefault<T> {
+    const COUNT: u32 = 3
+}
+
+// A `Self`-dependent declared type defers typing to instantiation: the
+// default retypes to whatever `X` is bound to in each impl.
+trait DeferredDefault {
+    type X
+    const C: Self::X = 1
+}
+
+trait Capability {
+    const C: u32
+}
+
+// A default body may rely on capabilities of `Self` only when the trait
+// declares them.
+trait BoundedUser
+where Self: Capability
+{
+    const D: u32 = Self::C
+}
+
+struct Unit {}
+
+impl ValidDefault for Unit {}
+
+impl SelfReferencingDefault for Unit {
+    const BASE: u32 = 4
+}
+
+impl GenericTraitDefault<bool> for Unit {}
+
+fn use_defaults(_ value: Unit) -> u32 {
+    Unit::COUNT
+}

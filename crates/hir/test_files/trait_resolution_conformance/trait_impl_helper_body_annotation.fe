@@ -1,0 +1,28 @@
+struct Slot<const N: u32> {}
+
+trait LenHelper {
+    const N: u32
+}
+
+trait UseLenBody {
+    fn run(self) -> u32
+}
+
+struct S {}
+
+impl LenHelper for S {
+    const N: u32 = 1
+}
+
+impl UseLenBody for S {
+    fn run(self) -> u32 {
+        let value: Slot<{ <Self as LenHelper>::N }> = Slot {}
+        0
+    }
+}
+
+fn needs_use_len<T: UseLenBody>(_ value: T) {}
+
+fn use_it(value: S) {
+    needs_use_len(value)
+}

@@ -1,0 +1,39 @@
+// Regression: the Mutex lock bit is a `TSlot` whose slot is assigned from
+// the contract's *transient* counter. Before, it was numbered by the storage
+// counter and dereferenced in transient space, so locking a mutex flipped an
+// unrelated `TStorPtr<bool>` field that happened to share the number.
+use std::evm::{Call, Create, Ctx, Evm, Mutex}
+use std::evm::effects::TStorPtr
+
+msg CMsg {
+    #[selector = 1]
+    LockThenReadT1 -> u256,
+}
+
+pub contract C {
+    t0: TStorPtr<bool>,
+    t1: TStorPtr<bool>,
+    mut m: Mutex<u256>,
+
+    recv CMsg {
+        LockThenReadT1 -> u256 uses (t1, mut m) {
+            // Neither transient flag was ever written; both reads must be
+            // false even while the mutex lock bit is set.
+            let before = t1
+            m.lock()
+            let after = t1
+            m.unlock()
+            let mut result = 0
+            if before { result += 1 }
+            if after { result += 2 }
+            result
+        }
+    }
+}
+
+#[test]
+fn lock_does_not_alias_transient_fields() uses (cr: mut Create, evm: mut Evm) {
+    let c = cr.create2<C>(value: 0, args: (), salt: 1)
+    let r = evm.call(addr: c, gas: 200000, value: 0, message: CMsg::LockThenReadT1 {})
+    assert!(r == 0)
+}

@@ -1,0 +1,22 @@
+extern {
+    fn todo() -> !
+}
+
+trait Bound {
+    type Item
+}
+
+trait Foo<T> {
+    type Out
+}
+
+struct Missing {}
+struct Dummy<T> {}
+
+impl<T> Foo<T> for Dummy<T> {
+    type Out = u32
+}
+
+fn bad() -> <Dummy< <Missing as Bound>::Item > as Foo< <Missing as Bound>::Item >>::Out {
+    todo()
+}

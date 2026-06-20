@@ -1,0 +1,9 @@
+trait MissingConstType {
+    const C: usize = 1
+}
+
+struct MissingConstTypeStruct {}
+
+struct MissingConstTypeWrap {
+    arr: [u8; <MissingConstTypeStruct as MissingConstType>::C],
+}

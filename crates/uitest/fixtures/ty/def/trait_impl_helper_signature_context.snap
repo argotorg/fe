@@ -1,0 +1,19 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/trait_impl_helper_signature_context.fe
+---
+error[6-0003]: trait bound is not satisfied
+  ┌─ trait_impl_helper_signature_context.fe:8:22
+  │
+8 │     fn make(self) -> Slot<{ <Self as LenHelper>::N }>
+  │                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Self` doesn't implement `LenHelper`
+
+error[8-0024]: argument label mismatch
+   ┌─ trait_impl_helper_signature_context.fe:26:20
+   │
+23 │ fn needs_uses_len<T: UsesLen>(_value: T) {}
+   │    -------------- function defined here
+   ·
+26 │     needs_uses_len(value)
+   │                    ^^^^^ expected `_value` label, but `value` given

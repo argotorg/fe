@@ -1,0 +1,59 @@
+trait SignatureCtx {
+    type Item
+    fn make(self, _ value: Self::Item) -> Self::Item
+}
+
+struct SignatureCtxStruct {}
+
+impl SignatureCtx for SignatureCtxStruct {
+    type Item = u32
+
+    fn make(self, _ value: Self::Item) -> Self::Item {
+        value
+    }
+}
+
+fn use_signature_ctx(value: SignatureCtxStruct) -> u32 {
+    value.make(1)
+}
+
+trait AssocRhsCtx {
+    type A
+    type B
+}
+
+struct AssocRhsCtxStruct {}
+
+impl AssocRhsCtx for AssocRhsCtxStruct {
+    type A = u32
+    type B = Self::A
+}
+
+fn needs_assoc_rhs<T: AssocRhsCtx<A = u32, B = u32>>(_ value: T) {}
+
+fn use_assoc_rhs(value: AssocRhsCtxStruct) {
+    needs_assoc_rhs(value)
+}
+
+struct Slot<const N: u32> {}
+
+trait ConstSigCtx {
+    const N: u32
+    fn take(self, slot: Slot<{ Self::N }>) -> Slot<{ Self::N }>
+}
+
+struct ConstSigCtxStruct {}
+
+impl ConstSigCtx for ConstSigCtxStruct {
+    const N: u32 = 3
+
+    fn take(self, slot: Slot<{ Self::N }>) -> Slot<{ Self::N }> {
+        slot
+    }
+}
+
+fn needs_const_sig<T: ConstSigCtx>(_ value: T) {}
+
+fn use_const_sig_ctx(value: ConstSigCtxStruct, _ slot: Slot<{ ConstSigCtxStruct::N }>) {
+    needs_const_sig(value)
+}

@@ -1,0 +1,20 @@
+trait HasN {
+    const N: u32
+}
+
+struct Slot<const N: u32> {}
+
+trait Carrier {
+    type Out
+}
+
+struct Holder<T> {}
+struct Missing {}
+
+impl<T: HasN> Carrier for Holder<T> {
+    type Out = Slot<{ <T as HasN>::N }>
+}
+
+struct Wrap {
+    slot: <Holder<Missing> as Carrier>::Out,
+}

@@ -55,52 +55,56 @@ fn init() uses (evm: mut Evm) {
 
 #[contract_runtime(BalanceMap)]
 fn runtime() uses (evm: mut Evm) {
-    let mut balances = StorageMap<u256, u256, 0>::new()
-    let mut allowances = StorageMap<u256, u256, 1>::new()
     let selector = evm.calldataload(0) >> 224
-    with (RawOps = evm) {
-        match selector {
-            0x9cc7f708 => {
-                // balanceOf(uint256)
-                let addr = evm.calldataload(4)
-                let balance = with (balances) {
-                    get_balance(addr)
+    with (RawStorage = evm) {
+        let mut balances: StorageMap<u256, u256, 0> = StorageMap::new()
+        let mut allowances: StorageMap<u256, u256, 1> = StorageMap::new()
+        with (RawOps = evm) {
+            match selector {
+                0x9cc7f708 => {
+                    // balanceOf(uint256)
+                    let addr = evm.calldataload(4)
+                    let balance = with (balances) {
+                        get_balance(addr: addr)
+                    }
+                    abi_encode(value: balance)
                 }
-                abi_encode(value: balance)
-            }
-            0x4a4b9feb => {
-                // setBalance(uint256,uint256)
-                let addr = evm.calldataload(4)
-                let value = evm.calldataload(36)
-                with (balances) {
-                    set_balance(addr, value)
+                0x4a4b9feb => {
+                    // setBalance(uint256,uint256)
+                    let addr = evm.calldataload(4)
+                    let value = evm.calldataload(36)
+                    with (mut balances) {
+                        set_balance(addr: addr, value: value)
+                    }
+                    abi_encode(value: 0)
                 }
-                abi_encode(value: 0)
-            }
-            0x90dd2627 => {
-                // transfer(uint256,uint256,uint256)
-                let from = evm.calldataload(4)
-                let to = evm.calldataload(36)
-                let amount = evm.calldataload(68)
-                let result = with (balances) { transfer(from, to, amount) }
-                abi_encode(value: result)
-            }
-            0xc960174e => {
-                // getAllowance(uint256)
-                let addr = evm.calldataload(4)
-                let allowance = with (allowances) { get_allowance(addr) }
-                abi_encode(value: allowance)
-            }
-            0x0bca4841 => {
-                // setAllowance(uint256,uint256)
-                let addr = evm.calldataload(4)
-                let value = evm.calldataload(36)
-                with (allowances) {
-                    set_allowance(addr, value)
+                0x90dd2627 => {
+                    // transfer(uint256,uint256,uint256)
+                    let from = evm.calldataload(4)
+                    let to = evm.calldataload(36)
+                    let amount = evm.calldataload(68)
+                    let result = with (mut balances) {
+                        transfer(from: from, to: to, amount: amount)
+                    }
+                    abi_encode(value: result)
                 }
-                abi_encode(value: 0)
+                0xc960174e => {
+                    // getAllowance(uint256)
+                    let addr = evm.calldataload(4)
+                    let allowance = with (allowances) { get_allowance(addr: addr) }
+                    abi_encode(value: allowance)
+                }
+                0x0bca4841 => {
+                    // setAllowance(uint256,uint256)
+                    let addr = evm.calldataload(4)
+                    let value = evm.calldataload(36)
+                    with (mut allowances) {
+                        set_allowance(addr: addr, value: value)
+                    }
+                    abi_encode(value: 0)
+                }
+                _ => evm.return_data(offset: 0, len: 0)
             }
-            _ => evm.return_data(offset: 0, len: 0)
         }
     }
 }

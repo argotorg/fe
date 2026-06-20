@@ -2,6 +2,7 @@ use core::abi::{ByteInput, BytesView}
 
 use super::mem
 use super::ops
+use super::effects::RawStorage
 use super::storage_map::{StorageKey, StorageMap}
 
 /// Round `len` up to the number of whole EVM words required to store it.
@@ -108,44 +109,54 @@ pub fn emit_bytes_event_view<I>(topic0: u256, view: BytesView<I>)
 /// This uses two scalar `StorageMap`s internally:
 /// - `LEN_SALT`: byte lengths
 /// - `WORD_SALT`: 32-byte payload words
-pub struct StorageBytes<K, const LEN_SALT: u256 = _, const WORD_SALT: u256 = _> {}
+struct StorageBytesSeal {}
+
+pub struct StorageBytes<K, const LEN_SALT: u256 = _, const WORD_SALT: u256 = _> {
+    seal: StorageBytesSeal,
+}
 
 impl<K: StorageKey + Copy, const LEN_SALT: u256, const WORD_SALT: u256>
     StorageBytes<K, LEN_SALT, WORD_SALT>
 {
-    pub fn new() -> Self {
-        Self {}
+    pub(ingot) fn new_unchecked() -> Self {
+        Self { seal: StorageBytesSeal {} }
+    }
+
+    pub fn new() -> Self
+    uses (storage: mut RawStorage)
+    {
+        Self::new_unchecked()
     }
 
     pub fn len(self, key: K) -> u256 {
-        let lengths: StorageMap<K, u256, LEN_SALT> = StorageMap::new()
-        lengths.get(key)
+        let lengths: StorageMap<K, u256, LEN_SALT> = StorageMap::new_unchecked()
+        lengths.get_unchecked(key)
     }
 
-    pub fn clear(self, key: K) {
-        let lengths: StorageMap<K, u256, LEN_SALT> = StorageMap::new()
-        let words: StorageMap<(K, u256), u256, WORD_SALT> = StorageMap::new()
+    pub fn clear(mut self, key: K) {
+        let mut lengths: StorageMap<K, u256, LEN_SALT> = StorageMap::new_unchecked()
+        let mut words: StorageMap<(K, u256), u256, WORD_SALT> = StorageMap::new_unchecked()
 
-        let len = lengths.get(key)
+        let len = lengths.get_unchecked(key)
         let word_count = ceil_words(len)
         let mut i: u256 = 0
         while i < word_count {
-            words.set(key: (key, i), value: 0)
+            words.set_unchecked(key: (key, i), value: 0)
             i += 1
         }
-        lengths.set(key: key, value: 0)
+        lengths.set_unchecked(key: key, value: 0)
     }
 
     /// Store bytes copied directly from calldata.
     ///
     /// `data_ptr` is a raw calldata byte offset.
-    pub fn store_from_calldata(self, key: K, data_ptr: u256, len: u256) {
+    pub fn store_from_calldata(mut self, key: K, data_ptr: u256, len: u256) {
         self.clear(key)
 
-        let lengths: StorageMap<K, u256, LEN_SALT> = StorageMap::new()
-        let words: StorageMap<(K, u256), u256, WORD_SALT> = StorageMap::new()
+        let mut lengths: StorageMap<K, u256, LEN_SALT> = StorageMap::new_unchecked()
+        let mut words: StorageMap<(K, u256), u256, WORD_SALT> = StorageMap::new_unchecked()
 
-        lengths.set(key: key, value: len)
+        lengths.set_unchecked(key: key, value: len)
         let word_count = ceil_words(len)
         let mut i: u256 = 0
         while i < word_count {
@@ -156,21 +167,21 @@ impl<K: StorageKey + Copy, const LEN_SALT: u256, const WORD_SALT: u256>
                     word = word & mask_for_bytes(rem)
                 }
             }
-            words.set(key: (key, i), value: word)
+            words.set_unchecked(key: (key, i), value: word)
             i += 1
         }
     }
 
     /// Store bytes from an arbitrary ABI byte view.
-    pub fn store_view<I>(self, key: K, view: BytesView<I>)
+    pub fn store_view<I>(mut self, key: K, view: BytesView<I>)
         where I: ByteInput
     {
         self.clear(key)
 
-        let lengths: StorageMap<K, u256, LEN_SALT> = StorageMap::new()
-        let words: StorageMap<(K, u256), u256, WORD_SALT> = StorageMap::new()
+        let mut lengths: StorageMap<K, u256, LEN_SALT> = StorageMap::new_unchecked()
+        let mut words: StorageMap<(K, u256), u256, WORD_SALT> = StorageMap::new_unchecked()
 
-        lengths.set(key: key, value: view.len())
+        lengths.set_unchecked(key: key, value: view.len())
         let word_count = ceil_words(view.len())
         let mut i: u256 = 0
         while i < word_count {
@@ -181,17 +192,17 @@ impl<K: StorageKey + Copy, const LEN_SALT: u256, const WORD_SALT: u256>
                     word = word & mask_for_bytes(rem)
                 }
             }
-            words.set(key: (key, i), value: word)
+            words.set_unchecked(key: (key, i), value: word)
             i += 1
         }
     }
 
     /// Return ABI-encoded `bytes` from storage.
     pub fn encode_return(self, key: K) -> ! {
-        let lengths: StorageMap<K, u256, LEN_SALT> = StorageMap::new()
-        let words: StorageMap<(K, u256), u256, WORD_SALT> = StorageMap::new()
+        let lengths: StorageMap<K, u256, LEN_SALT> = StorageMap::new_unchecked()
+        let words: StorageMap<(K, u256), u256, WORD_SALT> = StorageMap::new_unchecked()
 
-        let len = lengths.get(key)
+        let len = lengths.get_unchecked(key)
         let word_count = ceil_words(len)
         let total_len = 64 + word_count * 32
         let ptr = mem::alloc(total_len)
@@ -200,7 +211,7 @@ impl<K: StorageKey + Copy, const LEN_SALT: u256, const WORD_SALT: u256>
 
         let mut i: u256 = 0
         while i < word_count {
-            ops::mstore(addr: ptr + 64 + i * 32, value: words.get((key, i)))
+            ops::mstore(addr: ptr + 64 + i * 32, value: words.get_unchecked((key, i)))
             i += 1
         }
 

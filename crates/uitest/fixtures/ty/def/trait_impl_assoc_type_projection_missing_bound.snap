@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/trait_impl_assoc_type_projection_missing_bound.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_assoc_type_projection_missing_bound.fe:13:16
+   │
+13 │     type Out = Slot<{ <T as HasN>::N }>
+   │                ^^^^^^^^^^^^^^^^^^^^^^^^ `T` doesn't implement `HasN`

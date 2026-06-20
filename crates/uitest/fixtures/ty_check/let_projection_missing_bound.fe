@@ -1,0 +1,11 @@
+extern {
+    fn todo() -> !
+}
+
+trait Bound {
+    type Item
+}
+
+fn bad_let<T>() {
+    let _: <T as Bound>::Item = todo()
+}

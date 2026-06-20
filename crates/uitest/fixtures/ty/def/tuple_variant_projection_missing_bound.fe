@@ -1,0 +1,17 @@
+trait Bound {
+    type Item
+}
+
+trait Foo<T> {
+    type Out
+}
+
+struct Dummy<T> {}
+
+impl<T> Foo<T> for Dummy<T> {
+    type Out = u32
+}
+
+enum E<T> {
+    A(<Dummy< <T as Bound>::Item > as Foo< <T as Bound>::Item >>::Out),
+}

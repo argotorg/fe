@@ -1850,6 +1850,118 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             },
 
+            Self::StaticSlotSpaceUnresolved { span, ty } => {
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message:
+                        "this field embeds a `StaticSlot` type whose `SPACE` does not evaluate to a concrete address space"
+                            .to_string(),
+                    span: span.resolve(db),
+                }];
+                if let Some(name_span) = ty.name_span(db) {
+                    let type_name = ty.base_ty(db).pretty_print(db);
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{type_name}` is defined here"),
+                        span: name_span.resolve(db),
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "cannot determine the address space of a static-slot field".to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "`StaticSlot::SPACE` must evaluate to a concrete `core::effect_ref::AddressSpace` variant; it cannot depend on an unresolved generic parameter".to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
+            Self::ContractFieldNonSlotConstHole { span, ty } => {
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message:
+                        "this contract field has an inferred const (`_`) that is not a storage slot"
+                            .to_string(),
+                    span: span.resolve(db),
+                }];
+                if let Some(name_span) = ty.name_span(db) {
+                    let type_name = ty.base_ty(db).pretty_print(db);
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{type_name}` is defined here"),
+                        span: name_span.resolve(db),
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "contract field has an unresolved non-slot const generic".to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "only storage-slot (`u256` or `usize`) const generics may be left inferred (`_`) in a contract field; provide an explicit value".to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
+            Self::ContractFieldHandleSpaceUnresolved { span, ty } => {
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message:
+                        "the address space of this contract field's handle could not be determined"
+                            .to_string(),
+                    span: span.resolve(db),
+                }];
+                if let Some(name_span) = ty.name_span(db) {
+                    let type_name = ty.base_ty(db).pretty_print(db);
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{type_name}` is defined here"),
+                        span: name_span.resolve(db),
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "cannot determine the address space of a contract field".to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "the `EffectHandle` implementation's `const SPACE: AddressSpace` must resolve to a concrete address space; it cannot be left inferred (`_`) or depend on an unresolved generic parameter".to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
+            Self::ContractFieldExplicitConstHole { span, ty } => {
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "this contract field uses an explicit inferred const (`_`)"
+                        .to_string(),
+                    span: span.resolve(db),
+                }];
+                if let Some(name_span) = ty.name_span(db) {
+                    let type_name = ty.base_ty(db).pretty_print(db);
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{type_name}` is defined here"),
+                        span: name_span.resolve(db),
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "explicit `_` const argument is not allowed in a contract field"
+                        .to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "a storage-slot layout hole must come from the type's `= _` parameter default; provide an explicit value here instead".to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
             Self::ConstHoleInValuePosition { span, ty } => {
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
@@ -2030,6 +2142,22 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 Severity::Error,
                 "const evaluation exceeded the recursion limit",
                 "const evaluation recurses too deeply",
+                span.resolve(db),
+                error_code,
+            ),
+
+            Self::ConstEvalRecursiveConst(span) => primary_diag(
+                Severity::Error,
+                "recursive constant definition",
+                "this constant requires its own value",
+                span.resolve(db),
+                error_code,
+            ),
+
+            Self::TypeLoweringCycle(span) => primary_diag(
+                Severity::Error,
+                "cycle detected while resolving this type",
+                "this type's definition depends on itself",
                 span.resolve(db),
                 error_code,
             ),
@@ -4879,6 +5007,59 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                         "missing associated const `{}` from trait `{}`",
                         const_name.data(db),
                         trait_.name(db).unwrap().data(db)
+                    ),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
+            Self::ConstTyMismatchWithTrait {
+                primary,
+                trait_decl_span,
+                const_name,
+                trait_ty,
+                impl_ty,
+            } => CompleteDiagnostic {
+                severity,
+                message: format!(
+                    "associated const `{}` has incompatible type",
+                    const_name.data(db)
+                ),
+                sub_diagnostics: vec![
+                    SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "expected `{}`, found `{}`",
+                            trait_ty.pretty_print(db),
+                            impl_ty.pretty_print(db),
+                        ),
+                        span: primary.resolve(db),
+                    },
+                    SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: "trait requires this type".to_string(),
+                        span: trait_decl_span.resolve(db),
+                    },
+                ],
+                notes: vec![],
+                error_code,
+            },
+
+            Self::RecursiveAssocConst {
+                primary,
+                const_name,
+            } => CompleteDiagnostic {
+                severity,
+                message: format!(
+                    "associated const `{}` has a recursive definition",
+                    const_name.data(db)
+                ),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "`{}` cannot be evaluated to a concrete value",
+                        const_name.data(db)
                     ),
                     span: primary.resolve(db),
                 }],

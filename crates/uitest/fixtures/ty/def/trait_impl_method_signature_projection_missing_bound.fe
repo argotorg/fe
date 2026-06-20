@@ -1,0 +1,25 @@
+extern {
+    fn todo() -> !
+}
+
+trait Bound {
+    type Item
+}
+
+trait UsesBound {
+    fn run(self) -> <Self as Bound>::Item
+}
+
+struct S {}
+
+impl UsesBound for S {
+    fn run(self) -> <Self as Bound>::Item {
+        todo()
+    }
+}
+
+fn needs_uses_bound<T: UsesBound>(value: T) {}
+
+fn use_it(value: S) {
+    needs_uses_bound(value)
+}

@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/contract_field_explicit_const_hole.fe
+---
+error[3-0042]: explicit `_` const argument is not allowed in a contract field
+  ┌─ contract_field_explicit_const_hole.fe:6:12
+  │
+6 │     value: String<_>,
+  │            ^^^^^^^^^ this contract field uses an explicit inferred const (`_`)
+  │
+  = a storage-slot layout hole must come from the type's `= _` parameter default; provide an explicit value here instead

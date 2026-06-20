@@ -1,0 +1,17 @@
+trait Bound {
+    type Item
+}
+
+trait HasN {
+    const N: u32
+}
+
+trait Foo {}
+
+struct Slot<const N: u32> {}
+struct Holder<T> {}
+struct Missing {}
+
+impl Foo for Holder< <Missing as Bound>::Item > {}
+
+impl Foo for Holder<Slot<{ <Missing as HasN>::N }>> {}

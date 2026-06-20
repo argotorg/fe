@@ -1,0 +1,31 @@
+struct Slot<const N: u32> {}
+
+trait A {
+    const N: u32
+}
+
+trait B {
+    const N: u32
+    fn make(self) -> Slot<{ <Self as A>::N }>
+}
+
+struct S {}
+
+impl A for S {
+    const N: u32 = 1
+}
+
+impl B for S {
+    const N: u32 = 2
+
+    fn make(self) -> Slot<{ <Self as A>::N }> {
+        let value: Slot<{ <Self as A>::N }> = Slot {}
+        value
+    }
+}
+
+fn needs_b<T: B>(_ value: T) {}
+
+fn use_it(value: S) {
+    needs_b(value)
+}

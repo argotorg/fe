@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/method_bound/call_bound_note_two_levels.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ call_bound_note_two_levels.fe:13:10
+   │
+ 8 │ impl<T: Red> Pair<T> {
+   │         --- required by this bound on `join`
+   ·
+13 │     pair.join(other)
+   │          ^^^^ `T` doesn't implement `Red`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ call_bound_note_two_levels.fe:13:10
+   │
+ 9 │     fn join<U: Blue>(self, _ other: U) {}
+   │                ---- required by this bound on `join`
+   ·
+13 │     pair.join(other)
+   │          ^^^^ `U` doesn't implement `Blue`

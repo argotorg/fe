@@ -1,0 +1,13 @@
+extern {
+    fn todo() -> !
+}
+
+trait HasN {
+    const N: u32
+}
+
+struct Slot<const N: u32> {}
+
+fn bad_len<T>() {
+    let _: Slot<{ <T as HasN>::N }> = todo()
+}

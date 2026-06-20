@@ -2,7 +2,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{
     const_ty::{
-        AppFrameId, CallableInputLayoutHoleOrigin, ConstTyData, ConstTyId, HoleId, LocalFrameId,
+        CallableInputLayoutHoleOrigin, ConstTyData, ConstTyId, HoleAnchor, HoleId, HoleMinter,
         StructuralHoleId,
     },
     fold::{TyFoldable, TyFolder},
@@ -11,7 +11,7 @@ use super::{
     visitor::{TyVisitable, TyVisitor, walk_ty},
 };
 use crate::analysis::HirAnalysisDb;
-use crate::hir_def::CallableDef;
+use crate::hir_def::{CallableDef, TypeAlias as HirTypeAlias};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LayoutPlaceholderPolicy {
@@ -319,7 +319,9 @@ where
 {
     let holes = collect_unique_structural_holes_in_order(db, value);
     assert!(
-        holes.iter().all(|hole_id| hole_id.app_frame(db).is_some()),
+        holes
+            .iter()
+            .all(|hole_id| !matches!(hole_id.anchor(db), HoleAnchor::AliasTemplate(_))),
         "template-only structural hole escaped into semantic binding"
     );
     holes
@@ -374,67 +376,94 @@ where
     )
 }
 
-pub(crate) fn prepend_local_parent_to_structural_holes<'db, T>(
+/// Re-anchors every lowering-template hole in `value` at `anchor`, assigning
+/// fresh sequential ordinals in first-visit order. Sharing-preserving: all
+/// occurrences of one hole id map to one re-anchored id.
+pub(crate) fn reanchor_template_holes<'db, T>(
     db: &'db dyn HirAnalysisDb,
     value: T,
-    parent: LocalFrameId<'db>,
+    anchor: HoleAnchor<'db>,
 ) -> T
 where
     T: TyFoldable<'db>,
 {
+    let mut next = 0u32;
+    let mut renumbered: FxHashMap<StructuralHoleId<'db>, TyId<'db>> = FxHashMap::default();
     rewrite_structural_holes(db, value, |hole_id, hole_ty| {
-        Some(TyId::const_ty(
-            db,
-            ConstTyId::hole_with_id(
-                db,
-                hole_ty,
-                HoleId::Structural(hole_id.prepend_local_parent(db, parent)),
-            ),
-        ))
-    })
-}
-
-pub(crate) fn rebase_structural_holes_under_app<'db, T>(
-    db: &'db dyn HirAnalysisDb,
-    value: T,
-    parent: AppFrameId<'db>,
-) -> T
-where
-    T: TyFoldable<'db>,
-{
-    rewrite_structural_holes(db, value, |hole_id, hole_ty| {
-        Some(TyId::const_ty(
-            db,
-            ConstTyId::hole_with_id(
-                db,
-                hole_ty,
-                HoleId::Structural(hole_id.rebase_app_under(db, parent)),
-            ),
-        ))
-    })
-}
-
-pub(crate) fn rebase_owned_structural_holes_under_app<'db, T>(
-    db: &'db dyn HirAnalysisDb,
-    value: T,
-    parent: AppFrameId<'db>,
-    mut owns_hole: impl FnMut(StructuralHoleId<'db>) -> bool,
-) -> T
-where
-    T: TyFoldable<'db>,
-{
-    rewrite_structural_holes(db, value, |hole_id, hole_ty| {
-        owns_hole(hole_id).then(|| {
+        if !hole_id.anchor(db).is_lowering_template() {
+            return None;
+        }
+        Some(*renumbered.entry(hole_id).or_insert_with(|| {
+            let ordinal = next;
+            next += 1;
             TyId::const_ty(
                 db,
                 ConstTyId::hole_with_id(
                     db,
                     hole_ty,
-                    HoleId::Structural(hole_id.rebase_app_under(db, parent)),
+                    HoleId::Structural(StructuralHoleId::new(
+                        db,
+                        hole_id.expected_ty(db),
+                        hole_id.origin(db),
+                        anchor,
+                        ordinal,
+                    )),
                 ),
             )
-        })
+        }))
     })
+}
+
+/// Replaces holes owned by `alias`'s template with fresh holes minted from
+/// the use site's minter. Sharing-preserving: all occurrences of one
+/// template hole map to one fresh hole.
+pub(crate) fn refresh_alias_template_holes<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    value: T,
+    alias: HirTypeAlias<'db>,
+    minter: &HoleMinter<'db>,
+) -> T
+where
+    T: TyFoldable<'db>,
+{
+    let mut refreshed: FxHashMap<StructuralHoleId<'db>, TyId<'db>> = FxHashMap::default();
+    rewrite_structural_holes(db, value, |hole_id, hole_ty| {
+        if hole_id.anchor(db) != HoleAnchor::AliasTemplate(alias) {
+            return None;
+        }
+        Some(*refreshed.entry(hole_id).or_insert_with(|| {
+            let (anchor, ordinal) = minter.mint();
+            TyId::const_ty(
+                db,
+                ConstTyId::hole_with_id(
+                    db,
+                    hole_ty,
+                    HoleId::Structural(StructuralHoleId::new(
+                        db,
+                        hole_id.expected_ty(db),
+                        hole_id.origin(db),
+                        anchor,
+                        ordinal,
+                    )),
+                ),
+            )
+        }))
+    })
+}
+
+/// The structural-hole origin of a layout placeholder, when it is a
+/// structural hole (implicit-param placeholders have none).
+pub(crate) fn structural_hole_origin<'db>(
+    db: &'db dyn HirAnalysisDb,
+    placeholder: TyId<'db>,
+) -> Option<super::const_ty::StructuralHoleOrigin<'db>> {
+    let TyData::ConstTy(const_ty) = placeholder.data(db) else {
+        return None;
+    };
+    let ConstTyData::Hole(_, HoleId::Structural(hole_id)) = const_ty.data(db) else {
+        return None;
+    };
+    Some(hole_id.origin(db))
 }
 
 pub(crate) fn collect_layout_hole_tys_in_order<'db, T>(
@@ -459,6 +488,22 @@ pub(crate) fn collect_layout_placeholder_tys_in_order_with_policy<'db, T>(
 where
     T: TyVisitable<'db>,
 {
+    collect_layout_placeholder_pairs_in_order_with_policy(db, value, policy)
+        .into_iter()
+        .map(|(_, hole_ty)| hole_ty)
+        .collect()
+}
+
+/// Like [`collect_layout_placeholder_tys_in_order_with_policy`], but pairs
+/// each (fallbacked) placeholder value type with the placeholder itself.
+pub(crate) fn collect_layout_placeholder_pairs_in_order_with_policy<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    value: T,
+    policy: LayoutPlaceholderPolicy,
+) -> Vec<(TyId<'db>, TyId<'db>)>
+where
+    T: TyVisitable<'db>,
+{
     collect_layout_placeholders_in_order_with_policy(db, value, policy)
         .into_iter()
         .filter_map(|placeholder| {
@@ -466,8 +511,10 @@ where
                 return None;
             };
             match const_ty.data(db) {
-                ConstTyData::Hole(hole_ty, _) => Some(layout_hole_fallback_ty(db, *hole_ty)),
-                ConstTyData::TyParam(param, ty) if param.is_implicit() => Some(*ty),
+                ConstTyData::Hole(hole_ty, _) => {
+                    Some((placeholder, layout_hole_fallback_ty(db, *hole_ty)))
+                }
+                ConstTyData::TyParam(param, ty) if param.is_implicit() => Some((placeholder, *ty)),
                 _ => None,
             }
         })
@@ -525,13 +572,13 @@ mod tests {
 
     use super::{
         LayoutPlaceholderPolicy, alpha_rename_hidden_layout_placeholders,
-        collect_unique_app_bound_structural_holes_in_order,
-        prepend_local_parent_to_structural_holes, rebase_structural_holes_under_app,
-        substitute_layout_placeholders_by_identity, substitute_layout_placeholders_in_order,
+        collect_unique_app_bound_structural_holes_in_order, reanchor_template_holes,
+        refresh_alias_template_holes, substitute_layout_placeholders_by_identity,
+        substitute_layout_placeholders_in_order,
     };
     use crate::analysis::ty::{
         const_ty::{
-            AppFrameId, ConstTyData, ConstTyId, HoleId, LayoutHoleArgSite, LocalFrameId,
+            ConstTyData, ConstTyId, HoleAnchor, HoleId, HoleMinter, LayoutHoleArgSite,
             StructuralHoleOrigin,
         },
         ty_def::{Kind, PrimTy, TyBase, TyData, TyId, TyParam},
@@ -563,22 +610,27 @@ mod tests {
 
     fn mk_structural_hole_ty<'db>(
         db: &'db HirAnalysisTestDb,
-        local_frame: LocalFrameId<'db>,
-        app_frame: Option<AppFrameId<'db>>,
+        identity: (HoleAnchor<'db>, u32),
     ) -> TyId<'db> {
         TyId::const_ty(
             db,
-            ConstTyId::structural_hole_with_app(
+            ConstTyId::structural_hole(
                 db,
                 usize_ty(db),
                 StructuralHoleOrigin::ExplicitWildcard {
                     site: LayoutHoleArgSite::GenericArgList(GenericArgListId::none(db)),
                     arg_idx: 0,
                 },
-                local_frame,
-                app_frame,
+                identity,
             ),
         )
+    }
+
+    fn template_anchor<'db>(db: &'db HirAnalysisTestDb, scope: ScopeId<'db>) -> HoleAnchor<'db> {
+        HoleAnchor::TemplateArgs {
+            args: GenericArgListId::none(db),
+            scope,
+        }
     }
 
     fn expect_structural_hole<'db>(
@@ -596,6 +648,14 @@ mod tests {
 
     fn mk_array_with_len<'db>(db: &'db HirAnalysisTestDb, len: TyId<'db>) -> TyId<'db> {
         TyId::app(db, TyId::array(db, TyId::u256(db)), len)
+    }
+
+    fn array_len_hole<'db>(
+        db: &'db HirAnalysisTestDb,
+        array_ty: TyId<'db>,
+    ) -> super::StructuralHoleId<'db> {
+        let (_, args) = array_ty.decompose_ty_app(db);
+        expect_structural_hole(db, args[1])
     }
 
     #[test]
@@ -819,69 +879,153 @@ mod tests {
     }
 
     #[test]
-    fn prepend_local_parent_only_updates_local_provenance() {
-        let db = HirAnalysisTestDb::default();
-        let local_root = LocalFrameId::root_generic_arg_list(&db, GenericArgListId::none(&db));
-        let app_root = AppFrameId::root_generic_arg_list(&db, GenericArgListId::given(&db, vec![]));
-        let parent = LocalFrameId::root_generic_arg_list(&db, GenericArgListId::given(&db, vec![]));
-
-        let rebound = prepend_local_parent_to_structural_holes(
-            &db,
-            mk_structural_hole_ty(&db, local_root, Some(app_root)),
-            parent,
+    fn reanchor_template_holes_changes_identity_and_preserves_sharing() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("reanchor_template_holes_changes_identity.fe"),
+            "type A = u256\nfn f() {}",
         );
-        let hole_id = expect_structural_hole(&db, rebound);
+        let (top_mod, _) = db.top_mod(file);
+        let scope = top_mod
+            .children_non_nested(&db)
+            .find_map(|item| match item {
+                ItemKind::Func(func) => Some(func.scope()),
+                _ => None,
+            })
+            .expect("missing `f` function");
+        let alias = top_mod
+            .children_non_nested(&db)
+            .find_map(|item| match item {
+                ItemKind::TypeAlias(alias) => Some(alias),
+                _ => None,
+            })
+            .expect("missing `A` alias");
 
-        assert_eq!(hole_id.local_frame(&db).parent(&db), Some(parent));
-        assert_eq!(hole_id.app_frame(&db), Some(app_root));
+        // One template hole occurring twice plus a distinct sibling, embedded
+        // as array lengths (tuple elements must be star-kinded).
+        let shared = mk_structural_hole_ty(&db, (template_anchor(&db, scope), 0));
+        let sibling = mk_structural_hole_ty(&db, (template_anchor(&db, scope), 1));
+        let tuple = TyId::tuple_with_elems(
+            &db,
+            &[
+                mk_array_with_len(&db, shared),
+                mk_array_with_len(&db, sibling),
+                mk_array_with_len(&db, shared),
+            ],
+        );
+
+        let reanchored = reanchor_template_holes(&db, tuple, HoleAnchor::AliasTemplate(alias));
+        assert_ne!(reanchored, tuple);
+
+        let (_, elems) = reanchored.decompose_ty_app(&db);
+        let ids: Vec<_> = elems
+            .iter()
+            .map(|elem| array_len_hole(&db, *elem))
+            .collect();
+        // Sharing preserved, distinctness preserved, anchors rewritten.
+        assert_eq!(ids[0], ids[2]);
+        assert_ne!(ids[0], ids[1]);
+        assert!(
+            ids.iter()
+                .all(|id| id.anchor(&db) == HoleAnchor::AliasTemplate(alias))
+        );
+        assert_ne!(ids[0].ordinal(&db), ids[1].ordinal(&db));
     }
 
     #[test]
-    fn rebase_under_app_only_updates_application_provenance() {
-        let db = HirAnalysisTestDb::default();
-        let local_root = LocalFrameId::root_generic_arg_list(&db, GenericArgListId::none(&db));
-        let first_app =
-            AppFrameId::root_generic_arg_list(&db, GenericArgListId::given(&db, vec![]));
-        let rebound_parent = AppFrameId::root_generic_arg_list(&db, GenericArgListId::none(&db));
-
-        let rebound = rebase_structural_holes_under_app(
-            &db,
-            mk_structural_hole_ty(&db, local_root, Some(first_app)),
-            rebound_parent,
+    fn refresh_alias_template_holes_mints_per_use_identities() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("refresh_alias_template_holes_mints.fe"),
+            "type A = u256\nfn f() {}",
         );
-        let hole_id = expect_structural_hole(&db, rebound);
+        let (top_mod, _) = db.top_mod(file);
+        let scope = top_mod
+            .children_non_nested(&db)
+            .find_map(|item| match item {
+                ItemKind::Func(func) => Some(func.scope()),
+                _ => None,
+            })
+            .expect("missing `f` function");
+        let alias = top_mod
+            .children_non_nested(&db)
+            .find_map(|item| match item {
+                ItemKind::TypeAlias(alias) => Some(alias),
+                _ => None,
+            })
+            .expect("missing `A` alias");
 
-        assert_eq!(hole_id.local_frame(&db), local_root);
+        let template = mk_structural_hole_ty(&db, (HoleAnchor::AliasTemplate(alias), 0));
+        let use_minter = HoleMinter::new(template_anchor(&db, scope));
+
+        // Two instantiations of the same template must produce distinct holes;
+        // within one instantiation, repeated occurrences stay shared.
+        let pair = TyId::tuple_with_elems(
+            &db,
+            &[
+                mk_array_with_len(&db, template),
+                mk_array_with_len(&db, template),
+            ],
+        );
+        let first = refresh_alias_template_holes(&db, pair, alias, &use_minter);
+        let second = refresh_alias_template_holes(&db, pair, alias, &use_minter);
+        assert_ne!(first, second);
+
+        let (_, first_elems) = first.decompose_ty_app(&db);
         assert_eq!(
-            hole_id.app_frame(&db).unwrap().parent(&db),
-            Some(rebound_parent)
+            array_len_hole(&db, first_elems[0]),
+            array_len_hole(&db, first_elems[1]),
+        );
+        assert_ne!(
+            array_len_hole(&db, first_elems[0]),
+            array_len_hole(&db, second.decompose_ty_app(&db).1[0]),
         );
     }
 
     #[test]
-    fn collect_unique_app_bound_structural_holes_accepts_app_bound_holes() {
-        let db = HirAnalysisTestDb::default();
-        let local_root = LocalFrameId::root_generic_arg_list(&db, GenericArgListId::none(&db));
-        let app_root = AppFrameId::root_generic_arg_list(&db, GenericArgListId::given(&db, vec![]));
+    fn collect_unique_app_bound_structural_holes_accepts_use_site_holes() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("collect_unique_app_bound_accepts_use_site.fe"),
+            "fn f() {}",
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let scope = top_mod
+            .children_non_nested(&db)
+            .find_map(|item| match item {
+                ItemKind::Func(func) => Some(func.scope()),
+                _ => None,
+            })
+            .expect("missing `f` function");
 
         let holes = collect_unique_app_bound_structural_holes_in_order(
             &db,
-            mk_structural_hole_ty(&db, local_root, Some(app_root)),
+            mk_structural_hole_ty(&db, (template_anchor(&db, scope), 0)),
         );
 
         assert_eq!(holes.len(), 1);
-        assert_eq!(holes[0].app_frame(&db), Some(app_root));
     }
 
     #[test]
     #[should_panic(expected = "template-only structural hole escaped into semantic binding")]
-    fn collect_unique_app_bound_structural_holes_rejects_template_only_holes() {
-        let db = HirAnalysisTestDb::default();
-        let local_root = LocalFrameId::root_generic_arg_list(&db, GenericArgListId::none(&db));
+    fn collect_unique_app_bound_structural_holes_rejects_alias_template_holes() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("collect_unique_app_bound_rejects_alias_template.fe"),
+            "type A = u256",
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let alias = top_mod
+            .children_non_nested(&db)
+            .find_map(|item| match item {
+                ItemKind::TypeAlias(alias) => Some(alias),
+                _ => None,
+            })
+            .expect("missing `A` alias");
 
         let _ = collect_unique_app_bound_structural_holes_in_order(
             &db,
-            mk_structural_hole_ty(&db, local_root, None),
+            mk_structural_hole_ty(&db, (HoleAnchor::AliasTemplate(alias), 0)),
         );
     }
 }

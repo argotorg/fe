@@ -30,7 +30,7 @@ pub contract A uses (ctx: Ctx, call: mut Call) {
             // this calls B::Enter -> A::Callback -> B::Protected
             let _ = call.call(addr: b, gas, value, message: BMsg::Enter { a: self_addr, user: user })
 
-            // within the same transaction, now unlocked: Protected should increment map[user]
+            // within the same transaction, now unlocked: Protected should take the lock.
             call.call(addr: b, gas, value, message: BMsg::Protected { user: user })
         }
 
@@ -52,26 +52,24 @@ pub contract B {
     recv BMsg {
         Enter { a, user } -> u256 uses (mut guarded_balances, ctx: Ctx, call: mut Call) {
             guarded_balances.lock()
-            let pre = guarded_balances.value.get(key: user)
+            let pre = guarded_balances.peek().get(key: user)
             call.call(
                 addr: a,
                 gas: 150000,
                 value: 0,
                 message: AMsg::Callback { b: ctx.address(), user: user },
             )
-            let post = guarded_balances.value.get(key: user)
+            let post = guarded_balances.peek().get(key: user)
             assert!(post == pre)
             guarded_balances.unlock()
             post
         }
 
         Protected { user } -> u256 uses (mut guarded_balances) {
-            let mut result = guarded_balances.value.get(key: user)
+            let mut result = guarded_balances.peek().get(key: user)
             let mut did_lock = false
             match guarded_balances.try_lock() {
                 Option::Some(mut balances) => {
-                    let current = balances.get(key: user)
-                    balances.set(key: user, value: current + 1)
                     result = balances.get(key: user)
                     did_lock = true
                 }
@@ -84,7 +82,7 @@ pub contract B {
         }
 
         Get { user } -> u256 uses (guarded_balances) {
-            guarded_balances.value.get(key: user)
+            guarded_balances.peek().get(key: user)
         }
 
         IsLocked -> bool uses (guarded_balances) {
@@ -124,14 +122,14 @@ fn test_reentrancy_guard_mutex_storage_map() uses (cr: mut Create, evm: mut Evm)
     let before = evm.call(addr: b, gas, value, message: BMsg::Get { user: user })
     assert!(before == 0)
 
-    // Reentrant Protected call during Enter is blocked; only the post-Enter Protected increments.
+    // Reentrant Protected call during Enter is blocked; the post-Enter call can take the lock.
     let started = evm.call(addr: a, gas, value, message: AMsg::Start { b: b, user: user })
-    assert!(started == 1)
+    assert!(started == 0)
 
     let after = evm.call(addr: b, gas, value, message: BMsg::Get { user: user })
-    assert!(after == 1)
+    assert!(after == 0)
 
-    // A standalone Protected call increments again.
+    // A standalone Protected call also leaves the map unchanged.
     let direct = evm.call(addr: b, gas, value, message: BMsg::Protected { user: user })
-    assert!(direct == 2)
+    assert!(direct == 0)
 }

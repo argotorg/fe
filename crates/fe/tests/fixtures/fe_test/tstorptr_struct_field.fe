@@ -1,0 +1,69 @@
+// A runtime `TStorPtr` handle stored as an ordinary struct field: the handle
+// value lives in persistent storage (written by `init`, read back in later
+// transactions) while the flag it points at lives in transient storage.
+// For reentrancy locks prefer `std::evm::Mutex`, whose zero-sized `TSlot`
+// lock costs no storage and gets its slot from the layout; this pins the
+// runtime-handle composition itself.
+use core::effect_ref::EffectHandle
+use std::evm::effects::TStorPtr
+use std::evm::{Create, Evm}
+
+struct Flagged {
+    count: u256,
+    flag: TStorPtr<bool>,
+}
+
+impl Flagged {
+    fn attach(mut self, slot: u256) {
+        self.flag = TStorPtr::from_raw(slot)
+    }
+}
+
+msg CMsg {
+    #[selector = 1]
+    HandleSlot -> u256,
+    #[selector = 2]
+    Bump -> u256,
+}
+
+pub contract C {
+    mut state: Flagged,
+
+    init() uses (mut state) {
+        state.attach(slot: 0xfe)
+    }
+
+    recv CMsg {
+        HandleSlot -> u256 uses (state) {
+            // The handle written by `init` persists across transactions.
+            state.flag.raw()
+        }
+
+        Bump -> u256 uses (mut state) {
+            // Set and clear the transient flag through the persisted handle;
+            // the persistent counter advances while the flag round-trips.
+            assert!(!state.flag.read())
+            state.flag.write(true)
+            assert!(state.flag.read())
+            state.flag.write(false)
+            assert!(!state.flag.read())
+            state.count += 1
+            state.count
+        }
+    }
+}
+
+#[test]
+fn handle_persists_flag_is_transient() uses (cr: mut Create, evm: mut Evm) {
+    let c = cr.create2<C>(value: 0, args: (), salt: 1)
+    let gas = 200000
+    let value = 0
+
+    let slot = evm.call(addr: c, gas, value, message: CMsg::HandleSlot {})
+    assert!(slot == 0xfe)
+
+    let a = evm.call(addr: c, gas, value, message: CMsg::Bump {})
+    assert!(a == 1)
+    let b = evm.call(addr: c, gas, value, message: CMsg::Bump {})
+    assert!(b == 2)
+}

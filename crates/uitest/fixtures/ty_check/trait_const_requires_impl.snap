@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/trait_const_requires_impl.fe
+---
+error[6-0003]: trait bound is not satisfied
+  ┌─ trait_const_requires_impl.fe:8:5
+  │
+8 │     <MissingConstStruct as MissingConst>::C
+  │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `MissingConstStruct` doesn't implement `MissingConst`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_const_requires_impl.fe:13:9
+   │
+13 │         <MissingConstStruct as MissingConst>::C => true,
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `MissingConstStruct` doesn't implement `MissingConst`

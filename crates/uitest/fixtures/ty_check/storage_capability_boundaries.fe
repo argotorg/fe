@@ -1,0 +1,36 @@
+use std::evm::{StorageBytes, StorageMap, StoragePackedArray, TSlot}
+
+struct Store {
+    balances: StorageMap<u256, u256, 0>,
+}
+
+pub fn map_new_without_effect() -> u256 {
+    let map: StorageMap<u256, u256, 0> = StorageMap::new()
+    map.get(1)
+}
+
+pub fn map_literal() -> StorageMap<u256, u256, 0> {
+    StorageMap {}
+}
+
+pub fn bytes_new_without_effect() -> StorageBytes<u256, 0, 1> {
+    StorageBytes::new()
+}
+
+pub fn array_new_without_effect() -> StoragePackedArray<8, 0> {
+    StoragePackedArray::new()
+}
+
+pub fn tslot_literal() -> TSlot<u256, 0> {
+    TSlot {}
+}
+
+pub fn tslot_write_without_effect(slot: TSlot<u256, 0>) {
+    slot.write(1)
+}
+
+pub fn readonly_store_set()
+uses (store: Store)
+{
+    store.balances.set(key: 1, value: 2)
+}

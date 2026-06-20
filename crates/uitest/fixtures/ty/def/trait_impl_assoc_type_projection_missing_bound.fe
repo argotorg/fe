@@ -1,0 +1,14 @@
+trait HasN {
+    const N: u32
+}
+
+trait UsesN {
+    type Out
+}
+
+struct Slot<const N: u32> {}
+struct Holder<T> {}
+
+impl<T> UsesN for Holder<T> {
+    type Out = Slot<{ <T as HasN>::N }>
+}

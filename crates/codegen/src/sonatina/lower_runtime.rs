@@ -3925,6 +3925,11 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
 
         let from_ptr = from.is_pointer(&self.fb.module_builder.ctx);
         let to_ptr = ty.is_pointer(&self.fb.module_builder.ctx);
+        if !from_ptr && !to_ptr && (!from.is_integral() || !ty.is_integral()) {
+            return Err(LowerError::Internal(format!(
+                "cannot coerce non-scalar value from {from:?} to {ty:?}"
+            )));
+        }
         Ok(match (from_ptr, to_ptr) {
             (true, false) => {
                 if !ty.is_integral() {

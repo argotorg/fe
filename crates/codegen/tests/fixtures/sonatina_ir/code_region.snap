@@ -12,7 +12,7 @@ func private %balance() {
         jump block1;
 
     block1:
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_2757 0.i256 0.i256;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_e62a 0.i256 0.i256;
         unreachable;
 }
 
@@ -152,14 +152,6 @@ func private %read_selector() -> i256 {
         return v3;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_2757(v0.i256, v1.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        evm_return v0 v1;
-}
-
 func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25(v0.i256, v1.i256) {
     block0:
         jump block1;
@@ -185,6 +177,14 @@ func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25_1(v0
 }
 
 func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25_2(v0.i256, v1.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        evm_return v0 v1;
+}
+
+func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_e62a(v0.i256, v1.i256) {
     block0:
         jump block1;
 
@@ -229,7 +229,7 @@ func private %transfer() {
         jump block1;
 
     block1:
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_2757 0.i256 0.i256;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_e62a 0.i256 0.i256;
         unreachable;
 }
 

@@ -565,7 +565,8 @@ impl<T> Logger for Ptr<T> {
 
 impl<T> EffectHandle for Ptr<T> {
     type Target = T
-    type AddressSpace = core::effect_ref::Memory
+
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
 
     fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
@@ -774,7 +775,8 @@ struct Ptr<T> {
 
 impl<T> EffectHandle for Ptr<T> {
     type Target = T
-    type AddressSpace = core::effect_ref::Memory
+
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
 
     fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
@@ -1802,7 +1804,8 @@ struct Ptr<T> {
 
 impl<T> EffectHandle for Ptr<T> {
     type Target = T
-    type AddressSpace = core::effect_ref::Memory
+
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
 
     fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
@@ -2043,7 +2046,8 @@ struct Ptr<T> {
 
 impl EffectHandle for Ptr<Storage<u8>> {
     type Target = Storage<u8>
-    type AddressSpace = core::effect_ref::Memory
+
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
 
     fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
@@ -2111,7 +2115,8 @@ struct Ptr<T> {
 
 impl EffectHandle for Ptr<Storage<u8>> {
     type Target = Storage<u8>
-    type AddressSpace = core::effect_ref::Memory
+
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
 
     fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
@@ -2173,7 +2178,8 @@ struct Ptr<T> {
 
 impl EffectHandle for Ptr<Storage<u8>> {
     type Target = Storage<u8>
-    type AddressSpace = core::effect_ref::Memory
+
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
 
     fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
@@ -2236,7 +2242,8 @@ where
     T: HasTy
 {
     type Target = Storage<T::Assoc>
-    type AddressSpace = core::effect_ref::Memory
+
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
 
     fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
@@ -2306,7 +2313,8 @@ where
     T: HasTy
 {
     type Target = Storage<T::Assoc>
-    type AddressSpace = core::effect_ref::Memory
+
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
 
     fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
@@ -3687,7 +3695,8 @@ struct Ptr<T> {
 
 impl EffectHandle for Ptr<Storage<u8>> {
     type Target = Storage<u8>
-    type AddressSpace = core::effect_ref::Memory
+
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
 
     fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
@@ -4383,7 +4392,7 @@ fn storage_map_effect_forwarding_keeps_concrete_hidden_layout_args() {
     let file = db.new_stand_alone(
         Utf8PathBuf::from("storage_map_effect_forwarding_keeps_concrete_hidden_layout_args.fe"),
         r#"
-use std::evm::StorageMap
+use std::evm::{RawStorage, StorageMap}
 
 fn needs(_ addr: u256) -> u256
     uses (balances: StorageMap<u256, u256>)
@@ -4391,7 +4400,9 @@ fn needs(_ addr: u256) -> u256
     balances.get(key: addr)
 }
 
-fn caller() {
+fn caller()
+    uses (storage: mut RawStorage)
+{
     let mut balances = StorageMap<u256, u256, 0>::new()
     with (balances) {
         let _ = needs(1)
@@ -4416,7 +4427,7 @@ fn nested_storage_map_effect_forwarding_keeps_concrete_hidden_layout_args() {
             "nested_storage_map_effect_forwarding_keeps_concrete_hidden_layout_args.fe",
         ),
         r#"
-use std::evm::StorageMap
+use std::evm::{RawStorage, StorageMap}
 
 fn needs(_ addr: u256) -> u256
     uses (balances: StorageMap<u256, u256>)
@@ -4430,7 +4441,9 @@ fn nested(_ addr: u256) -> u256
     needs(addr)
 }
 
-fn caller() {
+fn caller()
+    uses (storage: mut RawStorage)
+{
     let mut balances = StorageMap<u256, u256, 0>::new()
     with (balances) {
         let _ = nested(1)
@@ -4496,7 +4509,7 @@ fn projected_storage_map_effect_forwarding_keeps_concrete_hidden_layout_args() {
             "projected_storage_map_effect_forwarding_keeps_concrete_hidden_layout_args.fe",
         ),
         r#"
-use std::evm::StorageMap
+use std::evm::{RawStorage, StorageMap}
 
 fn needs(_ addr: u256) -> u256
     uses (balances: StorageMap<u256, u256>)
@@ -5393,7 +5406,7 @@ fn free_function_effect_calls_monomorphize_distinct_provider_bindings() {
     let file = db.new_stand_alone(
         Utf8PathBuf::from("free_function_effect_calls_monomorphize_distinct_provider_bindings.fe"),
         r#"
-use std::evm::StorageMap
+use std::evm::{RawStorage, StorageMap}
 
 fn needs(_ addr: u256) -> u256
     uses (balances: StorageMap<u256, u256>)
@@ -5401,7 +5414,9 @@ fn needs(_ addr: u256) -> u256
     balances.get(key: addr)
 }
 
-fn caller() {
+fn caller()
+    uses (storage: mut RawStorage)
+{
     let mut left = StorageMap<u256, u256, 0>::new()
     let mut right = StorageMap<u256, u256, 0>::new()
     with (left) {

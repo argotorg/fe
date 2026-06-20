@@ -1,0 +1,46 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/storage_capability_boundaries.fe
+---
+error[8-0011]: missing fields in record pattern
+   ┌─ storage_capability_boundaries.fe:13:16
+   │
+13 │     StorageMap {}
+   │                ^^
+   │                │
+   │                missing `seal`
+   │                Consider using `StorageMap { seal }` instead
+
+error[8-0011]: missing fields in record pattern
+   ┌─ storage_capability_boundaries.fe:25:11
+   │
+25 │     TSlot {}
+   │           ^^
+   │           │
+   │           missing `seal`
+   │           Consider using `TSlot { seal }` instead
+
+error[8-0036]: missing effect `RawStorage` required by `new`
+  ┌─ storage_capability_boundaries.fe:8:42
+  │
+8 │     let map: StorageMap<u256, u256, 0> = StorageMap::new()
+  │                                          ^^^^^^^^^^^^^^^^^ `new` requires effect `RawStorage` to be in scope
+  │
+  = provide it with `with (RawStorage = value)` or require it via `uses RawStorage`
+
+error[8-0036]: missing effect `RawStorage` required by `new`
+   ┌─ storage_capability_boundaries.fe:17:5
+   │
+17 │     StorageBytes::new()
+   │     ^^^^^^^^^^^^^^^^^^^ `new` requires effect `RawStorage` to be in scope
+   │
+   = provide it with `with (RawStorage = value)` or require it via `uses RawStorage`
+
+error[8-0036]: missing effect `RawStorage` required by `new`
+   ┌─ storage_capability_boundaries.fe:21:5
+   │
+21 │     StoragePackedArray::new()
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^ `new` requires effect `RawStorage` to be in scope
+   │
+   = provide it with `with (RawStorage = value)` or require it via `uses RawStorage`

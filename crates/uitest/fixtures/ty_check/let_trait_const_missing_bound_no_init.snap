@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/let_trait_const_missing_bound_no_init.fe
+---
+error[6-0003]: trait bound is not satisfied
+  ┌─ let_trait_const_missing_bound_no_init.fe:8:12
+  │
+8 │     let _: Slot<{ <T as HasN>::N }>
+  │            ^^^^^^^^^^^^^^^^^^^^^^^^ `T` doesn't implement `HasN`

@@ -1,0 +1,12 @@
+use std::evm::RawStorage
+
+struct FakeRawStorage {}
+
+impl RawStorage for FakeRawStorage {
+    fn sload(self, _ slot: u256) -> u256 {
+        0
+    }
+
+    fn sstore(mut self, slot: u256, value: u256) {
+    }
+}

@@ -9,7 +9,6 @@ use crate::{
 
 use crate::hir_def::CallableDef;
 use crate::hir_def::params::FuncParamMode;
-use common::indexmap::IndexMap;
 use cranelift_entity::{PrimaryMap, SecondaryMap};
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Update;
@@ -38,10 +37,7 @@ use crate::analysis::{
         trait_def::TraitInstId,
         trait_resolution::{
             PredicateListId,
-            constraint::{
-                collect_constraints, collect_func_decl_constraints,
-                collect_func_effect_provider_constraints,
-            },
+            constraint::{collect_constraints, collect_func_effect_provider_constraints},
         },
         ty_contains_const_hole,
         ty_def::{InvalidCause, StringFallback, TyData, TyId, TyVarSort},
@@ -104,11 +100,10 @@ impl<'db> TyCheckEnv<'db> {
             scope: ScopeId<'db>,
         ) -> PredicateListId<'db> {
             match scope.parent_item(db) {
-                Some(ItemKind::Trait(trait_)) => {
-                    let self_pred =
-                        TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
-                    PredicateListId::new(db, vec![self_pred])
-                }
+                Some(ItemKind::Trait(trait_)) => PredicateListId::new(
+                    db,
+                    vec![crate::semantic::trait_self_predicate(db, trait_)],
+                ),
                 Some(ItemKind::ImplTrait(impl_trait)) => {
                     collect_constraints(db, impl_trait.into()).instantiate_identity()
                 }
@@ -128,17 +123,9 @@ impl<'db> TyCheckEnv<'db> {
         // Compute base assumptions (without effect-derived bounds) up-front
         let (base_preds, base_assumptions) = match owner {
             BodyOwner::Func(func) => {
-                let mut preds =
-                    collect_func_decl_constraints(db, func.into(), true).instantiate_identity();
-                // Methods inside a trait implicitly assume `Self: Trait` in their bodies so
+                // Trait methods implicitly assume `Self: Trait` in their bodies so
                 // default method calls resolve against the trait being implemented.
-                if let Some(ItemKind::Trait(trait_)) = func.scope().parent_item(db) {
-                    let self_pred =
-                        TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
-                    let mut merged = preds.list(db).to_vec();
-                    merged.push(self_pred);
-                    preds = PredicateListId::new(db, merged);
-                }
+                let preds = crate::semantic::func_body_assumptions(db, func);
                 let assumptions = preds.extend_all_bounds(db);
                 (preds, assumptions)
             }
@@ -149,19 +136,7 @@ impl<'db> TyCheckEnv<'db> {
                     _ => None,
                 };
                 if let Some(func) = containing_func {
-                    let mut preds =
-                        collect_func_decl_constraints(db, func.into(), true).instantiate_identity();
-                    if let Some(ItemKind::Trait(trait_)) = func.scope().parent_item(db) {
-                        let self_pred = TraitInstId::new(
-                            db,
-                            trait_,
-                            trait_.params(db).to_vec(),
-                            IndexMap::new(),
-                        );
-                        let mut merged = preds.list(db).to_vec();
-                        merged.push(self_pred);
-                        preds = PredicateListId::new(db, merged);
-                    }
+                    let preds = crate::semantic::func_body_assumptions(db, func);
                     let assumptions = preds.extend_all_bounds(db);
                     (preds, assumptions)
                 } else {

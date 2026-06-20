@@ -1,0 +1,9 @@
+trait HasN {
+    const N: u32
+}
+
+struct Slot<const N: u32> {}
+
+struct Holder<T> {
+    item: Slot<{ <T as HasN>::N }>,
+}

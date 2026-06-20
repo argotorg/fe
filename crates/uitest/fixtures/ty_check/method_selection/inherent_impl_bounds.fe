@@ -1,0 +1,63 @@
+trait DirectBound {}
+
+struct DirectBox<T> {
+    item: T,
+}
+
+impl<T: DirectBound> DirectBox<T> {
+    fn touch(self) {}
+}
+
+fn direct_ok<T: DirectBound>(box_: DirectBox<T>) {
+    box_.touch()
+}
+
+fn direct_bad<T>(box_: DirectBox<T>) {
+    box_.touch()
+}
+
+trait AssocSuper {
+    type Item
+}
+
+trait AssocStrong: AssocSuper {}
+
+struct AssocBox<T> {
+    item: T,
+}
+
+impl<T: AssocStrong> AssocBox<T::Item> {
+    fn touch(self) {}
+}
+
+fn assoc_ok<T: AssocStrong>(box_: AssocBox<T::Item>) {
+    box_.touch()
+}
+
+fn assoc_id<T: AssocStrong>(box_: AssocBox<T::Item>) -> AssocBox<T::Item> {
+    box_
+}
+
+fn assoc_bad<T: AssocSuper>(box_: AssocBox<T::Item>) {
+    box_.touch()
+}
+
+trait FactoryInput {}
+
+struct Factory<T> {
+    item: T,
+}
+
+impl<T: FactoryInput> Factory<T> {
+    fn make(item: own T) -> Self {
+        Factory { item }
+    }
+}
+
+fn assoc_fn_ok<T: FactoryInput>(item: own T) -> Factory<T> {
+    Factory::make(item)
+}
+
+fn assoc_fn_bad<T>(item: own T) {
+    Factory::make(item)
+}

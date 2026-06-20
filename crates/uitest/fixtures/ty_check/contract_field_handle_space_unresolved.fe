@@ -1,0 +1,25 @@
+// An `EffectHandle` contract field whose address space is left inferred (the
+// handle's `const SPACE = SP` where `SP` is a defaulted `_`) must be rejected:
+// the field's storage space is unknown, so it cannot be silently classified
+// into the mutable-field default (Storage).
+use core::effect_ref::{AddressSpace, EffectHandle}
+
+struct Ptr<T, const SP: AddressSpace = _> { raw: u256 }
+
+impl<T, const SP: AddressSpace> EffectHandle for Ptr<T, SP> {
+    type Target = T
+
+    const SPACE: AddressSpace = SP
+
+    fn from_raw(_ raw: u256) -> Self {
+        Ptr { raw }
+    }
+
+    fn raw(self) -> u256 {
+        self.raw
+    }
+}
+
+contract C {
+    mut value: Ptr<u256>,
+}

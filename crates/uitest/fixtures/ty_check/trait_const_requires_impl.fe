@@ -1,0 +1,16 @@
+trait MissingConst {
+    const C: u32 = 1
+}
+
+struct MissingConstStruct {}
+
+fn use_missing_const_expr() -> u32 {
+    <MissingConstStruct as MissingConst>::C
+}
+
+fn use_missing_const_pat(value: u32) -> bool {
+    match value {
+        <MissingConstStruct as MissingConst>::C => true,
+        _ => false,
+    }
+}

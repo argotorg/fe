@@ -177,14 +177,12 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         let local = arg.local;
         if matches!(target, RuntimeClass::AggregateValue { .. })
             && self.env.boundary_source_transport_sensitive(local)
-            && self
+            && let Some(actual) = self
                 .env
                 .actual_aggregate_class_for_source(self.carriers, local)
-                .is_some()
         {
             return Some(SelectedRuntimeArg::aggregate_from_runtime_source(
-                local,
-                target.clone(),
+                local, actual,
             ));
         }
         if !target.is_transport()
@@ -427,6 +425,16 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
                 self.env
                     .semantic_value_class(self.carriers, local)
                     .and_then(|class| self.try_selected_semantic_operand_for_class(arg, &class))
+            })
+            .or_else(|| {
+                self.env
+                    .source_locals(local)
+                    .iter()
+                    .copied()
+                    .find_map(|source| {
+                        carrier_value_class(source, self.carriers)
+                            .map(|class| SelectedRuntimeArg::local_value(source, class))
+                    })
             })
     }
 

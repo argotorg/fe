@@ -1,6 +1,6 @@
 use crate::core::hir_def::{
-    CallableDef, ConstGenericArgValue, GenericArg, GenericArgListId, GenericParam,
-    GenericParamOwner, GenericParamView, IdentId, KindBound as HirKindBound, Partial, PathId,
+    Body, CallableDef, ConstGenericArgValue, Expr, GenericArg, GenericArgListId, GenericParam,
+    GenericParamOwner, GenericParamView, IdentId, KindBound as HirKindBound, Partial, PathId, Stmt,
     TypeAlias as HirTypeAlias, TypeBound, TypeId as HirTyId, TypeKind as HirTyKind, TypeMode,
     scope_graph::ScopeId,
 };
@@ -11,8 +11,8 @@ use smallvec::smallvec;
 use super::{
     assoc_const::AssocConstUse,
     const_ty::{
-        AppFrameId, CallableInputLayoutHoleOrigin, ConstTyData, ConstTyId, EvaluatedConstTy,
-        HoleId, LayoutHoleArgSite, LocalFrameId, LocalFrameSite, StructuralHoleOrigin,
+        CallableInputLayoutHoleOrigin, ConstTyData, ConstTyId, EvaluatedConstTy, HoleAnchor,
+        HoleMinter, LayoutHoleArgSite, StructuralHoleOrigin,
     },
     effects::{ResolvedEffectKey, TraitKeySchema},
     fold::{TyFoldable, TyFolder},
@@ -20,8 +20,7 @@ use super::{
         callable_input_layout_bindings_by_origin,
         collect_unique_app_bound_structural_holes_in_order,
         collect_unique_layout_placeholders_in_order, layout_hole_fallback_ty,
-        prepend_local_parent_to_structural_holes, rebase_owned_structural_holes_under_app,
-        rebase_structural_holes_under_app, rewrite_structural_holes,
+        reanchor_template_holes, refresh_alias_template_holes, rewrite_structural_holes,
     },
     trait_def::TraitInstId,
     trait_resolution::{
@@ -31,7 +30,9 @@ use super::{
     ty_def::{InvalidCause, Kind, TyData, TyId, TyParam},
     visitor::TyVisitable,
 };
-use crate::analysis::name_resolution::{PathRes, PathResErrorKind, resolve_path};
+use crate::analysis::name_resolution::{
+    PathRes, PathResErrorKind, resolve_path, resolve_path_with_minter,
+};
 use crate::analysis::{HirAnalysisDb, ty::binder::Binder};
 
 /// Lowers the given HirTy to `TyId`.
@@ -42,7 +43,8 @@ pub fn lower_hir_ty<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> TyId<'db> {
-    lower_hir_ty_impl(db, ty, scope, assumptions)
+    let minter = HoleMinter::new(HoleAnchor::TemplateTy { ty, scope });
+    lower_hir_ty_impl(db, ty, scope, assumptions, &minter)
 }
 
 fn lower_hir_ty_impl<'db>(
@@ -50,13 +52,10 @@ fn lower_hir_ty_impl<'db>(
     ty: HirTyId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
+    minter: &HoleMinter<'db>,
 ) -> TyId<'db> {
-    let ty_frame = LocalFrameId::root_hir_ty(db, ty);
-    let child_frame = |slot| ty_frame.child_type_component(db, ty, slot);
-    let lower_child = |child_ty, slot| {
-        let lowered = lower_opt_hir_ty_impl(db, child_ty, scope, assumptions);
-        prepend_local_parent_to_structural_holes(db, lowered, child_frame(slot))
-    };
+    let lower_child =
+        |child_ty, _slot| lower_opt_hir_ty_impl(db, child_ty, scope, assumptions, minter);
 
     match ty.data(db) {
         HirTyKind::Ptr(pointee) => {
@@ -74,11 +73,7 @@ fn lower_hir_ty_impl<'db>(
             }
         }
 
-        HirTyKind::Path(path) => prepend_local_parent_to_structural_holes(
-            db,
-            lower_path_impl(db, scope, *path, assumptions),
-            ty_frame,
-        ),
+        HirTyKind::Path(path) => lower_path_impl(db, scope, *path, assumptions, minter),
 
         HirTyKind::Tuple(tuple_id) => {
             let elems = tuple_id.data(db);
@@ -96,7 +91,7 @@ fn lower_hir_ty_impl<'db>(
 
         HirTyKind::Array(hir_elem_ty, len) => {
             let elem_ty = lower_child(*hir_elem_ty, 0);
-            let len_ty = ConstTyId::from_opt_body(db, *len);
+            let len_ty = lower_opt_const_body(db, *len, scope, assumptions, minter);
             let len_ty = TyId::const_ty(db, len_ty);
             let array = TyId::array(db, elem_ty);
             TyId::app(db, array, len_ty)
@@ -106,13 +101,45 @@ fn lower_hir_ty_impl<'db>(
     }
 }
 
+/// Lowers `ty` minting structural-hole identities through the caller's
+/// minter, so holes are keyed to the enclosing lowering execution instead of
+/// this type's content-interned identity. Use this instead of the memoized
+/// [`lower_hir_ty`] whenever the result flows into a larger type under
+/// construction: a memoized result reused at two positions carries the same
+/// hole identities at both.
+pub(crate) fn lower_hir_ty_with_minter<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: HirTyId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    minter: &HoleMinter<'db>,
+) -> TyId<'db> {
+    lower_hir_ty_impl(db, ty, scope, assumptions, minter)
+}
+
+pub(crate) fn lower_opt_hir_ty_with_minter<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: Partial<HirTyId<'db>>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    minter: &HoleMinter<'db>,
+) -> TyId<'db> {
+    lower_opt_hir_ty_impl(db, ty, scope, assumptions, minter)
+}
+
 pub fn lower_opt_hir_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: Partial<HirTyId<'db>>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> TyId<'db> {
-    lower_opt_hir_ty_impl(db, ty, scope, assumptions)
+    let Some(hir_ty) = ty.to_opt() else {
+        return TyId::invalid(db, InvalidCause::ParseError);
+    };
+    // Anchor at the same memo key the tracked entry would use, so holes get
+    // the same identity whether or not this lowering is memoized.
+    let minter = HoleMinter::new(HoleAnchor::TemplateTy { ty: hir_ty, scope });
+    lower_hir_ty_impl(db, hir_ty, scope, assumptions, &minter)
 }
 
 fn lower_opt_hir_ty_impl<'db>(
@@ -120,10 +147,136 @@ fn lower_opt_hir_ty_impl<'db>(
     ty: Partial<HirTyId<'db>>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
+    minter: &HoleMinter<'db>,
 ) -> TyId<'db> {
     ty.to_opt()
-        .map(|hir_ty| lower_hir_ty_impl(db, hir_ty, scope, assumptions))
+        .map(|hir_ty| lower_hir_ty_impl(db, hir_ty, scope, assumptions, minter))
         .unwrap_or_else(|| TyId::invalid(db, InvalidCause::ParseError))
+}
+
+fn const_body_simple_path<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> Option<PathId<'db>> {
+    fn expr_simple_path<'db>(
+        db: &'db dyn HirAnalysisDb,
+        body: Body<'db>,
+        expr: &Expr<'db>,
+    ) -> Option<PathId<'db>> {
+        match expr {
+            Expr::Path(path) => path.to_opt(),
+            Expr::Block(stmts) => {
+                let [stmt] = stmts.as_slice() else {
+                    return None;
+                };
+                let Partial::Present(Stmt::Expr(expr)) = stmt.data(db, body) else {
+                    return None;
+                };
+                let Partial::Present(expr) = expr.data(db, body) else {
+                    return None;
+                };
+                expr_simple_path(db, body, expr)
+            }
+            _ => None,
+        }
+    }
+
+    let expr = body.expr(db).data(db, body).clone().to_opt()?;
+    expr_simple_path(db, body, &expr)
+}
+
+/// Extends `assumptions` with the enclosing trait's implicit `Self: Trait`
+/// predicate, mirroring the body-checking environment. Signature-position
+/// const bodies like `Slot<{ Self::N }>` in a trait method must resolve
+/// `Self::N` to a trait const the same way the body checker later does, or
+/// the const falls back to an unevaluated body whose CTFE cannot resolve the
+/// trait const reference.
+fn with_enclosing_trait_self_predicate<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> PredicateListId<'db> {
+    let mut item = Some(scope.item());
+    while let Some(current) = item {
+        match current {
+            crate::hir_def::ItemKind::Trait(trait_) => {
+                let pred = crate::core::semantic::trait_self_predicate(db, trait_);
+                if assumptions.list(db).contains(&pred) {
+                    return assumptions;
+                }
+                let mut merged = assumptions.list(db).clone();
+                merged.push(pred);
+                return PredicateListId::new(db, merged);
+            }
+            // `Self` inside impls resolves to the implementor type directly.
+            crate::hir_def::ItemKind::Impl(_) | crate::hir_def::ItemKind::ImplTrait(_) => {
+                return assumptions;
+            }
+            _ => {}
+        }
+        item = current.scope().parent_item(db);
+    }
+    assumptions
+}
+
+fn lower_opt_const_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Partial<Body<'db>>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    minter: &HoleMinter<'db>,
+) -> ConstTyId<'db> {
+    let Some(body) = body.to_opt() else {
+        return ConstTyId::invalid(db, InvalidCause::ParseError);
+    };
+    let Some(path) = const_body_simple_path(db, body) else {
+        return ConstTyId::from_body(db, body, None, None);
+    };
+
+    let assumptions = with_enclosing_trait_self_predicate(db, scope, assumptions);
+    match resolve_path_with_minter(db, path, scope, assumptions, true, minter) {
+        Ok(PathRes::Const(const_def, ty)) => {
+            if let Some(body) = const_def.body(db).to_opt() {
+                ConstTyId::from_body(db, body, Some(ty), Some(const_def))
+            } else {
+                ConstTyId::invalid(db, InvalidCause::ParseError)
+            }
+        }
+        Ok(PathRes::TraitConst(recv_ty, inst, name)) => {
+            let mut args = inst.args(db).clone();
+            if let Some(self_arg) = args.first_mut() {
+                *self_arg = recv_ty;
+            }
+            let inst =
+                TraitInstId::new(db, inst.def(db), args, inst.assoc_type_bindings(db).clone());
+
+            if let Some(expected_ty) = inst
+                .def(db)
+                .const_(db, name)
+                .and_then(|v| v.ty_binder(db))
+                .map(|b| b.instantiate(db, inst.args(db)))
+            {
+                // Defer evaluation: the use position's expected type may
+                // differ in integer shape from the const's declared type
+                // (e.g. a `u256` trait const used as an array length).
+                let assoc = AssocConstUse::new(scope, assumptions, inst, name);
+                super::const_ty::abstract_const_ty_from_assoc_const_use(db, assoc, expected_ty)
+            } else {
+                ConstTyId::invalid(db, InvalidCause::Other)
+            }
+        }
+        Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) => {
+            if let TyData::ConstTy(const_ty) = ty.data(db) {
+                *const_ty
+            } else {
+                ConstTyId::from_body(db, body, None, None)
+            }
+        }
+        Ok(PathRes::EnumVariant(variant)) if variant.ty.is_unit_variant_only_enum(db) => {
+            ConstTyId::new(
+                db,
+                ConstTyData::Evaluated(EvaluatedConstTy::EnumVariant(variant.variant), variant.ty),
+            )
+        }
+        _ => ConstTyId::from_body(db, body, None, None),
+    }
 }
 
 fn lower_path_impl<'db>(
@@ -131,24 +284,20 @@ fn lower_path_impl<'db>(
     scope: ScopeId<'db>,
     path: Partial<PathId<'db>>,
     assumptions: PredicateListId<'db>,
+    minter: &HoleMinter<'db>,
 ) -> TyId<'db> {
     let Some(path) = path.to_opt() else {
         return TyId::invalid(db, InvalidCause::ParseError);
     };
 
-    match crate::analysis::name_resolution::resolve_path(db, path, scope, assumptions, false) {
+    match resolve_path_with_minter(db, path, scope, assumptions, false, minter) {
         Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty) | PathRes::Func(ty)) => ty,
         Ok(res) => TyId::invalid(db, InvalidCause::NotAType(res)),
         Err(err) => {
             // Try to resolve as a value, to find a matching `const` definition
             if matches!(err.kind, PathResErrorKind::NotFound { .. })
-                && let Ok(resolved) = crate::analysis::name_resolution::resolve_path(
-                    db,
-                    path,
-                    scope,
-                    assumptions,
-                    true,
-                )
+                && let Ok(resolved) =
+                    resolve_path_with_minter(db, path, scope, assumptions, true, minter)
             {
                 return match resolved {
                     PathRes::Const(const_def, ty) => {
@@ -209,9 +358,12 @@ fn lower_hir_ty_cycle_initial<'db>(
     _scope: ScopeId<'db>,
     _assumptions: PredicateListId<'db>,
 ) -> TyId<'db> {
-    // On cycles during type lowering, treat the type as invalid so that
-    // callers can emit a suitable diagnostic without recursing further.
-    TyId::invalid(db, InvalidCause::Other)
+    // On cycles during type lowering, treat the type as invalid. The cause
+    // renders a diagnostic at the use site: cyclic shapes are normally
+    // rejected by dedicated checks first (alias cycles, recursive types,
+    // cyclic trait bounds), so any cycle that converges to this value is a
+    // shape those checks missed and must not be silently invalid.
+    TyId::invalid(db, InvalidCause::TypeLoweringCycle)
 }
 
 fn lower_hir_ty_cycle_recover<'db>(
@@ -264,7 +416,11 @@ fn lower_path<'db>(
     path: Partial<PathId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> TyId<'db> {
-    lower_path_impl(db, scope, path, assumptions)
+    let Some(p) = path.to_opt() else {
+        return TyId::invalid(db, InvalidCause::ParseError);
+    };
+    let minter = HoleMinter::new(HoleAnchor::TemplatePath { path: p, scope });
+    lower_path_impl(db, scope, path, assumptions, &minter)
 }
 
 fn generic_param_owner_assumptions<'db>(
@@ -324,11 +480,6 @@ fn bind_callable_input_layout_holes<'db, T>(
 where
     T: TyFoldable<'db> + TyVisitable<'db> + Copy,
 {
-    let value = rebase_structural_holes_under_app(
-        db,
-        value,
-        AppFrameId::root_callable_input(db, func, origin),
-    );
     let ordinals = collect_unique_app_bound_structural_holes_in_order(db, value)
         .into_iter()
         .enumerate()
@@ -673,17 +824,6 @@ pub(crate) fn func_implicit_param_plan<'db>(
     }
 }
 
-fn local_frame_contains_alias_template<'db>(
-    db: &'db dyn HirAnalysisDb,
-    frame: LocalFrameId<'db>,
-    alias: HirTypeAlias<'db>,
-) -> bool {
-    matches!(frame.site(db), LocalFrameSite::AliasTemplate(found) if found == alias)
-        || frame
-            .parent(db)
-            .is_some_and(|parent| local_frame_contains_alias_template(db, parent, alias))
-}
-
 /// Lowers the given type alias to [`TyAlias`].
 #[salsa::tracked(return_ref, cycle_fn=lower_type_alias_cycle_recover, cycle_initial=lower_type_alias_cycle_initial)]
 pub(crate) fn lower_type_alias<'db>(
@@ -722,19 +862,9 @@ pub(crate) fn lower_type_alias_from_hir<'db>(
         // Should be reported by TypeAliasAnalysisPass
         TyId::invalid(db, InvalidCause::Other)
     } else {
-        rewrite_structural_holes(db, alias_to, |hole_id, hole_ty| {
-            Some(TyId::const_ty(
-                db,
-                ConstTyId::hole_with_id(
-                    db,
-                    hole_ty,
-                    HoleId::Structural(hole_id.prepend_local_parent(
-                        db,
-                        LocalFrameId::new(db, None, LocalFrameSite::AliasTemplate(alias)),
-                    )),
-                ),
-            ))
-        })
+        // Mark template ownership: use sites replace alias-anchored holes
+        // with fresh holes from their own minter.
+        reanchor_template_holes(db, alias_to, HoleAnchor::AliasTemplate(alias))
     };
     TyAlias {
         alias,
@@ -822,6 +952,7 @@ impl<'db> TyAlias<'db> {
         path: PathId<'db>,
         args: &[TyId<'db>],
         assumptions: PredicateListId<'db>,
+        minter: &HoleMinter<'db>,
     ) -> TyId<'db> {
         let expected = self.param_set.explicit_param_count(db);
         debug_assert!(
@@ -833,8 +964,8 @@ impl<'db> TyAlias<'db> {
             None,
             args,
             assumptions,
-            ConstDefaultCompletion::metadata(Some(path))
-                .with_app_frame(Some(AppFrameId::root_path(db, path))),
+            ConstDefaultCompletion::metadata(Some(path)),
+            Some(minter),
         );
         if completed.len() < expected {
             return TyId::invalid(
@@ -849,20 +980,20 @@ impl<'db> TyAlias<'db> {
             return TyId::invalid(db, cause);
         }
 
-        self.instantiate_completed_args(db, &completed, AppFrameId::root_path(db, path))
+        self.instantiate_completed_args(db, &completed, minter)
     }
 
     fn instantiate_completed_args(
         &self,
         db: &'db dyn HirAnalysisDb,
         completed: &[TyId<'db>],
-        inst_app_frame: AppFrameId<'db>,
+        minter: &HoleMinter<'db>,
     ) -> TyId<'db> {
-        rebase_owned_structural_holes_under_app(
+        refresh_alias_template_holes(
             db,
             self.alias_to.instantiate(db, completed),
-            inst_app_frame,
-            |hole_id| local_frame_contains_alias_template(db, hole_id.local_frame(db), self.alias),
+            self.alias,
+            minter,
         )
     }
 }
@@ -873,25 +1004,13 @@ pub(crate) fn lower_generic_arg_list<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     hole_site: LayoutHoleArgSite<'db>,
+    minter: &HoleMinter<'db>,
 ) -> Vec<TyId<'db>> {
-    let hole_local_frame = match hole_site {
-        LayoutHoleArgSite::Path(path) => LocalFrameId::root_path(db, path),
-        LayoutHoleArgSite::GenericArgList(args) => LocalFrameId::root_generic_arg_list(db, args),
-    };
-    let hole_app_frame = match hole_site {
-        LayoutHoleArgSite::Path(path) => AppFrameId::root_path(db, path),
-        LayoutHoleArgSite::GenericArgList(args) => AppFrameId::root_generic_arg_list(db, args),
-    };
-
     args.data(db)
         .iter()
         .enumerate()
         .map(|(arg_idx, arg)| match arg {
             GenericArg::Type(ty_arg) => {
-                let arg_frame = ty_arg
-                    .ty
-                    .to_opt()
-                    .map(|hir_ty| hole_app_frame.child_type_component(db, hir_ty, arg_idx));
                 // Generic args are syntactically ambiguous: `String<N>` may parse `N` as a type
                 // even when `String` expects a const generic arg. When a type-arg is a path that
                 // resolves as a value const/trait-const, lower it as a const-ty argument so
@@ -956,12 +1075,11 @@ pub(crate) fn lower_generic_arg_list<'db>(
                         _ => {}
                     }
                 }
-                let ty = lower_opt_hir_ty(db, ty_arg.ty, scope, assumptions);
-                arg_frame.map_or(ty, |frame| rebase_structural_holes_under_app(db, ty, frame))
+                lower_opt_hir_ty_impl(db, ty_arg.ty, scope, assumptions, minter)
             }
             GenericArg::Const(const_arg) => match const_arg.value {
                 ConstGenericArgValue::Expr(body) => {
-                    let const_ty = ConstTyId::from_opt_body(db, body);
+                    let const_ty = lower_opt_const_body(db, body, scope, assumptions, minter);
                     TyId::const_ty(db, const_ty)
                 }
                 ConstGenericArgValue::Hole => TyId::const_ty(
@@ -973,7 +1091,7 @@ pub(crate) fn lower_generic_arg_list<'db>(
                             site: hole_site,
                             arg_idx,
                         },
-                        hole_local_frame,
+                        minter.mint(),
                     ),
                 ),
             },
@@ -1068,6 +1186,7 @@ impl<'db> GenericParamTypeSet<'db> {
         provided_explicit: &[TyId<'db>],
         assumptions: PredicateListId<'db>,
         completion: ConstDefaultCompletion<'db>,
+        minter: Option<&HoleMinter<'db>>,
     ) -> Vec<TyId<'db>> {
         self.complete_explicit_args_with_defaults_in_mode(
             db,
@@ -1076,6 +1195,7 @@ impl<'db> GenericParamTypeSet<'db> {
             assumptions,
             completion,
             false,
+            minter,
         )
     }
 
@@ -1086,6 +1206,7 @@ impl<'db> GenericParamTypeSet<'db> {
         provided_explicit: &[TyId<'db>],
         assumptions: PredicateListId<'db>,
         completion: ConstDefaultCompletion<'db>,
+        minter: Option<&HoleMinter<'db>>,
     ) -> Vec<TyId<'db>> {
         self.complete_explicit_args_with_defaults_in_mode(
             db,
@@ -1094,6 +1215,7 @@ impl<'db> GenericParamTypeSet<'db> {
             assumptions,
             completion,
             true,
+            minter,
         )
     }
 
@@ -1115,6 +1237,7 @@ impl<'db> GenericParamTypeSet<'db> {
             .unwrap_or_else(|cause| TyId::invalid(db, cause))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn complete_explicit_args_with_defaults_in_mode(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -1123,6 +1246,7 @@ impl<'db> GenericParamTypeSet<'db> {
         assumptions: PredicateListId<'db>,
         completion: ConstDefaultCompletion<'db>,
         checked_explicit: bool,
+        minter: Option<&HoleMinter<'db>>,
     ) -> Vec<TyId<'db>> {
         let total = self.params_precursor(db).len();
         let offset = self.offset_to_explicit(db);
@@ -1198,14 +1322,14 @@ impl<'db> GenericParamTypeSet<'db> {
             if let Some(hir_ty) = prec.default_hir_ty {
                 let lowered = if hir_ty.is_self_ty(db) && trait_self.is_none() {
                     TyId::invalid(db, InvalidCause::Other)
+                } else if let Some(minter) = minter {
+                    // Mint through the application's minter: the memoized
+                    // lowering would hand two applications of the same
+                    // default the same hole identities.
+                    lower_hir_ty_impl(db, hir_ty, scope, assumptions, minter)
                 } else {
                     lower_hir_ty(db, hir_ty, scope, assumptions)
                 };
-                let lowered = completion
-                    .default_type_frame(db, hir_ty, i)
-                    .map_or(lowered, |frame| {
-                        rebase_structural_holes_under_app(db, lowered, frame)
-                    });
                 let lowered = substitute_known_params(&mapping, lowered);
                 mapping[i] = Some(lowered);
                 result.push(lowered);
@@ -1238,21 +1362,17 @@ impl<'db> GenericParamTypeSet<'db> {
                     ConstGenericArgValue::Hole => TyId::const_ty(
                         db,
                         completion
-                            .application_app_frame(db)
-                            .and_then(|frame| {
+                            .application_path
+                            .and_then(|_| {
                                 let owner = prec.owner?;
                                 let param_idx = prec.original_idx?;
-                                completion.application_local_frame(db).map(|local_frame| {
-                                    ConstTyId::structural_hole_with_app(
-                                        db,
-                                        expected.unwrap_or_else(|| {
-                                            TyId::invalid(db, InvalidCause::Other)
-                                        }),
-                                        StructuralHoleOrigin::DefaultHoleParam { owner, param_idx },
-                                        local_frame,
-                                        Some(frame),
-                                    )
-                                })
+                                Some(ConstTyId::structural_hole(
+                                    db,
+                                    expected
+                                        .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other)),
+                                    StructuralHoleOrigin::DefaultHoleParam { owner, param_idx },
+                                    minter?.mint(),
+                                ))
                             })
                             .unwrap_or_else(|| {
                                 ConstTyId::hole_with_ty(
@@ -1288,7 +1408,6 @@ enum ConstDefaultCompletionMode {
 pub(crate) struct ConstDefaultCompletion<'db> {
     mode: ConstDefaultCompletionMode,
     application_path: Option<PathId<'db>>,
-    application_frame: Option<AppFrameId<'db>>,
 }
 
 impl<'db> ConstDefaultCompletion<'db> {
@@ -1296,7 +1415,6 @@ impl<'db> ConstDefaultCompletion<'db> {
         Self {
             mode: ConstDefaultCompletionMode::MetadataOnly,
             application_path,
-            application_frame: None,
         }
     }
 
@@ -1304,35 +1422,7 @@ impl<'db> ConstDefaultCompletion<'db> {
         Self {
             mode: ConstDefaultCompletionMode::Evaluate,
             application_path,
-            application_frame: None,
         }
-    }
-
-    pub(crate) fn with_app_frame(mut self, application_frame: Option<AppFrameId<'db>>) -> Self {
-        self.application_frame = application_frame;
-        self
-    }
-
-    fn application_app_frame(self, db: &'db dyn HirAnalysisDb) -> Option<AppFrameId<'db>> {
-        self.application_frame.or_else(|| {
-            self.application_path
-                .map(|path| AppFrameId::root_path(db, path))
-        })
-    }
-
-    fn application_local_frame(self, db: &'db dyn HirAnalysisDb) -> Option<LocalFrameId<'db>> {
-        self.application_path
-            .map(|path| LocalFrameId::root_path(db, path))
-    }
-
-    fn default_type_frame(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        hir_ty: HirTyId<'db>,
-        lowered_param_idx: usize,
-    ) -> Option<AppFrameId<'db>> {
-        self.application_app_frame(db)
-            .map(|frame| frame.child_type_component(db, hir_ty, lowered_param_idx))
     }
 }
 

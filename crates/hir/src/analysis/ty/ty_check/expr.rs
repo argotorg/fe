@@ -31,7 +31,7 @@ use crate::analysis::ty::{
     corelib::{
         resolve_core_range_types, resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path,
     },
-    diagnostics::{BodyDiag, FuncBodyDiag, MustUseSubject},
+    diagnostics::{BodyDiag, FuncBodyDiag, MustUseSubject, TraitConstraintDiag, TyDiagCollection},
     effect_handle_metadata,
     effects::{
         BarrierReason, EffectBarrier, EffectKeyKind, EffectPatternKey, EffectQuery,
@@ -56,7 +56,9 @@ use crate::analysis::ty::{
     fold::{AssocTySubst, TyFoldable as _, TyFolder},
     provider::{ProviderTransport, provider_semantics_for_specialized_call},
     trait_def::TraitInstId,
-    trait_resolution::{GoalSatisfiability, PredicateListId, TraitGoalSolution, TraitSolveCx},
+    trait_resolution::{
+        GoalSatisfiability, PredicateListId, TraitGoalSolution, TraitSolveCx, is_goal_satisfiable,
+    },
     ty_check::callable::{Callable, EffectProviderProvenance, EffectProviderSpecialization},
     ty_def::{CapabilityKind, PrimTy, TyBase, TyData, prim_int_bits},
     unify::UnificationTable,
@@ -73,6 +75,7 @@ use crate::analysis::{
     },
     place::resolve_place_field_index,
     ty::{
+        const_expr::ConstExpr,
         const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
         normalize::normalize_ty,
         ty_check::{RecordInitLowering, TyChecker, path::RecordInitChecker},
@@ -3176,8 +3179,8 @@ impl<'db> TyChecker<'db> {
         };
 
         let (func_ty, trait_inst) = match candidate {
-            MethodCandidate::InherentMethod(func_def) => (
-                self.instantiate_inherent_method_to_term(func_def, selected_receiver_ty),
+            MethodCandidate::InherentMethod(cand) => (
+                self.extract_inherent_method_to_term(&canonical_r_ty, cand, selected_receiver_ty),
                 None,
             ),
 
@@ -3438,8 +3441,12 @@ impl<'db> TyChecker<'db> {
                 PathRes::Method(receiver_ty, candidate) => {
                     let canonical_r_ty = Canonicalized::new(self.db, receiver_ty);
                     let (method_ty, trait_inst) = match candidate {
-                        MethodCandidate::InherentMethod(func_def) => (
-                            self.instantiate_inherent_method_to_term(func_def, receiver_ty),
+                        MethodCandidate::InherentMethod(cand) => (
+                            self.extract_inherent_method_to_term(
+                                &canonical_r_ty,
+                                cand,
+                                receiver_ty,
+                            ),
                             None,
                         ),
                         MethodCandidate::TraitMethod(cand)
@@ -3593,6 +3600,25 @@ impl<'db> TyChecker<'db> {
                         args,
                         inst.assoc_type_bindings(self.db).clone(),
                     );
+
+                    if !super::trait_const_goal_has_foreign_params(self.db, inst, self.env.scope())
+                        && let GoalSatisfiability::UnSat(_) = is_goal_satisfiable(
+                            self.db,
+                            TraitSolveCx::new(self.db, self.env.scope())
+                                .with_assumptions(self.env.assumptions()),
+                            inst,
+                        )
+                    {
+                        self.push_diag(TyDiagCollection::from(
+                            TraitConstraintDiag::TraitBoundNotSat {
+                                span: path_expr_span.clone().into(),
+                                primary_goal: inst,
+                                unsat_subgoal: None,
+                                required_by: None,
+                            },
+                        ));
+                        return ExprProp::invalid(self.db);
+                    }
 
                     self.env.register_const_ref(
                         expr,
@@ -3952,11 +3978,7 @@ impl<'db> TyChecker<'db> {
                 && let (_, args) = array_ty.decompose_ty_app(self.db)
                 && let Some(len_ty) = args.get(1)
                 && let TyData::ConstTy(const_ty) = len_ty.data(self.db)
-                && !matches!(
-                    const_ty.data(self.db),
-                    ConstTyData::Evaluated(EvaluatedConstTy::LitInt(_), _)
-                        | ConstTyData::TyParam(..)
-                )
+                && !self.array_len_const_is_acceptable(*const_ty)
             {
                 requires_known_const = true;
                 self.push_diag(BodyDiag::ConstValueMustBeKnown(len_body.span().into()));
@@ -3974,6 +3996,23 @@ impl<'db> TyChecker<'db> {
         };
 
         ExprProp::new(ty, true)
+    }
+
+    /// Whether `const_ty` is acceptable as an array-repeat length: a known
+    /// literal, or a symbolic const that resolves per monomorphization — a bare
+    /// const param (`N`) or a bare trait-const projection (`T::N`). The latter
+    /// two stay symbolic during checking and become concrete once the owning
+    /// type parameters are.
+    fn array_len_const_is_acceptable(&self, const_ty: ConstTyId<'db>) -> bool {
+        match const_ty.data(self.db) {
+            ConstTyData::Evaluated(EvaluatedConstTy::LitInt(_), _) | ConstTyData::TyParam(..) => {
+                true
+            }
+            ConstTyData::Abstract(expr, _) => {
+                matches!(expr.data(self.db), ConstExpr::TraitConst(_))
+            }
+            _ => false,
+        }
     }
 
     fn check_if(

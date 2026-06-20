@@ -17,6 +17,7 @@ pub use name_resolver::{
     EarlyNameQueryId, NameDerivation, NameDomain, NameRes, NameResBucket, NameResKind,
     NameResolutionError, QueryDirective,
 };
+pub(crate) use path_resolver::resolve_path_with_minter;
 pub(crate) use path_resolver::{FindAssociatedTypeError, find_associated_type};
 pub use path_resolver::{
     PathRes, PathResError, PathResErrorKind, ResolvedVariant, resolve_ident_to_bucket,

@@ -11,14 +11,12 @@ use salsa::Update;
 use super::const_expr::{ConstExpr, ConstExprId, pretty_print_un_op};
 use super::{
     assoc_const::AssocConstUse,
+    binder::Binder,
     diagnostics::{BodyDiag, FuncBodyDiag},
     fold::{AssocTySubst, TyFoldable},
     normalize::normalize_ty,
     trait_def::TraitInstId,
-    trait_resolution::{
-        TraitSolveCx,
-        constraint::{collect_constraints, collect_func_decl_constraints},
-    },
+    trait_resolution::{TraitSolveCx, constraint::collect_constraints},
     ty_check::{check_anon_const_body, check_const_body},
     ty_def::{InvalidCause, TyId, TyParam, TyVar},
     ty_lower::{ConstDefaultCompletion, collect_generic_params},
@@ -36,7 +34,7 @@ use crate::analysis::{
 };
 use crate::hir_def::{CallableDef, ItemKind, scope_graph::ScopeId};
 use common::indexmap::IndexMap;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub enum LayoutHoleArgSite<'db> {
@@ -126,154 +124,92 @@ pub enum StructuralHoleOrigin<'db> {
     },
 }
 
+/// Where a structural hole's identity is anchored.
+///
+/// During the shared, content-keyed lowering a hole is anchored at the memo
+/// key of the execution that minted it (`Template*`); since distinct memo
+/// entries have distinct keys, ordinals from different executions can never
+/// collide. Anchored entry points re-anchor template holes at a genuinely
+/// unique item position (added in later phases).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum LocalFrameSite<'db> {
-    HirType(HirTypeId<'db>),
-    TypeComponent { ty: HirTypeId<'db>, slot: usize },
-    RootPath(PathId<'db>),
-    GenericArgList(GenericArgListId<'db>),
+pub enum HoleAnchor<'db> {
+    /// Minted while lowering a HIR type (the `lower_hir_ty` memo key).
+    TemplateTy {
+        ty: HirTypeId<'db>,
+        scope: ScopeId<'db>,
+    },
+    /// Minted while resolving a path outside any enclosing HIR-type lowering
+    /// (e.g. path expressions in bodies).
+    TemplatePath {
+        path: PathId<'db>,
+        scope: ScopeId<'db>,
+    },
+    /// Minted while lowering a standalone generic-arg list (e.g. explicit
+    /// call-site generic args).
+    TemplateArgs {
+        args: GenericArgListId<'db>,
+        scope: ScopeId<'db>,
+    },
+    /// A hole owned by a type alias's right-hand side. Instantiating the
+    /// alias at a use site replaces these with fresh holes minted from the
+    /// use site's minter.
     AliasTemplate(HirTypeAlias<'db>),
 }
 
-#[salsa::interned]
+impl<'db> HoleAnchor<'db> {
+    /// Whether this anchor is a content-keyed lowering template (as opposed
+    /// to an alias template or, in later phases, a unique item position).
+    pub(crate) fn is_lowering_template(self) -> bool {
+        matches!(
+            self,
+            Self::TemplateTy { .. } | Self::TemplatePath { .. } | Self::TemplateArgs { .. }
+        )
+    }
+}
+
+/// Mints `(anchor, ordinal)` hole identities for one lowering execution.
+///
+/// Threaded by reference through the lowering descent so that every mint
+/// event within one execution receives a distinct ordinal; a hole cannot be
+/// minted without one, which makes "forgot to re-key after a memoized call"
+/// impossible by construction.
 #[derive(Debug)]
-pub struct LocalFrameId<'db> {
-    pub parent: Option<LocalFrameId<'db>>,
-    pub site: LocalFrameSite<'db>,
+pub(crate) struct HoleMinter<'db> {
+    anchor: HoleAnchor<'db>,
+    counter: std::cell::Cell<u32>,
 }
 
-impl<'db> LocalFrameId<'db> {
-    pub(crate) fn root_hir_ty(db: &'db dyn HirAnalysisDb, hir_ty: HirTypeId<'db>) -> Self {
-        Self::new(db, None, LocalFrameSite::HirType(hir_ty))
+impl<'db> HoleMinter<'db> {
+    pub(crate) fn new(anchor: HoleAnchor<'db>) -> Self {
+        Self {
+            anchor,
+            counter: std::cell::Cell::new(0),
+        }
     }
 
-    pub(crate) fn child_type_component(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        ty: HirTypeId<'db>,
-        slot: usize,
-    ) -> Self {
-        Self::new(db, Some(self), LocalFrameSite::TypeComponent { ty, slot })
-    }
-
-    pub(crate) fn root_path(db: &'db dyn HirAnalysisDb, path: PathId<'db>) -> Self {
-        Self::new(db, None, LocalFrameSite::RootPath(path))
-    }
-
-    pub(crate) fn root_generic_arg_list(
-        db: &'db dyn HirAnalysisDb,
-        args: GenericArgListId<'db>,
-    ) -> Self {
-        Self::new(db, None, LocalFrameSite::GenericArgList(args))
-    }
-
-    pub(crate) fn prepend_parent(self, db: &'db dyn HirAnalysisDb, parent: Self) -> Self {
-        let rebased_parent = self
-            .parent(db)
-            .map(|current| current.prepend_parent(db, parent));
-        Self::new(db, rebased_parent.or(Some(parent)), self.site(db))
+    pub(crate) fn mint(&self) -> (HoleAnchor<'db>, u32) {
+        let ordinal = self.counter.get();
+        self.counter.set(ordinal + 1);
+        (self.anchor, ordinal)
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum AppFrameSite<'db> {
-    CallableInput {
-        func: Func<'db>,
-        origin: CallableInputLayoutHoleOrigin,
-    },
-    TypeComponent {
-        ty: HirTypeId<'db>,
-        slot: usize,
-    },
-    RootPath(PathId<'db>),
-    GenericArgList(GenericArgListId<'db>),
-}
-
-#[salsa::interned]
-#[derive(Debug)]
-pub struct AppFrameId<'db> {
-    pub parent: Option<AppFrameId<'db>>,
-    pub site: AppFrameSite<'db>,
-}
-
-impl<'db> AppFrameId<'db> {
-    pub(crate) fn root_callable_input(
-        db: &'db dyn HirAnalysisDb,
-        func: Func<'db>,
-        origin: CallableInputLayoutHoleOrigin,
-    ) -> Self {
-        Self::new(db, None, AppFrameSite::CallableInput { func, origin })
-    }
-
-    pub(crate) fn child_type_component(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        ty: HirTypeId<'db>,
-        slot: usize,
-    ) -> Self {
-        Self::new(db, Some(self), AppFrameSite::TypeComponent { ty, slot })
-    }
-
-    pub(crate) fn root_path(db: &'db dyn HirAnalysisDb, path: PathId<'db>) -> Self {
-        Self::new(db, None, AppFrameSite::RootPath(path))
-    }
-
-    pub(crate) fn root_generic_arg_list(
-        db: &'db dyn HirAnalysisDb,
-        args: GenericArgListId<'db>,
-    ) -> Self {
-        Self::new(db, None, AppFrameSite::GenericArgList(args))
-    }
-
-    pub(crate) fn prepend_parent(self, db: &'db dyn HirAnalysisDb, parent: Self) -> Self {
-        let rebased_parent = self
-            .parent(db)
-            .map(|current| current.prepend_parent(db, parent));
-        Self::new(db, rebased_parent.or(Some(parent)), self.site(db))
-    }
-}
-
+/// Identity of a structural layout hole.
+///
+/// HIR ids (`TypeId`, `PathId`, `GenericArgListId`) are content-interned, so
+/// a hole's creation site alone cannot identify a syntactic occurrence:
+/// `(Slot<_>, Slot<_>)` shares one child HIR type and `(M, M)` one alias
+/// path. Identity is therefore assigned at mint time: the `anchor` names the
+/// lowering execution (or alias template) that minted the hole and the
+/// `ordinal` distinguishes mint events within it. Two holes silently merging
+/// means aliased storage slots, so minting errs on the side of distinctness.
 #[salsa::interned]
 #[derive(Debug)]
 pub struct StructuralHoleId<'db> {
     pub expected_ty: TyId<'db>,
     pub origin: StructuralHoleOrigin<'db>,
-    pub local_frame: LocalFrameId<'db>,
-    pub app_frame: Option<AppFrameId<'db>>,
-}
-
-impl<'db> StructuralHoleId<'db> {
-    pub(crate) fn prepend_local_parent(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        parent: LocalFrameId<'db>,
-    ) -> Self {
-        Self::new(
-            db,
-            self.expected_ty(db),
-            self.origin(db),
-            self.local_frame(db).prepend_parent(db, parent),
-            self.app_frame(db),
-        )
-    }
-
-    pub(crate) fn rebase_app_under(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        parent: AppFrameId<'db>,
-    ) -> Self {
-        let app_frame = self
-            .app_frame(db)
-            .map(|frame| frame.prepend_parent(db, parent))
-            .or(Some(parent));
-        Self::new(
-            db,
-            self.expected_ty(db),
-            self.origin(db),
-            self.local_frame(db),
-            app_frame,
-        )
-    }
+    pub anchor: HoleAnchor<'db>,
+    pub ordinal: u32,
 }
 
 impl<'db> HoleId<'db> {
@@ -297,30 +233,14 @@ impl<'db> HoleId<'db> {
         db: &'db dyn HirAnalysisDb,
         expected_ty: TyId<'db>,
         origin: StructuralHoleOrigin<'db>,
-        local_frame: LocalFrameId<'db>,
+        identity: (HoleAnchor<'db>, u32),
     ) -> Self {
         Self::Structural(StructuralHoleId::new(
             db,
             expected_ty,
             origin,
-            local_frame,
-            None,
-        ))
-    }
-
-    pub(crate) fn structural_with_app(
-        db: &'db dyn HirAnalysisDb,
-        expected_ty: TyId<'db>,
-        origin: StructuralHoleOrigin<'db>,
-        local_frame: LocalFrameId<'db>,
-        app_frame: Option<AppFrameId<'db>>,
-    ) -> Self {
-        Self::Structural(StructuralHoleId::new(
-            db,
-            expected_ty,
-            origin,
-            local_frame,
-            app_frame,
+            identity.0,
+            identity.1,
         ))
     }
 }
@@ -910,6 +830,9 @@ pub fn complete_default_const_args_for_identity<'db>(
         &args[explicit_offset..],
         assumptions,
         ConstDefaultCompletion::evaluate(None),
+        // No application path: `= _` defaults complete as opaque holes here,
+        // so there is no structural identity to mint.
+        None,
     );
     if completed_args.len() == args.len().saturating_sub(explicit_offset) {
         return ty;
@@ -1310,13 +1233,25 @@ pub(crate) fn evaluate_const_ty<'db>(
 
     if let ConstTyData::Abstract(expr, ty) = const_ty.data(db)
         && let ConstExpr::TraitConst(assoc) = expr.data(db)
-        && let Some(resolved) = const_ty_from_assoc_const_use(db, *assoc)
     {
-        let evaluated = resolved.evaluate(db, expected_ty.or(Some(*ty)));
-        if evaluated.ty(db).has_invalid(db) {
-            return const_ty;
+        if let Some(resolved) = const_ty_from_assoc_const_use(db, *assoc) {
+            let evaluated = resolved.evaluate(db, expected_ty.or(Some(*ty)));
+            if evaluated.ty(db).has_invalid(db) {
+                return const_ty;
+            }
+            return evaluated;
         }
-        return evaluated;
+        // Unresolvable here (e.g. `Self` is still generic): keep the const
+        // abstract, but adopt the use position's integer shape the same way
+        // resolved trait consts are normalized into it on evaluation.
+        if let Some(expected) = expected_ty
+            && expected != *ty
+            && int_ty_shape(db, expected).is_some()
+            && int_ty_shape(db, *ty).is_some()
+        {
+            return const_ty.with_ty(db, expected);
+        }
+        return const_ty;
     }
 
     let (body, const_ty_ty, generic_args, const_def) = match const_ty.data(db) {
@@ -1949,6 +1884,7 @@ pub(crate) fn invalid_cause_from_ctfe_error<'db>(
         CtfeError::RecursionLimitExceeded { .. } => {
             InvalidCause::ConstEvalRecursionLimitExceeded { body, expr }
         }
+        CtfeError::RecursiveConst { .. } => InvalidCause::ConstEvalRecursiveConst { body, expr },
         CtfeError::NonConstCall { .. } => InvalidCause::ConstEvalNonConstCall { body, expr },
         CtfeError::InvalidBody { .. } => InvalidCause::Other,
         CtfeError::NotConstEvaluable { .. }
@@ -1989,7 +1925,8 @@ fn root_ctfe_error<'a, 'db>(
         | CtfeError::VariantMismatch { origin }
         | CtfeError::UninitializedLocal { origin }
         | CtfeError::StepLimitExceeded { origin }
-        | CtfeError::RecursionLimitExceeded { origin } => (owner, err, *origin),
+        | CtfeError::RecursionLimitExceeded { origin }
+        | CtfeError::RecursiveConst { origin } => (owner, err, *origin),
     }
 }
 
@@ -2105,15 +2042,7 @@ pub(crate) fn assumptions_for_body<'db>(
         _ => None,
     };
     if let Some(func) = containing_func {
-        let mut preds = collect_func_decl_constraints(db, func.into(), true).instantiate_identity();
-        if let Some(ItemKind::Trait(trait_)) = func.scope().parent_item(db) {
-            let self_pred =
-                TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
-            let mut merged = preds.list(db).to_vec();
-            merged.push(self_pred);
-            preds = PredicateListId::new(db, merged);
-        }
-        return preds.extend_all_bounds(db);
+        return crate::semantic::func_body_assumptions(db, func).extend_all_bounds(db);
     }
 
     let mut enclosing = body.scope();
@@ -2125,9 +2054,8 @@ pub(crate) fn assumptions_for_body<'db>(
 
     match parent_item {
         Some(ItemKind::Trait(trait_)) => {
-            let self_pred =
-                TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
-            PredicateListId::new(db, vec![self_pred]).extend_all_bounds(db)
+            PredicateListId::new(db, vec![crate::semantic::trait_self_predicate(db, trait_)])
+                .extend_all_bounds(db)
         }
         Some(ItemKind::ImplTrait(impl_trait)) => collect_constraints(db, impl_trait.into())
             .instantiate_identity()
@@ -2164,27 +2092,114 @@ pub(crate) fn const_ty_from_assoc_const_use<'db>(
     const_ty_from_trait_const(db, assoc.solve_cx(db), assoc.inst(), assoc.name())
 }
 
+/// Whether `start_body`'s value definition can re-enter `start_body` when
+/// its const references (module consts and trait consts through their
+/// selected impls or defaults) are resolved transitively.
+///
+/// This detects recursive associated-const definitions on *generic* impls at
+/// the definition site: evaluation under the impl's own binder never errors
+/// (param-dependent consts legitimately stay symbolic, and the recursive
+/// fixpoint in `evaluate_const_ty` recovers with the unevaluated form), so
+/// recursion is invisible to the evaluation result. The typed body's
+/// registered const refs give the same resolution edges lowering will take;
+/// refs whose resolution depends on unknown params (no impl selected) end
+/// the walk — those are deferred to instantiation sites.
+pub(crate) fn const_body_resolution_reenters<'db>(
+    db: &'db dyn HirAnalysisDb,
+    start_body: Body<'db>,
+    start_expected: TyId<'db>,
+    start_args: &[TyId<'db>],
+) -> bool {
+    use crate::analysis::ty::ty_check::ConstRef;
+
+    let mut visited = FxHashSet::default();
+    visited.insert(start_body);
+    let mut frontier = vec![(start_body, start_expected, start_args.to_vec())];
+    while let Some((body, expected, args)) = frontier.pop() {
+        let typed_body = &check_anon_const_body(db, body, expected).1;
+        for cref in typed_body.const_refs() {
+            let next = match cref {
+                ConstRef::Const(const_) => const_
+                    .body(db)
+                    .to_opt()
+                    .map(|next_body| (next_body, const_.ty(db), Vec::new())),
+                ConstRef::TraitConst(assoc) => {
+                    // The recorded use is in the owning body's binder terms:
+                    // `Self::B` in a trait default keeps `Self` as a param.
+                    // Instantiate with the args this body is evaluated under
+                    // so impl overrides resolve (a default-body cycle only
+                    // closes through the concrete impl's override).
+                    let assoc = if args.is_empty() {
+                        assoc
+                    } else {
+                        assoc.with_inst(Binder::bind(assoc.inst()).instantiate(db, &args))
+                    };
+                    const_ty_from_assoc_const_use(db, assoc).and_then(|const_ty| {
+                        match const_ty.data(db) {
+                            ConstTyData::UnEvaluated {
+                                body,
+                                ty: Some(ty),
+                                generic_args,
+                                ..
+                            } => Some((*body, *ty, generic_args.clone())),
+                            _ => None,
+                        }
+                    })
+                }
+            };
+            let Some((next_body, next_expected, next_args)) = next else {
+                continue;
+            };
+            if next_body == start_body {
+                return true;
+            }
+            if next_expected.has_invalid(db) || !visited.insert(next_body) {
+                continue;
+            }
+            frontier.push((next_body, next_expected, next_args));
+        }
+    }
+    false
+}
+
+/// Builds the abstract (unevaluated) form of a trait-const use. Evaluation is
+/// deferred to the use position so the const can be retyped to the position's
+/// expected type (e.g. an integer trait const used as an array length), while
+/// the carried `AssocConstUse` keeps the trait goal visible to
+/// well-formedness checking.
+pub(crate) fn abstract_const_ty_from_assoc_const_use<'db>(
+    db: &'db dyn HirAnalysisDb,
+    assoc: AssocConstUse<'db>,
+    expected_ty: TyId<'db>,
+) -> ConstTyId<'db> {
+    ConstTyId::new(
+        db,
+        ConstTyData::Abstract(
+            ConstExprId::new(db, ConstExpr::TraitConst(assoc)),
+            expected_ty,
+        ),
+    )
+}
+
 pub(crate) fn const_ty_or_abstract_from_assoc_const_use<'db>(
     db: &'db dyn HirAnalysisDb,
     assoc: AssocConstUse<'db>,
     expected_ty: TyId<'db>,
 ) -> Option<ConstTyId<'db>> {
-    let make_abstract = || {
-        ConstTyId::new(
-            db,
-            ConstTyData::Abstract(
-                ConstExprId::new(db, ConstExpr::TraitConst(assoc)),
-                expected_ty,
-            ),
-        )
-    };
-
     let Some(evaluated) = const_ty_from_assoc_const_use(db, assoc) else {
-        return Some(make_abstract());
+        return Some(abstract_const_ty_from_assoc_const_use(
+            db,
+            assoc,
+            expected_ty,
+        ));
     };
     let evaluated = evaluated.evaluate(db, Some(expected_ty));
     if evaluated.ty(db).has_invalid(db) {
-        return Some(make_abstract());
+        return Some(abstract_const_ty_from_assoc_const_use(
+            db,
+            assoc,
+            expected_ty,
+        ));
     }
     Some(evaluated)
 }
@@ -2196,16 +2211,25 @@ pub(super) fn const_ty_from_trait_const<'db>(
     name: IdentId<'db>,
 ) -> Option<ConstTyId<'db>> {
     let trait_ = inst.def(db);
-    let (body, generic_args) =
-        crate::analysis::ty::trait_def::assoc_const_body_and_impl_args_for_trait_inst(
-            db, solve_cx, inst, name,
-        )
-        .or_else(|| {
-            trait_
-                .const_(db, name)
-                .and_then(|c| c.default_body(db))
-                .map(|body| (body, inst.args(db).clone()))
-        })?;
+    let selected = crate::analysis::ty::trait_def::assoc_const_body_and_impl_args_for_trait_inst(
+        db, solve_cx, inst, name,
+    );
+    let (body, generic_args) = if let Some(selected) = selected {
+        selected
+    } else if crate::analysis::ty::trait_def::trait_inst_selects_concrete_impl(db, solve_cx, inst) {
+        // A concrete impl is selected but inherits the trait default for this
+        // const, so the default is its value. (When the instance is satisfied
+        // only by an assumption, e.g. `T: Trait`, no concrete impl is selected:
+        // fall through to `None` so the const stays abstract and a later
+        // overriding impl specializes correctly instead of being fixed to the
+        // default.)
+        trait_
+            .const_(db, name)
+            .and_then(|c| c.default_body(db))
+            .map(|body| (body, inst.args(db).clone()))?
+    } else {
+        return None;
+    };
 
     let declared_ty = trait_
         .const_(db, name)
@@ -2431,23 +2455,9 @@ impl<'db> ConstTyId<'db> {
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
         origin: StructuralHoleOrigin<'db>,
-        local_frame: LocalFrameId<'db>,
+        identity: (HoleAnchor<'db>, u32),
     ) -> Self {
-        Self::hole_with_id(db, ty, HoleId::structural(db, ty, origin, local_frame))
-    }
-
-    pub fn structural_hole_with_app(
-        db: &'db dyn HirAnalysisDb,
-        ty: TyId<'db>,
-        origin: StructuralHoleOrigin<'db>,
-        local_frame: LocalFrameId<'db>,
-        app_frame: Option<AppFrameId<'db>>,
-    ) -> Self {
-        Self::hole_with_id(
-            db,
-            ty,
-            HoleId::structural_with_app(db, ty, origin, local_frame, app_frame),
-        )
+        Self::hole_with_id(db, ty, HoleId::structural(db, ty, origin, identity))
     }
 
     pub fn bound_callable_hole(
@@ -2471,8 +2481,8 @@ impl<'db> ConstTyId<'db> {
                         db,
                         ty,
                         hole_id.origin(db),
-                        hole_id.local_frame(db),
-                        hole_id.app_frame(db),
+                        hole_id.anchor(db),
+                        hole_id.ordinal(db),
                     )),
                     HoleId::Bound(hole_id) => HoleId::Bound(*hole_id),
                 },

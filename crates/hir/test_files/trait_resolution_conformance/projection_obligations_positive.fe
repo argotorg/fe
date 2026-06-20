@@ -1,0 +1,45 @@
+trait Bound {
+    type Item
+}
+
+trait HasN {
+    const N: u32
+}
+
+trait CarrierN {
+    type Out
+}
+
+struct Slot<const N: u32> {}
+
+struct AssocItem {}
+
+impl Bound for AssocItem {
+    type Item = u32
+}
+
+impl HasN for AssocItem {
+    const N: u32 = 3
+}
+
+struct AssocHolder<T: Bound> {
+    item: <T as Bound>::Item,
+}
+
+struct ConstHolder<T: HasN> {
+    item: Slot<{ <T as HasN>::N }>,
+}
+
+struct UsesHolder<T> {}
+
+impl<T: HasN> CarrierN for UsesHolder<T> {
+    type Out = Slot<{ <T as HasN>::N }>
+}
+
+fn use_assoc_holder(value: AssocHolder<AssocItem>) -> u32 {
+    value.item
+}
+
+fn use_const_holder(value: ConstHolder<AssocItem>) -> Slot<3> {
+    value.item
+}

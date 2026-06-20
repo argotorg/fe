@@ -1,0 +1,11 @@
+trait MissingConstArg {
+    const N: u32 = 1
+}
+
+struct MissingConstArgStruct {}
+
+struct Slot<const N: u32> {}
+
+struct MissingConstArgWrap {
+    slot: Slot<{ <MissingConstArgStruct as MissingConstArg>::N }>
+}

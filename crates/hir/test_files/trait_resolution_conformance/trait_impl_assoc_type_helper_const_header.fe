@@ -1,0 +1,25 @@
+struct Slot<const N: u32> {}
+
+trait LenHelper {
+    const N: u32
+}
+
+trait UsesLen {
+    type Out
+}
+
+struct UsesLenStruct {}
+
+impl LenHelper for UsesLenStruct {
+    const N: u32 = 3
+}
+
+impl UsesLen for UsesLenStruct {
+    type Out = Slot<{ <Self as LenHelper>::N }>
+}
+
+fn needs_uses_len<T: UsesLen<Out = Slot<{ 3 }>>>(_ value: T) {}
+
+fn use_uses_len(value: UsesLenStruct) {
+    needs_uses_len(value)
+}

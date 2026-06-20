@@ -62,15 +62,17 @@ pub use layout_holes::ty_contains_const_hole;
 pub use msg_selector::MsgSelectorAnalysisPass;
 pub use provider::{
     ProviderAddressSpace, ProviderKind, ProviderSemantics, ProviderTransport,
-    RootProviderRegistration, RootProviderSiteKind, address_space_from_ty, provider_semantics,
-    registered_root_providers,
+    RootProviderRegistration, RootProviderSiteKind, effect_space_from_trait_const,
+    provider_semantics, registered_root_providers,
 };
 
 const DEFAULT_TARGET_TY_PATH: &[&str] = &["std", "evm", "EvmTarget"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EffectHandleMetadata<'db> {
-    pub address_space: TyId<'db>,
+    /// `None` when the handle's impl cannot be selected yet (e.g. the type
+    /// still contains inference variables).
+    pub address_space: Option<provider::ProviderAddressSpace>,
     pub target_ty: TyId<'db>,
 }
 
@@ -392,7 +394,28 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
                     ItemKind::Const(const_) => Some(*const_),
                     _ => None,
                 })
-                .flat_map(|const_| &ty_check::check_const_body(db, const_).0)
+                .flat_map(|const_| {
+                    ty_check::check_const_body(db, const_)
+                        .0
+                        .iter()
+                        .chain(ty_check::check_const_value(db, const_))
+                })
+                .map(|diag| diag.to_voucher()),
+        );
+
+        diags.extend(
+            top_mod
+                .all_impl_traits(db)
+                .iter()
+                .flat_map(|impl_trait| ty_check::check_impl_trait_const_bodies(db, *impl_trait))
+                .map(|diag| diag.to_voucher()),
+        );
+
+        diags.extend(
+            top_mod
+                .all_traits(db)
+                .iter()
+                .flat_map(|trait_| ty_check::check_trait_const_default_bodies(db, *trait_))
                 .map(|diag| diag.to_voucher()),
         );
 
@@ -581,7 +604,6 @@ pub fn effect_handle_metadata<'db>(
         return None;
     }
     let effect_handle = corelib::resolve_core_trait(db, scope, &["EffectHandle"])?;
-    let address_space_ident = IdentId::new(db, "AddressSpace".to_string());
     let target_ident = IdentId::new(db, "Target".to_string());
     let inst = trait_def::TraitInstId::new(db, effect_handle, vec![ty], IndexMap::new());
     match is_goal_satisfiable(
@@ -591,22 +613,15 @@ pub fn effect_handle_metadata<'db>(
     ) {
         GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => None,
         GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation(_) => {
-            let address_space = normalize::normalize_ty(
-                db,
-                inst.assoc_ty(db, address_space_ident)?,
-                scope,
-                assumptions,
-            );
+            let address_space =
+                provider::effect_space_from_trait_const(db, scope, assumptions, inst);
             let target_ty = normalize::normalize_ty(
                 db,
                 inst.assoc_ty(db, target_ident).unwrap_or(ty),
                 scope,
                 assumptions,
             );
-            (!address_space.has_invalid(db)
-                && !ty_contains_const_hole(db, address_space)
-                && !target_ty.has_invalid(db))
-            .then_some(EffectHandleMetadata {
+            (!target_ty.has_invalid(db)).then_some(EffectHandleMetadata {
                 address_space,
                 target_ty,
             })

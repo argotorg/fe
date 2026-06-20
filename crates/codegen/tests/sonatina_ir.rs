@@ -238,10 +238,20 @@ fn get_balance(addr: u256) -> u256
     balances.get(key: addr)
 }
 
-pub fn main() -> u256 {
-    let mut balances = StorageMap<u256, u256, 0>::new()
-    with (balances) {
-        get_balance(1)
+msg M {
+    #[selector = 0]
+    Get -> u256,
+}
+
+contract C {
+    balances: StorageMap<u256, u256>
+
+    recv M {
+        Get -> u256 uses (balances) {
+            with (balances) {
+                get_balance(addr: 1)
+            }
+        }
     }
 }
 "#,
@@ -251,7 +261,7 @@ pub fn main() -> u256 {
         },
     );
     assert!(
-        output.contains("func private %get_balance") && output.contains("object @main"),
+        output.contains("func private %get_balance") && output.contains("object @C"),
         "concrete-provider StorageMap helper should emit real Sonatina IR:\n{output}"
     );
 }

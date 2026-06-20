@@ -3,16 +3,6 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/const_block_checked_overflow.fe
 ---
-error[3-0023]: the expression cannot be evaluated at compile time
-  ┌─ const_block_checked_overflow.fe:5:17
-  │
-5 │   const BAD: u8 = {
-  │ ╭─────────────────^
-6 │ │     bad_call()
-7 │ │     1
-8 │ │ }
-  │ ╰─^ unsupported in const evaluation
-
 error[3-0024]: non-const function call in const context
   ┌─ const_block_checked_overflow.fe:6:5
   │

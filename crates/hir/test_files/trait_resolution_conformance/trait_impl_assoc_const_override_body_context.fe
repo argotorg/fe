@@ -1,0 +1,41 @@
+trait OverrideBodyPath {
+    type X
+    const A: Self::X
+    const B: Self::X
+}
+
+struct OverrideBodyPathStruct {}
+
+impl OverrideBodyPath for OverrideBodyPathStruct {
+    type X = u32
+    const A: Self::X = 1
+    const B: Self::X = {
+        let x: Self::X = OverrideBodyPathStruct::A
+        x
+    }
+}
+
+fn use_override_body_path() -> u32 {
+    OverrideBodyPathStruct::B
+}
+
+trait OverrideBodySelf {
+    type X
+    const A: Self::X
+    const B: Self::X
+}
+
+struct OverrideBodySelfStruct {}
+
+impl OverrideBodySelf for OverrideBodySelfStruct {
+    type X = u32
+    const A: Self::X = 1
+    const B: Self::X = {
+        let x: Self::X = Self::A
+        x
+    }
+}
+
+fn use_override_body_self() -> u32 {
+    OverrideBodySelfStruct::B
+}

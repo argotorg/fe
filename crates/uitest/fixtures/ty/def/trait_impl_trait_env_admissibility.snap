@@ -1,0 +1,82 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/trait_impl_trait_env_admissibility.fe
+---
+error[2-0002]: `MissingType` is not found
+    ┌─ trait_impl_trait_env_admissibility.fe:126:14
+    │
+126 │     const C: MissingType = 0
+    │              ^^^^^^^^^^^ `MissingType` is not found
+
+error[6-0003]: trait bound is not satisfied
+  ┌─ trait_impl_trait_env_admissibility.fe:8:6
+  │
+8 │ impl Foo<U> for Bar {}
+  │      ^^^^^^ `U` doesn't implement `Hashable`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_trait_env_admissibility.fe:10:26
+   │
+10 │ fn needs_hashable_foo<T: Foo<U>>(_ value: T) {}
+   │                          ^^^^^^ `U` doesn't implement `Hashable`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_trait_env_admissibility.fe:21:16
+   │
+21 │ impl Child for Baz {}
+   │                ^^^ `Baz` doesn't implement `Super`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_trait_env_admissibility.fe:50:17
+   │
+50 │     type Item = U
+   │                 ^ `U` doesn't implement `Hashable`
+
+error[6-0008]: method `call` has incompatible return type
+   ┌─ trait_impl_trait_env_admissibility.fe:66:8
+   │
+60 │     fn call(self) -> u32
+   │        ---- trait requires this return type
+   ·
+66 │     fn call(self) -> bool {
+   │        ^^^^ expected `u32`, found `bool`
+
+error[6-0012]: missing associated type in trait implementation
+   ┌─ trait_impl_trait_env_admissibility.fe:35:19
+   │
+35 │ impl WithItem for MissingItem {}
+   │                   ^^^^^^^^^^^ missing associated type `Item` from trait `WithItem`
+
+error[6-0014]: associated const not defined in trait
+    ┌─ trait_impl_trait_env_admissibility.fe:168:11
+    │
+168 │     const C: u32 = 1
+    │           ^ associated const `C` is not defined in trait `Marker`
+
+error[6-0015]: missing associated const in trait implementation
+   ┌─ trait_impl_trait_env_admissibility.fe:83:20
+   │
+83 │ impl WithConst for MissingConst {}
+   │                    ^^^^^^^^^^^^ missing associated const `C` from trait `WithConst`
+
+error[6-0016]: associated const `C` has incompatible type
+    ┌─ trait_impl_trait_env_admissibility.fe:114:14
+    │
+108 │     const C: u32
+    │              --- trait requires this type
+    ·
+114 │     const C: bool = 0
+    │              ^^^^ expected `u32`, found `bool`
+
+error[8-0000]: type mismatch
+   ┌─ trait_impl_trait_env_admissibility.fe:98:20
+   │
+98 │     const C: u32 = true
+   │                    ^^^^ expected `u32`, but `bool` is given
+
+error[8-0012]: undefined variable
+    ┌─ trait_impl_trait_env_admissibility.fe:154:20
+    │
+154 │     const C: u32 = missing()
+    │                    ^^^^^^^ undefined variable `missing`

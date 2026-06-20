@@ -1,0 +1,63 @@
+trait LeftHelperRound {}
+
+trait RightHelperRound {}
+
+trait LeftRound {
+    type X: RightHelperRound
+}
+
+trait RightRound {
+    type X: LeftHelperRound
+}
+
+struct LeftSeedRound {}
+
+struct RightSeedRound {}
+
+struct LeftConcreteHelperRound {}
+
+struct RightConcreteHelperRound {}
+
+impl LeftHelperRound for LeftConcreteHelperRound
+    where LeftSeedRound: LeftRound
+{}
+
+impl RightHelperRound for RightConcreteHelperRound
+    where RightSeedRound: RightRound
+{}
+
+impl LeftRound for LeftSeedRound {
+    type X = RightConcreteHelperRound
+}
+
+impl RightRound for RightSeedRound {
+    type X = LeftConcreteHelperRound
+}
+
+trait BaseRound {
+    const C: u32
+}
+
+trait UsesBaseRound {}
+
+struct ValidRound {}
+
+struct WrapperRound<T> {
+    item: T,
+}
+
+impl BaseRound for ValidRound {
+    const C: u32 = 1
+}
+
+impl BaseRound for ValidRound {
+    const C: u32 = missing()
+}
+
+impl<T: BaseRound> UsesBaseRound for WrapperRound<T> {}
+
+fn needs_uses_base_round<T: UsesBaseRound>(_ value: T) {}
+
+fn use_uses_base_round(value: WrapperRound<ValidRound>) {
+    needs_uses_base_round(value)
+}

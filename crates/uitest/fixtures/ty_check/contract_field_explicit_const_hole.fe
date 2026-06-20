@@ -1,0 +1,7 @@
+// A storage-slot layout hole must be declared by the type author via a `= _`
+// parameter default. An explicit `_` const argument at the use site (here on
+// `String`'s byte-capacity parameter, which is not a slot at all) is rejected
+// rather than silently numbered as a storage slot.
+contract C {
+    value: String<_>,
+}

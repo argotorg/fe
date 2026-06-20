@@ -4,28 +4,23 @@ use std::evm::{PackedBits, StoragePackedArray, ValidPackedBits}
 // produce a "trait bound is not satisfied" error from the `ValidPackedBits`
 // constraint on the impl block.
 
-pub fn ok_8bit() -> u256 {
-    let a = StoragePackedArray<8, 0>::new()
+pub fn ok_8bit(a: StoragePackedArray<8, 0>) -> u256 {
     a.get(0)
 }
 
-pub fn bad_7bit() -> u256 {
-    let a = StoragePackedArray<7, 0>::new()
+pub fn bad_7bit(a: StoragePackedArray<7, 0>) -> u256 {
     a.get(0)
 }
 
-pub fn bad_24bit() -> u256 {
-    let a = StoragePackedArray<24, 0>::new()
+pub fn bad_24bit(a: StoragePackedArray<24, 0>) -> u256 {
     a.get(0)
 }
 
-pub fn bad_zero() -> u256 {
-    let a = StoragePackedArray<0, 0>::new()
+pub fn bad_zero(a: StoragePackedArray<0, 0>) -> u256 {
     a.get(0)
 }
 
-pub fn bad_256() -> u256 {
-    let a = StoragePackedArray<256, 0>::new()
+pub fn bad_256(a: StoragePackedArray<256, 0>) -> u256 {
     a.get(0)
 }
 

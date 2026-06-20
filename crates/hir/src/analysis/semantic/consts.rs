@@ -7,7 +7,7 @@ use crate::analysis::{
     HirAnalysisDb,
     semantic::{SemanticInstance, instantiate_with_generic_args},
     ty::{
-        const_ty::{ConstTyData, EvaluatedConstTy, evaluate_type_level_int_const_expr},
+        const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy, evaluate_type_level_int_const_expr},
         ty_def::{PrimTy, TyBase, TyData, TyId, TyVarSort, prim_int_bits},
     },
 };
@@ -349,6 +349,54 @@ pub fn sem_const_eq<'db>(
     }
 }
 
+/// Demands the most concrete form of a type-level (symbolic) const value
+/// under an instance's generic arguments: instantiates the carried const
+/// type with the args, evaluates it at the value's expected type, and folds
+/// integer const expressions. A second round covers structure exposed by the
+/// first evaluation (e.g. a trait const that resolved to another symbolic
+/// form mentioning instantiable params).
+///
+/// This is the single demand point for turning a `SemConstValue::TypeLevel`
+/// payload concrete; const canonicalization, runtime reification, and the
+/// CTFE machine's scalar reads all go through it. Returns `None` if the
+/// payload is not a const type.
+pub(crate) fn demand_concrete_const_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    const_ty: TyId<'db>,
+    expected: TyId<'db>,
+    generic_args: &[TyId<'db>],
+) -> Option<ConstTyId<'db>> {
+    fn evaluate_and_fold<'db>(
+        db: &'db dyn HirAnalysisDb,
+        const_ty: ConstTyId<'db>,
+        expected: TyId<'db>,
+    ) -> ConstTyId<'db> {
+        let evaluated = const_ty.evaluate(db, Some(expected));
+        if let ConstTyData::Abstract(expr, expected_ty) = evaluated.data(db)
+            && let Some(concrete) = evaluate_type_level_int_const_expr(db, *expr, *expected_ty)
+        {
+            concrete
+        } else {
+            evaluated
+        }
+    }
+
+    let instantiated = instantiate_with_generic_args(db, const_ty, generic_args);
+    let TyData::ConstTy(const_ty) = instantiated.data(db) else {
+        return None;
+    };
+    let mut evaluated = evaluate_and_fold(db, *const_ty, expected);
+    if matches!(evaluated.data(db), ConstTyData::Abstract(..)) {
+        let reinstantiated =
+            instantiate_with_generic_args(db, TyId::const_ty(db, evaluated), generic_args);
+        let TyData::ConstTy(reinstantiated) = reinstantiated.data(db) else {
+            unreachable!("instantiating a const ty must yield a const ty");
+        };
+        evaluated = evaluate_and_fold(db, *reinstantiated, expected);
+    }
+    Some(evaluated)
+}
+
 pub fn sem_const_from_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
@@ -464,37 +512,12 @@ fn reify_runtime_const_impl<'db>(
             } else {
                 ty
             };
-            let instantiated = instantiate_with_generic_args(
+            let evaluated = demand_concrete_const_ty(
                 db,
                 const_ty,
+                ty,
                 instance.key(db).subst(db).generic_args(db),
-            );
-            let TyData::ConstTy(const_ty) = instantiated.data(db) else {
-                return None;
-            };
-            let mut evaluated = const_ty.evaluate(db, Some(ty));
-            if let ConstTyData::Abstract(expr, expected_ty) = evaluated.data(db)
-                && let Some(concrete) = evaluate_type_level_int_const_expr(db, *expr, *expected_ty)
-            {
-                evaluated = concrete;
-            }
-            if matches!(evaluated.data(db), ConstTyData::Abstract(..)) {
-                let instantiated = instantiate_with_generic_args(
-                    db,
-                    TyId::const_ty(db, evaluated),
-                    instance.key(db).subst(db).generic_args(db),
-                );
-                let TyData::ConstTy(instantiated) = instantiated.data(db) else {
-                    unreachable!("instantiating a const ty must yield a const ty");
-                };
-                evaluated = instantiated.evaluate(db, Some(ty));
-                if let ConstTyData::Abstract(expr, expected_ty) = evaluated.data(db)
-                    && let Some(concrete) =
-                        evaluate_type_level_int_const_expr(db, *expr, *expected_ty)
-                {
-                    evaluated = concrete;
-                }
-            }
+            )?;
             let value = sem_const_from_ty(db, TyId::const_ty(db, evaluated))?;
             if matches!(value.value(db), SemConstValue::TypeLevel { .. }) {
                 return None;

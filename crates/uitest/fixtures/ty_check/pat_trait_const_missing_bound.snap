@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/pat_trait_const_missing_bound.fe
+---
+error[6-0003]: trait bound is not satisfied
+  ┌─ pat_trait_const_missing_bound.fe:7:9
+  │
+7 │         <T as HasN>::N => true,
+  │         ^^^^^^^^^^^^^^ `T` doesn't implement `HasN`

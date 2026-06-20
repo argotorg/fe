@@ -681,6 +681,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
 
     fn lower_const_ref(&mut self, expr: ExprId, const_ref: ConstRef<'db>) -> SValueId {
         let ty = self.expr_ty(expr);
+        let mut type_level_fallback = None;
         if let ConstRef::TraitConst(assoc) = const_ref
             && let Some(const_ty) = const_ty_or_abstract_from_assoc_const_use(self.db, assoc, ty)
                 .map(|const_ty| TyId::const_ty(self.db, const_ty))
@@ -709,6 +710,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     SExpr::Const(SConst::Value(symbolic)),
                 );
             }
+            type_level_fallback = Some(symbolic);
         }
 
         if let Some(const_ref) =
@@ -718,6 +720,19 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 SemOrigin::Expr(expr),
                 ty,
                 SExpr::Const(SConst::Ref(const_ref)),
+            );
+        }
+
+        // The trait const cannot be resolved to a concrete instance in this
+        // context (e.g. a trait const on a still-generic `Self` inside a
+        // CTFE-evaluated anon const body of a trait method signature). Emit
+        // the type-level symbolic value so const evaluation yields the
+        // abstract form instead of panicking.
+        if let Some(symbolic) = type_level_fallback {
+            return self.emit_expr_with_origin(
+                SemOrigin::Expr(expr),
+                ty,
+                SExpr::Const(SConst::Value(symbolic)),
             );
         }
 

@@ -1,0 +1,18 @@
+trait Red {}
+trait Blue {}
+
+struct Pair<T> {
+    item: T,
+}
+
+impl<T: Red> Pair<T> {
+    fn join<U: Blue>(self, _ other: U) {}
+}
+
+fn call_join<T, U>(pair: Pair<T>, other: U) {
+    pair.join(other)
+}
+
+// The "required by this bound" notes must point at the bound that produced
+// each constraint: the `T: Red` failure at the impl bound, the `U: Blue`
+// failure at the method's own bound.

@@ -7,7 +7,7 @@ target = "evm-ethereum-osaka"
 
 type @layout_0 = {i256};
 
-func private %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_5fc5() -> @layout_0 {
+func private %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_efe3() -> @layout_0 {
     block0:
         jump block1;
 
@@ -17,7 +17,7 @@ func private %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_5fc5() -> @lay
         return v3;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_5fc5_0() -> @layout_0 {
+func private %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_efe3_0() -> @layout_0 {
     block0:
         jump block1;
 
@@ -32,7 +32,7 @@ func private %main() -> @layout_0 {
         jump block1;
 
     block1:
-        v0.@layout_0 = call %standalone_caller__caller__who_called__gcd5c_8b85;
+        v0.@layout_0 = call %standalone_caller__caller__who_called__gcd5c_a9cd;
         return v0;
 }
 
@@ -50,16 +50,16 @@ func private %standalone_caller__caller__who_called__gcd5c_4c8a() -> @layout_0 {
         jump block1;
 
     block1:
-        v0.@layout_0 = call %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_5fc5;
+        v0.@layout_0 = call %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_efe3;
         return v0;
 }
 
-func private %standalone_caller__caller__who_called__gcd5c_8b85() -> @layout_0 {
+func private %standalone_caller__caller__who_called__gcd5c_a9cd() -> @layout_0 {
     block0:
         jump block1;
 
     block1:
-        v0.@layout_0 = call %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_5fc5_0;
+        v0.@layout_0 = call %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_efe3_0;
         return v0;
 }
 

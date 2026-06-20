@@ -1,0 +1,29 @@
+extern {
+    fn todo() -> !
+}
+
+trait Hashable {
+    fn hash(self) -> u256
+}
+
+struct Cache<T: Hashable> {
+    item: T,
+}
+
+impl<T: Hashable> Cache<T> {
+    fn touch(self) {}
+}
+
+fn bad_param<T>(cache: Cache<T>) {
+    cache.touch()
+}
+
+fn bad_let<T>() {
+    let cache: Cache<T>
+    cache.touch()
+}
+
+fn bad_let_init<T>() {
+    let cache: Cache<T> = todo()
+    cache.touch()
+}

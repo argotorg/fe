@@ -15,7 +15,7 @@ use super::{BodyOwner, ExprProp, LocalBinding, TyChecker};
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
-        const_ty::LayoutHoleArgSite,
+        const_ty::{HoleAnchor, HoleMinter, LayoutHoleArgSite},
         corelib::resolve_lib_func_path,
         diagnostics::{BodyDiag, FuncBodyDiag},
         fold::{AssocTySubst, TyFoldable, TyFolder},
@@ -150,12 +150,17 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
         return Ok(());
     }
 
+    let minter = HoleMinter::new(HoleAnchor::TemplateArgs {
+        args,
+        scope: tc.env.scope(),
+    });
     let given_args = lower_generic_arg_list(
         db,
         args,
         tc.env.scope(),
         tc.env.assumptions(),
         LayoutHoleArgSite::GenericArgList(args),
+        &minter,
     );
     let offset = callable.callable_def.offset_to_explicit_params_position(db);
     let current_args = &mut callable.generic_args[offset..];

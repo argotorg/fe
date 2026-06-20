@@ -1,0 +1,7 @@
+trait Bound {
+    type Item
+}
+
+fn ok<T: Bound>() {
+    let _: <T as Bound>::Item
+}

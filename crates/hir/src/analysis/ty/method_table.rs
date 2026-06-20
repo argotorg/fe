@@ -5,13 +5,63 @@ use salsa::Update;
 
 use super::{
     binder::Binder,
-    canonical::Canonical,
-    const_ty::ConstTyId,
-    ty_def::{InvalidCause, TyBase, TyId, strip_derived_adt_layout_args},
+    canonical::{Canonical, Solution},
+    fold::{TyFoldable, TyFolder},
+    ty_def::{TyBase, TyId, strip_derived_adt_layout_args},
     unify::UnificationTable,
+    visitor::{TyVisitable, TyVisitor},
 };
 use crate::analysis::{HirAnalysisDb, ty::ty_def::TyData};
 use crate::hir_def::CallableDef;
+
+/// An inherent-method candidate returned by [`probe_method`], carrying the
+/// binding the probe proved alongside the definition.
+///
+/// `bound` is the candidate as matched against the receiver, canonicalized
+/// over the probe's receiver query: consumers extract it into their own
+/// inference context instead of re-deriving the binder args from the
+/// receiver. This keeps the matching rule (which params, which probe key,
+/// which normalizations) in exactly one place — the probe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub struct ProbedMethod<'db> {
+    pub def: CallableDef<'db>,
+    pub bound: Solution<BoundInherentMethod<'db>>,
+}
+
+/// The bound form of an inherent-method candidate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub struct BoundInherentMethod<'db> {
+    /// The candidate's function type with all binder args applied (solved
+    /// where the receiver determined them, fresh variables otherwise).
+    pub func_ty: TyId<'db>,
+    /// The probe key (the method's self-param type, or the impl self type
+    /// for associated functions) under the same binder args. Consumers unify
+    /// this against their receiver to propagate the solution's bindings into
+    /// receiver inference variables.
+    pub key_ty: TyId<'db>,
+}
+
+impl<'db> TyVisitable<'db> for BoundInherentMethod<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        self.func_ty.visit_with(visitor);
+        self.key_ty.visit_with(visitor);
+    }
+}
+
+impl<'db> TyFoldable<'db> for BoundInherentMethod<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        Self {
+            func_ty: self.func_ty.fold_with(db, folder),
+            key_ty: self.key_ty.fold_with(db, folder),
+        }
+    }
+}
 
 #[salsa::tracked(return_ref, cycle_fn=collect_methods_cycle_recover, cycle_initial=collect_methods_cycle_initial)]
 pub(crate) fn collect_methods<'db>(
@@ -49,7 +99,7 @@ pub(crate) fn probe_method<'db>(
     ingot: Ingot<'db>,
     ty: Canonical<TyId<'db>>,
     name: IdentId<'db>,
-) -> Vec<CallableDef<'db>> {
+) -> Vec<ProbedMethod<'db>> {
     let table = collect_methods(db, ingot);
     table.probe(db, ty, name)
 }
@@ -65,15 +115,18 @@ impl<'db> MethodTable<'db> {
         db: &'db dyn HirAnalysisDb,
         ty: Canonical<TyId<'db>>,
         name: IdentId<'db>,
-    ) -> Vec<CallableDef<'db>> {
+    ) -> Vec<ProbedMethod<'db>> {
         let mut table = UnificationTable::new(db);
-        let ty = ty.extract_identity(&mut table);
-        let Some(base) = Self::extract_ty_base(ty, db) else {
+        // The table is fresh, so the extracted receiver vars share keys with
+        // the canonical query vars — the precondition for canonicalizing
+        // solutions against `ty` below.
+        let extracted = ty.extract_identity(&mut table);
+        let Some(base) = Self::extract_ty_base(extracted, db) else {
             return vec![];
         };
 
         if let Some(bucket) = self.buckets.get(base) {
-            bucket.probe(&mut table, ty, name)
+            bucket.probe(ty, &mut table, extracted, name)
         } else {
             vec![]
         }
@@ -125,25 +178,42 @@ impl<'db> MethodBucket<'db> {
 
     fn probe(
         &self,
+        canonical_ty: Canonical<TyId<'db>>,
         table: &mut UnificationTable<'db>,
         ty: TyId<'db>,
         name: IdentId<'db>,
-    ) -> Vec<CallableDef<'db>> {
+    ) -> Vec<ProbedMethod<'db>> {
+        let db = table.db;
         let mut methods = vec![];
-        let ty = strip_derived_adt_layout_args(table.db, ty);
-        let ty = saturate_ty_for_method_probe(table.db, ty);
-        for (&cand_ty, funcs) in self.methods.iter() {
+        let ty = strip_derived_adt_layout_args(db, ty);
+        let ty = saturate_ty_for_method_probe(table, ty);
+        for (&cand_key, funcs) in self.methods.iter() {
+            let Some(&func) = funcs.get(&name) else {
+                continue;
+            };
             let snapshot = table.snapshot();
 
             let ty = table.instantiate_to_term(ty);
-            let cand_ty = table.instantiate_with_fresh_vars(cand_ty);
-            let cand_ty = strip_derived_adt_layout_args(table.db, cand_ty);
-            let cand_ty = table.instantiate_to_term(cand_ty);
+            // Apply fresh vars along the candidate's full binder spine, then
+            // express the probe key in terms of those same vars (key params
+            // index into the callable's arg list), so a successful match
+            // yields the bound candidate, not just its identity.
+            let mut func_ty = TyId::func(db, func);
+            while let Some(prop) = func_ty.applicable_ty(db) {
+                let arg = table.new_var_for(prop);
+                func_ty = TyId::app(db, func_ty, arg);
+            }
+            let key_ty = cand_key.instantiate(db, func_ty.generic_args(db));
+            let key_ty = strip_derived_adt_layout_args(db, key_ty);
+            let key_ty = table.instantiate_to_term(key_ty);
 
-            if table.unify(cand_ty, ty).is_ok()
-                && let Some(func) = funcs.get(&name)
-            {
-                methods.push(*func)
+            if table.unify(key_ty, ty).is_ok() {
+                let bound = canonical_ty.canonicalize_solution(
+                    db,
+                    table,
+                    BoundInherentMethod { func_ty, key_ty },
+                );
+                methods.push(ProbedMethod { def: func, bound });
             }
             table.rollback_to(snapshot);
         }
@@ -152,17 +222,23 @@ impl<'db> MethodBucket<'db> {
     }
 }
 
-fn saturate_ty_for_method_probe<'db>(db: &'db dyn HirAnalysisDb, mut ty: TyId<'db>) -> TyId<'db> {
+fn saturate_ty_for_method_probe<'db>(
+    table: &mut UnificationTable<'db>,
+    mut ty: TyId<'db>,
+) -> TyId<'db> {
+    let db = table.db;
     while !ty.is_star_kind(db) {
         let Some(prop) = ty.applicable_ty(db) else {
             break;
         };
 
-        let arg = if let Some(const_ty) = prop.const_ty {
-            TyId::const_ty(db, ConstTyId::hole_with_ty(db, const_ty))
-        } else {
-            TyId::invalid(db, InvalidCause::Other)
-        };
+        // Fresh vars, not invalid/hole placeholders: the padding args can be
+        // unified into the candidate's binder args during the probe, and the
+        // bound candidate is part of the probe's result — a baked invalid
+        // type poisons downstream bound checks (goals containing invalids
+        // are skipped) and a baked layout hole pins a const arg that the
+        // call site would otherwise infer.
+        let arg = table.new_var_for(prop);
 
         ty = TyId::app(db, ty, arg);
     }

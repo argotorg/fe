@@ -5,12 +5,13 @@ use crate::{
         HirAnalysisDb,
         ty::{
             corelib::resolve_lib_type_path,
-            trait_resolution::PredicateListId,
+            trait_def::TraitInstId,
+            trait_resolution::{PredicateListId, TraitSolveCx},
             ty_check::EffectParamSite,
             ty_def::{CapabilityKind, TyId},
         },
     },
-    hir_def::{Contract, Func, scope_graph::ScopeId},
+    hir_def::{Contract, Func, IdentId, scope_graph::ScopeId},
 };
 
 use super::{effect_handle_metadata, resolve_default_root_effect_ty};
@@ -157,7 +158,7 @@ pub fn provider_semantics<'db>(
         return ProviderSemantics {
             provider_ty,
             kind: provider_kind_for_target_ty(db, metadata.target_ty),
-            address_space: address_space_from_ty(db, scope, metadata.address_space),
+            address_space: metadata.address_space,
             target_ty: Some(metadata.target_ty),
             transport: ProviderTransport::ByValue,
         };
@@ -193,26 +194,46 @@ pub fn provider_semantics_for_specialized_call<'db>(
     semantics
 }
 
-pub fn address_space_from_ty<'db>(
+/// Reads the `SPACE: AddressSpace` const of `inst` (an `EffectHandle` or
+/// `StaticSlot` instance) and maps the `core::effect_ref::AddressSpace`
+/// variant onto the compiler's address-space enum.
+pub fn effect_space_from_trait_const<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
-    ty: TyId<'db>,
+    assumptions: PredicateListId<'db>,
+    inst: TraitInstId<'db>,
 ) -> Option<ProviderAddressSpace> {
-    for (path, space) in [
-        ("core::effect_ref::Memory", ProviderAddressSpace::Memory),
-        ("core::effect_ref::Storage", ProviderAddressSpace::Storage),
-        (
-            "core::effect_ref::TransientStorage",
-            ProviderAddressSpace::Transient,
-        ),
-        ("core::effect_ref::Calldata", ProviderAddressSpace::Calldata),
-        ("core::effect_ref::Code", ProviderAddressSpace::Code),
-    ] {
-        if ty == resolve_lib_type_path(db, scope, path)? {
-            return Some(space);
-        }
+    use super::const_ty::{ConstTyData, EvaluatedConstTy, const_ty_from_trait_const};
+
+    // Impl selection requires a resolvable self type; unresolved candidates
+    // simply have no known space yet (mirrors the old projection behavior).
+    if inst.self_ty(db).has_var(db) {
+        return None;
     }
-    None
+
+    let space_ident = IdentId::new(db, "SPACE".to_string());
+    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+    let const_ty = const_ty_from_trait_const(db, solve_cx, inst, space_ident)?;
+    let evaluated = const_ty.evaluate(db, None);
+    let ConstTyData::Evaluated(EvaluatedConstTy::EnumVariant(variant), _) = evaluated.data(db)
+    else {
+        return None;
+    };
+
+    let space_enum = resolve_lib_type_path(db, scope, "core::effect_ref::AddressSpace")?;
+    let space_adt = space_enum.adt_def(db)?;
+    if super::adt_def::AdtRef::Enum(variant.enum_) != space_adt.adt_ref(db) {
+        return None;
+    }
+
+    match variant.ident(db)?.data(db).as_str() {
+        "Memory" => Some(ProviderAddressSpace::Memory),
+        "Calldata" => Some(ProviderAddressSpace::Calldata),
+        "Storage" => Some(ProviderAddressSpace::Storage),
+        "TransientStorage" => Some(ProviderAddressSpace::Transient),
+        "Code" => Some(ProviderAddressSpace::Code),
+        _ => None,
+    }
 }
 
 fn provider_kind_for_target_ty<'db>(

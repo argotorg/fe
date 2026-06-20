@@ -9,15 +9,14 @@ type @layout_0 = {i256, i256};
 
 global private const @layout_0 $const_region_0 = {10, 20};
 
-func private %bump__gb2d8(v0.objref<@layout_0>) {
+func private %bump__gaab0(v0.i256) {
     block0:
         jump block1;
 
     block1:
-        v3.objref<i256> = obj.proj v0 0.i256;
-        v4.i256 = obj.load v3;
-        (v6.i256, v7.i1) = uaddo v4 1.i256;
-        br v7 block2 block3;
+        v2.i256 = mload v0 i256;
+        (v4.i256, v5.i1) = uaddo v2 1.i256;
+        br v5 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -25,16 +24,15 @@ func private %bump__gb2d8(v0.objref<@layout_0>) {
         evm_revert 0.i256 36.i256;
 
     block3:
-        v13.objref<i256> = obj.proj v0 0.i256;
-        obj.store v13 v6;
-        v14.objref<i256> = obj.proj v0 1.i256;
-        v15.i256 = obj.load v14;
-        (v17.i256, v18.i1) = uaddo v15 2.i256;
-        br v18 block2 block4;
+        mstore v0 v4 i256;
+        v13.i256 = add v0 32.i256;
+        v14.i256 = mload v13 i256;
+        (v16.i256, v17.i1) = uaddo v14 2.i256;
+        br v17 block2 block4;
 
     block4:
-        v20.objref<i256> = obj.proj v0 1.i256;
-        obj.store v20 v17;
+        v19.i256 = add v0 32.i256;
+        mstore v19 v16 i256;
         return;
 }
 
@@ -65,14 +63,15 @@ func private %bump__gc323(v0.i256) {
         return;
 }
 
-func private %bump__gaab0(v0.i256) {
+func private %bump__gb2d8(v0.objref<@layout_0>) {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = mload v0 i256;
-        (v4.i256, v5.i1) = uaddo v2 1.i256;
-        br v5 block2 block3;
+        v3.objref<i256> = obj.proj v0 0.i256;
+        v4.i256 = obj.load v3;
+        (v6.i256, v7.i1) = uaddo v4 1.i256;
+        br v7 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -80,15 +79,16 @@ func private %bump__gaab0(v0.i256) {
         evm_revert 0.i256 36.i256;
 
     block3:
-        mstore v0 v4 i256;
-        v13.i256 = add v0 32.i256;
-        v14.i256 = mload v13 i256;
-        (v16.i256, v17.i1) = uaddo v14 2.i256;
-        br v17 block2 block4;
+        v13.objref<i256> = obj.proj v0 0.i256;
+        obj.store v13 v6;
+        v14.objref<i256> = obj.proj v0 1.i256;
+        v15.i256 = obj.load v14;
+        (v17.i256, v18.i1) = uaddo v15 2.i256;
+        br v18 block2 block4;
 
     block4:
-        v19.i256 = add v0 32.i256;
-        mstore v19 v16 i256;
+        v20.objref<i256> = obj.proj v0 1.i256;
+        obj.store v20 v17;
         return;
 }
 

@@ -28,7 +28,7 @@ use crate::analysis::{
         adt_def::{AdtRef, adt_layout_hole_plan, adt_layout_hole_plan_with_explicit_args},
         binder::Binder,
         canonical::Canonicalized,
-        const_ty::{AppFrameId, HoleId, LayoutHoleArgSite, LocalFrameId, StructuralHoleOrigin},
+        const_ty::{HoleAnchor, HoleId, HoleMinter, LayoutHoleArgSite, StructuralHoleOrigin},
         layout_holes::layout_hole_with_fallback_ty,
         normalize::normalize_ty,
         trait_def::{TraitInstId, impls_for_ty_with_constraints},
@@ -37,7 +37,7 @@ use crate::analysis::{
         ty_def::{InvalidCause, Kind, TyData, TyId},
         ty_lower::{
             ConstDefaultCompletion, TyAlias, collect_generic_params, lower_generic_arg_list,
-            lower_hir_ty, lower_type_alias,
+            lower_hir_ty_with_minter, lower_type_alias,
         },
     },
 };
@@ -547,7 +547,7 @@ impl<'db> PathRes<'db> {
             PathRes::Mod(scope) => Some(*scope),
             PathRes::Method(_, cand) => {
                 let scope = match cand {
-                    MethodCandidate::InherentMethod(func_def) => func_def.scope(),
+                    MethodCandidate::InherentMethod(cand) => cand.def.scope(),
                     MethodCandidate::TraitMethod(c) | MethodCandidate::NeedsConfirmation(c) => {
                         c.method.scope()
                     }
@@ -575,7 +575,7 @@ impl<'db> PathRes<'db> {
                 // Method visibility depends on the method's defining scope
                 // (function or trait method), not the receiver type.
                 let method_scope = match cand {
-                    MethodCandidate::InherentMethod(func_def) => func_def.scope(),
+                    MethodCandidate::InherentMethod(cand) => cand.def.scope(),
                     MethodCandidate::TraitMethod(c) | MethodCandidate::NeedsConfirmation(c) => {
                         c.method.scope()
                     }
@@ -699,6 +699,22 @@ pub fn resolve_path<'db>(
     assumptions: PredicateListId<'db>,
     resolve_tail_as_value: bool,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
+    let minter = HoleMinter::new(HoleAnchor::TemplatePath { path, scope });
+    resolve_path_with_minter(db, path, scope, assumptions, resolve_tail_as_value, &minter)
+}
+
+/// Like [`resolve_path`], but mints structural-hole identities through the
+/// caller's minter so holes created during resolution (generic-arg wildcards,
+/// `= _` default completions, derived layout args) are keyed to the enclosing
+/// lowering execution rather than to this path's content-interned identity.
+pub(crate) fn resolve_path_with_minter<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    resolve_tail_as_value: bool,
+    minter: &HoleMinter<'db>,
+) -> PathResolutionResult<'db, PathRes<'db>> {
     let directive = QueryDirective::for_scope(db, scope);
     resolve_path_impl(
         db,
@@ -709,6 +725,7 @@ pub fn resolve_path<'db>(
         directive,
         true,
         &mut |_, _| {},
+        minter,
     )
 }
 
@@ -724,6 +741,7 @@ where
     F: FnMut(PathId<'db>, &PathRes<'db>),
 {
     let directive = QueryDirective::for_scope(db, scope);
+    let minter = HoleMinter::new(HoleAnchor::TemplatePath { path, scope });
     resolve_path_impl(
         db,
         path,
@@ -733,6 +751,7 @@ where
         directive,
         true,
         observer,
+        &minter,
     )
 }
 
@@ -746,6 +765,7 @@ fn resolve_path_impl<'db, F>(
     base_directive: QueryDirective,
     is_tail: bool,
     observer: &mut F,
+    minter: &HoleMinter<'db>,
 ) -> PathResolutionResult<'db, PathRes<'db>>
 where
     F: FnMut(PathId<'db>, &PathRes<'db>),
@@ -762,6 +782,7 @@ where
                 base_directive,
                 false,
                 observer,
+                minter,
             )
         })
         .transpose()?;
@@ -776,7 +797,7 @@ where
                 path,
             ));
         }
-        let ty = lower_hir_ty(db, type_, scope, assumptions);
+        let ty = lower_hir_ty_with_minter(db, type_, scope, assumptions, minter);
         if let Some(cause) = ty.invalid_cause(db) {
             match cause {
                 InvalidCause::NotAType(res) => {
@@ -977,6 +998,7 @@ where
                 scope,
                 assumptions,
                 LayoutHoleArgSite::Path(path),
+                minter,
             );
             let mut dedup: IndexMap<TyId<'db>, (TraitInstId<'db>, TyId<'db>)> = IndexMap::new();
             for (inst, ty_candidate) in assoc_tys.iter().copied() {
@@ -1068,7 +1090,7 @@ where
         pick_type_domain_from_bucket(parent_res, bucket, path, path.parent(db))?
     };
 
-    let r = resolve_name_res(db, &res, parent_ty, path, scope, assumptions)?;
+    let r = resolve_name_res_with_minter(db, &res, parent_ty, path, scope, assumptions, minter)?;
     observer(path, &r);
     Ok(r)
 }
@@ -1104,12 +1126,15 @@ fn select_assoc_const_candidate<'db>(
     // we don't know its concrete type yet, so probing impls would pull in many
     // unrelated candidates and frequently lead to spurious ambiguity.
     //
-    // In that case, rely on in-scope bounds (`assumptions`) to provide candidates.
+    // In that case, rely on in-scope bounds (`assumptions`) to provide
+    // candidates. The list is elaborated so constants inherited through
+    // transitive super-trait bounds are visible.
     let receiver_is_ty_param = matches!(
         receiver_ty.base_ty(db).data(db),
         TyData::TyParam(_) | TyData::AssocTy(_) | TyData::QualifiedTy(_)
     );
     if receiver_is_ty_param {
+        let assumptions = assumptions.extend_all_bounds(db);
         let mut matches: IndexSet<TraitInstId<'db>> = IndexSet::default();
         let receiver = Canonicalized::new(db, receiver_ty);
         receiver.with_materialized(db, |cx| {
@@ -1121,19 +1146,11 @@ fn select_assoc_const_candidate<'db>(
                 let pred = cx.materialize(pred);
                 if cx.unify::<TyId<'db>>(receiver, self_ty).is_ok()
                     && let Some(pred) = cx.try_extract::<TraitInstId<'db>>(pred)
+                    && pred.def(db).const_(db, name).is_some()
                 {
-                    if pred.def(db).const_(db, name).is_some() {
-                        matches.insert(pred);
-                    }
-
-                    // `T::CONST` should also see constants inherited through a
-                    // super-trait bound such as `T: SubTrait`.
-                    for super_trait in pred.def(db).super_traits(db) {
-                        let super_inst = super_trait.instantiate(db, pred.args(db));
-                        if super_inst.def(db).const_(db, name).is_some() {
-                            matches.insert(super_inst);
-                        }
-                    }
+                    // Constants inherited through super-trait bounds are
+                    // covered by the elaborated assumption list.
+                    matches.insert(pred);
                 }
 
                 cx.rollback_to(snapshot);
@@ -1218,6 +1235,11 @@ pub(crate) fn find_associated_type<'db>(
 ) -> Result<SmallVec<(TraitInstId<'db>, TyId<'db>), 4>, FindAssociatedTypeError> {
     let canonical_ty = ty.canonical();
     let original_ty = ty.original();
+
+    // Candidate discovery must see implied bounds: `T: Sub` with
+    // `trait Sub: Super { .. }` makes `Super`'s associated types reachable
+    // through `T::Item`.
+    let assumptions = assumptions.extend_all_bounds(db);
 
     // Qualified type: `<A as T>::B`. Always construct the associated type projection
     // against the qualified trait instance; bindings (if any) will be handled downstream.
@@ -1373,12 +1395,26 @@ pub fn resolve_name_res<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
+    let minter = HoleMinter::new(HoleAnchor::TemplatePath { path, scope });
+    resolve_name_res_with_minter(db, nameres, parent_ty, path, scope, assumptions, &minter)
+}
+
+pub(crate) fn resolve_name_res_with_minter<'db>(
+    db: &'db dyn HirAnalysisDb,
+    nameres: &NameRes<'db>,
+    parent_ty: Option<TyId<'db>>,
+    path: PathId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    minter: &HoleMinter<'db>,
+) -> PathResolutionResult<'db, PathRes<'db>> {
     let args = lower_generic_arg_list(
         db,
         path.generic_args(db),
         scope,
         assumptions,
         LayoutHoleArgSite::Path(path),
+        minter,
     );
     let res = match nameres.kind {
         NameResKind::Prim(prim) => {
@@ -1389,7 +1425,14 @@ pub fn resolve_name_res<'db>(
             ScopeId::Item(item) => match item {
                 ItemKind::Struct(_) | ItemKind::Enum(_) => {
                     let adt_ref = AdtRef::try_from_item(item).unwrap();
-                    PathRes::Ty(ty_from_adtref(db, path, adt_ref, &args, assumptions)?)
+                    PathRes::Ty(ty_from_adtref(
+                        db,
+                        path,
+                        adt_ref,
+                        &args,
+                        assumptions,
+                        minter,
+                    )?)
                 }
                 ItemKind::Contract(contract) => {
                     // Contracts have no generic parameters
@@ -1447,7 +1490,7 @@ pub fn resolve_name_res<'db>(
                     }
                     PathRes::TyAlias(
                         alias.clone(),
-                        alias.instantiate_from_path(db, path, &args, assumptions),
+                        alias.instantiate_from_path(db, path, &args, assumptions, minter),
                     )
                 }
 
@@ -1581,7 +1624,7 @@ pub fn resolve_name_res<'db>(
                 } else {
                     // The variant was imported via `use`.
                     debug_assert!(path.parent(db).is_none());
-                    ty_from_adtref(db, path, var.enum_.into(), &[], assumptions)?
+                    ty_from_adtref(db, path, var.enum_.into(), &[], assumptions, minter)?
                 };
                 // TODO report error if args isn't empty
                 PathRes::EnumVariant(ResolvedVariant {
@@ -1615,6 +1658,7 @@ fn ty_from_adtref<'db>(
     adt_ref: AdtRef<'db>,
     args: &[TyId<'db>],
     assumptions: PredicateListId<'db>,
+    minter: &HoleMinter<'db>,
 ) -> PathResolutionResult<'db, TyId<'db>> {
     let adt = adt_ref.as_adt(db);
     let ty = TyId::adt(db, adt);
@@ -1629,8 +1673,8 @@ fn ty_from_adtref<'db>(
         None,
         explicit_args,
         assumptions,
-        ConstDefaultCompletion::metadata(Some(path))
-            .with_app_frame(Some(AppFrameId::root_path(db, path))),
+        ConstDefaultCompletion::metadata(Some(path)),
+        Some(minter),
     );
     let layout_plan = if completed_args.len() == explicit_param_len {
         adt_layout_hole_plan_with_explicit_args(db, adt, &completed_args)
@@ -1640,26 +1684,37 @@ fn ty_from_adtref<'db>(
     completed_args.extend(layout_provided.iter().copied());
 
     let provided_layout_len = layout_provided.len();
-    for (layout_idx, hole_ty) in layout_plan
-        .hole_tys()
+    for (layout_idx, entry) in layout_plan
+        .entries()
         .iter()
         .copied()
         .enumerate()
         .skip(provided_layout_len)
     {
-        completed_args.push(layout_hole_with_fallback_ty(
-            db,
-            hole_ty,
-            HoleId::structural(
+        completed_args.push(match entry.source {
+            // The plan occurrence was substituted in from an explicit arg:
+            // reuse that hole's identity so one logical hole stays one TyId
+            // across the arg position and the instantiated field types.
+            Some(placeholder) => placeholder,
+            None => layout_hole_with_fallback_ty(
                 db,
-                hole_ty,
-                StructuralHoleOrigin::ExplicitWildcard {
-                    site: LayoutHoleArgSite::Path(path),
-                    arg_idx: explicit_param_len + layout_idx,
-                },
-                LocalFrameId::root_path(db, path),
+                entry.hole_ty,
+                HoleId::structural(
+                    db,
+                    entry.hole_ty,
+                    // Keep the template hole's origin so the trailing arg
+                    // stays attributable to the generic param that declared
+                    // it; identity comes from the freshly minted anchor.
+                    entry
+                        .template_origin
+                        .unwrap_or(StructuralHoleOrigin::ExplicitWildcard {
+                            site: LayoutHoleArgSite::Path(path),
+                            arg_idx: explicit_param_len + layout_idx,
+                        }),
+                    minter.mint(),
+                ),
             ),
-        ));
+        });
     }
 
     let applied =
