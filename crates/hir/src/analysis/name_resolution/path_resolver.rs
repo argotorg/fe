@@ -914,6 +914,7 @@ where
 
                 // Associated const on a specific trait instance
                 if resolve_tail_as_value && trait_inst.def(db).const_(db, ident).is_some() {
+                    reject_assoc_const_generic_args(db, path)?;
                     let r = PathRes::TraitConst(trait_inst.self_ty(db), *trait_inst, ident);
                     observer(path, &r);
                     return Ok(r);
@@ -953,6 +954,7 @@ where
                 if let Some(impl_) =
                     select_inherent_const_candidate(db, ty, ident, scope, assumptions)
                 {
+                    reject_assoc_const_generic_args(db, path)?;
                     let r = PathRes::InherentConst(ty, impl_, ident);
                     observer(path, &r);
                     return Ok(r);
@@ -962,6 +964,7 @@ where
                 // `OtherIngotType::CONST` and `ExternalType::LOCAL_TRAIT_CONST` both resolve.
                 match select_assoc_const_candidate(db, ty, ident, scope, assumptions) {
                     AssocConstSelection::Found(inst) => {
+                        reject_assoc_const_generic_args(db, path)?;
                         let r = PathRes::TraitConst(ty, inst, ident);
                         observer(path, &r);
                         return Ok(r);
@@ -1174,6 +1177,23 @@ pub(crate) fn ingot_impl_const_map<'db>(
         }
     }
     map
+}
+
+fn reject_assoc_const_generic_args<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+) -> Result<(), PathResError<'db>> {
+    let args = path.generic_args(db);
+    if !args.is_empty(db) {
+        return Err(PathResError::new(
+            PathResErrorKind::ArgNumMismatch {
+                expected: 0,
+                given: args.data(db).len(),
+            },
+            path,
+        ));
+    }
+    Ok(())
 }
 
 /// Searches inherent `impl` blocks of the receiver type for an associated
