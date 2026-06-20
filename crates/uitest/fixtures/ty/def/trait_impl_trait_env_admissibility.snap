@@ -9,12 +9,6 @@ error[2-0002]: `MissingType` is not found
 126 │     const C: MissingType = 0
     │              ^^^^^^^^^^^ `MissingType` is not found
 
-error[3-0011]: given type doesn't match the expected const type
-   ┌─ trait_impl_trait_env_admissibility.fe:98:20
-   │
-98 │     const C: u32 = true
-   │                    ^^^^ expected `u32` type here, but `bool` is given
-
 error[6-0003]: trait bound is not satisfied
   ┌─ trait_impl_trait_env_admissibility.fe:8:6
   │
@@ -74,6 +68,12 @@ error[6-0016]: associated const `C` has incompatible type
     ·
 114 │     const C: bool = 0
     │              ^^^^ expected `u32`, found `bool`
+
+error[8-0000]: type mismatch
+   ┌─ trait_impl_trait_env_admissibility.fe:98:20
+   │
+98 │     const C: u32 = true
+   │                    ^^^^ expected `u32`, but `bool` is given
 
 error[8-0012]: undefined variable
     ┌─ trait_impl_trait_env_admissibility.fe:154:20

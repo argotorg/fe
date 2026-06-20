@@ -428,17 +428,10 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
         );
 
         // Associated const bodies in inherent impl blocks live inside the impl
-        // rather than as standalone items, so check them here. Type mismatches
-        // against the declared const type are skipped: `diags_assoc_consts`
-        // already reports those with a dedicated diagnostic. (Trait impl
-        // consts are not included: desugared `#[event]`/`#[error]` impls rely
-        // on cascaded body errors being suppressed.)
-        let not_const_ty_mismatch = |diag: &&diagnostics::FuncBodyDiag<'db>| {
-            !matches!(
-                diag,
-                diagnostics::FuncBodyDiag::Body(diagnostics::BodyDiag::TypeMismatch { .. })
-            )
-        };
+        // rather than as standalone items, so check them here. A value/declared-type
+        // mismatch surfaces as a plain `TypeMismatch`, same as a top-level `const`.
+        // (Trait impl consts are not included: desugared `#[event]`/`#[error]`
+        // impls rely on cascaded body errors being suppressed.)
         for &impl_ in top_mod.all_impls(db) {
             // Consts on generic impls have legitimately parametric values
             // (e.g. `256 / BITS`), validated per instantiation; only flag a
@@ -451,12 +444,7 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
                     continue;
                 };
                 let (body_diags, _) = ty_check::check_anon_const_body(db, body, expected_ty);
-                diags.extend(
-                    body_diags
-                        .iter()
-                        .filter(not_const_ty_mismatch)
-                        .map(|diag| diag.to_voucher()),
-                );
+                diags.extend(body_diags.iter().map(|diag| diag.to_voucher()));
                 // CTFE-validate the value, but only when it type-checks cleanly
                 // (otherwise the type error is the real diagnostic).
                 if body_diags.is_empty() {

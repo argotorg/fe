@@ -173,7 +173,6 @@ pub fn check_impl_trait_const_bodies<'db>(
             check_anon_const_body(db, body, expected_ty)
                 .0
                 .iter()
-                .filter(|diag| !matches!(diag, FuncBodyDiag::Body(BodyDiag::TypeMismatch { .. })))
                 .cloned(),
         );
     }

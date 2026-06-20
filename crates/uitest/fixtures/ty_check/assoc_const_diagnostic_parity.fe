@@ -13,7 +13,8 @@ trait HasConst {
     const C: u256
 }
 
-// --- type mismatch between value and declared type: both must report 3-0011 ---
+// --- type mismatch between value and declared type: both must report 8-0000,
+// --- the same plain `TypeMismatch` a top-level `const` body gets ---
 struct InhMismatch {}
 
 impl InhMismatch {

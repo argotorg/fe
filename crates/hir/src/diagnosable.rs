@@ -11,12 +11,9 @@ use smallvec1::SmallVec;
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution;
 use crate::analysis::ty;
-use crate::analysis::ty::diagnostics::{
-    BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection, TyLowerDiag,
-};
+use crate::analysis::ty::diagnostics::{TraitConstraintDiag, TyDiagCollection, TyLowerDiag};
 use crate::analysis::ty::normalize::normalize_ty;
 use crate::analysis::ty::trait_lower::lower_impl_trait;
-use crate::analysis::ty::ty_check::check_anon_const_body;
 use crate::analysis::ty::ty_def::{InvalidCause, TyId};
 use crate::analysis::ty::ty_error::collect_ty_lower_errors;
 use crate::hir_def::scope_graph::ScopeId;
@@ -72,19 +69,6 @@ fn const_ty_mismatch_diag<'db>(
         given,
     }
     .into()
-}
-
-fn extract_type_mismatch<'db>(
-    diag: &FuncBodyDiag<'db>,
-) -> Option<(DynLazySpan<'db>, TyId<'db>, TyId<'db>)> {
-    match diag {
-        FuncBodyDiag::Body(BodyDiag::TypeMismatch {
-            span,
-            expected,
-            given,
-        }) => Some((span.clone(), *expected, *given)),
-        _ => None,
-    }
 }
 
 fn cyclic_trait_ref_diag<'db>(span: DynLazySpan<'db>, context: &str) -> TyDiagCollection<'db> {
@@ -551,8 +535,8 @@ impl<'db> Impl<'db> {
         out
     }
 
-    /// Diagnostics for associated consts in inherent impl blocks: every const
-    /// must have a value, and the value must match the declared type.
+    /// Declaration diagnostics for associated consts in inherent impl blocks:
+    /// every const must have a value, and body checking runs in `BodyAnalysisPass`.
     pub fn diags_assoc_consts(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         use ty::diagnostics::ImplDiag;
 
@@ -636,7 +620,7 @@ impl<'db> Impl<'db> {
                 continue;
             }
 
-            let Some(body) = impl_const.value_body(db) else {
+            if impl_const.value_body(db).is_none() {
                 diags.push(
                     ImplDiag::InherentConstMissingValue {
                         primary: impl_const.span().ty().into(),
@@ -645,7 +629,7 @@ impl<'db> Impl<'db> {
                     .into(),
                 );
                 continue;
-            };
+            }
 
             // Report unresolvable/invalid type annotations; checking the body
             // against an invalid expected type would only produce noise.
@@ -659,21 +643,12 @@ impl<'db> Impl<'db> {
                 );
                 if !ty_diags.is_empty() {
                     diags.extend(ty_diags);
-                    continue;
                 }
             }
 
-            let Some(expected_ty) = impl_const.ty(db) else {
-                continue;
-            };
-            // All type mismatches in the body are reported here with the
-            // dedicated const diagnostic; the remaining body diagnostics are
-            // emitted by `BodyAnalysisPass`, which skips mismatches to avoid
-            // double-reporting.
-            let (body_diags, _) = check_anon_const_body(db, body, expected_ty);
-            for (span, expected, given) in body_diags.iter().filter_map(extract_type_mismatch) {
-                diags.push(const_ty_mismatch_diag(span, expected, given));
-            }
+            // The const value body is type-checked by `BodyAnalysisPass`, which
+            // surfaces a value/declared-type mismatch as a plain `TypeMismatch`
+            // (same as a top-level `const`); nothing is reported for it here.
         }
         diags
     }
@@ -860,27 +835,9 @@ impl<'db> ImplTrait<'db> {
             }
         }
 
-        for impl_const in self.assoc_consts(db) {
-            let Some(name) = impl_const.name(db) else {
-                continue;
-            };
-            let Some(body) = impl_const.value_body(db) else {
-                continue;
-            };
-            let Some(expected) = trait_hir.const_(db, name).and_then(|c| c.ty_binder(db)) else {
-                continue;
-            };
-
-            let expected_ty = expected.instantiate(db, trait_args);
-            if expected_ty.has_invalid(db) {
-                continue;
-            }
-
-            let (body_diags, _) = check_anon_const_body(db, body, expected_ty);
-            for (span, expected, given) in body_diags.iter().filter_map(extract_type_mismatch) {
-                diags.push(const_ty_mismatch_diag(span, expected, given));
-            }
-        }
+        // Const value bodies are type-checked by the body analysis pass
+        // (`check_impl_trait_const_bodies`), which surfaces a value/declared-type
+        // mismatch as a plain `TypeMismatch`, same as a top-level `const`.
 
         diags
     }

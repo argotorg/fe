@@ -3,14 +3,14 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/assoc_const_diagnostic_parity.fe
 ---
-error[3-0011]: given type doesn't match the expected const type
-   ┌─ assoc_const_diagnostic_parity.fe:20:21
+error[8-0000]: type mismatch
+   ┌─ assoc_const_diagnostic_parity.fe:21:21
    │
-20 │     const C: u256 = true
-   │                     ^^^^ expected `u256` type here, but `bool` is given
+21 │     const C: u256 = true
+   │                     ^^^^ expected `u256`, but `bool` is given
 
-error[3-0011]: given type doesn't match the expected const type
-   ┌─ assoc_const_diagnostic_parity.fe:26:21
+error[8-0000]: type mismatch
+   ┌─ assoc_const_diagnostic_parity.fe:27:21
    │
-26 │     const C: u256 = true
-   │                     ^^^^ expected `u256` type here, but `bool` is given
+27 │     const C: u256 = true
+   │                     ^^^^ expected `u256`, but `bool` is given
