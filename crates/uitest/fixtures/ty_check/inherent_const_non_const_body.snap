@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/inherent_const_non_const_body.fe
+---
+error[3-0024]: non-const function call in const context
+   ┌─ inherent_const_non_const_body.fe:11:21
+   │
+11 │     const C: u256 = not_const()
+   │                     ^^^^^^^^^^^ calls in const context must be `const fn`
+
+error[3-0024]: non-const function call in const context
+   ┌─ inherent_const_non_const_body.fe:18:23
+   │
+18 │     const BAD: u256 = not_const()
+   │                       ^^^^^^^^^^^ calls in const context must be `const fn`

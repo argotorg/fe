@@ -1,0 +1,49 @@
+// Associated consts take no generic arguments of their own: the impl/type
+// generics live on the receiver (`Foo<1>::CONST`), not on the const segment.
+// Args written directly on the const must be rejected with 2-0011, exactly like
+// a top-level `const`, so `Foo::C<1>` can't silently resolve as `Foo::C`.
+
+struct S {}
+
+impl S {
+    const SIZE: u256 = 4
+}
+
+pub trait HasSize {
+    const TSIZE: u256
+}
+
+impl HasSize for S {
+    const TSIZE: u256 = 8
+}
+
+// inherent const, value argument on the const segment
+fn inherent_value_arg() -> u256 {
+    S::SIZE<1>
+}
+
+// inherent const, type argument on the const segment
+fn inherent_type_arg() -> u256 {
+    S::SIZE<u256>
+}
+
+// trait const reached through the receiver type
+fn trait_receiver_arg() -> u256 {
+    S::TSIZE<1>
+}
+
+// trait const reached through a qualified path
+fn trait_qualified_arg() -> u256 {
+    <S as HasSize>::TSIZE<1>
+}
+
+// Receiver-position args remain valid (no diagnostic): generics belong here.
+struct Foo<const N: u256> {}
+
+impl<const N: u256> Foo<N> {
+    const D: u256 = N * 2
+}
+
+fn receiver_args_ok() -> u256 {
+    Foo<3>::D
+}

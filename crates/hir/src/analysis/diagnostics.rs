@@ -5066,6 +5066,100 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                 notes: vec![],
                 error_code,
             },
+
+            Self::InherentConstMissingValue {
+                primary,
+                const_name,
+            } => CompleteDiagnostic {
+                severity,
+                message: "missing value for associated const".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "associated const `{}` in an `impl` block must have a value",
+                        const_name.data(db),
+                    ),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
+            Self::InherentConstConflict {
+                primary,
+                conflict_with,
+                const_name,
+            } => CompleteDiagnostic {
+                severity,
+                message: "conflicting associated const definitions".to_string(),
+                sub_diagnostics: vec![
+                    SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!("`{}` is defined more than once", const_name.data(db)),
+                        span: primary.resolve(db),
+                    },
+                    SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: "previous definition here".into(),
+                        span: conflict_with.resolve(db),
+                    },
+                ],
+                notes: vec![],
+                error_code,
+            },
+
+            Self::InherentConstShadowsVariant {
+                primary,
+                variant_span,
+                const_name,
+            } => CompleteDiagnostic {
+                severity,
+                message: "associated const conflicts with enum variant".to_string(),
+                sub_diagnostics: vec![
+                    SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "associated const `{}` has the same name as a variant of the enum",
+                            const_name.data(db),
+                        ),
+                        span: primary.resolve(db),
+                    },
+                    SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: "variant defined here".into(),
+                        span: variant_span.resolve(db),
+                    },
+                ],
+                notes: vec![],
+                error_code,
+            },
+
+            Self::InherentConstShadowsFn {
+                primary,
+                fn_span,
+                const_name,
+            } => CompleteDiagnostic {
+                severity,
+                message: "associated const conflicts with associated function".to_string(),
+                sub_diagnostics: vec![
+                    SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "associated const `{}` has the same name as an associated function, \
+                             which it would make unreachable",
+                            const_name.data(db),
+                        ),
+                        span: primary.resolve(db),
+                    },
+                    SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: "function defined here".into(),
+                        span: fn_span.resolve(db),
+                    },
+                ],
+                notes: vec![],
+                error_code,
+            },
         }
     }
 }

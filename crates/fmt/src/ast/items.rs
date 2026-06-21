@@ -3,7 +3,9 @@
 use pretty::DocAllocator;
 
 use crate::RewriteContext;
-use parser::ast::{self, ItemKind, ItemModifierOwner, TraitItemKind, prelude::AstNode};
+use parser::ast::{
+    self, ImplItemKind, ItemKind, ItemModifierOwner, TraitItemKind, prelude::AstNode,
+};
 
 use super::types::{
     Doc, ToDoc, TokenPiece, block_list_auto, block_list_spaced_auto, block_list_with_comments,
@@ -1253,7 +1255,10 @@ impl ToDoc for ast::TraitConstItem {
             .map(|v| alloc.text(" = ").append(v.to_doc(ctx)))
             .unwrap_or_else(|| alloc.nil());
 
+        let modifier = modifier_doc(self, ctx);
+
         attrs
+            .append(modifier)
             .append(alloc.text("const "))
             .append(name)
             .append(ty_doc)
@@ -1293,7 +1298,16 @@ impl ToDoc for ast::Impl {
 
 impl ToDoc for ast::ImplItemList {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
-        block_items_doc(self.syntax(), ast::Func::cast, ctx)
+        block_items_doc(self.syntax(), ast::ImplItem::cast, ctx)
+    }
+}
+
+impl ToDoc for ast::ImplItem {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        match self.kind() {
+            ImplItemKind::Func(func) => func.to_doc(ctx),
+            ImplItemKind::Const(c) => c.to_doc(ctx),
+        }
     }
 }
 

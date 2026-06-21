@@ -1,0 +1,46 @@
+---
+source: crates/language-server/src/functionality/goto.rs
+expression: snapshot
+input_file: test_files/goto_inherent_const.fe
+---
+note: 
+  ┌─ goto_inherent_const.fe:3:6
+  │
+3 │ impl Counter {
+  │      ^^^^^^^ -> goto_inherent_const::Counter
+
+note: 
+  ┌─ goto_inherent_const.fe:8:9
+  │
+8 │         Self::MAX
+  │         ^^^^ -> goto_inherent_const::Counter
+
+note: 
+  ┌─ goto_inherent_const.fe:8:15
+  │
+8 │         Self::MAX
+  │               ^^^ -> goto_inherent_const::Counter::MAX
+
+note: 
+   ┌─ goto_inherent_const.fe:13:5
+   │
+13 │     Counter::MAX + Counter::MIN
+   │     ^^^^^^^ -> goto_inherent_const::Counter
+
+note: 
+   ┌─ goto_inherent_const.fe:13:14
+   │
+13 │     Counter::MAX + Counter::MIN
+   │              ^^^ -> goto_inherent_const::Counter::MAX
+
+note: 
+   ┌─ goto_inherent_const.fe:13:20
+   │
+13 │     Counter::MAX + Counter::MIN
+   │                    ^^^^^^^ -> goto_inherent_const::Counter
+
+note: 
+   ┌─ goto_inherent_const.fe:13:29
+   │
+13 │     Counter::MAX + Counter::MIN
+   │                             ^^^ -> goto_inherent_const::Counter::MIN

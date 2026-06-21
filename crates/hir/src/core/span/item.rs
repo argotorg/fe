@@ -259,11 +259,52 @@ define_lazy_span_node!(
         (generic_params, generic_params, LazyGenericParamListSpan),
         (where_clause, where_clause, LazyWhereClauseSpan),
         (target_ty, ty, LazyTySpan),
+        (item_list, item_list, LazyImplItemListSpan),
     }
 );
 impl<'db> LazyImplSpan<'db> {
     pub fn new(i: Impl<'db>) -> Self {
         Self(crate::span::transition::SpanTransitionChain::new(i))
+    }
+
+    pub fn associated_const(self, idx: usize) -> LazyTraitConstSpan<'db> {
+        self.item_list().assoc_const(idx)
+    }
+}
+
+define_lazy_span_node!(LazyImplItemListSpan, ast::ImplItemList,);
+
+impl<'db> LazyImplItemListSpan<'db> {
+    pub fn assoc_const(mut self, idx: usize) -> LazyTraitConstSpan<'db> {
+        use crate::span::transition::{LazyArg, LazyTransitionFn, ResolvedOrigin};
+        use parser::ast::prelude::*;
+
+        fn f(origin: ResolvedOrigin, arg: LazyArg) -> ResolvedOrigin {
+            let idx = match arg {
+                LazyArg::Idx(idx) => idx,
+                _ => unreachable!(),
+            };
+
+            origin.map(|node| {
+                ast::ImplItemList::cast(node)
+                    .and_then(|list| {
+                        list.into_iter()
+                            .filter_map(|item| match item.kind() {
+                                ast::ImplItemKind::Const(c) => Some(c),
+                                _ => None,
+                            })
+                            .nth(idx)
+                    })
+                    .map(|n| n.syntax().clone().into())
+            })
+        }
+
+        let lazy_transition = LazyTransitionFn {
+            f,
+            arg: LazyArg::Idx(idx),
+        };
+        self.0.push(lazy_transition);
+        LazyTraitConstSpan(self.0)
     }
 }
 
@@ -286,6 +327,10 @@ define_lazy_span_node!(
 impl<'db> LazyTraitSpan<'db> {
     pub fn new(t: Trait<'db>) -> Self {
         Self(crate::span::transition::SpanTransitionChain::new(t))
+    }
+
+    pub fn associated_const(self, idx: usize) -> LazyTraitConstSpan<'db> {
+        self.item_list().assoc_const(idx)
     }
 }
 

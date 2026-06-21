@@ -1,0 +1,9 @@
+struct S {}
+
+impl S {
+    const C: Nope = 1
+}
+
+fn f() -> u256 {
+    S::C
+}

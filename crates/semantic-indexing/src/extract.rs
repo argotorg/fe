@@ -6,7 +6,7 @@
 use common::ingot::Ingot;
 use hir::{
     SpannedHirDb,
-    core::semantic::SymbolView,
+    core::semantic::{SignatureWithSpan, SymbolView},
     hir_def::{
         Contract, Enum, FieldParent, HirIngot, Impl, ImplTrait, ItemKind, Struct, TopLevelMod,
         Trait, VariantKind, Visibility, scope_graph::ScopeId,
@@ -221,7 +221,8 @@ impl<'db> DocExtractor<'db> {
 
     /// Extract methods from an `impl Trait for Type` block as DocImplMethod
     fn extract_impl_trait_methods(&self, it: ImplTrait<'db>) -> Vec<DocImplMethod> {
-        it.methods(self.db)
+        let mut methods: Vec<_> = it
+            .methods(self.db)
             .filter_map(|func| {
                 let name = func.name(self.db).to_opt()?.data(self.db).to_string();
                 let (signature, signature_span) = self.get_signature_with_span(func.into());
@@ -238,12 +239,25 @@ impl<'db> DocExtractor<'db> {
                     docs,
                 })
             })
-            .collect()
+            .collect();
+
+        methods.extend(it.assoc_consts(self.db).filter_map(|assoc_const| {
+            let name = assoc_const.name(self.db)?.data(self.db).to_string();
+            let docs = assoc_const.docs(self.db).map(|s| DocContent::from_raw(&s));
+            let (signature, signature_span) = assoc_const
+                .signature_with_span(self.db)
+                .map(|sig_span| self.signature_span_data(sig_span))
+                .unwrap_or_else(|| (format!("const {name}"), None));
+            Some(self.assoc_const_impl_method(name, signature, signature_span, docs))
+        }));
+
+        methods
     }
 
-    /// Extract methods from an `impl Type` block as DocImplMethod
+    /// Extract methods and associated consts from an `impl Type` block as inline impl members.
     fn extract_impl_methods_for_type(&self, i: Impl<'db>) -> Vec<DocImplMethod> {
-        i.funcs(self.db)
+        let mut methods: Vec<_> = i
+            .funcs(self.db)
             .filter_map(|func| {
                 let name = func.name(self.db).to_opt()?.data(self.db).to_string();
                 let (signature, signature_span) = self.get_signature_with_span(func.into());
@@ -260,7 +274,22 @@ impl<'db> DocExtractor<'db> {
                     docs,
                 })
             })
-            .collect()
+            .collect();
+
+        methods.extend(
+            i.assoc_consts(self.db)
+                .enumerate()
+                .filter_map(|(idx, assoc_const)| {
+                    let scope = ScopeId::ImplConst(i, idx as u16);
+                    let name = assoc_const.name(self.db)?.data(self.db).to_string();
+                    let docs = self.get_docstring(scope).map(|s| DocContent::from_raw(&s));
+                    let (signature, signature_span) =
+                        self.get_symbol_signature_with_span(SymbolView::new(scope));
+                    Some(self.assoc_const_impl_method(name, signature, signature_span, docs))
+                }),
+        );
+
+        methods
     }
 
     /// Extract documentation for a single item
@@ -409,30 +438,87 @@ impl<'db> DocExtractor<'db> {
         }
     }
 
-    /// Get the item's signature and its source span data for SCIP overlay.
-    fn get_signature_with_span(&self, item: ItemKind<'db>) -> (String, Option<SignatureSpanData>) {
-        let sym = SymbolView::from_item(item);
+    fn span_to_sig_data(&self, span: &common::diagnostics::Span) -> Option<SignatureSpanData> {
+        let start: usize = span.range.start().into();
+        let end: usize = span.range.end().into();
+        span.file.url(self.db).map(|u| SignatureSpanData {
+            file_url: u.to_string(),
+            byte_start: start,
+            byte_end: end,
+        })
+    }
+
+    fn signature_span_data(
+        &self,
+        sig_span: SignatureWithSpan,
+    ) -> (String, Option<SignatureSpanData>) {
+        let span_data = sig_span.file.url(self.db).map(|u| SignatureSpanData {
+            file_url: u.to_string(),
+            byte_start: sig_span.byte_start,
+            byte_end: sig_span.byte_end,
+        });
+        (sig_span.text.replace("\r\n", "\n"), span_data)
+    }
+
+    fn get_symbol_signature_with_span(
+        &self,
+        sym: SymbolView<'db>,
+    ) -> (String, Option<SignatureSpanData>) {
         match sym.signature_with_span(self.db) {
-            Some(sig_span) => {
-                let span_data = sig_span.file.url(self.db).map(|u| SignatureSpanData {
-                    file_url: u.to_string(),
-                    byte_start: sig_span.byte_start,
-                    byte_end: sig_span.byte_end,
-                });
-                (sig_span.text.replace("\r\n", "\n"), span_data)
-            }
+            Some(sig_span) => self.signature_span_data(sig_span),
             None => (sym.signature(self.db).unwrap_or_default(), None),
         }
     }
 
-    /// Build `SignatureSpanData` from a resolved `Span`.
-    fn span_to_sig_data(&self, span: &common::diagnostics::Span) -> Option<SignatureSpanData> {
-        let file_url = span.file.url(self.db)?;
-        Some(SignatureSpanData {
-            file_url: file_url.to_string(),
-            byte_start: span.range.start().into(),
-            byte_end: span.range.end().into(),
+    /// Get the item's signature and its source span data for SCIP overlay.
+    fn get_signature_with_span(&self, item: ItemKind<'db>) -> (String, Option<SignatureSpanData>) {
+        self.get_symbol_signature_with_span(SymbolView::from_item(item))
+    }
+
+    fn assoc_const_doc_child(
+        &self,
+        scope: ScopeId<'db>,
+        visibility: DocVisibility,
+    ) -> Option<DocChild> {
+        let name = scope.name(self.db)?.data(self.db).to_string();
+        let docs = self.get_docstring(scope).map(|s| DocContent::from_raw(&s));
+        let (mut signature, signature_span) =
+            self.get_symbol_signature_with_span(SymbolView::new(scope));
+        if signature.is_empty() {
+            signature = format!("const {name}");
+        }
+
+        Some(DocChild {
+            kind: DocChildKind::AssocConst,
+            name,
+            docs,
+            signature,
+            rich_signature: vec![],
+            signature_span,
+            sig_scope: None,
+            visibility,
         })
+    }
+
+    fn assoc_const_impl_method(
+        &self,
+        name: String,
+        mut signature: String,
+        signature_span: Option<SignatureSpanData>,
+        docs: Option<DocContent>,
+    ) -> DocImplMethod {
+        if signature.is_empty() {
+            signature = format!("const {name}");
+        }
+
+        DocImplMethod {
+            name,
+            signature,
+            rich_signature: vec![],
+            signature_span,
+            sig_scope: None,
+            docs,
+        }
     }
 
     /// Build a signature span covering name..type for a field.
@@ -872,6 +958,13 @@ impl<'db> DocExtractor<'db> {
             }
         }
 
+        for (idx, _assoc_const) in t.assoc_consts(self.db).enumerate() {
+            let scope = ScopeId::TraitConst(t, idx as u16);
+            if let Some(child) = self.assoc_const_doc_child(scope, DocVisibility::Public) {
+                children.push(child);
+            }
+        }
+
         children
     }
 
@@ -886,7 +979,6 @@ impl<'db> DocExtractor<'db> {
                     .map(|s| DocContent::from_raw(&s));
                 let (signature, signature_span) = self.get_signature_with_span(func.into());
                 let visibility = self.convert_visibility(func.vis(self.db));
-
                 children.push(DocChild {
                     kind: DocChildKind::Method,
                     name: name_str,
@@ -897,6 +989,15 @@ impl<'db> DocExtractor<'db> {
                     sig_scope: None,
                     visibility,
                 });
+            }
+        }
+
+        for (idx, _assoc_const) in i.assoc_consts(self.db).enumerate() {
+            let scope = ScopeId::ImplConst(i, idx as u16);
+            if let Some(child) =
+                self.assoc_const_doc_child(scope, self.convert_visibility(scope.data(self.db).vis))
+            {
+                children.push(child);
             }
         }
 
@@ -924,6 +1025,30 @@ impl<'db> DocExtractor<'db> {
                     signature_span,
                     sig_scope: None,
                     visibility,
+                });
+            }
+        }
+
+        for assoc_const in it.assoc_consts(self.db) {
+            if let Some(name) = assoc_const.name(self.db) {
+                let name = name.data(self.db).to_string();
+                let docs = assoc_const.docs(self.db).map(|s| DocContent::from_raw(&s));
+                let (mut signature, signature_span) = assoc_const
+                    .signature_with_span(self.db)
+                    .map(|sig_span| self.signature_span_data(sig_span))
+                    .unwrap_or_else(|| (format!("const {name}"), None));
+                if signature.is_empty() {
+                    signature = format!("const {name}");
+                }
+                children.push(DocChild {
+                    kind: DocChildKind::AssocConst,
+                    name,
+                    docs,
+                    signature,
+                    rich_signature: vec![],
+                    signature_span,
+                    sig_scope: None,
+                    visibility: DocVisibility::Public,
                 });
             }
         }
@@ -1436,6 +1561,163 @@ mod tests {
             original.modules.len(),
             restored.modules.len(),
             "module tree mismatch"
+        );
+    }
+
+    #[test]
+    fn extracts_associated_const_doc_children() {
+        let mut db = DriverDataBase::default();
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let file_path = temp.path().join("assoc_consts.fe");
+        let url = url::Url::from_file_path(&file_path).expect("file url");
+        let file = db.workspace().touch(
+            &mut db,
+            url,
+            Some(
+                r#"pub trait Sizes {
+    /// Width in bytes.
+    const WIDTH: u256 = 32
+}
+
+pub struct Packet {}
+
+impl Packet {
+    /// Maximum payload.
+    pub const MAX: u256 = 1024
+}
+
+impl Sizes for Packet {
+    /// Packet width override.
+    const WIDTH: u256 = 64
+}
+"#
+                .to_string(),
+            ),
+        );
+        let top_mod = db.top_mod(file);
+        let extractor = DocExtractor::new(&db);
+        let index = extractor.extract_module(top_mod);
+
+        let trait_item = index
+            .items
+            .iter()
+            .find(|item| item.name == "Sizes")
+            .expect("trait docs");
+        let width = trait_item
+            .children
+            .iter()
+            .find(|child| child.kind == DocChildKind::AssocConst && child.name == "WIDTH")
+            .expect("trait associated const child");
+        assert_eq!(width.signature, "const WIDTH: u256 = 32");
+        assert_eq!(
+            width.docs.as_ref().map(|docs| docs.summary.as_str()),
+            Some("Width in bytes.")
+        );
+
+        let impl_item = top_mod
+            .all_impls(&db)
+            .iter()
+            .copied()
+            .next()
+            .expect("inherent impl");
+        let max_child = extractor
+            .extract_impl_members(impl_item)
+            .into_iter()
+            .find(|child| child.kind == DocChildKind::AssocConst && child.name == "MAX")
+            .expect("inherent associated const child");
+
+        let impl_trait = top_mod
+            .all_impl_traits(&db)
+            .iter()
+            .copied()
+            .next()
+            .expect("impl trait");
+        let width_impl = extractor
+            .extract_impl_trait_members(impl_trait)
+            .into_iter()
+            .find(|child| child.kind == DocChildKind::AssocConst && child.name == "WIDTH")
+            .expect("impl-trait associated const child");
+        assert_eq!(width_impl.signature, "const WIDTH: u256 = 64");
+        assert_eq!(
+            width_impl.docs.as_ref().map(|docs| docs.summary.as_str()),
+            Some("Packet width override.")
+        );
+        assert_eq!(max_child.signature, "pub const MAX: u256 = 1024");
+        assert_eq!(
+            max_child.docs.as_ref().map(|docs| docs.summary.as_str()),
+            Some("Maximum payload.")
+        );
+    }
+
+    #[test]
+    fn extracts_inherent_assoc_consts_into_impl_links() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        std::fs::write(
+            temp.path().join("fe.toml"),
+            "[ingot]\nname = \"doc_assoc_consts\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let src_dir = temp.path().join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::write(
+            src_dir.join("lib.fe"),
+            r#"pub trait Limits {
+    const FLOOR: u256
+}
+
+pub struct Packet {}
+
+impl Packet {
+    /// Maximum payload.
+    pub const MAX: u256 = 1024
+}
+
+impl Limits for Packet {
+    /// Minimum payload.
+    const FLOOR: u256 = 1
+}
+"#,
+        )
+        .unwrap();
+
+        let mut db = DriverDataBase::default();
+        let ingot_url = url::Url::from_directory_path(temp.path()).expect("dir url");
+        driver::init_ingot(&mut db, &ingot_url);
+        let ingot = db
+            .workspace()
+            .containing_ingot(&db, ingot_url)
+            .expect("ingot should exist");
+        let extractor = DocExtractor::new(&db);
+        let links = extractor.extract_trait_impl_links(ingot);
+
+        let (_, impl_link) = links
+            .iter()
+            .find(|(target, link)| target == "Packet" && link.trait_name.is_empty())
+            .expect("inherent impl link");
+        let max = impl_link
+            .methods
+            .iter()
+            .find(|method| method.name == "MAX")
+            .expect("inherent associated const inline member");
+        assert_eq!(max.signature, "pub const MAX: u256 = 1024");
+        assert_eq!(
+            max.docs.as_ref().map(|docs| docs.summary.as_str()),
+            Some("Maximum payload.")
+        );
+
+        let (_, trait_impl_link) = links
+            .iter()
+            .find(|(target, link)| target == "Packet" && link.trait_name.ends_with("Limits"))
+            .expect("trait impl link");
+        let floor = trait_impl_link
+            .methods
+            .iter()
+            .find(|method| method.name == "FLOOR")
+            .expect("impl-trait associated const inline member");
+        assert_eq!(floor.signature, "const FLOOR: u256 = 1");
+        assert_eq!(
+            floor.docs.as_ref().map(|docs| docs.summary.as_str()),
+            Some("Minimum payload.")
         );
     }
 

@@ -1,0 +1,12 @@
+// Two overlapping inherent impls define the same const, and the const is
+// never referenced. The conflict must still be reported at the definition
+// site (path resolution would otherwise never run to catch it).
+struct Foo {}
+
+impl Foo {
+    const X: u256 = 1
+}
+
+impl Foo {
+    const X: u256 = 2
+}

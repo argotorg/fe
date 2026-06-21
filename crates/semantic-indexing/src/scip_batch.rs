@@ -187,6 +187,57 @@ fn child_descriptor_suffix(scope: ScopeId<'_>) -> descriptor::Suffix {
     }
 }
 
+/// Build a SCIP symbol for a primitive type (e.g. `u256`), which has no scope
+/// or item. Used to anchor inherent consts that core/std define on primitives.
+/// The package is the const's defining ingot (passed in), so the symbol is
+/// stable across definition and cross-ingot references.
+fn primitive_type_symbol<'db>(
+    db: &'db driver::DriverDataBase,
+    self_ty: hir::analysis::ty::ty_def::TyId<'db>,
+    ingot_name: &str,
+    ingot_version: &str,
+) -> Option<String> {
+    // Primitives have no type arguments, so the full type print is just the
+    // primitive's name (e.g. `u256`).
+    let name = self_ty.pretty_print(db).to_string();
+    if name.is_empty() {
+        return None;
+    }
+    let symbol = types::Symbol {
+        scheme: "fe".to_string(),
+        package: Some(types::Package {
+            manager: "fe".to_string(),
+            name: ingot_name.to_string(),
+            version: ingot_version.to_string(),
+            special_fields: Default::default(),
+        })
+        .into(),
+        descriptors: vec![types::Descriptor {
+            name,
+            disambiguator: String::new(),
+            suffix: descriptor::Suffix::Type.into(),
+            special_fields: Default::default(),
+        }],
+        special_fields: Default::default(),
+    };
+    Some(format_symbol(symbol))
+}
+
+/// Escape a string for use as a SCIP descriptor name. A simple identifier is
+/// left bare; anything else is backtick-quoted with internal backticks doubled
+/// (so e.g. a self type like `Foo<1>` becomes a single valid descriptor name).
+fn scip_escape_name(name: &str) -> String {
+    let is_simple = !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '+' | '-' | '$'));
+    if is_simple {
+        name.to_string()
+    } else {
+        format!("`{}`", name.replace('`', "``"))
+    }
+}
+
 /// Build a SCIP symbol string for a child (field, variant, method, etc.)
 /// by appending a descriptor to the parent's symbol.
 fn child_scip_symbol(parent_symbol: &str, child_name: &str, scope: ScopeId<'_>) -> String {
@@ -365,6 +416,19 @@ fn process_module<'db>(
                 db,
                 item,
                 scope_graph,
+                ctx,
+                &doc_url,
+                file_relative_paths,
+                &mut documents,
+                &mut line_index_cache,
+            );
+            // The impl block itself has no symbol, but its associated consts do
+            // (anchored on the target type by `scope_to_scip_symbol`); index
+            // them here so inherent-const definitions and references aren't
+            // dropped from the same-ingot index.
+            index_anonymous_impl_const_children(
+                db,
+                item,
                 ctx,
                 &doc_url,
                 file_relative_paths,
@@ -613,6 +677,83 @@ fn index_unnamed_item_generic_params<'db>(
     }
 }
 
+/// Emit SCIP definition and reference occurrences for the associated consts of
+/// an anonymous (inherent) impl block. The impl itself has no symbol, so the
+/// normal child-indexing path is unreachable; each const gets a real symbol via
+/// `scope_to_scip_symbol` (anchored on the impl's target type).
+#[allow(clippy::too_many_arguments)]
+fn index_anonymous_impl_const_children<'db>(
+    db: &'db driver::DriverDataBase,
+    item: ItemKind<'db>,
+    ctx: &index_util::IngotContext<'db>,
+    doc_url: &str,
+    file_relative_paths: &HashMap<String, String>,
+    documents: &mut HashMap<String, ScipDocumentBuilder>,
+    line_index_cache: &mut HashMap<common::file::File, LineIndex>,
+) {
+    if !matches!(item, ItemKind::Impl(_)) {
+        return;
+    }
+    for child in SymbolView::from_item(item).children(db) {
+        let child_scope = child.scope();
+        if !matches!(child_scope, ScopeId::ImplConst(..)) {
+            continue;
+        }
+        let (Some(child_name), Some(child_symbol)) = (
+            child.name(db),
+            scope_to_scip_symbol(db, &child_scope, &ctx.name, &ctx.version),
+        ) else {
+            continue;
+        };
+
+        if let Some(doc) = documents.get_mut(doc_url) {
+            if doc.seen_symbols.insert(child_symbol.clone()) {
+                let child_docs = child.docs(db).map(|d| vec![d]).unwrap_or_default();
+                doc.symbols.push(types::SymbolInformation {
+                    symbol: child_symbol.clone(),
+                    documentation: child_docs,
+                    relationships: Vec::new(),
+                    kind: child_symbol_kind(child_scope).into(),
+                    display_name: child_name.clone(),
+                    signature_documentation: None.into(),
+                    enclosing_symbol: String::new(),
+                    special_fields: Default::default(),
+                });
+            }
+            if let Some(name_span) = child.name_span(db)
+                && let Some(range) = span_to_scip_range(&name_span, db, line_index_cache)
+            {
+                push_occurrence(
+                    doc,
+                    range,
+                    child_symbol.clone(),
+                    types::SymbolRole::Definition as i32,
+                );
+            }
+        }
+
+        // Reference occurrences (may live in other files/documents).
+        for indexed_ref in ctx.ref_index.references_to(&child_scope) {
+            if let Some(resolved) = indexed_ref.span.resolve(db) {
+                let ref_url = match resolved.file.url(db) {
+                    Some(url) => url.to_string(),
+                    None => continue,
+                };
+                let ref_doc = documents.entry(ref_url.clone()).or_insert_with(|| {
+                    let relative = file_relative_paths
+                        .get(&ref_url)
+                        .cloned()
+                        .unwrap_or_default();
+                    ScipDocumentBuilder::new(relative)
+                });
+                if let Some(range) = span_to_scip_range(&resolved, db, line_index_cache) {
+                    push_occurrence(ref_doc, range, child_symbol.clone(), 0);
+                }
+            }
+        }
+    }
+}
+
 /// Index generic parameters for a symbol using SymbolView::generic_params().
 /// Shared by both top-level items and child items (trait methods, etc.).
 #[allow(clippy::too_many_arguments)]
@@ -698,6 +839,33 @@ fn scope_to_scip_symbol<'db>(
             let (parent_sym, _) = item_symbol(db, *item, ingot_name, ingot_version)?;
             let param_name = scope.name(db)?;
             Some(format!("{}[{}]", parent_sym, param_name.data(db)))
+        }
+        // An inherent-impl const's enclosing impl is anonymous (no symbol), so
+        // anchor it on the impl's target type instead, mirroring how a trait
+        // const anchors on its named trait.
+        ScopeId::ImplConst(impl_, _) => {
+            let self_ty = impl_.ty(db);
+            let child_name = scope.name(db)?;
+
+            // Anchor the const on its impl's target type. Named types use their
+            // item symbol; primitives (`impl u256` in core/std) have no scope,
+            // so synthesize a type symbol from the primitive's name.
+            let mut parent_sym = match self_ty.as_scope(db).and_then(|s| s.to_item()) {
+                Some(target_item) => item_symbol(db, target_item, ingot_name, ingot_version)?.0,
+                None => primitive_type_symbol(db, self_ty, ingot_name, ingot_version)?,
+            };
+
+            // Specialized impls (`impl Foo<1>` vs `impl Foo<2>`) share the same
+            // target type and const name but are distinct definitions (their
+            // self types don't unify, so they aren't a conflict). Insert a meta
+            // descriptor encoding the impl's self type so their symbols differ.
+            // Non-generic impls (`impl Foo`) need no discriminator.
+            let (_, args) = self_ty.decompose_ty_app(db);
+            if !args.is_empty() {
+                let disambig = scip_escape_name(self_ty.pretty_print(db));
+                parent_sym = format!("{parent_sym}{disambig}:");
+            }
+            Some(child_scip_symbol(&parent_sym, child_name.data(db), *scope))
         }
         ScopeId::Field(_, _)
         | ScopeId::Variant(_)
@@ -2442,5 +2610,98 @@ impl<E> Applicative for Result<E> {
             "ingot name should come from fe.toml config"
         );
         assert_eq!(ctx.version, "0.1.0");
+    }
+
+    #[test]
+    fn scip_escape_name_quotes_only_when_needed() {
+        assert_eq!(scip_escape_name("X"), "X");
+        assert_eq!(scip_escape_name("Foo_1"), "Foo_1");
+        assert_eq!(scip_escape_name("Foo<1>"), "`Foo<1>`");
+        assert_eq!(scip_escape_name("a`b"), "`a``b`");
+    }
+
+    #[test]
+    fn specialized_impl_consts_get_distinct_scip_symbols() {
+        // `impl Foo<1>` and `impl Foo<2>` are not a conflict (their self types
+        // don't unify) and each defines `X`; their SCIP symbols must differ so
+        // navigation doesn't conflate the two definitions.
+        let code = r#"struct Foo<const N: u256> {}
+
+impl Foo<1> {
+    pub const X: u256 = 10
+}
+
+impl Foo<2> {
+    pub const X: u256 = 20
+}
+
+pub fn a() -> u256 {
+    Foo<1>::X
+}
+
+pub fn b() -> u256 {
+    Foo<2>::X
+}
+"#;
+        let result = generate_test_scip(code);
+        let doc = result
+            .index
+            .documents
+            .iter()
+            .find(|d| d.relative_path == "test.fe")
+            .expect("document");
+
+        let const_symbols: std::collections::HashSet<&str> = doc
+            .occurrences
+            .iter()
+            .map(|o| o.symbol.as_str())
+            .filter(|s| s.contains("Foo#") && s.ends_with("X:"))
+            .collect();
+
+        assert!(
+            const_symbols.len() >= 2,
+            "expected distinct symbols for Foo<1>::X and Foo<2>::X, got {const_symbols:?}"
+        );
+    }
+
+    #[test]
+    fn inherent_const_definition_is_indexed() {
+        // The const's definition occurrence must be present in the same-ingot
+        // index even though the enclosing inherent impl is anonymous.
+        let code = r#"struct Counter {}
+
+impl Counter {
+    pub const MAX: u256 = 100
+}
+
+pub fn at_limit(n: u256) -> bool {
+    n == Counter::MAX
+}
+"#;
+        let result = generate_test_scip(code);
+        let doc = result
+            .index
+            .documents
+            .iter()
+            .find(|d| d.relative_path == "test.fe")
+            .expect("document");
+
+        let has_const_def = doc.occurrences.iter().any(|o| {
+            o.symbol.contains("Counter#")
+                && o.symbol.ends_with("MAX:")
+                && (o.symbol_roles & (types::SymbolRole::Definition as i32)) != 0
+        });
+        assert!(
+            has_const_def,
+            "expected a definition occurrence for the inherent const Counter::MAX"
+        );
+        let has_const_symbol = doc
+            .symbols
+            .iter()
+            .any(|s| s.symbol.contains("Counter#") && s.symbol.ends_with("MAX:"));
+        assert!(
+            has_const_symbol,
+            "expected a symbol entry for the inherent const Counter::MAX"
+        );
     }
 }

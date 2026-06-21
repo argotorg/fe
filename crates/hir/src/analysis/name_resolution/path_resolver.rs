@@ -2,13 +2,14 @@ use crate::core::hir_def::GenericArg;
 use crate::hir_def::{CallableDef, Func};
 use crate::{
     core::hir_def::{
-        Const, Enum, EnumVariant, GenericParamOwner, IdentId, ImplTrait, ItemKind, PathId,
-        PathKind, Trait, TypeBound, TypeKind, VariantKind, scope_graph::ScopeId,
+        Const, Enum, EnumVariant, GenericParamOwner, HirIngot, IdentId, Impl, ImplTrait, ItemKind,
+        PathId, PathKind, Trait, TypeBound, TypeKind, VariantKind, scope_graph::ScopeId,
     },
     span::{DynLazySpan, path::LazyPathSpan},
 };
 use common::indexmap::{IndexMap, IndexSet};
 use either::Either;
+use rustc_hash::FxHashMap;
 use smallvec::{SmallVec, smallvec};
 use thin_vec::ThinVec;
 
@@ -27,18 +28,24 @@ use crate::analysis::{
     ty::{
         adt_def::{AdtRef, adt_layout_hole_plan, adt_layout_hole_plan_with_explicit_args},
         binder::Binder,
-        canonical::Canonicalized,
+        canonical::{Canonical, Canonicalized},
         const_ty::{HoleAnchor, HoleId, HoleMinter, LayoutHoleArgSite, StructuralHoleOrigin},
+        fold::TyFoldable as _,
         layout_holes::layout_hole_with_fallback_ty,
+        method_table::probe_method,
         normalize::normalize_ty,
         trait_def::{TraitInstId, impls_for_ty_with_constraints},
         trait_lower::{TraitArgError, TraitRefLowerError, lower_trait_ref, lower_trait_ref_impl},
-        trait_resolution::PredicateListId,
-        ty_def::{InvalidCause, Kind, TyData, TyId},
+        trait_resolution::{
+            GoalSatisfiability, PredicateListId, TraitSolveCx, constraint::collect_constraints,
+            is_goal_satisfiable,
+        },
+        ty_def::{InvalidCause, Kind, TyBase, TyData, TyId},
         ty_lower::{
             ConstDefaultCompletion, TyAlias, collect_generic_params, lower_generic_arg_list,
             lower_hir_ty_with_minter, lower_type_alias,
         },
+        unify::UnificationTable,
     },
 };
 
@@ -507,6 +514,9 @@ pub enum PathRes<'db> {
     Mod(ScopeId<'db>),
     Method(TyId<'db>, MethodCandidate<'db>),
     TraitConst(TyId<'db>, TraitInstId<'db>, IdentId<'db>),
+    /// An associated const defined in an inherent `impl` block,
+    /// e.g. `Foo::SIZE` where `impl Foo { const SIZE: u256 = 32 }`.
+    InherentConst(TyId<'db>, Impl<'db>, IdentId<'db>),
 }
 
 impl<'db> PathRes<'db> {
@@ -523,6 +533,7 @@ impl<'db> PathRes<'db> {
             // TODO: map over candidate ty?
             PathRes::Method(ty, candidate) => PathRes::Method(f(ty), candidate),
             PathRes::TraitConst(ty, inst, name) => PathRes::TraitConst(f(ty), inst, name),
+            PathRes::InherentConst(ty, impl_, name) => PathRes::InherentConst(f(ty), impl_, name),
             r @ (PathRes::Trait(_)
             | PathRes::TraitMethod(..)
             | PathRes::Mod(_)
@@ -536,8 +547,12 @@ impl<'db> PathRes<'db> {
             PathRes::Const(const_, _) => Some(const_.scope()),
             PathRes::TraitConst(_ty, inst, name) => {
                 let trait_ = inst.def(db);
-                let idx = trait_.const_index(db, *name).unwrap() as u16;
+                let idx = trait_.const_index(db, *name)? as u16;
                 Some(ScopeId::TraitConst(trait_, idx))
+            }
+            PathRes::InherentConst(_ty, impl_, name) => {
+                let idx = impl_.const_index(db, *name)? as u16;
+                Some(ScopeId::ImplConst(*impl_, idx))
             }
             PathRes::TyAlias(alias, _) => Some(alias.alias.scope()),
             PathRes::Trait(trait_) => Some(trait_.def(db).scope()),
@@ -565,6 +580,15 @@ impl<'db> PathRes<'db> {
                 // Associated consts behave like trait methods: the trait does not
                 // need to be imported as long as it's otherwise visible.
                 is_scope_visible_from(db, inst.def(db).scope(), from_scope)
+            }
+            PathRes::InherentConst(..) => {
+                // The const's own scope carries its `pub` visibility. If the
+                // const can't be resolved to a scope (the name no longer exists
+                // on the impl), treat it as not visible rather than panicking.
+                match self.as_scope(db) {
+                    Some(scope) => is_scope_visible_from(db, scope, from_scope),
+                    None => false,
+                }
             }
             PathRes::TraitMethod(_inst, method) => {
                 // Trait method visibility depends on the method's defining scope,
@@ -608,11 +632,13 @@ impl<'db> PathRes<'db> {
                 v.variant.name(db)?
             )),
             PathRes::Const(const_, _) => const_.scope().pretty_path(db),
-            PathRes::TraitConst(ty, _inst, name) => Some(format!(
-                "{}::{}",
-                ty_path(*ty).unwrap_or_else(|| "<missing>".into()),
-                name.data(db)
-            )),
+            PathRes::TraitConst(ty, _, name) | PathRes::InherentConst(ty, _, name) => {
+                Some(format!(
+                    "{}::{}",
+                    ty_path(*ty).unwrap_or_else(|| "<missing>".into()),
+                    name.data(db)
+                ))
+            }
             PathRes::TraitMethod(..) => self.as_scope(db)?.pretty_path(db),
             r @ (PathRes::Trait(..) | PathRes::Mod(..) | PathRes::FuncParam(..)) => {
                 r.as_scope(db).unwrap().pretty_path(db)
@@ -637,6 +663,7 @@ impl<'db> PathRes<'db> {
             PathRes::EnumVariant(_) => "enum variant",
             PathRes::Const(..) => "constant",
             PathRes::TraitConst(..) => "constant",
+            PathRes::InherentConst(..) => "constant",
             PathRes::Mod(_) => "module",
             PathRes::Method(..) => "method",
         }
@@ -887,36 +914,17 @@ where
 
                 // Associated const on a specific trait instance
                 if resolve_tail_as_value && trait_inst.def(db).const_(db, ident).is_some() {
+                    reject_assoc_const_generic_args(db, path)?;
                     let r = PathRes::TraitConst(trait_inst.self_ty(db), *trait_inst, ident);
                     observer(path, &r);
                     return Ok(r);
                 }
             }
 
-            // Try to resolve as an associated const on the receiver type
-            if is_tail && resolve_tail_as_value {
-                // Probe impls across both the call-site scope and the receiver type's ingot so
-                // `OtherIngotType::CONST` and `ExternalType::LOCAL_TRAIT_CONST` both resolve.
-                match select_assoc_const_candidate(db, ty, ident, scope, assumptions) {
-                    AssocConstSelection::Found(inst) => {
-                        let r = PathRes::TraitConst(ty, inst, ident);
-                        observer(path, &r);
-                        return Ok(r);
-                    }
-                    AssocConstSelection::Ambiguous(traits) => {
-                        return Err(PathResError::new(
-                            PathResErrorKind::AmbiguousAssociatedConst {
-                                name: ident,
-                                trait_insts: traits,
-                            },
-                            path,
-                        ));
-                    }
-                    AssocConstSelection::NotFound => {}
-                }
-            }
-
-            // Try to resolve as an enum variant
+            // Try to resolve as an enum variant. Variants take precedence over
+            // associated consts so that a const sharing a variant's name can
+            // never change the meaning of `E::Variant` (the collision itself is
+            // reported at the const definition).
             if let Some(enum_) = ty.as_enum(db) {
                 // We need to use the concrete enum scope instead of
                 // parent_scope to resolve the variants in all cases,
@@ -935,6 +943,42 @@ where
                     });
                     observer(path, &reso);
                     return Ok(reso);
+                }
+            }
+
+            // Try to resolve as an associated const on the receiver type
+            if is_tail && resolve_tail_as_value {
+                // Inherent impl consts take precedence over trait impl consts.
+                // Conflicting inherent impls are rejected at their definition,
+                // so resolve to the first applicable impl here.
+                if let Some(impl_) =
+                    select_inherent_const_candidate(db, ty, ident, scope, assumptions)
+                {
+                    reject_assoc_const_generic_args(db, path)?;
+                    let r = PathRes::InherentConst(ty, impl_, ident);
+                    observer(path, &r);
+                    return Ok(r);
+                }
+
+                // Probe impls across both the call-site scope and the receiver type's ingot so
+                // `OtherIngotType::CONST` and `ExternalType::LOCAL_TRAIT_CONST` both resolve.
+                match select_assoc_const_candidate(db, ty, ident, scope, assumptions) {
+                    AssocConstSelection::Found(inst) => {
+                        reject_assoc_const_generic_args(db, path)?;
+                        let r = PathRes::TraitConst(ty, inst, ident);
+                        observer(path, &r);
+                        return Ok(r);
+                    }
+                    AssocConstSelection::Ambiguous(traits) => {
+                        return Err(PathResError::new(
+                            PathResErrorKind::AmbiguousAssociatedConst {
+                                name: ident,
+                                trait_insts: traits,
+                            },
+                            path,
+                        ));
+                    }
+                    AssocConstSelection::NotFound => {}
                 }
             }
 
@@ -1052,6 +1096,7 @@ where
             PathRes::Func(_)
             | PathRes::EnumVariant(..)
             | PathRes::TraitConst(..)
+            | PathRes::InherentConst(..)
             | PathRes::TraitMethod(..),
         ) => {
             return Err(PathResError::new(
@@ -1104,6 +1149,249 @@ enum AssocConstSelection<'db> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FindAssociatedTypeError {
     InfiniteBoundRecursion,
+}
+
+/// Maps `(impl target base type, const name)` to the inherent impls of this
+/// ingot that define an associated const with that name, so const path
+/// resolution doesn't have to scan every impl.
+#[salsa::tracked(return_ref)]
+pub(crate) fn ingot_impl_const_map<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: common::ingot::Ingot<'db>,
+) -> FxHashMap<(TyBase<'db>, IdentId<'db>), Vec<Impl<'db>>> {
+    let mut map: FxHashMap<(TyBase<'db>, IdentId<'db>), Vec<Impl<'db>>> = FxHashMap::default();
+    for &impl_ in ingot.all_impls(db) {
+        if impl_.hir_consts(db).is_empty() {
+            continue;
+        }
+        let Some(impl_ty) = impl_.admissible_inherent_impl_ty(db) else {
+            continue;
+        };
+        let TyData::TyBase(base) = impl_ty.base_ty(db).data(db) else {
+            continue;
+        };
+        for c in impl_.hir_consts(db) {
+            if let Some(name) = c.name.to_opt() {
+                map.entry((*base, name)).or_default().push(impl_);
+            }
+        }
+    }
+    map
+}
+
+fn reject_assoc_const_generic_args<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+) -> Result<(), PathResError<'db>> {
+    let args = path.generic_args(db);
+    if !args.is_empty(db) {
+        return Err(PathResError::new(
+            PathResErrorKind::ArgNumMismatch {
+                expected: 0,
+                given: args.data(db).len(),
+            },
+            path,
+        ));
+    }
+    Ok(())
+}
+
+/// Searches inherent `impl` blocks of the receiver type for an associated
+/// const named `name`. Returns the first impl whose self type unifies with the
+/// receiver and whose `where` constraints hold for it.
+///
+/// Two inherent impls that define the same const for the same type are a
+/// definition-site conflict (see [`earliest_conflicting_inherent_const_impl`]),
+/// exactly like conflicting inherent methods, so here we simply pick the first
+/// applicable impl; a conflicting program is already rejected at its
+/// definition.
+fn select_inherent_const_candidate<'db>(
+    db: &'db dyn HirAnalysisDb,
+    receiver_ty: TyId<'db>,
+    name: IdentId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Option<Impl<'db>> {
+    // Inherent impls can only be probed for concrete receiver types.
+    let TyData::TyBase(receiver_base) = receiver_ty.base_ty(db).data(db) else {
+        return None;
+    };
+
+    // Search the call-site ingot, its resolved dependencies, and the receiver
+    // type's own ingot. Dependencies matter for primitives: `receiver_ty.ingot`
+    // is `None` for `u256` etc., yet core/std may define `impl u256 { const X }`,
+    // so a downstream `u256::X` must look into those dependency ingots. This
+    // mirrors how the inherent-method table merges external ingots.
+    let scope_ingot = scope.ingot(db);
+    // `IndexSet` dedupes while preserving the deliberate search order
+    // (call-site ingot, then dependencies, then the receiver's own ingot).
+    let mut search_ingots: IndexSet<common::ingot::Ingot<'db>> = IndexSet::default();
+    search_ingots.insert(scope_ingot);
+    for (_, external) in scope_ingot.resolved_external_ingots(db) {
+        search_ingots.insert(*external);
+    }
+    if let Some(recv_ingot) = receiver_ty.ingot(db) {
+        search_ingots.insert(recv_ingot);
+    }
+
+    // Cheap name-indexed lookup first; the canonical receiver and solve
+    // context are only built when there is at least one candidate.
+    let candidates: Vec<(common::ingot::Ingot<'db>, &Vec<Impl<'db>>)> = search_ingots
+        .into_iter()
+        .filter_map(|ingot| {
+            ingot_impl_const_map(db, ingot)
+                .get(&(*receiver_base, name))
+                .map(|impls| (ingot, impls))
+        })
+        .collect();
+    if candidates.is_empty() {
+        return None;
+    }
+
+    let canonical_receiver = Canonicalized::new(db, receiver_ty).canonical();
+
+    for (ingot, impls) in candidates {
+        let solve_cx =
+            TraitSolveCx::new(db, ingot.root_mod(db).scope()).with_assumptions(assumptions);
+        for &impl_ in impls {
+            let Some(impl_ty) = impl_.admissible_inherent_impl_ty(db) else {
+                continue;
+            };
+
+            let mut table = UnificationTable::new(db);
+            let receiver = canonical_receiver.extract_identity(&mut table);
+            let receiver = table.instantiate_to_term(receiver);
+
+            // Instantiate the impl's params once so the target type and the
+            // impl's `where` constraints share the same inference vars.
+            let impl_params = collect_generic_params(db, impl_.into()).params(db);
+            let fresh_args = table.instantiate_with_fresh_vars(Binder::bind(impl_params.to_vec()));
+            let impl_ty = Binder::bind(impl_ty).instantiate(db, &fresh_args);
+            let impl_ty = table.instantiate_to_term(impl_ty);
+            if table.unify(impl_ty, receiver).is_err() {
+                continue;
+            }
+
+            // Conditional inherent impls (`impl<T> Foo<T> where T: Default`)
+            // only provide the const when their constraints hold for the
+            // receiver. `NeedsConfirmation` is rejected: nothing downstream
+            // registers the obligation for a later recheck.
+            let constraints = collect_constraints(db, impl_.into())
+                .instantiate(db, &fresh_args)
+                .fold_with(db, &mut table);
+            let satisfied = constraints.list(db).iter().all(|&constraint| {
+                matches!(
+                    is_goal_satisfiable(db, solve_cx, constraint),
+                    GoalSatisfiability::Satisfied(_) | GoalSatisfiability::ContainsInvalid
+                )
+            });
+            if satisfied {
+                return Some(impl_);
+            }
+        }
+    }
+
+    None
+}
+
+/// Definition-site conflict detection for inherent associated consts: finds the
+/// earliest other inherent impl that defines a const named `name` for the same
+/// type, so an unreferenced conflict is still diagnosed.
+///
+/// Conflict is purely structural (the impls' self types unify), exactly like
+/// the inherent-method conflict check. Two impls of the same type defining the
+/// same const collide regardless of their `where` clauses.
+pub(crate) fn earliest_conflicting_inherent_const_impl<'db>(
+    db: &'db dyn HirAnalysisDb,
+    impl_: Impl<'db>,
+    name: IdentId<'db>,
+) -> Option<Impl<'db>> {
+    let self_ty = impl_.admissible_inherent_impl_ty(db)?;
+    let TyData::TyBase(base) = self_ty.base_ty(db).data(db) else {
+        return None;
+    };
+    let own_ingot = impl_.top_mod(db).ingot(db);
+
+    // Search dependency ingots before the impl's own ingot, mirroring
+    // `select_inherent_const_candidate`. This matters for primitives: core and
+    // std are both allowed to `impl u256`, so a duplicate const across that
+    // dependency edge must be detected. Dependencies come first so the conflict
+    // is reported once, anchored at the dependency's definition.
+    let mut search_ingots: IndexSet<common::ingot::Ingot<'db>> = IndexSet::default();
+    for (_, ext) in own_ingot.resolved_external_ingots(db) {
+        search_ingots.insert(*ext);
+    }
+    search_ingots.insert(own_ingot);
+
+    // `ingot_impl_const_map` lists an impl once per matching const, so dedupe
+    // while preserving the stable order used for anchoring.
+    let mut ordered: IndexSet<Impl<'db>> = IndexSet::default();
+    for ingot in search_ingots {
+        if let Some(cands) = ingot_impl_const_map(db, ingot).get(&(*base, name)) {
+            ordered.extend(cands.iter().copied());
+        }
+    }
+    let self_idx = ordered.get_index_of(&impl_)?;
+
+    // Only report against an *earlier* impl so each conflicting pair yields a
+    // single diagnostic, anchored at the first definition.
+    ordered
+        .iter()
+        .take(self_idx)
+        .copied()
+        .find(|&other| inherent_impl_self_types_unify(db, impl_, other))
+}
+
+/// Finds an inherent associated function that an inherent const named `name`
+/// would shadow: path resolution resolves the const before method selection,
+/// so the function becomes unreachable. Returns the function's name span for a
+/// definition-site diagnostic.
+pub(crate) fn shadowed_inherent_fn_for_const<'db>(
+    db: &'db dyn HirAnalysisDb,
+    impl_: Impl<'db>,
+    name: IdentId<'db>,
+) -> Option<DynLazySpan<'db>> {
+    let self_ty = impl_.admissible_inherent_impl_ty(db)?;
+    let ingot = impl_.top_mod(db).ingot(db);
+    for &cand in probe_method(db, ingot, Canonical::new(db, self_ty), name) {
+        let CallableDef::Func(func) = cand.def else {
+            continue;
+        };
+        let Some(ItemKind::Impl(fn_impl)) = func.scope().parent_item(db) else {
+            continue;
+        };
+        if fn_impl == impl_ || inherent_impl_self_types_unify(db, impl_, fn_impl) {
+            return Some(cand.def.name_span());
+        }
+    }
+    None
+}
+
+/// `true` if the two inherent impls' self types unify (with each impl's params
+/// instantiated as fresh inference vars). This is the structural conflict
+/// notion used for inherent methods, applied to consts.
+fn inherent_impl_self_types_unify<'db>(
+    db: &'db dyn HirAnalysisDb,
+    a: Impl<'db>,
+    b: Impl<'db>,
+) -> bool {
+    let (Some(a_ty), Some(b_ty)) = (
+        a.admissible_inherent_impl_ty(db),
+        b.admissible_inherent_impl_ty(db),
+    ) else {
+        return false;
+    };
+    let mut table = UnificationTable::new(db);
+    let instantiate = |table: &mut UnificationTable<'db>, impl_: Impl<'db>, ty: TyId<'db>| {
+        let args = table.instantiate_with_fresh_vars(Binder::bind(
+            collect_generic_params(db, impl_.into()).params(db).to_vec(),
+        ));
+        let self_ty = Binder::bind(ty).instantiate(db, &args);
+        table.instantiate_to_term(self_ty)
+    };
+    let a_self = instantiate(&mut table, a, a_ty);
+    let b_self = instantiate(&mut table, b, b_ty);
+    table.unify(a_self, b_self).is_ok()
 }
 
 fn select_assoc_const_candidate<'db>(
@@ -1616,6 +1904,14 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
 
                 let const_name = t.const_by_index(idx as usize).name(db).unwrap();
                 PathRes::TraitConst(self_ty, trait_inst, const_name)
+            }
+
+            ScopeId::ImplConst(impl_, idx) => {
+                let const_name = impl_.const_by_index(idx as usize).name(db).unwrap();
+                let self_ty = impl_
+                    .admissible_inherent_impl_ty(db)
+                    .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
+                PathRes::InherentConst(self_ty, impl_, const_name)
             }
 
             ScopeId::Variant(var) => {

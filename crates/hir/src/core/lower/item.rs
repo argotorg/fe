@@ -631,16 +631,30 @@ impl<'db> Impl<'db> {
         let ty = TypeId::lower_ast_partial(ctxt, ast.ty());
         let origin = HirOrigin::raw(&ast);
 
+        let mut consts = vec![];
         if let Some(item_list) = ast.item_list() {
             for impl_item in item_list {
-                validate_func_attrs(
-                    ctxt,
-                    impl_item.attr_list(),
-                    "fn",
-                    impl_item.sig().name().map(|name| name.text().to_string()),
-                    true,
-                );
-                Func::lower_ast(ctxt, impl_item);
+                match impl_item.kind() {
+                    ast::ImplItemKind::Func(func) => {
+                        validate_func_attrs(
+                            ctxt,
+                            func.attr_list(),
+                            "fn",
+                            func.sig().name().map(|name| name.text().to_string()),
+                            true,
+                        );
+                        Func::lower_ast(ctxt, func);
+                    }
+                    ast::ImplItemKind::Const(c) => {
+                        validate_unsupported_item_attrs(
+                            ctxt,
+                            c.attr_list(),
+                            "const",
+                            c.name().map(|name| name.text().to_string()),
+                        );
+                        consts.push(AssocConstDef::lower_ast(ctxt, c));
+                    }
+                }
             }
         }
 
@@ -651,6 +665,7 @@ impl<'db> Impl<'db> {
             attributes,
             generic_params,
             where_clause,
+            consts,
             ctxt.top_mod(),
             origin,
         );
@@ -866,6 +881,7 @@ impl<'db> AssocConstDef<'db> {
             name: IdentId::lower_token_partial(ctxt, ast.name()),
             ty: TypeId::lower_ast_partial(ctxt, ast.ty()),
             value,
+            vis: super::lower_visibility(&ast),
         }
     }
 }

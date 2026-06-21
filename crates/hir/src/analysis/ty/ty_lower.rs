@@ -9,7 +9,7 @@ use salsa::Update;
 use smallvec::smallvec;
 
 use super::{
-    assoc_const::AssocConstUse,
+    assoc_const::{AssocConstUse, InherentConstUse},
     const_ty::{
         CallableInputLayoutHoleOrigin, ConstTyData, ConstTyId, EvaluatedConstTy, HoleAnchor,
         HoleMinter, LayoutHoleArgSite, StructuralHoleOrigin,
@@ -332,6 +332,27 @@ fn lower_path_impl<'db>(
                                 super::const_ty::const_ty_or_abstract_from_assoc_const_use(
                                     db,
                                     assoc,
+                                    expected_ty,
+                                )
+                            {
+                                TyId::const_ty(db, const_ty)
+                            } else {
+                                TyId::invalid(db, InvalidCause::Other)
+                            }
+                        } else {
+                            TyId::invalid(db, InvalidCause::Other)
+                        }
+                    }
+                    PathRes::InherentConst(recv_ty, impl_, name) => {
+                        if let Some(expected_ty) =
+                            super::const_ty::inherent_const_expected_ty(db, impl_, recv_ty, name)
+                        {
+                            let use_ =
+                                InherentConstUse::new(scope, assumptions, impl_, recv_ty, name);
+                            if let Some(const_ty) =
+                                super::const_ty::const_ty_or_abstract_from_inherent_const_use(
+                                    db,
+                                    use_,
                                     expected_ty,
                                 )
                             {
@@ -1052,6 +1073,23 @@ pub(crate) fn lower_generic_arg_list<'db>(
                                     super::const_ty::const_ty_or_abstract_from_assoc_const_use(
                                         db,
                                         assoc,
+                                        expected_ty,
+                                    )
+                                {
+                                    return TyId::const_ty(db, const_ty);
+                                }
+                            }
+                        }
+                        PathRes::InherentConst(recv_ty, impl_, name) => {
+                            if let Some(expected_ty) = super::const_ty::inherent_const_expected_ty(
+                                db, impl_, recv_ty, name,
+                            ) {
+                                let use_ =
+                                    InherentConstUse::new(scope, assumptions, impl_, recv_ty, name);
+                                if let Some(const_ty) =
+                                    super::const_ty::const_ty_or_abstract_from_inherent_const_use(
+                                        db,
+                                        use_,
                                         expected_ty,
                                     )
                                 {

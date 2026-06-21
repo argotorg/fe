@@ -238,6 +238,12 @@ where
                 }
                 self.unify(assoc1.inst(), assoc2.inst())
             }
+            (InherentConst(use1), InherentConst(use2)) => {
+                if use1.impl_() != use2.impl_() || use1.name() != use2.name() {
+                    return Err(UnificationError::TypeMismatch);
+                }
+                self.unify_ty(use1.receiver_ty(), use2.receiver_ty())
+            }
             (
                 ArithBinOp {
                     op: op1,

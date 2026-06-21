@@ -1,0 +1,4 @@
+[workspace]
+name = "dependency_inherent_const"
+version = "0.1.0"
+members = ["ingots/app"]

@@ -1,0 +1,9 @@
+pub struct Counter {}
+
+impl Counter {
+  const MAX: u256 = 100
+}
+
+pub fn at_limit(n: u256) -> bool {
+  n == Counter::MAX
+}

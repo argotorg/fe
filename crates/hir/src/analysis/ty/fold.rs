@@ -235,6 +235,10 @@ where
             let assoc = assoc.fold_with(db, folder);
             ConstExprId::new(db, ConstExpr::TraitConst(assoc))
         }
+        ConstExpr::InherentConst(use_) => {
+            let use_ = use_.fold_with(db, folder);
+            ConstExprId::new(db, ConstExpr::InherentConst(use_))
+        }
         ConstExpr::LocalBinding(binding) => ConstExprId::new(db, ConstExpr::LocalBinding(*binding)),
     }
 }

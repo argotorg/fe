@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/inherent_const_ty_mismatch.fe
+---
+error[8-0000]: type mismatch
+  ┌─ inherent_const_ty_mismatch.fe:4:21
+  │
+4 │     const C: u256 = true
+  │                     ^^^^ expected `u256`, but `bool` is given

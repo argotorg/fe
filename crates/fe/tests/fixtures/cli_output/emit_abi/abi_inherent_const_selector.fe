@@ -1,0 +1,21 @@
+// The selector delegates to an inherent-impl associated const whose value is
+// a `sol(...)` signature. ABI generation must follow the const body to recover
+// the signature, otherwise the recv arm is dropped from the JSON ABI.
+struct Selectors {}
+
+impl Selectors {
+    const PING: u32 = sol("ping(uint256)")
+}
+
+msg FooMsg {
+    #[selector = Selectors::PING]
+    Ping { value: u256 } -> u256,
+}
+
+pub contract Foo {
+    recv FooMsg {
+        Ping { value } -> u256 {
+            return value
+        }
+    }
+}

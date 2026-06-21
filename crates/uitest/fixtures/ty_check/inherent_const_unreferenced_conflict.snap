@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/inherent_const_unreferenced_conflict.fe
+---
+error[6-0019]: conflicting associated const definitions
+   ┌─ inherent_const_unreferenced_conflict.fe:11:11
+   │
+ 7 │     const X: u256 = 1
+   │           - previous definition here
+   ·
+11 │     const X: u256 = 2
+   │           ^ `X` is defined more than once

@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/inherent_const_multiple_mismatches.fe
+---
+error[8-0000]: type mismatch
+  ┌─ inherent_const_multiple_mismatches.fe:5:26
+  │
+5 │         let flag: bool = 1
+  │                          ^ expected `bool`, but `{integer}` is given
+
+error[8-0000]: type mismatch
+  ┌─ inherent_const_multiple_mismatches.fe:6:9
+  │
+6 │         true
+  │         ^^^^ expected `u256`, but `bool` is given

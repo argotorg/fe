@@ -47,6 +47,7 @@ impl<'db> HasReferences<'db> for ScopeId<'db> {
             ScopeId::GenericParam(_, _) => EMPTY_REFS,
             ScopeId::TraitType(_, _) => EMPTY_REFS,
             ScopeId::TraitConst(_, _) => EMPTY_REFS,
+            ScopeId::ImplConst(_, _) => EMPTY_REFS,
             ScopeId::FuncParam(_, _) => EMPTY_REFS,
             ScopeId::Field(_, _) => EMPTY_REFS,
             ScopeId::Variant(_) => EMPTY_REFS,
@@ -312,14 +313,19 @@ impl<'db> TopLevelMod<'db> {
                 return Some(ScopeId::from_item(item));
             }
 
-            // Check variant and field children — these have precise name-only
-            // spans.  Other non-item scopes (generic params, func params, trait
-            // types/consts) have broader spans that may overlap with references
-            // we'd rather resolve through reference_at.
+            // Check children that expose a precise name-only span, so the
+            // cursor sitting on a definition name resolves to that child.
+            // Associated consts qualify (their `name_span` is the identifier
+            // token); generic/func params and trait types are excluded because
+            // their spans are broader and can overlap references we'd rather
+            // resolve through `reference_at`.
             let scope_graph = self.scope_graph(db);
             for child in scope_graph.children(ScopeId::from_item(item)) {
                 match child {
-                    ScopeId::Variant(_) | ScopeId::Field(_, _) => {}
+                    ScopeId::Variant(_)
+                    | ScopeId::Field(_, _)
+                    | ScopeId::ImplConst(_, _)
+                    | ScopeId::TraitConst(_, _) => {}
                     _ => continue,
                 }
                 if let Some(name_span) = child.name_span(db)

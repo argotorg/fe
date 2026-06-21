@@ -329,6 +329,7 @@ pub(super) fn create_direct_encode_assoc_const<
         name: Partial::Present(name),
         ty: Partial::Present(ty),
         value: Partial::Present(body),
+        vis: crate::hir_def::Visibility::Public,
     }
 }
 
@@ -470,6 +471,7 @@ fn create_bool_assoc_const<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
         name: Partial::Present(name),
         ty: Partial::Present(ty),
         value: Partial::Present(body),
+        vis: crate::hir_def::Visibility::Public,
     }
 }
 
@@ -542,6 +544,7 @@ pub(super) fn create_head_size_assoc_const<'db, O: Clone + Into<crate::span::Des
         name: Partial::Present(name),
         ty: Partial::Present(ty),
         value: Partial::Present(body),
+        vis: crate::hir_def::Visibility::Public,
     }
 }
 
@@ -901,6 +904,7 @@ fn create_selector_const<'db>(
         name: Partial::Present(selector_name),
         ty: Partial::Present(selector_ty),
         value: Partial::Present(body),
+        vis: crate::hir_def::Visibility::Public,
     }
 }
 

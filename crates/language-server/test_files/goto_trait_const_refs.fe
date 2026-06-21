@@ -1,0 +1,11 @@
+struct Other {}
+
+trait HasC {
+    const MADE: Other
+}
+
+struct S {}
+
+impl HasC for S {
+    const MADE: Other = Other {}
+}

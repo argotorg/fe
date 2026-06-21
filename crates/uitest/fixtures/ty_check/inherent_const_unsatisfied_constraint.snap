@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/inherent_const_unsatisfied_constraint.fe
+---
+error[2-0002]: `C` is not found
+   ┌─ inherent_const_unsatisfied_constraint.fe:21:15
+   │
+21 │     Wrap<No>::C
+   │               ^ `C` is not found
+
+error[2-0002]: `C` is not found
+   ┌─ inherent_const_unsatisfied_constraint.fe:29:14
+   │
+29 │     Wrap<T>::C
+   │              ^ `C` is not found

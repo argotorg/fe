@@ -1,0 +1,15 @@
+mod a {
+    pub struct Foo {}
+}
+
+mod b {
+    use super::a::Foo
+
+    impl Foo {
+        pub const X: u256 = 1
+    }
+}
+
+fn use_it() -> u256 {
+    b::Foo::X
+}

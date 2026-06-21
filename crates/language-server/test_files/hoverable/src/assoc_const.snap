@@ -1,0 +1,807 @@
+---
+source: crates/language-server/src/functionality/references.rs
+expression: snapshot
+input_file: test_files/hoverable/src/assoc_const.fe
+---
+note: 
+  ┌─ lib.fe:1:5
+  │
+1 │ use stuff::calculations::{ return_three, return_four }
+  │     ^^^^^ ref: 1:4
+
+note: 
+  ┌─ lib.fe:1:12
+  │
+1 │ use stuff::calculations::{ return_three, return_four }
+  │            ^^^^^^^^^^^^ ref: 1:11
+
+note: 
+  ┌─ lib.fe:1:28
+  │
+1 │ use stuff::calculations::{ return_three, return_four }
+  │                            ^^^^^^^^^^^^ ref: 1:27
+
+note: 
+  ┌─ lib.fe:1:42
+  │
+1 │ use stuff::calculations::{ return_three, return_four }
+  │                                          ^^^^^^^^^^^ ref: 1:41
+
+note: 
+  ┌─ lib.fe:2:5
+  │
+2 │ use stuff::calculations::ambiguous
+  │     ^^^^^ ref: 2:4
+
+note: 
+  ┌─ lib.fe:2:12
+  │
+2 │ use stuff::calculations::ambiguous
+  │            ^^^^^^^^^^^^ ref: 2:11
+
+note: 
+  ┌─ lib.fe:2:26
+  │
+2 │ use stuff::calculations::ambiguous
+  │                          ^^^^^^^^^ ref: 2:25
+
+note: 
+  ┌─ lib.fe:3:5
+  │
+3 │ use stuff::Color
+  │     ^^^^^ ref: 3:4
+
+note: 
+  ┌─ lib.fe:3:12
+  │
+3 │ use stuff::Color
+  │            ^^^^^ ref: 3:11
+
+note: 
+  ┌─ lib.fe:8:8
+  │
+8 │ pub fn return_seven() {
+  │        ^^^^^^^^^^^^ def: defined here @ 8:7 (2 refs)
+
+note: 
+  ┌─ lib.fe:9:3
+  │
+9 │   return_three() + return_four()
+  │   ^^^^^^^^^^^^ ref: 9:2
+
+note: 
+  ┌─ lib.fe:9:20
+  │
+9 │   return_three() + return_four()
+  │                    ^^^^^^^^^^^ ref: 9:19
+
+note: 
+   ┌─ lib.fe:12:4
+   │
+12 │ fn calculate() {
+   │    ^^^^^^^^^ def: defined here @ 12:3 (1 refs)
+
+note: 
+   ┌─ lib.fe:13:3
+   │
+13 │   return_seven()
+   │   ^^^^^^^^^^^^ ref: 13:2
+
+note: 
+   ┌─ lib.fe:14:7
+   │
+14 │   let x: stuff::calculations::ambiguous
+   │       ^ def: defined here @ 14:6 (1 refs)
+
+note: 
+   ┌─ lib.fe:14:10
+   │
+14 │   let x: stuff::calculations::ambiguous
+   │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ref: 14:30
+
+note: 
+   ┌─ lib.fe:19:11
+   │
+19 │ pub trait Calculatable {
+   │           ^^^^^^^^^^^^ def: defined here @ 19:10 (5 refs)
+
+note: 
+   ┌─ lib.fe:20:6
+   │
+20 │   fn calculate(self) -> i32
+   │      ^^^^^^^^^ def: defined here @ 20:5 (2 refs)
+
+note: 
+   ┌─ lib.fe:20:16
+   │
+20 │   fn calculate(self) -> i32
+   │                ^^^^ ref: 20:15
+
+note: 
+   ┌─ lib.fe:24:8
+   │
+24 │ struct Numbers {
+   │        ^^^^^^^ def: defined here @ 24:7 (5 refs)
+
+note: 
+   ┌─ lib.fe:25:3
+   │
+25 │   x: i32,
+   │   ^ def: defined here @ 25:2 (3 refs)
+
+note: 
+   ┌─ lib.fe:26:3
+   │
+26 │   y: i32
+   │   ^ def: defined here @ 26:2 (2 refs)
+
+note: 
+   ┌─ lib.fe:29:4
+   │
+29 │ fn add(x: i32, y: i32) -> i32 {
+   │    ^^^ def: defined here @ 29:3 (2 refs)
+
+note: 
+   ┌─ lib.fe:29:8
+   │
+29 │ fn add(x: i32, y: i32) -> i32 {
+   │        ^ def: defined here @ 29:7 (2 refs)
+
+note: 
+   ┌─ lib.fe:29:16
+   │
+29 │ fn add(x: i32, y: i32) -> i32 {
+   │                ^ def: defined here @ 29:15 (2 refs)
+
+note: 
+   ┌─ lib.fe:30:5
+   │
+30 │     x + y
+   │     ^ ref: 30:4
+
+note: 
+   ┌─ lib.fe:30:9
+   │
+30 │     x + y
+   │         ^ ref: 30:8
+
+note: 
+   ┌─ lib.fe:33:6
+   │
+33 │ impl Calculatable for Numbers {
+   │      ^^^^^^^^^^^^ ref: 33:5
+
+note: 
+   ┌─ lib.fe:33:23
+   │
+33 │ impl Calculatable for Numbers {
+   │                       ^^^^^^^ ref: 33:22
+
+note: 
+   ┌─ lib.fe:34:6
+   │
+34 │   fn calculate(self) -> i32 {
+   │      ^^^^^^^^^ def: defined here @ 34:5 (1 refs)
+
+note: 
+   ┌─ lib.fe:34:16
+   │
+34 │   fn calculate(self) -> i32 {
+   │                ^^^^ def: defined here @ 34:15 (3 refs)
+
+note: 
+   ┌─ lib.fe:35:11
+   │
+35 │       let z = self.x
+   │           ^ def: defined here @ 35:10 (2 refs)
+
+note: 
+   ┌─ lib.fe:35:15
+   │
+35 │       let z = self.x
+   │               ^^^^ ref: 35:14
+
+note: 
+   ┌─ lib.fe:35:20
+   │
+35 │       let z = self.x
+   │                    ^ ref: 35:19
+
+note: 
+   ┌─ lib.fe:36:11
+   │
+36 │       let w = self.y
+   │           ^ def: defined here @ 36:10 (2 refs)
+
+note: 
+   ┌─ lib.fe:36:15
+   │
+36 │       let w = self.y
+   │               ^^^^ ref: 36:14
+
+note: 
+   ┌─ lib.fe:36:20
+   │
+36 │       let w = self.y
+   │                    ^ ref: 36:19
+
+note: 
+   ┌─ lib.fe:37:7
+   │
+37 │       add(z, w)
+   │       ^^^ ref: 37:6
+
+note: 
+   ┌─ lib.fe:37:11
+   │
+37 │       add(z, w)
+   │           ^ ref: 37:10
+
+note: 
+   ┌─ lib.fe:37:14
+   │
+37 │       add(z, w)
+   │              ^ ref: 37:13
+
+note: 
+   ┌─ lib.fe:41:6
+   │
+41 │ enum Option {
+   │      ^^^^^^ def: defined here @ 41:5 (4 refs)
+
+note: 
+   ┌─ lib.fe:42:3
+   │
+42 │   Some(i32),
+   │   ^^^^ def: defined here @ 42:2 (2 refs)
+
+note: 
+   ┌─ lib.fe:43:3
+   │
+43 │   None
+   │   ^^^^ def: defined here @ 43:2 (2 refs)
+
+note: 
+   ┌─ lib.fe:47:4
+   │
+47 │ fn test_locals(x: i32) -> i32 {
+   │    ^^^^^^^^^^^ def: defined here @ 47:3 (1 refs)
+
+note: 
+   ┌─ lib.fe:47:16
+   │
+47 │ fn test_locals(x: i32) -> i32 {
+   │                ^ def: defined here @ 47:15 (2 refs)
+
+note: 
+   ┌─ lib.fe:48:7
+   │
+48 │   let a = x
+   │       ^ def: defined here @ 48:6 (2 refs)
+
+note: 
+   ┌─ lib.fe:48:11
+   │
+48 │   let a = x
+   │           ^ ref: 48:10
+
+note: 
+   ┌─ lib.fe:49:7
+   │
+49 │   let x = a + 1
+   │       ^ def: defined here @ 49:6 (2 refs)
+
+note: 
+   ┌─ lib.fe:49:11
+   │
+49 │   let x = a + 1
+   │           ^ ref: 49:10
+
+note: 
+   ┌─ lib.fe:51:9
+   │
+51 │     let x = x + 1
+   │         ^ def: defined here @ 51:8 (2 refs)
+
+note: 
+   ┌─ lib.fe:51:13
+   │
+51 │     let x = x + 1
+   │             ^ ref: 51:12
+
+note: 
+   ┌─ lib.fe:52:5
+   │
+52 │     x
+   │     ^ ref: 52:4
+
+note: 
+   ┌─ lib.fe:57:4
+   │
+57 │ fn test_match(opt: Option) -> i32 {
+   │    ^^^^^^^^^^ def: defined here @ 57:3 (1 refs)
+
+note: 
+   ┌─ lib.fe:57:15
+   │
+57 │ fn test_match(opt: Option) -> i32 {
+   │               ^^^ def: defined here @ 57:14 (2 refs)
+
+note: 
+   ┌─ lib.fe:57:20
+   │
+57 │ fn test_match(opt: Option) -> i32 {
+   │                    ^^^^^^ ref: 57:19
+
+note: 
+   ┌─ lib.fe:58:9
+   │
+58 │   match opt {
+   │         ^^^ ref: 58:8
+
+note: 
+   ┌─ lib.fe:59:5
+   │
+59 │     Option::Some(val) => val
+   │     ^^^^^^^^^^^^ ref: 59:4
+
+note: 
+   ┌─ lib.fe:59:18
+   │
+59 │     Option::Some(val) => val
+   │                  ^^^ def: defined here @ 59:17 (2 refs)
+
+note: 
+   ┌─ lib.fe:59:26
+   │
+59 │     Option::Some(val) => val
+   │                          ^^^ ref: 59:25
+
+note: 
+   ┌─ lib.fe:60:5
+   │
+60 │     Option::None => 0
+   │     ^^^^^^^^^^^^ ref: 60:12
+
+note: 
+   ┌─ lib.fe:64:4
+   │
+64 │ fn favorite_color() -> Color {
+   │    ^^^^^^^^^^^^^^ def: defined here @ 64:3 (1 refs)
+
+note: 
+   ┌─ lib.fe:64:24
+   │
+64 │ fn favorite_color() -> Color {
+   │                        ^^^^^ ref: 64:23
+
+note: 
+   ┌─ lib.fe:65:3
+   │
+65 │   Color::Red
+   │   ^^^^^^^^^^ ref: 65:2
+
+note: 
+   ┌─ lib.fe:68:4
+   │
+68 │ fn describe_color(c: Color) -> i32 {
+   │    ^^^^^^^^^^^^^^ def: defined here @ 68:3 (1 refs)
+
+note: 
+   ┌─ lib.fe:68:19
+   │
+68 │ fn describe_color(c: Color) -> i32 {
+   │                   ^ def: defined here @ 68:18 (2 refs)
+
+note: 
+   ┌─ lib.fe:68:22
+   │
+68 │ fn describe_color(c: Color) -> i32 {
+   │                      ^^^^^ ref: 68:21
+
+note: 
+   ┌─ lib.fe:69:9
+   │
+69 │   match c {
+   │         ^ ref: 69:8
+
+note: 
+   ┌─ lib.fe:70:5
+   │
+70 │     Color::Red => 1
+   │     ^^^^^^^^^^ ref: 70:4
+
+note: 
+   ┌─ lib.fe:71:5
+   │
+71 │     Color::Green => 2
+   │     ^^^^^^^^^^^^ ref: 71:4
+
+note: 
+   ┌─ lib.fe:72:5
+   │
+72 │     Color::Blue => 3
+   │     ^^^^^^^^^^^ ref: 72:11
+
+note: 
+   ┌─ lib.fe:76:8
+   │
+76 │ struct Wrapper<T> {
+   │        ^^^^^^^ def: defined here @ 76:7 (4 refs)
+
+note: 
+   ┌─ lib.fe:77:3
+   │
+77 │   inner: T
+   │   ^^^^^ def: defined here @ 77:2 (2 refs)
+
+note: 
+   ┌─ lib.fe:77:10
+   │
+77 │   inner: T
+   │          ^ ref: 77:9
+
+note: 
+   ┌─ lib.fe:80:4
+   │
+80 │ fn wrap<T>(val: T) -> Wrapper<T> {
+   │    ^^^^ def: defined here @ 80:3 (1 refs)
+
+note: 
+   ┌─ lib.fe:80:12
+   │
+80 │ fn wrap<T>(val: T) -> Wrapper<T> {
+   │            ^^^ def: defined here @ 80:11 (2 refs)
+
+note: 
+   ┌─ lib.fe:80:17
+   │
+80 │ fn wrap<T>(val: T) -> Wrapper<T> {
+   │                 ^ ref: 80:16
+
+note: 
+   ┌─ lib.fe:80:23
+   │
+80 │ fn wrap<T>(val: T) -> Wrapper<T> {
+   │                       ^^^^^^^^^^ ref: 80:22
+
+note: 
+   ┌─ lib.fe:80:31
+   │
+80 │ fn wrap<T>(val: T) -> Wrapper<T> {
+   │                               ^ ref: 80:30
+
+note: 
+   ┌─ lib.fe:81:3
+   │
+81 │   Wrapper { inner: val }
+   │   ^^^^^^^ ref: 81:2
+
+note: 
+   ┌─ lib.fe:81:20
+   │
+81 │   Wrapper { inner: val }
+   │                    ^^^ ref: 81:19
+
+note: 
+   ┌─ lib.fe:84:4
+   │
+84 │ fn unwrap_numbers(w: Wrapper<Numbers>) -> i32 {
+   │    ^^^^^^^^^^^^^^ def: defined here @ 84:3 (1 refs)
+
+note: 
+   ┌─ lib.fe:84:19
+   │
+84 │ fn unwrap_numbers(w: Wrapper<Numbers>) -> i32 {
+   │                   ^ def: defined here @ 84:18 (2 refs)
+
+note: 
+   ┌─ lib.fe:84:22
+   │
+84 │ fn unwrap_numbers(w: Wrapper<Numbers>) -> i32 {
+   │                      ^^^^^^^^^^^^^^^^ ref: 84:21
+
+note: 
+   ┌─ lib.fe:84:30
+   │
+84 │ fn unwrap_numbers(w: Wrapper<Numbers>) -> i32 {
+   │                              ^^^^^^^ ref: 84:29
+
+note: 
+   ┌─ lib.fe:85:3
+   │
+85 │   w.inner.x
+   │   ^ ref: 85:2
+
+note: 
+   ┌─ lib.fe:85:5
+   │
+85 │   w.inner.x
+   │     ^^^^^ ref: 85:4
+
+note: 
+   ┌─ lib.fe:85:11
+   │
+85 │   w.inner.x
+   │           ^ ref: 85:10
+
+note: 
+   ┌─ lib.fe:88:4
+   │
+88 │ fn do_calc<T: Calculatable>(thing: T) -> i32 {
+   │    ^^^^^^^ def: defined here @ 88:3 (1 refs)
+
+note: 
+   ┌─ lib.fe:88:15
+   │
+88 │ fn do_calc<T: Calculatable>(thing: T) -> i32 {
+   │               ^^^^^^^^^^^^ ref: 88:14
+
+note: 
+   ┌─ lib.fe:88:29
+   │
+88 │ fn do_calc<T: Calculatable>(thing: T) -> i32 {
+   │                             ^^^^^ def: defined here @ 88:28 (2 refs)
+
+note: 
+   ┌─ lib.fe:88:36
+   │
+88 │ fn do_calc<T: Calculatable>(thing: T) -> i32 {
+   │                                    ^ ref: 88:35
+
+note: 
+   ┌─ lib.fe:89:3
+   │
+89 │   thing.calculate()
+   │   ^^^^^ ref: 89:2
+
+note: 
+   ┌─ lib.fe:89:9
+   │
+89 │   thing.calculate()
+   │         ^^^^^^^^^ ref: 89:8
+
+note: 
+   ┌─ lib.fe:92:1
+   │  
+92 │ ╭ msg TokenMsg {
+93 │ │   #[selector = 0x01]
+94 │ │   Mint { to: i32, amount: i32 } -> bool,
+95 │ │   #[selector = 0x02]
+96 │ │   Burn { amount: i32 } -> bool,
+97 │ │ }
+   │ ╰─^ def: defined here @ 92:0 (11 refs)
+
+note: 
+   ┌─ lib.fe:94:3
+   │
+94 │   Mint { to: i32, amount: i32 } -> bool,
+   │   ^^^^ ref: 94:2
+
+note: 
+   ┌─ lib.fe:96:3
+   │
+96 │   Burn { amount: i32 } -> bool,
+   │   ^^^^ ref: 96:2
+
+note: 
+   ┌─ lib.fe:99:14
+   │
+99 │ pub contract Token {
+   │              ^^^^^ def: defined here @ 99:13 (1 refs)
+
+note: 
+    ┌─ lib.fe:100:3
+    │
+100 │   supply: i32
+    │   ^^^^^^ def: defined here @ 100:2 (5 refs)
+
+note: 
+    ┌─ lib.fe:102:8
+    │
+102 │   recv TokenMsg {
+    │        ^^^^^^^^ ref: 102:7
+
+note: 
+    ┌─ lib.fe:103:5
+    │
+103 │     Mint { to, amount } -> bool uses (mut supply) {
+    │     ^^^^ ref: 103:4
+
+note: 
+    ┌─ lib.fe:103:12
+    │
+103 │     Mint { to, amount } -> bool uses (mut supply) {
+    │            ^^ def: defined here @ 103:11 (1 refs)
+
+note: 
+    ┌─ lib.fe:103:16
+    │
+103 │     Mint { to, amount } -> bool uses (mut supply) {
+    │                ^^^^^^ def: defined here @ 103:15 (2 refs)
+
+note: 
+    ┌─ lib.fe:103:43
+    │
+103 │     Mint { to, amount } -> bool uses (mut supply) {
+    │                                           ^^^^^^ ref: 103:42
+
+note: 
+    ┌─ lib.fe:104:7
+    │
+104 │       supply += amount
+    │       ^^^^^^ ref: 104:6
+
+note: 
+    ┌─ lib.fe:104:17
+    │
+104 │       supply += amount
+    │                 ^^^^^^ ref: 104:16
+
+note: 
+    ┌─ lib.fe:107:5
+    │
+107 │     Burn { amount } -> bool uses (mut supply) {
+    │     ^^^^ ref: 107:4
+
+note: 
+    ┌─ lib.fe:107:12
+    │
+107 │     Burn { amount } -> bool uses (mut supply) {
+    │            ^^^^^^ def: defined here @ 107:11 (2 refs)
+
+note: 
+    ┌─ lib.fe:107:39
+    │
+107 │     Burn { amount } -> bool uses (mut supply) {
+    │                                       ^^^^^^ ref: 107:38
+
+note: 
+    ┌─ lib.fe:108:7
+    │
+108 │       supply -= amount
+    │       ^^^^^^ ref: 108:6
+
+note: 
+    ┌─ lib.fe:108:17
+    │
+108 │       supply -= amount
+    │                 ^^^^^^ ref: 108:16
+
+note: 
+  ┌─ stuff.fe:2:9
+  │
+2 │ pub mod calculations {
+  │         ^^^^^^^^^^^^ def: defined here @ 2:8 (5 refs)
+
+note: 
+  ┌─ stuff.fe:4:10
+  │
+4 │   pub fn return_three() -> u32 {
+  │          ^^^^^^^^^^^^ def: defined here @ 4:9 (3 refs)
+
+note: 
+  ┌─ stuff.fe:9:10
+  │
+9 │   pub fn return_four() {
+  │          ^^^^^^^^^^^ def: defined here @ 9:9 (3 refs)
+
+note: 
+   ┌─ stuff.fe:14:11
+   │
+14 │   pub mod ambiguous {
+   │           ^^^^^^^^^ def: defined here @ 14:10 (3 refs)
+
+note: 
+   ┌─ stuff.fe:18:10
+   │
+18 │   pub fn ambiguous() {}
+   │          ^^^^^^^^^ def: defined here @ 18:9 (1 refs)
+
+note: 
+   ┌─ stuff.fe:21:10
+   │
+21 │ pub enum Color {
+   │          ^^^^^ def: defined here @ 21:9 (12 refs)
+
+note: 
+   ┌─ stuff.fe:22:3
+   │
+22 │   Red,
+   │   ^^^ def: defined here @ 22:2 (4 refs)
+
+note: 
+   ┌─ stuff.fe:23:3
+   │
+23 │   Green,
+   │   ^^^^^ def: defined here @ 23:2 (3 refs)
+
+note: 
+   ┌─ stuff.fe:24:3
+   │
+24 │   Blue
+   │   ^^^^ def: defined here @ 24:2 (3 refs)
+
+note: 
+   ┌─ stuff.fe:27:8
+   │
+27 │ pub fn is_red(c: Color) -> bool {
+   │        ^^^^^^ def: defined here @ 27:7 (1 refs)
+
+note: 
+   ┌─ stuff.fe:27:15
+   │
+27 │ pub fn is_red(c: Color) -> bool {
+   │               ^ def: defined here @ 27:14 (2 refs)
+
+note: 
+   ┌─ stuff.fe:27:18
+   │
+27 │ pub fn is_red(c: Color) -> bool {
+   │                  ^^^^^ ref: 27:17
+
+note: 
+   ┌─ stuff.fe:28:9
+   │
+28 │   match c {
+   │         ^ ref: 28:8
+
+note: 
+   ┌─ stuff.fe:29:5
+   │
+29 │     Color::Red => true
+   │     ^^^^^^^^^^ ref: 29:4
+
+note: 
+   ┌─ stuff.fe:30:5
+   │
+30 │     Color::Green => false
+   │     ^^^^^^^^^^^^ ref: 30:4
+
+note: 
+   ┌─ stuff.fe:31:5
+   │
+31 │     Color::Blue => false
+   │     ^^^^^^^^^^^ ref: 31:11
+
+note: 
+  ┌─ assoc_const.fe:1:12
+  │
+1 │ pub struct Counter {}
+  │            ^^^^^^^ def: defined here @ 1:11 (3 refs)
+
+note: 
+  ┌─ assoc_const.fe:3:6
+  │
+3 │ impl Counter {
+  │      ^^^^^^^ ref: 3:5
+
+note: 
+  ┌─ assoc_const.fe:4:9
+  │
+4 │   const MAX: u256 = 100
+  │         ^^^ def: defined here @ 4:8 (2 refs)
+
+note: 
+  ┌─ assoc_const.fe:7:8
+  │
+7 │ pub fn at_limit(n: u256) -> bool {
+  │        ^^^^^^^^ def: defined here @ 7:7 (1 refs)
+
+note: 
+  ┌─ assoc_const.fe:7:17
+  │
+7 │ pub fn at_limit(n: u256) -> bool {
+  │                 ^ def: defined here @ 7:16 (2 refs)
+
+note: 
+  ┌─ assoc_const.fe:8:3
+  │
+8 │   n == Counter::MAX
+  │   ^ ref: 8:2
+
+note: 
+  ┌─ assoc_const.fe:8:8
+  │
+8 │   n == Counter::MAX
+  │        ^^^^^^^^^^^^ ref: 8:16

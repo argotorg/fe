@@ -1,0 +1,22 @@
+---
+source: crates/language-server/src/functionality/goto.rs
+expression: snapshot
+input_file: test_files/goto_inherent_const_refs.fe
+---
+note: 
+  ┌─ goto_inherent_const_refs.fe:5:6
+  │
+5 │ impl S {
+  │      ^ -> goto_inherent_const_refs::S
+
+note: 
+  ┌─ goto_inherent_const_refs.fe:6:17
+  │
+6 │     const MADE: Other = Other {}
+  │                 ^^^^^ -> goto_inherent_const_refs::Other
+
+note: 
+  ┌─ goto_inherent_const_refs.fe:6:25
+  │
+6 │     const MADE: Other = Other {}
+  │                         ^^^^^ -> goto_inherent_const_refs::Other

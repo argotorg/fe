@@ -1,0 +1,23 @@
+trait HasX {
+    const X: u256
+}
+
+struct Foo {}
+
+impl Foo {
+    const X: u256 = 1
+}
+
+impl Foo {
+    const X: u256 = 2
+}
+
+// The trait const must not be silently selected when the inherent
+// candidates are ambiguous.
+impl HasX for Foo {
+    const X: u256 = 99
+}
+
+fn f() -> u256 {
+    Foo::X
+}

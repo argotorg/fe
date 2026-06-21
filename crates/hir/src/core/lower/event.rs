@@ -397,6 +397,7 @@ fn create_topic0_const<'db>(
         name: Partial::Present(topic0_name),
         ty: Partial::Present(topic0_ty),
         value: Partial::Present(body),
+        vis: crate::hir_def::Visibility::Public,
     }
 }
 

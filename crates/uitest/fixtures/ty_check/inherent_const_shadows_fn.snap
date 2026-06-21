@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/inherent_const_shadows_fn.fe
+---
+error[6-0021]: associated const conflicts with associated function
+  ┌─ inherent_const_shadows_fn.fe:7:11
+  │
+7 │     const make: u256 = 1
+  │           ^^^^ associated const `make` has the same name as an associated function, which it would make unreachable
+8 │
+9 │     fn make() -> S {
+  │        ---- function defined here

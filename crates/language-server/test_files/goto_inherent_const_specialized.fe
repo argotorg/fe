@@ -1,0 +1,17 @@
+struct Foo<const N: u256> {}
+
+impl Foo<1> {
+    pub const X: u256 = 10
+}
+
+impl Foo<2> {
+    pub const X: u256 = 20
+}
+
+fn a() -> u256 {
+    Foo<1>::X
+}
+
+fn b() -> u256 {
+    Foo<2>::X
+}

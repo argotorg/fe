@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/inherent_const_invalid_body.fe
+---
+error[8-0012]: undefined variable
+  ┌─ inherent_const_invalid_body.fe:4:21
+  │
+4 │     const C: u256 = nope()
+  │                     ^^^^ undefined variable `nope`

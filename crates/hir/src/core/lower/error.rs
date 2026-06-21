@@ -360,6 +360,7 @@ fn create_selector_const<'db>(
         name: Partial::Present(selector_name),
         ty: Partial::Present(selector_ty),
         value: Partial::Present(body),
+        vis: crate::hir_def::Visibility::Public,
     }
 }
 

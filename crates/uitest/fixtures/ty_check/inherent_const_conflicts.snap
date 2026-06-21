@@ -1,0 +1,21 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/inherent_const_conflicts.fe
+---
+error[6-0019]: conflicting associated const definitions
+   ┌─ inherent_const_conflicts.fe:14:11
+   │
+13 │     const C: u256 = 1
+   │           - previous definition here
+14 │     const C: u256 = 2
+   │           ^ `C` is defined more than once
+
+error[6-0020]: associated const conflicts with enum variant
+  ┌─ inherent_const_conflicts.fe:7:11
+  │
+2 │     A,
+  │     - variant defined here
+  ·
+7 │     const A: u256 = 1
+  │           ^ associated const `A` has the same name as a variant of the enum

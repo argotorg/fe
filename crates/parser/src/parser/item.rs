@@ -857,7 +857,7 @@ impl super::Parse for ImplItemListScope {
     type Error = Recovery<ErrProof>;
 
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
-        parse_fn_item_block(parser, FuncDefScope::Impl)
+        parse_fn_item_block(parser, FuncDefScope::Impl, true)
     }
 }
 
@@ -954,7 +954,7 @@ impl super::Parse for ExternItemListScope {
     type Error = Recovery<ErrProof>;
 
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
-        parse_fn_item_block(parser, FuncDefScope::Extern)
+        parse_fn_item_block(parser, FuncDefScope::Extern, false)
     }
 }
 
@@ -983,10 +983,12 @@ impl super::Parse for TypeAliasScope {
 }
 
 /// This function is used to parse items in `impl` and `extern` blocks,
-/// which only allow `fn` definitions.
+/// which only allow `fn` definitions (and, in `impl` blocks, associated
+/// `const` items).
 fn parse_fn_item_block<S: TokenStream>(
     parser: &mut Parser<S>,
     fn_def_scope: FuncDefScope,
+    allow_consts: bool,
 ) -> Result<(), Recovery<ErrProof>> {
     parser.bump_expected(SyntaxKind::LBrace);
     loop {
@@ -1006,8 +1008,14 @@ fn parse_fn_item_block<S: TokenStream>(
 
         if is_fn_head {
             parser.parse_cp(FuncScope::new(fn_def_scope), checkpoint)?;
+        } else if allow_consts && parser.current_kind() == Some(SyntaxKind::ConstKw) {
+            parser.parse_cp(TraitConstItemScope::default(), checkpoint)?;
         } else {
-            let proof = parser.error("only `fn` is allowed in this block");
+            let proof = if allow_consts {
+                parser.error("only `fn` or `const` is allowed in this block")
+            } else {
+                parser.error("only `fn` is allowed in this block")
+            };
             if parser.current_kind() == Some(SyntaxKind::ConstKw) {
                 parser.bump();
             }

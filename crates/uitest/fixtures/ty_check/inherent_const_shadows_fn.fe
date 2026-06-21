@@ -1,0 +1,12 @@
+// An inherent const and an inherent associated function share a name. Path
+// resolution resolves `S::make` to the const, making the function unreachable,
+// so the collision is reported at the definition site.
+struct S {}
+
+impl S {
+    const make: u256 = 1
+
+    fn make() -> S {
+        S {}
+    }
+}

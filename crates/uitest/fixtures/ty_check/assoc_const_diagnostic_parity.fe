@@ -1,0 +1,28 @@
+// Diagnostic parity: the same mistake in an inherent associated const and in a
+// trait associated const must produce the same diagnostic. This guards the
+// recurring "trait const handled X, inherent const forgot X" (and vice versa)
+// drift class: if the two paths ever diverge, this snapshot changes.
+//
+// Note: the non-const-body (CTFE) check is intentionally asymmetric and so is
+// not asserted here. Inherent and top-level const bodies are CTFE-validated,
+// but trait-impl const bodies are deliberately skipped because desugared
+// `#[event]`/`#[error]` impls rely on their synthetic bodies' errors being
+// suppressed. See `inherent_const_non_const_body.fe` for the inherent case.
+
+trait HasConst {
+    const C: u256
+}
+
+// --- type mismatch between value and declared type: both must report 8-0000,
+// --- the same plain `TypeMismatch` a top-level `const` body gets ---
+struct InhMismatch {}
+
+impl InhMismatch {
+    const C: u256 = true
+}
+
+struct TraitMismatch {}
+
+impl HasConst for TraitMismatch {
+    const C: u256 = true
+}

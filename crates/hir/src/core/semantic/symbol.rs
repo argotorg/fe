@@ -8,7 +8,10 @@
 use crate::HirDb;
 use crate::SpannedHirDb;
 use crate::hir_def::scope_graph::ScopeId;
-use crate::hir_def::{Attr, EnumVariant, FieldParent, ItemKind, TopLevelMod, Visibility};
+use crate::hir_def::{
+    Attr, AttrListId, EnumVariant, FieldParent, ItemKind, TopLevelMod, Visibility,
+};
+use crate::span::item::LazyTraitConstSpan;
 use crate::span::{DesugaredOrigin, DynLazySpan, HirOrigin, LazySpan};
 use common::diagnostics::Span;
 use common::file::File;
@@ -106,6 +109,7 @@ impl<'db> From<ScopeId<'db>> for SymbolKind {
             ScopeId::GenericParam(..) => SymbolKind::GenericParam,
             ScopeId::TraitType(..) => SymbolKind::TraitType,
             ScopeId::TraitConst(..) => SymbolKind::TraitConst,
+            ScopeId::ImplConst(..) => SymbolKind::TraitConst,
             ScopeId::FuncParam(..) => SymbolKind::FuncParam,
             ScopeId::Field(..) => SymbolKind::Field,
             ScopeId::Variant(_) => SymbolKind::Variant,
@@ -183,47 +187,38 @@ impl<'db> SymbolView<'db> {
     /// Extract doc comments from attributes.
     pub fn docs(&self, db: &'db dyn HirDb) -> Option<String> {
         let attrs = self.scope.attrs(db)?;
-        let doc_parts: Vec<String> = attrs
-            .data(db)
-            .iter()
-            .filter_map(|attr| {
-                if let Attr::DocComment(doc) = attr {
-                    Some(doc.text.data(db).clone())
-                } else {
-                    None
-                }
-            })
-            .collect();
-        if doc_parts.is_empty() {
-            None
-        } else {
-            Some(doc_parts.join("\n"))
-        }
+        docs_from_attrs(db, attrs)
     }
 
     /// Extract the definition/signature text from source.
     ///
-    /// Returns the source text from the beginning of the name's line up to
-    /// (but not including) the body block. For items without bodies, returns
-    /// the full item text.
+    /// For source-backed scopes this returns the exact signature text. For
+    /// scopes without a dedicated signature span, it falls back to the symbol
+    /// name.
     pub fn signature(&self, db: &'db dyn SpannedHirDb) -> Option<String> {
-        let item = match self.scope {
-            ScopeId::Item(item) => item,
-            _ => return self.name(db),
-        };
-        get_item_signature_with_span(db, item).map(|s| s.text)
+        if let Some(sig_span) = self.signature_with_span(db) {
+            Some(sig_span.text)
+        } else {
+            self.name(db)
+        }
     }
 
     /// Extract signature text together with its exact source byte range.
-    ///
-    /// Returns `None` for non-item scopes (fields, variants, params).
+    /// Returns `None` for scopes that do not have a source-backed signature
+    /// (fields, variants, params).
     /// The byte range satisfies: `file.text(db)[byte_start..byte_end] == text`.
     pub fn signature_with_span(&self, db: &'db dyn SpannedHirDb) -> Option<SignatureWithSpan> {
-        let item = match self.scope {
-            ScopeId::Item(item) => item,
-            _ => return None,
-        };
-        get_item_signature_with_span(db, item)
+        match self.scope {
+            ScopeId::Item(item) => get_item_signature_with_span(db, item),
+            ScopeId::TraitConst(trait_, idx) => get_assoc_const_signature_with_span(
+                db,
+                trait_.span().item_list().assoc_const(idx as usize),
+            ),
+            ScopeId::ImplConst(impl_, idx) => {
+                get_assoc_const_signature_with_span(db, impl_.span().associated_const(idx as usize))
+            }
+            _ => None,
+        }
     }
 
     /// Resolve the name span to a concrete `Span`.
@@ -297,6 +292,60 @@ pub struct SourceLocation {
     pub file: String,
     pub line: u32,
     pub column: u32,
+}
+
+pub(crate) fn docs_from_attrs<'db>(db: &'db dyn HirDb, attrs: AttrListId<'db>) -> Option<String> {
+    let doc_parts: Vec<String> = attrs
+        .data(db)
+        .iter()
+        .filter_map(|attr| {
+            if let Attr::DocComment(doc) = attr {
+                Some(doc.text.data(db).clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+    if doc_parts.is_empty() {
+        None
+    } else {
+        Some(doc_parts.join("\n"))
+    }
+}
+
+pub(crate) fn get_assoc_const_signature_with_span<'db>(
+    db: &'db dyn SpannedHirDb,
+    span: LazyTraitConstSpan<'db>,
+) -> Option<SignatureWithSpan> {
+    let full_span = span.clone().resolve(db)?;
+    let name_span = span.name().resolve(db)?;
+    let file_text = full_span.file.text(db);
+    let text = file_text.as_str();
+
+    let mut start: usize = name_span.range.start().into();
+    let mut end: usize = full_span.range.end().into();
+
+    while start > 0 && text.as_bytes().get(start - 1) != Some(&b'\n') {
+        start -= 1;
+    }
+    end = end.min(text.len());
+    if start > end {
+        start = end;
+    }
+
+    while start < end && text.as_bytes()[start].is_ascii_whitespace() {
+        start += 1;
+    }
+    while end > start && text.as_bytes()[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+
+    Some(SignatureWithSpan {
+        text: text.get(start..end)?.to_string(),
+        file: full_span.file,
+        byte_start: start,
+        byte_end: end,
+    })
 }
 
 // --- Internal helpers ---
@@ -458,6 +507,9 @@ fn item_children<'db>(db: &'db dyn HirDb, item: ItemKind<'db>) -> Vec<SymbolView
         ItemKind::Impl(i) => {
             for func in i.funcs(db) {
                 children.push(SymbolView::from_item(ItemKind::Func(func)));
+            }
+            for idx in 0..i.consts(db).len() {
+                children.push(SymbolView::new(ScopeId::ImplConst(i, idx as u16)));
             }
         }
         ItemKind::ImplTrait(it) => {

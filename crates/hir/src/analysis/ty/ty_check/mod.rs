@@ -58,7 +58,7 @@ use salsa::Update;
 use crate::analysis::place::{Place, PlaceBase};
 
 use super::{
-    assoc_const::AssocConstUse,
+    assoc_const::{AssocConstUse, InherentConstUse},
     canonical::{Canonical, Canonicalized},
     diagnostics::{
         BodyDiag, CallConstraintDiagInfo, FuncBodyDiag, StaticAssertComparisonValues,
@@ -429,14 +429,31 @@ pub fn check_const_value<'db>(
         return Vec::new();
     }
 
-    let const_owner = BodyOwner::AnonConstBody {
-        body,
-        expected: const_.ty(db),
-    };
+    const_body_ctfe_diags(db, body, const_.ty(db), false)
+}
+
+/// CTFE-validates an anonymous const body (a top-level `const` initializer or
+/// an inherent associated-const value). Mirrors the validation top-level
+/// consts get, so a body that type-checks but is not const-evaluable (e.g.
+/// `const C: u256 = ordinary_fn()`) is rejected here rather than only when
+/// referenced.
+///
+/// `allow_type_level` must be true for consts on generic impls: their value
+/// (e.g. `256 / BITS`) is legitimately parametric and is fully evaluated per
+/// instantiation, so a `TypeLevel` result is expected, not an error. A
+/// genuinely non-const body still yields `NotConstEvaluable` and is flagged
+/// regardless.
+pub(crate) fn const_body_ctfe_diags<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    expected: TyId<'db>,
+    allow_type_level: bool,
+) -> Vec<FuncBodyDiag<'db>> {
+    let owner = BodyOwner::AnonConstBody { body, expected };
     let mut diags = Vec::new();
-    match eval_body_owner_const(db, const_owner, Vec::new()) {
+    match eval_body_owner_const(db, owner, Vec::new()) {
         Ok(value) => {
-            if matches!(value.value(db), SemConstValue::TypeLevel { .. }) {
+            if !allow_type_level && matches!(value.value(db), SemConstValue::TypeLevel { .. }) {
                 diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into());
             }
         }
@@ -444,7 +461,7 @@ pub fn check_const_value<'db>(
             diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into());
         }
         Err(err) => {
-            let ty = TyId::invalid(db, invalid_cause_from_ctfe_error(db, const_owner, err));
+            let ty = TyId::invalid(db, invalid_cause_from_ctfe_error(db, owner, err));
             if let Some(diag) = ty.emit_diag(db, body.span().into()) {
                 diags.push(diag.into());
             }
@@ -2495,6 +2512,7 @@ pub struct ResolvedEffectArg<'db> {
 pub enum ConstRef<'db> {
     Const(Const<'db>),
     TraitConst(AssocConstUse<'db>),
+    InherentConst(InherentConstUse<'db>),
 }
 
 impl<'db> TyVisitable<'db> for ConstRef<'db> {
@@ -2505,6 +2523,7 @@ impl<'db> TyVisitable<'db> for ConstRef<'db> {
         match self {
             ConstRef::Const(_) => {}
             ConstRef::TraitConst(assoc) => assoc.visit_with(visitor),
+            ConstRef::InherentConst(use_) => use_.visit_with(visitor),
         }
     }
 }
@@ -2517,6 +2536,7 @@ impl<'db> TyFoldable<'db> for ConstRef<'db> {
         match self {
             ConstRef::Const(const_def) => ConstRef::Const(const_def),
             ConstRef::TraitConst(assoc) => ConstRef::TraitConst(assoc.fold_with(db, folder)),
+            ConstRef::InherentConst(use_) => ConstRef::InherentConst(use_.fold_with(db, folder)),
         }
     }
 }

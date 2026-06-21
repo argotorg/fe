@@ -320,7 +320,8 @@ mod tests {
                 if let Some(target) = resolution.first() {
                     let label = match target {
                         Target::Scope(scope) => {
-                            scope.pretty_path(db).unwrap_or_else(|| "?".to_string())
+                            hir::core::semantic::scope_qualified_path(db, *scope)
+                                .unwrap_or_else(|| "?".to_string())
                         }
                         Target::Local { ty, .. } => {
                             format!("local: {}", ty.pretty_print(db))

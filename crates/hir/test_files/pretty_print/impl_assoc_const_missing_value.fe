@@ -1,0 +1,10 @@
+// Regression: a parser-valid inherent const that omits its initializer
+// (`const MISSING: u256`) lowers to `Partial::Absent` for its value. Pretty
+// printing such a diagnosable-but-incomplete program must not panic; it prints
+// the const without a `= ...` initializer.
+pub struct Foo {}
+
+impl Foo {
+    const PRESENT: u256 = 1
+    const MISSING: u256
+}

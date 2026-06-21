@@ -5,8 +5,9 @@ use crate::{
     HirDb,
     hir_def::{
         Body, Enum, EnumVariant, ExprId, FieldDefListId, FieldParent, FuncParamListId,
-        FuncParamName, GenericParamListId, GenericParamOwner, HirIngot, ItemKind, TopLevelMod,
-        TrackedItemId, TrackedItemVariant, Trait, Use, VariantDefListId, VariantKind, Visibility,
+        FuncParamName, GenericParamListId, GenericParamOwner, HirIngot, Impl, ItemKind,
+        TopLevelMod, TrackedItemId, TrackedItemVariant, Trait, Use, VariantDefListId, VariantKind,
+        Visibility,
         scope_graph::{EdgeKind, Scope, ScopeEdge, ScopeGraph, ScopeId},
     },
 };
@@ -235,6 +236,7 @@ impl<'db> ScopeGraphBuilder<'db> {
                     inner.into(),
                     inner.generic_params(self.db),
                 );
+                self.add_impl_const_scope(item_node, inner);
                 self.graph
                     .add_edge(item_node, item_node, EdgeKind::self_ty());
                 EdgeKind::anon()
@@ -464,6 +466,22 @@ impl<'db> ScopeGraphBuilder<'db> {
         for (i, assoc_const) in trait_.consts(self.db).iter().enumerate() {
             let scope_id = ScopeId::TraitConst(trait_, i as u16);
             let scope = Scope::new(scope_id, Visibility::Private);
+            let const_node = self.graph.push(scope_id, scope);
+
+            self.graph.add_lex_edge(const_node, parent_node);
+            let kind = assoc_const
+                .name
+                .to_opt()
+                .map(EdgeKind::value)
+                .unwrap_or_else(EdgeKind::anon);
+            self.graph.add_edge(parent_node, const_node, kind)
+        }
+    }
+
+    fn add_impl_const_scope(&mut self, parent_node: NodeId, impl_: Impl<'db>) {
+        for (i, assoc_const) in impl_.consts(self.db).iter().enumerate() {
+            let scope_id = ScopeId::ImplConst(impl_, i as u16);
+            let scope = Scope::new(scope_id, assoc_const.vis);
             let const_node = self.graph.push(scope_id, scope);
 
             self.graph.add_lex_edge(const_node, parent_node);

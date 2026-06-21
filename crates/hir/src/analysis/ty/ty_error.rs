@@ -93,7 +93,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
             && let Ok(resolved) = resolve_path(self.db, path, ctxt.scope(), self.assumptions, true)
         {
             let is_const_like = match resolved {
-                PathRes::Const(..) | PathRes::TraitConst(..) => true,
+                PathRes::Const(..) | PathRes::TraitConst(..) | PathRes::InherentConst(..) => true,
                 PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
                     matches!(ty.data(self.db), TyData::ConstTy(_))
                 }

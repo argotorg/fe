@@ -27,7 +27,9 @@ fn def_scope_for_vis<'db>(db: &'db dyn HirAnalysisDb, scope: ScopeId<'db>) -> Op
             }
         }
         ScopeId::Item(_) => scope.parent(db),
-        ScopeId::Field(..) | ScopeId::Variant(..) => {
+        // Like associated functions: private consts are visible within the
+        // module containing the impl, not just inside the impl block.
+        ScopeId::ImplConst(..) | ScopeId::Field(..) | ScopeId::Variant(..) => {
             let parent_item = scope.item();
             ScopeId::Item(parent_item).parent(db)
         }

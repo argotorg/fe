@@ -77,6 +77,15 @@ impl<const BITS: u256, const SALT: u256> Copy for StoragePackedArray<BITS, SALT>
 impl<const BITS: u256, const SALT: u256> StoragePackedArray<BITS, SALT>
     where PackedBits<BITS>: ValidPackedBits
 {
+    /// Number of lanes packed into each 256-bit storage slot.
+    const LANES_PER_SLOT: u256 = 256 / BITS
+
+    /// Mask covering the low `BITS` bits of a lane.
+    const LANE_MASK: u256 = (1 << BITS) - 1
+
+    /// First storage slot of the array's region.
+    const BASE_SLOT: u256 = keccak(SALT)
+
     pub(ingot) fn new_unchecked() -> Self {
         Self { seal: StoragePackedArraySeal {} }
     }
@@ -91,11 +100,9 @@ impl<const BITS: u256, const SALT: u256> StoragePackedArray<BITS, SALT>
     #[arithmetic(unchecked)]
     #[inline(always)]
     pub fn get(self, _ i: u256) -> u256 {
-        let lanes_per_slot: u256 = 256 / BITS
-        let lane_mask: u256 = (1 << BITS) - 1
-        let slot: u256 = keccak(SALT) + (i / lanes_per_slot)
-        let bit_pos: u256 = (i % lanes_per_slot) * BITS
-        (sload(slot) >> bit_pos) & lane_mask
+        let slot: u256 = Self::BASE_SLOT + (i / Self::LANES_PER_SLOT)
+        let bit_pos: u256 = (i % Self::LANES_PER_SLOT) * BITS
+        (sload(slot) >> bit_pos) & Self::LANE_MASK
     }
 
     /// Overwrite the lane at index `i` with `value`. Bits above `BITS` in
@@ -103,32 +110,27 @@ impl<const BITS: u256, const SALT: u256> StoragePackedArray<BITS, SALT>
     #[arithmetic(unchecked)]
     #[inline(always)]
     pub fn set(mut self, i: u256, value: u256) {
-        let lanes_per_slot: u256 = 256 / BITS
-        let lane_mask: u256 = (1 << BITS) - 1
-        let slot: u256 = keccak(SALT) + (i / lanes_per_slot)
-        let bit_pos: u256 = (i % lanes_per_slot) * BITS
-        let lane_mask_shifted: u256 = lane_mask << bit_pos
+        let slot: u256 = Self::BASE_SLOT + (i / Self::LANES_PER_SLOT)
+        let bit_pos: u256 = (i % Self::LANES_PER_SLOT) * BITS
+        let lane_mask_shifted: u256 = Self::LANE_MASK << bit_pos
         let cleared: u256 = sload(slot) & (U256_MASK ^ lane_mask_shifted)
-        let inserted: u256 = (value & lane_mask) << bit_pos
+        let inserted: u256 = (value & Self::LANE_MASK) << bit_pos
         sstore(slot: slot, value: cleared | inserted)
     }
 
     /// Linear search in `[start, end)` for the first lane equal to `needle`.
     ///
-    /// Reads one SLOAD per slot and then scans up to `lanes_per_slot` lanes
-    /// from the in-register word, amortizing storage access across
+    /// Reads one SLOAD per slot and then scans up to `Self::LANES_PER_SLOT`
+    /// lanes from the in-register word, amortizing storage access across
     /// consecutive indices.
     #[arithmetic(unchecked)]
     pub fn search(self, needle: u256, start: u256, end: u256) -> Option<u256> {
-        let lanes_per_slot: u256 = 256 / BITS
-        let lane_mask: u256 = (1 << BITS) - 1
-        let base: u256 = keccak(SALT)
         let mut i: u256 = start
         while i < end {
-            let word: u256 = sload(base + (i / lanes_per_slot))
-            let mut lane: u256 = i % lanes_per_slot
-            while lane < lanes_per_slot && i < end {
-                if ((word >> (lane * BITS)) & lane_mask) == needle {
+            let word: u256 = sload(Self::BASE_SLOT + (i / Self::LANES_PER_SLOT))
+            let mut lane: u256 = i % Self::LANES_PER_SLOT
+            while lane < Self::LANES_PER_SLOT && i < end {
+                if ((word >> (lane * BITS)) & Self::LANE_MASK) == needle {
                     return Option::Some(i)
                 }
                 lane += 1

@@ -534,6 +534,124 @@ impl<'db> Impl<'db> {
 
         out
     }
+
+    /// Declaration diagnostics for associated consts in inherent impl blocks:
+    /// every const must have a value, and body checking runs in `BodyAnalysisPass`.
+    pub fn diags_assoc_consts(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        use ty::diagnostics::ImplDiag;
+
+        let mut diags = Vec::new();
+        let assumptions = constraints_for(db, self.into());
+        let target_enum = self
+            .admissible_inherent_impl_ty(db)
+            .and_then(|ty| ty.as_enum(db));
+        let mut seen: rustc_hash::FxHashMap<IdentId<'db>, DynLazySpan<'db>> = Default::default();
+        for impl_const in self.assoc_consts(db) {
+            let Some(name) = impl_const.name(db) else {
+                continue;
+            };
+
+            let name_span: DynLazySpan = impl_const.span().name().into();
+            // Duplicate within this same impl block.
+            if let Some(first_span) = seen.get(&name) {
+                diags.push(
+                    ImplDiag::InherentConstConflict {
+                        primary: name_span.clone(),
+                        conflict_with: first_span.clone(),
+                        const_name: name,
+                    }
+                    .into(),
+                );
+                continue;
+            }
+            seen.insert(name, name_span.clone());
+
+            // Conflict with an overlapping *other* inherent impl block. Caught
+            // here so an unreferenced duplicate is still diagnosed (path
+            // resolution would otherwise only report it at a use site).
+            if let Some(other) =
+                crate::analysis::name_resolution::earliest_conflicting_inherent_const_impl(
+                    db, self, name,
+                )
+                && let Some(conflict_with) = other
+                    .assoc_consts(db)
+                    .find(|c| c.name(db) == Some(name))
+                    .map(|c| c.span().name().into())
+            {
+                diags.push(
+                    ImplDiag::InherentConstConflict {
+                        primary: name_span,
+                        conflict_with,
+                        const_name: name,
+                    }
+                    .into(),
+                );
+                continue;
+            }
+
+            // A const sharing a variant's name could never be referenced
+            // (variants take precedence in path resolution), so reject it.
+            if let Some(enum_) = target_enum
+                && let Some(variant) = enum_.variants(db).find(|v| v.name(db) == Some(name))
+            {
+                let variant_span = EnumVariant::new(enum_, variant.idx).span().name().into();
+                diags.push(
+                    ImplDiag::InherentConstShadowsVariant {
+                        primary: name_span,
+                        variant_span,
+                        const_name: name,
+                    }
+                    .into(),
+                );
+                continue;
+            }
+
+            // A const that shares a name with an inherent function shadows it:
+            // `S::name` resolves to the const, so the function is unreachable.
+            if let Some(fn_span) = name_resolution::shadowed_inherent_fn_for_const(db, self, name) {
+                diags.push(
+                    ImplDiag::InherentConstShadowsFn {
+                        primary: name_span,
+                        fn_span,
+                        const_name: name,
+                    }
+                    .into(),
+                );
+                continue;
+            }
+
+            if impl_const.value_body(db).is_none() {
+                diags.push(
+                    ImplDiag::InherentConstMissingValue {
+                        primary: impl_const.span().ty().into(),
+                        const_name: name,
+                    }
+                    .into(),
+                );
+                continue;
+            }
+
+            // Report unresolvable/invalid type annotations; checking the body
+            // against an invalid expected type would only produce noise.
+            if let Some(hir_ty) = impl_const.hir_ty(db) {
+                let ty_diags = ty::ty_error::collect_hir_ty_diags(
+                    db,
+                    self.scope(),
+                    hir_ty,
+                    impl_const.span().ty(),
+                    assumptions,
+                );
+                if !ty_diags.is_empty() {
+                    diags.extend(ty_diags);
+                }
+            }
+
+            // The const value body is type-checked by `BodyAnalysisPass`, which
+            // surfaces a value/declared-type mismatch as a plain `TypeMismatch`
+            // (same as a top-level `const`); nothing is reported for it here.
+        }
+        diags
+    }
 }
 
 impl<'db> ImplTrait<'db> {
@@ -716,6 +834,10 @@ impl<'db> ImplTrait<'db> {
                 );
             }
         }
+
+        // Const value bodies are type-checked by the body analysis pass
+        // (`check_impl_trait_const_bodies`), which surfaces a value/declared-type
+        // mismatch as a plain `TypeMismatch`, same as a top-level `const`.
 
         diags
     }
@@ -1593,6 +1715,7 @@ impl<'db> Diagnosable<'db> for Impl<'db> {
 
     fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
         let mut out = self.diags_preconditions(db);
+        out.extend(self.diags_assoc_consts(db));
         out.extend(GenericParamOwner::Impl(self).diags(db));
         out
     }

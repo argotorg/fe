@@ -1,0 +1,23 @@
+enum E {
+    A,
+    B,
+}
+
+impl E {
+    const A: u256 = 1
+}
+
+struct S {}
+
+impl S {
+    const C: u256 = 1
+    const C: u256 = 2
+}
+
+fn variant_still_wins() -> E {
+    E::A
+}
+
+fn first_const_wins() -> u256 {
+    S::C
+}

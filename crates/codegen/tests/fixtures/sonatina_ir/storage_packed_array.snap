@@ -332,14 +332,14 @@ func inline(always) private %get(v0.i256) -> i256 {
         jump block1;
 
     block1:
-        v9.i256 = evm_udiv v0 32.i256;
-        v10.i256 = add 18569430475105882587588266137607568536673111973893317399460219858819262702947.i256 v9;
-        v11.i256 = evm_umod v0 32.i256;
-        v12.i256 = mul v11 8.i256;
-        v13.i256 = evm_sload v10;
-        v14.i256 = shr v12 v13;
-        v15.i256 = and v14 255.i256;
-        return v15;
+        v4.i256 = evm_udiv v0 32.i256;
+        v5.i256 = add 18569430475105882587588266137607568536673111973893317399460219858819262702947.i256 v4;
+        v6.i256 = evm_umod v0 32.i256;
+        v8.i256 = mul v6 8.i256;
+        v9.i256 = evm_sload v5;
+        v10.i256 = shr v8 v9;
+        v12.i256 = and v10 255.i256;
+        return v12;
 }
 
 func private %get_status(v0.i256) -> i256 {
@@ -466,7 +466,6 @@ func private %search(v0.i256, v1.i256, v2.i256) -> @layout_5 {
     block0:
         v3.*i256 = alloca i256;
         v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
         jump block1;
 
     block1:
@@ -474,64 +473,62 @@ func private %search(v0.i256, v1.i256, v2.i256) -> @layout_5 {
         jump block2;
 
     block2:
-        v14.i256 = mload v3 i256;
-        v16.i1 = lt v14 v2;
-        br v16 block3 block4;
+        v6.i256 = mload v3 i256;
+        v8.i1 = lt v6 v2;
+        br v8 block3 block4;
 
     block3:
-        v17.i256 = mload v3 i256;
-        v19.i256 = evm_udiv v17 32.i256;
-        v21.i256 = add 18569430475105882587588266137607568536673111973893317399460219858819262702947.i256 v19;
-        v22.i256 = evm_sload v21;
-        v23.i256 = mload v3 i256;
-        v24.i256 = evm_umod v23 32.i256;
-        mstore v4 v24 i256;
+        v11.i256 = mload v3 i256;
+        v12.i256 = evm_udiv v11 32.i256;
+        v13.i256 = add 18569430475105882587588266137607568536673111973893317399460219858819262702947.i256 v12;
+        v14.i256 = evm_sload v13;
+        v15.i256 = mload v3 i256;
+        v16.i256 = evm_umod v15 32.i256;
+        mstore v4 v16 i256;
         jump block5;
 
     block4:
-        v25.@layout_5 = enum.make @layout_5 #None;
-        return v25;
+        v17.@layout_5 = enum.make @layout_5 #None;
+        return v17;
 
     block5:
-        mstore v5 32.i256 i256;
-        v26.i256 = mload v4 i256;
-        v27.i256 = mload v5 i256;
-        v28.i1 = lt v26 v27;
-        br v28 block8 block7;
+        v18.i256 = mload v4 i256;
+        v19.i1 = lt v18 32.i256;
+        br v19 block8 block7;
 
     block6:
-        v29.i256 = mload v4 i256;
-        v30.i256 = mul v29 8.i256;
-        v32.i256 = shr v30 v22;
-        v34.i256 = and v32 255.i256;
-        v36.i1 = eq v34 v0;
-        br v36 block9 block10;
+        v21.i256 = mload v4 i256;
+        v22.i256 = mul v21 8.i256;
+        v24.i256 = shr v22 v14;
+        v26.i256 = and v24 255.i256;
+        v28.i1 = eq v26 v0;
+        br v28 block9 block10;
 
     block7:
         jump block2;
 
     block8:
-        v37.i256 = mload v3 i256;
-        v39.i1 = lt v37 v2;
-        br v39 block6 block7;
+        v29.i256 = mload v3 i256;
+        v31.i1 = lt v29 v2;
+        br v31 block6 block7;
 
     block9:
-        v40.i256 = mload v3 i256;
-        v41.@layout_5 = enum.make @layout_5 #Some v40;
-        return v41;
+        v32.i256 = mload v3 i256;
+        v33.@layout_5 = enum.make @layout_5 #Some v32;
+        return v33;
 
     block10:
         jump block11;
 
     block11:
-        v42.i256 = ptr_to_int v4 i256;
-        v43.i256 = mload v42 i256;
-        v44.i256 = add v43 1.i256;
-        mstore v42 v44 i256;
-        v45.i256 = ptr_to_int v3 i256;
-        v46.i256 = mload v45 i256;
-        v47.i256 = add v46 1.i256;
-        mstore v45 v47 i256;
+        v34.i256 = ptr_to_int v4 i256;
+        v36.i256 = mload v34 i256;
+        v37.i256 = add v36 1.i256;
+        mstore v34 v37 i256;
+        v38.i256 = ptr_to_int v3 i256;
+        v39.i256 = mload v38 i256;
+        v40.i256 = add v39 1.i256;
+        mstore v38 v40 i256;
         jump block5;
 }
 
@@ -558,18 +555,18 @@ func inline(always) private %set(v0.objref<@layout_7>, v1.i256, v2.i256) {
         jump block1;
 
     block1:
-        v11.i256 = evm_udiv v1 32.i256;
-        v12.i256 = add 18569430475105882587588266137607568536673111973893317399460219858819262702947.i256 v11;
-        v13.i256 = evm_umod v1 32.i256;
-        v14.i256 = mul v13 8.i256;
-        v15.i256 = shl v14 255.i256;
-        v16.i256 = evm_sload v12;
-        v18.i256 = xor -1.i256 v15;
-        v19.i256 = and v16 v18;
-        v21.i256 = and v2 255.i256;
-        v22.i256 = shl v14 v21;
-        v23.i256 = or v19 v22;
-        evm_sstore v12 v23;
+        v6.i256 = evm_udiv v1 32.i256;
+        v7.i256 = add 18569430475105882587588266137607568536673111973893317399460219858819262702947.i256 v6;
+        v8.i256 = evm_umod v1 32.i256;
+        v10.i256 = mul v8 8.i256;
+        v12.i256 = shl v10 255.i256;
+        v13.i256 = evm_sload v7;
+        v15.i256 = xor -1.i256 v12;
+        v16.i256 = and v13 v15;
+        v18.i256 = and v2 255.i256;
+        v19.i256 = shl v10 v18;
+        v20.i256 = or v16 v19;
+        evm_sstore v7 v20;
         return;
 }
 

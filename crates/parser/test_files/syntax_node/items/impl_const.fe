@@ -1,0 +1,18 @@
+impl Foo {
+    const SIZE: usize = 4
+    pub const LIMIT: usize = 8
+    pub(ingot) const INGOT_LIMIT: usize = 16
+
+    fn size(self) -> usize {
+        Self::SIZE
+    }
+}
+
+impl<const N: u256> Bar<N> {
+    const DOUBLE: u256 = N * 2
+    const MASK: u256 = (1 << N) - 1
+
+    const fn double(self) -> u256 {
+        Self::DOUBLE
+    }
+}
