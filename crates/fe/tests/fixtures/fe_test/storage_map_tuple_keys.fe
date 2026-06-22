@@ -1,0 +1,126 @@
+msg TupleKeyMsg {
+    #[selector = 1]
+    Put3 { a: u256, b: u256, c: u256, value: u256 } -> u256,
+
+    #[selector = 2]
+    Read3 { a: u256, b: u256, c: u256 } -> u256,
+
+    #[selector = 3]
+    Put4 { a: u256, b: u256, c: u256, d: u256, value: u256 } -> u256,
+
+    #[selector = 4]
+    Read4 { a: u256, b: u256, c: u256, d: u256 } -> u256,
+
+    #[selector = 5]
+    Put5 { a: u256, b: u256, c: u256, d: u256, e: u256, value: u256 } -> u256,
+
+    #[selector = 6]
+    Read5 { a: u256, b: u256, c: u256, d: u256, e: u256 } -> u256,
+
+    #[selector = 7]
+    Put6 { a: u256, b: u256, c: u256, d: u256, e: u256, f: u256, value: u256 } -> u256,
+
+    #[selector = 8]
+    Read6 { a: u256, b: u256, c: u256, d: u256, e: u256, f: u256 } -> u256,
+}
+
+struct Store {
+    triples: StorageMap<(u256, u256, u256), u256>,
+    quartets: StorageMap<(u256, u256, u256, u256), u256>,
+    quintets: StorageMap<(u256, u256, u256, u256, u256), u256>,
+    sextets: StorageMap<(u256, u256, u256, u256, u256, u256), u256>,
+}
+
+pub contract C {
+    mut store: Store
+
+    init() uses (mut store) {}
+
+    recv TupleKeyMsg {
+        Put3 { a, b, c, value } -> u256 uses (mut store) {
+            store.triples.set(key: (a, b, c), value: value)
+            store.triples.get(key: (a, b, c))
+        }
+
+        Read3 { a, b, c } -> u256 uses (store) {
+            store.triples.get(key: (a, b, c))
+        }
+
+        Put4 { a, b, c, d, value } -> u256 uses (mut store) {
+            store.quartets.set(key: (a, b, c, d), value: value)
+            store.quartets.get(key: (a, b, c, d))
+        }
+
+        Read4 { a, b, c, d } -> u256 uses (store) {
+            store.quartets.get(key: (a, b, c, d))
+        }
+
+        Put5 { a, b, c, d, e, value } -> u256 uses (mut store) {
+            store.quintets.set(key: (a, b, c, d, e), value: value)
+            store.quintets.get(key: (a, b, c, d, e))
+        }
+
+        Read5 { a, b, c, d, e } -> u256 uses (store) {
+            store.quintets.get(key: (a, b, c, d, e))
+        }
+
+        Put6 { a, b, c, d, e, f, value } -> u256 uses (mut store) {
+            store.sextets.set(key: (a, b, c, d, e, f), value: value)
+            store.sextets.get(key: (a, b, c, d, e, f))
+        }
+
+        Read6 { a, b, c, d, e, f } -> u256 uses (store) {
+            store.sextets.get(key: (a, b, c, d, e, f))
+        }
+    }
+}
+
+#[test]
+fn test_storage_map_tuple_keys() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 0)
+    assert!(c.inner != 0)
+
+    let v3: u256 = evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: TupleKeyMsg::Put3 { a: 1, b: 2, c: 3, value: 33 },
+    )
+    assert!(v3 == 33)
+    let v3: u256 = evm.call(addr: c, gas: 1000000, value: 0, message: TupleKeyMsg::Read3 { a: 1, b: 2, c: 3 })
+    assert!(v3 == 33)
+    let v3_missing: u256 = evm.call(addr: c, gas: 1000000, value: 0, message: TupleKeyMsg::Read3 { a: 1, b: 2, c: 4 })
+    assert!(v3_missing == 0)
+
+    let v4: u256 = evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: TupleKeyMsg::Put4 { a: 4, b: 5, c: 6, d: 7, value: 44 },
+    )
+    assert!(v4 == 44)
+    let v4: u256 = evm.call(addr: c, gas: 1000000, value: 0, message: TupleKeyMsg::Read4 { a: 4, b: 5, c: 6, d: 7 })
+    assert!(v4 == 44)
+
+    let v5: u256 = evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: TupleKeyMsg::Put5 { a: 8, b: 9, c: 10, d: 11, e: 12, value: 55 },
+    )
+    assert!(v5 == 55)
+    let v5: u256 = evm.call(addr: c, gas: 1000000, value: 0, message: TupleKeyMsg::Read5 { a: 8, b: 9, c: 10, d: 11, e: 12 })
+    assert!(v5 == 55)
+
+    let v6: u256 = evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: TupleKeyMsg::Put6 { a: 13, b: 14, c: 15, d: 16, e: 17, f: 18, value: 66 },
+    )
+    assert!(v6 == 66)
+    let v6: u256 = evm.call(addr: c, gas: 1000000, value: 0, message: TupleKeyMsg::Read6 { a: 13, b: 14, c: 15, d: 16, e: 17, f: 18 })
+    assert!(v6 == 66)
+    let v6_missing: u256 = evm.call(addr: c, gas: 1000000, value: 0, message: TupleKeyMsg::Read6 { a: 13, b: 14, c: 15, d: 16, e: 17, f: 19 })
+    assert!(v6_missing == 0)
+}
