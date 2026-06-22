@@ -24,7 +24,9 @@ pub mod index;
 pub mod reference;
 pub mod symbol;
 use crate::analysis::HirAnalysisDb;
-use crate::analysis::ty::corelib::{resolve_core_trait, resolve_lib_func_path};
+use crate::analysis::ty::corelib::{
+    resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path,
+};
 use crate::analysis::ty::diagnostics::{ImplDiag, TyLowerDiag};
 use crate::analysis::ty::fold::TyFoldable;
 use crate::analysis::ty::normalize::normalize_ty;
@@ -1644,6 +1646,10 @@ pub struct ContractFieldLayoutInfo<'db> {
     /// True when this field is a selected `EffectHandle` whose `SPACE` did not
     /// resolve to a concrete address space; the field is reported as an error.
     pub handle_space_unresolved: bool,
+    /// True when this field contains a `StorageMap` whose value type contains
+    /// another `StorageMap`. Nested storage maps cannot derive per-key inner
+    /// roots soundly and are reported as an error.
+    pub nested_storage_map_value: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
@@ -2020,6 +2026,80 @@ struct ContractFieldLayoutPlan<'db> {
     /// True when the field is a selected `EffectHandle` whose `const SPACE` did
     /// not resolve to a concrete address space (so its slot space is unknown).
     handle_space_unresolved: bool,
+    /// True when this field contains a `StorageMap` whose value type contains
+    /// another `StorageMap`.
+    nested_storage_map_value: bool,
+}
+
+fn resolve_storage_map_adt<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+) -> Option<AdtDef<'db>> {
+    let storage_map = resolve_lib_type_path(db, scope, "std::evm::storage_map::StorageMap")
+        .or_else(|| resolve_lib_type_path(db, scope, "std::evm::StorageMap"))?;
+    match storage_map.base_ty(db).data(db) {
+        TyData::TyBase(TyBase::Adt(adt)) => Some(*adt),
+        _ => None,
+    }
+}
+
+fn ty_base_is_storage_map<'db>(
+    db: &'db dyn HirAnalysisDb,
+    base: TyId<'db>,
+    storage_map_adt: AdtDef<'db>,
+) -> bool {
+    matches!(base.data(db), TyData::TyBase(TyBase::Adt(adt)) if *adt == storage_map_adt)
+}
+
+fn ty_contains_storage_map<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    storage_map_adt: AdtDef<'db>,
+    visiting: &mut FxHashSet<TyId<'db>>,
+) -> bool {
+    if !visiting.insert(ty) {
+        return false;
+    }
+
+    let (base, args) = ty.decompose_ty_app(db);
+    let found = ty_base_is_storage_map(db, base, storage_map_adt)
+        || args
+            .iter()
+            .any(|arg| ty_contains_storage_map(db, *arg, storage_map_adt, visiting))
+        || ty
+            .field_types(db)
+            .into_iter()
+            .any(|field_ty| ty_contains_storage_map(db, field_ty, storage_map_adt, visiting));
+
+    visiting.remove(&ty);
+    found
+}
+
+fn ty_has_nested_storage_map_value<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    storage_map_adt: AdtDef<'db>,
+    visiting: &mut FxHashSet<TyId<'db>>,
+) -> bool {
+    if !visiting.insert(ty) {
+        return false;
+    }
+
+    let (base, args) = ty.decompose_ty_app(db);
+    let found = if ty_base_is_storage_map(db, base, storage_map_adt) {
+        args.get(1).copied().is_some_and(|value_ty| {
+            ty_contains_storage_map(db, value_ty, storage_map_adt, visiting)
+        })
+    } else {
+        args.iter()
+            .any(|arg| ty_has_nested_storage_map_value(db, *arg, storage_map_adt, visiting))
+            || ty.field_types(db).into_iter().any(|field_ty| {
+                ty_has_nested_storage_map_value(db, field_ty, storage_map_adt, visiting)
+            })
+    };
+
+    visiting.remove(&ty);
+    found
 }
 
 /// Result of probing a contract field's `EffectHandle` implementation.
@@ -2188,6 +2268,15 @@ impl<'db> ContractFieldEffectHandleCx<'db> {
             target_ty,
             handle_space_unresolved,
         } = self.metadata(db, field_ty);
+        let nested_storage_map_value =
+            resolve_storage_map_adt(db, self.scope).is_some_and(|storage_map_adt| {
+                ty_has_nested_storage_map_value(
+                    db,
+                    field_ty,
+                    storage_map_adt,
+                    &mut FxHashSet::default(),
+                )
+            });
         // Provider slot order is defined by the normalized Target type. Contract
         // layout must not synthesize a positional equivalence with the wrapper.
         let slot_basis_ty = if is_provider { target_ty } else { field_ty };
@@ -2278,6 +2367,7 @@ impl<'db> ContractFieldEffectHandleCx<'db> {
             explicit_const_hole,
             non_slot_const_hole,
             handle_space_unresolved,
+            nested_storage_map_value,
         }
     }
 }
@@ -2535,6 +2625,7 @@ impl<'db> Contract<'db> {
                     explicit_const_hole: plan.explicit_const_hole,
                     non_slot_const_hole: plan.non_slot_const_hole,
                     handle_space_unresolved: plan.handle_space_unresolved,
+                    nested_storage_map_value: plan.nested_storage_map_value,
                 },
             );
         }
@@ -5569,6 +5660,12 @@ impl<'db> FieldView<'db> {
             // A defaulted const `_` that is not a storage slot.
             if info.non_slot_const_hole {
                 out.push(TyLowerDiag::ContractFieldNonSlotConstHole { span, ty }.into());
+                return out;
+            }
+            // A `StorageMap` value cannot itself contain another `StorageMap`;
+            // use a composite key so every value has a concrete storage root.
+            if info.nested_storage_map_value {
+                out.push(TyLowerDiag::NestedStorageMapValue { span, ty }.into());
                 return out;
             }
         }
