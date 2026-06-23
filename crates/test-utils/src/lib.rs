@@ -8,7 +8,7 @@ use tracing::{
     level_filters::LevelFilter,
     subscriber::{DefaultGuard, set_default},
 };
-use tracing_subscriber::{EnvFilter, layer::SubscriberExt};
+use tracing_subscriber::{EnvFilter, fmt::TestWriter, layer::SubscriberExt};
 use tracing_tree::HierarchicalLayer;
 
 pub fn setup_tracing_with_filter(filter: &str) -> DefaultGuard {
@@ -19,6 +19,30 @@ pub fn setup_tracing_with_filter(filter: &str) -> DefaultGuard {
 pub fn setup_tracing(level: Level) -> DefaultGuard {
     let subscriber = default_subscriber().with(LevelFilter::from_level(level));
     set_default(subscriber)
+}
+
+pub fn setup_test_tracing() -> DefaultGuard {
+    let subscriber = test_subscriber();
+    set_default(subscriber)
+}
+
+pub fn test_subscriber() -> impl Subscriber + Send + Sync {
+    tracing_subscriber::registry()
+        .with(
+            EnvFilter::builder()
+                .with_default_directive(LevelFilter::INFO.into())
+                .from_env_lossy(),
+        )
+        .with(
+            HierarchicalLayer::new(2)
+                .with_targets(true)
+                .with_thread_ids(true)
+                .with_thread_names(true)
+                .with_indent_lines(true)
+                .with_bracketed_fields(true)
+                .with_ansi(false)
+                .with_writer(TestWriter::default()),
+        )
 }
 
 fn default_subscriber() -> impl Subscriber + Send + Sync {

@@ -141,7 +141,9 @@ mod tests {
     use service::LspActorService;
     use std::ops::ControlFlow;
     use tower::Service;
-    use tracing::info;
+    use tracing::{info, subscriber::set_global_default};
+
+    static INIT: std::sync::Once = std::sync::Once::new();
 
     #[derive(Debug)]
     enum Initialize {}
@@ -164,8 +166,16 @@ mod tests {
         initialized: bool,
     }
 
+    fn init_global_test_tracing() {
+        INIT.call_once(|| {
+            let subscriber = test_utils::test_subscriber();
+            let _ = set_global_default(subscriber);
+        });
+    }
+
     #[tokio::test]
     async fn test_lsp_actor() {
+        init_global_test_tracing();
         let actor_ref = ActorBuilder::new()
             .with_state_init(|| {
                 let initial_state = TestState { initialized: false };
