@@ -125,11 +125,11 @@ impl StorageKey for bool {
 /// prevent collisions.
 struct StorageMapSeal {}
 
-pub struct StorageMap<K, V, const SALT: u256 = _> {
+pub struct StorageMap<K, V: WordRepr, const SALT: u256 = _> {
     seal: StorageMapSeal,
 }
 
-impl<K, V, const SALT: u256> Copy for StorageMap<K, V, SALT> {}
+impl<K, V: WordRepr, const SALT: u256> Copy for StorageMap<K, V, SALT> {}
 
 #[inline(always)]
 fn storagemap_storage_slot_with_salt<K>(key: K, salt: u256) -> u256
