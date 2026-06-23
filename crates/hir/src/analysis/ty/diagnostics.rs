@@ -215,13 +215,6 @@ pub enum TyLowerDiag<'db> {
         span: DynLazySpan<'db>,
         ty: TyId<'db>,
     },
-
-    /// A contract field contains a `StorageMap` whose value type contains
-    /// another `StorageMap`. Use a composite key instead.
-    NestedStorageMapValue {
-        span: DynLazySpan<'db>,
-        ty: TyId<'db>,
-    },
 }
 
 impl TyLowerDiag<'_> {
@@ -269,7 +262,6 @@ impl TyLowerDiag<'_> {
             Self::ContractFieldNonSlotConstHole { .. } => 40,
             Self::ContractFieldHandleSpaceUnresolved { .. } => 41,
             Self::ContractFieldExplicitConstHole { .. } => 42,
-            Self::NestedStorageMapValue { .. } => 43,
         }
     }
 }

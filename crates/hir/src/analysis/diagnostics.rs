@@ -1965,34 +1965,6 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 }
             }
 
-            Self::NestedStorageMapValue { span, ty } => {
-                let mut sub_diagnostics = vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "this `StorageMap` stores another `StorageMap` as its value"
-                        .to_string(),
-                    span: span.resolve(db),
-                }];
-                if let Some(name_span) = ty.name_span(db) {
-                    let type_name = ty.base_ty(db).pretty_print(db);
-                    sub_diagnostics.push(SubDiagnostic {
-                        style: LabelStyle::Secondary,
-                        message: format!("`{type_name}` is defined here"),
-                        span: name_span.resolve(db),
-                    });
-                }
-
-                CompleteDiagnostic {
-                    severity: Severity::Error,
-                    message: "nested storage maps are not supported as contract fields"
-                        .to_string(),
-                    sub_diagnostics,
-                    notes: vec![
-                        "use a composite key such as `StorageMap<(OuterKey, InnerKey), Value>` instead".to_string(),
-                    ],
-                    error_code,
-                }
-            }
-
             Self::ConstHoleInValuePosition { span, ty } => {
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
