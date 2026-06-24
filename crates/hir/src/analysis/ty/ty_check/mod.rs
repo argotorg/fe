@@ -683,11 +683,6 @@ enum ConstPredicateOutcome<'db> {
     Requeue(env::ConstPredicateObligation<'db>),
 }
 
-enum CallConstraintBoundOwner<'db> {
-    GenericParam(GenericParamOwner<'db>, usize, usize),
-    WherePredicate(WhereClauseOwner<'db>, usize, usize),
-}
-
 impl<'db> TyChecker<'db> {
     fn string_literal_fallback(&self) -> StringFallback {
         StringFallback::Fixed
