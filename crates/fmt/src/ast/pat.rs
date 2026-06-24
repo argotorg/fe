@@ -22,7 +22,34 @@ impl ToDoc for ast::Pat {
             PatKind::PathTuple(path_tuple) => path_tuple.to_doc(ctx),
             PatKind::Record(record) => record.to_doc(ctx),
             PatKind::Or(or) => or.to_doc(ctx),
+            PatKind::QuoteHole(hole) => hole.to_doc(ctx),
         }
+    }
+}
+
+impl ToDoc for ast::QuoteHolePat {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        let hole_doc = self
+            .hole()
+            .map(|hole| hole.to_doc(ctx))
+            .unwrap_or_else(|| alloc.nil());
+
+        // The binder group is a plain name list — `${variant}(lhs)` — not
+        // a tuple, so no singleton trailing comma.
+        let Some(binders) = self.binders() else {
+            return hole_doc;
+        };
+        let names = binders
+            .iter()
+            .map(|pat| pat.to_doc(ctx))
+            .collect::<Vec<_>>();
+        let sep = alloc.text(", ");
+        hole_doc
+            .append(alloc.text("("))
+            .append(alloc.intersperse(names, sep))
+            .append(alloc.text(")"))
     }
 }
 

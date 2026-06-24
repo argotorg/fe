@@ -35,7 +35,7 @@ fn token_piece_basic<'a>(
             TokenPiece::new(text).space_after()
         }
         ImplKw => TokenPiece::new(text),
-        ForKw => TokenPiece::new(text).space_before(),
+        ForKw | AsKw => TokenPiece::new(text).space_before(),
         Eq | Arrow => TokenPiece::new(text).spaces(),
         _ => return None,
     })
@@ -76,6 +76,8 @@ fn token_doc_item_node_piece<'a>(
         piece!(ast::GenericParamList),
         piece!(ast::TypeBoundList),
         piece!(ast::SuperTraitList),
+        piece!(ast::ImplTraitAlias),
+        piece!(ast::ImplTraitWith),
         piece!(ast::WhereClause, space_before),
         piece!(ast::UsesClause, space_before),
         piece!(ast::Path, space_before),
@@ -152,7 +154,7 @@ fn where_doc<'a, N: ast::WhereClauseOwner + AstNode>(
     let alloc = &ctx.alloc;
 
     if let Some(where_clause) = node.where_clause() {
-        if where_clause.iter().next().is_none() && !has_comment_tokens(where_clause.syntax()) {
+        if where_clause_is_empty(&where_clause) && !has_comment_tokens(where_clause.syntax()) {
             return alloc.nil();
         }
 
@@ -352,6 +354,8 @@ impl ToDoc for ast::Item {
             Some(ItemKind::Enum(enum_)) => enum_.to_doc(ctx),
             Some(ItemKind::TypeAlias(type_alias)) => type_alias.to_doc(ctx),
             Some(ItemKind::Impl(impl_)) => impl_.to_doc(ctx),
+            Some(ItemKind::DeriveProviderScope(scope)) => scope.to_doc(ctx),
+            Some(ItemKind::DeriveDecl(decl)) => decl.to_doc(ctx),
             Some(ItemKind::Trait(trait_)) => trait_.to_doc(ctx),
             Some(ItemKind::ImplTrait(impl_trait)) => impl_trait.to_doc(ctx),
             Some(ItemKind::Const(const_)) => const_.to_doc(ctx),
@@ -361,6 +365,62 @@ impl ToDoc for ast::Item {
             Some(ItemKind::Msg(msg)) => msg.to_doc(ctx),
             None => ctx.alloc.nil(),
         }
+    }
+}
+
+impl ToDoc for ast::DeriveProviderScope {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        token_doc_item_like_if_comments!(self, ctx);
+
+        let attrs = attrs_doc(self, ctx);
+        let provider_path = self
+            .provider_path()
+            .map(|path| path.to_doc(ctx))
+            .unwrap_or_else(|| alloc.nil());
+        let items_doc = self
+            .item_list()
+            .map(|items| {
+                alloc
+                    .text(" ")
+                    .append(block_items_doc(items.syntax(), ast::Item::cast, ctx))
+            })
+            .unwrap_or_else(|| alloc.text(" {}"));
+
+        attrs
+            .append(alloc.text("with "))
+            .append(provider_path)
+            .append(items_doc)
+    }
+}
+
+impl ToDoc for ast::DeriveDecl {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        token_doc_item_like_if_comments!(self, ctx);
+
+        let attrs = attrs_doc(self, ctx);
+        let head_path = self
+            .head_path()
+            .map(|path| path.to_doc(ctx))
+            .unwrap_or_else(|| alloc.nil());
+        let target_path = self
+            .target_path()
+            .map(|path| path.to_doc(ctx))
+            .unwrap_or_else(|| alloc.nil());
+        let provider_path = self
+            .provider_path()
+            .map(|path| alloc.text(" using ").append(path.to_doc(ctx)))
+            .unwrap_or_else(|| alloc.nil());
+
+        attrs
+            .append(alloc.text("derive "))
+            .append(head_path)
+            .append(alloc.text(" for "))
+            .append(target_path)
+            .append(provider_path)
     }
 }
 
@@ -572,6 +632,10 @@ fn func_sig_to_doc<'a>(
 }
 
 /// Helper to build where clause document that is forced to a new line.
+fn where_clause_is_empty(where_clause: &ast::WhereClause) -> bool {
+    where_clause.iter().next().is_none() && where_clause.const_predicates().next().is_none()
+}
+
 fn where_doc_forced<'a, N: ast::WhereClauseOwner + AstNode>(
     node: &N,
     ctx: &'a RewriteContext<'a>,
@@ -579,7 +643,7 @@ fn where_doc_forced<'a, N: ast::WhereClauseOwner + AstNode>(
     let alloc = &ctx.alloc;
 
     if let Some(where_clause) = node.where_clause() {
-        if where_clause.iter().next().is_none() && !has_comment_tokens(where_clause.syntax()) {
+        if where_clause_is_empty(&where_clause) && !has_comment_tokens(where_clause.syntax()) {
             return alloc.nil();
         }
 
@@ -1330,6 +1394,19 @@ impl ToDoc for ast::ImplTrait {
             .map(|ty| alloc.text(" for ").append(ty.to_doc(ctx)))
             .unwrap_or_else(|| alloc.nil());
 
+        // Cascade selection (FCO): the optional `as Name` alias and `with <path>`
+        // permit clauses sit between the for-type and the where-clause/body,
+        // matching the parser's slot ordering.
+        let alias_doc = self
+            .alias()
+            .map(|alias| alias.to_doc(ctx))
+            .unwrap_or_else(|| alloc.nil());
+
+        let with_doc = self
+            .with_permit()
+            .map(|with| with.to_doc(ctx))
+            .unwrap_or_else(|| alloc.nil());
+
         let where_clause = where_doc(self, ctx);
 
         let items_doc = self
@@ -1342,8 +1419,28 @@ impl ToDoc for ast::ImplTrait {
             .append(generics)
             .append(trait_doc)
             .append(ty_doc)
+            .append(alias_doc)
+            .append(with_doc)
             .append(where_clause)
             .append(items_doc)
+    }
+}
+
+impl ToDoc for ast::ImplTraitAlias {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+        self.name()
+            .map(|name| alloc.text(" as ").append(alloc.text(ctx.token(&name))))
+            .unwrap_or_else(|| alloc.nil())
+    }
+}
+
+impl ToDoc for ast::ImplTraitWith {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+        self.path()
+            .map(|path| alloc.text(" with ").append(path.to_doc(ctx)))
+            .unwrap_or_else(|| alloc.nil())
     }
 }
 

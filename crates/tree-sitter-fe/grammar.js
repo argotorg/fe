@@ -35,6 +35,7 @@ module.exports = grammar({
     $._block_comment_end,
     $._generic_open,
     $._comparison_lt,
+    $._where_brace_open,
   ],
 
   word: $ => $.identifier,
@@ -70,6 +71,26 @@ module.exports = grammar({
     [$.path_segment, $.attribute],
     // recv arm pattern name can be identifier or path
     [$.recv_arm_pattern, $.path_segment],
+    // A const-predicate operand path (`T::SIZE` in `T::SIZE >= 50`) shares its
+    // leading tokens with a where_predicate type head; keep the expression and
+    // type interpretations live until the trailing operator disambiguates. The
+    // const predicate's operands are all `_where_const_no_or` (brace-free).
+    [$._where_const_no_or, $.path_segment],
+    [$._where_const_no_or, $._path],
+    [$._where_const_no_or, $._path, $.path_segment],
+    [$.self_type, $._where_const_no_or, $.path_segment],
+    [$.self_type, $._where_const_no_or, $._path, $.path_segment],
+    // `where ( .. )` is ambiguous between a tuple-type predicate and a
+    // parenthesized/tuple const-expression predicate.
+    [$.tuple_type, $.tuple_expression],
+    [$.self_type, $._expression, $.path_segment],
+    // `<T as Trait>::X` shares a prefix as a qualified-path type or expression.
+    [$.qualified_path_type, $.qualified_path_expression],
+    // A const predicate (binary/unary/call/paren expression) can also be the
+    // operand/base of a wider expression (`!x` then `(`, `a < b` then `+`);
+    // keep both live so operator/postfix precedence resolves it.
+    [$.where_const_predicate, $._where_const_no_or],
+    [$.where_const_paren_expression, $.paren_expression],
   ],
 
   rules: {
@@ -445,8 +466,27 @@ module.exports = grammar({
       field('trait', $.trait_ref),
       'for',
       field('type', $._type),
+      // Cascade selection (FCO): an optional `as Name` alias and/or an optional
+      // `with <path>` permit clause sit between the for-type and the where-
+      // clause/body, matching the compiler parser's slot ordering.
+      optional(field('alias', $.impl_trait_alias)),
+      optional(field('with', $.impl_trait_with)),
       optional($.where_clause),
       field('body', $.trait_item_list),
+    ),
+
+    // `as Name` — optional alias on a trait impl (cascade selection).
+    impl_trait_alias: $ => seq(
+      'as',
+      field('name', $.identifier),
+    ),
+
+    // `with <path>` — optional permit clause on a trait impl (cascade
+    // selection). `with` is a contextual keyword here; the path is stored
+    // unresolved.
+    impl_trait_with: $ => seq(
+      'with',
+      field('path', $.path),
     ),
 
     impl_item_list: $ => seq(
@@ -520,10 +560,16 @@ module.exports = grammar({
       $.kind_bound,
     ),
 
+    // Kind bounds: `*`, `Constraint`, `* -> *`, `* -> Constraint`,
+    // `(* -> Constraint) -> Constraint`, etc. The `Constraint` atom names the
+    // kind of saturated constraints (trait applications); `*` names the kind of
+    // types. Both may sit on either side of a `->` arrow.
     kind_bound: $ => prec.right(choice(
-      seq('*', optional(seq('->', $.kind_bound))),
+      seq($._kind_atom, optional(seq('->', $.kind_bound))),
       seq('(', $.kind_bound, ')', optional(seq('->', $.kind_bound))),
     )),
+
+    _kind_atom: $ => choice('*', 'Constraint'),
 
     // Uses external scanner token _generic_open instead of '<' to avoid
     // precedence conflict with binary_expression's '<' operator.
@@ -553,9 +599,24 @@ module.exports = grammar({
 
     where_clause: $ => prec.right(seq(
       'where',
-      sep1($.where_predicate, ','),
+      // The first predicate may be a plain-brace const predicate: a `{` right
+      // after `where` is unambiguously a predicate (a where clause needs at
+      // least one, and the item body can never sit before any predicate). Later
+      // predicates after a `,` rely on the scanner-gated `_where_brace_open` to
+      // tell a brace predicate from the item body.
+      choice($.where_predicate, $.where_const_predicate, $.where_const_predicate_block_first),
+      repeat(seq(',', choice($.where_predicate, $.where_const_predicate))),
       optional(','),
     )),
+
+    // First-position brace const predicate: `where { <expr> }`. A plain `{`
+    // (not the scanner-gated open) because in this position the brace cannot be
+    // the item body.
+    where_const_predicate_block_first: $ => seq(
+      '{',
+      $._expression,
+      '}',
+    ),
 
     // A type-bound predicate (`T: Bounds`) or the boundless constraint-
     // application form (`where Eq<T>`), where the applied trait path alone is
@@ -567,6 +628,161 @@ module.exports = grammar({
         $.type_bound_list,
       )),
     ),
+
+    // A bare const-expression predicate: `T::SIZE >= 50`, `above_threshold<T>()`,
+    // `(T::SIZE + 1) * 2 < 2000`, `!(T::SIZE == 0)`, the brace form
+    // `{ T::NAME_LEN < 100 }`, or a literal/boolean. Record-init is excluded
+    // (no-struct condition form) so a trailing `{ .. }` in `where FLAG { .. }`
+    // stays with the item body.
+    //
+    // Deliberately omits the bare top-level forms — a lone path/identifier
+    // (`where FLAG`), instantiation (`where Eq<T>`), or `self`/`Self` — because
+    // those are syntactically a type and are parsed by `where_predicate` (the
+    // type-bound / constraint-application form). Only expressions whose top
+    // shape (operator, call, unary, paren, brace, literal) a type cannot take
+    // appear here, which keeps the predicate kinds unambiguous to the parser.
+    //
+    // The brace form is the dedicated `where_const_predicate_block`, gated by
+    // the external scanner so it never steals an item body brace. None of the
+    // other forms may *begin* with `{`, so a `{` at predicate position is the
+    // item body unless the scanner has confirmed a brace predicate. That keeps
+    // a trailing comma before the body (`fn f() where P, { .. }`) unambiguous.
+    where_const_predicate: $ => choice(
+      $.where_const_or_expression,
+      $.where_const_binary_expression,
+      $.where_const_unary_expression,
+      $.where_const_call_expression,
+      $.where_const_method_call_expression,
+      $.where_const_paren_expression,
+      $.where_const_predicate_block,
+    ),
+
+    // The brace form of a const predicate, `{ <expr> }`. Opened by the external
+    // `_where_brace_open` token, which the scanner emits for a `{` only when the
+    // balanced group is followed by another `{` (the item body) — mirroring the
+    // compiler's `WhereBracePolicy::Lookahead`. A `{` that is the item body is
+    // never given this token, so the body always wins.
+    where_const_predicate_block: $ => seq(
+      $._where_brace_open,
+      $._expression,
+      '}',
+    ),
+
+    // Where-const-specific wrappers for the standalone non-binary predicate
+    // forms. Distinct nodes (not the shared `unary_expression`/`call_expression`
+    // /… which are members of `_expression`) so that reducing a standalone const
+    // predicate does NOT also keep an `_expression` interpretation alive. That
+    // matters because `_expression` includes `block`: were these shared, a `{`
+    // body brace after a where clause's trailing comma would be (wrongly) read
+    // as the start of a predicate. Each delegates to the shared form internally.
+    where_const_unary_expression: $ => prec(PREC.UNARY, seq(
+      field('operator', choice('!', '-', '~', '+')),
+      field('operand', $._expression),
+    )),
+    where_const_call_expression: $ => prec(PREC.POSTFIX, seq(
+      field('function', $._where_const_no_or),
+      field('arguments', $.call_arg_list),
+    )),
+    where_const_method_call_expression: $ => prec.left(PREC.POSTFIX, seq(
+      field('receiver', $._where_const_no_or),
+      '.',
+      field('method', $.identifier),
+      optional(field('type_arguments', $.generic_arg_list)),
+      field('arguments', $.call_arg_list),
+    )),
+    where_const_paren_expression: $ => seq(
+      '(',
+      $._expression,
+      ')',
+    ),
+
+    // Const-predicate binary/or expressions. BOTH operands exclude the brace-led
+    // atoms (block/if/match/with) so `{` never appears in the const predicate's
+    // FIRST set — a body brace after a where clause's trailing comma is then
+    // never mistaken for the start of a predicate.
+    where_const_or_expression: $ => prec.left(PREC.OR, seq(
+      field('left', $._where_const_no_or),
+      field('operator', '||'),
+      field('right', $._where_const_no_or),
+    )),
+
+    where_const_binary_expression: $ => {
+      const table = [
+        [PREC.AND, '&&'],
+        [PREC.COMPARE, choice('==', '!=', $._comparison_lt, '>', '<=', '>=')],
+        [PREC.BITOR, '|'],
+        [PREC.BITXOR, '^'],
+        [PREC.BITAND, '&'],
+        [PREC.SHIFT, choice('<<', '>>')],
+        [PREC.ADD, choice('+', '-')],
+        [PREC.MUL, choice('*', '/', '%')],
+      ];
+      return choice(
+        ...table.map(([precedence, operator]) =>
+          prec.left(precedence, seq(
+            field('left', $._where_const_no_or),
+            field('operator', operator),
+            field('right', $._where_const_no_or),
+          ))
+        ),
+        prec.right(PREC.EXP, seq(
+          field('left', $._where_const_no_or),
+          field('operator', '**'),
+          field('right', $._where_const_no_or),
+        )),
+      );
+    },
+
+    // Leading operand for a where const predicate. Every alternative's FIRST set
+    // excludes `{`, so a const predicate never *begins* with a brace; that keeps
+    // a `{` item body after a where clause's trailing comma unambiguous (it is
+    // the body, never a predicate). The shared expression forms that begin with
+    // a `{`-capable `_expression` base — `cast`/`range`/`field`/`index`/the
+    // shared `method_call`/`instantiation` — are therefore excluded; the
+    // `where_const_*` wrappers and `_where_const_postfix` cover the needed
+    // path/call/field/index shapes with brace-free bases.
+    _where_const_no_or: $ => choice(
+      $.where_const_binary_expression,
+      $.where_const_unary_expression,
+      $.where_const_call_expression,
+      $.where_const_method_call_expression,
+      $._where_const_postfix,
+      prec.left($.identifier),
+      $.scoped_path,
+      'self',
+      'Self',
+      'super',
+      'ingot',
+      $.tuple_expression,
+      $.array_expression,
+      $.paren_expression,
+      $.literal,
+      $.qualified_path_expression,
+    ),
+
+    // Brace-free postfix forms (`T::SIZE.field`, `Foo<T>`, `arr[i]`) whose base
+    // is the brace-free `_where_const_no_or` rather than the shared `_expression`.
+    _where_const_postfix: $ => choice(
+      $.where_const_field_expression,
+      $.where_const_index_expression,
+      $.where_const_instantiation_expression,
+    ),
+
+    where_const_field_expression: $ => prec.left(PREC.POSTFIX, seq(
+      field('value', $._where_const_no_or),
+      '.',
+      field('field', choice($.identifier, $.integer_literal)),
+    )),
+    where_const_index_expression: $ => prec(PREC.POSTFIX, seq(
+      field('value', $._where_const_no_or),
+      '[',
+      field('index', $._expression),
+      ']',
+    )),
+    where_const_instantiation_expression: $ => prec(PREC.POSTFIX, seq(
+      field('value', $._where_const_no_or),
+      field('type_arguments', $.generic_arg_list),
+    )),
 
     // ==================== TYPES ====================
 
@@ -597,10 +813,15 @@ module.exports = grammar({
       repeat1(seq('::', field('name', $.identifier))),
     )),
 
-    path_type: $ => prec.right(PREC.PATH + 5, seq(
-      $.path,
-      optional($.generic_arg_list),
-    )),
+    path_type: $ => choice(
+      // Args-bearing form gets higher precedence so that when the external
+      // scanner has already committed `<` to a `_generic_open`, the parser
+      // shifts the generic args rather than reducing an args-less path type
+      // (matters in where-position, where a const-predicate operand competes
+      // for the same `_generic_open`).
+      prec.right(PREC.PATH + 6, seq($.path, $.generic_arg_list)),
+      prec.right(PREC.PATH + 5, $.path),
+    ),
 
     tuple_type: $ => seq(
       '(',

@@ -8,6 +8,7 @@ enum TokenType {
   BLOCK_COMMENT_END,
   GENERIC_OPEN,
   COMPARISON_LT,
+  WHERE_BRACE_OPEN,
 };
 
 void *tree_sitter_fe_external_scanner_create(void) { return NULL; }
@@ -173,6 +174,67 @@ static bool scan_automatic_semicolon(TSLexer *lexer) {
 }
 
 
+// Skip whitespace and comments. Used by the where-brace lookahead.
+static void skip_trivia(TSLexer *lexer) {
+  for (;;) {
+    int32_t c = lexer->lookahead;
+    if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
+      advance(lexer);
+      continue;
+    }
+    if (c == '/') {
+      advance(lexer);
+      if (lexer->lookahead == '/') {
+        while (!lexer->eof(lexer) && lexer->lookahead != '\n') advance(lexer);
+        continue;
+      }
+      if (lexer->lookahead == '*') {
+        advance(lexer);
+        skip_block_comment(lexer);
+        continue;
+      }
+      return;  // a bare '/' is not trivia
+    }
+    return;
+  }
+}
+
+// Decide whether a `{` at where-predicate position opens a brace-form const
+// predicate (`where ..., { expr } <body>`) rather than the item's own body.
+//
+// Mirrors the compiler's `WhereBracePolicy::Lookahead`: scan the balanced brace
+// group, then peek the first non-trivia char after the closing `}`. The brace
+// is a predicate only when the item body brace (`{`) follows it. The brace-form
+// predicate is always the last predicate and is trailed by the body brace, so
+// requiring a following `{` is sufficient and unambiguous. Assumes the leading
+// `{` is the current lookahead; consumes and marks the token as exactly the `{`.
+static bool scan_where_brace_open(TSLexer *lexer) {
+  if (lexer->lookahead != '{') return false;
+  advance(lexer);          // consume the opening '{'
+  lexer->mark_end(lexer);  // the emitted token is exactly the '{'
+
+  int depth = 1;
+  while (depth > 0 && !lexer->eof(lexer)) {
+    int32_t c = lexer->lookahead;
+    if (c == '{') { depth++; advance(lexer); continue; }
+    if (c == '}') { depth--; advance(lexer); continue; }
+    if (c == '/') {
+      advance(lexer);
+      if (lexer->lookahead == '/') {
+        while (!lexer->eof(lexer) && lexer->lookahead != '\n') advance(lexer);
+        continue;
+      }
+      if (lexer->lookahead == '*') { advance(lexer); skip_block_comment(lexer); continue; }
+      continue;
+    }
+    advance(lexer);
+  }
+  if (depth != 0) return false;  // unbalanced -- not a predicate
+
+  skip_trivia(lexer);
+  return lexer->lookahead == '{';
+}
+
 bool tree_sitter_fe_external_scanner_scan(void *payload, TSLexer *lexer,
                                           const bool *valid_symbols) {
   (void)payload;
@@ -182,8 +244,25 @@ bool tree_sitter_fe_external_scanner_scan(void *payload, TSLexer *lexer,
       valid_symbols[BLOCK_COMMENT_CONTENT] &&
       valid_symbols[BLOCK_COMMENT_END] &&
       valid_symbols[GENERIC_OPEN] &&
-      valid_symbols[COMPARISON_LT]) {
+      valid_symbols[COMPARISON_LT] &&
+      valid_symbols[WHERE_BRACE_OPEN]) {
     return false;
+  }
+
+  // Where-brace predicate open: a `{` at where-predicate position that opens a
+  // `{ expr }` const predicate, but only when the item body brace follows it.
+  // Checked before the automatic semicolon so the brace is not swallowed.
+  if (valid_symbols[WHERE_BRACE_OPEN]) {
+    while (!lexer->eof(lexer) &&
+           (lexer->lookahead == ' ' || lexer->lookahead == '\t' ||
+            lexer->lookahead == '\r' || lexer->lookahead == '\n')) {
+      skip(lexer);
+    }
+    if (lexer->lookahead == '{' && scan_where_brace_open(lexer)) {
+      lexer->result_symbol = WHERE_BRACE_OPEN;
+      return true;
+    }
+    // Not a where-brace predicate -- fall through to other tokens.
   }
 
   // Try automatic semicolon first, but if it returns false and other tokens
