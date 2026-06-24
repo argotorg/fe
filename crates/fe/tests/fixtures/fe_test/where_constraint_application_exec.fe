@@ -1,0 +1,56 @@
+// Integration (executes, not just type-checks): the boundless
+// constraint-application predicate `where Eq<T>` must behave end-to-end exactly
+// like `where T: Eq`: the obligation is collected, the body's `a.eq(b)`
+// resolves the `eq` method against that assumption, and the whole thing lowers
+// and RUNS. This exercises the real `core::ops::Eq` (prelude trait) through the
+// full pipeline, beyond the unit-level ty_check fixture.
+
+use core::ops::Eq
+
+struct Point {
+    x: u256,
+    y: u256,
+}
+
+impl Eq for Point {
+    fn eq(self, _ other: Point) -> bool {
+        self.x == other.x && self.y == other.y
+    }
+}
+
+// `where Eq<T>` is equivalent to `where T: Eq`. `a.eq(b)` type-checks ONLY
+// because the constraint application supplies the `T: Eq` assumption to method
+// resolution; `differ` likewise resolves the defaulted `ne` method.
+fn same<T>(_ a: T, _ b: T) -> bool where Eq<T> {
+    a.eq(b)
+}
+
+fn differ<T>(_ a: T, _ b: T) -> bool where Eq<T> {
+    a.ne(b)
+}
+
+#[test]
+fn constraint_app_eq_equal_struct() {
+    assert!(same(Point { x: 1, y: 2 }, Point { x: 1, y: 2 }))
+}
+
+#[test]
+fn constraint_app_eq_unequal_struct() {
+    assert!(!same(Point { x: 1, y: 2 }, Point { x: 9, y: 2 }))
+}
+
+#[test]
+fn constraint_app_ne_struct() {
+    assert!(differ(Point { x: 1, y: 2 }, Point { x: 1, y: 9 }))
+}
+
+#[test]
+fn constraint_app_on_primitive() {
+    // Typed locals pin `T = u256`; bare integer literals are `{integer}` and
+    // can't infer the type parameter (a literal-inference limit, not a
+    // constraint-application one).
+    let five: u256 = 5
+    let six: u256 = 6
+    assert!(same(five, five))
+    assert!(!same(five, six))
+}
