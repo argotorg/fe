@@ -169,10 +169,20 @@ pub(super) fn synthesize_provider_impl<'db>(
 /// actively WRONG: it adds a duplicate method-resolution candidate (the bare
 /// where-assumption alongside the real impl), which the solver reports as
 /// `8-0026` "multiple trait candidates" for `self.field.<method>()` in the
-/// generated body (observed on array/tuple field types). Removing that gate
-/// entirely would require a method-resolution policy change (dedup
-/// assumption-candidates against impl-candidates), which is an owner decision,
-/// not part of TD5.2 — see the TD5.2 report.
+/// generated body (observed on array/tuple field types).
+///
+/// PS-MR framing-2 (ratified by the architect 2026-06-24) IS this gate: a
+/// fully concrete require must NOT become a param-env assumption. Its
+/// observable contract is realized here: no added method-resolution candidate
+/// (no `8-0026`), and a missing concrete impl fails through the normal
+/// `6-0003` trait-bound diagnostic at the body use site (pinned by
+/// `derived_abi_size_missing_field_bound` / `abi_size_concrete_missing_field`).
+/// PROACTIVELY verifying a concrete require the body never uses at a call site
+/// would need analysis to read the provider's `Require` effects, but
+/// `ProviderOutput` is expansion-stage (`validate_impl_provider` is `HirDb`),
+/// so that crossing is the deferred staged-generation (x-3d) work, tracked
+/// under SGK, not this slice. The general assumption-vs-impl dedup (framing-1)
+/// is separately deferred, witness-keyed on `ImplementorId`.
 fn requirement_where_clause<'db>(
     db: &'db dyn HirDb,
     generics: &super::derive::DeriveGenerics<'db>,
