@@ -1,0 +1,35 @@
+// The boundless constraint-application where-predicate `where Equal<T>` is
+// collected as the trait obligation `T: Equal` (proposition shape
+// `Trait<Self, ..>`, so the FIRST arg is the subject). This fixture pins the
+// USE-SITE enforcement: a caller whose inferred `T` implements `Equal`
+// type-checks clean; a caller whose `T` does not gets the precise
+// `trait bound is not satisfied` diagnostic, exactly as if the bound had been
+// written `T: Equal`.
+
+trait Equal<T = Self> {
+    fn equal(self, _ other: T) -> bool
+}
+
+struct Yes {}
+impl Equal for Yes {
+    fn equal(self, _ other: Yes) -> bool {
+        true
+    }
+}
+
+// Deliberately does NOT implement `Equal`.
+struct No {}
+
+// Constraint-application predicate: `where Equal<T>` ≡ `where T: Equal`.
+fn needs_equal<T>(_ x: T) where Equal<T> {
+}
+
+fn ok_caller() {
+    needs_equal(Yes {})
+}
+
+fn bad_caller() {
+    // `No` does not implement `Equal`, so the `Equal<No>` obligation induced by
+    // the constraint application fails here.
+    needs_equal(No {})
+}

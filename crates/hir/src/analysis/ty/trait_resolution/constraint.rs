@@ -18,7 +18,7 @@ use crate::analysis::{
         },
         layout_holes::{collect_layout_hole_tys_in_order, ty_contains_const_hole},
         trait_def::TraitInstId,
-        trait_lower::{lower_impl_trait, lower_trait_ref},
+        trait_lower::{lower_hir_constraint_application, lower_impl_trait, lower_trait_ref},
         trait_resolution::PredicateListId,
         ty_def::{TyBase, TyData, TyId, TyVarSort},
         ty_lower::{collect_generic_params, lower_hir_ty},
@@ -418,7 +418,7 @@ fn collect_decl_constraint_pairs_impl<'db>(
         };
         for (bound_idx, bound) in hir_param.bounds.iter().enumerate() {
             if let TypeBound::Trait(trait_ref) = bound {
-                deferred.push(Deferred {
+                deferred.push(Deferred::Bound {
                     bound_ty: Either::Right(ty),
                     trait_ref: *trait_ref,
                     scope: owner_scope,
@@ -452,18 +452,37 @@ fn collect_decl_constraint_pairs_impl<'db>(
                 continue;
             }
 
-            for (bound_idx, bound) in pred.bounds.iter().enumerate() {
-                if let TypeBound::Trait(trait_ref) = *bound {
-                    deferred.push(Deferred {
-                        bound_ty: Either::Left(hir_ty),
-                        trait_ref,
-                        scope: owner_scope,
-                        source: PredicateSource::WherePredicateBound {
-                            owner: w_owner,
-                            pred_idx,
-                            bound_idx,
-                        },
-                    });
+            // A boundless predicate is the constraint-application form
+            // (`where Eq<T>`): the whole `pred.ty` is the predicate. A predicate
+            // with bounds is the ordinary `Type: Trait` form.
+            if pred.bounds.is_empty() {
+                deferred.push(Deferred::Application {
+                    hir_ty,
+                    scope: owner_scope,
+                    // A boundless predicate has no per-bound index; record the
+                    // predicate provenance with `bound_idx: 0`. The where-clause
+                    // span path resolves to nothing for a bound-less predicate,
+                    // so use-site diagnostics correctly omit a secondary label.
+                    source: PredicateSource::WherePredicateBound {
+                        owner: w_owner,
+                        pred_idx,
+                        bound_idx: 0,
+                    },
+                });
+            } else {
+                for (bound_idx, bound) in pred.bounds.iter().enumerate() {
+                    if let TypeBound::Trait(trait_ref) = *bound {
+                        deferred.push(Deferred::Bound {
+                            bound_ty: Either::Left(hir_ty),
+                            trait_ref,
+                            scope: owner_scope,
+                            source: PredicateSource::WherePredicateBound {
+                                owner: w_owner,
+                                pred_idx,
+                                bound_idx,
+                            },
+                        });
+                    }
                 }
             }
         }
@@ -478,9 +497,9 @@ fn collect_decl_constraint_pairs_impl<'db>(
             PredicateListId::new(db, all_predicates.keys().copied().collect::<Vec<_>>());
 
         let before = deferred.len();
-        deferred.retain(|p| match try_resolve_type_bound(db, p, assumptions) {
+        deferred.retain(|p| match try_resolve_deferred(db, p, assumptions) {
             Some(inst) => {
-                all_predicates.entry(inst).or_insert(p.source);
+                all_predicates.entry(inst).or_insert(p.source());
                 false
             }
             None => true,
@@ -520,11 +539,34 @@ pub fn collect_constraints<'db>(
     }
 }
 
-struct Deferred<'db> {
-    bound_ty: Either<HirTypeId<'db>, TyId<'db>>,
-    trait_ref: TraitRefId<'db>,
-    scope: ScopeId<'db>,
-    source: PredicateSource<'db>,
+enum Deferred<'db> {
+    /// A `Type: Trait` bound: a subject plus a trait ref, where `Self` is the
+    /// bound's subject (the receiver convention).
+    Bound {
+        bound_ty: Either<HirTypeId<'db>, TyId<'db>>,
+        trait_ref: TraitRefId<'db>,
+        scope: ScopeId<'db>,
+        source: PredicateSource<'db>,
+    },
+    /// A boundless constraint application (`where Eq<T>`): the written type IS
+    /// the predicate, lowered with the proposition convention `Self = first
+    /// arg`. Carried through the same fixed-point so there is one collection
+    /// routine, not a parallel pipeline.
+    Application {
+        hir_ty: HirTypeId<'db>,
+        scope: ScopeId<'db>,
+        source: PredicateSource<'db>,
+    },
+}
+
+impl<'db> Deferred<'db> {
+    /// The written-bound provenance recorded for this predicate, used by
+    /// use-site diagnostics to point back at the originating bound.
+    fn source(&self) -> PredicateSource<'db> {
+        match self {
+            Deferred::Bound { source, .. } | Deferred::Application { source, .. } => *source,
+        }
+    }
 }
 
 /// What `Self` denotes in bounds written at `scope`: the nearest enclosing
@@ -554,31 +596,43 @@ pub(crate) fn enclosing_trait_self_ty<'db>(
     None
 }
 
-fn try_resolve_type_bound<'db>(
+fn try_resolve_deferred<'db>(
     db: &'db dyn HirAnalysisDb,
     deferred: &Deferred<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Option<TraitInstId<'db>> {
-    let ty = match deferred.bound_ty {
-        Either::Left(hir_ty) => {
-            let ty = lower_hir_ty(db, hir_ty, deferred.scope, assumptions);
-            if ty.has_invalid(db) {
-                return None;
-            }
-            ty
-        }
-        Either::Right(ty) => ty,
-    };
+    match deferred {
+        Deferred::Bound {
+            bound_ty,
+            trait_ref,
+            scope,
+            ..
+        } => {
+            let ty = match bound_ty {
+                Either::Left(hir_ty) => {
+                    let ty = lower_hir_ty(db, *hir_ty, *scope, assumptions);
+                    if ty.has_invalid(db) {
+                        return None;
+                    }
+                    ty
+                }
+                Either::Right(ty) => *ty,
+            };
 
-    lower_trait_ref(
-        db,
-        ty,
-        deferred.trait_ref,
-        deferred.scope,
-        assumptions,
-        enclosing_trait_self_ty(db, deferred.scope),
-    )
-    .ok()
+            lower_trait_ref(
+                db,
+                ty,
+                *trait_ref,
+                *scope,
+                assumptions,
+                enclosing_trait_self_ty(db, *scope),
+            )
+            .ok()
+        }
+        Deferred::Application { hir_ty, scope, .. } => {
+            lower_hir_constraint_application(db, *hir_ty, *scope, assumptions)
+        }
+    }
 }
 
 #[cfg(test)]
