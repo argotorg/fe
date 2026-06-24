@@ -1,0 +1,38 @@
+// A pattern hole takes a reflected `Variant` handle: `${field}(lhs)` in
+// pattern position is a precise executor failure.
+
+use core::derive::Derive
+use core::derive::Evidence
+use core::derive::ImplBuilder
+use core::derive::Reflect
+
+trait Tagged {
+    fn tag(self) -> bool
+}
+
+impl Derive<Tagged> for PatTag {
+    const fn derive<T>(ev: own Evidence<Tagged<T>>) -> Evidence<Tagged<T>>
+        uses (
+            reflect: Reflect<T>,
+            builder: mut ImplBuilder<Tagged<T>>,
+        )
+    {
+        let mut arms = quote { }
+        for variant in reflect.variants() {
+            for field in variant.fields() {
+                arms = quote { ${arms}, ${field}(lhs) => true }
+            }
+        }
+        builder.emit_method("tag", quote { match self { ${arms} } })
+        builder.finish()
+        ev
+    }
+}
+
+enum Coin {
+    Heads(u256),
+}
+
+derive Tagged for Coin using PatTag
+
+struct PatTag {}

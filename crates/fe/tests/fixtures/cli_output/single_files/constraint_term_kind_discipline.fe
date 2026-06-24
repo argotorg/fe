@@ -1,0 +1,12 @@
+// FCO RUNG 2 NEGATIVE — kind discipline for the new `ConstraintTerm` production.
+//
+// A `Constraint`-kinded type parameter (`G: Constraint`) does NOT admit a
+// `*`-kinded ordinary type: `Box<u256>` is a kind mismatch (`u256 : *` vs the
+// expected `Constraint`). This keeps the new production honest — turning
+// saturated trait-apps into `Constraint`-kinded terms must not also relax the
+// kind check at the `Constraint` position. The bare-`Eq` `2-0006` boundary is
+// pinned separately by `derive_trait_as_type_value.fe`.
+
+struct Box<G: Constraint> { h: u256 }
+
+fn f(b: Box<u256>) {}

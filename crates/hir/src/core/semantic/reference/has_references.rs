@@ -97,7 +97,10 @@ impl<'db> HasReferences<'db> for ItemKind<'db> {
             ItemKind::Const(c) => c.body(db).to_opt().map_or(EMPTY_REFS, |b| b.references(db)),
             ItemKind::StaticAssert(assert_) => assert_.condition(db).references(db),
             // Modules don't contain references themselves
-            ItemKind::TopMod(_) | ItemKind::Mod(_) => EMPTY_REFS,
+            ItemKind::TopMod(_)
+            | ItemKind::Mod(_)
+            | ItemKind::DeriveProviderScope(_)
+            | ItemKind::DeriveDecl(_) => EMPTY_REFS,
             ItemKind::Contract(contract) => contract_references(db, *contract),
         }
     }

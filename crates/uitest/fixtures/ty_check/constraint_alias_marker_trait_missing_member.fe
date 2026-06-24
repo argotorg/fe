@@ -1,0 +1,56 @@
+// Tier A constraint alias (marker-trait + blanket-impl) — NEGATIVE case.
+//
+// Companion to crates/fe/tests/fixtures/fe_test/constraint_alias_marker_trait.fe
+// (the positive, executing case). This fixture pins the DIAGNOSTIC QUALITY of
+// the safe constraint-alias pattern: when a type is missing exactly ONE member
+// of the bundle, the failure must name the MISSING MEMBER obligation, not leak
+// an alias-internal / blanket-impl error.
+//
+// The alias bundles two REAL prelude traits: `core::ops::Eq` + `core::default::Default`.
+
+use core::ops::Eq
+use core::default::Default
+
+// The constraint alias: marker trait whose supertrait list is the bundle, plus
+// a blanket impl over every `T` that satisfies the members.
+trait ValueLike: Eq + Default {}
+impl<T> ValueLike for T where T: Eq + Default {}
+
+// `OnlyEq` implements ONE member (Eq) but NOT the other (Default). It therefore
+// is NOT `ValueLike`, because the blanket impl's `where T: Eq + Default` clause
+// is unsatisfiable for it.
+struct OnlyEq {}
+impl Eq for OnlyEq {
+    fn eq(self, _ other: OnlyEq) -> bool {
+        true
+    }
+}
+
+// `Both` satisfies the whole bundle — included so the fixture is anti-vacuous:
+// the only error must come from `OnlyEq`, proving the alias admits a satisfying
+// type and rejects only the one missing a member.
+struct Both {}
+impl Eq for Both {
+    fn eq(self, _ other: Both) -> bool {
+        true
+    }
+}
+impl Default for Both {
+    fn default() -> Self {
+        Both {}
+    }
+}
+
+fn needs_value_like<T>(_ x: T) where T: ValueLike {
+}
+
+fn ok_caller() {
+    // `Both` satisfies every member, so `Both: ValueLike` holds: clean.
+    needs_value_like(Both {})
+}
+
+fn bad_caller() {
+    // `OnlyEq` is missing the `Default` member, so `OnlyEq: ValueLike` fails.
+    // The diagnostic should point at the missing MEMBER obligation.
+    needs_value_like(OnlyEq {})
+}

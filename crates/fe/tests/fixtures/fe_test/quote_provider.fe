@@ -1,0 +1,133 @@
+// Quasiquote v1 acceptance: a user-defined derive provider authored with
+// `quote` templates instead of builder expression commands.
+//
+// What is proven here:
+// 1. `quote { .. }` builds an inert compile-time template inside a provider
+//    body; `${...}` holes capture interpreter values (quote values for
+//    composition, `Field` handles for member access, compile-time bools).
+// 2. `quote(limit) { .. }` declares an open name that binds against the
+//    emitted method's parameter (`limit`) at `emit_method`.
+// 3. Quote templates elaborate into the same generated expressions the
+//    builder commands produce: method calls, field access, `&&`, `==`.
+
+use core::derive::Derive
+use core::derive::Evidence
+use core::derive::ImplBuilder
+use core::derive::Reflect
+
+// A unit-bearing wrapper with an inherent comparison method; the provider
+// below generates calls to it from inside a quote.
+struct Gauge {
+    raw: u256,
+}
+
+impl Gauge {
+    fn lte(self, _ other: Gauge) -> bool {
+        return self.raw <= other.raw
+    }
+}
+
+// Field-wise "fits within": every field must be <= the limit's field.
+trait Within {
+    fn within(self, _ limit: Self) -> bool
+}
+
+impl Derive<Within> for BoundCheck {
+    const fn derive<T>(ev: own Evidence<Within<T>>) -> Evidence<Within<T>>
+        uses (
+            reflect: Reflect<T>,
+            builder: mut ImplBuilder<Within<T>>,
+        )
+    {
+        // true && self.f0.lte(limit.f0) && self.f1.lte(limit.f1) && ..
+        let mut body = quote { true }
+        for field in reflect.fields() {
+            body = quote(limit) { ${body} && self.${field}.lte(limit.${field}) }
+        }
+        builder.emit_method("within", body)
+        builder.finish()
+        ev
+    }
+}
+
+// A marker method whose body is a lifted compile-time bool: `${flag}`
+// lifts the interpreter bool into a generated literal.
+trait Audited {
+    fn audited(self) -> bool
+}
+
+impl Derive<Audited> for AlwaysAudited {
+    const fn derive<T>(ev: own Evidence<Audited<T>>) -> Evidence<Audited<T>>
+        uses (
+            reflect: Reflect<T>,
+            builder: mut ImplBuilder<Audited<T>>,
+        )
+    {
+        let flag = true
+        builder.emit_method("audited", quote { ${flag} })
+        builder.finish()
+        ev
+    }
+}
+
+struct Box2 {
+    w: Gauge,
+    h: Gauge,
+}
+
+derive Within for Box2 using BoundCheck
+derive Audited for Box2 using AlwaysAudited
+
+// Generated evidence is consumable through generic bounds.
+fn fits<T: Within>(_ value: T, _ limit: T) -> bool {
+    value.within(limit)
+}
+
+fn gauge(_ raw: u256) -> Gauge {
+    Gauge { raw }
+}
+
+#[test]
+fn within_all_fields_under_limit() {
+    let small = Box2 { w: gauge(2), h: gauge(3) }
+    let big = Box2 { w: gauge(10), h: gauge(10) }
+    assert!(small.within(big))
+}
+
+#[test]
+fn within_equal_fields_pass() {
+    let a = Box2 { w: gauge(4), h: gauge(5) }
+    let b = Box2 { w: gauge(4), h: gauge(5) }
+    assert!(a.within(b))
+}
+
+#[test]
+fn within_fails_on_first_field() {
+    let wide = Box2 { w: gauge(11), h: gauge(1) }
+    let limit = Box2 { w: gauge(10), h: gauge(10) }
+    assert!(!wide.within(limit))
+}
+
+#[test]
+fn within_fails_on_second_field() {
+    let tall = Box2 { w: gauge(1), h: gauge(11) }
+    let limit = Box2 { w: gauge(10), h: gauge(10) }
+    assert!(!tall.within(limit))
+}
+
+#[test]
+fn lifted_bool_hole_generates_literal() {
+    let b = Box2 { w: gauge(0), h: gauge(0) }
+    assert!(b.audited())
+}
+
+#[test]
+fn generated_impl_satisfies_generic_bound() {
+    let small = Box2 { w: gauge(1), h: gauge(1) }
+    let big = Box2 { w: gauge(2), h: gauge(2) }
+    assert!(fits(small, big))
+    assert!(!fits(big, small))
+}
+
+struct BoundCheck {}
+struct AlwaysAudited {}

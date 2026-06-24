@@ -29,6 +29,7 @@ pub(crate) fn ingot_display_name(db: &dyn InputDb, ingot: Ingot) -> String {
         .map(|n| n.to_string())
         .unwrap_or_else(|| match ingot.kind(db) {
             common::ingot::IngotKind::Core => "core".to_string(),
+            common::ingot::IngotKind::CoreDerives => "core_derives".to_string(),
             common::ingot::IngotKind::Std => "std".to_string(),
             _ => "unknown".to_string(),
         })

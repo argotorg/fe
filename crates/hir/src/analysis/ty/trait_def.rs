@@ -6,7 +6,7 @@ use crate::{
         trait_lower::collect_trait_impls,
         trait_resolution::{GoalSatisfiability, PredicateListId, Selection},
     },
-    hir_def::{Contract, Func, HirIngot, IdentId, ImplTrait, Trait},
+    hir_def::{Contract, Func, HirIngot, IdentId, ImplTrait, Trait, scope_graph::ScopeId},
 };
 use common::{
     indexmap::{IndexMap, IndexSet},
@@ -22,7 +22,7 @@ use super::{
     fold::TyFoldable as _,
     trait_lower::collect_implementor_methods,
     trait_resolution::{
-        TraitSolveCx, constraint::collect_constraints, is_goal_satisfiable,
+        ProvisionEnv, TraitSolveCx, constraint::collect_constraints, is_goal_satisfiable,
         normalize_trait_inst_preserving_validity,
     },
     ty_def::TyId,
@@ -162,8 +162,12 @@ fn std_evm_contract_trait_def<'db>(
     }
 }
 
+/// `pub` (rather than `pub(crate)`) because it is the `origin` field of
+/// [`ImplementorId`], which is now public provenance carried out of typeck's
+/// impl selection (rung 3.2). Salsa's generated accessor for that field would
+/// otherwise leak this crate-private type through a public interface (E0446).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub(crate) enum ImplementorOrigin<'db> {
+pub enum ImplementorOrigin<'db> {
     Hir(ImplTrait<'db>),
     VirtualContract(Contract<'db>),
     Assumption,
@@ -191,15 +195,61 @@ fn ingot_trait_env_cycle_recover<'db>(
     salsa::CycleRecoveryAction::Iterate
 }
 
+/// The result of resolving a trait method to its concrete HIR function: the
+/// function, the impl's instantiated generic arguments, and the selected
+/// implementor.
+///
+/// `implementor` is provenance carried for rung 3.2 — it records which impl
+/// typeck's solver committed to so a later rung (3.3) can assert that MIR
+/// re-resolution picks the same one. It is **not consulted** in rung 3.2:
+/// callers that only need the function/args ignore it. The instantiation-time
+/// caller (`const_ref.rs`) stores it into the semantic instance's `ImplEnv`.
+#[derive(Debug, Clone)]
+pub struct ResolvedTraitMethod<'db> {
+    pub func: Func<'db>,
+    pub impl_args: Vec<TyId<'db>>,
+    pub implementor: ImplementorId<'db>,
+}
+
+/// Rung 3.3 MIR re-resolution determinism check (pure).
+///
+/// Compares the implementor type-checking committed to at instantiation time
+/// (`typeck_selected`, carried on the semantic instance's `ImplEnv`) against the
+/// implementor monomorphization just re-resolved (`mono_resolved`):
+///
+/// - `typeck_selected == None` — type-checking did not commit a concrete impl
+///   for this callable (genuinely generic / not a trait method). Nothing to
+///   enforce → `Ok(())`.
+/// - both present and **equal** — the expected path under coherence → `Ok(())`.
+/// - both present and **differ** — a determinism violation: monomorphization
+///   picked a *different* impl than type-checking. Returns the offending pair so
+///   the caller can raise a hard, precise diagnostic (never silently proceed).
+///
+/// This is its own pure function so the (otherwise un-triggerable under
+/// coherence) violation branch is unit-testable directly — a source-level
+/// mismatch is not constructible in valid Fe (coherence guarantees a single
+/// valid impl per concrete trait inst, and re-resolution with identical inputs
+/// is deterministic), so the assertion is a defensive invariant that earns its
+/// keep when rung 3.4 broadens "provision" and could re-resolve differently.
+pub fn check_reresolution_determinism<'db>(
+    typeck_selected: Option<ImplementorId<'db>>,
+    mono_resolved: ImplementorId<'db>,
+) -> Result<(), (ImplementorId<'db>, ImplementorId<'db>)> {
+    match typeck_selected {
+        Some(typeck) if typeck != mono_resolved => Err((typeck, mono_resolved)),
+        _ => Ok(()),
+    }
+}
+
 /// Resolves the concrete HIR function that implements `method` for the given
-/// trait instance, returning both the function and the impl's instantiated
-/// generic arguments.
+/// trait instance, returning the function, the impl's instantiated generic
+/// arguments, and the selected implementor (see [`ResolvedTraitMethod`]).
 pub fn resolve_trait_method_instance<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
     inst: TraitInstId<'db>,
     method: IdentId<'db>,
-) -> Option<(Func<'db>, Vec<TyId<'db>>)> {
+) -> Option<ResolvedTraitMethod<'db>> {
     let assumptions = solve_cx.assumptions();
     let norm_scope = solve_cx.normalization_scope_for_trait_inst(db, inst);
     let inst = normalize_trait_inst_preserving_validity(db, inst, norm_scope, assumptions);
@@ -209,6 +259,57 @@ pub fn resolve_trait_method_instance<'db>(
         Selection::Ambiguous(_ambiguous) => return None,
         Selection::NotFound => return None,
     };
+    resolve_trait_method_against_implementor(db, inst, method, implementor)
+}
+
+/// Reconstructs a [`ResolvedTraitMethod`] for `method` against a **given**
+/// (recorded) implementor, WITHOUT re-running impl selection (`select_impl`).
+///
+/// This is the recorded-source entry point of the FCO "slide" cascade (C1).
+/// When a callee instance carries the implementor typeck's solver committed to
+/// at instantiation time (`ImplEnv::selected_implementor`), MIR consumes that
+/// recorded implementor as the resolution SOURCE instead of re-resolving
+/// through the global impl table.
+///
+/// Normalization of `inst` is performed here, identically to
+/// [`resolve_trait_method_instance`] (`normalization_scope_for_trait_inst` +
+/// `normalize_trait_inst_preserving_validity`), so the subsequent
+/// `trait_inst`-unification is byte-identical to the re-resolve path. The ONLY
+/// difference between the two paths is the source of `implementor`: here it is
+/// the recorded one; in `resolve_trait_method_instance` it is `select_impl`'s
+/// result. Under coherence (today's ≤1-impl invariant, enforced for the
+/// recorded path in MIR by `check_reresolution_determinism`) the recorded
+/// implementor is exactly the one `select_impl` would return, so this produces
+/// the identical `func`/`impl_args`.
+pub fn resolve_trait_method_instance_with_implementor<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    inst: TraitInstId<'db>,
+    method: IdentId<'db>,
+    implementor: ImplementorId<'db>,
+) -> Option<ResolvedTraitMethod<'db>> {
+    let assumptions = solve_cx.assumptions();
+    let norm_scope = solve_cx.normalization_scope_for_trait_inst(db, inst);
+    let inst = normalize_trait_inst_preserving_validity(db, inst, norm_scope, assumptions);
+    resolve_trait_method_against_implementor(db, inst, method, implementor)
+}
+
+/// Shared reconstruction tail of [`resolve_trait_method_instance`] and
+/// [`resolve_trait_method_instance_with_implementor`]: given a concrete
+/// `implementor` and the **already-normalized** trait instance `inst`, build
+/// the [`ResolvedTraitMethod`] (method lookup + fresh-var instantiation +
+/// `trait_inst` unification + param folding / trait-arg fallback). Factored out
+/// so both the `select_impl` path and the recorded-implementor path run the
+/// exact same code, guaranteeing byte-identical `func`/`impl_args`.
+fn resolve_trait_method_against_implementor<'db>(
+    db: &'db dyn HirAnalysisDb,
+    inst: TraitInstId<'db>,
+    method: IdentId<'db>,
+    implementor: ImplementorId<'db>,
+) -> Option<ResolvedTraitMethod<'db>> {
+    // The given implementor is provenance: carried out for rung 3.2, never
+    // consulted here (the resolution result below is unchanged from before).
+    let selected_implementor = implementor;
     let explicit_method = implementor.methods(db).get(&method).copied();
     let trait_method = implementor
         .trait_def(db)
@@ -226,12 +327,20 @@ pub fn resolve_trait_method_instance<'db>(
             .iter()
             .map(|&ty| ty.fold_with(db, &mut table))
             .collect();
-        return Some((func, impl_args));
+        return Some(ResolvedTraitMethod {
+            func,
+            impl_args,
+            implementor: selected_implementor,
+        });
     }
 
     let func = trait_method?;
     let trait_args = inst.args(db).to_vec();
-    Some((func, trait_args))
+    Some(ResolvedTraitMethod {
+        func,
+        impl_args: trait_args,
+        implementor: selected_implementor,
+    })
 }
 
 /// Returns all implementors for the given `ty` that satisfy the given assumptions.
@@ -245,7 +354,7 @@ pub(crate) fn impls_for_ty_with_constraints<'db>(
     let ty = ty.extract_identity(&mut table);
 
     let env = ingot_trait_env(db, ingot);
-    let solve_cx = TraitSolveCx::new(db, ingot.root_mod(db).scope()).with_assumptions(assumptions);
+    let solve_cx = ProvisionEnv::for_scope(ingot.root_mod(db).scope(), assumptions).solve_cx(db);
     if ty.has_invalid(db) || ty.base_ty(db).is_never(db) {
         return vec![];
     }
@@ -287,6 +396,13 @@ pub(crate) fn impls_for_ty_with_constraints<'db>(
                 }
 
                 for &constraint in impl_constraints.list(db) {
+                    // The implementor was instantiated with fresh vars and its
+                    // self type unified with `ty`, so fold the predicate through
+                    // the table to get the *concrete* goal (e.g. `Point: Copy`,
+                    // not `?T: Copy`) before checking satisfiability — otherwise a
+                    // conditional blanket's guard (`impl<T: Copy> Clone for T`)
+                    // is never judged UnSat and the impl is kept spuriously.
+                    let constraint = constraint.fold_with(db, &mut table);
                     match is_goal_satisfiable(db, solve_cx, constraint) {
                         GoalSatisfiability::UnSat(_) => {
                             table.rollback_to(snapshot);
@@ -352,6 +468,39 @@ pub(crate) fn impls_for_ty<'db>(
             is_ok
         })
         .collect()
+}
+
+/// Finds the implementor of `trait_def` for `ty`, searching the trait env
+/// **visible from `scope`** — the scope's ingot first, then `ty`'s own ingot
+/// (for an external trait implemented in the type's ingot). Returns the first
+/// match.
+///
+/// PS1a (read-path unification): this is the first scope-indexed *provision
+/// lookup* primitive. It consolidates the duplicated
+/// `search_ingots = [scope_ingot, ty_ingot]` + `impls_for_ty(..).find(trait)`
+/// pattern that was open-coded at several call sites (msg-variant / contract
+/// resolution). It is a deliberate **read-path** unification of the global trait
+/// env behind one entry; it does NOT change resolution outcomes. The mutable,
+/// non-salsa `EffectEnv` frame stack is intentionally NOT folded in here — it is
+/// a separate resolution surface (unifying it would be a facade).
+pub(crate) fn find_implementor_of_trait_in_scope<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    ty: TyId<'db>,
+    trait_def: Trait<'db>,
+) -> Option<Binder<ImplementorId<'db>>> {
+    let canonical_ty = Canonical::new(db, ty);
+    let scope_ingot = scope.ingot(db);
+    let search_ingots = [
+        Some(scope_ingot),
+        ty.ingot(db).filter(|&ingot| ingot != scope_ingot),
+    ];
+    search_ingots.into_iter().flatten().find_map(|ingot| {
+        impls_for_ty(db, ingot, canonical_ty)
+            .iter()
+            .find(|impl_| impl_.skip_binder().trait_def(db) == trait_def)
+            .copied()
+    })
 }
 
 /// Looks up the HIR body for an associated const defined in the selected trait impl, if unique.
@@ -484,9 +633,17 @@ impl<'db> TraitEnv<'db> {
 
 /// Represents a slim, internal view of a trait impl, derived from an
 /// `ImplTrait` item and its lowered trait instance.
+///
+/// `pub` (rather than `pub(crate)`) because it is the provenance carried out of
+/// typeck's impl selection (rung 3.2): `resolve_trait_method_instance` reports
+/// the selected `ImplementorId` so the instantiation-time caller can record
+/// which impl typeck committed to in the semantic instance's `ImplEnv`. The
+/// carry is read-only in rung 3.2 (never compared, hashed into a key, or
+/// serialized into a codegen symbol); rung 3.3 will assert MIR re-resolves the
+/// same one.
 #[salsa::interned]
 #[derive(Debug)]
-pub(crate) struct ImplementorId<'db> {
+pub struct ImplementorId<'db> {
     /// The trait instance that this impl realizes.
     pub(crate) trait_: TraitInstId<'db>,
 
@@ -543,12 +700,32 @@ impl<'db> ImplementorId<'db> {
     }
 
     /// Semantic self type of this impl.
-    pub(crate) fn self_ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
+    ///
+    /// `pub` so codegen-symbol minting (`mir::runtime::stable_key`) can build a
+    /// stable per-implementor discriminator for a SCOPE-SELECTED
+    /// `ImplEnv::selected_implementor` (cascade C3d Some-only identity).
+    pub fn self_ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
         self.trait_(db).self_ty(db)
     }
 
+    /// The HIR `impl` item this implementor was lowered from, as an `ItemKind`,
+    /// or `None` for a virtual / assumption-based implementor (which never carry
+    /// a `selected_implementor`). It is the stable discriminator the cascade C3d
+    /// Some-only codegen-symbol identity needs: a derived default and a
+    /// hand-written override of the same `(Trait, Type)` are DISTINCT HIR `impl`
+    /// items, so this distinguishes them (`mir::runtime::stable_key`).
+    pub fn hir_item(self, db: &'db dyn HirAnalysisDb) -> Option<crate::hir_def::ItemKind<'db>> {
+        match self.origin(db) {
+            ImplementorOrigin::Hir(impl_trait) => Some(impl_trait.into()),
+            ImplementorOrigin::VirtualContract(_) | ImplementorOrigin::Assumption => None,
+        }
+    }
+
     /// Trait instance realized by this impl, including its associated type definitions.
-    pub(crate) fn trait_inst(self, db: &'db dyn HirAnalysisDb) -> TraitInstId<'db> {
+    ///
+    /// `pub` for the same reason as [`Self::self_ty`] (cascade C3d codegen-symbol
+    /// discriminator).
+    pub fn trait_inst(self, db: &'db dyn HirAnalysisDb) -> TraitInstId<'db> {
         let trait_inst = self.trait_(db);
         if self.types(db).is_empty() {
             return trait_inst;
@@ -593,7 +770,18 @@ impl<'db> ImplementorId<'db> {
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> Vec<TyDiagCollection<'db>> {
-        if !matches!(self.origin(db), ImplementorOrigin::Hir(_)) {
+        let ImplementorOrigin::Hir(impl_trait) = self.origin(db) else {
+            return Vec::new();
+        };
+        // A derive provider declared in the `impl Derive<Goal> for Provider`
+        // form is NOT an ordinary trait impl: its `derive` fn is the
+        // compile-time command-language entry point (checked by the provider
+        // executor, exempt from ordinary signature/body analysis via
+        // `is_derive_provider_fn`), so its signature intentionally diverges from
+        // `core::derive::Derive::derive` (extra type params for live abstract
+        // heads, the `uses (..)` capability clause, etc.). It must therefore
+        // skip ordinary method conformance.
+        if crate::core::lower::impl_trait_provider_goal_path(db, impl_trait).is_some() {
             return Vec::new();
         }
         let mut diags = vec![];
@@ -669,8 +857,8 @@ pub(crate) fn does_impl_trait_conflict<'db>(
     // Check if all constraints from both implementations would be satisfiable
     // when the types are unified.
     let merged_constraints = a_constraints.merge(db, b_constraints);
-    let solve_cx = TraitSolveCx::new(db, a.trait_def(db).scope())
-        .with_assumptions(PredicateListId::empty_list(db));
+    let solve_cx = ProvisionEnv::for_scope(a.trait_def(db).scope(), PredicateListId::empty_list(db))
+        .solve_cx(db);
 
     for &constraint in merged_constraints.list(db) {
         let constraint = constraint.fold_with(db, &mut table);
@@ -686,6 +874,64 @@ pub(crate) fn does_impl_trait_conflict<'db>(
     }
 
     true
+}
+
+/// Whether a goal's resolved trait-def identity is in the v1 CANONICAL set: the
+/// narrow tier of traits whose impl is consensus-/layout-critical, so a second
+/// in-scope impl is a genuine coherence conflict (a wrong impl silently
+/// relocates storage slots or changes the ABI wire format = fund loss), NOT a
+/// benign customization. Recognition keys on the FULL resolved identity (the
+/// trait's own name + its defining ingot kind), NEVER on the bare spelling —
+/// EXACTLY like [`is_std_evm_contract_trait_def`] and the `core::derive` item
+/// recognizer (`scope_is_core_derive_item`, `provider_goal.rs`): a user trait
+/// merely *named* `AbiSize` / `StorageKey`, defined in a `Local` ingot, resolves
+/// to a DIFFERENT `Trait` def and is NOT canonical.
+///
+/// The v1 set (tunable allowlist; v1 = storage-layout + ABI-layout):
+///   - storage-layout: `std::evm::storage_map::StorageKey` (the storage-slot
+///     witness — a wrong `write_key` relocates every mapping slot);
+///   - ABI-layout family: `core::abi::AbiSize` (the layout/size metadata:
+///     `HEAD_SIZE` / `IS_DYNAMIC` / `payload_size`), plus the codecs built on it,
+///     `core::abi::Encode` / `core::abi::Decode` (a wrong impl produces wrong
+///     on-the-wire bytes = consensus break). `AbiSize` lives in the `Core` ingot
+///     and `StorageKey` in the `Std` ingot, so the kind discriminates per trait.
+///
+/// Deliberately NON-canonical in v1: `Ord` / `Hash` (`core::ops`). These are
+/// commonly and legitimately customized via providers (e.g. `StableOrd`), and
+/// the "consensus Ord/Hash" worry is a use-context sub-case (a specific contract
+/// relying on a specific ordering), not a property of the trait def — deferred as
+/// a tunable refinement rather than blanket-canonicalized here.
+///
+/// LIVE (FCO slide C3c-1): the coherence conflict gate in `lowered_implementor`
+/// (`core/semantic/mod.rs`) now computes this predicate and branches the conflict
+/// path on it. As of C3c-1 BOTH branches preserve today's behavior — a conflict
+/// still returns `Conflict`/emits `5-0001` for canonical AND non-canonical goals
+/// (byte-identical) — so the seam is planted and the predicate is genuinely
+/// consumed. The coherence demotion that turns "the goal is NON-canonical" into
+/// "a second impl is permitted (provider-overridable)" is increment C3c-3, which
+/// flips only the non-canonical branch. The unit test
+/// `is_single_impl_keys_on_resolved_identity_not_name` exercises the v1 set
+/// (StorageKey / AbiSize = true) and the non-canonical cases (Ord / Eq /
+/// user-defined = false), each via a real trait resolution so neither arm passes
+/// vacuously.
+pub(crate) fn is_single_impl<'db>(db: &'db dyn HirAnalysisDb, trait_def: Trait<'db>) -> bool {
+    // A goal trait is "single-impl" (one-of-a-kind: at most one impl program-wide,
+    // the money floor) iff its DECLARATION carries the `#[fixed]` attribute. The
+    // policy thus lives in Fe, on the trait decl (the storage-/ABI-layout traits in
+    // core/std), not a hardcoded compiler allowlist; adding or removing a goal is a
+    // one-line Fe change (`fco-guts-over-sugar`: the SET is a deferred-tunable
+    // default).
+    //
+    // Two properties this spelling buys for free:
+    // - SCOPE-FREE / salsa-safe: it reads an attribute of the trait HIR node, never
+    //   the lexical scope, so the scarcity key at `lowered_implementor` stays
+    //   scope-free (`trait_resolution/mod.rs` key invariant).
+    // - ORPHAN-SAFE by construction: you can only attribute a trait you are
+    //   DECLARING (one you own), so single-impl-marking a FOREIGN trait to seize
+    //   sole authority over its impls is unrepresentable.
+    crate::hir_def::ItemKind::Trait(trait_def)
+        .attrs(db)
+        .is_some_and(|attrs| attrs.has_attr(db, "fixed"))
 }
 
 /// Represents an instantiated trait, which can be thought of as a trait
@@ -834,9 +1080,70 @@ impl<'db> TraitInstId<'db> {
 mod tests {
     use camino::Utf8PathBuf;
 
-    use super::impls_for_trait_def;
-    use crate::hir_def::ItemKind;
+    use super::{check_reresolution_determinism, impls_for_trait_def, is_single_impl};
+    use crate::analysis::name_resolution::{PathRes, resolve_path};
+    use crate::analysis::ty::trait_resolution::PredicateListId;
+    use crate::hir_def::{ItemKind, PathId};
     use crate::test_db::HirAnalysisTestDb;
+
+    /// Rung 3.3: the MIR re-resolution determinism assertion fires on a genuine
+    /// impl mismatch and is a no-op otherwise. A source-level mismatch is NOT
+    /// constructible in valid Fe (coherence guarantees a single valid impl per
+    /// concrete trait inst, and re-resolution with identical inputs is
+    /// deterministic), so we cannot drive this via a `.fe` fixture — we instead
+    /// build two genuinely distinct `ImplementorId`s (two types implementing the
+    /// same trait) and exercise the pure check directly. This keeps the
+    /// otherwise-untriggerable violation branch under test for rung 3.4.
+    #[test]
+    fn reresolution_determinism_check_detects_impl_mismatch() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("reresolution_determinism_check_detects_impl_mismatch.fe"),
+            r#"
+trait Foo {}
+
+struct A {}
+struct B {}
+
+impl Foo for A {}
+impl Foo for B {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let trait_ = top_mod
+            .children_non_nested(&db)
+            .find_map(|item| match item {
+                ItemKind::Trait(trait_)
+                    if trait_
+                        .name(&db)
+                        .to_opt()
+                        .is_some_and(|name| name.data(&db) == "Foo") =>
+                {
+                    Some(trait_)
+                }
+                _ => None,
+            })
+            .expect("missing `Foo` trait");
+
+        let impls = impls_for_trait_def(&db, top_mod.ingot(&db), trait_);
+        assert_eq!(impls.len(), 2, "expected the two distinct `Foo` impls");
+        // Two genuinely distinct implementors (`Foo for A` and `Foo for B`).
+        let impl_a = impls[0].instantiate_identity();
+        let impl_b = impls[1].instantiate_identity();
+        assert_ne!(impl_a, impl_b, "impls of `Foo` for A vs B must differ");
+
+        // Carried `None` (typeck committed nothing concrete) → no assertion.
+        assert!(check_reresolution_determinism(None, impl_a).is_ok());
+        // Carried and re-resolved agree (the coherent path) → no assertion.
+        assert!(check_reresolution_determinism(Some(impl_a), impl_a).is_ok());
+        // Carried and re-resolved DIFFER → the hard-fail branch, returning the
+        // offending pair (mapped to `LowerError::NondeterministicReResolution`
+        // at the MIR site, never a silent divergence / panic).
+        assert_eq!(
+            check_reresolution_determinism(Some(impl_a), impl_b),
+            Err((impl_a, impl_b)),
+        );
+    }
 
     #[test]
     fn trait_env_collects_overlapping_constrained_impls_without_cycle() {
@@ -869,5 +1176,108 @@ impl<T> Foo for T where T: Marker {}
 
         let impls = impls_for_trait_def(&db, top_mod.ingot(&db), trait_);
         assert_eq!(impls.len(), 2);
+    }
+
+    /// Resolve `path` (as segment strings) from `file`'s top-module scope to its
+    /// trait def, asserting it resolves to a TRAIT (anti-vacuous: a non-`Trait`
+    /// resolution — or a failure — would make either polarity of the canonical
+    /// check pass for free), then return `is_single_impl` for that def.
+    fn resolve_is_single_impl(
+        db: &mut HirAnalysisTestDb,
+        file_name: &str,
+        text: &str,
+        path: &[&str],
+    ) -> bool {
+        let file = db.new_stand_alone(Utf8PathBuf::from(file_name), text);
+        let (top_mod, _) = db.top_mod(file);
+        let scope = top_mod.scope();
+        let assumptions = PredicateListId::empty_list(db);
+        let path_id = PathId::from_segments(db, path);
+        let trait_def = match resolve_path(db, path_id, scope, assumptions, false) {
+            Ok(PathRes::Trait(inst)) => inst.def(db),
+            res => panic!("expected {path:?} to resolve to a trait, got {res:?}"),
+        };
+        is_single_impl(db, trait_def)
+    }
+
+    /// FCO: the single-impl (money-floor) predicate is driven by the `#[fixed]`
+    /// attribute on the trait DECLARATION, never by the bare spelling. It
+    /// recognizes exactly the traits that carry `#[fixed]` (the v1 storage-/ABI-
+    /// layout set in core/std).
+    ///
+    /// Positive (anti-vacuous): the real `std::evm::StorageKey` and
+    /// `core::abi::AbiSize` traits carry `#[fixed]`, so they ARE single-impl.
+    ///
+    /// Negative (anti-vacuous): `core::ops::Ord` and `core::ops::Eq` are real
+    /// traits with NO `#[fixed]` (confirming they are deliberately non-single-impl
+    /// in v1), and a LOCAL `trait AbiSize {}` declared in the fixture, same
+    /// spelling but no `#[fixed]`, is NOT single-impl. The local case is the
+    /// load-bearing one: it proves the predicate reads the attribute, not the name.
+    /// `resolve_is_single_impl` asserts each path resolves to a real trait, so
+    /// neither arm can pass vacuously.
+    #[test]
+    fn is_single_impl_reads_fixed_attribute() {
+        // Positive: storage-layout — std::evm::StorageKey.
+        let mut db = HirAnalysisTestDb::default();
+        assert!(
+            resolve_is_single_impl(
+                &mut db,
+                "is_single_impl_storage_key.fe",
+                "struct ImplPermit {}\n",
+                &["std", "evm", "StorageKey"],
+            ),
+            "std::evm::StorageKey (storage-layout) must be canonical in v1"
+        );
+
+        // Positive: ABI-layout — core::abi::AbiSize.
+        let mut db = HirAnalysisTestDb::default();
+        assert!(
+            resolve_is_single_impl(
+                &mut db,
+                "is_single_impl_abi_size.fe",
+                "struct ImplPermit {}\n",
+                &["core", "abi", "AbiSize"],
+            ),
+            "core::abi::AbiSize (ABI-layout) must be canonical in v1"
+        );
+
+        // Negative: core::ops::Ord is a real trait but deliberately NON-canonical
+        // in v1 (commonly customized via providers).
+        let mut db = HirAnalysisTestDb::default();
+        assert!(
+            !resolve_is_single_impl(
+                &mut db,
+                "is_single_impl_ord.fe",
+                "struct ImplPermit {}\n",
+                &["core", "ops", "Ord"],
+            ),
+            "core::ops::Ord must be NON-canonical in v1"
+        );
+
+        // Negative: core::ops::Eq is also a real, non-canonical trait.
+        let mut db = HirAnalysisTestDb::default();
+        assert!(
+            !resolve_is_single_impl(
+                &mut db,
+                "is_single_impl_eq.fe",
+                "struct ImplPermit {}\n",
+                &["core", "ops", "Eq"],
+            ),
+            "core::ops::Eq must be NON-canonical in v1"
+        );
+
+        // Negative (anti-vacuous on identity): a LOCAL `trait AbiSize {}` — same
+        // spelling, `Local` ingot — resolves to a DIFFERENT def and is NOT
+        // canonical. The identity is keyed on (name, defining-ingot), not name.
+        let mut db = HirAnalysisTestDb::default();
+        assert!(
+            !resolve_is_single_impl(
+                &mut db,
+                "is_single_impl_local_abi_size.fe",
+                "trait AbiSize {}\n",
+                &["AbiSize"],
+            ),
+            "a local `trait AbiSize` (not core::abi::AbiSize) must be NON-canonical"
+        );
     }
 }

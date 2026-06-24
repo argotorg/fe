@@ -1,0 +1,151 @@
+// Canonical derive providers for core traits.
+//
+// These providers are the ONLY place that knows how to derive `Eq` and
+// `Default`: the compiler knows how to run providers and how to synthesize
+// HIR from builder commands, but the shape of the generated impls is decided
+// here, in Fe.
+//
+// Provider bodies execute at compile time, inside the compiler's expansion
+// stage. They are written in a restricted command language: reflection
+// iteration (`reflect.fields()`, `reflect.variants()`, `variant.fields()`),
+// boolean locals, `if`/`else`, and `builder` commands that describe the
+// generated impl (requirements, method signatures, and method body
+// expressions). Method bodies can be spelled either as builder expression
+// commands or as `quote { .. }` templates; both elaborate into the same
+// generated expressions. Templates cover `match` too: `${variant}(group)`
+// pattern holes bind a variant's payload under a group name, and arm lists
+// are folded as quotes of `pat => expr` arms spliced with a bare `${...}`
+// hole in arm position.
+
+use core::default::Default
+use core::derive::Derive
+use core::derive::Evidence
+use core::derive::ImplBuilder
+use core::derive::Reflect
+use core::ops::Eq
+
+struct StableEq {}
+
+impl Derive<Eq> for StableEq {
+    const fn derive<T>(ev: own Evidence<Eq<T>>) -> Evidence<Eq<T>>
+        uses (
+            reflect: Reflect<T>,
+            builder: mut ImplBuilder<Eq<T>>,
+        )
+    {
+        if reflect.is_struct() {
+            // true && self.f0 == other.f0 && self.f1 == other.f1 && ..
+            // The comparison is spelled out as a quote fold; the leading
+            // `true` seed is folded away by MIR. `other` is an open name,
+            // bound by the `eq` method the quote is emitted into.
+            let mut body = quote { true }
+            for field in reflect.fields() {
+                builder.require<Eq>(field.ty())
+                body = quote(other) { ${body} && self.${field} == other.${field} }
+            }
+            builder.emit_method("eq", body)
+        }
+        if reflect.is_enum() {
+            // Variant counting with plain bools: `multi` is true when the
+            // enum has more than one variant (the inner match then needs a
+            // `_ => false` arm; for a single variant it would be
+            // unreachable).
+            let mut multi = false
+            let mut seen = false
+            for variant in reflect.variants() {
+                if seen {
+                    multi = true
+                }
+                seen = true
+            }
+            // An uninhabited enum has no values to compare; `eq` is trivially
+            // `true` (and can never be called).
+            let mut body = quote { true }
+            if seen {
+                // match self {
+                //     Enum::V(lhs_..) => match other {
+                //         Enum::V(rhs_..) => lhs_0 == rhs_0 && ..
+                //         _ => false
+                //     }
+                //     ..
+                // }
+                // The arm list is folded as a quote of match arms: each
+                // iteration splices the arms built so far (`${arms}`, the
+                // empty quote seeds the fold) and appends one arm. The
+                // `${variant}(lhs)` pattern hole binds the variant's payload
+                // under the `lhs` group; `lhs.${field}` reaches one binder.
+                let mut arms = quote { }
+                for variant in reflect.variants() {
+                    let mut cmp = quote { true }
+                    let mut has_field = false
+                    for field in variant.fields() {
+                        builder.require<Eq>(field.ty())
+                        let field_cmp = quote(lhs, rhs) { lhs.${field} == rhs.${field} }
+                        if has_field {
+                            cmp = quote { ${cmp} && ${field_cmp} }
+                        } else {
+                            cmp = field_cmp
+                            has_field = true
+                        }
+                    }
+                    let mut inner = quote(other) { match other { ${variant}(rhs) => ${cmp} } }
+                    if multi {
+                        inner = quote(other) {
+                            match other {
+                                ${variant}(rhs) => ${cmp},
+                                _ => false
+                            }
+                        }
+                    }
+                    arms = quote { ${arms}, ${variant}(lhs) => ${inner} }
+                }
+                body = quote { match self { ${arms} } }
+            }
+            builder.emit_method("eq", body)
+        }
+        builder.finish()
+        ev
+    }
+}
+
+struct StableDefault {}
+
+impl Derive<Default> for StableDefault {
+    const fn derive<T>(ev: own Evidence<Default<T>>) -> Evidence<Default<T>>
+        uses (
+            reflect: Reflect<T>,
+            builder: mut ImplBuilder<Default<T>>,
+        )
+    {
+        if reflect.is_struct() {
+            // Self { f0: <F0 as Default>::default(), .. }
+            let mut init = builder.struct_init()
+            for field in reflect.fields() {
+                builder.require<Default>(field.ty())
+                init = builder.with_field(init, field, builder.trait_call(field.ty(), "default"))
+            }
+            builder.emit_method("default", init)
+        }
+        if reflect.is_enum() {
+            // Enum::DefaultVariant / Enum::DefaultVariant(..defaults..) /
+            // Enum::DefaultVariant { f: ..default.., .. } for the variant
+            // marked `#[default]`.
+            for variant in reflect.variants() {
+                if variant.is_default() {
+                    let mut init = builder.variant_init(variant)
+                    for field in variant.fields() {
+                        builder.require<Default>(field.ty())
+                        init = builder.with_field(
+                            init,
+                            field,
+                            builder.trait_call(field.ty(), "default"),
+                        )
+                    }
+                    builder.emit_method("default", init)
+                }
+            }
+        }
+        builder.finish()
+        ev
+    }
+}

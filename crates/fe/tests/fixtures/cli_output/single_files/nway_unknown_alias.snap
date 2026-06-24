@@ -1,0 +1,22 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/nway_unknown_alias.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/nway_unknown_alias.fe
+
+error[8-0086]: no impl named `Nope` in scope
+   ┌─ nway_unknown_alias.fe:33:24
+   │
+18 │ impl Greeting for User as Casual {
+   │                           ------ `Casual` defined here
+   ·
+24 │ impl Greeting for User as Formal {
+   │                           ------ `Formal` defined here
+   ·
+33 │     let g: u32 = with (Nope) {
+   │                        ^^^^ `with (Nope)` names no impl alias here
+
+
+=== EXIT CODE: 1 ===

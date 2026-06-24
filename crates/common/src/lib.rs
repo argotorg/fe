@@ -66,7 +66,9 @@ macro_rules! impl_db_default {
     ($db_type:ty) => {
         impl Default for $db_type
         where
-            $db_type: $crate::stdlib::HasBuiltinCore + $crate::stdlib::HasBuiltinStd,
+            $db_type: $crate::stdlib::HasBuiltinCore
+                + $crate::stdlib::HasBuiltinCoreDerives
+                + $crate::stdlib::HasBuiltinStd,
         {
             fn default() -> Self {
                 let mut db = Self {
@@ -85,6 +87,7 @@ macro_rules! impl_db_default {
                 let settings = $crate::compilation::CompilationSettings::default(&db);
                 db.settings = Some(settings);
                 $crate::stdlib::HasBuiltinCore::initialize_builtin_core(&mut db);
+                $crate::stdlib::HasBuiltinCoreDerives::initialize_builtin_core_derives(&mut db);
                 $crate::stdlib::HasBuiltinStd::initialize_builtin_std(&mut db);
                 db
             }

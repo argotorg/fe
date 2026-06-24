@@ -1,9 +1,10 @@
 use core::contracts::Target
-use super::effects::Evm
+use super::effects::{Evm, EvmIntrinsics}
 
 pub struct EvmTarget {}
 
 impl Target for EvmTarget {
     type RootEffect = Evm
     type DefaultAbi = super::super::abi::Sol
+    type Intrinsics = EvmIntrinsics
 }

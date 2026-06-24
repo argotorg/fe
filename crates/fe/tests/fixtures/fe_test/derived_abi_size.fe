@@ -1,0 +1,118 @@
+// BRIDGE BURN-DOWN #5 / H10a reify-path proof — a REAL selectable Fe derive
+// provider produces a REAL EVM ABI layout fact end-to-end.
+//
+// `core::abi::AbiSize` (ingots/core/src/abi.fe) is a real core trait with two
+// derivable consts (HEAD_SIZE: u256, IS_DYNAMIC: bool) and a defaulted
+// `payload_size` method. The leaf impls for u256/bool/.. already live in
+// core::abi (each scalar is one 32-byte head word, statically sized). This
+// fixture proves a Fe provider can FOLD those leaf facts into a struct impl:
+//   - HEAD_SIZE   = SUM over fields of <Field as AbiSize>::HEAD_SIZE   (builder.add)
+//   - IS_DYNAMIC  = OR  over fields of <Field as AbiSize>::IS_DYNAMIC  (builder.or)
+// and `require<AbiSize>(field.ty())` makes the generated impl re-enter normal
+// checking carrying the right per-field obligations.
+//
+// MULTI-BACKEND NOTE: head/tail word layout is EVM-specific (wasm/spirv have
+// their own layouts), so AbiSize-derivation is NOT canonicalized into
+// `core_derives` (the backend-agnostic canonical derive surface). It is a
+// NAMED provider (`using StableAbiSize`), declared FIXTURE-LOCAL here exactly
+// like the proven `derived_abi_shape.fe` pattern — selecting it requires an
+// explicit `using`, so it never propagates EVM-specificity into the
+// auto-selected canonical core derive surface. The `add`/`or` fold primitives
+// it uses ARE backend-agnostic infra (any layout provider can use them).
+
+use core::abi::AbiSize
+
+// FCO #5b: `StableAbiSize` lives in the `std` ingot
+// (`ingots/std/src/abi.fe`), promoted out of this fixture. It is selected here
+// by NAME via `derive AbiSize for T using StableAbiSize` (the unique provider
+// of that name, NOT canonical) — exercising the std-resident provider
+// end-to-end, the same one the compiler schedules for `#[error]` structs.
+
+struct Point {
+    x: u256,
+    y: u256,
+}
+
+derive AbiSize for Point using StableAbiSize
+
+struct Mixed {
+    a: u256,
+    b: bool,
+    c: u256,
+}
+
+derive AbiSize for Mixed using StableAbiSize
+
+#[test]
+fn abi_size_two_fields() {
+    // 32 + 32 = 64 — the provider summed two field HEAD_SIZE values from the
+    // REAL core leaf impls (u256::HEAD_SIZE == 32).
+    assert!(Point::HEAD_SIZE == 64)
+    assert!(!Point::IS_DYNAMIC)
+}
+
+#[test]
+fn abi_size_three_fields() {
+    // 32 + 32 + 32 = 96; all leaves static so the OR fold stays false.
+    assert!(Mixed::HEAD_SIZE == 96)
+    assert!(!Mixed::IS_DYNAMIC)
+}
+
+// The derived const is usable like a hand-written assoc const: it composes into
+// a generic that reads it through the REAL `AbiSize` bound. T is inferred from
+// the value argument (no turbofish needed).
+fn head_size_of<T: AbiSize>(_ value: T) -> u256 {
+    T::HEAD_SIZE
+}
+
+#[test]
+fn derived_abi_size_satisfies_generic_bound() {
+    assert!(head_size_of(Point { x: 0, y: 0 }) == 64)
+    assert!(head_size_of(Mixed { a: 0, b: false, c: 0 }) == 96)
+}
+
+// The defaulted `payload_size(self) -> Self::HEAD_SIZE` method is inherited by
+// the generated impl and reads the folded const at runtime.
+#[test]
+fn derived_abi_size_default_method() {
+    let p = Point { x: 1, y: 2 }
+    assert!(p.payload_size() == 64)
+}
+
+// Composition: a struct whose field is ITSELF a derived-AbiSize struct. Outer's
+// HEAD_SIZE folds <Point as AbiSize>::HEAD_SIZE (the GENERATED impl's const,
+// = 64) with <bool as AbiSize>::HEAD_SIZE (= 32) -> 96. This is the real test
+// that derived layout facts re-enter normal resolution and compose — a
+// generated impl's evidence consumed by another generated impl.
+struct Outer {
+    inner: Point,
+    flag: bool,
+}
+
+derive AbiSize for Outer using StableAbiSize
+
+#[test]
+fn abi_size_nested_composition() {
+    assert!(Outer::HEAD_SIZE == 96)
+    assert!(!Outer::IS_DYNAMIC)
+}
+
+// IS_DYNAMIC OR fold is anti-vacuous: a struct holding a DynString field (whose
+// real core impl is IS_DYNAMIC == true) must fold to dynamic. HEAD_SIZE still
+// sums the head words (DynString::HEAD_SIZE == 32, the offset/length head slot).
+use core::abi::DynString
+
+struct WithDynamic {
+    tag: u256,
+    text: DynString,
+}
+
+derive AbiSize for WithDynamic using StableAbiSize
+
+#[test]
+fn abi_size_dynamic_or_fold() {
+    // 32 (u256 head) + 32 (DynString head slot) = 64.
+    assert!(WithDynamic::HEAD_SIZE == 64)
+    // OR fold caught the dynamic field.
+    assert!(WithDynamic::IS_DYNAMIC)
+}

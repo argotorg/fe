@@ -1,0 +1,17 @@
+---
+source: crates/fe/tests/cli_output.rs
+assertion_line: 1822
+expression: output
+input_file: tests/fixtures/cli_output/single_files/provider_signature_return_goal.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/provider_signature_return_goal.fe
+
+error[2-0002]: `ReturnBogus` is not found
+   ┌─ provider_signature_return_goal.fe:24:63
+   │
+24 │     const fn derive<T>(ev: own Evidence<Real<T>>) -> Evidence<ReturnBogus<T>>
+   │                                                               ^^^^^^^^^^^ `ReturnBogus` is not found
+
+
+=== EXIT CODE: 1 ===

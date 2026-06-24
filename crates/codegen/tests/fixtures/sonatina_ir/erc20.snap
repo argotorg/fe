@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 449
 expression: output
 input_file: crates/codegen/tests/fixtures/erc20.fe
 ---
@@ -129,8 +130,7 @@ func private %__CoolCoin_recv_0_7() -> i256 {
         jump block1;
 
     block1:
-        v1.i256 = zext 1129271116.i64 i256;
-        return v1;
+        return 1129271116.i256;
 }
 
 func private %__CoolCoin_recv_0_8() -> i8 {

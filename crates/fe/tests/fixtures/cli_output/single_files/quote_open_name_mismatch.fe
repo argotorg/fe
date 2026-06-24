@@ -1,0 +1,36 @@
+// A quote's declared open name must match a parameter of the method it is
+// emitted into: `quote(rhs)` cannot close over `same(self, _ other: Self)`.
+
+use core::derive::Derive
+use core::derive::Evidence
+use core::derive::ImplBuilder
+use core::derive::Reflect
+
+trait Same {
+    fn same(self, _ other: Self) -> bool
+}
+
+impl Derive<Same> for QuoteSame {
+    const fn derive<T>(ev: own Evidence<Same<T>>) -> Evidence<Same<T>>
+        uses (
+            reflect: Reflect<T>,
+            builder: mut ImplBuilder<Same<T>>,
+        )
+    {
+        let mut body = quote { true }
+        for field in reflect.fields() {
+            body = quote(rhs) { ${body} && self.${field} == rhs.${field} }
+        }
+        builder.emit_method("same", body)
+        builder.finish()
+        ev
+    }
+}
+
+struct Point {
+    x: u256,
+}
+
+derive Same for Point using QuoteSame
+
+struct QuoteSame {}

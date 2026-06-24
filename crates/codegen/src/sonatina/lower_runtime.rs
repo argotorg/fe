@@ -225,7 +225,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         }
 
         let ty = self.ty_for_layout(region.layout(self.db))?;
-        let init = self.gv_initializer_for_const(region.value(self.db).clone())?;
+        let init = self.gv_initializer_for_const(region.value(self.db).clone(), None)?;
         let name = self.const_name(region);
         let gv = self.builder.declare_gv(GlobalVariableData::constant(
             name,
@@ -237,54 +237,56 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         Ok(gv)
     }
 
+    /// Builds a global initializer for a const node. `class` is the runtime
+    /// class of the slot the node initializes (a struct field or array
+    /// element), so scalar immediates are typed by the slot — the same
+    /// authority [`Self::ty_for_layout`] builds the global's type from — and
+    /// not by the value's own width (a `String<12>` value carries 12 bytes,
+    /// but its slot is a full word).
     fn gv_initializer_for_const(
         &mut self,
         node: ConstNode<'db>,
+        class: Option<&RuntimeClass<'db>>,
     ) -> Result<sonatina_ir::global_variable::GvInitializer, LowerError> {
         Ok(match node {
             ConstNode::Scalar(scalar) => sonatina_ir::global_variable::GvInitializer::make_imm(
-                self.immediate_for_const(&scalar, None)?,
+                self.immediate_for_const(&scalar, class)?,
             ),
-            ConstNode::Aggregate { layout, fields } => {
-                let ty = self.ty_for_layout(layout)?;
-                let compound = ty.resolve_compound(&self.builder.ctx).ok_or_else(|| {
-                    LowerError::Internal(format!("const aggregate type `{ty:?}` is not compound"))
-                })?;
-                match compound {
-                    CompoundType::Array { .. } => {
-                        sonatina_ir::global_variable::GvInitializer::make_array(
-                            fields
-                                .iter()
-                                .cloned()
-                                .map(|field| self.gv_initializer_for_const(field))
-                                .collect::<Result<Vec<_>, _>>()?,
-                        )
+            ConstNode::Aggregate { layout, fields } => match layout.data(self.db) {
+                Layout::Struct(data) => {
+                    if data.fields.len() != fields.len() {
+                        return Err(LowerError::Internal(format!(
+                            "const struct has {} fields but its layout has {}",
+                            fields.len(),
+                            data.fields.len()
+                        )));
                     }
-                    CompoundType::Struct(_) => {
-                        sonatina_ir::global_variable::GvInitializer::make_struct(
-                            fields
-                                .iter()
-                                .cloned()
-                                .map(|field| self.gv_initializer_for_const(field))
-                                .collect::<Result<Vec<_>, _>>()?,
-                        )
-                    }
-                    CompoundType::Enum(_) => {
-                        return Err(LowerError::Unsupported(
-                            "enum const globals are not yet supported by Sonatina object data encoding"
-                                .to_string(),
-                        ));
-                    }
-                    CompoundType::Ptr(_)
-                    | CompoundType::ObjRef(_)
-                    | CompoundType::ConstRef(_)
-                    | CompoundType::Func { .. } => {
-                        return Err(LowerError::Unsupported(
-                            "reference/function const globals are not supported".to_string(),
-                        ));
-                    }
+                    sonatina_ir::global_variable::GvInitializer::make_struct(
+                        fields
+                            .iter()
+                            .cloned()
+                            .zip(data.fields.iter())
+                            .map(|(field, class)| self.gv_initializer_for_const(field, Some(class)))
+                            .collect::<Result<Vec<_>, _>>()?,
+                    )
                 }
-            }
+                Layout::Array(data) => {
+                    let elem = data.elem.clone();
+                    sonatina_ir::global_variable::GvInitializer::make_array(
+                        fields
+                            .iter()
+                            .cloned()
+                            .map(|field| self.gv_initializer_for_const(field, Some(&elem)))
+                            .collect::<Result<Vec<_>, _>>()?,
+                    )
+                }
+                Layout::Enum(_) => {
+                    return Err(LowerError::Unsupported(
+                        "enum const globals are not yet supported by Sonatina object data encoding"
+                            .to_string(),
+                    ));
+                }
+            },
         })
     }
 
@@ -516,10 +518,26 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 signed,
                 words,
             } => Immediate::from_i256(bytes_to_i256(words, *signed), int_ty(*bits)),
-            ConstScalar::FixedBytes(bytes) => Immediate::from_i256(
-                bytes_to_i256(bytes, false),
-                fixed_bytes_ty(bytes.len() as u16),
-            ),
+            ConstScalar::FixedBytes(bytes) => {
+                // The value carries only its own bytes (right-aligned), but
+                // the slot may be wider — `String<N>` slots are full words.
+                let len = match class {
+                    Some(RuntimeClass::Scalar(ScalarClass {
+                        repr: ScalarRepr::FixedBytes { len },
+                        ..
+                    })) => {
+                        if bytes.len() > *len as usize {
+                            return Err(LowerError::Internal(format!(
+                                "fixed-bytes const of {} bytes exceeds its {len}-byte slot",
+                                bytes.len()
+                            )));
+                        }
+                        *len
+                    }
+                    _ => bytes.len() as u16,
+                };
+                Immediate::from_i256(bytes_to_i256(bytes, false), fixed_bytes_ty(len))
+            }
             ConstScalar::Address { bytes, .. } => {
                 Immediate::from_i256(bytes_to_i256(bytes, false), Type::I256)
             }

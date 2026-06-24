@@ -66,7 +66,7 @@ pub(crate) fn enclosing_assumptions<'db>(
 ///
 /// Bodies can belong to functions, contract init blocks, or contract recv arms.
 /// This function identifies the owner and calls the appropriate type checker.
-pub(crate) fn typed_body_for_body<'db>(
+pub fn typed_body_for_body<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
 ) -> Option<&'db TypedBody<'db>> {

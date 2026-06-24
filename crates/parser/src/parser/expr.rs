@@ -613,6 +613,11 @@ impl super::Parse for FieldExprScope {
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
         parser.bump_expected(SyntaxKind::Dot);
 
+        // `base.${hole}` — a member-access splice hole inside a quote body.
+        if parser.current_kind() == Some(SyntaxKind::Dollar) {
+            return parser.parse(expr_atom::QuoteHoleExprScope::default());
+        }
+
         parser.expect(&[SyntaxKind::Ident, SyntaxKind::Int], None)?;
         parser.bump();
         Ok(())

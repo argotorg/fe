@@ -1,0 +1,21 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/provider_duplicate_finish.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/provider_duplicate_finish.fe
+
+error[13-0010]: derive provider `TwiceFinish` failed to derive `Marker`
+   ┌─ provider_duplicate_finish.fe:35:8
+   │
+26 │         builder.finish()
+   │         ---------------- the provider called `finish` more than once
+   ·
+35 │ derive Marker for Point using TwiceFinish
+   │        ^^^^^^ requested here: the provider called `finish` more than once
+   │
+   = the provider `TwiceFinish` ran at compile time and failed; the secondary label points at the failing provider code
+
+
+=== EXIT CODE: 1 ===

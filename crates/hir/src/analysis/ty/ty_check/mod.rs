@@ -30,7 +30,7 @@ use crate::hir_def::{CallableDef, ImplTrait, Trait};
 use crate::{
     hir_def::{
         BinOp, Body, Const, Contract, ContractRecvArm, Expr, ExprId, Func, GenericParamOwner,
-        LitKind, ManualContractRootAttr, Partial, Pat, PatId, PathId, StaticAssert,
+        ItemKind, LitKind, ManualContractRootAttr, Partial, Pat, PatId, PathId, StaticAssert,
         StaticAssertComparison, Stmt, StmtId, StringId, TypeId as HirTyId, WhereClauseOwner,
     },
     span::{
@@ -45,7 +45,8 @@ use cranelift_entity::{PrimaryMap, SecondaryMap, entity_impl, packed_option::Pac
 use ena::unify::InPlace;
 use env::TyCheckEnv;
 pub use env::{
-    EffectParamSite, ExprProp, LocalBinding, ParamSite, PatBindingMode, PathReadSemantics,
+    ConstPredicateObligationOrigin, EffectParamSite, ExprProp, LocalBinding, ParamSite,
+    PatBindingMode, PathReadSemantics, TraitObligationOrigin,
 };
 pub(super) use expr::TraitOps;
 pub use owner::BodyOwner;
@@ -59,15 +60,17 @@ use crate::analysis::place::{Place, PlaceBase};
 
 use super::{
     assoc_const::{AssocConstUse, InherentConstUse},
+    binder::Binder,
     canonical::{Canonical, Canonicalized},
     diagnostics::{
         BodyDiag, CallConstraintDiagInfo, FuncBodyDiag, StaticAssertComparisonValues,
         TraitConstraintDiag, TyDiagCollection, TyLowerDiag,
     },
     effects::{EffectKeyKind, ResolvedEffectKey, resolve_effect_key},
-    trait_def::TraitInstId,
+    term::{TermId, lower_hir_to_term, normalize_term, substitute_term},
+    trait_def::{ImplementorOrigin, TraitInstId},
     trait_resolution::{
-        CanonicalGoalQuery, GoalSatisfiability, PredicateListId, TraitSolveCx,
+        CanonicalGoalQuery, GoalSatisfiability, PredicateListId, TraitGoalSolution,
         is_goal_query_satisfiable, is_goal_satisfiable,
     },
     ty_contains_const_hole,
@@ -75,7 +78,7 @@ use super::{
         BorrowKind, CapabilityKind, InvalidCause, Kind, MAX_INLINE_STRING_BYTES, StringFallback,
         TyId, TyVarSort,
     },
-    ty_lower::{lower_hir_ty, resolve_callable_input_effect_key},
+    ty_lower::{collect_generic_params, lower_hir_ty, resolve_callable_input_effect_key},
     unify::{InferenceKey, Snapshot, UnificationError, UnificationTable},
 };
 use crate::analysis::semantic::SemanticCodeRegionRef;
@@ -373,6 +376,107 @@ fn eval_static_assert_comparison_operand<'db>(
     eval_body_owner_const(db, owner, Vec::new()).ok()
 }
 
+/// Declaration-site checks for the bare const-expression predicates of an
+/// item's `where` clause.
+///
+/// Every predicate body is type-checked as a `bool`-expected anonymous const
+/// body, and the underlying body diagnostics are reported at the declaration.
+/// Predicates whose value CTFE can already decide here — they do not depend
+/// on any generic parameter — are additionally *evaluated*, so `where false`
+/// errors at the declaration instead of at every use site. Predicates over
+/// generic parameters are left to obligation-level discharge at their use
+/// sites.
+pub fn check_where_const_predicates<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: WhereClauseOwner<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    let mut diags = Vec::new();
+    let expected = TyId::bool(db);
+    let params_in_scope = where_clause_owner_has_params_in_scope(db, owner);
+
+    for &body in owner.where_clause(db).const_predicates(db) {
+        let body_diags = &check_anon_const_body(db, body, expected).0;
+        if !body_diags.is_empty() && !const_predicate_ignorable_type_diags(body_diags) {
+            diags.extend(body_diags.iter().cloned());
+            continue;
+        }
+        // Ignorable diagnostics (unresolved integral inference vars, e.g.
+        // literal-only predicates) still evaluate, exactly like
+        // `check_static_assert` above.
+
+        // With generic parameters in scope the predicate's value depends on
+        // the instantiation; discharge happens at the use site. (CTFE of a
+        // body that references an unbound parameter is not attempted.)
+        if params_in_scope {
+            continue;
+        }
+
+        let body_owner = BodyOwner::AnonConstBody { body, expected };
+        match eval_body_owner_const(db, body_owner, Vec::new()) {
+            Ok(value) => match static_assert_bool_value(db, value) {
+                Some(true) => {}
+                Some(false) => diags.push(
+                    BodyDiag::WhereConstPredicateFailed {
+                        primary: body.span().into(),
+                    }
+                    .into(),
+                ),
+                // The body type-checked as `bool`, so a non-bool result can
+                // only be a not-yet-resolvable value.
+                None => {}
+            },
+            Err(err) => match err {
+                crate::analysis::semantic::CtfeError::NotConstEvaluable { .. } => {
+                    diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into())
+                }
+                err => {
+                    let ty = TyId::invalid(db, invalid_cause_from_ctfe_error(db, body_owner, err));
+                    if let Some(diag) = ty.emit_diag(db, body.span().into()) {
+                        diags.push(diag.into());
+                    }
+                }
+            },
+        }
+    }
+
+    diags
+}
+
+/// Whether any generic parameter (including a trait's implicit `Self` and a
+/// member function's inherited parameters) is in scope of `owner`'s `where`
+/// clause. Used as a conservative gate for declaration-site predicate
+/// evaluation: with no parameters in scope, every CTFE failure is a genuine
+/// fault rather than a not-yet-instantiated parameter.
+fn where_clause_owner_has_params_in_scope<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: WhereClauseOwner<'db>,
+) -> bool {
+    let mut item = Some(ItemKind::from(owner));
+    while let Some(cur) = item {
+        if let Some(param_owner) = GenericParamOwner::from_item_opt(cur)
+            && !collect_generic_params(db, param_owner)
+                .params(db)
+                .is_empty()
+        {
+            return true;
+        }
+        item = cur.scope().parent_item(db);
+    }
+    false
+}
+
+/// Type diagnostics that do not indicate a malformed predicate at the
+/// declaration: unresolved inference variables can be an artifact of
+/// checking a generic predicate without its instantiation.
+fn const_predicate_ignorable_type_diags(diags: &[FuncBodyDiag<'_>]) -> bool {
+    diags.iter().all(|diag| {
+        matches!(
+            diag,
+            FuncBodyDiag::Body(BodyDiag::TypeAnnotationNeeded { .. })
+        )
+    })
+}
+
 pub(super) fn check_body<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
@@ -520,6 +624,9 @@ fn typed_body_for_bodyless_func<'db>(
         pattern_store: PatternStore::default(),
         pattern_status: SecondaryMap::with_default(PatternAnalysisStatus::Invalid),
         for_loop_seq: SecondaryMap::new(),
+        discharged_obligations: Vec::new(),
+        discharged_const_predicates: Vec::new(),
+        scoped_selection_exprs: FxHashSet::default(),
         expr_place: SecondaryMap::new(),
         expr_places: PrimaryMap::new(),
     }
@@ -556,9 +663,29 @@ pub(crate) struct TyCheckerSnapshot<'db> {
 }
 
 enum TraitObligationOutcome<'db> {
-    Discharged,
+    /// The obligation was retired. Carries the solution the solver committed
+    /// to, or `None` when the obligation was retired without committing to
+    /// evidence (rolled-back inference, invalid goals, or ambiguity and
+    /// unsatisfiability that were reported as diagnostics instead), plus the
+    /// [`DischargeRoute`] that retired it (the ordinary trait-solver path is
+    /// [`DischargeRoute::ImplTable`]; discharge from an in-scope scoped provision
+    /// is [`DischargeRoute::ScopedProvision`]).
+    Discharged(Option<TraitGoalSolution<'db>>, DischargeRoute),
     Progressed,
     Requeue(env::TraitObligation<'db>),
+}
+
+enum ConstPredicateOutcome<'db> {
+    /// The obligation was retired (discharged with recorded evidence, reported
+    /// as a diagnostic, or left to the caller's own assumptions). Terminal.
+    Discharged,
+    /// The substitution is not yet concrete; try again after more inference.
+    Requeue(env::ConstPredicateObligation<'db>),
+}
+
+enum CallConstraintBoundOwner<'db> {
+    GenericParam(GenericParamOwner<'db>, usize, usize),
+    WherePredicate(WhereClauseOwner<'db>, usize, usize),
 }
 
 impl<'db> TyChecker<'db> {
@@ -760,7 +887,11 @@ impl<'db> TyChecker<'db> {
                         if matches!(
                             is_goal_satisfiable(
                                 self.db,
-                                TraitSolveCx::new(self.db, contract.scope()),
+                                env::ProvisionEnv::for_scope(
+                                    contract.scope(),
+                                    PredicateListId::empty_list(self.db),
+                                )
+                                .solve_cx(self.db),
                                 trait_req
                             ),
                             GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
@@ -1004,13 +1135,16 @@ impl<'db> TyChecker<'db> {
         !collect_flags(self.db, goal).intersects(TyFlags::HAS_VAR | TyFlags::HAS_INVALID)
     }
 
-    fn dedup_equivalent_trait_insts(&self, insts: Vec<TraitInstId<'db>>) -> Vec<TraitInstId<'db>> {
+    fn dedup_equivalent_trait_solutions(
+        &self,
+        solutions: Vec<TraitGoalSolution<'db>>,
+    ) -> Vec<TraitGoalSolution<'db>> {
         let db = self.db;
         let mut seen = FxHashSet::default();
         let mut unique = Vec::new();
-        for inst in insts {
-            if seen.insert(Canonical::new(db, inst)) {
-                unique.push(inst);
+        for solution in solutions {
+            if seen.insert(Canonical::new(db, solution.inst)) {
+                unique.push(solution);
             }
         }
         unique
@@ -1180,57 +1314,156 @@ impl<'db> TyChecker<'db> {
         }
     }
 
+    /// Tries to discharge `goal` FROM one of the in-scope scoped provisions
+    /// captured onto `obligation` at enqueue time (FCO "slide" step 3 / THE
+    /// PUSH, increment 1a). The provisions are consulted innermost-first; each is
+    /// an `Evidence`-typed value whose witnessed constraint (the `Eq<T>` inside
+    /// `Evidence<Eq<T>>`) is recognized by RESOLVED identity. The first provision
+    /// whose witnessed constraint unifies with `goal` discharges it.
+    ///
+    /// Returns `Some(solution)` when discharged — and the inner solution is now
+    /// always `Some(TraitGoalSolution { .. })` carrying the REAL global `Hir`
+    /// [`ImplementorId`] the matching provision named (cascade C2). This closes
+    /// the former `Some(None)` floor: every scoped discharge records a concrete
+    /// impl, so the cascade's recorded selection (consumed by MIR under C1) is
+    /// real end-to-end and never re-resolved into a future ambiguity. The route
+    /// stays [`DischargeRoute::ScopedProvision`]. Returns `None` when no provision
+    /// matches, leaving the impl-table solve to run.
+    ///
+    /// A provision that unifies but carries no impl (`selected_implementor` is
+    /// `None`) is NOT treated as a match — discharge requires the real impl. No
+    /// real provision is ever `Evidence`-typed today (the snapshot is always
+    /// empty until cascade C3), so this never fires on real code; the synthetic
+    /// 1a unit test is the only producer of a carrying provision.
+    ///
+    /// Unification commits its bindings only on a match (`UnificationTable::unify`
+    /// rolls back on failure), so a non-matching provision never perturbs
+    /// inference. This consultation is deliberately OUTSIDE the tracked
+    /// `is_goal_query_satisfiable` solve — the scope-carried snapshot never enters
+    /// a salsa key, so the solve cache stays scope-free.
+    fn discharge_from_scoped_provision(
+        &mut self,
+        goal: TraitInstId<'db>,
+        obligation: &env::TraitObligation<'db>,
+    ) -> Option<Option<TraitGoalSolution<'db>>> {
+        let db = self.db;
+        for provided in &obligation.scoped_provisions {
+            let Some(witnessed) = super::provider_goal::evidence_witnessed_goal(db, provided.ty)
+            else {
+                continue;
+            };
+            // The cascade soundness floor: a scoped discharge MUST carry the real
+            // impl the provision names. A provision missing it cannot discharge.
+            let Some(implementor) = provided.selected_implementor else {
+                continue;
+            };
+            if self.table.unify(witnessed, goal).is_ok() {
+                // The provision discharges the goal, recording the REAL global
+                // `Hir` implementor it names as the committed solution (the
+                // post-unify `goal` is its trait instance) — never `Some(None)`.
+                return Some(Some(TraitGoalSolution {
+                    inst: goal,
+                    implementor,
+                }));
+            }
+        }
+        None
+    }
+
     fn process_trait_obligation(
         &mut self,
         mut obligation: env::TraitObligation<'db>,
         final_pass: bool,
     ) -> TraitObligationOutcome<'db> {
         let db = self.db;
-        let scope = self.env.scope();
         let assumptions = self.env.assumptions();
 
         if self.has_dead_inference_keys(&obligation.goal) {
-            return TraitObligationOutcome::Discharged;
+            return TraitObligationOutcome::Discharged(None, DischargeRoute::ImplTable);
         }
 
         obligation.goal = self.normalize_trait_goal(obligation.goal);
         let goal = obligation.goal;
         let flags = collect_flags(db, goal);
         if flags.contains(TyFlags::HAS_INVALID) || self.has_dead_inference_keys(&goal) {
-            return TraitObligationOutcome::Discharged;
+            return TraitObligationOutcome::Discharged(None, DischargeRoute::ImplTable);
         }
 
-        let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+        // FCO "slide" step 3 / THE PUSH (increment 1a): before consulting the
+        // global impl table, try to discharge the goal FROM an in-scope scoped
+        // provision captured onto this obligation at enqueue time. Each
+        // `Evidence`-typed provision witnesses a concrete constraint; if that
+        // witnessed constraint unifies with this (normalized) goal, the provision
+        // IS the evidence and the impl-table solve is skipped entirely. The
+        // consultation happens HERE, before/outside the tracked
+        // `is_goal_query_satisfiable` solve, so the solve cache stays scope-free.
+        // (TODAY the snapshot is always empty — `Evidence` is unforgeable until
+        // increment 1b — so this loop never fires on real code.)
+        if let Some(solution) = self.discharge_from_scoped_provision(goal, &obligation) {
+            return TraitObligationOutcome::Discharged(solution, DischargeRoute::ScopedProvision);
+        }
+
+        let solve_cx = self.env.provision_env().solve_cx(db);
         let query = CanonicalGoalQuery::new(db, goal, assumptions);
         match is_goal_query_satisfiable(db, solve_cx, &query) {
             GoalSatisfiability::Satisfied(solution) => {
-                let solved = query.extract_solution(&mut self.table, solution).inst;
+                let solved = query.extract_solution(&mut self.table, solution);
                 if self.has_dead_inference_keys(&solved) {
-                    return TraitObligationOutcome::Discharged;
+                    return TraitObligationOutcome::Discharged(None, DischargeRoute::ImplTable);
                 }
-                self.table.unify(goal, solved).unwrap();
+                self.table.unify(goal, solved.inst).unwrap();
                 if self.normalize_trait_goal(goal) != goal {
                     TraitObligationOutcome::Progressed
                 } else {
-                    TraitObligationOutcome::Discharged
+                    TraitObligationOutcome::Discharged(Some(solved), DischargeRoute::ImplTable)
                 }
             }
             GoalSatisfiability::NeedsConfirmation(ambiguous) => {
                 let mut candidates: Vec<_> = ambiguous
                     .iter()
-                    .map(|solution| query.extract_solution(&mut self.table, *solution).inst)
+                    .map(|solution| query.extract_solution(&mut self.table, *solution))
                     .collect();
                 candidates.retain(|candidate| !self.has_dead_inference_keys(candidate));
-                let candidates = self.dedup_equivalent_trait_insts(candidates);
+                let candidates = self.dedup_equivalent_trait_solutions(candidates);
 
                 if let [solution] = candidates.as_slice() {
-                    if self.table.unify(goal, *solution).is_ok()
-                        && self.normalize_trait_goal(goal) != goal
-                    {
+                    let solution = *solution;
+                    let unified = self.table.unify(goal, solution.inst).is_ok();
+                    if unified && self.normalize_trait_goal(goal) != goal {
                         TraitObligationOutcome::Progressed
                     } else {
-                        TraitObligationOutcome::Discharged
+                        TraitObligationOutcome::Discharged(unified.then_some(solution), DischargeRoute::ImplTable)
                     }
+                } else if let Some(crate::analysis::ty::trait_resolution::Selection::Unique(
+                    default,
+                )) = self
+                    .env
+                    .provision_env()
+                    .solve_cx(db)
+                    .default_tier_selection(db, goal)
+                {
+                    // FCO "slide" cascade C3c-2 — the DEFAULT-TIER rule at the
+                    // trait-goal discharge leg. With >1 REAL coexisting impl for a
+                    // concrete non-canonical goal and no in-scope provision having
+                    // selected one, pick the sole default-marked (CoreDerives-
+                    // origin) impl deterministically and RECORD it as the committed
+                    // solution, so the cascade's recorded selection (const_ref's
+                    // typeck twin → MIR's C1 rail) consumes the default and never
+                    // re-decides into a `select_impl`→`Ambiguous`→panic. The
+                    // consultation is OUTSIDE the tracked `is_goal_query_satisfiable`
+                    // solve (it runs on the solve's result), so the salsa cache
+                    // stays scope-free. None/many marked falls through to the clean
+                    // `AmbiguousTraitInst` diagnostic below — NEVER a panic. For
+                    // code without a cascade default+override pair the demotion
+                    // still forbids a 2nd impl, so this is `None` (byte-identical).
+                    let solution = TraitGoalSolution {
+                        inst: goal,
+                        implementor: default,
+                    };
+                    TraitObligationOutcome::Discharged(
+                        Some(solution),
+                        DischargeRoute::ImplTable,
+                    )
                 } else {
                     if final_pass && self.trait_goal_is_concrete_for_diagnostics(goal) {
                         let required_by = match obligation.origin {
@@ -1239,18 +1472,28 @@ impl<'db> TyChecker<'db> {
                                 constraint_idx,
                                 ..
                             } => self.call_constraint_diag_info(callable_def, constraint_idx),
-                            env::TraitObligationOrigin::GenericConfirmation => None,
+                            env::TraitObligationOrigin::GenericConfirmation
+                            | env::TraitObligationOrigin::MethodSelection { .. } => None,
                         };
+                        // FCO T-Nway (#84 inc3) — if the coexisting impls behind
+                        // this ambiguity are `as Name`-aliased (the N-way cascade
+                        // case), enrich the diagnostic with `with (Name)`
+                        // disambiguation suggestions. Empty otherwise.
+                        let alias_suggestions = self.alias_suggestions_for_goal(goal);
                         self.push_diag(BodyDiag::AmbiguousTraitInst {
                             primary: obligation.span.clone(),
-                            cands: candidates.into_iter().collect(),
+                            cands: candidates
+                                .into_iter()
+                                .map(|solution| solution.inst)
+                                .collect(),
                             required_by,
+                            alias_suggestions,
                         });
-                        return TraitObligationOutcome::Discharged;
+                        return TraitObligationOutcome::Discharged(None, DischargeRoute::ImplTable);
                     }
 
                     if final_pass {
-                        TraitObligationOutcome::Discharged
+                        TraitObligationOutcome::Discharged(None, DischargeRoute::ImplTable)
                     } else {
                         TraitObligationOutcome::Requeue(obligation)
                     }
@@ -1264,7 +1507,8 @@ impl<'db> TyChecker<'db> {
                             constraint_idx,
                             ..
                         } => self.call_constraint_diag_info(callable_def, constraint_idx),
-                        env::TraitObligationOrigin::GenericConfirmation => None,
+                        env::TraitObligationOrigin::GenericConfirmation
+                        | env::TraitObligationOrigin::MethodSelection { .. } => None,
                     };
                     let unsat = subgoal.map(|goal| query.extract_subgoal(&mut self.table, goal));
                     self.push_diag(TyDiagCollection::from(
@@ -1275,14 +1519,338 @@ impl<'db> TyChecker<'db> {
                             required_by,
                         },
                     ));
-                    TraitObligationOutcome::Discharged
+                    TraitObligationOutcome::Discharged(None, DischargeRoute::ImplTable)
                 } else if final_pass {
-                    TraitObligationOutcome::Discharged
+                    TraitObligationOutcome::Discharged(None, DischargeRoute::ImplTable)
                 } else {
                     TraitObligationOutcome::Requeue(obligation)
                 }
             }
-            GoalSatisfiability::ContainsInvalid => TraitObligationOutcome::Discharged,
+            GoalSatisfiability::ContainsInvalid => TraitObligationOutcome::Discharged(None, DischargeRoute::ImplTable),
+        }
+    }
+
+    /// Records discharge evidence for a retired trait obligation so that
+    /// `finish` can move it onto the [`TypedBody`]. Goals that contain dead
+    /// inference keys are skipped: they belong to rolled-back inference and
+    /// cannot be folded with the final unification table.
+    fn record_discharged_obligation(
+        &mut self,
+        origin: env::TraitObligationOrigin<'db>,
+        goal: TraitInstId<'db>,
+        solution: Option<TraitGoalSolution<'db>>,
+        route: DischargeRoute,
+    ) {
+        if self.has_dead_inference_keys(&goal) {
+            return;
+        }
+        self.env.record_discharged_obligation(DischargedObligation {
+            origin,
+            goal,
+            solution,
+            route,
+        });
+    }
+
+    /// Discharges a `where`-clause const predicate at the obligation level: the
+    /// predicate body is evaluated by CTFE under the call's resolved type
+    /// substitution (`B := Evm`), so a symbolic predicate becomes closed and
+    /// decidable. CTFE runs here, never inside the trait solver / proof forest
+    /// (hard rule: gate, do not select). A `false` predicate or an evaluation
+    /// fault is a hard error — the obligation is never silently dropped and no
+    /// impl candidate is ever removed (anti-SFINAE).
+    fn process_const_predicate_obligation(
+        &mut self,
+        obligation: env::ConstPredicateObligation<'db>,
+        final_pass: bool,
+    ) -> ConstPredicateOutcome<'db> {
+        let db = self.db;
+
+        // Resolve the callee's type arguments through the current inference
+        // table.
+        let args: Vec<TyId<'db>> = obligation
+            .generic_args
+            .iter()
+            .map(|&ty| {
+                let ty = ty.fold_with(db, &mut self.table);
+                self.normalize_ty(ty)
+            })
+            .collect();
+
+        // Not yet concrete: an unresolved inference variable means we cannot
+        // evaluate yet. Retry after more inference; on the final pass leave it
+        // (a genuinely unresolved type is reported elsewhere).
+        if args.iter().any(|ty| ty.has_var(db)) {
+            return if final_pass {
+                ConstPredicateOutcome::Discharged
+            } else {
+                ConstPredicateOutcome::Requeue(obligation)
+            };
+        }
+
+        // Invalid argument: it carries its own diagnostics; do not pile on.
+        if args.iter().any(|ty| ty.has_invalid(db)) {
+            return ConstPredicateOutcome::Discharged;
+        }
+
+        // Symbolic subject: the substitution still mentions a generic parameter
+        // (the caller forwards its own type). CTFE cannot decide it; the only
+        // sound discharge is an exact matching assumption in the caller's own
+        // `where` clause, matched by normalized term identity.
+        if args.iter().any(|ty| ty.has_param(db)) {
+            return self.discharge_const_predicate_by_assumption(obligation, args);
+        }
+
+        let expected = TyId::bool(db);
+        let owner = BodyOwner::AnonConstBody {
+            body: obligation.predicate,
+            expected,
+        };
+        match eval_body_owner_const(db, owner, args.clone()) {
+            Ok(value) => match static_assert_bool_value(db, value) {
+                // A closed CTFE discharge consults nothing else: premise-free.
+                Some(true) => self.record_discharged_const_predicate(
+                    obligation,
+                    args,
+                    DischargeRoute::Ctfe,
+                    Vec::new(),
+                ),
+                Some(false) => self.push_diag(BodyDiag::WhereConstPredicateFailed {
+                    primary: obligation.span.clone(),
+                }),
+                // Type-checked as `bool` but not reducible to a concrete value.
+                None => self.push_diag(BodyDiag::ConstValueMustBeKnown(obligation.span.clone())),
+            },
+            Err(crate::analysis::semantic::CtfeError::NotConstEvaluable { .. }) => {
+                self.push_diag(BodyDiag::ConstValueMustBeKnown(obligation.span.clone()))
+            }
+            Err(err) => {
+                // A CTFE fault (overflow, divide-by-zero, ...) is a hard error
+                // on the chosen call — never a skipped candidate.
+                let ty = TyId::invalid(db, invalid_cause_from_ctfe_error(db, owner, err));
+                if let Some(diag) = ty.emit_diag(db, obligation.span.clone()) {
+                    self.push_diag(diag);
+                }
+            }
+        }
+
+        ConstPredicateOutcome::Discharged
+    }
+
+    /// Records discharge evidence for a retired const-predicate obligation.
+    fn record_discharged_const_predicate(
+        &mut self,
+        obligation: env::ConstPredicateObligation<'db>,
+        generic_args: Vec<TyId<'db>>,
+        route: DischargeRoute,
+        premises: Vec<CheckPremise<'db>>,
+    ) {
+        self.env
+            .record_discharged_const_predicate(DischargedConstPredicate {
+                origin: obligation.origin,
+                predicate: obligation.predicate,
+                generic_args,
+                route,
+                premises,
+            });
+    }
+
+    /// Discharges a symbolic const predicate by matching it, by normalized term
+    /// identity, against the caller's own `where`-clause assumptions. The
+    /// callee predicate is lowered to a term, its parameters rewritten by the
+    /// call's arguments, and normalized; if it is identical to a normalized
+    /// caller assumption it discharges by the `Assumption` route. Matching is
+    /// exact: no implication, no direction flipping, no boolean splitting, and
+    /// no CTFE on the symbolic subject.
+    fn discharge_const_predicate_by_assumption(
+        &mut self,
+        obligation: env::ConstPredicateObligation<'db>,
+        args: Vec<TyId<'db>>,
+    ) -> ConstPredicateOutcome<'db> {
+        let db = self.db;
+        let env::ConstPredicateObligationOrigin::CallConstraint { callable_def, .. } =
+            obligation.origin;
+
+        // Lower the callee predicate to a term under the callee's own bounds,
+        // then rewrite its parameters by the call's arguments.
+        let callee_assumptions =
+            crate::analysis::ty::trait_resolution::constraint::collect_func_decl_constraints(
+                db,
+                callable_def,
+                true,
+            )
+            .instantiate_identity();
+        let predicate = obligation.predicate;
+        let Ok(goal_term) =
+            lower_hir_to_term(db, predicate, predicate.expr(db), callee_assumptions)
+        else {
+            // The predicate is outside the term fragment, so it cannot be
+            // matched by identity. Leave it to the form-limitation diagnostics
+            // rather than emitting a spurious failure.
+            return ConstPredicateOutcome::Discharged;
+        };
+        let goal_term = normalize_term(db, substitute_term(db, goal_term, &args));
+
+        if let Some((assumption_term, assumption)) = self
+            .const_predicate_assumptions()
+            .into_iter()
+            .find(|(term, _)| *term == goal_term)
+        {
+            // Record the matched in-scope assumption as this discharge's
+            // premise: the logical dependency a receipt/explain consumer needs
+            // to say "required P, discharged by assumption P at <span>".
+            let premise = CheckPremise::Assumption {
+                required_term: goal_term,
+                assumption_term,
+                assumption,
+            };
+            self.record_discharged_const_predicate(
+                obligation,
+                args,
+                DischargeRoute::Assumption,
+                vec![premise],
+            );
+        } else {
+            // No in-scope assumption proves it and the subject is symbolic, so
+            // CTFE cannot decide it either: this is a hard failure.
+            self.push_diag(BodyDiag::WhereConstPredicateFailed {
+                primary: obligation.span.clone(),
+            });
+        }
+        ConstPredicateOutcome::Discharged
+    }
+
+    /// The caller's own `where`-clause const predicates, each lowered to a
+    /// normalized term paired with the predicate body it came from — the
+    /// assumptions a symbolic obligation may discharge against, and the origin
+    /// recorded as the discharge premise. Predicates outside the term fragment
+    /// are skipped (their formation is diagnosed elsewhere).
+    fn const_predicate_assumptions(&self) -> Vec<(TermId<'db>, Body<'db>)> {
+        let db = self.db;
+        let BodyOwner::Func(func) = self.env.owner() else {
+            return Vec::new();
+        };
+        let assumptions = self.env.assumptions();
+        WhereClauseOwner::from(func)
+            .where_clause(db)
+            .const_predicates(db)
+            .iter()
+            .filter_map(|&predicate| {
+                lower_hir_to_term(db, predicate, predicate.expr(db), assumptions)
+                    .ok()
+                    .map(|term| (normalize_term(db, term), predicate))
+            })
+            .collect()
+    }
+
+    /// Gate-2 tail adapter: a concrete method call commits to an impl exactly as
+    /// a trait-bound call does, but method resolution does not raise the
+    /// selection as a trait obligation on its own. Re-raise the resolved
+    /// selection `inst` as an obligation so its selected-impl `where`-clause
+    /// const predicates run through the *same* discharge → gate-not-select path
+    /// ([`Self::gate_selected_impl_const_predicates`]) — never a bespoke
+    /// method-call checker. Only a concrete goal is gated: a symbolic receiver's
+    /// predicate is the enclosing item's own assumption, discharged by identity
+    /// at its eventual concrete call site (the gate also skips non-concrete
+    /// goals, so this guard is belt-and-suspenders).
+    fn gate_concrete_method_selection(
+        &mut self,
+        inst: TraitInstId<'db>,
+        call_expr: ExprId,
+        span: DynLazySpan<'db>,
+    ) {
+        let db = self.db;
+        let inst = inst.fold_with(db, &mut self.table);
+        if inst
+            .args(db)
+            .iter()
+            .any(|ty| ty.has_var(db) || ty.has_param(db) || ty.has_invalid(db))
+        {
+            return;
+        }
+        let scoped_provisions = self.env.snapshot_evidence_provisions();
+        // Cascade C3d: a call-keyed origin so this concrete selection's scoped
+        // discharge is readable per call (`discharged_obligations_for_call`),
+        // letting `const_ref.rs::scoped_provision_implementor` carry a recorded
+        // scope selection through to MIR for a DIRECT receiver call. Distinct
+        // from `CallConstraint` so no call-constraint diagnostic is attached.
+        self.env.register_trait_obligation(env::TraitObligation {
+            goal: inst,
+            origin: env::TraitObligationOrigin::MethodSelection { call_expr },
+            span,
+            scoped_provisions,
+        });
+    }
+
+    /// Gate-not-select: once the trait solver commits to an impl for `goal`,
+    /// that impl's own `where`-clause const predicates must hold for the
+    /// committing substitution. The substitution is re-derived by unifying the
+    /// freshly-instantiated impl's trait instance with the discharged goal, then
+    /// the impl's const predicates are evaluated by CTFE — at the obligation
+    /// level, outside the proof forest. A refuted predicate on the *selected*
+    /// impl is a hard error, never a silently-tried-elsewhere candidate;
+    /// coherence already rejects impls that differ only by a const predicate.
+    fn gate_selected_impl_const_predicates(
+        &mut self,
+        goal: TraitInstId<'db>,
+        solution: TraitGoalSolution<'db>,
+        span: DynLazySpan<'db>,
+    ) {
+        let db = self.db;
+        let implementor = solution.implementor;
+        let ImplementorOrigin::Hir(impl_trait) = implementor.origin(db) else {
+            return;
+        };
+        let predicates = WhereClauseOwner::from(impl_trait)
+            .where_clause(db)
+            .const_predicates(db);
+        if predicates.is_empty() {
+            return;
+        }
+
+        // Re-derive the impl's argument substitution for this goal.
+        let goal = goal.fold_with(db, &mut self.table);
+        let mut table = UnificationTable::new(db);
+        let implementor = table.instantiate_with_fresh_vars(Binder::bind(implementor));
+        if table.unify(implementor.trait_inst(db), goal).is_err() {
+            return;
+        }
+        let args: Vec<TyId<'db>> = implementor
+            .params(db)
+            .iter()
+            .map(|&ty| ty.fold_with(db, &mut table))
+            .collect();
+        // Only a concrete substitution can be CTFE-discharged; a symbolic one is
+        // the enclosing item's own assumption, gated at its own call site.
+        if args
+            .iter()
+            .any(|ty| ty.has_var(db) || ty.has_param(db) || ty.has_invalid(db))
+        {
+            return;
+        }
+
+        let expected = TyId::bool(db);
+        for &predicate in predicates {
+            let owner = BodyOwner::AnonConstBody {
+                body: predicate,
+                expected,
+            };
+            match eval_body_owner_const(db, owner, args.clone()) {
+                Ok(value) => {
+                    if static_assert_bool_value(db, value) == Some(false) {
+                        self.push_diag(BodyDiag::WhereConstPredicateFailed {
+                            primary: span.clone(),
+                        });
+                    }
+                }
+                Err(crate::analysis::semantic::CtfeError::NotConstEvaluable { .. }) => {}
+                Err(err) => {
+                    let invalid = TyId::invalid(db, invalid_cause_from_ctfe_error(db, owner, err));
+                    if let Some(diag) = invalid.emit_diag(db, span.clone()) {
+                        self.push_diag(diag);
+                    }
+                }
+            }
         }
     }
 
@@ -1400,11 +1968,27 @@ impl<'db> TyChecker<'db> {
             for task in tasks {
                 match task {
                     env::DeferredTask::Obligation(obligation) => {
+                        let origin = obligation.origin;
+                        let goal = obligation.goal;
+                        let span = obligation.span.clone();
                         match self.process_trait_obligation(obligation, false) {
-                            TraitObligationOutcome::Discharged => {}
+                            TraitObligationOutcome::Discharged(solution, route) => {
+                                self.record_discharged_obligation(origin, goal, solution, route);
+                                if let Some(solution) = solution {
+                                    self.gate_selected_impl_const_predicates(goal, solution, span);
+                                }
+                            }
                             TraitObligationOutcome::Progressed => progressed = true,
                             TraitObligationOutcome::Requeue(obligation) => {
                                 self.env.register_trait_obligation(obligation);
+                            }
+                        }
+                    }
+                    env::DeferredTask::ConstPredicate(obligation) => {
+                        match self.process_const_predicate_obligation(obligation, false) {
+                            ConstPredicateOutcome::Discharged => {}
+                            ConstPredicateOutcome::Requeue(obligation) => {
+                                self.env.register_const_predicate_obligation(obligation);
                             }
                         }
                     }
@@ -1482,10 +2066,18 @@ impl<'db> TyChecker<'db> {
                                 };
 
                                 if candidate.needs_confirmation {
+                                    let scoped_provisions =
+                                        self.env.snapshot_evidence_provisions();
+                                    // Cascade C3d: call-keyed so a `with (<T as
+                                    // Trait>)` scoped selection on this deferred
+                                    // method call is readable per call → MIR.
                                     self.env.register_trait_obligation(env::TraitObligation {
                                         goal: inst,
-                                        origin: env::TraitObligationOrigin::GenericConfirmation,
+                                        origin: env::TraitObligationOrigin::MethodSelection {
+                                            call_expr: pending.expr,
+                                        },
                                         span: call_span.clone().into(),
+                                        scoped_provisions,
                                     });
                                 }
 
@@ -1505,6 +2097,19 @@ impl<'db> TyChecker<'db> {
                                     Some((receiver, receiver_prop)),
                                     true,
                                 );
+
+                                // Gate-2 tail: now that `check_args` has unified
+                                // the receiver with the impl's self type, route
+                                // the concrete selection through the shared
+                                // gate-not-select adapter (`needs_confirmation`
+                                // already routed above).
+                                if !candidate.needs_confirmation {
+                                    self.gate_concrete_method_selection(
+                                        inst,
+                                        pending.expr,
+                                        call_span.clone().into(),
+                                    );
+                                }
 
                                 self.check_callable_effects(pending.expr, &mut callable);
 
@@ -1565,7 +2170,20 @@ impl<'db> TyChecker<'db> {
         for task in self.env.take_deferred_tasks() {
             match task {
                 env::DeferredTask::Obligation(obligation) => {
-                    let _ = self.process_trait_obligation(obligation, true);
+                    let origin = obligation.origin;
+                    let goal = obligation.goal;
+                    let span = obligation.span.clone();
+                    if let TraitObligationOutcome::Discharged(solution, route) =
+                        self.process_trait_obligation(obligation, true)
+                    {
+                        self.record_discharged_obligation(origin, goal, solution, route);
+                        if let Some(solution) = solution {
+                            self.gate_selected_impl_const_predicates(goal, solution, span);
+                        }
+                    }
+                }
+                env::DeferredTask::ConstPredicate(obligation) => {
+                    let _ = self.process_const_predicate_obligation(obligation, true);
                 }
                 env::DeferredTask::Method(pending) => {
                     let Some(expr_prop) = self.env.typed_expr(pending.expr) else {
@@ -2141,7 +2759,7 @@ impl<'db> TyChecker<'db> {
             return false;
         };
         match pat_data {
-            Pat::WildCard | Pat::Rest | Pat::Lit(_) => false,
+            Pat::WildCard | Pat::Rest | Pat::Lit(_) | Pat::QuoteHole(..) => false,
             Pat::Path(..) => self
                 .env
                 .pat_binding(pat)
@@ -2193,7 +2811,7 @@ impl<'db> TyChecker<'db> {
                 self.retype_pattern_bindings_for_borrow(*lhs, kind);
                 self.retype_pattern_bindings_for_borrow(*rhs, kind);
             }
-            Pat::WildCard | Pat::Rest | Pat::Lit(..) => {}
+            Pat::WildCard | Pat::Rest | Pat::Lit(..) | Pat::QuoteHole(..) => {}
         }
     }
 
@@ -2233,7 +2851,7 @@ impl<'db> TyChecker<'db> {
                 self.seed_pat_bindings(*lhs);
                 self.seed_pat_bindings(*rhs);
             }
-            Pat::WildCard | Pat::Rest | Pat::Lit(..) => {}
+            Pat::WildCard | Pat::Rest | Pat::Lit(..) | Pat::QuoteHole(..) => {}
         }
     }
 
@@ -2570,6 +3188,16 @@ pub struct TypedBody<'db> {
     pattern_status: SecondaryMap<PatId, PatternAnalysisStatus>,
     /// Resolved Seq trait methods for for-loops
     for_loop_seq: SecondaryMap<StmtId, Option<ForLoopSeq<'db>>>,
+    /// Discharge evidence for trait obligations retired while checking this
+    /// body, in retirement order.
+    discharged_obligations: Vec<DischargedObligation<'db>>,
+    /// Discharge evidence for const-predicate obligations retired while
+    /// checking this body, in retirement order.
+    discharged_const_predicates: Vec<DischargedConstPredicate<'db>>,
+    /// FCO "slide" cascade C3b: value `ExprId`s of `with`-bindings consumed as
+    /// scoped impl selections (`with (<T as Trait>)`). MIR body lowering skips
+    /// these (they name a goal, not a value).
+    scoped_selection_exprs: FxHashSet<ExprId>,
     expr_place: SecondaryMap<ExprId, PackedOption<ExprPlaceId>>,
     expr_places: PrimaryMap<ExprPlaceId, Place<'db>>,
 }
@@ -2718,6 +3346,204 @@ impl<'db> TyFoldable<'db> for RecordInitLowering<'db> {
     }
 }
 
+/// Evidence that a trait obligation raised while type checking a body was
+/// discharged.
+///
+/// One record is written per retired obligation, in retirement order. The
+/// inline [`TraitGoalSolution`] is the forerunner of an interned evidence id
+/// keyed on `(goal, route)`; consumers should treat it as opaque evidence
+/// describing how the goal was discharged rather than relying on its
+/// representation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DischargedObligation<'db> {
+    /// Where the obligation was raised.
+    pub origin: TraitObligationOrigin<'db>,
+    /// The trait goal that was discharged.
+    pub goal: TraitInstId<'db>,
+    /// The solution the trait solver committed to, or `None` when the
+    /// obligation was retired without committing to evidence (e.g. ambiguity
+    /// or unsatisfiability already reported as a diagnostic).
+    pub solution: Option<TraitGoalSolution<'db>>,
+    /// The discharge mechanism that committed this goal. The ordinary
+    /// trait-solver path records [`DischargeRoute::ImplTable`]; a goal discharged
+    /// from an in-scope `Evidence`-typed scoped provision records
+    /// [`DischargeRoute::ScopedProvision`] (FCO increment 1a).
+    pub route: DischargeRoute,
+}
+
+impl<'db> TyVisitable<'db> for DischargedObligation<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: crate::analysis::ty::visitor::TyVisitor<'db> + ?Sized,
+    {
+        self.goal.visit_with(visitor);
+        if let Some(solution) = &self.solution {
+            solution.visit_with(visitor);
+        }
+    }
+}
+
+impl<'db> TyFoldable<'db> for DischargedObligation<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: crate::analysis::ty::fold::TyFolder<'db>,
+    {
+        Self {
+            origin: self.origin,
+            goal: self.goal.fold_with(db, folder),
+            solution: self.solution.map(|solution| solution.fold_with(db, folder)),
+            route: self.route,
+        }
+    }
+}
+
+/// How a first-class obligation was discharged. This is the evidence *route*:
+/// it identifies the discharge mechanism that committed the goal.
+///
+/// Const predicates are discharged by CTFE at the obligation level
+/// ([`DischargeRoute::Ctfe`]). Other routes (trait-impl selection, in-scope
+/// assumption matching, compiler-known facts) land with their own producers;
+/// this enum is matched without a wildcard so a new route is a compile error
+/// rather than a silent fall-through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DischargeRoute {
+    /// A closed const predicate was evaluated to `true` by compile-time
+    /// function evaluation under the call's type substitution.
+    Ctfe,
+    /// A symbolic const predicate was matched, by normalized term identity,
+    /// against an in-scope `where`-clause assumption of the caller (no CTFE,
+    /// no implication, no direction flipping, no boolean splitting).
+    Assumption,
+    /// A trait goal was discharged by the trait solver selecting an impl from
+    /// the global impl table (the ordinary trait-impl-selection route). The
+    /// committed impl, when one was recorded, rides in the obligation's
+    /// `solution`.
+    ImplTable,
+    /// A trait goal was discharged FROM an in-scope scoped provision: an
+    /// `Evidence`-typed `with`/`uses` provision, captured onto the obligation at
+    /// enqueue time, whose witnessed constraint unified with the obligation goal
+    /// (FCO "slide" step 3 / THE PUSH, increment 1a). The impl table is NOT
+    /// consulted on this route — the provision IS the evidence.
+    ScopedProvision,
+}
+
+/// A discharge's dependency on another checked fact.
+///
+/// `premises` records *logical* dependencies, not every evaluation input. The
+/// [`DischargeRoute::Ctfe`] route is premise-free — it evaluates a closed term
+/// and consults nothing else, so its `premises` stay empty (the evaluated value
+/// is receipt/debug payload, not a premise). The [`DischargeRoute::Assumption`]
+/// route depends on the in-scope `where`-clause assumption it matched, recorded
+/// as [`CheckPremise::Assumption`].
+///
+/// The enum is deliberately extensible: future routes (SMT-discharged evidence,
+/// runtime-check sites, axioms/laws, resource proofs) add their own variants
+/// without changing the meaning of the existing ones. That premise-extensibility
+/// is a one-way door — a discharge that cannot record what it depended on cannot
+/// be retrofitted once `fe explain`/hover/certificate formats ship. Record-side
+/// only — never part of an interned evidence key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckPremise<'db> {
+    /// The discharge relied on an in-scope `where`-clause assumption, matched by
+    /// normalized term identity (the [`DischargeRoute::Assumption`] route).
+    Assumption {
+        /// The normalized obligation term that had to be proved.
+        required_term: TermId<'db>,
+        /// The normalized in-scope assumption term it matched. Identical to
+        /// `required_term` at M5 (matching is by exact identity); kept distinct
+        /// so a future non-identity route can record the assumption it used.
+        assumption_term: TermId<'db>,
+        /// The caller `where`-clause const-predicate body the assumption came
+        /// from. Span and owner derive from this stable id (repo-native origin —
+        /// no separate span/owner fields to drift out of sync).
+        assumption: Body<'db>,
+    },
+}
+
+impl<'db> TyVisitable<'db> for CheckPremise<'db> {
+    fn visit_with<V>(&self, _visitor: &mut V)
+    where
+        V: crate::analysis::ty::visitor::TyVisitor<'db> + ?Sized,
+    {
+        // Premise payloads are recorded facts (interned terms in the caller's
+        // own parameter frame, plus an HIR body id), not live obligations:
+        // there is nothing for a type folder/visitor to traverse.
+    }
+}
+
+impl<'db> TyFoldable<'db> for CheckPremise<'db> {
+    fn super_fold_with<F>(self, _db: &'db dyn HirAnalysisDb, _folder: &mut F) -> Self
+    where
+        F: crate::analysis::ty::fold::TyFolder<'db>,
+    {
+        self
+    }
+}
+
+/// Evidence that a `where`-clause const predicate raised while type checking a
+/// body was discharged.
+///
+/// One record is written per retired const-predicate obligation, in retirement
+/// order. Unlike a trait goal, a const predicate is a body (`B::WORD_BITS ==
+/// 256`) evaluated under a type substitution; the record keeps both the source
+/// body and the substitution so a receipt can be reconstructed, plus the
+/// [`DischargeRoute`] and an extensible [`premises`](Self::premises) slot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DischargedConstPredicate<'db> {
+    /// Where the obligation was raised.
+    pub origin: env::ConstPredicateObligationOrigin<'db>,
+    /// The predicate body that was discharged.
+    pub predicate: Body<'db>,
+    /// The type arguments the predicate was evaluated under.
+    pub generic_args: Vec<TyId<'db>>,
+    /// How the predicate was discharged.
+    pub route: DischargeRoute,
+    /// Logical dependencies of this discharge: the matched assumption for the
+    /// `Assumption` route, empty for the (closed) `Ctfe` route. See
+    /// [`CheckPremise`].
+    pub premises: Vec<CheckPremise<'db>>,
+}
+
+impl<'db> DischargedConstPredicate<'db> {
+    /// The call expression this discharge is keyed to.
+    pub fn call_expr(&self) -> ExprId {
+        match self.origin {
+            env::ConstPredicateObligationOrigin::CallConstraint { call_expr, .. } => call_expr,
+        }
+    }
+}
+
+impl<'db> TyVisitable<'db> for DischargedConstPredicate<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: crate::analysis::ty::visitor::TyVisitor<'db> + ?Sized,
+    {
+        self.generic_args.visit_with(visitor);
+        for premise in &self.premises {
+            premise.visit_with(visitor);
+        }
+    }
+}
+
+impl<'db> TyFoldable<'db> for DischargedConstPredicate<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: crate::analysis::ty::fold::TyFolder<'db>,
+    {
+        Self {
+            origin: self.origin,
+            predicate: self.predicate,
+            generic_args: self.generic_args.fold_with(db, folder),
+            route: self.route,
+            premises: self
+                .premises
+                .into_iter()
+                .map(|premise| premise.fold_with(db, folder))
+                .collect(),
+        }
+    }
+}
+
 impl<'db> TyVisitable<'db> for TypedBody<'db> {
     fn visit_with<V>(&self, visitor: &mut V)
     where
@@ -2749,6 +3575,12 @@ impl<'db> TyVisitable<'db> for TypedBody<'db> {
         self.pattern_store.visit_with(visitor);
         for seq in self.for_loop_seq.values().flatten() {
             seq.visit_with(visitor);
+        }
+        for obligation in &self.discharged_obligations {
+            obligation.visit_with(visitor);
+        }
+        for discharged in &self.discharged_const_predicates {
+            discharged.visit_with(visitor);
         }
     }
 }
@@ -2802,6 +3634,12 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
             .values_mut()
             .flatten()
             .for_each(|seq| *seq = seq.clone().fold_with(db, folder));
+        this.discharged_obligations
+            .iter_mut()
+            .for_each(|obligation| *obligation = (*obligation).fold_with(db, folder));
+        this.discharged_const_predicates
+            .iter_mut()
+            .for_each(|discharged| *discharged = discharged.clone().fold_with(db, folder));
         this.expr_places
             .values_mut()
             .for_each(|place| *place = place.clone().fold_with(db, folder));
@@ -3048,6 +3886,60 @@ impl<'db> TypedBody<'db> {
         self.for_loop_seq[stmt].as_ref()
     }
 
+    /// All trait-obligation discharge records for this body, in the order the
+    /// obligations were retired by the type checker.
+    pub fn discharged_obligations(&self) -> &[DischargedObligation<'db>] {
+        &self.discharged_obligations
+    }
+
+    /// Discharge records for obligations raised by the constraints of the
+    /// given call expression.
+    pub fn discharged_obligations_for_call(
+        &self,
+        call_expr: ExprId,
+    ) -> impl Iterator<Item = &DischargedObligation<'db>> {
+        self.discharged_obligations
+            .iter()
+            .filter(move |obligation| match obligation.origin {
+                TraitObligationOrigin::CallConstraint {
+                    call_expr: origin_expr,
+                    ..
+                } => origin_expr == call_expr,
+                // Cascade C3d: a direct receiver call's concrete selection is
+                // call-keyed, so its scoped-provision discharge is readable here
+                // (consumed by `const_ref.rs::scoped_provision_implementor`).
+                TraitObligationOrigin::MethodSelection {
+                    call_expr: origin_expr,
+                } => origin_expr == call_expr,
+                TraitObligationOrigin::GenericConfirmation => false,
+            })
+    }
+
+    /// FCO "slide" cascade C3b: whether `value_expr` is a `with`-binding consumed
+    /// as a scoped impl SELECTION (`with (<T as Trait>)`) — it names a (Trait,
+    /// Type) goal, not a runtime value, so MIR body lowering must SKIP lowering it
+    /// (it has no value-path classification; the impl it selected is recorded on
+    /// the discharge instead).
+    pub fn is_scoped_selection_expr(&self, value_expr: ExprId) -> bool {
+        self.scoped_selection_exprs.contains(&value_expr)
+    }
+
+    /// All const-predicate discharge records for this body, in the order the
+    /// obligations were retired by the type checker.
+    pub fn discharged_const_predicates(&self) -> &[DischargedConstPredicate<'db>] {
+        &self.discharged_const_predicates
+    }
+
+    /// Const-predicate discharge records for the given call expression.
+    pub fn discharged_const_predicates_for_call(
+        &self,
+        call_expr: ExprId,
+    ) -> impl Iterator<Item = &DischargedConstPredicate<'db>> {
+        self.discharged_const_predicates
+            .iter()
+            .filter(move |discharged| discharged.call_expr() == call_expr)
+    }
+
     pub fn binding_source(
         &self,
         db: &'db dyn HirAnalysisDb,
@@ -3118,7 +4010,9 @@ impl<'db> TypedBody<'db> {
                     _ => None,
                 }
             }
-            Partial::Present(Pat::WildCard | Pat::Rest | Pat::Lit(_) | Pat::Path(_, _))
+            Partial::Present(
+                Pat::WildCard | Pat::Rest | Pat::Lit(_) | Pat::Path(_, _) | Pat::QuoteHole(..),
+            )
             | Partial::Absent => None,
         }
     }
@@ -3700,7 +4594,11 @@ impl<'db> TypedBody<'db> {
                     seen,
                 );
             }
-            Expr::Lit(_) | Expr::Path(_) => {}
+            Expr::Lit(_)
+            | Expr::Path(_)
+            | Expr::Quote { .. }
+            | Expr::QuoteHole(..)
+            | Expr::QuoteFieldHole(..) => {}
         }
     }
 
@@ -3924,6 +4822,22 @@ impl<'db> TypedBody<'db> {
             .collect()
     }
 
+    /// Build an otherwise-empty [`TypedBody`] carrying the given discharge
+    /// records. Test-only constructor for the cascade C3d const_ref read
+    /// (`scoped_provision_implementor`): it lets a unit test hand-build the exact
+    /// `ScopedProvision`-routed discharge a real caller would record, without
+    /// running a full body walk.
+    #[cfg(test)]
+    pub(crate) fn with_discharged_obligations_for_test(
+        db: &'db dyn HirAnalysisDb,
+        discharged_obligations: Vec<DischargedObligation<'db>>,
+    ) -> Self {
+        Self {
+            discharged_obligations,
+            ..Self::empty(db)
+        }
+    }
+
     fn empty(db: &'db dyn HirAnalysisDb) -> Self {
         Self {
             body: None,
@@ -3945,6 +4859,9 @@ impl<'db> TypedBody<'db> {
             pattern_store: PatternStore::default(),
             pattern_status: SecondaryMap::with_default(PatternAnalysisStatus::Invalid),
             for_loop_seq: SecondaryMap::new(),
+            discharged_obligations: Vec::new(),
+            discharged_const_predicates: Vec::new(),
+            scoped_selection_exprs: FxHashSet::default(),
             expr_place: SecondaryMap::new(),
             expr_places: PrimaryMap::new(),
         }
@@ -4290,9 +5207,414 @@ impl<'db> TyCheckerFinalizer<'db> {
             return;
         }
 
-        let solve_cx = TraitSolveCx::new(self.db, self.body.body.unwrap().scope());
+        let solve_cx = env::ProvisionEnv::for_scope(
+            self.body.body.unwrap().scope(),
+            PredicateListId::empty_list(self.db),
+        )
+        .solve_cx(self.db);
         if let Some(diag) = ty.emit_wf_diag(self.db, solve_cx, self.assumptions, span) {
             self.diags.push(diag.into());
         }
+    }
+}
+
+/// Returns the first `where`-clause const predicate of the ADT applied at the
+/// outermost level of `ty` that is *refuted* under its concrete type arguments,
+/// or `None` if every predicate holds, the application is still symbolic, or a
+/// predicate faults (faults are diagnosed where the value is evaluated, not at
+/// well-formedness time). Called from `check_ty_wf` so that a concrete ADT
+/// application violating its own bound is ill-formed wherever it appears —
+/// construction, signatures, locals, fields, never-called declarations. CTFE
+/// runs here, at the well-formedness/obligation layer, never inside the trait
+/// solver's proof forest. Nested applications are covered by `check_ty_wf`'s own
+/// recursion over type arguments.
+pub(crate) fn ty_const_predicate_violation<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+) -> Option<Body<'db>> {
+    let (base, args) = ty.decompose_ty_app(db);
+
+    // A symbolic application (an argument still mentioning a parameter or
+    // inference variable) is the enclosing item's own assumption; do not
+    // CTFE-evaluate it. Invalid arguments carry their own diagnostics.
+    if args
+        .iter()
+        .any(|arg| arg.has_var(db) || arg.has_param(db) || arg.has_invalid(db))
+    {
+        return None;
+    }
+
+    let TyData::TyBase(TyBase::Adt(adt)) = base.data(db) else {
+        return None;
+    };
+    let owner = WhereClauseOwner::from_item_opt(adt.adt_ref(db).as_item())?;
+
+    let expected = TyId::bool(db);
+    for &predicate in owner.where_clause(db).const_predicates(db) {
+        let pred_owner = BodyOwner::AnonConstBody {
+            body: predicate,
+            expected,
+        };
+        if let Ok(value) = eval_body_owner_const(db, pred_owner, args.to_vec())
+            && static_assert_bool_value(db, value) == Some(false)
+        {
+            return Some(predicate);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod scoped_provision_tests {
+    use camino::Utf8PathBuf;
+
+    use super::{DischargeRoute, TraitObligationOutcome, TyChecker, env};
+    use crate::{
+        analysis::{
+            name_resolution::{PathRes, resolve_path},
+            ty::{
+                trait_def::{ImplementorId, TraitInstId, impls_for_trait_def},
+                trait_resolution::PredicateListId,
+                ty_check::env::{EffectOrigin, EffectParamSite, ProvidedEffect},
+                ty_def::TyId,
+            },
+        },
+        hir_def::{Expr, ExprId, Func, Partial, PathId},
+        span::DynLazySpan,
+        test_db::HirAnalysisTestDb,
+    };
+
+    /// A fixture with an `Eq` bound function, a `Point` struct, and a real
+    /// `impl Eq for Point` (the global `Hir` impl whose [`ImplementorId`] a scoped
+    /// provision names under cascade C2), but NO `impl Ord for Point` — so an
+    /// `Ord<Point>` goal can only ever come from a provision, exercising the
+    /// negative arm against the impl table.
+    ///
+    /// [`ImplementorId`]: crate::analysis::ty::trait_def::ImplementorId
+    const FIXTURE: &str = r#"
+use core::ops::Eq
+use core::ops::Ord
+
+struct Point {
+    x: u256,
+    y: u256,
+}
+
+impl Eq for Point {
+    fn eq(self, _ other: Point) -> bool {
+        self.x == other.x
+    }
+}
+
+fn requires_eq<T: Eq>(_ t: T) {}
+"#;
+
+    /// Resolve a path (as segment strings) from `top_mod`'s file scope to whatever
+    /// it names, panicking if it does not resolve.
+    fn resolve<'db>(
+        db: &'db HirAnalysisTestDb,
+        top_mod_scope: crate::hir_def::scope_graph::ScopeId<'db>,
+        segments: &[&str],
+    ) -> PathRes<'db> {
+        let path = PathId::from_segments(db, segments);
+        resolve_path(db, path, top_mod_scope, PredicateListId::empty_list(db), false)
+            .unwrap_or_else(|e| panic!("expected {segments:?} to resolve, got {e:?}"))
+    }
+
+    /// Build the concrete trait instance `<subject>: <trait><subject>` (e.g.
+    /// `Point: Eq<Point>`), exactly the saturated `[Self, T]` arg shape a real
+    /// `T: Eq` constraint instantiates to when `T := Point`.
+    fn concrete_inst<'db>(
+        db: &'db HirAnalysisTestDb,
+        trait_inst: TraitInstId<'db>,
+        subject: TyId<'db>,
+    ) -> TraitInstId<'db> {
+        TraitInstId::new_simple(db, trait_inst.def(db), vec![subject, subject])
+    }
+
+    fn find_func<'db>(db: &'db HirAnalysisTestDb, top_mod: crate::hir_def::TopLevelMod<'db>, name: &str) -> Func<'db> {
+        top_mod
+            .all_funcs(db)
+            .iter()
+            .copied()
+            .find(|f| f.name(db).to_opt().is_some_and(|n| n.data(db) == name))
+            .unwrap_or_else(|| panic!("missing `{name}` function"))
+    }
+
+    /// The REAL global `Hir` [`ImplementorId`] of the sole `impl <trait_inst.def>`
+    /// for `subject` in `top_mod`'s ingot — e.g. `impl Eq for Point` — looked up
+    /// through the same impl table the trait solver uses. This is what a scoped
+    /// provision names under cascade C2; the unit test carries it so the discharge
+    /// records a concrete `TraitGoalSolution` rather than the old `Some(None)`.
+    fn sole_implementor<'db>(
+        db: &'db HirAnalysisTestDb,
+        top_mod: crate::hir_def::TopLevelMod<'db>,
+        trait_inst: TraitInstId<'db>,
+        subject: TyId<'db>,
+    ) -> ImplementorId<'db> {
+        let impls = impls_for_trait_def(db, top_mod.ingot(db), trait_inst.def(db));
+        let mut matching = impls
+            .iter()
+            .map(|binder| binder.instantiate_identity())
+            .filter(|implementor| implementor.self_ty(db) == subject);
+        let implementor = matching
+            .next()
+            .unwrap_or_else(|| panic!("expected a real impl of the trait for the subject type"));
+        assert!(
+            matching.next().is_none(),
+            "expected exactly one impl for the subject type",
+        );
+        implementor
+    }
+
+    /// The headline mechanism (FCO increment 1a + cascade C2): a deferred trait
+    /// obligation whose snapshot carries an in-scope `Evidence<Eq<Point>>`
+    /// provision — naming the REAL `impl Eq for Point` — is discharged FROM that
+    /// provision (consulted before the impl table), recording the `ScopedProvision`
+    /// route AND a concrete `TraitGoalSolution` whose implementor is that real
+    /// impl (never the old `Some(None)` floor). The negative arm proves the
+    /// discharge is goal-specific: the same `Evidence<Eq<Point>>` does NOT
+    /// discharge an unrelated `Ord<Point>` goal.
+    #[test]
+    fn evidence_provision_discharges_matching_goal_only() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("scoped_provision_discharge.fe"),
+            FIXTURE,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let scope = top_mod.scope();
+
+        // Resolve the canonical `core::derive::Evidence` ADT ctor and the
+        // `core::ops::Eq` / `core::ops::Ord` traits by RESOLVED identity.
+        let PathRes::Ty(evidence_ctor) = resolve(&db, scope, &["core", "derive", "Evidence"])
+        else {
+            panic!("core::derive::Evidence must resolve to a type");
+        };
+        let PathRes::Trait(eq_inst) = resolve(&db, scope, &["core", "ops", "Eq"]) else {
+            panic!("core::ops::Eq must resolve to a trait");
+        };
+        let PathRes::Trait(ord_inst) = resolve(&db, scope, &["core", "ops", "Ord"]) else {
+            panic!("core::ops::Ord must resolve to a trait");
+        };
+        let PathRes::Ty(point_ty) = resolve(&db, scope, &["Point"]) else {
+            panic!("Point must resolve to a type");
+        };
+
+        let eq_point = concrete_inst(&db, eq_inst, point_ty);
+        let ord_point = concrete_inst(&db, ord_inst, point_ty);
+
+        // The in-scope provision value's type: a saturated `Evidence<Eq<Point>>`
+        // (the `Eq<Point>` goal as a `ConstraintTerm`, applied to the `Evidence`
+        // ctor) — exactly the witness shape increment 1b will mint at a `with`.
+        let eq_constraint_term = TyId::constraint_term(&db, eq_point);
+        let evidence_eq_point = TyId::app(&db, evidence_ctor, eq_constraint_term);
+
+        // Anti-vacuous: the recognizer must peel this synthetic witness back to
+        // the `Eq<Point>` it witnesses, by resolved `core::derive::Evidence`
+        // identity. (If this returned `None`, the whole discharge path is dead
+        // and both polarities below would pass for free.)
+        assert_eq!(
+            super::super::provider_goal::evidence_witnessed_goal(&db, evidence_eq_point),
+            Some(eq_point),
+            "the recognizer must peel Evidence<Eq<Point>> to Eq<Point>",
+        );
+
+        // The REAL global `Hir` implementor the provision names: `impl Eq for
+        // Point`. Cascade C2 carries this onto the provision so the discharge
+        // records it as the committed solution (not `Some(None)`).
+        let eq_point_impl = sole_implementor(&db, top_mod, eq_inst, point_ty);
+
+        let requires_eq = find_func(&db, top_mod, "requires_eq");
+        let provision = ProvidedEffect {
+            origin: EffectOrigin::Param {
+                site: EffectParamSite::Func(requires_eq),
+                index: 0,
+                name: None,
+            },
+            ty: evidence_eq_point,
+            is_mut: false,
+            binding: None,
+            selected_implementor: Some(eq_point_impl),
+        };
+
+        let make_obligation = |goal| env::TraitObligation {
+            goal,
+            origin: env::TraitObligationOrigin::GenericConfirmation,
+            span: DynLazySpan::invalid(),
+            scoped_provisions: vec![provision],
+        };
+
+        // POSITIVE: the obligation goal `Eq<Point>` is witnessed by the snapshot
+        // provision, so it discharges FROM the provision via `ScopedProvision` —
+        // recording the REAL `impl Eq for Point` implementor the provision names
+        // as the committed solution (cascade C2: never `Some(None)`).
+        {
+            let mut tc = TyChecker::new(&db, super::BodyOwner::Func(requires_eq))
+                .expect("requires_eq is checkable");
+            let outcome = tc.discharge_from_scoped_provision(eq_point, &make_obligation(eq_point));
+            let solution = outcome
+                .expect("Evidence<Eq<Point>> must discharge an Eq<Point> goal")
+                .expect("the scoped discharge must record a concrete solution, not Some(None)");
+            assert_eq!(
+                solution.implementor, eq_point_impl,
+                "the recorded implementor must be the REAL `impl Eq for Point`",
+            );
+            assert_eq!(
+                solution.inst, eq_point,
+                "the recorded solution's trait inst must be the discharged Eq<Point> goal",
+            );
+
+            // Full processing path: the outcome carries the ScopedProvision route
+            // AND the concrete solution naming the real implementor.
+            let mut tc = TyChecker::new(&db, super::BodyOwner::Func(requires_eq))
+                .expect("requires_eq is checkable");
+            let outcome = tc.process_trait_obligation(make_obligation(eq_point), false);
+            let TraitObligationOutcome::Discharged(Some(solution), DischargeRoute::ScopedProvision) =
+                outcome
+            else {
+                panic!(
+                    "processing must discharge Eq<Point> via the ScopedProvision route with a concrete solution",
+                );
+            };
+            assert_eq!(
+                solution.implementor, eq_point_impl,
+                "the processed discharge must record the REAL `impl Eq for Point`",
+            );
+        }
+
+        // NEGATIVE: the same `Evidence<Eq<Point>>` provision must NOT discharge an
+        // unrelated `Ord<Point>` goal — the discharge is keyed on the witnessed
+        // constraint's identity, not "any provision discharges anything".
+        {
+            let mut tc = TyChecker::new(&db, super::BodyOwner::Func(requires_eq))
+                .expect("requires_eq is checkable");
+            let outcome =
+                tc.discharge_from_scoped_provision(ord_point, &make_obligation(ord_point));
+            assert_eq!(
+                outcome, None,
+                "Evidence<Eq<Point>> must NOT discharge an Ord<Point> goal",
+            );
+        }
+    }
+
+    /// A fixture exercising the PROVISIONAL near-term activation surface for
+    /// cascade scoped-selection (FCO slide C3b): a `with (<Point as Eq>) { .. }`
+    /// shorthand whose value names the concrete goal `<Point as Eq>` and a body
+    /// that uses no effects. `select` returns `()`; `not_a_goal` holds an
+    /// ordinary value `with` to exercise the negative arm.
+    const SELECTION_FIXTURE: &str = r#"
+use core::ops::Eq
+
+struct Point {
+    x: u256,
+    y: u256,
+}
+
+impl Eq for Point {
+    fn eq(self, _ other: Point) -> bool {
+        self.x == other.x
+    }
+}
+
+fn select() {
+    with (<Point as Eq>) {
+        ()
+    }
+}
+
+fn not_a_goal() {
+    let p: u256 = 0
+    with (p) {
+        ()
+    }
+}
+"#;
+
+    /// The value `ExprId` of the sole `with`-binding in `func`'s body.
+    fn sole_with_binding_value<'db>(db: &'db HirAnalysisTestDb, func: Func<'db>) -> ExprId {
+        let body = func.body(db).expect("func has a body");
+        for (_id, expr) in body.exprs(db).iter() {
+            if let Partial::Present(Expr::With(bindings, _)) = expr {
+                let [binding] = bindings.as_slice() else {
+                    panic!("expected exactly one with-binding");
+                };
+                return binding.value;
+            }
+        }
+        panic!("expected a `with` expression in `{:?}`'s body", func.name(db));
+    }
+
+    /// FCO slide C3b: the PROVISIONAL activation surface. A
+    /// `with (<Point as Eq>) { .. }` shorthand stamps a REAL `Evidence`-typed
+    /// scoped provision — `ty == Evidence<Eq<Point>>`, `selected_implementor ==
+    /// Some(`the sole `impl Eq for Point`)` — so the cascade's snapshot/discharge
+    /// fire on it. The named goal resolves to a REAL impl's `ImplementorId` (no
+    /// forged `Evidence`), and the whole body type-checks with no diagnostics
+    /// (the surface is inert in effect: byte-identical until coherence demotes).
+    /// The negative arm proves an ordinary value `with (p)` mints no selection.
+    #[test]
+    fn provisional_with_selection_stamps_real_implementor() {
+        use crate::analysis::ty::{provider_goal::evidence_witnessed_goal, ty_def::TyData};
+
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("provisional_with_selection.fe"),
+            SELECTION_FIXTURE,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        // Byte-identity / inertness: the surface introduces no diagnostics — the
+        // body checks exactly as it would without the selection.
+        db.assert_no_diags(top_mod);
+        let scope = top_mod.scope();
+
+        let PathRes::Trait(eq_inst) = resolve(&db, scope, &["core", "ops", "Eq"]) else {
+            panic!("core::ops::Eq must resolve to a trait");
+        };
+        let PathRes::Ty(point_ty) = resolve(&db, scope, &["Point"]) else {
+            panic!("Point must resolve to a type");
+        };
+        let eq_point = concrete_inst(&db, eq_inst, point_ty);
+        let eq_point_impl = sole_implementor(&db, top_mod, eq_inst, point_ty);
+
+        // POSITIVE: `with (<Point as Eq>)` stamps the real selection.
+        let select = find_func(&db, top_mod, "select");
+        let value = sole_with_binding_value(&db, select);
+        let mut tc =
+            TyChecker::new(&db, super::BodyOwner::Func(select)).expect("select is checkable");
+        let provided = tc
+            .provisional_scoped_selection(value)
+            .expect("`with (<Point as Eq>)` must mint a scoped selection provision");
+
+        // The minted witness type is a saturated `Evidence<Eq<Point>>` the
+        // cascade recognizer peels back to `Eq<Point>`.
+        assert!(
+            matches!(provided.ty.data(&db), TyData::TyApp(..)),
+            "the provision type must be the applied `Evidence<Eq<Point>>`",
+        );
+        assert_eq!(
+            evidence_witnessed_goal(&db, provided.ty),
+            Some(eq_point),
+            "the minted provision type must be Evidence<Eq<Point>>",
+        );
+        // The stamp carries the REAL `impl Eq for Point` implementor — the only
+        // impl coherence permits, hence the one the solver would itself pick.
+        assert_eq!(
+            provided.selected_implementor,
+            Some(eq_point_impl),
+            "the provision must name the real `impl Eq for Point` implementor",
+        );
+
+        // NEGATIVE: an ordinary value `with (p)` is NOT a goal selection.
+        let not_a_goal = find_func(&db, top_mod, "not_a_goal");
+        let value = sole_with_binding_value(&db, not_a_goal);
+        let mut tc = TyChecker::new(&db, super::BodyOwner::Func(not_a_goal))
+            .expect("not_a_goal is checkable");
+        assert_eq!(
+            tc.provisional_scoped_selection(value),
+            None,
+            "an ordinary value `with (p)` must not mint a scoped selection",
+        );
     }
 }

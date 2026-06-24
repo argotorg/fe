@@ -1,0 +1,46 @@
+// BR3 guard (TGT-GENERATED-ITEM-VALIDATION). The provider *body* is exempt from
+// ordinary type/borrow checking by design (it is a restricted compile-time
+// command language; `is_derive_provider_fn` filters it out at
+// analysis/ty/mod.rs:389,718-721 and borrowck/check.rs:185). But the items the
+// provider EMITS must re-enter normal checking — otherwise a typed provider
+// system degenerates into trusted macro magic.
+//
+// This fixture pins the failure direction, which previously had NO fixture
+// (inventory docs/dev/FCO_BRIDGE_AND_REIFICATION_TARGETS.md, finding #8/#11):
+// the emitted `dup` is declared `-> Self` but its body is a `bool`. The expected
+// outcome is a diagnostic (a normal type mismatch on the generated body, or a
+// provider/derive-lower rejection) — NOT a clean compile. The captured snapshot
+// records which path reports it.
+
+use core::derive::Derive
+use core::derive::Evidence
+use core::derive::ImplBuilder
+use core::derive::Reflect
+
+trait Dup {
+    fn dup(self) -> Self
+}
+
+impl Derive<Dup> for BadDup {
+    const fn derive<T>(ev: own Evidence<Dup<T>>) -> Evidence<Dup<T>>
+        uses (
+            reflect: Reflect<T>,
+            builder: mut ImplBuilder<Dup<T>>,
+        )
+    {
+        // Deliberately wrong: `dup` returns `Self` (the inferred signature from
+        // the `Dup` goal trait), but the emitted body is a `bool`. A correct
+        // provider would build `Self { .. }`.
+        builder.emit_method("dup", quote { true })
+        builder.finish()
+        ev
+    }
+}
+
+struct Point {
+    x: u256,
+}
+
+derive Dup for Point using BadDup
+
+struct BadDup {}

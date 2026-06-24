@@ -1,0 +1,36 @@
+// FCO Level 1 (W-D) NEGATIVE — the RETURN goal position, closing an audit hole.
+//
+// The adversarial audit (2026-06-16) found that Level 1 de-exempted the witness
+// PARAMETER and `uses`-`ImplBuilder` goal positions but NOT the witness RETURN
+// position: a nonsense trait in `-> Evidence<..>` compiled SILENTLY while the
+// same trait in the parameter position errored. The goal-argument exemption
+// survived in the return slot.
+//
+// Here the parameter + `uses` goals are VALID (`Real<T>`), so the ONLY ill-formed
+// goal is the RETURN `Evidence<ReturnBogus<T>>`. It must now error (`2-0002`) at
+// the return position — proving `provider_capability_goals` checks the return
+// slot, not only params/effects.
+
+use core::derive::Derive
+use core::derive::Evidence
+use core::derive::ImplBuilder
+use core::derive::Reflect
+
+trait Real {
+    fn r(self) -> bool
+}
+
+impl Derive<Real> for ReturnGoal {
+    const fn derive<T>(ev: own Evidence<Real<T>>) -> Evidence<ReturnBogus<T>>
+        uses (
+            reflect: Reflect<T>,
+            builder: mut ImplBuilder<Real<T>>,
+        )
+    {
+        builder.emit_method("r", builder.bool(true))
+        builder.finish()
+        ev
+    }
+}
+
+struct ReturnGoal {}

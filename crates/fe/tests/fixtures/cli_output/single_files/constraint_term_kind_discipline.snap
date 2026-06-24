@@ -1,0 +1,17 @@
+---
+source: crates/fe/tests/cli_output.rs
+assertion_line: 1824
+expression: output
+input_file: tests/fixtures/cli_output/single_files/constraint_term_kind_discipline.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/constraint_term_kind_discipline.fe
+
+error[3-0001]: invalid type argument kind
+   ┌─ constraint_term_kind_discipline.fe:12:9
+   │
+12 │ fn f(b: Box<u256>) {}
+   │         ^^^^^^^^^ expected `Constraint` kind, but `u256` has `*` kind
+
+
+=== EXIT CODE: 1 ===

@@ -1,0 +1,6 @@
+// `quote` expressions are only allowed in derive provider bodies.
+
+fn not_a_provider() -> bool {
+    let q = quote { true }
+    true
+}

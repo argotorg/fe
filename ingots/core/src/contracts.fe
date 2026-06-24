@@ -70,4 +70,31 @@ pub fn decode_runtime_args<H, A, T>(_ host: mut H) -> T
 pub trait Target {
     type RootEffect: ContractHost
     type DefaultAbi: Abi
+    /// The target's intrinsic-capability carrier (FCO effects-as-capabilities,
+    /// instance #2). A backend's intrinsics gate on holding this; the toolchain
+    /// seeds the selected target's `Intrinsics` at the program root. Authority
+    /// only (non-scarce): using an intrinsic is freely multiple, so unlike the
+    /// `#[fixed]` money floor there is no <=1 count, just the in-scope check.
+    type Intrinsics
 }
+
+/// Capability to use a backend's EVM-storage intrinsics (`SLOAD`/`SSTORE`).
+///
+/// FCO effects-as-capabilities, instance #2 (the per-target intrinsic carrier,
+/// design #93). This is the TRAIT-KEYED gate the storage `extern` ops carry via
+/// `uses (_t: StorageIntrinsic)`: the obligation resolves only against an
+/// in-scope provider whose type implements it. On an EVM build the target's
+/// root effect (`<EvmTarget as Target>::RootEffect`, i.e. `std::evm::effects::Evm`)
+/// implements it, so the op resolves byte-identically; a future non-EVM target
+/// whose root effect does NOT implement it would reject the op (the cross-target
+/// negative, not testable until a second backend exists).
+///
+/// It is reused through the PROVEN root-provider path: the toolchain already
+/// seeds the selected target's root effect at the program root (how `Ctx` /
+/// `RawOps` / `RawMem` reach contract bodies), and a trait-keyed `uses` matches
+/// that seeded provider when `RootEffect: StorageIntrinsic`. The named carrier
+/// `Target::Intrinsics` (e.g. `EvmIntrinsics`) documents the capability per
+/// target; the root effect is what actually carries it (implements this trait),
+/// so the gate resolves against the single seeded root provider rather than a
+/// second, parallel root seed. Marker only (no methods): authority, non-scarce.
+pub trait StorageIntrinsic {}

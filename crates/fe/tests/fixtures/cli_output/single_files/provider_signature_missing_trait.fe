@@ -1,0 +1,32 @@
+// FCO Level 1 (W-D) NEGATIVE B — the bridge being retired, demonstrated.
+//
+// `Evidence<MissingTrait<T>>` names a trait that does not exist. Under the
+// Level-0 signature exemption this compiled SILENTLY (the goal argument was
+// decoration, never resolved). Level 1 lowers the goal position via the W-B
+// constraint lowering and reports the unresolved trait — the same boundary as a
+// `where MissingTrait<T>` predicate. This is the de-exempt flip from
+// "compiles" to "errors" (decision packet §1 `Bogus<T>` probe).
+
+use core::derive::Derive
+use core::derive::Evidence
+use core::derive::ImplBuilder
+use core::derive::Reflect
+
+trait Real {
+    fn r(self) -> bool
+}
+
+impl Derive<Real> for MissingGoal {
+    const fn derive<T>(ev: own Evidence<MissingTrait<T>>) -> Evidence<MissingTrait<T>>
+        uses (
+            reflect: Reflect<T>,
+            builder: mut ImplBuilder<MissingTrait<T>>,
+        )
+    {
+        builder.emit_method("r", builder.bool(true))
+        builder.finish()
+        ev
+    }
+}
+
+struct MissingGoal {}

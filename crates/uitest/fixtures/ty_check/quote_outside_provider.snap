@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/quote_outside_provider.fe
+---
+error[8-0084]: `quote` expressions are only allowed in derive provider bodies
+  ┌─ quote_outside_provider.fe:4:13
+  │
+4 │     let q = quote { true }
+  │             ^^^^^^^^^^^^^^ `quote` builds a code template for a `mut ImplBuilder<..>` capability

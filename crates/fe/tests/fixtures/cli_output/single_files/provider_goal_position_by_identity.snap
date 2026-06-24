@@ -1,0 +1,29 @@
+---
+source: crates/fe/tests/cli_output.rs
+assertion_line: 1822
+expression: output
+input_file: tests/fixtures/cli_output/single_files/provider_goal_position_by_identity.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/provider_goal_position_by_identity.fe
+
+error[2-0002]: `Bogus` is not found
+   ┌─ provider_goal_position_by_identity.fe:30:34
+   │
+30 │     const fn derive<T>(ev: own W<Bogus<T>>) -> W<Bogus<T>>
+   │                                  ^^^^^ `Bogus` is not found
+
+error[2-0002]: `Bogus` is not found
+   ┌─ provider_goal_position_by_identity.fe:30:50
+   │
+30 │     const fn derive<T>(ev: own W<Bogus<T>>) -> W<Bogus<T>>
+   │                                                  ^^^^^ `Bogus` is not found
+
+error[2-0002]: `Bogus` is not found
+   ┌─ provider_goal_position_by_identity.fe:33:28
+   │
+33 │             builder: mut B<Bogus<T>>,
+   │                            ^^^^^ `Bogus` is not found
+
+
+=== EXIT CODE: 1 ===

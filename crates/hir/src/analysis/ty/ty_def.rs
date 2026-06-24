@@ -25,12 +25,12 @@ use smallvec::SmallVec;
 use super::{
     adt_def::{AdtDef, adt_layout_hole_plan_with_explicit_args, instantiated_adt_field_ty},
     const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy, TypePrintMode},
-    diagnostics::{TraitConstraintDiag, TyDiagCollection},
+    diagnostics::TyDiagCollection,
     effects::place_effect_provider_param_index_map,
     fold::{TyFoldable, TyFolder},
     layout_holes::{LayoutPlaceholderPolicy, substitute_layout_placeholders_in_order},
     trait_def::TraitInstId,
-    trait_resolution::{PredicateListId, WellFormedness},
+    trait_resolution::PredicateListId,
     ty_lower::collect_generic_params,
     unify::{InferenceKey, UnificationTable},
     visitor::{TyVisitable, TyVisitor},
@@ -44,7 +44,7 @@ use crate::analysis::{
         ty_error::emit_invalid_ty_error,
     },
 };
-use crate::hir_def::CallableDef;
+use crate::hir_def::{CallableDef, Trait};
 
 pub const MAX_INLINE_STRING_BYTES: usize = 31;
 
@@ -227,6 +227,12 @@ impl<'db> TyId<'db> {
                     trait_inst.pretty_print(db, false)
                 )
             }
+            TyData::ConstraintTerm(inst) => inst.pretty_print(db, false),
+            TyData::TraitCtor(trait_) => trait_
+                .name(db)
+                .to_opt()
+                .map(|n| n.data(db).to_string())
+                .unwrap_or_else(|| "<unknown>".to_string()),
             TyData::TyApp(_, _) => pretty_print_ty_app(db, self, mode),
             TyData::TyBase(base) => base.pretty_print(db),
             TyData::ConstTy(const_ty) => const_ty.pretty_print_with_mode(db, mode),
@@ -371,6 +377,14 @@ impl<'db> TyId<'db> {
         Self::new(db, TyData::QualifiedTy(trait_))
     }
 
+    pub(crate) fn constraint_term(db: &'db dyn HirAnalysisDb, inst: TraitInstId<'db>) -> Self {
+        Self::new(db, TyData::ConstraintTerm(inst))
+    }
+
+    pub(crate) fn trait_ctor(db: &'db dyn HirAnalysisDb, trait_: Trait<'db>) -> Self {
+        Self::new(db, TyData::TraitCtor(trait_))
+    }
+
     pub(crate) fn adt(db: &'db dyn HirAnalysisDb, adt: AdtDef<'db>) -> Self {
         Self::new(db, TyData::TyBase(TyBase::Adt(adt)))
     }
@@ -401,6 +415,12 @@ impl<'db> TyId<'db> {
 
     pub fn is_const_ty(self, db: &dyn HirAnalysisDb) -> bool {
         matches!(self.base_ty(db).data(db), TyData::ConstTy(_))
+    }
+
+    /// Whether this type is a `Constraint`-kinded constraint term produced from a
+    /// saturated concrete trait application (e.g. `Eq<T>` in type position).
+    pub fn is_constraint_term(self, db: &dyn HirAnalysisDb) -> bool {
+        matches!(self.data(db), TyData::ConstraintTerm(_))
     }
 
     /// Returns the contract if this type is a contract type.
@@ -569,6 +589,8 @@ impl<'db> TyId<'db> {
             TyData::TyParam(param) => Some(param.scope(db)),
             TyData::AssocTy(assoc_ty) => assoc_ty.scope(db),
             TyData::QualifiedTy(trait_inst) => Some(trait_inst.def(db).scope()),
+            TyData::ConstraintTerm(inst) => Some(inst.def(db).scope()),
+            TyData::TraitCtor(trait_) => Some(trait_.scope()),
             TyData::TyBase(TyBase::Adt(adt)) => Some(adt.scope(db)),
             TyData::TyBase(TyBase::Contract(c)) => Some(c.scope()),
             TyData::TyBase(TyBase::Func(func)) => Some(func.scope()),
@@ -594,6 +616,8 @@ impl<'db> TyId<'db> {
             TyData::TyParam(param) => param.scope(db).name_span(db),
             TyData::AssocTy(assoc_ty) => assoc_ty.scope(db)?.name_span(db),
             TyData::QualifiedTy(trait_inst) => trait_inst.def(db).scope().name_span(db),
+            TyData::ConstraintTerm(inst) => inst.def(db).scope().name_span(db),
+            TyData::TraitCtor(trait_) => trait_.scope().name_span(db),
 
             TyData::TyBase(TyBase::Adt(adt)) => Some(adt.name_span(db)),
             TyData::TyBase(TyBase::Contract(c)) => c.scope().name_span(db),
@@ -626,21 +650,7 @@ impl<'db> TyId<'db> {
         assumptions: PredicateListId<'db>,
         span: DynLazySpan<'db>,
     ) -> Option<TyDiagCollection<'db>> {
-        if let WellFormedness::IllFormed { goal, subgoal } =
-            check_ty_wf(db, solve_cx.with_assumptions(assumptions), self)
-        {
-            Some(
-                TraitConstraintDiag::TraitBoundNotSat {
-                    span,
-                    primary_goal: goal,
-                    unsat_subgoal: subgoal,
-                    required_by: None,
-                }
-                .into(),
-            )
-        } else {
-            None
-        }
+        check_ty_wf(db, solve_cx.with_assumptions(assumptions), self).into_diag(span)
     }
 
     pub(super) fn ty_var(
@@ -734,7 +744,69 @@ impl<'db> TyId<'db> {
             );
         }
 
+        // A trait constructor (`Eq`, kind `* -> Constraint`) is the unsaturated
+        // sibling of `ConstraintTerm`: applying it to its subject (and any
+        // required explicit params) reduces it to the saturated constraint
+        // `ConstraintTerm(Eq<T>)`. This is the single fold-routed application
+        // site (`fold_ty_app` defaults to `TyId::app`), so this reduction covers
+        // substitution, normalization, and direct lowering uniformly. Until the
+        // ctor is saturated it stays a plain `TyApp` (partial application).
+        if let Some(reduced) = Self::reduce_trait_ctor_app(db, lhs, rhs) {
+            return reduced;
+        }
+
         Self::new(db, TyData::TyApp(lhs, rhs))
+    }
+
+    /// If `lhs` is a (possibly partially-applied) trait constructor and applying
+    /// `rhs` saturates it, build the resulting `ConstraintTerm`. Returns `None`
+    /// when `lhs` is not a trait ctor or the application is still partial (more
+    /// subjects/params required), in which case the caller keeps the plain
+    /// `TyApp` accumulation.
+    fn reduce_trait_ctor_app(
+        db: &'db dyn HirAnalysisDb,
+        lhs: Self,
+        rhs: Self,
+    ) -> Option<TyId<'db>> {
+        let (base, existing_args) = lhs.decompose_ty_app(db);
+        let TyData::TraitCtor(trait_) = base.data(db) else {
+            return None;
+        };
+        let trait_ = *trait_;
+
+        // The first applied arg is the subject (`Self`); the rest are explicit
+        // params. Reuse the default-completion that `lower_hir_constraint_application`
+        // uses so a defaulted param like `Eq<T = Self>` saturates with a single
+        // explicit subject. The reduction is a pure substitution with no use-site
+        // path, so default completion runs in metadata mode against empty
+        // assumptions.
+        let mut applied: Vec<TyId<'db>> = Vec::with_capacity(existing_args.len() + 1);
+        applied.extend_from_slice(existing_args);
+        applied.push(rhs);
+
+        let subject = applied[0];
+        let provided_explicit = &applied[1..];
+        let non_self_completed = trait_.param_set(db).complete_explicit_args(
+            db,
+            Some(subject),
+            provided_explicit,
+            PredicateListId::empty_list(db),
+            super::ty_lower::ConstDefaultCompletion::metadata(None),
+            None,
+        );
+
+        // Only saturated applications reduce; a still-partial ctor (a trait with
+        // further required explicit params) keeps accumulating as a `TyApp`.
+        if non_self_completed.len() != trait_.params(db).len() - 1 {
+            return None;
+        }
+
+        let mut final_args: Vec<TyId<'db>> = Vec::with_capacity(trait_.params(db).len());
+        final_args.push(subject);
+        final_args.extend(non_self_completed);
+
+        let inst = TraitInstId::new(db, trait_, final_args, common::indexmap::IndexMap::new());
+        Some(Self::constraint_term(db, inst))
     }
 
     pub(crate) fn check_const_ty_without_eval(
@@ -914,7 +986,7 @@ impl<'db> TyId<'db> {
         }
 
         let applicable_kind = match self.kind(db) {
-            Kind::Star => return None,
+            Kind::Star | Kind::Constraint => return None,
             Kind::Abs(inner) => inner.0.clone(),
             Kind::Any => Kind::Any,
         };
@@ -1079,6 +1151,17 @@ pub enum TyData<'db> {
 
     /// Qualified type, e.g., `<T as Iterator>`.
     QualifiedTy(TraitInstId<'db>),
+
+    /// A proposition-kind term: a resolved constraint carried where a type is
+    /// expected, e.g. the `Eq<T>` in `Evidence<Eq<T>>`. Concrete-only: the head is
+    /// always a resolved trait. Inert leaf — never a solver goal, never reduced.
+    ConstraintTerm(TraitInstId<'db>),
+
+    /// A concrete trait constructor as a first-class value (unsaturated), e.g. `Eq`
+    /// (kind `* -> Constraint`). The unsaturated sibling of `ConstraintTerm` — it
+    /// REDUCES to a `ConstraintTerm` when applied to its subject (that reduction is a
+    /// later rung; R1 is inert). Typing-only; never a solver goal.
+    TraitCtor(Trait<'db>),
 
     // Type application,
     // e.g., `Option<i32>` is represented as `TApp(TyConst(Option), TyConst(i32))`.
@@ -1307,6 +1390,9 @@ pub enum Kind {
     /// Represents star kind, i.e., `*` kind.
     Star,
 
+    /// Represents the proposition kind inhabited by constraints.
+    Constraint,
+
     /// Represents higher kinded types.
     /// e.g.,
     /// `* -> *`, `(* -> *) -> *` or `* -> (* -> *) -> *`
@@ -1324,6 +1410,7 @@ impl Kind {
     pub fn does_match(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Star, Self::Star) => true,
+            (Self::Constraint, Self::Constraint) => true,
             (Self::Abs(a), Self::Abs(b)) => a.0.does_match(&b.0) && a.1.does_match(&b.1),
             (Self::Any, _) => true,
             (_, Self::Any) => true,
@@ -1336,6 +1423,7 @@ impl fmt::Display for Kind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Star => write!(f, "*"),
+            Self::Constraint => write!(f, "Constraint"),
             Self::Abs(inner) => write!(f, "({} -> {})", inner.0, inner.1),
             Self::Any => write!(f, "Any"),
         }
@@ -1865,6 +1953,16 @@ impl HasKind for TyData<'_> {
                 .and_then(|decl| super::ty_lower::lower_kind_in_bounds(&decl.bounds))
                 .unwrap_or(Kind::Star),
             TyData::QualifiedTy(_) => Kind::Star,
+            TyData::ConstraintTerm(_) => Kind::Constraint,
+            TyData::TraitCtor(trait_) => {
+                // The trait-constructor kind: one `*` arrow per subject that must be
+                // supplied to saturate the trait into a `Constraint`. That is the
+                // implicit `Self` subject plus every required (non-defaulted)
+                // explicit parameter. `core::ops::Eq<T = Self>` has a defaulted `T`,
+                // so its arity is 1 → `* -> Constraint`.
+                let arity = 1 + trait_.param_set(db).required_explicit_param_count(db);
+                (0..arity).fold(Kind::Constraint, |acc, _| Kind::abs(Kind::Star, acc))
+            }
             TyData::TyBase(base) => base.kind(db),
             TyData::TyApp(abs, _) => match abs.kind(db) {
                 // `TyId::app` method handles the kind mismatch, so we don't need to verify it again

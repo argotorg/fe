@@ -53,6 +53,34 @@ pub enum Expr<'db> {
 
     /// `with (K = v, ..) { body }`
     With(Vec<WithBinding<'db>>, ExprId),
+
+    /// `quote(open, ..) { body }` — a derive-provider quote template. The
+    /// body is an inert template elaborated by the provider executor; it is
+    /// never type-checked or evaluated directly.
+    Quote {
+        /// Declared open names, bound at the destination the quote is
+        /// emitted into (`self`/`Self` are implicitly open).
+        open: Vec<IdentId<'db>>,
+        /// The template body.
+        body: QuoteBody,
+    },
+    /// `${expr}` — a splice hole in expression position inside a quote body.
+    QuoteHole(ExprId),
+    /// `base.${expr}` — a member-access splice hole inside a quote body.
+    QuoteFieldHole(ExprId, ExprId),
+}
+
+/// The body of a quote template. The shape is structural: a block is an
+/// expression template; a `pat => expr` sequence is a match-arm template
+/// (spliceable into match-arm position).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+pub enum QuoteBody {
+    /// `quote { expr }` — a block expression template.
+    Expr(ExprId),
+    /// `quote { ${arms}, ${variant}(group) => expr }` — a match-arm
+    /// sequence template. Arm splices are arms with an absent pattern whose
+    /// body is the splice hole.
+    Arms(Vec<MatchArm>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, salsa::Update)]

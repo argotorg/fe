@@ -1,0 +1,33 @@
+// FCO-M5 pair 12: a predicate whose evaluation faults is a hard error, never a
+// silently-skipped candidate. `divides_cleanly` divides by an associated const;
+// `Ten` (10) evaluates fine, `Zero` (0) faults with a division-by-zero error in
+// const context — not an 8-0085 "not satisfied" and not a removed candidate
+// (anti-SFINAE).
+//
+// Invariant: predicate evaluation faults are hard errors.
+
+trait Divisor {
+    const DENOM: u256
+}
+
+struct Ten {}
+struct Zero {}
+
+impl Divisor for Ten {
+    const DENOM: u256 = 10
+}
+
+impl Divisor for Zero {
+    const DENOM: u256 = 0
+}
+
+fn divides_cleanly<T: Divisor>() where 100 / T::DENOM == 10 {
+}
+
+fn ok() {
+    divides_cleanly<Ten>()
+}
+
+fn bad() {
+    divides_cleanly<Zero>()
+}

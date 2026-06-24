@@ -1,0 +1,285 @@
+// Std-lib derive provider: lexicographic `Ord` (lt/le/gt/ge) authored on the
+// existing provider/builder bridge, mirroring StableEq/StableClone. Struct-only
+// (the same scope as the StableClone fixture), exercised through the generated
+// comparison methods.
+//
+// This is "safe std-lib polish" per the bridge + reification inventory
+// (docs/dev/FCO_BRIDGE_AND_REIFICATION_TARGETS.md, finding #5): it rides the
+// existing typed-provider bridge and depends on NEITHER the Constraint-kind
+// graduation (K02-K04) NOR scoped ProvisionEnv. It grows the thin std-lib
+// provider coverage (previously only StableEq / StableDefault / StableEip712 /
+// StableClone).
+
+use core::derive::Derive
+use core::derive::Evidence
+use core::derive::ImplBuilder
+use core::derive::Reflect
+use core::ops::Eq
+use core::ops::Ord
+
+impl Derive<Ord> for StableOrd {
+    const fn derive<T>(ev: own Evidence<Ord<T>>) -> Evidence<Ord<T>>
+        uses (
+            reflect: Reflect<T>,
+            builder: mut ImplBuilder<Ord<T>>,
+        )
+    {
+        if reflect.is_struct() {
+            // Lexicographic order as a left fold over fields. For field i,
+            // `eq_prefix` is `self.f0 == other.f0 && .. && self.f{i-1} == other.f{i-1}`:
+            //   lt = OR_i (eq_prefix_i && self.fi < other.fi)
+            //   gt = OR_i (eq_prefix_i && self.fi > other.fi)
+            //   le = lt || full_eq          ge = gt || full_eq
+            // The leading `false ||` / `true &&` seeds are folded away by MIR
+            // (the same trick StableEq uses for its `true &&` seed). Splices are
+            // AST-level, so the `(eq_prefix && cmp)` grouping is hygienic — no
+            // operator-precedence hazard. Comparisons use the `<`/`>` operators
+            // (the quote fragment supports `&&`, `||`, `==`, `<`, `>`); the
+            // operators are type-directed, so `self.x < other.x` resolves against
+            // the field type's `Ord` impl (a bare `.lt()` method call would
+            // mis-resolve against the goal trait's `Ord<Self>`).
+            let mut lt_body = quote { false }
+            let mut gt_body = quote { false }
+            let mut eq_prefix = quote { true }
+            for field in reflect.fields() {
+                builder.require<Ord>(field.ty())
+                builder.require<Eq>(field.ty())
+                lt_body = quote(other) {
+                    ${lt_body} || (${eq_prefix} && self.${field} < other.${field})
+                }
+                gt_body = quote(other) {
+                    ${gt_body} || (${eq_prefix} && self.${field} > other.${field})
+                }
+                eq_prefix = quote(other) {
+                    ${eq_prefix} && self.${field} == other.${field}
+                }
+            }
+            let le_body = quote { ${lt_body} || ${eq_prefix} }
+            let ge_body = quote { ${gt_body} || ${eq_prefix} }
+
+            builder.emit_method("lt", lt_body)
+
+            builder.emit_method("le", le_body)
+
+            builder.emit_method("gt", gt_body)
+
+            builder.emit_method("ge", ge_body)
+        }
+        if reflect.is_enum() {
+            // Enums order by (variant declaration position, then payload
+            // lexicographically). Each comparator is a nested
+            // `match self { Vi(lhs) => match other { Vj(rhs) => <result_ij> } }`,
+            // with the boolean for each (Vi, Vj) pair built at compile time:
+            //   i < j  -> lt,le = true ;  gt,ge = false   (i/j via variant.precedes)
+            //   i > j  -> gt,ge = true ;  lt,le = false
+            //   i == j -> lexicographic comparison over the variant's payload.
+            // The payload fold SUBSUMES unit variants: with no fields, lt/gt seed
+            // to false and the eq-prefix seeds to true, so an equal unit variant
+            // gives lt=gt=false, le=ge=true — exactly the right unit answer.
+            let mut lt_body = builder.match_expr(builder.self_ref())
+            let mut le_body = builder.match_expr(builder.self_ref())
+            let mut gt_body = builder.match_expr(builder.self_ref())
+            let mut ge_body = builder.match_expr(builder.self_ref())
+            for sv in reflect.variants() {
+                let mut lt_inner = builder.match_expr(builder.arg_ref("other"))
+                let mut le_inner = builder.match_expr(builder.arg_ref("other"))
+                let mut gt_inner = builder.match_expr(builder.arg_ref("other"))
+                let mut ge_inner = builder.match_expr(builder.arg_ref("other"))
+                for ov in reflect.variants() {
+                    let mut lt_arm = builder.bool(false)
+                    let mut le_arm = builder.bool(false)
+                    let mut gt_arm = builder.bool(false)
+                    let mut ge_arm = builder.bool(false)
+                    if sv.precedes(ov) {
+                        lt_arm = builder.bool(true)
+                        le_arm = builder.bool(true)
+                    } else {
+                        if ov.precedes(sv) {
+                            gt_arm = builder.bool(true)
+                            ge_arm = builder.bool(true)
+                        } else {
+                            // Same variant: lexicographic left fold over its payload.
+                            //   lt = OR_k (eq_prefix_k && lhs.fk < rhs.fk)
+                            //   gt = OR_k (eq_prefix_k && lhs.fk > rhs.fk)
+                            // eq_prefix advances by && (lhs.fk == rhs.fk); after the
+                            // loop it is the full payload equality, so
+                            //   le = lt || full_eq ;  ge = gt || full_eq.
+                            let mut lt_lex = builder.bool(false)
+                            let mut gt_lex = builder.bool(false)
+                            let mut eq_prefix = builder.bool(true)
+                            for field in sv.fields() {
+                                builder.require<Ord>(field.ty())
+                                builder.require<Eq>(field.ty())
+                                let field_lt = builder.lt(
+                                    builder.variant_binder(sv, field, "lhs"),
+                                    builder.variant_binder(sv, field, "rhs"),
+                                )
+                                let field_gt = builder.gt(
+                                    builder.variant_binder(sv, field, "lhs"),
+                                    builder.variant_binder(sv, field, "rhs"),
+                                )
+                                let field_eq = builder.eq(
+                                    builder.variant_binder(sv, field, "lhs"),
+                                    builder.variant_binder(sv, field, "rhs"),
+                                )
+                                lt_lex = builder.or(lt_lex, builder.and(eq_prefix, field_lt))
+                                gt_lex = builder.or(gt_lex, builder.and(eq_prefix, field_gt))
+                                eq_prefix = builder.and(eq_prefix, field_eq)
+                            }
+                            lt_arm = lt_lex
+                            gt_arm = gt_lex
+                            le_arm = builder.or(lt_lex, eq_prefix)
+                            ge_arm = builder.or(gt_lex, eq_prefix)
+                        }
+                    }
+                    lt_inner = builder.with_arm(lt_inner, builder.variant_pat(ov, "rhs"), lt_arm)
+                    le_inner = builder.with_arm(le_inner, builder.variant_pat(ov, "rhs"), le_arm)
+                    gt_inner = builder.with_arm(gt_inner, builder.variant_pat(ov, "rhs"), gt_arm)
+                    ge_inner = builder.with_arm(ge_inner, builder.variant_pat(ov, "rhs"), ge_arm)
+                }
+                lt_body = builder.with_arm(lt_body, builder.variant_pat(sv, "lhs"), lt_inner)
+                le_body = builder.with_arm(le_body, builder.variant_pat(sv, "lhs"), le_inner)
+                gt_body = builder.with_arm(gt_body, builder.variant_pat(sv, "lhs"), gt_inner)
+                ge_body = builder.with_arm(ge_body, builder.variant_pat(sv, "lhs"), ge_inner)
+            }
+            builder.emit_method("lt", lt_body)
+
+            builder.emit_method("le", le_body)
+
+            builder.emit_method("gt", gt_body)
+
+            builder.emit_method("ge", ge_body)
+        }
+        builder.finish()
+        ev
+    }
+}
+
+struct Point {
+    x: u256,
+    y: u256,
+}
+
+derive Ord for Point using StableOrd
+
+// Fresh operands per comparison so the test body doesn't depend on `Point`
+// being `Copy` (Ord methods take `self`/`other` by value).
+#[test]
+fn ord_primary_field_decides() {
+    assert!(Point { x: 1, y: 9 }.lt(Point { x: 2, y: 0 }))
+    assert!(Point { x: 1, y: 9 }.le(Point { x: 2, y: 0 }))
+    assert!(Point { x: 2, y: 0 }.gt(Point { x: 1, y: 9 }))
+    assert!(Point { x: 2, y: 0 }.ge(Point { x: 1, y: 9 }))
+    assert!(!Point { x: 1, y: 9 }.gt(Point { x: 2, y: 0 }))
+}
+
+#[test]
+fn ord_secondary_field_breaks_tie() {
+    // primary field equal (5 == 5); the secondary field decides.
+    assert!(Point { x: 5, y: 3 }.lt(Point { x: 5, y: 7 }))
+    assert!(!Point { x: 5, y: 7 }.lt(Point { x: 5, y: 3 }))
+    assert!(Point { x: 5, y: 3 }.le(Point { x: 5, y: 7 }))
+    assert!(Point { x: 5, y: 7 }.gt(Point { x: 5, y: 3 }))
+}
+
+#[test]
+fn ord_equal_is_le_ge_not_lt_gt() {
+    assert!(Point { x: 4, y: 4 }.le(Point { x: 4, y: 4 }))
+    assert!(Point { x: 4, y: 4 }.ge(Point { x: 4, y: 4 }))
+    assert!(!Point { x: 4, y: 4 }.lt(Point { x: 4, y: 4 }))
+    assert!(!Point { x: 4, y: 4 }.gt(Point { x: 4, y: 4 }))
+}
+
+// --- enum support: unit variants order by DECLARATION POSITION --------------
+// (Low < Mid < High) via the `variant.precedes` reflection primitive. The
+// provider builds each comparator as a nested match; the unit case falls out of
+// the same lexicographic fold the payload case uses (empty payload).
+
+enum OrderingLike {
+    Low,
+    Mid,
+    High,
+}
+
+derive Ord for OrderingLike using StableOrd
+
+#[test]
+fn enum_ord_declaration_order_lt() {
+    assert!(OrderingLike::Low.lt(OrderingLike::Mid))
+    assert!(OrderingLike::Mid.lt(OrderingLike::High))
+    assert!(OrderingLike::Low.lt(OrderingLike::High))
+    assert!(!OrderingLike::Mid.lt(OrderingLike::Low))
+    assert!(!OrderingLike::High.lt(OrderingLike::Mid))
+}
+
+#[test]
+fn enum_ord_gt_is_mirror() {
+    assert!(OrderingLike::High.gt(OrderingLike::Mid))
+    assert!(OrderingLike::Mid.gt(OrderingLike::Low))
+    assert!(!OrderingLike::Low.gt(OrderingLike::High))
+}
+
+#[test]
+fn enum_ord_equal_is_le_ge_not_lt_gt() {
+    assert!(OrderingLike::Mid.le(OrderingLike::Mid))
+    assert!(OrderingLike::Mid.ge(OrderingLike::Mid))
+    assert!(!OrderingLike::Mid.lt(OrderingLike::Mid))
+    assert!(!OrderingLike::Mid.gt(OrderingLike::Mid))
+}
+
+#[test]
+fn enum_ord_le_ge_strict_pairs() {
+    assert!(OrderingLike::Low.le(OrderingLike::High))
+    assert!(!OrderingLike::High.le(OrderingLike::Low))
+    assert!(OrderingLike::High.ge(OrderingLike::Low))
+    assert!(!OrderingLike::Low.ge(OrderingLike::High))
+}
+
+// --- enum support: PAYLOAD variants (cross-variant by position, then payload
+// lexicographically). Declaration order: Empty < One(_) < Pair(_, _). Within a
+// variant the payload breaks ties (Pair compares first field, then second). This
+// exercises the same-variant lexicographic fold over tuple-variant binders.
+
+enum Measure {
+    Empty,
+    One(u256),
+    Pair(u256, u256),
+}
+
+derive Ord for Measure using StableOrd
+
+#[test]
+fn enum_ord_payload_cross_variant_by_position() {
+    assert!(Measure::Empty.lt(Measure::One(0)))
+    assert!(Measure::One(999).lt(Measure::Pair(0, 0)))
+    assert!(Measure::Empty.lt(Measure::Pair(0, 0)))
+    assert!(!Measure::One(0).lt(Measure::Empty))
+    assert!(Measure::Pair(0, 0).gt(Measure::One(999)))
+}
+
+#[test]
+fn enum_ord_payload_same_variant_single_field() {
+    assert!(Measure::One(1).lt(Measure::One(2)))
+    assert!(!Measure::One(2).lt(Measure::One(1)))
+    assert!(Measure::One(2).gt(Measure::One(1)))
+    assert!(Measure::One(5).le(Measure::One(5)))
+    assert!(Measure::One(5).ge(Measure::One(5)))
+    assert!(!Measure::One(5).lt(Measure::One(5)))
+}
+
+#[test]
+fn enum_ord_payload_same_variant_lexicographic() {
+    // First field decides.
+    assert!(Measure::Pair(1, 9).lt(Measure::Pair(2, 0)))
+    // First field equal -> second field breaks the tie.
+    assert!(Measure::Pair(5, 3).lt(Measure::Pair(5, 7)))
+    assert!(!Measure::Pair(5, 7).lt(Measure::Pair(5, 3)))
+    assert!(Measure::Pair(5, 7).gt(Measure::Pair(5, 3)))
+    // Equal payloads: le/ge but not lt/gt.
+    assert!(Measure::Pair(4, 4).le(Measure::Pair(4, 4)))
+    assert!(Measure::Pair(4, 4).ge(Measure::Pair(4, 4)))
+    assert!(!Measure::Pair(4, 4).lt(Measure::Pair(4, 4)))
+    assert!(!Measure::Pair(4, 4).gt(Measure::Pair(4, 4)))
+}
+
+struct StableOrd {}

@@ -126,11 +126,13 @@ pub(super) fn lower_event_struct<'db>(
     let data_fields = parsed_fields.data_fields.clone();
     let ordered_field_type_paths = parsed_fields.ordered_field_type_paths.clone();
 
-    let impl_trait_idx = builder.ctxt().next_impl_trait_idx();
     let trait_ref = Partial::Present(trait_ref);
     let self_ty = Partial::Present(self_ty);
     builder.with_item_scope(
-        TrackedItemVariant::ImplTrait(impl_trait_idx),
+        TrackedItemVariant::GeneratedImplTrait {
+            goal: trait_ref,
+            self_ty,
+        },
         move |builder, id| {
             let topic0_const = create_topic0_const(
                 builder.ctxt(),

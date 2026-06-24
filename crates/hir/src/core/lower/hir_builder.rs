@@ -8,10 +8,11 @@ use crate::{
         ArithBinOp, AssocConstDef, AssocTyDef, Attr, AttrArg, AttrListId, BinOp, Body, BodyKind,
         EffectParamListId, Expr, ExprId, FieldDefListId, FieldIndex, Func, FuncModifiers,
         FuncParam, FuncParamListId, FuncParamMode, FuncParamName, GenericArg, GenericArgListId,
-        GenericParam, GenericParamListId, IdentId, ImplTrait, ItemKind, Mod, NormalAttr, Partial,
-        Pat, PatId, PathId, PathKind, Stmt, StmtId, Struct, TopLevelMod, TrackedItemId,
-        TrackedItemVariant, TraitRefId, TypeBound, TypeGenericArg, TypeGenericParam, TypeId,
-        TypeKind, TypeMode, UnOp, Visibility, WhereClauseId, expr::CallArg,
+        GenericParam, GenericParamListId, IdentId, ImplTrait, ItemKind, LitKind, MatchArm, Mod,
+        NormalAttr, Partial, Pat, PatId, PathId, PathKind, RecordPatField, Stmt, StmtId, Struct,
+        TopLevelMod, TrackedItemId, TrackedItemVariant, TraitRefId, TypeBound, TypeGenericArg,
+        TypeGenericParam, TypeId, TypeKind, TypeMode, UnOp, Visibility, WhereClauseId,
+        expr::CallArg,
     },
     span::{DesugaredOrigin, HirOrigin},
 };
@@ -144,7 +145,7 @@ where
     }
 
     pub(super) fn empty_where_clause(&self) -> WhereClauseId<'db> {
-        WhereClauseId::new(self.db(), vec![])
+        WhereClauseId::new(self.db(), vec![], vec![])
     }
 
     pub(super) fn empty_effect_params(&self) -> EffectParamListId<'db> {
@@ -219,6 +220,21 @@ where
         let db = self.db();
         FuncParam {
             mode: FuncParamMode::Own,
+            is_mut: false,
+            has_ref_prefix: false,
+            has_own_prefix: false,
+            is_label_suppressed: false,
+            name: Partial::Present(FuncParamName::Ident(IdentId::make_self(db))),
+            ty: Partial::Present(self.self_ty()),
+            self_ty_fallback: true,
+        }
+    }
+
+    /// Plain `self` receiver (view mode).
+    pub(super) fn param_view_self(&self) -> FuncParam<'db> {
+        let db = self.db();
+        FuncParam {
+            mode: FuncParamMode::View,
             is_mut: false,
             has_ref_prefix: false,
             has_own_prefix: false,
@@ -393,9 +409,34 @@ where
         consts: Vec<AssocConstDef<'db>>,
         origin: HirOrigin<ast::ImplTrait>,
     ) -> ImplTrait<'db> {
+        self.new_impl_trait_generic(
+            id,
+            trait_ref,
+            ty,
+            self.empty_generic_params(),
+            self.empty_where_clause(),
+            types,
+            consts,
+            origin,
+        )
+    }
+
+    /// Like [`Self::new_impl_trait`], but with explicit generic parameters
+    /// and a where clause on the synthesized `impl`, e.g.
+    /// `impl<A, B> Trait for Ty<A, B> where A: Trait, B: Trait`.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn new_impl_trait_generic(
+        &mut self,
+        id: TrackedItemId<'db>,
+        trait_ref: Partial<TraitRefId<'db>>,
+        ty: Partial<TypeId<'db>>,
+        generic_params: GenericParamListId<'db>,
+        where_clause: WhereClauseId<'db>,
+        types: Vec<AssocTyDef<'db>>,
+        consts: Vec<AssocConstDef<'db>>,
+        origin: HirOrigin<ast::ImplTrait>,
+    ) -> ImplTrait<'db> {
         let attrs = self.empty_attrs();
-        let generic_params = self.empty_generic_params();
-        let where_clause = self.empty_where_clause();
 
         ImplTrait::new(
             self.db(),
@@ -407,6 +448,10 @@ where
             where_clause,
             types,
             consts,
+            // Synthesized/generated impls carry no user-facing `as Name` alias.
+            None,
+            // Synthesized/generated impls carry no user-facing `with <path>` permit.
+            None,
             self.top_mod(),
             origin,
         )
@@ -430,11 +475,102 @@ where
         let trait_ref = Partial::Present(trait_ref);
         let ty = Partial::Present(ty);
 
-        let idx = self.ctxt.next_impl_trait_idx();
-        self.with_item_scope(TrackedItemVariant::ImplTrait(idx), |this, id| {
-            let (types, consts) = build_assocs(this);
-            this.new_impl_trait(id, trait_ref, ty, types, consts, this.origin())
-        })
+        self.with_item_scope(
+            TrackedItemVariant::GeneratedImplTrait {
+                goal: trait_ref,
+                self_ty: ty,
+            },
+            |this, id| {
+                let (types, consts) = build_assocs(this);
+                this.new_impl_trait(id, trait_ref, ty, types, consts, this.origin())
+            },
+        )
+    }
+
+    /// Builds a generic `impl<..> Trait for Ty<..> where ..` item with
+    /// associated types and consts built inside the impl scope (so their
+    /// value bodies are tracked as children of the impl, like `#[event]`'s
+    /// `TOPIC0`), followed by child items. The generic parameters are
+    /// registered in the impl's scope by the scope graph builder (from the
+    /// item data), so types inside the closures can reference them by name.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn impl_trait_generic_assocs_build(
+        &mut self,
+        trait_ref: TraitRefId<'db>,
+        ty: TypeId<'db>,
+        generic_params: GenericParamListId<'db>,
+        where_clause: WhereClauseId<'db>,
+        build_assocs: impl FnOnce(&mut Self) -> (Vec<AssocTyDef<'db>>, Vec<AssocConstDef<'db>>),
+        build_children: impl FnOnce(&mut Self),
+    ) -> ImplTrait<'db> {
+        let trait_ref = Partial::Present(trait_ref);
+        let ty = Partial::Present(ty);
+
+        self.with_item_scope(
+            TrackedItemVariant::GeneratedImplTrait {
+                goal: trait_ref,
+                self_ty: ty,
+            },
+            |this, id| {
+                let (types, consts) = build_assocs(this);
+                let impl_trait = this.new_impl_trait_generic(
+                    id,
+                    trait_ref,
+                    ty,
+                    generic_params,
+                    where_clause,
+                    types,
+                    consts,
+                    this.origin(),
+                );
+                build_children(this);
+                impl_trait
+            },
+        )
+    }
+
+    /// Builds an anonymous single-expression body (e.g. the value of an
+    /// associated const, or a const generic argument). The closure builds
+    /// the root expression through a [`BodyBuilder`].
+    pub(super) fn anonymous_expr_body(
+        &mut self,
+        build: impl FnOnce(&mut BodyBuilder<'_, 'db, O>) -> ExprId,
+    ) -> Body<'db> {
+        let mut body_builder = BodyBuilder::new(
+            self.ctxt,
+            self.roots,
+            self.desugared.clone(),
+            TrackedItemVariant::NamelessBody,
+        );
+        let root = build(&mut body_builder);
+        body_builder.finish_anonymous(root)
+    }
+
+    /// The type `String<len>`: an exact-width inline string. The const
+    /// generic argument is an anonymous integer-literal body.
+    pub(super) fn string_n_ty(&mut self, len: usize) -> TypeId<'db> {
+        let db = self.db();
+        let len_body = self.anonymous_expr_body(|body| {
+            body.push_expr(Expr::Lit(LitKind::Int(crate::hir_def::IntegerId::new(
+                db,
+                num_bigint::BigUint::from(len),
+            ))))
+        });
+        let args = GenericArgListId::given(
+            db,
+            vec![GenericArg::Const(crate::hir_def::ConstGenericArg {
+                value: crate::hir_def::ConstGenericArgValue::Expr(Partial::Present(len_body)),
+            })],
+        );
+        let path = PathId::new(
+            db,
+            PathKind::Ident {
+                ident: Partial::Present(self.ident("String")),
+                generic_args: args,
+            },
+            None,
+        );
+        self.ty_path(path)
     }
 
     pub(super) fn impl_trait_with_children(
@@ -448,12 +584,18 @@ where
         let trait_ref = Partial::Present(trait_ref);
         let ty = Partial::Present(ty);
 
-        let idx = self.ctxt.next_impl_trait_idx();
-        self.with_item_scope(TrackedItemVariant::ImplTrait(idx), |this, id| {
-            let impl_trait = this.new_impl_trait(id, trait_ref, ty, types, consts, this.origin());
-            build_children(this);
-            impl_trait
-        })
+        self.with_item_scope(
+            TrackedItemVariant::GeneratedImplTrait {
+                goal: trait_ref,
+                self_ty: ty,
+            },
+            |this, id| {
+                let impl_trait =
+                    this.new_impl_trait(id, trait_ref, ty, types, consts, this.origin());
+                build_children(this);
+                impl_trait
+            },
+        )
     }
 
     pub(super) fn func_with_body_inline_always(
@@ -639,6 +781,43 @@ where
         ))))
     }
 
+    pub(super) fn bool_lit_expr(&mut self, value: bool) -> ExprId {
+        self.push_expr(Expr::Lit(LitKind::Bool(value)))
+    }
+
+    pub(super) fn match_expr(&mut self, scrutinee: ExprId, arms: Vec<MatchArm>) -> ExprId {
+        self.push_expr(Expr::Match(scrutinee, Partial::Present(arms)))
+    }
+
+    pub(super) fn wildcard_pat(&mut self) -> PatId {
+        self.push_pat(Pat::WildCard)
+    }
+
+    /// An irrefutable single-identifier binding pattern.
+    pub(super) fn bind_pat(&mut self, ident: IdentId<'db>) -> PatId {
+        let path = PathId::from_ident(self.db(), ident);
+        self.push_pat(Pat::Path(Partial::Present(path), false))
+    }
+
+    /// A path pattern, e.g. a unit enum variant like `Enum::Variant`.
+    pub(super) fn path_pat(&mut self, path: PathId<'db>) -> PatId {
+        self.push_pat(Pat::Path(Partial::Present(path), false))
+    }
+
+    /// A tuple-variant pattern, e.g. `Enum::Variant(a, b)`.
+    pub(super) fn path_tuple_pat(&mut self, path: PathId<'db>, elems: Vec<PatId>) -> PatId {
+        self.push_pat(Pat::PathTuple(Partial::Present(path), elems))
+    }
+
+    /// A record pattern, e.g. `Enum::Variant { x: a, y: b }`.
+    pub(super) fn record_pat(
+        &mut self,
+        path: PathId<'db>,
+        fields: Vec<RecordPatField<'db>>,
+    ) -> PatId {
+        self.push_pat(Pat::Record(Partial::Present(path), fields))
+    }
+
     pub(super) fn path_expr(&mut self, path: PathId<'db>) -> ExprId {
         self.push_expr(Expr::Path(Partial::Present(path)))
     }
@@ -663,6 +842,15 @@ where
             .push_str_args(db, "abi_field_head_size", args);
         let callee = self.path_expr(path);
         self.call_expr(callee, vec![])
+    }
+
+    /// `core::keccak(arg)` — the core keccak helper, resolved through the
+    /// caller's core ingot alias.
+    pub(super) fn core_keccak_call(&mut self, arg: ExprId) -> ExprId {
+        let db = self.db();
+        let path = PathId::from_ident(db, self.roots.core).push_str(db, "keccak");
+        let callee = self.path_expr(path);
+        self.call_expr(callee, vec![arg])
     }
 
     pub(super) fn call_expr(&mut self, callee: ExprId, args: Vec<ExprId>) -> ExprId {
@@ -910,5 +1098,15 @@ where
         let root_expr = self.push_expr(Expr::Block(stmts));
         self.body.f_ctxt.leave_block_scope(root_expr);
         self.body.build(None, root_expr, BodyKind::FuncBody)
+    }
+
+    /// Finishes as an anonymous single-expression body (no statement
+    /// block); used for associated-const values and const generic args.
+    fn finish_anonymous(self, root: ExprId) -> Body<'db> {
+        debug_assert!(
+            self.stmts.is_empty(),
+            "anonymous bodies must be single expressions"
+        );
+        self.body.build(None, root, BodyKind::Anonymous)
     }
 }

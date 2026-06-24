@@ -11,6 +11,14 @@ pub use sol::{self, *}
 use super::evm::effects::RawMem
 use super::evm::{mem, ops}
 
+// FCO #5b — the `AbiSize` derive provider (capability types recognized by
+// canonical `core::derive::*` identity). `AbiSize` is imported through its
+// canonical `core::abi` path so the generated impls name the trait through a
+// path that resolves from every error/msg-bearing module (see the provider
+// note below).
+use core::abi::AbiSize
+use core::derive::{Derive, Evidence, ImplBuilder, Reflect}
+
 /// Allocate a 32-byte Solidity ABI `bytes` value from a single word.
 ///
 /// The returned value owns a memory tail with layout `(len = 32, word)`.
@@ -73,4 +81,84 @@ uses (mem: mut RawMem)
         i += 1
     }
     Bytes::from_abi_tail(data: data, len: len, size: size)
+}
+
+// FCO burn-down #5b — the `AbiSize` derive provider.
+//
+// This is the Fe replacement for the Rust `lower_error_abi_size_impl` generator
+// (deleted in this burn-down). For a struct it folds the per-field core leaf
+// `AbiSize` facts into the struct's impl:
+//   - HEAD_SIZE  = SUM over fields of <Field as AbiSize>::HEAD_SIZE  (builder.add)
+//   - IS_DYNAMIC = OR  over fields of <Field as AbiSize>::IS_DYNAMIC (builder.or)
+// and `require<AbiSize>(field.ty())` re-enters normal checking carrying the
+// right per-field obligation (so a non-`AbiSize` field diagnoses 6-0003).
+//
+// PLACEMENT (multi-backend + path resolution): head/tail word layout is
+// EVM-specific (wasm/spirv have their own layouts), so this provider must NOT be
+// in the `core_derives` ingot — that ingot IS the canonical auto-selected derive
+// surface (`IngotKind::CoreDerives`), and putting `AbiSize` there would make
+// `derive AbiSize` auto-select it backend-agnostically. It lives in `std`
+// instead (`IngotKind::Std`, which is NOT canonical), so it is selectable only by
+// NAME (`using StableAbiSize`) — never auto-selected. `std` is also the right
+// home for an EVM-layout provider, and crucially it is DOWNSTREAM of `core`, so
+// `use core::abi::AbiSize` canonicalizes the provider's goal to the absolute
+// path `core::abi::AbiSize`; the generated `impl core::abi::AbiSize for E` then
+// resolves from every error/msg-bearing module (std's own `#[error] Panic`, user
+// errors) — independent of derive-site prelude. (A provider placed IN `core`,
+// where `AbiSize` is locally defined and `core::` cannot self-import, would get a
+// BARE `AbiSize` goal path that only resolves via the std prelude — which std's
+// own modules do not get — so std error structs silently lost their AbiSize impl.
+// That is the bug this placement fixes.) The compiler schedules this provider
+// explicitly for `#[error]` desugared structs (Route A, `schedule_error_abi_size`
+// in expansion.rs). The `add`/`or`/`trait_const` fold primitives are
+// backend-agnostic infra.
+//
+// Extends the proven #5a `derived_abi_size.fe` body with a `payload_size`
+// override (the per-field dynamic-tail fold the deleted error generator emitted)
+// and a `<() as AbiSize>::HEAD_SIZE` (== 0) seed so empty error structs fold to
+// `HEAD_SIZE = 0`, matching the deleted Rust generator byte-for-byte.
+struct StableAbiSize {}
+
+impl Derive<AbiSize> for StableAbiSize {
+    const fn derive<T>(ev: own Evidence<AbiSize<T>>) -> Evidence<AbiSize<T>>
+        uses (
+            reflect: Reflect<T>,
+            builder: mut ImplBuilder<AbiSize<T>>,
+        )
+    {
+        if reflect.is_struct() {
+            // HEAD_SIZE  = 0 + <F0 as AbiSize>::HEAD_SIZE + <F1>::HEAD_SIZE + ..
+            // IS_DYNAMIC = false || <F0>::IS_DYNAMIC || ..
+            // The `0`/`false` seeds (the empty-fold identities) are folded away
+            // by MIR; the `0` seed is `<() as AbiSize>::HEAD_SIZE` (the core unit
+            // impl, == 0) so no integer-literal command is needed AND an empty
+            // error struct gets `HEAD_SIZE = 0` (not `false`), matching the
+            // deleted Rust generator's 0-seeded sum exactly.
+            let mut head = builder.trait_const(builder.ty<()>(), "HEAD_SIZE")
+            let mut dynamic = builder.bool(false)
+            // payload_size = Self::HEAD_SIZE + Σ self.field.dynamic_payload_size_of()
+            //   — the per-field dynamic tail fold, byte-equivalent to the
+            //   deleted generator's `Self::HEAD_SIZE + Σ
+            //   core::abi::dynamic_payload_size(self.field)` (a free-function
+            //   call the command set can't spell; the method form can).
+            let mut payload = builder.trait_const(builder.self_ty(), "HEAD_SIZE")
+            for field in reflect.fields() {
+                // Re-enter normal checking: the generated impl carries an
+                // `AbiSize` obligation on every field type.
+                builder.require<AbiSize>(field.ty())
+                let field_head = builder.trait_const(field.ty(), "HEAD_SIZE")
+                let field_dyn = builder.trait_const(field.ty(), "IS_DYNAMIC")
+                head = builder.add(head, field_head)
+                dynamic = builder.or(dynamic, field_dyn)
+                let field_val = builder.field_get(builder.self_ref(), field)
+                let field_tail = builder.call(field_val, "dynamic_payload_size_of")
+                payload = builder.add(payload, field_tail)
+            }
+            builder.emit_const("HEAD_SIZE", builder.ty<u256>(), head)
+            builder.emit_const("IS_DYNAMIC", builder.ty<bool>(), dynamic)
+            builder.emit_method("payload_size", payload)
+        }
+        builder.finish()
+        ev
+    }
 }

@@ -8,7 +8,7 @@ use super::{
 use crate::{
     hir_def::{
         AttrListId, Body, BodyKind, CompBinOp, EffectParamListId, FuncParamListId,
-        GenericParamListId, IdentId, PathId, TraitRefId, TupleTypeId, TypeBound, TypeId,
+        GenericParamListId, IdentId, Partial, PathId, TraitRefId, TupleTypeId, TypeBound, TypeId,
         WhereClauseId, item::*,
     },
     lower::msg::lower_msg_as_mod,
@@ -88,6 +88,8 @@ const MUST_USE_EXPECTED: &str = "`#[must_use]`";
 const ARITHMETIC_TARGETS: &str = "functions and modules";
 const EVENT_TARGETS: &str = "structs";
 const ERROR_TARGETS: &str = "structs";
+const DERIVE_TARGETS: &str = "structs and enums";
+const DEFAULT_TARGETS: &str = super::derive::DEFAULT_ATTR_TARGETS;
 const MUST_USE_TARGETS: &str = "functions, structs, and enums";
 const PAYABLE_TARGETS: &str = "init blocks and recv arms";
 const INDEXED_TARGETS: &str = "event fields";
@@ -109,6 +111,7 @@ fn validate_mod_attrs<'db>(
             AttrRule::supported("arithmetic", ARITHMETIC_FORM, ARITHMETIC_EXPECTED),
             AttrRule::unsupported("event", EVENT_TARGETS),
             AttrRule::unsupported("error", ERROR_TARGETS),
+            AttrRule::unsupported("derive", DERIVE_TARGETS),
             AttrRule::unsupported("must_use", MUST_USE_TARGETS),
             AttrRule::unsupported("payable", PAYABLE_TARGETS),
         ],
@@ -153,6 +156,7 @@ fn validate_func_attrs<'db>(
             AttrRule::supported("must_use", BARE_FORM, MUST_USE_EXPECTED),
             AttrRule::unsupported("event", EVENT_TARGETS),
             AttrRule::unsupported("error", ERROR_TARGETS),
+            AttrRule::unsupported("derive", DERIVE_TARGETS),
             AttrRule::unsupported("payable", PAYABLE_TARGETS),
         ],
     );
@@ -173,6 +177,7 @@ fn validate_struct_attrs<'db>(
             AttrRule::supported("error", BARE_FORM, "`#[error]`"),
             AttrRule::supported("must_use", BARE_FORM, MUST_USE_EXPECTED),
             AttrRule::unsupported("payable", PAYABLE_TARGETS),
+            AttrRule::unsupported("default", DEFAULT_TARGETS),
         ],
     );
 }
@@ -192,6 +197,8 @@ fn validate_enum_attrs<'db>(
             AttrRule::unsupported("error", ERROR_TARGETS),
             AttrRule::supported("must_use", BARE_FORM, MUST_USE_EXPECTED),
             AttrRule::unsupported("payable", PAYABLE_TARGETS),
+            // `#[default]` marks a variant, not the enum itself.
+            AttrRule::unsupported("default", DEFAULT_TARGETS),
         ],
     );
 }
@@ -210,6 +217,7 @@ fn validate_unsupported_item_attrs<'db>(
             AttrRule::unsupported("arithmetic", ARITHMETIC_TARGETS),
             AttrRule::unsupported("event", EVENT_TARGETS),
             AttrRule::unsupported("error", ERROR_TARGETS),
+            AttrRule::unsupported("derive", DERIVE_TARGETS),
             AttrRule::unsupported("must_use", MUST_USE_TARGETS),
             AttrRule::unsupported("payable", PAYABLE_TARGETS),
         ],
@@ -350,6 +358,15 @@ impl<'db> ItemKind<'db> {
                 validate_unsupported_item_attrs(ctxt, impl_.attr_list(), "impl", None);
                 Impl::lower_ast(ctxt, impl_);
             }
+            ast::ItemKind::DeriveProviderScope(scope) => {
+                validate_unsupported_item_attrs(
+                    ctxt,
+                    scope.attr_list(),
+                    "derive provider selection scope",
+                    None,
+                );
+                DeriveProviderScope::lower_ast(ctxt, scope);
+            }
             ast::ItemKind::Trait(trait_) => {
                 validate_unsupported_item_attrs(
                     ctxt,
@@ -362,6 +379,10 @@ impl<'db> ItemKind<'db> {
             ast::ItemKind::ImplTrait(impl_trait) => {
                 validate_unsupported_item_attrs(ctxt, impl_trait.attr_list(), "impl trait", None);
                 ImplTrait::lower_ast(ctxt, impl_trait);
+            }
+            ast::ItemKind::DeriveDecl(decl) => {
+                validate_unsupported_item_attrs(ctxt, decl.attr_list(), "derive declaration", None);
+                DeriveDecl::lower_ast(ctxt, decl);
             }
             ast::ItemKind::Const(const_) => {
                 validate_unsupported_item_attrs(
@@ -486,10 +507,13 @@ impl<'db> Struct<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Struct) -> Self {
         let is_event_struct = super::event::is_event_struct(&ast);
         let is_error_struct = super::error::is_error_struct(&ast);
+        let has_derive_attr = super::derive::has_derive_attr(&ast);
 
         if is_event_struct && is_error_struct {
             super::error::report_event_error_attr_conflict(ctxt, &ast);
         }
+        // `#[derive(..)]` combined with `#[event]` / `#[error]` is reported by
+        // the post-lowering expansion stage (`lower::expansion`).
         if is_event_struct {
             return super::event::lower_event_struct(ctxt, ast);
         }
@@ -504,7 +528,13 @@ impl<'db> Struct<'db> {
         let id = ctxt.joined_id(TrackedItemVariant::Struct(name));
         ctxt.enter_item_scope(id, false);
 
-        let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
+        // Strip the compiler-consumed `#[derive(..)]` attribute, like
+        // `#[event]` / `#[error]` are stripped from their structs.
+        let attributes = if has_derive_attr {
+            super::attr::lower_attrs_without_named(ctxt, ast.attr_list(), "derive")
+        } else {
+            AttrListId::lower_ast_opt(ctxt, ast.attr_list())
+        };
         let vis = super::lower_visibility(&ast);
         let generic_params = GenericParamListId::lower_ast_opt(ctxt, ast.generic_params());
         let where_clause = WhereClauseId::lower_ast_opt(ctxt, ast.where_clause());
@@ -523,6 +553,8 @@ impl<'db> Struct<'db> {
             ctxt.top_mod(),
             origin,
         );
+        // Derived trait impls are synthesized as siblings of the struct by
+        // the post-lowering expansion stage (`lower::expansion`).
         ctxt.leave_item_scope(struct_)
     }
 }
@@ -564,15 +596,25 @@ pub(super) fn lower_uses_clause_opt<'db>(
 
 impl<'db> Enum<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Enum) -> Self {
+        let has_derive_attr = super::derive::enum_has_derive_attr(&ast);
+
         let name = IdentId::lower_token_partial(ctxt, ast.name());
         let id = ctxt.joined_id(TrackedItemVariant::Enum(name));
         ctxt.enter_item_scope(id, false);
 
-        let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
+        // Strip the compiler-consumed `#[derive(..)]` attribute, like
+        // `#[event]` / `#[error]` are stripped from their structs.
+        let attributes = if has_derive_attr {
+            super::attr::lower_attrs_without_named(ctxt, ast.attr_list(), "derive")
+        } else {
+            AttrListId::lower_ast_opt(ctxt, ast.attr_list())
+        };
         let vis = super::lower_visibility(&ast);
         let generic_params = GenericParamListId::lower_ast_opt(ctxt, ast.generic_params());
         let where_clause = WhereClauseId::lower_ast_opt(ctxt, ast.where_clause());
-        let variants = VariantDefListId::lower_ast_opt(ctxt, ast.variants());
+        // The `#[default]` variant markers are consumed by derive lowering;
+        // strip them from the lowered variants like the `derive` attribute.
+        let variants = VariantDefListId::lower_ast_opt(ctxt, ast.variants(), has_derive_attr);
         let origin = HirOrigin::raw(&ast);
 
         let enum_ = Self::new(
@@ -587,6 +629,12 @@ impl<'db> Enum<'db> {
             ctxt.top_mod(),
             origin,
         );
+        // Derived trait impls are synthesized as siblings of the enum by the
+        // post-lowering expansion stage (`lower::expansion`), which also
+        // validates the `#[default]` variant markers: the markers are
+        // meaningful exactly when some request (attribute or standalone
+        // declaration) derives `Default` for this enum, which only the
+        // expansion stage can see.
         ctxt.leave_item_scope(enum_)
     }
 }
@@ -787,6 +835,15 @@ impl<'db> ImplTrait<'db> {
         let where_clause = WhereClauseId::lower_ast_opt(ctxt, ast.where_clause());
         let trait_ref = TraitRefId::lower_ast_partial(ctxt, ast.trait_ref());
         let ty = TypeId::lower_ast_partial(ctxt, ast.ty());
+        // Optional `as Name` alias (FCO T-Nway). Stored only — not bound.
+        let alias = ast
+            .alias()
+            .map(|a| IdentId::lower_token_partial(ctxt, a.name()));
+        // Optional `with <path>` permit (FCO T3). The path is lowered but NOT
+        // resolved: it is stored as written for later increments.
+        let impl_permit = ast
+            .with_permit()
+            .map(|w| PathId::lower_ast_partial(ctxt, w.path()));
         let origin = HirOrigin::raw(&ast);
 
         let mut types = vec![];
@@ -836,6 +893,8 @@ impl<'db> ImplTrait<'db> {
             where_clause,
             types,
             consts,
+            alias,
+            impl_permit,
             ctxt.top_mod(),
             origin,
         );
@@ -883,6 +942,109 @@ impl<'db> AssocConstDef<'db> {
             value,
             vis: super::lower_visibility(&ast),
         }
+    }
+}
+
+impl<'db> DeriveProviderScope<'db> {
+    pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::DeriveProviderScope) -> Self {
+        let idx = ctxt.next_derive_provider_scope_idx();
+        let id = ctxt.joined_id(TrackedItemVariant::DeriveProviderScope(idx));
+        ctxt.enter_item_scope(id, false);
+
+        let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
+        let provider_path = ast
+            .provider_path()
+            .map(|path| PathId::lower_ast(ctxt, path))
+            .into();
+        let origin = HirOrigin::raw(&ast);
+
+        let scope = Self::new(
+            ctxt.db(),
+            id,
+            attributes,
+            provider_path,
+            ctxt.top_mod(),
+            origin,
+        );
+
+        if let Some(item_list) = ast.item_list() {
+            for item in item_list {
+                match item.kind() {
+                    Some(ast::ItemKind::DeriveDecl(decl)) => {
+                        validate_unsupported_item_attrs(
+                            ctxt,
+                            decl.attr_list(),
+                            "derive declaration",
+                            None,
+                        );
+                        DeriveDecl::lower_ast_with_provider_scope(ctxt, decl, scope);
+                    }
+                    Some(_) => ItemKind::lower_ast(ctxt, item),
+                    None => {}
+                }
+            }
+        }
+
+        ctxt.leave_item_scope(scope)
+    }
+}
+
+impl<'db> DeriveDecl<'db> {
+    pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::DeriveDecl) -> Self {
+        Self::lower_ast_with_provider_scope_opt(ctxt, ast, None)
+    }
+
+    pub(super) fn lower_ast_with_provider_scope(
+        ctxt: &mut FileLowerCtxt<'db>,
+        ast: ast::DeriveDecl,
+        provider_scope: DeriveProviderScope<'db>,
+    ) -> Self {
+        Self::lower_ast_with_provider_scope_opt(ctxt, ast, Some(provider_scope))
+    }
+
+    fn lower_ast_with_provider_scope_opt(
+        ctxt: &mut FileLowerCtxt<'db>,
+        ast: ast::DeriveDecl,
+        provider_scope: Option<DeriveProviderScope<'db>>,
+    ) -> Self {
+        let idx = ctxt.next_derive_decl_idx();
+        let id = ctxt.joined_id(TrackedItemVariant::DeriveDecl(idx));
+        ctxt.enter_item_scope(id, false);
+
+        let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
+        let head_path = ast
+            .head_path()
+            .map(|path| PathId::lower_ast(ctxt, path))
+            .into();
+        let target_path = ast
+            .target_path()
+            .map(|path| PathId::lower_ast(ctxt, path))
+            .into();
+        let explicit_provider_path = ast
+            .provider_path()
+            .map(|path| PathId::lower_ast(ctxt, path));
+        let scoped_provider_path =
+            provider_scope.and_then(|scope| scope.provider_path(ctxt.db()).to_opt());
+        let selected_provider_from_scope =
+            explicit_provider_path.is_none() && scoped_provider_path.is_some();
+        let selected_provider_path = explicit_provider_path
+            .or(scoped_provider_path)
+            .map(Partial::Present);
+        let origin = HirOrigin::raw(&ast);
+
+        let decl = Self::new(
+            ctxt.db(),
+            id,
+            attributes,
+            head_path,
+            target_path,
+            selected_provider_path,
+            provider_scope,
+            selected_provider_from_scope,
+            ctxt.top_mod(),
+            origin,
+        );
+        ctxt.leave_item_scope(decl)
     }
 }
 
@@ -1025,24 +1187,40 @@ impl<'db> FieldDef<'db> {
 }
 
 impl<'db> VariantDefListId<'db> {
-    fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::VariantDefList) -> Self {
+    fn lower_ast(
+        ctxt: &mut FileLowerCtxt<'db>,
+        ast: ast::VariantDefList,
+        strip_default_attr: bool,
+    ) -> Self {
         let variants = ast
             .into_iter()
-            .map(|variant| VariantDef::lower_ast(ctxt, variant))
+            .map(|variant| VariantDef::lower_ast(ctxt, variant, strip_default_attr))
             .collect::<Vec<_>>();
         Self::new(ctxt.db(), variants)
     }
 
-    fn lower_ast_opt(ctxt: &mut FileLowerCtxt<'db>, ast: Option<ast::VariantDefList>) -> Self {
-        ast.map(|ast| Self::lower_ast(ctxt, ast))
+    fn lower_ast_opt(
+        ctxt: &mut FileLowerCtxt<'db>,
+        ast: Option<ast::VariantDefList>,
+        strip_default_attr: bool,
+    ) -> Self {
+        ast.map(|ast| Self::lower_ast(ctxt, ast, strip_default_attr))
             .unwrap_or(Self::new(ctxt.db(), Vec::new()))
     }
 }
 
 impl<'db> VariantDef<'db> {
-    fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::VariantDef) -> Self {
+    fn lower_ast(
+        ctxt: &mut FileLowerCtxt<'db>,
+        ast: ast::VariantDef,
+        strip_default_attr: bool,
+    ) -> Self {
         report_payable_on_unsupported_target(ctxt, ast.attr_list(), "variant", None);
-        let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
+        let attributes = if strip_default_attr {
+            super::attr::lower_attrs_without_named(ctxt, ast.attr_list(), "default")
+        } else {
+            AttrListId::lower_ast_opt(ctxt, ast.attr_list())
+        };
         let name = IdentId::lower_token_partial(ctxt, ast.name());
         let kind = match ast.kind() {
             ast::VariantKind::Unit => VariantKind::Unit,

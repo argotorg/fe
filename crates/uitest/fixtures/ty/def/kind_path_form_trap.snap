@@ -1,0 +1,34 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/kind_path_form_trap.fe
+---
+error[1-0001]: unexpected syntax while parsing struct definition
+   ┌─ kind_path_form_trap.fe:26:19
+   │
+26 │ where T: Foo<i32> -> *
+   │                   ^^^^ unexpected
+
+error[1-0001]: unexpected syntax while parsing kind bound
+   ┌─ kind_path_form_trap.fe:33:15
+   │
+33 │ where T: * -> Foo<i32>
+   │               ^^^^^^^^ unexpected
+
+error[2-0007]: expected trait item here
+   ┌─ kind_path_form_trap.fe:26:10
+   │
+26 │ where T: Foo<i32> -> *
+   │          ^^^^^^^^ expected trait here, but found type `Foo`
+
+error[2-0007]: expected trait item here
+   ┌─ kind_path_form_trap.fe:40:10
+   │
+40 │ where T: Foo<i32>
+   │          ^^^^^^^^ expected trait here, but found type `Foo`
+
+error[3-0016]: too many generic args; expected 0, given 1
+   ┌─ kind_path_form_trap.fe:28:10
+   │
+28 │     val: T<i32>,
+   │          ^^^^^^ expected 0 arguments, but 1 were given

@@ -1,0 +1,16 @@
+// `${...}` splice holes are only allowed inside a `quote` body, `$` must
+// be immediately followed by `{`, and quotes do not nest.
+
+fn hole_outside_quote() -> bool {
+    let x = ${true}
+    x
+}
+
+fn dollar_without_brace() -> bool {
+    let x = $true
+    x
+}
+
+fn nested_quote() {
+    let q = quote { quote { true } }
+}

@@ -1,0 +1,29 @@
+---
+source: crates/fe/tests/cli_output.rs
+assertion_line: 1822
+expression: output
+input_file: tests/fixtures/cli_output/single_files/provider_signature_missing_trait.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/provider_signature_missing_trait.fe
+
+error[2-0002]: `MissingTrait` is not found
+   ┌─ provider_signature_missing_trait.fe:20:41
+   │
+20 │     const fn derive<T>(ev: own Evidence<MissingTrait<T>>) -> Evidence<MissingTrait<T>>
+   │                                         ^^^^^^^^^^^^ `MissingTrait` is not found
+
+error[2-0002]: `MissingTrait` is not found
+   ┌─ provider_signature_missing_trait.fe:20:71
+   │
+20 │     const fn derive<T>(ev: own Evidence<MissingTrait<T>>) -> Evidence<MissingTrait<T>>
+   │                                                                       ^^^^^^^^^^^^ `MissingTrait` is not found
+
+error[2-0002]: `MissingTrait` is not found
+   ┌─ provider_signature_missing_trait.fe:23:38
+   │
+23 │             builder: mut ImplBuilder<MissingTrait<T>>,
+   │                                      ^^^^^^^^^^^^ `MissingTrait` is not found
+
+
+=== EXIT CODE: 1 ===

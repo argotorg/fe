@@ -22,10 +22,10 @@ use crate::{
     span::{
         DynLazySpan, HirOrigin,
         item::{
-            LazyConstSpan, LazyContractSpan, LazyEnumSpan, LazyFuncSpan, LazyImplSpan,
-            LazyImplTraitSpan, LazyItemSpan, LazyModSpan, LazyStaticAssertSpan, LazyStructSpan,
-            LazyTopModSpan, LazyTraitSpan, LazyTraitTypeSpan, LazyTypeAliasSpan, LazyUseSpan,
-            LazyVariantDefSpan,
+            LazyConstSpan, LazyContractSpan, LazyDeriveDeclSpan, LazyDeriveProviderScopeSpan,
+            LazyEnumSpan, LazyFuncSpan, LazyImplSpan, LazyImplTraitSpan,
+            LazyItemSpan, LazyModSpan, LazyStaticAssertSpan, LazyStructSpan, LazyTopModSpan,
+            LazyTraitSpan, LazyTraitTypeSpan, LazyTypeAliasSpan, LazyUseSpan, LazyVariantDefSpan,
         },
         params::LazyGenericParamListSpan,
     },
@@ -55,6 +55,8 @@ pub enum ItemKind<'db> {
     Impl(Impl<'db>),
     Trait(Trait<'db>),
     ImplTrait(ImplTrait<'db>),
+    DeriveProviderScope(DeriveProviderScope<'db>),
+    DeriveDecl(DeriveDecl<'db>),
     Const(Const<'db>),
     StaticAssert(StaticAssert<'db>),
     Use(Use<'db>),
@@ -84,7 +86,13 @@ impl<'db> ItemKind<'db> {
             TypeAlias(alias) => alias.name(db).to_opt(),
             Trait(trait_) => trait_.name(db).to_opt(),
             Const(const_) => const_.name(db).to_opt(),
-            Use(_) | StaticAssert(_) | Body(_) | Impl(_) | ImplTrait(_) => None,
+            Use(_)
+            | StaticAssert(_)
+            | Body(_)
+            | Impl(_)
+            | ImplTrait(_)
+            | DeriveProviderScope(_)
+            | DeriveDecl(_) => None,
         }
     }
 
@@ -101,6 +109,8 @@ impl<'db> ItemKind<'db> {
             Self::Impl(impl_) => impl_.attributes(db),
             Self::Trait(trait_) => trait_.attributes(db),
             Self::ImplTrait(impl_trait) => impl_trait.attributes(db),
+            Self::DeriveProviderScope(scope) => scope.attributes(db),
+            Self::DeriveDecl(decl) => decl.attributes(db),
             Self::Const(const_) => const_.attributes(db),
             Self::StaticAssert(assert_) => assert_.attributes(db),
             Self::Use(use_) => use_.attributes(db),
@@ -122,6 +132,8 @@ impl<'db> ItemKind<'db> {
             Trait(_) => "trait",
             Impl(_) => "impl",
             ImplTrait(_) => "impl trait",
+            DeriveProviderScope(_) => "derive provider selection scope",
+            DeriveDecl(_) => "derive",
             Const(_) => "const",
             StaticAssert(_) => "static_assert",
             Use(_) => "use",
@@ -140,7 +152,14 @@ impl<'db> ItemKind<'db> {
             TypeAlias(alias) => Some(alias.span().alias().into()),
             Trait(trait_) => Some(trait_.span().name().into()),
             Const(const_) => Some(const_.span().name().into()),
-            TopMod(_) | StaticAssert(_) | Use(_) | Body(_) | Impl(_) | ImplTrait(_) => None,
+            TopMod(_)
+            | StaticAssert(_)
+            | Use(_)
+            | Body(_)
+            | Impl(_)
+            | ImplTrait(_)
+            | DeriveProviderScope(_)
+            | DeriveDecl(_) => None,
         }
     }
 
@@ -157,7 +176,12 @@ impl<'db> ItemKind<'db> {
             Trait(trait_) => trait_.vis(db),
             Const(const_) => const_.vis(db),
             Use(use_) => use_.vis(db),
-            StaticAssert(_) | Impl(_) | ImplTrait(_) | Body(_) => Visibility::Private,
+            StaticAssert(_)
+            | Impl(_)
+            | ImplTrait(_)
+            | DeriveProviderScope(_)
+            | DeriveDecl(_)
+            | Body(_) => Visibility::Private,
         }
     }
 
@@ -173,6 +197,8 @@ impl<'db> ItemKind<'db> {
             ItemKind::Trait(trait_) => trait_.top_mod(db),
             ItemKind::Impl(impl_) => impl_.top_mod(db),
             ItemKind::ImplTrait(impl_trait) => impl_trait.top_mod(db),
+            ItemKind::DeriveProviderScope(scope) => scope.top_mod(db),
+            ItemKind::DeriveDecl(decl) => decl.top_mod(db),
             ItemKind::Const(const_) => const_.top_mod(db),
             ItemKind::StaticAssert(assert_) => assert_.top_mod(db),
             ItemKind::Use(use_) => use_.top_mod(db),
@@ -358,7 +384,7 @@ impl<'db> WhereClauseOwner<'db> {
         ItemKind::from(self).top_mod(db)
     }
 
-    pub(crate) fn where_clause(self, db: &'db dyn HirDb) -> WhereClauseId<'db> {
+    pub fn where_clause(self, db: &'db dyn HirDb) -> WhereClauseId<'db> {
         match self {
             Self::Func(func) => func.where_clause(db),
             Self::Struct(struct_) => struct_.where_clause(db),
@@ -569,6 +595,28 @@ impl<'db> TopLevelMod<'db> {
             .collect()
     }
 
+    #[salsa::tracked(return_ref)]
+    pub fn all_derive_provider_scopes(self, db: &'db dyn HirDb) -> Vec<DeriveProviderScope<'db>> {
+        self.all_items(db)
+            .iter()
+            .filter_map(|item| match item {
+                ItemKind::DeriveProviderScope(scope) => Some(*scope),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[salsa::tracked(return_ref)]
+    pub fn all_derive_decls(self, db: &'db dyn HirDb) -> Vec<DeriveDecl<'db>> {
+        self.all_items(db)
+            .iter()
+            .filter_map(|item| match item {
+                ItemKind::DeriveDecl(decl) => Some(*decl),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Returns all impls in the top level module including ones in nested
     /// modules.
     #[salsa::tracked(return_ref)]
@@ -736,6 +784,24 @@ impl<'db> Func<'db> {
 
     pub fn is_extern(self, db: &dyn HirDb) -> bool {
         self.modifiers(db).is_extern
+    }
+
+    /// Whether this function is the `derive` function of a derive provider.
+    /// Provider bodies are written in the compile-time command language and are
+    /// checked by the provider executor in the expansion stage, so the ordinary
+    /// signature/body analyses skip them.
+    ///
+    /// A derive provider is the ordinary `impl Derive<Goal> for Provider {
+    /// const fn derive .. }`, whose parent is an [`ItemKind::ImplTrait`] whose
+    /// trait ref resolves — base-graph-safely, by the same `core::derive::Derive`
+    /// identity rule the provider engine uses — to the `Derive` provider trait.
+    pub fn is_derive_provider_fn(self, db: &dyn HirDb) -> bool {
+        match self.scope().parent_item(db) {
+            Some(ItemKind::ImplTrait(impl_trait)) => {
+                crate::lower::impl_trait_provider_goal_path(db, impl_trait).is_some()
+            }
+            _ => false,
+        }
     }
 
     pub fn is_method(self, db: &dyn HirDb) -> bool {
@@ -1229,6 +1295,15 @@ pub struct ImplTrait<'db> {
     pub(crate) types: Vec<AssocTyDef<'db>>,
     #[return_ref]
     pub(in crate::core) consts: Vec<AssocConstDef<'db>>,
+    /// The optional user-facing `as Name` alias on this trait impl (FCO
+    /// T-Nway). `None` for elided/synthesized impls. Stored only — not yet
+    /// bound into any scope nor used for selection (later increments).
+    pub(in crate::core) alias: Option<Partial<IdentId<'db>>>,
+    /// The optional user-facing `with <path>` permit on this trait impl (FCO
+    /// T3). `None` for elided/synthesized impls. The path references a permit
+    /// value and is stored UNRESOLVED — not yet bound into any scope, gated,
+    /// nor used for selection (later increments).
+    pub(in crate::core) impl_permit: Option<Partial<PathId<'db>>>,
     pub top_mod: TopLevelMod<'db>,
 
     #[return_ref]
@@ -1243,6 +1318,22 @@ impl<'db> ImplTrait<'db> {
     /// Returns the trait reference for this impl.
     pub fn hir_trait_ref(self, db: &'db dyn HirDb) -> Partial<TraitRefId<'db>> {
         self.trait_ref(db)
+    }
+
+    /// Returns the optional user-facing `as Name` alias on this trait impl
+    /// (FCO T-Nway). `None` when the impl was written without an `as` clause
+    /// or is synthesized. Stored only — name binding/selection are later
+    /// increments.
+    pub fn hir_alias(self, db: &'db dyn HirDb) -> Option<Partial<IdentId<'db>>> {
+        self.alias(db)
+    }
+
+    /// Returns the optional user-facing `with <path>` permit on this trait
+    /// impl (FCO T3). `None` when the impl was written without a `with` clause
+    /// or is synthesized. The path is stored UNRESOLVED — name resolution,
+    /// gating, and selection are later increments.
+    pub fn hir_impl_permit(self, db: &'db dyn HirDb) -> Option<Partial<PathId<'db>>> {
+        self.impl_permit(db)
     }
 
     /// Returns the raw associated const definitions from the HIR.
@@ -1281,6 +1372,16 @@ impl<'db> ImplTrait<'db> {
         })
     }
 
+    /// A `db`-resolved, salsa-index-independent rendering of this impl's
+    /// interning identity (its [`TrackedItemId`]'s [`TrackedItemVariant`]).
+    /// Exposes the FCO keystone's content key for cross-database comparison:
+    /// a *generated* impl renders its `(goal, self_ty)` content, whereas a
+    /// hand-written one renders its positional ordinal. See
+    /// [`TrackedItemVariant::content_repr`].
+    pub fn interning_identity_repr(self, db: &'db dyn HirDb) -> String {
+        self.id(db).variant(db).content_repr(db)
+    }
+
     // raw type_ref access kept; shim exposes public ___tmp method.
 
     // Semantic `ty` lives in `crate::semantic`.
@@ -1302,6 +1403,76 @@ pub struct AssocConstDef<'db> {
     /// Only meaningful for consts in inherent `impl` blocks; consts in trait
     /// impls inherit their visibility from the trait.
     pub vis: Visibility,
+}
+
+#[salsa::tracked]
+#[derive(Debug)]
+pub struct DeriveProviderScope<'db> {
+    #[id]
+    id: TrackedItemId<'db>,
+
+    pub(in crate::core) attributes: AttrListId<'db>,
+    pub provider_path: Partial<PathId<'db>>,
+    pub top_mod: TopLevelMod<'db>,
+
+    #[return_ref]
+    pub(crate) origin: HirOrigin<ast::DeriveProviderScope>,
+}
+
+impl<'db> DeriveProviderScope<'db> {
+    pub fn span(self) -> LazyDeriveProviderScopeSpan<'db> {
+        LazyDeriveProviderScopeSpan::new(self)
+    }
+
+    pub fn scope(self) -> ScopeId<'db> {
+        ScopeId::from_item(self.into())
+    }
+
+    pub fn children_non_nested(
+        self,
+        db: &'db dyn HirDb,
+    ) -> impl Iterator<Item = ItemKind<'db>> + 'db {
+        let scope = ScopeId::from_item(self.into());
+        let s_graph = scope.scope_graph(db);
+        s_graph.child_items(scope)
+    }
+
+    pub fn derive_decls(self, db: &'db dyn HirDb) -> impl Iterator<Item = DeriveDecl<'db>> + 'db {
+        self.children_non_nested(db).filter_map(|item| match item {
+            ItemKind::DeriveDecl(decl) => Some(decl),
+            _ => None,
+        })
+    }
+}
+
+#[salsa::tracked]
+#[derive(Debug)]
+pub struct DeriveDecl<'db> {
+    #[id]
+    id: TrackedItemId<'db>,
+
+    pub(in crate::core) attributes: AttrListId<'db>,
+    pub head_path: Partial<PathId<'db>>,
+    pub target_path: Partial<PathId<'db>>,
+    pub selected_provider_path: Option<Partial<PathId<'db>>>,
+    pub provider_scope: Option<DeriveProviderScope<'db>>,
+    /// True when `selected_provider_path` came from an enclosing
+    /// `with Provider { ... }` selector rather than an explicit `using`.
+    pub selected_provider_from_scope: bool,
+    pub top_mod: TopLevelMod<'db>,
+
+    #[return_ref]
+    pub(crate) origin: HirOrigin<ast::DeriveDecl>,
+}
+
+impl<'db> DeriveDecl<'db> {
+    pub fn span(self) -> LazyDeriveDeclSpan<'db> {
+        LazyDeriveDeclSpan::new(self)
+    }
+
+    pub fn scope(self) -> ScopeId<'db> {
+        ScopeId::from_item(self.into())
+    }
 }
 
 #[salsa::tracked]
@@ -1694,20 +1865,112 @@ pub enum TrackedItemVariant<'db> {
     Impl(u32),
     Trait(Partial<IdentId<'db>>),
     ImplTrait(u32),
+    /// FCO KEYSTONE: the content-keyed identity of a *generated* `impl Trait
+    /// for Ty` item (the `#[error]`/`#[event]`/`#[msg]` desugarings and the
+    /// derive-provider replay). Unlike the positional [`Self::ImplTrait`]
+    /// ordinal — which is reset to 0 in every lowering pass and renumbers all
+    /// downstream ids when derive targets are reordered — this arm keys on the
+    /// HIR-level content that actually distinguishes the impl: its goal trait
+    /// reference and self type. Under coherence (at most one impl of a given
+    /// trait for a given type) `(goal, self_ty)` is collision-free, so the
+    /// interned `TrackedItemId` — and therefore the downstream `ImplementorId`
+    /// / `SemanticInstanceKey` — is stable across reorderings of sibling
+    /// derive targets. Hand-written `impl Trait` items stay on
+    /// [`Self::ImplTrait`] (they are already reorder-stable via
+    /// `HirOrigin::raw`).
+    GeneratedImplTrait {
+        goal: Partial<TraitRefId<'db>>,
+        self_ty: Partial<TypeId<'db>>,
+    },
+    DeriveProviderScope(u32),
+    DeriveDecl(u32),
     Const(Partial<IdentId<'db>>),
     StaticAssert(u32),
     ContractInit,
-    ContractRecvArm { recv_idx: u32, arm_idx: u32 },
+    ContractRecvArm {
+        recv_idx: u32,
+        arm_idx: u32,
+    },
     Use(Partial<super::UsePathId<'db>>),
+    /// Namespace marker for items synthesized by the post-lowering expansion
+    /// stage (e.g. `#[derive(..)]` impls). Joining this onto the top-level
+    /// module's id keeps expansion-generated `TrackedItemId`s disjoint from
+    /// the ids of items created during base lowering, whose per-file
+    /// `ImplTrait`/`Impl` counters restart from zero in the expansion pass.
+    Expansion,
     FuncBody,
     NamelessBody,
+    /// Anonymous `bool`-expected const body of a bare const-expression
+    /// predicate in a `where` clause, indexed by its position among the
+    /// clause's const predicates.
+    WhereConstPredicate(u32),
     StaticAssertCondition,
     StaticAssertComparisonLhs,
     StaticAssertComparisonRhs,
     Joined(Box<Self>, Box<Self>),
 }
-impl TrackedItemVariant<'_> {
+impl<'db> TrackedItemVariant<'db> {
     pub(crate) fn join(self, rhs: Self) -> Self {
         Self::Joined(self.into(), rhs.into())
+    }
+
+    /// A `db`-resolved, salsa-index-independent rendering of this variant,
+    /// suitable for comparing interning identity *across databases* (idents are
+    /// resolved to their text, paths/types to their source form). Used by the
+    /// FCO keystone tripwire to observe that a *generated* impl's interning
+    /// identity is stable under derive-target reordering: the
+    /// [`Self::ImplTrait`] arm renders its positional ordinal (the instability),
+    /// while [`Self::GeneratedImplTrait`] renders only its `(goal, self_ty)`
+    /// content (the fix).
+    pub fn content_repr(&self, db: &'db dyn crate::HirDb) -> String {
+        fn ident(p: &Partial<IdentId>, db: &dyn crate::HirDb) -> String {
+            p.to_opt()
+                .map_or_else(|| "<missing>".into(), |i| i.data(db).to_string())
+        }
+        match self {
+            Self::TopLevelMod(name) => format!("TopMod({})", name.data(db)),
+            Self::Mod(name) => format!("Mod({})", ident(name, db)),
+            Self::Func(name) => format!("Func({})", ident(name, db)),
+            Self::Struct(name) => format!("Struct({})", ident(name, db)),
+            Self::Contract(name) => format!("Contract({})", ident(name, db)),
+            Self::Enum(name) => format!("Enum({})", ident(name, db)),
+            Self::TypeAlias(name) => format!("TypeAlias({})", ident(name, db)),
+            Self::Impl(idx) => format!("Impl(ord:{idx})"),
+            Self::Trait(name) => format!("Trait({})", ident(name, db)),
+            Self::ImplTrait(idx) => format!("ImplTrait(ord:{idx})"),
+            Self::GeneratedImplTrait { goal, self_ty } => {
+                let goal = goal.to_opt().and_then(|t| t.path(db).to_opt()).map_or_else(
+                    || "<missing>".into(),
+                    |p| p.pretty_print(db),
+                );
+                let self_ty = self_ty
+                    .to_opt()
+                    .map_or_else(|| "<missing>".into(), |t| t.pretty_print(db));
+                format!("GeneratedImplTrait(goal:{goal},self:{self_ty})")
+            }
+            Self::DeriveProviderScope(idx) => format!("DeriveProviderScope(ord:{idx})"),
+            Self::DeriveDecl(idx) => format!("DeriveDecl(ord:{idx})"),
+            Self::Const(name) => format!("Const({})", ident(name, db)),
+            Self::StaticAssert(idx) => format!("StaticAssert(ord:{idx})"),
+            Self::ContractInit => "ContractInit".into(),
+            Self::ContractRecvArm { recv_idx, arm_idx } => {
+                format!("ContractRecvArm({recv_idx},{arm_idx})")
+            }
+            Self::Use(path) => format!(
+                "Use({})",
+                path.to_opt()
+                    .map_or_else(|| "<missing>".into(), |p| p.pretty_path(db))
+            ),
+            Self::Expansion => "Expansion".into(),
+            Self::FuncBody => "FuncBody".into(),
+            Self::NamelessBody => "NamelessBody".into(),
+            Self::WhereConstPredicate(idx) => format!("WhereConstPredicate({idx})"),
+            Self::StaticAssertCondition => "StaticAssertCondition".into(),
+            Self::StaticAssertComparisonLhs => "StaticAssertComparisonLhs".into(),
+            Self::StaticAssertComparisonRhs => "StaticAssertComparisonRhs".into(),
+            Self::Joined(lhs, rhs) => {
+                format!("{}::{}", lhs.content_repr(db), rhs.content_repr(db))
+            }
+        }
     }
 }

@@ -1,0 +1,94 @@
+// CASCADE N-way NESTED shadowing (FCO #84 T-Nway) — three aliased impls of one
+// `(Trait, Type)` plus an unaliased default; nested `with (Name) { .. }` scopes
+// shadow one another, INNERMOST wins, and each pop restores the enclosing
+// selection.
+//
+// THE DREAM: `with (LevelA) { with (LevelB) { with (LevelC) { .. } } }` — at each
+//   depth the SAME `s.level()` call reads the innermost selected impl; unwinding
+//   restores each enclosing scope's choice. The reading sequence across the nest
+//   (before/inside-each/after) is 3 -> 5 -> 7 -> 9 -> 7 -> 5 -> 3.
+// PASS CRITERIA: `level()` reads 3 (default) outside; 5 in `with (LevelA)`; 7 in
+//   the nested `with (LevelB)`; 9 in the innermost `with (LevelC)`; then 7, 5, 3
+//   as each block closes.
+// DRIVEN-BY: the unified SELECTION DISCRIMINATOR (the unaliased `Anonymous` default
+//   coexists with three distinct `Alias`es; the unscoped tier picks the sole
+//   `Anonymous`; `with (Name)` selects the named alias) + the effect-env FRAME
+//   STACK, which already gives innermost-wins shadowing: each `with` pushes a
+//   frame and the in-scope provision snapshot walks frames innermost-first, so the
+//   nested selections naturally stack and pop with no extra machinery.
+//
+// SURFACE: `impl Volume for Speaker as LevelA { .. }` is the real `as Name` alias;
+// `with (LevelA) { .. }` is the real N-way selection form.
+
+trait Volume {
+    fn level(self) -> u32
+}
+
+struct Speaker {
+    id: u256,
+}
+
+// UNALIASED DEFAULT: the sole `Anonymous` impl — the unscoped default-tier picks
+// it (level == 3).
+impl Volume for Speaker {
+    fn level(self) -> u32 {
+        return 3
+    }
+}
+
+// THREE ALIASED LEVELS: selectable only via `with (LevelA/LevelB/LevelC)`.
+impl Volume for Speaker as LevelA {
+    fn level(self) -> u32 {
+        return 5
+    }
+}
+
+impl Volume for Speaker as LevelB {
+    fn level(self) -> u32 {
+        return 7
+    }
+}
+
+impl Volume for Speaker as LevelC {
+    fn level(self) -> u32 {
+        return 9
+    }
+}
+
+#[test]
+fn nested_scopes_innermost_wins_then_restore() {
+    let s = Speaker { id: 1 }
+
+    // Outside any selecting scope: the unaliased default (3).
+    assert!(s.level() == 3)
+
+    let a: u32 = with (LevelA) {
+        // LevelA selected (5).
+        assert!(s.level() == 5)
+
+        let b: u32 = with (LevelB) {
+            // Nested: LevelB shadows LevelA (7).
+            assert!(s.level() == 7)
+
+            let c: u32 = with (LevelC) {
+                // Innermost: LevelC shadows LevelB (9).
+                assert!(s.level() == 9)
+                s.level()
+            }
+            assert!(c == 9)
+
+            // LevelC popped -> back to LevelB (7).
+            assert!(s.level() == 7)
+            s.level()
+        }
+        assert!(b == 7)
+
+        // LevelB popped -> back to LevelA (5).
+        assert!(s.level() == 5)
+        s.level()
+    }
+    assert!(a == 5)
+
+    // LevelA popped -> back to the unaliased default (3).
+    assert!(s.level() == 3)
+}

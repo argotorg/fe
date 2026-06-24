@@ -1,0 +1,24 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/provider_missing_finish.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/provider_missing_finish.fe
+
+error[13-0010]: derive provider `NoFinish` failed to derive `Marker`
+   ┌─ provider_missing_finish.fe:34:8
+   │  
+24 │ ╭     {
+25 │ │         // BUG: returns the evidence without ever calling `builder.finish()`.
+26 │ │         ev
+27 │ │     }
+   │ ╰─────' the provider returned without calling `finish`
+   · │
+34 │   derive Marker for Point using NoFinish
+   │          ^^^^^^ requested here: the provider returned without calling `finish`
+   │  
+   = the provider `NoFinish` ran at compile time and failed; the secondary label points at the failing provider code
+
+
+=== EXIT CODE: 1 ===

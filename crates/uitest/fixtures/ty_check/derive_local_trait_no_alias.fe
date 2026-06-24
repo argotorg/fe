@@ -1,0 +1,25 @@
+// W-C cross-module safety (anti-vacuous guard for derive-by-identity).
+//
+// A user declares their OWN trait named `Eq` and writes `derive Eq for Point`.
+// The goal `Eq` resolves to the LOCAL `Eq` (a distinct identity from
+// `core::ops::Eq`), so it must NOT silently select the canonical core `Eq`
+// provider. Before W-C, provider selection keyed on the head-name STRING, so
+// the local `Eq` falsely matched the core provider and generated a wrong
+// `impl core::ops::Eq for Point`. With identity-based selection the bare-ident
+// adapter is disqualified by the competing local trait, so the request is
+// reported as non-derivable instead of mis-deriving.
+//
+// The error proves the false cross-module match is prevented. (A user can
+// still derive their own trait via an explicit provider, `derive Eq for Point
+// using MyProvider`; that is a separate, named-selection path.)
+
+trait Eq {
+    fn eq(self, other: Self) -> bool
+}
+
+struct Point {
+    x: u256,
+    y: u256,
+}
+
+derive Eq for Point

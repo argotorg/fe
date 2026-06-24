@@ -4,7 +4,7 @@ use hir::{
         HirAnalysisDb,
         semantic::{EffectProviderSubst, GenericSubst, ImplEnv, SemanticInstance},
         ty::{
-            trait_def::TraitInstId,
+            trait_def::{ImplementorId, TraitInstId},
             ty_check::{
                 BodyOwner, EffectParamSite, EffectProviderProvenance, EffectProviderSpecialization,
                 LocalBinding,
@@ -320,7 +320,7 @@ fn local_binding_identity<'db>(db: &'db dyn HirAnalysisDb, binding: LocalBinding
     }
 }
 
-fn impl_env_identity<'db>(db: &'db dyn HirAnalysisDb, env: ImplEnv<'db>) -> String {
+fn impl_env_identity<'db>(db: &'db dyn HirAnalysisDb, env: &ImplEnv<'db>) -> String {
     let assumptions = env
         .assumptions(db)
         .list(db)
@@ -335,18 +335,91 @@ fn impl_env_identity<'db>(db: &'db dyn HirAnalysisDb, env: ImplEnv<'db>) -> Stri
         .collect::<Vec<_>>()
         .join("$");
     format!(
-        "scope${}$assumptions${assumptions}$witnesses${witnesses}",
-        module_path_components_for_scope(db, env.normalization_scope(db)).join("$")
+        "scope${}$assumptions${assumptions}$witnesses${witnesses}{}",
+        module_path_components_for_scope(db, env.normalization_scope(db)).join("$"),
+        selected_implementor_discriminator(db, env.selected_implementors(db)),
     )
 }
 
-fn impl_env_symbol_identity<'db>(db: &'db dyn HirAnalysisDb, env: ImplEnv<'db>) -> String {
+fn impl_env_symbol_identity<'db>(db: &'db dyn HirAnalysisDb, env: &ImplEnv<'db>) -> String {
     let assumptions = trait_symbol_identities(db, env.assumptions(db).list(db).iter().copied());
     let witnesses = trait_symbol_identities(db, env.witnesses(db).iter().copied());
     format!(
-        "scope${}$assumptions${assumptions}$witnesses${witnesses}",
-        module_path_components_for_scope(db, env.normalization_scope(db)).join("$")
+        "scope${}$assumptions${assumptions}$witnesses${witnesses}{}",
+        module_path_components_for_scope(db, env.normalization_scope(db)).join("$"),
+        selected_implementor_discriminator(db, env.selected_implementors(db)),
     )
+}
+
+/// The EMPTY-ONLY codegen-symbol discriminator for the `ImplEnv`
+/// `selected_implementors` per-goal carrier (cascade C3d/M3). MANDATORY: it keeps
+/// the codegen-symbol identity in LOCKSTEP with the interning identity
+/// (`template.rs` folds the carrier into `ImplEnv`'s `Eq`/`Hash` only when
+/// NON-EMPTY). Without it two now-distinct `default`/`override`-carrying instances
+/// would mint the SAME symbol — a miscompile (one impl's body served under the
+/// other's symbol).
+///
+/// - EMPTY carrier → the empty string, so a non-scope-selected env's identity is
+///   BYTE-IDENTICAL to the pre-cascade behavior (today every non-cascade instance
+///   carries an empty carrier, so all existing symbols are unchanged).
+/// - SINGLE-entry carrier → keyed on the impl's own HIR `impl` item ALONE — a
+///   discriminator BYTE-IDENTICAL to the pre-M3 `Some(impl)` output, so every
+///   resolved-impl-body instance that already carries one override keeps its
+///   exact existing symbol. (A derived default and a hand-written override of the
+///   same `(Trait, Type)` are DISTINCT items → distinct strings → distinct
+///   symbols; for a virtual / assumption implementor with no HIR item the
+///   trait-inst + self-type identity is the fallback.)
+/// - MULTI-entry carrier (the M3 generic-helper case, which never existed pre-M3)
+///   → a discriminator over EVERY `(goal, impl)` entry in the carrier's canonical
+///   order, so a helper instantiated under two different scoped selections mints
+///   distinct symbols.
+fn selected_implementor_discriminator<'db>(
+    db: &'db dyn HirAnalysisDb,
+    selected: &[(TraitInstId<'db>, ImplementorId<'db>)],
+) -> String {
+    match selected {
+        [] => String::new(),
+        // SINGLE entry: byte-identical to the pre-M3 `Some(impl)` discriminator —
+        // hash the impl identity ALONE (the goal rides in `witnesses` already), so
+        // existing resolved-body symbols are unchanged.
+        [(_, implementor)] => format!(
+            "$selected_implementor${}",
+            stable_identity_hash(&implementor_discriminator_identity(db, *implementor)),
+        ),
+        // MULTI entry: hash the full canonically-ordered `(goal, impl)` set.
+        entries => {
+            let joined = entries
+                .iter()
+                .map(|(goal, implementor)| {
+                    format!(
+                        "{}@{}",
+                        trait_identity(db, *goal),
+                        implementor_discriminator_identity(db, *implementor),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("$");
+            format!("$selected_implementors${}", stable_identity_hash(&joined))
+        }
+    }
+}
+
+/// The stable identity string of an `ImplementorId` used in the
+/// `selected_implementor`/`selected_implementors` discriminators: the impl's own
+/// HIR `impl` item when it has one, else a virtual trait-inst + self-type
+/// fallback (an assumption implementor with no HIR item — never carried today).
+fn implementor_discriminator_identity<'db>(
+    db: &'db dyn HirAnalysisDb,
+    implementor: ImplementorId<'db>,
+) -> String {
+    match implementor.hir_item(db) {
+        Some(item) => item_identity(db, item),
+        None => format!(
+            "virtual${}$self${}",
+            trait_identity(db, implementor.trait_inst(db)),
+            type_identity(db, implementor.self_ty(db)),
+        ),
+    }
 }
 
 fn trait_symbol_identities<'db>(
@@ -413,6 +486,9 @@ fn ty_mentions_effect_provider_param<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'
         TyData::QualifiedTy(trait_inst) => {
             trait_inst_mentions_effect_provider_param(db, *trait_inst)
         }
+        TyData::ConstraintTerm(inst) => trait_inst_mentions_effect_provider_param(db, *inst),
+        // A bare `Trait` def carries no type arguments, hence no effect provider.
+        TyData::TraitCtor(_) => false,
         TyData::TyVar(_)
         | TyData::TyBase(_)
         | TyData::ConstTy(_)
@@ -494,6 +570,8 @@ pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
             assoc.name.data(db)
         ),
         TyData::QualifiedTy(trait_inst) => format!("qualified${}", trait_identity(db, *trait_inst)),
+        TyData::ConstraintTerm(inst) => format!("constraint${}", trait_identity(db, *inst)),
+        TyData::TraitCtor(trait_) => format!("traitctor${}", item_identity(db, (*trait_).into())),
         TyData::ConstTy(const_ty) => {
             format!(
                 "const_ty${}",
@@ -599,6 +677,7 @@ fn ingot_logical_name<'db>(
         .and_then(|config| config.metadata.name.map(|name| name.to_string()))
         .unwrap_or_else(|| match ingot.kind(db) {
             IngotKind::Core => "core".to_string(),
+            IngotKind::CoreDerives => "core_derives".to_string(),
             IngotKind::Std => "std".to_string(),
             IngotKind::StandAlone => format!("standalone${}", top_mod.name(db).data(db)),
             IngotKind::Local => format!("local${}", top_mod.name(db).data(db)),

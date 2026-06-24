@@ -5,6 +5,8 @@ use ingot::evm::word::WordRepr
 use core::{EffectRef, EffectRefMut}
 
 /// Keys that can be written into the mapping preimage for keccak hashing.
+// `#[fixed]`: one-of-a-kind (single-impl) goal, the storage-layout money floor.
+#[fixed]
 pub trait StorageKey {
     /// Writes the key bytes at `ptr` and returns the length written.
     fn write_key(ptr: u256, self) -> u256

@@ -908,6 +908,104 @@ pub contract C {
     client.shutdown().await;
 }
 
+#[tokio::test]
+async fn mock_lsp_hover_shows_discharged_trait_obligations() {
+    let mut client = MockLspClient::start().await;
+    client.initialize().await;
+
+    let uri = lib_url();
+    client.did_open(&uri, "");
+    client.settle(500).await;
+
+    let code = r#"trait Marker {}
+
+struct Point {}
+
+impl Marker for Point {}
+
+struct Holder {}
+
+impl Holder {
+  fn accept<T: Marker>(self, _ t: T) {}
+}
+
+fn requires_marker<T: Marker>(_ t: T) {}
+
+fn caller(p: Point, h: Holder) {
+  requires_marker(p)
+  h.accept(p)
+}
+"#;
+    client.did_change(&uri, 700, code);
+    client.settle(1000).await;
+
+    // Hovering the callee path of `requires_marker(p)` reports the trait
+    // obligation its constraints raised and the impl that discharged it.
+    let call_hover = hover_eventually(&mut client, &uri, 15, 5).await;
+    let call_text = hover_text(&call_hover);
+    assert!(
+        call_text.contains("Trait obligations discharged:")
+            && call_text.contains("`Point: Marker` discharged by `impl Marker for Point`"),
+        "expected call hover to include discharge evidence, got:\n{call_text}"
+    );
+
+    // The same evidence is reported when hovering the method name of a
+    // method call whose constraints were discharged.
+    let method_hover = hover_eventually(&mut client, &uri, 16, 5).await;
+    let method_text = hover_text(&method_hover);
+    assert!(
+        method_text.contains("Trait obligations discharged:")
+            && method_text.contains("`Point: Marker` discharged by `impl Marker for Point`"),
+        "expected method hover to include discharge evidence, got:\n{method_text}"
+    );
+
+    client.shutdown().await;
+}
+
+#[tokio::test]
+async fn mock_lsp_hover_shows_discharged_const_predicates() {
+    let mut client = MockLspClient::start().await;
+    client.initialize().await;
+
+    let uri = lib_url();
+    client.did_open(&uri, "");
+    client.settle(500).await;
+
+    let code = r#"trait Platform {
+    const WORD_BITS: u256
+}
+
+struct Evm {}
+
+impl Platform for Evm {
+    const WORD_BITS: u256 = 256
+}
+
+fn word_op<B: Platform>() where B::WORD_BITS == 256 {
+}
+
+fn caller() {
+    word_op<Evm>()
+}
+"#;
+    client.did_change(&uri, 700, code);
+    client.settle(1000).await;
+
+    // Hovering the callee `word_op` reports the const predicate its `where`
+    // clause raised and the route (CTFE) that discharged it, reconstructed from
+    // the recorded evidence.
+    let call_hover = hover_eventually(&mut client, &uri, 14, 5).await;
+    let call_text = hover_text(&call_hover);
+    assert!(
+        call_text.contains("Const predicates discharged:")
+            && call_text.contains("discharged by CTFE")
+            && call_text.contains("Evm"),
+        "expected call hover to include const-predicate discharge evidence, got:\n{call_text}"
+    );
+
+    client.shutdown().await;
+}
+
 /// Regression test for the "goto def → freeze" bug observed in Zed.
 ///
 /// # History

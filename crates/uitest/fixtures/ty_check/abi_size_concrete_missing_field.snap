@@ -1,0 +1,17 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/abi_size_concrete_missing_field.fe
+---
+error[2-0010]: no method named `dynamic_payload_size_of` found for struct `NoAbi`
+   ┌─ abi_size_concrete_missing_field.fe:21:1
+   │
+21 │ derive AbiSize for Bad using StableAbiSize
+   │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method not found in `NoAbi`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ abi_size_concrete_missing_field.fe:21:1
+   │
+21 │ derive AbiSize for Bad using StableAbiSize
+   │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `NoAbi` doesn't implement `AbiSize`

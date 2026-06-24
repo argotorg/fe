@@ -968,4 +968,137 @@ fn require_decode<T>() where T: Decode<Sol> {}
             }
         }
     }
+
+    // ----------------------------------------------------------------------
+    // Provider-goal concrete-constraint boundary invariant (FCO Level 1, "W-D").
+    //
+    // A derive provider's capability/witness signature (`Evidence<Eq<T>>` /
+    // `ImplBuilder<Eq<T>>`) is a real kind-checked type: the GOOD goal `Eq<T>`
+    // lowers to a `Constraint`-kinded `TyData::ConstraintTerm` (R2) through the
+    // ordinary type walk (R3), via THIS module's `lower_hir_constraint_application`
+    // (the W-B lowering). The provider-goal DIAGNOSTIC pass (`provider_goal.rs`)
+    // reuses the SAME function as its good/bad discriminator on the *inner* type
+    // argument.
+    //
+    // This test LOCKS that boundary against the *existing* lowering (see
+    // docs/dev/FCO_DECISION_PACKET_provider_goal_representation.md §0.5 / §4 and
+    // FCO_PROBE_provider_goal_representation.md): the SAME function that yields the
+    // concrete goal for `Eq<T>` declines every non-concrete shape (missing trait,
+    // unsaturated `* -> Constraint` head, and a LIVE `* -> Constraint` param head)
+    // to `None` — so no live head can ever be carried to the solver.
+    #[test]
+    fn provider_capability_goal_lowers_concrete_rejects_nonconcrete() {
+        use crate::hir_def::scope_graph::ScopeId;
+        use crate::hir_def::types::TypeKind;
+        use crate::hir_def::{GenericArg, TopLevelMod};
+
+        // Self-contained source: `Evidence<G>` declared `*`-kinded (what Level 1
+        // would add so the witness param resolves), a local `Eq`, and a provider
+        // whose witness goal is the `{goal}` slot.
+        fn provider_src(goal: &str) -> String {
+            format!(
+                r#"
+use core::derive::Derive
+use core::derive::ImplBuilder
+use core::derive::Reflect
+
+trait Eq {{}}
+
+struct Evidence<G> {{
+    handle: u256
+}}
+
+struct Prov {{}}
+
+impl Derive<Eq> for Prov {{
+    const fn derive<Q: * -> Constraint, T>(ev: own Evidence<{goal}>) -> Evidence<{goal}>
+        uses (reflect: Reflect<T>, builder: mut ImplBuilder<{goal}>)
+    {{
+        builder.finish()
+        ev
+    }}
+}}
+"#
+            )
+        }
+
+        fn derive_fn<'db>(
+            db: &'db HirAnalysisTestDb,
+            top_mod: TopLevelMod<'db>,
+        ) -> crate::hir_def::Func<'db> {
+            top_mod
+                .scope_graph(db)
+                .items_dfs(db)
+                .find_map(|item| match item {
+                    ItemKind::Func(f)
+                        if f.name(db).to_opt().is_some_and(|n| n.data(db) == "derive") =>
+                    {
+                        Some(f)
+                    }
+                    _ => None,
+                })
+                .expect("missing derive fn")
+        }
+
+        // Position-scoped extraction: pull the single inner type argument of the
+        // witness param's `Evidence<..>` HIR type (the `{goal}` slot).
+        fn inner_goal_hir_ty<'db>(
+            db: &'db HirAnalysisTestDb,
+            func: crate::hir_def::Func<'db>,
+        ) -> crate::hir_def::types::TypeId<'db> {
+            let ev = func.params(db).next().expect("derive has a witness param");
+            let ev_ty = ev.hir_ty(db).expect("witness param has a type");
+            let ev_ty = match ev_ty.data(db) {
+                TypeKind::Mode(_, inner) => inner.to_opt().unwrap(),
+                _ => ev_ty,
+            };
+            let TypeKind::Path(p) = ev_ty.data(db) else {
+                panic!("witness param not a path type");
+            };
+            let path = p.to_opt().unwrap();
+            let GenericArg::Type(ta) = path.generic_args(db).data(db).first().unwrap() else {
+                panic!("Evidence has no type arg");
+            };
+            ta.ty.to_opt().unwrap()
+        }
+
+        // (goal spelling, expect a concrete TraitInstId?)
+        let cases = [
+            ("Eq<T>", true),     // concrete saturated constraint -> the carrier
+            ("Bogus<T>", false), // missing trait -> declined
+            ("Eq", false),       // unsaturated `* -> Constraint` head -> declined
+            ("Q<T>", false),     // LIVE `* -> Constraint` param head -> declined
+        ];
+
+        for (goal, expect_concrete) in cases {
+            let mut db = HirAnalysisTestDb::default();
+            let file = db.new_stand_alone(
+                Utf8PathBuf::from(format!("cap_goal_{}.fe", goal.replace(['<', '>'], "_"))),
+                &provider_src(goal),
+            );
+            let (top_mod, _) = db.top_mod(file);
+            let func = derive_fn(&db, top_mod);
+            let goal_hir = inner_goal_hir_ty(&db, func);
+            let scope = ScopeId::from_item(func.into());
+            let lowered = lower_hir_constraint_application(
+                &db,
+                goal_hir,
+                scope,
+                PredicateListId::empty_list(&db),
+            );
+            assert_eq!(
+                lowered.is_some(),
+                expect_concrete,
+                "goal `{goal}`: lower_hir_constraint_application = {:?}",
+                lowered.map(|inst| inst.pretty_print(&db, true).to_string()),
+            );
+            if goal == "Eq<T>" {
+                assert_eq!(
+                    lowered.unwrap().pretty_print(&db, true).to_string(),
+                    "T: Eq",
+                    "concrete goal `Eq<T>` must lower to `T: Eq` (Self = first arg)"
+                );
+            }
+        }
+    }
 }

@@ -13,6 +13,7 @@ use crate::{
 // `Url::join` normalizes children under `builtin-core:/...`, so lookups must
 // use the same base form or builtin ingots appear empty.
 pub static BUILTIN_CORE_BASE_URL: &str = "builtin-core:/";
+pub static BUILTIN_CORE_DERIVES_BASE_URL: &str = "builtin-core-derives:/";
 pub static BUILTIN_STD_BASE_URL: &str = "builtin-std:/";
 
 fn is_library_file(path: &Utf8Path) -> bool {
@@ -90,14 +91,19 @@ fn load_library_dir(db: &mut dyn InputDb, base_url: &str, root: &Utf8Path) -> Re
 
 pub fn load_library_from_path(db: &mut dyn InputDb, library_root: &Utf8Path) -> Result<(), String> {
     let core_root = library_root.join("core");
+    let core_derives_root = library_root.join("core_derives");
     let std_root = library_root.join("std");
 
     // Clear embedded builtins first so stale files from the embedded version
     // don't leak into the index when the on-disk version has fewer files.
     clear_library(db, BUILTIN_CORE_BASE_URL);
+    clear_library(db, BUILTIN_CORE_DERIVES_BASE_URL);
     clear_library(db, BUILTIN_STD_BASE_URL);
 
     load_library_dir(db, BUILTIN_CORE_BASE_URL, &core_root)?;
+    if core_derives_root.exists() {
+        load_library_dir(db, BUILTIN_CORE_DERIVES_BASE_URL, &core_derives_root)?;
+    }
     load_library_dir(db, BUILTIN_STD_BASE_URL, &std_root)?;
     Ok(())
 }
@@ -138,6 +144,28 @@ impl<T: InputDb> HasBuiltinCore for T {
 }
 
 #[derive(Embed)]
+#[folder = "../../ingots/core_derives"]
+pub struct CoreDerives;
+
+pub trait HasBuiltinCoreDerives: InputDb {
+    fn initialize_builtin_core_derives(&mut self);
+    fn builtin_core_derives(&self) -> Ingot<'_>;
+}
+
+impl<T: InputDb> HasBuiltinCoreDerives for T {
+    fn initialize_builtin_core_derives(&mut self) {
+        initialize_builtin::<CoreDerives>(self, BUILTIN_CORE_DERIVES_BASE_URL);
+    }
+
+    fn builtin_core_derives(&self) -> Ingot<'_> {
+        let core_derives = self
+            .workspace()
+            .containing_ingot(self, Url::parse(BUILTIN_CORE_DERIVES_BASE_URL).unwrap());
+        core_derives.expect("Built-in core_derives ingot failed to initialize")
+    }
+}
+
+#[derive(Embed)]
 #[folder = "../../ingots/std"]
 pub struct Std;
 
@@ -163,7 +191,7 @@ impl<T: InputDb> HasBuiltinStd for T {
 mod tests {
     use camino::Utf8Path;
 
-    use super::{HasBuiltinCore, HasBuiltinStd, is_library_file};
+    use super::{HasBuiltinCore, HasBuiltinCoreDerives, HasBuiltinStd, is_library_file};
     use crate::define_input_db;
 
     define_input_db!(TestDb);
@@ -181,11 +209,16 @@ mod tests {
     fn builtin_ingots_are_indexed_under_their_lookup_urls() {
         let db = TestDb::default();
         let core = db.builtin_core();
+        let core_derives = db.builtin_core_derives();
         let std = db.builtin_std();
 
         assert!(
             core.files(&db).iter().next().is_some(),
             "builtin core ingot should contain indexed files"
+        );
+        assert!(
+            core_derives.files(&db).iter().next().is_some(),
+            "builtin core_derives ingot should contain indexed files"
         );
         assert!(
             std.files(&db).iter().next().is_some(),

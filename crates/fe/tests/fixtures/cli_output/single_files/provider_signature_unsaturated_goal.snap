@@ -1,0 +1,47 @@
+---
+source: crates/fe/tests/cli_output.rs
+assertion_line: 1822
+expression: output
+input_file: tests/fixtures/cli_output/single_files/provider_signature_unsaturated_goal.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/provider_signature_unsaturated_goal.fe
+
+error[2-0006]: expected type item here
+   ┌─ provider_signature_unsaturated_goal.fe:15:41
+   │
+15 │     const fn derive<T>(ev: own Evidence<Eq>) -> Evidence<Eq>
+   │                                         ^^ expected type here, but found trait `Eq`
+
+error[2-0006]: expected type item here
+   ┌─ provider_signature_unsaturated_goal.fe:15:58
+   │
+15 │     const fn derive<T>(ev: own Evidence<Eq>) -> Evidence<Eq>
+   │                                                          ^^ expected type here, but found trait `Eq`
+
+error[6-0009]: derive provider goal is not a concrete constraint
+   ┌─ provider_signature_unsaturated_goal.fe:15:41
+   │
+15 │     const fn derive<T>(ev: own Evidence<Eq>) -> Evidence<Eq>
+   │                                         ^^ `Evidence<Eq>` names the bare `* -> Constraint` head `Eq`, not a saturated constraint
+   │
+   = write a saturated goal such as `Evidence<Eq<T>>` so the goal lowers to one concrete obligation
+
+error[6-0009]: derive provider goal is not a concrete constraint
+   ┌─ provider_signature_unsaturated_goal.fe:15:58
+   │
+15 │     const fn derive<T>(ev: own Evidence<Eq>) -> Evidence<Eq>
+   │                                                          ^^ `Evidence<Eq>` names the bare `* -> Constraint` head `Eq`, not a saturated constraint
+   │
+   = write a saturated goal such as `Evidence<Eq<T>>` so the goal lowers to one concrete obligation
+
+error[6-0009]: derive provider goal is not a concrete constraint
+   ┌─ provider_signature_unsaturated_goal.fe:18:38
+   │
+18 │             builder: mut ImplBuilder<Eq>,
+   │                                      ^^ `ImplBuilder<Eq>` names the bare `* -> Constraint` head `Eq`, not a saturated constraint
+   │
+   = write a saturated goal such as `ImplBuilder<Eq<T>>` so the goal lowers to one concrete obligation
+
+
+=== EXIT CODE: 1 ===

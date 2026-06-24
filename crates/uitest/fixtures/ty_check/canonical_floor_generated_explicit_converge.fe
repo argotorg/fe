@@ -1,0 +1,41 @@
+// FCO money-floor CONVERGENCE — a CTFE-GENERATED canonical impl and a HAND-WRITTEN
+// one for the same (goal, type) meet at the SAME establish gate and conflict.
+//
+// THE POINT (the "important either way" property, FCO_CAPABILITY_FLOOR_CASE_2026-06-23 §9/§12):
+//   the floor is enforced as a whole-program COUNT over the materialized impl set
+//   (`ingot_trait_env.impls`), and the expansion stage folds provider-generated
+//   impls into `all_items` -> that same set. So a generated impl and an explicit
+//   impl of a CANONICAL goal are NOT two separate populations: they converge, and
+//   the count sees BOTH. This fixture LOCKS that convergence, so a future change
+//   that let generated impls slip past the gate would fail here.
+//
+// SHARPER THAN `cascade_canonical_floor.fe` (which pits explicit-vs-explicit):
+//   here the GENERATED impl (`derive .. using StableAbiSize`, a default-marked,
+//   CoreDerives-style establishment) plus the HAND-WRITTEN override is exactly the
+//   default+override SHAPE the cascade lets COEXIST for a NON-canonical goal
+//   (e.g. `Eq`). For the CANONICAL `AbiSize` the money floor must STILL reject it:
+//   the canonical arm of the conflict gate is `conflict_allowed = false` and never
+//   flips, regardless of the selection discriminator.
+//
+// PASS CRITERIA: a `5-0001` "conflicting trait implementations" diagnostic on the
+//   two AbiSize establishments for `Token` — generated + explicit, one canonical
+//   slot, counted as one population.
+
+use core::abi::AbiSize
+
+struct Token {
+    amount: u256,
+}
+
+// Generated establishment: the std provider folds the single u256 field
+// (HEAD_SIZE == 32, static). This impl is materialized by the expansion stage and
+// joins `ingot_trait_env.impls` exactly like a hand-written one.
+derive AbiSize for Token using StableAbiSize
+
+// Hand-written establishment for the SAME (AbiSize, Token) pair. For a
+// non-canonical goal this default+override pair would coexist (the cascade); for
+// the canonical AbiSize the floor rejects it as a conflict — exactly-one layout.
+impl AbiSize for Token {
+    const HEAD_SIZE: u256 = 64
+    const IS_DYNAMIC: bool = true
+}

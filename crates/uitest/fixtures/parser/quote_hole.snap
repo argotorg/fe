@@ -1,0 +1,36 @@
+---
+source: crates/uitest/tests/parser.rs
+expression: diags
+input_file: fixtures/parser/quote_hole.fe
+---
+error[1-0001]: `${...}` splice holes are only allowed inside a `quote` body
+  ┌─ quote_hole.fe:5:13
+  │
+5 │     let x = ${true}
+  │             ^ `${...}` splice holes are only allowed inside a `quote` body
+
+error[1-0001]: `${...}` splice holes are only allowed inside a `quote` body
+   ┌─ quote_hole.fe:10:13
+   │
+10 │     let x = $true
+   │             ^ `${...}` splice holes are only allowed inside a `quote` body
+
+error[1-0001]: `$` must be followed by `{` to form a splice hole
+   ┌─ quote_hole.fe:10:14
+   │
+10 │     let x = $true
+   │              ^ `$` must be followed by `{` to form a splice hole
+
+error[1-0001]: unexpected syntax while parsing `${...}` splice hole
+   ┌─ quote_hole.fe:10:14
+   │
+10 │       let x = $true
+   │ ╭──────────────^
+11 │ │     x
+   │ ╰─────^ unexpected
+
+error[1-0001]: `quote` inside a quote body is not supported; build the inner fragment in a separate `let` and splice it with `${...}`
+   ┌─ quote_hole.fe:15:21
+   │
+15 │     let q = quote { quote { true } }
+   │                     ^^^^^ `quote` inside a quote body is not supported; build the inner fragment in a separate `let` and splice it with `${...}`

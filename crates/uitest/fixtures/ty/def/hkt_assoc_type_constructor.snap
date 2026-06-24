@@ -1,0 +1,52 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/hkt_assoc_type_constructor.fe
+---
+error[1-0001]: only `fn`, `type`, or `const` is allowed in this block
+   ┌─ hkt_assoc_type_constructor.fe:14:13
+   │
+14 │     type Ptr<T>
+   │             ^ only `fn`, `type`, or `const` is allowed in this block
+
+error[1-0001]: unexpected syntax while parsing `trait` item list
+   ┌─ hkt_assoc_type_constructor.fe:14:13
+   │
+14 │     type Ptr<T>
+   │             ^^^ unexpected
+
+error[1-0001]: only `fn`, `type`, or `const` is allowed in this block
+   ┌─ hkt_assoc_type_constructor.fe:20:13
+   │
+20 │     type Ptr<T> = u256
+   │             ^ only `fn`, `type`, or `const` is allowed in this block
+
+error[1-0001]: unexpected syntax while parsing `trait` item list
+   ┌─ hkt_assoc_type_constructor.fe:20:13
+   │
+20 │     type Ptr<T> = u256
+   │             ^^^^^^^^^^ unexpected
+
+error[2-0002]: `Ptr` is not found
+   ┌─ hkt_assoc_type_constructor.fe:29:23
+   │
+29 │ fn evm_word(_ p: Evm::Ptr<u256>) -> u256 {
+   │                       ^^^ `Ptr` is not found
+
+error[2-0011]: incorrect number of generic arguments for `Ptr`; expected 0, given 1
+   ┌─ hkt_assoc_type_constructor.fe:24:33
+   │
+24 │ fn word_ptr<B: Backend>(_ p: B::Ptr<u256>) -> B::Ptr<u256> {
+   │                                 ^^^ expected 0 arguments, but 1 were given
+
+error[2-0011]: incorrect number of generic arguments for `Ptr`; expected 0, given 1
+   ┌─ hkt_assoc_type_constructor.fe:24:50
+   │
+24 │ fn word_ptr<B: Backend>(_ p: B::Ptr<u256>) -> B::Ptr<u256> {
+   │                                                  ^^^ expected 0 arguments, but 1 were given
+
+error[6-0012]: missing associated type in trait implementation
+   ┌─ hkt_assoc_type_constructor.fe:19:18
+   │
+19 │ impl Backend for Evm {
+   │                  ^^^ missing associated type `Ptr` from trait `Backend`

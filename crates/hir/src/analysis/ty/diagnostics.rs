@@ -12,8 +12,8 @@ use crate::{analysis::name_resolution::diagnostics::PathResDiag, hir_def::ItemKi
 use crate::{analysis::ty::ty_check::EffectParamOwner, span::DynLazySpan};
 use crate::{
     core::hir_def::{
-        CallableDef, CompBinOp, Enum, FieldIndex, FieldParent, Func, GenericParamOwner, IdentId,
-        ImplTrait,
+        Body, CallableDef, CompBinOp, Enum, FieldIndex, FieldParent, Func, GenericParamOwner,
+        IdentId, ImplTrait,
     },
     hir_def::TypeAlias,
 };
@@ -457,6 +457,12 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
         comparison: Option<StaticAssertComparisonValues>,
     },
+    /// A `where` clause const predicate is statically known to be `false`.
+    /// At the declaration site this fires for parameter-free predicates
+    /// (e.g. `where false`), which CTFE can already decide.
+    WhereConstPredicateFailed {
+        primary: DynLazySpan<'db>,
+    },
 
     InvalidCast {
         primary: DynLazySpan<'db>,
@@ -630,6 +636,12 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
         cands: ThinVec<TraitInstId<'db>>,
         required_by: Option<CallConstraintDiagInfo<'db>>,
+        /// FCO T-Nway (#84 inc3) — when the coexisting impls behind this
+        /// ambiguity carry `as Name` aliases (the N-way cascade case), the alias
+        /// names usable to disambiguate, e.g. `with (Casual)` / `with (Formal)`.
+        /// Empty for every non-cascade ambiguity (the inference-variable path),
+        /// so that rendering is byte-identical there.
+        alias_suggestions: Vec<IdentId<'db>>,
     },
 
     InvisibleAmbiguousTrait {
@@ -747,6 +759,9 @@ pub enum BodyDiag<'db> {
     // Const fn / const-check diagnostics -----------------------------------
     ConstFnEffectsNotAllowed(DynLazySpan<'db>),
     ConstFnWithNotAllowed(DynLazySpan<'db>),
+    /// A `quote` expression (or `${...}` splice hole) outside a derive
+    /// provider body.
+    QuoteOutsideProvider(DynLazySpan<'db>),
     ConstFnNonConstCall {
         primary: DynLazySpan<'db>,
         callee: CallableDef<'db>,
@@ -754,6 +769,37 @@ pub enum BodyDiag<'db> {
     ConstFnEffectfulCall {
         primary: DynLazySpan<'db>,
         callee: CallableDef<'db>,
+    },
+
+    /// FCO T-Nway (#84 inc3) — `with (Name)` where `Name` is a bare ident that
+    /// resolves to neither a `<T as Trait>` goal, an in-scope named impl alias,
+    /// nor an ordinary value/type binding, while ≥1 `as Name` impl IS visible.
+    /// The most likely intent was to select a named impl by alias, so we report
+    /// a precise "no impl named `Name`" instead of the generic
+    /// `UndefinedVariable` "not found" (which this variant SUPPRESSES).
+    UnknownWithImplAlias {
+        primary: DynLazySpan<'db>,
+        name: IdentId<'db>,
+        /// Every `as Name` impl alias visible in scope, sorted by alias name, for
+        /// the did-you-mean note and a SECONDARY label at each alias's `as Name`
+        /// token (so the user SEES every selectable impl). Each entry pairs the
+        /// alias ident with the impl item that declares it.
+        available: Vec<(IdentId<'db>, ImplTrait<'db>)>,
+    },
+
+    /// FCO T-Nway (#84 inc3) — `with (Name)` where `Name` matches MORE THAN ONE
+    /// visible `as Name` impl (e.g. two impls of different `(Trait, Type)` both
+    /// aliased `Name`). The alias does not pick a single impl, so selection is
+    /// ambiguous; we name the conflicting goals rather than silently falling
+    /// through to a confusing value error.
+    AmbiguousWithImplAlias {
+        primary: DynLazySpan<'db>,
+        name: IdentId<'db>,
+        /// The impls that share the alias `name`, each paired with its
+        /// `(Trait, Type)` goal. Sorted by printed goal so the message and the
+        /// SECONDARY labels (one at each colliding impl's `as Name` token) are
+        /// deterministic.
+        colliding: Vec<(TraitInstId<'db>, ImplTrait<'db>)>,
     },
 }
 
@@ -866,6 +912,7 @@ impl<'db> BodyDiag<'db> {
             Self::InvalidCast { .. } => 55,
             Self::ConstValueMustBeKnown(..) => 64,
             Self::StaticAssertFailed { .. } => 81,
+            Self::WhereConstPredicateFailed { .. } => 85,
             Self::AccessedFieldNotFound { .. } => 15,
             Self::OpsTraitNotImplemented { .. } => 16,
             Self::UnsupportedUnaryPlus(..) => 52,
@@ -918,8 +965,11 @@ impl<'db> BodyDiag<'db> {
             Self::RecvFallbackReturnTypeNotAllowed { .. } => 80,
             Self::ConstFnEffectsNotAllowed(_) => 55,
             Self::ConstFnWithNotAllowed(_) => 56,
+            Self::QuoteOutsideProvider(_) => 84,
             Self::ConstFnNonConstCall { .. } => 62,
             Self::ConstFnEffectfulCall { .. } => 63,
+            Self::UnknownWithImplAlias { .. } => 86,
+            Self::AmbiguousWithImplAlias { .. } => 87,
         }
     }
 }
@@ -979,6 +1029,38 @@ pub enum TraitConstraintDiag<'db> {
     ConcreteTypeBound(DynLazySpan<'db>, TyId<'db>),
 
     ConstTyBound(DynLazySpan<'db>, TyId<'db>),
+
+    /// A concrete ADT application whose `where`-clause const predicate is
+    /// refuted under its arguments (e.g. `Bounded<4, 1>` where `MIN <= MAX`).
+    /// Rendered identically to a call-site const-predicate failure (8-0085).
+    ConstPredicateNotSat {
+        span: DynLazySpan<'db>,
+        predicate: Body<'db>,
+    },
+
+    /// An abstract constraint-constructor parameter (`P : * -> Constraint`) used
+    /// as a trait head, e.g. `where P<T>`. Not yet supported: genuine
+    /// variable-headed solving is build-trigger-gated research (wiring-party
+    /// D2/D7c; `docs/dev/FCO_ABSTRACT_HEAD_RESEARCH_DOSSIER.md`). Names the
+    /// monomorphize-per-trait workaround rather than silently dropping the
+    /// predicate.
+    ConstraintCtorParamUnsupported {
+        span: DynLazySpan<'db>,
+        param: IdentId<'db>,
+    },
+
+    /// A derive-provider capability/witness goal argument (`Evidence<..>` /
+    /// `ImplBuilder<..>`) is not a concrete, saturated constraint — e.g.
+    /// `Evidence<Eq>` names the bare `* -> Constraint` head instead of a
+    /// saturated `Eq<T>` (FCO Level 1). The goal must lower to one concrete
+    /// obligation; an unsaturated head cannot.
+    ProviderGoalNotConcrete {
+        span: DynLazySpan<'db>,
+        /// The capability naming the goal (`Evidence` / `ImplBuilder`).
+        capability: &'static str,
+        /// The goal head as written (`Eq`).
+        goal: IdentId<'db>,
+    },
 }
 
 impl TraitConstraintDiag<'_> {
@@ -991,6 +1073,12 @@ impl TraitConstraintDiag<'_> {
             Self::InfiniteBoundRecursion(..) => 4,
             Self::ConcreteTypeBound(..) => 5,
             Self::ConstTyBound(..) => 6,
+            // Rendered as 8-0085 (TyCheck) in `to_complete`, matching the
+            // call-site const-predicate failure; this local code is unused for
+            // the rendered code but kept for the enum's own numbering.
+            Self::ConstPredicateNotSat { .. } => 7,
+            Self::ConstraintCtorParamUnsupported { .. } => 8,
+            Self::ProviderGoalNotConcrete { .. } => 9,
         }
     }
 }
@@ -1126,6 +1214,11 @@ pub enum ImplDiag<'db> {
         fn_span: DynLazySpan<'db>,
         const_name: IdentId<'db>,
     },
+
+    MethodConstPredicateMismatch {
+        impl_m: CallableDef<'db>,
+        trait_m: CallableDef<'db>,
+    },
 }
 
 impl ImplDiag<'_> {
@@ -1153,6 +1246,7 @@ impl ImplDiag<'_> {
             Self::InherentConstConflict { .. } => 19,
             Self::InherentConstShadowsVariant { .. } => 20,
             Self::InherentConstShadowsFn { .. } => 21,
+            Self::MethodConstPredicateMismatch { .. } => 22,
         }
     }
 }

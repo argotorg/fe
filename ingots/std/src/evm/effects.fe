@@ -524,6 +524,19 @@ struct Private {}
 /// Default EVM effect provider (zero-sized).
 pub struct Evm { seal: Private }
 
+/// The EVM target's intrinsic-capability carrier (`<EvmTarget as Target>::Intrinsics`).
+/// A zero-sized, sealed (unforgeable: private field, no public ctor) token that
+/// NAMES the per-target intrinsic capability (design #93).
+///
+/// The ACTUAL gate the storage ops carry is the TRAIT-keyed capability
+/// `core::contracts::StorageIntrinsic` (a type-keyed `uses (t: EvmIntrinsics)`
+/// can NOT match a root-seeded provider, since a root provider has no target
+/// type to unify against). The root effect `Evm` is the provider the toolchain
+/// already seeds at the program root, so it is `Evm` that carries the capability
+/// (`impl StorageIntrinsic for Evm`); this carrier documents/anchors the
+/// capability per target. Authority only, non-scarce.
+pub struct EvmIntrinsics { seal: Private }
+
 impl EvmCapabilitySeal for Evm {}
 
 impl Evm {
@@ -633,6 +646,12 @@ impl RawStorage for Evm {
         ops::sstore(slot: slot, value: value)
     }
 }
+
+// The EVM root effect carries the EVM-storage intrinsic capability (#93): the
+// toolchain seeds `Evm` at the program root, so the storage `extern` ops gated on
+// `uses (_t: StorageIntrinsic)` are granted ambiently against this impl on an EVM
+// build (a non-EVM root effect lacking it leaves the obligation `8-0036`).
+impl core::contracts::StorageIntrinsic for Evm {}
 
 impl RawOps for Evm {
     fn calldataload(self, _ offset: u256) -> u256 {

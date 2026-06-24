@@ -1,0 +1,37 @@
+// FCO #84 T-Nway inc3 — FIRST-CLASS DIAGNOSTIC: unknown `with (Name)` impl alias.
+//
+// `Greeting` for `User` has two aliased impls (`as Casual`, `as Formal`). A
+// `with (Nope)` head names NO impl alias, so selection fails. Because named
+// impls ARE in scope and `Nope` resolves to neither a `<T as Trait>` goal, an
+// alias, nor an ordinary value, we report a PRECISE "no impl named `Nope`"
+// diagnostic (code 8-0086) with an "available named impls" help line — NOT the
+// generic "undefined variable" (which is SUPPRESSED, so this is single-reported).
+
+trait Greeting {
+    fn greet(self) -> u32
+}
+
+struct User {
+    id: u256,
+}
+
+impl Greeting for User as Casual {
+    fn greet(self) -> u32 {
+        return 1
+    }
+}
+
+impl Greeting for User as Formal {
+    fn greet(self) -> u32 {
+        return 2
+    }
+}
+
+#[test]
+fn unknown_alias_is_reported() {
+    let u = User { id: 7 }
+    let g: u32 = with (Nope) {
+        u.greet()
+    }
+    assert!(g == 1)
+}

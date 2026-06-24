@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 449
 expression: output
 input_file: crates/codegen/tests/fixtures/string_literal.fe
 ---
@@ -19,8 +20,7 @@ func private %string_literal() -> i256 {
         jump block1;
 
     block1:
-        v1.i256 = zext 448378203247.i64 i256;
-        return v1;
+        return 448378203247.i256;
 }
 
 

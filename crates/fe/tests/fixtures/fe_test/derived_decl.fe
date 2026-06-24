@@ -1,0 +1,127 @@
+// M3 step 2 acceptance test: standalone `derive Trait for Type` declarations
+// must EXECUTE, producing the same compiler-internal impls as
+// `#[derive(..)]` — including for types declared in other modules of the
+// same file, and composing with attribute-derived impls.
+
+use core::ops::Eq
+use core::default::Default
+
+// A struct with NO attributes at all; both impls come from standalone
+// declarations below.
+struct It {
+    a: u256,
+    flag: bool,
+}
+
+derive Eq for It
+derive Default for It
+
+// Target declared inside a nested module, derived from inside the module
+// with a bare name. (Resolution also supports path targets from the top
+// level; see `Sealed`.)
+mod inner {
+    pub struct Boxed {
+        pub v: u256,
+    }
+
+    derive Eq for Boxed
+
+    pub struct Sealed {
+        pub v: u256,
+        pub w: u256,
+    }
+}
+
+// Target declared inside a nested module, derived from the top level via a
+// path.
+derive Eq for inner::Sealed
+
+// Composition with attribute derives, both directions:
+// an attribute-derived struct wrapping a decl-derived field type ...
+#[derive(Eq)]
+struct Wrapper {
+    it: It,
+}
+
+// ... and a decl-derived struct wrapping an attribute-derived field type.
+struct Combo {
+    w: Wrapper,
+    n: u256,
+}
+
+derive Eq for Combo
+
+#[test]
+fn decl_derived_eq_equal_values() {
+    let x = It { a: 10, flag: true }
+    let y = It { a: 10, flag: true }
+    assert!(x.eq(y))
+}
+
+#[test]
+fn decl_derived_eq_field_differs() {
+    let x = It { a: 10, flag: true }
+    let y = It { a: 11, flag: true }
+    assert!(!x.eq(y))
+    let z = It { a: 10, flag: false }
+    assert!(!x.eq(z))
+}
+
+#[test]
+fn decl_derived_ne_trait_default_method() {
+    let x = It { a: 1, flag: false }
+    let y = It { a: 2, flag: false }
+    assert!(x.ne(y))
+    let z = It { a: 1, flag: false }
+    assert!(!x.ne(z))
+}
+
+#[test]
+fn decl_derived_eq_operator_syntax() {
+    let x = It { a: 7, flag: true }
+    let y = It { a: 7, flag: true }
+    assert!(x == y)
+}
+
+#[test]
+fn decl_derived_default_field_values() {
+    let d = It::default()
+    assert!(d.a == 0)
+    assert!(!d.flag)
+}
+
+#[test]
+fn decl_derived_in_nested_mod() {
+    let b1 = inner::Boxed { v: 42 }
+    let b2 = inner::Boxed { v: 42 }
+    let b3 = inner::Boxed { v: 43 }
+    assert!(b1.eq(b2))
+    assert!(!b1.eq(b3))
+}
+
+#[test]
+fn decl_derived_path_target_in_nested_mod() {
+    let s1 = inner::Sealed { v: 1, w: 2 }
+    let s2 = inner::Sealed { v: 1, w: 2 }
+    let s3 = inner::Sealed { v: 1, w: 3 }
+    assert!(s1.eq(s2))
+    assert!(s1.ne(s3))
+}
+
+#[test]
+fn attr_derived_wraps_decl_derived() {
+    let w1 = Wrapper { it: It { a: 5, flag: true } }
+    let w2 = Wrapper { it: It { a: 5, flag: true } }
+    let w3 = Wrapper { it: It { a: 6, flag: true } }
+    assert!(w1.eq(w2))
+    assert!(!w1.eq(w3))
+}
+
+#[test]
+fn decl_derived_wraps_attr_derived() {
+    let c1 = Combo { w: Wrapper { it: It { a: 1, flag: false } }, n: 9 }
+    let c2 = Combo { w: Wrapper { it: It { a: 1, flag: false } }, n: 9 }
+    let c3 = Combo { w: Wrapper { it: It { a: 2, flag: false } }, n: 9 }
+    assert!(c1 == c2)
+    assert!(c1 != c3)
+}

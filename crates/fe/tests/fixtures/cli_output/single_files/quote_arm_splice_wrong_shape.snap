@@ -1,0 +1,22 @@
+---
+source: crates/fe/tests/cli_output.rs
+assertion_line: 1822
+expression: output
+input_file: tests/fixtures/cli_output/single_files/quote_arm_splice_wrong_shape.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/quote_arm_splice_wrong_shape.fe
+
+error[13-0010]: derive provider `ExprAsArms` failed to derive `Tagged`
+   ┌─ quote_arm_splice_wrong_shape.fe:33:8
+   │
+21 │         let not_arms = quote { true }
+   │                        -------------- invalid quote: the quote holds an expression template; arm splices need match arms (`pat => expr` items) or an empty `quote { }`
+   ·
+33 │ derive Tagged for Mode using ExprAsArms
+   │        ^^^^^^ requested here: invalid quote: the quote holds an expression template; arm splices need match arms (`pat => expr` items) or an empty `quote { }`
+   │
+   = the provider `ExprAsArms` ran at compile time and failed; the secondary label points at the failing provider code
+
+
+=== EXIT CODE: 1 ===

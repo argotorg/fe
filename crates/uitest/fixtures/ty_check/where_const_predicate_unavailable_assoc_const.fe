@@ -1,0 +1,28 @@
+// FCO-M5 pair 10: predicate formation requires the associated const to be
+// available. `needs_size` bounds `T: HasSize`, so `T::SIZE` resolves and the
+// predicate forms. `bad` bounds nothing, so `T::SIZE` is unavailable — that is
+// a formation/resolution failure (`SIZE` is not found), NOT an 8-0085 discharge
+// failure and NOT an ICE.
+//
+// Invariant: associated-const predicates whose trait source is unavailable are
+// rejected by name, never silently accepted or ICEd.
+
+trait HasSize {
+    const SIZE: u256
+}
+
+struct Big {}
+
+impl HasSize for Big {
+    const SIZE: u256 = 64
+}
+
+fn needs_size<T: HasSize>() where T::SIZE >= 50 {
+}
+
+fn ok() {
+    needs_size<Big>()
+}
+
+fn bad<T>() where T::SIZE >= 50 {
+}

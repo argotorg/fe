@@ -1,0 +1,36 @@
+// A `Field` handle only fills member-access holes (`self.${field}`);
+// splicing it in expression position is a precise executor failure.
+
+use core::derive::Derive
+use core::derive::Evidence
+use core::derive::ImplBuilder
+use core::derive::Reflect
+
+trait Tagged {
+    fn tag(self) -> bool
+}
+
+impl Derive<Tagged> for FieldTag {
+    const fn derive<T>(ev: own Evidence<Tagged<T>>) -> Evidence<Tagged<T>>
+        uses (
+            reflect: Reflect<T>,
+            builder: mut ImplBuilder<Tagged<T>>,
+        )
+    {
+        let mut body = quote { true }
+        for field in reflect.fields() {
+            body = quote { ${field} }
+        }
+        builder.emit_method("tag", body)
+        builder.finish()
+        ev
+    }
+}
+
+struct Point {
+    x: u256,
+}
+
+derive Tagged for Point using FieldTag
+
+struct FieldTag {}

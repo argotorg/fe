@@ -1,0 +1,37 @@
+// FCO L2 anti-leak: lock the executor's CommandAfterFinish invariant
+// (provider_executor.rs:177-211). After a derive provider calls
+// `builder.finish()`, no further builder command may be issued. This is the
+// use-once / no-leak discipline enforced by the EXECUTOR (borrowck skips
+// provider bodies, check.rs:185-186), the L2 layer of the capability floor design.
+//
+// PASS CRITERIA: a provider-failed diagnostic whose message is
+//   "the provider issued a builder command after `finish`".
+
+use core::derive::Derive
+use core::derive::Evidence
+use core::derive::ImplBuilder
+use core::derive::Reflect
+
+trait Marker {}
+
+impl Derive<Marker> for EmitAfterFinish {
+    const fn derive<T>(ev: own Evidence<Marker<T>>) -> Evidence<Marker<T>>
+        uses (
+            reflect: Reflect<T>,
+            builder: mut ImplBuilder<Marker<T>>,
+        )
+    {
+        builder.finish()
+        // BUG: a builder command issued after `finish`.
+        builder.emit_const("X", builder.ty<u256>(), builder.bool(false))
+        ev
+    }
+}
+
+struct Point {
+    x: u256,
+}
+
+derive Marker for Point using EmitAfterFinish
+
+struct EmitAfterFinish {}

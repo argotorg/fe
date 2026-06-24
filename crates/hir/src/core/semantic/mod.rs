@@ -46,6 +46,7 @@ pub fn lower_hir_kind_local(k: &HirKindBound) -> Kind {
     use crate::hir_def::Partial;
     match k {
         HirKindBound::Mono => Kind::Star,
+        HirKindBound::Constraint => Kind::Constraint,
         HirKindBound::Abs(lhs, rhs) => {
             let lhs_k = match lhs {
                 Partial::Present(inner) => lower_hir_kind_local(inner),
@@ -78,6 +79,7 @@ use crate::analysis::ty::layout_holes::{
 };
 use crate::analysis::ty::trait_def::{
     ImplementorId, ImplementorOrigin, TraitInstId, does_impl_trait_conflict, ingot_trait_env,
+    is_single_impl,
 };
 use crate::analysis::ty::trait_lower::{TraitRefLowerError, lower_trait_ref};
 use crate::analysis::ty::trait_resolution::constraint::{
@@ -93,8 +95,8 @@ use crate::analysis::ty::{
         ProviderSemantics, RootProviderRegistration, provider_semantics, registered_root_providers,
     },
     trait_resolution::{
-        GoalSatisfiability, PredicateListId, TraitSolveCx, WellFormedness, check_ty_wf,
-        is_goal_satisfiable,
+        GoalSatisfiability, PredicateListId, ProvisionEnv, WellFormedness,
+        check_ty_wf, is_goal_satisfiable,
     },
     ty_check::EffectParamSite,
     ty_contains_const_hole,
@@ -736,6 +738,14 @@ impl<'db> Func<'db> {
         self.ret_type_ref(db).is_some()
     }
 
+    /// The explicit HIR return-type reference, if the function annotates one.
+    /// HIR-level (the `ret_type_ref` field is `pub(in crate::core)`); for the
+    /// analysis-lowered type use [`Self::return_ty`]. Exposed so the provider-goal
+    /// de-exemption can check the `-> Evidence<..>` return position by identity.
+    pub fn ret_ty_hir(self, db: &'db dyn HirDb) -> Option<crate::hir_def::TypeId<'db>> {
+        self.ret_type_ref(db)
+    }
+
     /// Explicit return type if annotated in source; `None` when the
     /// function has no explicit return type.
     fn explicit_return_ty(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
@@ -805,6 +815,11 @@ impl<'db> Func<'db> {
             return Vec::new();
         };
         let assumptions = self.assumptions(db);
+        // The return type's const-predicate well-formedness is covered by the
+        // body checker, which checks the tail expression's type (unified with
+        // the declared return type) via `check_ty_wf`. (Bodyless declarations —
+        // trait method signatures, externs — are not yet covered; tracked as a
+        // follow-up alongside bodyless parameter types.)
         collect_ty_lower_errors(
             db,
             self.scope(),
@@ -1301,21 +1316,20 @@ impl<'db> FuncParamView<'db> {
             );
         }
 
-        // Well-formedness / trait-bound satisfaction for parameter type
-        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
+        // Well-formedness (trait bounds and const predicates) for parameter
+        // type. Use the full `param_env` (which adds the implicit `Self: Trait`
+        // predicate for trait methods and the implied-bound closure) rather
+        // than the bare lowering assumptions, so a trait method parameter that
+        // projects through `Self` (e.g. `Self::Item::Assoc`) does not spuriously
+        // report `Self` as not implementing its own trait.
+        if let Some(diag) = check_ty_wf(
             db,
-            TraitSolveCx::new(db, func.scope()).with_assumptions(param_env(db, func.into())),
+            ProvisionEnv::for_scope(func.scope(), param_env(db, func.into())).solve_cx(db),
             ty,
-        ) {
-            out.push(
-                TraitConstraintDiag::TraitBoundNotSat {
-                    span: ty_span.clone(),
-                    primary_goal: goal,
-                    unsat_subgoal: subgoal,
-                    required_by: None,
-                }
-                .into(),
-            );
+        )
+        .into_diag(ty_span.clone())
+        {
+            out.push(diag);
         }
 
         // Self-parameter type shape check
@@ -2060,7 +2074,11 @@ impl<'db> ContractFieldEffectHandleCx<'db> {
         field_ty: TyId<'db>,
     ) -> ContractFieldMetadata<'db> {
         let inst = TraitInstId::new(db, self.effect_handle, vec![field_ty], IndexMap::new());
-        match is_goal_satisfiable(db, TraitSolveCx::new(db, self.scope), inst) {
+        match is_goal_satisfiable(
+            db,
+            ProvisionEnv::for_scope(self.scope, PredicateListId::empty_list(db)).solve_cx(db),
+            inst,
+        ) {
             GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => {
                 ContractFieldMetadata {
                     is_provider: false,
@@ -2156,7 +2174,7 @@ impl<'db> ContractFieldEffectHandleCx<'db> {
         }
 
         let inst = TraitInstId::new(db, static_slot, vec![self_ty], IndexMap::new());
-        let solve_cx = TraitSolveCx::new(db, self.scope).with_assumptions(self.assumptions);
+        let solve_cx = ProvisionEnv::for_scope(self.scope, self.assumptions).solve_cx(db);
         match is_goal_satisfiable(db, solve_cx, inst) {
             // The owner does not implement `StaticSlot`: an ordinary layout hole.
             GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => {
@@ -3178,9 +3196,8 @@ fn get_variant_selector_info<'db>(
 ) -> VariantSelectorInfo {
     use crate::analysis::semantic::{SemConstScalar, SemConstValue, eval_body_owner_const};
     use crate::analysis::ty::{
-        canonical::Canonical,
         corelib::resolve_core_trait,
-        trait_def::impls_for_ty,
+        trait_def::find_implementor_of_trait_in_scope,
         ty_def::{PrimTy, TyBase, TyData},
     };
     use num_traits::ToPrimitive;
@@ -3191,19 +3208,9 @@ fn get_variant_selector_info<'db>(
             signature: None,
         };
     };
-    let canonical_ty = Canonical::new(db, variant_ty);
-    let scope_ingot = scope.ingot(db);
-    let search_ingots = [
-        Some(scope_ingot),
-        variant_ty.ingot(db).filter(|&ingot| ingot != scope_ingot),
-    ];
-
-    let Some(implementor) = search_ingots.into_iter().flatten().find_map(|ingot| {
-        impls_for_ty(db, ingot, canonical_ty)
-            .iter()
-            .find(|impl_| impl_.skip_binder().trait_def(db).eq(&msg_variant_trait))
-            .copied()
-    }) else {
+    let Some(implementor) =
+        find_implementor_of_trait_in_scope(db, scope, variant_ty, msg_variant_trait)
+    else {
         return VariantSelectorInfo {
             value: None,
             signature: None,
@@ -3898,23 +3905,14 @@ impl<'db> TypeAlias<'db> {
         };
         let assumptions = constraints_for(db, self.into());
         let ty = lower_hir_ty(db, hir_ty, self.scope(), assumptions);
-        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
+        check_ty_wf(
             db,
-            TraitSolveCx::new(db, self.scope()).with_assumptions(param_env(db, self.into())),
+            ProvisionEnv::for_scope(self.scope(), param_env(db, self.into())).solve_cx(db),
             ty,
-        ) {
-            vec![
-                TraitConstraintDiag::TraitBoundNotSat {
-                    span: self.span().ty().into(),
-                    primary_goal: goal,
-                    unsat_subgoal: subgoal,
-                    required_by: None,
-                }
-                .into(),
-            ]
-        } else {
-            Vec::new()
-        }
+        )
+        .into_diag(self.span().ty().into())
+        .into_iter()
+        .collect()
     }
 }
 
@@ -4269,6 +4267,10 @@ pub(crate) enum InherentImplAdmissibility<'db> {
         goal: TraitInstId<'db>,
         subgoal: Option<TraitInstId<'db>>,
     },
+    IllFormedConstPredicate {
+        ty: TyId<'db>,
+        predicate: Body<'db>,
+    },
 }
 
 impl<'db> Impl<'db> {
@@ -4349,12 +4351,15 @@ impl<'db> Impl<'db> {
 
         match check_ty_wf(
             db,
-            TraitSolveCx::new(db, self.scope()).with_assumptions(param_env(db, self.into())),
+            ProvisionEnv::for_scope(self.scope(), param_env(db, self.into())).solve_cx(db),
             ty,
         ) {
             WellFormedness::WellFormed => InherentImplAdmissibility::Admissible { ty },
             WellFormedness::IllFormed { goal, subgoal } => {
                 InherentImplAdmissibility::IllFormed { ty, goal, subgoal }
+            }
+            WellFormedness::IllFormedConstPredicate { predicate } => {
+                InherentImplAdmissibility::IllFormedConstPredicate { ty, predicate }
             }
         }
     }
@@ -4367,7 +4372,8 @@ impl<'db> Impl<'db> {
             InherentImplAdmissibility::Admissible { ty } => Some(ty),
             InherentImplAdmissibility::NotAllowed { .. }
             | InherentImplAdmissibility::InvalidTy { .. }
-            | InherentImplAdmissibility::IllFormed { .. } => None,
+            | InherentImplAdmissibility::IllFormed { .. }
+            | InherentImplAdmissibility::IllFormedConstPredicate { .. } => None,
         }
     }
 
@@ -4491,6 +4497,38 @@ impl<'db> ImplTrait<'db> {
 
         // Conflict check
         let trait_ = implementor.skip_binder().trait_(db);
+        // C3c money-floor + demotion: canonical goals stay exactly-one; for a
+        // non-canonical goal the C3c-3 DEMOTION is LIVE but DELIBERATELY NARROW —
+        // it permits a second impl ONLY for the cascade's "derive the default,
+        // override it" shape, i.e. when exactly ONE of the two conflicting impls
+        // is the CoreDerives-origin DEFAULT (`implementor_is_default_marked`). Two
+        // arbitrary OVERLAPPING user impls (neither a derived default) stay a real
+        // coherence conflict (`5-0001`) — overlap is a genuine hazard, not a
+        // cascade default+override pair. Canonical goals (the money floor) ALWAYS
+        // reject a second impl.
+        let canonical = is_single_impl(db, trait_.def(db));
+
+        // C3c ImplPermit-floor (T1.2, LATENT seam): recognize, via the unified
+        // resolved-identity recognizer (`impl_permit_capability_in_scope`, T1.1's live
+        // `CoreDeriveItem::ImplPermit` arm), whether the unforgeable one-of-a-kind
+        // capability `core::derive::ImplPermit` is present for this goal's coherence
+        // floor. RECOGNITION ONLY: this is computed and DELIBERATELY NOT BRANCHED ON
+        // (the `let _` makes that explicit), mirroring the C3c-1 byte-identical
+        // landing: the seam is planted and the recognizer genuinely consumed,
+        // behavior unchanged.
+        //
+        // The actual ImplPermit-GATING (turning "an `ImplPermit<goal>` is in scope" into a
+        // permitted established impl) is a later increment, and it does NOT belong
+        // here: this floor's job is existence-scarcity (coherence), and its salsa key
+        // must stay scope-free (`trait_resolution/mod.rs:103-167`), so the per-call
+        // decision must NOT become a scope-keyed tracked query at this query. Later
+        // increments must wire any permit against the LIVE `MethodSelection` /
+        // `scoped_selection_exprs` verify-leg seam (`ty_check/env.rs`), NOT the
+        // always-empty `discharge_from_scoped_provision` /
+        // `snapshot_evidence_provisions` path (deletion survey knot #4).
+        let _impl_permit_capability_present =
+            crate::analysis::ty::provider_goal::impl_permit_capability_in_scope(db, self.scope());
+
         let env = ingot_trait_env(db, self.top_mod(db).ingot(db));
         if let Some(impls) = env.impls.get(&trait_.def(db)) {
             for &cand_view in impls {
@@ -4499,10 +4537,45 @@ impl<'db> ImplTrait<'db> {
                     continue;
                 }
                 if does_impl_trait_conflict(db, cand_view, implementor) {
-                    return Err(ImplTraitLowerError::Conflict {
-                        primary: cand_impl_trait,
-                        conflict: self,
-                    });
+                    let conflict_allowed = if canonical {
+                        // Canonical goal (storage-/ABI-layout critical): a second
+                        // in-scope impl is always a genuine coherence conflict.
+                        // The money floor — never flips (soundness invariant).
+                        false
+                    } else {
+                        // Non-canonical goal: permit coexistence ONLY when the two
+                        // impls have DISTINCT selection discriminators (FCO T-Nway).
+                        // The unified discriminator GENERALIZES the old binary
+                        // `is_default_marked != is_default_marked` into the N-way
+                        // shape: ≤1 `Default`, ≤1 `Anonymous`, distinct `Alias`es
+                        // may coexist; a same-discriminator pair (two anonymous, two
+                        // defaults, or two same-named aliases) is a real `5-0001`
+                        // conflict. The unscoped default-tier (C3c-2) then picks the
+                        // `Default` (else the sole `Anonymous`); `with (Name)` selects
+                        // an `Alias`; `with (<T as Trait>)` (C3b) selects the sole
+                        // `Anonymous` override.
+                        //
+                        // BYTE-IDENTICAL when no aliases exist: the only
+                        // discriminators are `Default` / `Anonymous`, so
+                        // `discriminator != discriminator` is exactly the old
+                        // `this_default != cand_default` ({Default,Anonymous} ok;
+                        // {Anon,Anon}/{Default,Default} conflict).
+                        let this_disc = crate::analysis::ty::trait_resolution::selection_discriminator(
+                            db,
+                            *implementor.skip_binder(),
+                        );
+                        let cand_disc = crate::analysis::ty::trait_resolution::selection_discriminator(
+                            db,
+                            *cand_view.skip_binder(),
+                        );
+                        this_disc != cand_disc
+                    };
+                    if !conflict_allowed {
+                        return Err(ImplTraitLowerError::Conflict {
+                            primary: cand_impl_trait,
+                            conflict: self,
+                        });
+                    }
                 }
             }
         }
@@ -4776,7 +4849,7 @@ impl<'db> ImplTrait<'db> {
 
         if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
             db,
-            TraitSolveCx::new(db, self.scope()).with_assumptions(param_env(db, self.into())),
+            ProvisionEnv::for_scope(self.scope(), param_env(db, self.into())).solve_cx(db),
             ty,
         ) {
             return (
@@ -4926,24 +4999,15 @@ impl<'db> ImplAssocTypeView<'db> {
         }
 
         let ty = lower_hir_ty(db, hir, self.owner.scope(), assumptions);
-        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
+        check_ty_wf(
             db,
-            TraitSolveCx::new(db, self.owner.scope())
-                .with_assumptions(param_env(db, self.owner.into())),
+            ProvisionEnv::for_scope(self.owner.scope(), param_env(db, self.owner.into()))
+                .solve_cx(db),
             ty,
-        ) {
-            return vec![
-                TraitConstraintDiag::TraitBoundNotSat {
-                    span: ty_span.into(),
-                    primary_goal: goal,
-                    unsat_subgoal: subgoal,
-                    required_by: None,
-                }
-                .into(),
-            ];
-        }
-
-        Vec::new()
+        )
+        .into_diag(ty_span.into())
+        .into_iter()
+        .collect()
     }
 }
 
@@ -5540,22 +5604,16 @@ impl<'db> FieldView<'db> {
             return out;
         }
 
-        // Trait-bound well-formedness for field type.
+        // Well-formedness (trait bounds and const predicates) for field type.
         let owner_item = self.owner_item();
-        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
+        if let Some(diag) = check_ty_wf(
             db,
-            TraitSolveCx::new(db, owner_item.scope()).with_assumptions(param_env(db, owner_item)),
+            ProvisionEnv::for_scope(owner_item.scope(), param_env(db, owner_item)).solve_cx(db),
             ty,
-        ) {
-            out.push(
-                TraitConstraintDiag::TraitBoundNotSat {
-                    span: span.clone(),
-                    primary_goal: goal,
-                    unsat_subgoal: subgoal,
-                    required_by: None,
-                }
-                .into(),
-            );
+        )
+        .into_diag(span.clone())
+        {
+            out.push(diag);
             return out;
         }
 

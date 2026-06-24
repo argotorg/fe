@@ -31,6 +31,7 @@ pub enum SymbolKind {
     Trait,
     Impl,
     ImplTrait,
+    Derive,
     Const,
     Use,
     Field,
@@ -54,6 +55,7 @@ impl SymbolKind {
             Self::Trait => "trait",
             Self::Impl => "impl",
             Self::ImplTrait => "impl trait",
+            Self::Derive => "derive",
             Self::Const => "const",
             Self::Use => "use",
             Self::Field => "field",
@@ -94,6 +96,8 @@ impl<'db> From<ItemKind<'db>> for SymbolKind {
             ItemKind::Trait(_) => SymbolKind::Trait,
             ItemKind::Impl(_) => SymbolKind::Impl,
             ItemKind::ImplTrait(_) => SymbolKind::ImplTrait,
+            ItemKind::DeriveProviderScope(_) => SymbolKind::Derive,
+            ItemKind::DeriveDecl(_) => SymbolKind::Derive,
             ItemKind::Const(_) => SymbolKind::Const,
             ItemKind::Use(_) => SymbolKind::Use,
             ItemKind::StaticAssert(_) => SymbolKind::Const,
@@ -517,6 +521,11 @@ fn item_children<'db>(db: &'db dyn HirDb, item: ItemKind<'db>) -> Vec<SymbolView
                 children.push(SymbolView::from_item(ItemKind::Func(method)));
             }
         }
+        ItemKind::DeriveProviderScope(scope) => {
+            for child_item in scope.children_non_nested(db) {
+                children.push(SymbolView::from_item(child_item));
+            }
+        }
         ItemKind::Mod(m) => {
             let scope = m.scope();
             let scope_graph = scope.top_mod(db).scope_graph(db);
@@ -627,7 +636,11 @@ pub fn item_kind_to_url_suffix(db: &dyn SpannedHirDb, item: ItemKind) -> Option<
         ItemKind::Const(_) => Some("const"),
         ItemKind::Impl(_) => Some("impl"),
         ItemKind::ImplTrait(_) => Some("impl"),
-        ItemKind::StaticAssert(_) | ItemKind::Use(_) | ItemKind::Body(_) => None,
+        ItemKind::StaticAssert(_)
+        | ItemKind::Use(_)
+        | ItemKind::DeriveProviderScope(_)
+        | ItemKind::DeriveDecl(_)
+        | ItemKind::Body(_) => None,
     }
 }
 

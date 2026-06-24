@@ -1,0 +1,8 @@
+---
+source: crates/fe/tests/cli_output.rs
+assertion_line: 1824
+expression: output
+input_file: tests/fixtures/cli_output/single_files/constraint_term_saturated_trait_app.fe
+---
+
+=== EXIT CODE: 0 ===

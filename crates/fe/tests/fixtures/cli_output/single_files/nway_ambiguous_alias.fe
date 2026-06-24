@@ -1,0 +1,40 @@
+// FCO #84 T-Nway inc3 — FIRST-CLASS DIAGNOSTIC: ambiguous `with (Name)` alias.
+//
+// The SAME alias `Dup` is used on two DIFFERENT impls — `Hello` for `User` and
+// `Bye` for `User`. `with (Dup)` therefore names more than one impl and does not
+// pick a single one. Rather than silently falling through to a confusing value
+// error, we report a PRECISE "`Dup` is an ambiguous impl alias" diagnostic
+// (code 8-0087) naming both `(Trait, Type)` goals it collides on.
+
+trait Hello {
+    fn hello(self) -> u32
+}
+
+trait Bye {
+    fn bye(self) -> u32
+}
+
+struct User {
+    id: u256,
+}
+
+impl Hello for User as Dup {
+    fn hello(self) -> u32 {
+        return 1
+    }
+}
+
+impl Bye for User as Dup {
+    fn bye(self) -> u32 {
+        return 2
+    }
+}
+
+#[test]
+fn ambiguous_alias_is_reported() {
+    let u = User { id: 7 }
+    let g: u32 = with (Dup) {
+        u.hello()
+    }
+    assert!(g == 1)
+}

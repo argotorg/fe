@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/where_const_predicate_chained_projection.fe
+---
+error[2-0002]: `ADDRESS_SPACE` is not found
+   ┌─ where_const_predicate_chained_projection.fe:34:58
+   │
+34 │ fn needs_linear_chained<B: Platform2>() where B::Memory::ADDRESS_SPACE == 1 {
+   │                                                          ^^^^^^^^^^^^^ `ADDRESS_SPACE` is not found

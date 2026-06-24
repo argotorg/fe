@@ -1,0 +1,84 @@
+// M2 acceptance (part 2): derived Eq and Default on GENERIC structs must
+// EXECUTE. The generated impls must carry real where-clauses
+// (impl<A, B> Eq for Pair<A, B> where A: Eq, B: Eq) — the thing effort2
+// could only represent at the analysis layer. Also covers composition:
+// derived impls relying on other derived impls.
+
+use core::ops::Eq
+use core::default::Default
+
+#[derive(Eq, Default)]
+struct Pair<A, B> {
+    a: A,
+    b: B,
+}
+
+#[derive(Eq)]
+struct Wrapper<T> {
+    inner: T,
+}
+
+#[derive(Eq)]
+struct Point {
+    x: u256,
+    y: u256,
+}
+
+#[derive(Eq)]
+struct Rect {
+    top_left: Point,
+    bottom_right: Point,
+}
+
+#[test]
+fn derived_generic_eq_equal() {
+    // The annotations are required for any generic struct holding integer
+    // literals (hand-written impls included); they are not derive-specific.
+    let p: Pair<u256, bool> = Pair { a: 1, b: true }
+    let q: Pair<u256, bool> = Pair { a: 1, b: true }
+    assert!(p.eq(q))
+}
+
+#[test]
+fn derived_generic_eq_differs() {
+    let p: Pair<u256, bool> = Pair { a: 1, b: true }
+    let q: Pair<u256, bool> = Pair { a: 1, b: false }
+    assert!(!p.eq(q))
+}
+
+#[test]
+fn derived_generic_default() {
+    let p: Pair<u256, bool> = Pair::default()
+    assert!(p.a == 0)
+    assert!(!p.b)
+}
+
+#[test]
+fn derived_nested_concrete_composition() {
+    // Rect's derived eq relies on Point's derived eq per field.
+    let r1 = Rect {
+        top_left: Point { x: 1, y: 2 },
+        bottom_right: Point { x: 3, y: 4 },
+    }
+    let r2 = Rect {
+        top_left: Point { x: 1, y: 2 },
+        bottom_right: Point { x: 3, y: 4 },
+    }
+    let r3 = Rect {
+        top_left: Point { x: 1, y: 2 },
+        bottom_right: Point { x: 3, y: 5 },
+    }
+    assert!(r1.eq(r2))
+    assert!(!r1.eq(r3))
+}
+
+#[test]
+fn derived_generic_over_derived_field() {
+    // Wrapper<Point>'s obligation `Point: Eq` is satisfied by Point's
+    // derived impl — generated evidence consumed by generated impl.
+    let w1 = Wrapper { inner: Point { x: 7, y: 8 } }
+    let w2 = Wrapper { inner: Point { x: 7, y: 8 } }
+    let w3 = Wrapper { inner: Point { x: 7, y: 9 } }
+    assert!(w1.eq(w2))
+    assert!(!w1.eq(w3))
+}

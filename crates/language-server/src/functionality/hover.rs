@@ -6,13 +6,14 @@ use hir::{
     HirDb,
     analysis::ty::{
         ProviderAddressSpace,
-        ty_check::{EffectParamSite, LocalBinding, ParamSite},
+        term::pretty_print_term,
+        ty_check::{CheckPremise, DischargeRoute, EffectParamSite, LocalBinding, ParamSite},
     },
     core::semantic::{
         EffectEnvView, ProviderSource,
-        reference::{ReferenceView, Target},
+        reference::{BodyPathContext, ReferenceView, Target, typed_body_for_body},
     },
-    hir_def::{FieldParent, ItemKind, PathId, scope_graph::ScopeId},
+    hir_def::{Body, Expr, ExprId, FieldParent, ItemKind, Partial, PathId, scope_graph::ScopeId},
     lower::map_file_to_mod,
     span::LazySpan,
 };
@@ -208,6 +209,120 @@ fn hover_markdown_for_target<'db>(
     Some(body)
 }
 
+/// Returns the call expression whose constraints the reference under the
+/// cursor raised: the call itself for method calls, or the enclosing call
+/// when the reference is the callee path of a call expression.
+fn call_expr_for_reference<'db>(
+    db: &'db DriverDataBase,
+    reference: &ReferenceView<'db>,
+) -> Option<(Body<'db>, ExprId)> {
+    match reference {
+        ReferenceView::MethodCall(view) => Some((view.body, view.expr)),
+        ReferenceView::Path(view) => {
+            let BodyPathContext::Expr(callee) = view.body_ctx? else {
+                return None;
+            };
+            let body = view.scope.body()?;
+            let call_expr = body.exprs(db).iter().find_map(|(expr, data)| {
+                if let Partial::Present(Expr::Call(call_callee, _)) = data
+                    && *call_callee == callee
+                {
+                    Some(expr)
+                } else {
+                    None
+                }
+            })?;
+            Some((body, call_expr))
+        }
+        ReferenceView::FieldAccess(_) | ReferenceView::UsePath(_) => None,
+    }
+}
+
+/// Renders the trait obligations that type checking discharged for the call
+/// under the cursor, naming the impl the solver committed to for each goal.
+/// Records without a committed solution are omitted.
+fn discharged_obligations_footer<'db>(
+    db: &'db DriverDataBase,
+    reference: &ReferenceView<'db>,
+) -> Option<String> {
+    let (body, call_expr) = call_expr_for_reference(db, reference)?;
+    let typed_body = typed_body_for_body(db, body)?;
+    let lines: Vec<String> = typed_body
+        .discharged_obligations_for_call(call_expr)
+        .filter_map(|obligation| {
+            let solution = obligation.solution?;
+            Some(format!(
+                "- `{}` discharged by `{}`",
+                obligation.goal.pretty_print(db, true),
+                solution.describe_implementor(db)
+            ))
+        })
+        .collect();
+    if lines.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "Trait obligations discharged:\n{}",
+        lines.join("\n")
+    ))
+}
+
+/// Renders the `where`-clause const predicates that type checking discharged
+/// for the call under the cursor: the route each took (CTFE evaluation or an
+/// in-scope assumption) and the type substitution it was discharged under.
+/// Premises are shown when present — the matched in-scope assumption for the
+/// assumption route; the CTFE route is premise-free. This is the user-facing
+/// consumer of the const-predicate evidence record.
+fn discharged_const_predicates_footer<'db>(
+    db: &'db DriverDataBase,
+    reference: &ReferenceView<'db>,
+) -> Option<String> {
+    let (body, call_expr) = call_expr_for_reference(db, reference)?;
+    let typed_body = typed_body_for_body(db, body)?;
+    let lines: Vec<String> = typed_body
+        .discharged_const_predicates_for_call(call_expr)
+        .map(|discharged| {
+            let route = match discharged.route {
+                DischargeRoute::Ctfe => "CTFE",
+                DischargeRoute::Assumption => "an assumption",
+                // Trait-obligation routes; const predicates never take these, but
+                // the match is wildcard-free so a new route is a compile error.
+                DischargeRoute::ImplTable => "the impl table",
+                DischargeRoute::ScopedProvision => "a scoped provision",
+            };
+            let args = discharged
+                .generic_args
+                .iter()
+                .map(|ty| ty.pretty_print(db).to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let premises = if discharged.premises.is_empty() {
+                String::new()
+            } else {
+                let rendered = discharged
+                    .premises
+                    .iter()
+                    .map(|premise| match premise {
+                        CheckPremise::Assumption {
+                            assumption_term, ..
+                        } => format!("`{}`", pretty_print_term(db, *assumption_term)),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(", from assumption {rendered}")
+            };
+            format!("- const predicate discharged by {route} (with `{args}`){premises}")
+        })
+        .collect();
+    if lines.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "Const predicates discharged:\n{}",
+        lines.join("\n")
+    ))
+}
+
 pub fn hover_helper(
     db: &DriverDataBase,
     file: File,
@@ -261,7 +376,7 @@ pub fn hover_helper(
     };
 
     // Build hover content
-    let info = if resolution.is_ambiguous() {
+    let mut info = if resolution.is_ambiguous() {
         let mut sections = vec!["**Multiple definitions**\n\n".to_string()];
 
         for (i, target) in resolution.as_slice().iter().enumerate() {
@@ -284,6 +399,18 @@ pub fn hover_helper(
         };
         info
     };
+
+    if let Some(footer) = discharged_obligations_footer(db, r) {
+        info.push('\n');
+        info.push_str(&footer);
+        info.push('\n');
+    }
+
+    if let Some(footer) = discharged_const_predicates_footer(db, r) {
+        info.push('\n');
+        info.push_str(&footer);
+        info.push('\n');
+    }
 
     let result = async_lsp::lsp_types::Hover {
         contents: async_lsp::lsp_types::HoverContents::Markup(

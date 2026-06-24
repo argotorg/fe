@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/derive_local_trait_no_alias.fe
+---
+error[13-0002]: cannot derive `Eq`
+   ┌─ derive_local_trait_no_alias.fe:25:8
+   │
+25 │ derive Eq for Point
+   │        ^^ `Eq` is not a derivable trait
+   │
+   = derivable traits are `Eq` and `Default`

@@ -1,0 +1,68 @@
+// CASCADE scoped override — a `with (<Speaker as Eq>)` scope selects the
+// hand-written OVERRIDE impl; the same DIRECT receiver call uses the derived
+// DEFAULT outside the block and the OVERRIDE inside it.
+//
+// THE DREAM: a derived default impl and a hand-written override coexist (cf.
+//   cascade_noncanonical_coexist.fe); an unscoped direct call uses the DERIVED
+//   DEFAULT (cf. cascade_unscoped_default.fe); and a direct call INSIDE a
+//   `with (<Speaker as Eq>) { .. }` block uses the OVERRIDE — observably, at
+//   runtime, within ONE function body, same receiver, differing only by scope.
+// PASS CRITERIA: with two Speakers that differ structurally, the same `a.eq(b)`
+//   DIRECT call returns the DERIVED-DEFAULT result (false — different ids) OUTSIDE
+//   the block, and the OVERRIDE result (true — "everything equal") INSIDE the
+//   `with (<Speaker as Eq>)` block. No generic/non-trait helper: every call is a
+//   direct trait-method call on the receiver, all in one `#[test]` body.
+// DRIVEN-BY: C3b (the scoped-selection surface records the override) + C3c-2 (the
+//   unscoped default-tier rule) + C3c-3 (coexistence) + C3d (the recorded
+//   selection becomes observable for a DIRECT receiver call: a call-keyed
+//   `MethodSelection` obligation carries the scope-named override through to MIR's
+//   C1 rail via the Some-only `ImplEnv` identity).
+//
+// PROVISIONAL-SURFACE: `with (<Speaker as Eq>) { .. }` is the PROVISIONAL cascade
+// selection syntax — a `with`-binding whose value path is the qualified-type form
+// `<T as Trait>` (resolving to the (Trait, Type) goal). This spelling WILL CHANGE
+// with the keystone; treat the keyword/grammar as a placeholder and the SEMANTICS
+// (inner scope selects the impl) as the spec. It reuses the existing
+// `with (..) { .. }` block expression (WithExpr) so it parses today.
+
+use core::ops::Eq
+
+// DERIVED DEFAULT: structural equality (id-by-id), the CoreDerives `StableEq`
+// provider output. Default-marked (CoreDerives-origin). An unscoped call uses it.
+#[derive(Eq)]
+struct Speaker {
+    id: u256,
+}
+
+// HAND-WRITTEN OVERRIDE: "everything equal" — a deliberately distinct answer from
+// the structural default. Selectable only via `with (<Speaker as Eq>) { .. }`; it
+// must NOT be picked outside such a scope.
+impl Eq for Speaker {
+    fn eq(self, _ other: Speaker) -> bool {
+        true
+    }
+}
+
+#[test]
+fn scoped_override_observable_for_direct_call() {
+    // Two Speakers that differ STRUCTURALLY (ids 7 vs 8): the derived default says
+    // NOT equal; the override says equal. The two answers are distinguishable, so
+    // which impl runs is observable at runtime.
+    let a = Speaker { id: 7 }
+    let b = Speaker { id: 8 }
+
+    // OUTSIDE any selecting scope: the derived (default-tier) structural impl —
+    // different ids are NOT equal. DIRECT receiver call, no helper.
+    assert!(!a.eq(b))
+
+    // INSIDE `with (<Speaker as Eq>)`: the hand-written override is selected for
+    // (Eq, Speaker), so the SAME DIRECT call returns the override result (true).
+    let inside: bool = with (<Speaker as Eq>) {
+        a.eq(b)
+    }
+    assert!(inside)
+
+    // AFTER the block closes, the selection is popped — back to the derived
+    // default: NOT equal again. Same DIRECT call, scope-only difference.
+    assert!(!a.eq(b))
+}

@@ -1,0 +1,57 @@
+// K04a-C2: derive-provider capabilities recognized by RESOLVED identity, not by a
+// bare head-identifier string match.
+//
+// The provider imports the canonical capability types UNDER ALIASES
+// (`Reflect as Mirror`, `ImplBuilder as Builder`) and names them by the alias in
+// its `uses (..)` clause. The alias head idents `Mirror` / `Builder` do NOT match
+// the legacy string keys (`Reflect` / `ImplBuilder`), so the compatibility shim
+// canNOT recognize them. Recognition therefore *must* come from the new identity
+// path: the key path canonicalizes (through this module's `use` items, base-graph
+// only) to `core::derive::Reflect` / `::ImplBuilder` and matches on the `derive::`
+// qualifier. If the generated `impl Eq` runs, identity recognition worked.
+//
+// This is the anti-vacuous proof that C2 recognizes by identity rather than
+// falling back to the string key. (Existing providers using the unqualified
+// `Reflect` / `ImplBuilder` keep working via the shim — see core_derives /
+// derived_clone.)
+
+use core::ops::Eq
+use core::derive::Derive
+use core::derive::Evidence
+use core::derive::Reflect as Mirror
+use core::derive::ImplBuilder as Builder
+
+impl Derive<Eq> for AliasedEq {
+    const fn derive<T>(ev: own Evidence<Eq<T>>) -> Evidence<Eq<T>>
+        uses (
+            reflect: Mirror<T>,
+            builder: mut Builder<Eq<T>>,
+        )
+    {
+        if reflect.is_struct() {
+            let mut body = quote { true }
+            for field in reflect.fields() {
+                builder.require<Eq>(field.ty())
+                body = quote(other) { ${body} && self.${field} == other.${field} }
+            }
+            builder.emit_method("eq", body)
+        }
+        builder.finish()
+        ev
+    }
+}
+
+struct Point {
+    x: u256,
+    y: u256,
+}
+
+derive Eq for Point using AliasedEq
+
+#[test]
+fn aliased_capability_recognized_by_identity_not_string_key() {
+    assert!(Point { x: 1, y: 2 }.eq(Point { x: 1, y: 2 }))
+    assert!(!Point { x: 1, y: 2 }.eq(Point { x: 1, y: 3 }))
+}
+
+struct AliasedEq {}

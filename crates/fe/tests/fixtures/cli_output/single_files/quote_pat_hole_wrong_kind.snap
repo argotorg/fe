@@ -1,0 +1,22 @@
+---
+source: crates/fe/tests/cli_output.rs
+assertion_line: 1822
+expression: output
+input_file: tests/fixtures/cli_output/single_files/quote_pat_hole_wrong_kind.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/quote_pat_hole_wrong_kind.fe
+
+error[13-0010]: derive provider `PatTag` failed to derive `Tagged`
+   ┌─ quote_pat_hole_wrong_kind.fe:36:8
+   │
+23 │                 arms = quote { ${arms}, ${field}(lhs) => true }
+   │                                           ----- invalid quote: a `Field` handle cannot fill a pattern hole; pattern holes accept `Variant` handles
+   ·
+36 │ derive Tagged for Coin using PatTag
+   │        ^^^^^^ requested here: invalid quote: a `Field` handle cannot fill a pattern hole; pattern holes accept `Variant` handles
+   │
+   = the provider `PatTag` ran at compile time and failed; the secondary label points at the failing provider code
+
+
+=== EXIT CODE: 1 ===

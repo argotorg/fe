@@ -94,6 +94,16 @@ impl<'db> TyChecker<'db> {
                     };
                 self.finish_pat_check(pat, expected, rhs.ty, analysis)
             }
+
+            // Splice hole pats are only meaningful inside quote bodies,
+            // which this checker never enters; outside a quote the parser
+            // has already reported the stray `${...}`.
+            Pat::QuoteHole(..) => self.finish_pat_check(
+                pat,
+                expected,
+                TyId::invalid(self.db, InvalidCause::Other),
+                PatternAnalysisStatus::Invalid,
+            ),
         }
     }
 
@@ -278,7 +288,7 @@ impl<'db> TyChecker<'db> {
                 self.discard_local_bindings_in_pat(*lhs);
                 self.discard_local_bindings_in_pat(*rhs);
             }
-            Pat::WildCard | Pat::Rest | Pat::Lit(..) => {}
+            Pat::WildCard | Pat::Rest | Pat::Lit(..) | Pat::QuoteHole(..) => {}
         }
     }
 

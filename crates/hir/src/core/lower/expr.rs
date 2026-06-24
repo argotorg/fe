@@ -127,14 +127,19 @@ impl<'db> Expr<'db> {
 
             ast::ExprKind::Field(field) => {
                 let receiver = Self::push_to_body_opt(ctxt, field.receiver());
-                let field = if let Some(name) = field.field_name() {
-                    Some(FieldIndex::Ident(IdentId::lower_token(ctxt.f_ctxt, name))).into()
-                } else if let Some(num) = field.field_index() {
-                    Some(FieldIndex::Index(IntegerId::lower_ast(ctxt.f_ctxt, num))).into()
+                if let Some(hole) = field.field_hole() {
+                    let inner = Self::push_to_body_opt(ctxt, hole.expr());
+                    Self::QuoteFieldHole(receiver, inner)
                 } else {
-                    None.into()
-                };
-                Self::Field(receiver, field)
+                    let field = if let Some(name) = field.field_name() {
+                        Some(FieldIndex::Ident(IdentId::lower_token(ctxt.f_ctxt, name))).into()
+                    } else if let Some(num) = field.field_index() {
+                        Some(FieldIndex::Index(IntegerId::lower_ast(ctxt.f_ctxt, num))).into()
+                    } else {
+                        None.into()
+                    };
+                    Self::Field(receiver, field)
+                }
             }
 
             ast::ExprKind::Index(index) => {
@@ -216,6 +221,36 @@ impl<'db> Expr<'db> {
                     .and_then(|b| ast::Expr::cast(b.syntax().clone()));
                 let body = Self::push_to_body_opt(ctxt, body_expr);
                 Self::With(bindings, body)
+            }
+
+            ast::ExprKind::Quote(quote) => {
+                let open = quote
+                    .open_names()
+                    .map(|names| {
+                        names
+                            .names()
+                            .map(|name| IdentId::lower_token(ctxt.f_ctxt, name))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let body = if let Some(arms) = quote.arms() {
+                    QuoteBody::Arms(
+                        arms.into_iter()
+                            .map(|arm| MatchArm::lower_ast(ctxt, arm))
+                            .collect(),
+                    )
+                } else {
+                    let body_expr = quote
+                        .body()
+                        .and_then(|b| ast::Expr::cast(b.syntax().clone()));
+                    QuoteBody::Expr(Self::push_to_body_opt(ctxt, body_expr))
+                };
+                Self::Quote { open, body }
+            }
+
+            ast::ExprKind::QuoteHole(hole) => {
+                let inner = Self::push_to_body_opt(ctxt, hole.expr());
+                Self::QuoteHole(inner)
             }
 
             ast::ExprKind::Paren(paren) => {

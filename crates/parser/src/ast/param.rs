@@ -292,6 +292,12 @@ impl WhereClause {
     pub fn where_kw(&self) -> Option<SyntaxToken> {
         support::token(self.syntax(), SK::WhereKw)
     }
+
+    /// Returns an iterator over bare const-expression predicates in this
+    /// where clause.
+    pub fn const_predicates(&self) -> impl Iterator<Item = WhereConstPredicate> {
+        support::children(self.syntax())
+    }
 }
 
 ast_node! {
@@ -307,6 +313,19 @@ impl WherePredicate {
 
     /// Returns `Trait` in `T: Trait`.
     pub fn bounds(&self) -> Option<TypeBoundList> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
+    /// A bare const-expression predicate in a where clause,
+    /// e.g. `T::SIZE >= 50` or `{ T::NAME_LEN < 100 }`.
+    pub struct WhereConstPredicate,
+    SK::WhereConstPredicate,
+}
+impl WhereConstPredicate {
+    /// Returns the expression inside the const predicate.
+    pub fn expr(&self) -> Option<super::Expr> {
         support::child(self.syntax())
     }
 }
@@ -457,7 +476,7 @@ impl TraitRef {
 
 ast_node! {
     pub struct KindBound,
-     SK::KindBoundAbs | SK::KindBoundMono
+     SK::KindBoundAbs | SK::KindBoundMono | SK::KindBoundConstraint
 }
 impl KindBound {
     pub fn mono(&self) -> Option<KindBoundMono> {
@@ -473,11 +492,25 @@ impl KindBound {
             _ => None,
         }
     }
+
+    pub fn constraint(&self) -> Option<KindBoundConstraint> {
+        match self.syntax().kind() {
+            SK::KindBoundConstraint => {
+                Some(KindBoundConstraint::cast(self.syntax().clone()).unwrap())
+            }
+            _ => None,
+        }
+    }
 }
 
 ast_node! {
     pub struct KindBoundMono,
     SK::KindBoundMono,
+}
+
+ast_node! {
+    pub struct KindBoundConstraint,
+    SK::KindBoundConstraint,
 }
 
 ast_node! {
@@ -504,6 +537,8 @@ pub enum KindBoundVariant {
     Mono(KindBoundMono),
     /// `KindBound -> KindBound`
     Abs(KindBoundAbs),
+    /// `Constraint`
+    Constraint(KindBoundConstraint),
 }
 
 /// A trait for AST nodes that can have generic parameters.
@@ -651,6 +686,26 @@ mod tests {
         };
         assert_eq!(p3.name().unwrap().text(), "N");
         assert!(p3.ty().is_some());
+    }
+
+    // K02a revival (re-port of effort2 1184fbbf0): `* -> Constraint` parses, with
+    // the codomain a `Constraint` kind bound.
+    #[test]
+    #[wasm_bindgen_test]
+    fn generic_param_with_constraint_kind_bound() {
+        let source = r#"<P: * -> Constraint>"#;
+        let gp = parse_generic_params(source);
+        let mut params = gp.into_iter();
+
+        let GenericParamKind::Type(param) = params.next().unwrap().kind() else {
+            panic!("expected type param");
+        };
+        let bound = param.bounds().unwrap().iter().next().unwrap();
+        let kind = bound.kind_bound().expect("expected kind bound");
+        let abs = kind.abs().expect("expected higher-kinded bound");
+
+        assert!(abs.lhs().unwrap().mono().is_some());
+        assert!(abs.rhs().unwrap().constraint().is_some());
     }
 
     #[test]
@@ -858,5 +913,294 @@ mod tests {
             err.msg()
                 .contains("typed `uses` parameters only support `mut`; remove `own`")
         }));
+    }
+
+    // ===== Where-clause const predicates =====
+
+    fn parse_items(source: &str) -> (crate::SyntaxNode, Vec<crate::ParseError>) {
+        let (green, errors) = crate::parse_source_file(source, RecoveryMode::Recover);
+        (crate::SyntaxNode::new_root(green), errors)
+    }
+
+    fn parse_items_no_errors(source: &str) -> crate::SyntaxNode {
+        let (node, errors) = parse_items(source);
+        assert!(
+            errors.is_empty(),
+            "expected no parse errors, got {errors:?}\ntree: {node:#?}"
+        );
+        node
+    }
+
+    fn nth_func(root: &crate::SyntaxNode, n: usize) -> crate::ast::Func {
+        root.descendants()
+            .filter_map(crate::ast::Func::cast)
+            .nth(n)
+            .expect("missing func")
+    }
+
+    fn where_counts(wc: &WhereClause) -> (usize, usize) {
+        (wc.iter().count(), wc.const_predicates().count())
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn where_clause_with_const_predicate() {
+        let source = r#"where true, T: Trait"#;
+        let wc = parse_where_clause(source);
+
+        let type_preds: Vec<_> = wc.iter().collect();
+        assert_eq!(type_preds.len(), 1);
+        assert!(matches!(
+            type_preds[0].ty().unwrap().kind(),
+            TypeKind::Path(_)
+        ));
+
+        let const_preds: Vec<_> = wc.const_predicates().collect();
+        assert_eq!(const_preds.len(), 1);
+        assert!(const_preds[0].expr().is_some());
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn where_clause_bare_const_predicate_forms() {
+        // Comparison with `<` (not a generic-arg open), call with commas
+        // inside parens, logical chain, parenthesized arithmetic, negation.
+        let root = parse_items_no_errors(
+            "fn a<T>() where T: Sized, T::SIZE >= 50 {}\n\
+             fn b<T>() where T: Sized, T::SIZE < 256 {}\n\
+             fn c<T>() where T: Sized, sum_ok(T::SIZE, T::NAME_LEN) {}\n\
+             fn d<T>() where T: Sized, T::SIZE > 0 && T::SIZE < 500 {}\n\
+             fn e<T>() where T: Sized, (T::SIZE + 1) * 2 < 2000 {}\n\
+             fn f<T>() where T: Sized, !(T::SIZE == 0) {}\n\
+             fn g<T>() where T: Sized, above_threshold<T>() {}\n",
+        );
+        for n in 0..7 {
+            let func = nth_func(&root, n);
+            let wc = func.sig().where_clause().expect("missing where clause");
+            assert_eq!(where_counts(&wc), (1, 1), "func #{n}");
+            assert!(func.body().is_some(), "func #{n} lost its body");
+        }
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn where_clause_const_predicate_then_body() {
+        let f = parse_func("fn foo<T>() where T: Trait, true {}");
+        let wc = f.sig().where_clause().expect("missing where clause");
+        assert_eq!(where_counts(&wc), (1, 1));
+        assert!(f.body().is_some(), "function body should still be parsed");
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn where_clause_mixed_brace_predicate_then_body() {
+        // The check_mixed shape: type bound, bare const predicate, brace
+        // const predicate, then a REAL body on the next line (defect 1a).
+        let root = parse_items_no_errors(
+            "fn check_mixed<T>() where T: Sized + Named, T::SIZE < 500, { T::NAME_LEN < 100 }\n\
+             {\n\
+             }\n",
+        );
+        let func = nth_func(&root, 0);
+        let wc = func.sig().where_clause().expect("missing where clause");
+        assert_eq!(where_counts(&wc), (1, 2));
+        assert!(func.body().is_some(), "real body must not be swallowed");
+        // Exactly one func; the body must not have leaked out as an item.
+        assert!(
+            root.descendants()
+                .filter_map(crate::ast::Func::cast)
+                .count()
+                == 1
+        );
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn where_clause_brace_as_body_when_item_ends() {
+        // No predicate follows and nothing else claims the block: the
+        // block after `where T: Sized,` ... is the fn body, and the
+        // trailing-comma form keeps the where clause valid.
+        let root = parse_items_no_errors("fn f<T>() where T: Sized, { T::SIZE < 100 }");
+        let func = nth_func(&root, 0);
+        let wc = func.sig().where_clause().expect("missing where clause");
+        // One-token lookahead: nothing follows the block, so it is the body.
+        assert_eq!(where_counts(&wc), (1, 0));
+        assert!(func.body().is_some());
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn where_clause_brace_predicate_vs_brace_body_disambiguation() {
+        // Brace predicate directly followed by the body block: the first
+        // block is a predicate because a `{` follows it (defect 1a).
+        let root = parse_items_no_errors("fn f<T>() where { T::SIZE < 100 } { 5 }");
+        let func = nth_func(&root, 0);
+        let wc = func.sig().where_clause().expect("missing where clause");
+        assert_eq!(where_counts(&wc), (0, 1));
+        assert!(func.body().is_some());
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn where_clause_bare_path_record_init_ambiguity() {
+        // Defect 1b: `where FLAG { ... }` must parse FLAG as the predicate
+        // and keep the block as the fn body, exactly like if/while
+        // conditions.
+        let root = parse_items_no_errors("fn f() where FLAG { 5 }");
+        let func = nth_func(&root, 0);
+        let wc = func.sig().where_clause().expect("missing where clause");
+        assert_eq!(where_counts(&wc), (0, 1));
+        let pred = wc.const_predicates().next().unwrap();
+        assert_eq!(pred.expr().unwrap().syntax().to_string(), "FLAG");
+        assert!(func.body().is_some(), "record-init must not eat the body");
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn where_clause_const_predicate_trailing_comma() {
+        let root = parse_items_no_errors("fn f<T>() where T: Sized, T::SIZE >= 50, {}");
+        let func = nth_func(&root, 0);
+        let wc = func.sig().where_clause().expect("missing where clause");
+        assert_eq!(where_counts(&wc), (1, 1));
+        assert!(func.body().is_some());
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn where_clause_newline_separated_const_predicates() {
+        // Newline-separated predicates miss their commas; the parser
+        // reports the missing separator but still parses every predicate.
+        let (root, errors) = parse_items(
+            "fn f<T>() where\n\
+                 T: Sized\n\
+                 T::SIZE >= 50\n\
+                 true\n\
+             {}\n",
+        );
+        assert_eq!(errors.len(), 2, "one missing-comma error per boundary");
+        assert!(errors.iter().all(|e| e.msg().contains("expected `,`")));
+        let func = nth_func(&root, 0);
+        let wc = func.sig().where_clause().expect("missing where clause");
+        assert_eq!(where_counts(&wc), (1, 2));
+        assert!(func.body().is_some());
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn where_const_predicate_on_impl() {
+        let root = parse_items_no_errors(
+            "impl<T> Compact for T where T: Sized, T::SIZE <= 32 {\n\
+                 fn pack(self) -> u256 { 0 }\n\
+             }\n",
+        );
+        let impl_trait = root
+            .descendants()
+            .find_map(crate::ast::ImplTrait::cast)
+            .expect("missing impl");
+        let wc = impl_trait.where_clause().expect("missing where clause");
+        assert_eq!(where_counts(&wc), (1, 1));
+        // The impl's member fn must still be present.
+        assert!(
+            root.descendants()
+                .filter_map(crate::ast::Func::cast)
+                .count()
+                == 1
+        );
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn where_const_predicate_on_trait_fn_without_body() {
+        // Bodyless trait fn decl: a trailing brace predicate is taken as a
+        // predicate unconditionally — no body exists to claim it.
+        let root = parse_items_no_errors(
+            "trait Bounded {\n\
+                 fn must_fit<T>() where T: Sized, T::SIZE < 100\n\
+                 fn check<T>() where { T::SIZE < 100 }\n\
+             }\n",
+        );
+        let must_fit = nth_func(&root, 0);
+        let wc = must_fit.sig().where_clause().expect("missing where clause");
+        assert_eq!(where_counts(&wc), (1, 1));
+        assert!(must_fit.body().is_none());
+
+        let check = nth_func(&root, 1);
+        let wc = check.sig().where_clause().expect("missing where clause");
+        assert_eq!(where_counts(&wc), (0, 1));
+        assert!(check.body().is_none());
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn where_const_predicate_on_trait_fn_with_body() {
+        let root = parse_items_no_errors(
+            "trait Bounded {\n\
+                 fn a<T>() where T: Sized, T::SIZE < 100 { 5 }\n\
+                 fn b<T>() where { T::SIZE < 100 } { 5 }\n\
+             }\n",
+        );
+        let a = nth_func(&root, 0);
+        assert_eq!(
+            where_counts(&a.sig().where_clause().expect("missing where clause")),
+            (1, 1)
+        );
+        assert!(a.body().is_some(), "default body must survive");
+
+        let b = nth_func(&root, 1);
+        assert_eq!(
+            where_counts(&b.sig().where_clause().expect("missing where clause")),
+            (0, 1)
+        );
+        assert!(b.body().is_some(), "default body after brace predicate");
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn where_const_predicate_on_struct_and_enum() {
+        let root = parse_items_no_errors(
+            "struct Wrap<T> where T: Sized, T::SIZE <= 32 { inner: T }\n\
+             enum Opt<T> where T: Sized, T::SIZE <= 32 {\n\
+                 Some(T),\n\
+                 None,\n\
+             }\n",
+        );
+        let struct_ = root
+            .descendants()
+            .find_map(crate::ast::Struct::cast)
+            .expect("missing struct");
+        let wc = struct_.where_clause().expect("missing struct where clause");
+        assert_eq!(where_counts(&wc), (1, 1));
+        assert!(struct_.fields().is_some(), "field list must survive");
+
+        let enum_ = root
+            .descendants()
+            .find_map(crate::ast::Enum::cast)
+            .expect("missing enum");
+        let wc = enum_.where_clause().expect("missing enum where clause");
+        assert_eq!(where_counts(&wc), (1, 1));
+        assert!(enum_.variants().is_some(), "variant list must survive");
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn where_const_predicate_on_trait_header() {
+        let root = parse_items_no_errors(
+            "trait Big<T> where T: Sized, T::SIZE >= 50 {\n\
+                 fn big(self) -> u256\n\
+             }\n",
+        );
+        let trait_ = root
+            .descendants()
+            .find_map(crate::ast::Trait::cast)
+            .expect("missing trait");
+        let wc = trait_.where_clause().expect("missing trait where clause");
+        assert_eq!(where_counts(&wc), (1, 1));
+        assert!(
+            root.descendants()
+                .filter_map(crate::ast::Func::cast)
+                .count()
+                == 1,
+            "trait item list must survive"
+        );
     }
 }

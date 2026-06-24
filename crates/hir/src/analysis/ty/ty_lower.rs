@@ -23,6 +23,7 @@ use super::{
         reanchor_template_holes, refresh_alias_template_holes, rewrite_structural_holes,
     },
     trait_def::TraitInstId,
+    trait_lower::lower_hir_constraint_application,
     trait_resolution::{
         PredicateListId,
         constraint::{collect_constraints, collect_func_decl_constraints},
@@ -73,7 +74,23 @@ fn lower_hir_ty_impl<'db>(
             }
         }
 
-        HirTyKind::Path(path) => lower_path_impl(db, scope, *path, assumptions, minter),
+        HirTyKind::Path(path) => {
+            // A saturated concrete trait application in type position (e.g.
+            // `Eq<T>`) lowers to a `Constraint`-kinded `ConstraintTerm` rather
+            // than falling to the `2-0006` "found trait, expected type"
+            // (`NotAType`) fallback in `lower_path_impl`. `None` covers a
+            // bare/unsaturated head, an abstract `* -> Constraint` parameter
+            // head, a non-trait head, or an arg-count/kind/const failure, all
+            // of which keep the existing path-lowering behavior. Whether a
+            // `ConstraintTerm` actually fits its use site is decided
+            // downstream by the kind check (`*` position => kind error,
+            // `Constraint` position => fits); production here is unconditional.
+            if let Some(inst) = lower_hir_constraint_application(db, ty, scope, assumptions) {
+                TyId::constraint_term(db, inst)
+            } else {
+                lower_path_impl(db, scope, *path, assumptions, minter)
+            }
+        }
 
         HirTyKind::Tuple(tuple_id) => {
             let elems = tuple_id.data(db);
@@ -1167,6 +1184,19 @@ impl<'db> GenericParamTypeSet<'db> {
             .saturating_sub(self.offset_to_explicit(db))
     }
 
+    /// Number of explicit parameters that have no default and therefore must be
+    /// supplied explicitly. Defaults are trailing, so this is the length of the
+    /// required prefix. Read-only query used to size kinds (e.g. the
+    /// trait-constructor kind `* -> ... -> Constraint`); does not participate in
+    /// argument lowering.
+    pub(crate) fn required_explicit_param_count(self, db: &'db dyn HirAnalysisDb) -> usize {
+        self.params_precursor(db)
+            .iter()
+            .skip(self.offset_to_explicit(db))
+            .filter(|prec| prec.default_hir_ty.is_none() && prec.default_hir_const.is_none())
+            .count()
+    }
+
     pub(crate) fn explicit_const_param_default_hole_ty(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -1757,6 +1787,7 @@ impl<'db> TyParamPrecursor<'db> {
 pub(super) fn lower_kind(kind: &HirKindBound) -> Kind {
     match kind {
         HirKindBound::Mono => Kind::Star,
+        HirKindBound::Constraint => Kind::Constraint,
         HirKindBound::Abs(lhs, rhs) => match (lhs, rhs) {
             (Partial::Present(lhs), Partial::Present(rhs)) => {
                 Kind::Abs(Box::new((lower_kind(lhs), lower_kind(rhs))))
@@ -1781,4 +1812,57 @@ pub(super) fn lower_kind_in_bounds<'db>(bounds: &[TypeBound<'db>]) -> Option<Kin
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        hir_def::{ItemKind, TopLevelMod},
+        test_db::HirAnalysisTestDb,
+    };
+
+    fn find_func<'db>(
+        db: &'db HirAnalysisTestDb,
+        top_mod: TopLevelMod<'db>,
+        func_name: &str,
+    ) -> crate::hir_def::Func<'db> {
+        top_mod
+            .children_non_nested(db)
+            .find_map(|item| match item {
+                ItemKind::Func(func)
+                    if func
+                        .name(db)
+                        .to_opt()
+                        .is_some_and(|name| name.data(db) == func_name) =>
+                {
+                    Some(func)
+                }
+                _ => None,
+            })
+            .expect("missing function")
+    }
+
+    // K02a revival (re-port of effort2 1184fbbf0): a `Constraint` kind bound
+    // lowers to `Kind::Constraint`, so `P: * -> Constraint` is `* -> Constraint`.
+    #[test]
+    fn lowers_constraint_kind_bound() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "lowers_constraint_kind_bound.fe".into(),
+            r#"
+fn f<P: * -> Constraint>() {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let func = find_func(&db, top_mod, "f");
+        let param_set = collect_generic_params(&db, func.into());
+        let kind = param_set.params(&db)[0].kind(&db);
+
+        assert!(matches!(
+            kind,
+            Kind::Abs(inner) if inner.0 == Kind::Star && inner.1 == Kind::Constraint
+        ));
+    }
 }

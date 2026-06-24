@@ -327,6 +327,7 @@ impl KindBound {
     pub fn pretty_print(&self) -> String {
         match self {
             KindBound::Mono => "*".to_string(),
+            KindBound::Constraint => "Constraint".to_string(),
             KindBound::Abs(lhs, rhs) => {
                 let lhs = unwrap_partial_ref(lhs, "KindBound::Abs lhs").pretty_print();
                 let rhs = unwrap_partial_ref(rhs, "KindBound::Abs rhs").pretty_print();
@@ -344,13 +345,15 @@ impl<'db> WhereClauseId<'db> {
     /// Pretty-prints a where clause.
     pub fn pretty_print(self, db: &'db dyn HirDb) -> String {
         let predicates = self.data(db);
-        if predicates.is_empty() {
+        let const_predicates = self.const_predicates(db);
+        if predicates.is_empty() && const_predicates.is_empty() {
             return String::new();
         }
 
         let preds = predicates
             .iter()
             .map(|p| p.pretty_print(db))
+            .chain(const_predicates.iter().map(|p| p.pretty_print(db)))
             .collect::<Vec<_>>()
             .join(", ");
         format!(" where {}", preds)
@@ -543,6 +546,22 @@ impl<'db> Pat<'db> {
                     lhs_pat.pretty_print(db, body),
                     rhs_pat.pretty_print(db, body)
                 )
+            }
+            Pat::QuoteHole(inner, binders) => {
+                let inner_ref = unwrap_partial_ref(inner.data(db, body), "Pat::QuoteHole expr");
+                let mut result = format!("${{{}}}", inner_ref.pretty_print(db, body, 0));
+                if !binders.is_empty() {
+                    let binders_str = binders
+                        .iter()
+                        .map(|p| {
+                            let pat = unwrap_partial_ref(p.data(db, body), "Pat::QuoteHole binder");
+                            pat.pretty_print(db, body)
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    result.push_str(&format!("({})", binders_str));
+                }
+                result
             }
         }
     }
@@ -829,6 +848,71 @@ impl<'db> Expr<'db> {
                 };
                 format!("with ({}) {}", bindings_str, body_str)
             }
+
+            Expr::Quote {
+                open,
+                body: template,
+            } => {
+                let open_str = if open.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        "({})",
+                        open.iter()
+                            .map(|name| name.data(db).as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
+                let body_str = match template {
+                    QuoteBody::Expr(template) => {
+                        let template_ref =
+                            unwrap_partial_ref(template.data(db, body), "Quote::body");
+                        // Quote bodies always carry braces.
+                        if matches!(template_ref, Expr::Block(_)) {
+                            template_ref.pretty_print(db, body, indent)
+                        } else {
+                            format!("{{ {} }}", template_ref.pretty_print(db, body, indent))
+                        }
+                    }
+                    QuoteBody::Arms(arms) => {
+                        let arms_str = arms
+                            .iter()
+                            .map(|arm| {
+                                let arm_body =
+                                    unwrap_partial_ref(arm.body.data(db, body), "Quote arm body");
+                                let body_str = arm_body.pretty_print(db, body, indent);
+                                match arm.pat.data(db, body) {
+                                    // An arm splice: the hole is the arm's
+                                    // only content.
+                                    Partial::Absent => body_str,
+                                    Partial::Present(pat) => {
+                                        format!("{} => {}", pat.pretty_print(db, body), body_str)
+                                    }
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!("{{ {arms_str} }}")
+                    }
+                };
+                format!("quote{open_str} {body_str}")
+            }
+
+            Expr::QuoteHole(inner) => {
+                let inner_ref = unwrap_partial_ref(inner.data(db, body), "QuoteHole::expr");
+                format!("${{{}}}", inner_ref.pretty_print(db, body, indent))
+            }
+
+            Expr::QuoteFieldHole(base, inner) => {
+                let base_ref = unwrap_partial_ref(base.data(db, body), "QuoteFieldHole::base");
+                let inner_ref = unwrap_partial_ref(inner.data(db, body), "QuoteFieldHole::expr");
+                format!(
+                    "{}.${{{}}}",
+                    base_ref.pretty_print(db, body, indent),
+                    inner_ref.pretty_print(db, body, indent)
+                )
+            }
         }
     }
 }
@@ -1098,6 +1182,8 @@ impl<'db> ItemKind<'db> {
             ItemKind::Impl(i) => i.pretty_print(db),
             ItemKind::Trait(t) => t.pretty_print(db),
             ItemKind::ImplTrait(i) => i.pretty_print(db),
+            ItemKind::DeriveProviderScope(s) => s.pretty_print(db),
+            ItemKind::DeriveDecl(d) => d.pretty_print(db),
             ItemKind::Const(c) => c.pretty_print(db),
             ItemKind::StaticAssert(a) => a.pretty_print(db),
             ItemKind::Use(u) => u.pretty_print(db),
@@ -1616,6 +1702,36 @@ impl<'db> Const<'db> {
         let body = unwrap_partial(self.body(db), "Const::body");
         result.push_str(&body.pretty_print(db));
 
+        result
+    }
+}
+
+impl<'db> DeriveDecl<'db> {
+    pub fn pretty_print(self, db: &'db dyn HirDb) -> String {
+        let mut result = String::new();
+        result.push_str(&self.attributes(db).pretty_print_with_newline(db));
+        result.push_str("derive ");
+        let head = unwrap_partial(self.head_path(db), "DeriveDecl::head_path");
+        result.push_str(&head.pretty_print(db));
+        result.push_str(" for ");
+        let target = unwrap_partial(self.target_path(db), "DeriveDecl::target_path");
+        result.push_str(&target.pretty_print(db));
+        if let Some(provider) = self.selected_provider_path(db) {
+            result.push_str(" using ");
+            let provider = unwrap_partial(provider, "DeriveDecl::selected_provider_path");
+            result.push_str(&provider.pretty_print(db));
+        }
+        result
+    }
+}
+
+impl<'db> DeriveProviderScope<'db> {
+    pub fn pretty_print(self, db: &'db dyn HirDb) -> String {
+        let mut result = String::new();
+        result.push_str(&self.attributes(db).pretty_print_with_newline(db));
+        result.push_str("with ");
+        let provider = unwrap_partial(self.provider_path(db), "DeriveProviderScope::provider_path");
+        result.push_str(&provider.pretty_print(db));
         result
     }
 }

@@ -1,0 +1,17 @@
+---
+source: crates/fe/tests/cli_output.rs
+assertion_line: 1824
+expression: output
+input_file: tests/fixtures/cli_output/single_files/derive_kind_form1_self_as_trait.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/derive_kind_form1_self_as_trait.fe
+
+error[2-0006]: expected type item here
+   ┌─ derive_kind_form1_self_as_trait.fe:20:18
+   │
+20 │ impl Derive_ for Eq {
+   │                  ^^ expected type here, but found trait `Eq`
+
+
+=== EXIT CODE: 1 ===

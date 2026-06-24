@@ -1,0 +1,25 @@
+// K01/K02b/K03 planned-form fixture (architect expression-first directive:
+// "name the ghost"). Constraint-kind CONSTRUCTORS — a param of kind
+// `* -> Constraint` applied in a where-clause as `where P<T>`.
+//
+// This pins the CURRENT behavior of the planned form. Desired near-term posture
+// (architect K01/K02b reframe): existing kind forms keep working; planned forms
+// either parse-and-reject-by-name or fail at parse with a named diagnostic;
+// there is NO silent `Kind::Any` fallthrough and NO ICE. The snapshot is the
+// classification — if it ever shows a clean compile (the constructor silently
+// accepted) or an ICE, the ghost was mishandled.
+
+// 1. Kind bound `* -> Constraint` on a param. K02a landed `* -> Constraint`
+//    parsing + lowering to `Kind::Constraint`, so the bound itself should be
+//    accepted here (this is the "existing form still works" anchor).
+pub fn takes_constraint_ctor<P: * -> Constraint>() {
+}
+
+// 2. APPLY the constraint-kind constructor in a where-clause: `where P<T>`.
+//    This is the K03 frontier (traits as `* -> Constraint`, `where P<T>`),
+//    not yet implemented. The form should be recognized and rejected by name,
+//    not silently accepted nor ICE.
+pub fn require_constraint<P: * -> Constraint, T>()
+where P<T>
+{
+}

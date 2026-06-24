@@ -1,0 +1,96 @@
+// CASCADE scoped override THROUGH A GENERIC HELPER (FCO M3) — a
+// `with (<Speaker as Eq>)` scope selects the hand-written OVERRIDE impl, and the
+// selection PROPAGATES THROUGH A GENERIC HELPER `fn same<T: Eq>(x, y) { x.eq(y) }`
+// whose inner `x.eq(y)` resolves to the OVERRIDE inside the block and the DERIVED
+// DEFAULT outside it.
+//
+// THE DREAM (the M3 increment): cascade_scoped_override.fe proved a DIRECT
+//   receiver call (`a.eq(b)`) observes the scoped override. THIS fixture proves
+//   the same override is observable when the call goes through a GENERIC HELPER
+//   boundary: the scope selection is recorded at the helper CALL SITE
+//   (`same(a, b)`'s `T: Eq` bound, discharged from the in-scope provision) and
+//   carried onto the helper instance's `ImplEnv` per-goal carrier, so the helper
+//   body's inner `x.eq(y)` looks the override up BY GOAL through MIR's C1 rail
+//   instead of re-resolving to the default tier.
+// PASS CRITERIA: with two Speakers that differ structurally (ids 7 vs 8), the
+//   helper call `same(a, b)` returns the DERIVED-DEFAULT result (false — different
+//   ids) OUTSIDE the block, and the OVERRIDE result (true — "everything equal")
+//   INSIDE the `with (<Speaker as Eq>)` block. Same helper, same receiver, scope-
+//   only difference — observable at runtime.
+// DRIVEN-BY: C3b (the scoped-selection surface records the override) + C3c-2/3
+//   (default-tier resolution + coexistence) + C3d (recorded selection) + M3 (the
+//   const_ref `else` branch carries the call-site scoped discharges onto the
+//   helper instance; classify.rs looks them up BY GOAL).
+//
+// PROVISIONAL-SURFACE: `with (<Speaker as Eq>) { .. }` is the PROVISIONAL cascade
+// selection syntax (see cascade_scoped_override.fe) — a `with`-binding whose value
+// path is the qualified-type form `<T as Trait>`. The keyword/grammar is a
+// placeholder; the SEMANTICS (inner scope selects the impl, even across a generic
+// helper) are the spec.
+
+use core::ops::Eq
+
+// DERIVED DEFAULT: structural equality (id-by-id), the CoreDerives `StableEq`
+// provider output. Default-marked (CoreDerives-origin). An unscoped helper call
+// uses it.
+#[derive(Eq)]
+struct Speaker {
+    id: u256,
+}
+
+// HAND-WRITTEN OVERRIDE: "everything equal" — a deliberately distinct answer from
+// the structural default. Selectable only via `with (<Speaker as Eq>) { .. }`; it
+// must NOT be picked outside such a scope, NOR leak across the helper boundary
+// when the helper is called outside the scope.
+impl Eq for Speaker {
+    fn eq(self, _ other: Speaker) -> bool {
+        true
+    }
+}
+
+// GENERIC HELPER: the `T: Eq` bound's `x.eq(y)` is a NON-trait-callee call from
+// the helper's perspective (`same` is a plain `fn`), so without M3 the inner call
+// would re-resolve to the default tier regardless of the caller's scope. M3
+// carries the caller's scoped selection onto this helper's instance so the inner
+// call resolves through it.
+fn same<T: Eq>(_ x: T, _ y: T) -> bool {
+    x.eq(y)
+}
+
+#[test]
+fn scoped_override_propagates_through_generic_helper() {
+    // Two Speakers that differ STRUCTURALLY (ids 7 vs 8): the derived default says
+    // NOT equal; the override says equal. The two answers are distinguishable, so
+    // which impl runs inside the helper is observable at runtime.
+    let a = Speaker { id: 7 }
+    let b = Speaker { id: 8 }
+
+    // OUTSIDE any selecting scope: the helper's inner `x.eq(y)` uses the derived
+    // (default-tier) structural impl — different ids are NOT equal.
+    assert!(!same(a, b))
+
+    // INSIDE `with (<Speaker as Eq>)`: the hand-written override is selected for
+    // (Eq, Speaker) at the `same(a, b)` CALL SITE, and M3 carries it through the
+    // helper boundary, so the SAME helper call returns the override result (true).
+    let inside: bool = with (<Speaker as Eq>) {
+        same(a, b)
+    }
+    assert!(inside)
+
+    // AFTER the block closes, the selection is popped — back to the derived
+    // default: NOT equal again. Same helper call, scope-only difference.
+    assert!(!same(a, b))
+}
+
+#[test]
+fn structural_default_helper_still_holds_unscoped() {
+    // Belt-and-suspenders: the derived default through the helper still agrees
+    // with structural equality when ids match, unscoped.
+    let c = Speaker { id: 5 }
+    let d = Speaker { id: 5 }
+    assert!(same(c, d))
+
+    let e = Speaker { id: 5 }
+    let f = Speaker { id: 6 }
+    assert!(!same(e, f))
+}

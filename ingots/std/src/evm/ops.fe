@@ -3,6 +3,8 @@
 /// Most functions in this module are internal to `std`; higher-level access is
 /// provided via `std::evm::effects`. Public functions expose pure raw EVM
 /// operations for low-level code that needs an exact opcode shape.
+use core::contracts::StorageIntrinsic
+
 extern {
     // -------------------------------------------------------------------------
     // Memory
@@ -15,8 +17,16 @@ extern {
     // -------------------------------------------------------------------------
     // Storage
     // -------------------------------------------------------------------------
-    pub(ingot) fn sload(_: u256) -> u256
-    pub(ingot) fn sstore(slot: u256, value: u256)
+    //
+    // FCO effects-as-capabilities #2 (#93): the storage intrinsics are gated on
+    // the target's intrinsic capability via the TRAIT-keyed obligation
+    // `uses (_t: StorageIntrinsic)`. On an EVM build this resolves against the
+    // root-seeded `Evm` effect (`impl StorageIntrinsic for Evm`), byte-identical;
+    // a future non-EVM target whose root effect lacks the capability would reject
+    // the op. Scoped to `sload`/`sstore` for this slice; rolling the same gate
+    // out to the rest of the EVM `extern` ops is a mechanical follow-up.
+    pub(ingot) fn sload(_: u256) -> u256 uses (_t: StorageIntrinsic)
+    pub(ingot) fn sstore(slot: u256, value: u256) uses (_t: StorageIntrinsic)
 
     // -------------------------------------------------------------------------
     // Calldata / returndata

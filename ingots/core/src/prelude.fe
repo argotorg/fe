@@ -10,5 +10,6 @@ pub use super::{
     num::UnsignedAbs,
     option::Option::{self, *},
     result::Result::{self, *},
+    derive::impl_permit,
     todo, panic,
 }

@@ -19,19 +19,23 @@ use super::{
         alpha_rename_hidden_layout_placeholders, callable_input_layout_bindings_by_origin,
     },
     normalize::normalize_ty,
+    term::{TermId, lower_hir_to_term, normalize_term, rebase_term_with},
     trait_def::TraitInstId,
     trait_resolution::{
-        GoalSatisfiability, PredicateListId, TraitSolveCx,
-        constraint::collect_func_def_constraints, is_goal_satisfiable,
+        GoalSatisfiability, PredicateListId, ProvisionEnv,
+        constraint::{collect_func_decl_constraints, collect_func_def_constraints},
+        is_goal_satisfiable,
     },
     ty_check::{ConstRef, check_anon_const_body},
     ty_def::{InvalidCause, TyData, TyId},
     unify::UnificationTable,
 };
 use crate::analysis::{HirAnalysisDb, semantic::instantiate_with_generic_args};
-use crate::hir_def::{CallableDef, Expr, Partial, PathKind, scope_graph::ScopeId};
+use crate::hir_def::{
+    CallableDef, Expr, Func, ItemKind, Partial, PathKind, WhereClauseOwner, scope_graph::ScopeId,
+};
 use common::indexmap::IndexMap;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 type ParamSubstMap<'db> = FxHashMap<(ScopeId<'db>, usize), TyId<'db>>;
 
@@ -89,6 +93,7 @@ pub(super) fn compare_impl_method<'db>(
     }
 
     compare_constraints(db, impl_m, trait_m, trait_inst, &param_subst, sink);
+    compare_const_predicates(db, impl_m, trait_m, &param_subst, sink);
 }
 
 /// Checks if the number of generic parameters of the implemented method is the
@@ -998,7 +1003,7 @@ fn compare_constraints<'db>(
     for &goal in impl_m_constraints.list(db) {
         match is_goal_satisfiable(
             db,
-            TraitSolveCx::new(db, trait_m.scope()).with_assumptions(trait_m_constraints),
+            ProvisionEnv::for_scope(trait_m.scope(), trait_m_constraints).solve_cx(db),
             goal,
         ) {
             GoalSatisfiability::Satisfied(_) | GoalSatisfiability::ContainsInvalid => {}
@@ -1021,4 +1026,100 @@ fn compare_constraints<'db>(
         );
         false
     }
+}
+
+/// Checks that an impl method's `where`-clause *const* predicates match the
+/// trait method's exactly.
+///
+/// Unlike trait bounds (compared by satisfiability — an impl may not be
+/// *stricter*), const predicates are first-class obligations matched by **exact
+/// term identity** after normalization: no logical implication, no relation
+/// rewriting (`N >= 50` and `50 <= N` are different terms by design), no
+/// strengthening or weakening. This mirrors the obligation discharge path,
+/// where a caller's assumption discharges a callee predicate only by identity
+/// (see `ty_check::discharge_const_predicate_by_assumption`): if the impl could
+/// silently substitute a different predicate, a trait-routed call would
+/// discharge against the trait's predicate while the impl body relied on its
+/// own, breaking the guarantee. Requiring exact equality keeps the impl body's
+/// assumptions and the trait's published obligations the same term.
+///
+/// Predicates outside the term fragment are skipped here (they cannot be
+/// compared by identity); their own formation diagnostics report them.
+///
+/// Returns `false` if the sets differ (and records a diagnostic).
+fn compare_const_predicates<'db>(
+    db: &'db dyn HirAnalysisDb,
+    impl_m: CallableDef<'db>,
+    trait_m: CallableDef<'db>,
+    param_subst: &ParamSubstMap<'db>,
+    sink: &mut Vec<TyDiagCollection<'db>>,
+) -> bool {
+    let (CallableDef::Func(impl_func), CallableDef::Func(trait_func)) = (impl_m, trait_m) else {
+        // Only `fn` items carry `where`-clause const predicates.
+        return true;
+    };
+
+    // The impl method's predicates already live over the impl method's frame.
+    let impl_terms: FxHashSet<TermId<'db>> = func_const_predicate_terms(db, impl_func)
+        .into_iter()
+        .map(|term| normalize_term(db, term))
+        .collect();
+
+    // The trait method's predicates live over the *trait* method's frame; rebase
+    // them into the impl frame with the same trait→impl param substitution used
+    // for the trait-bound comparison, then normalize, so identity comparison is
+    // frame-aligned.
+    let rebase = |param_ty: TyId<'db>| match param_owner_and_idx(db, param_ty) {
+        Some(key) => param_subst.get(&key).copied().unwrap_or(param_ty),
+        None => param_ty,
+    };
+    let trait_terms: FxHashSet<TermId<'db>> = func_const_predicate_terms(db, trait_func)
+        .into_iter()
+        .map(|term| normalize_term(db, rebase_term_with(db, term, &rebase)))
+        .collect();
+
+    if impl_terms == trait_terms {
+        true
+    } else {
+        sink.push(ImplDiag::MethodConstPredicateMismatch { impl_m, trait_m }.into());
+        false
+    }
+}
+
+/// Lowers a function's `where`-clause const predicates to (unnormalized) terms,
+/// over the function's own parameter frame. Predicates outside the term
+/// fragment are skipped (their formation is diagnosed elsewhere).
+fn func_const_predicate_terms<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: Func<'db>,
+) -> Vec<TermId<'db>> {
+    let assumptions = func_predicate_assumptions(db, func);
+    WhereClauseOwner::Func(func)
+        .where_clause(db)
+        .const_predicates(db)
+        .iter()
+        .filter_map(|&body| lower_hir_to_term(db, body, body.expr(db), assumptions).ok())
+        .collect()
+}
+
+/// The in-scope assumptions a function's `where`-clause const predicate is
+/// resolved under, mirroring the type checker's body environment
+/// (`ty_check::env`): the function's declared constraints, the implicit
+/// `Self: Trait` bound a *trait* method carries (so `Self::SIZE` resolves to an
+/// associated const), and all super-trait bounds. Without this a trait method's
+/// `Self::`-projected predicate would fail to resolve and silently drop out of
+/// the conformance comparison.
+fn func_predicate_assumptions<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: Func<'db>,
+) -> PredicateListId<'db> {
+    let mut preds =
+        collect_func_decl_constraints(db, CallableDef::Func(func), true).instantiate_identity();
+    if let Some(ItemKind::Trait(trait_)) = func.scope().parent_item(db) {
+        let self_pred = TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
+        let mut merged = preds.list(db).to_vec();
+        merged.push(self_pred);
+        preds = PredicateListId::new(db, merged);
+    }
+    preds.extend_all_bounds(db)
 }

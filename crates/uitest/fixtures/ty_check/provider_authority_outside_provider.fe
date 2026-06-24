@@ -1,0 +1,37 @@
+// BR2 guard (TGT-PROVIDER-AUTHORITY-STRINGKEY) — the #1 fossilization risk.
+//
+// A derive provider's `derive` fn gets three special powers, all keyed on the
+// `Derive` marker (`impl Name: Derive for Trait`, recognized at lowering in
+// provider.rs:97):
+//   1. its body is EXEMPT from ordinary type/borrow checking (is_derive_provider_fn,
+//      filtered at analysis/ty/mod.rs:389,718-721 and semantic/borrowck/check.rs:185);
+//   2. its `uses (..)` capability params are recognized by type-path head-ident —
+//      `Reflect`  -> reflection handle, `ImplBuilder` -> builder (provider.rs:171-172);
+//   3. `quote { .. }` is a legal template expression.
+//
+// This fixture pins that NONE of that authority leaks to a function that is NOT a
+// derive provider: the SAME signature shape in a PLAIN impl (no `: Derive`) gets
+// ordinary checking. So `Reflect` / `ImplBuilder` / `Evidence` are just undefined
+// types (name resolution), and `quote { .. }` is rejected (8-0084). If a future
+// change ever lets the string-keyed authority or the body exemption fire without
+// the marker, these errors disappear and this snapshot fails — surfacing the
+// escape. (This is the interim guard the bridge inventory flagged as MISSING:
+// docs/dev/FCO_BRIDGE_AND_REIFICATION_TARGETS.md, finding #8/#11.)
+
+struct NotProvider {}
+
+impl NotProvider {
+    // Shaped exactly like a real provider `derive` fn, but the enclosing impl is
+    // `impl NotProvider`, NOT `impl NotProvider: Derive for SomeTrait`.
+    const fn fake_derive<T>(ev: own Evidence<T>) -> Evidence<T>
+        uses (
+            reflect: Reflect<T>,
+            builder: mut ImplBuilder<T>,
+        )
+    {
+        let mut sig = builder.method("dup")
+        builder.emit_method(sig, quote { true })
+        builder.finish()
+        ev
+    }
+}

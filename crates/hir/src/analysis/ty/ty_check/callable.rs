@@ -31,6 +31,7 @@ use crate::analysis::{
 use crate::core::semantic::{ProviderBinding, ProviderSource};
 use crate::hir_def::Body;
 use crate::hir_def::CallableDef;
+use crate::hir_def::WhereClauseOwner;
 use crate::hir_def::params::FuncParamMode;
 
 pub(super) enum CallGenericArgUnifyError {
@@ -782,6 +783,7 @@ impl<'db> Callable<'db> {
                 continue;
             }
 
+            let scoped_provisions = tc.env.snapshot_evidence_provisions();
             tc.env
                 .register_trait_obligation(super::env::TraitObligation {
                     goal: constraint,
@@ -791,7 +793,31 @@ impl<'db> Callable<'db> {
                         constraint_idx,
                     },
                     span: span.clone(),
+                    scoped_provisions,
                 });
+        }
+
+        // Const predicates on the callee's `where` clause become first-class
+        // obligations on the same deferred queue, discharged by CTFE at the
+        // obligation level under this call's type substitution (never inside
+        // the trait solver).
+        if let CallableDef::Func(func) = self.callable_def {
+            let predicates = WhereClauseOwner::from(func)
+                .where_clause(db)
+                .const_predicates(db);
+            for (predicate_idx, &predicate) in predicates.iter().enumerate() {
+                tc.env
+                    .register_const_predicate_obligation(super::env::ConstPredicateObligation {
+                        predicate,
+                        generic_args: self.generic_args.clone(),
+                        origin: super::env::ConstPredicateObligationOrigin::CallConstraint {
+                            call_expr,
+                            callable_def: self.callable_def,
+                            predicate_idx,
+                        },
+                        span: span.clone(),
+                    });
+            }
         }
     }
 }

@@ -1,0 +1,133 @@
+// H10a — first ABI/static-layout reification slice (expression-first directive).
+//
+// A derive provider that computes EVM ABI layout facts for a struct by folding
+// per-field facts: HEAD_WORDS (number of 32-byte head words) as a SUM, IS_DYNAMIC
+// as an OR. The sum is the point: the provider command language previously had no
+// arithmetic (no integer Value, no Add) — this slice adds the minimal `builder.add`
+// (and `builder.or`) fold primitives the fixture needs, answering the H10 map's
+// "does std need more engine?" pressure-test with the smallest possible yes.
+//
+// MULTI-BACKEND NOTE: head/tail word layout is EVM-specific, so `AbiShape` here is
+// an EVM layout trait, NOT a universal one (wasm/spirv have their own layouts). The
+// `add`/`or` fold primitives, by contrast, are backend-agnostic infrastructure any
+// layout provider can use. Fixture-local pressure test; NOT canonicalized into
+// core_derives (the real core ABI traits live in core::abi).
+
+use core::derive::Derive
+use core::derive::Evidence
+use core::derive::ImplBuilder
+use core::derive::Reflect
+
+trait AbiShape {
+    const HEAD_WORDS: u256
+    const IS_DYNAMIC: bool
+}
+
+// Leaf facts: a u256 / bool each occupy exactly one static head word.
+impl AbiShape for u256 {
+    const HEAD_WORDS: u256 = 1
+    const IS_DYNAMIC: bool = false
+}
+
+impl AbiShape for bool {
+    const HEAD_WORDS: u256 = 1
+    const IS_DYNAMIC: bool = false
+}
+
+impl Derive<AbiShape> for StableAbiShape {
+    const fn derive<T>(ev: own Evidence<AbiShape<T>>) -> Evidence<AbiShape<T>>
+        uses (
+            reflect: Reflect<T>,
+            builder: mut ImplBuilder<AbiShape<T>>,
+        )
+    {
+        if reflect.is_struct() {
+            // HEAD_WORDS = <F0 as AbiShape>::HEAD_WORDS + <F1>::HEAD_WORDS + ..
+            //   seeded with the first field's const so no integer literal is
+            //   needed; each later field folds in with `builder.add`.
+            // IS_DYNAMIC = false || <F0>::IS_DYNAMIC || .. (the leading `false`
+            //   seed is folded away by MIR, like StableEq's `true &&`).
+            let mut head = builder.bool(false)
+            let mut dynamic = builder.bool(false)
+            let mut first = true
+            for field in reflect.fields() {
+                builder.require<AbiShape>(field.ty())
+                let field_words = builder.trait_const(field.ty(), "HEAD_WORDS")
+                let field_dyn = builder.trait_const(field.ty(), "IS_DYNAMIC")
+                if first {
+                    head = field_words
+                    first = false
+                } else {
+                    head = builder.add(head, field_words)
+                }
+                dynamic = builder.or(dynamic, field_dyn)
+            }
+            builder.emit_const("HEAD_WORDS", builder.ty<u256>(), head)
+            builder.emit_const("IS_DYNAMIC", builder.ty<bool>(), dynamic)
+        }
+        builder.finish()
+        ev
+    }
+}
+
+struct Point2 {
+    x: u256,
+    y: u256,
+}
+
+derive AbiShape for Point2 using StableAbiShape
+
+struct Triple {
+    a: u256,
+    b: bool,
+    c: u256,
+}
+
+derive AbiShape for Triple using StableAbiShape
+
+#[test]
+fn abi_head_words_two_fields() {
+    // 1 + 1 = 2 — the provider summed two field head-word counts.
+    assert!(Point2::HEAD_WORDS == 2)
+    assert!(!Point2::IS_DYNAMIC)
+}
+
+#[test]
+fn abi_head_words_three_fields() {
+    // 1 + 1 + 1 = 3.
+    assert!(Triple::HEAD_WORDS == 3)
+    assert!(!Triple::IS_DYNAMIC)
+}
+
+// The derived layout const is usable like a hand-written assoc const: it composes
+// into a generic that reads it (the fact carries through normal resolution). T is
+// inferred from the value argument (no turbofish needed).
+fn head_words_of<T: AbiShape>(_ value: T) -> u256 {
+    T::HEAD_WORDS
+}
+
+#[test]
+fn derived_abi_fact_satisfies_generic_bound() {
+    assert!(head_words_of(Point2 { x: 0, y: 0 }) == 2)
+    assert!(head_words_of(Triple { a: 0, b: false, c: 0 }) == 3)
+}
+
+// Composition: a struct whose field is ITSELF a derived-AbiShape struct. Outer's
+// HEAD_WORDS folds <Point2 as AbiShape>::HEAD_WORDS (the GENERATED impl's const,
+// = 2) with <bool as AbiShape>::HEAD_WORDS (= 1) -> 3. This is the real test that
+// derived layout facts re-enter normal resolution and compose — a generated impl's
+// evidence consumed by another generated impl.
+struct Outer {
+    inner: Point2,
+    flag: bool,
+}
+
+derive AbiShape for Outer using StableAbiShape
+
+#[test]
+fn abi_head_words_nested_composition() {
+    assert!(Outer::HEAD_WORDS == 3)
+    assert!(!Outer::IS_DYNAMIC)
+}
+
+struct StableAbiShape {}

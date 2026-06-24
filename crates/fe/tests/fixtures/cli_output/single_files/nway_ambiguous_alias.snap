@@ -1,0 +1,24 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/nway_ambiguous_alias.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/nway_ambiguous_alias.fe
+
+error[8-0087]: `Dup` is an ambiguous impl alias
+   ┌─ nway_ambiguous_alias.fe:36:24
+   │
+21 │ impl Hello for User as Dup {
+   │                        --- also names this impl: `User: Hello`
+   ·
+27 │ impl Bye for User as Dup {
+   │                      --- also names this impl: `User: Bye`
+   ·
+36 │     let g: u32 = with (Dup) {
+   │                        ^^^ `Dup` names more than one impl: `User: Bye` and `User: Hello`
+   │
+   = give the two impls distinct `as Name` aliases so each can be selected unambiguously
+
+
+=== EXIT CODE: 1 ===

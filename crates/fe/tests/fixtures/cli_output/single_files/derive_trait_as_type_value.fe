@@ -1,0 +1,13 @@
+// FCO Stage 1 NEGATIVE frontier guard — trait used as a type value in ORDINARY
+// (non-provider) code.
+//
+// Pins the `2-0006` "found trait, expected type" boundary at `ty_lower.rs:141`
+// (`InvalidCause::NotAType`): a bare trait name (`Eq`) in type position is
+// rejected. This is the K03-value frontier that Stage 1 deliberately leaves in
+// place for ordinary positions — only the special-cased provider goal carrier
+// admits a constraint there. This guard locks the ordinary-position boundary so
+// the carrier-scoped K04b re-kinding cannot leak into ordinary `ty_lower`.
+
+use core::ops::Eq
+
+struct Holder { x: Eq }
