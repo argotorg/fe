@@ -3685,6 +3685,22 @@ impl<'db> WherePredicateView<'db> {
         &self.clause.id.data(db)[self.idx]
     }
 
+    /// True when this predicate carries no bounds at all: the boundless
+    /// constraint-application form (`where Eq<T>`), distinct from a `Type: Bound`
+    /// predicate and from a kind-bound predicate (`P: * -> Constraint`).
+    pub fn is_boundless(self, db: &'db dyn HirDb) -> bool {
+        self.hir_pred(db).bounds.is_empty()
+    }
+
+    /// The raw HIR subject type written for this predicate, if present. For a
+    /// constraint application this is the whole applied trait path (`Eq<T>`).
+    pub fn subject_hir_ty(
+        self,
+        db: &'db dyn HirDb,
+    ) -> Option<crate::core::hir_def::types::TypeId<'db>> {
+        self.hir_pred(db).ty.to_opt()
+    }
+
     fn owner_item(self) -> ItemKind<'db> {
         ItemKind::from(self.clause.owner)
     }

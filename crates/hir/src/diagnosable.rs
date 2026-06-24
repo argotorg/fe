@@ -150,6 +150,13 @@ impl<'db> WherePredicateView<'db> {
     /// - Per-bound trait diagnostics
     /// - Per-bound kind consistency
     pub fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        // A boundless predicate is the constraint-application form (`where
+        // Eq<T>`): the whole written type is the predicate, not a subject with
+        // trait bounds, so it has its own diagnostics path.
+        if self.is_boundless(db) {
+            return self.constraint_application_diags(db);
+        }
+
         let Some(subject) = self.subject_ty(db) else {
             return Vec::new();
         };
@@ -159,6 +166,54 @@ impl<'db> WherePredicateView<'db> {
         }
 
         self.bound_diags(db, subject)
+    }
+
+    /// Diagnostics for a boundless constraint-application predicate (`where
+    /// Eq<T>`). A concrete trait head is collected as an obligation and enforced
+    /// at use sites, so it needs no declaration-side diagnostic. A head that is
+    /// not a trait (most importantly an abstract `* -> Constraint` parameter
+    /// `where P<T>`, which is intentionally not yet supported) is rejected BY
+    /// NAME here rather than silently dropped.
+    fn constraint_application_diags(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<TyDiagCollection<'db>> {
+        use crate::analysis::name_resolution::diagnostics::PathResDiag;
+        use crate::analysis::name_resolution::{ExpectedPathKind, PathRes, resolve_path};
+        use crate::core::hir_def::types::TypeKind as HirTyKind;
+
+        let Some(hir_ty) = self.subject_hir_ty(db) else {
+            return Vec::new();
+        };
+        let HirTyKind::Path(path) = hir_ty.data(db) else {
+            return Vec::new();
+        };
+        let Some(path) = path.to_opt() else {
+            return Vec::new();
+        };
+
+        let owner_item = ItemKind::from(self.clause.owner);
+        let scope = owner_item.scope();
+        let assumptions = header_constraints_for(db, owner_item);
+        let head = path.strip_generic_args(db);
+        let ty_path_span = self.span().ty().into_path_type().path();
+
+        match resolve_path(db, head, scope, assumptions, false) {
+            // Concrete trait application: collected + enforced at use sites.
+            Ok(PathRes::Trait(_)) => Vec::new(),
+            // Non-trait head (incl. an abstract `* -> Constraint` parameter).
+            Ok(res) => match path.ident(db).to_opt() {
+                Some(ident) => {
+                    vec![PathResDiag::ExpectedTrait(ty_path_span.into(), ident, res.kind_name())
+                        .into()]
+                }
+                None => Vec::new(),
+            },
+            Err(err) => err
+                .into_diag(db, head, ty_path_span, ExpectedPathKind::Trait)
+                .map(|d| vec![d.into()])
+                .unwrap_or_default(),
+        }
     }
 
     /// Diagnostic for this predicate's subject type, if any:

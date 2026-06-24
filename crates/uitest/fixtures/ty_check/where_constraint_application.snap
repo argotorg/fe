@@ -1,0 +1,11 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/where_constraint_application.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ where_constraint_application.fe:34:5
+   │
+34 │     needs_equal(No {})
+   │     ^^^^^^^^^^^ `No` doesn't implement `Equal<No>`

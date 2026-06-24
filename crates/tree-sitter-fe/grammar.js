@@ -557,10 +557,15 @@ module.exports = grammar({
       optional(','),
     )),
 
+    // A type-bound predicate (`T: Bounds`) or the boundless constraint-
+    // application form (`where Eq<T>`), where the applied trait path alone is
+    // the predicate and the `: bounds` are absent.
     where_predicate: $ => seq(
       $._type,
-      ':',
-      $.type_bound_list,
+      optional(seq(
+        ':',
+        $.type_bound_list,
+      )),
     ),
 
     // ==================== TYPES ====================
