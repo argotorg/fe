@@ -8,4 +8,4 @@ error[6-0003]: trait bound is not satisfied
   ┌─ nested_storage_map_contract_field.fe:4:17
   │
 4 │     mut nested: StorageMap<u256, StorageMap<u256, u256>>,
-  │                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `StorageMap<u256, u256, _>` doesn't implement `WordRepr`
+  │                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `StorageMap<u256, u256, _>` doesn't implement `StorageMapValue`

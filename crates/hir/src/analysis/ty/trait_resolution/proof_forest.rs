@@ -3,26 +3,29 @@
 
 use std::collections::BinaryHeap;
 
-use common::indexmap::IndexSet;
+use common::indexmap::{IndexMap, IndexSet};
 use cranelift_entity::{PrimaryMap, entity_impl};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{
-    CanonicalGoalQuery, GoalSatisfiability, TraitGoalSolution, TraitSolveCx, TraitSolverQuery,
-    normalize_trait_inst_preserving_validity,
+    CanonicalGoalQuery, GoalSatisfiability, PredicateListId, TraitGoalSolution, TraitSolveCx,
+    TraitSolverQuery, normalize_trait_inst_preserving_validity,
 };
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
+        adt_def::AdtRef,
         binder::Binder,
         canonical::Canonical,
+        corelib::{resolve_lib_trait_path, resolve_lib_type_path},
         fold::TyFoldable,
-        trait_def::{ImplementorId, TraitInstId, impls_for_trait_in_ingots},
-        ty_def::{TyData, TyId},
+        trait_def::{ImplementorId, ImplementorOrigin, TraitInstId, impls_for_trait_in_ingots},
+        ty_def::{TyBase, TyData, TyId, instantiate_adt_field_ty},
         unify::PersistentUnificationTable,
         visitor::{TyVisitable, TyVisitor},
     },
 };
+use crate::hir_def::{HirIngot, Trait, scope_graph::ScopeId};
 const MAXIMUM_SOLUTION_NUM: usize = 2;
 /// The maximum depth of any type that the solver will consider.
 ///
@@ -266,7 +269,7 @@ struct GeneratorNodeData<'db> {
     ///  A list of consumer nodes that depend on this generator node.
     dependents: Vec<ConsumerNode>,
     ///  A list of candidate implementors for the trait.
-    cands: &'db [Binder<ImplementorId<'db>>],
+    cands: Vec<Binder<ImplementorId<'db>>>,
     /// The index of the next candidate to be tried.
     next_cand: usize,
     /// A list of child consumer nodes created for sub-goals.
@@ -286,8 +289,12 @@ impl<'db> GeneratorNodeData<'db> {
             origin_ingot,
             extracted_goal,
         );
-        let cands =
-            impls_for_trait_in_ingots(db, primary, secondary, Canonical::new(db, extracted_goal));
+        let mut cands =
+            impls_for_trait_in_ingots(db, primary, secondary, Canonical::new(db, extracted_goal))
+                .to_vec();
+        if let Some(impl_) = storage_map_value_virtual_impl(db, origin_ingot, extracted_goal) {
+            cands.push(Binder::bind(impl_));
+        }
 
         Self {
             table,
@@ -295,11 +302,157 @@ impl<'db> GeneratorNodeData<'db> {
             extracted_query,
             solutions: IndexSet::default(),
             dependents: Vec::new(),
-            cands: cands.as_slice(),
+            cands,
             next_cand: 0,
             children: Vec::new(),
         }
     }
+}
+
+fn storage_map_value_virtual_impl<'db>(
+    db: &'db dyn HirAnalysisDb,
+    origin_ingot: crate::Ingot<'db>,
+    goal: TraitInstId<'db>,
+) -> Option<ImplementorId<'db>> {
+    let scope = origin_ingot.root_mod(db).scope();
+    let storage_map_value_trait =
+        resolve_lib_trait_path(db, scope, "std::evm::storage_map::StorageMapValue")
+            .or_else(|| resolve_lib_trait_path(db, scope, "std::evm::StorageMapValue"))?;
+    if goal.def(db) != storage_map_value_trait {
+        return None;
+    }
+
+    let self_ty = goal.self_ty(db);
+    let constraints = storage_map_value_constraints(db, scope, storage_map_value_trait, self_ty)?;
+
+    Some(ImplementorId::new(
+        db,
+        goal,
+        Vec::new(),
+        IndexMap::new(),
+        ImplementorOrigin::VirtualStorageMapValue(constraints),
+    ))
+}
+
+fn storage_map_value_constraints<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    storage_map_value_trait: Trait<'db>,
+    ty: TyId<'db>,
+) -> Option<PredicateListId<'db>> {
+    let storage_map_ty = resolve_lib_type_path(db, scope, "std::evm::storage_map::StorageMap")
+        .or_else(|| resolve_lib_type_path(db, scope, "std::evm::StorageMap"))?;
+    let TyData::TyBase(TyBase::Adt(storage_map_adt)) = storage_map_ty.base_ty(db).data(db) else {
+        return None;
+    };
+
+    let mut predicates = Vec::new();
+    storage_map_value_predicates_for_ty(
+        db,
+        storage_map_value_trait,
+        *storage_map_adt,
+        ty,
+        &mut predicates,
+    )?;
+    Some(PredicateListId::new(db, predicates))
+}
+
+fn storage_map_value_predicates_for_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    storage_map_value_trait: Trait<'db>,
+    storage_map_adt: crate::analysis::ty::adt_def::AdtDef<'db>,
+    ty: TyId<'db>,
+    predicates: &mut Vec<TraitInstId<'db>>,
+) -> Option<()> {
+    if ty.has_invalid(db) {
+        return Some(());
+    }
+
+    if let Some((_, inner)) = ty.as_capability(db) {
+        return storage_map_value_predicates_for_ty(
+            db,
+            storage_map_value_trait,
+            storage_map_adt,
+            inner,
+            predicates,
+        );
+    }
+
+    if let TyData::ConstTy(const_ty) = ty.data(db) {
+        return storage_map_value_predicates_for_ty(
+            db,
+            storage_map_value_trait,
+            storage_map_adt,
+            const_ty.ty(db),
+            predicates,
+        );
+    }
+
+    let base = ty.base_ty(db);
+    match base.data(db) {
+        TyData::TyVar(_) | TyData::TyParam(_) | TyData::AssocTy(_) | TyData::QualifiedTy(_) => {
+            return None;
+        }
+        TyData::TyBase(TyBase::Adt(adt)) if *adt == storage_map_adt => return None,
+        _ => {}
+    }
+
+    if ty.is_tuple(db) {
+        let (_, elems) = ty.decompose_ty_app(db);
+        predicates.extend(
+            elems
+                .iter()
+                .map(|&elem| storage_map_value_predicate(db, storage_map_value_trait, elem)),
+        );
+        return Some(());
+    }
+
+    if ty.is_array(db) {
+        let (_, args) = ty.decompose_ty_app(db);
+        if let Some(&elem) = args.first() {
+            predicates.push(storage_map_value_predicate(
+                db,
+                storage_map_value_trait,
+                elem,
+            ));
+        }
+        return Some(());
+    }
+
+    let Some(adt_def) = ty.adt_def(db) else {
+        return Some(());
+    };
+
+    match adt_def.adt_ref(db) {
+        AdtRef::Struct(_) | AdtRef::Enum(_) => {
+            for (variant_idx, fields) in adt_def.fields(db).iter().enumerate() {
+                for field_idx in 0..fields.num_types() {
+                    let field_ty = instantiate_adt_field_ty(
+                        db,
+                        adt_def,
+                        variant_idx,
+                        field_idx,
+                        ty.generic_args(db),
+                    );
+                    predicates.push(storage_map_value_predicate(
+                        db,
+                        storage_map_value_trait,
+                        field_ty,
+                    ));
+                }
+            }
+        }
+    }
+
+    Some(())
+}
+
+fn storage_map_value_predicate<'db>(
+    db: &'db dyn HirAnalysisDb,
+    storage_map_value_trait: Trait<'db>,
+    ty: TyId<'db>,
+) -> TraitInstId<'db> {
+    TraitInstId::new(db, storage_map_value_trait, vec![ty], IndexMap::new())
 }
 
 impl GeneratorNode {
