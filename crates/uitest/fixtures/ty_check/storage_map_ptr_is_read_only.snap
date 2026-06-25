@@ -1,0 +1,11 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/storage_map_ptr_is_read_only.fe
+---
+error[2-0010]: no method named `write` found for struct `StoragePtr`
+   ┌─ storage_map_ptr_is_read_only.fe:12:17
+   │
+12 │             ptr.write(2)
+   │                 ^^^^^ method not found in `StoragePtr`
