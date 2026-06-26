@@ -116,12 +116,7 @@ fn semantic_callee_key_with_assumptions<'db>(
     );
 
     let impl_env = if let Some(witness) = resolved_trait_witness {
-        ImplEnv::new(
-            db,
-            owner.scope(),
-            PredicateListId::empty_list(db),
-            vec![witness],
-        )
+        ImplEnv::for_resolved_trait_method(db, owner, witness)
     } else {
         let mut witnesses: IndexSet<_> = impl_env.witnesses(db).iter().copied().collect();
         if let Some(witness) = callable.trait_inst() {

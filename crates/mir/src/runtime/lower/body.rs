@@ -4957,17 +4957,18 @@ impl<'db> RmirEmitter<'db> {
         if target.aggregate_layout().is_none() {
             return fallback;
         }
+        // Recover the underlying aggregate value type by peeling any
+        // view/borrow wrappers off the declared type.
         let mut ty = fallback;
-        while let Some(inner) = ty.as_view(self.db) {
-            ty = inner;
-        }
-        if let Some((_, inner)) = ty.as_borrow(self.db) {
-            ty = inner;
-            while let Some(inner) = ty.as_view(self.db) {
+        loop {
+            if let Some(inner) = ty.as_view(self.db) {
                 ty = inner;
+            } else if let Some((_, inner)) = ty.as_borrow(self.db) {
+                ty = inner;
+            } else {
+                return ty;
             }
         }
-        ty
     }
 
     fn should_preserve_const_source_class(

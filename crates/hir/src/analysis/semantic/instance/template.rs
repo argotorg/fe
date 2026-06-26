@@ -80,6 +80,23 @@ impl<'db> ImplEnv<'db> {
             Vec::new(),
         )
     }
+
+    /// Canonical environment for a trait method that has been resolved to a
+    /// concrete impl body: the impl body's own scope, no caller assumptions,
+    /// and just the single resolving witness. Keeping this independent of the
+    /// caller lets identical resolved instances deduplicate.
+    pub fn for_resolved_trait_method(
+        db: &'db dyn HirAnalysisDb,
+        owner: BodyOwner<'db>,
+        witness: TraitInstId<'db>,
+    ) -> Self {
+        Self::new(
+            db,
+            owner.scope(),
+            PredicateListId::empty_list(db),
+            vec![witness],
+        )
+    }
 }
 
 #[salsa::interned]
