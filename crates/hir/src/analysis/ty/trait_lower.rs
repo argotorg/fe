@@ -3,7 +3,9 @@
 use crate::{
     core::hir_def::{
         AssocTypeGenericArg, ConstGenericArgValue, HirIngot, IdentId, ImplTrait, ItemKind, Partial,
-        PathId, Trait, TraitRefId, params::GenericArg, scope_graph::ScopeId,
+        PathId, Trait, TraitRefId,
+        params::GenericArg,
+        scope_graph::ScopeId,
         types::{TypeId as HirTypeId, TypeKind},
     },
     hir_def::Func,

@@ -204,8 +204,10 @@ impl<'db> WherePredicateView<'db> {
             // Non-trait head (incl. an abstract `* -> Constraint` parameter).
             Ok(res) => match path.ident(db).to_opt() {
                 Some(ident) => {
-                    vec![PathResDiag::ExpectedTrait(ty_path_span.into(), ident, res.kind_name())
-                        .into()]
+                    vec![
+                        PathResDiag::ExpectedTrait(ty_path_span.into(), ident, res.kind_name())
+                            .into(),
+                    ]
                 }
                 None => Vec::new(),
             },
