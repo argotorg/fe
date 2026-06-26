@@ -1974,3 +1974,118 @@ impl<'db> TrackedItemVariant<'db> {
         }
     }
 }
+
+#[cfg(test)]
+mod keystone_tripwire {
+    //! FCO KEYSTONE IDENTITY TRIPWIRE (SGK rung 1a).
+    //!
+    //! These tests lock the invariant the staged-generation kernel depends on:
+    //! a *generated* derive-provider `impl Trait for Ty` item's interning
+    //! identity (its [`TrackedItemId`]'s [`TrackedItemVariant`], rendered via
+    //! [`ImplTrait::interning_identity_repr`]) is
+    //!
+    //!   (i)  STABLE across two independent analyses of the same input, and
+    //!   (ii) INVARIANT under reordering sibling `derive` targets in the source.
+    //!
+    //! Both hold because the generated impl keys on its content
+    //! ([`TrackedItemVariant::GeneratedImplTrait`]'s `(goal, self_ty)`), not on
+    //! a positional ordinal. If a future change regresses the keystone back to a
+    //! positional id, (ii) trips: the repr would render `ImplTrait(ord:N)` and
+    //! flip with source order.
+
+    use crate::{
+        hir_def::ItemKind,
+        lower::{generated_hir_items, map_file_to_mod},
+        test_db::TestDb,
+    };
+
+    /// The sorted interning-identity reprs of every generated `impl Trait`
+    /// item for `text`, each produced in its own freshly-built database.
+    fn generated_impl_reprs(text: &str) -> Vec<String> {
+        let mut db = TestDb::default();
+        let file = db.standalone_file(text);
+        let top_mod = map_file_to_mod(&db, file);
+        let mut reprs: Vec<String> = generated_hir_items(&db, top_mod)
+            .iter()
+            .filter_map(|item| match item {
+                ItemKind::ImplTrait(impl_trait) => Some(impl_trait.interning_identity_repr(&db)),
+                _ => None,
+            })
+            .collect();
+        reprs.sort();
+        reprs
+    }
+
+    /// (i) The generated impls' identities are identical across two independent
+    /// analyses of the same source (no hidden per-run / per-database state).
+    #[test]
+    fn generated_impl_identity_stable_across_analyses() {
+        let text = r#"
+            #[derive(Eq, Default)]
+            struct Point {
+                x: u256,
+                y: u256,
+            }
+        "#;
+
+        let first = generated_impl_reprs(text);
+        let second = generated_impl_reprs(text);
+
+        assert_eq!(
+            first, second,
+            "generated impl identities must be stable across analyses"
+        );
+        // Two derived traits (`Eq`, `Default`), both content-keyed.
+        assert_eq!(first.len(), 2);
+        assert!(
+            first
+                .iter()
+                .all(|repr| repr.contains("GeneratedImplTrait") && !repr.contains("ord:")),
+            "generated impls must be content-keyed, not positional: {first:?}"
+        );
+    }
+
+    /// (ii) Reordering sibling derive targets does not change any generated
+    /// impl's identity: the set of reprs is byte-identical between the two
+    /// orderings (content-keyed, not positional).
+    #[test]
+    fn generated_impl_identity_invariant_under_sibling_reorder() {
+        let order_a = r#"
+            #[derive(Eq)]
+            struct A {
+                x: u256,
+            }
+
+            #[derive(Eq)]
+            struct B {
+                y: u256,
+            }
+        "#;
+        let order_b = r#"
+            #[derive(Eq)]
+            struct B {
+                y: u256,
+            }
+
+            #[derive(Eq)]
+            struct A {
+                x: u256,
+            }
+        "#;
+
+        let reprs_a = generated_impl_reprs(order_a);
+        let reprs_b = generated_impl_reprs(order_b);
+
+        assert_eq!(
+            reprs_a, reprs_b,
+            "generated impl identities must be invariant under sibling derive reordering"
+        );
+        assert_eq!(reprs_a.len(), 2);
+        assert!(
+            reprs_a
+                .iter()
+                .all(|repr| repr.contains("GeneratedImplTrait") && !repr.contains("ord:")),
+            "reorder-invariance requires content keying, not positional ordinals: {reprs_a:?}"
+        );
+    }
+}
