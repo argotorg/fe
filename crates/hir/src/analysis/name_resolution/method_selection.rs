@@ -607,7 +607,16 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
             let constraint = constraint.fold_with(self.db, &mut table);
             let query = CanonicalGoalQuery::new(self.db, constraint, self.assumptions);
             match is_goal_query_satisfiable(self.db, solve_cx, &query) {
-                GoalSatisfiability::Satisfied(_) => {}
+                GoalSatisfiability::Satisfied(solution) => {
+                    // A unique solution can bind impl parameters that the self
+                    // type doesn't determine (e.g. a trait argument fixed only
+                    // by this bound). Unify it back into the table so the trait
+                    // instance built below reflects those bindings instead of
+                    // leaving them as unconstrained inference variables (which
+                    // would drop the bound from the inferred method signature).
+                    let solved = query.extract_solution(&mut table, solution).inst;
+                    let _ = table.unify(constraint, solved);
+                }
                 GoalSatisfiability::NeedsConfirmation(_) | GoalSatisfiability::ContainsInvalid => {
                     needs_confirmation = true;
                 }
