@@ -154,7 +154,6 @@ fn check_runtime_body_supported<'db>(
                     NExpr::Call {
                         callee,
                         args,
-                        effect_args: _,
                         ..
                     },
                 ..

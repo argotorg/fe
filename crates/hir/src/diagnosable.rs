@@ -222,7 +222,7 @@ impl<'db> WherePredicateView<'db> {
             // research (FCO_ABSTRACT_HEAD_RESEARCH_DOSSIER.md). Name the
             // monomorphize-per-trait workaround instead of a bare "expected
             // trait" or a silent drop.
-            Ok(PathRes::Ty(ty)) if is_constraint_ctor(&ty.kind(db)) => {
+            Ok(PathRes::Ty(ty)) if is_constraint_ctor(ty.kind(db)) => {
                 match path.ident(db).to_opt() {
                     Some(param) => vec![
                         TraitConstraintDiag::ConstraintCtorParamUnsupported {

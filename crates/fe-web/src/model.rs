@@ -717,7 +717,7 @@ impl DocIndex {
                             // Look up the trait URL
                             let trait_url = lookup_trait(&trait_items, &trait_impl.trait_name)
                                 .map(|p| format!("{}/trait", p))
-                                .unwrap_or_else(|| format!("{}/trait", &trait_impl.trait_name));
+                                .unwrap_or_else(|| format!("{}/trait", trait_impl.trait_name));
 
                             // Use the target item's path and kind for the type URL
                             let type_url = format!("{}/{}", item.path, item.kind.as_str());

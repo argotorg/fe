@@ -296,7 +296,7 @@ fn goal_error<'db>(
         Ok(PathRes::Trait(_)) => GoalError::Unsaturated { head },
         // A live `* -> Constraint` parameter head (`Evidence<P<T>>`): the
         // abstract-head boundary, named at a typed position.
-        Ok(PathRes::Ty(ty)) if is_constraint_ctor(&ty.kind(db)) => match path.ident(db).to_opt() {
+        Ok(PathRes::Ty(ty)) if is_constraint_ctor(ty.kind(db)) => match path.ident(db).to_opt() {
             Some(param) => GoalError::LiveHead { param },
             None => GoalError::Unresolved { head },
         },
@@ -390,7 +390,7 @@ fn path_head_resolves_to_capability<'db>(
 /// Whether `def_scope` is the definition scope of the canonical `core::derive`
 /// item `expected`: its own name is `expected`'s name, its parent module is the
 /// `derive` module, and that module lives in the `core` ingot. The `core` ingot
-/// + `derive` module qualifier is the resolved identity (stronger than the
+/// and `derive` module qualifier is the resolved identity (stronger than the
 /// spelling): a like-named user type in any other module is rejected.
 ///
 /// This is the merged-graph scope-keyed recognizer; its base-graph path-keyed

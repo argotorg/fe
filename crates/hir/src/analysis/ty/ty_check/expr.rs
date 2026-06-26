@@ -1616,8 +1616,8 @@ impl<'db> TyChecker<'db> {
     /// - 1 default-marked (CoreDerives-origin) + 1 non-default → the NON-default
     ///   override (the cascade keystone case: an unscoped call uses the derived
     ///   default, `with (<T as Trait>)` selects the hand-written override);
-    /// - >1 non-default (N-way) → `None` (keystone-deferred: selecting among
-    ///   several overrides needs more than naming the goal — do NOT invent
+    /// - `>1` non-default (N-way) → `None` (keystone-deferred: selecting among
+    ///   several overrides needs more than naming the goal, do NOT invent
     ///   impl-naming; fall through to the ordinary `with`-provider path);
     /// - all default-marked → `None` (nothing to override).
     ///
