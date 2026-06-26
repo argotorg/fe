@@ -201,10 +201,7 @@ fn requirement_where_clause<'db>(
         // owns only `Require` (the emit variants are replayed in
         // `synthesize_provider_impl`'s member closures). Filtering here keeps
         // the two readers of the single trace from double-processing.
-        let ProviderEffect::Require {
-            ty, trait_path, ..
-        } = effect
-        else {
+        let ProviderEffect::Require { ty, trait_path, .. } = effect else {
             continue;
         };
         // Concrete requirements are discharged at the generated body's use site,

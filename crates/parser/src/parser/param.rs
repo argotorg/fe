@@ -697,9 +697,30 @@ fn continues_const_expr(kind: Option<SyntaxKind>) -> bool {
     matches!(
         kind,
         Some(
-            Plus | Minus | Star | Star2 | Slash | Percent | Amp | Amp2 | Pipe | Pipe2 | Hat | Lt
-                | Gt | LtEq | GtEq | Eq2 | NotEq | LShift | RShift | AsKw | LParen | LBracket
-                | Dot | Dot2 | Colon2
+            Plus | Minus
+                | Star
+                | Star2
+                | Slash
+                | Percent
+                | Amp
+                | Amp2
+                | Pipe
+                | Pipe2
+                | Hat
+                | Lt
+                | Gt
+                | LtEq
+                | GtEq
+                | Eq2
+                | NotEq
+                | LShift
+                | RShift
+                | AsKw
+                | LParen
+                | LBracket
+                | Dot
+                | Dot2
+                | Colon2
         )
     )
 }

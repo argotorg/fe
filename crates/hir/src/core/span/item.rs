@@ -16,8 +16,8 @@ use super::{
 };
 use crate::{
     hir_def::{
-        Body, Const, Contract, DeriveDecl, DeriveProviderScope, Enum, Func, Impl,
-        ImplTrait, ItemKind, Mod, StaticAssert, Struct, TopLevelMod, Trait, TypeAlias, Use,
+        Body, Const, Contract, DeriveDecl, DeriveProviderScope, Enum, Func, Impl, ImplTrait,
+        ItemKind, Mod, StaticAssert, Struct, TopLevelMod, Trait, TypeAlias, Use,
     },
     span::{
         DesugaredOrigin, DesugaredUseFocus, MsgDesugaredFocus,

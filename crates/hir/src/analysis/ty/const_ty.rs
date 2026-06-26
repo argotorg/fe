@@ -16,10 +16,7 @@ use super::{
     fold::{AssocTySubst, TyFoldable},
     normalize::normalize_ty,
     trait_def::TraitInstId,
-    trait_resolution::{
-        ProvisionEnv, TraitSolveCx,
-        constraint::collect_constraints,
-    },
+    trait_resolution::{ProvisionEnv, TraitSolveCx, constraint::collect_constraints},
     ty_check::{check_anon_const_body, check_const_body},
     ty_def::{InvalidCause, TyId, TyParam, TyVar},
     ty_lower::{ConstDefaultCompletion, collect_generic_params},
@@ -1005,10 +1002,9 @@ pub fn canonicalize_ty_for_mode<'db>(
                 db,
                 canonicalize_trait_inst_for_mode(db, *trait_inst, env, mode),
             ),
-            TyData::ConstraintTerm(inst) => TyId::constraint_term(
-                db,
-                canonicalize_trait_inst_for_mode(db, *inst, env, mode),
-            ),
+            TyData::ConstraintTerm(inst) => {
+                TyId::constraint_term(db, canonicalize_trait_inst_for_mode(db, *inst, env, mode))
+            }
             // Leaf: a bare `Trait` def with no inner `TyId` to canonicalize.
             TyData::TraitCtor(trait_) => TyId::trait_ctor(db, *trait_),
             TyData::TyVar(_)
@@ -1757,8 +1753,7 @@ pub(crate) fn evaluate_const_ty<'db>(
                         ConstTyId::new(db, ConstTyData::Abstract(expr, expected_ty))
                     };
 
-                    let solve_cx =
-                        ProvisionEnv::for_scope(body.scope(), assumptions).solve_cx(db);
+                    let solve_cx = ProvisionEnv::for_scope(body.scope(), assumptions).solve_cx(db);
                     if let Some(const_ty) = const_ty_from_trait_const(db, solve_cx, inst, name) {
                         let evaluated = const_ty.evaluate(db, expected_ty);
                         if evaluated.ty(db).has_invalid(db) {

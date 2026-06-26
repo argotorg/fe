@@ -1382,11 +1382,11 @@ impl<'db> TyChecker<'db> {
         // the goal as a `ConstraintTerm`, by RESOLVED `core::derive::Evidence`
         // identity (never the bare spelling). Verify with the recognizer so a
         // shadowing user `Evidence` can never activate the cascade.
-        let evidence_ctor = resolve_lib_type_path(self.db, self.env.scope(), "core::derive::Evidence")?;
+        let evidence_ctor =
+            resolve_lib_type_path(self.db, self.env.scope(), "core::derive::Evidence")?;
         let constraint_term = TyId::constraint_term(self.db, goal);
         let evidence_ty = TyId::app(self.db, evidence_ctor, constraint_term);
-        if super::super::provider_goal::evidence_witnessed_goal(self.db, evidence_ty)
-            != Some(goal)
+        if super::super::provider_goal::evidence_witnessed_goal(self.db, evidence_ty) != Some(goal)
         {
             return None;
         }
@@ -1481,7 +1481,8 @@ impl<'db> TyChecker<'db> {
         let db = self.db;
 
         // Only a bare path expression can be an alias head.
-        let Partial::Present(Expr::Path(Partial::Present(path))) = self.env.expr_data(value).clone()
+        let Partial::Present(Expr::Path(Partial::Present(path))) =
+            self.env.expr_data(value).clone()
         else {
             return None;
         };
@@ -1660,7 +1661,10 @@ impl<'db> TyChecker<'db> {
             // exactly the old "sole non-default override".
             _ => {
                 let mut anonymous = candidates.iter().copied().filter(|&impl_| {
-                    matches!(selection_discriminator(db, impl_), SelDiscriminator::Anonymous)
+                    matches!(
+                        selection_discriminator(db, impl_),
+                        SelDiscriminator::Anonymous
+                    )
                 });
                 let first = anonymous.next()?;
                 // >1 `Anonymous` would be a coherence conflict (caught earlier), but
@@ -2262,7 +2266,11 @@ impl<'db> TyChecker<'db> {
             self.db,
             trait_query.def,
             args,
-            trait_query.assoc_bindings.iter().copied().collect::<IndexMap<_, _>>(),
+            trait_query
+                .assoc_bindings
+                .iter()
+                .copied()
+                .collect::<IndexMap<_, _>>(),
         );
         matches!(
             self.trait_effect_goal_satisfiability(trait_goal),
@@ -4034,8 +4042,7 @@ impl<'db> TyChecker<'db> {
                                 inst
                             };
                             if matches!(candidate, MethodCandidate::NeedsConfirmation(_)) {
-                                let scoped_provisions =
-                                    self.env.snapshot_evidence_provisions();
+                                let scoped_provisions = self.env.snapshot_evidence_provisions();
                                 self.env.register_trait_obligation(TraitObligation {
                                     goal: inst,
                                     origin: TraitObligationOrigin::GenericConfirmation,

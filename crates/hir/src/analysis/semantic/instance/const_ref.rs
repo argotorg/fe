@@ -108,11 +108,9 @@ fn semantic_callee_key_with_assumptions<'db>(
             let owner = if let Some(inst) = callable.trait_inst()
                 && let Some(name) = func.name(db).to_opt()
             {
-                let solve_cx = ProvisionEnv::for_scope(
-                    impl_env.normalization_scope(db),
-                    assumptions,
-                )
-                .solve_cx(db);
+                let solve_cx =
+                    ProvisionEnv::for_scope(impl_env.normalization_scope(db), assumptions)
+                        .solve_cx(db);
                 // The typeck twin of the MIR `selected_implementor` source
                 // (cascade C3d/M3). `Some(override)` from one of two sources:
                 //
@@ -153,7 +151,11 @@ fn semantic_callee_key_with_assumptions<'db>(
                 // SOURCE differs (the cascade C3d twin of `classify.rs`).
                 let resolved = match scoped {
                     Some(override_impl) => resolve_trait_method_instance_with_implementor(
-                        db, solve_cx, inst, name, override_impl,
+                        db,
+                        solve_cx,
+                        inst,
+                        name,
+                        override_impl,
                     ),
                     None => resolve_trait_method_instance(db, solve_cx, inst, name),
                 };
@@ -190,8 +192,10 @@ fn semantic_callee_key_with_assumptions<'db>(
                 // (every non-cascade call) — byte-identical to the pre-M3 instance
                 // (empty-only `ImplEnv` identity — see `template.rs`).
                 if let Some(call_expr) = call_expr {
-                    selected_implementors
-                        .extend(scoped_provision_implementors(caller_key.typed_body(db), call_expr));
+                    selected_implementors.extend(scoped_provision_implementors(
+                        caller_key.typed_body(db),
+                        call_expr,
+                    ));
                 }
                 BodyOwner::Func(func)
             };
@@ -536,8 +540,14 @@ fn requires_eq<T: Eq>(_ t: T) {}
         segments: &[&str],
     ) -> PathRes<'db> {
         let path = PathId::from_segments(db, segments);
-        resolve_path(db, path, top_mod_scope, PredicateListId::empty_list(db), false)
-            .unwrap_or_else(|e| panic!("expected {segments:?} to resolve, got {e:?}"))
+        resolve_path(
+            db,
+            path,
+            top_mod_scope,
+            PredicateListId::empty_list(db),
+            false,
+        )
+        .unwrap_or_else(|e| panic!("expected {segments:?} to resolve, got {e:?}"))
     }
 
     /// `<subject>: <trait><subject>` (e.g. `Point: Eq<Point>`) — the saturated
@@ -598,7 +608,10 @@ fn requires_eq<T: Eq>(_ t: T) {}
                 constraint_idx: 0,
             },
             goal,
-            solution: Some(TraitGoalSolution { inst: goal, implementor }),
+            solution: Some(TraitGoalSolution {
+                inst: goal,
+                implementor,
+            }),
             route,
         }
     }
@@ -611,8 +624,7 @@ fn requires_eq<T: Eq>(_ t: T) {}
     #[test]
     fn scoped_provision_discharge_is_preferred_for_const_ref() {
         let mut db = HirAnalysisTestDb::default();
-        let file =
-            db.new_stand_alone(Utf8PathBuf::from("scoped_provision_const_ref.fe"), FIXTURE);
+        let file = db.new_stand_alone(Utf8PathBuf::from("scoped_provision_const_ref.fe"), FIXTURE);
         let (top_mod, _) = db.top_mod(file);
         db.assert_no_diags(top_mod);
         let scope = top_mod.scope();

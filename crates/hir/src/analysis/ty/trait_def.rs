@@ -857,8 +857,9 @@ pub(crate) fn does_impl_trait_conflict<'db>(
     // Check if all constraints from both implementations would be satisfiable
     // when the types are unified.
     let merged_constraints = a_constraints.merge(db, b_constraints);
-    let solve_cx = ProvisionEnv::for_scope(a.trait_def(db).scope(), PredicateListId::empty_list(db))
-        .solve_cx(db);
+    let solve_cx =
+        ProvisionEnv::for_scope(a.trait_def(db).scope(), PredicateListId::empty_list(db))
+            .solve_cx(db);
 
     for &constraint in merged_constraints.list(db) {
         let constraint = constraint.fold_with(db, &mut table);

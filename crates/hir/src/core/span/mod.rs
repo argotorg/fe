@@ -5,8 +5,8 @@ use salsa::Update;
 use crate::{
     HirDb, SpannedHirDb,
     core::hir_def::{
-        Body, Const, Contract, DeriveDecl, DeriveProviderScope, Enum, Func, Impl,
-        ImplTrait, Mod, StaticAssert, Struct, TopLevelMod, Trait, TypeAlias, Use,
+        Body, Const, Contract, DeriveDecl, DeriveProviderScope, Enum, Func, Impl, ImplTrait, Mod,
+        StaticAssert, Struct, TopLevelMod, Trait, TypeAlias, Use,
     },
     core::lower::top_mod_ast,
 };
@@ -39,13 +39,12 @@ pub mod lazy_spans {
         },
         item::{
             LazyBodySpan, LazyConstSpan, LazyContractRecvSpan, LazyContractSpan,
-            LazyDeriveDeclSpan, LazyDeriveProviderScopeSpan, LazyEnumSpan,
-            LazyFieldDefListSpan, LazyFieldDefSpan, LazyFuncSignatureSpan, LazyFuncSpan,
-            LazyImplSpan, LazyImplTraitAliasSpan, LazyImplTraitSpan, LazyImplTraitWithSpan,
-            LazyItemSpan, LazyModSpan,
-            LazyRecvArmListSpan, LazyRecvArmSpan, LazyStaticAssertSpan, LazyStructSpan,
-            LazyTopModSpan, LazyTraitSpan,
-            LazyTypeAliasSpan, LazyUseSpan, LazyVariantDefListSpan, LazyVariantDefSpan,
+            LazyDeriveDeclSpan, LazyDeriveProviderScopeSpan, LazyEnumSpan, LazyFieldDefListSpan,
+            LazyFieldDefSpan, LazyFuncSignatureSpan, LazyFuncSpan, LazyImplSpan,
+            LazyImplTraitAliasSpan, LazyImplTraitSpan, LazyImplTraitWithSpan, LazyItemSpan,
+            LazyModSpan, LazyRecvArmListSpan, LazyRecvArmSpan, LazyStaticAssertSpan,
+            LazyStructSpan, LazyTopModSpan, LazyTraitSpan, LazyTypeAliasSpan, LazyUseSpan,
+            LazyVariantDefListSpan, LazyVariantDefSpan,
         },
         params::{
             LazyConstGenericParamSpan, LazyFuncParamListSpan, LazyFuncParamSpan,

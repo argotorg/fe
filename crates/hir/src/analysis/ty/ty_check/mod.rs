@@ -1427,7 +1427,10 @@ impl<'db> TyChecker<'db> {
                     if unified && self.normalize_trait_goal(goal) != goal {
                         TraitObligationOutcome::Progressed
                     } else {
-                        TraitObligationOutcome::Discharged(unified.then_some(solution), DischargeRoute::ImplTable)
+                        TraitObligationOutcome::Discharged(
+                            unified.then_some(solution),
+                            DischargeRoute::ImplTable,
+                        )
                     }
                 } else if let Some(crate::analysis::ty::trait_resolution::Selection::Unique(
                     default,
@@ -1455,10 +1458,7 @@ impl<'db> TyChecker<'db> {
                         inst: goal,
                         implementor: default,
                     };
-                    TraitObligationOutcome::Discharged(
-                        Some(solution),
-                        DischargeRoute::ImplTable,
-                    )
+                    TraitObligationOutcome::Discharged(Some(solution), DischargeRoute::ImplTable)
                 } else {
                     if final_pass && self.trait_goal_is_concrete_for_diagnostics(goal) {
                         let required_by = match obligation.origin {
@@ -1521,7 +1521,9 @@ impl<'db> TyChecker<'db> {
                     TraitObligationOutcome::Requeue(obligation)
                 }
             }
-            GoalSatisfiability::ContainsInvalid => TraitObligationOutcome::Discharged(None, DischargeRoute::ImplTable),
+            GoalSatisfiability::ContainsInvalid => {
+                TraitObligationOutcome::Discharged(None, DischargeRoute::ImplTable)
+            }
         }
     }
 
@@ -2061,8 +2063,7 @@ impl<'db> TyChecker<'db> {
                                 };
 
                                 if candidate.needs_confirmation {
-                                    let scoped_provisions =
-                                        self.env.snapshot_evidence_provisions();
+                                    let scoped_provisions = self.env.snapshot_evidence_provisions();
                                     // Cascade C3d: call-keyed so a `with (<T as
                                     // Trait>)` scoped selection on this deferred
                                     // method call is readable per call → MIR.
@@ -5312,8 +5313,14 @@ fn requires_eq<T: Eq>(_ t: T) {}
         segments: &[&str],
     ) -> PathRes<'db> {
         let path = PathId::from_segments(db, segments);
-        resolve_path(db, path, top_mod_scope, PredicateListId::empty_list(db), false)
-            .unwrap_or_else(|e| panic!("expected {segments:?} to resolve, got {e:?}"))
+        resolve_path(
+            db,
+            path,
+            top_mod_scope,
+            PredicateListId::empty_list(db),
+            false,
+        )
+        .unwrap_or_else(|e| panic!("expected {segments:?} to resolve, got {e:?}"))
     }
 
     /// Build the concrete trait instance `<subject>: <trait><subject>` (e.g.
@@ -5327,7 +5334,11 @@ fn requires_eq<T: Eq>(_ t: T) {}
         TraitInstId::new_simple(db, trait_inst.def(db), vec![subject, subject])
     }
 
-    fn find_func<'db>(db: &'db HirAnalysisTestDb, top_mod: crate::hir_def::TopLevelMod<'db>, name: &str) -> Func<'db> {
+    fn find_func<'db>(
+        db: &'db HirAnalysisTestDb,
+        top_mod: crate::hir_def::TopLevelMod<'db>,
+        name: &str,
+    ) -> Func<'db> {
         top_mod
             .all_funcs(db)
             .iter()
@@ -5373,10 +5384,7 @@ fn requires_eq<T: Eq>(_ t: T) {}
     #[test]
     fn evidence_provision_discharges_matching_goal_only() {
         let mut db = HirAnalysisTestDb::default();
-        let file = db.new_stand_alone(
-            Utf8PathBuf::from("scoped_provision_discharge.fe"),
-            FIXTURE,
-        );
+        let file = db.new_stand_alone(Utf8PathBuf::from("scoped_provision_discharge.fe"), FIXTURE);
         let (top_mod, _) = db.top_mod(file);
         db.assert_no_diags(top_mod);
         let scope = top_mod.scope();
@@ -5538,7 +5546,10 @@ fn not_a_goal() {
                 return binding.value;
             }
         }
-        panic!("expected a `with` expression in `{:?}`'s body", func.name(db));
+        panic!(
+            "expected a `with` expression in `{:?}`'s body",
+            func.name(db)
+        );
     }
 
     /// FCO slide C3b: the PROVISIONAL activation surface. A

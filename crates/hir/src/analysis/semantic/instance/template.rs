@@ -424,7 +424,10 @@ fn host() {}
         // FLOOR: `with_selected_implementors(vec![])` is byte-identical to the
         // empty `ImplEnv::new` — equal under `Eq` AND `Hash`.
         let empty_via_setter = ImplEnv::empty(&db, scope).with_selected_implementors(vec![]);
-        assert_eq!(base, empty_via_setter, "empty carrier must equal `None` floor");
+        assert_eq!(
+            base, empty_via_setter,
+            "empty carrier must equal `None` floor"
+        );
         assert_eq!(
             hash_of(&base),
             hash_of(&empty_via_setter),
@@ -440,8 +443,8 @@ fn host() {}
         );
 
         // OBSERVABLE: a NON-EMPTY carrier is a DISTINCT env, hash, and key.
-        let one = ImplEnv::empty(&db, scope)
-            .with_selected_implementors(vec![(alpha_goal, alpha_impl)]);
+        let one =
+            ImplEnv::empty(&db, scope).with_selected_implementors(vec![(alpha_goal, alpha_impl)]);
         assert_ne!(base, one, "a non-empty carrier must differ from the floor");
         assert_ne!(
             hash_of(&base),
@@ -455,9 +458,12 @@ fn host() {}
         );
 
         // DISTINCTNESS: two different single overrides → different envs/keys.
-        let other = ImplEnv::empty(&db, scope)
-            .with_selected_implementors(vec![(beta_goal, beta_impl)]);
-        assert_ne!(one, other, "different overrides must produce different envs");
+        let other =
+            ImplEnv::empty(&db, scope).with_selected_implementors(vec![(beta_goal, beta_impl)]);
+        assert_ne!(
+            one, other,
+            "different overrides must produce different envs"
+        );
         assert_ne!(
             key_for(&db, host, &one),
             key_for(&db, host, &other),
@@ -470,7 +476,10 @@ fn host() {}
             .with_selected_implementors(vec![(alpha_goal, alpha_impl), (beta_goal, beta_impl)]);
         let ba = ImplEnv::empty(&db, scope)
             .with_selected_implementors(vec![(beta_goal, beta_impl), (alpha_goal, alpha_impl)]);
-        assert_eq!(ab, ba, "equal selection SETS must be equal regardless of order");
+        assert_eq!(
+            ab, ba,
+            "equal selection SETS must be equal regardless of order"
+        );
         assert_eq!(
             hash_of(&ab),
             hash_of(&ba),
@@ -483,8 +492,14 @@ fn host() {}
         );
 
         // BY-GOAL lookup resolves each entry; an unrelated goal misses.
-        assert_eq!(ab.selected_implementor_for_goal(&db, alpha_goal), Some(alpha_impl));
-        assert_eq!(ab.selected_implementor_for_goal(&db, beta_goal), Some(beta_impl));
+        assert_eq!(
+            ab.selected_implementor_for_goal(&db, alpha_goal),
+            Some(alpha_impl)
+        );
+        assert_eq!(
+            ab.selected_implementor_for_goal(&db, beta_goal),
+            Some(beta_impl)
+        );
     }
 
     /// A real `(goal, implementor)` for `impl Eq for <self_name>` — the derived

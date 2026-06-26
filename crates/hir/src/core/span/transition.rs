@@ -10,15 +10,15 @@ use thin_vec::ThinVec;
 
 use super::{
     DesugaredOrigin, DesugaredUseFocus, HirOrigin, LazySpan, UseDesugared, body_ast, const_ast,
-    contract_ast, derive_decl_ast, derive_provider_scope_ast, enum_ast,
-    expr::ExprRoot, func_ast, impl_ast, impl_trait_ast, mod_ast, pat::PatRoot, static_assert_ast,
-    stmt::StmtRoot, struct_ast, trait_ast, type_alias_ast, use_ast,
+    contract_ast, derive_decl_ast, derive_provider_scope_ast, enum_ast, expr::ExprRoot, func_ast,
+    impl_ast, impl_trait_ast, mod_ast, pat::PatRoot, static_assert_ast, stmt::StmtRoot, struct_ast,
+    trait_ast, type_alias_ast, use_ast,
 };
 use crate::{
     HirDb, SpannedHirDb,
     hir_def::{
-        Body, Const, Contract, DeriveDecl, DeriveProviderScope, Enum, Func, Impl,
-        ImplTrait, ItemKind, Mod, StaticAssert, Struct, TopLevelMod, Trait, TypeAlias, Use,
+        Body, Const, Contract, DeriveDecl, DeriveProviderScope, Enum, Func, Impl, ImplTrait,
+        ItemKind, Mod, StaticAssert, Struct, TopLevelMod, Trait, TypeAlias, Use,
     },
     lower::top_mod_ast,
 };

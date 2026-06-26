@@ -179,7 +179,13 @@ pub(crate) fn provider_goal_diags<'db>(
         // outer path span: `Evidence<Eq<T>>` (mode-stripped param ty path).
         let outer = mode_stripped_ty_span(param.lazy_ty_span(db));
         let goal_path_span = inner_goal_path_span(db, hir_ty, outer);
-        push(classify_goal(db, GoalPosition::Witness, inner, scope, goal_path_span));
+        push(classify_goal(
+            db,
+            GoalPosition::Witness,
+            inner,
+            scope,
+            goal_path_span,
+        ));
     }
 
     // `uses (..)` capabilities: an `ImplBuilder<..>` key path carries the goal.
@@ -218,7 +224,13 @@ pub(crate) fn provider_goal_diags<'db>(
         // `into_mode_type()` mis-resolves a non-mode return span to the file root.
         let outer = func.span().ret_ty().into_path_type().path();
         let goal_path_span = inner_goal_path_span(db, ret_hir, outer);
-        push(classify_goal(db, GoalPosition::Witness, inner, scope, goal_path_span));
+        push(classify_goal(
+            db,
+            GoalPosition::Witness,
+            inner,
+            scope,
+            goal_path_span,
+        ));
     }
 
     diags
@@ -330,7 +342,12 @@ fn goal_error_diag<'db>(
                     .to_opt()
                     .map(|ident| PathResDiag::ExpectedTrait(span, ident, res.kind_name()).into()),
                 Err(inner) => inner
-                    .into_diag(db, head, goal.goal_path_span.clone(), ExpectedPathKind::Trait)
+                    .into_diag(
+                        db,
+                        head,
+                        goal.goal_path_span.clone(),
+                        ExpectedPathKind::Trait,
+                    )
                     .map(|d| d.into()),
             }
         }
@@ -629,9 +646,7 @@ fn descend_to_goal<'db>(outer: LazyPathSpan<'db>, last: usize) -> LazyPathSpan<'
 
 /// Strip an own/mut mode wrapper from a parameter's type span, returning the
 /// underlying path span.
-fn mode_stripped_ty_span<'db>(
-    ty_span: crate::span::types::LazyTySpan<'db>,
-) -> LazyPathSpan<'db> {
+fn mode_stripped_ty_span<'db>(ty_span: crate::span::types::LazyTySpan<'db>) -> LazyPathSpan<'db> {
     // `into_mode_type().inner()` degrades to the same span when the type is not a
     // mode type, so this is safe for both `own Evidence<..>` and `Evidence<..>`.
     ty_span.into_mode_type().inner().into_path_type().path()

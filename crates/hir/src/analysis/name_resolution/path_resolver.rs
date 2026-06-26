@@ -1820,15 +1820,10 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                                         // lowering produces a `TraitCtor`. In a `*` position
                                         // the kinds disagree and the error stands.
                                         Ok(PathRes::Trait(arg_inst))
-                                            if trait_params.get(idx + 1).is_some_and(
-                                                |param| {
-                                                    let ctor = TyId::trait_ctor(
-                                                        db,
-                                                        arg_inst.def(db),
-                                                    );
-                                                    param.kind(db).does_match(ctor.kind(db))
-                                                },
-                                            ) => {}
+                                            if trait_params.get(idx + 1).is_some_and(|param| {
+                                                let ctor = TyId::trait_ctor(db, arg_inst.def(db));
+                                                param.kind(db).does_match(ctor.kind(db))
+                                            }) => {}
                                         Ok(res)
                                             if !matches!(
                                                 res,

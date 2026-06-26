@@ -528,8 +528,7 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
                         if matches!(
                             is_goal_satisfiable(
                                 db,
-                                ProvisionEnv::for_scope(contract.scope(), assumptions)
-                                    .solve_cx(db),
+                                ProvisionEnv::for_scope(contract.scope(), assumptions).solve_cx(db),
                                 trait_req
                             ),
                             GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
@@ -637,8 +636,8 @@ pub fn resolve_default_root_effect_ty<'db>(
     // that misses, which happens when std is analyzed standalone (`analyze_stdlib`,
     // where std self-refs use `ingot::`) so the ambient intrinsic-capability grant
     // still resolves there.
-    let target_ty = resolve_target_ty(PathId::from_segments(db, DEFAULT_TARGET_TY_PATH))
-        .or_else(|| {
+    let target_ty =
+        resolve_target_ty(PathId::from_segments(db, DEFAULT_TARGET_TY_PATH)).or_else(|| {
             resolve_target_ty(
                 corelib::lib_root_path(db, scope, "std")
                     .push_str(db, "evm")

@@ -206,11 +206,13 @@ impl<'db> WherePredicateView<'db> {
         let ty_path_span = self.span().ty().into_path_type().path();
 
         // Is `kind` the kind `* -> Constraint` of a constraint constructor?
-        let is_constraint_ctor = |kind: &Kind| matches!(
-            kind,
-            Kind::Abs(inner)
-                if inner.0.does_match(&Kind::Star) && inner.1.does_match(&Kind::Constraint)
-        );
+        let is_constraint_ctor = |kind: &Kind| {
+            matches!(
+                kind,
+                Kind::Abs(inner)
+                    if inner.0.does_match(&Kind::Star) && inner.1.does_match(&Kind::Constraint)
+            )
+        };
 
         match resolve_path(db, head, scope, assumptions, false) {
             // Concrete trait application: collected + enforced at use sites.
@@ -222,19 +224,23 @@ impl<'db> WherePredicateView<'db> {
             // trait" or a silent drop.
             Ok(PathRes::Ty(ty)) if is_constraint_ctor(&ty.kind(db)) => {
                 match path.ident(db).to_opt() {
-                    Some(param) => vec![TraitConstraintDiag::ConstraintCtorParamUnsupported {
-                        span: ty_path_span.into(),
-                        param,
-                    }
-                    .into()],
+                    Some(param) => vec![
+                        TraitConstraintDiag::ConstraintCtorParamUnsupported {
+                            span: ty_path_span.into(),
+                            param,
+                        }
+                        .into(),
+                    ],
                     None => Vec::new(),
                 }
             }
             // Any other non-trait head.
             Ok(res) => match path.ident(db).to_opt() {
                 Some(ident) => {
-                    vec![PathResDiag::ExpectedTrait(ty_path_span.into(), ident, res.kind_name())
-                        .into()]
+                    vec![
+                        PathResDiag::ExpectedTrait(ty_path_span.into(), ident, res.kind_name())
+                            .into(),
+                    ]
                 }
                 None => Vec::new(),
             },
@@ -541,8 +547,11 @@ impl<'db> Trait<'db> {
             if let Ok(inst) = view.trait_inst(db)
                 && let Some(diag) = check_trait_inst_wf(
                     db,
-                    ty::trait_resolution::ProvisionEnv::for_scope(self.scope(), view.assumptions(db))
-                        .solve_cx(db),
+                    ty::trait_resolution::ProvisionEnv::for_scope(
+                        self.scope(),
+                        view.assumptions(db),
+                    )
+                    .solve_cx(db),
                     inst,
                 )
                 .into_diag(view.span().into())

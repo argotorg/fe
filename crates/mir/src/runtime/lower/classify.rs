@@ -2342,12 +2342,14 @@ pub(crate) fn resolve_runtime_call_key<'db>(
             .with_assumptions(assumptions)
             .recorded_implementor_is_valid_candidate(db, concrete_inst, recorded_implementor)
         {
-            return Err(crate::runtime::LowerError::ForgedRecordedImplementor(format!(
-                "internal: the recorded selected implementor is not a valid impl for this trait call's goal: \
+            return Err(crate::runtime::LowerError::ForgedRecordedImplementor(
+                format!(
+                    "internal: the recorded selected implementor is not a valid impl for this trait call's goal: \
                  recorded={recorded_implementor:?} method={} concrete_inst={} caller={caller_key:?} callee={callee_key:?}",
-                method_name.data(db),
-                concrete_inst.pretty_print(db, false),
-            )));
+                    method_name.data(db),
+                    concrete_inst.pretty_print(db, false),
+                ),
+            ));
         }
         let Some(resolved) = resolve_trait_method_instance_with_implementor(
             db,
@@ -2393,12 +2395,14 @@ pub(crate) fn resolve_runtime_call_key<'db>(
         if let Err((typeck_implementor, mono_implementor)) =
             check_reresolution_determinism(recorded_implementor, resolved.implementor)
         {
-            return Err(crate::runtime::LowerError::NondeterministicReResolution(format!(
-                "internal: monomorphization re-resolved trait method `{}` to a different impl than type-checking selected: \
+            return Err(crate::runtime::LowerError::NondeterministicReResolution(
+                format!(
+                    "internal: monomorphization re-resolved trait method `{}` to a different impl than type-checking selected: \
                  typeck={typeck_implementor:?} mono={mono_implementor:?} concrete_inst={} caller={caller_key:?} callee={callee_key:?}",
-                method_name.data(db),
-                concrete_inst.pretty_print(db, false),
-            )));
+                    method_name.data(db),
+                    concrete_inst.pretty_print(db, false),
+                ),
+            ));
         }
         resolved
     };

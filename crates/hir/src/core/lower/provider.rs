@@ -20,8 +20,8 @@ use super::base_scope_graph_impl;
 use crate::{
     HirDb,
     hir_def::{
-        Body, Func, GenericArg, HirIngot, IdentId, ImplTrait, ItemKind, PathId,
-        TopLevelMod, Trait, TraitRefId, TypeId, TypeKind, UsePathSegment,
+        Body, Func, GenericArg, HirIngot, IdentId, ImplTrait, ItemKind, PathId, TopLevelMod, Trait,
+        TraitRefId, TypeId, TypeKind, UsePathSegment,
         scope_graph::{ScopeGraph, ScopeId},
     },
     span::{DesugaredOrigin, DynLazySpan, HirOrigin},
@@ -281,9 +281,7 @@ fn validate_provider_fn<'db>(
                 canonical_trait_path(db, top_mod, PathId::from_ident(db, key_head))
             };
             match path_core_derive_item(db, canonical) {
-                Some(CoreDeriveItem::Reflect) => {
-                    capabilities.push(Capability::Reflect(param_name))
-                }
+                Some(CoreDeriveItem::Reflect) => capabilities.push(Capability::Reflect(param_name)),
                 Some(CoreDeriveItem::ImplBuilder) if param.is_mut => {
                     capabilities.push(Capability::ImplBuilder(param_name))
                 }
@@ -293,13 +291,19 @@ fn validate_provider_fn<'db>(
         // The minimal capability check: a provider must declare the
         // capabilities it consumes. The full key/grade capability system is
         // a later milestone.
-        if !capabilities.iter().any(|capability| capability.is_reflect()) {
+        if !capabilities
+            .iter()
+            .any(|capability| capability.is_reflect())
+        {
             errors.push(error(
                 "derive provider functions must declare a `Reflect<..>` capability in `uses (..)`"
                     .into(),
             ));
         }
-        if !capabilities.iter().any(|capability| capability.is_builder()) {
+        if !capabilities
+            .iter()
+            .any(|capability| capability.is_builder())
+        {
             errors.push(error(
                 "derive provider functions must declare a `mut ImplBuilder<..>` capability in `uses (..)`"
                     .into(),
@@ -379,13 +383,9 @@ pub(super) fn validate_impl_provider<'db>(
     if !errors.is_empty() {
         return Err(errors);
     }
-    let (Some(name), Some(head_name), Some(goal_path), Some(func), Some(body)) = (
-        name,
-        head_name,
-        goal_path,
-        func_level.func,
-        func_level.body,
-    ) else {
+    let (Some(name), Some(head_name), Some(goal_path), Some(func), Some(body)) =
+        (name, head_name, goal_path, func_level.func, func_level.body)
+    else {
         return Err(errors);
     };
 
@@ -678,10 +678,11 @@ pub(super) fn resolve_trait_def<'db>(
     // Final segment: a `Trait` directly in the resolved module's base graph.
     let owner = module.graph_owner();
     let base = base_scope_graph_impl(db, owner);
-    base.child_items(module.scope()).find_map(|item| match item {
-        ItemKind::Trait(trait_) if trait_.name(db).to_opt() == Some(last) => Some(trait_),
-        _ => None,
-    })
+    base.child_items(module.scope())
+        .find_map(|item| match item {
+            ItemKind::Trait(trait_) if trait_.name(db).to_opt() == Some(last) => Some(trait_),
+            _ => None,
+        })
 }
 
 /// Resolves the *root* segment of a trait path to the module its leading
@@ -752,12 +753,13 @@ fn nav_child_module<'db>(
     // Inline `mod` items hang off the module's scope in the owner's base graph.
     let owner = module.graph_owner();
     let base = base_scope_graph_impl(db, owner);
-    base.child_items(module.scope()).find_map(|item| match item {
-        ItemKind::Mod(mod_) if mod_.name(db).to_opt() == Some(segment) => {
-            Some(NavModule::Inline(mod_, owner))
-        }
-        _ => None,
-    })
+    base.child_items(module.scope())
+        .find_map(|item| match item {
+            ItemKind::Mod(mod_) if mod_.name(db).to_opt() == Some(segment) => {
+                Some(NavModule::Inline(mod_, owner))
+            }
+            _ => None,
+        })
 }
 
 /// All validated derive providers declared in `ingot`, discovered through
@@ -867,13 +869,15 @@ fn names_competing_definition<'db>(
         | ItemKind::Struct(_)
         | ItemKind::Enum(_)
         | ItemKind::TypeAlias(_)
-        | ItemKind::Contract(_) => item
+        | ItemKind::Contract(_) => {
+            item
             .name(db)
             .is_some_and(|item_name| item_name == name)
             // Only definitions directly in the requesting module shadow the
             // bare convention; items nested in inner modules do not.
             && item.top_mod(db) == from
-            && is_top_level_item(base, item),
+            && is_top_level_item(base, item)
+        }
         // A `use` binding the name resolves the bare ident to its imported
         // target instead (handled by canonical-path identity); its presence
         // disqualifies the bare convention here too.
@@ -1321,11 +1325,7 @@ pub fn derived_impl_provenance<'db>(
 #[cfg(test)]
 mod tests {
     use super::{core_providers, goal_matches_provider, is_core_derivable, resolve_trait_def};
-    use crate::{
-        hir_def::PathId,
-        lower::map_file_to_mod,
-        test_db::TestDb,
-    };
+    use crate::{hir_def::PathId, lower::map_file_to_mod, test_db::TestDb};
 
     /// The selection SSOT — [`resolve_trait_def`] — keys on the resolved
     /// `Trait` *def*, so two traits that *spell* the same last segment in
@@ -1354,9 +1354,12 @@ mod tests {
             .expect("a::Eq resolves to a trait def");
         let b_eq = resolve_trait_def(&db, top_mod, PathId::from_segments(&db, &["b", "Eq"]))
             .expect("b::Eq resolves to a trait def");
-        let core_eq =
-            resolve_trait_def(&db, top_mod, PathId::from_segments(&db, &["core", "ops", "Eq"]))
-                .expect("core::ops::Eq resolves to the core trait def");
+        let core_eq = resolve_trait_def(
+            &db,
+            top_mod,
+            PathId::from_segments(&db, &["core", "ops", "Eq"]),
+        )
+        .expect("core::ops::Eq resolves to the core trait def");
 
         // Same last segment (`Eq`) everywhere, three distinct defs.
         assert_ne!(a_eq, b_eq, "same-named local traits must be distinct defs");
@@ -1415,11 +1418,9 @@ mod tests {
 
     /// The single ordinary-form provider (`impl Derive<G> for P`) in `text`,
     /// validated.
-    fn validate_only_provider(
-        text: &str,
-    ) -> Result<(), Vec<String>> {
-        use crate::hir_def::{HirIngot, ItemKind};
+    fn validate_only_provider(text: &str) -> Result<(), Vec<String>> {
         use super::{impl_trait_provider_goal_path, validate_impl_provider};
+        use crate::hir_def::{HirIngot, ItemKind};
 
         let mut db = TestDb::default();
         let file = db.standalone_file(text);
@@ -1579,15 +1580,18 @@ mod tests {
         let goal_path = impl_trait_provider_goal_path(&db, impl_trait)
             .expect("goal path is recovered from the Derive<..> argument");
         assert_eq!(
-            goal_path.ident(&db).to_opt().map(|i| i.data(&db).to_string()),
+            goal_path
+                .ident(&db)
+                .to_opt()
+                .map(|i| i.data(&db).to_string()),
             Some("Eq".to_string()),
             "the goal extracted from `Derive<Eq>` is `Eq`"
         );
 
         // Validation yields a ValidatedProvider whose name is the implementor
         // (`StableEq`), goal head is `Eq`, and capabilities are recognized.
-        let validated = validate_impl_provider(&db, impl_trait)
-            .expect("the ordinary-form provider validates");
+        let validated =
+            validate_impl_provider(&db, impl_trait).expect("the ordinary-form provider validates");
         assert_eq!(validated.name.data(&db), "StableEq");
         assert_eq!(validated.head_name.data(&db), "Eq");
         assert_eq!(validated.provider, impl_trait);
@@ -1853,9 +1857,8 @@ impl Marker for Point {}
         // The generated impl's provenance points at the NAMED `StableAbiSize`
         // provider — reconstructed (no stored provenance) and UNIQUE because no
         // canonical AbiSize competitor exists.
-        let prov = derived_impl_provenance(&db, gen_impl).expect(
-            "a NAMED-only AbiSize derive must have unambiguous reconstructable provenance",
-        );
+        let prov = derived_impl_provenance(&db, gen_impl)
+            .expect("a NAMED-only AbiSize derive must have unambiguous reconstructable provenance");
         assert_eq!(
             prov.generated_impl, gen_impl,
             "provenance names the generated impl itself"

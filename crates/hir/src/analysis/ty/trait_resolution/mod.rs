@@ -360,7 +360,9 @@ impl<'db> TraitSolveCx<'db> {
         let applying: Vec<ImplementorId<'db>> = cands
             .iter()
             .copied()
-            .filter(|&cand| Self::implementor_applies_to_goal(db, cand, inst, scope, self.assumptions))
+            .filter(|&cand| {
+                Self::implementor_applies_to_goal(db, cand, inst, scope, self.assumptions)
+            })
             .map(|cand| cand.instantiate_identity())
             .collect();
 
@@ -481,14 +483,13 @@ impl<'db> TraitSolveCx<'db> {
         implementor: ImplementorId<'db>,
     ) -> bool {
         match implementor.origin(db) {
-            ImplementorOrigin::Hir(impl_trait) => {
-                crate::core::lower::derived_impl_provenance(db, impl_trait).is_some_and(
-                    |provenance| {
-                        provenance.provider.top_mod(db).ingot(db).kind(db)
-                            == common::ingot::IngotKind::CoreDerives
-                    },
-                )
-            }
+            ImplementorOrigin::Hir(impl_trait) => crate::core::lower::derived_impl_provenance(
+                db, impl_trait,
+            )
+            .is_some_and(|provenance| {
+                provenance.provider.top_mod(db).ingot(db).kind(db)
+                    == common::ingot::IngotKind::CoreDerives
+            }),
             ImplementorOrigin::VirtualContract(_) | ImplementorOrigin::Assumption => false,
         }
     }
@@ -1507,10 +1508,7 @@ impl Eq for Point {
         // No `Default`, sole `Anonymous` → the hand-written `Anonymous` is the
         // unscoped default (the new N-way fallback: an `Anonymous` coexisting with
         // an `Alias`, no derived default).
-        match default_tier_decision(vec![
-            (real, SelDiscriminator::Anonymous),
-            (other, casual),
-        ]) {
+        match default_tier_decision(vec![(real, SelDiscriminator::Anonymous), (other, casual)]) {
             Selection::Unique(selected) => assert_eq!(
                 selected, real,
                 "the sole `Anonymous` is the unscoped default when no `Default` exists",

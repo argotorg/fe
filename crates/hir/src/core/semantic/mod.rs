@@ -95,8 +95,8 @@ use crate::analysis::ty::{
         ProviderSemantics, RootProviderRegistration, provider_semantics, registered_root_providers,
     },
     trait_resolution::{
-        GoalSatisfiability, PredicateListId, ProvisionEnv, WellFormedness,
-        check_ty_wf, is_goal_satisfiable,
+        GoalSatisfiability, PredicateListId, ProvisionEnv, WellFormedness, check_ty_wf,
+        is_goal_satisfiable,
     },
     ty_check::EffectParamSite,
     ty_contains_const_hole,
@@ -4560,14 +4560,16 @@ impl<'db> ImplTrait<'db> {
                         // `discriminator != discriminator` is exactly the old
                         // `this_default != cand_default` ({Default,Anonymous} ok;
                         // {Anon,Anon}/{Default,Default} conflict).
-                        let this_disc = crate::analysis::ty::trait_resolution::selection_discriminator(
-                            db,
-                            *implementor.skip_binder(),
-                        );
-                        let cand_disc = crate::analysis::ty::trait_resolution::selection_discriminator(
-                            db,
-                            *cand_view.skip_binder(),
-                        );
+                        let this_disc =
+                            crate::analysis::ty::trait_resolution::selection_discriminator(
+                                db,
+                                *implementor.skip_binder(),
+                            );
+                        let cand_disc =
+                            crate::analysis::ty::trait_resolution::selection_discriminator(
+                                db,
+                                *cand_view.skip_binder(),
+                            );
                         this_disc != cand_disc
                     };
                     if !conflict_allowed {

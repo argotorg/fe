@@ -23,15 +23,15 @@ use crate::{
 pub use abi_field::{AbiFieldContext, AbiFieldDiagnostic};
 pub use attr::{AttrMisuseError, AttrMisuseErrorKind};
 pub use derive::{DeriveError, DeriveErrorKind, DeriveSecondarySpan};
-pub use provider::{DerivedImplProvenance, derived_impl_provenance};
-pub(crate) use provider::CoreDeriveItem;
-pub(crate) use provider::impl_trait_provider_goal_path;
 pub use error::{ErrorDiagnostic, ErrorDiagnosticKind};
 pub use event::{EventError, EventErrorKind};
 pub(crate) use expansion::expanded_items_impl;
 pub use expansion::generated_hir_items;
 pub use item::{FieldModifierError, FieldModifierErrorKind, SelectorError, SelectorErrorKind};
 pub use parse::parse_file_impl;
+pub(crate) use provider::CoreDeriveItem;
+pub(crate) use provider::impl_trait_provider_goal_path;
+pub use provider::{DerivedImplProvenance, derived_impl_provenance};
 
 pub(crate) mod parse;
 

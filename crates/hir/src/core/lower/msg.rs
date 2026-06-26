@@ -10,9 +10,9 @@ use crate::{
     HirDb, SelectorError, SelectorErrorKind,
     hir_def::{
         ArithBinOp, AssocConstDef, AttrListId, BinOp, Body, BodyKind, Expr, ExprId, FieldDef,
-        FieldDefListId, FieldIndex, FuncModifiers,
-        IdentId, ImplTrait, IntegerId, LitKind, LogicalBinOp, Mod, Partial, Pat, PathId, PathKind,
-        Stmt, Struct, TrackedItemVariant, TraitRefId, TupleTypeId, TypeId, TypeKind, Visibility,
+        FieldDefListId, FieldIndex, FuncModifiers, IdentId, ImplTrait, IntegerId, LitKind,
+        LogicalBinOp, Mod, Partial, Pat, PathId, PathKind, Stmt, Struct, TrackedItemVariant,
+        TraitRefId, TupleTypeId, TypeId, TypeKind, Visibility,
     },
     lower::FileLowerCtxt,
     span::{MsgDesugared, MsgDesugaredFocus},

@@ -529,7 +529,11 @@ impl<'db> ProviderOutput<'db> {
                     out.push('\n');
                 }
                 ProviderEffect::EmitMethod { sig, .. } => {
-                    let _ = writeln!(out, "emit_method {}", self.skeleton.sigs[sig.0].name.data(db));
+                    let _ = writeln!(
+                        out,
+                        "emit_method {}",
+                        self.skeleton.sigs[sig.0].name.data(db)
+                    );
                 }
                 ProviderEffect::EmitAssocTy { name, .. } => {
                     let _ = writeln!(out, "emit_assoc_ty {}", name.data(db));
@@ -848,9 +852,11 @@ impl<'db> BinaryRead<'db> {
     /// "unsupported", exactly as a mismatched bespoke arm would).
     fn apply(self, rhs: &Value<'db>) -> Option<bool> {
         match (self.operand, self.apply, rhs) {
-            (CompareOperand::Variant, BinaryCompare::Precedes(lhs_index), Value::Variant(other)) => {
-                Some(lhs_index < other.index())
-            }
+            (
+                CompareOperand::Variant,
+                BinaryCompare::Precedes(lhs_index),
+                Value::Variant(other),
+            ) => Some(lhs_index < other.index()),
             (CompareOperand::Ty, BinaryCompare::SameTy(lhs_ty), Value::Ty(rhs_ty)) => {
                 Some(lhs_ty == *rhs_ty)
             }
@@ -1087,9 +1093,7 @@ impl<'a, 'db> ProviderExecutor<'a, 'db> {
         // `effects` is the sole replay trace: TD5.2 moved `require` and TD5.x
         // moved the emit families out of bespoke `commands` (deleted) into the
         // effect trace, so the command-count cap is measured over `effects`.
-        if self.steps > STEP_BUDGET
-            || self.effects.len() + self.exprs.len() > COMMAND_BUDGET
-        {
+        if self.steps > STEP_BUDGET || self.effects.len() + self.exprs.len() > COMMAND_BUDGET {
             return Err(ExecError {
                 kind: ProviderFailureKind::BudgetExceeded,
                 range,
@@ -2173,7 +2177,8 @@ impl<'a, 'db> ProviderExecutor<'a, 'db> {
                     if let Some(read) = variant.scalar_read(method_name.as_str()) {
                         return Ok(read.into_value(self.db));
                     }
-                    return match self.variant_field_sequence(variant.index(), method_name.as_str()) {
+                    return match self.variant_field_sequence(variant.index(), method_name.as_str())
+                    {
                         Some(seq) => Ok(Value::Seq(seq)),
                         None => Err(self.unsupported_expr(expr)),
                     };
@@ -2241,7 +2246,11 @@ impl<'a, 'db> ProviderExecutor<'a, 'db> {
     /// values in declaration order. `None` for any other method name. Same
     /// identity/order preservation and `filter_map` rationale as
     /// [`Self::reflection_sequence`].
-    fn variant_field_sequence(&self, variant_index: usize, method: &str) -> Option<Vec<Value<'db>>> {
+    fn variant_field_sequence(
+        &self,
+        variant_index: usize,
+        method: &str,
+    ) -> Option<Vec<Value<'db>>> {
         if method != "fields" {
             return None;
         }
@@ -3390,8 +3399,7 @@ mod effect_trace {
         // The effect IR records BOTH the require and (cheaply) its reflected
         // field origin — the observability paired with the migration.
         assert_eq!(
-            dump,
-            "require u256: Eq (field None.0)\nrequire u256: Eq\n",
+            dump, "require u256: Eq (field None.0)\nrequire u256: Eq\n",
             "TD5.1 effect trace must render each require (with field provenance \
              when available)"
         );
@@ -3427,12 +3435,8 @@ mod qualified_path {
         let ty = path_ty(db, "Point");
         let trait_ = TraitRefId::new(db, Partial::Present(PathId::from_str(db, "HasK")));
         // `<Point as HasK>::K`
-        let path = PathId::new(
-            db,
-            PathKind::QualifiedType { type_: ty, trait_ },
-            None,
-        )
-        .push_str(db, "K");
+        let path =
+            PathId::new(db, PathKind::QualifiedType { type_: ty, trait_ }, None).push_str(db, "K");
 
         let (got_ty, got_trait, got_name) =
             qualified_path_parts(db, path).expect("a `<Ty as Trait>::item` path is recognized");
@@ -3463,12 +3467,8 @@ mod qualified_path {
         );
         // `<Point as HasK>::K<u256>` — a generic-arg-bearing final segment is
         // not the bare associated-item form this grammar accepts.
-        let path = PathId::new(
-            db,
-            PathKind::QualifiedType { type_: ty, trait_ },
-            None,
-        )
-        .push_str_args(db, "K", args);
+        let path = PathId::new(db, PathKind::QualifiedType { type_: ty, trait_ }, None)
+            .push_str_args(db, "K", args);
         assert!(qualified_path_parts(db, path).is_none());
     }
 }

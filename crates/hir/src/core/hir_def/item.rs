@@ -23,9 +23,9 @@ use crate::{
         DynLazySpan, HirOrigin,
         item::{
             LazyConstSpan, LazyContractSpan, LazyDeriveDeclSpan, LazyDeriveProviderScopeSpan,
-            LazyEnumSpan, LazyFuncSpan, LazyImplSpan, LazyImplTraitSpan,
-            LazyItemSpan, LazyModSpan, LazyStaticAssertSpan, LazyStructSpan, LazyTopModSpan,
-            LazyTraitSpan, LazyTraitTypeSpan, LazyTypeAliasSpan, LazyUseSpan, LazyVariantDefSpan,
+            LazyEnumSpan, LazyFuncSpan, LazyImplSpan, LazyImplTraitSpan, LazyItemSpan, LazyModSpan,
+            LazyStaticAssertSpan, LazyStructSpan, LazyTopModSpan, LazyTraitSpan, LazyTraitTypeSpan,
+            LazyTypeAliasSpan, LazyUseSpan, LazyVariantDefSpan,
         },
         params::LazyGenericParamListSpan,
     },
@@ -1939,10 +1939,10 @@ impl<'db> TrackedItemVariant<'db> {
             Self::Trait(name) => format!("Trait({})", ident(name, db)),
             Self::ImplTrait(idx) => format!("ImplTrait(ord:{idx})"),
             Self::GeneratedImplTrait { goal, self_ty } => {
-                let goal = goal.to_opt().and_then(|t| t.path(db).to_opt()).map_or_else(
-                    || "<missing>".into(),
-                    |p| p.pretty_print(db),
-                );
+                let goal = goal
+                    .to_opt()
+                    .and_then(|t| t.path(db).to_opt())
+                    .map_or_else(|| "<missing>".into(), |p| p.pretty_print(db));
                 let self_ty = self_ty
                     .to_opt()
                     .map_or_else(|| "<missing>".into(), |t| t.pretty_print(db));

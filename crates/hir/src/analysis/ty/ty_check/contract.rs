@@ -151,8 +151,7 @@ fn check_recv_variant_param_types_decodable<'db>(
     let Some(decode_trait) = resolve_core_trait(db, contract.scope(), &["abi", "Decode"]) else {
         return;
     };
-    let solve_cx =
-        super::env::ProvisionEnv::for_scope(contract.scope(), assumptions).solve_cx(db);
+    let solve_cx = super::env::ProvisionEnv::for_scope(contract.scope(), assumptions).solve_cx(db);
 
     for field_ty in variant.ty.field_types(db) {
         check_ty_decodable(
@@ -710,8 +709,7 @@ pub(crate) fn eval_msg_variant_selector<'db>(
 ) -> Option<u32> {
     let msg_variant_trait = resolve_core_trait(db, scope, &["message", "MsgVariant"])?;
 
-    let implementor =
-        find_implementor_of_trait_in_scope(db, scope, variant_ty, msg_variant_trait)?;
+    let implementor = find_implementor_of_trait_in_scope(db, scope, variant_ty, msg_variant_trait)?;
     let impl_ = implementor.skip_binder();
 
     let selector_name = IdentId::new(db, "SELECTOR".to_string());

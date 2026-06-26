@@ -392,8 +392,8 @@ fn schedule_error_abi_size<'db>(
     error_struct: parser::ast::AstPtr<ast::Struct>,
     schedule: &mut dyn FnMut(ItemKind<'db>, TargetKind<'db>, DeriveRequest<'db>),
 ) {
-    use common::ingot::IngotKind;
     use crate::hir_def::TypeKind;
+    use common::ingot::IngotKind;
 
     // Well-formedness gate — byte-identical to the deleted Rust generator's
     // guards in `lower_error_struct`: the `AbiSize` impl was generated ONLY for
