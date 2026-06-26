@@ -1,0 +1,100 @@
+// Regression coverage for the canonical `ImplEnv` built when a trait method
+// resolves to a concrete impl (see `ImplEnv::for_resolved_trait_method`). That
+// env carries only the resolving witness and drops the caller's assumptions, so
+// a trait *default body* reached through a generic param receiver (an
+// "assumption implementor") must stay provable from the trait's own bounds plus
+// that single witness alone.
+
+// --- default body dispatching to a supertrait method ---
+
+trait Base {
+    fn base_value(self) -> u256
+}
+
+trait Derived: Base {
+    // Default body: calls a supertrait method on `self`. Resolving this call
+    // needs `Self: Base`, which is not the witness itself (`Self: Derived`) but
+    // must be elaborated from it -- with no caller assumptions available.
+    fn doubled(self) -> u256 {
+        self.base_value() * 2
+    }
+}
+
+struct Token {
+    amount: u256,
+}
+
+impl Copy for Token {}
+
+impl Base for Token {
+    fn base_value(self) -> u256 {
+        self.amount
+    }
+}
+
+// Only an empty `impl Derived`, so `doubled` resolves to the trait default body.
+impl Derived for Token {}
+
+// Param receiver: the `Derived` (and elaborated `Base`) bound is supplied purely
+// as a caller assumption. After monomorphization the call lands in the default
+// body of `Derived::doubled`.
+fn run_doubled<T: Derived>(_ t: T) -> u256 {
+    t.doubled()
+}
+
+#[test]
+fn default_body_supertrait_call_via_assumption() {
+    let token = Token { amount: 21 }
+    assert(run_doubled(token) == 42)
+}
+
+// --- default body dispatching to another required method of the same trait ---
+
+trait Counter {
+    fn seed(self) -> u256
+
+    // Default body: calls a sibling required method that the impl provides.
+    fn next(self) -> u256 {
+        self.seed() + 1
+    }
+}
+
+struct Ticket {
+    n: u256,
+}
+
+impl Copy for Ticket {}
+
+impl Counter for Ticket {
+    fn seed(self) -> u256 {
+        self.n
+    }
+}
+
+fn run_next<T: Counter>(_ t: T) -> u256 {
+    t.next()
+}
+
+#[test]
+fn default_body_sibling_call_via_assumption() {
+    let ticket = Ticket { n: 100 }
+    assert(run_next(ticket) == 101)
+}
+
+// --- nested generic forwarding before the default body resolves ---
+
+// `outer` only knows `T: Derived` as an assumption and forwards to `inner`,
+// which re-derives the same bound before finally reaching the default body.
+fn forward_inner<U: Derived>(_ u: U) -> u256 {
+    u.doubled()
+}
+
+fn forward_outer<T: Derived>(_ t: T) -> u256 {
+    forward_inner(t)
+}
+
+#[test]
+fn default_body_nested_forwarding_via_assumption() {
+    let token = Token { amount: 5 }
+    assert(forward_outer(token) == 10)
+}
