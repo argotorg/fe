@@ -116,7 +116,7 @@ impl CoreDeriveItem {
 /// fallback: a user type merely *named* `Reflect`, without importing the
 /// canonical type, grants NO capability authority. This enum is the home for the
 /// recognized capability (and any future grade/scope).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub(super) enum Capability<'db> {
     /// `reflect: Reflect<T>` — reflection over the derive target.
     Reflect(IdentId<'db>),
@@ -143,7 +143,7 @@ impl<'db> Capability<'db> {
 
 /// A derive provider that passed the HIR-level shape validation and can be
 /// selected and executed by the expansion stage.
-#[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub(super) struct ValidatedProvider<'db> {
     /// The ordinary `impl Derive<Goal> for Provider` declaration that this
     /// validated provider was lowered from. Identified by stable identity (its
@@ -1114,12 +1114,12 @@ pub(super) fn select_provider<'db>(
 /// Reflection data for a derive target, extracted from the target's HIR by
 /// the expansion stage and exposed to provider bodies through the
 /// `Reflect<T>` capability.
-#[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub(super) struct TargetReflection<'db> {
     pub(super) shape: TargetShape<'db>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub(super) enum TargetShape<'db> {
     Struct {
         fields: Vec<ReflectedField<'db>>,
@@ -1131,7 +1131,7 @@ pub(super) enum TargetShape<'db> {
 
 /// A reflected field of the target: a struct field, or a payload field of
 /// an enum variant (`variant` is the variant index in that case).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub(super) struct ReflectedField<'db> {
     pub(super) variant: Option<usize>,
     pub(super) index: usize,
@@ -1139,7 +1139,7 @@ pub(super) struct ReflectedField<'db> {
     pub(super) ty: TypeId<'db>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub(super) enum FieldName<'db> {
     /// A named (record) field.
     Named(IdentId<'db>),
@@ -1147,7 +1147,7 @@ pub(super) enum FieldName<'db> {
     Positional(usize),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub(super) struct ReflectedVariant<'db> {
     pub(super) index: usize,
     pub(super) name: IdentId<'db>,
@@ -1156,7 +1156,7 @@ pub(super) struct ReflectedVariant<'db> {
     pub(super) fields: Vec<ReflectedField<'db>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub(super) enum ReflectedVariantKind {
     Unit,
     Tuple,

@@ -20,11 +20,12 @@
 
 use common::indexmap::{IndexMap, IndexSet};
 use parser::ast::{self, prelude::*};
+use rustc_hash::FxHashSet;
 use salsa::Update;
 
 use super::{
     FileLowerCtxt, base_scope_graph_impl,
-    derive::{self, DeriveErrorKind, DeriveRequest, accumulate_error},
+    derive::{self, DeriveErrorKind, DeriveRequest, ProviderImplExpansion, accumulate_error},
     provider::{self, ProviderSelection},
     top_mod_ast,
 };
@@ -32,7 +33,7 @@ use crate::{
     HirDb, LowerHirDb,
     hir_def::{
         DeriveDecl, Enum, IdentId, ItemKind, PathId, Struct, TopLevelMod,
-        scope_graph::{EdgeKind, ScopeGraph, ScopeId},
+        scope_graph::{EdgeKind, Scope, ScopeGraph, ScopeId},
     },
     span::{DeriveDesugared, DesugaredOrigin, HirOrigin},
 };
@@ -329,45 +330,89 @@ pub(crate) fn expanded_items_impl<'db>(
         }
     }
 
-    let mut items = Vec::new();
-    if groups.is_empty() {
-        // Avoid building (and later merging) an empty graph.
-        let graph = ctxt.build();
-        debug_assert!(graph.scopes.is_empty());
-        return ExpandedItems { items, graph };
-    }
-
+    // Each generated impl is minted by the staged-generation query
+    // (`expand_provider_impl`, in `derive`), which returns it as a self-contained
+    // scope-graph fragment. Collect the fragments in base-DFS / request order
+    // (`ctxt` still carries the request/target diagnostics), then merge them
+    // into the expansion graph below.
+    let mut fragments: Vec<&ProviderImplExpansion<'db>> = Vec::new();
     for (&parent, group_items) in &groups {
         let vis = base.scope_data(&parent).vis;
-        ctxt.enter_shim_scope(parent, vis);
         for item in group_items {
             let Some(pending) = targets.get(item) else {
                 continue;
             };
             match &pending.kind {
                 TargetKind::Struct(struct_, ast) => {
-                    derive::lower_struct_derives(&mut ctxt, ast, *struct_, &pending.requests);
+                    derive::lower_struct_derives(
+                        &mut ctxt,
+                        parent,
+                        vis,
+                        ast,
+                        *struct_,
+                        &pending.requests,
+                        &mut fragments,
+                    );
                 }
                 TargetKind::Enum(enum_, ast) => {
-                    derive::lower_enum_derives(&mut ctxt, ast, *enum_, &pending.requests);
+                    derive::lower_enum_derives(
+                        &mut ctxt,
+                        parent,
+                        vis,
+                        ast,
+                        *enum_,
+                        &pending.requests,
+                        &mut fragments,
+                    );
                 }
                 TargetKind::SyntheticStruct(struct_, anchor) => {
                     derive::lower_synthetic_struct_derives(
                         &mut ctxt,
+                        parent,
+                        vis,
                         *anchor,
                         *struct_,
                         &pending.requests,
+                        &mut fragments,
                     );
                 }
             }
         }
-        ctxt.leave_shim_scope();
     }
 
-    let graph = ctxt.build();
-    for parent in groups.keys() {
-        items.extend(graph.child_items(*parent));
+    // Merge the per-impl fragments into a single expansion graph. This
+    // reproduces, byte-for-byte, the graph the inline single-context build
+    // produced: fragments are visited in synthesis order, so per-impl scopes
+    // are appended in the same order, and a shim mirroring a parent scope shared
+    // by sibling impls unions its generated parent-to-child edges (exactly the
+    // union `merged_scope_graph_impl` performs when merging into the base graph).
+    let mut items = Vec::new();
+    let mut scopes: IndexMap<ScopeId<'db>, Scope<'db>> = IndexMap::default();
+    let mut unresolved_uses: FxHashSet<_> = FxHashSet::default();
+    for fragment in fragments {
+        let ProviderImplExpansion::Synthesized {
+            items: frag_items,
+            graph: frag_graph,
+        } = fragment
+        else {
+            continue;
+        };
+        items.extend(frag_items.iter().copied());
+        for (scope_id, scope) in &frag_graph.scopes {
+            if let Some(existing) = scopes.get_mut(scope_id) {
+                existing.edges.extend(scope.edges.iter().cloned());
+            } else {
+                scopes.insert(*scope_id, scope.clone());
+            }
+        }
+        unresolved_uses.extend(frag_graph.unresolved_uses.iter().copied());
     }
+
+    let graph = ScopeGraph {
+        top_mod,
+        scopes,
+        unresolved_uses,
+    };
 
     ExpandedItems { items, graph }
 }

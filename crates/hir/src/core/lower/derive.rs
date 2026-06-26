@@ -21,6 +21,11 @@
 //! siblings of the target once the expansion graph is merged into the base
 //! scope graph.
 
+// `salsa::tracked`/`salsa::interned` generate constructors that take one
+// argument per field, which can exceed the `too_many_arguments` threshold; the
+// same applies to the multi-input derive entry points below.
+#![allow(clippy::too_many_arguments)]
+
 use parser::ast::{self, prelude::*};
 use salsa::Accumulator as _;
 
@@ -32,14 +37,16 @@ use super::{
         self, FieldName, ProviderSelection, ReflectedField, ReflectedVariant, ReflectedVariantKind,
         SelectionOutcome, TargetReflection, TargetShape, ValidatedProvider,
     },
-    provider_executor::ProviderExecutor,
+    provider_executor::{ProviderExecutor, ProviderFailureKind},
     provider_synthesis::synthesize_provider_impl,
 };
 use crate::{
+    HirDb,
     hir_def::{
-        Enum, GenericArg, GenericArgListId, GenericParam, GenericParamListId, IdentId, Partial,
-        PathId, PathKind, Struct, TraitRefId, TypeGenericArg, TypeGenericParam, TypeId, TypeKind,
-        VariantKind, WhereClauseId, WherePredicate,
+        Enum, GenericArg, GenericArgListId, GenericParam, GenericParamListId, IdentId, ItemKind,
+        Partial, PathId, PathKind, Struct, TopLevelMod, TraitRefId, TypeGenericArg,
+        TypeGenericParam, TypeId, TypeKind, VariantKind, Visibility, WhereClauseId, WherePredicate,
+        scope_graph::{ScopeGraph, ScopeId},
     },
     span::DeriveDesugared,
 };
@@ -308,6 +315,11 @@ impl<'db> DeriveRequest<'db> {
 /// (see [`super::provider_synthesis`]); the item's own inline param bounds
 /// and where-clause predicates are carried over so the impl self type stays
 /// well-formed.
+///
+/// `Hash`/`Eq` make this a field of the interned [`ProviderExpansionKey`], so
+/// the staged-generation query keys on the resolved generics (interned-field
+/// requirements are `Hash + Eq + Clone`, not `Update`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) struct DeriveGenerics<'db> {
     /// The impl's generic param list: the item's params with default types
     /// stripped (defaults are not meaningful on an impl). Empty for
@@ -412,16 +424,28 @@ fn derive_self_ty<'db>(
 /// struct in the merged scope graph.
 pub(super) fn lower_struct_derives<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
+    parent: ScopeId<'db>,
+    parent_vis: Visibility,
     ast: &ast::Struct,
     struct_: Struct<'db>,
     requests: &[DeriveRequest<'db>],
+    fragments: &mut Vec<&'db ProviderImplExpansion<'db>>,
 ) {
     let item_name = ast.name().map(|n| n.text().to_string());
-    lower_struct_derives_inner(ctxt, item_name, struct_, requests, || {
-        ast.generic_params()
-            .map(|g| g.syntax().text_range())
-            .unwrap_or_else(|| ast.syntax().text_range())
-    });
+    lower_struct_derives_inner(
+        ctxt,
+        parent,
+        parent_vis,
+        item_name,
+        struct_,
+        requests,
+        fragments,
+        || {
+            ast.generic_params()
+                .map(|g| g.syntax().text_range())
+                .unwrap_or_else(|| ast.syntax().text_range())
+        },
+    );
 }
 
 /// Like [`lower_struct_derives`] but for a SYNTHETIC struct that has no source
@@ -433,20 +457,35 @@ pub(super) fn lower_struct_derives<'db>(
 /// item name and that fallback span.
 pub(super) fn lower_synthetic_struct_derives<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
+    parent: ScopeId<'db>,
+    parent_vis: Visibility,
     anchor: parser::TextRange,
     struct_: Struct<'db>,
     requests: &[DeriveRequest<'db>],
+    fragments: &mut Vec<&'db ProviderImplExpansion<'db>>,
 ) {
     let db = ctxt.db();
     let item_name = struct_.name(db).to_opt().map(|n| n.data(db).to_string());
-    lower_struct_derives_inner(ctxt, item_name, struct_, requests, || anchor);
+    lower_struct_derives_inner(
+        ctxt,
+        parent,
+        parent_vis,
+        item_name,
+        struct_,
+        requests,
+        fragments,
+        || anchor,
+    );
 }
 
 fn lower_struct_derives_inner<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
+    parent: ScopeId<'db>,
+    parent_vis: Visibility,
     item_name: Option<String>,
     struct_: Struct<'db>,
     requests: &[DeriveRequest<'db>],
+    fragments: &mut Vec<&'db ProviderImplExpansion<'db>>,
     generics_range: impl FnOnce() -> parser::TextRange,
 ) {
     let db = ctxt.db();
@@ -488,11 +527,14 @@ fn lower_struct_derives_inner<'db>(
 
     execute_requests(
         ctxt,
+        parent,
+        parent_vis,
         &item_name,
         struct_name_ident,
         &generics,
         &reflection,
         requests,
+        fragments,
     );
 }
 
@@ -585,9 +627,12 @@ fn resolve_default_variant<'db>(
 /// in the merged scope graph.
 pub(super) fn lower_enum_derives<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
+    parent: ScopeId<'db>,
+    parent_vis: Visibility,
     ast: &ast::Enum,
     enum_: Enum<'db>,
     requests: &[DeriveRequest<'db>],
+    fragments: &mut Vec<&'db ProviderImplExpansion<'db>>,
 ) {
     let item_name = ast.name().map(|n| n.text().to_string());
     let db = ctxt.db();
@@ -689,26 +734,159 @@ pub(super) fn lower_enum_derives<'db>(
 
     execute_requests(
         ctxt,
+        parent,
+        parent_vis,
         &item_name,
         enum_name_ident,
         &generics,
         &reflection,
         &runnable,
+        fragments,
     );
 }
 
-/// Selects, executes, and replays the provider for each request targeting
-/// one item. Failures accumulate diagnostics; they never abort the other
-/// requests.
+/// The result of [`expand_provider_impl`] for one selected derive request:
+/// either the synthesized `impl Trait for Ty` (as a self-contained scope-graph
+/// fragment ready to merge into the expansion graph), or the provider-execution
+/// failure to be rendered into a derive diagnostic at the request site.
+///
+/// SGK rung 1: this is the value the staged-generation query memoizes. It does
+/// NOT carry diagnostics: the executor failure is returned as data and the
+/// `ProviderFailed` diagnostic is accumulated by the caller, which still owns
+/// the request-site span and the selected provider's module.
+#[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
+pub(super) enum ProviderImplExpansion<'db> {
+    /// The provider body executed and replayed into one generated impl. `items`
+    /// is the single generated `impl Trait` item; `graph` is the partial scope
+    /// graph holding the impl (and its members) hung off a shim that mirrors the
+    /// target's lexical parent scope. Merging the fragment is identical to the
+    /// shim-union the merged scope graph already performs.
+    Synthesized {
+        items: Vec<ItemKind<'db>>,
+        graph: ScopeGraph<'db>,
+    },
+    /// The provider body failed to execute. `kind`/`range` reconstruct the same
+    /// `ProviderFailed` diagnostic (and its provider-module secondary span) the
+    /// inline path produced.
+    Failed {
+        kind: ProviderFailureKind,
+        range: parser::TextRange,
+    },
+}
+
+/// The resolved inputs that fully determine one generated derive impl: the
+/// selected provider, the goal's self type, the target's reflection and
+/// generics, and the derive-site origin. Interning these into a single content
+/// key makes [`expand_provider_impl`] query-order-independent: two derive
+/// requests that resolve to the same inputs (in any order, in any pass) share
+/// one memoized expansion. Interned-struct fields require `Hash + Eq + Clone`,
+/// not `Update`.
+#[salsa::interned]
+#[derive(Debug)]
+pub(super) struct ProviderExpansionKey<'db> {
+    /// The module the impl is generated into (the target's module). Roots the
+    /// generated `TrackedItemId` chain under `Expansion`.
+    top_mod: TopLevelMod<'db>,
+    /// The target's lexical parent scope; the generated impl becomes its child
+    /// (via a shim) so unqualified references resolve in the target's context.
+    parent: ScopeId<'db>,
+    /// The parent scope's visibility, carried onto the shim.
+    parent_vis: Visibility,
+    #[return_ref]
+    provider: ValidatedProvider<'db>,
+    #[return_ref]
+    reflection: TargetReflection<'db>,
+    self_ty: TypeId<'db>,
+    target_name: IdentId<'db>,
+    #[return_ref]
+    generics: DeriveGenerics<'db>,
+    #[return_ref]
+    desugared: DeriveDesugared,
+}
+
+/// STAGED-GENERATION KERNEL (SGK rung 1). Runs the EXISTING derive generation
+/// for one resolved request: it executes the selected provider's body
+/// ([`ProviderExecutor::run`], still the bespoke executor at this rung) and
+/// replays the result into a real `impl Trait for Ty` item
+/// ([`synthesize_provider_impl`]) inside its own expansion context, returning
+/// the impl as a mergeable scope-graph fragment.
+///
+/// This is a LOWERING-phase `#[salsa::tracked]` query: it is keyed on the
+/// resolved derive inputs (so it is query-order-independent) and runs strictly
+/// upstream of analysis. It MUST NOT be reachable from the solver
+/// (`trait_resolution`): generation never runs inside trait resolution. The
+/// generated impl's identity stays byte-stable across this relocation because
+/// it is content-keyed (`TrackedItemVariant::GeneratedImplTrait{goal,self_ty}`,
+/// under `Expansion`), independent of which query mints it.
+#[salsa::tracked(return_ref)]
+pub(super) fn expand_provider_impl<'db>(
+    db: &'db dyn HirDb,
+    key: ProviderExpansionKey<'db>,
+) -> ProviderImplExpansion<'db> {
+    let top_mod = key.top_mod(db);
+    let parent = key.parent(db);
+    let parent_vis = key.parent_vis(db);
+    let provider = key.provider(db);
+    let reflection = key.reflection(db);
+    let self_ty = key.self_ty(db);
+    let target_name = key.target_name(db);
+    let generics = key.generics(db);
+    let desugared = key.desugared(db);
+
+    match ProviderExecutor::run(db, provider, reflection, self_ty, target_name) {
+        Ok(output) => {
+            let trait_ref = TraitRefId::new(db, Partial::Present(provider.trait_path));
+
+            // Mint the impl in a private expansion context shimmed to the
+            // target's parent scope, exactly as the inline groups loop did. The
+            // generated `TrackedItemId`s are content-keyed under `Expansion`, so
+            // they are identical regardless of which query builds them.
+            let mut ctxt = FileLowerCtxt::enter_expansion(db, top_mod);
+            ctxt.enter_shim_scope(parent, parent_vis);
+            {
+                let mut builder = HirBuilder::new(&mut ctxt, desugared.clone());
+                synthesize_provider_impl(
+                    &mut builder,
+                    target_name,
+                    self_ty,
+                    generics,
+                    reflection,
+                    trait_ref,
+                    &output,
+                );
+            }
+            ctxt.leave_shim_scope();
+
+            let graph = ctxt.build();
+            let items: Vec<ItemKind<'db>> = graph.child_items(parent).collect();
+            ProviderImplExpansion::Synthesized { items, graph }
+        }
+        Err(err) => ProviderImplExpansion::Failed {
+            kind: err.kind,
+            range: err.range,
+        },
+    }
+}
+
+/// Selects the provider for each request targeting one item and routes the
+/// generation through [`expand_provider_impl`]. Selection failures accumulate
+/// diagnostics here (with the request-site span); successful expansions are
+/// collected into `fragments` for the caller to merge, and provider-execution
+/// failures are rendered into a `ProviderFailed` diagnostic. No request ever
+/// aborts the others.
 fn execute_requests<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
+    parent: ScopeId<'db>,
+    parent_vis: Visibility,
     item_name: &Option<String>,
     target_name: IdentId<'db>,
     generics: &DeriveGenerics<'db>,
     reflection: &TargetReflection<'db>,
     requests: &[DeriveRequest<'db>],
+    fragments: &mut Vec<&'db ProviderImplExpansion<'db>>,
 ) {
     let db = ctxt.db();
+    let top_mod = ctxt.top_mod();
     let self_ty = derive_self_ty(ctxt, target_name, generics);
 
     for request in requests {
@@ -753,26 +931,28 @@ fn execute_requests<'db>(
             }
         };
 
-        match ProviderExecutor::run(db, provider, reflection, self_ty, target_name) {
-            Ok(output) => {
-                let trait_ref = TraitRefId::new(db, Partial::Present(provider.trait_path));
-                let mut builder = HirBuilder::new(ctxt, request.desugared.clone());
-                synthesize_provider_impl(
-                    &mut builder,
-                    target_name,
-                    self_ty,
-                    generics,
-                    reflection,
-                    trait_ref,
-                    &output,
-                );
-            }
-            Err(err) => {
+        let key = ProviderExpansionKey::new(
+            db,
+            top_mod,
+            parent,
+            parent_vis,
+            provider.clone(),
+            reflection.clone(),
+            self_ty,
+            target_name,
+            generics.clone(),
+            request.desugared.clone(),
+        );
+
+        let expansion = expand_provider_impl(db, key);
+        match expansion {
+            ProviderImplExpansion::Synthesized { .. } => fragments.push(expansion),
+            ProviderImplExpansion::Failed { kind, range } => {
                 let provider_file = provider.provider.top_mod(db).file(db);
                 let secondary = DeriveSecondarySpan {
                     file: provider_file,
-                    range: err.range,
-                    label: err.kind.message(),
+                    range: *range,
+                    label: kind.message(),
                 };
                 accumulate_error_with(
                     ctxt,
@@ -780,10 +960,57 @@ fn execute_requests<'db>(
                     DeriveErrorKind::ProviderFailed {
                         provider: provider.name.data(db).to_string(),
                         trait_name,
-                        message: err.kind.message(),
+                        message: kind.message(),
                     },
                     request.primary_range,
                     Some(secondary),
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod sgk_solver_guard {
+    //! SGK rung 1 invariant gate: the staged-generation query
+    //! [`super::expand_provider_impl`] is a LOWERING-phase query and MUST NOT be
+    //! reachable from the trait solver. Generation never runs inside trait
+    //! resolution (that is the salsa-cycle dead-end the SGK doctrine forbids).
+    //!
+    //! `expand_provider_impl` is `pub(super)`, so the solver (in `analysis::ty`)
+    //! cannot name it at all; this is a static guarantee. This source-scan pins
+    //! it loudly: it embeds the solver's source at compile time and asserts the
+    //! name never appears there, so a future change that routes generation
+    //! through the solver trips the test (analogous to the executor
+    //! `freeze_guard` scan).
+
+    /// The trait solver's source, embedded at compile time so the scan is
+    /// path-independent and tracks the files it pins.
+    const SOLVER_SOURCES: &[(&str, &str)] = &[
+        (
+            "trait_resolution/mod.rs",
+            include_str!("../../analysis/ty/trait_resolution/mod.rs"),
+        ),
+        (
+            "trait_resolution/proof_forest.rs",
+            include_str!("../../analysis/ty/trait_resolution/proof_forest.rs"),
+        ),
+        (
+            "trait_resolution/constraint.rs",
+            include_str!("../../analysis/ty/trait_resolution/constraint.rs"),
+        ),
+    ];
+
+    /// No solver source may mention the staged-generation query or the
+    /// expansion-stage query: generation stays strictly upstream of analysis.
+    #[test]
+    fn solver_does_not_reach_generation() {
+        for (name, source) in SOLVER_SOURCES {
+            for forbidden in ["expand_provider_impl", "expanded_items_impl"] {
+                assert!(
+                    !source.contains(forbidden),
+                    "solver source `{name}` references `{forbidden}`: generation must \
+                     never run inside trait resolution (SGK lowering-phase invariant)"
                 );
             }
         }
