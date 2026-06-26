@@ -6,12 +6,11 @@ input_file: fixtures/ty_check/event_shadowed_address_type.fe
 error[6-0003]: trait bound is not satisfied
    ┌─ event_shadowed_address_type.fe:5:1
    │
- 5 │ ╭ ╭ #[event]
- 6 │ │ │ struct BadEvent {
- 7 │ │ │     #[indexed]
- 8 │ │ │     from: Address,
- 9 │ │ │     #[indexed]
-10 │ │ │     to: std::evm::Address,
-11 │ │ │ }
-   │ ╰─│─^ `Address` doesn't implement `TopicValue`
-   │   ╰─' trait bound `Address: SolInt` is not satisfied
+ 5 │ ╭ #[event]
+ 6 │ │ struct BadEvent {
+ 7 │ │     #[indexed]
+ 8 │ │     from: Address,
+ 9 │ │     #[indexed]
+10 │ │     to: std::evm::Address,
+11 │ │ }
+   │ ╰─^ `Address` doesn't implement `TopicValue`

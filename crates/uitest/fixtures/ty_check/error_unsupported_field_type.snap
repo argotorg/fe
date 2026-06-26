@@ -15,12 +15,11 @@ error[2-0010]: no method named `encode_to_ptr` found for struct `StorageMap`
 error[6-0003]: trait bound is not satisfied
     ┌─ error_unsupported_field_type.fe:3:1
     │
-  3 │ ╭ ╭ #[error]
-  4 │ │ │ struct Bad {
-  5 │ │ │     value: StorageMap<Address, u256, 0>,
-  6 │ │ │ }
-    │ ╰─│─^ `StorageMap<Address, u256, 0>` doesn't implement `AbiSize`
-    │   ╰─' trait bound `StorageMap<Address, u256, 0>: SolInt` is not satisfied
+  3 │ ╭ #[error]
+  4 │ │ struct Bad {
+  5 │ │     value: StorageMap<Address, u256, 0>,
+  6 │ │ }
+    │ ╰─^ `StorageMap<Address, u256, 0>` doesn't implement `AbiSize`
     │
     ┌─ src/abi.fe:317:32
     │
@@ -30,12 +29,11 @@ error[6-0003]: trait bound is not satisfied
 error[6-0003]: trait bound is not satisfied
     ┌─ error_unsupported_field_type.fe:3:1
     │
-  3 │ ╭ ╭ #[error]
-  4 │ │ │ struct Bad {
-  5 │ │ │     value: StorageMap<Address, u256, 0>,
-  6 │ │ │ }
-    │ ╰─│─^ `StorageMap<Address, u256, 0>` doesn't implement `Encode<Sol>`
-    │   ╰─' trait bound `StorageMap<Address, u256, 0>: SolInt` is not satisfied
+  3 │ ╭ #[error]
+  4 │ │ struct Bad {
+  5 │ │     value: StorageMap<Address, u256, 0>,
+  6 │ │ }
+    │ ╰─^ `StorageMap<Address, u256, 0>` doesn't implement `Encode<Sol>`
     │
     ┌─ src/abi.fe:437:14
     │
@@ -45,12 +43,11 @@ error[6-0003]: trait bound is not satisfied
 error[6-0003]: trait bound is not satisfied
     ┌─ error_unsupported_field_type.fe:3:1
     │
-  3 │ ╭ ╭ #[error]
-  4 │ │ │ struct Bad {
-  5 │ │ │     value: StorageMap<Address, u256, 0>,
-  6 │ │ │ }
-    │ ╰─│─^ `StorageMap<Address, u256, 0>` doesn't implement `AbiSize`
-    │   ╰─' trait bound `StorageMap<Address, u256, 0>: SolInt` is not satisfied
+  3 │ ╭ #[error]
+  4 │ │ struct Bad {
+  5 │ │     value: StorageMap<Address, u256, 0>,
+  6 │ │ }
+    │ ╰─^ `StorageMap<Address, u256, 0>` doesn't implement `AbiSize`
     │
     ┌─ src/abi.fe:437:26
     │
