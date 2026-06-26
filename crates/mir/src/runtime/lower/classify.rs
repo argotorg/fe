@@ -2304,17 +2304,13 @@ pub(crate) fn resolve_runtime_call_key<'db>(
         callee_key.subst(db).generic_args(db),
         concrete_inst.args(db).len(),
     );
+    let owner = BodyOwner::Func(impl_func);
     Ok(SemanticInstanceKey::new(
         db,
-        BodyOwner::Func(impl_func),
+        owner,
         GenericSubst::new(db, impl_args),
         hir::analysis::semantic::EffectProviderSubst::empty(db),
-        ImplEnv::new(
-            db,
-            BodyOwner::Func(impl_func).scope(),
-            PredicateListId::empty_list(db),
-            vec![concrete_inst],
-        ),
+        ImplEnv::for_resolved_trait_method(db, owner, concrete_inst),
     ))
 }
 
