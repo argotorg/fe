@@ -51,10 +51,12 @@ pub contract C {
                 debt: debt,
                 nonce: nonce,
             }
-            let position_ptr = store.positions.ptr(key: (account, market))
-            let loaded = with (position_ptr) {
-                write_position(value: position)
-                read_position()
+            let loaded = with (mut store.positions) {
+                let position_ptr = store.positions.mut_ptr(key: (account, market))
+                with (position_ptr) {
+                    write_position(value: position)
+                    read_position()
+                }
             }
             pack_position(position: loaded)
         }

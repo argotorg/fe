@@ -59,6 +59,16 @@ pub fn resolve_lib_type_path<'db>(
     resolve_lib_path(db, scope, path_id)
 }
 
+/// Resolve a trait by a fully-qualified `core::...` or `std::...` path string.
+pub fn resolve_lib_trait_path<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    path: &str,
+) -> Option<Trait<'db>> {
+    let path_id = LibPath::new(db, path.to_string());
+    resolve_lib_trait(db, scope, path_id)
+}
+
 /// Resolve a function by a fully-qualified `core::...` or `std::...` path string.
 ///
 /// Returns the `Func` HIR item for the resolved function.
@@ -386,6 +396,26 @@ fn resolve_lib_path<'db>(
     let assumptions = PredicateListId::empty_list(db);
     match resolve_path(db, path, scope, assumptions, true).ok()? {
         PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => Some(ty),
+        _ => None,
+    }
+}
+
+#[salsa::tracked]
+fn resolve_lib_trait<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    path: LibPath<'db>,
+) -> Option<Trait<'db>> {
+    let mut segments = path.string(db).split("::");
+    let mut path = lib_root_path(db, scope, segments.next()?);
+
+    for segment in segments {
+        path = path.push_str(db, segment);
+    }
+
+    let assumptions = PredicateListId::empty_list(db);
+    match resolve_path(db, path, scope, assumptions, true).ok()? {
+        PathRes::Trait(trait_inst) => Some(trait_inst.def(db)),
         _ => None,
     }
 }

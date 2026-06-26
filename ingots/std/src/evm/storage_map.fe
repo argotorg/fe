@@ -2,7 +2,7 @@ use super::effects::{Address, RawStorage}
 use super::mem
 use ingot::evm::ops::{keccak256, mstore, sload, sstore}
 use ingot::evm::word::WordRepr
-use core::{EffectHandle, StorPtr}
+use core::{AddressSpace, EffectHandle, EffectRef, StorPtr}
 
 /// Keys that can be written into the mapping preimage for keccak hashing.
 pub trait StorageKey {
@@ -118,6 +118,12 @@ impl StorageKey for bool {
     }
 }
 
+/// Values that may occupy a `StorageMap` entry.
+///
+/// The compiler satisfies this marker structurally for ordinary storage values.
+/// Nested storage maps are intentionally excluded; use composite keys instead.
+pub trait StorageMapValue {}
+
 /// A storage-backed mapping from keys `K` to values `V`.
 ///
 /// `SALT` is the mapping's slot seed (the `slot` component in
@@ -125,11 +131,46 @@ impl StorageKey for bool {
 /// prevent collisions.
 struct StorageMapSeal {}
 
-pub struct StorageMap<K, V, const SALT: u256 = _> {
+pub struct StorageMap<K, V: StorageMapValue, const SALT: u256 = _> {
     seal: StorageMapSeal,
 }
 
-impl<K, V, const SALT: u256> Copy for StorageMap<K, V, SALT> {}
+impl<K, V: StorageMapValue, const SALT: u256> Copy for StorageMap<K, V, SALT> {}
+
+/// Read-only pointer to a value stored in a `StorageMap`.
+pub struct StoragePtr<T> {
+    slot: u256,
+}
+
+impl<T> Copy for StoragePtr<T> {}
+
+impl<T> EffectHandle for StoragePtr<T> {
+    type Target = T
+
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn from_raw(_ raw: u256) -> Self {
+        Self { slot: raw }
+    }
+
+    fn raw(self) -> u256 {
+        self.slot
+    }
+}
+
+impl<T> EffectRef<T> for StoragePtr<T> {}
+
+impl<T> StoragePtr<T> {
+    /// Reads the pointed-at value.
+    pub fn read(self) -> T
+        where T: Copy
+    {
+        let ptr = self
+        with (ptr) {
+            core::effect_ref::read(ptr)
+        }
+    }
+}
 
 #[inline(always)]
 fn storagemap_storage_slot_with_salt<K>(key: K, salt: u256) -> u256
@@ -160,7 +201,7 @@ fn storagemap_set_word_with_salt<K>(key: K, salt: u256, word: u256)
     sstore(slot: storage_slot, value: word)
 }
 
-impl<K: StorageKey, V, const SALT: u256> StorageMap<K, V, SALT> {
+impl<K: StorageKey, V: StorageMapValue, const SALT: u256> StorageMap<K, V, SALT> {
     pub(ingot) fn new_unchecked() -> Self {
         Self { seal: StorageMapSeal {} }
     }
@@ -172,17 +213,29 @@ impl<K: StorageKey, V, const SALT: u256> StorageMap<K, V, SALT> {
     }
 
     #[inline(always)]
-    pub(ingot) fn ptr_unchecked(self, key: K) -> StorPtr<V> {
+    pub(ingot) fn ptr_unchecked(self, key: K) -> StoragePtr<V> {
+        StoragePtr::from_raw(storagemap_storage_slot_with_salt(key, salt: SALT))
+    }
+
+    #[inline(always)]
+    pub fn ptr(self, key: K) -> StoragePtr<V> {
+        self.ptr_unchecked(key)
+    }
+
+    #[inline(always)]
+    pub(ingot) fn mut_ptr_unchecked(self, key: K) -> StorPtr<V> {
         StorPtr::from_raw(storagemap_storage_slot_with_salt(key, salt: SALT))
     }
 
     #[inline(always)]
-    pub fn ptr(self, key: K) -> StorPtr<V> {
-        self.ptr_unchecked(key)
+    pub fn mut_ptr(self, key: K) -> StorPtr<V>
+    uses (map: mut StorageMap<K, V, SALT>)
+    {
+        self.mut_ptr_unchecked(key)
     }
 }
 
-impl<K: StorageKey, V: WordRepr, const SALT: u256> StorageMap<K, V, SALT> {
+impl<K: StorageKey, V: WordRepr + StorageMapValue, const SALT: u256> StorageMap<K, V, SALT> {
     #[inline(always)]
     pub(ingot) fn get_unchecked(self, _ key: K) -> V {
         V::from_word(storagemap_get_word_with_salt(key, salt: SALT))

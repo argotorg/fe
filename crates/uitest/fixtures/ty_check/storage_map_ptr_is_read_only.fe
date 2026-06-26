@@ -1,11 +1,3 @@
-use std::evm::StorageMap
-
-type MyMap<K> = StorageMap<K, u256, 1>
-
-fn needs_map() uses (m: MyMap<u256>) {
-    ()
-}
-
 msg M {
     #[selector = 0]
     Ping -> (),
@@ -16,7 +8,8 @@ contract C {
 
     recv M {
         Ping -> () uses (balances) {
-            needs_map()
+            let ptr = balances.ptr(key: 1)
+            ptr.write(2)
         }
     }
 }

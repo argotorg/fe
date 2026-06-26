@@ -4,10 +4,10 @@ assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/effect_key_alias_const_default.fe
 ---
-error[8-0036]: missing effect `MyMap<u256, u256>` required by `needs_map`
+error[8-0036]: missing effect `MyMap<u256>` required by `needs_map`
    ┌─ effect_key_alias_const_default.fe:19:13
    │
 19 │             needs_map()
-   │             ^^^^^^^^^^^ `needs_map` requires effect `MyMap<u256, u256>` to be in scope
+   │             ^^^^^^^^^^^ `needs_map` requires effect `MyMap<u256>` to be in scope
    │
-   = provide it with `with (MyMap<u256, u256> = value)` or require it via `uses MyMap<u256, u256>`
+   = provide it with `with (MyMap<u256> = value)` or require it via `uses MyMap<u256>`
