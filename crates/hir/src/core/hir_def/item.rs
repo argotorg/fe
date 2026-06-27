@@ -2182,9 +2182,11 @@ mod keystone_tripwire {
         );
         assert!(!reprs_a.is_empty());
         assert!(
-            reprs_a.iter().all(|repr| repr.contains("GeneratedImplTrait")
-                && repr.contains("Func(")
-                && !repr.contains("ord:")),
+            reprs_a
+                .iter()
+                .all(|repr| repr.contains("GeneratedImplTrait")
+                    && repr.contains("Func(")
+                    && !repr.contains("ord:")),
             "reorder-invariance requires content keying: {reprs_a:?}"
         );
     }

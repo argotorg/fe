@@ -930,17 +930,15 @@ fn check_projected_trait_use_wf<'db>(
     //    every projection of `Name` satisfies its declared bounds for any `T`, so the
     //    projected trait use is well-formed (e.g. the `Self::Item::Assoc` second hop in
     //    `trait RecursiveSuper: A<Self::Item::Assoc> { type Item: RecursiveSuper }`).
-    if let TyData::AssocTy(assoc) = self_ty.data(db) {
-        if let Some(assoc_view) = assoc
+    if let TyData::AssocTy(assoc) = self_ty.data(db)
+        && let Some(assoc_view) = assoc
             .trait_
             .def(db)
             .assoc_types(db)
             .find(|t| t.name(db) == Some(assoc.name))
-        {
-            if self_ty.assoc_type_bounds(db, assoc_view).any(|b| b == inst) {
-                return WellFormedness::WellFormed;
-            }
-        }
+        && self_ty.assoc_type_bounds(db, assoc_view).any(|b| b == inst)
+    {
+        return WellFormedness::WellFormed;
     }
 
     unsatisfied_goal(db, solve_cx, inst).unwrap_or(WellFormedness::WellFormed)
