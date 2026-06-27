@@ -1027,6 +1027,26 @@ fn normalize_arith<'db>(
     TermId::new(db, TermNode::Arith { op, lhs, rhs })
 }
 
+/// The shared natural-number comparison primitive: the SINGLE place that
+/// decides a [`TermCmpOp`] over two concrete naturals.
+///
+/// Const-predicate folding ([`normalize_cmp`]) and derive-provider steering
+/// (the provider executor's integer-comparison path) both route their integer
+/// comparisons through this one function. That is the SGK-B "no second
+/// evaluator" invariant for comparison: provider steering grows no local
+/// integer comparator; a pure numeric decision in a provider body is decided by
+/// the same code that decides a `where N > 0` const predicate.
+pub(crate) fn compare_nats(op: TermCmpOp, a: &BigUint, b: &BigUint) -> bool {
+    match op {
+        TermCmpOp::Eq => a == b,
+        TermCmpOp::Ne => a != b,
+        TermCmpOp::Lt => a < b,
+        TermCmpOp::Le => a <= b,
+        TermCmpOp::Gt => a > b,
+        TermCmpOp::Ge => a >= b,
+    }
+}
+
 /// Rebuilds a comparison node over normalized operands: folds literal
 /// comparisons, orders the operands of the symmetric relations (`Eq`/`Ne`),
 /// and preserves every relation as written.
@@ -1037,16 +1057,7 @@ fn normalize_cmp<'db>(
     rhs: TermId<'db>,
 ) -> TermId<'db> {
     if let (TermNode::Int(lhs_lit), TermNode::Int(rhs_lit)) = (lhs.data(db), rhs.data(db)) {
-        let a = lhs_lit.data(db);
-        let b = rhs_lit.data(db);
-        let result = match op {
-            TermCmpOp::Eq => a == b,
-            TermCmpOp::Ne => a != b,
-            TermCmpOp::Lt => a < b,
-            TermCmpOp::Le => a <= b,
-            TermCmpOp::Gt => a > b,
-            TermCmpOp::Ge => a >= b,
-        };
+        let result = compare_nats(op, lhs_lit.data(db), rhs_lit.data(db));
         return TermId::bool(db, result);
     }
 
