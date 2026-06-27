@@ -396,9 +396,9 @@ struct QuoteTemplate<'db> {
     /// Declared open names (`quote(other) { .. }`); `self` is implicitly
     /// open.
     open: Vec<IdentId<'db>>,
-    /// The template body: a block expression in the provider's body, or a
-    /// match-arm sequence.
-    body: QuoteBody,
+    /// The template body: a block expression in the provider's body, a
+    /// match-arm sequence, or a method definition.
+    body: QuoteBody<'db>,
     /// Captured hole values, keyed by the hole expression
     /// (`Expr::QuoteHole` / `Expr::QuoteFieldHole`) for expression holes,
     /// and by the hole's inner expression for pattern holes
@@ -1297,6 +1297,10 @@ impl<'a, 'db> ProviderExecutor<'a, 'db> {
                         let arms = arms.clone();
                         self.capture_arm_holes(&arms, &mut holes)?;
                     }
+                    // The method body is an ordinary expression template; its
+                    // `${...}` holes are captured the same way. The signature
+                    // is inert and carries no holes.
+                    QuoteBody::Method(_, root) => self.capture_quote_holes(*root, &mut holes)?,
                 }
                 self.quotes.push(QuoteTemplate {
                     origin: expr,
@@ -1527,6 +1531,14 @@ impl<'a, 'db> ProviderExecutor<'a, 'db> {
                      template (wrap the arms in a `match`)",
                 ));
             }
+            QuoteBody::Method(..) => {
+                return Err(self.invalid_quote(
+                    template.origin,
+                    "the quote holds a method definition; expression positions need an \
+                     expression template. Emit the whole method with \
+                     `emit_method(quote { fn .. })`.",
+                ));
+            }
         };
         let Partial::Present(Expr::Block(stmts)) = block.data(self.db, self.body) else {
             return Err(self.invalid_quote(template.origin, "malformed quote body"));
@@ -1587,6 +1599,11 @@ impl<'a, 'db> ProviderExecutor<'a, 'db> {
                      (`pat => expr` items) or an empty `quote { }`",
                 ))
             }
+            QuoteBody::Method(..) => Err(self.invalid_quote(
+                template.origin,
+                "the quote holds a method definition; arm splices need match arms \
+                 (`pat => expr` items) or an empty `quote { }`",
+            )),
         }
     }
 

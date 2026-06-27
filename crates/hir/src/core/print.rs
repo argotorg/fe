@@ -895,6 +895,26 @@ impl<'db> Expr<'db> {
                             .join(", ");
                         format!("{{ {arms_str} }}")
                     }
+                    QuoteBody::Method(sig, method_body) => {
+                        let name = sig
+                            .name
+                            .to_opt()
+                            .map_or_else(|| "{unknown}".to_string(), |n| n.data(db).to_string());
+                        let params = sig
+                            .params
+                            .map_or_else(|| "()".to_string(), |p| p.pretty_print(db));
+                        let ret = sig
+                            .ret
+                            .map_or_else(String::new, |t| format!(" -> {}", t.pretty_print(db)));
+                        let body_ref =
+                            unwrap_partial_ref(method_body.data(db, body), "Quote::method body");
+                        let body_str = if matches!(body_ref, Expr::Block(_)) {
+                            body_ref.pretty_print(db, body, indent)
+                        } else {
+                            format!("{{ {} }}", body_ref.pretty_print(db, body, indent))
+                        };
+                        format!("{{ fn {name}{params}{ret} {body_str} }}")
+                    }
                 };
                 format!("quote{open_str} {body_str}")
             }

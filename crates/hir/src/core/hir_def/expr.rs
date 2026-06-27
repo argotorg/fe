@@ -1,7 +1,8 @@
 use cranelift_entity::entity_impl;
 
 use super::{
-    Body, GenericArgListId, IdentId, IntegerId, LitKind, Partial, PatId, PathId, StmtId, TypeId,
+    Body, FuncParamListId, GenericArgListId, IdentId, IntegerId, LitKind, Partial, PatId, PathId,
+    StmtId, TypeId,
 };
 use crate::{HirDb, span::expr::LazyExprSpan};
 
@@ -62,7 +63,7 @@ pub enum Expr<'db> {
         /// emitted into (`self`/`Self` are implicitly open).
         open: Vec<IdentId<'db>>,
         /// The template body.
-        body: QuoteBody,
+        body: QuoteBody<'db>,
     },
     /// `${expr}` — a splice hole in expression position inside a quote body.
     QuoteHole(ExprId),
@@ -72,15 +73,37 @@ pub enum Expr<'db> {
 
 /// The body of a quote template. The shape is structural: a block is an
 /// expression template; a `pat => expr` sequence is a match-arm template
-/// (spliceable into match-arm position).
+/// (spliceable into match-arm position); a `fn name(self, ..) -> Ret { .. }`
+/// is a method-definition template (emitted as a whole method member).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
-pub enum QuoteBody {
+pub enum QuoteBody<'db> {
     /// `quote { expr }` — a block expression template.
     Expr(ExprId),
     /// `quote { ${arms}, ${variant}(group) => expr }` — a match-arm
     /// sequence template. Arm splices are arms with an absent pattern whose
     /// body is the splice hole.
     Arms(Vec<MatchArm>),
+    /// `quote { fn name(self, ..) -> Ret { body } }` — a method-definition
+    /// template. The signature is captured structurally (name, parameters,
+    /// return type) off the real `fn` node; `body` is the method's body
+    /// block, an expression in this body's arena so its `${...}` holes are
+    /// captured and elaborated exactly like an [`QuoteBody::Expr`] template.
+    Method(QuoteMethodSig<'db>, ExprId),
+}
+
+/// The spelled signature of a [`QuoteBody::Method`] template, captured
+/// structurally from the quote's `fn` node. It is validated against the goal
+/// trait's declaration when the method is emitted (see the provider executor);
+/// it is never type-checked directly as written.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+pub struct QuoteMethodSig<'db> {
+    /// The spelled method name (`fn NAME`).
+    pub name: Partial<IdentId<'db>>,
+    /// The spelled parameter list, including the `self` receiver, in the same
+    /// interned representation an ordinary `fn` uses.
+    pub params: Option<FuncParamListId<'db>>,
+    /// The spelled return type (`-> Ret`), if any.
+    pub ret: Option<TypeId<'db>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, salsa::Update)]

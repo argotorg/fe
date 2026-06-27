@@ -1640,6 +1640,11 @@ pub fn walk_expr<'db, V>(
                     visit_node_in_body!(visitor, ctxt, &arm.body, expr);
                 }
             }
+            // The signature is an inert template (never type-checked as
+            // written); only the body block carries holes to walk.
+            QuoteBody::Method(_sig, body) => {
+                visit_node_in_body!(visitor, ctxt, body, expr);
+            }
         },
 
         Expr::QuoteHole(inner) => {
