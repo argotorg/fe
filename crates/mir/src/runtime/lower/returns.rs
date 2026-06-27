@@ -306,6 +306,10 @@ struct ReturnSliceInferer<'summary, 'lookup, 'db> {
     db: &'db dyn MirDb,
     summary: &'summary RuntimeReturnSummary<'db>,
     carriers: Vec<RuntimeCarrier<'db>>,
+    /// Locals whose carrier is fixed by the interface signature (the runtime-visible
+    /// parameters); mirrors [`LocalStateInferer`] so both solvers agree on param carriers
+    /// when a parameter is itself a returned value. See its `signature_pinned` field.
+    signature_pinned: Vec<bool>,
     class_cache: InferClassCache<'db>,
     pending_dependents: Vec<SliceAssignmentId>,
     lookup: &'lookup mut dyn FnMut(RuntimeInstanceKey<'db>) -> Option<RuntimeClass<'db>>,
@@ -323,13 +327,16 @@ impl<'summary, 'lookup, 'db> ReturnSliceInferer<'summary, 'lookup, 'db> {
         lookup: &'lookup mut dyn FnMut(RuntimeInstanceKey<'db>) -> Option<RuntimeClass<'db>>,
     ) -> Self {
         let mut carriers = vec![RuntimeCarrier::Erased; summary.semantic_body.locals.len()];
+        let mut signature_pinned = vec![false; summary.semantic_body.locals.len()];
         for (class, local) in params.iter().zip(summary.param_locals.iter().copied()) {
             carriers[local.index()] = RuntimeCarrier::Value(class.clone());
+            signature_pinned[local.index()] = true;
         }
         Self {
             db,
             summary,
             carriers,
+            signature_pinned,
             class_cache: InferClassCache::new(summary.semantic_body.locals.len()),
             pending_dependents: Vec::new(),
             lookup,
@@ -343,6 +350,9 @@ impl<'summary, 'lookup, 'db> ReturnSliceInferer<'summary, 'lookup, 'db> {
     }
 
     fn set_carrier(&mut self, local: SLocalId, desired: RuntimeCarrier<'db>) -> bool {
+        if self.signature_pinned[local.index()] {
+            return false;
+        }
         let current = self
             .carriers
             .get(local.index())
