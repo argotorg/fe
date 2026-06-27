@@ -54,6 +54,12 @@ pub(super) struct InferenceResult<'db> {
 pub(super) struct LocalStateInferer<'a, 'db> {
     env: BodyEnv<'a, 'db>,
     carriers: Vec<RuntimeCarrier<'db>>,
+    /// Locals whose carrier is fixed by the interface signature (the runtime-visible
+    /// parameters). Their carrier is the calling convention: the verifier requires it to
+    /// stay exactly equal to the signature param class, so inference must never refine it
+    /// (e.g. upgrading an owned aggregate param to an object ref for internal mutable
+    /// storage — that is satisfied by a [`RuntimeLocalRoot::Slot`] instead).
+    signature_pinned: Vec<bool>,
     class_cache: InferClassCache<'db>,
     pending_dependents: Vec<AssignmentId>,
 }
@@ -65,12 +71,15 @@ impl<'a, 'db> LocalStateInferer<'a, 'db> {
         param_locals: &[SLocalId],
     ) -> Self {
         let mut carriers = vec![RuntimeCarrier::Erased; env.body().locals.len()];
+        let mut signature_pinned = vec![false; env.body().locals.len()];
         for (class, local) in params.iter().zip(param_locals.iter().copied()) {
             carriers[local.index()] = RuntimeCarrier::Value(class.clone());
+            signature_pinned[local.index()] = true;
         }
         Self {
             env,
             carriers,
+            signature_pinned,
             class_cache: InferClassCache::new(env.body().locals.len()),
             pending_dependents: Vec::new(),
         }
@@ -112,6 +121,9 @@ impl<'a, 'db> LocalStateInferer<'a, 'db> {
     }
 
     fn set_carrier(&mut self, local: SLocalId, desired: RuntimeCarrier<'db>) -> bool {
+        if self.signature_pinned[local.index()] {
+            return false;
+        }
         let current = self
             .carriers
             .get(local.index())
