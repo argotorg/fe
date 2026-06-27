@@ -1540,6 +1540,21 @@ impl<'a, 'db> ProviderExecutor<'a, 'db> {
                 ));
             }
         };
+        self.elab_block_template(block, &template, sig, binders)
+    }
+
+    /// Elaborates a single-expression block template (the body of a
+    /// [`QuoteBody::Expr`] quote, or the method body of a
+    /// [`QuoteBody::Method`] quote) into one generated expression. Shared by
+    /// [`Self::elaborate_quote`] and [`Self::elaborate_quote_method`] so the
+    /// method form produces byte-identical output to the expression form.
+    fn elab_block_template(
+        &mut self,
+        block: ExprId,
+        template: &QuoteTemplate<'db>,
+        sig: SigId,
+        binders: &[BinderGroup<'db>],
+    ) -> Result<GenExprId, ExecError> {
         let Partial::Present(Expr::Block(stmts)) = block.data(self.db, self.body) else {
             return Err(self.invalid_quote(template.origin, "malformed quote body"));
         };
@@ -1565,7 +1580,126 @@ impl<'a, 'db> ProviderExecutor<'a, 'db> {
                 );
             }
         };
-        self.elab_template_expr(root, &template, sig, binders)
+        self.elab_template_expr(root, template, sig, binders)
+    }
+
+    /// Elaborates a [`QuoteBody::Method`] quote into the canonical method
+    /// signature plus the elaborated body expression, ready to push as a
+    /// [`ProviderEffect::EmitMethod`].
+    ///
+    /// The signature SOURCE is the spelled `fn` header, but the signature USED
+    /// for codegen is the canonical one inferred from the goal trait's
+    /// declaration ([`Self::infer_method_sig`]): for a conforming provider the
+    /// two are equal, so the generated impl is byte-identical to the
+    /// `emit_method(name, body)` form, while a non-conforming spelled header
+    /// becomes a named diagnostic (see [`Self::validate_spelled_method_sig`]).
+    ///
+    /// The method's parameters are its body's binding scope: the effective open
+    /// names are exactly the canonical parameter names, so `self`/parameter
+    /// references in the body resolve the same way an explicit
+    /// `quote(param, ..) { .. }` would, with no open-name dance.
+    fn elaborate_quote_method(
+        &mut self,
+        quote: QuoteId,
+        at: ExprId,
+    ) -> Result<(SigId, GenExprId), ExecError> {
+        let template = self.quotes[quote.0].clone();
+        let QuoteBody::Method(spelled, body_block) = &template.body else {
+            return Err(self.invalid_method(at, "expected a method quote `quote { fn .. }`"));
+        };
+        let spelled = spelled.clone();
+        let body_block = *body_block;
+
+        let Partial::Present(name) = spelled.name else {
+            return Err(self.invalid_method(at, "the quoted method has no name"));
+        };
+
+        // Canonical signature from the goal trait's declaration: the
+        // byte-identical source of truth for codegen.
+        let sig = self.infer_method_sig(at, name)?;
+        // The spelled header must conform to that declaration.
+        self.validate_spelled_method_sig(at, &spelled, sig)?;
+
+        // The method's parameters bind its body; elaborate with them open so
+        // `self`/parameter references resolve like the `emit_method(name, body)`
+        // form's explicitly-opened names.
+        let mut effective = template.clone();
+        effective.open = self.sigs[sig.0].args.iter().map(|(arg, _)| *arg).collect();
+        self.validate_open_names(&effective, sig, &[])?;
+        let body = self.elab_block_template(body_block, &effective, sig, &[])?;
+        Ok((sig, body))
+    }
+
+    /// Checks that a [`QuoteBody::Method`] quote's spelled `fn` header conforms
+    /// to the goal trait's declaration of the same method (whose canonical
+    /// [`GenMethodSig`] is `sig`): same `self`-receiver presence, same parameter
+    /// count, and same parameter names in order. A mismatch is a named provider
+    /// diagnostic rather than the silent inference the `emit_method(name, body)`
+    /// form did. (Parameter/return TYPE conformance is validated when the sealed
+    /// generated impl re-enters ordinary checking; the spelled types are inert
+    /// here.)
+    fn validate_spelled_method_sig(
+        &mut self,
+        at: ExprId,
+        spelled: &crate::hir_def::QuoteMethodSig<'db>,
+        sig: SigId,
+    ) -> Result<(), ExecError> {
+        let canon = &self.sigs[sig.0];
+        let canon_name = canon.name;
+        let canon_takes_self = canon.takes_self;
+        let canon_args: Vec<IdentId<'db>> = canon.args.iter().map(|(arg, _)| *arg).collect();
+
+        let params: Vec<crate::hir_def::FuncParam<'db>> = spelled
+            .params
+            .map(|p| p.data(self.db).clone())
+            .unwrap_or_default();
+        let spelled_takes_self = params.first().is_some_and(|p| p.is_self_param(self.db));
+        if spelled_takes_self != canon_takes_self {
+            let detail = if canon_takes_self {
+                format!(
+                    "the quoted method `{}` omits the `self` receiver that the goal trait's \
+                     declaration requires",
+                    canon_name.data(self.db),
+                )
+            } else {
+                format!(
+                    "the quoted method `{}` takes a `self` receiver, but the goal trait's \
+                     declaration does not",
+                    canon_name.data(self.db),
+                )
+            };
+            return Err(self.invalid_method(at, &detail));
+        }
+
+        let spelled_args: Vec<IdentId<'db>> = params
+            .iter()
+            .skip(usize::from(spelled_takes_self))
+            .filter_map(|p| p.name())
+            .collect();
+        if spelled_args.len() != canon_args.len() {
+            let detail = format!(
+                "the quoted method `{}` declares {} parameter(s), but the goal trait's \
+                 declaration has {}",
+                canon_name.data(self.db),
+                spelled_args.len(),
+                canon_args.len(),
+            );
+            return Err(self.invalid_method(at, &detail));
+        }
+        for (spelled_arg, canon_arg) in spelled_args.iter().zip(canon_args.iter()) {
+            if spelled_arg != canon_arg {
+                let detail = format!(
+                    "the quoted method `{}` names a parameter `{}` where the goal trait's \
+                     declaration names `{}`; parameter names must match for the body's \
+                     references to resolve",
+                    canon_name.data(self.db),
+                    spelled_arg.data(self.db),
+                    canon_arg.data(self.db),
+                );
+                return Err(self.invalid_method(at, &detail));
+            }
+        }
+        Ok(())
     }
 
     /// Elaborates a quote spliced in match-arm position, appending its arms
@@ -2402,6 +2536,40 @@ impl<'a, 'db> ProviderExecutor<'a, 'db> {
                 if self.emitted_methods.contains(&name) {
                     return Err(self.invalid_method(
                         name_arg.expr,
+                        &format!("duplicate generated method `{}`", name.data(self.db)),
+                    ));
+                }
+                self.emitted_methods.push(name);
+                self.effects.push(ProviderEffect::EmitMethod { sig, body });
+                Ok(Value::Unit)
+            }
+            ("emit_method", [method_arg]) => {
+                self.check_not_finished(expr)?;
+                // The quoted-method artifact: `emit_method(quote { fn name(self,
+                // ..) -> Ret { body } })` emits a whole method from one quote.
+                // The spelled `fn` header is the structural signature source; it
+                // is validated against the goal trait's declaration, and the
+                // canonical (declaration-derived) signature is used for codegen
+                // so the result is byte-identical to the `emit_method(name, body)`
+                // form (see `elaborate_quote_method`).
+                let Value::Quote(quote) = self.eval_expr(method_arg.expr)? else {
+                    return Err(self.invalid_method(
+                        method_arg.expr,
+                        "one-argument `emit_method` takes a method quote `quote { fn .. }`",
+                    ));
+                };
+                if !matches!(self.quotes[quote.0].body, QuoteBody::Method(..)) {
+                    return Err(self.invalid_method(
+                        method_arg.expr,
+                        "`emit_method(quote { .. })` requires a method quote \
+                         `quote { fn name(..) -> Ret { .. } }`",
+                    ));
+                }
+                let (sig, body) = self.elaborate_quote_method(quote, method_arg.expr)?;
+                let name = self.sigs[sig.0].name;
+                if self.emitted_methods.contains(&name) {
+                    return Err(self.invalid_method(
+                        method_arg.expr,
                         &format!("duplicate generated method `{}`", name.data(self.db)),
                     ));
                 }
