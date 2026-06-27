@@ -3490,9 +3490,9 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                         span: field_span.resolve(db),
                     },
                 ],
-                notes: vec![format!(
-                    "immutable contract fields can only be assigned in `init`; mark the field `mut` to make it mutable contract state",
-                )],
+                notes: vec![
+                    "immutable contract fields can only be assigned in `init`; mark the field `mut` to make it mutable contract state".to_string(),
+                ],
                 error_code,
             },
 

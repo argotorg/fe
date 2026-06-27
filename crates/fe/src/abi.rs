@@ -881,10 +881,9 @@ fn std_sol_compat_abi_type(
     // Match Uint{N} or Int{N} where N is a valid Solidity bit width (8..=256, multiple of 8)
     let (prefix, digits) = if let Some(rest) = name.strip_prefix("Uint") {
         ("uint", rest)
-    } else if let Some(rest) = name.strip_prefix("Int") {
-        ("int", rest)
     } else {
-        return None;
+        let rest = name.strip_prefix("Int")?;
+        ("int", rest)
     };
 
     let bits: u16 = digits.parse().ok()?;

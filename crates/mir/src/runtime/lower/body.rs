@@ -150,13 +150,7 @@ fn check_runtime_body_supported<'db>(
     for block in &body.blocks {
         for stmt in &block.stmts {
             if let NSStmtKind::Assign {
-                expr:
-                    NExpr::Call {
-                        callee,
-                        args,
-                        effect_args: _,
-                        ..
-                    },
+                expr: NExpr::Call { callee, args, .. },
                 ..
             } = &stmt.kind
                 && let Some(value_ty) = panic_payload_ty(db, body, *callee, args)
