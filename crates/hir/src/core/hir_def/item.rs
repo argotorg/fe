@@ -2088,4 +2088,104 @@ mod keystone_tripwire {
             "reorder-invariance requires content keying, not positional ordinals: {reprs_a:?}"
         );
     }
+
+    /// The sorted interning-identity reprs of every generated *method* across all
+    /// generated `impl Trait` items for `text`. SGK rung-1 "x-3d unnecessary"
+    /// proof: a generated method's id is content-rooted at
+    /// `..::GeneratedImplTrait{goal,self_ty}::Func(name)` (and its body one
+    /// constant `::FuncBody` join below that), with no positional ordinal, so
+    /// relocating body construction to a downstream query cannot change it.
+    fn generated_method_reprs(text: &str) -> Vec<String> {
+        let mut db = TestDb::default();
+        let file = db.standalone_file(text);
+        let top_mod = map_file_to_mod(&db, file);
+        let mut reprs: Vec<String> = generated_hir_items(&db, top_mod)
+            .iter()
+            .filter_map(|item| match item {
+                ItemKind::ImplTrait(impl_trait) => Some(*impl_trait),
+                _ => None,
+            })
+            .flat_map(|impl_trait| {
+                impl_trait
+                    .methods(&db)
+                    .map(|f| f.id(&db).variant(&db).content_repr(&db))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        reprs.sort();
+        reprs
+    }
+
+    /// (i, body level) Generated method/body identities are stable across two
+    /// independent analyses and content-keyed (no positional ordinal), so the
+    /// body identity needs no downstream-query relocation (x-3d) to be stable.
+    #[test]
+    fn generated_method_identity_stable_across_analyses() {
+        let text = r#"
+            #[derive(Eq, Default)]
+            struct Point {
+                x: u256,
+                y: u256,
+            }
+        "#;
+
+        let first = generated_method_reprs(text);
+        let second = generated_method_reprs(text);
+
+        assert_eq!(
+            first, second,
+            "generated method/body identities must be stable across analyses"
+        );
+        assert!(!first.is_empty(), "expected generated methods");
+        assert!(
+            first.iter().all(|repr| repr.contains("GeneratedImplTrait")
+                && repr.contains("Func(")
+                && !repr.contains("ord:")),
+            "generated method ids must be content-keyed under GeneratedImplTrait::Func, \
+             not positional: {first:?}"
+        );
+    }
+
+    /// (ii, body level) Reordering sibling derive targets does not change any
+    /// generated method/body identity.
+    #[test]
+    fn generated_method_identity_invariant_under_sibling_reorder() {
+        let order_a = r#"
+            #[derive(Eq)]
+            struct A {
+                x: u256,
+            }
+
+            #[derive(Eq)]
+            struct B {
+                y: u256,
+            }
+        "#;
+        let order_b = r#"
+            #[derive(Eq)]
+            struct B {
+                y: u256,
+            }
+
+            #[derive(Eq)]
+            struct A {
+                x: u256,
+            }
+        "#;
+
+        let reprs_a = generated_method_reprs(order_a);
+        let reprs_b = generated_method_reprs(order_b);
+
+        assert_eq!(
+            reprs_a, reprs_b,
+            "generated method/body identities must be invariant under sibling derive reordering"
+        );
+        assert!(!reprs_a.is_empty());
+        assert!(
+            reprs_a.iter().all(|repr| repr.contains("GeneratedImplTrait")
+                && repr.contains("Func(")
+                && !repr.contains("ord:")),
+            "reorder-invariance requires content keying: {reprs_a:?}"
+        );
+    }
 }
