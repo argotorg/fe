@@ -22,16 +22,6 @@ mod InnerMsg {
         const SELECTOR: u32 = 1
     }
 
-    impl core::abi::AbiSize for Inner {
-        const HEAD_SIZE: u256 = 0 + u256::HEAD_SIZE + Bytes::HEAD_SIZE
-        const IS_DYNAMIC: bool = false || u256::IS_DYNAMIC || Bytes::IS_DYNAMIC
-
-        #[inline(always)]
-        fn payload_size(self) -> u256 {
-            return <Self as core::abi::AbiSize>::HEAD_SIZE + core::abi::dynamic_payload_size(self.marker) + core::abi::dynamic_payload_size(self.data)
-        }
-    }
-
     impl core::abi::Encode<std::abi::Sol> for Inner {
         const DIRECT_ENCODE: bool = true && <u256 as core::abi::Encode<std::abi::Sol> >::DIRECT_ENCODE && <Bytes as core::abi::Encode<std::abi::Sol> >::DIRECT_ENCODE
 
@@ -69,6 +59,16 @@ mod InnerMsg {
             return Self { marker: marker, data: data }
         }
     }
+
+    impl core::abi::AbiSize for Inner {
+        const HEAD_SIZE: u256 = <() as core::abi::AbiSize>::HEAD_SIZE + <u256 as core::abi::AbiSize>::HEAD_SIZE + <Bytes as core::abi::AbiSize>::HEAD_SIZE
+        const IS_DYNAMIC: bool = false || <u256 as core::abi::AbiSize>::IS_DYNAMIC || <Bytes as core::abi::AbiSize>::IS_DYNAMIC
+
+        #[inline(always)]
+        fn payload_size(self) -> u256 {
+            return Self::HEAD_SIZE + self.marker.dynamic_payload_size_of() + self.data.dynamic_payload_size_of()
+        }
+    }
 }
 
 mod OuterMsg {
@@ -83,16 +83,6 @@ mod OuterMsg {
     impl core::message::MsgVariant<std::abi::Sol> for Outer {
         type Return = ()
         const SELECTOR: u32 = 2
-    }
-
-    impl core::abi::AbiSize for Outer {
-        const HEAD_SIZE: u256 = 0 + InnerMsg::Inner::HEAD_SIZE
-        const IS_DYNAMIC: bool = false || InnerMsg::Inner::IS_DYNAMIC
-
-        #[inline(always)]
-        fn payload_size(self) -> u256 {
-            return <Self as core::abi::AbiSize>::HEAD_SIZE + core::abi::dynamic_payload_size(self.inner)
-        }
     }
 
     impl core::abi::Encode<std::abi::Sol> for Outer {
@@ -124,6 +114,16 @@ mod OuterMsg {
             let __fe_msg_decode_input_len: u256 = __fe_msg_decode_input.len()
             let inner: InnerMsg::Inner = core::abi::decode_msg_field_from<std::abi::Sol, InnerMsg::Inner, I>(__fe_msg_decode_input, base: __fe_msg_decode_base, head_pos: __fe_msg_decode_base, input_len: __fe_msg_decode_input_len)
             return Self { inner: inner }
+        }
+    }
+
+    impl core::abi::AbiSize for Outer {
+        const HEAD_SIZE: u256 = <() as core::abi::AbiSize>::HEAD_SIZE + <InnerMsg::Inner as core::abi::AbiSize>::HEAD_SIZE
+        const IS_DYNAMIC: bool = false || <InnerMsg::Inner as core::abi::AbiSize>::IS_DYNAMIC
+
+        #[inline(always)]
+        fn payload_size(self) -> u256 {
+            return Self::HEAD_SIZE + self.inner.dynamic_payload_size_of()
         }
     }
 }
