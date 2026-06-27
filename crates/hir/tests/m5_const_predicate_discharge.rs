@@ -831,7 +831,7 @@ fn wf_const_predicate_symbolic_generic_not_refuted() {
 // implication. This mirrors the obligation discharge path: a caller's
 // assumption discharges a callee predicate only by identity, so if the impl
 // could publish one predicate to trait-routed callers while its body relied
-// on another, the discharge guarantee would break. Reported as `6-0016`
+// on another, the discharge guarantee would break. Reported as `6-0022`
 // (`ImplDiag::MethodConstPredicateMismatch`).
 // =====================================================================
 
@@ -868,7 +868,7 @@ impl HasOp for X {
     }
 }
 "#,
-        "6-0016",
+        "6-0022",
     );
 }
 
@@ -888,7 +888,7 @@ impl HasOp for X {
     }
 }
 "#,
-        "6-0016",
+        "6-0022",
     );
 }
 
@@ -907,7 +907,7 @@ impl HasOp for X {
     }
 }
 "#,
-        "6-0016",
+        "6-0022",
     );
 }
 
@@ -926,7 +926,7 @@ impl HasOp for X {
     }
 }
 "#,
-        "6-0016",
+        "6-0022",
     );
 }
 
@@ -947,7 +947,7 @@ impl HasOp for X {
     }
 }
 "#,
-        "6-0016",
+        "6-0022",
     );
 }
 
@@ -1007,6 +1007,6 @@ impl HasSize for X {
     }
 }
 "#,
-        "6-0016",
+        "6-0022",
     );
 }
