@@ -910,6 +910,39 @@ fn check_projected_trait_use_wf<'db>(
         }
     }
 
+    // The projection base `<X as Tr>` is well-formed when `X: Tr` holds by definition, even
+    // when the surrounding header assumptions deliberately omit the corresponding predicate
+    // (see `header_constraints_for`, which drops the `Self: Trait` self-predicate to keep
+    // projection from recursing through the in-progress trait). Two such structural cases:
+    let self_ty = inst.self_ty(db);
+
+    // 1. `<Self as ThisTrait>`: a trait's own self-parameter implements the trait by
+    //    definition, so projecting the trait's own associated types in its header
+    //    (e.g. `Self::Item` in `trait Direct: A<Self::Item>`) is always well-formed.
+    if Some(self_ty)
+        == crate::analysis::ty::ty_lower::collect_generic_params(db, inst.def(db).into())
+            .trait_self(db)
+    {
+        return WellFormedness::WellFormed;
+    }
+
+    // 2. `<T::Name as Tr>` where `type Name: Tr` is a declared bound on the associated type:
+    //    every projection of `Name` satisfies its declared bounds for any `T`, so the
+    //    projected trait use is well-formed (e.g. the `Self::Item::Assoc` second hop in
+    //    `trait RecursiveSuper: A<Self::Item::Assoc> { type Item: RecursiveSuper }`).
+    if let TyData::AssocTy(assoc) = self_ty.data(db) {
+        if let Some(assoc_view) = assoc
+            .trait_
+            .def(db)
+            .assoc_types(db)
+            .find(|t| t.name(db) == Some(assoc.name))
+        {
+            if self_ty.assoc_type_bounds(db, assoc_view).any(|b| b == inst) {
+                return WellFormedness::WellFormed;
+            }
+        }
+    }
+
     unsatisfied_goal(db, solve_cx, inst).unwrap_or(WellFormedness::WellFormed)
 }
 
