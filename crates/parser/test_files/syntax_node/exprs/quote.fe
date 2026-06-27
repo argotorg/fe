@@ -1,0 +1,12 @@
+quote { fn eq(self, other: Self) -> bool { ${body} } }
+
+quote { Foo(a) => true, Bar => false }
+
+quote { true }
+
+quote { match self { Foo(a) => true } }
+
+quote {
+    setup()
+    fn helper() -> bool { true }
+}

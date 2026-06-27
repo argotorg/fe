@@ -323,6 +323,8 @@ pub enum SyntaxKind {
     QuoteOpenList,
     /// `${expr}` splice hole inside a quote body
     QuoteHoleExpr,
+    /// `fn name(self, ..) -> Ret { .. }` method body of a quote
+    QuoteMethod,
     /// `(1 + 2)`
     ParenExpr,
     /// x = 1
@@ -744,6 +746,7 @@ impl SyntaxKind {
             SyntaxKind::QuoteExpr => "`quote` expression",
             SyntaxKind::QuoteOpenList => "`quote` open name list",
             SyntaxKind::QuoteHoleExpr => "`${...}` splice hole",
+            SyntaxKind::QuoteMethod => "`quote` method body",
             SyntaxKind::ParenExpr => "parenthesized expression",
             SyntaxKind::AssignExpr => "assignment expression",
             SyntaxKind::AugAssignExpr => "augmented assignment expression",

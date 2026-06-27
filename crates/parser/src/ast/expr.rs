@@ -445,6 +445,13 @@ impl QuoteExpr {
     pub fn arms(&self) -> Option<MatchArmList> {
         support::child(self.syntax())
     }
+
+    /// Returns the method body (`quote { fn name(self, ..) -> Ret { .. } }`),
+    /// if the quote is a method template rather than an expression or
+    /// arm-sequence template.
+    pub fn method(&self) -> Option<QuoteMethod> {
+        support::child(self.syntax())
+    }
 }
 
 ast_node! {
@@ -470,6 +477,20 @@ ast_node! {
 impl QuoteHoleExpr {
     /// Returns the spliced expression.
     pub fn expr(&self) -> Option<Expr> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
+    /// `fn name(self, ..) -> Ret { .. }` method body of a quote
+    pub struct QuoteMethod,
+    SK::QuoteMethod
+}
+impl QuoteMethod {
+    /// Returns the function definition spelled as the quote's method body.
+    /// Downstream lowering reads the method name, parameters, return type and
+    /// body block off this real `fn` node.
+    pub fn func(&self) -> Option<super::Func> {
         support::child(self.syntax())
     }
 }

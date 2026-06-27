@@ -7,6 +7,7 @@ use super::token_stream::LexicalToken;
 use super::{
     ErrProof, Parser, Recovery, define_scope,
     expr::{parse_condition_expr, parse_expr, parse_expr_no_struct},
+    func::{FuncDefScope, FuncScope},
     item::ItemScope,
     parse_list, parse_pat,
     stmt::parse_stmt,
@@ -293,11 +294,30 @@ impl super::Parse for QuoteExprScope {
         if parser.current_kind() != Some(SyntaxKind::LBrace) {
             return parser.error_and_recover("`quote` requires a body `{ ... }`");
         }
-        // Quote bodies come in two structural shapes: an expression body
-        // (a block, the v1 form) and a match-arm sequence (`pat => expr`
-        // items and `${...}` arm splices). A `=>` at brace depth zero can
-        // only belong to an arm of the quote body itself — arms of nested
-        // `match` expressions sit behind their own `{`.
+        // Quote bodies come in three structural shapes: a method definition
+        // (`fn name(self, ..) -> Ret { .. }`, the artifact form), an
+        // expression body (a block, the v1 form), and a match-arm sequence
+        // (`pat => expr` items and `${...}` arm splices). The checks are
+        // ordered method, then arms, then block.
+        //
+        // A method body starts with `fn` as the first meaningful token of the
+        // quote body, at brace depth zero; a `fn` nested inside a `match`/`if`
+        // arm sits behind its own `{` and so is not the first token here.
+        let is_method = parser.dry_run(|p| {
+            p.bump_expected(SyntaxKind::LBrace);
+            while p.current_kind() == Some(SyntaxKind::Newline) {
+                p.bump();
+            }
+            p.current_kind() == Some(SyntaxKind::FnKw)
+        });
+        if is_method {
+            parser.parse(QuoteMethodScope::default())?;
+            return Ok(());
+        }
+
+        // A `=>` at brace depth zero can only belong to an arm of the quote
+        // body itself; arms of nested `match` expressions sit behind their
+        // own `{`.
         let is_arms = parser.dry_run(|p| {
             p.bump_expected(SyntaxKind::LBrace);
             let mut depth = 0usize;
@@ -348,6 +368,31 @@ impl super::Parse for QuoteOpenListScope {
                 }
             },
         )
+    }
+}
+
+define_scope! { QuoteMethodScope, QuoteMethod }
+impl super::Parse for QuoteMethodScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        // The quote body is delimited by the outer `{ .. }`; the method
+        // definition itself is parsed by the real `fn`-item parser so that the
+        // params (`self`, `other: Self`), return type and body block (with its
+        // `${...}` splice holes) all go through existing machinery. `Impl`
+        // mode permits a `self` receiver and requires a body block.
+        parser.bump_expected(SyntaxKind::LBrace);
+        parser.parse(FuncScope::new(FuncDefScope::Impl))?;
+        if parser.find(
+            SyntaxKind::RBrace,
+            crate::ExpectedKind::ClosingBracket {
+                bracket: SyntaxKind::RBrace,
+                parent: SyntaxKind::QuoteMethod,
+            },
+        )? {
+            parser.bump();
+        }
+        Ok(())
     }
 }
 
