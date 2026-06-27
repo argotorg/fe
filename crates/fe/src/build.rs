@@ -1108,7 +1108,13 @@ fn collect_ingot_contract_names(
 ) -> Result<Vec<String>, String> {
     let mut names = BTreeSet::new();
     for &top_mod in ingot.all_modules(db) {
-        let package = build_runtime_package(db, top_mod).map_err(|err| err.to_string())?;
+        // Library/re-export modules contribute nothing deployable; only contracts
+        // (and the root module's `main`) yield artifacts.
+        let Some(package) =
+            mir::build_ingot_module_runtime_package(db, top_mod).map_err(|err| err.to_string())?
+        else {
+            continue;
+        };
         for object in package.root_objects(db) {
             names.insert(object.name(db).clone());
         }
