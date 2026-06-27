@@ -1499,7 +1499,17 @@ fn select_assoc_const_candidate<'db>(
     let mut matches: IndexSet<TraitInstId<'db>> = IndexSet::default();
     for ingot in search_ingots.into_iter().flatten() {
         for cand in impls_for_ty_with_constraints(db, ingot, canonical_receiver, assumptions) {
-            let inst = cand.skip_binder().trait_(db);
+            // Recover the impl's concrete (const-)generic arguments by unifying its self type
+            // against the receiver, so the selected trait instance carries the receiver's args
+            // (e.g. `GenericForward<7>`, not the impl-parameter `GenericForward<N>`). The impls
+            // query discards these bindings, and a downstream impl-satisfiability check on the
+            // un-substituted instance would fail to match the const-generic blanket impl.
+            let mut table = UnificationTable::new(db);
+            let gen_impl = table.instantiate_with_fresh_vars(cand);
+            if table.unify(gen_impl.self_ty(db), receiver_ty).is_err() {
+                continue;
+            }
+            let inst = gen_impl.trait_(db).fold_with(db, &mut table);
             let trait_ = inst.def(db);
             if trait_.const_(db, name).is_some() {
                 matches.insert(inst);
