@@ -52,22 +52,18 @@ impl Derive<Eq> for StableEq {
             builder.emit_method(quote { fn eq(self, other: Self) -> bool { ${body} } })
         }
         if reflect.is_enum() {
-            // Variant counting with plain bools: `multi` is true when the
-            // enum has more than one variant (the inner match then needs a
-            // `_ => false` arm; for a single variant it would be
-            // unreachable).
-            let mut multi = false
-            let mut seen = false
-            for variant in reflect.variants() {
-                if seen {
-                    multi = true
-                }
-                seen = true
-            }
+            // Variant counting as an integer comparison: `multi` is true when
+            // the enum has more than one variant (the inner match then needs a
+            // `_ => false` arm; for a single variant it would be unreachable).
+            // The count comparison is a pure compile-time decision decided by
+            // the same primitive that discharges a `where N > 0` const
+            // predicate, not by provider-local arithmetic.
+            let count = reflect.variants().len()
+            let multi = count > 1
             // An uninhabited enum has no values to compare; `eq` is trivially
             // `true` (and can never be called).
             let mut body = quote { true }
-            if seen {
+            if count > 0 {
                 // match self {
                 //     Enum::V(lhs_..) => match other {
                 //         Enum::V(rhs_..) => lhs_0 == rhs_0 && ..

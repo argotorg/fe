@@ -26,11 +26,14 @@ use super::{
 };
 use crate::{
     HirDb,
-    analysis::ty::ty_def::MAX_INLINE_STRING_BYTES,
+    analysis::ty::{
+        term::{TermCmpOp, compare_nats},
+        ty_def::MAX_INLINE_STRING_BYTES,
+    },
     hir_def::{
         BinOp, Body, CompBinOp, Cond, CondId, Expr, ExprId, Func, GenericArg, GenericArgListId,
-        IdentId, ItemKind, LitKind, LogicalBinOp, MatchArm, Partial, Pat, PatId, PathId, PathKind,
-        QuoteBody, Stmt, StmtId, StringId, Trait, TraitRefId, TypeId, TypeKind,
+        IdentId, IntegerId, ItemKind, LitKind, LogicalBinOp, MatchArm, Partial, Pat, PatId, PathId,
+        PathKind, QuoteBody, Stmt, StmtId, StringId, Trait, TraitRefId, TypeId, TypeKind,
         scope_graph::ScopeId,
     },
     span::HirOrigin,
@@ -560,6 +563,11 @@ enum Value<'db> {
     /// A compile-time string (string literals, reflected names, and
     /// `concat` results).
     Str(StringId<'db>),
+    /// A compile-time natural number: an integer literal or a reflected count
+    /// (`reflect.variants().len()`). Steering compares these through the SHARED
+    /// `compare_nats` primitive (the same code that decides a `where N > 0`
+    /// const predicate), never a provider-local comparator.
+    Int(IntegerId<'db>),
     /// A reflected field handle, as a typed read-only handle (TD5c). Scalar
     /// reads (`ty`/`name`) resolve against the handle's own property table; its
     /// `FieldKey` identity (which flows into generated HIR / provenance /
@@ -1274,6 +1282,31 @@ impl<'a, 'db> ProviderExecutor<'a, 'db> {
         match expr_data {
             Expr::Lit(LitKind::Bool(value)) => Ok(Value::Bool(*value)),
             Expr::Lit(LitKind::String(value)) => Ok(Value::Str(*value)),
+            Expr::Lit(LitKind::Int(value)) => Ok(Value::Int(*value)),
+            // A pure integer comparison in provider steering (e.g.
+            // `reflect.variants().len() > 1`): both operands are evaluated to
+            // compile-time naturals and the relation is decided by the SHARED
+            // `compare_nats` primitive (the same code that discharges a
+            // `where N > 0` const predicate), so steering grows no local
+            // integer comparator. Pure decision, no emission.
+            Expr::Bin(lhs, rhs, BinOp::Comp(op)) => {
+                let (lhs, rhs, op) = (*lhs, *rhs, *op);
+                let lhs = self.int_value(lhs)?;
+                let rhs = self.int_value(rhs)?;
+                let cmp = match op {
+                    CompBinOp::Eq => TermCmpOp::Eq,
+                    CompBinOp::NotEq => TermCmpOp::Ne,
+                    CompBinOp::Lt => TermCmpOp::Lt,
+                    CompBinOp::LtEq => TermCmpOp::Le,
+                    CompBinOp::Gt => TermCmpOp::Gt,
+                    CompBinOp::GtEq => TermCmpOp::Ge,
+                };
+                Ok(Value::Bool(compare_nats(
+                    cmp,
+                    lhs.data(self.db),
+                    rhs.data(self.db),
+                )))
+            }
             Expr::Path(_) => {
                 let Some(name) = self.simple_expr_path_ident(expr) else {
                     return Err(self.unsupported_expr(expr));
@@ -2346,6 +2379,17 @@ impl<'a, 'db> ProviderExecutor<'a, 'db> {
                 }
                 Err(self.unsupported_expr(expr))
             }
+            // A compile-time sequence (a reflection iterable like
+            // `reflect.variants()`) answers `.len()` with its element count as
+            // a `Value::Int`, the integer source for steering's pure
+            // comparison decisions. Not a `builder.*`/reflection-read op (no
+            // `("name", ..)` arm), so the frozen op surface is unchanged.
+            Value::Seq(items) => match method_name.as_str() {
+                "len" if args.is_empty() => {
+                    Ok(Value::Int(IntegerId::from_usize(self.db, items.len())))
+                }
+                _ => Err(self.unsupported_expr(expr)),
+            },
             _ => Err(self.unsupported_expr(expr)),
         }
     }
@@ -3188,6 +3232,15 @@ impl<'a, 'db> ProviderExecutor<'a, 'db> {
         }
     }
 
+    /// Evaluates `expr` to a compile-time natural number (an integer literal or
+    /// a reflected count). Used by the steering integer-comparison path.
+    fn int_value(&mut self, expr: ExprId) -> Result<IntegerId<'db>, ExecError> {
+        match self.eval_expr(expr)? {
+            Value::Int(value) => Ok(value),
+            _ => Err(self.unsupported_expr(expr)),
+        }
+    }
+
     /// A compile-time string destined for a generated string literal or
     /// exact-width string type; enforces the inline string capacity.
     fn checked_inline_str(&mut self, expr: ExprId) -> Result<StringId<'db>, ExecError> {
@@ -3315,6 +3368,7 @@ fn value_kind_name(value: &Value) -> &'static str {
     match value {
         Value::Bool(_) => "compile-time bool",
         Value::Str(_) => "compile-time string",
+        Value::Int(_) => "compile-time integer",
         Value::Field(_) => "`Field` handle",
         Value::Variant(_) => "`Variant` handle",
         Value::Ty(_) | Value::GenTy(_) => "type value",
@@ -3527,6 +3581,43 @@ mod freeze_guard {
         // language for synthesis to read. The source-level freeze scan below
         // (in the `command_surface_freeze` module) keeps the named op surface
         // pinned independently of this type-level guard.
+    }
+
+    /// SGK-B NO-SECOND-EVALUATOR (comparison/arithmetic). The provider
+    /// executor's STEERING evaluation (`eval_expr`) grows no local integer
+    /// comparator or arithmetic:
+    ///
+    ///   * its only integer comparison is decided by the SHARED `compare_nats`
+    ///     primitive (the same code that discharges a `where N > 0` const
+    ///     predicate — see the `term::steering_int_comparison_agrees_with_ctfe_folding`
+    ///     differential test), and
+    ///   * it evaluates NO integer arithmetic at all (an arithmetic binop falls
+    ///     through to `unsupported`), so a provider body cannot grow `Add`/`Sub`/
+    ///     `Mul` steering value-semantics here.
+    ///
+    /// A future change that adds a provider-local comparator or arithmetic to
+    /// steering trips this scan; any numeric computation must route through the
+    /// shared value-CTFE layer instead.
+    #[test]
+    fn steering_numeric_decisions_use_the_shared_primitive_only() {
+        // Markers assembled at runtime so they do not appear verbatim in this
+        // file's own embedded `SOURCE` (which would shift the scanned slice).
+        let start = format!("fn eval_{}(", "expr");
+        let end = format!("fn capture_quote_{}(", "holes");
+        let eval = slice_between(&start, &end);
+
+        let shared_call = format!("compare_{}(", "nats");
+        assert!(
+            eval.contains(&shared_call),
+            "FREEZE (SGK-B): steering integer comparison must route through the shared \
+             `compare_nats` primitive, not a provider-local comparator."
+        );
+        let local_arith = format!("BinOp::{}", "Arith");
+        assert!(
+            !eval.contains(&local_arith),
+            "FREEZE (SGK-B): steering evaluates integer arithmetic locally; route any numeric \
+             computation through the shared value-CTFE layer (compare_nats / term folding)."
+        );
     }
 }
 

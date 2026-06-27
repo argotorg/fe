@@ -1291,8 +1291,8 @@ mod tests {
     use super::{
         NORMALIZATION_RULES, TERM_ARITH_OP_SHAPE, TERM_CMP_OP_SHAPE, TERM_LANG_SHAPE,
         TERM_LANG_VERSION, TermArithOp, TermCmpOp, TermId, TermLowerError, TermNode,
-        UnsupportedExprKind, callee_from_func_ty, lower_hir_to_term, normalize_term,
-        term_lang_fingerprint, term_of_resolved_const_ty,
+        UnsupportedExprKind, callee_from_func_ty, compare_nats, lower_hir_to_term, normalize_cmp,
+        normalize_term, term_lang_fingerprint, term_of_resolved_const_ty,
     };
     use crate::analysis::ty::const_ty::{ConstTyData, ConstTyId};
     use crate::analysis::ty::trait_resolution::{PredicateListId, constraint::collect_constraints};
@@ -2294,6 +2294,46 @@ mod tests {
             },
         );
         assert_eq!(normalize_term(&db, underflow), underflow);
+    }
+
+    /// SGK-B island differential: a derive provider's integer comparison
+    /// (decided by the shared `compare_nats`) agrees with ordinary
+    /// const-predicate folding (`normalize_cmp`) for every relation over every
+    /// sample. Both route through `compare_nats`, so a future second comparator
+    /// in either path would make them diverge and trip this test.
+    #[test]
+    fn steering_int_comparison_agrees_with_ctfe_folding() {
+        let (db, _file) = setup("island_diff", "");
+        let samples = [
+            (0u32, 0u32),
+            (0, 1),
+            (1, 0),
+            (1, 1),
+            (2, 1),
+            (1, 2),
+            (7, 7),
+            (50, 49),
+        ];
+        for (a, b) in samples {
+            let (na, nb) = (BigUint::from(a), BigUint::from(b));
+            for op in TermCmpOp::ALL {
+                // CTFE path: fold a comparison of two integer-literal terms.
+                let ctfe = normalize_cmp(
+                    &db,
+                    op,
+                    TermId::int(&db, na.clone()),
+                    TermId::int(&db, nb.clone()),
+                );
+                // Steering path: the shared `compare_nats` decider the provider
+                // executor's integer comparison calls.
+                let steering = TermId::bool(&db, compare_nats(op, &na, &nb));
+                assert_eq!(
+                    ctfe, steering,
+                    "const-predicate folding and provider-steering compare_nats disagree \
+                     for {op:?} on ({a}, {b})"
+                );
+            }
+        }
     }
 
     #[test]
