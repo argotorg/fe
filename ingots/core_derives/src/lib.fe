@@ -9,13 +9,15 @@
 // stage. They are written in a restricted command language: reflection
 // iteration (`reflect.fields()`, `reflect.variants()`, `variant.fields()`),
 // boolean locals, `if`/`else`, and `builder` commands that describe the
-// generated impl (requirements, method signatures, and method body
-// expressions). Method bodies can be spelled either as builder expression
-// commands or as `quote { .. }` templates; both elaborate into the same
-// generated expressions. Templates cover `match` too: `${variant}(group)`
-// pattern holes bind a variant's payload under a group name, and arm lists
-// are folded as quotes of `pat => expr` arms spliced with a bare `${...}`
-// hole in arm position.
+// generated impl (requirements and emitted members). A whole method can be
+// emitted from one quote, `builder.emit_method(quote { fn name(self, ..) -> Ret
+// { body } })`: the signature is spelled structurally and validated against the
+// goal trait's declaration. (The older `emit_method("name", body)` form, which
+// infers the signature from the declaration, still works.) Method bodies are
+// `quote { .. }` templates that elaborate into generated expressions. Templates
+// cover `match` too: `${variant}(group)` pattern holes bind a variant's payload
+// under a group name, and arm lists are folded as quotes of `pat => expr` arms
+// spliced with a bare `${...}` hole in arm position.
 
 use core::default::Default
 use core::derive::Derive
@@ -36,14 +38,18 @@ impl Derive<Eq> for StableEq {
         if reflect.is_struct() {
             // true && self.f0 == other.f0 && self.f1 == other.f1 && ..
             // The comparison is spelled out as a quote fold; the leading
-            // `true` seed is folded away by MIR. `other` is an open name,
-            // bound by the `eq` method the quote is emitted into.
+            // `true` seed is folded away by MIR. `other` is the parameter of
+            // the emitted `eq` method (declared in the quoted-method header
+            // below); the fold quote declares it open so its references resolve.
             let mut body = quote { true }
             for field in reflect.fields() {
                 builder.require<Eq>(field.ty())
                 body = quote(other) { ${body} && self.${field} == other.${field} }
             }
-            builder.emit_method("eq", body)
+            // Emit the whole method from one quote: name, receiver, parameter
+            // and return type are spelled structurally; the accumulated body
+            // splices in as `${body}`.
+            builder.emit_method(quote { fn eq(self, other: Self) -> bool { ${body} } })
         }
         if reflect.is_enum() {
             // Variant counting with plain bools: `multi` is true when the
@@ -101,7 +107,7 @@ impl Derive<Eq> for StableEq {
                 }
                 body = quote { match self { ${arms} } }
             }
-            builder.emit_method("eq", body)
+            builder.emit_method(quote { fn eq(self, other: Self) -> bool { ${body} } })
         }
         builder.finish()
         ev

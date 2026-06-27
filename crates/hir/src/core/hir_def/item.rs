@@ -2190,4 +2190,83 @@ mod keystone_tripwire {
             "reorder-invariance requires content keying: {reprs_a:?}"
         );
     }
+
+    /// The sorted pretty-printed source of every generated *method* (signature
+    /// plus body) across all generated `impl Trait` items for `text`.
+    fn generated_method_bodies(text: &str) -> Vec<String> {
+        let mut db = TestDb::default();
+        let file = db.standalone_file(text);
+        let top_mod = map_file_to_mod(&db, file);
+        let mut bodies: Vec<String> = generated_hir_items(&db, top_mod)
+            .iter()
+            .filter_map(|item| match item {
+                ItemKind::ImplTrait(impl_trait) => Some(*impl_trait),
+                _ => None,
+            })
+            .flat_map(|impl_trait| {
+                impl_trait
+                    .methods(&db)
+                    .map(|f| f.pretty_print(&db))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        bodies.sort();
+        bodies
+    }
+
+    /// SGK-B byte-identical lock: the `StableEq` provider emits its `eq` via the
+    /// quoted-method artifact (`emit_method(quote { fn eq(..) { .. } })`). The
+    /// generated method body must stay character-for-character what the prior
+    /// `emit_method("eq", body)` form produced. The reference strings below were
+    /// captured by a stash differential proving the two forms agree exactly;
+    /// note the parameter renders as the canonical `_ other: <Target>` (from the
+    /// trait declaration), NOT the spelled `other: Self`, confirming codegen
+    /// uses the declaration-derived signature.
+    #[test]
+    fn derived_eq_method_body_is_byte_identical() {
+        let struct_eq = generated_method_bodies(
+            r#"
+            #[derive(Eq)]
+            struct Point {
+                x: u256,
+                y: u256,
+            }
+        "#,
+        )
+        .join("\n");
+        assert_eq!(
+            struct_eq,
+            "#[inline(always)]\n\
+             fn eq(self, _ other: Point) -> bool {\n\
+             \x20   return true && self.x == other.x && self.y == other.y\n\
+             }",
+        );
+
+        let enum_eq = generated_method_bodies(
+            r#"
+            #[derive(Eq)]
+            enum Choice {
+                A(u256),
+                B,
+            }
+        "#,
+        )
+        .join("\n");
+        assert_eq!(
+            enum_eq,
+            "#[inline(always)]\n\
+             fn eq(self, _ other: Choice) -> bool {\n\
+             \x20   return match self {\n\
+             \x20       Choice::A(lhs_0) => match other {\n\
+             \x20           Choice::A(rhs_0) => lhs_0 == rhs_0,\n\
+             \x20           _ => false,\n\
+             \x20       },\n\
+             \x20       Choice::B => match other {\n\
+             \x20           Choice::B => true,\n\
+             \x20           _ => false,\n\
+             \x20       },\n\
+             \x20   }\n\
+             }",
+        );
+    }
 }
