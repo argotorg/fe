@@ -17,11 +17,11 @@ pub use runtime::{
     RuntimeLocalRoot, RuntimeObject, RuntimePackage, RuntimeParam, RuntimePlace,
     RuntimeProgramView, RuntimeReturnPlan, RuntimeSection, RuntimeSectionName, RuntimeSectionRef,
     RuntimeSyntheticSpec, SaturatingBinOp, ScalarClass, ScalarRepr, ScalarRole, StructLayout,
-    VariantId, array_elem_size_bytes, build_runtime_package, build_test_runtime_package,
-    enum_tag_size_bytes, enum_variant_field_offset_bytes, format_runtime_body,
-    format_runtime_body_excerpt, format_runtime_package, format_runtime_verify_failure,
-    layout_size_bytes, runtime_instance_stable_key, runtime_instance_symbol_key,
-    serialize_const_region_bytes, struct_field_offset_bytes,
+    VariantId, array_elem_size_bytes, build_ingot_module_runtime_package, build_runtime_package,
+    build_test_runtime_package, enum_tag_size_bytes, enum_variant_field_offset_bytes,
+    format_runtime_body, format_runtime_body_excerpt, format_runtime_package,
+    format_runtime_verify_failure, layout_size_bytes, runtime_instance_stable_key,
+    runtime_instance_symbol_key, serialize_const_region_bytes, struct_field_offset_bytes,
 };
 pub use verify::{
     VerifyError, resolve_runtime_place, resolve_runtime_place_address_class, verify_const_region,

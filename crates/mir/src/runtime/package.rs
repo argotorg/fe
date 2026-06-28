@@ -339,8 +339,20 @@ pub fn build_runtime_package<'db>(
         ));
     }
 
+    build_standalone_main_package(db, top_mod, &entry_funcs)
+}
+
+/// Build the executable `main` object for a non-contract module, given the
+/// free functions to keep alive as standalone runtime roots. `entry_funcs` must
+/// be non-empty; the `main` function (or, failing that, the first root) is used
+/// as the program entry point.
+fn build_standalone_main_package<'db>(
+    db: &'db dyn MirDb,
+    top_mod: TopLevelMod<'db>,
+    entry_funcs: &[Func<'db>],
+) -> Result<RuntimePackage<'db>, LowerError> {
     let mut roots = Vec::new();
-    for func in entry_funcs.iter().copied() {
+    for &func in entry_funcs {
         let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(func))?;
         let entry_effect_args =
             entry_effect_arg_plans(db, EntryEffectContext::StandaloneFunc { func }, semantic)?;
@@ -379,6 +391,77 @@ pub fn build_runtime_package<'db>(
     verify_runtime_package(db, package)
         .map_err(|err| LowerError::Unsupported(format!("invalid runtime package: {err:?}")))?;
     Ok(package)
+}
+
+/// Build the runtime package contributed by `top_mod` as part of an *ingot*
+/// build, or `None` when the module contributes nothing deployable.
+///
+/// An ingot is a package of contracts. Contracts (and manual contract roots) are
+/// deployable wherever they live. The only non-contract artifact an ingot
+/// produces is the root module's `main` executable, when the root module defines
+/// a `main` function (a script-style ingot).
+///
+/// Crucially, library/re-export modules are *not* built as standalone executable
+/// modules here. Their free functions are not entry points: they are lowered as
+/// dependencies of the contracts that call them. Running standalone-root
+/// construction on them (as [`build_runtime_package`] does for a single-module
+/// build) is wrong - it both invents an object named `main` per module (so
+/// multi-module ingots collide) and rejects ordinary helpers that declare `uses`
+/// effect parameters, since a standalone root has no caller to supply them.
+pub fn build_ingot_module_runtime_package<'db>(
+    db: &'db dyn MirDb,
+    top_mod: TopLevelMod<'db>,
+) -> Result<Option<RuntimePackage<'db>>, LowerError> {
+    if !top_mod.all_contracts(db).is_empty()
+        || !discover_manual_contract_roots(db, top_mod)?.is_empty()
+    {
+        return Ok(Some(build_contract_package(db, top_mod)?));
+    }
+    match ingot_root_main_func(db, top_mod)? {
+        Some(main_func) => Ok(Some(build_standalone_main_package(
+            db,
+            top_mod,
+            &[main_func],
+        )?)),
+        None => Ok(None),
+    }
+}
+
+/// Returns the root module's `main` function when it is a valid standalone
+/// executable entry - the only place an ingot may build a `main` object.
+///
+/// This applies the same validation [`build_runtime_package`] uses for a
+/// single-module build: `extern`/`#[test]` functions are skipped, a `main` with
+/// ordinary parameters (or an associated `main`) is not an executable and yields
+/// `None`, and a malformed `main` is a hard error. Because only the function
+/// literally named `main` is ever inspected, library helpers (including
+/// effectful ones, even when defined in the root module) are never
+/// standalone-validated.
+fn ingot_root_main_func<'db>(
+    db: &'db dyn MirDb,
+    top_mod: TopLevelMod<'db>,
+) -> Result<Option<Func<'db>>, LowerError> {
+    use hir::hir_def::HirIngot;
+    if top_mod != top_mod.ingot(db).root_mod(db) {
+        return Ok(None);
+    }
+    let Some(main_func) = top_mod
+        .all_funcs(db)
+        .iter()
+        .copied()
+        .filter(|func| func.top_mod(db) == top_mod)
+        .filter(|func| !func.is_extern(db) && !is_test_func(db, *func))
+        .find(|func| is_main_func(db, *func))
+    else {
+        return Ok(None);
+    };
+    match runtime_root_candidate(db, main_func)? {
+        RuntimeRootCandidate::Root(func) => Ok(Some(func)),
+        RuntimeRootCandidate::NotRoot => Ok(None),
+        RuntimeRootCandidate::Rejected(rejection) => Err(LowerError::Unsupported(
+            format_runtime_root_rejection(db, &rejection),
+        )),
+    }
 }
 
 pub fn build_test_runtime_package<'db>(

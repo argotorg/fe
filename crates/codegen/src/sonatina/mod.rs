@@ -276,10 +276,9 @@ fn select_ingot_runtime_packages<'db>(
 ) -> Result<Vec<RuntimePackage<'db>>, LowerError> {
     let mut packages = Vec::new();
     for &top_mod in ingot.all_modules(db) {
-        let package = build_runtime_package(db, top_mod)?;
-        if package.root_objects(db).is_empty() {
+        let Some(package) = mir::build_ingot_module_runtime_package(db, top_mod)? else {
             continue;
-        }
+        };
         let Some(contract) = contract else {
             packages.push(package);
             continue;
@@ -604,10 +603,9 @@ pub fn emit_module_sonatina_ir_optimized(
 pub fn emit_ingot_sonatina_ir(db: &DriverDataBase, ingot: Ingot<'_>) -> Result<String, LowerError> {
     let mut modules = Vec::new();
     for &top_mod in ingot.all_modules(db) {
-        let package = build_runtime_package(db, top_mod)?;
-        if package.root_objects(db).is_empty() {
+        let Some(package) = mir::build_ingot_module_runtime_package(db, top_mod)? else {
             continue;
-        }
+        };
         modules.push(emit_runtime_package_sonatina_ir(
             db,
             &package,
