@@ -54,7 +54,7 @@ impl super::Parse for PathSegmentScope {
                         parser.bump_trivias();
                         parser.add_error(ParseError::Unexpected(
                             "unexpected turbofish syntax `::<`; remove the double colons".into(),
-                            TextRange::at(parser.end_of_prev_token, TextSize::from(3)),
+                            TextRange::at(parser.current_pos, TextSize::from(3)),
                         ));
                         parser.bump_expected(SyntaxKind::Colon2);
                     }
