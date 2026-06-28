@@ -5,6 +5,9 @@ input_file: crates/codegen/tests/fixtures/raw_log_emit.fe
 ---
 target = "evm-ethereum-osaka"
 
+type @layout_0 = {};
+type @layout_1 = {@layout_0};
+
 func private %from_raw(v0.i256) -> i256 {
     block0:
         jump block1;
@@ -13,12 +16,12 @@ func private %from_raw(v0.i256) -> i256 {
         return v0;
 }
 
-func private %log0(v0.i256, v1.i256) {
+func private %log0(v0.objref<@layout_1>, v1.i256, v2.i256) {
     block0:
         jump block1;
 
     block1:
-        evm_log0 v0 v1;
+        evm_log0 v1 v2;
         return;
 }
 
@@ -40,13 +43,13 @@ func private %main_root() {
         evm_stop;
 }
 
-func private %mem_ptr(v0.i256) -> i256 {
+func private %mem_ptr(v0.objref<@layout_1>, v1.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = call %from_raw v0;
-        return v2;
+        v3.i256 = call %from_raw v1;
+        return v3;
 }
 
 func private %raw(v0.i256) -> i256 {
@@ -62,9 +65,9 @@ func private %raw_emit() {
         jump block1;
 
     block1:
-        v1.i256 = call %mem_ptr 256.i256;
-        v2.i256 = call %raw v1;
-        call %log0 v2 32.i256;
+        v2.i256 = call %mem_ptr undef.objref<@layout_1> 256.i256;
+        v3.i256 = call %raw v2;
+        call %log0 undef.objref<@layout_1> v3 32.i256;
         return;
 }
 

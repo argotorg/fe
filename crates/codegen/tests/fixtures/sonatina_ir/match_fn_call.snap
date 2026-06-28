@@ -5,31 +5,34 @@ input_file: crates/codegen/tests/fixtures/match_fn_call.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_97e7(v0.i256) -> i256 {
+type @layout_0 = {};
+type @layout_1 = {@layout_0};
+
+func private %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_ff8a(v0.objref<@layout_1>, v1.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = evm_calldata_load v0;
-        return v2;
+        v3.i256 = evm_calldata_load v1;
+        return v3;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_97e7_0(v0.i256) -> i256 {
+func private %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_ff8a_0(v0.objref<@layout_1>, v1.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = evm_calldata_load v0;
-        return v2;
+        v3.i256 = evm_calldata_load v1;
+        return v3;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_97e7_1(v0.i256) -> i256 {
+func private %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_ff8a_1(v0.objref<@layout_1>, v1.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = evm_calldata_load v0;
-        return v2;
+        v3.i256 = evm_calldata_load v1;
+        return v3;
 }
 
 func private %standalone_match_fn_call__match_fn_call__example__gcd5c_4226() -> i256 {
@@ -115,9 +118,9 @@ func private %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_044c
         jump block1;
 
     block1:
-        v1.i256 = call %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_97e7 0.i256;
-        v3.i256 = shr 224.i256 v1;
-        return v3;
+        v2.i256 = call %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_ff8a undef.objref<@layout_1> 0.i256;
+        v4.i256 = shr 224.i256 v2;
+        return v4;
 }
 
 func private %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_5a44() -> i256 {
@@ -125,9 +128,9 @@ func private %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_5a44
         jump block1;
 
     block1:
-        v1.i256 = call %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_97e7_0 0.i256;
-        v3.i256 = shr 224.i256 v1;
-        return v3;
+        v2.i256 = call %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_ff8a_0 undef.objref<@layout_1> 0.i256;
+        v4.i256 = shr 224.i256 v2;
+        return v4;
 }
 
 func private %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_94d5() -> i256 {
@@ -135,9 +138,9 @@ func private %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_94d5
         jump block1;
 
     block1:
-        v1.i256 = call %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_97e7_1 0.i256;
-        v3.i256 = shr 224.i256 v1;
-        return v3;
+        v2.i256 = call %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_ff8a_1 undef.objref<@layout_1> 0.i256;
+        v4.i256 = shr 224.i256 v2;
+        return v4;
 }
 
 

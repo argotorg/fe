@@ -5,7 +5,9 @@ input_file: crates/codegen/tests/fixtures/storage.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @layout_0 = enum {
+type @layout_0 = {};
+type @layout_1 = {@layout_0};
+type @layout_2 = enum {
     #Ok,
     #Insufficient,
 };
@@ -15,8 +17,8 @@ func private %abi_encode(v0.i256) {
         jump block1;
 
     block1:
-        call %mstore 0.i256 v0;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_f28e 0.i256 32.i256;
+        call %mstore undef.objref<@layout_1> 0.i256 v0;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_dfe8 undef.objref<@layout_1> 0.i256 32.i256;
         unreachable;
 }
 
@@ -45,21 +47,21 @@ func private %balance_of_raw(v0.i256, v1.i256) -> i256 {
         jump block4;
 }
 
-func private %calldataload(v0.i256) -> i256 {
+func private %calldataload(v0.objref<@layout_1>, v1.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = evm_calldata_load v0;
-        return v2;
+        v3.i256 = evm_calldata_load v1;
+        return v3;
 }
 
-func private %codecopy(v0.i256, v1.i256, v2.i256) {
+func private %codecopy(v0.objref<@layout_1>, v1.i256, v2.i256, v3.i256) {
     block0:
         jump block1;
 
     block1:
-        evm_code_copy v0 v1 v2;
+        evm_code_copy v1 v2 v3;
         return;
 }
 
@@ -143,8 +145,8 @@ func private %init() {
         v1.i256 = sym_addr &__Coin_runtime;
         v2.*i8 = evm_malloc v0;
         v3.i256 = ptr_to_int v2 i256;
-        call %codecopy v3 v1 v0;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_e8fc_0 v3 v0;
+        call %codecopy undef.objref<@layout_1> v3 v1 v0;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_cd6f_0 undef.objref<@layout_1> v3 v0;
         unreachable;
 }
 
@@ -166,37 +168,37 @@ func private %manual_contract_runtime_root_Coin() {
         evm_stop;
 }
 
-func private %mstore(v0.i256, v1.i256) {
+func private %mstore(v0.objref<@layout_1>, v1.i256, v2.i256) {
     block0:
         jump block1;
 
     block1:
-        mstore v0 v1 i256;
+        mstore v1 v2 i256;
         return;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_e8fc(v0.i256, v1.i256) {
+func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_cd6f(v0.objref<@layout_1>, v1.i256, v2.i256) {
     block0:
         jump block1;
 
     block1:
-        evm_return v0 v1;
+        evm_return v1 v2;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_e8fc_0(v0.i256, v1.i256) {
+func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_cd6f_0(v0.objref<@layout_1>, v1.i256, v2.i256) {
     block0:
         jump block1;
 
     block1:
-        evm_return v0 v1;
+        evm_return v1 v2;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_f28e(v0.i256, v1.i256) {
+func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_dfe8(v0.objref<@layout_1>, v1.i256, v2.i256) {
     block0:
         jump block1;
 
     block1:
-        evm_return v0 v1;
+        evm_return v1 v2;
 }
 
 func private %runtime() {
@@ -204,105 +206,105 @@ func private %runtime() {
         jump block1;
 
     block1:
-        v1.i256 = call %stor_ptr__g2c78 0.i256;
-        v3.i256 = call %stor_ptr__gd216 2.i256;
-        v4.i256 = call %calldataload 0.i256;
-        v6.i256 = shr 224.i256 v4;
-        v8.i1 = eq v6 2877082652.i256;
-        br v8 block2 block7;
+        v2.i256 = call %stor_ptr__g2c78 undef.objref<@layout_1> 0.i256;
+        v5.i256 = call %stor_ptr__gd216 undef.objref<@layout_1> 2.i256;
+        v7.i256 = call %calldataload undef.objref<@layout_1> 0.i256;
+        v9.i256 = shr 224.i256 v7;
+        v11.i1 = eq v9 2877082652.i256;
+        br v11 block2 block7;
 
     block2:
-        v10.i256 = call %calldataload 4.i256;
-        v12.i256 = call %calldataload 36.i256;
-        v13.i1 = eq v10 0.i256;
-        br v13 block12 block14;
+        v14.i256 = call %calldataload undef.objref<@layout_1> 4.i256;
+        v17.i256 = call %calldataload undef.objref<@layout_1> 36.i256;
+        v18.i1 = eq v14 0.i256;
+        br v18 block12 block14;
 
     block3:
-        v14.i256 = call %calldataload 4.i256;
-        v16.i256 = call %balance_of_raw v14 v1;
-        call %abi_encode v16;
+        v20.i256 = call %calldataload undef.objref<@layout_1> 4.i256;
+        v22.i256 = call %balance_of_raw v20 v2;
+        call %abi_encode v22;
         unreachable;
 
     block4:
-        v17.i256 = call %calldataload 4.i256;
-        v18.i256 = call %calldataload 36.i256;
-        v19.i1 = eq v17 0.i256;
-        br v19 block16 block18;
+        v24.i256 = call %calldataload undef.objref<@layout_1> 4.i256;
+        v26.i256 = call %calldataload undef.objref<@layout_1> 36.i256;
+        v27.i1 = eq v24 0.i256;
+        br v27 block16 block18;
 
     block5:
-        v21.i256 = call %total_supply v3;
-        call %abi_encode v21;
+        v29.i256 = call %total_supply v5;
+        call %abi_encode v29;
         unreachable;
 
     block6:
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_e8fc 0.i256 0.i256;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_cd6f undef.objref<@layout_1> 0.i256 0.i256;
         unreachable;
 
     block7:
-        v24.i1 = eq v6 1818602213.i256;
-        br v24 block3 block8;
+        v33.i1 = eq v9 1818602213.i256;
+        br v33 block3 block8;
 
     block8:
-        v27.i1 = eq v6 217554442.i256;
-        br v27 block4 block9;
+        v36.i1 = eq v9 217554442.i256;
+        br v36 block4 block9;
 
     block9:
-        v30.i1 = eq v6 960555502.i256;
-        br v30 block5 block10;
+        v39.i1 = eq v9 960555502.i256;
+        br v39 block5 block10;
 
     block10:
         jump block6;
 
     block11:
-        v31.i256 = phi (v35 block12) (v39 block13);
-        call %abi_encode v31;
+        v40.i256 = phi (v44 block12) (v48 block13);
+        call %abi_encode v40;
         unreachable;
 
     block12:
-        v35.i256 = call %credit_alice v12 v1 v3;
+        v44.i256 = call %credit_alice v17 v2 v5;
         jump block11;
 
     block13:
-        v39.i256 = call %credit_bob v12 v1 v3;
+        v48.i256 = call %credit_bob v17 v2 v5;
         jump block11;
 
     block14:
         jump block13;
 
     block15:
-        v40.@layout_0 = phi (v44 block16) (v47 block17);
-        v41.i256 = call %transfer_result_code v40;
-        call %abi_encode v41;
+        v49.@layout_2 = phi (v53 block16) (v56 block17);
+        v50.i256 = call %transfer_result_code v49;
+        call %abi_encode v50;
         unreachable;
 
     block16:
-        v44.@layout_0 = call %transfer_from_alice v18 v1;
+        v53.@layout_2 = call %transfer_from_alice v26 v2;
         jump block15;
 
     block17:
-        v47.@layout_0 = call %transfer_from_bob v18 v1;
+        v56.@layout_2 = call %transfer_from_bob v26 v2;
         jump block15;
 
     block18:
         jump block17;
 }
 
-func private %stor_ptr__g2c78(v0.i256) -> i256 {
+func private %stor_ptr__gd216(v0.objref<@layout_1>, v1.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = call %from_raw__g9438 v0;
-        return v2;
+        v3.i256 = call %from_raw__gf198 v1;
+        return v3;
 }
 
-func private %stor_ptr__gd216(v0.i256) -> i256 {
+func private %stor_ptr__g2c78(v0.objref<@layout_1>, v1.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = call %from_raw__gf198 v0;
-        return v2;
+        v3.i256 = call %from_raw__g9438 v1;
+        return v3;
 }
 
 func private %total_supply(v0.i256) -> i256 {
@@ -314,7 +316,7 @@ func private %total_supply(v0.i256) -> i256 {
         return v2;
 }
 
-func private %transfer_from_alice(v0.i256, v1.i256) -> @layout_0 {
+func private %transfer_from_alice(v0.i256, v1.i256) -> @layout_2 {
     block0:
         jump block1;
 
@@ -324,7 +326,7 @@ func private %transfer_from_alice(v0.i256, v1.i256) -> @layout_0 {
         br v5 block2 block3;
 
     block2:
-        v6.@layout_0 = enum.make @layout_0 #Insufficient;
+        v6.@layout_2 = enum.make @layout_2 #Insufficient;
         return v6;
 
     block3:
@@ -350,11 +352,11 @@ func private %transfer_from_alice(v0.i256, v1.i256) -> @layout_0 {
     block7:
         v25.i256 = add v1 1.i256;
         evm_sstore v25 v22;
-        v26.@layout_0 = enum.make @layout_0 #Ok;
+        v26.@layout_2 = enum.make @layout_2 #Ok;
         return v26;
 }
 
-func private %transfer_from_bob(v0.i256, v1.i256) -> @layout_0 {
+func private %transfer_from_bob(v0.i256, v1.i256) -> @layout_2 {
     block0:
         jump block1;
 
@@ -365,7 +367,7 @@ func private %transfer_from_bob(v0.i256, v1.i256) -> @layout_0 {
         br v7 block2 block3;
 
     block2:
-        v8.@layout_0 = enum.make @layout_0 #Insufficient;
+        v8.@layout_2 = enum.make @layout_2 #Insufficient;
         return v8;
 
     block3:
@@ -391,17 +393,17 @@ func private %transfer_from_bob(v0.i256, v1.i256) -> @layout_0 {
 
     block7:
         evm_sstore v1 v24;
-        v27.@layout_0 = enum.make @layout_0 #Ok;
+        v27.@layout_2 = enum.make @layout_2 #Ok;
         return v27;
 }
 
-func private %transfer_result_code(v0.@layout_0) -> i256 {
+func private %transfer_result_code(v0.@layout_2) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.enumtag(@layout_0) = enum.tag v0;
-        br_table v2 (0.enumtag(@layout_0) block3) (1.enumtag(@layout_0) block4);
+        v2.enumtag(@layout_2) = enum.tag v0;
+        br_table v2 (0.enumtag(@layout_2) block3) (1.enumtag(@layout_2) block4);
 
     block2:
         v5.i256 = phi (0.i256 block3) (1.i256 block4);

@@ -5,7 +5,9 @@ input_file: crates/codegen/tests/fixtures/enum_variant_contract.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @layout_0 = enum {
+type @layout_0 = {};
+type @layout_1 = {@layout_0};
+type @layout_2 = enum {
     #None,
     #Some(i256),
 };
@@ -15,26 +17,26 @@ func private %abi_encode_u256(v0.i256) {
         jump block1;
 
     block1:
-        call %mstore 0.i256 v0;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_06c7 0.i256 32.i256;
+        call %mstore undef.objref<@layout_1> 0.i256 v0;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_65e1 undef.objref<@layout_1> 0.i256 32.i256;
         unreachable;
 }
 
-func private %calldataload(v0.i256) -> i256 {
+func private %calldataload(v0.objref<@layout_1>, v1.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = evm_calldata_load v0;
-        return v2;
+        v3.i256 = evm_calldata_load v1;
+        return v3;
 }
 
-func private %codecopy(v0.i256, v1.i256, v2.i256) {
+func private %codecopy(v0.objref<@layout_1>, v1.i256, v2.i256, v3.i256) {
     block0:
         jump block1;
 
     block1:
-        evm_code_copy v0 v1 v2;
+        evm_code_copy v1 v2 v3;
         return;
 }
 
@@ -47,8 +49,8 @@ func private %init() {
         v1.i256 = sym_addr &__EnumContract_runtime;
         v2.*i8 = evm_malloc v0;
         v3.i256 = ptr_to_int v2 i256;
-        call %codecopy v3 v1 v0;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_1461_0 v3 v0;
+        call %codecopy undef.objref<@layout_1> v3 v1 v0;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_b458_0 undef.objref<@layout_1> v3 v0;
         unreachable;
 }
 
@@ -70,37 +72,37 @@ func private %manual_contract_runtime_root_EnumContract() {
         evm_stop;
 }
 
-func private %mstore(v0.i256, v1.i256) {
+func private %mstore(v0.objref<@layout_1>, v1.i256, v2.i256) {
     block0:
         jump block1;
 
     block1:
-        mstore v0 v1 i256;
+        mstore v1 v2 i256;
         return;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_06c7(v0.i256, v1.i256) {
+func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_65e1(v0.objref<@layout_1>, v1.i256, v2.i256) {
     block0:
         jump block1;
 
     block1:
-        evm_return v0 v1;
+        evm_return v1 v2;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_1461(v0.i256, v1.i256) {
+func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_b458(v0.objref<@layout_1>, v1.i256, v2.i256) {
     block0:
         jump block1;
 
     block1:
-        evm_return v0 v1;
+        evm_return v1 v2;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_1461_0(v0.i256, v1.i256) {
+func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_b458_0(v0.objref<@layout_1>, v1.i256, v2.i256) {
     block0:
         jump block1;
 
     block1:
-        evm_return v0 v1;
+        evm_return v1 v2;
 }
 
 func private %runtime() {
@@ -108,79 +110,79 @@ func private %runtime() {
         jump block1;
 
     block1:
-        v1.i256 = call %calldataload 0.i256;
-        v3.i256 = shr 224.i256 v1;
-        v5.i1 = eq v3 1817627404.i256;
-        br v5 block2 block3;
+        v2.i256 = call %calldataload undef.objref<@layout_1> 0.i256;
+        v4.i256 = shr 224.i256 v2;
+        v6.i1 = eq v4 1817627404.i256;
+        br v6 block2 block3;
 
     block2:
-        v7.i256 = call %calldataload 4.i256;
-        v8.@layout_0 = enum.make @layout_0 #Some v7;
-        v9.enumtag(@layout_0) = enum.tag v8;
-        br_table v9 (1.enumtag(@layout_0) block6) (0.enumtag(@layout_0) block7);
+        v9.i256 = call %calldataload undef.objref<@layout_1> 4.i256;
+        v10.@layout_2 = enum.make @layout_2 #Some v9;
+        v11.enumtag(@layout_2) = enum.tag v10;
+        br_table v11 (1.enumtag(@layout_2) block6) (0.enumtag(@layout_2) block7);
 
     block3:
         jump block4;
 
     block4:
-        v14.i1 = eq v3 1163776883.i256;
-        br v14 block8 block9;
+        v16.i1 = eq v4 1163776883.i256;
+        br v16 block8 block9;
 
     block5:
-        v15.i256 = phi (v17 block6) (0.i256 block7);
-        call %abi_encode_u256 v15;
+        v17.i256 = phi (v19 block6) (0.i256 block7);
+        call %abi_encode_u256 v17;
         unreachable;
 
     block6:
-        enum.assert_variant v8 #Some;
-        v17.i256 = enum.extract v8 #Some 0.i256;
+        enum.assert_variant v10 #Some;
+        v19.i256 = enum.extract v10 #Some 0.i256;
         jump block5;
 
     block7:
         jump block5;
 
     block8:
-        v18.@layout_0 = enum.make @layout_0 #None;
-        v19.@layout_0 = enum.make @layout_0 #None;
-        v20.enumtag(@layout_0) = enum.tag v19;
-        br_table v20 (1.enumtag(@layout_0) block12) (0.enumtag(@layout_0) block13);
+        v20.@layout_2 = enum.make @layout_2 #None;
+        v21.@layout_2 = enum.make @layout_2 #None;
+        v22.enumtag(@layout_2) = enum.tag v21;
+        br_table v22 (1.enumtag(@layout_2) block12) (0.enumtag(@layout_2) block13);
 
     block9:
         jump block10;
 
     block10:
-        v23.i1 = eq v3 3572425762.i256;
-        br v23 block14 block15;
+        v25.i1 = eq v4 3572425762.i256;
+        br v25 block14 block15;
 
     block11:
-        v24.i256 = phi (v26 block12) (0.i256 block13);
-        call %abi_encode_u256 v24;
+        v26.i256 = phi (v28 block12) (0.i256 block13);
+        call %abi_encode_u256 v26;
         unreachable;
 
     block12:
-        enum.assert_variant v19 #Some;
-        v26.i256 = enum.extract v19 #Some 0.i256;
+        enum.assert_variant v21 #Some;
+        v28.i256 = enum.extract v21 #Some 0.i256;
         jump block11;
 
     block13:
         jump block11;
 
     block14:
-        v27.i256 = call %calldataload 4.i256;
-        v28.@layout_0 = enum.make @layout_0 #Some v27;
-        v29.enumtag(@layout_0) = enum.tag v28;
-        br_table v29 (1.enumtag(@layout_0) block18) (0.enumtag(@layout_0) block19);
+        v30.i256 = call %calldataload undef.objref<@layout_1> 4.i256;
+        v31.@layout_2 = enum.make @layout_2 #Some v30;
+        v32.enumtag(@layout_2) = enum.tag v31;
+        br_table v32 (1.enumtag(@layout_2) block18) (0.enumtag(@layout_2) block19);
 
     block15:
         jump block16;
 
     block16:
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_1461 0.i256 0.i256;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_b458 undef.objref<@layout_1> 0.i256 0.i256;
         unreachable;
 
     block17:
-        v30.i256 = phi (1.i256 block18) (0.i256 block19);
-        call %abi_encode_u256 v30;
+        v34.i256 = phi (1.i256 block18) (0.i256 block19);
+        call %abi_encode_u256 v34;
         unreachable;
 
     block18:

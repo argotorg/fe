@@ -6,6 +6,8 @@ input_file: crates/codegen/tests/fixtures/effect_ptr_domains.fe
 target = "evm-ethereum-osaka"
 
 type @layout_0 = {i256, i256};
+type @layout_1 = {};
+type @layout_2 = {@layout_1};
 
 global private const @layout_0 $const_region_0 = {10, 20};
 
@@ -117,22 +119,22 @@ func private %main_root() {
         evm_stop;
 }
 
-func private %mem_ptr(v0.i256) -> i256 {
+func private %mem_ptr(v0.objref<@layout_2>, v1.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = call %impl_trait_MemPtr__from_raw__gb2d8 v0;
-        return v2;
+        v3.i256 = call %impl_trait_MemPtr__from_raw__gb2d8 v1;
+        return v3;
 }
 
-func private %stor_ptr(v0.i256) -> i256 {
+func private %stor_ptr(v0.objref<@layout_2>, v1.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = call %impl_trait_StorPtr__from_raw__gb2d8 v0;
-        return v2;
+        v3.i256 = call %impl_trait_StorPtr__from_raw__gb2d8 v1;
+        return v3;
 }
 
 func private %test_effect_ptr_domains() {
@@ -140,17 +142,17 @@ func private %test_effect_ptr_domains() {
         jump block1;
 
     block1:
-        v1.i256 = call %mem_ptr 256.i256;
-        call %bump__gaab0 v1;
-        v4.i256 = call %stor_ptr 0.i256;
-        call %bump__gc323 v4;
-        v8.constref<@layout_0> = const.ref $const_region_0;
-        v9.objref<@layout_0> = obj.alloc @layout_0;
-        v10.objref<i256> = obj.proj v9 0.i256;
-        obj.store v10 10.i256;
-        v12.objref<i256> = obj.proj v9 1.i256;
-        obj.store v12 20.i256;
-        call %bump__gb2d8 v9;
+        v2.i256 = call %mem_ptr undef.objref<@layout_2> 256.i256;
+        call %bump__gaab0 v2;
+        v6.i256 = call %stor_ptr undef.objref<@layout_2> 0.i256;
+        call %bump__gc323 v6;
+        v10.constref<@layout_0> = const.ref $const_region_0;
+        v11.objref<@layout_0> = obj.alloc @layout_0;
+        v12.objref<i256> = obj.proj v11 0.i256;
+        obj.store v12 10.i256;
+        v14.objref<i256> = obj.proj v11 1.i256;
+        obj.store v14 20.i256;
+        call %bump__gb2d8 v11;
         return;
 }
 

@@ -5,22 +5,25 @@ input_file: crates/codegen/tests/fixtures/keccak_intrinsic.fe
 ---
 target = "evm-ethereum-osaka"
 
+type @layout_0 = {};
+type @layout_1 = {@layout_0};
+
 func private %hash(v0.i256, v1.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v4.i256 = call %keccak256 v0 v1;
-        return v4;
+        v5.i256 = call %keccak256 undef.objref<@layout_1> v0 v1;
+        return v5;
 }
 
-func private %keccak256(v0.i256, v1.i256) -> i256 {
+func private %keccak256(v0.objref<@layout_1>, v1.i256, v2.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v4.i256 = evm_keccak256 v0 v1;
-        return v4;
+        v5.i256 = evm_keccak256 v1 v2;
+        return v5;
 }
 
 func private %main() -> i256 {
