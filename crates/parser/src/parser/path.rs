@@ -1,4 +1,4 @@
-use crate::{ParseError, SyntaxKind};
+use crate::{ParseError, SyntaxKind, TextRange, TextSize};
 
 use super::{
     Parser, define_scope,
@@ -51,6 +51,10 @@ impl super::Parse for PathSegmentScope {
                     })
                 {
                     if is_turbofish {
+                        parser.add_error(ParseError::Unexpected(
+                            "unexpected turbofish syntax `::<`; remove the double colons".into(),
+                            TextRange::at(parser.end_of_prev_token, TextSize::from(3)),
+                        ));
                         parser.bump_expected(SyntaxKind::Colon2);
                     }
                     parser
