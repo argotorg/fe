@@ -1,12 +1,12 @@
 use crate::analysis::ty::diagnostics::BodyDiag;
 use crate::analysis::ty::effects::{ResolvedEffectKey, resolve_effect_key};
 use crate::analysis::ty::trait_resolution::{
-    GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
+    GoalSatisfiability, PredicateListId, ProvisionEnv, TraitSolveCx, is_goal_satisfiable,
 };
 use crate::analysis::ty::ty_check::EffectParamOwner;
 use crate::core::adt_lower::lower_adt;
 use crate::core::hir_def::{
-    IdentId, ItemKind, PathId, TopLevelMod, Trait, TypeAlias,
+    IdentId, ItemKind, PathId, TopLevelMod, Trait, TypeAlias, WhereClauseOwner,
     scope_graph::{ScopeGraph, ScopeId},
 };
 use adt_def::{AdtDef, AdtRef};
@@ -47,7 +47,9 @@ pub mod pattern_analysis;
 pub mod pattern_ir;
 pub mod pattern_types;
 pub mod provider;
+pub mod provider_goal;
 pub(crate) mod scratch;
+pub mod term;
 pub mod trait_def;
 pub mod trait_lower;
 pub mod trait_resolution; // This line was previously 'pub mod name_resolution;'
@@ -138,7 +140,7 @@ fn ty_is_copy_query<'db>(
     {
         return true;
     }
-    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+    let solve_cx = ProvisionEnv::for_scope(scope, assumptions).solve_cx(db);
     if !copy_goal_has_possible_impl(db, solve_cx, inst) {
         return false;
     }
@@ -352,6 +354,8 @@ fn walk<'db>(
                 | ItemKind::Use(_)
                 | ItemKind::Impl(_)
                 | ItemKind::ImplTrait(_)
+                | ItemKind::DeriveProviderScope(_)
+                | ItemKind::DeriveDecl(_)
                 | ItemKind::Body(_) => continue,
             };
             defs.entry((domain, item.name(db).unwrap()))
@@ -379,12 +383,28 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
         // Check function and const bodies; contract-specific analysis is handled separately.
+        // Derive provider bodies are written in the compile-time command
+        // language and are checked by the provider executor instead.
         let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = top_mod
             .all_funcs(db)
             .iter()
+            .filter(|func| !func.is_derive_provider_fn(db))
             .flat_map(|func| &ty_check::check_func_body(db, *func).0)
             .map(|diag| diag.to_voucher())
             .collect();
+
+        // Declaration-site checks of `where` clause const predicates: every
+        // predicate body type-checks as a `bool`-expected anonymous const
+        // body, and parameter-free predicates are evaluated right here
+        // (`where false` errors at the declaration).
+        diags.extend(
+            top_mod
+                .all_items(db)
+                .iter()
+                .filter_map(|item| WhereClauseOwner::from_item_opt(*item))
+                .flat_map(|owner| ty_check::check_where_const_predicates(db, owner))
+                .map(|diag| diag.to_voucher()),
+        );
 
         diags.extend(
             top_mod
@@ -508,8 +528,7 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
                         if matches!(
                             is_goal_satisfiable(
                                 db,
-                                TraitSolveCx::new(db, contract.scope())
-                                    .with_assumptions(assumptions),
+                                ProvisionEnv::for_scope(contract.scope(), assumptions).solve_cx(db),
                                 trait_req
                             ),
                             GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
@@ -605,11 +624,26 @@ pub fn resolve_default_root_effect_ty<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Option<TyId<'db>> {
-    let target_path = PathId::from_segments(db, DEFAULT_TARGET_TY_PATH);
-    let target_ty = match resolve_path(db, target_path, scope, assumptions, false).ok()? {
-        PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => ty,
-        _ => return None,
+    let resolve_target_ty = |path: PathId<'db>| -> Option<TyId<'db>> {
+        match resolve_path(db, path, scope, assumptions, false).ok()? {
+            PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => Some(ty),
+            _ => None,
+        }
     };
+    // Prefer the absolute `std::evm::EvmTarget` path: this is byte-identical to the
+    // prior resolution for a user ingot (so the MIR root-provider seeding resolves
+    // the exact same `Evm` TyId). Fall back to the ingot-relative path only when
+    // that misses, which happens when std is analyzed standalone (`analyze_stdlib`,
+    // where std self-refs use `ingot::`) so the ambient intrinsic-capability grant
+    // still resolves there.
+    let target_ty =
+        resolve_target_ty(PathId::from_segments(db, DEFAULT_TARGET_TY_PATH)).or_else(|| {
+            resolve_target_ty(
+                corelib::lib_root_path(db, scope, "std")
+                    .push_str(db, "evm")
+                    .push_str(db, "EvmTarget"),
+            )
+        })?;
 
     let target_trait = corelib::resolve_core_trait(db, scope, &["contracts", "Target"])?;
     let inst_target =
@@ -638,7 +672,7 @@ pub fn effect_handle_metadata<'db>(
     let inst = trait_def::TraitInstId::new(db, effect_handle, vec![ty], IndexMap::new());
     match is_goal_satisfiable(
         db,
-        TraitSolveCx::new(db, scope).with_assumptions(assumptions),
+        ProvisionEnv::for_scope(scope, assumptions).solve_cx(db),
         inst,
     ) {
         GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => None,
@@ -745,12 +779,40 @@ impl ModuleAnalysisPass for FuncAnalysisPass {
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
         // Function diagnostics are handled here; contract-specific diagnostics are separate.
-        top_mod
+        // Derive provider signatures are NO LONGER exempt from the ordinary
+        // `*`-kinded signature walk (FCO R3). A valid capability/witness goal
+        // (`Evidence<Eq<T>>`) lowers cleanly to a `Constraint`-kinded
+        // `ConstraintTerm` through ordinary type lowering (R2), so the witness
+        // parameter/return and the `uses`-`ImplBuilder` slots type-check without
+        // a special case — `core_derives` and `std` providers check clean. The
+        // exemption is therefore removed wholesale; nothing in a valid provider
+        // signature over-reports under the ordinary walk.
+        let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = top_mod
             .all_funcs(db)
             .iter()
             .flat_map(|func| func.diags(db))
             .map(|diag| diag.to_voucher())
-            .collect()
+            .collect();
+
+        // The ordinary walk type-checks the goal POSITIONS but does not produce
+        // the boundary diagnostics for ILL-FORMED provider goals: a live abstract
+        // head (`Evidence<P<T>>`, `P: * -> Constraint`) is kind-correct and
+        // lowers SILENTLY; a bare/unsaturated head (`Evidence<Eq>`) degrades to a
+        // generic `2-0006`; and a goal in the `uses (..)` clause is not walked at
+        // all. The provider-goal pass classifies each recognized goal position and
+        // emits the precise FCO boundary diagnostic (`6-0008` live head, `6-0009`
+        // unsaturated, name-resolution for an unresolved head) with its hint —
+        // covering all three goal slots (witness param, `uses`-builder, return).
+        diags.extend(
+            top_mod
+                .all_funcs(db)
+                .iter()
+                .filter(|func| func.is_derive_provider_fn(db))
+                .flat_map(|func| provider_goal::provider_goal_diags(db, *func))
+                .map(|diag| diag.to_voucher()),
+        );
+
+        diags
     }
 }
 

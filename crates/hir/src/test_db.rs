@@ -10,8 +10,8 @@ use std::ops::Range;
 
 use crate::analysis::{
     analysis_pass::{
-        AnalysisPassManager, AttrMisusePass, ErrorLowerPass, EventLowerPass, MsgLowerPass,
-        ParsingPass,
+        AnalysisPassManager, AttrMisusePass, DeriveLowerPass, ErrorLowerPass, EventLowerPass,
+        MsgLowerPass, ParsingPass,
     },
     diagnostics::{DiagnosticVoucher, SpannedHirAnalysisDb},
     name_resolution::ImportAnalysisPass,
@@ -369,6 +369,7 @@ pub fn initialize_analysis_pass() -> AnalysisPassManager {
     pass_manager.add_module_pass("MsgLower", Box::new(MsgLowerPass {}));
     pass_manager.add_module_pass("EventLower", Box::new(EventLowerPass {}));
     pass_manager.add_module_pass("ErrorLower", Box::new(ErrorLowerPass {}));
+    pass_manager.add_module_pass("DeriveLower", Box::new(DeriveLowerPass {}));
     pass_manager.add_module_pass("MsgSelector", Box::new(MsgSelectorAnalysisPass {}));
     pass_manager.add_module_pass("DefConflict", Box::new(DefConflictAnalysisPass {}));
     pass_manager.add_module_pass("Import", Box::new(ImportAnalysisPass {}));

@@ -1,0 +1,92 @@
+// Tier A constraint alias via marker-trait + blanket-impl (ZERO compiler change).
+//
+// A "constraint alias" bundles several trait obligations under one name. The
+// SAFE way to get this in Fe today — no new `ItemKind`, no solver changes — is a
+// marker trait whose SUPERTRAIT bounds list the members, plus a blanket impl
+// that holds for any `T` satisfying those members:
+//
+//     trait ValueLike: Eq + Default {}
+//     impl<T> ValueLike for T where T: Eq + Default {}
+//
+// The design invariant this proves: `where T: ValueLike` is a single written
+// bound that EXPANDS to its concrete member obligations (`T: Eq`, `T: Default`)
+// BEFORE the solver runs — exactly the supertrait-elaboration the trait solver
+// already performs. The solver never sees a variable-headed alias goal.
+//
+// Members are REAL prelude traits: `core::ops::Eq` and `core::default::Default`.
+// They compose into "value-like" (comparable + has a canonical default).
+
+use core::ops::Eq
+use core::default::Default
+
+// --- The constraint alias --------------------------------------------------
+// Marker trait: no items of its own; its supertrait list IS the bundle.
+trait ValueLike: Eq + Default {}
+
+// Blanket impl: every `T` that satisfies the members IS `ValueLike`. This is
+// what makes `ValueLike` an *alias* rather than an opt-in marker — authors never
+// write `impl ValueLike for MyType`; satisfying the members is sufficient.
+impl<T> ValueLike for T where T: Eq + Default {}
+
+// --- Types that satisfy the whole bundle -----------------------------------
+#[derive(Eq, Default)]
+struct Point {
+    x: u256,
+    y: u256,
+}
+
+#[derive(Eq, Default)]
+struct Pair {
+    a: u256,
+    b: bool,
+}
+
+// --- A function bounded by the ALIAS ---------------------------------------
+// `where T: ValueLike` is the single alias bound. Inside the body we use BOTH
+// member capabilities: `T::default()` (from the `Default` member) and `.eq`
+// (from the `Eq` member). They are only callable because the supertrait bounds
+// of `ValueLike` elaborate to `T: Eq` and `T: Default` at the use site.
+fn is_default<T>(_ x: T) -> bool where T: ValueLike {
+    x.eq(T::default())
+}
+
+fn equal<T>(_ a: T, _ b: T) -> bool where T: ValueLike {
+    a.eq(b)
+}
+
+#[test]
+fn alias_admits_satisfying_type_point() {
+    // Point satisfies the whole bundle, so `Point: ValueLike` holds by the
+    // blanket impl and `is_default` type-checks + runs.
+    let origin = Point { x: 0, y: 0 }
+    assert!(is_default(origin))
+
+    let off = Point { x: 1, y: 0 }
+    assert!(!is_default(off))
+}
+
+#[test]
+fn alias_admits_satisfying_type_pair() {
+    let p = Pair { a: 0, b: false }
+    assert!(is_default(p))
+
+    let q = Pair { a: 0, b: true }
+    assert!(!is_default(q))
+}
+
+#[test]
+fn alias_eq_member_through_bound() {
+    let p1 = Point { x: 3, y: 4 }
+    let p2 = Point { x: 3, y: 4 }
+    let p3 = Point { x: 3, y: 5 }
+    assert!(equal(p1, p2))
+    assert!(!equal(p1, p3))
+}
+
+#[test]
+fn alias_default_member_through_bound() {
+    // `T::default()` resolves only because the `Default` member of the alias is
+    // elaborated into scope by the `T: ValueLike` bound.
+    let d = Pair { a: 0, b: false }
+    assert!(is_default(d))
+}

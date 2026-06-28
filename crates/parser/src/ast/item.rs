@@ -45,6 +45,8 @@ impl Item {
             .or_else(|| support::child(self.syntax()).map(ItemKind::Impl))
             .or_else(|| support::child(self.syntax()).map(ItemKind::Trait))
             .or_else(|| support::child(self.syntax()).map(ItemKind::ImplTrait))
+            .or_else(|| support::child(self.syntax()).map(ItemKind::DeriveProviderScope))
+            .or_else(|| support::child(self.syntax()).map(ItemKind::DeriveDecl))
             .or_else(|| support::child(self.syntax()).map(ItemKind::Const))
             .or_else(|| support::child(self.syntax()).map(ItemKind::StaticAssert))
             .or_else(|| support::child(self.syntax()).map(ItemKind::Use))
@@ -490,6 +492,80 @@ impl ImplTrait {
     pub fn item_list(&self) -> Option<TraitItemList> {
         support::child(self.syntax())
     }
+
+    /// Returns the optional `as Name` alias clause.
+    /// `as Baz` in `impl<T> Foo for Bar<T> as Baz { .. }`
+    pub fn alias(&self) -> Option<ImplTraitAlias> {
+        support::child(self.syntax())
+    }
+
+    /// Returns the optional `with <path>` permit clause.
+    /// `with a` in `impl<T> Foo for Bar<T> with a { .. }`
+    pub fn with_permit(&self) -> Option<ImplTraitWith> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
+    /// `as Name` — optional alias on a trait impl.
+    pub struct ImplTraitAlias,
+    SK::ImplTraitAlias,
+}
+impl ImplTraitAlias {
+    /// Returns the alias name token.
+    /// `Name` in `as Name`.
+    pub fn name(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::Ident)
+    }
+}
+
+ast_node! {
+    /// `with <path>` — optional permit clause on a trait impl.
+    pub struct ImplTraitWith,
+    SK::ImplTraitWith,
+}
+impl ImplTraitWith {
+    /// Returns the permit path node.
+    /// `a` in `with a`. Stored unresolved (FCO T3).
+    pub fn path(&self) -> Option<super::Path> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
+    /// `with StableEq { derive Eq for Foo }`
+    pub struct DeriveProviderScope,
+    SK::DeriveProviderScope,
+}
+impl super::AttrListOwner for DeriveProviderScope {}
+impl DeriveProviderScope {
+    pub fn provider_path(&self) -> Option<super::Path> {
+        support::child(self.syntax())
+    }
+
+    pub fn item_list(&self) -> Option<ItemList> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
+    /// `derive Eq for Foo using StableEq`
+    pub struct DeriveDecl,
+    SK::DeriveDecl,
+}
+impl super::AttrListOwner for DeriveDecl {}
+impl DeriveDecl {
+    pub fn head_path(&self) -> Option<super::Path> {
+        support::children(self.syntax()).next()
+    }
+
+    pub fn target_path(&self) -> Option<super::Path> {
+        support::children(self.syntax()).nth(1)
+    }
+
+    pub fn provider_path(&self) -> Option<super::Path> {
+        support::children(self.syntax()).nth(2)
+    }
 }
 
 ast_node! {
@@ -767,6 +843,8 @@ pub enum ItemKind {
     Impl(Impl),
     Trait(Trait),
     ImplTrait(ImplTrait),
+    DeriveProviderScope(DeriveProviderScope),
+    DeriveDecl(DeriveDecl),
     Const(Const),
     StaticAssert(StaticAssert),
     Use(Use),
@@ -1020,6 +1098,31 @@ mod tests {
 
     #[test]
     #[wasm_bindgen_test]
+    fn derive_decl() {
+        let source = r#"
+                derive Eq for Foo using StableEq
+            "#;
+        let decl: DeriveDecl = parse_item(source);
+        assert_eq!(decl.head_path().unwrap().to_string(), "Eq");
+        assert_eq!(decl.target_path().unwrap().to_string(), "Foo");
+        assert_eq!(decl.provider_path().unwrap().to_string(), "StableEq");
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn derive_provider_scope() {
+        let source = r#"
+                with StableEq {
+                    derive Eq for Foo
+                }
+            "#;
+        let scope: DeriveProviderScope = parse_item(source);
+        assert_eq!(scope.provider_path().unwrap().to_string(), "StableEq");
+        assert_eq!(scope.item_list().unwrap().into_iter().count(), 1);
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
     fn impl_() {
         let source = r#"
                 impl Foo {
@@ -1114,6 +1217,62 @@ mod tests {
             TraitItemKind::Func(_)
         ));
         assert_eq!(items.next(), None);
+        // No `as Name` alias on this impl.
+        assert!(i.alias().is_none());
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn impl_trait_as_name() {
+        // The optional trailing `as Name` alias parses and is exposed.
+        let with_alias = r#"
+            impl Trait::Foo for (i32) as Bar {
+                fn foo(self) -> u32 { return 1 };
+            }"#;
+        let i: ImplTrait = parse_item(with_alias);
+        assert!(i.trait_ref().is_some());
+        assert!(matches!(i.ty().unwrap().kind(), TypeKind::Tuple(_)));
+        let alias = i.alias().expect("expected `as Name` alias");
+        assert_eq!(alias.name().unwrap().text(), "Bar");
+        // Body is still parsed normally after the alias.
+        assert!(i.item_list().is_some());
+
+        // The unnamed form has no alias.
+        let without_alias = r#"
+            impl Trait::Foo for (i32) {
+                fn foo(self) -> u32 { return 1 };
+            }"#;
+        let j: ImplTrait = parse_item(without_alias);
+        assert!(j.alias().is_none());
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn impl_trait_with_permit() {
+        // The optional trailing `with <path>` permit clause parses and the
+        // path is exposed unresolved (FCO T3).
+        let with_permit = r#"
+            impl Trait::Foo for (i32) with a {
+                fn foo(self) -> u32 { return 1 };
+            }"#;
+        let i: ImplTrait = parse_item(with_permit);
+        assert!(i.trait_ref().is_some());
+        assert!(matches!(i.ty().unwrap().kind(), TypeKind::Tuple(_)));
+        // No alias on this impl, only the permit.
+        assert!(i.alias().is_none());
+        let permit = i.with_permit().expect("expected `with <path>` permit");
+        let path = permit.path().expect("expected permit path");
+        assert_eq!(path.text().to_string(), "a");
+        // Body is still parsed normally after the permit.
+        assert!(i.item_list().is_some());
+
+        // The plain form has no permit.
+        let without_permit = r#"
+            impl Trait::Foo for (i32) {
+                fn foo(self) -> u32 { return 1 };
+            }"#;
+        let j: ImplTrait = parse_item(without_permit);
+        assert!(j.with_permit().is_none());
     }
 
     #[test]

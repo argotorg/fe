@@ -1,0 +1,126 @@
+//! Compile-time derive-provider capability types.
+//!
+//! A derive provider's `derive` fn consumes capabilities through its `uses (..)`
+//! clause, plus a witness parameter. These are their canonical types:
+//!   - `Reflect<T>`     — reflection over the derive target `T`.
+//!   - `ImplBuilder<G>` — the builder for the generated `impl G`.
+//!   - `Evidence<G>`    — the witness that the provider derives the goal `G`.
+//!
+//! They exist so the compiler can recognize provider capabilities by RESOLVED
+//! identity (the canonical path `core::derive::*`) rather than by a bare
+//! head-identifier string match (K04a). A user type merely named `Reflect` no
+//! longer collides with the capability.
+//!
+//! These types are deliberately NOT in the prelude: ordinary code does not see
+//! them by a bare name. Each has only a private field and no constructor, so no
+//! runtime value of a capability can be built; provider bodies are checked by the
+//! provider executor (not ordinary type checking), and the capabilities are
+//! bound there as compile-time values.
+
+/// Reflection capability over a derive target `T`.
+pub struct Reflect<T> {
+    handle: u256
+}
+
+/// Generated-impl builder capability for the goal `G` (e.g. `Eq<T>`).
+///
+/// `G` is a CONSTRAINT (the trait being derived), not an ordinary `*`-kinded
+/// type, so its param is `Constraint`-kinded — i.e. `ImplBuilder : Constraint -> *`
+/// (FCO K04b). A valid saturated goal (`Eq<T>`) lowers through the ordinary type
+/// walk to a `Constraint`-kinded `ConstraintTerm`; `provider_goal.rs` only
+/// diagnoses ILL-FORMED goals (e.g. a live `* -> Constraint` head).
+pub struct ImplBuilder<G: Constraint> {
+    handle: u256
+}
+
+/// Witness that a derive provider produces evidence for the goal `G` (e.g.
+/// `Eq<T>`). It is the `derive` fn's ordinary witness parameter and result.
+///
+/// Like `Reflect`/`ImplBuilder`, `Evidence` is recognized by resolved identity,
+/// is NOT in the prelude, has only a private field, and has no constructor — so
+/// no runtime `Evidence<G>` value can be built. The witness is bound by the
+/// provider executor as a compile-time value; the goal `G` is kind-checked at
+/// the provider signature (FCO Level 1), never materialized at runtime.
+///
+/// `G` is a CONSTRAINT (the trait being derived), not an ordinary `*`-kinded
+/// type, so its param is `Constraint`-kinded — i.e. `Evidence : Constraint -> *`
+/// (FCO K04b). A valid saturated goal (`Eq<T>`) lowers through the ordinary type
+/// walk to a `Constraint`-kinded `ConstraintTerm`; `provider_goal.rs` only
+/// diagnoses ILL-FORMED goals (e.g. a live `* -> Constraint` head).
+pub struct Evidence<G: Constraint> {
+    handle: u256
+}
+
+/// Permission to establish the one allowed impl of a one-of-a-kind goal `T`.
+///
+/// `ImplPermit<T>` is the compile-time TOKEN that authorizes establishing the single
+/// canonical impl of a one-of-a-kind constraint `T`. This increment adds the type
+/// ONLY: it is INERT, nothing mints it and nothing consumes its authority yet
+/// (minting-at-root, the establish gate, and the single-impl flow are later
+/// increments). It exists now so the compiler can recognize the capability by
+/// RESOLVED IDENTITY (`core::derive::ImplPermit`) ahead of that wiring.
+///
+/// UNFORGEABILITY (construction blocked). Like `Evidence` / `ImplBuilder`,
+/// `ImplPermit` has ONLY a private field (`handle: u256`) and NO public constructor,
+/// and it is deliberately NOT in the prelude. Therefore no ordinary expression,
+/// in any ingot, can mint an `ImplPermit<T>` value: there is no `ImplPermit { .. }`
+/// literal it can write (the field is private) and no associated/free constructor
+/// to call. An `ImplPermit<T>` can only ever be bound as a compile-time value by the
+/// compiler itself. This is the same proof shape that makes `Evidence`
+/// unforgeable; capture/propagation of the bound capability is a later increment's
+/// concern and out of scope here.
+///
+/// `T` is a CONSTRAINT (the one-of-a-kind goal), not an ordinary `*`-kinded type,
+/// so its param is `Constraint`-kinded, i.e. `ImplPermit : Constraint -> *` (mirrors
+/// `Evidence` / `ImplBuilder`, FCO K04b). A saturated concrete constraint
+/// (`Eq<T>`) lowers through the ordinary type walk to a `Constraint`-kinded
+/// `ConstraintTerm`.
+pub struct ImplPermit<T: Constraint> {
+    handle: u256
+}
+
+/// Authority to mint an `ImplPermit<G>` for a single-impl goal `G`. Recognized by
+/// RESOLVED IDENTITY (`core::derive::PermitAuthority`). It has no constructor and is
+/// not in the prelude, so ordinary code can never forge it; it is satisfied as a
+/// `uses (..)` capability obligation, never materialized as a runtime value.
+///
+/// For an ORDINARY (non-one-of-a-kind) goal `G`, `PermitAuthority<G>` discharges
+/// ambiently (default-allow): minting an `ImplPermit<G>` via `impl_permit()` is free. For
+/// a one-of-a-kind (canonical) goal there is NO ambient grant, so `impl_permit()`
+/// reports the ordinary missing-effect error unless a `PermitAuthority<G>` was
+/// threaded in non-ambiently (a later increment). The default-allow rule shares
+/// the SINGLE `is_single_impl` predicate with the establish-gate floor.
+pub struct PermitAuthority<G: Constraint> {
+    handle: u256
+}
+
+extern {
+    /// Mint the `ImplPermit<G>` that authorizes establishing the one allowed impl of
+    /// the goal `G`. It is bodyless (an `extern const fn`, like `size_of` /
+    /// `panic`): an `ImplPermit<G>` is unforgeable, so no Fe body could construct one;
+    /// the compiler binds the value at the compile-time call site. `G` is INFERRED
+    /// from the binding/consume context (Fe has no turbofish), e.g.
+    /// `let a: ImplPermit<Eq<Foo>> = impl_permit()`.
+    ///
+    /// The gate is the `uses (grant: PermitAuthority<G>)` obligation, NOT the body:
+    /// for an ordinary goal `G` it discharges ambiently (free); for a one-of-a-
+    /// kind (canonical) goal it stays unsatisfied and calling `impl_permit()` reports
+    /// the ordinary missing-effect error.
+    pub const fn impl_permit<G: Constraint>() -> ImplPermit<G> uses (grant: PermitAuthority<G>)
+}
+
+/// The derive-provider trait. A provider `impl Derive<P> for Name` (with goal
+/// `P` a `* -> Constraint` trait constructor as the first generic arg, and the
+/// provider named by the implementor/`Self` type `Name`) declares the canonical
+/// `derive` fn the expansion stage runs to produce evidence for the goal `P<T>`.
+///
+/// This is the real trait the compiler recognizes providers by: provider
+/// recognition canonicalizes the head trait of an `impl Derive<P> for Name` and
+/// accepts it only when it resolves to `core::derive::Derive` by identity —
+/// there is no built-in string marker. The `uses (reflect, builder)` clause
+/// records the capabilities the body consumes; the provider validator is the
+/// enforcement of those capabilities (TD4, design choice B).
+pub trait Derive<P: * -> Constraint> {
+    const fn derive<T>(ev: own Evidence<P<T>>) -> Evidence<P<T>>
+        uses (reflect: Reflect<T>, builder: mut ImplBuilder<P<T>>)
+}

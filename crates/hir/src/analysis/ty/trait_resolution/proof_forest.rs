@@ -619,6 +619,8 @@ pub(crate) fn ty_depth_impl<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> u
         | TyData::TyBase(_)
         | TyData::TyParam(_)
         | TyData::AssocTy { .. }
+        | TyData::ConstraintTerm(_)
+        | TyData::TraitCtor(_)
         | TyData::TyVar(_) => 1,
         TyData::QualifiedTy(trait_inst) => ty_depth_impl(db, trait_inst.self_ty(db)) + 1,
         TyData::TyApp(lhs, rhs) => {

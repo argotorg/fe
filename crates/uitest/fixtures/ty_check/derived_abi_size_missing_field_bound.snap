@@ -1,0 +1,17 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/derived_abi_size_missing_field_bound.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ derived_abi_size_missing_field_bound.fe:45:5
+   │
+38 │ fn needs<T: AbiSize>() -> u256 {
+   │             ------- required by this bound on `needs`
+   ·
+45 │     needs<Wrap<NoAbi>>()
+   │     ^^^^^^^^^^^^^^^^^^
+   │     │
+   │     `Wrap<NoAbi>` doesn't implement `AbiSize`
+   │     trait bound `NoAbi: AbiSize` is not satisfied

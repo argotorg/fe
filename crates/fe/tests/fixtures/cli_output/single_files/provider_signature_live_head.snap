@@ -1,0 +1,35 @@
+---
+source: crates/fe/tests/cli_output.rs
+assertion_line: 1822
+expression: output
+input_file: tests/fixtures/cli_output/single_files/provider_signature_live_head.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/provider_signature_live_head.fe
+
+error[6-0008]: constraint-constructor parameter is not yet a supported trait head
+   ┌─ provider_signature_live_head.fe:20:61
+   │
+20 │     const fn derive<P: * -> Constraint, T>(ev: own Evidence<P<T>>) -> Evidence<P<T>>
+   │                                                             ^^^^ `P` (`* -> Constraint`) cannot yet be applied as a trait here
+   │
+   = write one provider per concrete trait (e.g. `impl Derive for Eq`), or monomorphize the consumer
+
+error[6-0008]: constraint-constructor parameter is not yet a supported trait head
+   ┌─ provider_signature_live_head.fe:20:80
+   │
+20 │     const fn derive<P: * -> Constraint, T>(ev: own Evidence<P<T>>) -> Evidence<P<T>>
+   │                                                                                ^^^^ `P` (`* -> Constraint`) cannot yet be applied as a trait here
+   │
+   = write one provider per concrete trait (e.g. `impl Derive for Eq`), or monomorphize the consumer
+
+error[6-0008]: constraint-constructor parameter is not yet a supported trait head
+   ┌─ provider_signature_live_head.fe:23:38
+   │
+23 │             builder: mut ImplBuilder<P<T>>,
+   │                                      ^^^^ `P` (`* -> Constraint`) cannot yet be applied as a trait here
+   │
+   = write one provider per concrete trait (e.g. `impl Derive for Eq`), or monomorphize the consumer
+
+
+=== EXIT CODE: 1 ===

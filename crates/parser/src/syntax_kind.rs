@@ -74,6 +74,9 @@ pub enum SyntaxKind {
     /// `#`
     #[token("#")]
     Pound,
+    /// `$`
+    #[token("$")]
+    Dollar,
     /// `// Comment`
     #[regex(r"//[^\n\r]*")]
     Comment,
@@ -314,6 +317,14 @@ pub enum SyntaxKind {
     MatchExpr,
     /// `with (Effect = value, ..) { Block }`
     WithExpr,
+    /// `quote { expr }` / `quote(open, ..) { expr }`
+    QuoteExpr,
+    /// `(open, ..)` declared open names of a quote
+    QuoteOpenList,
+    /// `${expr}` splice hole inside a quote body
+    QuoteHoleExpr,
+    /// `fn name(self, ..) -> Ret { .. }` method body of a quote
+    QuoteMethod,
     /// `(1 + 2)`
     ParenExpr,
     /// x = 1
@@ -361,6 +372,8 @@ pub enum SyntaxKind {
     RecordPatField,
     /// `pat1 | pat2`
     OrPat,
+    /// `${expr}(group)` splice hole in pattern position inside a quote body
+    QuoteHolePat,
 
     // MatchArms.
     // `pat => { stmtlist }`
@@ -407,6 +420,16 @@ pub enum SyntaxKind {
     TraitItemList,
     /// `impl Trait for Foo { .. }`
     ImplTrait,
+    /// `as Name` — optional alias on a trait impl (`impl Trait for Foo as Name`)
+    ImplTraitAlias,
+    /// `with <path>` — optional permit clause on a trait impl
+    /// (`impl Trait for Foo with a`). The path references a permit value and
+    /// is stored unresolved (FCO T3).
+    ImplTraitWith,
+    /// `with StableEq { derive Eq for Foo }`
+    DeriveProviderScope,
+    /// `derive Trait for Foo`
+    DeriveDecl,
     /// `const FOO: i32 = 1`
     Const,
     /// `static_assert(expr)`
@@ -513,10 +536,15 @@ pub enum SyntaxKind {
     KindBoundAbs,
     /// `*`.
     KindBoundMono,
+    /// `Constraint`.
+    KindBoundConstraint,
     /// `where Option<T>: Trait1 + Trait2`
     WhereClause,
     /// `Option<T>: Trait1 + Trait2`
     WherePredicate,
+    /// A bare const-expression predicate in a where clause,
+    /// e.g. `T::SIZE >= 50` in `where T: Sized, T::SIZE >= 50`.
+    WhereConstPredicate,
     /// `Transfer { to: Address, amount: u256 } -> bool`
     MsgVariant,
     /// `{ to: Address, amount: u256 }`
@@ -610,6 +638,7 @@ impl SyntaxKind {
             SyntaxKind::FatArrow => "`=>`",
             SyntaxKind::Underscore => "`_`",
             SyntaxKind::Pound => "`#`",
+            SyntaxKind::Dollar => "`$`",
             SyntaxKind::Plus => "`+`",
             SyntaxKind::Minus => "`-`",
             SyntaxKind::Star => "`*`",
@@ -714,6 +743,10 @@ impl SyntaxKind {
             SyntaxKind::IfExpr => "`if` expression",
             SyntaxKind::MatchExpr => "`match` expression",
             SyntaxKind::WithExpr => "`with` expression",
+            SyntaxKind::QuoteExpr => "`quote` expression",
+            SyntaxKind::QuoteOpenList => "`quote` open name list",
+            SyntaxKind::QuoteHoleExpr => "`${...}` splice hole",
+            SyntaxKind::QuoteMethod => "`quote` method body",
             SyntaxKind::ParenExpr => "parenthesized expression",
             SyntaxKind::AssignExpr => "assignment expression",
             SyntaxKind::AugAssignExpr => "augmented assignment expression",
@@ -734,6 +767,7 @@ impl SyntaxKind {
             SyntaxKind::RecordPatFieldList => "record pattern field list",
             SyntaxKind::RecordPatField => "record pattern field",
             SyntaxKind::OrPat => "`or` pattern",
+            SyntaxKind::QuoteHolePat => "`${...}` splice hole pattern",
             SyntaxKind::MatchArm => "`match` arm",
             SyntaxKind::MatchArmList => "`match` arm list",
             SyntaxKind::Item => "item",
@@ -758,6 +792,10 @@ impl SyntaxKind {
             SyntaxKind::TraitTypeItem => "`trait` type item",
             SyntaxKind::TraitConstItem => "`trait` const item",
             SyntaxKind::ImplTrait => "`impl` trait block",
+            SyntaxKind::ImplTraitAlias => "`impl` trait alias",
+            SyntaxKind::ImplTraitWith => "`impl` trait permit clause",
+            SyntaxKind::DeriveProviderScope => "derive provider selection scope",
+            SyntaxKind::DeriveDecl => "derive declaration",
             SyntaxKind::Const => "const definition",
             SyntaxKind::StaticAssert => "static assertion",
             SyntaxKind::Use => "`use` statement",
@@ -795,8 +833,10 @@ impl SyntaxKind {
             SyntaxKind::TypeBoundList => "type bound list",
             SyntaxKind::KindBoundAbs => "kind bound",
             SyntaxKind::KindBoundMono => "kind bound",
+            SyntaxKind::KindBoundConstraint => "kind bound",
             SyntaxKind::WhereClause => "`where` clause",
             SyntaxKind::WherePredicate => "`where` predicate",
+            SyntaxKind::WhereConstPredicate => "`where` const predicate",
             SyntaxKind::UsesClause => "`uses` clause",
             SyntaxKind::UsesParamList => "`uses` parameter list",
             SyntaxKind::UsesParam => "`uses` parameter",
@@ -831,6 +871,7 @@ impl SyntaxKind {
                 | SyntaxKind::FatArrow
                 | SyntaxKind::Underscore
                 | SyntaxKind::Pound
+                | SyntaxKind::Dollar
                 | SyntaxKind::Plus
                 | SyntaxKind::Minus
                 | SyntaxKind::Star

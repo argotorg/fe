@@ -1,6 +1,6 @@
 use common::InputDb;
 use common::indexmap::IndexMap;
-use common::stdlib::{HasBuiltinCore, HasBuiltinStd};
+use common::stdlib::{HasBuiltinCore, HasBuiltinCoreDerives, HasBuiltinStd};
 use driver::{DriverDataBase, db::DiagnosticsCollection};
 use fe_hir::analysis::ty::ty_check::ReturnProvenance;
 use fe_hir::analysis::ty::{
@@ -40,6 +40,19 @@ fn analyze_stdlib() {
 
     let std_diags = db.run_on_ingot(std_ingot);
     assert_builtin_clean(&db, std_diags, "std");
+}
+
+#[test]
+fn analyze_core_derives() {
+    let db = DriverDataBase::default();
+    let core_derives = db.builtin_core_derives();
+    assert!(
+        core_derives.files(&db).iter().next().is_some(),
+        "builtin core_derives ingot should not be empty"
+    );
+
+    let diags = db.run_on_ingot(core_derives);
+    assert_builtin_clean(&db, diags, "core_derives");
 }
 
 fn assert_builtin_clean(db: &DriverDataBase, diags: DiagnosticsCollection<'_>, name: &str) {

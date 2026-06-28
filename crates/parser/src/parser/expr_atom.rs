@@ -7,6 +7,7 @@ use super::token_stream::LexicalToken;
 use super::{
     ErrProof, Parser, Recovery, define_scope,
     expr::{parse_condition_expr, parse_expr, parse_expr_no_struct},
+    func::{FuncDefScope, FuncScope},
     item::ItemScope,
     parse_list, parse_pat,
     stmt::parse_stmt,
@@ -21,7 +22,7 @@ use crate::{
 pub(super) fn is_expr_atom_head(kind: SyntaxKind) -> bool {
     use SyntaxKind::*;
     match kind {
-        IfKw | MatchKw | LBrace | LParen | LBracket => true,
+        IfKw | MatchKw | LBrace | LParen | LBracket | Dollar => true,
         kind if lit::is_lit(kind) => true,
         kind if path::is_path_segment(kind) => true,
         _ => false,
@@ -60,11 +61,37 @@ pub(super) fn parse_expr_atom<S: TokenStream>(
                     p.current_kind() == Some(SyntaxKind::LBrace)
                 });
             if is_with {
-                parser.parse_cp(WithExprScope::default(), None)
+                return parser.parse_cp(WithExprScope::default(), None);
+            }
+            // Contextual 'quote': ident text is "quote" followed by `{`, or
+            // by `(` where an open-name list + `)` + `{` parses (dry run).
+            let is_quote = parser
+                .current_token()
+                .map(|t| t.text() == "quote")
+                .unwrap_or(false)
+                && (matches!(
+                    parser.peek_n_non_trivia(2).as_slice(),
+                    [SyntaxKind::Ident, SyntaxKind::LBrace]
+                ) || (matches!(
+                    parser.peek_n_non_trivia(2).as_slice(),
+                    [SyntaxKind::Ident, SyntaxKind::LParen]
+                ) && parser.dry_run(|p| {
+                    p.bump_expected(SyntaxKind::Ident);
+                    if !p
+                        .parse_ok(QuoteOpenListScope::default())
+                        .is_ok_and(identity)
+                    {
+                        return false;
+                    }
+                    p.current_kind() == Some(SyntaxKind::LBrace)
+                })));
+            if is_quote {
+                parser.parse_cp(QuoteExprScope::default(), None)
             } else {
                 parser.parse_cp(PathExprScope::new(allow_record_init), None)
             }
         }
+        Some(Dollar) => parser.parse_cp(QuoteHoleExprScope::default(), None),
         Some(LBrace) => parser.parse_cp(BlockExprScope::default(), None),
         Some(LParen) => parser.parse_cp(ParenScope::default(), None),
         Some(LBracket) => parser.parse_cp(ArrayScope::default(), None),
@@ -235,6 +262,170 @@ impl super::Parse for WithParamScope {
     }
 }
 
+define_scope! { QuoteExprScope, QuoteExpr }
+impl super::Parse for QuoteExprScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        // Expect the contextual `quote` identifier.
+        let is_quote = parser
+            .current_token()
+            .map(|t| t.text() == "quote")
+            .unwrap_or(false);
+        if !is_quote {
+            return parser.error_and_recover("expected `quote`");
+        }
+        // This scope is already on the stack; a depth above 1 means an
+        // enclosing quote body.
+        if parser.quote_scope_depth() > 1 {
+            parser.error_msg_on_current_token(
+                "`quote` inside a quote body is not supported; build the inner \
+                 fragment in a separate `let` and splice it with `${...}`",
+            );
+        }
+        parser.bump();
+
+        parser.set_scope_recovery_stack(&[SyntaxKind::LParen, SyntaxKind::LBrace]);
+        if parser.current_kind() == Some(SyntaxKind::LParen) {
+            parser.parse(QuoteOpenListScope::default())?;
+        }
+        parser.pop_recovery_stack();
+
+        if parser.current_kind() != Some(SyntaxKind::LBrace) {
+            return parser.error_and_recover("`quote` requires a body `{ ... }`");
+        }
+        // Quote bodies come in three structural shapes: a method definition
+        // (`fn name(self, ..) -> Ret { .. }`, the artifact form), an
+        // expression body (a block, the v1 form), and a match-arm sequence
+        // (`pat => expr` items and `${...}` arm splices). The checks are
+        // ordered method, then arms, then block.
+        //
+        // A method body starts with `fn` as the first meaningful token of the
+        // quote body, at brace depth zero; a `fn` nested inside a `match`/`if`
+        // arm sits behind its own `{` and so is not the first token here.
+        let is_method = parser.dry_run(|p| {
+            p.bump_expected(SyntaxKind::LBrace);
+            while p.current_kind() == Some(SyntaxKind::Newline) {
+                p.bump();
+            }
+            p.current_kind() == Some(SyntaxKind::FnKw)
+        });
+        if is_method {
+            parser.parse(QuoteMethodScope::default())?;
+            return Ok(());
+        }
+
+        // A `=>` at brace depth zero can only belong to an arm of the quote
+        // body itself; arms of nested `match` expressions sit behind their
+        // own `{`.
+        let is_arms = parser.dry_run(|p| {
+            p.bump_expected(SyntaxKind::LBrace);
+            let mut depth = 0usize;
+            loop {
+                match p.current_kind() {
+                    None => break false,
+                    Some(SyntaxKind::LBrace | SyntaxKind::LParen | SyntaxKind::LBracket) => {
+                        depth += 1;
+                        p.bump();
+                    }
+                    Some(SyntaxKind::RBrace | SyntaxKind::RParen | SyntaxKind::RBracket) => {
+                        if depth == 0 {
+                            break false;
+                        }
+                        depth -= 1;
+                        p.bump();
+                    }
+                    Some(SyntaxKind::FatArrow) if depth == 0 => break true,
+                    Some(_) => p.bump(),
+                }
+            }
+        });
+        if is_arms {
+            parser.parse(MatchArmListScope::default())?;
+        } else {
+            parser.parse(BlockExprScope::default())?;
+        }
+        Ok(())
+    }
+}
+
+define_scope! { QuoteOpenListScope, QuoteOpenList, (RParen, Comma) }
+impl super::Parse for QuoteOpenListScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parse_list(
+            parser,
+            false,
+            SyntaxKind::QuoteOpenList,
+            (SyntaxKind::LParen, SyntaxKind::RParen),
+            |parser| {
+                if parser.current_kind() == Some(SyntaxKind::Ident) {
+                    parser.bump();
+                    Ok(())
+                } else {
+                    parser.error_and_recover("expected an open name")
+                }
+            },
+        )
+    }
+}
+
+define_scope! { QuoteMethodScope, QuoteMethod }
+impl super::Parse for QuoteMethodScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        // The quote body is delimited by the outer `{ .. }`; the method
+        // definition itself is parsed by the real `fn`-item parser so that the
+        // params (`self`, `other: Self`), return type and body block (with its
+        // `${...}` splice holes) all go through existing machinery. `Impl`
+        // mode permits a `self` receiver and requires a body block.
+        parser.bump_expected(SyntaxKind::LBrace);
+        parser.parse(FuncScope::new(FuncDefScope::Impl))?;
+        if parser.find(
+            SyntaxKind::RBrace,
+            crate::ExpectedKind::ClosingBracket {
+                bracket: SyntaxKind::RBrace,
+                parent: SyntaxKind::QuoteMethod,
+            },
+        )? {
+            parser.bump();
+        }
+        Ok(())
+    }
+}
+
+define_scope! { pub(super) QuoteHoleExprScope, QuoteHoleExpr }
+impl super::Parse for QuoteHoleExprScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        if parser.quote_scope_depth() == 0 {
+            parser.error_msg_on_current_token(
+                "`${...}` splice holes are only allowed inside a `quote` body",
+            );
+        }
+        parser.bump_expected(SyntaxKind::Dollar);
+
+        if parser.current_kind() != Some(SyntaxKind::LBrace) {
+            return parser.error_and_recover("`$` must be followed by `{` to form a splice hole");
+        }
+        parser.bump_expected(SyntaxKind::LBrace);
+        parse_expr(parser)?;
+        if parser.find(
+            SyntaxKind::RBrace,
+            crate::ExpectedKind::ClosingBracket {
+                bracket: SyntaxKind::RBrace,
+                parent: SyntaxKind::QuoteHoleExpr,
+            },
+        )? {
+            parser.bump();
+        }
+        Ok(())
+    }
+}
+
 define_scope! { MatchExprScope, MatchExpr }
 impl super::Parse for MatchExprScope {
     type Error = Recovery<ErrProof>;
@@ -290,6 +481,26 @@ impl super::Parse for MatchArmScope {
 
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
         parser.set_newline_as_trivia(false);
+
+        // `${arms}` standing alone (no binder group, no `=>`) is an arm
+        // splice inside a quote body: the hole is the arm's only content.
+        if parser.current_kind() == Some(SyntaxKind::Dollar) {
+            let is_splice = parser.dry_run(|p| {
+                if !p
+                    .parse_ok(QuoteHoleExprScope::default())
+                    .is_ok_and(identity)
+                {
+                    return false;
+                }
+                !matches!(
+                    p.current_kind(),
+                    Some(SyntaxKind::FatArrow | SyntaxKind::LParen)
+                )
+            });
+            if is_splice {
+                return parser.parse(QuoteHoleExprScope::default());
+            }
+        }
 
         parser.set_scope_recovery_stack(&[SyntaxKind::FatArrow]);
         parse_pat(parser)?;

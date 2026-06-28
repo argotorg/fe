@@ -1,0 +1,22 @@
+// DERIVE-KIND FORM 1 — the trait IS Self. Kind: `Derive : (* -> Constraint) -> Constraint`.
+//
+// TRADEOFF: cleanest kind (the one you'd first reach for), BUT (a) SINGLE-provider only — the
+// trait `Eq` implements `Derive` exactly once, so there is no room for named alternates
+// (`using StableEq`); (b) it requires `impl <trait> for Eq` — the *trait* as the implementing
+// `Self` — which is a deep change (traits as implementing entities, `Self : * -> Constraint`,
+// and `Self<T>` applying Self as a constructor). Today the impl head errors `2-0006`
+// "found trait `Eq`": Self must be a type. The most exotic form; it drops multi-provider.
+//
+// (`Derive_` (trailing `_`) names the demonstration trait, kept distinct from the real `Derive`
+//  — which today is a string-marker, not a real trait (retiring it is #7).)
+use core::derive::Evidence
+use core::ops::Eq
+
+trait Derive_ where Self: * -> Constraint {
+    const fn derive<T>(ev: own Evidence<Self<T>>) -> Evidence<Self<T>>
+}
+
+// GAP: `impl Derive_ for Eq` — the trait `Eq` cannot be the implementing `Self` (it's not a type).
+impl Derive_ for Eq {
+    const fn derive<T>(ev: own Evidence<Eq<T>>) -> Evidence<Eq<T>> { ev }
+}

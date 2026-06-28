@@ -607,6 +607,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             Expr::Match(scrutinee, arms) => self.lower_match_expr(expr, *scrutinee, arms),
             Expr::With(bindings, body) => self.lower_with_expr(bindings, *body),
+            // Quote templates only occur in derive provider bodies, which
+            // are never semantically lowered; elsewhere the type checker
+            // rejects them before lowering runs.
+            Expr::Quote { .. } | Expr::QuoteHole(..) | Expr::QuoteFieldHole(..) => {
+                panic!("quote expressions cannot reach semantic lowering")
+            }
         }
     }
 
@@ -745,7 +751,30 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             );
         }
 
-        panic!("const ref should resolve to a semantic instance: {const_ref:?}");
+        // The const-ref has no satisfying semantic instance. This is only
+        // reachable for an associated-const read `<Ty as Trait>::CONST` whose
+        // `Ty: Trait` bound is unsatisfiable, for example a derived
+        // `impl AbiSize for Bad` whose `HEAD_SIZE` folds
+        // `<NoAbi as AbiSize>::HEAD_SIZE` for a concrete field type that does
+        // not implement `AbiSize`. That unsatisfied bound is already reported
+        // as a normal `6-0003` trait-bound diagnostic at type-check
+        // (`ImplTrait::diags_assoc_consts` surfaces it), so reaching here means
+        // compilation will fail regardless. Emit a type-appropriate placeholder
+        // const instead of panicking, so this lowering query (which may run via
+        // CTFE of a dependent const before diagnostics abort the build)
+        // completes gracefully and lets the real diagnostic be reported.
+        let placeholder = if ty.is_bool(self.db) {
+            bool_const(self.db, false)
+        } else if ty.is_integral(self.db) {
+            int_const(self.db, ty, BigInt::from(0))
+        } else {
+            unit_const(self.db)
+        };
+        self.emit_expr_with_origin(
+            SemOrigin::Expr(expr),
+            ty,
+            SExpr::Const(SConst::Value(placeholder)),
+        )
     }
 
     fn lower_path_expr(&mut self, expr: ExprId) -> SValueId {

@@ -1694,13 +1694,26 @@ fn resolve_trait_runtime_instance<'db>(
     extra_generic_args: Vec<TyId<'db>>,
 ) -> Result<RuntimeInstance<'db>, ()> {
     let assumptions = PredicateListId::empty_list(db);
-    let (func, mut impl_args) = resolve_trait_method_instance(
+    let resolved = resolve_trait_method_instance(
         db,
         TraitSolveCx::new(db, scope).with_assumptions(assumptions),
         inst,
         IdentId::new(db, method.to_string()),
     )
     .ok_or(())?;
+    // DETERMINISM ASSERTION (rung 3.3): NOT applicable at this site. Unlike the
+    // typeck→mono re-resolution in `classify.rs::resolve_runtime_call_key` (whose
+    // callee instance carries typeck's committed `selected_implementor`), this
+    // helper synthesizes a *fresh* `TraitInstId` entirely inside the MIR layer
+    // (built by callers from contract-ABI machinery, e.g. `core::abi::Abi`), with
+    // empty assumptions and no upstream typeck instantiation. There is therefore
+    // no carried `selected_implementor` to compare against — the first
+    // resolution of this impl *is* this call, so the assertion has no committed
+    // choice to enforce against (carried value is structurally `None`). The
+    // determinism invariant is enforced where it has teeth: the `classify.rs`
+    // site that re-resolves an instance typeck already pinned.
+    let func = resolved.func;
+    let mut impl_args = resolved.impl_args;
     impl_args.extend(extra_generic_args);
     let key = SemanticInstanceKey::new(
         db,

@@ -1,0 +1,8 @@
+---
+source: crates/fe/tests/cli_output.rs
+assertion_line: 1824
+expression: output
+input_file: tests/fixtures/cli_output/single_files/derive_assoc_kind_skeleton.fe
+---
+
+=== EXIT CODE: 0 ===

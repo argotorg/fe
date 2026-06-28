@@ -58,13 +58,14 @@ fn run(evm: mut Evm) -> u256 {
         .map(|(name, method)| (*name, *method))
         .expect("missing trait method");
 
-    let (resolved_method, impl_args) = resolve_trait_method_instance(
+    let resolved = resolve_trait_method_instance(
         &db,
         TraitSolveCx::new(&db, impl_trait.scope()),
         inst,
         method_name,
     )
     .expect("missing resolved method");
+    let resolved_method = resolved.func;
 
     assert_eq!(resolved_method, trait_method);
     assert!(resolved_method.body(&db).is_some());
@@ -72,7 +73,7 @@ fn run(evm: mut Evm) -> u256 {
     let instantiated = instantiate_typed_body(
         &db,
         typed_body_template(&db, BodyOwner::Func(resolved_method)),
-        GenericSubst::new(&db, impl_args),
+        GenericSubst::new(&db, resolved.impl_args),
     );
     let self_binding = instantiated.param_binding(0).expect("missing self binding");
     let self_ty = instantiated.binding_ty(&db, self_binding);

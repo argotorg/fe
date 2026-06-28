@@ -26,6 +26,8 @@ ast_node! {
     | SK::IfExpr
     | SK::MatchExpr
     | SK::WithExpr
+    | SK::QuoteExpr
+    | SK::QuoteHoleExpr
     | SK::ParenExpr
     | SK::AssignExpr
     | SK::AugAssignExpr,
@@ -58,6 +60,8 @@ impl Expr {
             SK::IfExpr => ExprKind::If(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::MatchExpr => ExprKind::Match(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::WithExpr => ExprKind::With(AstNode::cast(self.syntax().clone()).unwrap()),
+            SK::QuoteExpr => ExprKind::Quote(AstNode::cast(self.syntax().clone()).unwrap()),
+            SK::QuoteHoleExpr => ExprKind::QuoteHole(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::ParenExpr => ExprKind::Paren(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::AssignExpr => ExprKind::Assign(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::AugAssignExpr => ExprKind::AugAssign(AstNode::cast(self.syntax().clone()).unwrap()),
@@ -266,6 +270,14 @@ impl FieldExpr {
         self.field_name()
             .or_else(|| self.field_index().map(|i| i.token().clone()))
     }
+
+    /// Returns the `${...}` splice hole accessor of `base.${hole}`,
+    /// inside quote bodies.
+    pub fn field_hole(&self) -> Option<QuoteHoleExpr> {
+        support::children::<Expr>(self.syntax())
+            .nth(1)
+            .and_then(|expr| QuoteHoleExpr::cast(expr.syntax().clone()))
+    }
 }
 
 ast_node! {
@@ -413,6 +425,77 @@ impl WithExpr {
 }
 
 ast_node! {
+    /// `quote { expr }` / `quote(open, ..) { expr }`
+    pub struct QuoteExpr,
+    SK::QuoteExpr
+}
+impl QuoteExpr {
+    /// Returns the declared open name list, if present.
+    pub fn open_names(&self) -> Option<QuoteOpenList> {
+        support::child(self.syntax())
+    }
+
+    pub fn body(&self) -> Option<BlockExpr> {
+        support::child(self.syntax())
+    }
+
+    /// Returns the match-arm sequence body
+    /// (`quote { ${arms}, ${variant}(group) => expr }`), if the quote is an
+    /// arm-sequence template rather than an expression template.
+    pub fn arms(&self) -> Option<MatchArmList> {
+        support::child(self.syntax())
+    }
+
+    /// Returns the method body (`quote { fn name(self, ..) -> Ret { .. } }`),
+    /// if the quote is a method template rather than an expression or
+    /// arm-sequence template.
+    pub fn method(&self) -> Option<QuoteMethod> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
+    /// `(open, ..)` declared open names of a quote
+    pub struct QuoteOpenList,
+    SK::QuoteOpenList
+}
+impl QuoteOpenList {
+    /// Returns the declared open name tokens.
+    pub fn names(&self) -> impl Iterator<Item = SyntaxToken> + '_ {
+        self.syntax()
+            .children_with_tokens()
+            .filter_map(|node| node.into_token())
+            .filter(|token| token.kind() == SK::Ident)
+    }
+}
+
+ast_node! {
+    /// `${expr}` splice hole inside a quote body
+    pub struct QuoteHoleExpr,
+    SK::QuoteHoleExpr
+}
+impl QuoteHoleExpr {
+    /// Returns the spliced expression.
+    pub fn expr(&self) -> Option<Expr> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
+    /// `fn name(self, ..) -> Ret { .. }` method body of a quote
+    pub struct QuoteMethod,
+    SK::QuoteMethod
+}
+impl QuoteMethod {
+    /// Returns the function definition spelled as the quote's method body.
+    /// Downstream lowering reads the method name, parameters, return type and
+    /// body block off this real `fn` node.
+    pub fn func(&self) -> Option<super::Func> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
     pub struct WithParamList,
     SK::WithParamList,
     IntoIterator<Item=WithParam>,
@@ -514,6 +597,8 @@ pub enum ExprKind {
     If(IfExpr),
     Match(MatchExpr),
     With(WithExpr),
+    Quote(QuoteExpr),
+    QuoteHole(QuoteHoleExpr),
     Paren(ParenExpr),
     Assign(AssignExpr),
     AugAssign(AugAssignExpr),

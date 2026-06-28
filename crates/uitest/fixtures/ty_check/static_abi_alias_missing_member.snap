@@ -1,0 +1,17 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/static_abi_alias_missing_member.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ static_abi_alias_missing_member.fe:61:5
+   │
+49 │ fn needs_static_abi<T>() where T: StaticAbi {
+   │                                   --------- required by this bound on `needs_static_abi`
+   ·
+61 │     needs_static_abi<OnlyAbiSize>()
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   │     │
+   │     `OnlyAbiSize` doesn't implement `StaticAbi`
+   │     trait bound `OnlyAbiSize: AbiShape` is not satisfied

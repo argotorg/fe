@@ -5,6 +5,8 @@ input_file: crates/codegen/tests/fixtures/match_return.fe
 ---
 target = "evm-ethereum-osaka"
 
+type @layout_1 = {};
+type @layout_2 = {@layout_1};
 type @layout_0 = enum {
     #A,
     #B,
@@ -19,11 +21,11 @@ func private %f(v0.@layout_0) {
         br_table v2 (0.enumtag(@layout_0) block2) (1.enumtag(@layout_0) block3);
 
     block2:
-        call %return_data 0.i256 0.i256;
+        call %return_data undef.objref<@layout_2> 0.i256 0.i256;
         unreachable;
 
     block3:
-        call %return_data 0.i256 0.i256;
+        call %return_data undef.objref<@layout_2> 0.i256 0.i256;
         unreachable;
 }
 
@@ -46,12 +48,12 @@ func private %main_root() {
         evm_stop;
 }
 
-func private %return_data(v0.i256, v1.i256) {
+func private %return_data(v0.objref<@layout_2>, v1.i256, v2.i256) {
     block0:
         jump block1;
 
     block1:
-        evm_return v0 v1;
+        evm_return v1 v2;
 }
 
 

@@ -1,0 +1,51 @@
+// FCO #87 inc1 — the ORDINARY derive-provider form `impl Derive<Goal> for
+// Provider` produces the same result as the legacy colon-overload form
+// `impl Provider: Derive for Goal`. This is a verbatim clone of
+// `quote_qualified_const_cross_trait.fe`, changing ONLY the provider
+// declaration head: `impl StableGetK: Derive for GetK` becomes the ordinary
+// `impl Derive<GetK> for StableGetK` (goal moves from the `for` clause to the
+// first generic arg of the `Derive<..>` trait ref; the implementor type IS the
+// provider name). The body — `uses (reflect, builder)` + the cross-trait
+// `<u256 as HasK>::K` quote — is byte-identical. A clean compile (EXIT 0)
+// proves the new declaration form is recognized by the provider engine and the
+// const-fn-effects exemptions, and that synthesis emits the same generated
+// `impl GetK for Point`.
+
+use core::derive::Derive
+use core::derive::Evidence
+use core::derive::ImplBuilder
+use core::derive::Reflect
+
+trait HasK {
+    const K: u256
+}
+
+impl HasK for u256 {
+    const K: u256 = 7
+}
+
+trait GetK {
+    fn get_k(self) -> u256
+}
+
+impl Derive<GetK> for StableGetK {
+    const fn derive<T>(ev: own Evidence<GetK<T>>) -> Evidence<GetK<T>>
+        uses (
+            reflect: Reflect<T>,
+            builder: mut ImplBuilder<GetK<T>>,
+        )
+    {
+        // `HasK` is NOT the goal trait (`GetK`): a cross-trait qualified const.
+        builder.emit_method("get_k", quote { <u256 as HasK>::K })
+        builder.finish()
+        ev
+    }
+}
+
+struct StableGetK {}
+
+struct Point {
+    x: u256,
+}
+
+derive GetK for Point using StableGetK

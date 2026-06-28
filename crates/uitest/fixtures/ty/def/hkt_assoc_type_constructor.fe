@@ -1,0 +1,31 @@
+// HKT associated-type classification ("name the ghost" for the actor `Backend`
+// shape). The multi-backend actor interface rests on a `* -> *` associated TYPE
+// constructor — `trait Backend { type Ptr<T> }` with `impl Backend for Evm { type
+// Ptr<T> = u256 }`, used as `B::Ptr<u256>`. On the `multi-backend` branch this
+// parses + round-trips HIR but the type-checker resolution of `B::Ptr<u32>` is
+// documented as INCOMPLETE (COMPROMISES.md). This fixture pins the CURRENT
+// behavior on first-class-obligations so we know whether HKT associated-type
+// resolution is a gap here too — and so any future fix has a regression anchor.
+// No assertion of a desired outcome; the snapshot IS the classification (must not
+// ICE).
+
+trait Backend {
+    // A higher-kinded associated type: `Ptr` itself has kind `* -> *`.
+    type Ptr<T>
+}
+
+struct Evm {}
+
+impl Backend for Evm {
+    type Ptr<T> = u256
+}
+
+// Apply the HKT associated type to a concrete argument in a signature position.
+fn word_ptr<B: Backend>(_ p: B::Ptr<u256>) -> B::Ptr<u256> {
+    p
+}
+
+// Concrete instantiation: does `Evm::Ptr<u256>` resolve to `u256`?
+fn evm_word(_ p: Evm::Ptr<u256>) -> u256 {
+    p
+}

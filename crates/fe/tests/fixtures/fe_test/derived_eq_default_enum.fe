@@ -1,0 +1,87 @@
+// M2 acceptance: derived Eq and Default on enums must EXECUTE.
+// Covers unit variants, tuple payloads, record payloads, and the
+// #[default] variant marker (unit and payload forms).
+
+use core::ops::Eq
+use core::default::Default
+
+#[derive(Eq)]
+enum Direction {
+    North,
+    South,
+    East,
+    West,
+}
+
+#[derive(Eq)]
+enum Shape {
+    Circle(u256),
+    Rect { w: u256, h: u256 },
+    Empty,
+}
+
+#[derive(Eq, Default)]
+enum Mode {
+    #[default]
+    Off,
+    On,
+}
+
+#[derive(Eq, Default)]
+enum Count {
+    #[default]
+    N(u256),
+    Overflowed,
+}
+
+#[test]
+fn derived_enum_eq_same_unit_variant() {
+    assert!(Direction::North.eq(Direction::North))
+}
+
+#[test]
+fn derived_enum_eq_different_unit_variants() {
+    assert!(!Direction::North.eq(Direction::South))
+}
+
+#[test]
+fn derived_enum_eq_tuple_payload_equal() {
+    assert!(Shape::Circle(5).eq(Shape::Circle(5)))
+}
+
+#[test]
+fn derived_enum_eq_tuple_payload_differs() {
+    assert!(!Shape::Circle(5).eq(Shape::Circle(6)))
+}
+
+#[test]
+fn derived_enum_eq_record_payload_equal() {
+    let a = Shape::Rect { w: 2, h: 3 }
+    let b = Shape::Rect { w: 2, h: 3 }
+    assert!(a.eq(b))
+}
+
+#[test]
+fn derived_enum_eq_record_payload_differs() {
+    let a = Shape::Rect { w: 2, h: 3 }
+    let b = Shape::Rect { w: 2, h: 4 }
+    assert!(!a.eq(b))
+}
+
+#[test]
+fn derived_enum_eq_different_variants() {
+    assert!(!Shape::Circle(0).eq(Shape::Empty))
+}
+
+#[test]
+fn derived_enum_default_unit_variant() {
+    let m = Mode::default()
+    assert!(m.eq(Mode::Off))
+    assert!(!m.eq(Mode::On))
+}
+
+#[test]
+fn derived_enum_default_payload_variant() {
+    let c = Count::default()
+    assert!(c.eq(Count::N(0)))
+}

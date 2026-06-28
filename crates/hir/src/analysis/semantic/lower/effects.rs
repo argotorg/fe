@@ -31,6 +31,14 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let mut saved = Vec::with_capacity(bindings.len());
         for binding in bindings {
             let value_expr = binding.value;
+            // FCO "slide" cascade C3b: a `with (<T as Trait>) { .. }` binding names
+            // a (Trait, Type) GOAL, not a runtime value — typeck consumed it as a
+            // scoped impl SELECTION (the selected impl rides the obligation
+            // discharge). Its qualified-type-path value expr has no value-path
+            // classification, so SKIP lowering it; it contributes nothing here.
+            if self.typed_body.is_scoped_selection_expr(value_expr) {
+                continue;
+            }
             let value = self.lower_expr(value_expr);
             saved.push((
                 value_expr,

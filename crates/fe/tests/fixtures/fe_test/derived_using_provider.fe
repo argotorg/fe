@@ -1,0 +1,91 @@
+// M3 step 3 acceptance: derive PROVIDERS execute.
+//
+// Two things are proven here:
+// 1. Explicit provider selection: `derive Eq for Point using StableEq`
+//    selects the canonical core provider by name and executes it.
+// 2. The public extension point: a USER-defined provider in this same file
+//    (`AlwaysTagged`, for the user trait `Tagged`) executes at compile time
+//    and generates a real impl — including a method body emitted through
+//    builder expression commands.
+
+use core::derive::Derive
+use core::derive::Evidence
+use core::derive::ImplBuilder
+use core::derive::Reflect
+use core::ops::Eq
+
+// A user trait with a required method; the provider below derives it.
+trait Tagged {
+    fn tag(self) -> bool
+}
+
+// A user-defined derive provider: generates `impl Tagged for T` with
+// `fn tag(self) -> bool { return true }`.
+impl Derive<Tagged> for AlwaysTagged {
+    const fn derive<T>(ev: own Evidence<Tagged<T>>) -> Evidence<Tagged<T>>
+        uses (
+            reflect: Reflect<T>,
+            builder: mut ImplBuilder<Tagged<T>>,
+        )
+    {
+        builder.emit_method("tag", builder.bool(true))
+        builder.finish()
+        ev
+    }
+}
+
+struct Point {
+    x: u256,
+    y: u256,
+}
+
+// Explicitly select the canonical core provider by name.
+derive Eq for Point using StableEq
+
+// Select the user-defined provider by name.
+derive Tagged for Point using AlwaysTagged
+
+// Scoped selection: declarations inside `with Provider { .. }` inherit the
+// provider.
+struct Label {
+    id: u256,
+}
+
+with AlwaysTagged {
+    derive Tagged for Label
+}
+
+// Generated evidence is consumable through generic bounds.
+fn tag_of<T: Tagged>(_ value: T) -> bool {
+    value.tag()
+}
+
+#[test]
+fn using_core_provider_executes() {
+    let a = Point { x: 1, y: 2 }
+    let b = Point { x: 1, y: 2 }
+    let c = Point { x: 1, y: 3 }
+    assert!(a.eq(b))
+    assert!(!a.eq(c))
+    assert!(a == b)
+}
+
+#[test]
+fn user_provider_generates_method_body() {
+    let p = Point { x: 0, y: 0 }
+    assert!(p.tag())
+}
+
+#[test]
+fn scoped_provider_selection_executes() {
+    let l = Label { id: 7 }
+    assert!(l.tag())
+}
+
+#[test]
+fn generated_impl_satisfies_generic_bound() {
+    let p = Point { x: 5, y: 6 }
+    assert!(tag_of(p))
+}
+
+struct AlwaysTagged {}

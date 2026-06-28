@@ -1,0 +1,43 @@
+// BR7 guard (TGT-KIND-ANY-PLANNED-FORM-TRAP). This pins the CURRENT behavior of a
+// *parameterized path in kind position* — e.g. `Foo<i32> -> *` — a form the
+// planned higher-kinded surface (node K01) has NOT landed.
+//
+// The kind grammar today is only `* | Constraint | k -> k | (k)` (parser
+// `param.rs` KindBound*; lowering `ty_lower.rs::lower_kind`). A path/applied kind
+// like `Foo<i32>` is NOT a kind term. The fossilization risk (inventory
+// docs/dev/FCO_BRIDGE_AND_REIFICATION_TARGETS.md, finding #6 / risk #4) is the
+// silent `Kind::Any` fill in `lower_kind` (ty_lower.rs:1637-1643): a `Partial::Absent`
+// kind sub-term becomes `Kind::Any`, and `(Kind::Any, _) => true` (ty_def.rs:1304)
+// accepts it against everything. If that ever happens here, an ill-kinded program
+// type-checks clean.
+//
+// This fixture is a TRIPWIRE, not an assertion of a named rejection (K01 is not
+// done, per the inventory's §5 caveat). The snapshot records whatever the compiler
+// does today — guaranteeing no-ICE and surfacing any future drift toward silent
+// `Kind::Any` acceptance. When K01 lands a named diagnostic for path kind forms,
+// this snapshot must be updated deliberately (and the trap closed).
+
+struct Foo<T> {
+    x: T,
+}
+
+// Parameterized path on the LEFT of `->`.
+pub struct PathKindLeft<T>
+where T: Foo<i32> -> *
+{
+    val: T<i32>,
+}
+
+// Parameterized path on the RIGHT of `->`.
+pub struct PathKindRight<T>
+where T: * -> Foo<i32>
+{
+    val: T<i32>,
+}
+
+// Bare parameterized path in kind position (no arrow).
+pub struct PathKindBare<T>
+where T: Foo<i32>
+{
+    val: T,
+}

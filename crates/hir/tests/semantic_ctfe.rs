@@ -707,6 +707,8 @@ fn contract_init_fixed_array_arg_fixture_has_no_type_level_semantic_consts() {
             | ItemKind::Trait(_)
             | ItemKind::Impl(_)
             | ItemKind::ImplTrait(_)
+            | ItemKind::DeriveProviderScope(_)
+            | ItemKind::DeriveDecl(_)
             | ItemKind::TypeAlias(_)
             | ItemKind::StaticAssert(_)
             | ItemKind::Use(_)

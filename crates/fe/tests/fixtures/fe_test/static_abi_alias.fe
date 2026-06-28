@@ -1,0 +1,169 @@
+// BRIDGE BURN-DOWN #6 (EXPRESSIVE_FIXTURE + REIFY) — a constraint alias that
+// bundles TWO REAL ABI obligations under one name, in a REAL ABI fixture.
+//
+// This reuses the PROVEN, landed Tier A pattern (#37 `ValueLike`, commit
+// 6183f29c1): a marker trait whose SUPERTRAIT list IS the bundle, plus a blanket
+// impl over every `T` satisfying the members:
+//
+//     trait StaticAbi: AbiSize + AbiShape {}
+//     impl<T> StaticAbi for T where T: AbiSize + AbiShape {}
+//
+// `where T: StaticAbi` is a SINGLE written bound that EXPANDS to its concrete
+// member obligations (`T: AbiSize`, `T: AbiShape`) BEFORE the solver runs —
+// ordinary supertrait elaboration, exactly like `ValueLike`. There is NO live
+// `P`, NO `ConstraintTerm`, and NO new solver rule: the solver never sees a
+// variable-headed alias goal, only the two concrete member obligations.
+//
+// The two bundled members are BOTH real ABI layout obligations:
+//   - `core::abi::AbiSize`  (HEAD_SIZE: u256, IS_DYNAMIC: bool) — the real core
+//     ABI trait; here derived by the same fixture-local NAMED `StableAbiSize`
+//     provider proven in burn-down #5 (derived_abi_size.fe).
+//   - `AbiShape`            (HEAD_WORDS: u256, IS_DYNAMIC: bool) — the proven
+//     fixture-local EVM layout trait from derived_abi_shape.fe, derived by the
+//     fixture-local NAMED `StableAbiShape` provider.
+//
+// MULTI-BACKEND NOTE: head/tail word layout is EVM-specific (AbiSize/AbiShape
+// are EVM ABI traits, not universal). The alias `StaticAbi` is therefore kept
+// FIXTURE-LOCAL — it is NOT canonicalized into backend-agnostic core. It is a
+// transparent bundle over concrete EVM ABI obligations, nothing more.
+
+use core::abi::AbiSize
+use core::derive::Derive
+use core::derive::Evidence
+use core::derive::ImplBuilder
+use core::derive::Reflect
+
+// --- Member trait 2: the proven fixture-local EVM layout trait --------------
+// (Member trait 1 is the REAL `core::abi::AbiSize`, imported above.)
+trait AbiShape {
+    const HEAD_WORDS: u256
+    const IS_DYNAMIC: bool
+}
+
+// Leaf facts: a u256 / bool each occupy exactly one static head word.
+impl AbiShape for u256 {
+    const HEAD_WORDS: u256 = 1
+    const IS_DYNAMIC: bool = false
+}
+
+impl AbiShape for bool {
+    const HEAD_WORDS: u256 = 1
+    const IS_DYNAMIC: bool = false
+}
+
+// --- The constraint alias ---------------------------------------------------
+// Marker trait: no items of its own; its supertrait list IS the bundle of two
+// REAL ABI obligations. Matches `ValueLike`'s exact spelling (no Self-param).
+trait StaticAbi: AbiSize + AbiShape {}
+
+// Blanket impl: every `T` satisfying both members IS `StaticAbi`. This is what
+// makes `StaticAbi` an *alias* rather than an opt-in marker — authors never
+// write `impl StaticAbi for MyType`; satisfying both members is sufficient.
+impl<T> StaticAbi for T where T: AbiSize + AbiShape {}
+
+// --- NAMED providers for each member ----------------------------------------
+// `StableAbiSize` (member 1, `core::abi::AbiSize`) is now the std-resident
+// provider (`ingots/std/src/abi.fe`), promoted out of fixtures in FCO #5b;
+// it is selected by name below. `StableAbiShape` (member 2) stays fixture-local
+// (its trait `AbiShape` is fixture-local).
+impl Derive<AbiShape> for StableAbiShape {
+    const fn derive<T>(ev: own Evidence<AbiShape<T>>) -> Evidence<AbiShape<T>>
+        uses (
+            reflect: Reflect<T>,
+            builder: mut ImplBuilder<AbiShape<T>>,
+        )
+    {
+        if reflect.is_struct() {
+            let mut head = builder.bool(false)
+            let mut dynamic = builder.bool(false)
+            let mut first = true
+            for field in reflect.fields() {
+                builder.require<AbiShape>(field.ty())
+                let field_words = builder.trait_const(field.ty(), "HEAD_WORDS")
+                let field_dyn = builder.trait_const(field.ty(), "IS_DYNAMIC")
+                if first {
+                    head = field_words
+                    first = false
+                } else {
+                    head = builder.add(head, field_words)
+                }
+                dynamic = builder.or(dynamic, field_dyn)
+            }
+            builder.emit_const("HEAD_WORDS", builder.ty<u256>(), head)
+            builder.emit_const("IS_DYNAMIC", builder.ty<bool>(), dynamic)
+        }
+        builder.finish()
+        ev
+    }
+}
+
+// --- A type satisfying the WHOLE bundle (both members derived) --------------
+struct Word {
+    x: u256,
+    y: u256,
+}
+
+derive AbiSize for Word using StableAbiSize
+derive AbiShape for Word using StableAbiShape
+
+struct Triple {
+    a: u256,
+    b: bool,
+    c: u256,
+}
+
+derive AbiSize for Triple using StableAbiSize
+derive AbiShape for Triple using StableAbiShape
+
+// --- The function bounded by the ALIAS --------------------------------------
+// `where T: StaticAbi` is the SINGLE alias bound replacing the boilerplate
+// `where T: AbiSize + AbiShape`. The body uses BOTH member capabilities through
+// that one bound: `T::HEAD_SIZE` comes from the `AbiSize` member, `T::HEAD_WORDS`
+// from the `AbiShape` member. They are only callable because the supertrait
+// bounds of `StaticAbi` elaborate to `T: AbiSize` and `T: AbiShape` at the use
+// site. Each head word is 32 bytes, so a self-consistent layout has
+// HEAD_SIZE == HEAD_WORDS * 32 — folded here from both derived facts.
+fn head_bytes_match_words<T>() -> bool where T: StaticAbi {
+    // AbiSize member: byte count of the head frame.
+    let bytes = T::HEAD_SIZE
+    // AbiShape member: head-word count of the same frame.
+    let words = T::HEAD_WORDS
+    bytes == words * 32
+}
+
+fn head_size_via_alias<T>() -> u256 where T: StaticAbi {
+    // Reads the AbiSize member through the single alias bound.
+    T::HEAD_SIZE
+}
+
+fn head_words_via_alias<T>() -> u256 where T: StaticAbi {
+    // Reads the AbiShape member through the single alias bound.
+    T::HEAD_WORDS
+}
+
+#[test]
+fn alias_reads_both_members_word() {
+    // AbiSize folded HEAD_SIZE = 32 + 32 = 64 (two u256 head words).
+    assert!(head_size_via_alias<Word>() == 64)
+    // AbiShape folded HEAD_WORDS = 1 + 1 = 2.
+    assert!(head_words_via_alias<Word>() == 2)
+}
+
+#[test]
+fn alias_reads_both_members_triple() {
+    // AbiSize folded HEAD_SIZE = 32 + 32 + 32 = 96.
+    assert!(head_size_via_alias<Triple>() == 96)
+    // AbiShape folded HEAD_WORDS = 1 + 1 + 1 = 3.
+    assert!(head_words_via_alias<Triple>() == 3)
+}
+
+#[test]
+fn alias_cross_member_consistency() {
+    // The single `where T: StaticAbi` bound expands to BOTH obligations, so a
+    // function can fold facts from BOTH members together. HEAD_SIZE (bytes) must
+    // equal HEAD_WORDS * 32 — proven for both satisfying types.
+    assert!(head_bytes_match_words<Word>())
+    assert!(head_bytes_match_words<Triple>())
+}
+
+struct StableAbiShape {}

@@ -1,0 +1,21 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/provider_command_after_finish.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/provider_command_after_finish.fe
+
+error[13-0010]: derive provider `EmitAfterFinish` failed to derive `Marker`
+   ┌─ provider_command_after_finish.fe:35:8
+   │
+26 │         builder.emit_const("X", builder.ty<u256>(), builder.bool(false))
+   │         ---------------------------------------------------------------- the provider issued a builder command after `finish`
+   ·
+35 │ derive Marker for Point using EmitAfterFinish
+   │        ^^^^^^ requested here: the provider issued a builder command after `finish`
+   │
+   = the provider `EmitAfterFinish` ran at compile time and failed; the secondary label points at the failing provider code
+
+
+=== EXIT CODE: 1 ===

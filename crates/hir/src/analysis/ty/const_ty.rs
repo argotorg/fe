@@ -16,7 +16,7 @@ use super::{
     fold::{AssocTySubst, TyFoldable},
     normalize::normalize_ty,
     trait_def::TraitInstId,
-    trait_resolution::{TraitSolveCx, constraint::collect_constraints},
+    trait_resolution::{ProvisionEnv, TraitSolveCx, constraint::collect_constraints},
     ty_check::{check_anon_const_body, check_const_body},
     ty_def::{InvalidCause, TyId, TyParam, TyVar},
     ty_lower::{ConstDefaultCompletion, collect_generic_params},
@@ -532,6 +532,8 @@ fn ty_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
         | TyData::TyParam(_)
         | TyData::AssocTy(_)
         | TyData::QualifiedTy(_)
+        | TyData::ConstraintTerm(_)
+        | TyData::TraitCtor(_)
         | TyData::Invalid(_) => false,
         TyData::TyApp(abs, arg) => ty_is_fully_ground(db, *abs) && ty_is_fully_ground(db, *arg),
         TyData::ConstTy(const_ty) => const_ty_is_fully_ground(db, *const_ty),
@@ -1000,6 +1002,11 @@ pub fn canonicalize_ty_for_mode<'db>(
                 db,
                 canonicalize_trait_inst_for_mode(db, *trait_inst, env, mode),
             ),
+            TyData::ConstraintTerm(inst) => {
+                TyId::constraint_term(db, canonicalize_trait_inst_for_mode(db, *inst, env, mode))
+            }
+            // Leaf: a bare `Trait` def with no inner `TyId` to canonicalize.
+            TyData::TraitCtor(trait_) => TyId::trait_ctor(db, *trait_),
             TyData::TyVar(_)
             | TyData::TyParam(_)
             | TyData::TyBase(_)
@@ -1656,7 +1663,7 @@ pub(crate) fn evaluate_const_ty<'db>(
                     }
                     PathRes::TraitConst(_recv_ty, inst, name) => {
                         let solve_cx =
-                            TraitSolveCx::new(db, body.scope()).with_assumptions(assumptions);
+                            ProvisionEnv::for_scope(body.scope(), assumptions).solve_cx(db);
                         const_ty_from_trait_const(db, solve_cx, inst, name)
                             .ok_or(ConstIntError::NotIntExpr)?
                     }
@@ -1746,8 +1753,7 @@ pub(crate) fn evaluate_const_ty<'db>(
                         ConstTyId::new(db, ConstTyData::Abstract(expr, expected_ty))
                     };
 
-                    let solve_cx =
-                        TraitSolveCx::new(db, body.scope()).with_assumptions(assumptions);
+                    let solve_cx = ProvisionEnv::for_scope(body.scope(), assumptions).solve_cx(db);
                     if let Some(const_ty) = const_ty_from_trait_const(db, solve_cx, inst, name) {
                         let evaluated = const_ty.evaluate(db, expected_ty);
                         if evaluated.ty(db).has_invalid(db) {
@@ -2144,7 +2150,12 @@ pub(crate) fn const_ty_from_assoc_const_use<'db>(
     db: &'db dyn HirAnalysisDb,
     assoc: AssocConstUse<'db>,
 ) -> Option<ConstTyId<'db>> {
-    const_ty_from_trait_const(db, assoc.solve_cx(db), assoc.inst(), assoc.name())
+    const_ty_from_trait_const(
+        db,
+        ProvisionEnv::for_scope(assoc.origin_scope(), assoc.assumptions()).solve_cx(db),
+        assoc.inst(),
+        assoc.name(),
+    )
 }
 
 /// Whether `start_body`'s value definition can re-enter `start_body` when

@@ -1,8 +1,9 @@
 use common::InputDb;
 pub use core::lower::{
-    AbiFieldContext, AbiFieldDiagnostic, AttrMisuseError, AttrMisuseErrorKind, ErrorDiagnostic,
-    ErrorDiagnosticKind, EventError, EventErrorKind, FieldModifierError, FieldModifierErrorKind,
-    SelectorError, SelectorErrorKind, parse::ParserError,
+    AbiFieldContext, AbiFieldDiagnostic, AttrMisuseError, AttrMisuseErrorKind, DeriveError,
+    DeriveErrorKind, DeriveSecondarySpan, ErrorDiagnostic, ErrorDiagnosticKind, EventError,
+    EventErrorKind, FieldModifierError, FieldModifierErrorKind, SelectorError, SelectorErrorKind,
+    parse::ParserError,
 };
 
 pub mod analysis;

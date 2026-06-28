@@ -3,7 +3,10 @@
 use crate::{
     core::hir_def::{
         AssocTypeGenericArg, ConstGenericArgValue, HirIngot, IdentId, ImplTrait, ItemKind, Partial,
-        PathId, Trait, TraitRefId, params::GenericArg, scope_graph::ScopeId,
+        PathId, Trait, TraitRefId,
+        params::GenericArg,
+        scope_graph::ScopeId,
+        types::{TypeId as HirTypeId, TypeKind},
     },
     hir_def::Func,
 };
@@ -24,6 +27,7 @@ use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{
         NameDomain, NameResKind, PathRes, PathResError, resolve_ident_to_bucket, resolve_name_res,
+        resolve_path,
     },
     ty::ty_def::{Kind, TyData},
 };
@@ -375,6 +379,117 @@ fn lower_trait_ref_impl_inner<'db>(
     }
 
     Ok(TraitInstId::new(db, t, final_args, assoc_bindings))
+}
+
+/// Lower a boundless constraint-application where-predicate (`where Eq<T>`) to
+/// the [`TraitInstId`] it asserts.
+///
+/// Unlike [`lower_trait_ref_impl`] (where `Self` is supplied by the bound
+/// receiver and the written args fill the non-`Self` params), a constraint
+/// application uses the proposition shape `Trait<Self, Args...>`: the FIRST
+/// provided type argument is the subject (`Self`). So `where Eq<T>` asserts
+/// `T: Eq` (the `Eq<T = Self>` slot is filled by `Self = T`).
+///
+/// Returns `None` when this is not a concrete trait application: an abstract
+/// `* -> Constraint` parameter head (`where P<T>`), a non-trait head, a missing
+/// subject, an arg-count/kind mismatch, or a const-evaluation failure. The
+/// analysis pass ([`crate::diagnosable`]) reports those by name; constraint
+/// collection stays diagnostic-free (it must not re-enter the solver).
+pub(crate) fn lower_hir_constraint_application<'db>(
+    db: &'db (dyn HirAnalysisDb + 'static),
+    hir_ty: HirTypeId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Option<TraitInstId<'db>> {
+    let TypeKind::Path(path) = hir_ty.data(db) else {
+        return None;
+    };
+    let path = path.to_opt()?;
+
+    let generic_args = path.generic_args(db);
+    if generic_args.is_empty(db) {
+        // A constraint application always names its subject explicitly.
+        return None;
+    }
+
+    // The head (path stripped of its generic args) must resolve to a trait.
+    // An abstract `* -> Constraint` parameter resolves to `PathRes::Ty` and is
+    // intentionally rejected here (deferred per the wiring-party D2/D7c).
+    let PathRes::Trait(inst) =
+        resolve_path(db, path.strip_generic_args(db), scope, assumptions, false).ok()?
+    else {
+        return None;
+    };
+    let t = inst.def(db);
+    let trait_params: &[TyId<'db>] = t.params(db);
+
+    // Lower the written args. The first positional arg is the subject (`Self`).
+    let args = generic_args.data(db);
+    let minter = HoleMinter::new(HoleAnchor::TemplatePath { path, scope });
+    let mut provided = Vec::with_capacity(args.len());
+    let mut assoc_bindings = IndexMap::new();
+    for arg in args.iter() {
+        match arg {
+            GenericArg::Type(ty_arg) => {
+                let ty = lower_opt_hir_ty_with_minter(db, ty_arg.ty, scope, assumptions, &minter);
+                provided.push(ty);
+            }
+            GenericArg::Const(const_arg) => match const_arg.value {
+                ConstGenericArgValue::Expr(body) => {
+                    provided.push(TyId::const_ty(db, ConstTyId::from_opt_body(db, body)));
+                }
+                ConstGenericArgValue::Hole => return None,
+            },
+            GenericArg::AssocType(AssocTypeGenericArg { name, ty }) => {
+                if let (Some(name), Some(ty)) = (name.to_opt(), ty.to_opt()) {
+                    let ty = lower_hir_ty_with_minter(db, ty, scope, assumptions, &minter);
+                    assoc_bindings.insert(name, ty);
+                }
+            }
+        }
+    }
+
+    if provided.is_empty() || provided.len() > trait_params.len() {
+        return None;
+    }
+    let self_ty = provided[0];
+
+    // Complete trailing explicit defaults after binding `Self` to the subject.
+    let non_self_completed = t.param_set(db).complete_explicit_args(
+        db,
+        Some(self_ty),
+        &provided[1..],
+        assumptions,
+        ConstDefaultCompletion::evaluate(Some(path)),
+        Some(&minter),
+    );
+    if non_self_completed.len() != trait_params.len() - 1 {
+        return None;
+    }
+
+    let mut final_args: Vec<TyId<'db>> = Vec::with_capacity(trait_params.len());
+    final_args.push(self_ty);
+    final_args.extend(non_self_completed);
+
+    // Kind-check (including the subject) and evaluate const args, mirroring
+    // `lower_trait_ref_impl`'s checks; any mismatch makes this not a well-formed
+    // application, so we decline rather than fabricate a bogus instance.
+    for (expected_ty, actual_ty) in trait_params.iter().zip(final_args.iter_mut()) {
+        if !expected_ty.kind(db).does_match(actual_ty.kind(db)) {
+            return None;
+        }
+
+        let expected_const_ty = match expected_ty.data(db) {
+            TyData::ConstTy(expected_ty) => expected_ty.ty(db).into(),
+            _ => None,
+        };
+        match actual_ty.evaluate_const_ty(db, expected_const_ty) {
+            Ok(evaluated_ty) => *actual_ty = evaluated_ty,
+            Err(_) => return None,
+        }
+    }
+
+    Some(TraitInstId::new(db, t, final_args, assoc_bindings))
 }
 
 #[cfg(test)]

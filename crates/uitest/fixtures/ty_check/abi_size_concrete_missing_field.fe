@@ -1,0 +1,21 @@
+// FCO #42 regression — a derived assoc-const initializer that reads
+// `<Ty as Trait>::CONST` for a concrete `Ty` NOT implementing the trait must
+// DIAGNOSE (6-0003), not ICE in semantic const lowering ("const ref should
+// resolve to a semantic instance", body.rs).
+//
+// Deriving `AbiSize` for `Bad { inner: NoAbi }` (NoAbi: !AbiSize) generates
+// `impl AbiSize for Bad` whose HEAD_SIZE folds `<NoAbi as AbiSize>::HEAD_SIZE`.
+// The `NoAbi: AbiSize` obligation is now registered at type-check and surfaced
+// from `diags_assoc_consts`, so the unsatisfied bound is reported as 6-0003.
+
+// FCO #5b: `StableAbiSize` is the std-resident provider
+// (`ingots/std/src/abi.fe`); this fixture selects it by name.
+use core::abi::AbiSize
+
+struct NoAbi {}
+
+struct Bad {
+    inner: NoAbi,
+}
+
+derive AbiSize for Bad using StableAbiSize

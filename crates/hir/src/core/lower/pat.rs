@@ -60,6 +60,18 @@ impl<'db> Pat<'db> {
                 let rhs = Self::lower_ast_opt(ctxt, or.rhs());
                 Pat::Or(lhs, rhs)
             }
+
+            ast::PatKind::QuoteHole(hole) => {
+                let inner = crate::hir_def::Expr::push_to_body_opt(
+                    ctxt,
+                    hole.hole().and_then(|h| h.expr()),
+                );
+                let binders = match hole.binders() {
+                    Some(elems) => elems.iter().map(|pat| Pat::lower_ast(ctxt, pat)).collect(),
+                    None => vec![],
+                };
+                Pat::QuoteHole(inner, binders)
+            }
         };
 
         ctxt.push_pat(pat, HirOrigin::raw(&ast))

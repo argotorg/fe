@@ -1,0 +1,26 @@
+// Boundless constraint-application where-predicates (`where Eq<T>`) must parse
+// as `WherePredicate` nodes (a type, no bound list), distinct from type-bound
+// predicates (`T: Bounds`). The discriminator is: a path whose FINAL segment
+// has generic args, followed by a token that does not continue an expression.
+
+// Single concrete constraint application.
+fn one<T>() where Eq<T> {
+}
+
+// Multiple, comma-separated, mixed with a type-bound predicate.
+fn many<T, U>() where T: Sized, Eq<T>, Ord<U> {
+}
+
+// Multi-segment trait path head.
+fn pathed<T>() where core::ops::Eq<T> {
+}
+
+// Constraint application on a struct (terminator is the field list `{`).
+struct Holder<T> where Eq<T> {
+    inner: T
+}
+
+// Trait method declaration with no body: terminator is the next item / `}`.
+trait Bounded {
+    fn needs<T>() where Eq<T>
+}

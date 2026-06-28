@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/canonical_floor_generated_explicit_converge.fe
+---
+error[5-0001]: conflicting trait implementations
+   ┌─ canonical_floor_generated_explicit_converge.fe:38:18
+   │
+33 │ derive AbiSize for Token using StableAbiSize
+   │ -------------------------------------------- conflicts with this trait implementation
+   ·
+38 │ impl AbiSize for Token {
+   │                  ^^^^^ this trait implementation

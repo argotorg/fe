@@ -188,6 +188,8 @@ enum ChainSegment {
     },
     /// `.field`
     Field { name: String },
+    /// `.${hole}` — a member-access splice hole inside a quote body
+    FieldHole(ast::QuoteHoleExpr),
 }
 
 /// Collects chain segments from an expression, returning (root, segments).
@@ -214,11 +216,15 @@ fn collect_chain(expr: &ast::Expr) -> (ast::Expr, Vec<ChainSegment>) {
                 }
             }
             ExprKind::Field(field) => {
-                let name = field
-                    .name_or_index()
-                    .map(|n| n.text().to_string())
-                    .unwrap_or_default();
-                segments.push(ChainSegment::Field { name });
+                if let Some(hole) = field.field_hole() {
+                    segments.push(ChainSegment::FieldHole(hole));
+                } else {
+                    let name = field
+                        .name_or_index()
+                        .map(|n| n.text().to_string())
+                        .unwrap_or_default();
+                    segments.push(ChainSegment::Field { name });
+                }
                 match field.receiver() {
                     Some(r) => current = r,
                     None => break,
@@ -258,6 +264,7 @@ fn segment_to_doc<'a>(seg: &ChainSegment, ctx: &'a RewriteContext<'a>) -> Doc<'a
                 .append(args_doc)
         }
         ChainSegment::Field { name } => alloc.text(".").append(alloc.text(name.clone())),
+        ChainSegment::FieldHole(hole) => alloc.text(".").append(hole.to_doc(ctx)),
     }
 }
 
@@ -1189,7 +1196,14 @@ impl ToDoc for ast::MatchArm {
 
         let pat = match self.pat() {
             Some(p) => p.to_doc(ctx),
-            None => return alloc.nil(),
+            // An arm splice inside a quote body: `${arms}` has no pattern
+            // and no `=>` — the hole is the arm's whole content.
+            None => {
+                return self
+                    .body()
+                    .map(|b| b.to_doc(ctx))
+                    .unwrap_or_else(|| alloc.nil());
+            }
         };
 
         let body = match self.body() {
@@ -1299,6 +1313,132 @@ impl ToDoc for ast::WithParamList {
             indent,
             true,
         )
+    }
+}
+
+impl ToDoc for ast::QuoteExpr {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        if !has_comment_tokens(self.syntax()) {
+            let open_doc = self
+                .open_names()
+                .map(|open| open.to_doc(ctx))
+                .unwrap_or_else(|| alloc.nil());
+
+            let body = if let Some(b) = self.body() {
+                quote_body_doc(&b, ctx)
+            } else if let Some(arms) = self.arms() {
+                quote_arms_doc(&arms, ctx)
+            } else {
+                return alloc.text("quote").append(open_doc);
+            };
+
+            return alloc
+                .text("quote")
+                .append(open_doc)
+                .append(alloc.text(" "))
+                .append(body);
+        }
+
+        let indent = ctx.config.indent_width as isize;
+        let has_open_names = self.open_names().is_some();
+
+        token_doc(
+            ctx,
+            self.syntax(),
+            indent,
+            |node| {
+                if let Some(open) = ast::QuoteOpenList::cast(node.clone()) {
+                    return Some(TokenPiece::new(open.to_doc(ctx)).space_after());
+                }
+                if let Some(arms) = ast::MatchArmList::cast(node.clone()) {
+                    return Some(TokenPiece::new(arms.to_doc(ctx)));
+                }
+                ast::BlockExpr::cast(node).map(|body| TokenPiece::new(body.to_doc(ctx)))
+            },
+            |token| match token.kind() {
+                SyntaxKind::Ident if ctx.snippet(token.text_range()).trim() == "quote" => {
+                    let piece = TokenPiece::new(alloc.text("quote"));
+                    if has_open_names {
+                        Some(piece)
+                    } else {
+                        Some(piece.space_after())
+                    }
+                }
+                _ => None,
+            },
+        )
+    }
+}
+
+/// Formats a quote body: single-statement bodies stay inline
+/// (`quote { ${body} && .. }`) and break with indentation only when too
+/// wide; multi-statement bodies use ordinary block formatting.
+fn quote_body_doc<'a>(body: &ast::BlockExpr, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+    let alloc = &ctx.alloc;
+    let mut stmts = body.stmts();
+    let (Some(only), None) = (stmts.next(), stmts.next()) else {
+        return body.to_doc(ctx);
+    };
+    let indent = ctx.config.indent_width as isize;
+    alloc
+        .text("{")
+        .append(alloc.line().append(only.to_doc(ctx)).nest(indent))
+        .append(alloc.line())
+        .append(alloc.text("}"))
+        .group()
+}
+
+/// Formats a quote arm-sequence body
+/// (`quote { ${arms}, ${variant}(group) => expr }`): arms stay inline,
+/// comma-separated, and break with indentation only when too wide.
+fn quote_arms_doc<'a>(arms: &ast::MatchArmList, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+    let alloc = &ctx.alloc;
+    let items: Vec<_> = arms
+        .syntax()
+        .children()
+        .filter_map(ast::MatchArm::cast)
+        .map(|arm| arm.to_doc(ctx))
+        .collect();
+    if items.is_empty() {
+        return alloc.text("{ }");
+    }
+    let indent = ctx.config.indent_width as isize;
+    let sep = alloc.text(",").append(alloc.line());
+    alloc
+        .text("{")
+        .append(
+            alloc
+                .line()
+                .append(alloc.intersperse(items, sep))
+                .nest(indent),
+        )
+        .append(alloc.line())
+        .append(alloc.text("}"))
+        .group()
+}
+
+impl ToDoc for ast::QuoteOpenList {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+        let names = self
+            .names()
+            .map(|name| name.text().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        alloc.text(format!("({names})"))
+    }
+}
+
+impl ToDoc for ast::QuoteHoleExpr {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+        let inner = self
+            .expr()
+            .map(|expr| expr.to_doc(ctx))
+            .unwrap_or_else(|| alloc.nil());
+        alloc.text("${").append(inner).append(alloc.text("}"))
     }
 }
 

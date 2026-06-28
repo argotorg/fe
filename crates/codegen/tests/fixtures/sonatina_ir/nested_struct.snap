@@ -5,37 +5,39 @@ input_file: crates/codegen/tests/fixtures/nested_struct.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @layout_0 = {i256};
+type @layout_0 = {};
 type @layout_1 = {@layout_0};
+type @layout_2 = {i256};
+type @layout_3 = {@layout_2};
 
-global private const @layout_0 $const_region_0 = {0};
-global private const @layout_1 $const_region_1 = {{0}};
+global private const @layout_2 $const_region_0 = {0};
+global private const @layout_3 $const_region_1 = {{0}};
 
 func private %abi_encode(v0.i256) {
     block0:
         jump block1;
 
     block1:
-        call %mstore 0.i256 v0;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_f7e3 0.i256 32.i256;
+        call %mstore undef.objref<@layout_1> 0.i256 v0;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_ceb2 undef.objref<@layout_1> 0.i256 32.i256;
         unreachable;
 }
 
-func private %calldataload(v0.i256) -> i256 {
+func private %calldataload(v0.objref<@layout_1>, v1.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = evm_calldata_load v0;
-        return v2;
+        v3.i256 = evm_calldata_load v1;
+        return v3;
 }
 
-func private %codecopy(v0.i256, v1.i256, v2.i256) {
+func private %codecopy(v0.objref<@layout_1>, v1.i256, v2.i256, v3.i256) {
     block0:
         jump block1;
 
     block1:
-        evm_code_copy v0 v1 v2;
+        evm_code_copy v1 v2 v3;
         return;
 }
 
@@ -56,8 +58,8 @@ func private %init() {
         v1.i256 = sym_addr &__NestedStruct_runtime;
         v2.*i8 = evm_malloc v0;
         v3.i256 = ptr_to_int v2 i256;
-        call %codecopy v3 v1 v0;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_7adf_0 v3 v0;
+        call %codecopy undef.objref<@layout_1> v3 v1 v0;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_b68e_0 undef.objref<@layout_1> v3 v0;
         unreachable;
 }
 
@@ -84,29 +86,29 @@ func private %mem_read(v0.i256) -> i256 {
         jump block1;
 
     block1:
-        v2.constref<@layout_0> = const.ref $const_region_0;
-        v3.constref<@layout_1> = const.ref $const_region_1;
-        v5.@layout_0 = insert_value undef.@layout_0 0.i256 0.i256;
-        v6.objref<@layout_1> = obj.alloc @layout_1;
-        v7.objref<@layout_0> = obj.proj v6 0.i256;
+        v2.constref<@layout_2> = const.ref $const_region_0;
+        v3.constref<@layout_3> = const.ref $const_region_1;
+        v5.@layout_2 = insert_value undef.@layout_2 0.i256 0.i256;
+        v6.objref<@layout_3> = obj.alloc @layout_3;
+        v7.objref<@layout_2> = obj.proj v6 0.i256;
         v8.objref<i256> = obj.proj v7 0.i256;
         v9.i256 = extract_value v5 0.i256;
         obj.store v8 v9;
-        v11.objref<@layout_0> = obj.proj v6 0.i256;
+        v11.objref<@layout_2> = obj.proj v6 0.i256;
         v12.objref<i256> = obj.proj v11 0.i256;
         obj.store v12 v0;
-        v13.objref<@layout_0> = obj.proj v6 0.i256;
+        v13.objref<@layout_2> = obj.proj v6 0.i256;
         v14.objref<i256> = obj.proj v13 0.i256;
         v15.i256 = obj.load v14;
         return v15;
 }
 
-func private %mstore(v0.i256, v1.i256) {
+func private %mstore(v0.objref<@layout_1>, v1.i256, v2.i256) {
     block0:
         jump block1;
 
     block1:
-        mstore v0 v1 i256;
+        mstore v1 v2 i256;
         return;
 }
 
@@ -119,28 +121,28 @@ func private %read_inner(v0.i256) -> i256 {
         return v2;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_7adf(v0.i256, v1.i256) {
+func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_b68e(v0.objref<@layout_1>, v1.i256, v2.i256) {
     block0:
         jump block1;
 
     block1:
-        evm_return v0 v1;
+        evm_return v1 v2;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_7adf_0(v0.i256, v1.i256) {
+func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_b68e_0(v0.objref<@layout_1>, v1.i256, v2.i256) {
     block0:
         jump block1;
 
     block1:
-        evm_return v0 v1;
+        evm_return v1 v2;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_f7e3(v0.i256, v1.i256) {
+func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_ceb2(v0.objref<@layout_1>, v1.i256, v2.i256) {
     block0:
         jump block1;
 
     block1:
-        evm_return v0 v1;
+        evm_return v1 v2;
 }
 
 func private %runtime() {
@@ -148,52 +150,52 @@ func private %runtime() {
         jump block1;
 
     block1:
-        v1.i256 = call %stor_ptr 0.i256;
-        v2.i256 = call %calldataload 0.i256;
-        v4.i256 = shr 224.i256 v2;
-        v6.i1 = eq v4 3091856072.i256;
-        br v6 block2 block6;
+        v2.i256 = call %stor_ptr undef.objref<@layout_1> 0.i256;
+        v4.i256 = call %calldataload undef.objref<@layout_1> 0.i256;
+        v6.i256 = shr 224.i256 v4;
+        v8.i1 = eq v6 3091856072.i256;
+        br v8 block2 block6;
 
     block2:
-        v8.i256 = call %calldataload 4.i256;
-        call %write_inner v8 v1;
-        call %abi_encode v8;
+        v11.i256 = call %calldataload undef.objref<@layout_1> 4.i256;
+        call %write_inner v11 v2;
+        call %abi_encode v11;
         unreachable;
 
     block3:
-        v12.i256 = call %read_inner v1;
-        call %abi_encode v12;
+        v15.i256 = call %read_inner v2;
+        call %abi_encode v15;
         unreachable;
 
     block4:
-        v13.i256 = call %calldataload 4.i256;
-        v14.i256 = call %mem_read v13;
-        call %abi_encode v14;
+        v17.i256 = call %calldataload undef.objref<@layout_1> 4.i256;
+        v18.i256 = call %mem_read v17;
+        call %abi_encode v18;
         unreachable;
 
     block5:
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_7adf 0.i256 0.i256;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_b68e undef.objref<@layout_1> 0.i256 0.i256;
         unreachable;
 
     block6:
-        v17.i1 = eq v4 3513050253.i256;
-        br v17 block3 block7;
+        v22.i1 = eq v6 3513050253.i256;
+        br v22 block3 block7;
 
     block7:
-        v20.i1 = eq v4 2154770637.i256;
-        br v20 block4 block8;
+        v25.i1 = eq v6 2154770637.i256;
+        br v25 block4 block8;
 
     block8:
         jump block5;
 }
 
-func private %stor_ptr(v0.i256) -> i256 {
+func private %stor_ptr(v0.objref<@layout_1>, v1.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = call %from_raw v0;
-        return v2;
+        v3.i256 = call %from_raw v1;
+        return v3;
 }
 
 func private %write_inner(v0.i256, v1.i256) {

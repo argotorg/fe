@@ -1,0 +1,18 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/permit_authority_default_allow.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/permit_authority_default_allow.fe
+
+error[8-0036]: missing effect `PermitAuthority<G>` required by `impl_permit`
+   ┌─ permit_authority_default_allow.fe:28:41
+   │
+28 │     let bad: ImplPermit<AbiSize<Foo>> = impl_permit()
+   │                                         ^^^^^^^^^^^^^ `impl_permit` requires effect `PermitAuthority<G>` to be in scope
+   │
+   = provide it with `with (PermitAuthority<G> = value)` or require it via `uses PermitAuthority<G>`
+
+
+=== EXIT CODE: 1 ===

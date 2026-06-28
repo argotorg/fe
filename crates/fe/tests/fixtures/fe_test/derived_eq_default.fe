@@ -1,0 +1,72 @@
+// M1 tracer bullet acceptance test: derived Eq and Default must EXECUTE,
+// not just type-check. First milestone of the first-class-obligations push.
+
+use core::ops::Eq
+use core::default::Default
+
+#[derive(Eq)]
+struct Point {
+    x: u256,
+    y: u256,
+}
+
+#[derive(Default)]
+struct Config {
+    enabled: bool,
+    count: u256,
+}
+
+#[derive(Eq, Default)]
+struct Pair {
+    a: u256,
+    b: bool,
+}
+
+#[test]
+fn derived_eq_equal_values() {
+    let p1 = Point { x: 10, y: 20 }
+    let p2 = Point { x: 10, y: 20 }
+    assert!(p1.eq(p2))
+}
+
+#[test]
+fn derived_eq_first_field_differs() {
+    let p1 = Point { x: 10, y: 20 }
+    let p2 = Point { x: 11, y: 20 }
+    assert!(!p1.eq(p2))
+}
+
+#[test]
+fn derived_eq_last_field_differs() {
+    let p1 = Point { x: 10, y: 20 }
+    let p2 = Point { x: 10, y: 21 }
+    assert!(!p1.eq(p2))
+}
+
+#[test]
+fn derived_eq_ne_default_method() {
+    let p1 = Point { x: 1, y: 2 }
+    let p2 = Point { x: 3, y: 4 }
+    assert!(p1.ne(p2))
+}
+
+#[test]
+fn derived_default_field_values() {
+    let c = Config::default()
+    assert!(!c.enabled)
+    assert!(c.count == 0)
+}
+
+#[test]
+fn derived_both_on_one_struct() {
+    let p = Pair::default()
+    let q = Pair { a: 0, b: false }
+    assert!(p.eq(q))
+}
+
+#[test]
+fn derived_eq_operator_syntax() {
+    let p1 = Point { x: 7, y: 7 }
+    let p2 = Point { x: 7, y: 7 }
+    assert!(p1 == p2)
+}

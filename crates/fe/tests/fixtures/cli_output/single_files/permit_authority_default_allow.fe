@@ -1,0 +1,29 @@
+// FCO T3 inc3 — the prelude `impl_permit()` mint + the DEFAULT-ALLOW grant policy.
+//
+// `impl_permit()` is `extern const fn impl_permit<G: Constraint>() -> ImplPermit<G>
+// uses (grant: PermitAuthority<G>)` (derive.fe): bodyless (an `ImplPermit<G>` is
+// unforgeable), `G` inferred from the binding (Fe has no turbofish). The gate is
+// the `uses (grant: PermitAuthority<G>)` obligation, NOT the body.
+//
+// DEFAULT-ALLOW: for an ORDINARY (non-one-of-a-kind) goal the `PermitAuthority<G>`
+// obligation discharges AMBIENTLY (free), so the mint type-checks. For a ONE-OF-
+// A-KIND (canonical) goal there is NO ambient grant, so the mint reports the
+// ordinary missing-effect error (`8-0036`). The single source of truth for "which
+// goals are one-of-a-kind" is `is_single_impl` (the SAME predicate the
+// establish-gate floor consults), so this negative case proves the money-floor
+// policy is wired to that one predicate, NOT a second list.
+
+use core::derive::ImplPermit
+use core::ops::Eq
+use core::abi::AbiSize
+
+struct Foo {}
+
+fn test() {
+    // ORDINARY goal: `Eq` is non-canonical -> grant ambient -> mint type-checks.
+    let ok: ImplPermit<Eq<Foo>> = impl_permit()
+
+    // ONE-OF-A-KIND goal: `AbiSize` is canonical (a wrong impl changes the ABI
+    // wire bytes) -> no ambient grant -> `8-0036` missing `PermitAuthority`.
+    let bad: ImplPermit<AbiSize<Foo>> = impl_permit()
+}

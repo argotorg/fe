@@ -23,7 +23,7 @@ use crate::{
             diagnostics::{BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection},
             provider::ProviderAddressSpace,
             trait_def::TraitInstId,
-            trait_def::impls_for_ty,
+            trait_def::{find_implementor_of_trait_in_scope, impls_for_ty},
             trait_resolution::{
                 GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
             },
@@ -151,7 +151,7 @@ fn check_recv_variant_param_types_decodable<'db>(
     let Some(decode_trait) = resolve_core_trait(db, contract.scope(), &["abi", "Decode"]) else {
         return;
     };
-    let solve_cx = TraitSolveCx::new(db, contract.scope()).with_assumptions(assumptions);
+    let solve_cx = super::env::ProvisionEnv::for_scope(contract.scope(), assumptions).solve_cx(db);
 
     for field_ty in variant.ty.field_types(db) {
         check_ty_decodable(
@@ -709,18 +709,7 @@ pub(crate) fn eval_msg_variant_selector<'db>(
 ) -> Option<u32> {
     let msg_variant_trait = resolve_core_trait(db, scope, &["message", "MsgVariant"])?;
 
-    let canonical_ty = Canonical::new(db, variant_ty);
-    let scope_ingot = scope.ingot(db);
-    let search_ingots = [
-        Some(scope_ingot),
-        variant_ty.ingot(db).filter(|&ingot| ingot != scope_ingot),
-    ];
-    let implementor = search_ingots.into_iter().flatten().find_map(|ingot| {
-        impls_for_ty(db, ingot, canonical_ty)
-            .iter()
-            .find(|impl_| impl_.skip_binder().trait_def(db) == msg_variant_trait)
-            .copied()
-    })?;
+    let implementor = find_implementor_of_trait_in_scope(db, scope, variant_ty, msg_variant_trait)?;
     let impl_ = implementor.skip_binder();
 
     let selector_name = IdentId::new(db, "SELECTOR".to_string());
@@ -939,22 +928,11 @@ pub(super) fn get_msg_variant_return_type<'db>(
 ) -> Option<TyId<'db>> {
     let msg_variant_trait = resolve_core_trait(db, scope, &["message", "MsgVariant"])?;
 
-    let canonical_ty = Canonical::new(db, variant_ty);
-    let scope_ingot = scope.ingot(db);
-    let search_ingots = [
-        Some(scope_ingot),
-        variant_ty.ingot(db).filter(|&ingot| ingot != scope_ingot),
-    ];
-
-    // Find the MsgVariant impl specifically, probing both:
-    // - the call-site ingot (for local traits implemented for external types), and
-    // - the receiver type's ingot (for external traits implemented in the type's ingot).
-    let msg_variant_impl = search_ingots.into_iter().flatten().find_map(|ingot| {
-        impls_for_ty(db, ingot, canonical_ty)
-            .iter()
-            .find(|impl_| impl_.skip_binder().trait_def(db).eq(&msg_variant_trait))
-            .copied()
-    })?;
+    // Find the MsgVariant impl specifically, probing both the call-site ingot
+    // (local traits on external types) and the receiver type's ingot (external
+    // traits implemented in the type's ingot).
+    let msg_variant_impl =
+        find_implementor_of_trait_in_scope(db, scope, variant_ty, msg_variant_trait)?;
 
     // Get the Return associated type from the impl
     let return_name = IdentId::new(db, "Return".to_string());

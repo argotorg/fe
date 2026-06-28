@@ -1,0 +1,47 @@
+// DEVX-B R1b: a derive provider whose quote reads an associated const of a
+// NON-goal trait via `<Ty as Trait>::CONST`. The goal trait is `GetK`; the
+// const `K` belongs to `HasK` (a different trait), so the access elaborates to
+// `GenExpr::QualifiedConst` (not the goal-trait `TraitConst`). Synthesis emits
+// `<u256 as HasK>::K` into the generated `impl GetK for Point`, which must
+// resolve and type-check. A clean compile (EXIT 0) proves the cross-trait
+// qualified-const quote form works end-to-end — the form `#[error]`'s
+// `<FieldTy as AbiSize>::HEAD_SIZE` needs (#65).
+
+use core::derive::Derive
+use core::derive::Evidence
+use core::derive::ImplBuilder
+use core::derive::Reflect
+
+trait HasK {
+    const K: u256
+}
+
+impl HasK for u256 {
+    const K: u256 = 7
+}
+
+trait GetK {
+    fn get_k(self) -> u256
+}
+
+impl Derive<GetK> for StableGetK {
+    const fn derive<T>(ev: own Evidence<GetK<T>>) -> Evidence<GetK<T>>
+        uses (
+            reflect: Reflect<T>,
+            builder: mut ImplBuilder<GetK<T>>,
+        )
+    {
+        // `HasK` is NOT the goal trait (`GetK`): a cross-trait qualified const.
+        builder.emit_method("get_k", quote { <u256 as HasK>::K })
+        builder.finish()
+        ev
+    }
+}
+
+struct Point {
+    x: u256,
+}
+
+derive GetK for Point using StableGetK
+
+struct StableGetK {}

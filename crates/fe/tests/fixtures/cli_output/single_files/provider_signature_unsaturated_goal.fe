@@ -1,0 +1,27 @@
+// FCO Level 1 (W-D) NEGATIVE C — unsaturated goal head.
+//
+// `Evidence<Eq>` names the bare `* -> Constraint` head `Eq`, not a saturated
+// constraint `Eq<T>`. A provider goal must lower to ONE concrete obligation; an
+// unsaturated head cannot. The Level-1 goal lowering declines it and reports an
+// arity/kind diagnostic naming the capability and the goal spelling.
+
+use core::derive::Derive
+use core::derive::Evidence
+use core::derive::ImplBuilder
+use core::derive::Reflect
+use core::ops::Eq
+
+impl Derive<Eq> for Unsaturated {
+    const fn derive<T>(ev: own Evidence<Eq>) -> Evidence<Eq>
+        uses (
+            reflect: Reflect<T>,
+            builder: mut ImplBuilder<Eq>,
+        )
+    {
+        builder.emit_method("eq", builder.bool(true))
+        builder.finish()
+        ev
+    }
+}
+
+struct Unsaturated {}

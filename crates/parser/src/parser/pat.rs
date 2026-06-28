@@ -1,6 +1,9 @@
 use std::convert::Infallible;
 
-use super::{ErrProof, Parser, Recovery, define_scope, path::PathScope, token_stream::TokenStream};
+use super::{
+    ErrProof, Parser, Recovery, define_scope, expr_atom::QuoteHoleExprScope, path::PathScope,
+    token_stream::TokenStream,
+};
 use crate::{
     ParseError, SyntaxKind,
     parser::{
@@ -19,7 +22,7 @@ pub fn parse_pat<S: TokenStream>(parser: &mut Parser<S>) -> Result<(), Recovery<
     let token = parser.current_token();
     if has_mut {
         match token.as_ref().map(|t| t.syntax_kind()) {
-            Some(Underscore | Dot2 | LParen) => {
+            Some(Underscore | Dot2 | LParen | Dollar) => {
                 parser.error_msg_on_current_token(&format!(
                     "`mut` is not allowed on `{}`",
                     token.unwrap().text()
@@ -45,6 +48,7 @@ pub fn parse_pat<S: TokenStream>(parser: &mut Parser<S>) -> Result<(), Recovery<
             .parse_cp(RestPatScope::default(), Some(checkpoint))
             .unwrap(),
         Some(LParen) => parser.parse_cp(TuplePatScope::default(), Some(checkpoint))?,
+        Some(Dollar) => parser.parse_cp(QuoteHolePatScope::default(), Some(checkpoint))?,
         Some(kind) if is_lit(kind) => parser
             .parse_cp(LitPatScope::default(), Some(checkpoint))
             .unwrap(),
@@ -110,6 +114,23 @@ impl super::Parse for TuplePatElemListScope {
             (SyntaxKind::LParen, SyntaxKind::RParen),
             parse_pat,
         )
+    }
+}
+
+define_scope! { QuoteHolePatScope, QuoteHolePat, (Pipe) }
+impl super::Parse for QuoteHolePatScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parser.set_newline_as_trivia(false);
+        // `${variant}` — the hole scope carries the depth check that
+        // rejects splice holes outside quote bodies.
+        parser.parse(QuoteHoleExprScope::default())?;
+        // `(group)` — the binder-group name covering the variant payload.
+        if parser.current_kind() == Some(SyntaxKind::LParen) {
+            parser.parse(TuplePatElemListScope::default())?;
+        }
+        Ok(())
     }
 }
 

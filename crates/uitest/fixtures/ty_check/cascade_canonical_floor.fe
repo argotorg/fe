@@ -1,0 +1,41 @@
+// CASCADE money-floor — the soundness guard the cascade must NEVER demote.
+//
+// THE DREAM: two impls of a CANONICAL trait (`core::abi::AbiSize`, one of the
+//   ABI/storage-layout set) for the SAME type are STILL rejected as a coherence
+//   conflict, even though the cascade (C3c-3) has demoted coherence for
+//   NON-canonical goals to allow a derived default + a hand-written override to
+//   coexist.
+// PASS CRITERIA: a `5-0001` "conflicting trait implementations" diagnostic fires
+//   on the two `impl AbiSize for Token` blocks — canonical goals stay
+//   exactly-one (the money floor).
+// DRIVEN-BY: the money floor (`is_single_impl` gates the conflict path; the
+//   canonical arm of the conflict gate is `conflict_allowed = false` and NEVER
+//   flips). This fixture LOCKS that invariant after the C3c-3 demotion landed.
+//
+// Why AbiSize is canonical: a wrong ABI-layout impl is a consensus break (a 2nd
+// impl could silently relocate the on-the-wire encoding). The canonical set keyed
+// by resolved (name, ingot) identity in `is_single_impl` is
+// { core::abi::AbiSize, Encode, Decode ; std::evm::storage_map::StorageKey }.
+// Unlike a NON-canonical trait (e.g. `core::ops::Eq`), where a derived default and
+// a hand-written override now COEXIST, a second canonical impl is forbidden.
+
+use core::abi::AbiSize
+
+struct Token {
+    amount: u256,
+}
+
+// First impl: claims a single 32-byte head word, static.
+impl AbiSize for Token {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+
+// Second impl for the SAME (AbiSize, Token) pair. For a NON-canonical goal the
+// cascade would let these coexist (a derived default + a scoped override); for
+// AbiSize the money-floor must REJECT this as a conflict — exactly-one canonical
+// layout.
+impl AbiSize for Token {
+    const HEAD_SIZE: u256 = 64
+    const IS_DYNAMIC: bool = true
+}

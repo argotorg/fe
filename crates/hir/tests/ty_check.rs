@@ -3,10 +3,10 @@ use std::path::Path;
 use common::diagnostics::{CompleteDiagnostic, cmp_complete_diagnostics};
 use dir_test::{Fixture, dir_test};
 use fe_hir::analysis::ty::{
-    ty_check::{check_contract_recv_arm_body, check_func_body},
+    ty_check::{TraitObligationOrigin, check_contract_recv_arm_body, check_func_body},
     ty_def::{Kind, TyId},
 };
-use fe_hir::hir_def::TopLevelMod;
+use fe_hir::hir_def::{Expr, Partial, TopLevelMod};
 use fe_hir::span::LazySpan;
 use fe_hir::test_db::{HirAnalysisTestDb, initialize_analysis_pass};
 use test_utils::snap_test;
@@ -160,6 +160,133 @@ fn probe() -> u256 {
     let (top_mod, _) = db.top_mod(file);
 
     db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn discharged_trait_obligations_are_recorded() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "discharged_trait_obligations_are_recorded.fe".into(),
+        r#"
+trait Marker {}
+
+struct Point {}
+
+impl Marker for Point {}
+
+fn requires_marker<T: Marker>(_ t: T) {}
+
+fn caller(p: Point) {
+    requires_marker(p)
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+
+    db.assert_no_diags(top_mod);
+
+    let caller = top_mod
+        .all_funcs(&db)
+        .iter()
+        .copied()
+        .find(|func| {
+            func.name(&db)
+                .to_opt()
+                .is_some_and(|name| name.data(&db) == "caller")
+        })
+        .expect("missing `caller` function");
+
+    let typed_body = &check_func_body(&db, caller).1;
+    let records = typed_body.discharged_obligations();
+    assert!(
+        !records.is_empty(),
+        "expected discharge records for `caller`, found none"
+    );
+
+    let record = records
+        .iter()
+        .find(|record| record.solution.is_some())
+        .expect("expected a discharge record with a committed solution");
+    assert_eq!(record.goal.pretty_print(&db, true), "Point: Marker");
+
+    let solution = record.solution.unwrap();
+    assert_eq!(solution.describe_implementor(&db), "impl Marker for Point");
+
+    // The record is keyed to the `requires_marker(p)` call expression.
+    let body = caller.body(&db).expect("`caller` has a body");
+    let call_expr = body
+        .exprs(&db)
+        .iter()
+        .find_map(|(expr, data)| {
+            if let Partial::Present(Expr::Call(..)) = data {
+                Some(expr)
+            } else {
+                None
+            }
+        })
+        .expect("`caller` body contains a call expression");
+    let for_call: Vec<_> = typed_body
+        .discharged_obligations_for_call(call_expr)
+        .collect();
+    assert_eq!(for_call.len(), 1);
+    assert!(matches!(
+        for_call[0].origin,
+        TraitObligationOrigin::CallConstraint {
+            call_expr: origin_expr,
+            ..
+        } if origin_expr == call_expr
+    ));
+}
+
+#[test]
+fn discharged_obligation_solution_notes_derive_provenance() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "discharged_obligation_solution_notes_derive_provenance.fe".into(),
+        r#"
+use core::ops::Eq
+
+#[derive(Eq)]
+struct Point {
+    x: u256,
+    y: u256,
+}
+
+fn requires_eq<T: Eq>(_ t: T) {}
+
+fn caller(p: Point) {
+    requires_eq(p)
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+
+    db.assert_no_diags(top_mod);
+
+    let caller = top_mod
+        .all_funcs(&db)
+        .iter()
+        .copied()
+        .find(|func| {
+            func.name(&db)
+                .to_opt()
+                .is_some_and(|name| name.data(&db) == "caller")
+        })
+        .expect("missing `caller` function");
+
+    let typed_body = &check_func_body(&db, caller).1;
+    let record = typed_body
+        .discharged_obligations()
+        .iter()
+        .find(|record| record.solution.is_some())
+        .expect("expected a discharge record with a committed solution");
+    // `Eq<T = Self>` elaborates its defaulted parameter, so the recorded
+    // goal and impl both carry the explicit `<Point>` argument.
+    assert_eq!(record.goal.pretty_print(&db, true), "Point: Eq<Point>");
+    assert_eq!(
+        record.solution.unwrap().describe_implementor(&db),
+        "impl Eq<Point> for Point (derived)"
+    );
 }
 
 fn diagnostics_for<'db>(

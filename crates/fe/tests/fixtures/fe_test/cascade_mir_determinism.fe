@@ -1,0 +1,88 @@
+// CASCADE MIR determinism THROUGH A GENERIC HELPER (FCO M3) — a scoped selection
+// drives a runtime LOOP of trait calls routed through a generic helper; the loop
+// sum matches the SELECTED impl deterministically, with NO per-call re-resolution
+// drift, all the way through codegen.
+//
+// THE DREAM: the executable determinism guard for the cascade. Inside a
+//   `with (<Speaker as Eq>)` scope the override is selected ONCE (recorded at the
+//   helper call site, carried onto the helper instance's `ImplEnv` per-goal
+//   carrier — M3); every iteration of the loop must consume that SAME recorded
+//   selection, never re-resolve per call. Outside the scope every iteration uses
+//   the derived default. A loop is the determinism stress: if any iteration
+//   re-resolved differently the sum would drift.
+// PASS CRITERIA: with two structurally-unequal Speakers, an n-iteration loop of
+//   `same(a, b)` (a generic helper over the `Eq` bound) sums to 0 UNSCOPED (the
+//   derived structural impl: different ids => not equal => 0 per call) and to n
+//   SCOPED (the override: always equal => 1 per call). No per-call drift; runs
+//   through codegen.
+// DRIVEN-BY: C1 rail (consume the recorded selection, never re-resolve) + C3b +
+//   C3c-2/3 + C3d + M3 (the per-goal carrier propagates the selection through the
+//   generic helper boundary so each looped inner `x.eq(y)` resolves through it).
+//
+// PROVISIONAL-SURFACE: `with (<Speaker as Eq>) { .. }` is the PROVISIONAL cascade
+// selection syntax (see cascade_scoped_override.fe). The semantics — a scope
+// selects the impl, consumed deterministically across a runtime loop and a
+// generic helper boundary — are the spec.
+
+use core::ops::Eq
+
+// DERIVED DEFAULT: structural equality (id-by-id). Default-marked.
+#[derive(Eq)]
+struct Speaker {
+    id: u256,
+}
+
+// HAND-WRITTEN OVERRIDE: "everything equal". Selectable only via
+// `with (<Speaker as Eq>) { .. }`.
+impl Eq for Speaker {
+    fn eq(self, _ other: Speaker) -> bool {
+        true
+    }
+}
+
+// GENERIC HELPER over the `Eq` bound: returns 1 when its two args compare equal
+// under the in-force `Eq` impl, else 0. The inner `x.eq(y)` is the non-trait
+// callee whose selection M3 must carry from the helper call site.
+fn eq_count<T: Eq>(_ x: T, _ y: T) -> u256 {
+    if x.eq(y) {
+        return 1
+    }
+    return 0
+}
+
+#[test]
+fn unscoped_loop_sum_is_zero() {
+    // Two structurally-unequal Speakers: the derived default says NOT equal, so
+    // each of the n iterations contributes 0.
+    let a = Speaker { id: 7 }
+    let b = Speaker { id: 8 }
+    let mut sum: u256 = 0
+    let mut i: u256 = 0
+    while i < 16 {
+        sum = sum + eq_count(a, b)
+        i = i + 1
+    }
+    // n * 0 = 0 — the structural default never says these are equal.
+    assert!(sum == 0)
+}
+
+#[test]
+fn scoped_loop_sum_is_n() {
+    // The SAME loop, but inside `with (<Speaker as Eq>)`: the override is selected
+    // for (Eq, Speaker) at the `eq_count(a, b)` call site and carried through the
+    // helper boundary (M3), so every iteration deterministically contributes 1.
+    let a = Speaker { id: 7 }
+    let b = Speaker { id: 8 }
+    let scoped_sum: u256 = with (<Speaker as Eq>) {
+        let mut sum: u256 = 0
+        let mut i: u256 = 0
+        while i < 16 {
+            sum = sum + eq_count(a, b)
+            i = i + 1
+        }
+        sum
+    }
+    // n * 1 = n (16) — every iteration consumed the SAME recorded override, no
+    // per-call re-resolution drift.
+    assert!(scoped_sum == 16)
+}

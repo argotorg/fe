@@ -1,0 +1,36 @@
+// FCO L2 anti-leak: lock the executor's MissingFinish invariant
+// (provider_executor.rs:177-211). A derive provider's command program MUST call
+// `builder.finish()` before returning its `Evidence`. This is the use-once /
+// no-leak discipline that lives in the EXECUTOR (borrowck skips provider bodies,
+// check.rs:185-186), the L2 layer of the capability floor design
+// (FCO_CAPABILITY_FLOOR_CASE_2026-06-23 section 11).
+//
+// PASS CRITERIA: a provider-failed diagnostic whose message is
+//   "the provider returned without calling `finish`".
+
+use core::derive::Derive
+use core::derive::Evidence
+use core::derive::ImplBuilder
+use core::derive::Reflect
+
+trait Marker {}
+
+impl Derive<Marker> for NoFinish {
+    const fn derive<T>(ev: own Evidence<Marker<T>>) -> Evidence<Marker<T>>
+        uses (
+            reflect: Reflect<T>,
+            builder: mut ImplBuilder<Marker<T>>,
+        )
+    {
+        // BUG: returns the evidence without ever calling `builder.finish()`.
+        ev
+    }
+}
+
+struct Point {
+    x: u256,
+}
+
+derive Marker for Point using NoFinish
+
+struct NoFinish {}

@@ -4,10 +4,17 @@ expression: res
 input_file: test_files/ty_check/recv_fallback.fe
 ---
 note:
+  ┌─ recv_fallback.fe:2:5
+  │
+2 │ ╭     #[selector = sol("count()")]
+3 │ │     Count -> u256,
+  │ ╰─────────────────^ u256
+
+note:
   ┌─ recv_fallback.fe:3:5
   │
 3 │     Count -> u256,
-  │     ^^^^^ () | Count | invalid(Other) | u256
+  │     ^^^^^ () | Count | invalid(Other)
 
 note:
    ┌─ recv_fallback.fe:10:9

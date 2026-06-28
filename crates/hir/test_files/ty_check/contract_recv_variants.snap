@@ -4,16 +4,30 @@ expression: res
 input_file: test_files/ty_check/contract_recv_variants.fe
 ---
 note:
+   ┌─ contract_recv_variants.fe:10:5
+   │
+10 │ ╭     #[selector = 0x01]
+11 │ │     Deposit { amount: u64 } -> u64,
+   │ ╰──────────────────────────────────^ Deposit | u256 | u64
+
+note:
    ┌─ contract_recv_variants.fe:11:5
    │
 11 │     Deposit { amount: u64 } -> u64,
-   │     ^^^^^^^ () | Deposit | I | fn decode_field<Sol, u64, D> | fn decode_msg_field_from<Sol, u64, I> | fn dynamic_payload_size<u64> | fn encode_field<Sol, u64, E> | mut D | mut E | mut u256 | u256 | u64
+   │     ^^^^^^^ () | Deposit | I | fn decode_field<Sol, u64, D> | fn decode_msg_field_from<Sol, u64, I> | fn encode_field<Sol, u64, E> | mut D | mut E | mut u256 | u256 | u64
+
+note:
+   ┌─ contract_recv_variants.fe:12:5
+   │
+12 │ ╭     #[selector = 0x02]
+13 │ │     Withdraw { amount: u64 } -> bool,
+   │ ╰────────────────────────────────────^ Withdraw | u256 | u64
 
 note:
    ┌─ contract_recv_variants.fe:13:5
    │
 13 │     Withdraw { amount: u64 } -> bool,
-   │     ^^^^^^^^ () | I | Withdraw | fn decode_field<Sol, u64, D> | fn decode_msg_field_from<Sol, u64, I> | fn dynamic_payload_size<u64> | fn encode_field<Sol, u64, E> | mut D | mut E | mut u256 | u256 | u64
+   │     ^^^^^^^^ () | I | Withdraw | fn decode_field<Sol, u64, D> | fn decode_msg_field_from<Sol, u64, I> | fn encode_field<Sol, u64, E> | mut D | mut E | mut u256 | u256 | u64
 
 note:
    ┌─ contract_recv_variants.fe:33:82

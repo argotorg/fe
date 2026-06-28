@@ -10,8 +10,10 @@ type @layout_1 = {i256, i256};
 type @layout_2 = {i256, i256};
 type @layout_3 = {@layout_2, i256};
 type @layout_4 = {@layout_3, i256};
-type @layout_5 = {i256};
-type @layout_6 = {i256};
+type @layout_5 = {};
+type @layout_6 = {@layout_5};
+type @layout_7 = {i256};
+type @layout_8 = {i256};
 
 func private %__Child_init(v0.i256, v1.i256) {
     block0:
@@ -28,7 +30,7 @@ func private %__Parent_init(v0.i256) {
     block1:
         v4.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
         v6.@layout_0 = insert_value v4 1.i256 v0;
-        v7.@layout_5 = call %create 0.i256 v6;
+        v8.@layout_7 = call %create undef.objref<@layout_6> 0.i256 v6;
         return;
 }
 
@@ -216,7 +218,7 @@ func inline(always) private %contract_init_abi_Parent() {
         v38.objref<i256> = obj.proj v1 1.i256;
         v39.i256 = extract_value v27 1.i256;
         obj.store v38 v39;
-        v40.@layout_6 = call %decode_payload__g3854 v1;
+        v40.@layout_8 = call %decode_payload__g3854 v1;
         v41.i256 = extract_value v40 0.i256;
         call %__Parent_init v41;
         return;
@@ -329,49 +331,49 @@ func private %copy_words(v0.i256, v1.i256, v2.i256) {
         jump block2;
 }
 
-func private %create(v0.i256, v1.@layout_0) -> @layout_5 {
+func private %create(v0.objref<@layout_6>, v1.i256, v2.@layout_0) -> @layout_7 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = sym_size &Child_init;
-        v3.i256 = sym_addr &Child_init;
+        v3.i256 = sym_size &Child_init;
+        v4.i256 = sym_addr &Child_init;
         br 1.i1 block5 block3;
 
     block2:
-        v7.*i8 = evm_malloc v2;
-        v8.i256 = ptr_to_int v7 i256;
-        evm_code_copy v8 v3 v2;
-        v12.@layout_5 = call %create_raw v0 v8 v2;
+        v8.*i8 = evm_malloc v3;
+        v9.i256 = ptr_to_int v8 i256;
+        evm_code_copy v9 v4 v3;
+        v14.@layout_7 = call %create_raw v0 v1 v9 v3;
         jump block4;
 
     block3:
-        v14.@layout_0 = call %encode_abi_payload v1;
-        v16.i256 = extract_value v14 1.i256;
-        (v18.i256, v19.i1) = uaddo v2 v16;
-        br v19 block9 block10;
+        v16.@layout_0 = call %encode_abi_payload v2;
+        v18.i256 = extract_value v16 1.i256;
+        (v20.i256, v21.i1) = uaddo v3 v18;
+        br v21 block9 block10;
 
     block4:
-        v43.@layout_5 = phi (v12 block2) (v42 block12);
-        v44.i256 = extract_value v43 0.i256;
-        v45.i1 = eq v44 0.i256;
-        br v45 block6 block7;
+        v46.@layout_7 = phi (v14 block2) (v45 block12);
+        v47.i256 = extract_value v46 0.i256;
+        v48.i1 = eq v47 0.i256;
+        br v48 block6 block7;
 
     block5:
         br 0.i1 block2 block3;
 
     block6:
-        v47.i256 = evm_return_data_size;
-        v48.*i8 = evm_malloc v47;
-        v49.i256 = ptr_to_int v48 i256;
-        evm_return_data_copy v49 0.i256 v47;
-        evm_revert v49 v47;
+        v50.i256 = evm_return_data_size;
+        v51.*i8 = evm_malloc v50;
+        v52.i256 = ptr_to_int v51 i256;
+        evm_return_data_copy v52 0.i256 v50;
+        evm_revert v52 v50;
 
     block7:
         jump block8;
 
     block8:
-        return v43;
+        return v46;
 
     block9:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -379,33 +381,33 @@ func private %create(v0.i256, v1.@layout_0) -> @layout_5 {
         evm_revert 0.i256 36.i256;
 
     block10:
-        v25.*i8 = evm_malloc v18;
-        v26.i256 = ptr_to_int v25 i256;
-        evm_code_copy v26 v3 v2;
-        (v30.i256, v31.i1) = uaddo v26 v2;
-        br v31 block9 block11;
+        v27.*i8 = evm_malloc v20;
+        v28.i256 = ptr_to_int v27 i256;
+        evm_code_copy v28 v4 v3;
+        (v32.i256, v33.i1) = uaddo v28 v3;
+        br v33 block9 block11;
 
     block11:
-        v33.i256 = extract_value v14 0.i256;
-        v34.i256 = extract_value v14 1.i256;
-        call %copy_words v30 v33 v34;
-        v36.i256 = extract_value v14 1.i256;
-        (v38.i256, v39.i1) = uaddo v2 v36;
-        br v39 block9 block12;
+        v35.i256 = extract_value v16 0.i256;
+        v36.i256 = extract_value v16 1.i256;
+        call %copy_words v32 v35 v36;
+        v38.i256 = extract_value v16 1.i256;
+        (v40.i256, v41.i1) = uaddo v3 v38;
+        br v41 block9 block12;
 
     block12:
-        v42.@layout_5 = call %create_raw v0 v26 v38;
+        v45.@layout_7 = call %create_raw v0 v1 v28 v40;
         jump block4;
 }
 
-func private %create_raw(v0.i256, v1.i256, v2.i256) -> @layout_5 {
+func private %create_raw(v0.objref<@layout_6>, v1.i256, v2.i256, v3.i256) -> @layout_7 {
     block0:
         jump block1;
 
     block1:
-        v6.i256 = evm_create v0 v1 v2;
-        v9.@layout_5 = insert_value undef.@layout_5 0.i256 v6;
-        return v9;
+        v7.i256 = evm_create v1 v2 v3;
+        v10.@layout_7 = insert_value undef.@layout_7 0.i256 v7;
+        return v10;
 }
 
 func inline(always) private %core__lib__abi__decode_field__g3854_271d(v0.objref<@layout_4>) -> i256 {
@@ -492,13 +494,13 @@ func private %decode_payload__g4770(v0.objref<@layout_4>) -> @layout_0 {
         return v8;
 }
 
-func private %decode_payload__g3854(v0.objref<@layout_4>) -> @layout_6 {
+func private %decode_payload__g3854(v0.objref<@layout_4>) -> @layout_8 {
     block0:
         jump block1;
 
     block1:
         v2.i256 = call %core__lib__abi__decode_field__g3854_271d v0;
-        v5.@layout_6 = insert_value undef.@layout_6 0.i256 v2;
+        v5.@layout_8 = insert_value undef.@layout_8 0.i256 v2;
         return v5;
 }
 

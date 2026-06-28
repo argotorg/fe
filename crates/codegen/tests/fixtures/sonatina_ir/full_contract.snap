@@ -7,14 +7,16 @@ target = "evm-ethereum-osaka"
 
 type @layout_0 = {i256};
 type @layout_1 = {i256, i256};
+type @layout_2 = {};
+type @layout_3 = {@layout_2};
 
 func private %abi_encode(v0.i256) {
     block0:
         jump block1;
 
     block1:
-        call %mstore 0.i256 v0;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_b74b 0.i256 32.i256;
+        call %mstore undef.objref<@layout_3> 0.i256 v0;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_8e74 undef.objref<@layout_3> 0.i256 32.i256;
         unreachable;
 }
 
@@ -58,21 +60,21 @@ func private %impl_Point__area(v0.objref<@layout_1>) -> i256 {
         return v8;
 }
 
-func private %calldataload(v0.i256) -> i256 {
+func private %calldataload(v0.objref<@layout_3>, v1.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = evm_calldata_load v0;
-        return v2;
+        v3.i256 = evm_calldata_load v1;
+        return v3;
 }
 
-func private %codecopy(v0.i256, v1.i256, v2.i256) {
+func private %codecopy(v0.objref<@layout_3>, v1.i256, v2.i256, v3.i256) {
     block0:
         jump block1;
 
     block1:
-        evm_code_copy v0 v1 v2;
+        evm_code_copy v1 v2 v3;
         return;
 }
 
@@ -81,52 +83,52 @@ func private %dispatch() {
         jump block1;
 
     block1:
-        v1.i256 = call %calldataload 0.i256;
-        v3.i256 = shr 224.i256 v1;
-        v5.i1 = eq v3 151146943.i256;
-        br v5 block2 block3;
+        v2.i256 = call %calldataload undef.objref<@layout_3> 0.i256;
+        v4.i256 = shr 224.i256 v2;
+        v6.i1 = eq v4 151146943.i256;
+        br v6 block2 block3;
 
     block2:
-        v7.i256 = call %calldataload 4.i256;
-        v9.i256 = call %calldataload 36.i256;
-        v11.@layout_1 = insert_value undef.@layout_1 0.i256 v7;
-        v13.@layout_1 = insert_value v11 1.i256 v9;
-        v14.objref<@layout_1> = obj.alloc @layout_1;
-        v15.objref<i256> = obj.proj v14 0.i256;
-        v16.i256 = extract_value v13 0.i256;
-        obj.store v15 v16;
-        v17.objref<i256> = obj.proj v14 1.i256;
-        v18.i256 = extract_value v13 1.i256;
-        obj.store v17 v18;
-        v19.objref<i256> = obj.proj v14 0.i256;
-        v20.i256 = obj.load v19;
-        (v21.i256, v22.i1) = uaddo v20 1.i256;
-        br v22 block8 block9;
+        v9.i256 = call %calldataload undef.objref<@layout_3> 4.i256;
+        v12.i256 = call %calldataload undef.objref<@layout_3> 36.i256;
+        v14.@layout_1 = insert_value undef.@layout_1 0.i256 v9;
+        v16.@layout_1 = insert_value v14 1.i256 v12;
+        v17.objref<@layout_1> = obj.alloc @layout_1;
+        v18.objref<i256> = obj.proj v17 0.i256;
+        v19.i256 = extract_value v16 0.i256;
+        obj.store v18 v19;
+        v20.objref<i256> = obj.proj v17 1.i256;
+        v21.i256 = extract_value v16 1.i256;
+        obj.store v20 v21;
+        v22.objref<i256> = obj.proj v17 0.i256;
+        v23.i256 = obj.load v22;
+        (v24.i256, v25.i1) = uaddo v23 1.i256;
+        br v25 block8 block9;
 
     block3:
         jump block4;
 
     block4:
-        v37.i1 = eq v3 2066295049.i256;
-        br v37 block5 block6;
+        v40.i1 = eq v4 2066295049.i256;
+        br v40 block5 block6;
 
     block5:
-        v38.i256 = call %calldataload 4.i256;
-        v40.@layout_0 = insert_value undef.@layout_0 0.i256 v38;
-        v41.objref<@layout_0> = obj.alloc @layout_0;
-        v42.objref<i256> = obj.proj v41 0.i256;
-        v43.i256 = extract_value v40 0.i256;
-        obj.store v42 v43;
-        v44.objref<i256> = obj.proj v41 0.i256;
-        v45.i256 = obj.load v44;
-        (v47.i256, v48.i1) = uaddo v45 3.i256;
-        br v48 block8 block11;
+        v42.i256 = call %calldataload undef.objref<@layout_3> 4.i256;
+        v44.@layout_0 = insert_value undef.@layout_0 0.i256 v42;
+        v45.objref<@layout_0> = obj.alloc @layout_0;
+        v46.objref<i256> = obj.proj v45 0.i256;
+        v47.i256 = extract_value v44 0.i256;
+        obj.store v46 v47;
+        v48.objref<i256> = obj.proj v45 0.i256;
+        v49.i256 = obj.load v48;
+        (v51.i256, v52.i1) = uaddo v49 3.i256;
+        br v52 block8 block11;
 
     block6:
         jump block7;
 
     block7:
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_b16a 0.i256 0.i256;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_332a undef.objref<@layout_3> 0.i256 0.i256;
         unreachable;
 
     block8:
@@ -135,25 +137,25 @@ func private %dispatch() {
         evm_revert 0.i256 36.i256;
 
     block9:
-        v26.objref<i256> = obj.proj v14 0.i256;
-        obj.store v26 v21;
-        v27.objref<i256> = obj.proj v14 1.i256;
-        v28.i256 = obj.load v27;
-        (v30.i256, v31.i1) = uaddo v28 2.i256;
-        br v31 block8 block10;
+        v29.objref<i256> = obj.proj v17 0.i256;
+        obj.store v29 v24;
+        v30.objref<i256> = obj.proj v17 1.i256;
+        v31.i256 = obj.load v30;
+        (v33.i256, v34.i1) = uaddo v31 2.i256;
+        br v34 block8 block10;
 
     block10:
-        v33.objref<i256> = obj.proj v14 1.i256;
-        obj.store v33 v30;
-        v34.i256 = call %impl_Point__area v14;
-        call %abi_encode v34;
+        v36.objref<i256> = obj.proj v17 1.i256;
+        obj.store v36 v33;
+        v37.i256 = call %impl_Point__area v17;
+        call %abi_encode v37;
         unreachable;
 
     block11:
-        v50.objref<i256> = obj.proj v41 0.i256;
-        obj.store v50 v47;
-        v51.i256 = call %impl_Square__area v41;
-        call %abi_encode v51;
+        v54.objref<i256> = obj.proj v45 0.i256;
+        obj.store v54 v51;
+        v55.i256 = call %impl_Square__area v45;
+        call %abi_encode v55;
         unreachable;
 }
 
@@ -166,8 +168,8 @@ func private %init() {
         v1.i256 = sym_addr &__ShapeDispatcher_runtime;
         v2.*i8 = evm_malloc v0;
         v3.i256 = ptr_to_int v2 i256;
-        call %codecopy v3 v1 v0;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_b16a_0 v3 v0;
+        call %codecopy undef.objref<@layout_3> v3 v1 v0;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_332a_0 undef.objref<@layout_3> v3 v0;
         unreachable;
 }
 
@@ -189,37 +191,37 @@ func private %manual_contract_runtime_root_ShapeDispatcher() {
         evm_stop;
 }
 
-func private %mstore(v0.i256, v1.i256) {
+func private %mstore(v0.objref<@layout_3>, v1.i256, v2.i256) {
     block0:
         jump block1;
 
     block1:
-        mstore v0 v1 i256;
+        mstore v1 v2 i256;
         return;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_b16a(v0.i256, v1.i256) {
+func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_332a(v0.objref<@layout_3>, v1.i256, v2.i256) {
     block0:
         jump block1;
 
     block1:
-        evm_return v0 v1;
+        evm_return v1 v2;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_b16a_0(v0.i256, v1.i256) {
+func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_332a_0(v0.objref<@layout_3>, v1.i256, v2.i256) {
     block0:
         jump block1;
 
     block1:
-        evm_return v0 v1;
+        evm_return v1 v2;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_b74b(v0.i256, v1.i256) {
+func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_8e74(v0.objref<@layout_3>, v1.i256, v2.i256) {
     block0:
         jump block1;
 
     block1:
-        evm_return v0 v1;
+        evm_return v1 v2;
 }
 
 

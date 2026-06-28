@@ -1499,7 +1499,17 @@ fn select_assoc_const_candidate<'db>(
     let mut matches: IndexSet<TraitInstId<'db>> = IndexSet::default();
     for ingot in search_ingots.into_iter().flatten() {
         for cand in impls_for_ty_with_constraints(db, ingot, canonical_receiver, assumptions) {
-            let inst = cand.skip_binder().trait_(db);
+            // Recover the impl's concrete (const-)generic arguments by unifying its self type
+            // against the receiver, so the selected trait instance carries the receiver's args
+            // (e.g. `GenericForward<7>`, not the impl-parameter `GenericForward<N>`). The impls
+            // query discards these bindings, and a downstream impl-satisfiability check on the
+            // un-substituted instance would fail to match the const-generic blanket impl.
+            let mut table = UnificationTable::new(db);
+            let gen_impl = table.instantiate_with_fresh_vars(cand);
+            if table.unify(gen_impl.self_ty(db), receiver_ty).is_err() {
+                continue;
+            }
+            let inst = gen_impl.trait_(db).fold_with(db, &mut table);
             let trait_ = inst.def(db);
             if trait_.const_(db, name).is_some() {
                 matches.insert(inst);
@@ -1802,6 +1812,7 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                         // domain errors (e.g., trait or value used where a type is expected)
                         // with precise spans in the name-resolution phase.
                         if !path.generic_args(db).is_empty(db) {
+                            let trait_params = collect_generic_params(db, t.into()).params(db);
                             let gen_args = path.generic_args(db).data(db);
                             for (idx, ga) in gen_args.iter().enumerate() {
                                 if let GenericArg::Type(ty_arg) = ga
@@ -1810,6 +1821,19 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                                     && let Some(arg_path) = p.to_opt()
                                 {
                                     match resolve_path(db, arg_path, scope, assumptions, false) {
+                                        // A bare concrete trait (`Eq`) in a
+                                        // `* -> Constraint`-expected param position is a
+                                        // first-class trait-constructor value, not a type
+                                        // error. The corresponding trait param is at
+                                        // `idx + 1` (skipping `Self`); if its kind matches
+                                        // the candidate ctor's, the arg is well-formed and
+                                        // lowering produces a `TraitCtor`. In a `*` position
+                                        // the kinds disagree and the error stands.
+                                        Ok(PathRes::Trait(arg_inst))
+                                            if trait_params.get(idx + 1).is_some_and(|param| {
+                                                let ctor = TyId::trait_ctor(db, arg_inst.def(db));
+                                                param.kind(db).does_match(ctor.kind(db))
+                                            }) => {}
                                         Ok(res)
                                             if !matches!(
                                                 res,
@@ -1864,7 +1888,11 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                     }
                 }
 
-                ItemKind::StaticAssert(_) | ItemKind::Use(_) | ItemKind::Body(_) => unreachable!(),
+                ItemKind::DeriveProviderScope(_)
+                | ItemKind::DeriveDecl(_)
+                | ItemKind::StaticAssert(_)
+                | ItemKind::Use(_)
+                | ItemKind::Body(_) => unreachable!(),
             },
             ScopeId::GenericParam(parent, idx) => {
                 let owner = GenericParamOwner::from_item_opt(parent).unwrap();

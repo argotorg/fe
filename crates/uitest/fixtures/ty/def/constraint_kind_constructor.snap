@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty/def/constraint_kind_constructor.fe
+---
+error[6-0008]: constraint-constructor parameter is not yet a supported trait head
+   ┌─ constraint_kind_constructor.fe:23:7
+   │
+23 │ where P<T>
+   │       ^^^^ `P` (`* -> Constraint`) cannot yet be applied as a trait here
+   │
+   = write one provider per concrete trait (e.g. `impl Derive for Eq`), or monomorphize the consumer

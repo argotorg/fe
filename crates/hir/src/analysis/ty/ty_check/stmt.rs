@@ -171,7 +171,7 @@ impl<'db> TyChecker<'db> {
                 self.check_mutable_pattern_bindings(*lhs);
                 self.check_mutable_pattern_bindings(*rhs);
             }
-            Pat::WildCard | Pat::Rest | Pat::Lit(..) => {}
+            Pat::WildCard | Pat::Rest | Pat::Lit(..) | Pat::QuoteHole(..) => {}
         }
     }
 

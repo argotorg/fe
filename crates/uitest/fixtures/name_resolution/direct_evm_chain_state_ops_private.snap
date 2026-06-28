@@ -1,6 +1,5 @@
 ---
 source: crates/uitest/tests/name_resolution.rs
-assertion_line: 26
 expression: diags
 input_file: fixtures/name_resolution/direct_evm_chain_state_ops_private.fe
 ---
@@ -10,7 +9,7 @@ error[2-0003]: `balance` is not visible
  4 │     ops::balance(0)
    │          ^^^^^^^ `balance` is not visible
    │
-   ┌─ src/evm/ops.fe:53:19
+   ┌─ src/evm/ops.fe:63:19
    │
-53 │     pub(ingot) fn balance(_ addr: u256) -> u256
+63 │     pub(ingot) fn balance(_ addr: u256) -> u256
    │                   ------- `balance` is defined here

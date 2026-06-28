@@ -1,0 +1,94 @@
+// CASCADE N-way named-impl selection (FCO #84 T-Nway) — a `Greeting` trait with
+// an UNALIASED default impl for `User` coexisting with an `as Casual` aliased
+// impl. An unscoped `u.greet()` uses the unaliased default; `with (Casual)`
+// selects the aliased dialect — observably, at runtime, in one function body.
+//
+// THE DREAM: N coexisting REAL impls of one `(Trait, Type)` told apart by an
+//   `as Name` user alias; a lexical scope (`with (Name) { .. }`) selects WHICH.
+// PASS CRITERIA: `u.greet() == 1` unscoped (the unaliased default); inside
+//   `with (Casual) { .. }` the SAME `u.greet()` returns `2` (the Casual dialect);
+//   after the block closes, back to `1`. The selection also propagates through a
+//   generic helper `welcome<T: Greeting>(t)` whose `t.greet()` resolves at the
+//   call site's scope.
+// DRIVEN-BY: the unified SELECTION DISCRIMINATOR (coherence permits the unaliased
+//   `Anonymous` + the `Alias(Casual)` to coexist; the unscoped default-tier picks
+//   the sole `Anonymous`; `with (Casual)` selects the `Alias(Casual)` impl) + the
+//   cascade C3b/C3d recorded-selection rail.
+//
+// SURFACE: `impl Greeting for User as Casual { .. }` is the real `as Name` alias
+// (FCO #84 inc1). `with (Casual) { .. }` is the real N-way selection form: a
+// `with`-binding whose bare-ident head is looked up as an impl alias.
+
+trait Greeting {
+    fn greet(self) -> u32
+}
+
+struct User {
+    id: u256,
+}
+
+// UNALIASED DEFAULT: the hand-written `Anonymous` impl. With no derive and no
+// `as Name`, this is the sole `Anonymous` discriminator — so the unscoped
+// default-tier picks it (greet == 1).
+impl Greeting for User {
+    fn greet(self) -> u32 {
+        return 1
+    }
+}
+
+// ALIASED DIALECT: the `as Casual` impl. Never the unscoped default — selectable
+// ONLY via `with (Casual) { .. }` (greet == 2).
+impl Greeting for User as Casual {
+    fn greet(self) -> u32 {
+        return 2
+    }
+}
+
+// GENERIC HELPER: `t.greet()` is a `T: Greeting`-bound call; the call-site scope's
+// selection is carried onto the helper instance (cascade M3), so the inner call
+// resolves to whatever dialect the CALLER's scope selected.
+fn welcome<T: Greeting>(_ t: T) -> u32 {
+    return t.greet()
+}
+
+#[test]
+fn unscoped_greet_uses_unaliased_default() {
+    let u = User { id: 7 }
+    // No selecting scope -> the sole unaliased (`Anonymous`) impl: greet == 1.
+    assert!(u.greet() == 1)
+}
+
+#[test]
+fn with_casual_selects_aliased_dialect() {
+    let u = User { id: 7 }
+
+    // OUTSIDE any selecting scope: the unaliased default dialect.
+    assert!(u.greet() == 1)
+
+    // INSIDE `with (Casual)`: the `as Casual` impl is selected for (Greeting, User),
+    // so the SAME direct call returns the Casual dialect (2).
+    let inside: u32 = with (Casual) {
+        u.greet()
+    }
+    assert!(inside == 2)
+
+    // AFTER the block closes, the selection is popped — back to the default (1).
+    assert!(u.greet() == 1)
+}
+
+#[test]
+fn selection_propagates_through_helper() {
+    let u = User { id: 7 }
+
+    // The generic helper unscoped uses the default dialect.
+    assert!(welcome(u) == 1)
+
+    // The caller's `with (Casual)` selection carries through the helper boundary.
+    let inside: u32 = with (Casual) {
+        welcome(u)
+    }
+    assert!(inside == 2)
+
+    // Popped after the block — back to the default through the helper.
+    assert!(welcome(u) == 1)
+}

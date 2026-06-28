@@ -48,6 +48,12 @@ fn pretty_print_ty_for_mismatch<'db>(db: &'db dyn SpannedHirAnalysisDb, ty: TyId
             let self_ty = pretty_print_ty_for_mismatch(db, trait_inst.self_ty(db));
             format!("<{} as {}>", self_ty, trait_inst.pretty_print(db, false))
         }
+        TyData::ConstraintTerm(inst) => inst.pretty_print(db, false),
+        TyData::TraitCtor(trait_) => trait_
+            .name(db)
+            .to_opt()
+            .map(|n| n.data(db).to_string())
+            .unwrap_or_else(|| "<unknown>".to_string()),
         TyData::TyApp(_, _) => pretty_print_ty_app_for_mismatch(db, ty),
         TyData::TyBase(base) => {
             use crate::analysis::ty::ty_def::TyBase;
@@ -636,6 +642,192 @@ impl DiagnosticVoucher for crate::AbiFieldDiagnostic {
             ],
             GlobalErrorCode::new(diagnostic_pass, code),
         )
+    }
+}
+
+impl DiagnosticVoucher for crate::DeriveError {
+    fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
+        use crate::DeriveErrorKind;
+
+        let primary_span = Span::new(self.file, self.primary_range, SpanKind::Original);
+        let item_name = self.item_name.as_deref().unwrap_or("<unknown>");
+
+        let (code, message, label, notes) = match &self.kind {
+            DeriveErrorKind::ConstGeneric { item_kind } => (
+                1,
+                format!(
+                    "`#[derive(..)]` on {item_kind}s with const generic parameters is not yet supported"
+                ),
+                format!("`{item_name}` has const generic parameters"),
+                vec![
+                    "remove the const generic parameters or implement the trait manually"
+                        .to_string(),
+                ],
+            ),
+            DeriveErrorKind::UnknownTrait { name, available } => (
+                2,
+                format!("cannot derive `{name}`"),
+                format!("`{name}` is not a derivable trait"),
+                vec![if available.is_empty() {
+                    "no derive providers are available for this trait".to_string()
+                } else {
+                    format!("derivable traits are {}", join_quoted(available))
+                }],
+            ),
+            DeriveErrorKind::InvalidForm => (
+                3,
+                "invalid `derive` attribute form".to_string(),
+                "expected `#[derive(Trait, ..)]`".to_string(),
+                vec!["use e.g. `#[derive(Eq)]` or `#[derive(Eq, Default)]`".to_string()],
+            ),
+            DeriveErrorKind::DuplicateTrait { name } => (
+                4,
+                format!("`{name}` is derived more than once"),
+                format!("duplicate `{name}` here"),
+                vec![format!("remove the extra `{name}` from the derive list")],
+            ),
+            DeriveErrorKind::EventErrorStruct => (
+                5,
+                "`#[derive(..)]` cannot be combined with `#[event]` or `#[error]`".to_string(),
+                "remove this `derive` attribute".to_string(),
+                vec![
+                    "deriving traits for `#[event]`/`#[error]` structs is not supported"
+                        .to_string(),
+                ],
+            ),
+            DeriveErrorKind::MissingDefaultVariant => (
+                6,
+                format!("`#[derive(Default)]` on enum `{item_name}` requires a `#[default]` variant"),
+                "no variant is marked `#[default]`".to_string(),
+                vec!["mark exactly one variant with `#[default]`".to_string()],
+            ),
+            DeriveErrorKind::MultipleDefaultVariants { first_variant_name } => (
+                7,
+                format!("multiple `#[default]` variants on enum `{item_name}`"),
+                "extra `#[default]` marker here".to_string(),
+                vec![match first_variant_name {
+                    Some(first) => {
+                        format!("`{first}` is already marked `#[default]`; only one variant can be the default")
+                    }
+                    None => "only one variant can be marked `#[default]`".to_string(),
+                }],
+            ),
+            DeriveErrorKind::ProviderNotFound {
+                provider,
+                trait_name,
+                wrong_goal_heads,
+            } => (
+                8,
+                format!("no derive provider named `{provider}` for `{trait_name}`"),
+                format!("`{provider}` does not provide `{trait_name}` evidence"),
+                vec![if wrong_goal_heads.is_empty() {
+                    format!("no visible derive provider is named `{provider}`")
+                } else {
+                    format!(
+                        "visible provider(s) named `{provider}` provide {}",
+                        join_quoted(wrong_goal_heads)
+                    )
+                }],
+            ),
+            DeriveErrorKind::ProviderAmbiguous {
+                provider,
+                trait_name,
+                count,
+            } => (
+                9,
+                format!("derive provider `{provider}` for `{trait_name}` is ambiguous"),
+                format!("`{provider}` matches {count} visible providers"),
+                vec!["rename one of the providers to disambiguate".to_string()],
+            ),
+            DeriveErrorKind::CanonicalProviderAmbiguous {
+                trait_name,
+                providers,
+            } => (
+                9,
+                format!("the derive request for `{trait_name}` is ambiguous"),
+                format!(
+                    "multiple canonical providers derive `{trait_name}`: {}",
+                    join_quoted(providers)
+                ),
+                vec!["select a provider explicitly with `using`".to_string()],
+            ),
+            DeriveErrorKind::ProviderFailed {
+                provider,
+                trait_name,
+                message,
+            } => (
+                10,
+                format!("derive provider `{provider}` failed to derive `{trait_name}`"),
+                format!("requested here: {message}"),
+                vec![format!(
+                    "the provider `{provider}` ran at compile time and failed; the secondary label points at the failing provider code"
+                )],
+            ),
+            DeriveErrorKind::InvalidProvider { message } => (
+                14,
+                "invalid derive provider declaration".to_string(),
+                message.clone(),
+                vec![
+                    "expected `impl Derive<Trait> for Provider { const fn derive<T>(..) uses (reflect: Reflect<T>, builder: mut ImplBuilder<..>) { .. } }`"
+                        .to_string(),
+                ],
+            ),
+            DeriveErrorKind::UnresolvedDeclTarget { path } => (
+                11,
+                format!("cannot resolve derive target `{path}`"),
+                "not found in this file".to_string(),
+                vec![
+                    "`derive .. for ..` declarations currently support struct and enum targets declared in the same file"
+                        .to_string(),
+                ],
+            ),
+            DeriveErrorKind::InvalidDeclTarget { path, actual } => (
+                12,
+                format!("`{path}` is not a struct or enum"),
+                format!("this resolves to a {actual}"),
+                vec!["`derive .. for ..` targets must be structs or enums".to_string()],
+            ),
+            DeriveErrorKind::ConflictingDerive { trait_name, target } => (
+                13,
+                format!("`{trait_name}` is already derived for `{target}`"),
+                "duplicate derive here".to_string(),
+                vec![
+                    "remove this declaration or the other `derive` that requests the same trait"
+                        .to_string(),
+                ],
+            ),
+        };
+
+        let error_code = GlobalErrorCode::new(DiagnosticPass::DeriveLower, code);
+
+        let mut sub_diagnostics = vec![SubDiagnostic::new(
+            LabelStyle::Primary,
+            label,
+            Some(primary_span),
+        )];
+        if let Some(secondary) = &self.secondary {
+            sub_diagnostics.push(SubDiagnostic::new(
+                LabelStyle::Secondary,
+                secondary.label.clone(),
+                Some(Span::new(
+                    secondary.file,
+                    secondary.range,
+                    SpanKind::Original,
+                )),
+            ));
+        }
+
+        CompleteDiagnostic::new(Severity::Error, message, sub_diagnostics, notes, error_code)
+    }
+}
+
+/// Joins names for diagnostic notes, e.g. "A, B and C" with backticks.
+fn join_quoted(names: &[String]) -> String {
+    let quoted: Vec<String> = names.iter().map(|name| format!("`{name}`")).collect();
+    match quoted.as_slice() {
+        [] => String::new(),
+        [one] => one.clone(),
+        [init @ .., last] => format!("{} and {last}", init.join(", ")),
     }
 }
 
@@ -3068,6 +3260,21 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
+            Self::WhereConstPredicateFailed { primary } => CompleteDiagnostic {
+                severity,
+                message: "const predicate is not satisfied".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "const predicate evaluated to `false` here".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![
+                    "const predicates must be proven by an assumption or by CTFE evaluating to `true`"
+                        .to_string(),
+                ],
+                error_code,
+            },
+
             Self::InvalidCast {
                 primary,
                 from,
@@ -3490,9 +3697,10 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                         span: field_span.resolve(db),
                     },
                 ],
-                notes: vec![format!(
-                    "immutable contract fields can only be assigned in `init`; mark the field `mut` to make it mutable contract state",
-                )],
+                notes: vec![
+                    "immutable contract fields can only be assigned in `init`; mark the field `mut` to make it mutable contract state"
+                        .to_string(),
+                ],
                 error_code,
             },
 
@@ -3833,6 +4041,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 primary,
                 cands,
                 required_by,
+                alias_suggestions,
             } => {
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
@@ -3858,11 +4067,25 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     });
                 }
 
+                // FCO T-Nway (#84 inc3) — when the coexisting impls are aliased,
+                // tell the user exactly how to disambiguate: select one with the
+                // `with (Name)` form. Empty for non-cascade ambiguity, so the
+                // note is absent there (byte-identical).
+                let mut notes = vec![];
+                if !alias_suggestions.is_empty() {
+                    let choices = alias_suggestions
+                        .iter()
+                        .map(|n| format!("`with ({})`", n.data(db)))
+                        .collect::<Vec<_>>()
+                        .join(" or ");
+                    notes.push(format!("disambiguate by selecting an impl: {choices}"));
+                }
+
                 CompleteDiagnostic {
                     severity: Severity::Error,
                     message: "ambiguous trait implementation".to_string(),
                     sub_diagnostics,
-                    notes: vec![],
+                    notes,
                     error_code,
                 }
             }
@@ -4309,6 +4532,14 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             ),
 
+            BodyDiag::QuoteOutsideProvider(primary) => primary_diag(
+                severity,
+                "`quote` expressions are only allowed in derive provider bodies",
+                "`quote` builds a code template for a `mut ImplBuilder<..>` capability",
+                primary.resolve(db),
+                error_code,
+            ),
+
             BodyDiag::ConstFnNonConstCall { primary, callee } => {
                 let name = callee
                     .name(db)
@@ -4358,8 +4589,133 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     error_code,
                 )
             }
+
+            BodyDiag::UnknownWithImplAlias {
+                primary,
+                name,
+                available,
+            } => {
+                let name_str = name.data(db);
+
+                // Primary: the `with (Name)` head that names no alias.
+                let mut sub_diagnostics = vec![SubDiagnostic::new(
+                    LabelStyle::Primary,
+                    format!("`with ({name_str})` names no impl alias here"),
+                    primary.resolve(db),
+                )];
+
+                // SECONDARY: point at every selectable named impl, at its
+                // `as Name` token, so the user SEES what they could have written.
+                // `available` is pre-sorted by alias name at the emit site.
+                for (alias, impl_trait) in available {
+                    sub_diagnostics.push(SubDiagnostic::new(
+                        LabelStyle::Secondary,
+                        format!("`{}` defined here", alias.data(db)),
+                        impl_trait.span().alias_name().resolve(db),
+                    ));
+                }
+
+                // Did-you-mean: the closest available alias within a small edit
+                // distance (deterministic — `available` is pre-sorted). Kept as a
+                // closing note because it still adds value beyond the labels.
+                let mut notes = Vec::new();
+                let alias_names: Vec<crate::hir_def::IdentId> =
+                    available.iter().map(|(a, _)| *a).collect();
+                if let Some(suggestion) = closest_name(name_str, &alias_names, db) {
+                    notes.push(format!("did you mean `{suggestion}`?"));
+                }
+
+                CompleteDiagnostic::new(
+                    severity,
+                    format!("no impl named `{name_str}` in scope"),
+                    sub_diagnostics,
+                    notes,
+                    error_code,
+                )
+            }
+
+            BodyDiag::AmbiguousWithImplAlias {
+                primary,
+                name,
+                colliding,
+            } => {
+                let name_str = name.data(db);
+                let goals_list = colliding
+                    .iter()
+                    .map(|(g, _)| format!("`{}`", g.pretty_print(db, true)))
+                    .collect::<Vec<_>>()
+                    .join(" and ");
+
+                // Primary: the `with (Name)` head whose alias is overloaded.
+                let mut sub_diagnostics = vec![SubDiagnostic::new(
+                    LabelStyle::Primary,
+                    format!("`{name_str}` names more than one impl: {goals_list}"),
+                    primary.resolve(db),
+                )];
+
+                // SECONDARY: point at each colliding impl's `as Name` token so both
+                // declarations are visible. `colliding` is sorted by printed goal.
+                for (goal, impl_trait) in colliding {
+                    sub_diagnostics.push(SubDiagnostic::new(
+                        LabelStyle::Secondary,
+                        format!("also names this impl: `{}`", goal.pretty_print(db, true)),
+                        impl_trait.span().alias_name().resolve(db),
+                    ));
+                }
+
+                CompleteDiagnostic::new(
+                    severity,
+                    format!("`{name_str}` is an ambiguous impl alias"),
+                    sub_diagnostics,
+                    vec![
+                        "give the two impls distinct `as Name` aliases so each can be selected unambiguously"
+                            .to_string(),
+                    ],
+                    error_code,
+                )
+            }
         }
     }
+}
+
+/// FCO T-Nway (#84 inc3) — the closest candidate name to `target` for a
+/// did-you-mean hint, by Levenshtein distance. Returns the first candidate (in
+/// the already-sorted `candidates` order, so the result is deterministic) within
+/// a distance threshold scaled to the target length. `None` if nothing is close.
+fn closest_name<'db>(
+    target: &str,
+    candidates: &[crate::hir_def::IdentId<'db>],
+    db: &dyn SpannedHirAnalysisDb,
+) -> Option<String> {
+    // Tolerate up to ~1 edit per 3 chars (min 1), capped at 3 — typical typo
+    // tolerance that avoids matching wildly different names.
+    let threshold = (target.len() / 3).clamp(1, 3);
+    candidates
+        .iter()
+        .map(|c| c.data(db).to_string())
+        .filter(|cand| cand != target)
+        .map(|cand| (levenshtein(target, &cand), cand))
+        .filter(|(dist, _)| *dist <= threshold)
+        .min_by_key(|(dist, _)| *dist)
+        .map(|(_, cand)| cand)
+}
+
+/// Plain iterative Levenshtein edit distance (byte-wise — alias idents are ASCII
+/// identifiers). Small inputs, so the simple two-row DP is fine.
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a = a.as_bytes();
+    let b = b.as_bytes();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0usize; b.len() + 1];
+    for (i, &ca) in a.iter().enumerate() {
+        cur[0] = i + 1;
+        for (j, &cb) in b.iter().enumerate() {
+            let cost = if ca == cb { 0 } else { 1 };
+            cur[j + 1] = (prev[j + 1] + 1).min(cur[j] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
 }
 
 impl DiagnosticVoucher for TraitLowerDiag<'_> {
@@ -4600,6 +4956,68 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                 notes: vec![],
                 error_code,
             },
+
+            // Rendered identically to the call-site `WhereConstPredicateFailed`
+            // (8-0085) so const predicates report the same way at every
+            // position; the error code is overridden to the TyCheck pass.
+            Self::ConstPredicateNotSat { span, .. } => CompleteDiagnostic {
+                severity,
+                message: "const predicate is not satisfied".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "const predicate evaluated to `false` here".to_string(),
+                    span: span.resolve(db),
+                }],
+                notes: vec![
+                    "const predicates must be proven by an assumption or by CTFE evaluating to `true`"
+                        .to_string(),
+                ],
+                error_code: GlobalErrorCode::new(DiagnosticPass::TyCheck, 85),
+            },
+
+            Self::ConstraintCtorParamUnsupported { span, param } => {
+                let name = param.data(db);
+                CompleteDiagnostic {
+                    severity,
+                    message: "constraint-constructor parameter is not yet a supported trait head"
+                        .to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "`{name}` (`* -> Constraint`) cannot yet be applied as a trait here"
+                        ),
+                        span: span.resolve(db),
+                    }],
+                    notes: vec![
+                        "write one provider per concrete trait (e.g. `impl Derive for Eq`), or monomorphize the consumer"
+                            .to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
+            Self::ProviderGoalNotConcrete {
+                span,
+                capability,
+                goal,
+            } => {
+                let goal_name = goal.data(db);
+                CompleteDiagnostic {
+                    severity,
+                    message: "derive provider goal is not a concrete constraint".to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "`{capability}<{goal_name}>` names the bare `* -> Constraint` head `{goal_name}`, not a saturated constraint"
+                        ),
+                        span: span.resolve(db),
+                    }],
+                    notes: vec![format!(
+                        "write a saturated goal such as `{capability}<{goal_name}<T>>` so the goal lowers to one concrete obligation"
+                    )],
+                    error_code,
+                }
+            }
         }
     }
 }
@@ -5160,6 +5578,36 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                 notes: vec![],
                 error_code,
             },
+
+            Self::MethodConstPredicateMismatch { impl_m, trait_m } => {
+                let method_name = impl_m.name(db).expect("methods have names").data(db);
+                CompleteDiagnostic {
+                    severity,
+                    message: "method has different `where` const predicates than trait".to_string(),
+                    sub_diagnostics: vec![
+                        SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: format!(
+                                "the `where` const predicates on method `{method_name}` must \
+                                 match the trait declaration exactly"
+                            ),
+                            span: impl_m.name_span().resolve(db),
+                        },
+                        SubDiagnostic {
+                            style: LabelStyle::Secondary,
+                            message: "trait declares the method's const predicates here"
+                                .to_string(),
+                            span: trait_m.name_span().resolve(db),
+                        },
+                    ],
+                    notes: vec![
+                        "const predicates are matched by exact term identity (after \
+                         normalization), not by logical implication"
+                            .to_string(),
+                    ],
+                    error_code,
+                }
+            }
         }
     }
 }

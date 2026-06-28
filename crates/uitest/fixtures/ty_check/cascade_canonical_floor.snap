@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/cascade_canonical_floor.fe
+---
+error[5-0001]: conflicting trait implementations
+   ┌─ cascade_canonical_floor.fe:29:18
+   │
+29 │ impl AbiSize for Token {
+   │                  ^^^^^ this trait implementation
+   ·
+38 │ impl AbiSize for Token {
+   │                  ----- conflicts with this trait implementation

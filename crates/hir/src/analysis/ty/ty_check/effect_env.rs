@@ -252,4 +252,34 @@ impl<'db> EffectEnv<'db> {
         }
         out
     }
+
+    /// An innermost-first snapshot of every in-scope provision's
+    /// [`ProvidedEffect`], across all live frames. Frames are walked from the
+    /// innermost (most recently pushed) outward; within a frame the unkeyed
+    /// providers are followed by the providers backing the keyed witness /
+    /// forwarder entries.
+    ///
+    /// This is the raw provision list captured onto a deferred
+    /// [`TraitObligation`](super::env::TraitObligation) at enqueue time, so the
+    /// obligation processor can consult the provisions that were in scope at the
+    /// raise site even after every `with` / `uses` frame has been popped. It is
+    /// a snapshot of provider *bindings* only — no key matching, no barriers, no
+    /// effect-query semantics — because the obligation processor recognizes the
+    /// `Evidence`-typed entries itself, by resolved identity.
+    pub fn snapshot_provisions(&self) -> SmallVec<[ProvidedEffect<'db>; 4]> {
+        let mut out = SmallVec::new();
+        for frame in self.frames.iter().rev() {
+            out.extend(frame.unkeyed.iter().copied());
+            for entries in frame.keyed_by_family.values() {
+                for entry in entries {
+                    match entry {
+                        KeyedEffectEntry::Witness(witness) => out.push(witness.provider),
+                        KeyedEffectEntry::Forwarder(forwarder) => out.push(forwarder.provider),
+                        KeyedEffectEntry::Barrier(_) => {}
+                    }
+                }
+            }
+        }
+        out
+    }
 }

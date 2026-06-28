@@ -18,7 +18,7 @@ use super::{
     },
     env::{
         EffectOrigin, EffectParamSite, ExprProp, LocalBinding, ParamSite, PendingPrimitiveOp,
-        ProvidedEffect, TraitObligation, TraitObligationOrigin, TyCheckEnv,
+        ProvidedEffect, ProvisionEnv, TraitObligation, TraitObligationOrigin, TyCheckEnv,
     },
     path::ResolvedPathInBody,
     ty_may_be_code_region_token,
@@ -32,7 +32,7 @@ use crate::analysis::ty::{
     corelib::{
         resolve_core_range_types, resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path,
     },
-    diagnostics::{BodyDiag, FuncBodyDiag, MustUseSubject, TraitConstraintDiag, TyDiagCollection},
+    diagnostics::{BodyDiag, FuncBodyDiag, MustUseSubject},
     effect_handle_metadata,
     effects::{
         BarrierReason, EffectBarrier, EffectKeyKind, EffectPatternKey, EffectQuery,
@@ -56,10 +56,8 @@ use crate::analysis::ty::{
     },
     fold::{AssocTySubst, TyFoldable as _, TyFolder},
     provider::{ProviderTransport, provider_semantics_for_specialized_call},
-    trait_def::TraitInstId,
-    trait_resolution::{
-        GoalSatisfiability, PredicateListId, TraitGoalSolution, TraitSolveCx, is_goal_satisfiable,
-    },
+    trait_def::{ImplementorId, TraitInstId, impls_for_trait_def, ingot_trait_env},
+    trait_resolution::{GoalSatisfiability, PredicateListId, TraitGoalSolution},
     ty_check::callable::{Callable, EffectProviderProvenance, EffectProviderSpecialization},
     ty_def::{CapabilityKind, PrimTy, TyBase, TyData, prim_int_bits},
     unify::UnificationTable,
@@ -84,7 +82,7 @@ use crate::analysis::{
         ty_lower::instantiate_callable_effect_layout_args,
     },
 };
-use crate::hir_def::{FieldParent, ItemKind, scope_graph::ScopeId};
+use crate::hir_def::{FieldParent, ImplTrait, ItemKind, scope_graph::ScopeId};
 use crate::semantic::ProviderBinding;
 use common::indexmap::IndexMap;
 
@@ -185,6 +183,13 @@ pub(super) struct EffectCommitPlan<'db> {
 enum EffectResolution<'db> {
     Chosen(Box<EffectEvidence<'db>>),
     BlockedByBarrier,
+    /// The obligation is discharged ambiently with NO backing provider value, so
+    /// no call-site provider argument is threaded. Today this is ONLY the
+    /// default-allow grant for a `PermitAuthority<G>` capability of an ordinary
+    /// (non-one-of-a-kind) goal `G` (the prelude `impl_permit()` mint): a compile-time
+    /// capability that authorizes the mint but has no runtime value. It is treated
+    /// like a satisfied effect that contributes no `ResolvedEffectArg`.
+    AmbientGrant,
     Missing,
     Ambiguous,
 }
@@ -302,7 +307,7 @@ impl<'db> TyChecker<'db> {
             Expr::Un(..) => self.check_unary(expr, expr_data),
             Expr::Cast(inner, ty) => self.check_cast(expr, *inner, *ty),
             Expr::Bin(lhs, rhs, op) => self.check_binary(expr, *lhs, *rhs, *op),
-            Expr::Call(..) => self.check_call(expr, expr_data),
+            Expr::Call(..) => self.check_call(expr, expr_data, expected),
             Expr::Assert(args) => self.check_assert(expr, args),
             Expr::MethodCall(..) => self.check_method_call(expr, expr_data),
             Expr::Path(..) => self.check_path(expr, expr_data),
@@ -318,6 +323,15 @@ impl<'db> TyChecker<'db> {
             Expr::With(bindings, body) => {
                 self.check_with(bindings, *body, expected, result_discarded)
             }
+            Expr::Quote { .. } => {
+                let diag = BodyDiag::QuoteOutsideProvider(expr.span(self.body()).into());
+                self.push_diag(diag);
+                ExprProp::invalid(self.db)
+            }
+            // Splice holes outside a quote body already carry a parse
+            // error; quote bodies themselves are only entered by the
+            // provider executor, never by this checker.
+            Expr::QuoteHole(..) | Expr::QuoteFieldHole(..) => ExprProp::invalid(self.db),
         };
         self.env.leave_expr();
 
@@ -1171,6 +1185,41 @@ impl<'db> TyChecker<'db> {
         self.env.effect_env_mut().push_frame();
 
         for binding in bindings {
+            // PROVISIONAL near-term activation surface for cascade scoped-selection
+            // — NOT the final provision-scoping form; will be replaced once the
+            // keystone lets a deriver mint Evidence soundly. See FCO_THE_SLIDE.
+            //
+            // A shorthand `with (<T as Trait>) { .. }` whose value names a
+            // concrete trait goal stamps a real `Evidence`-typed scoped provision
+            // carrying the goal's sole `Hir` implementor, activating the cascade
+            // (snapshot → `discharge_from_scoped_provision`). It is SOUND: the
+            // named goal resolves to a REAL existing impl's `ImplementorId`; no
+            // `Evidence` value is forged. It is byte-identical-in-effect today:
+            // coherence forbids >1 impl per (type, goal), so the named impl is the
+            // only impl the solver could pick.
+            if binding.key_path.is_none()
+                && let Some(provided) = self.provisional_scoped_selection(binding.value)
+            {
+                // The binding value names a (Trait, Type) GOAL, not a runtime
+                // value — record it so MIR body lowering skips it (cascade C3b).
+                self.env.record_scoped_selection_expr(binding.value);
+                self.env.effect_env_mut().insert_unkeyed(provided);
+                continue;
+            }
+
+            // FCO T-Nway (#84 inc3) — selection FAILED for this keyless head. If
+            // it looks like an impl-alias selection that went wrong (unknown or
+            // ambiguous `with (Name)`), emit a PRECISE diagnostic and SKIP the
+            // ordinary value path so the generic `UndefinedVariable` is NOT also
+            // reported (no double-report). `None` means "a legitimate
+            // `with (value)`" — fall through unchanged.
+            if binding.key_path.is_none()
+                && let Some(diag) = self.classify_with_alias_failure(binding.value)
+            {
+                self.push_diag(diag);
+                continue;
+            }
+
             let value_prop = self.check_expr_unknown(binding.value);
 
             let is_mut = value_prop
@@ -1185,6 +1234,10 @@ impl<'db> TyChecker<'db> {
                 ty: self.table.fold_ty(self.db, value_prop.ty),
                 is_mut,
                 binding: value_prop.binding,
+                // The `with`-binding surface that mints a REAL `Evidence`
+                // provision carrying its impl is cascade C3; today every
+                // `with` provision records no impl (latent).
+                selected_implementor: None,
             };
 
             match binding.key_path {
@@ -1241,7 +1294,395 @@ impl<'db> TyChecker<'db> {
         result
     }
 
-    fn check_call(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
+    /// PROVISIONAL near-term activation surface for cascade scoped-selection —
+    /// NOT the final provision-scoping form; will be replaced once the keystone
+    /// lets a deriver mint `Evidence` soundly. See `FCO_THE_SLIDE`.
+    ///
+    /// If `value` is a `with`-binding value that names a concrete trait goal via
+    /// the qualified-path form `<T as Trait>` (so its `Self` is concrete), and
+    /// that goal has a REAL `Hir` implementor in scope, build the scoped
+    /// provision the cascade consumes:
+    ///
+    /// - `ty`: a saturated `core::derive::Evidence<G>` (the goal `G` as a
+    ///   `ConstraintTerm`), recognized by [`snapshot_evidence_provisions`] and
+    ///   peeled by [`evidence_witnessed_goal`].
+    /// - `selected_implementor`: `Some(`the goal's sole `ImplementorId`)` — the
+    ///   REAL existing impl the surface names, so [`discharge_from_scoped_provision`]
+    ///   records a concrete [`TraitGoalSolution`] (never the old `Some(None)`).
+    ///
+    /// SOUNDNESS: the goal resolves to a REAL existing impl; no `Evidence` value
+    /// is forged. BYTE-IDENTITY: coherence forbids >1 impl per (type, goal)
+    /// today, so the named impl is the only one the solver could pick — selecting
+    /// it via the provision yields the same impl, leaving the surface inert in
+    /// effect until C3c-3 demotes coherence.
+    ///
+    /// Returns `None` for any other value (an ordinary effect provider), for a
+    /// non-qualified path, for a goal whose `Self` is not concrete, or when no
+    /// real implementor exists — in every case the caller falls through to the
+    /// ordinary `with`-provider path.
+    ///
+    /// [`snapshot_evidence_provisions`]: super::env::TyCheckEnv::snapshot_evidence_provisions
+    /// [`evidence_witnessed_goal`]: crate::analysis::ty::provider_goal::evidence_witnessed_goal
+    /// [`discharge_from_scoped_provision`]: super::TyChecker::discharge_from_scoped_provision
+    pub(super) fn provisional_scoped_selection(
+        &mut self,
+        value: ExprId,
+    ) -> Option<ProvidedEffect<'db>> {
+        // The value must be a bare path expression — the qualified-path form
+        // `<T as Trait>` lowers to a single qualified-type path segment; the
+        // `with (Name)` alias form is a single bare-ident path.
+        let Partial::Present(Expr::Path(Partial::Present(path))) =
+            self.env.expr_data(value).clone()
+        else {
+            return None;
+        };
+
+        // Resolve the selected `(goal, implementor)` from the `with` head, trying
+        // the two coexisting selection forms in order:
+        //   1. `with (<T as Trait>)` — names a `(Trait, Type)` GOAL (a `QualifiedTy`
+        //      wrapping the concrete trait instance). Selects the sole `Anonymous`
+        //      override.
+        //   2. `with (Name)` — a bare ident that does NOT resolve to a `<T as Trait>`
+        //      goal. Looked up as an impl ALIAS (FCO T-Nway): scan visible trait
+        //      impls for the one whose `hir_alias` last-segment == `Name`.
+        let path_span = value.span(self.body()).into_path_expr().path();
+        let (goal, implementor) = match self.resolve_path(path, false, path_span).ok() {
+            Some(PathRes::Ty(qualified_ty))
+                if matches!(qualified_ty.data(self.db), TyData::QualifiedTy(_)) =>
+            {
+                // GOAL form: `<T as Trait>`.
+                let TyData::QualifiedTy(goal) = qualified_ty.data(self.db) else {
+                    return None;
+                };
+                let goal = *goal;
+
+                // The goal's `Self` must be concrete: a real impl is selected by
+                // self type, and a non-concrete goal cannot name a single impl. (The
+                // qualified-path form always gives a concrete `Self`; this is the
+                // soundness backstop.)
+                let subject = goal.self_ty(self.db);
+                if subject.has_var(self.db) || subject.has_invalid(self.db) {
+                    return None;
+                }
+
+                // The REAL global `Hir` implementor the surface names: the sole
+                // `Anonymous` override of the goal's trait for `subject`. If none
+                // (or ambiguous because aliases coexist), mint nothing and fall
+                // through to the alias form / ordinary `with`-provider path.
+                let implementor = self.sole_scoped_selection_implementor(goal, subject)?;
+                (goal, implementor)
+            }
+            // ALIAS form: `with (Name)`. Either the path did not resolve, or it
+            // resolved to something other than a `<T as Trait>` goal — try the alias
+            // lookup. The recorded goal is the matched impl's own trait instance.
+            _ => self.alias_scoped_selection(path)?,
+        };
+
+        // Mint the witness type the cascade recognizes: `Evidence<G>` with `G`
+        // the goal as a `ConstraintTerm`, by RESOLVED `core::derive::Evidence`
+        // identity (never the bare spelling). Verify with the recognizer so a
+        // shadowing user `Evidence` can never activate the cascade.
+        let evidence_ctor =
+            resolve_lib_type_path(self.db, self.env.scope(), "core::derive::Evidence")?;
+        let constraint_term = TyId::constraint_term(self.db, goal);
+        let evidence_ty = TyId::app(self.db, evidence_ctor, constraint_term);
+        if super::super::provider_goal::evidence_witnessed_goal(self.db, evidence_ty) != Some(goal)
+        {
+            return None;
+        }
+
+        Some(ProvidedEffect {
+            origin: EffectOrigin::With { value_expr: value },
+            ty: evidence_ty,
+            is_mut: false,
+            binding: None,
+            selected_implementor: Some(implementor),
+        })
+    }
+
+    /// FCO T-Nway — the `with (Name)` ALIAS selection path. `path` is the `with`
+    /// head that did NOT resolve as a `<T as Trait>` goal; interpret it as an impl
+    /// ALIAS and look up the UNIQUE visible trait impl whose `as Name` alias
+    /// last-segment matches the path's last segment.
+    ///
+    /// This is a thin lookup (NOT a scope-graph binding, so the alias never
+    /// pollutes the namespace): scan every trait impl visible in the current
+    /// scope's ingot trait env (and the std/core ingots reachable from it) for one
+    /// carrying [`ImplTrait::hir_alias`] == `Name`. On a UNIQUE match, return the
+    /// matched impl's own trait instance as the recorded goal, plus its
+    /// [`ImplementorId`] — exactly the `(goal, implementor)` the goal form produces.
+    /// Ambiguous (>1) or no match → `None` (fall through to the ordinary
+    /// `with`-provider path; a precise diagnostic is increment-4 work).
+    fn alias_scoped_selection(
+        &self,
+        path: PathId<'db>,
+    ) -> Option<(TraitInstId<'db>, ImplementorId<'db>)> {
+        use crate::analysis::ty::trait_resolution::{SelDiscriminator, selection_discriminator};
+        let db = self.db;
+
+        // The alias must be a bare single-segment ident (`with (Name)`), never a
+        // multi-segment path — the alias lives in no module namespace.
+        if path.parent(db).is_some() {
+            return None;
+        }
+        let Partial::Present(name) = path.ident(db) else {
+            return None;
+        };
+
+        // Scan the trait impls visible in the current scope's ingot env (which
+        // already folds in resolved external ingots, e.g. std/core) for the unique
+        // impl whose `Alias` discriminator names `name`.
+        let env = ingot_trait_env(db, self.env.scope().ingot(db));
+        let mut matched: Option<ImplementorId<'db>> = None;
+        for impls in env.impls.values() {
+            for binder in impls {
+                let implementor = binder.instantiate_identity();
+                if selection_discriminator(db, implementor) == SelDiscriminator::Alias(name) {
+                    if matched.is_some_and(|m| m != implementor) {
+                        // Two impls share the alias `name` — ambiguous, bail.
+                        return None;
+                    }
+                    matched = Some(implementor);
+                }
+            }
+        }
+
+        let implementor = matched?;
+        Some((implementor.trait_(db), implementor))
+    }
+
+    /// FCO T-Nway (#84 inc3) — FIRST-CLASS DIAGNOSTICS for a `with (Name)` head
+    /// that DID NOT select an impl ([`Self::provisional_scoped_selection`]
+    /// returned `None`). Classify the failure precisely and, when it is an alias
+    /// problem, return the diagnostic to emit. Returning `Some(diag)` means the
+    /// caller MUST emit it and SKIP the ordinary `check_expr_unknown` value path
+    /// (so the generic `UndefinedVariable` "not found" is suppressed — no
+    /// double-report). Returning `None` means "this is NOT an alias problem" — a
+    /// legitimate `with (someRuntimeValue)` or `with (<T as Trait>)` — so the
+    /// caller falls through to the ordinary value path unchanged.
+    ///
+    /// PRECISION (do NOT hijack a real value binding):
+    /// - Only a bare SINGLE-SEGMENT ident path is ever an alias candidate.
+    /// - AMBIGUOUS: the ident matches >1 visible `as Name` impl → always an alias
+    ///   error (a real value can't both type-check AND collide with two impl
+    ///   aliases; the alias-shaped intent is unambiguous). Emitted regardless of
+    ///   whether the ident also resolves as a value, because a successful value
+    ///   resolution would have been taken by `provisional_scoped_selection`'s
+    ///   caller path already — here selection failed, so the alias collision is
+    ///   the actionable cause.
+    /// - UNKNOWN: the ident matches 0 visible aliases. We ONLY claim it as an
+    ///   alias typo when (a) ≥1 `as Name` impl exists somewhere in scope (so
+    ///   "named impls" is a real concept here) AND (b) the ident genuinely fails
+    ///   ORDINARY value/type resolution ([`resolve_ident_expr`] yields
+    ///   `NewBinding`, i.e. unresolved). If it resolves to a real value/type, it
+    ///   is a legitimate `with (value)` — return `None`, let it type-check.
+    fn classify_with_alias_failure(&self, value: ExprId) -> Option<BodyDiag<'db>> {
+        use crate::analysis::ty::trait_resolution::{SelDiscriminator, selection_discriminator};
+        let db = self.db;
+
+        // Only a bare path expression can be an alias head.
+        let Partial::Present(Expr::Path(Partial::Present(path))) =
+            self.env.expr_data(value).clone()
+        else {
+            return None;
+        };
+        // The alias must be a bare single-segment ident — multi-segment paths
+        // live in module namespaces and are never impl aliases.
+        if path.parent(db).is_some() {
+            return None;
+        }
+        let Partial::Present(name) = path.ident(db) else {
+            return None;
+        };
+
+        // Enumerate every visible `as Name` impl alias once: collect the goals
+        // that share `name`, and the full set of available alias names (sorted,
+        // deduped) for the help line / did-you-mean.
+        let env = ingot_trait_env(db, self.env.scope().ingot(db));
+        // The impls that share `name`, paired with their goal (for the ambiguous
+        // case). The full set of available aliases, paired with the declaring
+        // impl item (for the unknown case's secondary labels + did-you-mean).
+        let mut matching: Vec<(TraitInstId<'db>, ImplTrait<'db>)> = Vec::new();
+        let mut available: Vec<(IdentId<'db>, ImplTrait<'db>)> = Vec::new();
+        for impls in env.impls.values() {
+            for binder in impls {
+                let implementor = binder.instantiate_identity();
+                if let SelDiscriminator::Alias(alias) = selection_discriminator(db, implementor) {
+                    let impl_trait = implementor.hir_impl_trait(db);
+                    if !available.iter().any(|(a, _)| *a == alias) {
+                        available.push((alias, impl_trait));
+                    }
+                    if alias == name {
+                        let goal = implementor.trait_(db);
+                        if !matching.iter().any(|(g, _)| *g == goal) {
+                            matching.push((goal, impl_trait));
+                        }
+                    }
+                }
+            }
+        }
+
+        // No `as Name` impls anywhere → the named-impl concept does not apply
+        // here; this is an ordinary value/goal binding. Leave it to the value
+        // path (which reports the right error if the value is itself undefined).
+        if available.is_empty() {
+            return None;
+        }
+
+        let path_expr_span = value.span(self.body()).into_path_expr();
+
+        // AMBIGUOUS: the alias names more than one impl. The user clearly meant to
+        // select by alias (the name collides with multiple `as Name` impls), so
+        // name the conflicting goals instead of falling through to a value error.
+        if matching.len() > 1 {
+            // Deterministic order for the message + secondary labels.
+            matching.sort_by_key(|(g, _)| g.pretty_print(db, true));
+            return Some(BodyDiag::AmbiguousWithImplAlias {
+                primary: path_expr_span.into(),
+                name,
+                colliding: matching,
+            });
+        }
+
+        // Exactly one match would have been selected by
+        // `provisional_scoped_selection`; we are only called after it returned
+        // `None`, so a single match here cannot happen. Guard anyway: defer.
+        if matching.len() == 1 {
+            return None;
+        }
+
+        // UNKNOWN (0 matches) AND named impls exist. Only claim it as a typo if
+        // the ident genuinely fails ORDINARY resolution — protecting a real
+        // `with (value)` whose name happens to differ from every alias.
+        let ident_span: DynLazySpan<'db> = path_expr_span.clone().into();
+        if !matches!(
+            resolve_ident_expr(db, &self.env, path, ident_span),
+            ResolvedPathInBody::NewBinding(_)
+        ) {
+            // Resolves to a real value/type/binding → legitimate value binding.
+            return None;
+        }
+
+        available.sort_by_key(|(n, _)| n.data(db).clone());
+        Some(BodyDiag::UnknownWithImplAlias {
+            primary: path_expr_span.into(),
+            name,
+            available,
+        })
+    }
+
+    /// FCO T-Nway (#84 inc3) — the `as Name` aliases (sorted, deduped) of the
+    /// impls that coexist for `goal`'s `(Trait, Type)`. Used to ENRICH an
+    /// unscoped-ambiguity diagnostic with `with (Name)` disambiguation
+    /// suggestions. Returns `Vec::new()` when no coexisting impl is aliased (the
+    /// non-cascade ambiguity case), so the enrichment is inert there.
+    pub(super) fn alias_suggestions_for_goal(&self, goal: TraitInstId<'db>) -> Vec<IdentId<'db>> {
+        use crate::analysis::ty::trait_resolution::{SelDiscriminator, selection_discriminator};
+        let db = self.db;
+        let subject = goal.self_ty(db);
+        let trait_def = goal.def(db);
+        let scope_ingot = self.env.scope().ingot(db);
+        let trait_ingot = trait_def.top_mod(db).ingot(db);
+
+        let mut aliases: Vec<IdentId<'db>> = Vec::new();
+        for ingot in [scope_ingot, trait_ingot] {
+            for binder in impls_for_trait_def(db, ingot, trait_def).iter() {
+                let implementor = binder.instantiate_identity();
+                if implementor.self_ty(db) != subject {
+                    continue;
+                }
+                if let SelDiscriminator::Alias(alias) = selection_discriminator(db, implementor)
+                    && !aliases.contains(&alias)
+                {
+                    aliases.push(alias);
+                }
+            }
+        }
+        aliases.sort_by_key(|n| n.data(db).clone());
+        aliases
+    }
+
+    /// The real `Hir` [`ImplementorId`] that `with (<T as Trait>)` SELECTS for
+    /// `goal`'s trait at `subject`, looked up through the impl table the trait
+    /// solver itself uses (the goal's trait-def ingot and the current scope's
+    /// ingot).
+    ///
+    /// FCO "slide" cascade C3b selection rule — "derive the default, override it
+    /// in a scope". The scoped surface always names the OVERRIDE (the custom,
+    /// non-default impl) — never the derived default — so:
+    ///
+    /// - exactly 1 impl → that impl (byte-identical with today: coherence forbids
+    ///   a second, so the sole impl IS what the solver would pick);
+    /// - 1 default-marked (CoreDerives-origin) + 1 non-default → the NON-default
+    ///   override (the cascade keystone case: an unscoped call uses the derived
+    ///   default, `with (<T as Trait>)` selects the hand-written override);
+    /// - `>1` non-default (N-way) → `None` (keystone-deferred: selecting among
+    ///   several overrides needs more than naming the goal, do NOT invent
+    ///   impl-naming; fall through to the ordinary `with`-provider path);
+    /// - all default-marked → `None` (nothing to override).
+    ///
+    /// SOUNDNESS: always returns a REAL existing `ImplementorId` (never forges
+    /// Evidence). Default-marking is recognized by the SSOT
+    /// [`TraitSolveCx::implementor_is_default_marked`] (CoreDerives-origin by
+    /// resolved provenance ingot, never by name).
+    ///
+    /// [`TraitSolveCx::implementor_is_default_marked`]: crate::analysis::ty::trait_resolution::TraitSolveCx::implementor_is_default_marked
+    fn sole_scoped_selection_implementor(
+        &self,
+        goal: TraitInstId<'db>,
+        subject: TyId<'db>,
+    ) -> Option<ImplementorId<'db>> {
+        use crate::analysis::ty::trait_resolution::{SelDiscriminator, selection_discriminator};
+        let db = self.db;
+        let trait_def = goal.def(db);
+        let scope_ingot = self.env.scope().ingot(db);
+        let trait_ingot = trait_def.top_mod(db).ingot(db);
+        // The real `Hir` impls of this trait for `subject` (dedup across the two
+        // search ingots, which can overlap when scope and trait share an ingot).
+        let mut candidates: Vec<ImplementorId<'db>> = Vec::new();
+        for ingot in [scope_ingot, trait_ingot] {
+            for binder in impls_for_trait_def(db, ingot, trait_def).iter() {
+                let implementor = binder.instantiate_identity();
+                if implementor.self_ty(db) == subject && !candidates.contains(&implementor) {
+                    candidates.push(implementor);
+                }
+            }
+        }
+
+        match candidates.as_slice() {
+            // Exactly one impl: byte-identical with the pre-cascade behavior.
+            [only] => Some(*only),
+            // ≥2 coexisting impls: `with (<T as Trait>)` selects the sole
+            // `Anonymous`-discriminator override (the 2-slot {Default, Anonymous}
+            // case). With aliases coexisting there is no single `Anonymous` to mean
+            // — the goal form is ambiguous, so return `None` (fall through; the user
+            // should use the `with (Name)` alias form instead). Byte-identical when
+            // no aliases exist: every non-default impl is `Anonymous`, so this is
+            // exactly the old "sole non-default override".
+            _ => {
+                let mut anonymous = candidates.iter().copied().filter(|&impl_| {
+                    matches!(
+                        selection_discriminator(db, impl_),
+                        SelDiscriminator::Anonymous
+                    )
+                });
+                let first = anonymous.next()?;
+                // >1 `Anonymous` would be a coherence conflict (caught earlier), but
+                // be defensive: ambiguous → `None`.
+                if anonymous.next().is_some() {
+                    return None;
+                }
+                Some(first)
+            }
+        }
+    }
+
+    fn check_call(
+        &mut self,
+        expr: ExprId,
+        expr_data: &Expr<'db>,
+        expected: TyId<'db>,
+    ) -> ExprProp<'db> {
         let Expr::Call(callee, args) = expr_data else {
             unreachable!()
         };
@@ -1288,6 +1729,31 @@ impl<'db> TyChecker<'db> {
         }
 
         callable.check_args(self, args, call_span.clone().args(), None, false);
+
+        // Bind the callee's generic args from the expected (return-position) type
+        // BEFORE effect resolution, when the callee has effects. Ordinarily the
+        // return type unifies with `expected` only after this call returns
+        // (`check_expr_with_result_context`), which is AFTER effects are resolved,
+        // so an effect key mentioning a return-only generic param (e.g.
+        // `impl_permit() -> ImplPermit<G> uses (grant: PermitAuthority<G>)`, where `G` is fixed
+        // only by `let a: ImplPermit<Eq<Foo>>`) would still be an unbound inference
+        // var at the effect query and the per-goal grant could not be decided.
+        // The unify is snapshot-guarded and rolled back on failure, so the later
+        // unify (which emits any type-mismatch diagnostic) is untouched: for a
+        // well-typed call this only resolves the same inference vars earlier, and
+        // for an ill-typed one it is a no-op.
+        if let CallableDef::Func(func) = callable.callable_def
+            && func.has_effects(self.db)
+            && !expected.is_ty_var(self.db)
+            && !expected.has_invalid(self.db)
+            && expected != TyId::unit(self.db)
+        {
+            let ret_ty = callable.ret_ty(self.db);
+            let snapshot = self.table.snapshot();
+            if self.table.unify(ret_ty, expected).is_err() {
+                self.table.rollback_to(snapshot);
+            }
+        }
 
         self.check_callable_effects(expr, &mut callable);
 
@@ -1604,6 +2070,10 @@ impl<'db> TyChecker<'db> {
                     });
                 }
                 EffectResolution::BlockedByBarrier => {}
+                // Ambiently granted (default-allow `PermitAuthority<G>` for an
+                // ordinary goal): satisfied with no backing provider value, so no
+                // `ResolvedEffectArg` is threaded and no diagnostic is emitted.
+                EffectResolution::AmbientGrant => {}
                 EffectResolution::Missing => {
                     self.push_diag(BodyDiag::MissingEffect {
                         primary: call_span.clone(),
@@ -1732,7 +2202,80 @@ impl<'db> TyChecker<'db> {
             }
         }
         let _ = (func, call_span);
+        // Ambient fallback (the `RootProvider`-equivalent point after every live
+        // `with` / `uses` frame missed): the DEFAULT-ALLOW grant for the prelude
+        // `impl_permit()` mint. A `PermitAuthority<G>` capability obligation for an
+        // ordinary (non-one-of-a-kind) goal `G` is granted ambiently here, keyed
+        // ONLY on the query's resolved carrier identity + the single
+        // `is_single_impl` predicate (no scope read), so a one-of-a-kind goal
+        // stays `Missing` and reports `8-0036`. `G` is extracted from the
+        // `PermitAuthority<G>` type-query carrier (folded to its inferred instance).
+        if let Some(carrier) = self.query_type_key(&query.key) {
+            let carrier = self.table.fold_ty(self.db, carrier);
+            if crate::analysis::ty::provider_goal::permit_authority_default_allowed(
+                self.db, carrier,
+            ) {
+                return EffectResolution::AmbientGrant;
+            }
+        }
+        // Ambient EVM root provisioning (FCO effects-as-capabilities #2, #93): a
+        // trait-keyed intrinsic-capability obligation (e.g. `uses StorageIntrinsic`)
+        // is granted ambiently iff the selected target's root effect carries the
+        // capability (`RootEffect: <trait>`). Within a backend its intrinsics then
+        // need no per-fn `uses` ceremony (just as `self`/`mut self` already gate
+        // intra-contract storage); a non-EVM target whose root effect does NOT
+        // implement the capability leaves the obligation `Missing` and reports
+        // `8-0036`, which IS the cross-target gate.
+        if let EffectPatternKey::Trait(trait_query) = &query.key
+            && self.intrinsic_capability_granted_by_root(trait_query)
+        {
+            return EffectResolution::AmbientGrant;
+        }
         EffectResolution::Missing
+    }
+
+    /// Is the trait-keyed `trait_query` an intrinsic-capability obligation that the
+    /// selected target's root effect carries (so it is granted ambiently)?
+    ///
+    /// Recognized intrinsic capabilities are the marker traits in `core::contracts`
+    /// (currently `StorageIntrinsic`); rolling the gate to the remaining EVM op
+    /// families extends this set. The grant holds only when the default target's
+    /// root effect (`<DefaultTarget as Target>::RootEffect`, e.g. `std::evm::effects::Evm`)
+    /// actually implements the capability, so a future non-EVM target whose root
+    /// effect does not implement it gets no ambient grant (the cross-target gate).
+    fn intrinsic_capability_granted_by_root(&self, trait_query: &TraitPatternKey<'db>) -> bool {
+        let scope = self.env.scope();
+        if resolve_core_trait(self.db, scope, &["contracts", "StorageIntrinsic"])
+            != Some(trait_query.def)
+        {
+            return false;
+        }
+        let assumptions = self.env.assumptions();
+        let Some(root_effect_ty) =
+            crate::analysis::ty::resolve_default_root_effect_ty(self.db, scope, assumptions)
+        else {
+            return false;
+        };
+        if root_effect_ty.has_invalid(self.db) {
+            return false;
+        }
+        let args = std::iter::once(root_effect_ty)
+            .chain(trait_query.args_no_self.iter().copied())
+            .collect::<Vec<_>>();
+        let trait_goal = TraitInstId::new(
+            self.db,
+            trait_query.def,
+            args,
+            trait_query
+                .assoc_bindings
+                .iter()
+                .copied()
+                .collect::<IndexMap<_, _>>(),
+        );
+        matches!(
+            self.trait_effect_goal_satisfiability(trait_goal),
+            GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation(_)
+        )
     }
 
     fn match_family_keyed_entry(
@@ -2341,7 +2884,14 @@ impl<'db> TyChecker<'db> {
         assumptions: PredicateListId<'db>,
         trait_goal: TraitInstId<'db>,
     ) -> GoalSatisfiability<'db> {
-        let solve_cx = TraitSolveCx::new(self.db, scope).with_assumptions(assumptions);
+        // SSOT construction: route the verify-leg solver-cx through `ProvisionEnv`
+        // (rung 3.0's seam) instead of hand-assembling `TraitSolveCx::new(..)`.
+        // This leg verifies a scope-enumerated provider candidate, so it supplies
+        // its own `(scope, assumptions)` — preserved exactly — rather than the
+        // body's current `provision_env()`. The resulting `TraitSolveCx`, the
+        // canonical query, and the `is_goal_query_satisfiable` result are
+        // byte-identical to the previous inline construction.
+        let solve_cx = ProvisionEnv::for_scope(scope, assumptions).solve_cx(self.db);
         let query = crate::analysis::ty::trait_resolution::CanonicalGoalQuery::new(
             self.db,
             trait_goal,
@@ -3179,6 +3729,13 @@ impl<'db> TyChecker<'db> {
             }
         };
 
+        // Gate-2 tail: a concrete trait-method selection commits to an impl just
+        // like a trait-bound call; remember it so its selected-impl const
+        // predicates run through the shared gate-not-select adapter once
+        // `check_args` has fixed the substitution. `NeedsConfirmation` already
+        // raises its own obligation (which routes through the same gate), so it
+        // is intentionally not gated here a second time.
+        let mut method_selection_to_gate: Option<TraitInstId<'db>> = None;
         let (func_ty, trait_inst) = match candidate {
             MethodCandidate::InherentMethod(cand) => (
                 self.extract_inherent_method_to_term(&canonical_r_ty, cand, selected_receiver_ty),
@@ -3188,6 +3745,7 @@ impl<'db> TyChecker<'db> {
             MethodCandidate::TraitMethod(cand) => {
                 let inst = canonical_r_ty.extract_solution(&mut self.table, cand.inst);
                 let inst = self.specialize_same_trait_method_inst(method_name, inst);
+                method_selection_to_gate = Some(inst);
                 let func_ty =
                     self.instantiate_trait_method_to_term(cand.method, selected_receiver_ty, inst);
                 (func_ty, Some(inst))
@@ -3196,10 +3754,15 @@ impl<'db> TyChecker<'db> {
             MethodCandidate::NeedsConfirmation(cand) => {
                 let inst = canonical_r_ty.extract_solution(&mut self.table, cand.inst);
                 let inst = self.specialize_same_trait_method_inst(method_name, inst);
+                let scoped_provisions = self.env.snapshot_evidence_provisions();
+                // Cascade C3d: a method selection that needs confirmation is still
+                // call-keyed, so a scoped-provision discharge (a `with (<T as
+                // Trait>)` selection) is readable per call and carried to MIR.
                 self.env.register_trait_obligation(TraitObligation {
                     goal: inst,
-                    origin: TraitObligationOrigin::GenericConfirmation,
+                    origin: TraitObligationOrigin::MethodSelection { call_expr: expr },
                     span: call_span.clone().into(),
+                    scoped_provisions,
                 });
                 let func_ty =
                     self.instantiate_trait_method_to_term(cand.method, selected_receiver_ty, inst);
@@ -3258,6 +3821,13 @@ impl<'db> TyChecker<'db> {
             Some((*receiver, receiver_prop)),
             false,
         );
+
+        // Gate-2 tail: `check_args` has unified the receiver with the impl self
+        // type, so the selection is concrete; route it through the shared
+        // gate-not-select adapter.
+        if let Some(inst) = method_selection_to_gate {
+            self.gate_concrete_method_selection(inst, expr, call_span.clone().into());
+        }
 
         // Check required effects for the method call
         self.check_callable_effects(expr, &mut callable);
@@ -3472,10 +4042,12 @@ impl<'db> TyChecker<'db> {
                                 inst
                             };
                             if matches!(candidate, MethodCandidate::NeedsConfirmation(_)) {
+                                let scoped_provisions = self.env.snapshot_evidence_provisions();
                                 self.env.register_trait_obligation(TraitObligation {
                                     goal: inst,
                                     origin: TraitObligationOrigin::GenericConfirmation,
                                     span: path_expr_span.clone().into(),
+                                    scoped_provisions,
                                 });
                             }
                             let method_ty = if cand.method.is_method(self.db) {
@@ -3567,10 +4139,12 @@ impl<'db> TyChecker<'db> {
                         trait_inst
                     };
 
+                    let scoped_provisions = self.env.snapshot_evidence_provisions();
                     self.env.register_trait_obligation(TraitObligation {
                         goal: inst,
                         origin: TraitObligationOrigin::GenericConfirmation,
                         span: path_expr_span.clone().into(),
+                        scoped_provisions,
                     });
 
                     let func_ty = self.instantiate_trait_assoc_fn_to_term(
@@ -3602,24 +4176,21 @@ impl<'db> TyChecker<'db> {
                         inst.assoc_type_bindings(self.db).clone(),
                     );
 
-                    if !super::trait_const_goal_has_foreign_params(self.db, inst, self.env.scope())
-                        && let GoalSatisfiability::UnSat(_) = is_goal_satisfiable(
-                            self.db,
-                            TraitSolveCx::new(self.db, self.env.scope())
-                                .with_assumptions(self.env.assumptions()),
-                            inst,
-                        )
-                    {
-                        self.push_diag(TyDiagCollection::from(
-                            TraitConstraintDiag::TraitBoundNotSat {
-                                span: path_expr_span.clone().into(),
-                                primary_goal: inst,
-                                unsat_subgoal: None,
-                                required_by: None,
-                            },
-                        ));
-                        return ExprProp::invalid(self.db);
-                    }
+                    // Reading `<Ty as Trait>::CONST` requires `Ty: Trait`.
+                    // When the receiver type is concrete, this obligation has
+                    // no satisfying impl unless one exists; registering it here
+                    // makes that surface as a normal `6-0003` trait-bound
+                    // diagnostic instead of an unresolved const-ref that
+                    // panics during semantic lowering. (For generic receivers
+                    // the obligation is discharged by an in-scope `where`
+                    // bound, exactly like the sibling assoc-fn arm above.)
+                    let scoped_provisions = self.env.snapshot_evidence_provisions();
+                    self.env.register_trait_obligation(TraitObligation {
+                        goal: inst,
+                        origin: TraitObligationOrigin::GenericConfirmation,
+                        span: path_expr_span.clone().into(),
+                        scoped_provisions,
+                    });
 
                     self.env.register_const_ref(
                         expr,
@@ -4364,10 +4935,12 @@ impl<'db> TyChecker<'db> {
             ) => {
                 let inst = c_lhs_ty.extract_solution(&mut self.table, cand.inst);
                 if matches!(res, MethodCandidate::NeedsConfirmation(_)) {
+                    let scoped_provisions = self.env.snapshot_evidence_provisions();
                     self.env.register_trait_obligation(TraitObligation {
                         goal: inst,
                         origin: TraitObligationOrigin::GenericConfirmation,
                         span: expr.span(self.body()).into(),
+                        scoped_provisions,
                     });
                 }
 
@@ -4438,10 +5011,12 @@ impl<'db> TyChecker<'db> {
                         let candidate = viable.pop().unwrap();
                         let inst = c_lhs_ty.extract_solution(&mut self.table, candidate.cand.inst);
                         if candidate.needs_confirmation {
+                            let scoped_provisions = self.env.snapshot_evidence_provisions();
                             self.env.register_trait_obligation(TraitObligation {
                                 goal: inst,
                                 origin: TraitObligationOrigin::GenericConfirmation,
                                 span: expr.span(self.body()).into(),
+                                scoped_provisions,
                             });
                         }
                         let func_ty = self.instantiate_trait_method_to_term(
@@ -4476,6 +5051,9 @@ impl<'db> TyChecker<'db> {
                             primary: expr.span(self.body()).into(),
                             cands,
                             required_by: None,
+                            // Ops-trait inference ambiguity, not the N-way cascade
+                            // path — no impl-alias disambiguation applies.
+                            alias_suggestions: Vec::new(),
                         });
                         return ExprProp::invalid(self.db);
                     }

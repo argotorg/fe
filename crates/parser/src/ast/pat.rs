@@ -15,6 +15,7 @@ ast_node! {
     | SK::PathTuplePat
     | SK::RecordPat
     | SK::OrPat
+    | SK::QuoteHolePat
 }
 impl Pat {
     /// Returns the specific kind of the pattern.
@@ -30,6 +31,7 @@ impl Pat {
             }
             SK::RecordPat => PatKind::Record(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::OrPat => PatKind::Or(AstNode::cast(self.syntax().clone()).unwrap()),
+            SK::QuoteHolePat => PatKind::QuoteHole(AstNode::cast(self.syntax().clone()).unwrap()),
             _ => unreachable!(),
         }
     }
@@ -160,6 +162,24 @@ impl OrPat {
     }
 }
 
+ast_node! {
+    /// `${variant}(group)` — a splice hole in pattern position inside a
+    /// quote body, binding the variant's payload under `group`.
+    pub struct QuoteHolePat,
+    SK::QuoteHolePat,
+}
+impl QuoteHolePat {
+    /// Returns the `${...}` splice hole.
+    pub fn hole(&self) -> Option<super::QuoteHoleExpr> {
+        support::child(self.syntax())
+    }
+
+    /// Returns the parenthesized binder-group list, if present.
+    pub fn binders(&self) -> Option<TuplePatElemList> {
+        support::child(self.syntax())
+    }
+}
+
 /// A specific pattern kind.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From, derive_more::TryInto)]
 pub enum PatKind {
@@ -171,6 +191,7 @@ pub enum PatKind {
     PathTuple(PathTuplePat),
     Record(RecordPat),
     Or(OrPat),
+    QuoteHole(QuoteHolePat),
 }
 
 #[cfg(test)]

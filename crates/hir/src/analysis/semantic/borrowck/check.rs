@@ -180,6 +180,11 @@ fn collect_top_mod_semantic_borrow_diagnostic_vouchers<'db>(
     {
         match item {
             ItemKind::Func(func) => {
+                // Derive provider bodies are compile-time command programs,
+                // checked by the provider executor instead.
+                if func.is_derive_provider_fn(db) {
+                    continue;
+                }
                 collect_owner(db, BodyOwner::Func(*func), seen_owners, seen_diags, diags)
             }
             ItemKind::Const(const_) => collect_owner(
@@ -221,6 +226,8 @@ fn collect_top_mod_semantic_borrow_diagnostic_vouchers<'db>(
             | ItemKind::Trait(_)
             | ItemKind::Impl(_)
             | ItemKind::ImplTrait(_)
+            | ItemKind::DeriveProviderScope(_)
+            | ItemKind::DeriveDecl(_)
             | ItemKind::TypeAlias(_)
             | ItemKind::StaticAssert(_)
             | ItemKind::Use(_)

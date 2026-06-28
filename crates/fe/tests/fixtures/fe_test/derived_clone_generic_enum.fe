@@ -1,0 +1,83 @@
+// Expression-first pressure test (architect directive): derive Clone for a
+// GENERIC enum through the fixture-local `using` provider form. This is the
+// untrodden path — every existing `derive X for Y using P` fixture targets a
+// CONCRETE type; here the target `Maybe<T>` is generic, so the generated impl
+// must carry a real `where T: Clone` bound, generated from the provider's
+// `require<Clone>(field.ty())` command (the same mechanism `#[derive]` uses on
+// generic structs). Fixture-local; NOT canonicalized into core_derives.
+
+use core::clone::Clone
+use core::derive::Derive
+use core::derive::Evidence
+use core::derive::ImplBuilder
+use core::derive::Reflect
+
+impl Derive<Clone> for StableClone {
+    const fn derive<T>(ev: own Evidence<Clone<T>>) -> Evidence<Clone<T>>
+        uses (
+            reflect: Reflect<T>,
+            builder: mut ImplBuilder<Clone<T>>,
+        )
+    {
+        if reflect.is_struct() {
+            let mut init = builder.struct_init()
+            for field in reflect.fields() {
+                builder.require<Clone>(field.ty())
+                init = builder.with_field(
+                    init,
+                    field,
+                    builder.call(builder.field_get(builder.self_ref(), field), "clone"),
+                )
+            }
+            builder.emit_method("clone", init)
+        }
+        if reflect.is_enum() {
+            let mut body = builder.match_expr(builder.self_ref())
+            for variant in reflect.variants() {
+                let pat = builder.variant_pat(variant, "lhs")
+                let mut init = builder.variant_init(variant)
+                for field in variant.fields() {
+                    builder.require<Clone>(field.ty())
+                    init = builder.with_field(
+                        init,
+                        field,
+                        builder.call(builder.variant_binder(variant, field, "lhs"), "clone"),
+                    )
+                }
+                body = builder.with_arm(body, pat, init)
+            }
+            builder.emit_method("clone", body)
+        }
+        builder.finish()
+        ev
+    }
+}
+
+enum Maybe<T> {
+    Nothing,
+    Just(T),
+}
+
+derive Clone for Maybe<T> using StableClone
+
+#[test]
+fn clone_generic_enum_payload() {
+    let a: Maybe<u256> = Maybe::Just(7)
+    let b = a.clone()
+    match b {
+        Maybe::Just(n) => assert!(n == 7),
+        Maybe::Nothing => assert!(false),
+    }
+}
+
+#[test]
+fn clone_generic_enum_unit() {
+    let a: Maybe<u256> = Maybe::Nothing
+    let b = a.clone()
+    match b {
+        Maybe::Just(_n) => assert!(false),
+        Maybe::Nothing => assert!(true),
+    }
+}
+
+struct StableClone {}

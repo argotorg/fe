@@ -5,34 +5,36 @@ input_file: crates/codegen/tests/fixtures/caller.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @layout_0 = {i256};
+type @layout_0 = {};
+type @layout_1 = {@layout_0};
+type @layout_2 = {i256};
 
-func private %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_efe3() -> @layout_0 {
+func private %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_650b(v0.objref<@layout_1>) -> @layout_2 {
     block0:
         jump block1;
 
     block1:
-        v0.i256 = evm_caller;
-        v3.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
-        return v3;
+        v1.i256 = evm_caller;
+        v4.@layout_2 = insert_value undef.@layout_2 0.i256 v1;
+        return v4;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_efe3_0() -> @layout_0 {
+func private %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_650b_0(v0.objref<@layout_1>) -> @layout_2 {
     block0:
         jump block1;
 
     block1:
-        v0.i256 = evm_caller;
-        v3.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
-        return v3;
+        v1.i256 = evm_caller;
+        v4.@layout_2 = insert_value undef.@layout_2 0.i256 v1;
+        return v4;
 }
 
-func private %main() -> @layout_0 {
+func private %main() -> @layout_2 {
     block0:
         jump block1;
 
     block1:
-        v0.@layout_0 = call %standalone_caller__caller__who_called__gcd5c_a9cd;
+        v0.@layout_2 = call %standalone_caller__caller__who_called__gcd5c_a9cd;
         return v0;
 }
 
@@ -41,26 +43,26 @@ func private %main_root() {
         jump block1;
 
     block1:
-        v0.@layout_0 = call %main;
+        v0.@layout_2 = call %main;
         evm_stop;
 }
 
-func private %standalone_caller__caller__who_called__gcd5c_4c8a() -> @layout_0 {
+func private %standalone_caller__caller__who_called__gcd5c_4c8a() -> @layout_2 {
     block0:
         jump block1;
 
     block1:
-        v0.@layout_0 = call %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_efe3;
-        return v0;
+        v1.@layout_2 = call %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_650b undef.objref<@layout_1>;
+        return v1;
 }
 
-func private %standalone_caller__caller__who_called__gcd5c_a9cd() -> @layout_0 {
+func private %standalone_caller__caller__who_called__gcd5c_a9cd() -> @layout_2 {
     block0:
         jump block1;
 
     block1:
-        v0.@layout_0 = call %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_efe3_0;
-        return v0;
+        v1.@layout_2 = call %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_650b_0 undef.objref<@layout_1>;
+        return v1;
 }
 
 

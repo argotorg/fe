@@ -1,0 +1,29 @@
+// DERIVE-KIND FORM 3 — provider-as-Self, goal as an ASSOCIATED TYPE.
+// Kind: `Derive : * -> Constraint`  (an ordinary trait; the derived trait rides on `type Goal`).
+//
+// TRADEOFF: simplest kind (`Derive` stays first-order) and multi-provider ✓ (provider is Self).
+// The declaration kind-checks today (`type Goal : * -> Constraint` is accepted; the method's
+// `Evidence<Self::Goal<T>>` kind-checks — the projection head computes kind `Constraint`). The
+// gap is the impl binding `type Goal = Eq` — assigning a bare trait to the associated type —
+// today `2-0006` "found trait `Eq`" (then the method sig cascades because `Self::Goal` resolved
+// to `invalid(NotAType(Eq))`). Cost vs form 2: an extra associated type + projection machinery,
+// and the goal is implicit (named under `type Goal`) rather than visible in the head `Derive<Eq>`.
+// Same root gap as forms 1/2: a bare `* -> Constraint` trait as a value.
+//
+// (`Derive_` (trailing `_`) names the demonstration trait, kept distinct from the real `Derive`
+//  — which today is a string-marker, not a real trait (retiring it is #7).)
+use core::derive::Evidence
+use core::ops::Eq
+
+trait Derive_ {
+    type Goal: * -> Constraint
+    const fn derive<T>(ev: own Evidence<Self::Goal<T>>) -> Evidence<Self::Goal<T>>
+}
+
+struct StableEqK {}
+
+impl Derive_ for StableEqK {
+    // GAP: `type Goal = Eq` — a bare `* -> Constraint` trait as an associated-type value.
+    type Goal = Eq
+    const fn derive<T>(ev: own Evidence<Eq<T>>) -> Evidence<Eq<T>> { ev }
+}

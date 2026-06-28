@@ -55,6 +55,47 @@ impl<'db> ScopeGraphBuilder<'db> {
         builder
     }
 
+    /// Creates a builder for the post-lowering expansion stage.
+    ///
+    /// Unlike [`Self::enter_top_mod`], this does not create a scope for the
+    /// top-level module itself; generated items are attached to *existing*
+    /// scopes of the base graph via [`Self::enter_shim_scope`]. The id stack
+    /// is rooted at a [`TrackedItemVariant::Expansion`]-namespaced id so that
+    /// generated items' `TrackedItemId`s never collide with base items.
+    pub(super) fn enter_expansion(db: &'db dyn HirDb, top_mod: TopLevelMod<'db>) -> Self {
+        let mut builder = Self {
+            db,
+            top_mod,
+            graph: IntermediateScopeGraph::default(),
+            scope_stack: Default::default(),
+            module_stack: Default::default(),
+            id_stack: Default::default(),
+            declared_blocks: vec![],
+        };
+
+        let id = TrackedItemId::new(
+            db,
+            TrackedItemVariant::TopLevelMod(top_mod.name(db)).join(TrackedItemVariant::Expansion),
+        );
+        builder.id_stack.push(id);
+        builder
+    }
+
+    /// Pushes a node that mirrors an *existing* scope of the base graph so
+    /// that items generated under it become children of that scope once the
+    /// partial graph is merged into the base graph. The node carries no edges
+    /// of its own besides the parent-to-child edges added while generating;
+    /// on merge, those edges are unioned into the base scope's edge set.
+    pub(super) fn enter_shim_scope(&mut self, scope: ScopeId<'db>, vis: Visibility) {
+        let node = self.graph.push(scope, Scope::new(scope, vis));
+        self.scope_stack.push(node);
+    }
+
+    /// Leaves a scope entered with [`Self::enter_shim_scope`].
+    pub(super) fn leave_shim_scope(&mut self) {
+        self.scope_stack.pop().unwrap();
+    }
+
     pub(super) fn build(self) -> ScopeGraph<'db> {
         self.graph.build(self.top_mod)
     }
@@ -269,6 +310,16 @@ impl<'db> ScopeGraphBuilder<'db> {
                 );
                 self.graph
                     .add_edge(item_node, item_node, EdgeKind::self_ty());
+                EdgeKind::anon()
+            }
+
+            DeriveProviderScope(_) => {
+                self.graph.add_lex_edge(item_node, parent_node);
+                EdgeKind::anon()
+            }
+
+            DeriveDecl(_) => {
+                self.graph.add_lex_edge(item_node, parent_node);
                 EdgeKind::anon()
             }
 

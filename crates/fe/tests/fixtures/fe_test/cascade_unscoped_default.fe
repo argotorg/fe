@@ -1,0 +1,64 @@
+// CASCADE default-tier — with a derived default + an override and NO selecting
+// scope, the DERIVED DEFAULT wins (deterministically, never an ambiguity panic).
+//
+// THE DREAM: a derived default impl and a hand-written override coexist; a bare
+//   unscoped call resolves to the DERIVED DEFAULT — never an ambiguity panic
+//   despite two real impls existing.
+// PASS CRITERIA: outside any selecting scope, `a.eq(b)` uses the DERIVED
+//   structural impl (so two Speakers with different ids are NOT equal), and the
+//   tests pass. Crucially there is NO "ambiguous trait impl" error/panic.
+// DRIVEN-BY: C3c-2 (the unscoped default-tier rule collapses the >1-impl
+//   ambiguity to the sole default-marked impl at impl selection) + C3c-3 (the
+//   override is allowed to coexist in the first place).
+// SURFACE: no impl is NAMED. `#[derive(Eq)]` mints the default (CoreDerives-
+//   origin = default-marked); a plain `impl Eq for Speaker` is the override.
+//
+// DEFAULT DISCRIMINATOR: the default tier is the CoreDerives-origin derived impl
+// (`implementor_is_default_marked`), NOT declaration order — so an unscoped call
+// deterministically picks the derived structural `eq`.
+
+use core::ops::Eq
+
+// DERIVED DEFAULT: structural equality (id-by-id), the CoreDerives `StableEq`
+// provider output. Default-marked.
+#[derive(Eq)]
+struct Speaker {
+    id: u256,
+}
+
+// OVERRIDE: "everything equal". Selectable only via an explicit
+// `with (<Speaker as Eq>) { .. }` scope (see cascade_scoped_override.fe); it must
+// NOT be picked here because no scope selects it.
+impl Eq for Speaker {
+    fn eq(self, _ other: Speaker) -> bool {
+        true
+    }
+}
+
+#[test]
+fn unscoped_call_uses_derived_default() {
+    let a = Speaker { id: 7 }
+    let b = Speaker { id: 8 }
+    // No selecting scope in view -> the derived (default-tier) structural impl is
+    // used: different ids are NOT equal. (The override would say `true`.)
+    // Determinism — no ambiguity panic — is the whole point.
+    assert!(!a.eq(b))
+
+    let c = Speaker { id: 7 }
+    let d = Speaker { id: 7 }
+    // Structural default: same id => equal.
+    assert!(c.eq(d))
+}
+
+#[test]
+fn unscoped_call_is_not_ambiguous() {
+    // A generic that calls through the `Eq` bound also resolves to the derived
+    // default unscoped — proving default selection is not special to direct
+    // calls and never goes ambiguous.
+    assert!(!same(Speaker { id: 1 }, Speaker { id: 2 }))
+    assert!(same(Speaker { id: 5 }, Speaker { id: 5 }))
+}
+
+fn same<T: Eq>(_ x: T, _ y: T) -> bool {
+    x.eq(y)
+}

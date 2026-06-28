@@ -15,7 +15,7 @@ use super::{
     canonical::Canonicalized,
     fold::{TyFoldable, TyFolder},
     trait_def::{TraitInstId, impls_for_ty_with_constraints},
-    trait_resolution::{PredicateListId, TraitSolveCx},
+    trait_resolution::{PredicateListId, ProvisionEnv},
     ty_def::{AssocTy, TyData, TyId, TyParam},
     visitor::{TyVisitable, TyVisitor},
 };
@@ -242,7 +242,7 @@ impl<'db> TypeNormalizer<'db> {
 
         let mut dedup: IndexMap<TyId<'db>, ()> = IndexMap::new();
 
-        let solve_cx = TraitSolveCx::new(self.db, self.scope).with_assumptions(self.assumptions);
+        let solve_cx = ProvisionEnv::for_scope(self.scope, self.assumptions).solve_cx(self.db);
         let (primary, secondary) = solve_cx.search_ingots_for_trait_inst(self.db, trait_inst);
         let search_ingots = [Some(primary), secondary];
 

@@ -1,0 +1,31 @@
+// DERIVE-KIND FORM 2 — provider-as-Self, goal as a PARAM. **CHOSEN target (Micah, 2026-06-18).**
+// Kind: `Derive : * -> (* -> Constraint) -> Constraint`  (Self = the provider `*`; P = the
+// derived trait `* -> Constraint`).
+//
+// TRADEOFF: multi-provider ✓ — the provider is its own type, so many providers can derive one
+// trait (`using StableEq` / named alternates). The trait DECLARATION kind-checks
+// (`trait Derive_<P: * -> Constraint> { .. Evidence<P<T>> .. }` is clean below — P<T> is
+// Constraint-kinded, fits `Evidence : Constraint -> *`). The former gap was the impl head: passing
+// the bare trait `Eq` as a generic ARGUMENT (`Derive_<Eq>`) once errored `2-0006` "found trait
+// `Eq`", because a bare trait constructor (`* -> Constraint`, unsaturated) was not a first-class
+// value. THAT HAS LANDED (trait-constructor-as-value, `TyData::TraitCtor`): the bare trait now
+// reduces in argument position, so Form 2 compiles clean — this is the working CHOSEN form (the
+// `.snap` is `EXIT CODE: 0`).
+//
+// (`Derive_` (trailing `_`) names the demonstration trait, kept distinct from the real `Derive`
+//  — which today is a string-marker, not a real trait (retiring it is #7). The real provider body
+//  — `uses (reflect, builder) { quote { .. } }` — is #7/TD5-gated and omitted so the fixture
+//  isolates the kind/value form, not the executor.)
+use core::derive::Evidence
+use core::ops::Eq
+
+trait Derive_<P: * -> Constraint> {
+    const fn derive<T>(ev: own Evidence<P<T>>) -> Evidence<P<T>>
+}
+
+struct StableEqK {}
+
+// GAP: `Derive_<Eq>` — `Eq` is a bare `* -> Constraint` trait constructor in argument position.
+impl Derive_<Eq> for StableEqK {
+    const fn derive<T>(ev: own Evidence<Eq<T>>) -> Evidence<Eq<T>> { ev }
+}

@@ -187,7 +187,14 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
         // structure as a normal type. Const expressions inside types are validated via
         // const-ty lowering/evaluation, and walking their HIR representation as a type
         // produces spurious "expected type" diagnostics for paths like `SALT`.
-        if !ty.is_const_ty(self.db) {
+        //
+        // Likewise, a saturated concrete trait application (`Eq<T>`) lowers to a
+        // `Constraint`-kinded `ConstraintTerm` rather than a type: walking its HIR
+        // path as a type would emit a spurious `2-0006` "expected type, found trait"
+        // for the trait head. Whether the constraint term FITS its use site is a kind
+        // question, decided on the enclosing application above (a `*` position yields a
+        // KindMismatch reported there; a `Constraint` position fits).
+        if !ty.is_const_ty(self.db) && !ty.is_constraint_term(self.db) {
             walk_type(self, ctxt, hir_ty);
         }
         let did_fild_child_err = self.diags.len() > before;

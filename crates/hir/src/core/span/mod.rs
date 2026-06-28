@@ -5,8 +5,8 @@ use salsa::Update;
 use crate::{
     HirDb, SpannedHirDb,
     core::hir_def::{
-        Body, Const, Contract, Enum, Func, Impl, ImplTrait, Mod, StaticAssert, Struct, TopLevelMod,
-        Trait, TypeAlias, Use,
+        Body, Const, Contract, DeriveDecl, DeriveProviderScope, Enum, Func, Impl, ImplTrait, Mod,
+        StaticAssert, Struct, TopLevelMod, Trait, TypeAlias, Use,
     },
     core::lower::top_mod_ast,
 };
@@ -38,11 +38,13 @@ pub mod lazy_spans {
             LazyRecordInitExprSpan, LazyUnExprSpan,
         },
         item::{
-            LazyBodySpan, LazyConstSpan, LazyContractRecvSpan, LazyContractSpan, LazyEnumSpan,
-            LazyFieldDefListSpan, LazyFieldDefSpan, LazyFuncSignatureSpan, LazyFuncSpan,
-            LazyImplSpan, LazyImplTraitSpan, LazyItemSpan, LazyModSpan, LazyRecvArmListSpan,
-            LazyRecvArmSpan, LazyStaticAssertSpan, LazyStructSpan, LazyTopModSpan, LazyTraitSpan,
-            LazyTypeAliasSpan, LazyUseSpan, LazyVariantDefListSpan, LazyVariantDefSpan,
+            LazyBodySpan, LazyConstSpan, LazyContractRecvSpan, LazyContractSpan,
+            LazyDeriveDeclSpan, LazyDeriveProviderScopeSpan, LazyEnumSpan, LazyFieldDefListSpan,
+            LazyFieldDefSpan, LazyFuncSignatureSpan, LazyFuncSpan, LazyImplSpan,
+            LazyImplTraitAliasSpan, LazyImplTraitSpan, LazyImplTraitWithSpan, LazyItemSpan,
+            LazyModSpan, LazyRecvArmListSpan, LazyRecvArmSpan, LazyStaticAssertSpan,
+            LazyStructSpan, LazyTopModSpan, LazyTraitSpan, LazyTypeAliasSpan, LazyUseSpan,
+            LazyVariantDefListSpan, LazyVariantDefSpan,
         },
         params::{
             LazyConstGenericParamSpan, LazyFuncParamListSpan, LazyFuncParamSpan,
@@ -155,6 +157,20 @@ pub fn impl_trait_ast<'db>(
     item.origin(db)
 }
 
+pub fn derive_provider_scope_ast<'db>(
+    db: &'db dyn SpannedHirDb,
+    item: DeriveProviderScope<'db>,
+) -> &'db HirOrigin<ast::DeriveProviderScope> {
+    item.origin(db)
+}
+
+pub fn derive_decl_ast<'db>(
+    db: &'db dyn SpannedHirDb,
+    item: DeriveDecl<'db>,
+) -> &'db HirOrigin<ast::DeriveDecl> {
+    item.origin(db)
+}
+
 pub fn const_ast<'db>(db: &'db dyn SpannedHirDb, item: Const<'db>) -> &'db HirOrigin<ast::Const> {
     item.origin(db)
 }
@@ -241,6 +257,8 @@ pub enum DesugaredOrigin {
     Event(EventDesugared),
     /// The HIR node is the result of desugaring a `#[error]` struct.
     Error(ErrorDesugared),
+    /// The HIR node is the result of desugaring a `#[derive(..)]` struct.
+    Derive(DeriveDesugared),
 }
 
 /// Tracks the origin of HIR nodes desugared from a `msg` block.
@@ -278,6 +296,24 @@ pub struct EventDesugared {
 pub struct ErrorDesugared {
     /// The original `struct` AST node annotated with `#[error]`.
     pub error_struct: AstPtr<ast::Struct>,
+}
+
+/// Tracks the origin of HIR nodes desugared from a `#[derive(..)]` item.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum DeriveDesugared {
+    /// The original `struct` AST node annotated with `#[derive(..)]`.
+    Struct(AstPtr<ast::Struct>),
+    /// The original `enum` AST node annotated with `#[derive(..)]`.
+    Enum(AstPtr<ast::Enum>),
+    /// The standalone `derive Trait for Type` declaration that requested the
+    /// impl. Diagnostics on decl-generated items point at the declaration,
+    /// not at the target type.
+    Decl(AstPtr<ast::DeriveDecl>),
+    /// A compiler-synthesized derive on a `#[msg]` VARIANT struct (FCO #5c):
+    /// the variant has no source `struct` AST, so provenance points at the
+    /// `msg` block and the variant index. Diagnostics on the generated impl
+    /// resolve to the variant's span.
+    MsgVariant(AstPtr<ast::Msg>, usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

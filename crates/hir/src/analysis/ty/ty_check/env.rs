@@ -9,6 +9,7 @@ use crate::{
 
 use crate::hir_def::CallableDef;
 use crate::hir_def::params::FuncParamMode;
+use common::indexmap::IndexMap;
 use cranelift_entity::{PrimaryMap, SecondaryMap};
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Update;
@@ -34,7 +35,7 @@ use crate::analysis::{
         },
         fold::{TyFoldable, TyFolder},
         provider::ProviderAddressSpace,
-        trait_def::TraitInstId,
+        trait_def::{ImplementorId, TraitInstId},
         trait_resolution::{
             PredicateListId,
             constraint::{collect_constraints, collect_func_effect_provider_constraints},
@@ -48,6 +49,13 @@ use crate::analysis::{
 use crate::core::semantic::{
     EffectEnvView, EffectRequirement, ProviderBinding, ResolvedEffectBindingInfo,
 };
+
+// `ProvisionEnv` — the SSOT read-wrapper for the body-checker `(scope,
+// assumptions)` pair — now lives beside `TraitSolveCx` (its sole construction
+// target) in `trait_resolution`. Re-exported here so the body checker keeps
+// referring to it through `ty_check::env` (`provision_env()`, `for_scope`,
+// `solve_cx`) exactly as before.
+pub(crate) use crate::analysis::ty::trait_resolution::ProvisionEnv;
 
 pub(crate) struct TyCheckEnv<'db> {
     db: &'db dyn HirAnalysisDb,
@@ -91,6 +99,22 @@ pub(crate) struct TyCheckEnv<'db> {
 
     /// Resolved Seq trait methods for for-loops, keyed by the for statement.
     for_loop_seq: SecondaryMap<StmtId, Option<ForLoopSeq<'db>>>,
+
+    /// Discharge evidence for trait obligations retired while checking this
+    /// body, in retirement order.
+    discharged_obligations: Vec<super::DischargedObligation<'db>>,
+
+    /// Discharge evidence for const-predicate obligations retired while
+    /// checking this body, in retirement order.
+    discharged_const_predicates: Vec<super::DischargedConstPredicate<'db>>,
+
+    /// FCO "slide" cascade C3b — the value `ExprId`s of `with`-bindings consumed
+    /// as scoped impl SELECTIONS (`with (<T as Trait>) { .. }`). Such a binding
+    /// names a (Trait, Type) GOAL, not a runtime value, so it contributes no
+    /// value to the body and its qualified-type-path value expr has no value-path
+    /// classification. MIR body lowering reads this to SKIP lowering those value
+    /// exprs (they only selected an impl, already recorded on the discharge).
+    scoped_selection_exprs: FxHashSet<ExprId>,
 }
 
 impl<'db> TyCheckEnv<'db> {
@@ -100,15 +124,27 @@ impl<'db> TyCheckEnv<'db> {
             scope: ScopeId<'db>,
         ) -> PredicateListId<'db> {
             match scope.parent_item(db) {
-                Some(ItemKind::Trait(trait_)) => PredicateListId::new(
-                    db,
-                    vec![crate::semantic::trait_self_predicate(db, trait_)],
-                ),
+                Some(ItemKind::Trait(trait_)) => {
+                    let self_pred =
+                        TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
+                    let mut preds = collect_constraints(db, trait_.into())
+                        .instantiate_identity()
+                        .list(db)
+                        .to_vec();
+                    preds.push(self_pred);
+                    PredicateListId::new(db, preds)
+                }
                 Some(ItemKind::ImplTrait(impl_trait)) => {
                     collect_constraints(db, impl_trait.into()).instantiate_identity()
                 }
                 Some(ItemKind::Impl(impl_)) => {
                     collect_constraints(db, impl_.into()).instantiate_identity()
+                }
+                Some(ItemKind::Struct(struct_)) => {
+                    collect_constraints(db, struct_.into()).instantiate_identity()
+                }
+                Some(ItemKind::Enum(enum_)) => {
+                    collect_constraints(db, enum_.into()).instantiate_identity()
                 }
                 _ => PredicateListId::empty_list(db),
             }
@@ -195,6 +231,9 @@ impl<'db> TyCheckEnv<'db> {
             pattern_status: SecondaryMap::with_default(PatternAnalysisStatus::Invalid),
             call_effect_args: SecondaryMap::new(),
             for_loop_seq: SecondaryMap::new(),
+            discharged_obligations: Vec::new(),
+            discharged_const_predicates: Vec::new(),
+            scoped_selection_exprs: FxHashSet::default(),
         };
 
         env.enter_scope(body.expr(db));
@@ -565,6 +604,12 @@ impl<'db> TyCheckEnv<'db> {
         self.assumptions
     }
 
+    /// The SSOT provision environment for the current scope: the
+    /// `(scope, assumptions)` pair body-checker provision queries are built from.
+    pub(crate) fn provision_env(&self) -> ProvisionEnv<'db> {
+        ProvisionEnv::for_scope(self.scope(), self.assumptions())
+    }
+
     pub(crate) fn base_assumptions(&self) -> PredicateListId<'db> {
         self.base_assumptions
     }
@@ -679,6 +724,30 @@ impl<'db> TyCheckEnv<'db> {
 
     pub(crate) fn effect_env(&self) -> &keyed_effect_env::EffectEnv<'db> {
         &self.effect_env
+    }
+
+    /// Captures the innermost-first snapshot of the in-scope `Evidence`-typed
+    /// scoped provisions for a trait obligation raised at the current point in
+    /// the body walk (FCO "slide" step 3 / THE PUSH, increment 1a).
+    ///
+    /// Of every live provision (across all `with` / `uses` frames), only those
+    /// whose type is a saturated `core::derive::Evidence<G>` — recognized by
+    /// RESOLVED identity, never the bare spelling — are kept; the rest (ordinary
+    /// effect providers) are irrelevant to obligation discharge and dropped here.
+    /// The result is stored on the [`TraitObligation`] so the processor can
+    /// consult it after the effect frames have been popped.
+    ///
+    /// TODAY THIS ALWAYS RETURNS EMPTY: nothing can place an `Evidence` value
+    /// into a `with` yet (it is unforgeable — increment 1b), so no live provision
+    /// is `Evidence`-typed and the snapshot is always `[]`.
+    pub(super) fn snapshot_evidence_provisions(&self) -> Vec<ProvidedEffect<'db>> {
+        self.effect_env
+            .snapshot_provisions()
+            .into_iter()
+            .filter(|provided| {
+                super::super::provider_goal::evidence_witnessed_goal(self.db, provided.ty).is_some()
+            })
+            .collect()
     }
 
     pub(super) fn push_call_effect_arg(
@@ -810,6 +879,33 @@ impl<'db> TyCheckEnv<'db> {
         self.deferred.push(DeferredTask::Obligation(obligation))
     }
 
+    pub(super) fn register_const_predicate_obligation(
+        &mut self,
+        obligation: ConstPredicateObligation<'db>,
+    ) {
+        self.deferred.push(DeferredTask::ConstPredicate(obligation))
+    }
+
+    pub(super) fn record_discharged_obligation(
+        &mut self,
+        obligation: super::DischargedObligation<'db>,
+    ) {
+        self.discharged_obligations.push(obligation);
+    }
+
+    pub(super) fn record_discharged_const_predicate(
+        &mut self,
+        discharged: super::DischargedConstPredicate<'db>,
+    ) {
+        self.discharged_const_predicates.push(discharged);
+    }
+
+    /// FCO "slide" cascade C3b: mark a `with`-binding value expr as a scoped impl
+    /// SELECTION (not a runtime value), so MIR body lowering skips lowering it.
+    pub(super) fn record_scoped_selection_expr(&mut self, value_expr: ExprId) {
+        self.scoped_selection_exprs.insert(value_expr);
+    }
+
     pub(super) fn deferred_len(&self) -> usize {
         self.deferred.len()
     }
@@ -896,6 +992,15 @@ impl<'db> TyCheckEnv<'db> {
             .values_mut()
             .flatten()
             .for_each(|seq| *seq = seq.clone().fold_with(self.db, &mut prober));
+
+        self.discharged_obligations
+            .iter_mut()
+            .for_each(|obligation| *obligation = (*obligation).fold_with(self.db, &mut prober));
+        self.discharged_const_predicates
+            .iter_mut()
+            .for_each(|discharged| {
+                *discharged = discharged.clone().fold_with(self.db, &mut prober)
+            });
         let mut expr_place = SecondaryMap::new();
         let mut expr_places: PrimaryMap<super::ExprPlaceId, Place<'db>> = PrimaryMap::new();
         for expr in self.body.exprs(self.db).keys() {
@@ -940,6 +1045,9 @@ impl<'db> TyCheckEnv<'db> {
             pattern_store,
             pattern_status: self.pattern_status,
             for_loop_seq: self.for_loop_seq,
+            discharged_obligations: self.discharged_obligations,
+            discharged_const_predicates: self.discharged_const_predicates,
+            scoped_selection_exprs: self.scoped_selection_exprs,
             expr_place,
             expr_places,
         }
@@ -1009,6 +1117,7 @@ impl<'db> TyChecker<'db> {
                     .unwrap_or_else(|| self.env.lookup_binding_ty(&local_binding)),
                 is_mut: local_binding.is_mut(),
                 binding: Some(local_binding),
+                selected_implementor: None,
             };
 
             if let Some(req) = EffectRequirementDecl::from_effect_requirement(self.db, binding)
@@ -1067,6 +1176,7 @@ impl<'db> TyChecker<'db> {
                 .unwrap_or_else(|| self.env.lookup_binding_ty(&local_binding)),
             is_mut: binding.is_mut,
             binding: Some(local_binding),
+            selected_implementor: None,
         })
     }
 
@@ -1255,6 +1365,20 @@ pub(crate) struct ProvidedEffect<'db> {
     pub ty: TyId<'db>,
     pub is_mut: bool,
     pub binding: Option<LocalBinding<'db>>,
+    /// For an `Evidence`-typed scoped provision (FCO "slide"), the REAL global
+    /// `Hir` [`ImplementorId`] of the impl the provision names — the impl that
+    /// discharges the witnessed goal. Carried so [`discharge_from_scoped_provision`]
+    /// records a concrete [`TraitGoalSolution`] (never the old `Some(None)` floor),
+    /// making the cascade's recorded selection real end-to-end (cascade C2).
+    ///
+    /// `None` for every ordinary effect provider AND for every real provision
+    /// today: nothing mints an `Evidence` value into a `with` yet (the surface is
+    /// cascade C3), so the only producer of a `Some` here is the synthetic 1a
+    /// unit test. Excluded from no key — the snapshot never enters a salsa key.
+    ///
+    /// [`discharge_from_scoped_provision`]: super::TyChecker::discharge_from_scoped_provision
+    /// [`TraitGoalSolution`]: crate::analysis::ty::trait_resolution::TraitGoalSolution
+    pub selected_implementor: Option<ImplementorId<'db>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1522,18 +1646,39 @@ impl PendingPrimitiveOp {
 #[derive(Debug, Clone)]
 pub(super) enum DeferredTask<'db> {
     Obligation(TraitObligation<'db>),
+    ConstPredicate(ConstPredicateObligation<'db>),
     Method(PendingMethod<'db>),
     PrimitiveOp(PendingPrimitiveOp),
 }
 
+/// Where a trait obligation processed during type checking was raised.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum TraitObligationOrigin<'db> {
+pub enum TraitObligationOrigin<'db> {
+    /// The obligation was raised by a constraint on a callable at a call site.
     CallConstraint {
+        /// The call expression whose callable carries the constraint.
         call_expr: ExprId,
+        /// The callable whose declaration states the constraint.
         callable_def: CallableDef<'db>,
+        /// Index of the constraint in the callable's instantiated constraint
+        /// list.
         constraint_idx: usize,
     },
+    /// The obligation re-confirms an ambiguous trait method selection once
+    /// inference has progressed; it is not keyed to a specific constraint.
     GenericConfirmation,
+    /// The obligation confirms a CONCRETE trait-method selection at a direct
+    /// receiver call (`gate_concrete_method_selection`), keyed to the call
+    /// expression. Distinct from `CallConstraint` (which carries a constraint
+    /// index and a call-constraint diagnostic): a method-selection discharge has
+    /// no diagnostic, but IS call-keyed so its scoped-provision discharge is
+    /// readable per call (`discharged_obligations_for_call`) — the cascade C3d
+    /// link that lets a direct receiver call consume a recorded scope selection
+    /// at MIR (`const_ref.rs::scoped_provision_implementor`).
+    MethodSelection {
+        /// The method-call expression whose concrete selection this confirms.
+        call_expr: ExprId,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -1541,6 +1686,182 @@ pub(super) struct TraitObligation<'db> {
     pub goal: TraitInstId<'db>,
     pub origin: TraitObligationOrigin<'db>,
     pub span: DynLazySpan<'db>,
+    /// An innermost-first snapshot of the `Evidence`-typed scoped provisions in
+    /// scope at the site where this obligation was raised (FCO "slide" step 3 /
+    /// THE PUSH, increment 1a). Trait obligations are resolved LAZILY — after the
+    /// whole body walk, by which point every `with` / `uses` effect frame has
+    /// been popped — so the in-scope provisions must be carried onto the
+    /// obligation here, at enqueue time, to be consulted at processing time.
+    ///
+    /// Captured from the live effect env (via
+    /// [`snapshot_evidence_provisions`](TyCheckEnv::snapshot_evidence_provisions))
+    /// at each enqueue site. TODAY THIS IS ALWAYS EMPTY: there is no surface to
+    /// put an `Evidence` value into a `with` yet (`Evidence` is unforgeable —
+    /// that is increment 1b), so the discharge-from-provision path never fires on
+    /// real code and existing behavior is byte-identical.
+    pub scoped_provisions: Vec<ProvidedEffect<'db>>,
+}
+
+/// Where a const-predicate obligation processed during type checking was
+/// raised.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConstPredicateObligationOrigin<'db> {
+    /// Raised by a `where`-clause const predicate on a callable at a call site.
+    CallConstraint {
+        /// The call expression whose callee carries the predicate.
+        call_expr: ExprId,
+        /// The callee whose declaration states the predicate.
+        callable_def: CallableDef<'db>,
+        /// Index of the predicate in the callee's `const_predicates` list.
+        predicate_idx: usize,
+    },
+}
+
+/// A `where`-clause const predicate that must be discharged at the obligation
+/// level (by CTFE under a call's type substitution), never inside the trait
+/// solver. Const predicates ride the same deferred queue as trait obligations.
+#[derive(Debug, Clone)]
+pub(super) struct ConstPredicateObligation<'db> {
+    /// The predicate body — an anonymous `bool` body on the callee's where
+    /// clause (e.g. `B::WORD_BITS == 256`).
+    pub predicate: Body<'db>,
+    /// The callee's type arguments at this call, against which the predicate
+    /// is evaluated (`B := Evm`).
+    pub generic_args: Vec<TyId<'db>>,
+    pub origin: ConstPredicateObligationOrigin<'db>,
+    pub span: DynLazySpan<'db>,
 }
 
 impl<'db> TyCheckEnv<'db> {}
+
+#[cfg(test)]
+mod tests {
+    use super::ProvisionEnv;
+    use crate::{
+        analysis::ty::trait_resolution::{TraitSolveCx, constraint::collect_func_def_constraints},
+        hir_def::Func,
+        test_db::HirAnalysisTestDb,
+    };
+
+    /// SSOT guard for rung 3.0: building a solver context through
+    /// [`ProvisionEnv::solve_cx`] must be byte-identical to the inline
+    /// `TraitSolveCx::new(db, scope).with_assumptions(assumptions)` it replaced.
+    ///
+    /// A source-scan guard ("no inline `TraitSolveCx::new` in the body checker")
+    /// is *not* used here: two legitimate `TraitSolveCx::new` sites remain in
+    /// `ty_check/mod.rs` that are NOT the body-checker provision env (the
+    /// contract-root effect check keys off `contract.scope()`, and the
+    /// finalizer keys off `self.body.body.scope()` with no `env` access). A
+    /// blanket scan could not distinguish those from the migrated hot site
+    /// without a fragile allow-list, so the plan's accepted fallback — a focused
+    /// equality unit test — is used instead.
+    #[test]
+    fn provision_env_solve_cx_matches_hand_built() {
+        fn check<'db>(db: &'db HirAnalysisTestDb, func: Func<'db>) {
+            let scope = func.scope();
+            let assumptions =
+                collect_func_def_constraints(db, func.into(), true).instantiate_identity();
+
+            // Hand-built, exactly as the migrated call site used to construct it.
+            let hand_built = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+
+            // SSOT path: through the ProvisionEnv wrapper.
+            let provision_env = ProvisionEnv::for_scope(scope, assumptions);
+            let via_wrapper = provision_env.solve_cx(db);
+
+            assert_eq!(
+                hand_built, via_wrapper,
+                "ProvisionEnv::solve_cx diverged from the hand-built TraitSolveCx",
+            );
+            assert_eq!(provision_env.scope(), scope);
+            assert_eq!(provision_env.assumptions(), assumptions);
+        }
+
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "provision_env_solve_cx_matches_hand_built.fe".into(),
+            r#"
+trait A {}
+
+fn with_a<T: A>() -> bool {
+    true
+}
+
+fn without_a<T>() -> bool {
+    true
+}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+
+        // Exercise both a func with non-empty assumptions (`T: A`) and one with
+        // empty assumptions, so the assumptions plumbing is covered in both cases.
+        for func in top_mod.all_funcs(&db).iter().copied() {
+            check(&db, func);
+        }
+    }
+
+    /// SSOT guard for rung 3.4a: the effect-verify leg
+    /// (`trait_effect_goal_satisfiability_in_scope`) now routes its solver-cx
+    /// construction through [`ProvisionEnv::for_scope`] + [`ProvisionEnv::solve_cx`]
+    /// instead of hand-assembling `TraitSolveCx::new(db, scope).with_assumptions(..)`.
+    /// Unlike the body's `provision_env()`, this leg verifies a scope-enumerated
+    /// candidate against an *arbitrary* `(scope, assumptions)` pair supplied by the
+    /// caller, so the guard covers the explicit-pair constructor: the routed path
+    /// must produce a `TraitSolveCx` byte-identical to the inline construction it
+    /// replaced, for that site's exact inputs.
+    ///
+    /// A source-scan guard is unsuitable for the same reason as rung 3.0 (other
+    /// legitimate `TraitSolveCx::new` sites exist), so the focused equality test
+    /// is used.
+    #[test]
+    fn provision_env_for_scope_matches_hand_built_verify_leg() {
+        fn check<'db>(db: &'db HirAnalysisTestDb, func: Func<'db>) {
+            // The verify leg receives an explicit `(scope, assumptions)` pair (the
+            // effect scope a candidate provider is being verified in), not
+            // necessarily the body's current provision env. Mirror that here.
+            let scope = func.scope();
+            let assumptions =
+                collect_func_def_constraints(db, func.into(), true).instantiate_identity();
+
+            // Hand-built, exactly as `trait_effect_goal_satisfiability_in_scope`
+            // constructed it inline before rung 3.4a.
+            let hand_built = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+
+            // Routed SSOT path: the explicit-pair `ProvisionEnv` constructor.
+            let provision_env = ProvisionEnv::for_scope(scope, assumptions);
+            let via_wrapper = provision_env.solve_cx(db);
+
+            assert_eq!(
+                hand_built, via_wrapper,
+                "ProvisionEnv::for_scope(..).solve_cx diverged from the verify leg's \
+                 hand-built TraitSolveCx",
+            );
+            assert_eq!(provision_env.scope(), scope);
+            assert_eq!(provision_env.assumptions(), assumptions);
+        }
+
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "provision_env_for_scope_matches_hand_built_verify_leg.fe".into(),
+            r#"
+trait A {}
+
+fn with_a<T: A>() -> bool {
+    true
+}
+
+fn without_a<T>() -> bool {
+    true
+}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+
+        for func in top_mod.all_funcs(&db).iter().copied() {
+            check(&db, func);
+        }
+    }
+}

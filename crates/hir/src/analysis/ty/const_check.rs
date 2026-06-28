@@ -1,7 +1,7 @@
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::ty::diagnostics::{BodyDiag, FuncBodyDiag};
 use crate::analysis::ty::trait_def::resolve_trait_method_instance;
-use crate::analysis::ty::trait_resolution::TraitSolveCx;
+use crate::analysis::ty::trait_resolution::ProvisionEnv;
 use crate::analysis::ty::ty_check::{Callable, TypedBody};
 use crate::hir_def::{
     Body, CallableDef, Cond, CondId, Expr, ExprId, Func, Partial, Pat, Stmt, StmtId,
@@ -70,15 +70,15 @@ impl<'db> ConstFnChecker<'db, '_> {
         };
         if let Some(inst) = callable.trait_inst()
             && let Some(name) = func.name(self.db).to_opt()
-            && let Some((impl_func, _)) = resolve_trait_method_instance(
+            && let Some(resolved) = resolve_trait_method_instance(
                 self.db,
-                TraitSolveCx::new(self.db, self.body.scope())
-                    .with_assumptions(self.typed_body.assumptions()),
+                ProvisionEnv::for_scope(self.body.scope(), self.typed_body.assumptions())
+                    .solve_cx(self.db),
                 inst,
                 name,
             )
         {
-            return Some(impl_func);
+            return Some(resolved.func);
         }
         Some(func)
     }
@@ -143,6 +143,9 @@ impl<'db> ConstFnChecker<'db, '_> {
                 self.check_let_pat(*lhs);
                 self.check_let_pat(*rhs);
             }
+            // Splice hole pats only occur inside quote bodies, which this
+            // pass never enters (see the quote arms in `check_expr`).
+            Pat::QuoteHole(..) => {}
         }
     }
 
@@ -217,6 +220,11 @@ impl<'db> ConstFnChecker<'db, '_> {
             Expr::Tuple(elems) | Expr::Array(elems) => {
                 elems.iter().for_each(|elem| self.check_expr(*elem));
             }
+
+            // Quotes outside derive provider bodies are rejected by the
+            // type checker (`QuoteOutsideProvider`); provider bodies are
+            // exempt from this pass entirely.
+            Expr::Quote { .. } | Expr::QuoteHole(..) | Expr::QuoteFieldHole(..) => {}
         }
     }
 
@@ -256,6 +264,9 @@ impl<'db> ConstFnChecker<'db, '_> {
                 self.check_match_pat(*lhs);
                 self.check_match_pat(*rhs);
             }
+            // Splice hole pats only occur inside quote bodies, which this
+            // pass never enters (see the quote arms in `check_expr`).
+            Pat::QuoteHole(..) => {}
         }
     }
 }

@@ -7,6 +7,19 @@ fn multi_bounded<T,U>(x: T, y: U) where T:Clone,U:Copy {}
 // Function with complex bounds
 fn complex_bounds<T>(x: T) where T:Clone+Copy+Default {}
 
+// Function with a bare const predicate
+fn const_bounded<T>(x: T) where T:Sized,T::SIZE>=50 {}
+
+// Function with mixed bound and const predicates, brace form last
+fn mixed_bounded<T>(x: T) where T:Sized+Named,T::SIZE<500,{ T::NAME_LEN<100 }
+{}
+
+// Function with a bare-path predicate followed by the body (no record-init)
+fn flag_gated() where FLAG {}
+
+// Struct with a const predicate
+struct ConstBoundedStruct<T> where T:Sized,T::SIZE<=32 { value: T }
+
 // Struct with where clause
 struct BoundedStruct<T> where T:Clone { value: T }
 

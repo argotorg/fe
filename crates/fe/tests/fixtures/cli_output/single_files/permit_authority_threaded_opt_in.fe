@@ -1,0 +1,26 @@
+// FCO T3 inc5 (opt-in authority path): for a single-impl (one-of-a-kind) goal
+// `AbiSize<Foo>`, `impl_permit()`'s grant obligation `uses (PermitAuthority<G>)`
+// is NON-ambient (the default-allow blanket excludes `#[fixed]` goals), so it can
+// only be satisfied by a PermitAuthority threaded into a live frame. Here it is
+// threaded via the caller's own `uses` clause; the effect walk matches that frame
+// BEFORE the ambient fallback, so the mint resolves.
+//
+// This is the pragmatic opt-in authority path: whoever HOLDS PermitAuthority<G>
+// (threaded from above, ultimately the root mint in a later inc) may mint the one
+// permit. The companion `permit_authority_default_allow.fe` pins the NEGATIVE: the
+// same mint WITHOUT the grant reports `8-0036`.
+//
+// PASS CRITERIA: clean compile (no `8-0036`); the threaded PermitAuthority
+// discharges the single-impl mint's grant.
+
+use core::abi::AbiSize
+use core::derive::ImplPermit
+use core::derive::PermitAuthority
+
+struct Foo {
+    x: u256,
+}
+
+fn establish() uses (g: PermitAuthority<AbiSize<Foo>>) {
+    let p: ImplPermit<AbiSize<Foo>> = impl_permit()
+}

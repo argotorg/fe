@@ -1,0 +1,42 @@
+// FCO Level 1 (W-D) anti-vacuous guard: the `Evidence` / `ImplBuilder` GOAL
+// POSITIONS are recognized by RESOLVED identity, not by the bare names
+// `Evidence` / `ImplBuilder`.
+//
+// The capability/witness types are imported UNDER ALIASES (`Evidence as W`,
+// `ImplBuilder as B`). The alias heads `W` / `B` do not spell `Evidence` /
+// `ImplBuilder`, so a head-identifier STRING match could not recognize the goal
+// positions — recognition must come from the resolved identity (`W` / `B`
+// resolve to `core::derive::Evidence` / `::ImplBuilder`). The inner goal is a
+// nonexistent trait (`Bogus<T>`); because the positions ARE recognized by
+// identity, the goal is de-exempted and lowered, and the unresolved-trait
+// diagnostic fires on BOTH the witness and the builder slot — exactly as it does
+// for the un-aliased `Evidence<Bogus<T>>` in `provider_signature_missing_trait`.
+//
+// If recognition fell back to the bare names, the aliased positions would go
+// unrecognized, the goal would stay decoration, and NO diagnostic would fire —
+// so the presence of these two errors is the anti-vacuous proof that identity
+// (not the name) is what fires.
+
+use core::derive::Derive
+use core::derive::Evidence as W
+use core::derive::ImplBuilder as B
+use core::derive::Reflect
+
+trait Real {
+    fn r(self) -> bool
+}
+
+impl Derive<Real> for AliasedGoal {
+    const fn derive<T>(ev: own W<Bogus<T>>) -> W<Bogus<T>>
+        uses (
+            reflect: Reflect<T>,
+            builder: mut B<Bogus<T>>,
+        )
+    {
+        builder.emit_method("r", builder.bool(true))
+        builder.finish()
+        ev
+    }
+}
+
+struct AliasedGoal {}

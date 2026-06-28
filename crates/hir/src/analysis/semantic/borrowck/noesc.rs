@@ -77,13 +77,7 @@ impl<'db> NoEsc<'db> {
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
         match &stmt.kind {
             NSStmtKind::Assign {
-                expr:
-                    NExpr::Call {
-                        callee,
-                        args,
-                        effect_args: _,
-                        ..
-                    },
+                expr: NExpr::Call { callee, args, .. },
                 ..
             } => self.check_call_args(state, stmt.origin, *callee, args),
             NSStmtKind::Store { dst, src } => self.check_store(state, stmt.origin, dst, *src),

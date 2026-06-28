@@ -1,0 +1,33 @@
+// FCO T3 inc2 — the optional trailing `with <path>` permit clause on a trait
+// impl parses and lowers (parse + HIR storage only; the permit path is stored
+// UNRESOLVED: no name resolution, no gate, no selection yet). This fixture
+// proves BOTH forms compile clean (EXIT 0):
+//   - `impl TheTrait for TheType with a { .. }`  (permitted)
+//   - `impl OtherTrait for TheType { .. }`        (plain, unaffected)
+// The permit path `a` need not be defined at this increment: it is recognized
+// and stored as written, never resolved, so behavior is byte-identical to the
+// plain form.
+
+trait TheTrait {
+    fn the(self) -> u32
+}
+
+trait OtherTrait {
+    fn other(self) -> u32
+}
+
+struct TheType {
+    x: u32,
+}
+
+impl TheTrait for TheType with a {
+    fn the(self) -> u32 {
+        return self.x
+    }
+}
+
+impl OtherTrait for TheType {
+    fn other(self) -> u32 {
+        return self.x
+    }
+}

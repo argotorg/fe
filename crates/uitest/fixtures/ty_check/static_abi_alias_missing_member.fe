@@ -1,0 +1,62 @@
+// BRIDGE BURN-DOWN #6 — constraint alias bundling two REAL ABI obligations,
+// NEGATIVE (anti-vacuous) case.
+//
+// Companion to crates/fe/tests/fixtures/fe_test/static_abi_alias.fe (the
+// positive, executing case). This fixture pins the DIAGNOSTIC QUALITY of the
+// safe constraint-alias pattern when the bundled members are real ABI bounds:
+// when a type is missing exactly ONE member of the bundle, the failure must name
+// the MISSING MEMBER obligation by name (`AbiShape`), NOT leak an alias-internal
+// / blanket-impl error.
+//
+// The alias bundles `core::abi::AbiSize` (the REAL core ABI trait) + a
+// fixture-local EVM `AbiShape` layout trait, exactly as the positive fixture.
+
+use core::abi::AbiSize
+
+// Member trait 2 (member 1 is the real `core::abi::AbiSize`).
+trait AbiShape {
+    const HEAD_WORDS: u256
+    const IS_DYNAMIC: bool
+}
+
+// The constraint alias: marker trait whose supertrait list is the bundle, plus
+// a blanket impl over every `T` satisfying both members.
+trait StaticAbi: AbiSize + AbiShape {}
+impl<T> StaticAbi for T where T: AbiSize + AbiShape {}
+
+// `OnlyAbiSize` implements ONE member (the real `AbiSize`) but NOT the other
+// (`AbiShape`). It is therefore NOT `StaticAbi`, because the blanket impl's
+// `where T: AbiSize + AbiShape` clause is unsatisfiable for it.
+struct OnlyAbiSize {}
+impl AbiSize for OnlyAbiSize {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+
+// `Both` satisfies the whole bundle — included so the fixture is anti-vacuous:
+// the only error must come from `OnlyAbiSize`, proving the alias admits a
+// satisfying type and rejects only the one missing a member.
+struct Both {}
+impl AbiSize for Both {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+impl AbiShape for Both {
+    const HEAD_WORDS: u256 = 1
+    const IS_DYNAMIC: bool = false
+}
+
+fn needs_static_abi<T>() where T: StaticAbi {
+}
+
+fn ok_caller() {
+    // `Both` satisfies every member, so `Both: StaticAbi` holds: clean.
+    needs_static_abi<Both>()
+}
+
+fn bad_caller() {
+    // `OnlyAbiSize` is missing the `AbiShape` member, so `OnlyAbiSize: StaticAbi`
+    // fails. The diagnostic should point at the missing MEMBER obligation
+    // (`OnlyAbiSize: AbiShape`), not an alias-internal error.
+    needs_static_abi<OnlyAbiSize>()
+}

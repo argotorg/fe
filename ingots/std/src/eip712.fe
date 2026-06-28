@@ -1,0 +1,344 @@
+/// EIP-712 typed structured data hashing.
+///
+/// [`Eip712`] computes the `hashStruct` value defined by
+/// <https://eips.ethereum.org/EIPS/eip-712>: for a struct type
+/// `Mail { to: Address, contents: String<16> }` the encoded type is
+/// `"Mail(address to,string contents)"`, its type hash is the keccak256 of
+/// that string, and `hash712` is
+/// `keccak256(typeHash ‖ enc(to) ‖ enc(contents))` where atomic values are
+/// padded to 32 bytes and dynamic values (strings) are hashed.
+///
+/// This module provides the trait, the [`Hash712`] byte accumulator, the
+/// hand-written impls for atomic types, and the `StableEip712` derive
+/// provider that generates struct impls:
+///
+/// ```fe
+/// use std::eip712::Eip712
+///
+/// struct Mail {
+///     to: Address,
+///     contents: String<16>,
+/// }
+///
+/// derive Eip712 for Mail using StableEip712
+/// ```
+///
+/// Design notes:
+///
+/// * The EIP-712 *encoded type* of a struct exceeds the inline string
+///   capacity (`String<N>` holds at most 31 bytes), so it is never stored
+///   as one string. Each type contributes its `NAME` ("uint256", "Mail")
+///   and appends its member descriptor through `append_members`; the
+///   descriptor is assembled in a [`Hash712`] accumulator and hashed at
+///   runtime (the v1 encoding strategy: correct and simple; computing the
+///   type hash at compile time is a future, gas-only optimization).
+/// * Scope: referenced struct descriptors are appended once per distinct
+///   field type (syntactically distinct spelling) in field order, one
+///   nesting level deep. This matches the EIP-712 sorted/deduplicated
+///   encoding whenever a struct references at most one other struct type,
+///   which covers the canonical `Mail`/`Person` example. Deep transitive
+///   closure and name-sorting are future work.
+
+use core::derive::Derive
+use core::derive::Evidence
+use core::derive::ImplBuilder
+use core::derive::Reflect
+use super::evm::Address
+use super::evm::assert
+use super::evm::mem
+use super::evm::ops
+
+/// Accumulator capacity in bytes. Encoded types and field-hash sequences
+/// beyond this size revert; generous for the supported one-level scope.
+const HASH712_CAP: u256 = 1024
+
+/// A fixed-capacity keccak input accumulator.
+///
+/// Each accumulator owns a fresh `HASH712_CAP`-byte memory buffer, so
+/// nested accumulators (a struct hashing its string fields, say) never
+/// interleave writes. `str` appends only a string's effective (unpadded)
+/// bytes, which is what EIP-712 type descriptors and dynamic values hash.
+pub struct Hash712 {
+    base: u256,
+    len: u256,
+}
+
+impl Hash712 {
+    pub fn new() -> Hash712 {
+        Hash712 { base: mem::alloc(HASH712_CAP), len: 0 }
+    }
+
+    /// Appends the effective (unpadded) bytes of a descriptor piece. The
+    /// concrete capacity lets bare string literals type without an
+    /// annotation (the width of a literal argument to a const-generic
+    /// parameter is not inferable).
+    pub fn piece(self, _ s: String<31>) -> Hash712 {
+        self.str(s)
+    }
+
+    /// Appends the effective (unpadded) bytes of `s`.
+    pub fn str<const N: usize>(self, _ s: String<N>) -> Hash712 {
+        let n: usize = s.len()
+        if n == 0 {
+            return self
+        }
+        // The 32-byte store covers the buffer tail with the zeros shifted
+        // in below; the bound keeps the cover write inside the buffer.
+        assert(self.len + 32 <= HASH712_CAP)
+        ops::mstore(addr: self.base + self.len, value: (s as u256) << (((32 - n) * 8) as u256))
+        Hash712 { base: self.base, len: self.len + (n as u256) }
+    }
+
+    /// Appends one 32-byte word.
+    pub fn word(self, _ w: u256) -> Hash712 {
+        assert(self.len + 32 <= HASH712_CAP)
+        ops::mstore(addr: self.base + self.len, value: w)
+        Hash712 { base: self.base, len: self.len + 32 }
+    }
+
+    /// keccak256 of the accumulated bytes.
+    pub fn finish(self) -> u256 {
+        ops::keccak256(offset: self.base, len: self.len)
+    }
+}
+
+pub trait Eip712 {
+    /// The EIP-712 type name of this type — `"uint256"`, `"address"`,
+    /// `"string"`, or the struct's name. The effective (unpadded) length
+    /// is what descriptor assembly appends.
+    const NAME: String<31>
+    /// Appends this type's member descriptor to `acc`:
+    /// `"Name(type0 name0,type1 name1,..)"` for structs, nothing for
+    /// atomic types.
+    fn append_members(_ acc: Hash712) -> Hash712
+    /// The EIP-712 value encoding, reduced to one 32-byte word: atomic
+    /// values are zero-padded, strings are keccak-hashed, and structs hash
+    /// to `keccak256(typeHash ‖ enc(field0) ‖ ..)` (`hashStruct`).
+    fn hash712(self) -> u256
+}
+
+impl Eip712 for u256 {
+    const NAME: String<31> = "uint256"
+    fn append_members(_ acc: Hash712) -> Hash712 {
+        acc
+    }
+    fn hash712(self) -> u256 {
+        self
+    }
+}
+
+impl Eip712 for u128 {
+    const NAME: String<31> = "uint128"
+    fn append_members(_ acc: Hash712) -> Hash712 {
+        acc
+    }
+    fn hash712(self) -> u256 {
+        self as u256
+    }
+}
+
+impl Eip712 for u64 {
+    const NAME: String<31> = "uint64"
+    fn append_members(_ acc: Hash712) -> Hash712 {
+        acc
+    }
+    fn hash712(self) -> u256 {
+        self as u256
+    }
+}
+
+impl Eip712 for u32 {
+    const NAME: String<31> = "uint32"
+    fn append_members(_ acc: Hash712) -> Hash712 {
+        acc
+    }
+    fn hash712(self) -> u256 {
+        self as u256
+    }
+}
+
+impl Eip712 for u16 {
+    const NAME: String<31> = "uint16"
+    fn append_members(_ acc: Hash712) -> Hash712 {
+        acc
+    }
+    fn hash712(self) -> u256 {
+        self as u256
+    }
+}
+
+impl Eip712 for u8 {
+    const NAME: String<31> = "uint8"
+    fn append_members(_ acc: Hash712) -> Hash712 {
+        acc
+    }
+    fn hash712(self) -> u256 {
+        self as u256
+    }
+}
+
+impl Eip712 for bool {
+    const NAME: String<31> = "bool"
+    fn append_members(_ acc: Hash712) -> Hash712 {
+        acc
+    }
+    fn hash712(self) -> u256 {
+        if self {
+            1
+        } else {
+            0
+        }
+    }
+}
+
+impl Eip712 for Address {
+    const NAME: String<31> = "address"
+    fn append_members(_ acc: Hash712) -> Hash712 {
+        acc
+    }
+    fn hash712(self) -> u256 {
+        self.inner
+    }
+}
+
+impl<const N: usize> Eip712 for String<N> {
+    const NAME: String<31> = "string"
+    fn append_members(_ acc: Hash712) -> Hash712 {
+        acc
+    }
+    /// keccak256 of the string's effective (unpadded) bytes, per the
+    /// EIP-712 encoding of dynamic values.
+    fn hash712(self) -> u256 {
+        Hash712::new().str(self).finish()
+    }
+}
+
+/// The canonical EIP-712 derive provider: generates the `Eip712` impl for a
+/// struct from its reflected shape. This provider is the only place that
+/// knows the SHAPE of a derived impl — the descriptor piece layout, the
+/// type-hash assembly, and the `hash712` body; the atomic encodings above
+/// are ordinary runtime trait code.
+///
+/// Generated impl, for `struct Mail { to: Address, contents: String<16> }`:
+///
+/// ```fe
+/// impl Eip712 for Mail {
+///     const NAME: String<31> = "Mail"
+///     fn append_members(_ acc: Hash712) -> Hash712 {
+///         return acc.piece("Mail(")
+///             .piece(<Address as Eip712>::NAME).piece(" to,")
+///             .piece(<String<16> as Eip712>::NAME).piece(" contents)")
+///     }
+///     fn hash712(self) -> u256 {
+///         return Hash712::new()
+///             .word(
+///                 <String<16> as Eip712>::append_members(
+///                     <Address as Eip712>::append_members(
+///                         Self::append_members(Hash712::new()),
+///                     ),
+///                 ).finish(),
+///             )
+///             .word(<Address as Eip712>::hash712(self.to))
+///             .word(<String<16> as Eip712>::hash712(self.contents))
+///             .finish()
+///     }
+/// }
+/// ```
+///
+/// The type hash chain appends each DISTINCT field type's member
+/// descriptor once, in field order, so a referenced struct type's
+/// descriptor appears once even when several fields share it (the
+/// `Mail`/`Person` case).
+struct StableEip712 {}
+
+impl Derive<Eip712> for StableEip712 {
+    const fn derive<T>(ev: own Evidence<Eip712<T>>) -> Evidence<Eip712<T>>
+        uses (
+            reflect: Reflect<T>,
+            builder: mut ImplBuilder<Eip712<T>>,
+        )
+    {
+        if reflect.is_struct() {
+            // const NAME: String<31> = "<name>"
+            builder.emit_const(
+                "NAME",
+                builder.ty<String<31>>(),
+                builder.str(reflect.target_name()),
+            )
+
+            // fn append_members(_ acc: Hash712) -> Hash712 {
+            //     acc.str("<name>(").str(<F0>::NAME).str(" f0,")
+            //        ...
+            //        .str(<FN>::NAME).str(" fN)")
+            // }
+            // Literal text pieces alternate with field-type NAME consts;
+            // `str` appends effective bytes, so the chain reproduces the
+            // descriptor verbatim.
+            let mut acc = builder.arg_ref("acc")
+            let mut text = builder.concat(reflect.target_name(), "(")
+            let mut first = true
+            for field in reflect.fields() {
+                builder.require<Eip712>(field.ty())
+                if !first {
+                    text = builder.concat(text, ",")
+                }
+                first = false
+                acc = builder.call(acc, "piece", builder.str(text))
+                acc = builder.call(acc, "piece", builder.trait_const(field.ty(), "NAME"))
+                text = builder.concat(" ", field.name())
+            }
+            text = builder.concat(text, ")")
+            acc = builder.call(acc, "piece", builder.str(text))
+            builder.emit_method("append_members", acc)
+
+            // fn hash712(self) -> u256 {
+            //     Hash712::new()
+            //         .word(<typeHash: own descriptor, then each distinct
+            //                field type's descriptor, hashed>)
+            //         .word(<F0>::hash712(self.f0))
+            //         ..
+            //         .finish()
+            // }
+            let mut desc = builder.trait_call(
+                builder.self_ty(),
+                "append_members",
+                builder.static_call(builder.ty<std::eip712::Hash712>(), "new"),
+            )
+            for field in reflect.fields() {
+                // `field` is its type's first occurrence iff the first
+                // same-typed field in declaration order is `field` itself.
+                let mut first_occurrence = true
+                let mut decided = false
+                for prior in reflect.fields() {
+                    if !decided {
+                        if builder.same_ty(prior.ty(), field.ty()) {
+                            decided = true
+                            if !builder.same_field(prior, field) {
+                                first_occurrence = false
+                            }
+                        }
+                    }
+                }
+                if first_occurrence {
+                    desc = builder.trait_call(field.ty(), "append_members", desc)
+                }
+            }
+            let mut hash = builder.static_call(builder.ty<std::eip712::Hash712>(), "new")
+            hash = builder.call(hash, "word", builder.call(desc, "finish"))
+            for field in reflect.fields() {
+                hash = builder.call(
+                    hash,
+                    "word",
+                    builder.trait_call(
+                        field.ty(),
+                        "hash712",
+                        builder.field_get(builder.self_ref(), field),
+                    ),
+                )
+            }
+            builder.emit_method("hash712", builder.call(hash, "finish"))
+        }
+        builder.finish()
+        ev
+    }
+}

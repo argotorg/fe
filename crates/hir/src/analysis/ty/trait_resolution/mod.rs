@@ -1,21 +1,25 @@
 use super::{
+    binder::Binder,
     canonical::{Canonical, Canonicalized, Solution},
     const_expr::ConstExpr,
     const_ty::{ConstTyData, EvaluatedConstTy},
     fold::{AssocTySubst, TyFoldable},
-    trait_def::{ImplementorId, TraitInstId},
+    trait_def::{ImplementorId, ImplementorOrigin, TraitInstId, impls_for_trait_in_ingots},
     ty_def::{TyData, TyFlags, TyId},
 };
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
+        diagnostics::{TraitConstraintDiag, TyDiagCollection},
         trait_resolution::{constraint::ty_constraints, proof_forest::ProofForest},
+        ty_check::ty_const_predicate_violation,
         unify::UnificationTable,
     },
 };
 use crate::{
     Ingot,
-    hir_def::{HirIngot, scope_graph::ScopeId},
+    hir_def::{Body, HirIngot, scope_graph::ScopeId},
+    span::DynLazySpan,
 };
 use common::indexmap::IndexSet;
 use constraint::collect_constraints;
@@ -105,10 +109,110 @@ pub(crate) enum Selection<T> {
     NotFound,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+// SALSA-KEY INVARIANT (rung 3.1): `TraitSolveCx` is passed BY VALUE into the
+// `#[salsa::tracked]` fns `check_ty_wf`/`check_trait_inst_wf` (below), where its
+// `Hash`/`Eq` form part of the salsa cache key and its `Update` governs
+// revalidation. `scope` is pure carry-context — nothing in any tracked
+// computation reads it (rung 3.4 will), and it is always functionally
+// determined by `origin_ingot == scope.ingot(db)`. Two contexts that differ
+// ONLY in `scope` therefore produce identical results from every tracked fn, so
+// `scope` MUST be excluded from `PartialEq`/`Eq`/`Hash`/`Update`; otherwise
+// impl-resolution memoization would shatter across distinct scopes sharing an
+// ingot. Hence the manual impls below instead of `#[derive(...)]`.
+#[derive(Debug, Clone, Copy)]
 pub struct TraitSolveCx<'db> {
     origin_ingot: Ingot<'db>,
     assumptions: PredicateListId<'db>,
+    /// Lexical scope the query was raised in. Pure carry-context in rung 3.1 —
+    /// retained for scope-chain provision lookup (innermost-wins) in rung 3.4;
+    /// deliberately excluded from the salsa cache key (see invariant above).
+    scope: ScopeId<'db>,
+}
+
+impl<'db> PartialEq for TraitSolveCx<'db> {
+    fn eq(&self, other: &Self) -> bool {
+        // `scope` excluded — see SALSA-KEY INVARIANT above.
+        self.origin_ingot == other.origin_ingot && self.assumptions == other.assumptions
+    }
+}
+
+impl<'db> Eq for TraitSolveCx<'db> {}
+
+impl<'db> std::hash::Hash for TraitSolveCx<'db> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // `scope` excluded — must stay consistent with `PartialEq` above.
+        self.origin_ingot.hash(state);
+        self.assumptions.hash(state);
+    }
+}
+
+unsafe impl<'db> Update for TraitSolveCx<'db> {
+    unsafe fn maybe_update(old_pointer: *mut Self, new_value: Self) -> bool {
+        let old_value = unsafe { &mut *old_pointer };
+        // `scope` excluded from the change decision (consistent with `Eq`): a
+        // context differing only in `scope` is NOT a salsa change. We still
+        // refresh the stored `scope` to the latest value so the carry-context
+        // never goes stale, but report "unchanged" so downstream memoized
+        // results are not invalidated.
+        if old_value.origin_ingot == new_value.origin_ingot
+            && old_value.assumptions == new_value.assumptions
+        {
+            old_value.scope = new_value.scope;
+            false
+        } else {
+            *old_value = new_value;
+            true
+        }
+    }
+}
+
+/// SSOT read-wrapper for the `(scope, assumptions)` pair that every body-checker
+/// provision query needs. Building the solver context goes through exactly one
+/// place ([`ProvisionEnv::solve_cx`]) so the `(scope, assumptions) -> TraitSolveCx`
+/// triple is never hand-assembled at call sites.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ProvisionEnv<'db> {
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+}
+
+impl<'db> ProvisionEnv<'db> {
+    /// Build a provision environment for an explicit `(scope, assumptions)` pair.
+    ///
+    /// The body checker's *current* provision env comes from
+    /// [`TyCheckEnv::provision_env`]; legs that verify a candidate in a
+    /// *specific* effect scope (e.g. the effect-provider verify leg, which scans
+    /// a lexical scope to enumerate a provider and then verifies `ProviderTy:
+    /// Trait` against that scope's assumptions) supply their own `(scope,
+    /// assumptions)` here so solver-context construction still flows through the
+    /// single [`ProvisionEnv::solve_cx`] site rather than being hand-assembled.
+    ///
+    /// [`TyCheckEnv::provision_env`]: crate::analysis::ty::ty_check::env::TyCheckEnv::provision_env
+    pub(crate) fn for_scope(
+        scope: ScopeId<'db>,
+        assumptions: PredicateListId<'db>,
+    ) -> ProvisionEnv<'db> {
+        ProvisionEnv { scope, assumptions }
+    }
+
+    /// Build the trait-solver context for this provision environment. This is the
+    /// single construction site for a body-checker `TraitSolveCx`.
+    pub(crate) fn solve_cx(&self, db: &'db dyn HirAnalysisDb) -> TraitSolveCx<'db> {
+        TraitSolveCx::new(db, self.scope).with_assumptions(self.assumptions)
+    }
+
+    // `assumptions`/`scope` round out the SSOT read surface so rung 3.1+ can read
+    // either dimension through `ProvisionEnv` instead of `TyCheckEnv` directly.
+    // In rung 3.0 only `solve_cx` has non-test callers yet.
+    #[allow(dead_code)]
+    pub(crate) fn assumptions(&self) -> PredicateListId<'db> {
+        self.assumptions
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn scope(&self) -> ScopeId<'db> {
+        self.scope
+    }
 }
 
 impl<'db> TraitSolveCx<'db> {
@@ -116,6 +220,7 @@ impl<'db> TraitSolveCx<'db> {
         Self {
             origin_ingot: scope.ingot(db),
             assumptions: PredicateListId::empty_list(db),
+            scope,
         }
     }
 
@@ -134,6 +239,14 @@ impl<'db> TraitSolveCx<'db> {
         self.origin_ingot
     }
 
+    /// The lexical scope this solver context was raised in. Consumed in rung 3.4
+    /// for scope-chain provision lookup (innermost-wins); nothing reads it for
+    /// resolution in rung 3.1, and it is excluded from the salsa cache key.
+    #[allow(dead_code)]
+    pub(crate) fn scope(self) -> ScopeId<'db> {
+        self.scope
+    }
+
     pub(crate) fn select_impl(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -146,11 +259,238 @@ impl<'db> TraitSolveCx<'db> {
                 Selection::Unique(solution.value.implementor)
             }
             GoalSatisfiability::NeedsConfirmation(ambiguous) => {
+                // FCO "slide" cascade C3c-2 — the DEFAULT-TIER rule, consulted
+                // OUTSIDE the tracked `is_goal_satisfiable` solve (this match arm
+                // runs on the solve's *result*, so the salsa-key invariant at
+                // `mod.rs:109-164` — `scope` excluded from the tracked key — is
+                // untouched). When >1 REAL coexisting impl applies to a concrete
+                // non-canonical goal and exactly one is default-marked
+                // (CoreDerives-origin), collapse the ambiguity to that default so
+                // an unscoped call resolves deterministically (never a MIR
+                // `select_impl`→`Ambiguous`→panic). None/many marked, or any
+                // candidate carrying inference vars, leaves the ambiguity intact
+                // (a clean diagnostic upstream). With C3c-3 LIVE the demotion only
+                // admits coexistence in the cascade's default+override shape (the
+                // gate at `core/semantic/mod.rs` requires exactly one default), so
+                // this engages exactly there; for code without a coexisting pair
+                // `default_tier_selection` finds ≤1 applying candidate ⇒ `None` ⇒
+                // this falls through to `Ambiguous` (byte-identical).
+                if let Some(Selection::Unique(default)) = self.default_tier_selection(db, inst) {
+                    return Selection::Unique(default);
+                }
                 Selection::Ambiguous(ambiguous.iter().map(|s| s.value.implementor).collect())
             }
             GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => {
                 Selection::NotFound
             }
+        }
+    }
+
+    /// FCO "slide" cascade C3c-2 — the DEFAULT-TIER rule (LIVE with C3c-3).
+    ///
+    /// When >1 real coexisting `Hir` impl applies to one concrete goal and no
+    /// in-scope provision selected one (the unscoped/default tier), this picks the
+    /// DEFAULT-marked impl: the one whose provenance is a canonical core-derive
+    /// provider (see [`Self::implementor_is_default_marked`]). It is the
+    /// disambiguator consumed by [`Self::select_impl`]'s `Ambiguous` arm —
+    /// scope-free, run OUTSIDE the tracked `is_query_satisfiable` solve so the
+    /// cache-safety invariant (`trait_resolution/mod.rs:109-164`) is untouched.
+    ///
+    /// Returns:
+    /// - `None` — the rule DOES NOT ENGAGE: ≤1 coexisting impl applies to the
+    ///   goal, OR the goal still carries inference vars (the inference-ambiguity
+    ///   path). For code WITHOUT a cascade default+override pair the applying set
+    ///   is ≤1, so this is `None` and the caller falls back to today's path
+    ///   unchanged → byte-identical. Coexistence is admitted only in the cascade's
+    ///   default+override shape (the gate in `core/semantic/mod.rs` requires
+    ///   exactly one default-marked impl), so the engage branch fires there.
+    /// - `Some(Selection::Unique(impl))` — >1 applied AND exactly one is
+    ///   default-marked: select it deterministically (recorded so MIR consumes it
+    ///   via the C1 rail, never reaching `select_impl`→`LowerError`→panic at
+    ///   `classify.rs:2297`).
+    /// - `Some(Selection::Ambiguous(applying))` — >1 applied but none or >1 is
+    ///   default-marked: a CLEAN ambiguity signal (the caller emits the
+    ///   "disambiguate with `with`" diagnostic) — NEVER a panic.
+    /// - `Some(Selection::NotFound)` never occurs (the engage gate already
+    ///   requires applying candidates).
+    ///
+    /// SCOPING (the feasibility gate): this looks ONLY at the impl-table candidate
+    /// set (`impls_for_trait_in_ingots`) — how many *real coexisting impls* apply
+    /// to a concrete goal — and NEVER at a `GoalSatisfiability`. So it cannot
+    /// perturb the inference-variable ambiguity path
+    /// (`process_trait_obligation`'s `NeedsConfirmation` →
+    /// `BodyDiag::AmbiguousTraitInst`, `ty_check/mod.rs:1385`), which is fed by
+    /// inference vars, not by coexisting coherent impls. The two cases are
+    /// structurally distinct here.
+    ///
+    /// Consumed (C3c-2 LIVE) by [`Self::select_impl`]'s `Ambiguous` arm — the
+    /// single impl-selection SSOT — so an unscoped call over >1 coexisting impl
+    /// resolves deterministically to the default; and unit-tested synthetically
+    /// (`default_tier_rule_tests`). LATENT until C3c-3 demotes coherence: today
+    /// `applying.len() <= 1` ⇒ `None` ⇒ byte-identical.
+    pub(crate) fn default_tier_selection(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        inst: TraitInstId<'db>,
+    ) -> Option<Selection<ImplementorId<'db>>> {
+        // CONCRETE-GOAL GATE: the default-tier rule is for the UNSCOPED-call case
+        // (a concrete goal with >1 coexisting coherent impl). A goal still carrying
+        // inference variables belongs to the inference-ambiguity path
+        // (`NeedsConfirmation` → `AmbiguousTraitInst`), NOT here: its vars live in
+        // the CALLER's unification table, so instantiating candidates against it in
+        // our fresh table (`implementor_applies_to_goal`) would mix foreign keys
+        // (out-of-bounds in `TyVarResolver`). Leave such goals to the caller's
+        // normal path. Checked on the raw goal, before normalization touches it.
+        if crate::analysis::ty::visitor::collect_flags(db, inst).contains(TyFlags::HAS_VAR) {
+            return None;
+        }
+
+        let scope = self.normalization_scope_for_trait_inst(db, inst);
+        let inst = normalize_trait_inst_preserving_validity(db, inst, scope, self.assumptions);
+
+        // The impl-table candidate set for this goal's trait, across the same
+        // deterministic ingots the proof forest searches.
+        let (primary, secondary) = self.search_ingots_for_trait_inst(db, inst);
+        let cands = impls_for_trait_in_ingots(db, primary, secondary, Canonical::new(db, inst));
+
+        // Restrict to candidates that ACTUALLY apply to the goal (instantiate with
+        // fresh vars, normalize, unify) — mirroring the proof forest's candidate
+        // match (`proof_forest.rs:382-396`). This is the set of coexisting
+        // coherent impls for the goal.
+        let applying: Vec<ImplementorId<'db>> = cands
+            .iter()
+            .copied()
+            .filter(|&cand| {
+                Self::implementor_applies_to_goal(db, cand, inst, scope, self.assumptions)
+            })
+            .map(|cand| cand.instantiate_identity())
+            .collect();
+
+        // ENGAGE GATE: only >1 coexisting impl reaches the default-tier decision.
+        // Without a cascade default+override pair the demotion (C3c-3) still
+        // forbids a second impl, so `applying` is ≤1 and the rule no-ops here
+        // (byte-identical for non-cascade code).
+        if applying.len() <= 1 {
+            return None;
+        }
+
+        let discriminated: Vec<(ImplementorId<'db>, SelDiscriminator<'db>)> = applying
+            .into_iter()
+            .map(|implementor| (implementor, selection_discriminator(db, implementor)))
+            .collect();
+
+        Some(default_tier_decision(discriminated))
+    }
+
+    /// FCO "slide" cascade C1 SOUNDNESS BACKSTOP — whether `implementor` is a
+    /// REAL, valid impl for `goal`: a member of the same impl-table candidate set
+    /// the solver searches (`impls_for_trait_in_ingots`) that ACTUALLY APPLIES to
+    /// the (normalized) goal (`implementor_applies_to_goal`).
+    ///
+    /// This is the validity predicate the MIR C1 rail (`classify.rs`) checks
+    /// before it CONSUMES a recorded `ImplEnv::selected_implementor` as the
+    /// resolution source on its `Some` branch — the one path that otherwise trusts
+    /// a recorded implementor with no cross-check. It is NOT "recorded == default
+    /// re-resolution": a scoped override (`with (<T as Trait>)`) legitimately picks
+    /// a non-default candidate, and any such override is STILL a member of this set
+    /// (it is one of the goal's coexisting coherent impls), so this accepts every
+    /// legitimate override while rejecting a forged/mismatched record (an impl that
+    /// is not in the goal's candidate set, or does not unify with the goal/self-ty).
+    ///
+    /// Membership keys on interned `ImplementorId` identity: both the candidate set
+    /// (`cand.instantiate_identity()`) and a recorded implementor (a solver
+    /// solution, registered as `cand.instantiate_identity()` in
+    /// `proof_forest.rs::step`) are the raw, un-substituted candidate id, so a
+    /// genuinely-selected impl always compares equal here. BYTE-IDENTICAL today:
+    /// every recorded implementor is a solver solution = a candidate that applied
+    /// to the goal, so this is always `true` on valid Fe and never makes the MIR
+    /// check fire. The reuse of `implementor_applies_to_goal` (the over-approximate
+    /// apply test) keeps the predicate from ever under-counting — it can only
+    /// admit, never spuriously reject, a real applying candidate.
+    ///
+    /// `pub` (rather than `pub(crate)`) so the MIR C1 rail (`fe-mir`) can run the
+    /// backstop through the same `TraitSolveCx` it already builds for resolution,
+    /// mirroring the cross-crate `check_reresolution_determinism` entry point.
+    pub fn recorded_implementor_is_valid_candidate(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        goal: TraitInstId<'db>,
+        implementor: ImplementorId<'db>,
+    ) -> bool {
+        let scope = self.normalization_scope_for_trait_inst(db, goal);
+        let goal = normalize_trait_inst_preserving_validity(db, goal, scope, self.assumptions);
+
+        // The impl-table candidate set for this goal's trait, across the same
+        // deterministic ingots the proof forest searches.
+        let (primary, secondary) = self.search_ingots_for_trait_inst(db, goal);
+        let cands = impls_for_trait_in_ingots(db, primary, secondary, Canonical::new(db, goal));
+
+        // The recorded implementor is valid iff it is one of those candidates AND
+        // it actually applies to the goal (instantiate + normalize + unify) — the
+        // exact membership the solver would have established when it selected it.
+        cands.iter().copied().any(|cand| {
+            cand.instantiate_identity() == implementor
+                && Self::implementor_applies_to_goal(db, cand, goal, scope, self.assumptions)
+        })
+    }
+
+    /// Whether a candidate implementor applies to `goal`: instantiate it with
+    /// fresh vars, normalize its trait instance, and unify it against the
+    /// (already-normalized) goal — exactly the proof forest's candidate match
+    /// (`proof_forest.rs:382-396`), minus the constraint sub-solve (an
+    /// over-approximation that is sound for the latency gate: it can only
+    /// over-count applying candidates, never under-count, so it cannot make the
+    /// `<= 1` gate fire spuriously when >1 genuinely coexist).
+    fn implementor_applies_to_goal(
+        db: &'db dyn HirAnalysisDb,
+        cand: Binder<ImplementorId<'db>>,
+        goal: TraitInstId<'db>,
+        scope: ScopeId<'db>,
+        assumptions: PredicateListId<'db>,
+    ) -> bool {
+        let mut table = UnificationTable::new(db);
+        let gen_cand = table.instantiate_with_fresh_vars(cand);
+        let normalized_cand = normalize_trait_inst_preserving_validity(
+            db,
+            gen_cand.trait_inst(db),
+            scope,
+            assumptions,
+        );
+        table.unify(normalized_cand, goal).is_ok()
+    }
+
+    /// DEFAULT-marked recognition (precise): an implementor is default-marked iff
+    /// it is the output of a CANONICAL core-derive provider — i.e. its
+    /// [`ImplementorOrigin`] is `Hir(impl_trait)`, that impl was generated from a
+    /// derive site (`Desugared(Derive(..))`), and the provider that produced it
+    /// lives in a [`IngotKind::CoreDerives`] ingot. This is the "derive the
+    /// default" half of the cascade: a `#[derive(Eq)]`/`derive Eq for T` impl
+    /// (whose generator is the canonical `core_derives` `StableEq`) is the
+    /// DEFAULT; a hand-written `impl Eq for T` is the OVERRIDE.
+    ///
+    /// Recognition keys on the RESOLVED PROVENANCE PROVIDER's ingot
+    /// ([`derived_impl_provenance`] — the same provider re-identification the
+    /// derive selection used), never on the generated impl's own ingot (which is
+    /// the *user's* file, not `core_derives`) and never on a bare name. So:
+    /// - a hand-written impl (no `Desugared(Derive)` origin) → NOT marked;
+    /// - a derive backed by a NON-core (`using MyProvider`) provider → NOT marked
+    ///   (it is a custom default, not the canonical core one);
+    /// - a `VirtualContract` or an `Assumption` → NEVER marked.
+    ///
+    /// [`derived_impl_provenance`]: crate::core::lower::derived_impl_provenance
+    pub(crate) fn implementor_is_default_marked(
+        db: &'db dyn HirAnalysisDb,
+        implementor: ImplementorId<'db>,
+    ) -> bool {
+        match implementor.origin(db) {
+            ImplementorOrigin::Hir(impl_trait) => crate::core::lower::derived_impl_provenance(
+                db, impl_trait,
+            )
+            .is_some_and(|provenance| {
+                provenance.provider.top_mod(db).ingot(db).kind(db)
+                    == common::ingot::IngotKind::CoreDerives
+            }),
+            ImplementorOrigin::VirtualContract(_) | ImplementorOrigin::Assumption => false,
         }
     }
 
@@ -212,6 +552,103 @@ impl<'db> TraitSolveCx<'db> {
     pub(crate) fn origin_scope(self, db: &'db dyn HirAnalysisDb) -> ScopeId<'db> {
         self.origin_ingot.root_mod(db).scope()
     }
+}
+
+/// FCO T-Nway — the UNIFIED SELECTION DISCRIMINATOR for a non-canonical
+/// `(Trait, Type)` impl. The cascade's three coordinated selection sites
+/// (coherence, the unscoped default tier, scoped `with` selection) all branch on
+/// this single per-impl discriminator, GENERALIZING the old binary
+/// `implementor_is_default_marked` ({default, override}) into the N-way shape:
+///
+/// - [`SelDiscriminator::Default`] — the impl is the CoreDerives-origin derived
+///   default ([`TraitSolveCx::implementor_is_default_marked`]). At most one per
+///   goal.
+/// - [`SelDiscriminator::Alias`]`(name)` — the impl carries an `as Name` user
+///   alias (inc1, [`ImplTrait::hir_alias`]). Distinct per name; `with (Name)`
+///   selects it.
+/// - [`SelDiscriminator::Anonymous`] — a hand-written, unaliased,
+///   non-default-marked impl. At most one (the hand-written default/override).
+///
+/// EQUALITY (the coherence / selection key): `Default == Default`,
+/// `Anonymous == Anonymous`, `Alias(a) == Alias(a)`; everything else `!=`.
+/// Restricted to the no-alias case the only discriminators are `Default` /
+/// `Anonymous`, so this is byte-identical to the old `is_default_marked` binary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SelDiscriminator<'db> {
+    Default,
+    Alias(crate::hir_def::IdentId<'db>),
+    Anonymous,
+}
+
+/// Compute the [`SelDiscriminator`] for `implementor` (see the type docs).
+///
+/// `Default` takes precedence (the CoreDerives-origin default is never *also*
+/// selectable by an `as Name` alias — a derived impl carries no user alias).
+/// Otherwise, an `as Name` alias makes it `Alias(name)`; failing that it is
+/// `Anonymous`. A `VirtualContract` / `Assumption` implementor (no HIR item, no
+/// alias, not default-marked) is `Anonymous`.
+pub(crate) fn selection_discriminator<'db>(
+    db: &'db dyn HirAnalysisDb,
+    implementor: ImplementorId<'db>,
+) -> SelDiscriminator<'db> {
+    if TraitSolveCx::implementor_is_default_marked(db, implementor) {
+        return SelDiscriminator::Default;
+    }
+    if let ImplementorOrigin::Hir(impl_trait) = implementor.origin(db)
+        && let Some(crate::hir_def::Partial::Present(name)) = impl_trait.hir_alias(db)
+    {
+        return SelDiscriminator::Alias(name);
+    }
+    SelDiscriminator::Anonymous
+}
+
+/// FCO "slide" cascade C3c-2 / T-Nway — the pure DEFAULT-TIER decision over a set
+/// of ≥2 coexisting candidate implementors that all apply to one goal, each paired
+/// with its [`SelDiscriminator`]. Factored out so the decision is unit-testable
+/// synthetically without needing the impl table to physically hold >1 impl.
+///
+/// The UNSCOPED default (no selecting `with` in view) is:
+/// - the sole [`SelDiscriminator::Default`] impl if present (the derived default);
+/// - ELSE the sole [`SelDiscriminator::Anonymous`] impl (the hand-written default);
+/// - else [`Selection::Ambiguous`] over ALL candidates (a CLEAN ambiguity the
+///   caller turns into a "disambiguate with `with`" diagnostic — NEVER a panic).
+///
+/// `Alias`'d impls are NEVER the unscoped default — only `with (Name)` selects
+/// them — so they are excluded from the default candidates here (but still appear
+/// in the `Ambiguous` list, which enumerates everything that applies).
+///
+/// BYTE-IDENTICAL today: the only non-aliased shape coherence currently permits is
+/// {`Default`, `Anonymous`}, where exactly one `Default` exists → `Unique(Default)`
+/// — identical to the old "exactly one default-marked → `Unique`". The
+/// `Anonymous`-fallback is reachable only once aliases let ≥2 non-marked impls
+/// coexist (the new N-way case).
+fn default_tier_decision<'db>(
+    discriminated: Vec<(ImplementorId<'db>, SelDiscriminator<'db>)>,
+) -> Selection<ImplementorId<'db>> {
+    let with_disc = |want: fn(&SelDiscriminator<'db>) -> bool| -> Vec<ImplementorId<'db>> {
+        discriminated
+            .iter()
+            .filter_map(|&(implementor, disc)| want(&disc).then_some(implementor))
+            .collect()
+    };
+
+    let defaults = with_disc(|d| matches!(d, SelDiscriminator::Default));
+    if let [unique] = defaults.as_slice() {
+        return Selection::Unique(*unique);
+    }
+    // No clear `Default`: fall back to the sole hand-written `Anonymous` default.
+    if defaults.is_empty() {
+        let anonymous = with_disc(|d| matches!(d, SelDiscriminator::Anonymous));
+        if let [unique] = anonymous.as_slice() {
+            return Selection::Unique(*unique);
+        }
+    }
+    Selection::Ambiguous(
+        discriminated
+            .into_iter()
+            .map(|(implementor, _)| implementor)
+            .collect(),
+    )
 }
 
 pub(crate) fn normalize_trait_inst_preserving_validity<'db>(
@@ -318,6 +755,8 @@ pub(crate) fn check_ty_wf<'db>(
         | TyData::TyVar(_)
         | TyData::TyParam(_)
         | TyData::TyBase(_)
+        | TyData::ConstraintTerm(_)
+        | TyData::TraitCtor(_)
         | TyData::Never
         | TyData::Invalid(_) => {}
     }
@@ -345,6 +784,13 @@ pub(crate) fn check_ty_wf<'db>(
             let subgoal = subgoal.map(|subgoal| query.extract_subgoal(&mut table, subgoal));
             return WellFormedness::IllFormed { goal, subgoal };
         }
+    }
+
+    // A concrete ADT application is also ill-formed if its own `where`-clause
+    // const predicates are refuted under its arguments. CTFE runs here, at the
+    // well-formedness layer, never inside the proof forest.
+    if let Some(predicate) = ty_const_predicate_violation(db, ty) {
+        return WellFormedness::IllFormedConstPredicate { predicate };
     }
 
     WellFormedness::WellFormed
@@ -464,6 +910,37 @@ fn check_projected_trait_use_wf<'db>(
         }
     }
 
+    // The projection base `<X as Tr>` is well-formed when `X: Tr` holds by definition, even
+    // when the surrounding header assumptions deliberately omit the corresponding predicate
+    // (see `header_constraints_for`, which drops the `Self: Trait` self-predicate to keep
+    // projection from recursing through the in-progress trait). Two such structural cases:
+    let self_ty = inst.self_ty(db);
+
+    // 1. `<Self as ThisTrait>`: a trait's own self-parameter implements the trait by
+    //    definition, so projecting the trait's own associated types in its header
+    //    (e.g. `Self::Item` in `trait Direct: A<Self::Item>`) is always well-formed.
+    if Some(self_ty)
+        == crate::analysis::ty::ty_lower::collect_generic_params(db, inst.def(db).into())
+            .trait_self(db)
+    {
+        return WellFormedness::WellFormed;
+    }
+
+    // 2. `<T::Name as Tr>` where `type Name: Tr` is a declared bound on the associated type:
+    //    every projection of `Name` satisfies its declared bounds for any `T`, so the
+    //    projected trait use is well-formed (e.g. the `Self::Item::Assoc` second hop in
+    //    `trait RecursiveSuper: A<Self::Item::Assoc> { type Item: RecursiveSuper }`).
+    if let TyData::AssocTy(assoc) = self_ty.data(db)
+        && let Some(assoc_view) = assoc
+            .trait_
+            .def(db)
+            .assoc_types(db)
+            .find(|t| t.name(db) == Some(assoc.name))
+        && self_ty.assoc_type_bounds(db, assoc_view).any(|b| b == inst)
+    {
+        return WellFormedness::WellFormed;
+    }
+
     unsatisfied_goal(db, solve_cx, inst).unwrap_or(WellFormedness::WellFormed)
 }
 
@@ -490,11 +967,37 @@ pub(crate) enum WellFormedness<'db> {
         goal: TraitInstId<'db>,
         subgoal: Option<TraitInstId<'db>>,
     },
+    /// A concrete ADT application whose `where`-clause const predicate is
+    /// refuted under its arguments (e.g. `Bounded<4, 1>` where `MIN <= MAX`).
+    IllFormedConstPredicate {
+        predicate: Body<'db>,
+    },
 }
 
-impl WellFormedness<'_> {
+impl<'db> WellFormedness<'db> {
     fn is_wf(self) -> bool {
         matches!(self, WellFormedness::WellFormed)
+    }
+
+    /// Renders this well-formedness result as a diagnostic at `span`, or `None`
+    /// when well-formed. Every well-formedness consumer goes through this, so a
+    /// new kind of ill-formedness cannot be silently dropped at a use site.
+    pub(crate) fn into_diag(self, span: DynLazySpan<'db>) -> Option<TyDiagCollection<'db>> {
+        match self {
+            WellFormedness::WellFormed => None,
+            WellFormedness::IllFormed { goal, subgoal } => Some(
+                TraitConstraintDiag::TraitBoundNotSat {
+                    span,
+                    primary_goal: goal,
+                    unsat_subgoal: subgoal,
+                    required_by: None,
+                }
+                .into(),
+            ),
+            WellFormedness::IllFormedConstPredicate { predicate } => {
+                Some(TraitConstraintDiag::ConstPredicateNotSat { span, predicate }.into())
+            }
+        }
     }
 }
 
@@ -551,6 +1054,46 @@ pub(crate) fn check_trait_inst_wf<'db>(
 pub struct TraitGoalSolution<'db> {
     pub(crate) inst: TraitInstId<'db>,
     pub(crate) implementor: ImplementorId<'db>,
+}
+
+impl<'db> TraitGoalSolution<'db> {
+    /// The trait instance the solver committed to when it discharged the
+    /// goal, instantiated in the environment the goal was raised in.
+    pub fn inst(&self) -> TraitInstId<'db> {
+        self.inst
+    }
+
+    /// Renders the impl that discharged the goal for human consumption, e.g.
+    /// `impl Eq for Point`.
+    ///
+    /// Compiler-generated impls carry their provenance: impls expanded from
+    /// `#[derive(..)]` or a standalone `derive` declaration are suffixed with
+    /// `(derived)`, and goals proven directly from bounds in scope render as
+    /// the assumed predicate instead of an impl.
+    pub fn describe_implementor(&self, db: &'db dyn HirAnalysisDb) -> String {
+        let trait_inst = self.implementor.trait_(db);
+        let trait_str = trait_inst.pretty_print(db, false);
+        let self_ty = trait_inst.self_ty(db).pretty_print(db);
+        match self.implementor.origin(db) {
+            ImplementorOrigin::Hir(impl_trait) => {
+                let is_derived = matches!(
+                    impl_trait.origin(db),
+                    crate::span::HirOrigin::Desugared(crate::span::DesugaredOrigin::Derive(_))
+                );
+                if is_derived {
+                    format!("impl {trait_str} for {self_ty} (derived)")
+                } else {
+                    format!("impl {trait_str} for {self_ty}")
+                }
+            }
+            ImplementorOrigin::VirtualContract(_) => {
+                format!("built-in impl {trait_str} for {self_ty}")
+            }
+            ImplementorOrigin::Assumption => {
+                format!("bound {}", trait_inst.pretty_print(db, true))
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Update)]
@@ -839,5 +1382,201 @@ fn without_a<T>() -> bool {
             is_goal_query_satisfiable(&db, without_cx, &without_query),
             GoalSatisfiability::UnSat(_)
         ));
+    }
+}
+
+/// FCO "slide" cascade C3c-2 — the DEFAULT-TIER rule, exercised synthetically.
+///
+/// The rule fires ONLY in the future cascade state (>1 coexisting coherent impl
+/// for one goal), which today's coherence forbids, so it cannot be reached on
+/// real code. These tests therefore drive the two pieces directly:
+///  - [`super::default_tier_decision`]: the selection over ≥2 coexisting
+///    candidates (exactly-one-marked → `Unique`; none/two-marked → `Ambiguous`);
+///  - [`TraitSolveCx::implementor_is_default_marked`]: the canonical-provenance
+///    recognizer, proven anti-vacuously to REJECT a real `Local`-ingot `Hir` impl
+///    and an `Assumption` implementor (the only origins constructible without a
+///    `CoreDerives` ingot in the test DB).
+#[cfg(test)]
+mod default_tier_rule_tests {
+    use camino::Utf8PathBuf;
+
+    use super::{SelDiscriminator, Selection, TraitSolveCx, default_tier_decision};
+    use crate::{
+        analysis::{
+            name_resolution::{PathRes, resolve_path},
+            ty::{
+                trait_def::{ImplementorId, TraitInstId, impls_for_trait_def},
+                trait_resolution::PredicateListId,
+                ty_def::TyId,
+            },
+        },
+        hir_def::PathId,
+        test_db::HirAnalysisTestDb,
+    };
+
+    /// A `Point` struct with a single real `impl Eq for Point` — a `Local`-ingot
+    /// `Hir` implementor (NOT a canonical core-derive provider).
+    const FIXTURE: &str = r#"
+use core::ops::Eq
+
+struct Point {
+    x: u256,
+    y: u256,
+}
+
+impl Eq for Point {
+    fn eq(self, _ other: Point) -> bool {
+        self.x == other.x
+    }
+}
+"#;
+
+    fn resolve<'db>(
+        db: &'db HirAnalysisTestDb,
+        scope: crate::hir_def::scope_graph::ScopeId<'db>,
+        segments: &[&str],
+    ) -> PathRes<'db> {
+        let path = PathId::from_segments(db, segments);
+        resolve_path(db, path, scope, PredicateListId::empty_list(db), false)
+            .unwrap_or_else(|e| panic!("expected {segments:?} to resolve, got {e:?}"))
+    }
+
+    /// The sole real `impl Eq for Point` implementor, via the impl table.
+    fn sole_eq_point_impl<'db>(
+        db: &'db HirAnalysisTestDb,
+        top_mod: crate::hir_def::TopLevelMod<'db>,
+        eq_inst: TraitInstId<'db>,
+        point_ty: TyId<'db>,
+    ) -> ImplementorId<'db> {
+        impls_for_trait_def(db, top_mod.ingot(db), eq_inst.def(db))
+            .iter()
+            .map(|binder| binder.instantiate_identity())
+            .find(|implementor| implementor.self_ty(db) == point_ty)
+            .expect("expected a real impl Eq for Point")
+    }
+
+    /// The recognizer keys on RESOLVED canonical provenance, never on a name: a
+    /// real `Local`-ingot `Hir` impl is NOT default-marked, and an `Assumption`
+    /// implementor is NOT default-marked. (Anti-vacuous: if the recognizer always
+    /// returned `true`, the `none-marked → Ambiguous` decision case below could
+    /// pass for the wrong reason.)
+    #[test]
+    fn default_marked_recognizer_rejects_non_canonical_origins() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(Utf8PathBuf::from("default_tier_recognizer.fe"), FIXTURE);
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let scope = top_mod.scope();
+
+        let PathRes::Trait(eq_inst) = resolve(&db, scope, &["core", "ops", "Eq"]) else {
+            panic!("core::ops::Eq must resolve to a trait");
+        };
+        let PathRes::Ty(point_ty) = resolve(&db, scope, &["Point"]) else {
+            panic!("Point must resolve to a type");
+        };
+
+        let eq_point_impl = sole_eq_point_impl(&db, top_mod, eq_inst, point_ty);
+        assert!(
+            !TraitSolveCx::implementor_is_default_marked(&db, eq_point_impl),
+            "a Local-ingot Hir impl must NOT be default-marked",
+        );
+
+        let eq_point = TraitInstId::new_simple(&db, eq_inst.def(&db), vec![point_ty, point_ty]);
+        let assumption_impl = ImplementorId::assumption(&db, eq_point);
+        assert!(
+            !TraitSolveCx::implementor_is_default_marked(&db, assumption_impl),
+            "an Assumption implementor must NOT be default-marked",
+        );
+    }
+
+    /// The decision over ≥2 coexisting candidates: exactly-one default-marked →
+    /// that one is selected `Unique`; none or two default-marked → a CLEAN
+    /// `Ambiguous` over all candidates (never a panic). The default-marked bit is
+    /// fed explicitly here because the test DB has no `CoreDerives` ingot to mint a
+    /// genuinely canonical second impl; the recognizer itself is checked
+    /// independently above.
+    #[test]
+    fn default_tier_decision_selects_unique_marked_else_ambiguous() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(Utf8PathBuf::from("default_tier_decision.fe"), FIXTURE);
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let scope = top_mod.scope();
+
+        let PathRes::Trait(eq_inst) = resolve(&db, scope, &["core", "ops", "Eq"]) else {
+            panic!("core::ops::Eq must resolve to a trait");
+        };
+        let PathRes::Ty(point_ty) = resolve(&db, scope, &["Point"]) else {
+            panic!("Point must resolve to a type");
+        };
+
+        // Two distinct candidate implementors for the same `Eq<Point>` goal: the
+        // real impl, and a synthetic `Assumption` standing in for a second
+        // coexisting impl (the future cascade state). Distinct so `Ambiguous` can
+        // be observed to carry both.
+        let real = sole_eq_point_impl(&db, top_mod, eq_inst, point_ty);
+        let eq_point = TraitInstId::new_simple(&db, eq_inst.def(&db), vec![point_ty, point_ty]);
+        let other = ImplementorId::assumption(&db, eq_point);
+        assert_ne!(real, other, "candidates must be distinct");
+
+        use crate::hir_def::IdentId;
+        let casual = SelDiscriminator::Alias(IdentId::new(&db, "Casual".to_string()));
+        let formal = SelDiscriminator::Alias(IdentId::new(&db, "Formal".to_string()));
+
+        // Exactly one `Default` → select it (the byte-identical 2-slot case:
+        // {Default, Anonymous}).
+        match default_tier_decision(vec![
+            (real, SelDiscriminator::Default),
+            (other, SelDiscriminator::Anonymous),
+        ]) {
+            Selection::Unique(selected) => assert_eq!(
+                selected, real,
+                "the single `Default` candidate must be selected",
+            ),
+            other => panic!("expected Unique, got {other:?}"),
+        }
+
+        // No `Default`, sole `Anonymous` → the hand-written `Anonymous` is the
+        // unscoped default (the new N-way fallback: an `Anonymous` coexisting with
+        // an `Alias`, no derived default).
+        match default_tier_decision(vec![(real, SelDiscriminator::Anonymous), (other, casual)]) {
+            Selection::Unique(selected) => assert_eq!(
+                selected, real,
+                "the sole `Anonymous` is the unscoped default when no `Default` exists",
+            ),
+            other => panic!("expected Unique, got {other:?}"),
+        }
+
+        // Aliases are NEVER the unscoped default: two distinct aliases, no
+        // `Default`/`Anonymous` → clean ambiguity over BOTH (use `with (Name)`).
+        match default_tier_decision(vec![(real, casual), (other, formal)]) {
+            Selection::Ambiguous(cands) => {
+                assert_eq!(cands.len(), 2, "ambiguity must list every candidate");
+                assert!(cands.contains(&real) && cands.contains(&other));
+            }
+            other => panic!("expected Ambiguous, got {other:?}"),
+        }
+
+        // None `Default`, two `Anonymous` → clean ambiguity over BOTH candidates
+        // (no unique hand-written default).
+        match default_tier_decision(vec![
+            (real, SelDiscriminator::Anonymous),
+            (other, SelDiscriminator::Anonymous),
+        ]) {
+            Selection::Ambiguous(cands) => {
+                assert_eq!(cands.len(), 2, "ambiguity must list every candidate");
+                assert!(cands.contains(&real) && cands.contains(&other));
+            }
+            other => panic!("expected Ambiguous, got {other:?}"),
+        }
+
+        // Two `Default` → also clean ambiguity (no unique default).
+        match default_tier_decision(vec![
+            (real, SelDiscriminator::Default),
+            (other, SelDiscriminator::Default),
+        ]) {
+            Selection::Ambiguous(cands) => assert_eq!(cands.len(), 2),
+            other => panic!("expected Ambiguous, got {other:?}"),
+        }
     }
 }

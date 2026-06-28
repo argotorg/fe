@@ -1,0 +1,7 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/permit_authority_threaded_opt_in.fe
+---
+
+=== EXIT CODE: 0 ===

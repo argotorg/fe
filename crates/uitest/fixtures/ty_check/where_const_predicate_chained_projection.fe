@@ -1,0 +1,35 @@
+// FCO-M5 pair 11: simple single-segment associated-const projections are
+// supported (`needs_linear` over `B::ADDRESS_SPACE`), but a deeper chained
+// projection through an associated type (`B::Memory::ADDRESS_SPACE`) is not yet
+// supported and is rejected by name — no ICE, no silent mislowering.
+//
+// Invariant: simple projections work; deeper chained/HKT projections fail safely
+// until intentionally implemented.
+
+trait Platform1 {
+    const ADDRESS_SPACE: u256
+}
+
+struct LinearMemoryBackend {}
+
+impl Platform1 for LinearMemoryBackend {
+    const ADDRESS_SPACE: u256 = 1
+}
+
+fn needs_linear<B: Platform1>() where B::ADDRESS_SPACE == 1 {
+}
+
+fn ok() {
+    needs_linear<LinearMemoryBackend>()
+}
+
+trait MemoryKind {
+    const ADDRESS_SPACE: u256
+}
+
+trait Platform2 {
+    type Memory
+}
+
+fn needs_linear_chained<B: Platform2>() where B::Memory::ADDRESS_SPACE == 1 {
+}

@@ -1,0 +1,31 @@
+// FCO #84 T-Nway inc1 — the optional trailing `as Name` on a trait impl
+// parses and lowers (parse + HIR storage only; no name binding nor selection
+// yet). This fixture proves BOTH forms compile clean (EXIT 0):
+//   - `impl TheTrait for TheType as Alias { .. }`  (named)
+//   - `impl OtherTrait for TheType { .. }`         (unnamed, unaffected)
+// The alias is stored on the HIR `ImplTrait` item and is otherwise inert at
+// this increment, so behavior is byte-identical to the unnamed form.
+
+trait TheTrait {
+    fn the(self) -> u32
+}
+
+trait OtherTrait {
+    fn other(self) -> u32
+}
+
+struct TheType {
+    x: u32,
+}
+
+impl TheTrait for TheType as Alias {
+    fn the(self) -> u32 {
+        return self.x
+    }
+}
+
+impl OtherTrait for TheType {
+    fn other(self) -> u32 {
+        return self.x
+    }
+}

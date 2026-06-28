@@ -296,7 +296,10 @@ impl<'db> DocExtractor<'db> {
     pub fn extract_item(&self, item: ItemKind<'db>) -> Option<DocItem> {
         // Skip items that shouldn't be documented
         match item {
-            ItemKind::StaticAssert(_) | ItemKind::Use(_) | ItemKind::Body(_) => return None,
+            ItemKind::StaticAssert(_)
+            | ItemKind::Use(_)
+            | ItemKind::DeriveDecl(_)
+            | ItemKind::Body(_) => return None,
             _ => {}
         }
 
@@ -397,7 +400,11 @@ impl<'db> DocExtractor<'db> {
             ItemKind::Const(_) => Some(DocItemKind::Const),
             ItemKind::Impl(_) => Some(DocItemKind::Impl),
             ItemKind::ImplTrait(_) => Some(DocItemKind::ImplTrait),
-            ItemKind::StaticAssert(_) | ItemKind::Use(_) | ItemKind::Body(_) => None,
+            ItemKind::StaticAssert(_)
+            | ItemKind::Use(_)
+            | ItemKind::DeriveProviderScope(_)
+            | ItemKind::DeriveDecl(_)
+            | ItemKind::Body(_) => None,
         }
     }
 
@@ -1215,6 +1222,7 @@ impl<'db> DocExtractor<'db> {
                 }
                 ItemKind::StaticAssert(_)
                 | ItemKind::Use(_)
+                | ItemKind::DeriveDecl(_)
                 | ItemKind::Body(_)
                 | ItemKind::TopMod(_) => {}
                 _ => {
@@ -1281,7 +1289,10 @@ impl<'db> DocExtractor<'db> {
                 ItemKind::Mod(_) | ItemKind::TopMod(_) => {
                     children.push(self.build_module_node_for_ingot_inline(ingot, child));
                 }
-                ItemKind::StaticAssert(_) | ItemKind::Use(_) | ItemKind::Body(_) => {}
+                ItemKind::StaticAssert(_)
+                | ItemKind::Use(_)
+                | ItemKind::DeriveDecl(_)
+                | ItemKind::Body(_) => {}
                 _ => {
                     if self.should_skip_module_item(child) {
                         continue;
@@ -1345,7 +1356,10 @@ impl<'db> DocExtractor<'db> {
                 ItemKind::Mod(_) | ItemKind::TopMod(_) => {
                     children.push(self.build_module_node(child));
                 }
-                ItemKind::StaticAssert(_) | ItemKind::Use(_) | ItemKind::Body(_) => {}
+                ItemKind::StaticAssert(_)
+                | ItemKind::Use(_)
+                | ItemKind::DeriveDecl(_)
+                | ItemKind::Body(_) => {}
                 _ => {
                     if self.should_skip_module_item(child) {
                         continue;

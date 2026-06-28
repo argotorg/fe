@@ -1,0 +1,38 @@
+// FCO-M5 platform-fact demo: a backend fact (`WORD_BITS`) expressed as an
+// associated const gates a generic function through a `where` const predicate.
+//
+// The predicate becomes a first-class obligation at each call site and is
+// discharged by CTFE at the obligation level (never inside the trait solver),
+// under that call's type substitution:
+//
+//   `word_op<Evm>()`  -> Evm::WORD_BITS == 256  -> 256 == 256 -> holds, compiles
+//   `word_op<Tiny>()` -> Tiny::WORD_BITS == 256 -> 16 == 256  -> refuted, 8-0085
+//
+// Only the satisfying program proceeds. A refuted predicate is a hard error on
+// the chosen call — never a silently skipped candidate.
+
+trait Platform {
+    const WORD_BITS: u256
+}
+
+struct Evm {}
+struct Tiny {}
+
+impl Platform for Evm {
+    const WORD_BITS: u256 = 256
+}
+
+impl Platform for Tiny {
+    const WORD_BITS: u256 = 16
+}
+
+fn word_op<B: Platform>() where B::WORD_BITS == 256 {
+}
+
+fn use_evm() {
+    word_op<Evm>()
+}
+
+fn use_tiny() {
+    word_op<Tiny>()
+}

@@ -6,8 +6,8 @@ use super::{
     expr_atom::BlockExprScope,
     func::FuncDefScope,
     param::{
-        FuncParamListScope, TraitRefScope, TypeBoundListScope, parse_generic_params_opt,
-        parse_where_clause_opt,
+        FuncParamListScope, TraitRefScope, TypeBoundListScope, WhereBracePolicy,
+        parse_generic_params_opt, parse_where_clause_opt,
     },
     parse_list,
     path::PathScope,
@@ -127,6 +127,22 @@ impl super::Parse for ItemScope {
                 parser.current_token().unwrap().text()
             );
             parser.error(&error_msg);
+        }
+
+        if parser.is_ident("derive") {
+            if modifiers.is_pub || modifiers.is_unsafe {
+                parser.error("derive declarations do not support item modifiers");
+            }
+            parser.parse_cp(DeriveDeclScope::default(), checkpoint)?;
+            return Ok(());
+        }
+
+        if parser.is_ident("with") {
+            if modifiers.is_pub || modifiers.is_unsafe {
+                parser.error("derive provider selection scopes do not support item modifiers");
+            }
+            parser.parse_cp(DeriveProviderScopeScope::default(), checkpoint)?;
+            return Ok(());
         }
 
         parser.expect(
@@ -630,7 +646,7 @@ impl super::Parse for EnumScope {
         parse_generic_params_opt(parser, false)?;
 
         parser.pop_recovery_stack();
-        parse_where_clause_opt(parser)?;
+        parse_where_clause_opt(parser, WhereBracePolicy::Lookahead)?;
 
         if parser.find_and_pop(SyntaxKind::LBrace, ExpectedKind::Body(SyntaxKind::Enum))? {
             parser.parse(VariantDefListScope::default())?;
@@ -696,7 +712,7 @@ impl super::Parse for TraitScope {
         }
 
         parser.expect_and_pop_recovery_stack()?;
-        parse_where_clause_opt(parser)?;
+        parse_where_clause_opt(parser, WhereBracePolicy::Lookahead)?;
 
         if parser.find(SyntaxKind::LBrace, ExpectedKind::Body(SyntaxKind::Trait))? {
             parser.parse(TraitItemListScope::default())?;
@@ -826,8 +842,32 @@ impl super::Parse for ImplScope {
 
         parse_type(parser, None)?;
 
+        // Optional trailing `as Name` alias on a trait impl (FCO T-Nway).
+        // Only the `for`-bearing trait-impl form may be aliased; an inherent
+        // `impl Type {}` has no trait to select among. Consumed here — between
+        // the for-type and the where-clause/body — so the remaining recovery
+        // stack (`where`/`{`) is left intact. When absent, parsing is
+        // byte-identical to before.
+        if is_impl_trait && parser.current_kind() == Some(SyntaxKind::AsKw) {
+            parser.parse(ImplTraitAliasScope::default())?;
+        }
+
+        // Optional trailing `with <path>` permit clause on a trait impl (FCO
+        // T3). `with` is a contextual identifier (not a reserved keyword), so
+        // it is recognized via `is_ident` exactly like the `with` derive-
+        // provider scope. The path references a permit value; it is parsed and
+        // stored unresolved (no name resolution / no selection at this
+        // increment). Consumed in the SAME slot as `as Name`, after any alias
+        // and before the where-clause/body, so the remaining recovery stack
+        // (`where`/`{`) is left intact. Both clauses may appear in the order
+        // `as Name with a` (the `as` arm above runs first); supplying `with a`
+        // alone is the common form. When absent, parsing is byte-identical.
+        if is_impl_trait && parser.is_ident("with") {
+            parser.parse(ImplTraitWithScope::default())?;
+        }
+
         parser.expect_and_pop_recovery_stack()?;
-        parse_where_clause_opt(parser)?;
+        parse_where_clause_opt(parser, WhereBracePolicy::Lookahead)?;
 
         if parser.find_and_pop(
             SyntaxKind::LBrace,
@@ -839,6 +879,36 @@ impl super::Parse for ImplScope {
                 parser.parse(ImplItemListScope::default())?;
             }
         }
+        Ok(())
+    }
+}
+
+define_scope! { ImplTraitAliasScope, ImplTraitAlias }
+impl super::Parse for ImplTraitAliasScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parser.set_newline_as_trivia(false);
+        parser.bump_expected(SyntaxKind::AsKw);
+        parser.set_scope_recovery_stack(&[SyntaxKind::Ident]);
+        if parser.find_and_pop(SyntaxKind::Ident, ExpectedKind::Name(SyntaxKind::ImplTrait))? {
+            parser.bump();
+        }
+        Ok(())
+    }
+}
+
+define_scope! { ImplTraitWithScope, ImplTraitWith }
+impl super::Parse for ImplTraitWithScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        debug_assert!(parser.is_ident("with"));
+        parser.set_newline_as_trivia(false);
+        // `with` is a contextual identifier; consume it as the clause head.
+        parser.bump();
+        // The permit path is parsed but NOT resolved at this increment.
+        parser.parse_or_recover(PathScope::default())?;
         Ok(())
     }
 }
@@ -898,6 +968,49 @@ impl super::Parse for ConstScope {
             parser.bump();
             parse_expr(parser)?;
         }
+        Ok(())
+    }
+}
+
+define_scope! { DeriveDeclScope, DeriveDecl }
+impl super::Parse for DeriveDeclScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        debug_assert!(parser.is_ident("derive"));
+        parser.bump();
+        parser.set_newline_as_trivia(false);
+        parser.set_scope_recovery_stack(&[SyntaxKind::ForKw, SyntaxKind::Ident]);
+
+        parser.parse_or_recover(PathScope::default())?;
+
+        if parser.find_and_pop(SyntaxKind::ForKw, ExpectedKind::Unspecified)? {
+            parser.bump();
+            parser.parse_or_recover(PathScope::default())?;
+        }
+
+        if parser.is_ident("using") {
+            parser.bump();
+            parser.parse_or_recover(PathScope::default())?;
+        }
+
+        Ok(())
+    }
+}
+
+define_scope! { DeriveProviderScopeScope, DeriveProviderScope }
+impl super::Parse for DeriveProviderScopeScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        debug_assert!(parser.is_ident("with"));
+        parser.bump();
+        parser.set_newline_as_trivia(false);
+        parser.set_scope_recovery_stack(&[SyntaxKind::LBrace, SyntaxKind::RBrace]);
+
+        parser.parse_or_recover(PathScope::default())?;
+        parser.parse(ItemListScope::new(true))?;
+
         Ok(())
     }
 }

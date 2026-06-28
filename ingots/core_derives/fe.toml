@@ -1,0 +1,6 @@
+[ingot]
+name = "core_derives"
+version = "0.1.0"
+
+[dependencies]
+core = true

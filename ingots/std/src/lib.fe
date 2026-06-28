@@ -1,3 +1,4 @@
 pub use abi::{self, *}
+pub use eip712
 pub use evm
 pub use prelude

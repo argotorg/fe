@@ -1,0 +1,43 @@
+// FCO effects-as-capabilities #2 (#93): the EVM storage intrinsics gate,
+// ambient EVM root provisioning.
+//
+// `std::evm::ops::sload`/`sstore` are `extern` ops gated on the TRAIT-keyed
+// obligation `uses (_t: StorageIntrinsic)` (`core::contracts::StorageIntrinsic`).
+// On an EVM build the toolchain's selected target root effect
+// (`<std::evm::EvmTarget as Target>::RootEffect`, i.e. `std::evm::effects::Evm`)
+// implements `StorageIntrinsic`, so the obligation is granted AMBIENTLY against
+// the root effect (see `intrinsic_capability_granted_by_root`). Storage-using
+// code therefore needs no per-fn / per-arm `uses (_t: StorageIntrinsic)`
+// ceremony: just as `self`/`mut self` already carry intra-contract storage
+// mutability, the capability is implied by building for the EVM target.
+//
+// POSITIVE proof: this contract reads and writes storage with NO capability
+// declaration and compiles clean (no `8-0036`). The capability's real value is
+// CROSS-TARGET: a future non-EVM target whose root effect does NOT implement
+// `StorageIntrinsic` would leave the op's obligation `Missing` and report
+// `8-0036`. That negative is not testable until a second backend exists.
+
+use std::abi::sol
+use std::evm::StorageMap
+
+pub msg Msg {
+    #[selector = sol("store(uint256,uint256)")]
+    Store { key: u256, value: u256 },
+    #[selector = sol("load(uint256)")]
+    Load { key: u256 } -> u256,
+}
+
+pub contract Store {
+    mut data: StorageMap<u256, u256, 0>,
+
+    recv Msg {
+        // No `uses (_t: StorageIntrinsic)`: `data.set`/`data.get` reach the gated
+        // `sstore`/`sload`, whose obligation is granted ambiently by the EVM root.
+        Store { key, value } uses (mut data) {
+            data.set(key, value)
+        }
+        Load { key } -> u256 uses (data) {
+            data.get(key)
+        }
+    }
+}

@@ -1,0 +1,16 @@
+// FCO Stage 1 (assoc-type derive) POSITIVE kind-frontier guard.
+//
+// Pins that the generic associated-type `Derive` skeleton kind-checks CLEAN on
+// today's machinery (spike Probe C). The goal rides on an associated type
+// `Goal : * -> Constraint`, and the projection head `Self::Goal<T>` is computed
+// at kind `Constraint` — so a `Constraint`-kinded capability param accepts it.
+// This is the intermediate milestone shape; it must stay clean so a future
+// kind change can't silently move this frontier. If this ever errors, the
+// Stage-1 spike premise has broken.
+
+struct MyEvidence<G: Constraint> { handle: u256 }
+
+trait MyDerive {
+    type Goal: * -> Constraint
+    const fn derive<T>(ev: own MyEvidence<Self::Goal<T>>) -> MyEvidence<Self::Goal<T>>
+}

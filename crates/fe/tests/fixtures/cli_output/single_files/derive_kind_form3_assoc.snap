@@ -1,0 +1,35 @@
+---
+source: crates/fe/tests/cli_output.rs
+assertion_line: 1824
+expression: output
+input_file: tests/fixtures/cli_output/single_files/derive_kind_form3_assoc.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/derive_kind_form3_assoc.fe
+
+error[2-0006]: expected type item here
+   ┌─ derive_kind_form3_assoc.fe:27:17
+   │
+27 │     type Goal = Eq
+   │                 ^^ expected type here, but found trait `Eq`
+
+error[6-0007]: method `derive` has incompatible argument type
+   ┌─ derive_kind_form3_assoc.fe:28:24
+   │
+20 │     const fn derive<T>(ev: own Evidence<Self::Goal<T>>) -> Evidence<Self::Goal<T>>
+   │                        ------------------------------- trait requires this type
+   ·
+28 │     const fn derive<T>(ev: own Evidence<Eq<T>>) -> Evidence<Eq<T>> { ev }
+   │                        ^^^^^^^^^^^^^^^^^^^^^^^ expected `own Evidence<invalid(NotAType(lib::ops::Eq))<T>>`, found `own Evidence<Eq<T>>`
+
+error[6-0008]: method `derive` has incompatible return type
+   ┌─ derive_kind_form3_assoc.fe:28:14
+   │
+20 │     const fn derive<T>(ev: own Evidence<Self::Goal<T>>) -> Evidence<Self::Goal<T>>
+   │              ------ trait requires this return type
+   ·
+28 │     const fn derive<T>(ev: own Evidence<Eq<T>>) -> Evidence<Eq<T>> { ev }
+   │              ^^^^^^ expected `Evidence<invalid(NotAType(lib::ops::Eq))<T>>`, found `Evidence<Eq<T>>`
+
+
+=== EXIT CODE: 1 ===

@@ -1,0 +1,81 @@
+// W-C: derive-provider selection by RESOLVED GOAL IDENTITY.
+//
+// The canonical core `Eq` provider (`StableEq`, in core_derives) must be
+// selected for a derive goal no matter how the goal trait is *spelled* at the
+// derive site — because selection keys on the goal trait's resolved identity
+// (`core::ops::Eq`), not on the head-name string:
+//
+//   * bare       `derive Eq`            (the established convention)
+//   * qualified  `derive core::ops::Eq` (full path) — BROKEN before W-C
+//   * aliased    `derive MyEq`          (`use core::ops::Eq as MyEq`)
+//                                         — BROKEN before W-C (the probe)
+//
+// All three select the SAME provider and execute: each target gets a working
+// `eq` / `ne` / `==`. The forms are spread across three distinct targets
+// because deriving the same trait twice for one target is a conflict.
+//
+// Cross-module safety (a user trait *also* named `Eq` must NOT falsely select
+// the core provider) is the anti-vacuous guard, proven in the ty_check
+// fixture `derive_local_trait_no_alias.fe`: it cannot be proven by execution
+// here (the false match would generate a wrong impl and either fail to
+// type-check or silently mis-derive), so it is asserted as a diagnostic.
+
+use core::ops::Eq
+use core::ops::Eq as MyEq
+
+// Selected by the bare convention (Eq is not in the prelude, so this is the
+// last-segment derive-prelude adapter; with `use core::ops::Eq` above it is
+// also resolvable by identity).
+struct Bare {
+    x: u256,
+    y: u256,
+}
+derive Eq for Bare
+
+// Selected by full-path identity.
+struct Qualified {
+    x: u256,
+    y: u256,
+}
+derive core::ops::Eq for Qualified
+
+// Selected by alias identity: `MyEq` canonicalizes (through the `use .. as`)
+// to `core::ops::Eq`, the same identity as the provider head.
+struct Aliased {
+    x: u256,
+    y: u256,
+}
+derive MyEq for Aliased
+
+#[test]
+fn bare_goal_selects_core_eq() {
+    let a = Bare { x: 1, y: 2 }
+    let b = Bare { x: 1, y: 2 }
+    let c = Bare { x: 1, y: 3 }
+    assert!(a.eq(b))
+    assert!(a == b)
+    assert!(a.ne(c))
+    assert!(!(a == c))
+}
+
+#[test]
+fn qualified_goal_selects_core_eq() {
+    let a = Qualified { x: 7, y: 8 }
+    let b = Qualified { x: 7, y: 8 }
+    let c = Qualified { x: 9, y: 8 }
+    assert!(a.eq(b))
+    assert!(a == b)
+    assert!(a.ne(c))
+    assert!(!(a == c))
+}
+
+#[test]
+fn aliased_goal_selects_core_eq() {
+    let a = Aliased { x: 4, y: 5 }
+    let b = Aliased { x: 4, y: 5 }
+    let c = Aliased { x: 4, y: 6 }
+    assert!(a.eq(b))
+    assert!(a == b)
+    assert!(a.ne(c))
+    assert!(!(a == c))
+}

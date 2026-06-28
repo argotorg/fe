@@ -2271,6 +2271,7 @@ dependencies = [
 name = "fe-mir"
 version = "26.2.0"
 dependencies = [
+ "camino",
  "cranelift-entity 0.130.1",
  "fe-common",
  "fe-dataflow",

@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/constraint_alias_marker_trait_missing_member.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ constraint_alias_marker_trait_missing_member.fe:55:5
+   │
+44 │ fn needs_value_like<T>(_ x: T) where T: ValueLike {
+   │                                         --------- required by this bound on `needs_value_like`
+   ·
+55 │     needs_value_like(OnlyEq {})
+   │     ^^^^^^^^^^^^^^^^
+   │     │
+   │     `OnlyEq` doesn't implement `ValueLike`
+   │     trait bound `OnlyEq: Default` is not satisfied

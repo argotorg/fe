@@ -1,0 +1,16 @@
+// FCO RUNG 2 POSITIVE — saturated concrete trait-app produces a `ConstraintTerm`.
+//
+// In ORDINARY (non-provider) code, a saturated concrete trait application in
+// type position (`Eq<T>`) used to error `2-0006` "found trait, expected type"
+// (the `NotAType` fallback in `ty_lower.rs`). After RUNG 2 it lowers to a
+// `Constraint`-kinded `TyData::ConstraintTerm`, so it FITS a `Constraint`-kinded
+// type parameter (`G: Constraint`). This compiles clean.
+//
+// This goes through `lower_path_impl`'s caller in ordinary code (unlike exempt
+// provider signatures), proving the production path, not the carrier.
+
+use core::ops::Eq
+
+struct Box<G: Constraint> { h: u256 }
+
+fn f<T>(b: Box<Eq<T>>) {}

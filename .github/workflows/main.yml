@@ -49,6 +49,49 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Lint with clippy
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D clippy::all
+      - name: Invariant gates
+        # Each gate cites the incident it prevents. New invariants should be
+        # added here as one-line gates rather than as review-process rules.
+        run: |
+          set -uo pipefail
+          fail=0
+          # Gate: no CTFE reachable from proof search. Effort2's B2 (const
+          # evaluation inside the proof forest) was predicted in writing and
+          # reproduced anyway; the prover must gate on terms, not values.
+          if [ -f crates/hir/src/analysis/ty/trait_resolution/proof_forest.rs ] && \
+             grep -nE 'ctfe|Ctfe|eval_body_owner_const|evaluate_const' \
+               crates/hir/src/analysis/ty/trait_resolution/proof_forest.rs; then
+            echo "gate failed: CTFE reference in proof_forest.rs"; fail=1
+          fi
+          # Gate: no wildcard arms in files that must match exhaustively. A
+          # `_ =>` catch-all in function_symbols.rs silently swallowed new
+          # TyData variants. Grow this list as such files land.
+          if grep -n '_ =>' crates/codegen/src/function_symbols.rs; then
+            echo "gate failed: wildcard arm in function_symbols.rs"; fail=1
+          fi
+          # Gate: the discharge-evidence schema keeps its premises one-way
+          # door. A discharge that cannot record the checks it depended on
+          # cannot be retrofitted after `fe explain`/hover/cert formats ship.
+          # The Assumption route now records the matched in-scope assumption as
+          # a premise; the Ctfe route is premise-free by design (closed
+          # evaluation). The slot/type must stay present and extensible.
+          if [ -f crates/hir/src/analysis/ty/ty_check/mod.rs ] && \
+             ! grep -q 'premises' crates/hir/src/analysis/ty/ty_check/mod.rs; then
+            echo "gate failed: evidence premises slot removed"; fail=1
+          fi
+          if [ -f crates/hir/src/analysis/ty/ty_check/mod.rs ] && \
+             ! grep -q 'CheckPremise' crates/hir/src/analysis/ty/ty_check/mod.rs; then
+            echo "gate failed: CheckPremise type removed"; fail=1
+          fi
+          # Gate: every fixture path referenced from fe/tests and uitest
+          # exists on disk. Seven tests referencing deleted fixtures passed
+          # vacuously in a prior effort.
+          for p in $(grep -rhoE '"[^"]*fixtures/[^"]*\.fe"' crates/fe/tests crates/uitest --include='*.rs' | tr -d '"' | sort -u); do
+            if [ ! -e "crates/fe/$p" ] && [ ! -e "crates/uitest/$p" ]; then
+              echo "gate failed: missing fixture: $p"; fail=1
+            fi
+          done
+          exit $fail
 
   test:
     # Build & Test runs on all platforms

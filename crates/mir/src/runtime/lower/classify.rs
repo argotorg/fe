@@ -16,7 +16,10 @@ use hir::analysis::{
         corelib::runtime_builtin_func_kind,
         normalize::normalize_ty,
         provider::registered_root_providers,
-        trait_def::{TraitInstId, resolve_trait_method_instance},
+        trait_def::{
+            TraitInstId, check_reresolution_determinism, resolve_trait_method_instance,
+            resolve_trait_method_instance_with_implementor,
+        },
         trait_resolution::{PredicateListId, TraitSolveCx},
         ty_check::{BodyOwner, EffectParamSite, EffectPassMode, LocalBinding, ParamSite},
         ty_def::{CapabilityKind, TyData, TyId, strip_derived_adt_layout_args},
@@ -2280,22 +2283,132 @@ pub(crate) fn resolve_runtime_call_key<'db>(
         original_inst
     };
     let assumptions = runtime_callee_assumptions(db, caller_key, caller_typed_body);
-    let Some((impl_func, mut impl_args)) = resolve_trait_method_instance(
-        db,
-        TraitSolveCx::new(db, caller_key.impl_env(db).normalization_scope(db))
-            .with_assumptions(assumptions),
-        concrete_inst,
-        method_name,
-    ) else {
-        return Err(crate::runtime::LowerError::Unsupported(format!(
-            "runtime trait-call resolution failed to resolve a concrete impl body: caller={caller_key:?} decl={callee_key:?} method={} concrete_inst={} original_inst={}",
-            method_name.data(db),
-            concrete_inst.pretty_print(db, false),
-            original_inst
-                .map(|inst| inst.pretty_print(db, false))
-                .unwrap_or_else(|| "<none>".to_string()),
-        )));
+    // FCO "slide" cascade C1 (+ M3): consume the RECORDED implementor as the
+    // resolution SOURCE where typeck committed one, re-resolve only where it did
+    // not. The recorded implementor comes from one of two carriers:
+    //
+    //   * the CALLEE instance's own single override
+    //     (`impl_env.selected_implementor(db)`, where `impl_env =
+    //     callee_key.impl_env(db)`) — set in
+    //     `const_ref.rs::semantic_callee_key_with_assumptions` for a trait-method
+    //     callee (the direct-receiver / M2 case), and by the Gap-C nested carry
+    //     below;
+    //   * the CALLER instance's per-goal map, looked up BY GOAL
+    //     (`caller_key.impl_env(db).selected_implementor_for_goal(db,
+    //     concrete_inst)`) — set in `const_ref.rs`'s generic-helper `else` branch,
+    //     which carries the scope selection from the `with (<T as Trait>) {
+    //     helper(x) }` call site onto the helper instance. This is how a scoped
+    //     selection PROPAGATES THROUGH A GENERIC HELPER BOUNDARY (M3): the inner
+    //     `x.method()` call's `caller_key` is the helper instance, and its goal is
+    //     `concrete_inst`, so the helper-carried override is found here.
+    //
+    // The callee-carried override takes precedence (it is the more specific
+    // record); the caller's per-goal map is the fallback for the helper boundary.
+    //
+    // - `Some(implementor)` → build `resolved` directly FROM that recorded
+    //   implementor (`resolve_trait_method_instance_with_implementor`), skipping
+    //   `select_impl` entirely. Today there is always ≤1 coexisting impl, so the
+    //   recorded implementor is exactly the one `select_impl` would return and
+    //   this yields the byte-identical `func`/`impl_args`. With the future
+    //   cascade's ≥2 coexisting impls, `select_impl` would go `Ambiguous` →
+    //   `LowerError` → panic; consuming the record avoids re-deciding what
+    //   typeck already decided. We cannot replay `select_impl` here (a scoped
+    //   override legitimately DIFFERS from its default result — that is the whole
+    //   point of the cascade), but we CAN — and do — VALIDITY-check the record
+    //   before trusting it (`recorded_implementor_is_valid_candidate`): the
+    //   recorded `ImplementorId` must be a member of THIS goal's impl-table
+    //   candidate set AND actually apply to it. That rejects a forged/mismatched
+    //   record (the one place codegen otherwise consumes a recorded implementor
+    //   with zero cross-check) WITHOUT rejecting a legitimate scoped override, and
+    //   is byte-identical today: every recorded implementor is a solver solution =
+    //   a candidate that applied to the goal, so this never fires on valid Fe.
+    // - `None` (typeck did not commit a concrete impl) → re-resolve EXACTLY as
+    //   before through the global impl table, and keep the rung-3.3 determinism
+    //   assertion (which is `Ok` for `None` anyway, but guards against any
+    //   re-resolution divergence). See `check_reresolution_determinism`.
+    let recorded_implementor = impl_env.selected_implementor(db).or_else(|| {
+        caller_key
+            .impl_env(db)
+            .selected_implementor_for_goal(db, concrete_inst)
+    });
+    let resolved = if let Some(recorded_implementor) = recorded_implementor {
+        // SOUNDNESS BACKSTOP (cascade C1 `Some` branch): the recorded implementor
+        // is about to be CONSUMED as the resolution source. Cross-check that it is
+        // a real, valid impl for this call's goal before trusting it — see the
+        // invariant on `recorded_implementor_is_valid_candidate`. Never fires under
+        // coherence; a hard failure (never silently lower against a bad record),
+        // mirroring the `None` branch's determinism assertion below.
+        if !TraitSolveCx::new(db, caller_key.impl_env(db).normalization_scope(db))
+            .with_assumptions(assumptions)
+            .recorded_implementor_is_valid_candidate(db, concrete_inst, recorded_implementor)
+        {
+            return Err(crate::runtime::LowerError::ForgedRecordedImplementor(
+                format!(
+                    "internal: the recorded selected implementor is not a valid impl for this trait call's goal: \
+                 recorded={recorded_implementor:?} method={} concrete_inst={} caller={caller_key:?} callee={callee_key:?}",
+                    method_name.data(db),
+                    concrete_inst.pretty_print(db, false),
+                ),
+            ));
+        }
+        let Some(resolved) = resolve_trait_method_instance_with_implementor(
+            db,
+            TraitSolveCx::new(db, caller_key.impl_env(db).normalization_scope(db))
+                .with_assumptions(assumptions),
+            concrete_inst,
+            method_name,
+            recorded_implementor,
+        ) else {
+            return Err(crate::runtime::LowerError::Unsupported(format!(
+                "runtime trait-call resolution failed to reconstruct a concrete impl body from the recorded implementor: caller={caller_key:?} decl={callee_key:?} method={} concrete_inst={} recorded_implementor={recorded_implementor:?}",
+                method_name.data(db),
+                concrete_inst.pretty_print(db, false),
+            )));
+        };
+        resolved
+    } else {
+        let Some(resolved) = resolve_trait_method_instance(
+            db,
+            TraitSolveCx::new(db, caller_key.impl_env(db).normalization_scope(db))
+                .with_assumptions(assumptions),
+            concrete_inst,
+            method_name,
+        ) else {
+            return Err(crate::runtime::LowerError::Unsupported(format!(
+                "runtime trait-call resolution failed to resolve a concrete impl body: caller={caller_key:?} decl={callee_key:?} method={} concrete_inst={} original_inst={}",
+                method_name.data(db),
+                concrete_inst.pretty_print(db, false),
+                original_inst
+                    .map(|inst| inst.pretty_print(db, false))
+                    .unwrap_or_else(|| "<none>".to_string()),
+            )));
+        };
+        // DETERMINISM ASSERTION (rung 3.3): `resolved.implementor` is the impl
+        // this MIR re-resolution selected. The impl typeck committed to is
+        // `recorded_implementor` (callee-carried override, else the caller's
+        // per-goal lookup). Under coherence these always agree, so this never
+        // fires on valid Fe; if it fires, MIR has re-resolved to a *different*
+        // impl than type-checking — a real determinism violation that must
+        // hard-fail, never silently lower against the wrong impl. This branch is
+        // only reached when `recorded_implementor` is `None`, so the pure check
+        // returns `Ok`. See `check_reresolution_determinism`.
+        if let Err((typeck_implementor, mono_implementor)) =
+            check_reresolution_determinism(recorded_implementor, resolved.implementor)
+        {
+            return Err(crate::runtime::LowerError::NondeterministicReResolution(
+                format!(
+                    "internal: monomorphization re-resolved trait method `{}` to a different impl than type-checking selected: \
+                 typeck={typeck_implementor:?} mono={mono_implementor:?} concrete_inst={} caller={caller_key:?} callee={callee_key:?}",
+                    method_name.data(db),
+                    concrete_inst.pretty_print(db, false),
+                ),
+            ));
+        }
+        resolved
     };
+    let resolved_implementor = resolved.implementor;
+    let impl_func = resolved.func;
+    let mut impl_args = resolved.impl_args;
     let trait_arg_len = concrete_inst.args(db).len();
     let tail = callee_key
         .subst(db)
@@ -2312,12 +2425,23 @@ pub(crate) fn resolve_runtime_call_key<'db>(
         BodyOwner::Func(impl_func),
         GenericSubst::new(db, impl_args),
         hir::analysis::semantic::EffectProviderSubst::empty(db),
+        // Gap C: carry the `(concrete_inst, implementor)` we just resolved into
+        // the resolved-body instance's `ImplEnv` so nested trait calls inside that
+        // body inherit a real record (keyed by goal) and themselves take the
+        // recorded-source path above (previously this was discarded → nested calls
+        // carried `None` and re-resolved). This is the resolved IMPL-BODY instance
+        // (keyed by `impl_func`), distinct from any default-tier instance, so
+        // folding this single override into `ImplEnv` identity (empty-only
+        // identity — see the IDENTITY INVARIANT in `template.rs`) does not collide
+        // existing symbols: every reachable resolved-body instance already carries
+        // exactly this record.
         ImplEnv::new(
             db,
             caller_key.impl_env(db).normalization_scope(db),
             assumptions,
             witnesses.into_iter().collect::<Vec<_>>(),
-        ),
+        )
+        .with_selected_implementor(Some((concrete_inst, resolved_implementor))),
     ))
 }
 

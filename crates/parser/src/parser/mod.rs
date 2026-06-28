@@ -173,6 +173,16 @@ impl<S: TokenStream> Parser<S> {
             .is_some_and(|scope| scopes.contains(&scope.scope.syntax_kind()))
     }
 
+    /// The number of `quote` expression scopes currently on the scope stack.
+    /// `${...}` splice holes are only accepted at depth >= 1; a `quote`
+    /// inside another quote body (depth >= 2 at its own parse) is rejected.
+    pub(super) fn quote_scope_depth(&self) -> usize {
+        self.parents
+            .iter()
+            .filter(|scope| scope.scope.syntax_kind() == SyntaxKind::QuoteExpr)
+            .count()
+    }
+
     pub fn expect_and_pop_recovery_stack(&mut self) -> Result<(), Recovery<ErrProof>> {
         let current = self.current_kind();
         let r = if current.is_some() && self.scope_aux_recovery().contains(&current.unwrap()) {

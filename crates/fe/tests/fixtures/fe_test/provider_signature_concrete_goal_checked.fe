@@ -1,0 +1,61 @@
+// FCO Level 1 (W-D) POSITIVE acceptance: a derive provider whose capability /
+// witness GOAL arguments (`Evidence<Eq<T>>`, `ImplBuilder<Eq<T>>`) are now
+// KIND-CHECKED as a concrete constraint, and the derive STILL executes
+// end-to-end.
+//
+// Before Level 1 the goal argument was decoration: a nonsense trait in
+// `Evidence<..>` compiled silently (the signature was wholly exempt). Now the
+// goal position is lowered via the W-B constraint lowering (position-scoped, no
+// `TyData::ConstraintTerm`, no live head to the solver): the concrete `Eq<T>`
+// lowers to `T: Eq` and passes. The negatives (live head / missing trait /
+// unsaturated goal) are pinned as `fe check` snapshots:
+//   provider_signature_live_head.fe / _missing_trait.fe / _unsaturated_goal.fe
+//
+// This fixture proves the de-exemption did NOT break a real provider: the goal
+// is checked AND the generated `impl Eq for Point` still runs.
+
+use core::derive::Derive
+use core::derive::Evidence
+use core::derive::ImplBuilder
+use core::derive::Reflect
+use core::ops::Eq
+
+struct Point {
+    x: u256,
+    y: u256,
+}
+
+// A user-defined `Eq` provider whose goals are concrete (`Eq<T>`). Each goal
+// position is kind-checked concrete by the Level-1 rule; the body still runs in
+// the provider executor and emits a working `eq`.
+impl Derive<Eq> for ConcreteEq {
+    const fn derive<T>(ev: own Evidence<Eq<T>>) -> Evidence<Eq<T>>
+        uses (
+            reflect: Reflect<T>,
+            builder: mut ImplBuilder<Eq<T>>,
+        )
+    {
+        let mut body = quote { true }
+        for field in reflect.fields() {
+            builder.require<Eq>(field.ty())
+            body = quote(other) { ${body} && self.${field} == other.${field} }
+        }
+        builder.emit_method("eq", body)
+        builder.finish()
+        ev
+    }
+}
+
+derive Eq for Point using ConcreteEq
+
+#[test]
+fn concrete_goal_provider_executes() {
+    let a = Point { x: 1, y: 2 }
+    let b = Point { x: 1, y: 2 }
+    let c = Point { x: 9, y: 2 }
+    assert!(a.eq(b))
+    assert!(!a.eq(c))
+    assert!(a == b)
+}
+
+struct ConcreteEq {}

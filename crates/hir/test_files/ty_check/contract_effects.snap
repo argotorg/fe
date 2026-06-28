@@ -109,22 +109,43 @@ note:
    │             ^^^^^^^ u256
 
 note:
+   ┌─ contract_effects.fe:29:5
+   │
+29 │ ╭     #[selector = 0]
+30 │ │     Deposit { amount: u256 } -> u256,
+   │ ╰────────────────────────────────────^ Deposit | u256
+
+note:
    ┌─ contract_effects.fe:30:5
    │
 30 │     Deposit { amount: u256 } -> u256,
-   │     ^^^^^^^ () | Deposit | I | fn decode_field<Sol, u256, D> | fn decode_msg_field_from<Sol, u256, I> | fn dynamic_payload_size<u256> | fn encode_field<Sol, u256, E> | mut D | mut E | mut u256 | u256
+   │     ^^^^^^^ () | Deposit | I | fn decode_field<Sol, u256, D> | fn decode_msg_field_from<Sol, u256, I> | fn encode_field<Sol, u256, E> | mut D | mut E | mut u256 | u256
+
+note:
+   ┌─ contract_effects.fe:32:5
+   │
+32 │ ╭     #[selector = 1]
+33 │ │     Withdraw { amount: u256 } -> bool,
+   │ ╰─────────────────────────────────────^ Withdraw | u256
 
 note:
    ┌─ contract_effects.fe:33:5
    │
 33 │     Withdraw { amount: u256 } -> bool,
-   │     ^^^^^^^^ () | I | Withdraw | fn decode_field<Sol, u256, D> | fn decode_msg_field_from<Sol, u256, I> | fn dynamic_payload_size<u256> | fn encode_field<Sol, u256, E> | mut D | mut E | mut u256 | u256
+   │     ^^^^^^^^ () | I | Withdraw | fn decode_field<Sol, u256, D> | fn decode_msg_field_from<Sol, u256, I> | fn encode_field<Sol, u256, E> | mut D | mut E | mut u256 | u256
+
+note:
+   ┌─ contract_effects.fe:35:5
+   │
+35 │ ╭     #[selector = 2]
+36 │ │     Balance -> u256,
+   │ ╰───────────────────^ u256
 
 note:
    ┌─ contract_effects.fe:36:5
    │
 36 │     Balance -> u256,
-   │     ^^^^^^^ () | Balance | invalid(Other) | u256
+   │     ^^^^^^^ () | Balance | invalid(Other)
 
 note:
    ┌─ contract_effects.fe:45:1

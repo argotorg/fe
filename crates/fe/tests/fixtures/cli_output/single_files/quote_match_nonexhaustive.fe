@@ -1,0 +1,44 @@
+// A template match over the target must cover every reflected variant (or
+// carry a `_` arm); the provider fails before any code is generated, naming
+// the uncovered variant.
+
+use core::derive::Derive
+use core::derive::Evidence
+use core::derive::ImplBuilder
+use core::derive::Reflect
+
+trait Tagged {
+    fn tag(self) -> bool
+}
+
+impl Derive<Tagged> for FirstOnly {
+    const fn derive<T>(ev: own Evidence<Tagged<T>>) -> Evidence<Tagged<T>>
+        uses (
+            reflect: Reflect<T>,
+            builder: mut ImplBuilder<Tagged<T>>,
+        )
+    {
+        // Builds an arm for the FIRST variant only — the template match is
+        // non-exhaustive for any enum with more than one variant.
+        let mut arms = quote { }
+        let mut first = true
+        for variant in reflect.variants() {
+            if first {
+                arms = quote { ${arms}, ${variant}(lhs) => true }
+            }
+            first = false
+        }
+        builder.emit_method("tag", quote { match self { ${arms} } })
+        builder.finish()
+        ev
+    }
+}
+
+enum Mode {
+    On,
+    Off,
+}
+
+derive Tagged for Mode using FirstOnly
+
+struct FirstOnly {}

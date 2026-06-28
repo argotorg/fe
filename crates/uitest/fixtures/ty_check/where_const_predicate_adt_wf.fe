@@ -1,0 +1,42 @@
+// FCO-M5 gate 1+3: a const predicate on an ADT is enforced at every
+// well-formedness position, not only at call sites. `Bounded<MIN, MAX>` is
+// well-formed only when `MIN <= MAX`.
+//
+// The generic declaration itself is accepted (it is not refuted); a *concrete*
+// instantiation that violates the bound (`Bounded<4, 1>`) is rejected wherever
+// it is required to be well-formed — construction, a never-called signature
+// parameter, a never-called return type, and a struct field with no function
+// body in sight. The discharge runs at the well-formedness layer via CTFE,
+// never inside the trait solver.
+
+struct Bounded<const MIN: u256, const MAX: u256> where MIN <= MAX {
+    value: u256
+}
+
+extern {
+    fn diverge() -> !
+}
+
+// Satisfying instantiation: compiles.
+fn good() {
+    Bounded<1, 4> { value: 0 }
+}
+
+// Refuted at construction.
+fn bad_construct() {
+    Bounded<4, 1> { value: 0 }
+}
+
+// Refuted in a parameter type, even though `bad_param` is never called.
+fn bad_param(x: Bounded<4, 1>) {
+}
+
+// Refuted in a return type, even though `bad_return` is never called.
+fn bad_return() -> Bounded<4, 1> {
+    diverge()
+}
+
+// Refuted in a struct field — no function body involved.
+struct Holder {
+    x: Bounded<4, 1>
+}
