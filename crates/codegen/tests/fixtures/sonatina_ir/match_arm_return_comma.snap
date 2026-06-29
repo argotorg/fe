@@ -6,8 +6,8 @@ input_file: crates/codegen/tests/fixtures/match_arm_return_comma.fe
 target = "evm-ethereum-osaka"
 
 type @layout_0 = enum {
-    #A(i256),
-    #B,
+    #variant_0(i256),
+    #variant_1,
 };
 
 func private %f(v0.@layout_0) -> i256 {
@@ -20,8 +20,8 @@ func private %f(v0.@layout_0) -> i256 {
         br_table v3 (0.enumtag(@layout_0) block2) (1.enumtag(@layout_0) block3);
 
     block2:
-        enum.assert_variant v0 #A;
-        v8.i256 = enum.extract v0 #A 0.i256;
+        enum.assert_variant v0 #variant_0;
+        v8.i256 = enum.extract v0 #variant_0 0.i256;
         mstore v1 v8 i256;
         v9.i256 = mload v1 i256;
         return v9;
@@ -35,7 +35,7 @@ func private %main() -> i256 {
         jump block1;
 
     block1:
-        v1.@layout_0 = enum.make @layout_0 #A 1.i256;
+        v1.@layout_0 = enum.make @layout_0 #variant_0 1.i256;
         v2.i256 = call %f v1;
         return v2;
 }

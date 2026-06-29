@@ -6,8 +6,8 @@ input_file: crates/codegen/tests/fixtures/enum_variant_contract.fe
 target = "evm-ethereum-osaka"
 
 type @layout_0 = enum {
-    #None,
-    #Some(i256),
+    #variant_0,
+    #variant_1(i256),
 };
 
 func private %abi_encode_u256(v0.i256) {
@@ -16,7 +16,7 @@ func private %abi_encode_u256(v0.i256) {
 
     block1:
         call %mstore 0.i256 v0;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_06c7 0.i256 32.i256;
+        call %return_data 0.i256 32.i256;
         unreachable;
 }
 
@@ -48,7 +48,7 @@ func private %init() {
         v2.*i8 = evm_malloc v0;
         v3.i256 = ptr_to_int v2 i256;
         call %codecopy v3 v1 v0;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_1461_0 v3 v0;
+        call %return_data v3 v0;
         unreachable;
 }
 
@@ -79,23 +79,7 @@ func private %mstore(v0.i256, v1.i256) {
         return;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_06c7(v0.i256, v1.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        evm_return v0 v1;
-}
-
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_1461(v0.i256, v1.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        evm_return v0 v1;
-}
-
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_1461_0(v0.i256, v1.i256) {
+func private %return_data(v0.i256, v1.i256) {
     block0:
         jump block1;
 
@@ -115,7 +99,7 @@ func private %runtime() {
 
     block2:
         v7.i256 = call %calldataload 4.i256;
-        v8.@layout_0 = enum.make @layout_0 #Some v7;
+        v8.@layout_0 = enum.make @layout_0 #variant_1 v7;
         v9.enumtag(@layout_0) = enum.tag v8;
         br_table v9 (1.enumtag(@layout_0) block6) (0.enumtag(@layout_0) block7);
 
@@ -132,16 +116,16 @@ func private %runtime() {
         unreachable;
 
     block6:
-        enum.assert_variant v8 #Some;
-        v17.i256 = enum.extract v8 #Some 0.i256;
+        enum.assert_variant v8 #variant_1;
+        v17.i256 = enum.extract v8 #variant_1 0.i256;
         jump block5;
 
     block7:
         jump block5;
 
     block8:
-        v18.@layout_0 = enum.make @layout_0 #None;
-        v19.@layout_0 = enum.make @layout_0 #None;
+        v18.@layout_0 = enum.make @layout_0 #variant_0;
+        v19.@layout_0 = enum.make @layout_0 #variant_0;
         v20.enumtag(@layout_0) = enum.tag v19;
         br_table v20 (1.enumtag(@layout_0) block12) (0.enumtag(@layout_0) block13);
 
@@ -158,8 +142,8 @@ func private %runtime() {
         unreachable;
 
     block12:
-        enum.assert_variant v19 #Some;
-        v26.i256 = enum.extract v19 #Some 0.i256;
+        enum.assert_variant v19 #variant_1;
+        v26.i256 = enum.extract v19 #variant_1 0.i256;
         jump block11;
 
     block13:
@@ -167,7 +151,7 @@ func private %runtime() {
 
     block14:
         v27.i256 = call %calldataload 4.i256;
-        v28.@layout_0 = enum.make @layout_0 #Some v27;
+        v28.@layout_0 = enum.make @layout_0 #variant_1 v27;
         v29.enumtag(@layout_0) = enum.tag v28;
         br_table v29 (1.enumtag(@layout_0) block18) (0.enumtag(@layout_0) block19);
 
@@ -175,7 +159,7 @@ func private %runtime() {
         jump block16;
 
     block16:
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_1461 0.i256 0.i256;
+        call %return_data 0.i256 0.i256;
         unreachable;
 
     block17:

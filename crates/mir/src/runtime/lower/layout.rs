@@ -77,7 +77,6 @@ pub(crate) fn layout_for_ty_in_context<'db>(
         return LayoutId::new(
             db,
             LayoutKey::Array(ArrayLayout {
-                source_ty: ty,
                 elem: stored_class_for_ty_in_context(db, elem, scope, assumptions),
                 len: ty.array_len(db).expect("array length") as u64,
             }),
@@ -86,7 +85,6 @@ pub(crate) fn layout_for_ty_in_context<'db>(
     LayoutId::new(
         db,
         LayoutKey::Struct(StructLayout {
-            source_ty: ty,
             fields: ty
                 .field_types(db)
                 .into_iter()
@@ -129,7 +127,6 @@ pub(crate) fn layout_for_aggregate_instance_in_context<'db>(
         return LayoutId::new(
             db,
             LayoutKey::Array(ArrayLayout {
-                source_ty: ty,
                 elem,
                 len: len as u64,
             }),
@@ -144,7 +141,6 @@ pub(crate) fn layout_for_aggregate_instance_in_context<'db>(
     LayoutId::new(
         db,
         LayoutKey::Struct(StructLayout {
-            source_ty: ty,
             fields: field_classes.to_vec().into_boxed_slice(),
         }),
     )
@@ -166,7 +162,6 @@ pub(crate) fn layout_for_enum_variant_instance_in_context<'db>(
     LayoutId::new(
         db,
         LayoutKey::Enum(EnumLayoutKey {
-            source_ty: enum_ty,
             variants: enum_
                 .variants(db)
                 .enumerate()
@@ -199,10 +194,6 @@ pub(crate) fn layout_for_enum_variant_instance_in_context<'db>(
                         default_fields
                     };
                     EnumVariantLayout {
-                        name: enum_variant
-                            .name(db)
-                            .map(|name| name.data(db).to_string())
-                            .unwrap_or_else(|| format!("variant_{idx}")),
                         fields: fields.into(),
                     }
                 })
@@ -258,14 +249,9 @@ fn enum_layout_key<'db>(
     let enum_ = ty.as_enum(db).expect("enum layout requested for non-enum");
     let args = ty.generic_args(db);
     EnumLayoutKey {
-        source_ty: ty,
         variants: enum_
             .variants(db)
             .map(|variant| EnumVariantLayout {
-                name: variant
-                    .name(db)
-                    .map(|name| name.data(db).to_string())
-                    .unwrap_or_else(|| format!("variant_{}", variant.idx)),
                 fields: variant
                     .field_tys(db)
                     .into_iter()

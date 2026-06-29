@@ -7,9 +7,9 @@ target = "evm-ethereum-osaka"
 
 type @layout_0 = {i8, i8, i8};
 type @layout_1 = enum {
-    #Red,
-    #Green,
-    #Blue,
+    #variant_0,
+    #variant_1,
+    #variant_2,
 };
 
 func private %main() -> @layout_0 {
@@ -17,10 +17,10 @@ func private %main() -> @layout_0 {
         jump block1;
 
     block1:
-        v0.@layout_1 = enum.make @layout_1 #Red;
+        v0.@layout_1 = enum.make @layout_1 #variant_0;
         v1.i8 = call %match_with_wildcard v0;
         v3.i8 = call %wildcard_not_last 1.i8;
-        v4.@layout_1 = enum.make @layout_1 #Green;
+        v4.@layout_1 = enum.make @layout_1 #variant_1;
         v5.i8 = call %multiple_before_wildcard v4;
         v8.@layout_0 = insert_value undef.@layout_0 0.i256 v1;
         v10.@layout_0 = insert_value v8 1.i256 v3;

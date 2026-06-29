@@ -405,9 +405,10 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 let variants = data
                     .variants
                     .iter()
-                    .map(|variant| {
+                    .enumerate()
+                    .map(|(idx, variant)| {
                         Ok(VariantData {
-                            name: variant.name.clone(),
+                            name: format!("variant_{idx}"),
                             explicit_discriminant: None,
                             fields: variant
                                 .fields

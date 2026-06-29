@@ -1052,7 +1052,6 @@ mod tests {
         LayoutId::new(
             db,
             LayoutKey::Struct(StructLayout {
-                source_ty: TyId::unit(db),
                 fields: vec![word_class()].into(),
             }),
         )
@@ -1062,9 +1061,7 @@ mod tests {
         let enum_layout = LayoutId::new(
             db,
             LayoutKey::Enum(EnumLayoutKey {
-                source_ty: TyId::unit(db),
                 variants: vec![EnumVariantLayout {
-                    name: "Variant".to_string(),
                     fields: vec![word_class()].into(),
                 }]
                 .into(),
