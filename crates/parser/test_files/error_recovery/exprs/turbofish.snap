@@ -1,0 +1,40 @@
+---
+source: crates/parser/tests/error_recovery.rs
+assertion_line: 41
+expression: node
+input_file: test_files/error_recovery/exprs/turbofish.fe
+---
+Root@0..34
+  CallExpr@0..34
+    PathExpr@0..32
+      Path@0..32
+        PathSegment@0..27
+          Ident@0..10 "StorageMap"
+          Colon2@10..12 "::"
+          GenericArgList@12..27
+            Lt@12..13 "<"
+            TypeGenericArg@13..17
+              PathType@13..17
+                Path@13..17
+                  PathSegment@13..17
+                    Ident@13..17 "u256"
+            Comma@17..18 ","
+            WhiteSpace@18..19 " "
+            TypeGenericArg@19..23
+              PathType@19..23
+                Path@19..23
+                  PathSegment@19..23
+                    Ident@19..23 "u256"
+            Comma@23..24 ","
+            WhiteSpace@24..25 " "
+            ConstGenericArg@25..26
+              LitExpr@25..26
+                Lit@25..26
+                  Int@25..26 "0"
+            Gt@26..27 ">"
+        Colon2@27..29 "::"
+        PathSegment@29..32
+          Ident@29..32 "new"
+    CallArgList@32..34
+      LParen@32..33 "("
+      RParen@33..34 ")"

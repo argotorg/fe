@@ -1,4 +1,4 @@
-use crate::{ParseError, SyntaxKind};
+use crate::{ParseError, SyntaxKind, TextRange, TextSize};
 
 use super::{
     Parser, define_scope,
@@ -39,12 +39,25 @@ impl super::Parse for PathSegmentScope {
             Some(kind) if is_path_segment(kind) => {
                 parser.bump();
 
-                if parser.current_kind_same_line() == Some(SyntaxKind::Lt)
-                    && !(is_lt_eq(parser) || is_lshift(parser))
+                let is_turbofish = parser.current_kind_same_line() == Some(SyntaxKind::Colon2)
+                    && parser.peek_two() == (Some(SyntaxKind::Colon2), Some(SyntaxKind::Lt));
+
+                if (is_turbofish
+                    || (parser.current_kind_same_line() == Some(SyntaxKind::Lt)
+                        && !(is_lt_eq(parser) || is_lshift(parser))))
                     && parser.dry_run(|parser| {
+                        parser.bump_if(SyntaxKind::Colon2);
                         parser.parses_without_error(GenericArgListScope::new(self.is_expr))
                     })
                 {
+                    if is_turbofish {
+                        parser.bump_trivias();
+                        parser.add_error(ParseError::Unexpected(
+                            "unexpected turbofish syntax `::<`; remove the double colons".into(),
+                            TextRange::at(parser.current_pos, TextSize::from(3)),
+                        ));
+                        parser.bump_expected(SyntaxKind::Colon2);
+                    }
                     parser
                         .parse(GenericArgListScope::new(self.is_expr))
                         .expect("dry_run suggests this will succeed");
