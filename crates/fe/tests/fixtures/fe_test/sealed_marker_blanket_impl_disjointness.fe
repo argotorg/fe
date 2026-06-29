@@ -1,0 +1,118 @@
+use core::ops::{WrappingAdd, WrappingMul, WrappingSub}
+
+trait LeftWide {}
+trait LeftNarrow {}
+trait RightWide {}
+
+struct X {
+    value: u256,
+}
+
+struct Y {
+    value: u256,
+}
+
+struct Z {
+    value: u256,
+}
+
+impl LeftWide for X {}
+impl LeftWide for Y {}
+
+impl LeftNarrow for X {}
+impl LeftNarrow for Z {}
+
+impl RightWide for Y {}
+impl RightWide for Z {}
+
+impl<T: LeftWide + LeftNarrow> WrappingAdd for T {
+    fn wrapping_add(self, _ other: T) -> Self {
+        self
+    }
+}
+
+impl<T: RightWide> WrappingAdd for T {
+    fn wrapping_add(self, _ other: T) -> Self {
+        other
+    }
+}
+
+trait EmptyMarker {}
+trait FullMarker {}
+
+struct Full {
+    value: u256,
+}
+
+impl FullMarker for Full {}
+
+impl<T: EmptyMarker> WrappingSub for T {
+    fn wrapping_sub(self, _ other: T) -> Self {
+        self
+    }
+}
+
+impl<T: FullMarker> WrappingSub for T {
+    fn wrapping_sub(self, _ other: T) -> Self {
+        other
+    }
+}
+
+trait LeftOnly {}
+trait RightOnly {}
+trait Common {}
+
+struct Left {
+    value: u256,
+}
+
+struct Right {
+    value: u256,
+}
+
+impl LeftOnly for Left {}
+impl Common for Left {}
+
+impl RightOnly for Right {}
+impl Common for Right {}
+
+impl<T: LeftOnly + Common> WrappingMul for T {
+    fn wrapping_mul(self, _ other: T) -> Self {
+        self
+    }
+}
+
+impl<T: RightOnly + Common> WrappingMul for T {
+    fn wrapping_mul(self, _ other: T) -> Self {
+        other
+    }
+}
+
+#[test]
+fn sealed_marker_blanket_impl_global_intersection_disjoint() {
+    let left = X { value: 11 }
+    let left_other = X { value: 31 }
+    assert!(left.wrapping_add(left_other).value == 11)
+
+    let right = Y { value: 5 }
+    let right_other = Y { value: 7 }
+    assert!(right.wrapping_add(right_other).value == 7)
+}
+
+#[test]
+fn sealed_marker_blanket_impl_empty_marker_targets_are_unreachable() {
+    let full = Full { value: 13 }
+    let full_other = Full { value: 17 }
+    assert!(full.wrapping_sub(full_other).value == 17)
+}
+
+#[test]
+fn sealed_marker_blanket_impl_single_disjoint_pair_is_enough() {
+    let left = Left { value: 23 }
+    let left_other = Left { value: 29 }
+    assert!(left.wrapping_mul(left_other).value == 23)
+
+    let right = Right { value: 37 }
+    let right_other = Right { value: 41 }
+    assert!(right.wrapping_mul(right_other).value == 41)
+}

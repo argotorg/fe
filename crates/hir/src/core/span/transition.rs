@@ -18,7 +18,7 @@ use crate::{
     HirDb, SpannedHirDb,
     hir_def::{
         Body, Const, Contract, Enum, Func, Impl, ImplTrait, ItemKind, Mod, StaticAssert, Struct,
-        TopLevelMod, Trait, TypeAlias, Use,
+        TopLevelMod, Trait, TypeAlias, Use, scope_graph::ScopeId,
     },
     lower::top_mod_ast,
 };
@@ -85,6 +85,32 @@ impl<'db> SpanTransitionChain<'db> {
             ChainRoot::Stmt(s) => s.body.top_mod(db),
             ChainRoot::Expr(e) => e.body.top_mod(db),
             ChainRoot::Pat(p) => p.body.top_mod(db),
+        }
+    }
+
+    /// The HIR scope this span originates from, used e.g. for visibility
+    /// checks at the error location. For body-relative roots this is the
+    /// body's scope; for item roots it is the item's own scope.
+    pub(super) fn scope(&self) -> ScopeId<'db> {
+        match self.root {
+            ChainRoot::ItemKind(item) => ScopeId::from_item(item),
+            ChainRoot::TopMod(top_mod) => ScopeId::from_item(top_mod.into()),
+            ChainRoot::Mod(m) => ScopeId::from_item(m.into()),
+            ChainRoot::Func(f) => ScopeId::from_item(f.into()),
+            ChainRoot::Struct(s) => ScopeId::from_item(s.into()),
+            ChainRoot::Contract(c) => ScopeId::from_item(c.into()),
+            ChainRoot::Enum(e) => ScopeId::from_item(e.into()),
+            ChainRoot::TypeAlias(t) => ScopeId::from_item(t.into()),
+            ChainRoot::Impl(i) => ScopeId::from_item(i.into()),
+            ChainRoot::Trait(t) => ScopeId::from_item(t.into()),
+            ChainRoot::ImplTrait(i) => ScopeId::from_item(i.into()),
+            ChainRoot::Const(c) => ScopeId::from_item(c.into()),
+            ChainRoot::StaticAssert(a) => ScopeId::from_item(a.into()),
+            ChainRoot::Use(u) => ScopeId::from_item(u.into()),
+            ChainRoot::Body(b) => b.scope(),
+            ChainRoot::Stmt(s) => s.body.scope(),
+            ChainRoot::Expr(e) => e.body.scope(),
+            ChainRoot::Pat(p) => p.body.scope(),
         }
     }
 

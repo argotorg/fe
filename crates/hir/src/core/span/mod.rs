@@ -6,7 +6,7 @@ use crate::{
     HirDb, SpannedHirDb,
     core::hir_def::{
         Body, Const, Contract, Enum, Func, Impl, ImplTrait, Mod, StaticAssert, Struct, TopLevelMod,
-        Trait, TypeAlias, Use,
+        Trait, TypeAlias, Use, scope_graph::ScopeId,
     },
     core::lower::top_mod_ast,
 };
@@ -78,6 +78,12 @@ impl<'db> DynLazySpan<'db> {
 
     pub fn top_mod(&self, db: &'db dyn HirDb) -> Option<TopLevelMod<'db>> {
         self.0.as_ref().map(|chain| chain.top_mod(db))
+    }
+
+    /// The HIR scope this span originates from (the item or body the span was
+    /// built from), suitable as the "from scope" for visibility checks.
+    pub fn scope(&self) -> Option<ScopeId<'db>> {
+        self.0.as_ref().map(|chain| chain.scope())
     }
 }
 impl LazySpan for DynLazySpan<'_> {

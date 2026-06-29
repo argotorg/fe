@@ -52,21 +52,21 @@ func private %impl_trait_u64__saturating_add(v0.i64, v1.i64) -> i64 {
         return v4;
 }
 
-func private %impl_trait_u256__saturating_mul(v0.i256, v1.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v4.i256 = umulsat v0 v1;
-        return v4;
-}
-
 func private %impl_trait_u64__saturating_mul(v0.i64, v1.i64) -> i64 {
     block0:
         jump block1;
 
     block1:
         v4.i64 = umulsat v0 v1;
+        return v4;
+}
+
+func private %impl_trait_u256__saturating_mul(v0.i256, v1.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = umulsat v0 v1;
         return v4;
 }
 
@@ -116,15 +116,6 @@ func private %impl_trait_u256__saturating_sub(v0.i256, v1.i256) -> i256 {
         return v4;
 }
 
-func private %impl_trait_u256__wrapping_add(v0.i256, v1.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v4.i256 = add v0 v1;
-        return v4;
-}
-
 func private %impl_trait_u64__wrapping_add(v0.i64, v1.i64) -> i64 {
     block0:
         jump block1;
@@ -134,12 +125,12 @@ func private %impl_trait_u64__wrapping_add(v0.i64, v1.i64) -> i64 {
         return v4;
 }
 
-func private %impl_trait_u64__wrapping_mul(v0.i64, v1.i64) -> i64 {
+func private %impl_trait_u256__wrapping_add(v0.i256, v1.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v4.i64 = mul v0 v1;
+        v4.i256 = add v0 v1;
         return v4;
 }
 
@@ -149,6 +140,15 @@ func private %impl_trait_u256__wrapping_mul(v0.i256, v1.i256) -> i256 {
 
     block1:
         v4.i256 = mul v0 v1;
+        return v4;
+}
+
+func private %impl_trait_u64__wrapping_mul(v0.i64, v1.i64) -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i64 = mul v0 v1;
         return v4;
 }
 

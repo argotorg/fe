@@ -1,0 +1,12 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/fe_test_runner/sol_compat_int_event_logs.fe
+---
+=== STDOUT ===
+PASS  [<time>] sol_int_event_topics
+    log Log { address: 0xbd770416a3345f91e4b34576cb804a576fa48eb1, data: LogData { topics: [0x2d712881462e431c20bc1699080e9fad0f74afda152aad71a85554f2d2a4118f, 0x0000000000000000000000000000000000000000000000000000000000abcdef, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd6], data: 0x0000000000000000000000000000000000000000000000000000000000123456 } }
+
+test result: ok. 1 passed; 0 failed
+
+=== EXIT CODE: 0 ===
