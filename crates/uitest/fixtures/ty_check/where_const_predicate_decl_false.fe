@@ -1,0 +1,32 @@
+// FCO-M5 S1: declaration-site evaluation of parameter-free const predicates.
+// A predicate CTFE can already decide at the declaration errors right there;
+// no use site is needed to surface it.
+
+// Statically false predicate on a non-generic fn: errors at the decl.
+fn never_runs() -> u256 where false {
+    1
+}
+
+// Statically false comparison, still parameter-free.
+fn never_runs_cmp() -> u256 where 1 == 2 {
+    2
+}
+
+// Parameter-free CTFE fault: errors at the decl (faults are never silent).
+fn faulty_gate() -> u256 where 1 / 0 == 1 {
+    3
+}
+
+// Statically true predicate: no diagnostic.
+const LIMIT: u256 = 100
+fn fine() -> u256 where LIMIT > 10 {
+    4
+}
+
+// `false` on a *generic* fn: declaration-site evaluation is gated on "no
+// generic parameters in scope" (evaluating a predicate body that references
+// an unbound parameter is not attempted on this base), so this is deferred
+// to use-site discharge rather than decided here.
+fn never_runs_generic<T>() -> u256 where false {
+    5
+}

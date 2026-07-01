@@ -1,0 +1,98 @@
+// FCO-M5 S1: bare const-expression predicates in where clauses, re-derived
+// from the effort2 heritage corpus. This fixture pins the DECLARATION side:
+// every form parses (zero parse errors) and every predicate body
+// type-checks as a bool-expected anonymous const body. Use-site
+// discharge/enforcement is obligation-level work and gets its own fixtures
+// when it lands (S3); blessing call sites here would codify unenforced
+// semantics.
+
+trait Sized {
+    const SIZE: u256
+}
+
+trait Named {
+    const NAME_LEN: u256
+}
+
+struct Small {}
+impl Sized for Small { const SIZE: u256 = 1 }
+impl Named for Small { const NAME_LEN: u256 = 4 }
+
+struct Big {}
+impl Sized for Big { const SIZE: u256 = 999 }
+impl Named for Big { const NAME_LEN: u256 = 50 }
+
+// Bare expression: simple comparison
+fn check_big<T>() where T: Sized, T::SIZE >= 50
+{
+}
+
+// Bare expression: const fn call with commas inside parens
+const fn sum_ok(_ a: u256, _ b: u256) -> bool { a + b < 1000 }
+fn check_sum<T>() where T: Sized + Named, sum_ok(T::SIZE, T::NAME_LEN)
+{
+}
+
+// Bare expression: < as comparison not generic open
+fn check_lt<T>() where T: Sized, T::SIZE < 256
+{
+}
+
+// Bare expression: logical chain
+fn check_range<T>() where T: Sized, T::SIZE > 0 && T::SIZE < 500
+{
+}
+
+// Bare expression: parenthesized
+fn check_paren<T>() where T: Sized, (T::SIZE + 1) * 2 < 2000
+{
+}
+
+// Bare expression: negation
+fn check_nonzero<T>() where T: Sized, !(T::SIZE == 0)
+{
+}
+
+// Generic fn call in predicate
+const fn above_threshold<T>() -> bool where T: Sized { T::SIZE > 10 }
+fn check_generic_call<T>() where T: Sized, above_threshold<T>()
+{
+}
+
+// Mixed: type predicate then bare expression then block expression
+fn check_mixed<T>() where T: Sized + Named, T::SIZE < 500, { T::NAME_LEN < 100 }
+{
+}
+
+// Trailing comma after a bare predicate
+fn check_trailing<T>() where T: Sized, T::SIZE >= 50,
+{
+}
+
+// Where-clause owners beyond fn
+struct Wrap<T> where T: Sized, T::SIZE <= 32 {
+    inner: T
+}
+
+enum Opt<T> where T: Sized, T::SIZE <= 32 {
+    Some(T),
+    None,
+}
+
+trait BigOnly<T> where T: Sized, T::SIZE >= 50 {
+    fn big(self) -> u256
+}
+
+impl<T> Named for Wrap<T> where T: Sized, T::SIZE <= 32 {
+    const NAME_LEN: u256 = 4
+}
+
+// Trait method with bare predicate (bodyless context)
+trait Bounded {
+    fn must_fit<T>() where T: Sized, T::SIZE < 100
+}
+
+struct Checker {}
+impl Bounded for Checker {
+    fn must_fit<T>() where T: Sized, T::SIZE < 100 {}
+}

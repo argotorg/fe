@@ -1,0 +1,33 @@
+// FCO-M5 pair 4: a const predicate guards a generated ABI/layout path against
+// unsupported shapes. `static_abi_only` accepts only statically-sized shapes;
+// `AddressLike` (not dynamic) compiles, `BytesLike` (dynamic) is rejected with
+// 8-0085.
+//
+// Invariant: const predicates can protect generated ABI/layout paths from
+// unsupported shapes.
+
+trait AbiShape {
+    const IS_DYNAMIC: bool
+}
+
+struct AddressLike {}
+struct BytesLike {}
+
+impl AbiShape for AddressLike {
+    const IS_DYNAMIC: bool = false
+}
+
+impl AbiShape for BytesLike {
+    const IS_DYNAMIC: bool = true
+}
+
+fn static_abi_only<T: AbiShape>() where T::IS_DYNAMIC == false {
+}
+
+fn ok() {
+    static_abi_only<AddressLike>()
+}
+
+fn bad() {
+    static_abi_only<BytesLike>()
+}

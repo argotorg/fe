@@ -1,0 +1,29 @@
+// FCO-M5 S1, defect 1b: a bare-path predicate followed by a brace must NOT
+// parse as a record-init expression that swallows the item body
+// (`where FLAG { ... }` keeps the block with the item, the same way
+// `if`/`while` conditions do).
+
+const FLAG: bool = true
+const OFF: bool = false
+
+// `FLAG { 1 }` as record-init would eat the body; the predicate is `FLAG`.
+fn flag_gated() -> u256 where FLAG {
+    1
+}
+
+// The body still type-checks as the fn body (a record-init parse would
+// surface a bogus struct-literal error instead of this clean result).
+fn flag_gated_with_arg(_ x: u256) -> u256 where FLAG {
+    x
+}
+
+// A parameter-free false predicate behind the same shape still errors at
+// the declaration: proof the predicate is live, not silently dropped.
+fn off_gated() -> u256 where OFF {
+    2
+}
+
+// Struct sibling: `where FLAG` directly followed by the field list.
+struct Gated where FLAG {
+    value: u256
+}

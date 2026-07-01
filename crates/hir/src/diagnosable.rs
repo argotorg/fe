@@ -86,7 +86,7 @@ impl<'db> SuperTraitRefView<'db> {
     pub fn diags(self, db: &'db dyn HirAnalysisDb) -> Option<TyDiagCollection<'db>> {
         use name_resolution::{ExpectedPathKind, diagnostics::PathResDiag};
         use ty::trait_lower::{self, TraitRefLowerError};
-        use ty::trait_resolution::{WellFormedness, check_trait_inst_wf};
+        use ty::trait_resolution::check_trait_inst_wf;
 
         let span = self.span();
         let subject = self.subject_self(db);
@@ -124,23 +124,13 @@ impl<'db> SuperTraitRefView<'db> {
             return None;
         }
 
-        match check_trait_inst_wf(
+        check_trait_inst_wf(
             db,
             ty::trait_resolution::TraitSolveCx::new(db, scope)
                 .with_assumptions(param_env(db, self.owner.into())),
             inst,
-        ) {
-            WellFormedness::WellFormed => None,
-            WellFormedness::IllFormed { goal, subgoal } => Some(
-                TraitConstraintDiag::TraitBoundNotSat {
-                    span: span.into(),
-                    primary_goal: goal,
-                    unsat_subgoal: subgoal,
-                    required_by: None,
-                }
-                .into(),
-            ),
-        }
+        )
+        .into_diag(span.into())
     }
 }
 
@@ -273,6 +263,15 @@ impl<'db> WherePredicateBoundView<'db> {
                                     primary_goal: goal,
                                     unsat_subgoal: None,
                                     required_by: None,
+                                }
+                                .into(),
+                            );
+                        }
+                        WellFormedness::IllFormedConstPredicate { predicate } => {
+                            out.push(
+                                TraitConstraintDiag::ConstPredicateNotSat {
+                                    span: span.into(),
+                                    predicate,
                                 }
                                 .into(),
                             );
@@ -483,6 +482,15 @@ impl<'db> Trait<'db> {
                             .into(),
                         );
                     }
+                    WellFormedness::IllFormedConstPredicate { predicate } => {
+                        diags.push(
+                            TraitConstraintDiag::ConstPredicateNotSat {
+                                span: view.span().into(),
+                                predicate,
+                            }
+                            .into(),
+                        );
+                    }
                 }
             }
         }
@@ -526,6 +534,15 @@ impl<'db> Impl<'db> {
                         primary_goal: goal,
                         unsat_subgoal: subgoal,
                         required_by: None,
+                    }
+                    .into(),
+                );
+            }
+            InherentImplAdmissibility::IllFormedConstPredicate { predicate, .. } => {
+                out.push(
+                    TraitConstraintDiag::ConstPredicateNotSat {
+                        span: self.span().target_ty().into(),
+                        predicate,
                     }
                     .into(),
                 );
@@ -1207,6 +1224,15 @@ impl<'db> VariantView<'db> {
                         .into(),
                     );
                 }
+                WellFormedness::IllFormedConstPredicate { predicate } => {
+                    out.push(
+                        TraitConstraintDiag::ConstPredicateNotSat {
+                            span: span.clone().into(),
+                            predicate,
+                        }
+                        .into(),
+                    );
+                }
             }
         }
 
@@ -1555,6 +1581,13 @@ impl<'db> GenericParamOwner<'db> {
                                     primary_goal: goal,
                                     unsat_subgoal: None,
                                     required_by: None,
+                                }
+                                .into(),
+                            ),
+                            WellFormedness::IllFormedConstPredicate { predicate } => out.push(
+                                TraitConstraintDiag::ConstPredicateNotSat {
+                                    span: span.into(),
+                                    predicate,
                                 }
                                 .into(),
                             ),

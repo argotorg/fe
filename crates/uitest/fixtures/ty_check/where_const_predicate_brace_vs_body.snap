@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/where_const_predicate_brace_vs_body.fe
+---
+error[8-0085]: const predicate is not satisfied
+   ┌─ where_const_predicate_brace_vs_body.fe:45:32
+   │
+45 │ fn brace_false() -> u256 where { false }
+   │                                ^^^^^^^^^ const predicate evaluated to `false` here
+   │
+   = const predicates must be proven by an assumption or by CTFE evaluating to `true`
