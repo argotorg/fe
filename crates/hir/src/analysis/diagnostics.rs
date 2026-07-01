@@ -5,7 +5,10 @@
 
 use crate::analysis::{
     HirAnalysisDb,
-    name_resolution::diagnostics::{ImportDiag, PathResDiag},
+    name_resolution::{
+        diagnostics::{ImportDiag, PathResDiag},
+        is_scope_visible_from,
+    },
     ty::{
         diagnostics::{
             BodyDiag, CallConstraintDiagInfo, DefConflictError, FuncBodyDiag, ImplDiag,
@@ -4527,12 +4530,24 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                     primary_goal.pretty_print(db, false)
                 );
 
-                let unsat_subgoal = unsat_subgoal.map(|unsat| {
-                    format!(
-                        "trait bound `{}` is not satisfied",
-                        unsat.pretty_print(db, true)
-                    )
-                });
+                // Only surface the specific unsatisfied sub-goal when its trait
+                // is visible from where the error is reported. A bound on a
+                // trait the reader cannot name (e.g. a private sealed marker in
+                // another module) is unactionable noise, so we keep just the
+                // primary goal in that case.
+                let unsat_subgoal = unsat_subgoal
+                    .filter(|unsat| {
+                        let Some(from_scope) = span.scope() else {
+                            return true;
+                        };
+                        is_scope_visible_from(db, unsat.def(db).scope(), from_scope)
+                    })
+                    .map(|unsat| {
+                        format!(
+                            "trait bound `{}` is not satisfied",
+                            unsat.pretty_print(db, true)
+                        )
+                    });
 
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,

@@ -1,0 +1,23 @@
+use core::ops::WrappingAdd
+
+trait MarkerA {}
+trait MarkerB {}
+
+struct Both {
+    value: u256,
+}
+
+impl MarkerA for Both {}
+impl MarkerB for Both {}
+
+impl<T: MarkerA> WrappingAdd for T {
+    fn wrapping_add(self, _ other: T) -> Self {
+        self
+    }
+}
+
+impl<T: MarkerB> WrappingAdd for T {
+    fn wrapping_add(self, _ other: T) -> Self {
+        other
+    }
+}

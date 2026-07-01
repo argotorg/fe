@@ -9,8 +9,9 @@ use crate::analysis::{
     ty::{
         binder::Binder,
         canonical::{Canonical, Canonicalized, Solution},
+        fold::TyFoldable as _,
         method_table::{ProbedMethod, probe_method},
-        trait_def::{TraitInstId, impls_for_ty},
+        trait_def::{ImplementorId, TraitInstId, impls_for_ty},
         trait_resolution::{
             CanonicalGoalQuery, GoalSatisfiability, PredicateListId, TraitSolveCx,
             is_goal_query_satisfiable,
@@ -55,6 +56,38 @@ impl<'db> TraitMethodCand<'db> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum AssembledTraitMethodCand<'db> {
+    Impl {
+        implementor: Binder<ImplementorId<'db>>,
+        method: Func<'db>,
+    },
+    Assumption {
+        inst: TraitInstId<'db>,
+        method: Func<'db>,
+    },
+}
+
+impl<'db> AssembledTraitMethodCand<'db> {
+    fn trait_def(self, db: &'db dyn HirAnalysisDb) -> Trait<'db> {
+        match self {
+            AssembledTraitMethodCand::Impl { implementor, .. } => {
+                implementor.skip_binder().trait_def(db)
+            }
+            AssembledTraitMethodCand::Assumption { inst, .. } => inst.def(db),
+        }
+    }
+
+    fn diagnostic_inst(self, db: &'db dyn HirAnalysisDb) -> TraitInstId<'db> {
+        match self {
+            AssembledTraitMethodCand::Impl { implementor, .. } => {
+                implementor.skip_binder().trait_(db)
+            }
+            AssembledTraitMethodCand::Assumption { inst, .. } => inst,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AmbiguousTraitMethodCand<'db> {
     pub cand: TraitMethodCand<'db>,
@@ -65,6 +98,14 @@ pub struct AmbiguousTraitMethodCand<'db> {
 pub struct AmbiguousTraitMethods<'db> {
     pub candidates: ThinVec<AmbiguousTraitMethodCand<'db>>,
     pub diagnostic_traits: ThinVec<TraitInstId<'db>>,
+}
+
+#[derive(Clone, Copy)]
+enum TraitCandidateCheck<'db> {
+    Confirmed(TraitMethodCand<'db>),
+    NeedsConfirmation(TraitMethodCand<'db>),
+    Unsatisfied(TraitMethodCand<'db>),
+    Rejected,
 }
 
 pub(crate) fn select_method_candidate<'db>(
@@ -177,7 +218,7 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
             ];
             for ingot in search_ingots.into_iter().flatten() {
                 for &imp in impls_for_ty(self.db, ingot, self.receiver.canonical()) {
-                    self.insert_trait_method_cand(imp.skip_binder().trait_(self.db));
+                    self.insert_impl_trait_method_cand(imp);
                 }
             }
         }
@@ -196,10 +237,10 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
                 };
 
                 if cx.unify::<TyId<'db>>(receiver, self_ty).is_ok() {
-                    self.insert_trait_method_cand(pred);
+                    self.insert_assumption_trait_method_cand(pred);
                     for super_trait in pred.def(self.db).super_traits(self.db) {
                         let super_trait = super_trait.instantiate(self.db, pred.args(self.db));
-                        self.insert_trait_method_cand(super_trait);
+                        self.insert_assumption_trait_method_cand(super_trait);
                     }
                 }
 
@@ -212,13 +253,32 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
         self.trait_.map(|t| t == trait_def).unwrap_or(true)
     }
 
-    fn insert_trait_method_cand(&mut self, inst: TraitInstId<'db>) {
-        let trait_def = inst.def(self.db);
+    fn insert_impl_trait_method_cand(&mut self, implementor: Binder<ImplementorId<'db>>) {
+        let trait_def = implementor.skip_binder().trait_def(self.db);
         if !self.allow_trait(trait_def) {
             return;
         }
         if let Some(&trait_method) = trait_def.method_defs(self.db).get(&self.method_name) {
-            self.candidates.traits.insert((inst, trait_method));
+            self.candidates
+                .traits
+                .insert(AssembledTraitMethodCand::Impl {
+                    implementor,
+                    method: trait_method,
+                });
+        }
+    }
+
+    fn insert_assumption_trait_method_cand(&mut self, inst: TraitInstId<'db>) {
+        let trait_def = inst.def(self.db);
+        if self.allow_trait(trait_def)
+            && let Some(&trait_method) = trait_def.method_defs(self.db).get(&self.method_name)
+        {
+            self.candidates
+                .traits
+                .insert(AssembledTraitMethodCand::Assumption {
+                    inst,
+                    method: trait_method,
+                });
         }
     }
 }
@@ -286,35 +346,80 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
     /// * `Err(MethodSelectionError)` - An error indicating the reason for
     ///   failure.
     fn select_trait_methods(&self) -> Result<MethodCandidate<'db>, MethodSelectionError<'db>> {
-        let traits = &self.candidates.traits;
+        // For a fully-known receiver, drop trait candidates whose impl is
+        // provably inapplicable: either the self type cannot unify
+        // (`Rejected`) or the impl's `where`-clause is unsatisfiable
+        // (`Unsatisfied`). Otherwise a blanket `impl<T: Marker> Trait for T`
+        // that cannot apply to this receiver would still count as a competing
+        // candidate below and could, for instance, turn an otherwise
+        // unambiguous `concrete.method()` call into a spurious "import the
+        // trait" error (the single-candidate path resolves without requiring
+        // the trait to be in scope, but a second, inapplicable candidate
+        // defeats it).
+        //
+        // With an inference-variable receiver we cannot prove inapplicability
+        // yet, so everything is kept (matching the prior behavior). If pruning
+        // would remove every candidate, the originals are kept so the
+        // unsatisfied-bound diagnostics below still fire instead of reporting
+        // "not found".
+        //
+        // Each candidate is checked exactly once here and the result is carried
+        // through pruning and selection, so the trait solver isn't re-run for
+        // the same candidate.
+        let checked: Vec<(AssembledTraitMethodCand<'db>, TraitCandidateCheck<'db>)> = self
+            .candidates
+            .traits
+            .iter()
+            .copied()
+            .map(|cand| (cand, self.check_trait_cand(cand)))
+            .collect();
+        let checked: Vec<(AssembledTraitMethodCand<'db>, TraitCandidateCheck<'db>)> =
+            if checked.len() > 1 && !self.receiver.original().has_var(self.db) {
+                let applicable: Vec<_> = checked
+                    .iter()
+                    .copied()
+                    .filter(|(_, check)| {
+                        !matches!(
+                            check,
+                            TraitCandidateCheck::Rejected | TraitCandidateCheck::Unsatisfied(_)
+                        )
+                    })
+                    .collect();
+                if applicable.is_empty() {
+                    checked
+                } else {
+                    applicable
+                }
+            } else {
+                checked
+            };
 
-        if traits.len() == 1 {
-            let (inst, method) = traits.iter().next().unwrap();
-            return Ok(self.check_inst(*inst, *method));
+        if checked.len() == 1 {
+            return Self::finalize_sole_check(checked[0].1);
         }
 
         let available_traits = self.available_traits();
-        let visible_traits: Vec<_> = traits
+        let visible: Vec<_> = checked
             .iter()
             .copied()
-            .filter(|(inst, _method)| available_traits.contains(&inst.def(self.db)))
+            .filter(|(cand, _)| available_traits.contains(&cand.trait_def(self.db)))
             .collect();
 
-        match visible_traits.len() {
+        match visible.len() {
             0 => {
-                if traits.is_empty() {
+                if checked.is_empty() {
                     Err(MethodSelectionError::NotFound)
                 } else {
                     // Suggests trait imports.
-                    let traits = traits.iter().map(|(inst, _)| inst.def(self.db)).collect();
+                    let traits = checked
+                        .iter()
+                        .map(|(cand, _)| cand.trait_def(self.db))
+                        .collect();
                     Err(MethodSelectionError::InvisibleTraitMethod(traits))
                 }
             }
 
-            1 => {
-                let (def, method) = visible_traits[0];
-                Ok(self.check_inst(def, method))
-            }
+            1 => Self::finalize_sole_check(visible[0].1),
 
             _ => {
                 // Some candidates are equivalent after trait solving (e.g., an explicit
@@ -322,16 +427,51 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                 // must still treat distinct methods as ambiguous so later return-type
                 // constraints can disambiguate them.
                 let mut selected = IndexMap::default();
-                for (inst, method) in visible_traits.iter().copied() {
-                    match self.check_inst(inst, method) {
-                        MethodCandidate::TraitMethod(cand) => {
-                            selected.insert(cand, true);
+                let mut unsatisfied = IndexSet::default();
+                for (_, check) in visible.iter().copied() {
+                    match check {
+                        TraitCandidateCheck::Confirmed(cand) => {
+                            selected
+                                .entry(cand)
+                                .and_modify(|confirmed| *confirmed = true)
+                                .or_insert(true);
                         }
-                        MethodCandidate::NeedsConfirmation(cand) => {
+                        TraitCandidateCheck::NeedsConfirmation(cand) => {
                             selected.entry(cand).or_insert(false);
                         }
-                        MethodCandidate::InherentMethod(_) => unreachable!(),
+                        TraitCandidateCheck::Unsatisfied(cand) => {
+                            unsatisfied.insert(cand);
+                        }
+                        TraitCandidateCheck::Rejected => {}
                     }
+                }
+
+                if selected.is_empty() {
+                    if unsatisfied.len() == 1 {
+                        return Ok(MethodCandidate::NeedsConfirmation(
+                            *unsatisfied.iter().next().unwrap(),
+                        ));
+                    }
+                    if !unsatisfied.is_empty() {
+                        let diagnostic_traits = visible
+                            .iter()
+                            .map(|(cand, _)| cand.diagnostic_inst(self.db))
+                            .collect();
+                        let candidates = unsatisfied
+                            .into_iter()
+                            .map(|cand| AmbiguousTraitMethodCand {
+                                cand,
+                                needs_confirmation: true,
+                            })
+                            .collect();
+                        return Err(MethodSelectionError::AmbiguousTraitMethod(
+                            AmbiguousTraitMethods {
+                                candidates,
+                                diagnostic_traits,
+                            },
+                        ));
+                    }
+                    return Err(MethodSelectionError::NotFound);
                 }
 
                 if selected.len() == 1 {
@@ -345,19 +485,22 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
 
                 let confirmed: Vec<_> = selected
                     .iter()
-                    .filter_map(|(&cand, &is_confirmed)| is_confirmed.then_some(cand))
+                    .filter_map(|(&cand, &confirmed)| confirmed.then_some(cand))
                     .collect();
                 if confirmed.len() == 1
                     && (self.receiver.original().has_var(self.db)
                         || selected
                             .iter()
-                            .filter_map(|(&cand, &is_confirmed)| (!is_confirmed).then_some(cand))
+                            .filter_map(|(&cand, &confirmed)| (!confirmed).then_some(cand))
                             .all(|cand| self.candidate_specializes_to(cand, confirmed[0])))
                 {
                     return Ok(MethodCandidate::TraitMethod(confirmed[0]));
                 }
 
-                let diagnostic_traits = visible_traits.iter().map(|cand| cand.0).collect();
+                let diagnostic_traits = visible
+                    .iter()
+                    .map(|(cand, _)| cand.diagnostic_inst(self.db))
+                    .collect();
                 let candidates = selected
                     .into_iter()
                     .map(|(cand, confirmed)| AmbiguousTraitMethodCand {
@@ -372,6 +515,23 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                     },
                 ))
             }
+        }
+    }
+
+    /// Resolves the outcome when a single trait candidate remains (the only
+    /// assembled candidate, or the only visible one). An unsatisfiable
+    /// candidate is still surfaced as `NeedsConfirmation` so the unmet bound is
+    /// reported downstream rather than as a bare "method not found".
+    fn finalize_sole_check(
+        check: TraitCandidateCheck<'db>,
+    ) -> Result<MethodCandidate<'db>, MethodSelectionError<'db>> {
+        match check {
+            TraitCandidateCheck::Confirmed(cand) => Ok(MethodCandidate::TraitMethod(cand)),
+            TraitCandidateCheck::NeedsConfirmation(cand)
+            | TraitCandidateCheck::Unsatisfied(cand) => {
+                Ok(MethodCandidate::NeedsConfirmation(cand))
+            }
+            TraitCandidateCheck::Rejected => Err(MethodSelectionError::NotFound),
         }
     }
 
@@ -405,6 +565,82 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                 })
             }
             GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => false,
+        }
+    }
+
+    fn check_trait_cand(&self, cand: AssembledTraitMethodCand<'db>) -> TraitCandidateCheck<'db> {
+        match cand {
+            AssembledTraitMethodCand::Impl {
+                implementor,
+                method,
+            } => self.check_impl_cand(implementor, method),
+            AssembledTraitMethodCand::Assumption { inst, method } => {
+                match self.check_inst(inst, method) {
+                    MethodCandidate::TraitMethod(cand) => TraitCandidateCheck::Confirmed(cand),
+                    MethodCandidate::NeedsConfirmation(cand) => {
+                        TraitCandidateCheck::NeedsConfirmation(cand)
+                    }
+                    MethodCandidate::InherentMethod(_) => unreachable!(),
+                }
+            }
+        }
+    }
+
+    fn check_impl_cand(
+        &self,
+        implementor: Binder<ImplementorId<'db>>,
+        method: Func<'db>,
+    ) -> TraitCandidateCheck<'db> {
+        let mut table = UnificationTable::new(self.db);
+        let receiver_ty = self.receiver.canonical().extract_identity(&mut table);
+        let implementor = table.instantiate_with_fresh_vars(implementor);
+        let impl_ty = table.instantiate_to_term(implementor.self_ty(self.db));
+        let receiver_ty = table.instantiate_to_term(receiver_ty);
+        if table.unify(impl_ty, receiver_ty).is_err() {
+            return TraitCandidateCheck::Rejected;
+        }
+
+        let solve_cx = TraitSolveCx::new(self.db, self.scope).with_assumptions(self.assumptions);
+        let mut needs_confirmation = false;
+        let mut unsatisfied = false;
+        for &constraint in implementor.constraints(self.db).list(self.db) {
+            let constraint = constraint.fold_with(self.db, &mut table);
+            let query = CanonicalGoalQuery::new(self.db, constraint, self.assumptions);
+            match is_goal_query_satisfiable(self.db, solve_cx, &query) {
+                GoalSatisfiability::Satisfied(solution) => {
+                    // A unique solution can bind impl parameters that the self
+                    // type doesn't determine (e.g. a trait argument fixed only
+                    // by this bound). Unify it back into the table so the trait
+                    // instance built below reflects those bindings instead of
+                    // leaving them as unconstrained inference variables (which
+                    // would drop the bound from the inferred method signature).
+                    let solved = query.extract_solution(&mut table, solution).inst;
+                    let _ = table.unify(constraint, solved);
+                }
+                GoalSatisfiability::NeedsConfirmation(_) | GoalSatisfiability::ContainsInvalid => {
+                    needs_confirmation = true;
+                }
+                GoalSatisfiability::UnSat(_) => {
+                    unsatisfied = true;
+                    break;
+                }
+            }
+        }
+
+        let inst = implementor
+            .trait_inst(self.db)
+            .fold_with(self.db, &mut table);
+        let cand = TraitMethodCand::new(
+            self.receiver
+                .canonicalize_solution(self.db, &mut table, inst),
+            method,
+        );
+        if unsatisfied {
+            TraitCandidateCheck::Unsatisfied(cand)
+        } else if needs_confirmation {
+            TraitCandidateCheck::NeedsConfirmation(cand)
+        } else {
+            TraitCandidateCheck::Confirmed(cand)
         }
     }
 
@@ -514,7 +750,7 @@ pub enum MethodSelectionError<'db> {
 #[derive(Default)]
 struct AssembledCandidates<'db> {
     inherent_methods: FxHashSet<ProbedMethod<'db>>,
-    traits: IndexSet<(TraitInstId<'db>, Func<'db>)>,
+    traits: IndexSet<AssembledTraitMethodCand<'db>>,
 }
 
 impl<'db> AssembledCandidates<'db> {

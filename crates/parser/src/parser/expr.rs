@@ -266,7 +266,7 @@ impl super::Parse for LetExprScope {
         parser.bump_expected(SyntaxKind::LetKw);
         parser.set_newline_as_trivia(false);
         parse_pat(parser)?;
-        parser.bump_expected(SyntaxKind::Eq);
+        parser.bump_or_recover(SyntaxKind::Eq, "expected `=` after `let` pattern")?;
         parse_expr_with_min_bp(parser, LET_CONDITION_RHS_MIN_BP, false, false, None)
     }
 }

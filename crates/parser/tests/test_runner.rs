@@ -13,17 +13,6 @@ use fe_parser::{
 use test_utils::normalize::normalize_newlines;
 use tracing::error;
 
-static INIT: Once = Once::new();
-
-fn init_tracing() {
-    INIT.call_once(|| {
-        tracing_subscriber::fmt()
-            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-            .with_test_writer()
-            .init();
-    });
-}
-
 type BoxedParseFn = Box<dyn Fn(&mut Parser<lexer::Lexer>) -> Result<(), Recovery<ErrProof>>>;
 pub struct TestRunner {
     f: BoxedParseFn,
@@ -106,7 +95,7 @@ impl TestRunner {
     }
 
     pub fn run(&self, input: &str) -> (SyntaxNode, Vec<ParseError>) {
-        init_tracing();
+        let _logging = test_utils::setup_test_tracing();
         let input = normalize_newlines(input);
         let input = input.as_ref();
         let lexer = lexer::Lexer::new(input);

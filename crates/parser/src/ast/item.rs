@@ -790,6 +790,7 @@ mod tests {
     where
         T: TryFrom<ItemKind, Error = TryIntoError<ItemKind>>,
     {
+        let _logging = test_utils::setup_test_tracing();
         let lexer = Lexer::new(source);
         let mut parser = Parser::new(lexer, RecoveryMode::Recover);
 

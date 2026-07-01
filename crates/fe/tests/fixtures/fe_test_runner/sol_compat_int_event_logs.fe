@@ -1,0 +1,26 @@
+// Asserts the *contents* of event topics/data for custom-width Solidity int
+// wrappers, whose `TopicValue` (indexed fields) and `Encode` (data fields) are
+// provided by blanket impls in `std::abi::sol::ints`. The emitted log is
+// snapshotted, so the exact encoded words are checked:
+//   - an unsigned `Uint160` indexed topic is left-padded,
+//   - a *negative* `Int24` indexed topic is sign-extended to 32 bytes,
+//   - a non-indexed `Uint24` is encoded into the data word.
+use std::abi::sol::{Int24, Uint24, Uint160}
+
+#[event]
+struct Swap {
+    #[indexed]
+    sender: Uint160,
+    #[indexed]
+    tick: Int24,
+    amount: Uint24,
+}
+
+#[test]
+fn sol_int_event_topics() uses (evm: mut Evm) {
+    evm.emit(Swap {
+        sender: Uint160 { val: 0xabcdef },
+        tick: Int24 { val: -42 },
+        amount: Uint24 { val: 0x123456 },
+    })
+}

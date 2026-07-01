@@ -92,7 +92,7 @@ func private %bump__gb2d8(v0.objref<@layout_0>) {
         return;
 }
 
-func private %impl_trait_StorPtr__from_raw__gb2d8(v0.i256) -> i256 {
+func private %impl_trait_MemPtr__from_raw__gb2d8(v0.i256) -> i256 {
     block0:
         jump block1;
 
@@ -100,7 +100,7 @@ func private %impl_trait_StorPtr__from_raw__gb2d8(v0.i256) -> i256 {
         return v0;
 }
 
-func private %impl_trait_MemPtr__from_raw__gb2d8(v0.i256) -> i256 {
+func private %impl_trait_StorPtr__from_raw__gb2d8(v0.i256) -> i256 {
     block0:
         jump block1;
 

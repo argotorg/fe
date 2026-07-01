@@ -34,7 +34,7 @@ use crate::analysis::{
         layout_holes::layout_hole_with_fallback_ty,
         method_table::probe_method,
         normalize::normalize_ty,
-        trait_def::{TraitInstId, impls_for_ty_with_constraints},
+        trait_def::{TraitInstId, impls_for_ty_with_satisfied_constraints},
         trait_lower::{TraitArgError, TraitRefLowerError, lower_trait_ref, lower_trait_ref_impl},
         trait_resolution::{
             GoalSatisfiability, PredicateListId, TraitSolveCx, constraint::collect_constraints,
@@ -1498,7 +1498,9 @@ fn select_assoc_const_candidate<'db>(
 
     let mut matches: IndexSet<TraitInstId<'db>> = IndexSet::default();
     for ingot in search_ingots.into_iter().flatten() {
-        for cand in impls_for_ty_with_constraints(db, ingot, canonical_receiver, assumptions) {
+        for cand in
+            impls_for_ty_with_satisfied_constraints(db, ingot, canonical_receiver, assumptions)
+        {
             let inst = cand.skip_binder().trait_(db);
             let trait_ = inst.def(db);
             if trait_.const_(db, name).is_some() {
@@ -1594,17 +1596,21 @@ pub(crate) fn find_associated_type<'db>(
 
         // Search both the call-site ingot and the receiver's ingot so local
         // traits on external types and external traits on local types are both visible.
-        for ingot in search_ingots.into_iter().flatten() {
-            for impl_ in impls_for_ty_with_constraints(db, ingot, canonical_ty, assumptions) {
-                if let Some(Some((inst, assoc_ty))) =
-                    cx.with_impl_assoc_ty(impl_, lhs_ty, name, |cx, inst, assoc_ty| {
-                        Some((
-                            cx.try_extract::<TraitInstId<'db>>(inst)?,
-                            cx.try_extract::<TyId<'db>>(assoc_ty)?,
-                        ))
-                    })
+        if !matches!(original_ty.data(db), TyData::TyParam(_)) {
+            for ingot in search_ingots.into_iter().flatten() {
+                for impl_ in
+                    impls_for_ty_with_satisfied_constraints(db, ingot, canonical_ty, assumptions)
                 {
-                    candidates.push((inst, assoc_ty));
+                    if let Some(Some((inst, assoc_ty))) =
+                        cx.with_impl_assoc_ty(impl_, lhs_ty, name, |cx, inst, assoc_ty| {
+                            Some((
+                                cx.try_extract::<TraitInstId<'db>>(inst)?,
+                                cx.try_extract::<TyId<'db>>(assoc_ty)?,
+                            ))
+                        })
+                    {
+                        candidates.push((inst, assoc_ty));
+                    }
                 }
             }
         }

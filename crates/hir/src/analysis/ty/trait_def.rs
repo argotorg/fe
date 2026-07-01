@@ -235,12 +235,32 @@ pub fn resolve_trait_method_instance<'db>(
     Some((func, trait_args))
 }
 
-/// Returns all implementors for the given `ty` that satisfy the given assumptions.
-pub(crate) fn impls_for_ty_with_constraints<'db>(
+/// Returns all implementors for the given `ty` whose constraints are fully proven.
+pub(crate) fn impls_for_ty_with_satisfied_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
     ty: Canonical<TyId<'db>>,
     assumptions: PredicateListId<'db>,
+) -> Vec<Binder<ImplementorId<'db>>> {
+    impls_for_ty_with_constraint_mode(db, ingot, ty, assumptions, false)
+}
+
+/// Returns implementors whose constraints are not known to be unsatisfied.
+pub(crate) fn impls_for_ty_with_possible_constraints<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: Ingot<'db>,
+    ty: Canonical<TyId<'db>>,
+    assumptions: PredicateListId<'db>,
+) -> Vec<Binder<ImplementorId<'db>>> {
+    impls_for_ty_with_constraint_mode(db, ingot, ty, assumptions, true)
+}
+
+fn impls_for_ty_with_constraint_mode<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: Ingot<'db>,
+    ty: Canonical<TyId<'db>>,
+    assumptions: PredicateListId<'db>,
+    allow_needs_confirmation: bool,
 ) -> Vec<Binder<ImplementorId<'db>>> {
     let mut table = UnificationTable::new(db);
     let ty = ty.extract_identity(&mut table);
@@ -280,7 +300,6 @@ pub(crate) fn impls_for_ty_with_constraints<'db>(
             let unifies = table.unify(impl_ty, ty_term).is_ok();
 
             if unifies {
-                // Filter out impls that don't satisfy assumptions
                 let impl_constraints = inst.constraints(db);
                 if impl_constraints.is_empty(db) {
                     table.rollback_to(snapshot);
@@ -288,14 +307,18 @@ pub(crate) fn impls_for_ty_with_constraints<'db>(
                 }
 
                 for &constraint in impl_constraints.list(db) {
-                    match is_goal_satisfiable(db, solve_cx, constraint) {
-                        GoalSatisfiability::UnSat(_) => {
-                            table.rollback_to(snapshot);
-                            return false;
-                        }
-                        _ => {
-                            // Ignoring the NeedsConfirmation case for now
-                        }
+                    let constraint = constraint.fold_with(db, &mut table);
+                    let satisfiability = is_goal_satisfiable(db, solve_cx, constraint);
+                    let constraint_holds =
+                        matches!(satisfiability, GoalSatisfiability::Satisfied(_))
+                            || (allow_needs_confirmation
+                                && matches!(
+                                    satisfiability,
+                                    GoalSatisfiability::NeedsConfirmation(_)
+                                ));
+                    if !constraint_holds {
+                        table.rollback_to(snapshot);
+                        return false;
                     }
                 }
             }

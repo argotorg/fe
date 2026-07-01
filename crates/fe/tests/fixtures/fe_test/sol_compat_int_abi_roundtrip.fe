@@ -1,0 +1,80 @@
+// Runtime coverage for the ABI traits on custom-width Solidity int wrappers
+// (`Encode` / `Decode` / `AbiSize` / `AbiSpan` / `TopicValue`), which are
+// provided by marker-gated blanket impls in `std::abi::sol::ints`. Round-trips
+// a value through a contract call (caller-side `Encode`, callee-side `Decode`,
+// and the re-`Encode`d return) and emits an event whose indexed field uses
+// `TopicValue`.
+use std::abi::sol
+use std::abi::sol::{Uint160, Int24}
+use std::evm::{Evm, Log}
+
+msg M {
+    #[selector = sol("rtU160(uint160)")]
+    RtU160 { v: Uint160 } -> Uint160,
+    #[selector = sol("rtI24(int24)")]
+    RtI24 { v: Int24 } -> Int24,
+    #[selector = sol("emitSwap(uint160,int24)")]
+    EmitSwap { sender: Uint160, tick: Int24 },
+}
+
+#[event]
+struct Swap {
+    #[indexed]
+    sender: Uint160,
+    tick: Int24,
+}
+
+pub contract C uses (log: mut Log) {
+    init() {}
+
+    recv M {
+        RtU160 { v } -> Uint160 {
+            v
+        }
+        RtI24 { v } -> Int24 {
+            v
+        }
+        EmitSwap { sender, tick } uses (mut log) {
+            log.emit(Swap { sender: sender, tick: tick })
+        }
+    }
+}
+
+#[test]
+fn uint160_abi_roundtrip() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 0)
+
+    let max_u160: u256 = ((1 as u256) << 160) - 1
+    let r: Uint160 = evm.call(addr: c, gas: 2000000, value: 0, message: M::RtU160 { v: Uint160 { val: max_u160 } })
+    assert(r.val == max_u160)
+
+    let r: Uint160 = evm.call(addr: c, gas: 2000000, value: 0, message: M::RtU160 { v: Uint160 { val: 0x1234 } })
+    assert(r.val == 0x1234)
+}
+
+#[test]
+fn int24_abi_roundtrip() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 2)
+
+    // Exercises signed custom-width decode/encode (sign-extension) directly,
+    // across the full int24 range including negatives.
+    let r: Int24 = evm.call(addr: c, gas: 2000000, value: 0, message: M::RtI24 { v: Int24 { val: 8388607 } })
+    assert(r.val == 8388607)
+
+    let r: Int24 = evm.call(addr: c, gas: 2000000, value: 0, message: M::RtI24 { v: Int24 { val: -8388608 } })
+    assert(r.val == -8388608)
+
+    let r: Int24 = evm.call(addr: c, gas: 2000000, value: 0, message: M::RtI24 { v: Int24 { val: -1 } })
+    assert(r.val == -1)
+}
+
+#[test]
+fn event_indexed_uint160_topic() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 1)
+    evm.call(
+        addr: c,
+        gas: 2000000,
+        value: 0,
+        message: M::EmitSwap { sender: Uint160 { val: 0xabcdef }, tick: Int24 { val: -42 } },
+    )
+}
