@@ -557,7 +557,9 @@ impl<'db> TyFolder<'db> for AssocTySubst<'db> {
                 let folded_trait = assoc_ty.trait_.fold_with(db, self);
 
                 // Check if this associated type belongs to our trait instance
-                if assoc_ty.trait_.def(db) == self.trait_inst.def(db) {
+                if folded_trait.def(db) == self.trait_inst.def(db)
+                    && folded_trait.args(db) == self.trait_inst.args(db)
+                {
                     // Check if we have a binding for this associated type
                     if let Some(&bound_ty) =
                         self.trait_inst.assoc_type_bindings(db).get(&assoc_ty.name)

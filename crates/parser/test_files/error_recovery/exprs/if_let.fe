@@ -1,0 +1,4 @@
+if let Foo(i,j) foo {}
+if let (x, y) = (1, 2) {
+
+}

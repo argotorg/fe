@@ -28,6 +28,19 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt, clippy
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Generate tree-sitter parser
+        working-directory: crates/tree-sitter-fe
+        run: |
+          # Install only the pinned tree-sitter CLI (skip the root package's
+          # Node-addon build, which the Rust build doesn't use), then generate
+          # parser.c and friends from grammar.js.
+          npm ci --ignore-scripts
+          npm rebuild tree-sitter-cli
+          npx tree-sitter generate --abi=14
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2
       - name: Validate release notes entry
@@ -53,6 +66,20 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Generate tree-sitter parser
+        working-directory: crates/tree-sitter-fe
+        shell: bash
+        run: |
+          # Install only the pinned tree-sitter CLI (skip the root package's
+          # Node-addon build, which the Rust build doesn't use), then generate
+          # parser.c and friends from grammar.js.
+          npm ci --ignore-scripts
+          npm rebuild tree-sitter-cli
+          npx tree-sitter generate --abi=14
       - name: Cache solc
         id: solc-cache
         uses: actions/cache@v4

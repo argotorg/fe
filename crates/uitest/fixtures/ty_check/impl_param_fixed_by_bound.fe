@@ -1,0 +1,27 @@
+// Regression: an impl parameter that the self type doesn't determine but a
+// `where`-clause does (here `U`, fixed by `U: Marker`) must stay bound when the
+// method is selected. Otherwise `U` is left unconstrained and the `U: Marker`
+// obligation is dropped, so `x.consume(Bar {})` would type-check even though
+// `Bar` is not a `Marker` (and then fail only at codegen).
+//
+// With the bound applied, `U` resolves to the sole `Marker` type `Foo`, so
+// passing a `Bar` is correctly rejected here in the frontend.
+trait Marker {}
+
+struct Foo {}
+impl Marker for Foo {}
+
+struct Bar {}
+
+trait Consume<U> {
+    fn consume(self, _ u: U)
+}
+
+impl<T, U: Marker> Consume<U> for T {
+    fn consume(self, _ u: U) {}
+}
+
+fn caller() {
+    let x = Bar {}
+    x.consume(Bar {})
+}

@@ -210,3 +210,67 @@ where A: StorageKey,
         a_len + b_len
     }
 }
+
+impl<A, B, C> StorageKey for (A, B, C)
+where A: StorageKey,
+      B: StorageKey,
+      C: StorageKey {
+    #[inline(always)]
+    fn write_key(ptr: u256, self) -> u256 {
+        let a_len = A::write_key(ptr: ptr, self.0)
+        let b_len = B::write_key(ptr: ptr + a_len, self.1)
+        let c_len = C::write_key(ptr: ptr + a_len + b_len, self.2)
+        a_len + b_len + c_len
+    }
+}
+
+impl<A, B, C, D> StorageKey for (A, B, C, D)
+where A: StorageKey,
+      B: StorageKey,
+      C: StorageKey,
+      D: StorageKey {
+    #[inline(always)]
+    fn write_key(ptr: u256, self) -> u256 {
+        let a_len = A::write_key(ptr: ptr, self.0)
+        let b_len = B::write_key(ptr: ptr + a_len, self.1)
+        let c_len = C::write_key(ptr: ptr + a_len + b_len, self.2)
+        let d_len = D::write_key(ptr: ptr + a_len + b_len + c_len, self.3)
+        a_len + b_len + c_len + d_len
+    }
+}
+
+impl<A, B, C, D, E> StorageKey for (A, B, C, D, E)
+where A: StorageKey,
+      B: StorageKey,
+      C: StorageKey,
+      D: StorageKey,
+      E: StorageKey {
+    #[inline(always)]
+    fn write_key(ptr: u256, self) -> u256 {
+        let a_len = A::write_key(ptr: ptr, self.0)
+        let b_len = B::write_key(ptr: ptr + a_len, self.1)
+        let c_len = C::write_key(ptr: ptr + a_len + b_len, self.2)
+        let d_len = D::write_key(ptr: ptr + a_len + b_len + c_len, self.3)
+        let e_len = E::write_key(ptr: ptr + a_len + b_len + c_len + d_len, self.4)
+        a_len + b_len + c_len + d_len + e_len
+    }
+}
+
+impl<A, B, C, D, E, F> StorageKey for (A, B, C, D, E, F)
+where A: StorageKey,
+      B: StorageKey,
+      C: StorageKey,
+      D: StorageKey,
+      E: StorageKey,
+      F: StorageKey {
+    #[inline(always)]
+    fn write_key(ptr: u256, self) -> u256 {
+        let a_len = A::write_key(ptr: ptr, self.0)
+        let b_len = B::write_key(ptr: ptr + a_len, self.1)
+        let c_len = C::write_key(ptr: ptr + a_len + b_len, self.2)
+        let d_len = D::write_key(ptr: ptr + a_len + b_len + c_len, self.3)
+        let e_len = E::write_key(ptr: ptr + a_len + b_len + c_len + d_len, self.4)
+        let f_len = F::write_key(ptr: ptr + a_len + b_len + c_len + d_len + e_len, self.5)
+        a_len + b_len + c_len + d_len + e_len + f_len
+    }
+}

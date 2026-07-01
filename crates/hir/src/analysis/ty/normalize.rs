@@ -14,7 +14,7 @@ use super::{
     canonical::Canonical,
     canonical::Canonicalized,
     fold::{TyFoldable, TyFolder},
-    trait_def::{TraitInstId, impls_for_ty_with_constraints},
+    trait_def::{TraitInstId, impls_for_ty_with_possible_constraints},
     trait_resolution::{PredicateListId, TraitSolveCx},
     ty_def::{AssocTy, TyData, TyId, TyParam},
     visitor::{TyVisitable, TyVisitor},
@@ -252,7 +252,7 @@ impl<'db> TypeNormalizer<'db> {
         canonical_target.with_materialized(self.db, |cx| {
             let target_inst = cx.query();
             for ingot in search_ingots.into_iter().flatten() {
-                for implementor in impls_for_ty_with_constraints(
+                for implementor in impls_for_ty_with_possible_constraints(
                     self.db,
                     ingot,
                     canonical_self_ty,

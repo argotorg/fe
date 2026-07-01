@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/impl_param_fixed_by_bound.fe
+---
+error[8-0000]: type mismatch
+   ┌─ impl_param_fixed_by_bound.fe:26:15
+   │
+26 │     x.consume(Bar {})
+   │               ^^^^^^ expected `Foo`, but `Bar` is given

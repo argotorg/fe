@@ -1,0 +1,14 @@
+---
+source: crates/uitest/tests/ty.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty/def/local_bound_blanket_foreign_trait_impl_sealed_marker_conflict.fe
+---
+error[5-0001]: conflicting trait implementations
+   ┌─ local_bound_blanket_foreign_trait_impl_sealed_marker_conflict.fe:13:34
+   │
+13 │ impl<T: MarkerA> WrappingAdd for T {
+   │                                  ^ this trait implementation
+   ·
+19 │ impl<T: MarkerB> WrappingAdd for T {
+   │                                  - conflicts with this trait implementation

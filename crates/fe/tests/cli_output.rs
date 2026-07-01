@@ -577,6 +577,175 @@ fn test_cli_build_emit_metadata_ingot_includes_all_sources() {
 }
 
 #[test]
+fn test_cli_build_ingot_with_multiple_library_modules() {
+    // An ingot with several non-contract "library" modules plus a contract must
+    // build the contract without colliding on a synthesized `main` object (one
+    // was previously emitted per non-contract module). See the duplicate-`main`
+    // regression.
+    let temp = tempdir().expect("tempdir");
+    let src_dir = temp.path().join("src");
+    fs::create_dir_all(&src_dir).expect("create src dir");
+    fs::write(
+        temp.path().join("fe.toml"),
+        "[ingot]\nname = \"dup_main\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write fe.toml");
+    fs::write(
+        src_dir.join("lib.fe"),
+        "pub use libmod::{self, *}\npub use libmod2::{self, *}\npub use contractmod::{self, *}\n",
+    )
+    .expect("write lib.fe");
+    fs::write(src_dir.join("libmod.fe"), "pub fn helper() -> u256 { 1 }\n").expect("write libmod");
+    fs::write(
+        src_dir.join("libmod2.fe"),
+        "pub fn helper2() -> u256 { 2 }\n",
+    )
+    .expect("write libmod2");
+    fs::write(
+        src_dir.join("contractmod.fe"),
+        "pub msg AMsg {\n    #[selector = sol(\"foo()\")]\n    Foo -> u256,\n}\n\npub contract A {\n    recv AMsg {\n        Foo -> u256 { 1 }\n    }\n}\n",
+    )
+    .expect("write contractmod");
+
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+    let project_path = temp.path().to_str().expect("project path utf8");
+
+    let (output, exit_code) =
+        run_fe_main(&["build", "--out-dir", out_dir_str.as_str(), project_path]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+
+    assert!(out_dir.join("A.bin").is_file(), "missing A.bin:\n{output}");
+    assert!(
+        out_dir.join("A.runtime.bin").is_file(),
+        "missing A.runtime.bin:\n{output}"
+    );
+    // Library modules must not produce deployable `main` artifacts.
+    assert!(
+        !out_dir.join("main.bin").exists() && !out_dir.join("main.runtime.bin").exists(),
+        "library modules should not emit a `main` object:\n{:?}",
+        fs::read_dir(&out_dir).map(|d| d
+            .filter_map(|e| e.ok().map(|e| e.file_name()))
+            .collect::<Vec<_>>())
+    );
+}
+
+#[test]
+fn test_cli_build_ingot_contract_uses_effectful_library_helper() {
+    // A contract that calls a helper defined in a non-contract child module, where
+    // the helper takes a `uses` effect parameter, must build: the helper is lowered
+    // as a dependency of the contract, not validated as a standalone runtime root
+    // (which would reject its ordinary effect parameter).
+    let temp = tempdir().expect("tempdir");
+    let src_dir = temp.path().join("src");
+    fs::create_dir_all(&src_dir).expect("create src dir");
+    fs::write(
+        temp.path().join("fe.toml"),
+        "[ingot]\nname = \"effect_helper\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write fe.toml");
+    fs::write(
+        src_dir.join("lib.fe"),
+        "pub use libmod::{self, *}\n\npub msg AMsg {\n    #[selector = sol(\"foo()\")]\n    Foo -> u256,\n}\n\npub contract A {\n    recv AMsg {\n        Foo -> u256 {\n            let mut value: u256 = 1\n            with (value) { needs_effect() }\n        }\n    }\n}\n",
+    )
+    .expect("write lib.fe");
+    fs::write(
+        src_dir.join("libmod.fe"),
+        "pub fn needs_effect() -> u256 uses (value: mut u256) {\n    value += 1\n    value\n}\n",
+    )
+    .expect("write libmod");
+
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+    let project_path = temp.path().to_str().expect("project path utf8");
+
+    let (output, exit_code) =
+        run_fe_main(&["build", "--out-dir", out_dir_str.as_str(), project_path]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+    assert!(out_dir.join("A.bin").is_file(), "missing A.bin:\n{output}");
+    assert!(
+        out_dir.join("A.runtime.bin").is_file(),
+        "missing A.runtime.bin:\n{output}"
+    );
+}
+
+/// A root-module function named `main` is only an ingot executable when it is a
+/// valid standalone root (same validation as a single-module build). A `main`
+/// with ordinary parameters is not - it must be ignored, not synthesized into a
+/// `main` object (which previously panicked on an arg-count mismatch).
+#[test]
+fn test_cli_build_ingot_root_main_with_params_is_not_executable() {
+    let temp = tempdir().expect("tempdir");
+    let src_dir = temp.path().join("src");
+    fs::create_dir_all(&src_dir).expect("create src dir");
+    fs::write(
+        temp.path().join("fe.toml"),
+        "[ingot]\nname = \"param_main\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write fe.toml");
+    fs::write(
+        src_dir.join("lib.fe"),
+        "pub use contractmod::{self, *}\n\npub fn main(_ x: u256) {}\n",
+    )
+    .expect("write lib.fe");
+    fs::write(
+        src_dir.join("contractmod.fe"),
+        "pub msg AMsg {\n    #[selector = sol(\"foo()\")]\n    Foo -> u256,\n}\n\npub contract A {\n    recv AMsg {\n        Foo -> u256 { 1 }\n    }\n}\n",
+    )
+    .expect("write contractmod");
+
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+    let project_path = temp.path().to_str().expect("project path utf8");
+
+    let (output, exit_code) =
+        run_fe_main(&["build", "--out-dir", out_dir_str.as_str(), project_path]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+    assert!(out_dir.join("A.bin").is_file(), "missing A.bin:\n{output}");
+    assert!(
+        !out_dir.join("main.bin").exists() && !out_dir.join("main.runtime.bin").exists(),
+        "a `main` with parameters must not produce a `main` object:\n{output}"
+    );
+}
+
+/// A `#[test]`-attributed `main` in the root module is not an executable entry
+/// and must not produce a deployable `main` object during `fe build`.
+#[test]
+fn test_cli_build_ingot_root_test_main_is_not_executable() {
+    let temp = tempdir().expect("tempdir");
+    let src_dir = temp.path().join("src");
+    fs::create_dir_all(&src_dir).expect("create src dir");
+    fs::write(
+        temp.path().join("fe.toml"),
+        "[ingot]\nname = \"test_main\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write fe.toml");
+    fs::write(
+        src_dir.join("lib.fe"),
+        "pub use contractmod::{self, *}\n\n#[test]\nfn main() {}\n",
+    )
+    .expect("write lib.fe");
+    fs::write(
+        src_dir.join("contractmod.fe"),
+        "pub msg AMsg {\n    #[selector = sol(\"foo()\")]\n    Foo -> u256,\n}\n\npub contract A {\n    recv AMsg {\n        Foo -> u256 { 1 }\n    }\n}\n",
+    )
+    .expect("write contractmod");
+
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+    let project_path = temp.path().to_str().expect("project path utf8");
+
+    let (output, exit_code) =
+        run_fe_main(&["build", "--out-dir", out_dir_str.as_str(), project_path]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+    assert!(out_dir.join("A.bin").is_file(), "missing A.bin:\n{output}");
+    assert!(
+        !out_dir.join("main.bin").exists() && !out_dir.join("main.runtime.bin").exists(),
+        "a `#[test]` `main` must not produce a `main` object:\n{output}"
+    );
+}
+
+#[test]
 fn test_cli_build_emit_metadata_includes_transitive_dependency() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path();

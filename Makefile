@@ -16,6 +16,21 @@ docker-wasm-test:
 		rust:latest \
 		/bin/bash -c "rustup target add wasm32-unknown-unknown && cargo test -p fe-common -p fe-parser -p fe-hir --target wasm32-unknown-unknown"
 
+.PHONY: treesitter-generate
+treesitter-generate:
+	# Generate the tree-sitter parser with the pinned CLI. The generated
+	# sources (parser.c, grammar.json, node-types.json, src/tree_sitter/) are
+	# not tracked in git; they're regenerated from grammar.js at build time.
+	cd crates/tree-sitter-fe && npm ci --ignore-scripts && npm rebuild tree-sitter-cli && npx tree-sitter generate --abi=14
+
+.PHONY: test
+test: treesitter-generate
+	# Builds and runs the workspace tests, including the tree-sitter grammar
+	# test (crates/parser/tests/tree_sitter_parse.rs), which parses every .fe
+	# fixture against the freshly generated grammar.
+	cargo nextest run --release --workspace --all-features --no-fail-fast \
+		--exclude fe-language-server --exclude fe-bench
+
 .PHONY: check-wasm
 check-wasm:
 	@echo "Checking core crates for wasm32-unknown-unknown..."
