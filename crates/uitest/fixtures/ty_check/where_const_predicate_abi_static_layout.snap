@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/where_const_predicate_abi_static_layout.fe
+---
+error[8-0085]: const predicate is not satisfied
+   ┌─ where_const_predicate_abi_static_layout.fe:32:5
+   │
+32 │     static_abi_only<BytesLike>()
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^ const predicate evaluated to `false` here
+   │
+   = const predicates must be proven by an assumption or by CTFE evaluating to `true`

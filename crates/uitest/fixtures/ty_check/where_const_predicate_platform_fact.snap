@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/where_const_predicate_platform_fact.fe
+---
+error[8-0085]: const predicate is not satisfied
+   ┌─ where_const_predicate_platform_fact.fe:37:5
+   │
+37 │     word_op<Tiny>()
+   │     ^^^^^^^^^^^^^ const predicate evaluated to `false` here
+   │
+   = const predicates must be proven by an assumption or by CTFE evaluating to `true`

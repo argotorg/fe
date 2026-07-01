@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/where_const_predicate_ctfe_fault.fe
+---
+error[3-0025]: division by zero in const context
+   ┌─ where_const_predicate_ctfe_fault.fe:24:40
+   │
+24 │ fn divides_cleanly<T: Divisor>() where 100 / T::DENOM == 10 {
+   │                                        ^^^^^^^^^^^^^^ cannot divide by zero

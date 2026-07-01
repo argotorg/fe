@@ -1,0 +1,31 @@
+// FCO-M5 pair 2: a boolean backend capability gate. `storage_only` requires a
+// backend that has storage; `Evm` satisfies it and compiles, `PureMemory` does
+// not and is rejected at the call with 8-0085.
+//
+// Invariant: boolean associated-const predicates enforce backend capabilities.
+
+trait Platform {
+    const HAS_STORAGE: bool
+}
+
+struct Evm {}
+struct PureMemory {}
+
+impl Platform for Evm {
+    const HAS_STORAGE: bool = true
+}
+
+impl Platform for PureMemory {
+    const HAS_STORAGE: bool = false
+}
+
+fn storage_only<B: Platform>() where B::HAS_STORAGE == true {
+}
+
+fn ok() {
+    storage_only<Evm>()
+}
+
+fn bad() {
+    storage_only<PureMemory>()
+}

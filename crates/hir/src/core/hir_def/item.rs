@@ -1701,6 +1701,10 @@ pub enum TrackedItemVariant<'db> {
     Use(Partial<super::UsePathId<'db>>),
     FuncBody,
     NamelessBody,
+    /// Anonymous `bool`-expected const body of a bare const-expression
+    /// predicate in a `where` clause, indexed by its position among the
+    /// clause's const predicates.
+    WhereConstPredicate(u32),
     StaticAssertCondition,
     StaticAssertComparisonLhs,
     StaticAssertComparisonRhs,

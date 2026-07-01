@@ -25,12 +25,12 @@ use smallvec::SmallVec;
 use super::{
     adt_def::{AdtDef, adt_layout_hole_plan_with_explicit_args, instantiated_adt_field_ty},
     const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy, TypePrintMode},
-    diagnostics::{TraitConstraintDiag, TyDiagCollection},
+    diagnostics::TyDiagCollection,
     effects::place_effect_provider_param_index_map,
     fold::{TyFoldable, TyFolder},
     layout_holes::{LayoutPlaceholderPolicy, substitute_layout_placeholders_in_order},
     trait_def::TraitInstId,
-    trait_resolution::{PredicateListId, WellFormedness},
+    trait_resolution::PredicateListId,
     ty_lower::collect_generic_params,
     unify::{InferenceKey, UnificationTable},
     visitor::{TyVisitable, TyVisitor},
@@ -626,21 +626,7 @@ impl<'db> TyId<'db> {
         assumptions: PredicateListId<'db>,
         span: DynLazySpan<'db>,
     ) -> Option<TyDiagCollection<'db>> {
-        if let WellFormedness::IllFormed { goal, subgoal } =
-            check_ty_wf(db, solve_cx.with_assumptions(assumptions), self)
-        {
-            Some(
-                TraitConstraintDiag::TraitBoundNotSat {
-                    span,
-                    primary_goal: goal,
-                    unsat_subgoal: subgoal,
-                    required_by: None,
-                }
-                .into(),
-            )
-        } else {
-            None
-        }
+        check_ty_wf(db, solve_cx.with_assumptions(assumptions), self).into_diag(span)
     }
 
     pub(super) fn ty_var(

@@ -6,7 +6,7 @@ use crate::analysis::ty::trait_resolution::{
 use crate::analysis::ty::ty_check::EffectParamOwner;
 use crate::core::adt_lower::lower_adt;
 use crate::core::hir_def::{
-    IdentId, ItemKind, PathId, TopLevelMod, Trait, TypeAlias,
+    IdentId, ItemKind, PathId, TopLevelMod, Trait, TypeAlias, WhereClauseOwner,
     scope_graph::{ScopeGraph, ScopeId},
 };
 use adt_def::{AdtDef, AdtRef};
@@ -385,6 +385,19 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
             .flat_map(|func| &ty_check::check_func_body(db, *func).0)
             .map(|diag| diag.to_voucher())
             .collect();
+
+        // Declaration-site checks of `where` clause const predicates: every
+        // predicate body type-checks as a `bool`-expected anonymous const
+        // body, and parameter-free predicates are evaluated right here
+        // (`where false` errors at the declaration).
+        diags.extend(
+            top_mod
+                .all_items(db)
+                .iter()
+                .filter_map(|item| WhereClauseOwner::from_item_opt(*item))
+                .flat_map(|owner| ty_check::check_where_const_predicates(db, owner))
+                .map(|diag| diag.to_voucher()),
+        );
 
         diags.extend(
             top_mod

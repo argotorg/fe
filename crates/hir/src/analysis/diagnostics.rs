@@ -3071,6 +3071,21 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
+            Self::WhereConstPredicateFailed { primary } => CompleteDiagnostic {
+                severity,
+                message: "const predicate is not satisfied".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "const predicate evaluated to `false` here".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![
+                    "const predicates must be proven by an assumption or by CTFE evaluating to `true`"
+                        .to_string(),
+                ],
+                error_code,
+            },
+
             Self::InvalidCast {
                 primary,
                 from,
@@ -4614,6 +4629,24 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                 }],
                 notes: vec![],
                 error_code,
+            },
+
+            // Rendered identically to the call-site `WhereConstPredicateFailed`
+            // (8-0085) so const predicates report the same way at every
+            // position; the error code is overridden to the TyCheck pass.
+            Self::ConstPredicateNotSat { span, .. } => CompleteDiagnostic {
+                severity,
+                message: "const predicate is not satisfied".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "const predicate evaluated to `false` here".to_string(),
+                    span: span.resolve(db),
+                }],
+                notes: vec![
+                    "const predicates must be proven by an assumption or by CTFE evaluating to `true`"
+                        .to_string(),
+                ],
+                error_code: GlobalErrorCode::new(DiagnosticPass::TyCheck, 85),
             },
         }
     }

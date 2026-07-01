@@ -1,7 +1,9 @@
 use parser::ast::{self};
 
 use super::FileLowerCtxt;
-use crate::core::hir_def::{Body, IdentId, Partial, TypeId, TypeKind, TypeMode, params::*};
+use crate::core::hir_def::{
+    Body, BodyKind, IdentId, Partial, TrackedItemVariant, TypeId, TypeKind, TypeMode, params::*,
+};
 
 impl<'db> GenericArgListId<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::GenericArgList) -> Self {
@@ -52,10 +54,22 @@ impl<'db> FuncParamListId<'db> {
 impl<'db> WhereClauseId<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::WhereClause) -> Self {
         let predicates = ast
-            .into_iter()
+            .iter()
             .map(|pred| WherePredicate::lower_ast(ctxt, pred))
             .collect::<Vec<_>>();
-        Self::new(ctxt.db(), predicates)
+        let const_predicates = ast
+            .const_predicates()
+            .enumerate()
+            .map(|(idx, pred)| {
+                Body::lower_ast_with_variant(
+                    ctxt,
+                    pred.expr(),
+                    TrackedItemVariant::WhereConstPredicate(idx as u32),
+                    BodyKind::Anonymous,
+                )
+            })
+            .collect::<Vec<_>>();
+        Self::new(ctxt.db(), predicates, const_predicates)
     }
 
     pub(super) fn lower_ast_opt(
@@ -63,7 +77,7 @@ impl<'db> WhereClauseId<'db> {
         ast: Option<ast::WhereClause>,
     ) -> Self {
         ast.map(|ast| Self::lower_ast(ctxt, ast))
-            .unwrap_or_else(|| Self::new(ctxt.db(), Vec::new()))
+            .unwrap_or_else(|| Self::new(ctxt.db(), Vec::new(), Vec::new()))
     }
 }
 
