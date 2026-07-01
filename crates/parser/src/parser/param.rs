@@ -6,10 +6,10 @@ use crate::{ExpectedKind, ParseError, SyntaxKind};
 
 use super::{
     ErrProof, Parser, Recovery, define_scope,
-    expr::{is_lshift, is_lt_eq, parse_const_generic_expr, parse_expr, parse_expr_no_struct},
+    expr::{parse_const_generic_expr, parse_expr, parse_expr_no_struct},
     expr_atom::{BlockExprScope, LitExprScope},
     parse_list,
-    path::{PathScope, is_path_segment},
+    path::PathScope,
     token_stream::TokenStream,
     type_::{is_type_start, parse_type},
 };
@@ -521,12 +521,8 @@ impl super::Parse for WhereClauseScope {
             parser.set_newline_as_trivia(true);
             match parser.current_kind() {
                 Some(kind) if is_type_start(kind) => {
-                    if is_type_bound_predicate(parser)
-                        || is_constraint_application_predicate(parser)
-                    {
-                        // `T: Bounds` (colon present) or the boundless
-                        // constraint-application form `where Eq<T>` (colon
-                        // absent); `WherePredicateScope` accepts both.
+                    if is_type_bound_predicate(parser) {
+                        // `T: Bounds` (colon present).
                         parser.parse(WherePredicateScope::default())?;
                     } else {
                         parser.parse(WhereConstPredicateScope::default())?;
@@ -612,11 +608,8 @@ impl super::Parse for WherePredicateScope {
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
         parse_type(parser, None)?;
 
-        // A colon introduces a type-bound predicate (`T: Bounds`). With no
-        // colon the predicate is the boundless constraint-application form
-        // (`where Eq<T>`): the type alone is the predicate, lowered to a
-        // `TraitInstId`. The router only reaches this scope without a colon
-        // when `is_constraint_application_predicate` already matched.
+        // A where-predicate is the type-bound form `T: Bounds`; the router only
+        // reaches this scope when a colon follows the type.
         if parser.current_kind() == Some(SyntaxKind::Colon) {
             parser.parse(TypeBoundListScope::default())?;
         }
@@ -640,89 +633,6 @@ impl super::Parse for WhereConstPredicateScope {
 /// Dry-run: does this position start a type-bound predicate (`Type: Bounds`)?
 fn is_type_bound_predicate<S: TokenStream>(parser: &mut Parser<S>) -> bool {
     parser.dry_run(|p| parse_type(p, None).is_ok() && p.current_kind() == Some(SyntaxKind::Colon))
-}
-
-/// Dry-run: does this position start a *constraint-application* predicate — a
-/// trait path applied to type args with no bound (`where Eq<T>`), as opposed to
-/// a type-bound predicate (`T: Bounds`) or a const-expression predicate
-/// (`FLAG`, `T::SIZE >= 50`, `above_threshold<T>()`)?
-///
-/// Discriminator: the path's FINAL segment carries generic args **and** the
-/// token after the path does not continue a const expression. This excludes
-/// bare-ident const predicates (`where FLAG` — no generic args) and the generic
-/// const-expr forms (`above_threshold<T>()` — `(` continues the expression;
-/// `Foo<T>::C >= 5` — an operator continues). The head is resolved later: an
-/// abstract `where P<T>` (`P` a `* -> Constraint` param) is syntactically
-/// indistinguishable from `Eq<T>` and also matches here; it is rejected by name
-/// in the analysis pass.
-fn is_constraint_application_predicate<S: TokenStream>(parser: &mut Parser<S>) -> bool {
-    parser.dry_run(|parser| {
-        loop {
-            match parser.current_kind() {
-                // A simple path segment (not a `<T as Trait>` qualified type).
-                Some(kind) if is_path_segment(kind) && kind != SyntaxKind::Lt => {
-                    parser.bump();
-                }
-                _ => return false,
-            }
-
-            // Optional generic args on this segment (mirrors `PathSegmentScope`:
-            // test with a nested dry-run, then consume for real).
-            let has_args = parser.current_kind_same_line() == Some(SyntaxKind::Lt)
-                && !(is_lt_eq(parser) || is_lshift(parser))
-                && parser.dry_run(|p| p.parses_without_error(GenericArgListScope::new(false)));
-            if has_args {
-                parser
-                    .parse(GenericArgListScope::new(false))
-                    .expect("dry_run suggests this will succeed");
-            }
-
-            // A `::` means more segments follow; the constraint head is the
-            // generic args on the FINAL segment, so keep scanning.
-            if parser.bump_if(SyntaxKind::Colon2) {
-                continue;
-            }
-
-            return has_args && !continues_const_expr(parser.current_kind());
-        }
-    })
-}
-
-/// Tokens that continue a const-expression after a primary path expression:
-/// binary operators, `as`, and call/index/access postfixes. If one of these
-/// follows a path-with-generic-args the predicate is a const expression
-/// (`above_threshold<T>()`, `Foo<T>::C >= 5`), not a constraint application.
-fn continues_const_expr(kind: Option<SyntaxKind>) -> bool {
-    use SyntaxKind::*;
-    matches!(
-        kind,
-        Some(
-            Plus | Minus
-                | Star
-                | Star2
-                | Slash
-                | Percent
-                | Amp
-                | Amp2
-                | Pipe
-                | Pipe2
-                | Hat
-                | Lt
-                | Gt
-                | LtEq
-                | GtEq
-                | Eq2
-                | NotEq
-                | LShift
-                | RShift
-                | AsKw
-                | LParen
-                | LBracket
-                | Dot
-                | Dot2
-                | Colon2
-        )
-    )
 }
 
 /// Tokens that unambiguously start expressions but never types.
