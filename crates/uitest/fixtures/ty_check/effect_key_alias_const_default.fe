@@ -1,8 +1,8 @@
 use std::evm::StorageMap
 
-type MyMap<K, V> = StorageMap<K, V, 1>
+type MyMap<K> = StorageMap<K, u256, 1>
 
-fn needs_map() uses (m: MyMap<u256, u256>) {
+fn needs_map() uses (m: MyMap<u256>) {
     ()
 }
 

@@ -166,6 +166,7 @@ fn std_evm_contract_trait_def<'db>(
 pub(crate) enum ImplementorOrigin<'db> {
     Hir(ImplTrait<'db>),
     VirtualContract(Contract<'db>),
+    VirtualStorageMapValue(PredicateListId<'db>),
     Assumption,
 }
 
@@ -410,7 +411,9 @@ pub fn assoc_const_body_and_impl_args_for_trait_inst<'db>(
     };
     let hir_impl = match implementor.origin(db) {
         ImplementorOrigin::Hir(impl_trait) => impl_trait,
-        ImplementorOrigin::VirtualContract(_) | ImplementorOrigin::Assumption => return None,
+        ImplementorOrigin::VirtualContract(_)
+        | ImplementorOrigin::VirtualStorageMapValue(_)
+        | ImplementorOrigin::Assumption => return None,
     };
     let def = hir_impl
         .hir_consts(db)
@@ -545,6 +548,9 @@ impl<'db> ImplementorId<'db> {
                     .map(|n| n.data(db).to_string())
                     .unwrap_or_else(|| "<unknown>".to_string())
             ),
+            ImplementorOrigin::VirtualStorageMapValue(_) => {
+                panic!("requested HIR impl-trait for virtual storage-map-value implementor")
+            }
             ImplementorOrigin::Assumption => {
                 panic!("requested HIR impl-trait for assumption-based implementor")
             }
@@ -600,6 +606,7 @@ impl<'db> ImplementorId<'db> {
             ImplementorOrigin::VirtualContract(_) | ImplementorOrigin::Assumption => {
                 PredicateListId::empty_list(db)
             }
+            ImplementorOrigin::VirtualStorageMapValue(constraints) => constraints,
         }
     }
 

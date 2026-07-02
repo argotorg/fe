@@ -1,0 +1,15 @@
+use std::evm::StorageMap
+
+trait HasValue {
+    type Value
+}
+
+struct S {}
+
+impl HasValue for S {
+    type Value = u256
+}
+
+contract C {
+    mut values: StorageMap<u256, <S as HasValue>::Value>,
+}
