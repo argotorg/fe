@@ -1,0 +1,6 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/storage_map_value_projection_normalizes.fe
+---
+
