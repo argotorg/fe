@@ -1,0 +1,14 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/nested_storage_map_enum_value_contract_field.fe
+---
+error[6-0003]: trait bound is not satisfied
+  ┌─ nested_storage_map_enum_value_contract_field.fe:9:17
+  │
+9 │     mut nested: StorageMap<u256, MapValue>
+  │                 ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  │                 │
+  │                 `MapValue<_>` doesn't implement `StorageMapValue`
+  │                 trait bound `StorageMap<u256, u256, _>: StorageMapValue` is not satisfied
