@@ -284,15 +284,21 @@ impl<'db> GeneratorNodeData<'db> {
         let mut table = PersistentUnificationTable::new(db);
         let extracted_query = query.extract_identity(&mut table);
         let extracted_goal = extracted_query.goal;
-        let (primary, secondary) = TraitSolveCx::search_ingots_for_trait_inst_with_origin(
-            db,
-            origin_ingot,
-            extracted_goal,
-        );
-        let mut cands =
+        let is_storage_map_value = is_storage_map_value_goal(db, origin_ingot, extracted_goal);
+        let mut cands = if is_storage_map_value {
+            // `StorageMapValue` is compiler-owned structural evidence. Ignore
+            // HIR impls so user code cannot bypass the nested-map exclusion.
+            Vec::new()
+        } else {
+            let (primary, secondary) = TraitSolveCx::search_ingots_for_trait_inst_with_origin(
+                db,
+                origin_ingot,
+                extracted_goal,
+            );
             impls_for_trait_in_ingots(db, primary, secondary, Canonical::new(db, extracted_goal))
-                .to_vec();
-        if let Some(impl_) = storage_map_value_virtual_impl(db, origin_ingot, extracted_goal) {
+                .to_vec()
+        };
+        if let Some(impl_) = storage_map_value_virtual_impl(db, origin_ingot, extracted_query) {
             cands.push(Binder::bind(impl_));
         }
 
@@ -309,21 +315,42 @@ impl<'db> GeneratorNodeData<'db> {
     }
 }
 
-fn storage_map_value_virtual_impl<'db>(
+fn resolve_storage_map_value_trait<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+) -> Option<Trait<'db>> {
+    resolve_lib_trait_path(db, scope, "std::evm::storage_map::StorageMapValue")
+        .or_else(|| resolve_lib_trait_path(db, scope, "std::evm::StorageMapValue"))
+}
+
+fn is_storage_map_value_goal<'db>(
     db: &'db dyn HirAnalysisDb,
     origin_ingot: crate::Ingot<'db>,
     goal: TraitInstId<'db>,
-) -> Option<ImplementorId<'db>> {
+) -> bool {
     let scope = origin_ingot.root_mod(db).scope();
-    let storage_map_value_trait =
-        resolve_lib_trait_path(db, scope, "std::evm::storage_map::StorageMapValue")
-            .or_else(|| resolve_lib_trait_path(db, scope, "std::evm::StorageMapValue"))?;
+    resolve_storage_map_value_trait(db, scope).is_some_and(|trait_| goal.def(db) == trait_)
+}
+
+fn storage_map_value_virtual_impl<'db>(
+    db: &'db dyn HirAnalysisDb,
+    origin_ingot: crate::Ingot<'db>,
+    query: TraitSolverQuery<'db>,
+) -> Option<ImplementorId<'db>> {
+    let goal = query.goal;
+    let origin_scope = origin_ingot.root_mod(db).scope();
+    let storage_map_value_trait = resolve_storage_map_value_trait(db, origin_scope)?;
     if goal.def(db) != storage_map_value_trait {
         return None;
     }
 
     let self_ty = goal.self_ty(db);
-    let constraints = storage_map_value_constraints(db, scope, storage_map_value_trait, self_ty)?;
+    let norm_scope =
+        TraitSolveCx::normalization_scope_for_trait_inst_with_origin(db, origin_ingot, goal);
+    let self_ty =
+        crate::analysis::ty::normalize::normalize_ty(db, self_ty, norm_scope, query.assumptions);
+    let constraints =
+        storage_map_value_constraints(db, origin_scope, storage_map_value_trait, self_ty)?;
 
     Some(ImplementorId::new(
         db,

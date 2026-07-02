@@ -121,7 +121,8 @@ impl StorageKey for bool {
 /// Values that may occupy a `StorageMap` entry.
 ///
 /// The compiler satisfies this marker structurally for ordinary storage values.
-/// Nested storage maps are intentionally excluded; use composite keys instead.
+/// User-written impls are ignored by trait resolution, so nested storage maps
+/// cannot opt into this marker manually. Use composite keys instead.
 pub trait StorageMapValue {}
 
 /// A storage-backed mapping from keys `K` to values `V`.
