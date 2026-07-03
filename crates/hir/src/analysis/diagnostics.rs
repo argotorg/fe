@@ -743,7 +743,7 @@ impl DiagnosticVoucher for crate::DeriveError {
                 trait_name,
                 providers,
             } => (
-                9,
+                15,
                 format!("the derive request for `{trait_name}` is ambiguous"),
                 format!(
                     "multiple canonical providers derive `{trait_name}`: {}",
@@ -4957,9 +4957,13 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                 error_code,
             },
 
-            // Rendered identically to the call-site `WhereConstPredicateFailed`
-            // (8-0085) so const predicates report the same way at every
-            // position; the error code is overridden to the TyCheck pass.
+            // Same wording as the call-site `WhereConstPredicateFailed`
+            // (8-0085), but rendered under this enum's own shared `error_code`
+            // (TraitSatisfaction pass, `local_code()` = 7) rather than a
+            // hardcoded cross-namespace `GlobalErrorCode` literal, so this
+            // arm's code stays tracked by `TraitConstraintDiag::local_code`
+            // like every other arm here instead of silently squatting on
+            // `BodyDiag`'s TyCheck code space.
             Self::ConstPredicateNotSat { span, .. } => CompleteDiagnostic {
                 severity,
                 message: "const predicate is not satisfied".to_string(),
@@ -4972,7 +4976,7 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                     "const predicates must be proven by an assumption or by CTFE evaluating to `true`"
                         .to_string(),
                 ],
-                error_code: GlobalErrorCode::new(DiagnosticPass::TyCheck, 85),
+                error_code,
             },
 
             Self::ConstraintCtorParamUnsupported { span, param } => {
