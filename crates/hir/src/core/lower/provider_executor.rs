@@ -3489,9 +3489,14 @@ mod freeze_guard {
     fn recognized_reflect_ops_match_dispatch() {
         // The reflect/field/variant method arms live between the
         // `eval_method_call` freeze comment and the start of
-        // `eval_builder_method`.
+        // `eval_builder_method`. The start marker below must match the real
+        // comment IN THE FUNCTION BODY (`eval_method_call`, above), not a
+        // string that only occurs inside this test module — a marker that
+        // only matches here would scan the empty gap between this call's own
+        // two string-literal arguments and vacuously assert `[] == []`
+        // forever, letting a new bespoke reflect-op arm land unnoticed.
         let body = slice_between(
-            "// FREEZE (TD5.0): the reflection-read method names below",
+            "// FREEZE (TD5.0): the reflection-read method names are pinned by",
             "fn eval_builder_method(",
         );
         let mut dispatch = arm_keys(body);
