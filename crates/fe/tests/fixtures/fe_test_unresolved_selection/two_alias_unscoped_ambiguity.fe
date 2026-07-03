@@ -1,0 +1,37 @@
+// Regression (finding B-1): two ALIASED impls coexist (`as A` / `as B`) for the
+// same trait/type, with no anonymous or default impl. An UNSCOPED call over the
+// two aliases has no unique selection. This program is legal and type-checks
+// clean; MIR lowering used to resolve the call into a Sonatina backend PANIC
+// (classify.rs return-class inference / lower_call). It must now surface a clean
+// `unresolved trait selection` compile error and exit nonzero, never panic.
+//
+// This is the de-panic guard only: fixing the underlying selection so that the
+// ambiguity is diagnosed at type-check time (with a `with (...)` suggestion) is
+// a separate, deeper cascade fix and is intentionally NOT done here.
+
+trait Greet {
+    fn g(self) -> u32
+}
+
+struct U {
+    id: u256,
+}
+
+impl Greet for U as A {
+    fn g(self) -> u32 {
+        return 1
+    }
+}
+
+impl Greet for U as B {
+    fn g(self) -> u32 {
+        return 2
+    }
+}
+
+#[test]
+fn unscoped_over_two_aliases() {
+    let u = U { id: 1 }
+    let _ = u.g()
+    assert!(true)
+}

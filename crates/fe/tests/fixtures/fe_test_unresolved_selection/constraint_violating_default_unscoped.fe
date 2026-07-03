@@ -1,0 +1,43 @@
+// Regression (finding B-1): three coexisting impls for `Eq<Wrap<NoEq>>`:
+//   - a derived generic DEFAULT `impl<T> Eq for Wrap<T> where T: Eq`, whose
+//     constraint `T: Eq` is UNSATISFIED for `T = NoEq`,
+//   - a hand-written anonymous OVERRIDE `impl Eq for Wrap<NoEq>`,
+//   - an aliased dialect `impl Eq for Wrap<NoEq> as Fast`.
+// An UNSCOPED `a.eq(b)` type-checks clean, but MIR resolution used to commit the
+// constraint-violating derived default (or find no unique impl) and then PANIC
+// the Sonatina backend while reconstructing the impl body. It must now surface a
+// clean `unresolved trait selection` compile error and exit nonzero, never panic.
+//
+// This is the de-panic guard only: making the selection actually pick the sole
+// applicable override (or diagnose the ambiguity at type-check time) is the
+// deeper cascade fix and is intentionally NOT done here.
+
+use core::ops::Eq
+
+struct NoEq {
+    v: u256,
+}
+
+#[derive(Eq)]
+struct Wrap<T> {
+    inner: T,
+}
+
+impl Eq for Wrap<NoEq> {
+    fn eq(self, _ other: Wrap<NoEq>) -> bool {
+        return false
+    }
+}
+
+impl Eq for Wrap<NoEq> as Fast {
+    fn eq(self, _ other: Wrap<NoEq>) -> bool {
+        return true
+    }
+}
+
+#[test]
+fn unscoped_over_three_way_coexistence() {
+    let a = Wrap { inner: NoEq { v: 1 } }
+    let b = Wrap { inner: NoEq { v: 1 } }
+    assert!(!a.eq(b))
+}

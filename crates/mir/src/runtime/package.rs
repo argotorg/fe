@@ -74,6 +74,15 @@ pub enum LowerError {
     /// lower against a bad impl. The message carries the recorded implementor and
     /// the goal for diagnosis. See `recorded_implementor_is_valid_candidate`.
     ForgedRecordedImplementor(String),
+    /// A runtime trait-method call could not be resolved to a single concrete
+    /// impl body: the selection is ambiguous (several coexisting impls apply and
+    /// none was uniquely chosen) or the impl that would be chosen does not apply
+    /// here (its constraints are unsatisfied). This is a user-facing error on a
+    /// legal program, surfaced as a clean diagnostic (never a backend panic); the
+    /// call must be disambiguated with a `with (...)` selection. The message names
+    /// the trait-method and the goal only (no internal keys), so it is stable
+    /// across runs. See the pre-flight `check_runtime_trait_calls_resolvable`.
+    UnresolvedTraitSelection(String),
 }
 
 impl std::fmt::Display for LowerError {
@@ -82,6 +91,7 @@ impl std::fmt::Display for LowerError {
             LowerError::Unsupported(message) => write!(f, "{message}"),
             LowerError::NondeterministicReResolution(message) => write!(f, "{message}"),
             LowerError::ForgedRecordedImplementor(message) => write!(f, "{message}"),
+            LowerError::UnresolvedTraitSelection(message) => write!(f, "{message}"),
         }
     }
 }
@@ -2500,6 +2510,12 @@ fn wrap_runtime_lowering_error<'db>(
         LowerError::ForgedRecordedImplementor(message) => {
             LowerError::ForgedRecordedImplementor(format!(
                 "MIR lowering failed: forged recorded implementor while lowering `{}`: {message}",
+                runtime_instance_symbol_base(db, instance)
+            ))
+        }
+        LowerError::UnresolvedTraitSelection(message) => {
+            LowerError::UnresolvedTraitSelection(format!(
+                "MIR lowering failed: unresolved trait selection while lowering `{}`: {message}",
                 runtime_instance_symbol_base(db, instance)
             ))
         }

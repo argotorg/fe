@@ -1917,6 +1917,40 @@ fn test_fe_test(fixture: Fixture<&str>) {
     );
 }
 
+/// Regression guard for finding B-1: an unscoped trait-method call over
+/// coexisting impls (two `as Name` aliases, or a constraint-violating derived
+/// default alongside an override) type-checks clean but has no unique impl
+/// selection. It used to resolve into a Sonatina backend PANIC during MIR
+/// lowering. Each fixture here must instead fail with a clean, named
+/// `unresolved trait selection` compile error and a nonzero exit, never a
+/// panic. The normalized output is snapshotted so the exact diagnostic is
+/// pinned.
+#[dir_test(
+    dir: "$CARGO_MANIFEST_DIR/tests/fixtures/fe_test_unresolved_selection",
+    glob: "*.fe",
+)]
+fn test_fe_test_unresolved_selection(fixture: Fixture<&str>) {
+    let (output, exit_code) = run_fe_main(&["test", "--jobs", "1", fixture.path()]);
+    assert_ne!(
+        exit_code,
+        0,
+        "expected fe test to fail for {path}:\n{output}",
+        path = fixture.path(),
+    );
+    assert!(
+        !output.contains("panicked") && !output.contains("backend panicked"),
+        "expected a clean diagnostic, not a panic, for {path}:\n{output}",
+        path = fixture.path(),
+    );
+    assert!(
+        output.contains("unresolved trait selection"),
+        "expected the unresolved-trait-selection diagnostic for {path}:\n{output}",
+        path = fixture.path(),
+    );
+    // `run_fe_main` already normalizes timing and project paths.
+    snap_test!(output, fixture.path());
+}
+
 #[test]
 fn test_fe_test_rejects_oversized_balance_literal() {
     let temp = tempdir().expect("tempdir");

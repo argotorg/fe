@@ -101,6 +101,7 @@ pub fn lower_to_rmir<'db>(
         )
     });
     check_runtime_body_supported(db, semantic.key(db), &normalized_body)?;
+    check_runtime_trait_calls_resolvable(db, semantic.key(db), &normalized_body)?;
     let facts = BodyStaticFacts::new(db, &normalized_body);
     let signature = instance.interface_signature(db);
     let param_locals =
@@ -162,6 +163,42 @@ fn check_runtime_body_supported<'db>(
                     impl_env.assumptions(db),
                     value_ty,
                 )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Pre-flight guard (B-1): fail with a clean, user-facing `LowerError` when a
+/// runtime trait-method call in this body cannot be resolved to a single
+/// concrete impl, BEFORE the (panicking) static-facts pre-pass and body lowerer
+/// ever run. Both `classify::resolve_runtime_call_key` call sites
+/// (`classify.rs` return-class inference and `lower_call`) `unwrap_or_else` the
+/// resolution failure into a `panic!`; on a legal program with coexisting impls
+/// (aliased / constraint-violating default) that turns an ambiguous or
+/// unsatisfied selection into a backend ICE. This walk resolves the same calls
+/// the pre-pass would, with the same caller context that
+/// `BodyStaticFacts::new` uses (`key`, `key.typed_body(db)`), and returns the
+/// first `LowerError` so it surfaces through the ordinary `lower_to_rmir`
+/// error path as a compile error instead. A resolvable body is unaffected:
+/// every non-trait / bodied / uniquely-selected call returns `Ok` here exactly
+/// as it does at the real call sites. This is a de-panic guard only; it does
+/// NOT change how selection is decided (the deeper dedup/default-tier fix is a
+/// separate concern).
+fn check_runtime_trait_calls_resolvable<'db>(
+    db: &'db dyn MirDb,
+    key: SemanticInstanceKey<'db>,
+    body: &NormalizedSemanticBody<'db>,
+) -> Result<(), LowerError> {
+    let typed_body = key.typed_body(db);
+    for block in &body.blocks {
+        for stmt in &block.stmts {
+            if let NSStmtKind::Assign {
+                expr: NExpr::Call { callee, args, .. },
+                ..
+            } = &stmt.kind
+            {
+                resolve_runtime_call_key(db, key, typed_body, body, *callee, args)?;
             }
         }
     }

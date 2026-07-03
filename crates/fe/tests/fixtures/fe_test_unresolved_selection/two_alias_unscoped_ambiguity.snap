@@ -1,0 +1,15 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/fe_test_unresolved_selection/two_alias_unscoped_ambiguity.fe
+---
+=== STDOUT ===
+Failed to emit test Sonatina: MIR lowering failed: unresolved trait selection while lowering `unscoped_over_two_aliases`: cannot resolve a unique `impl` for the call to trait method `g` (goal `Greet`): the selection is ambiguous or unsatisfied. When multiple impls coexist for one type, disambiguate the call with a `with (...)` selection.
+ERROR [<time>] Failed to emit test Sonatina: MIR lowering failed: unresolved trait selection while lowering `unscoped_over_two_aliases`: cannot resolve a unique `impl` for the call to trait method `g` (goal `Greet`): the selection is ambiguous or unsatisfied. When multiple impls coexist for one type, disambiguate the call with a `with (...)` selection.
+
+test result: FAILED. 0 passed; 1 failed
+
+failures:
+    two_alias_unscoped_ambiguity::codegen
+
+=== EXIT CODE: 1 ===

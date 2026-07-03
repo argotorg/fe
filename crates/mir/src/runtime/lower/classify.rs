@@ -2359,11 +2359,13 @@ pub(crate) fn resolve_runtime_call_key<'db>(
             method_name,
             recorded_implementor,
         ) else {
-            return Err(crate::runtime::LowerError::Unsupported(format!(
-                "runtime trait-call resolution failed to reconstruct a concrete impl body from the recorded implementor: caller={caller_key:?} decl={callee_key:?} method={} concrete_inst={} recorded_implementor={recorded_implementor:?}",
-                method_name.data(db),
-                concrete_inst.pretty_print(db, false),
-            )));
+            return Err(crate::runtime::LowerError::UnresolvedTraitSelection(
+                format!(
+                    "cannot build a concrete `impl` body for the call to trait method `{}` (goal `{}`): the selected impl does not apply here (its constraints are unsatisfied). When multiple impls coexist for one type, disambiguate the call with a `with (...)` selection.",
+                    method_name.data(db),
+                    concrete_inst.pretty_print(db, false),
+                ),
+            ));
         };
         resolved
     } else {
@@ -2374,14 +2376,13 @@ pub(crate) fn resolve_runtime_call_key<'db>(
             concrete_inst,
             method_name,
         ) else {
-            return Err(crate::runtime::LowerError::Unsupported(format!(
-                "runtime trait-call resolution failed to resolve a concrete impl body: caller={caller_key:?} decl={callee_key:?} method={} concrete_inst={} original_inst={}",
-                method_name.data(db),
-                concrete_inst.pretty_print(db, false),
-                original_inst
-                    .map(|inst| inst.pretty_print(db, false))
-                    .unwrap_or_else(|| "<none>".to_string()),
-            )));
+            return Err(crate::runtime::LowerError::UnresolvedTraitSelection(
+                format!(
+                    "cannot resolve a unique `impl` for the call to trait method `{}` (goal `{}`): the selection is ambiguous or unsatisfied. When multiple impls coexist for one type, disambiguate the call with a `with (...)` selection.",
+                    method_name.data(db),
+                    concrete_inst.pretty_print(db, false),
+                ),
+            ));
         };
         // DETERMINISM ASSERTION (rung 3.3): `resolved.implementor` is the impl
         // this MIR re-resolution selected. The impl typeck committed to is
