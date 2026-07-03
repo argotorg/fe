@@ -1,0 +1,51 @@
+// Regression (residual left by finding B-1): the ambiguous unscoped call sits
+// inside a HELPER function whose return type is a zero-sized struct, so the
+// helper's runtime return plan is Dynamic/Erased. The B-1 guard only checks
+// the CURRENT body's own top-level calls right before that body is lowered;
+// it does not see this call, because the caller's `lower_call` needs the
+// helper's return class first (return-class inference), which walks the
+// helper's own static facts, including this ambiguous call, BEFORE the
+// helper's own instance is ever popped and lowered. This program is legal
+// and type-checks clean; MIR lowering used to resolve the call into a
+// Sonatina backend PANIC during return-class inference
+// (classify.rs:1177). It must now surface a clean `unresolved trait
+// selection` compile error and exit nonzero, never panic.
+//
+// This is the de-panic guard only: fixing the underlying selection so that
+// the ambiguity is diagnosed at type-check time (with a `with (...)`
+// suggestion) is a separate, deeper cascade fix and is intentionally NOT
+// done here.
+
+trait Greet {
+    fn g(self) -> u32
+}
+
+struct U {
+    id: u256,
+}
+
+impl Greet for U as A {
+    fn g(self) -> u32 {
+        return 1
+    }
+}
+
+impl Greet for U as B {
+    fn g(self) -> u32 {
+        return 2
+    }
+}
+
+struct Empty {}
+
+fn helper(_ u: U) -> Empty {
+    let v = u.g()
+    return Empty {}
+}
+
+#[test]
+fn calls_helper() {
+    let u = U { id: 1 }
+    let e = helper(u)
+    assert!(true)
+}

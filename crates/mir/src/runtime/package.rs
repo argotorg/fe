@@ -28,6 +28,7 @@ use crate::{
         get_or_build_runtime_instance,
     },
     runtime::code_region::{code_region_symbol, runtime_code_region_for_manual_root},
+    runtime::lower::body::check_reachable_runtime_trait_calls_resolvable,
     runtime::lower::classify::{
         RuntimeVisibleBindingPlan, runtime_effect_binding_plan, runtime_param_class,
         runtime_visible_binding_class,
@@ -78,10 +79,14 @@ pub enum LowerError {
     /// impl body: the selection is ambiguous (several coexisting impls apply and
     /// none was uniquely chosen) or the impl that would be chosen does not apply
     /// here (its constraints are unsatisfied). This is a user-facing error on a
-    /// legal program, surfaced as a clean diagnostic (never a backend panic); the
-    /// call must be disambiguated with a `with (...)` selection. The message names
-    /// the trait-method and the goal only (no internal keys), so it is stable
-    /// across runs. See the pre-flight `check_runtime_trait_calls_resolvable`.
+    /// legal program, surfaced as a clean diagnostic on every reachable
+    /// resolution route (never a backend panic); the call must be disambiguated
+    /// with a `with (...)` selection. The message names the trait-method and the
+    /// goal only (no internal keys), so it is stable across runs. See the
+    /// pre-flight `check_runtime_trait_calls_resolvable` (checks the body being
+    /// lowered) and `check_reachable_runtime_trait_calls_resolvable` (walks the
+    /// transitive callee graph, so an unresolvable call reached only through
+    /// return-class inference on a callee is caught before that panics too).
     UnresolvedTraitSelection(String),
 }
 
@@ -158,6 +163,12 @@ struct RuntimeGraphBuilder<'db> {
     seen_region_roots: FxHashSet<RuntimeCodeRegion<'db>>,
     materialized_contracts: FxHashSet<Contract<'db>>,
     materialized_object_names: FxHashSet<String>,
+    /// Memoizes bodies already validated by
+    /// `check_reachable_runtime_trait_calls_resolvable`, keyed by
+    /// `SemanticInstanceKey` (trait-call resolvability does not depend on
+    /// runtime specialization), so the transitive pre-flight walk stays
+    /// cheap across the many `RuntimeInstance`s that can share callees.
+    checked_reachable_trait_calls: FxHashSet<SemanticInstanceKey<'db>>,
 }
 
 impl<'db> RuntimeGraphBuilder<'db> {
@@ -182,6 +193,7 @@ impl<'db> RuntimeGraphBuilder<'db> {
             seen_region_roots: FxHashSet::default(),
             materialized_contracts,
             materialized_object_names,
+            checked_reachable_trait_calls: FxHashSet::default(),
         };
         for root in roots {
             builder.enqueue(root);
@@ -196,6 +208,14 @@ impl<'db> RuntimeGraphBuilder<'db> {
                 continue;
             }
 
+            if let Some(semantic) = instance.key(self.db).semantic(self.db) {
+                check_reachable_runtime_trait_calls_resolvable(
+                    self.db,
+                    semantic.key(self.db),
+                    &mut self.checked_reachable_trait_calls,
+                )
+                .map_err(|err| wrap_runtime_lowering_error(self.db, instance, err))?;
+            }
             let lowered = runtime_instance_lowered_body(self.db, instance)
                 .map_err(|err| wrap_runtime_lowering_error(self.db, instance, err))?;
             let direct_callees = lowered

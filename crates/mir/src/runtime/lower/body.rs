@@ -32,6 +32,7 @@ use hir::hir_def::{
     ArithBinOp, BinOp, CompBinOp, Func, UnOp, attr::ArithmeticMode, scope_graph::ScopeId,
 };
 use hir::projection::{IndexSource, Projection};
+use rustc_hash::FxHashSet;
 
 use crate::{
     db::MirDb,
@@ -185,7 +186,7 @@ fn check_runtime_body_supported<'db>(
 /// as it does at the real call sites. This is a de-panic guard only; it does
 /// NOT change how selection is decided (the deeper dedup/default-tier fix is a
 /// separate concern).
-fn check_runtime_trait_calls_resolvable<'db>(
+pub(crate) fn check_runtime_trait_calls_resolvable<'db>(
     db: &'db dyn MirDb,
     key: SemanticInstanceKey<'db>,
     body: &NormalizedSemanticBody<'db>,
@@ -199,6 +200,79 @@ fn check_runtime_trait_calls_resolvable<'db>(
             } = &stmt.kind
             {
                 resolve_runtime_call_key(db, key, typed_body, body, *callee, args)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Pre-flight guard extension (closes a residual left by B-1): transitively
+/// walk the semantic call graph reachable from `root_key`, applying
+/// `check_runtime_trait_calls_resolvable` to every reachable body BEFORE any
+/// lowering (or the panicking return-class-inference pre-pass) ever touches
+/// it.
+///
+/// B-1's original guard only checks the CURRENT body's own top-level calls,
+/// once, right before that body is lowered. That leaves a gap: a callee
+/// body's static facts (`BodyStaticFacts::new`, via `RuntimeReturnSummary`)
+/// get walked EARLIER than the callee's own guard, whenever the caller needs
+/// the callee's return class for return-class inference (`returns.rs`'s
+/// `runtime_return_class` / `runtime_return_summary`, demanded from
+/// `lower_call` here and transitively via `LocalStateInferer` in `infer.rs`).
+/// `BodyStaticFacts::new` classifies every call in the callee's body,
+/// including ones that never reach the return value, so an unresolvable call
+/// buried in a callee whose return plan is `Dynamic`/`Erased` (e.g. a
+/// zero-sized-struct-returning helper) hits the panic in `classify.rs`
+/// before the callee's own instance is ever popped and lowered.
+///
+/// This walk resolves the same calls the pre-pass and return-class inference
+/// would, transitively through every reachable callee body, so any
+/// unresolvable trait-method call surfaces as the ordinary
+/// `LowerError::UnresolvedTraitSelection` compile error here, before any of
+/// those panicking paths run. `checked` memoizes already-validated bodies
+/// (keyed by `SemanticInstanceKey`, independent of runtime specialization)
+/// across the whole package build, so this stays cheap even though multiple
+/// runtime instances can share callees.
+///
+/// Only recurses into callees that are actual bodied Fe functions
+/// (`BodyOwner::Func` with `func.body(db).is_some()`); externs and
+/// declaration-only callees are resolved (and checked) but not walked
+/// further, mirroring how the ordinary lowering path never normalizes a body
+/// that does not exist.
+pub(crate) fn check_reachable_runtime_trait_calls_resolvable<'db>(
+    db: &'db dyn MirDb,
+    root_key: SemanticInstanceKey<'db>,
+    checked: &mut FxHashSet<SemanticInstanceKey<'db>>,
+) -> Result<(), LowerError> {
+    let mut worklist = vec![root_key];
+    while let Some(key) = worklist.pop() {
+        if !checked.insert(key) {
+            continue;
+        }
+        let semantic = get_or_build_semantic_instance(db, key);
+        let Ok(body) = normalize_semantic_body(db, semantic) else {
+            // Normalization failures are a separate, unrelated error class
+            // surfaced through the ordinary lowering path if this body is
+            // actually reached; this guard only concerns trait-call
+            // resolvability.
+            continue;
+        };
+        check_runtime_trait_calls_resolvable(db, key, &body)?;
+        let typed_body = key.typed_body(db);
+        for block in &body.blocks {
+            for stmt in &block.stmts {
+                if let NSStmtKind::Assign {
+                    expr: NExpr::Call { callee, args, .. },
+                    ..
+                } = &stmt.kind
+                {
+                    let callee_key =
+                        resolve_runtime_call_key(db, key, typed_body, &body, *callee, args)?;
+                    if matches!(callee_key.owner(db), BodyOwner::Func(func) if func.body(db).is_some())
+                    {
+                        worklist.push(callee_key);
+                    }
+                }
             }
         }
     }

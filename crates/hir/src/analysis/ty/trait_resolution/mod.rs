@@ -316,9 +316,13 @@ impl<'db> TraitSolveCx<'db> {
     ///   prevents a backend panic on this path today is a separate runtime
     ///   pre-flight check added for the B-1 de-panic fix
     ///   (`check_runtime_trait_calls_resolvable`, `crates/mir/src/runtime/lower/body.rs`),
-    ///   which surfaces an unresolved selection as a clean
+    ///   extended to walk the transitive callee graph so a call reached only
+    ///   through return-class inference on a callee is covered too
+    ///   (`check_reachable_runtime_trait_calls_resolvable`, same file), which
+    ///   surfaces an unresolved selection as a clean
     ///   `LowerError::UnresolvedTraitSelection` pointing at `with (...)`
-    ///   disambiguation — not a guarantee this function makes on its own. The
+    ///   disambiguation on every reachable resolution route — not a guarantee
+    ///   this function makes on its own. The
     ///   ty_check-level `AmbiguousTraitInst` diagnostic (`ty_check/mod.rs:1478`)
     ///   is a separate leg that can go unreached for concrete-goal coexistence
     ///   today (see the dedup note at `ty_check/mod.rs:1133`); making it

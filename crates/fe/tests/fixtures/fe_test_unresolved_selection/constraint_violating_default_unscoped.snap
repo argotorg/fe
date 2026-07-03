@@ -4,8 +4,8 @@ expression: output
 input_file: tests/fixtures/fe_test_unresolved_selection/constraint_violating_default_unscoped.fe
 ---
 === STDOUT ===
-Failed to emit test Sonatina: MIR lowering failed: unresolved trait selection while lowering `eq`: cannot resolve a unique `impl` for the call to trait method `eq` (goal `Eq<Wrap<NoEq>>`): the selection is ambiguous or unsatisfied. When multiple impls coexist for one type, disambiguate the call with a `with (...)` selection.
-ERROR [<time>] Failed to emit test Sonatina: MIR lowering failed: unresolved trait selection while lowering `eq`: cannot resolve a unique `impl` for the call to trait method `eq` (goal `Eq<Wrap<NoEq>>`): the selection is ambiguous or unsatisfied. When multiple impls coexist for one type, disambiguate the call with a `with (...)` selection.
+Failed to emit test Sonatina: MIR lowering failed: unresolved trait selection while lowering `unscoped_over_three_way_coexistence`: cannot resolve a unique `impl` for the call to trait method `eq` (goal `Eq<Wrap<NoEq>>`): the selection is ambiguous or unsatisfied. When multiple impls coexist for one type, disambiguate the call with a `with (...)` selection.
+ERROR [<time>] Failed to emit test Sonatina: MIR lowering failed: unresolved trait selection while lowering `unscoped_over_three_way_coexistence`: cannot resolve a unique `impl` for the call to trait method `eq` (goal `Eq<Wrap<NoEq>>`): the selection is ambiguous or unsatisfied. When multiple impls coexist for one type, disambiguate the call with a `with (...)` selection.
 
 test result: FAILED. 0 passed; 1 failed
 
