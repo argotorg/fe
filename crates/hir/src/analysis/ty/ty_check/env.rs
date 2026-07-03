@@ -737,9 +737,12 @@ impl<'db> TyCheckEnv<'db> {
     /// The result is stored on the [`TraitObligation`] so the processor can
     /// consult it after the effect frames have been popped.
     ///
-    /// TODAY THIS ALWAYS RETURNS EMPTY: nothing can place an `Evidence` value
-    /// into a `with` yet (it is unforgeable — increment 1b), so no live provision
-    /// is `Evidence`-typed and the snapshot is always `[]`.
+    /// NO LONGER ALWAYS EMPTY: `with (<T as Trait>)` scoped selection
+    /// (`provisional_scoped_selection` in `ty_check/expr.rs`) now stamps a real
+    /// `Evidence`-typed provision carrying the named goal's sole `Hir`
+    /// implementor, so a `with` frame using that surface makes this return
+    /// non-empty. Plain `with (value)` provisions are still never
+    /// `Evidence`-typed and are filtered out here as before.
     pub(super) fn snapshot_evidence_provisions(&self) -> Vec<ProvidedEffect<'db>> {
         self.effect_env
             .snapshot_provisions()

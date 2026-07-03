@@ -8,8 +8,11 @@
 //! and law proofs stop failing with "expected X, found X".
 //!
 //! The module is deliberately standalone: it consumes existing HIR and
-//! name-resolution queries but nothing in the compiler depends on it yet.
-//! Its three contracts are:
+//! name-resolution queries, and is itself consumed by `ty_check/mod.rs`
+//! (declaration-side const-predicate checking), `method_cmp.rs` (method
+//! conformance), `diagnostics.rs` (rendering), `provider_executor.rs`
+//! (steering comparisons via `compare_nats`), and `test_db.rs` (test
+//! wiring). Its three contracts are:
 //!
 //! 1. **Lowering** ([`lower_hir_to_term`]) is *partial*: only the predicate
 //!    expression fragment is accepted, and every rejected construct gets a

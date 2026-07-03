@@ -57,8 +57,12 @@ const COMMAND_BUDGET: usize = 10_000;
 //
 // These are pure inventory: the dispatch `match`es in `eval_builder_method`
 // and `eval_method_call` remain the runtime authority; the catch-all arms
-// `debug_assert!` that any name routed to them is NOT in the canonical list,
-// so the list and the dispatch cannot drift apart.
+// return `Err(self.unsupported_expr(..))` for anything unrecognized (there is
+// no `debug_assert!` anywhere in this file). What keeps the list and the
+// dispatch from drifting apart is the compile-time
+// `recognized_builder_ops_match_dispatch` / `recognized_reflect_ops_match_dispatch`
+// tests below, which source-scan the dispatch arms and diff them against
+// these lists.
 
 /// Every `builder.*` operation recognized by [`ProviderExecutor::eval_builder_method`].
 /// One entry per `(method, args)` arm spelling. Includes obligation

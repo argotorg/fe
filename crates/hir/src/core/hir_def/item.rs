@@ -1296,8 +1296,11 @@ pub struct ImplTrait<'db> {
     #[return_ref]
     pub(in crate::core) consts: Vec<AssocConstDef<'db>>,
     /// The optional user-facing `as Name` alias on this trait impl (FCO
-    /// T-Nway). `None` for elided/synthesized impls. Stored only — not yet
-    /// bound into any scope nor used for selection (later increments).
+    /// T-Nway). `None` for elided/synthesized impls. LIVE: read by
+    /// `selection_discriminator` (`trait_resolution/mod.rs`) to tell
+    /// `Alias`-discriminated impls apart for N-way coexistence, and by
+    /// `alias_scoped_selection` (`ty_check/expr.rs`) to resolve `with (Name)`
+    /// to the impl whose alias matches.
     pub(in crate::core) alias: Option<Partial<IdentId<'db>>>,
     /// The optional user-facing `with <path>` permit on this trait impl (FCO
     /// T3). `None` for elided/synthesized impls. The path references a permit
@@ -1322,8 +1325,9 @@ impl<'db> ImplTrait<'db> {
 
     /// Returns the optional user-facing `as Name` alias on this trait impl
     /// (FCO T-Nway). `None` when the impl was written without an `as` clause
-    /// or is synthesized. Stored only — name binding/selection are later
-    /// increments.
+    /// or is synthesized. LIVE: consumed for N-way selection-discriminator
+    /// coexistence and for `with (Name)` alias selection (see the field doc
+    /// on `alias`, above).
     pub fn hir_alias(self, db: &'db dyn HirDb) -> Option<Partial<IdentId<'db>>> {
         self.alias(db)
     }

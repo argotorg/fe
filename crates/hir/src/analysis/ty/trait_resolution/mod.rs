@@ -309,8 +309,20 @@ impl<'db> TraitSolveCx<'db> {
     ///   via the C1 rail, never reaching `select_impl`→`LowerError`→panic at
     ///   `classify.rs:2297`).
     /// - `Some(Selection::Ambiguous(applying))` — >1 applied but none or >1 is
-    ///   default-marked: a CLEAN ambiguity signal (the caller emits the
-    ///   "disambiguate with `with`" diagnostic) — NEVER a panic.
+    ///   default-marked: this function does not itself diagnose or panic here —
+    ///   it hands `Ambiguous` back to `select_impl`'s caller. Some callers (e.g.
+    ///   `resolve_trait_method_instance`) just return `None`/`false` on
+    ///   `Ambiguous`, with no diagnostic emitted at this point. What actually
+    ///   prevents a backend panic on this path today is a separate runtime
+    ///   pre-flight check added for the B-1 de-panic fix
+    ///   (`check_runtime_trait_calls_resolvable`, `crates/mir/src/runtime/lower/body.rs`),
+    ///   which surfaces an unresolved selection as a clean
+    ///   `LowerError::UnresolvedTraitSelection` pointing at `with (...)`
+    ///   disambiguation — not a guarantee this function makes on its own. The
+    ///   ty_check-level `AmbiguousTraitInst` diagnostic (`ty_check/mod.rs:1478`)
+    ///   is a separate leg that can go unreached for concrete-goal coexistence
+    ///   today (see the dedup note at `ty_check/mod.rs:1133`); making it
+    ///   reliably reachable is a deferred cascade follow-up.
     /// - `Some(Selection::NotFound)` never occurs (the engage gate already
     ///   requires applying candidates).
     ///
@@ -610,8 +622,12 @@ pub(crate) fn selection_discriminator<'db>(
 /// The UNSCOPED default (no selecting `with` in view) is:
 /// - the sole [`SelDiscriminator::Default`] impl if present (the derived default);
 /// - ELSE the sole [`SelDiscriminator::Anonymous`] impl (the hand-written default);
-/// - else [`Selection::Ambiguous`] over ALL candidates (a CLEAN ambiguity the
-///   caller turns into a "disambiguate with `with`" diagnostic — NEVER a panic).
+/// - else [`Selection::Ambiguous`] over ALL candidates. This function does not
+///   itself diagnose or panic on that path — see the caveat on the `Ambiguous`
+///   case of `default_tier_selection`, above: whether the caller turns this
+///   into a clean "disambiguate with `with`" diagnostic depends on which
+///   caller and which leg reaches it, and a backend panic is avoided today by
+///   a separate runtime pre-flight guard added for B-1, not by this decision.
 ///
 /// `Alias`'d impls are NEVER the unscoped default — only `with (Name)` selects
 /// them — so they are excluded from the default candidates here (but still appear

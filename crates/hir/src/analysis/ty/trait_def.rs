@@ -911,7 +911,7 @@ pub(crate) fn does_impl_trait_conflict<'db>(
 /// consumed. The coherence demotion that turns "the goal is NON-canonical" into
 /// "a second impl is permitted (provider-overridable)" is increment C3c-3, which
 /// flips only the non-canonical branch. The unit test
-/// `is_single_impl_keys_on_resolved_identity_not_name` exercises the v1 set
+/// `is_single_impl_reads_fixed_attribute` exercises the v1 set
 /// (StorageKey / AbiSize = true) and the non-canonical cases (Ord / Eq /
 /// user-defined = false), each via a real trait resolution so neither arm passes
 /// vacuously.
