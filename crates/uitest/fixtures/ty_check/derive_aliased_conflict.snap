@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/derive_aliased_conflict.fe
+---
+error[13-0013]: `EqAlias` is already derived for `Point`
+   ┌─ derive_aliased_conflict.fe:30:1
+   │
+30 │ derive EqAlias for Point
+   │ ^^^^^^^^^^^^^^^^^^^^^^^^ duplicate derive here
+   │
+   = remove this declaration or the other `derive` that requests the same trait

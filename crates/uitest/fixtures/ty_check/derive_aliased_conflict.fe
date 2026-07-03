@@ -1,0 +1,30 @@
+// FCO S7 — `ConflictingDerive` must key on the trait's RESOLVED identity, not
+// the last-segment spelling written at the derive site.
+//
+// `Eq` and `EqAlias` are two different names for the SAME `core::ops::Eq`
+// trait def (one plain import, one aliased). Deriving it twice for the same
+// target under the two different spellings is the same conflict as deriving
+// it twice under one spelling.
+//
+// Before this fix, `derived_pairs` keyed on the last-segment ident, so `Eq`
+// and `EqAlias` were treated as different requests: both were scheduled and
+// expanded into real impls, and the conflict was only caught later, downstream,
+// by the ordinary `ImplTrait` coherence gate emitting a generic
+// `5-0001 conflicting trait implementations` pointing at both `derive` lines.
+// That downstream gate only fires because both expansions happen to land on
+// the same selection discriminator (`Default`) here; it is not a substitute
+// for catching the request-level conflict at its source.
+//
+// PASS CRITERIA: a single, precise `ConflictingDerive` diagnostic on the
+// second (aliased) declaration, caught during expansion before either impl
+// reaches the coherence gate.
+
+use core::ops::Eq
+use core::ops::Eq as EqAlias
+
+struct Point {
+    x: u256,
+}
+
+derive Eq for Point
+derive EqAlias for Point

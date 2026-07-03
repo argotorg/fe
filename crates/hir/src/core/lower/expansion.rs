@@ -32,7 +32,7 @@ use super::{
 use crate::{
     HirDb, LowerHirDb,
     hir_def::{
-        DeriveDecl, Enum, IdentId, ItemKind, PathId, Struct, TopLevelMod,
+        DeriveDecl, Enum, IdentId, ItemKind, PathId, Struct, TopLevelMod, Trait,
         scope_graph::{EdgeKind, Scope, ScopeGraph, ScopeId},
     },
     span::{DeriveDesugared, DesugaredOrigin, HirOrigin},
@@ -79,6 +79,40 @@ struct PendingTarget<'db> {
     requests: Vec<DeriveRequest<'db>>,
 }
 
+/// FCO S7: the `derived_pairs` conflict-detection key. Prefers the trait's
+/// RESOLVED identity — exactly what `goal_matches_provider` (`provider.rs`)
+/// selects providers by — over the raw last-segment ident, so an aliased
+/// derive (`derive EqAlias for Foo` where `EqAlias` is
+/// `use core::ops::Eq as EqAlias`) collides with a bare `derive Eq for Foo` /
+/// `#[derive(Eq)]` for the SAME resolved trait, instead of silently bypassing
+/// `ConflictingDerive` detection because the two spellings differ. Falls back
+/// to the raw ident when the path does not resolve to a trait def from here
+/// (an unrelated diagnostic, e.g. `UnknownTrait`/`UnresolvedDeclTarget`,
+/// already covers that case elsewhere) — the fallback only preserves the
+/// prior name-based behavior for it, never masking it. This is the
+/// keystone-protective fix: `GeneratedImplTrait`'s content-keyed identity
+/// (`core/hir_def/item.rs`) assumes at most one impl per (goal, self_ty); two
+/// aliased derives bypassing this check would otherwise expand twice and
+/// intern the same generated-impl id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum DeriveConflictKey<'db> {
+    Resolved(Trait<'db>),
+    ByName(IdentId<'db>),
+}
+
+fn derive_conflict_key<'db>(
+    db: &'db dyn HirDb,
+    top_mod: TopLevelMod<'db>,
+    trait_name: IdentId<'db>,
+    trait_path: PathId<'db>,
+) -> DeriveConflictKey<'db> {
+    let canonical = provider::canonical_trait_path(db, top_mod, trait_path);
+    match provider::resolve_trait_def(db, top_mod, canonical) {
+        Some(trait_def) => DeriveConflictKey::Resolved(trait_def),
+        None => DeriveConflictKey::ByName(trait_name),
+    }
+}
+
 /// Runs the expansion stage for `top_mod`: collects derive requests from
 /// `#[derive(..)]` attributes and `derive` declarations, executes the
 /// selected providers, and synthesizes the resulting trait impls as real
@@ -104,10 +138,12 @@ pub(crate) fn expanded_items_impl<'db>(
     // context).
     let mut targets: IndexMap<ItemKind<'db>, PendingTarget<'db>> = IndexMap::new();
     let mut groups: IndexMap<ScopeId<'db>, Vec<ItemKind<'db>>> = IndexMap::new();
-    // Every `(target item, trait name)` pair scheduled for generation, used
+    // Every `(target item, trait)` pair scheduled for generation, used
     // to diagnose conflicts between `#[derive(..)]` attributes and
     // standalone `derive` declarations (and between identical declarations).
-    let mut derived_pairs: IndexSet<(ItemKind<'db>, IdentId<'db>)> = IndexSet::new();
+    // Keyed on resolved trait identity, not spelling — see
+    // `DeriveConflictKey`.
+    let mut derived_pairs: IndexSet<(ItemKind<'db>, DeriveConflictKey<'db>)> = IndexSet::new();
     // Enums that did not become derive targets still need their
     // `#[default]` markers diagnosed as misplaced. Whether an enum is a
     // target is only known after the declaration walk, so collect them
@@ -157,7 +193,11 @@ pub(crate) fn expanded_items_impl<'db>(
                         derive::parse_derive_traits(&mut ctxt, ast.attr_list(), &item_name);
                     let desugared = DeriveDesugared::Struct(parser::ast::AstPtr::new(&ast));
                     for (trait_name, range) in traits {
-                        derived_pairs.insert((item, trait_name));
+                        let trait_path = PathId::from_ident(db, trait_name);
+                        derived_pairs.insert((
+                            item,
+                            derive_conflict_key(db, top_mod, trait_name, trait_path),
+                        ));
                         schedule(
                             &mut targets,
                             &mut groups,
@@ -165,7 +205,7 @@ pub(crate) fn expanded_items_impl<'db>(
                             TargetKind::Struct(struct_, ast.clone()),
                             DeriveRequest {
                                 trait_name,
-                                trait_path: PathId::from_ident(db, trait_name),
+                                trait_path,
                                 primary_range: range,
                                 selection: ProviderSelection::Canonical,
                                 selection_range: None,
@@ -257,7 +297,11 @@ pub(crate) fn expanded_items_impl<'db>(
                 }
                 let desugared = DeriveDesugared::Enum(parser::ast::AstPtr::new(&ast));
                 for (trait_name, range) in traits {
-                    derived_pairs.insert((item, trait_name));
+                    let trait_path = PathId::from_ident(db, trait_name);
+                    derived_pairs.insert((
+                        item,
+                        derive_conflict_key(db, top_mod, trait_name, trait_path),
+                    ));
                     schedule(
                         &mut targets,
                         &mut groups,
@@ -265,7 +309,7 @@ pub(crate) fn expanded_items_impl<'db>(
                         TargetKind::Enum(enum_, ast.clone()),
                         DeriveRequest {
                             trait_name,
-                            trait_path: PathId::from_ident(db, trait_name),
+                            trait_path,
                             primary_range: range,
                             selection: ProviderSelection::Canonical,
                             selection_range: None,
@@ -631,7 +675,7 @@ fn expand_derive_decl<'db>(
     root: &parser::SyntaxNode,
     decl: DeriveDecl<'db>,
     schedule: &mut dyn FnMut(ItemKind<'db>, TargetKind<'db>, DeriveRequest<'db>),
-    derived_pairs: &mut IndexSet<(ItemKind<'db>, IdentId<'db>)>,
+    derived_pairs: &mut IndexSet<(ItemKind<'db>, DeriveConflictKey<'db>)>,
 ) {
     let HirOrigin::Raw(ptr) = decl.origin(db) else {
         return;
@@ -785,7 +829,8 @@ fn expand_derive_decl<'db>(
         }
     };
 
-    if !derived_pairs.insert((target_item, trait_name)) {
+    let conflict_key = derive_conflict_key(db, ctxt.top_mod(), trait_name, head_path);
+    if !derived_pairs.insert((target_item, conflict_key)) {
         accumulate_error(
             ctxt,
             &item_name,
