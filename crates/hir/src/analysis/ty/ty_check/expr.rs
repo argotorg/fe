@@ -1375,7 +1375,28 @@ impl<'db> TyChecker<'db> {
             // ALIAS form: `with (Name)`. Either the path did not resolve, or it
             // resolved to something other than a `<T as Trait>` goal — try the alias
             // lookup. The recorded goal is the matched impl's own trait instance.
-            _ => self.alias_scoped_selection(path)?,
+            //
+            // FCO T-Nway (#84) S3 fix: PRECISION (do NOT hijack a real value
+            // binding). Consult the impl-alias namespace ONLY when the bare ident
+            // does NOT resolve as an ordinary value/type binding, mirroring the
+            // failure path's guard in `classify_with_alias_failure`. Otherwise a
+            // real `with (value)` (e.g. a `const Casual` value provider) whose
+            // spelling collides with an `as Casual` impl alias would be silently
+            // swallowed by the alias selection on the SUCCESS path. Only a bare
+            // single-segment ident can name a value binding here.
+            _ => {
+                if path.parent(self.db).is_none() {
+                    let ident_span: DynLazySpan<'db> =
+                        value.span(self.body()).into_path_expr().into();
+                    if !matches!(
+                        resolve_ident_expr(self.db, &self.env, path, ident_span),
+                        ResolvedPathInBody::NewBinding(_)
+                    ) {
+                        return None;
+                    }
+                }
+                self.alias_scoped_selection(path)?
+            }
         };
 
         // Mint the witness type the cascade recognizes: `Evidence<G>` with `G`

@@ -1,0 +1,45 @@
+// Regression (finding B-2 / S3): `with (Name)` PRECISION on the SUCCESS path.
+// When `Name` resolves to a real value binding (here the `const Casual`), the
+// `with (Name)` head must provide that VALUE; it must NOT be hijacked by an
+// `as Name` impl alias of the same spelling.
+//
+// Before the fix, `provisional_scoped_selection` consulted the impl-alias
+// namespace BEFORE ordinary value resolution, so `with (Casual) { u.greet() }`
+// selected the aliased impl (returning 2) and silently swallowed the const
+// value. The failure path already had a "do NOT hijack a real value binding"
+// guard; this pins the same guard on the success path, so the const value wins
+// and the sole anonymous impl is selected (returning 1).
+
+trait Greet {
+    fn greet(self) -> u32
+}
+
+struct U {
+    id: u256,
+}
+
+// Sole anonymous impl for `U`: returns 1.
+impl Greet for U {
+    fn greet(self) -> u32 {
+        return 1
+    }
+}
+
+// Aliased impl `as Casual`: returns 2, spelled identically to the const below.
+impl Greet for U as Casual {
+    fn greet(self) -> u32 {
+        return 2
+    }
+}
+
+const Casual: u32 = 7
+
+#[test]
+fn with_value_binding_is_not_hijacked_by_alias() {
+    let u = U { id: 1 }
+    // `Casual` is a real const value binding, so `with (Casual)` provides that
+    // value; it does NOT select the `as Casual` impl alias. The unscoped
+    // `u.greet()` therefore resolves to the sole anonymous impl.
+    let r = with (Casual) { u.greet() }
+    assert!(r == 1)
+}
