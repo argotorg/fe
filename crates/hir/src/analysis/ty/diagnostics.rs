@@ -1032,9 +1032,9 @@ pub enum TraitConstraintDiag<'db> {
 
     /// A concrete ADT application whose `where`-clause const predicate is
     /// refuted under its arguments (e.g. `Bounded<4, 1>` where `MIN <= MAX`).
-    /// Same message as the call-site const-predicate failure
-    /// (`BodyDiag::WhereConstPredicateFailed`, 8-0085), but rendered under
-    /// this enum's own `error_code` (6-0007), not that code.
+    /// Deliberately rendered as `8-0085`, the same code as the call-site
+    /// const-predicate failure (`BodyDiag::WhereConstPredicateFailed`), so
+    /// const predicates report the same way at every position.
     ConstPredicateNotSat {
         span: DynLazySpan<'db>,
         predicate: Body<'db>,
@@ -1075,8 +1075,9 @@ impl TraitConstraintDiag<'_> {
             Self::InfiniteBoundRecursion(..) => 4,
             Self::ConcreteTypeBound(..) => 5,
             Self::ConstTyBound(..) => 6,
-            // Rendered as 6-0007 (TraitSatisfaction) in `to_complete`, via the
-            // shared `error_code` binding like every other arm in this enum.
+            // This is the enum's own local numbering only; the *rendered*
+            // code is deliberately overridden to `8-0085` in `to_complete`
+            // (see the doc comment on the variant above).
             Self::ConstPredicateNotSat { .. } => 7,
             Self::ConstraintCtorParamUnsupported { .. } => 8,
             Self::ProviderGoalNotConcrete { .. } => 9,

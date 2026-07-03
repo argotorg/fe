@@ -4957,13 +4957,17 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                 error_code,
             },
 
-            // Same wording as the call-site `WhereConstPredicateFailed`
-            // (8-0085), but rendered under this enum's own shared `error_code`
-            // (TraitSatisfaction pass, `local_code()` = 7) rather than a
-            // hardcoded cross-namespace `GlobalErrorCode` literal, so this
-            // arm's code stays tracked by `TraitConstraintDiag::local_code`
-            // like every other arm here instead of silently squatting on
-            // `BodyDiag`'s TyCheck code space.
+            // Deliberate cross-pass override: this WF-level check and the
+            // call-site `BodyDiag::WhereConstPredicateFailed` are the same
+            // user-facing error ("const predicate is not satisfied") raised
+            // from two different passes, and we want one consistent code for
+            // it at every site, so this arm is pinned to `8-0085` rather than
+            // this enum's own shared `error_code` (TraitSatisfaction pass,
+            // `local_code()` = 7, which would otherwise render `6-0007`).
+            // `local_code()` = 7 remains this enum's own numbering for
+            // internal bookkeeping; only the *rendered* code is overridden
+            // here. This is intentional, not an oversight - do not "fix" it
+            // by reverting to the shared `error_code` binding.
             Self::ConstPredicateNotSat { span, .. } => CompleteDiagnostic {
                 severity,
                 message: "const predicate is not satisfied".to_string(),
@@ -4976,7 +4980,7 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                     "const predicates must be proven by an assumption or by CTFE evaluating to `true`"
                         .to_string(),
                 ],
-                error_code,
+                error_code: GlobalErrorCode::new(DiagnosticPass::TyCheck, 85),
             },
 
             Self::ConstraintCtorParamUnsupported { span, param } => {

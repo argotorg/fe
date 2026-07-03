@@ -3,7 +3,7 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/where_const_predicate_adt_wf.fe
 ---
-error[6-0007]: const predicate is not satisfied
+error[8-0085]: const predicate is not satisfied
    ┌─ where_const_predicate_adt_wf.fe:27:5
    │
 27 │     Bounded<4, 1> { value: 0 }
@@ -11,7 +11,7 @@ error[6-0007]: const predicate is not satisfied
    │
    = const predicates must be proven by an assumption or by CTFE evaluating to `true`
 
-error[6-0007]: const predicate is not satisfied
+error[8-0085]: const predicate is not satisfied
    ┌─ where_const_predicate_adt_wf.fe:31:17
    │
 31 │ fn bad_param(x: Bounded<4, 1>) {
@@ -19,7 +19,7 @@ error[6-0007]: const predicate is not satisfied
    │
    = const predicates must be proven by an assumption or by CTFE evaluating to `true`
 
-error[6-0007]: const predicate is not satisfied
+error[8-0085]: const predicate is not satisfied
    ┌─ where_const_predicate_adt_wf.fe:36:5
    │
 36 │     diverge()
@@ -27,7 +27,7 @@ error[6-0007]: const predicate is not satisfied
    │
    = const predicates must be proven by an assumption or by CTFE evaluating to `true`
 
-error[6-0007]: const predicate is not satisfied
+error[8-0085]: const predicate is not satisfied
    ┌─ where_const_predicate_adt_wf.fe:41:8
    │
 41 │     x: Bounded<4, 1>
