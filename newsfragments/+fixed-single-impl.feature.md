@@ -1,0 +1,1 @@
+Add `#[fixed]` for trait declarations, marking a trait as single-impl (at most one implementation program-wide). Applied to the storage-/ABI-layout-critical traits `StorageKey` and `AbiSize` in core/std.

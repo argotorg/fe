@@ -1,0 +1,1 @@
+Add scoped trait-impl selection: `impl Trait for Type as Name` names an alternate implementation, selectable at a call site with `with (Name) { .. }`. This surface is still evolving (naming and disambiguation semantics may change) and is considered provisional.

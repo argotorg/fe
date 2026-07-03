@@ -1,0 +1,1 @@
+Add derive providers: `#[derive(Trait)]` and standalone `derive Trait for Type` declarations are now implemented as compile-time providers written in Fe itself (`impl Derive<Trait> for Provider`), replacing the previous hardcoded Rust generators. Built-in providers cover `Eq`, `Ord`, `Default`, `Clone`, `AbiSize`, `Encode`/`Decode`, and EIP-712 struct hashing.

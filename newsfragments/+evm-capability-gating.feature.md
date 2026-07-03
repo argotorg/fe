@@ -1,0 +1,1 @@
+Storage intrinsics (`sload`/`sstore`) now require a capability granted by the current compilation target, recognized by resolved identity against `std::evm::EvmTarget`. Other EVM intrinsics are not yet gated.

@@ -1,0 +1,1 @@
+Generated `impl Trait for Type` items (from derive providers and `#[event]`/`#[error]`/`#[msg]` desugaring) are now identified by their content (the goal trait and self type) instead of their position among sibling items, so reordering derive targets no longer perturbs the identity of unrelated generated code.
