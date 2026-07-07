@@ -1,0 +1,109 @@
+msg MapStructMsg {
+    #[selector = 1]
+    PutPosition {
+        account: u256,
+        market: u256,
+        owner: u256,
+        collateral: u256,
+        debt: u256,
+        nonce: u256,
+    } -> u256,
+
+    #[selector = 2]
+    ReadPosition { account: u256, market: u256 } -> u256,
+}
+
+struct Position {
+    owner: u256,
+    collateral: u256,
+    debt: u256,
+    nonce: u256,
+}
+
+impl Copy for Position {}
+
+fn write_position(value: own Position) uses (position: mut Position) {
+    position = value
+}
+
+fn read_position() -> Position uses (position: Position) {
+    position
+}
+
+struct Store {
+    positions: StorageMap<(u256, u256), Position>,
+}
+
+fn pack_position(position: Position) -> u256 {
+    position.owner * 1000000000 + position.collateral * 1000000 + position.debt * 1000 + position.nonce
+}
+
+pub contract C {
+    mut store: Store
+
+    init() uses (mut store) {}
+
+    recv MapStructMsg {
+        PutPosition { account, market, owner, collateral, debt, nonce } -> u256 uses (mut store) {
+            let position = Position {
+                owner: owner,
+                collateral: collateral,
+                debt: debt,
+                nonce: nonce,
+            }
+            let loaded = with (mut store.positions) {
+                let position_ptr = store.positions.mut_ptr(key: (account, market))
+                with (position_ptr) {
+                    write_position(value: position)
+                    read_position()
+                }
+            }
+            pack_position(position: loaded)
+        }
+
+        ReadPosition { account, market } -> u256 uses (store) {
+            let position_ptr = store.positions.ptr(key: (account, market))
+            let loaded = with (position_ptr) {
+                read_position()
+            }
+            pack_position(position: loaded)
+        }
+    }
+}
+
+#[test]
+fn test_storage_map_struct_values() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 0)
+    assert!(c.inner != 0)
+
+    let packed: u256 = evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: MapStructMsg::PutPosition {
+            account: 7,
+            market: 8,
+            owner: 11,
+            collateral: 22,
+            debt: 33,
+            nonce: 44,
+        },
+    )
+    assert!(packed == 11022033044)
+
+    let packed: u256 = evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: MapStructMsg::ReadPosition { account: 7, market: 8 },
+    )
+    assert!(packed == 11022033044)
+
+    let empty: u256 = evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: MapStructMsg::ReadPosition { account: 7, market: 9 },
+    )
+    assert!(empty == 0)
+}
