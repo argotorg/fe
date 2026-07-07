@@ -1,0 +1,210 @@
+use core::EffectHandle
+use std::evm::Evm
+
+msg PackedStructMapMsg {
+    #[selector = 1]
+    Put {
+        a: u8,
+        b: u16,
+        c: bool,
+        d: u256,
+        e: u8,
+    } -> u256,
+
+    #[selector = 2]
+    Read -> u256,
+
+    #[selector = 3]
+    RawSlot { offset: u256 } -> u256,
+
+    #[selector = 4]
+    SetA { a: u8 } -> u256,
+
+    #[selector = 5]
+    SetB { b: u16 } -> u256,
+
+    #[selector = 6]
+    SetC { c: bool } -> u256,
+}
+
+struct PackedPosition {
+    a: u8,
+    b: u16,
+    c: bool,
+    d: u256,
+    e: u8,
+}
+
+impl Copy for PackedPosition {}
+
+fn write_packed(value: own PackedPosition) uses (position: mut PackedPosition) {
+    position = value
+}
+
+fn read_packed() -> PackedPosition uses (position: PackedPosition) {
+    position
+}
+
+fn set_a(value: u8) uses (position: mut PackedPosition) {
+    position.a = value
+}
+
+fn set_b(value: u16) uses (position: mut PackedPosition) {
+    position.b = value
+}
+
+fn set_c(value: bool) uses (position: mut PackedPosition) {
+    position.c = value
+}
+
+fn pack_position(position: PackedPosition) -> u256 {
+    let mut c: u256 = 0
+    if position.c {
+        c = 1
+    }
+    ((position.a as u256) * 1000000000000) +
+        ((position.b as u256) * 100000000) +
+        (c * 10000000) +
+        (position.d * 1000) +
+        (position.e as u256)
+}
+
+struct Store {
+    positions: StorageMap<u256, PackedPosition>,
+}
+
+pub contract C {
+    mut store: Store
+
+    init() uses (mut store) {}
+
+    recv PackedStructMapMsg {
+        Put { a, b, c, d, e } -> u256 uses (mut store) {
+            let position = PackedPosition { a: a, b: b, c: c, d: d, e: e }
+            let position_ptr = with (mut store.positions) {
+                store.positions.mut_ptr(key: 1)
+            }
+            with (position_ptr) {
+                write_packed(value: position)
+                pack_position(position: read_packed())
+            }
+        }
+
+        Read -> u256 uses (store) {
+            let position_ptr = store.positions.ptr(key: 1)
+            with (position_ptr) {
+                pack_position(position: read_packed())
+            }
+        }
+
+        RawSlot { offset } -> u256 uses (store, evm: Evm) {
+            let position_ptr = store.positions.ptr(key: 1)
+            evm.sload(position_ptr.raw() + offset)
+        }
+
+        SetA { a } -> u256 uses (mut store, evm: Evm) {
+            let position_ptr = with (mut store.positions) {
+                store.positions.mut_ptr(key: 1)
+            }
+            with (position_ptr) {
+                set_a(value: a)
+            }
+            evm.sload(position_ptr.raw())
+        }
+
+        SetB { b } -> u256 uses (mut store, evm: Evm) {
+            let position_ptr = with (mut store.positions) {
+                store.positions.mut_ptr(key: 1)
+            }
+            with (position_ptr) {
+                set_b(value: b)
+            }
+            evm.sload(position_ptr.raw())
+        }
+
+        SetC { c } -> u256 uses (mut store, evm: Evm) {
+            let position_ptr = with (mut store.positions) {
+                store.positions.mut_ptr(key: 1)
+            }
+            with (position_ptr) {
+                set_c(value: c)
+            }
+            evm.sload(position_ptr.raw())
+        }
+    }
+}
+
+#[test]
+fn test_storage_map_packed_struct_values() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 0)
+
+    let packed: u256 = evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: PackedStructMapMsg::Put {
+            a: 0xaa,
+            b: 0xbeef,
+            c: true,
+            d: 7,
+            e: 0x44,
+        },
+    )
+    assert!(packed == 174887910007068)
+
+    let raw0: u256 = evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: PackedStructMapMsg::RawSlot { offset: 0 },
+    )
+    assert!(raw0 == 0x1beefaa)
+
+    let raw1: u256 = evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: PackedStructMapMsg::RawSlot { offset: 1 },
+    )
+    assert!(raw1 == 7)
+
+    let raw2: u256 = evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: PackedStructMapMsg::RawSlot { offset: 2 },
+    )
+    assert!(raw2 == 0x44)
+
+    let raw0: u256 = evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: PackedStructMapMsg::SetB { b: 0x1234 },
+    )
+    assert!(raw0 == 0x11234aa)
+
+    let raw0: u256 = evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: PackedStructMapMsg::SetA { a: 0x55 },
+    )
+    assert!(raw0 == 0x1123455)
+
+    let raw0: u256 = evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: PackedStructMapMsg::SetC { c: false },
+    )
+    assert!(raw0 == 0x123455)
+
+    let packed: u256 = evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: PackedStructMapMsg::Read {},
+    )
+    assert!(packed == 85466000007068)
+}
