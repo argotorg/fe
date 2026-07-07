@@ -3004,6 +3004,76 @@ mod tests {
     }
 
     #[test]
+    fn runtime_handle_preservation_keeps_mut_owned_aggregate_param_by_value() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse(
+            "file:///runtime_handle_preservation_keeps_mut_owned_aggregate_param_by_value.fe",
+        )
+        .unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                include_str!(
+                    "../../../../fe/tests/fixtures/fe_test/mut_owned_aggregate_param_slot_carrier.fe"
+                )
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        // `permute` takes `mut _ s: own [u256; 3]`, projects it (`s[0]`), reassigns it whole
+        // (`s = [..]`), and returns it. That demands projectable owned storage, which must be
+        // supplied by a slot root rather than by widening the by-value parameter into an
+        // object reference. A "fix" that widened the ABI would keep the behavioral fe_test
+        // fixture green while silently changing the calling convention; these assertions fail
+        // loudly instead.
+        let semantic = semantic_instance_for_named_func(&db, top_mod, "permute");
+        let instance = runtime_instance_for_semantic(&db, semantic);
+        let signature = instance.interface_signature(&db);
+        let body = instance.body(&db);
+
+        let param = signature
+            .params
+            .first()
+            .expect("permute has one runtime-visible parameter");
+
+        // The interface contract stays a by-value aggregate: callers pass `[u256; 3]`
+        // directly, never an object handle.
+        assert!(
+            matches!(param.class, RuntimeClass::AggregateValue { .. }),
+            "mut-owned aggregate param must keep a by-value aggregate ABI class, got:\n{:#?}",
+            param.class,
+        );
+
+        // The parameter local's carrier is the calling-convention handle; it must stay
+        // exactly equal to the signature class (the equality the runtime verifier enforces,
+        // whose failure surfaces as SlotCarrierMismatch).
+        let carrier = body
+            .value_class(param.local)
+            .unwrap_or_else(|| panic!("param local {:?} should keep a value carrier", param.local));
+        assert_eq!(
+            carrier, &param.class,
+            "param carrier must equal the signature param class, not be upgraded to an object ref",
+        );
+
+        // Owned storage for the mutation/reassignment comes from a slot root over the same
+        // aggregate, confirming the demand is met without touching the carrier.
+        let root = &body.local(param.local).expect("param local exists").root;
+        assert!(
+            matches!(
+                root,
+                RuntimeLocalRoot::Slot(RuntimeClass::AggregateValue { .. })
+            ),
+            "projectable owned storage must come from an aggregate slot root, got:\n{root:#?}",
+        );
+    }
+
+    #[test]
     fn transport_shaped_returns_remain_visible_transport_returns() {
         let mut db = DriverDataBase::default();
         let file_url =

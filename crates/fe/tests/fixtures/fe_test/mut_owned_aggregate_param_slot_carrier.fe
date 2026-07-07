@@ -1,0 +1,76 @@
+// Regression: a `mut own` aggregate parameter is passed by value (a direct
+// aggregate carrier fixed by the calling convention), but its body both
+// projects into it and reassigns it whole, which demands projectable owned
+// storage. Carrier inference used to "upgrade" the parameter local to an
+// object-ref carrier to satisfy that demand, contradicting the signature's
+// by-value param class and tripping the runtime verifier with
+// `SlotCarrierMismatch`. The owned storage must instead come from a slot root
+// while the parameter carrier stays the signature aggregate.
+
+struct Pt {
+    x: u256,
+    y: u256,
+}
+
+// Array: projected read, whole reassignment, and returned.
+pub fn permute(mut _ s: own [u256; 3]) -> [u256; 3] {
+    let x: u256 = s[0]
+    s = [x, s[1], s[2]]
+    s
+}
+
+// Struct: field read, whole reassignment, and returned.
+pub fn bump(mut _ p: own Pt) -> Pt {
+    let old_x: u256 = p.x
+    p = Pt { x: old_x + 1, y: p.y }
+    p
+}
+
+// Index mutation only (no whole reassignment) still needs owned storage.
+pub fn set_first(mut _ s: own [u256; 3], _ v: u256) -> [u256; 3] {
+    s[0] = v
+    s
+}
+
+// Nested aggregate owned parameter.
+pub fn rotate(mut _ s: own [[u256; 2]; 2]) -> [[u256; 2]; 2] {
+    let head: [u256; 2] = s[0]
+    s = [s[1], head]
+    s
+}
+
+#[test]
+fn test_permute() {
+    let s: [u256; 3] = [1, 2, 3]
+    let out: [u256; 3] = permute(s)
+    assert(out[0] == 1)
+    assert(out[1] == 2)
+    assert(out[2] == 3)
+}
+
+#[test]
+fn test_bump() {
+    let p: Pt = Pt { x: 10, y: 20 }
+    let q: Pt = bump(p)
+    assert(q.x == 11)
+    assert(q.y == 20)
+}
+
+#[test]
+fn test_set_first() {
+    let s: [u256; 3] = [1, 2, 3]
+    let out: [u256; 3] = set_first(s, 99)
+    assert(out[0] == 99)
+    assert(out[1] == 2)
+    assert(out[2] == 3)
+}
+
+#[test]
+fn test_rotate() {
+    let s: [[u256; 2]; 2] = [[1, 2], [3, 4]]
+    let out: [[u256; 2]; 2] = rotate(s)
+    assert(out[0][0] == 3)
+    assert(out[0][1] == 4)
+    assert(out[1][0] == 1)
+    assert(out[1][1] == 2)
+}
