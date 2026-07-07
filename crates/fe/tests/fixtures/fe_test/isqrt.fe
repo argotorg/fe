@@ -1,0 +1,60 @@
+// Tests for `core::num::isqrt` — floor of the integer square root of a u256.
+
+use core::num::isqrt
+
+#[test]
+fn isqrt_small_values() {
+    assert(isqrt(0) == 0)
+    assert(isqrt(1) == 1)
+    assert(isqrt(2) == 1)
+    assert(isqrt(3) == 1)
+    assert(isqrt(4) == 2)
+    assert(isqrt(5) == 2)
+    assert(isqrt(8) == 2)
+    assert(isqrt(9) == 3)
+    assert(isqrt(15) == 3)
+    assert(isqrt(16) == 4)
+}
+
+// For a perfect square k*k, the floor contract pins the results at the
+// square and its immediate neighbors: k*k - 1 -> k - 1, k*k -> k, k*k + 1 -> k.
+#[test]
+fn isqrt_perfect_squares_small() {
+    let k: u256 = 10
+    assert(isqrt(k * k - 1) == k - 1)
+    assert(isqrt(k * k) == k)
+    assert(isqrt(k * k + 1) == k)
+}
+
+#[test]
+fn isqrt_perfect_squares_mid() {
+    let k: u256 = 1000003
+    assert(isqrt(k * k - 1) == k - 1)
+    assert(isqrt(k * k) == k)
+    assert(isqrt(k * k + 1) == k)
+}
+
+#[test]
+fn isqrt_perfect_squares_huge() {
+    // k = 2^127; k*k = 2^254 still fits in a u256.
+    let k: u256 = 170141183460469231731687303715884105728
+    assert(isqrt(k * k - 1) == k - 1)
+    assert(isqrt(k * k) == k)
+    assert(isqrt(k * k + 1) == k)
+}
+
+#[test]
+fn isqrt_u256_max() {
+    // floor(sqrt(2^256 - 1)) == 2^128 - 1
+    assert(isqrt(u256::max()) == 340282366920938463463374607431768211455)
+}
+
+// Arbitrary values cross-checked against precomputed floor square roots.
+#[test]
+fn isqrt_arbitrary_values() {
+    assert(isqrt(1000000000000000000) == 1000000000)
+    assert(isqrt(999999999999999999) == 999999999)
+    assert(isqrt(12345678901234567890) == 3513641828)
+    // 2^255
+    assert(isqrt(57896044618658097711785492504343953926634992332820282019728792003956564819968) == 240615969168004511545033772477625056927)
+}
