@@ -1,0 +1,15 @@
+msg M {
+    #[selector = 0]
+    Ping -> (),
+}
+
+contract C {
+    mut balances: StorageMap<u256, u256>
+
+    recv M {
+        Ping -> () uses (balances) {
+            let ptr = balances.mut_ptr(key: 1)
+            ptr.write(2)
+        }
+    }
+}
