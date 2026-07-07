@@ -1,0 +1,77 @@
+/// Test that `encode_msg_calldata` produces exactly the bytes a typed
+/// `call<M>` sends: the callee echoes `keccak256` of its full calldata, and
+/// the digest from a typed call must match the digest from a `raw_call` fed
+/// by `encode_msg_calldata`.
+
+use std::evm::{Ctx, Evm, RawOps, encode_msg_calldata, decode_returndata, last_returndata}
+
+msg EchoMsg {
+    #[selector = sol("digestStatic(uint256,address)")]
+    DigestStatic { a: u256, b: Address } -> u256,
+    #[selector = sol("digestDynamic(bytes)")]
+    DigestDynamic { data: Bytes } -> u256,
+}
+
+fn hash_calldata() -> u256 uses (raw: mut RawOps) {
+    let len = raw.calldatasize()
+    let ptr = std::evm::mem::alloc(len)
+    raw.calldatacopy(dest: ptr, offset: 0, len: len)
+    raw.keccak256(offset: ptr, len: len)
+}
+
+pub contract Echo uses (raw: mut RawOps) {
+    init() {}
+
+    recv EchoMsg {
+        DigestStatic { a, b } -> u256 uses (mut raw) {
+            hash_calldata()
+        }
+
+        DigestDynamic { data } -> u256 uses (mut raw) {
+            hash_calldata()
+        }
+    }
+}
+
+/// Build a 64-byte `Bytes` payload. `data` points at the ABI tail: the
+/// length word followed by the packed content words.
+fn build_bytes() -> Bytes
+uses (mem: mut std::evm::RawMem)
+{
+    let data = std::evm::mem::alloc(96)
+    mem.mstore(addr: data, value: 64)
+    mem.mstore(addr: data + 32, value: 0x1234)
+    mem.mstore(addr: data + 64, value: 0x5678)
+    Bytes { data: data, len: 64, size: 96 }
+}
+
+#[test]
+fn test_encode_msg_calldata_static_args() uses (evm: mut Evm, call: mut Call, ctx: Ctx) {
+    let echo = evm.create2<Echo>(value: 0, args: (), salt: 0)
+    assert!(echo.inner != 0)
+
+    let addr_arg = Address { inner: 0xabcdef }
+    let typed_digest: u256 = echo.call(EchoMsg::DigestStatic { a: 42, b: addr_arg })
+
+    let (ptr, len) = encode_msg_calldata(EchoMsg::DigestStatic { a: 42, b: addr_arg })
+    let ok = call.raw_call(addr: echo, gas: ctx.gas(), value: 0, args_offset: ptr, args_len: len)
+    assert!(ok)
+    let raw_digest: u256 = decode_returndata(last_returndata())
+
+    assert!(typed_digest == raw_digest)
+}
+
+#[test]
+fn test_encode_msg_calldata_dynamic_bytes() uses (evm: mut Evm, call: mut Call, ctx: Ctx, mem: mut std::evm::RawMem) {
+    let echo = evm.create2<Echo>(value: 0, args: (), salt: 0)
+    assert!(echo.inner != 0)
+
+    let typed_digest: u256 = echo.call(EchoMsg::DigestDynamic { data: build_bytes() })
+
+    let (ptr, len) = encode_msg_calldata(EchoMsg::DigestDynamic { data: build_bytes() })
+    let ok = call.raw_call(addr: echo, gas: ctx.gas(), value: 0, args_offset: ptr, args_len: len)
+    assert!(ok)
+    let raw_digest: u256 = decode_returndata(last_returndata())
+
+    assert!(typed_digest == raw_digest)
+}
