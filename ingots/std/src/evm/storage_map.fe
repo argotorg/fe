@@ -118,6 +118,13 @@ impl StorageKey for bool {
     }
 }
 
+/// Values that may occupy a `StorageMap` entry.
+///
+/// The compiler satisfies this marker structurally for ordinary storage values.
+/// User-written impls are ignored by trait resolution, so nested storage maps
+/// cannot opt into this marker manually. Use composite keys instead.
+pub trait StorageMapValue {}
+
 /// A storage-backed mapping from keys `K` to values `V`.
 ///
 /// `SALT` is the mapping's slot seed (the `slot` component in
@@ -125,11 +132,11 @@ impl StorageKey for bool {
 /// prevent collisions.
 struct StorageMapSeal {}
 
-pub struct StorageMap<K, V, const SALT: u256 = _> {
+pub struct StorageMap<K, V: StorageMapValue, const SALT: u256 = _> {
     seal: StorageMapSeal,
 }
 
-impl<K, V, const SALT: u256> Copy for StorageMap<K, V, SALT> {}
+impl<K, V: StorageMapValue, const SALT: u256> Copy for StorageMap<K, V, SALT> {}
 
 #[inline(always)]
 fn storagemap_storage_slot_with_salt<K>(key: K, salt: u256) -> u256
@@ -160,7 +167,7 @@ fn storagemap_set_word_with_salt<K>(key: K, salt: u256, word: u256)
     sstore(slot: storage_slot, value: word)
 }
 
-impl<K: StorageKey, V: WordRepr, const SALT: u256> StorageMap<K, V, SALT> {
+impl<K: StorageKey, V: WordRepr + StorageMapValue, const SALT: u256> StorageMap<K, V, SALT> {
     pub(ingot) fn new_unchecked() -> Self {
         Self { seal: StorageMapSeal {} }
     }

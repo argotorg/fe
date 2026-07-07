@@ -1,0 +1,11 @@
+use std::evm::{StorageMap, StorageMapValue}
+
+struct Wrapper {
+    inner: StorageMap<u256, u256, 0>,
+}
+
+impl StorageMapValue for Wrapper {}
+
+contract C {
+    mut nested: StorageMap<u256, Wrapper, 1>,
+}
