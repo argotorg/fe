@@ -2,6 +2,7 @@ pub use calldata::{self, *}
 pub use crypto::{self, *}
 pub use memory_input::{self, *}
 pub use effects::{self, *}
+pub use erc20::{self}
 pub use event::{self, *}
 pub use panic::{self, *}
 pub use ops::{

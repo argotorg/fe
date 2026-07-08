@@ -1,0 +1,225 @@
+/// Tests for `std::evm::erc20`: SafeERC20-style `safe_transfer` /
+/// `safe_transfer_from` / `safe_approve`, built on `call_with_default`.
+/// Tolerates tokens that return no data, reverts on a `false` return, and
+/// closes the no-code-at-address hole with a codesize check.
+
+use std::evm::{RawOps, erc20, mem}
+
+msg TokenMsg {
+    #[selector = sol("transfer(address,uint256)")]
+    Transfer { receiver: Address, amount: u256 } -> bool,
+    #[selector = sol("transferFrom(address,address,uint256)")]
+    TransferFrom { owner: Address, receiver: Address, amount: u256 } -> bool,
+    #[selector = sol("approve(address,uint256)")]
+    Approve { spender: Address, amount: u256 } -> bool,
+}
+
+/// Same selectors, declared without return types: handlers execute and
+/// return no data, like USDT-style tokens.
+msg NoRetTokenMsg {
+    #[selector = sol("transfer(address,uint256)")]
+    Transfer { receiver: Address, amount: u256 },
+    #[selector = sol("transferFrom(address,address,uint256)")]
+    TransferFrom { owner: Address, receiver: Address, amount: u256 },
+    #[selector = sol("approve(address,uint256)")]
+    Approve { spender: Address, amount: u256 },
+}
+
+msg CallCountMsg {
+    #[selector = 0x01]
+    GetCallCount -> u256,
+}
+
+pub contract CompliantToken {
+    recv TokenMsg {
+        Transfer { receiver, amount } -> bool {
+            true
+        }
+        TransferFrom { owner, receiver, amount } -> bool {
+            true
+        }
+        Approve { spender, amount } -> bool {
+            true
+        }
+    }
+}
+
+/// Reverts with a distinctive 32-byte payload; the marker sits in the top
+/// bytes so `#[test(should_revert, selector = 0xdeadbeef)]` can match it.
+pub contract RevertingToken {
+    recv TokenMsg {
+        Transfer { receiver, amount } -> bool {
+            let marker: u256 = 0xdeadbeefcafebabe << 192
+            revert(marker)
+        }
+        TransferFrom { owner, receiver, amount } -> bool {
+            let marker: u256 = 0xdeadbeefcafebabe << 192
+            revert(marker)
+        }
+        Approve { spender, amount } -> bool {
+            let marker: u256 = 0xdeadbeefcafebabe << 192
+            revert(marker)
+        }
+    }
+}
+
+struct CallCount {
+    count: u256,
+}
+
+/// Executes (counts calls) but returns no data.
+pub contract NoReturnToken {
+    mut store: CallCount
+
+    init() uses (mut store) {
+        store.count = 0
+    }
+
+    recv NoRetTokenMsg {
+        Transfer { receiver, amount } uses (mut store) {
+            store.count += 1
+        }
+        TransferFrom { owner, receiver, amount } uses (mut store) {
+            store.count += 1
+        }
+        Approve { spender, amount } uses (mut store) {
+            store.count += 1
+        }
+    }
+
+    recv CallCountMsg {
+        GetCallCount -> u256 uses (store) {
+            store.count
+        }
+    }
+}
+
+pub contract FalseToken {
+    recv TokenMsg {
+        Transfer { receiver, amount } -> bool {
+            false
+        }
+        TransferFrom { owner, receiver, amount } -> bool {
+            false
+        }
+        Approve { spender, amount } -> bool {
+            false
+        }
+    }
+}
+
+msg MalformedTokenMsg {
+    #[selector = sol("transfer(address,uint256)")]
+    Transfer { receiver: Address, amount: u256 } -> bool,
+}
+
+/// Returns fewer than 32 bytes of returndata.
+pub contract MalformedToken {
+    recv MalformedTokenMsg {
+        Transfer { receiver, amount } -> bool uses (raw: mut RawOps) {
+            let ptr = mem::alloc(32)
+            raw.mstore(addr: ptr, value: 0xaabbccdd << 224)
+            raw.return_data(offset: ptr, len: 4)
+        }
+    }
+}
+
+fn alice() -> Address {
+    Address { inner: 2 }
+}
+
+fn bob() -> Address {
+    Address { inner: 3 }
+}
+
+fn call_count(token: Address) -> u256 uses (evm: mut Evm) {
+    evm.call(addr: token, gas: 100000, value: 0, message: CallCountMsg::GetCallCount {})
+}
+
+// ---------------------------------------------------------------------------
+// safe_transfer: full mock matrix
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_safe_transfer_compliant_token() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    let token = evm.create2<CompliantToken>(value: 0, args: (), salt: 0)
+    erc20::safe_transfer(token, receiver: alice(), amount: 1)
+}
+
+#[test(should_revert, selector = 0xdeadbeef)]
+fn test_safe_transfer_bubbles_token_revert() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    let token = evm.create2<RevertingToken>(value: 0, args: (), salt: 0)
+    erc20::safe_transfer(token, receiver: alice(), amount: 1)
+}
+
+#[test]
+fn test_safe_transfer_no_return_token() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    let token = evm.create2<NoReturnToken>(value: 0, args: (), salt: 0)
+    erc20::safe_transfer(token, receiver: alice(), amount: 1)
+    assert!(call_count(token) == 1)
+}
+
+#[test(should_revert)]
+fn test_safe_transfer_reverts_on_false_return() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    let token = evm.create2<FalseToken>(value: 0, args: (), salt: 0)
+    erc20::safe_transfer(token, receiver: alice(), amount: 1)
+}
+
+#[test(should_revert)]
+fn test_safe_transfer_reverts_on_malformed_returndata() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    let token = evm.create2<MalformedToken>(value: 0, args: (), salt: 0)
+    erc20::safe_transfer(token, receiver: alice(), amount: 1)
+}
+
+#[test(should_revert)]
+fn test_safe_transfer_reverts_on_no_code_address() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    // Unlike bare `call_with_default`, the codesize check catches this.
+    let eoa = Address { inner: 0xe0a }
+    erc20::safe_transfer(token: eoa, receiver: alice(), amount: 1)
+}
+
+// ---------------------------------------------------------------------------
+// safe_transfer_from
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_safe_transfer_from_compliant_token() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    let token = evm.create2<CompliantToken>(value: 0, args: (), salt: 0)
+    erc20::safe_transfer_from(token, owner: alice(), receiver: bob(), amount: 1)
+}
+
+#[test]
+fn test_safe_transfer_from_no_return_token() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    let token = evm.create2<NoReturnToken>(value: 0, args: (), salt: 0)
+    erc20::safe_transfer_from(token, owner: alice(), receiver: bob(), amount: 1)
+    assert!(call_count(token) == 1)
+}
+
+#[test(should_revert)]
+fn test_safe_transfer_from_reverts_on_false_return() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    let token = evm.create2<FalseToken>(value: 0, args: (), salt: 0)
+    erc20::safe_transfer_from(token, owner: alice(), receiver: bob(), amount: 1)
+}
+
+// ---------------------------------------------------------------------------
+// safe_approve
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_safe_approve_compliant_token() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    let token = evm.create2<CompliantToken>(value: 0, args: (), salt: 0)
+    erc20::safe_approve(token, spender: alice(), amount: 1)
+}
+
+#[test]
+fn test_safe_approve_no_return_token() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    let token = evm.create2<NoReturnToken>(value: 0, args: (), salt: 0)
+    erc20::safe_approve(token, spender: alice(), amount: 1)
+    assert!(call_count(token) == 1)
+}
+
+#[test(should_revert)]
+fn test_safe_approve_reverts_on_false_return() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    let token = evm.create2<FalseToken>(value: 0, args: (), salt: 0)
+    erc20::safe_approve(token, spender: alice(), amount: 1)
+}

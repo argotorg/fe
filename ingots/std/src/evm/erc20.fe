@@ -1,0 +1,94 @@
+//! Safe ERC20 helpers (OpenZeppelin `SafeERC20` equivalent).
+//!
+//! Widely used tokens (USDT, BNB, OMG, ...) execute `transfer`/`approve` but
+//! return no data, so strictly decoding a `bool` result reverts on success.
+//! These helpers tolerate empty returndata via `call_with_default`, and in
+//! addition:
+//!
+//! - revert if the call succeeded with empty returndata but there is no code
+//!   at the token address (a call to a codeless account succeeds with empty
+//!   returndata at the EVM level, which would otherwise be a silent no-op)
+//! - revert if the token returned `false`
+//!
+//! Reverts from the token itself are bubbled through untouched.
+//!
+//! `safe_approve` has no "must set the allowance to zero first" restriction;
+//! callers dealing with tokens that require it (e.g. USDT) should approve 0
+//! first themselves.
+
+use super::effects::{Address, Call, Ctx, revert}
+use ingot::abi::sol::sol
+use ingot::evm::ops
+
+msg Erc20Msg {
+    #[selector = sol("transfer(address,uint256)")]
+    Transfer { receiver: Address, amount: u256 } -> bool,
+    #[selector = sol("transferFrom(address,address,uint256)")]
+    TransferFrom { owner: Address, receiver: Address, amount: u256 } -> bool,
+    #[selector = sol("approve(address,uint256)")]
+    Approve { spender: Address, amount: u256 } -> bool,
+}
+
+/// Call `transfer(receiver, amount)` on `token`, reverting unless the
+/// transfer succeeded under SafeERC20 rules.
+pub fn safe_transfer(token: Address, receiver: Address, amount: u256)
+uses (ctx: Ctx, call: mut Call)
+{
+    let ok = call.call_with_default(
+        addr: token,
+        gas: ops::gas(),
+        value: 0,
+        message: Erc20Msg::Transfer { receiver, amount },
+        default: true,
+    )
+    if !ok || empty_return_without_code(token) {
+        revert("erc20: transfer failed")
+    }
+}
+
+/// Call `transferFrom(owner, receiver, amount)` on `token`, reverting unless
+/// the transfer succeeded under SafeERC20 rules.
+pub fn safe_transfer_from(token: Address, owner: Address, receiver: Address, amount: u256)
+uses (ctx: Ctx, call: mut Call)
+{
+    let ok = call.call_with_default(
+        addr: token,
+        gas: ops::gas(),
+        value: 0,
+        message: Erc20Msg::TransferFrom { owner, receiver, amount },
+        default: true,
+    )
+    if !ok || empty_return_without_code(token) {
+        revert("erc20: transferFrom failed")
+    }
+}
+
+/// Call `approve(spender, amount)` on `token`, reverting unless the approval
+/// succeeded under SafeERC20 rules.
+pub fn safe_approve(token: Address, spender: Address, amount: u256)
+uses (ctx: Ctx, call: mut Call)
+{
+    let ok = call.call_with_default(
+        addr: token,
+        gas: ops::gas(),
+        value: 0,
+        message: Erc20Msg::Approve { spender, amount },
+        default: true,
+    )
+    if !ok || empty_return_without_code(token) {
+        revert("erc20: approve failed")
+    }
+}
+
+/// True if the token call just performed succeeded with empty returndata and
+/// `token` has no code, i.e. the "success" was a no-op call to a codeless
+/// account. Checked only on the empty-returndata path (mirroring
+/// OpenZeppelin) so compliant tokens pay no extra codesize gas.
+///
+/// Must run before any further call, while returndata still belongs to the
+/// token call.
+fn empty_return_without_code(_ token: Address) -> bool
+uses (ctx: Ctx)
+{
+    ops::returndatasize() == 0 && ctx.extcodesize(token) == 0
+}
