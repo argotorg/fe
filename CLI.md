@@ -94,6 +94,7 @@ Builds use the Sonatina codegen pipeline and generate EVM bytecode directly.
 
 ```
 fe build [--standalone] [--contract <name>] [--optimize <level>] [--out-dir <dir>] [--report [--report-out <out>] [--report-failed-only]] [path]
+fe build --from-metadata <PATH|-> [--contract <name>] [--optimize <level>] [--out-dir <dir>] [--emit <artifacts>]
 ```
 
 If `path` is omitted, it defaults to `.`.
@@ -233,6 +234,35 @@ Filenames are “sanitized” from contract names:
 - If the sanitized name is empty, it becomes `contract`
 
 This sanitization is also what the workspace collision check uses.
+
+### Rebuilding from metadata: `--from-metadata`
+
+`fe build --from-metadata <PATH|->` rebuilds a contract from a `<Contract>.metadata.json`
+recompilation input (as produced by `--emit metadata`) instead of a source tree. `-` reads the
+JSON from stdin, so external toolchains can pipe a synthesized metadata document into a single
+`fe build` invocation. All diagnostics go to stderr.
+
+Behavior:
+
+- The recorded project (all `sources`, one regenerated `fe.toml` per `settings.ingots[]` entry) is
+  materialized into a temporary directory and built through the normal ingot build path; the
+  bundled `std`/`core` are provided by the compiler.
+- **Contract selection**: defaults to the contract recorded in `settings.compilationTarget`;
+  `--contract <name>` overrides it.
+- **Optimizer level**: defaults to `settings.optimizer.level`; an explicit `-O`/`--optimize` wins,
+  with a warning on stderr that the rebuilt bytecode will not match the verified artifact.
+- **Arithmetic**: the per-ingot effective `arithmetic` values from the metadata are applied via
+  the regenerated `fe.toml` files (`dependency-arithmetic` is deliberately not re-applied; the
+  metadata records post-forcing values).
+- **Version check**: if `compiler.version` differs from the running compiler, a warning is printed
+  to stderr (no abort); exact bytecode reproduction is only guaranteed with the same version.
+- **Output**: artifacts are selected with `--emit` as usual and written to `--out-dir`, which
+  defaults to `./out` (relative to the current working directory, since there is no project
+  directory to anchor to).
+
+Errors (exit code 1): unreadable input, invalid JSON, `language != "Fe"`, missing `sources`, or a
+missing/rootless `settings.ingots`. Combining `--from-metadata` with the `[path]` argument,
+`--ingot`, `--standalone`, or `--report` is a CLI usage error (exit code 2).
 
 ### Reports: `--report`
 

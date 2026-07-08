@@ -7,6 +7,7 @@ mod dependency_diagnostics;
 mod doc;
 #[cfg(feature = "doc-server")]
 mod doc_serve;
+mod metadata_input;
 mod report;
 mod test;
 #[cfg(not(target_arch = "wasm32"))]
@@ -111,6 +112,17 @@ pub enum Command {
         /// Treat a `.fe` file target as standalone, even if it is inside an ingot.
         #[arg(long)]
         standalone: bool,
+        /// Rebuild from a `<Contract>.metadata.json` recompilation input produced by
+        /// `--emit metadata` (`-` reads the JSON from stdin).
+        ///
+        /// The recorded project is materialized into a temporary directory and built with
+        /// the settings captured in the metadata. Artifacts default to `./out`.
+        #[arg(
+            long,
+            value_name = "PATH",
+            conflicts_with_all = ["path", "ingot", "standalone", "report"]
+        )]
+        from_metadata: Option<Utf8PathBuf>,
         /// Build a specific contract by name (defaults to all contracts in the target).
         #[arg(long)]
         contract: Option<String>,
@@ -456,6 +468,7 @@ pub fn run(opts: &Options) {
             path,
             ingot,
             standalone,
+            from_metadata,
             contract,
             optimize,
             out_dir,
@@ -466,6 +479,18 @@ pub fn run(opts: &Options) {
             report_failed_only,
             recovery_mode,
         } => {
+            if let Some(metadata_path) = from_metadata {
+                build::build_from_metadata(
+                    metadata_path,
+                    contract.as_deref(),
+                    optimize.as_deref(),
+                    emit,
+                    out_dir.as_ref(),
+                    profile,
+                    *recovery_mode,
+                );
+                return;
+            }
             let opt_level = match effective_opt_level(optimize.as_deref()) {
                 Ok(level) => level,
                 Err(err) => {
