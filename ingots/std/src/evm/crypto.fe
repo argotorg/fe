@@ -11,9 +11,11 @@
 
 use core::option::Option
 use core::result::Result
+use super::effects::RawMem
 use super::memory_input::MemoryBytes
 use super::ops
 use super::mem
+use super::packed
 
 pub const ECRECOVER_ADDRESS: u256 = 0x01
 pub const SHA256_ADDRESS: u256 = 0x02
@@ -174,6 +176,15 @@ pub fn keccak256(_ offset: u256, _ len: u256) -> u256 {
 /// SHA256 hash of a memory region (precompile 0x02).
 pub fn sha256(offset: u256, len: u256) -> Result<PrecompileError, u256> {
     staticcall_word(addr: SHA256_ADDRESS, args_offset: offset, args_len: len)
+}
+
+/// EIP-712 typed-data digest:
+/// `keccak256(0x19 ++ 0x01 ++ domain_separator ++ struct_hash)`.
+#[inline(always)]
+pub fn eip712_digest(domain_separator: u256, struct_hash: u256) -> u256
+uses (mem: mut RawMem)
+{
+    packed::keccak_packed((0x19 as u8, 0x01 as u8, domain_separator, struct_hash))
 }
 
 /// RIPEMD160 hash of a memory region (precompile 0x03).

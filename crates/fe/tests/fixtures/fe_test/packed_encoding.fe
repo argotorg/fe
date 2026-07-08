@@ -1,0 +1,262 @@
+// Compatibility tests for `std::evm::packed` (Solidity `abi.encodePacked`
+// parity).
+//
+// Every expected value below was precomputed with Foundry, independent of
+// this implementation:
+//   cast abi-encode --packed "f(<types>)" <values...>   # packed bytes
+//   cast keccak <bytes>                                 # digests
+// The fixture is not its own oracle.
+
+use std::evm::{crypto, RawMem}
+use std::evm::packed::{EncodePacked, Packed, encode_packed, keccak_packed}
+use std::abi::{Bytes4, FixedBytes, bytes_from_words_prefix}
+
+// keccak256(abi.encodePacked(address(0x1111...), address(0x2222...)))
+// — the CREATE2 pair-salt case.
+const SALT_DIGEST: u256 = 0xa284ddd69adb56d959922d24c73d2cd9e6b24d5e789a4106eca975c86ec900e1
+
+#[test]
+fn test_create2_salt_pair() uses (mem: mut RawMem) {
+    let token0 = Address { inner: 0x1111111111111111111111111111111111111111 }
+    let token1 = Address { inner: 0x2222222222222222222222222222222222222222 }
+    assert!(keccak_packed((token0, token1)) == SALT_DIGEST)
+}
+
+// keccak256(abi.encodePacked(uint8(0x19), uint8(0x01), ds, sh))
+const EIP712_DS: u256 = 0x8b73c3c69bb8fe3d512ecc4cf759cc79239f7b179b0ffacaa9a75d522b39400f
+const EIP712_SH: u256 = 0xc2f8787176b8ac6bf7215b4adcc1e069bf4ab82d9ab1df05a57a91d425935b6e
+const EIP712_DIGEST: u256 = 0x7995d6d8051ece381c0692159969b2f1ea6f8efa91c78a4779bbc495e54057eb
+
+// Cross-checked three ways: tuple API, `crypto::eip712_digest`, and the
+// precomputed Solidity value.
+#[test]
+fn test_eip712_digest() uses (mem: mut RawMem) {
+    assert!(keccak_packed((0x19 as u8, 0x01 as u8, EIP712_DS, EIP712_SH)) == EIP712_DIGEST)
+    assert!(
+        crypto::eip712_digest(domain_separator: EIP712_DS, struct_hash: EIP712_SH)
+            == EIP712_DIGEST,
+    )
+}
+
+// abi.encodePacked(uint8,uint16,uint32,uint64,uint128,uint256,bool,address):
+// 1 + 2 + 4 + 8 + 16 + 32 + 1 + 20 = 84 bytes.
+const MIXED_U256: u256 = 0xfedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210
+const WETH: u256 = 0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2
+const MIXED_DIGEST: u256 = 0x471ad85baf6e428e4cab4bf6dfed5b60e1a42ac767fc6e87113105747a64ac84
+// sha256 of the same 84-byte payload (hashlib.sha256).
+const MIXED_SHA256: u256 = 0xa4cc93b97408bf6c6c91aaf092e19b265b02562fcd56e318a72c14051536509d
+
+#[test]
+fn test_mixed_widths_tuple() uses (mem: mut RawMem) {
+    let p = encode_packed((
+        0xab as u8,
+        0x1234 as u16,
+        0xdeadbeef as u32,
+        0x0102030405060708 as u64,
+        0x000102030405060708090a0b0c0d0e0f as u128,
+        MIXED_U256,
+        true,
+        Address { inner: WETH },
+    ))
+    assert!(p.len() == 84)
+    assert!(p.keccak256() == MIXED_DIGEST)
+}
+
+// The same payload built imperatively must hash identically, through both
+// terminals.
+#[test]
+fn test_builder_matches_tuple_api() uses (mem: mut RawMem) {
+    let mut p = Packed::new()
+    p.u8(0xab)
+    p.u16(0x1234)
+    p.u32(0xdeadbeef)
+    p.u64(0x0102030405060708)
+    p.u128(0x000102030405060708090a0b0c0d0e0f)
+    p.u256(MIXED_U256)
+    p.bool_(true)
+    p.address(Address { inner: WETH })
+    assert!(p.len() == 84)
+    assert!(p.keccak256() == MIXED_DIGEST)
+    assert!(p.sha256() == MIXED_SHA256)
+}
+
+// Signed integers pack as two's complement in their exact width:
+// int8(-1) → 0xff, int16(-2) → 0xfffe.
+const I8_NEG1_DIGEST: u256 = 0x8b1a944cf13a9a1c08facb2c9e98623ef3254d2ddb48113885c3e8e97fec8db9
+const I16_NEG2_DIGEST: u256 = 0xeeb4ce57fda2c1de2e5bd73b1c0172b8029bc8d06145bc2dee844707debc67c7
+// abi.encodePacked(true, uint256(42), int8(-1))
+const BOOL_U256_I8_DIGEST: u256 = 0x47986397ef53bb76085fe6cf289a4dc0394b23a3d7ec7a187639b2124b296099
+
+#[test]
+fn test_signed_twos_complement() uses (mem: mut RawMem) {
+    let a: i8 = -1
+    let b: i16 = -2
+    assert!(keccak_packed((a,)) == I8_NEG1_DIGEST)
+    assert!(keccak_packed((b,)) == I16_NEG2_DIGEST)
+    assert!(keccak_packed((true, 42 as u256, a)) == BOOL_U256_I8_DIGEST)
+}
+
+// abi.encodePacked(bytes4(0x01ffc9a7)) — the 4 raw content bytes, never a
+// zero-padded word.
+const BYTES4_DIGEST: u256 = 0x9c71c307e9d8f8e0832d700582ffc921ebbd3bafe9dd110f65726dc5a219a435
+// abi.encodePacked(uint256(0x01ffc9a7)) — 32 right-aligned bytes.
+const U256_SELECTOR_DIGEST: u256 = 0x38e509caef1c80181deba73914106496c69255ad482c39496a6538d5367c2dd1
+
+#[test]
+fn test_fixed_bytes_alignment() uses (mem: mut RawMem) {
+    let fb = Bytes4 { val: 0x01ffc9a7 }
+    assert!(keccak_packed((fb,)) == BYTES4_DIGEST)
+    // Solidity parity: uint32 with the same bit pattern packs to the same
+    // 4 bytes (cast agrees), while widening to uint256 pads to 32 bytes
+    // and produces a different buffer.
+    assert!(keccak_packed((0x01ffc9a7 as u32,)) == BYTES4_DIGEST)
+    assert!(keccak_packed((0x01ffc9a7 as u256,)) == U256_SELECTOR_DIGEST)
+}
+
+// A hand-built FixedBytes with bits above the low N bytes is non-canonical;
+// the ABI encoder (`FixedBytes::word`) reverts on it, and packing must too
+// instead of silently truncating distinct values into colliding encodings.
+#[test(should_revert)]
+fn test_fixed_bytes_non_canonical_reverts() uses (mem: mut RawMem) {
+    let fb = Bytes4 { val: 0xff01ffc9a7 }
+    keccak_packed((fb,))
+}
+
+// Unsupported widths revert like the ABI encoder (`FixedBytes::word`):
+// N == 0 would otherwise silently contribute zero bytes, quietly omitting
+// the field from the packed hash.
+#[test(should_revert)]
+fn test_fixed_bytes_zero_width_reverts() uses (mem: mut RawMem) {
+    let fb: FixedBytes<0> = FixedBytes { val: 0 }
+    keccak_packed((fb,))
+}
+
+// ...and N > 32 would otherwise trip `append_word`'s width assert (a
+// panic) instead of the empty revert the ABI encoder uses.
+#[test(should_revert)]
+fn test_fixed_bytes_over_width_reverts() uses (mem: mut RawMem) {
+    let fb: FixedBytes<33> = FixedBytes { val: 1 }
+    keccak_packed((fb,))
+}
+
+// Same for a hand-built Address with bits above the low 160 set: packing
+// must revert, not truncate it into a collision with the canonical value.
+#[test(should_revert)]
+fn test_address_non_canonical_reverts() uses (mem: mut RawMem) {
+    let addr = Address { inner: (1 << 160) | 0x1111111111111111111111111111111111111111 }
+    keccak_packed((addr,))
+}
+
+// keccak256("Uniswap V2") — the effective 10 string bytes, not a padded
+// capacity.
+const UNISWAP_V2_DIGEST: u256 = 0xbfcc8ef98ffbf7b6c3fec7bf5185b566b9863e35a9d83acd49ad6824b5969738
+
+#[test]
+fn test_string_effective_bytes() uses (mem: mut RawMem) {
+    // Runtime path validated against both the compile-time path and the
+    // precomputed Solidity value.
+    assert!(keccak_packed(("Uniswap V2",)) == UNISWAP_V2_DIGEST)
+    assert!(keccak_packed(("Uniswap V2",)) == core::keccak("Uniswap V2"))
+
+    let mut p = Packed::new()
+    let name: String<10> = "Uniswap V2"
+    p.string(name)
+    assert!(p.len() == 10)
+    assert!(p.keccak256() == UNISWAP_V2_DIGEST)
+}
+
+// abi.encodePacked(uint8(0xaa), <50 bytes 0x00..0x31>, uint16(0xbbcc)):
+// dynamic bytes contribute their raw payload, no length word.
+const DYN_BYTES_DIGEST: u256 = 0xc678bacd16f81df316a48ba4b0f33527929404604752a156934f55706a85301c
+// abi.encodePacked(uint8(0xaa), "", uint16(0xbbcc))
+const DYN_EMPTY_DIGEST: u256 = 0xccad3f5300e77cf5347e3c6200a08bd8cf71f94a0b347bcb39486b17b88a8a71
+
+fn fifty_bytes() -> Bytes uses (mem: mut RawMem) {
+    bytes_from_words_prefix<50, 2>([
+        0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f,
+        0x202122232425262728292a2b2c2d2e2f30310000000000000000000000000000,
+    ])
+}
+
+#[test]
+fn test_dynamic_bytes_between_scalars() uses (mem: mut RawMem) {
+    assert!(keccak_packed((0xaa as u8, fifty_bytes(), 0xbbcc as u16)) == DYN_BYTES_DIGEST)
+    // A view packs identically to the owning Bytes.
+    assert!(keccak_packed((0xaa as u8, fifty_bytes().view(), 0xbbcc as u16)) == DYN_BYTES_DIGEST)
+    // Zero-length case.
+    assert!(keccak_packed((0xaa as u8, Bytes::empty(), 0xbbcc as u16)) == DYN_EMPTY_DIGEST)
+}
+
+// abi.encodePacked(uint8(0x11), WETH, MIXED_U256)
+const FLAT_DIGEST: u256 = 0x1d14a90c464e40ebf036a55b03363aa6f517a9f7ef1d8bafe272f27459e772f4
+
+#[test]
+fn test_nested_tuple_flattens() uses (mem: mut RawMem) {
+    let weth = Address { inner: WETH }
+    assert!(keccak_packed((0x11 as u8, weth, MIXED_U256)) == FLAT_DIGEST)
+    assert!(keccak_packed((0x11 as u8, (weth, MIXED_U256))) == FLAT_DIGEST)
+}
+
+// keccak256 of the 640-byte concatenation of uint256(0)..uint256(19).
+const GROWTH_DIGEST: u256 = 0x275968f225ff5beab3eb38415d20f03a79a91f856ebde75ca5ea8ac3c2f9fac9
+
+// Appending far past the default 128-byte capacity grows the buffer and
+// hashes identically to an exactly-sized run; nothing traps.
+#[test]
+fn test_growth_matches_exact_capacity() uses (mem: mut RawMem) {
+    let mut grown = Packed::new()
+    let mut exact = Packed::with_capacity(bytes: 640)
+    let mut i: u256 = 0
+    while i < 20 {
+        grown.u256(i)
+        exact.u256(i)
+        i += 1
+    }
+    assert!(grown.len() == 640)
+    assert!(exact.len() == 640)
+    assert!(grown.keccak256() == GROWTH_DIGEST)
+    assert!(exact.keccak256() == GROWTH_DIGEST)
+}
+
+// abi.encodePacked(bytes3(0x010203), uint8(0xff))
+const TINY_DIGEST: u256 = 0x5ed6f5078aed9ab97fe2101f196724b85518d27fbeef8c8256e8e09720f901ac
+
+// A 3-byte capacity forces the byte-granular write path (no whole word
+// fits below the limit) and repeated doubling on growth.
+#[test]
+fn test_tiny_capacity_byte_writes() uses (mem: mut RawMem) {
+    let mut p = Packed::with_capacity(bytes: 3)
+    let arr: [u8; 3] = [0x01, 0x02, 0x03]
+    p.bytes(arr)
+    p.u8(0xff)
+    assert!(p.len() == 4)
+    assert!(p.keccak256() == TINY_DIGEST)
+
+    // Same payload through the tuple API.
+    assert!(keccak_packed((arr, 0xff as u8)) == TINY_DIGEST)
+}
+
+// sha256("abc") — the FIPS 180 reference vector.
+const SHA256_ABC: u256 = 0xba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+
+#[test]
+fn test_sha256_terminal() uses (mem: mut RawMem) {
+    let mut p = Packed::new()
+    let abc: [u8; 3] = [0x61, 0x62, 0x63]
+    p.bytes(abc)
+    assert!(p.sha256() == SHA256_ABC)
+}
+
+// `as_bytes` copies out a Solidity-compatible `bytes memory` payload:
+// length word, raw bytes, zeroed padding.
+#[test]
+fn test_as_bytes_roundtrip() uses (mem: mut RawMem) {
+    let mut p = Packed::new()
+    p.address(Address { inner: 0x1111111111111111111111111111111111111111 })
+    p.address(Address { inner: 0x2222222222222222222222222222222222222222 })
+    let b = p.as_bytes()
+    assert!(b.len == 40)
+    assert!(b.size == 96)
+    // Re-packing the copied Bytes hashes identically to the builder.
+    assert!(keccak_packed((b,)) == SALT_DIGEST)
+}
