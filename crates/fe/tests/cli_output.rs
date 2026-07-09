@@ -1184,10 +1184,10 @@ fn test_cli_build_emit_metadata_disambiguates_same_named_dependencies() {
 }
 
 #[test]
-fn test_cli_build_emit_metadata_disambiguates_dependency_from_root_source_path() {
+fn test_cli_build_emit_metadata_disambiguates_dependency_namespace_from_root_source_prefix() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path();
-    fs::create_dir_all(root.join("app/src/src")).expect("create app sources");
+    fs::create_dir_all(root.join("app/src")).expect("create app sources");
     fs::create_dir_all(root.join("dep/src")).expect("create dependency sources");
     fs::write(
         root.join("app/fe.toml"),
@@ -1199,15 +1199,10 @@ fn test_cli_build_emit_metadata_disambiguates_dependency_from_root_source_path()
         "[ingot]\nname = \"src\"\nversion = \"1.0.0\"\n",
     )
     .expect("write dependency fe.toml");
-    let root_only_src = "pub fn root_only() -> u256 {\n    return 7\n}\n";
     let dependency_src = "pub fn helper() -> u256 {\n    return 42\n}\n";
-    fs::write(root.join("app/src/src/lib.fe"), root_only_src).expect("write root source");
     fs::write(root.join("dep/src/lib.fe"), dependency_src).expect("write dependency source");
-    fs::write(
-        root.join("app/src/main.fe"),
-        "use dep::helper\n\npub msg FooMsg {\n    #[selector = sol(\"run()\")]\n    Run -> u256,\n}\n\npub contract Foo {\n    recv FooMsg {\n        Run -> u256 {\n            helper()\n        }\n    }\n}\n",
-    )
-    .expect("write app main source");
+    let root_src = "use dep::helper\n\npub msg FooMsg {\n    #[selector = sol(\"run()\")]\n    Run -> u256,\n}\n\npub contract Foo {\n    recv FooMsg {\n        Run -> u256 {\n            helper()\n        }\n    }\n}\n";
+    fs::write(root.join("app/src/main.fe"), root_src).expect("write app main source");
 
     let out_dir = root.join("app/out");
     let (output, exit_code) = run_fe_main(&[
@@ -1225,19 +1220,21 @@ fn test_cli_build_emit_metadata_disambiguates_dependency_from_root_source_path()
     )
     .expect("parse metadata");
     let sources = metadata["sources"].as_object().expect("sources object");
-    assert_eq!(sources["src/src/lib.fe"]["content"], root_only_src);
+    assert_eq!(sources["src/main.fe"]["content"], root_src);
     assert_eq!(sources["src-2/src/lib.fe"]["content"], dependency_src);
-    let dep = metadata["settings"]["ingots"]
+    let ingots = metadata["settings"]["ingots"]
         .as_array()
-        .expect("ingots array")
+        .expect("ingots array");
+    let dep = ingots
         .iter()
         .find(|ingot| ingot["name"] == "src")
         .expect("dependency ingot");
     assert_eq!(dep["namespace"], "src-2");
-    assert_eq!(
-        metadata["settings"]["ingots"][0]["dependencies"]["dep"],
-        "src-2"
-    );
+    let root_ingot = ingots
+        .iter()
+        .find(|ingot| ingot["namespace"] == "")
+        .expect("root ingot");
+    assert_eq!(root_ingot["dependencies"]["dep"], "src-2");
 
     let original_runtime =
         fs::read_to_string(out_dir.join("Foo.runtime.bin")).expect("read original runtime.bin");
@@ -1791,6 +1788,97 @@ fn test_cli_build_from_metadata_honors_compilation_target_source_path() {
         rebuilt_runtime, reference_runtime,
         "rebuild must produce the contract recorded in compilationTarget"
     );
+}
+
+#[test]
+fn test_cli_build_from_metadata_rejects_unresolvable_compilation_target() {
+    // The recorded `compilationTarget` must resolve exactly; a stale or edited
+    // path must fail the rebuild instead of silently falling back to building
+    // a same-named contract from a different source file.
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path();
+    fs::create_dir_all(root.join("app/src")).expect("create app/src");
+    fs::write(
+        root.join("app/fe.toml"),
+        "[ingot]\nname = \"app\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write app/fe.toml");
+    fs::write(root.join("app/src/a.fe"), "pub contract Foo {\n}\n").expect("write app/src/a.fe");
+    fs::write(root.join("app/src/b.fe"), "pub contract Bar {\n}\n").expect("write app/src/b.fe");
+
+    let out_dir = root.join("app/out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "metadata",
+        "--out-dir",
+        out_dir.to_str().expect("out utf8"),
+        root.join("app").to_str().expect("app utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "original build failed:\n{output}");
+    let metadata: Value = serde_json::from_str(
+        &fs::read_to_string(out_dir.join("Foo.metadata.json")).expect("read metadata"),
+    )
+    .expect("parse metadata");
+
+    let rebuild_with_target = |target: Value| {
+        let mut edited = metadata.clone();
+        edited["settings"]["compilationTarget"] = target;
+        let edited_path = root.join("edited.metadata.json");
+        fs::write(&edited_path, edited.to_string()).expect("write edited metadata");
+        let recon = tempdir().expect("recon tempdir");
+        let recon_out = recon.path().join("out");
+        let (output, exit_code) = run_fe_main(&[
+            "build",
+            "--from-metadata",
+            edited_path.to_str().expect("metadata utf8"),
+            "--emit",
+            "runtime-bytecode",
+            "--out-dir",
+            recon_out.to_str().expect("out utf8"),
+        ]);
+        let emitted = recon_out.join("Foo.runtime.bin").exists();
+        (output, exit_code, emitted)
+    };
+
+    // The recorded source path does not exist in the metadata sources.
+    let (output, exit_code, emitted) =
+        rebuild_with_target(serde_json::json!({ "src/missing.fe": "Foo" }));
+    assert_eq!(exit_code, 1, "expected exit 1:\n{output}");
+    assert!(
+        output.contains("`src/missing.fe` recorded in `settings.compilationTarget` does not exist"),
+        "expected missing-path error:\n{output}"
+    );
+    assert!(!emitted, "no artifact must be emitted:\n{output}");
+
+    // The recorded source path exists but its module defines a different contract.
+    let (output, exit_code, emitted) =
+        rebuild_with_target(serde_json::json!({ "src/b.fe": "Foo" }));
+    assert_eq!(exit_code, 1, "expected exit 1:\n{output}");
+    assert!(
+        output.contains("`src/b.fe` does not define the contract `Foo`"),
+        "expected wrong-module error:\n{output}"
+    );
+    assert!(!emitted, "no artifact must be emitted:\n{output}");
+
+    // `compilationTarget` must hold exactly one source-path/contract-name pair.
+    let (output, exit_code, emitted) =
+        rebuild_with_target(serde_json::json!({ "src/a.fe": "Foo", "src/b.fe": "Bar" }));
+    assert_eq!(exit_code, 1, "expected exit 1:\n{output}");
+    assert!(
+        output.contains("must contain exactly one source-path/contract-name pair"),
+        "expected exactly-one-pair error:\n{output}"
+    );
+    assert!(!emitted, "no artifact must be emitted:\n{output}");
+
+    // A non-string contract name is rejected the same way.
+    let (output, exit_code, emitted) = rebuild_with_target(serde_json::json!({ "src/a.fe": 1 }));
+    assert_eq!(exit_code, 1, "expected exit 1:\n{output}");
+    assert!(
+        output.contains("must contain exactly one source-path/contract-name pair"),
+        "expected non-string-name error:\n{output}"
+    );
+    assert!(!emitted, "no artifact must be emitted:\n{output}");
 }
 
 #[test]

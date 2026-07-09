@@ -381,19 +381,43 @@ pub fn build_from_metadata(
 
     // Default target: the contract recorded in `compilationTarget`; an
     // explicit `--contract` overrides it.
-    let recorded_target = metadata["settings"]["compilationTarget"]
-        .as_object()
-        .and_then(|target| target.iter().next())
-        .and_then(|(path, name)| Some((path.clone(), name.as_str()?.to_string())));
+    let compilation_target = &metadata["settings"]["compilationTarget"];
+    let recorded_target = if compilation_target.is_null() {
+        None
+    } else {
+        let target = compilation_target
+            .as_object()
+            .filter(|target| target.len() == 1)
+            .and_then(|target| {
+                let (path, name) = target.iter().next()?;
+                Some((path.clone(), name.as_str()?.to_string()))
+            });
+        if target.is_none() {
+            eprintln!(
+                "Error: `settings.compilationTarget` must contain exactly one \
+                 source-path/contract-name pair"
+            );
+            std::process::exit(1);
+        }
+        target
+    };
     let contract = contract
         .map(str::to_string)
         .or_else(|| recorded_target.as_ref().map(|(_, name)| name.clone()));
     // The recorded source path pins which module defines the target, in case
     // another module defines a same-named contract; it only applies while
-    // building the recorded contract.
+    // building the recorded contract. Standalone-target metadata keys its
+    // source by bare file basename, which `reconstruct_project` materializes
+    // under `src/`; mirror that so the path resolves in the rebuilt ingot.
     let target_source = recorded_target
         .filter(|(_, name)| contract.as_deref() == Some(name))
-        .map(|(path, _)| path);
+        .map(|(path, _)| {
+            if path.contains('/') {
+                path
+            } else {
+                format!("src/{path}")
+            }
+        });
 
     let temp = match tempfile::Builder::new()
         .prefix("fe-from-metadata")
@@ -1079,14 +1103,27 @@ fn build_ingot(
     // `--from-metadata` records the contract's defining source file in
     // `settings.compilationTarget`; scope emission to that module so a
     // same-named contract in another module cannot make the target ambiguous.
+    // A recorded target that doesn't resolve is an error, never a fallback to
+    // ingot-wide resolution: that could silently rebuild the wrong source.
     let target_mod = match (target_source, contract) {
         (Some(key), Some(name)) => {
             let mut sources = BTreeMap::new();
             collect_ingot_sources_prefixed(db, ingot, None, &mut sources);
-            sources
-                .get(key)
-                .map(|(top_mod, _)| *top_mod)
-                .filter(|top_mod| module_defines_contract(db, *top_mod, name))
+            let Some((top_mod, _)) = sources.get(key) else {
+                eprintln!(
+                    "Error: the source path `{key}` recorded in \
+                     `settings.compilationTarget` does not exist in the sources"
+                );
+                return BuildSummary { had_errors: true };
+            };
+            if !module_defines_contract(db, *top_mod, name) {
+                eprintln!(
+                    "Error: `{key}` does not define the contract `{name}` recorded in \
+                     `settings.compilationTarget`"
+                );
+                return BuildSummary { had_errors: true };
+            }
+            Some(*top_mod)
         }
         _ => None,
     };
@@ -1578,8 +1615,9 @@ fn non_builtin_closure<'db>(
 /// Assign each non-builtin ingot in the closure a unique, deterministic namespace, used
 /// consistently for source-key prefixes, `settings.ingots[].namespace`, and the dependency map.
 /// The root ingot gets the empty namespace; others use their name, qualified by version (then an
-/// index) when two *distinct* ingots share a name (e.g. two versions of the same package). Without
-/// this, same-named-different-version dependencies would collide in the flat `sources` map.
+/// index) when two *distinct* ingots share a name (e.g. two versions of the same package).
+/// Dependency namespaces also avoid every root-source path prefix so a metadata reader can
+/// distinguish unprefixed root sources from namespace-prefixed dependency sources.
 fn assign_namespaces(
     db: &DriverDataBase,
     root: hir::Ingot<'_>,
@@ -1626,11 +1664,9 @@ fn assign_namespaces(
         let stem = candidate.clone();
         let mut n = 2;
         while used.contains(&candidate)
-            || ing.files(db).iter().any(|(_, file)| {
-                file.kind(db) == Some(IngotFileKind::Source)
-                    && file.path(db).as_ref().is_some_and(|path| {
-                        root_source_keys.contains(&format!("{candidate}/{path}"))
-                    })
+            || root_source_keys.iter().any(|key| {
+                key.strip_prefix(candidate.as_str())
+                    .is_some_and(|rest| rest.starts_with('/'))
             })
         {
             candidate = format!("{stem}-{n}");
