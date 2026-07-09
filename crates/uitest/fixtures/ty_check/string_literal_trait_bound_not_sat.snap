@@ -1,0 +1,27 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/string_literal_trait_bound_not_sat.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ string_literal_trait_bound_not_sat.fe:13:5
+   │
+ 8 │ fn takes_asbytes<T: AsBytes>(_ x: T) -> u256 {
+   │                     ------- required by this bound on `takes_asbytes`
+   ·
+13 │     takes_asbytes(("a", true))
+   │     ^^^^^^^^^^^^^
+   │     │
+   │     `(String<1>, bool)` doesn't implement `AsBytes`
+   │     trait bound `bool: AsBytes` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ string_literal_trait_bound_not_sat.fe:17:5
+    │
+ 17 │     core::keccak(("a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r"))
+    │     ^^^^^^^^^^^^ `(String<1>, String<1>, String<1>, String<1>, String<1>, String<1>, String<1>, String<1>, String<1>, String<1>, String<1>, String<1>, String<1>, String<1>, String<1>, String<1>, String<1>, String<1>)` doesn't implement `AsBytes`
+    │
+    ┌─ src/bytes.fe:443:24
+    │
+443 │ pub const fn keccak<T: AsBytes>(_ x: T) -> u256 {
+    │                        ------- required by this bound on `keccak`

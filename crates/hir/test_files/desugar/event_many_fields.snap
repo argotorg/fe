@@ -1,0 +1,34 @@
+---
+source: crates/hir/tests/desugar.rs
+expression: output
+input_file: test_files/desugar/event_many_fields.fe
+---
+use core::prelude::*
+use std::prelude::*
+use std::evm::Address
+
+pub struct ManyFields {
+    pub who: Address,
+    pub f0: u256,
+    pub f1: u256,
+    pub f2: u256,
+    pub f3: u256,
+    pub f4: u256,
+    pub f5: u256,
+    pub f6: u256,
+    pub f7: u256,
+    pub f8: u256,
+    pub f9: u256,
+    pub f10: u256,
+    pub f11: u256,
+}
+
+impl std::evm::Event for ManyFields {
+    const TOPIC0: u256 = core::keccak((("ManyFields", "(", Address::SOL_TYPE, ",", u256::SOL_TYPE, ",", u256::SOL_TYPE, ",", u256::SOL_TYPE, ",", u256::SOL_TYPE, ",", u256::SOL_TYPE, ",", u256::SOL_TYPE, ","), (u256::SOL_TYPE, ",", u256::SOL_TYPE, ",", u256::SOL_TYPE, ",", u256::SOL_TYPE, ",", u256::SOL_TYPE, ",", u256::SOL_TYPE, ")")))
+
+    #[inline(always)]
+    fn emit<L: std::evm::Log>(own self, _ log: mut L) {
+        let (data_ptr, data_len) = std::evm::encode_event_payload((self.f0, self.f1, self.f2, self.f3, self.f4, self.f5, self.f6, self.f7, self.f8, self.f9, self.f10, self.f11))
+        log.log2(offset: data_ptr, len: data_len, topic0: Self::TOPIC0, topic1: self.who.as_topic())
+    }
+}

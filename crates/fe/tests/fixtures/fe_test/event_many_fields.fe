@@ -1,0 +1,173 @@
+// Regression test for events with many fields.
+//
+// The `#[event]` desugar hashes the signature with `core::keccak` over a
+// tuple of string fragments. That tuple has `2 * total_fields + 2` elements,
+// and the `AsBytes` tuple impls stop at arity 16, so events with 8 or more
+// total fields used to leave `TOPIC0` unevaluated and crash MIR lowering.
+// The desugar now nests the tuple into chunks of at most 16 elements, which
+// hashes the same bytes at any field count.
+//
+// The expected TOPIC0 values below are `keccak256` of the canonical event
+// signature (e.g. `E8Data(address,uint256,...)`), computed externally with
+// `cast keccak`.
+
+use std::evm::{Evm, Log}
+
+#[event]
+struct E6Data {
+    #[indexed]
+    who: Address,
+    f0: u256,
+    f1: u256,
+    f2: u256,
+    f3: u256,
+    f4: u256,
+    f5: u256,
+}
+
+#[event]
+struct E7Data {
+    #[indexed]
+    who: Address,
+    f0: u256,
+    f1: u256,
+    f2: u256,
+    f3: u256,
+    f4: u256,
+    f5: u256,
+    f6: u256,
+}
+
+#[event]
+struct E8Data {
+    #[indexed]
+    who: Address,
+    f0: u256,
+    f1: u256,
+    f2: u256,
+    f3: u256,
+    f4: u256,
+    f5: u256,
+    f6: u256,
+    f7: u256,
+}
+
+#[event]
+struct E16Data {
+    #[indexed]
+    who: Address,
+    f0: u256,
+    f1: u256,
+    f2: u256,
+    f3: u256,
+    f4: u256,
+    f5: u256,
+    f6: u256,
+    f7: u256,
+    f8: u256,
+    f9: u256,
+    f10: u256,
+    f11: u256,
+    f12: u256,
+    f13: u256,
+    f14: u256,
+    f15: u256,
+}
+
+#[event]
+struct E7NoIdx {
+    f0: u256,
+    f1: u256,
+    f2: u256,
+    f3: u256,
+    f4: u256,
+    f5: u256,
+    f6: u256,
+}
+
+msg ProbeMsg {
+    #[selector = sol("emitE6Data()")]
+    EmitE6Data -> u256,
+    #[selector = sol("emitE7Data()")]
+    EmitE7Data -> u256,
+    #[selector = sol("emitE8Data()")]
+    EmitE8Data -> u256,
+    #[selector = sol("emitE16Data()")]
+    EmitE16Data -> u256,
+    #[selector = sol("emitE7NoIdx()")]
+    EmitE7NoIdx -> u256,
+}
+
+pub contract Probe uses (log: mut Log) {
+    recv ProbeMsg {
+        EmitE6Data -> u256 uses (mut log) {
+            log.emit(E6Data { who: Address::zero(), f0: 0, f1: 1, f2: 2, f3: 3, f4: 4, f5: 5 })
+            let ret: u256 = 1
+            ret
+        }
+
+        EmitE7Data -> u256 uses (mut log) {
+            log.emit(E7Data { who: Address::zero(), f0: 0, f1: 1, f2: 2, f3: 3, f4: 4, f5: 5, f6: 6 })
+            let ret: u256 = 2
+            ret
+        }
+
+        EmitE8Data -> u256 uses (mut log) {
+            log.emit(E8Data { who: Address::zero(), f0: 0, f1: 1, f2: 2, f3: 3, f4: 4, f5: 5, f6: 6, f7: 7 })
+            let ret: u256 = 3
+            ret
+        }
+
+        EmitE16Data -> u256 uses (mut log) {
+            log.emit(E16Data { who: Address::zero(), f0: 0, f1: 1, f2: 2, f3: 3, f4: 4, f5: 5, f6: 6, f7: 7, f8: 8, f9: 9, f10: 10, f11: 11, f12: 12, f13: 13, f14: 14, f15: 15 })
+            let ret: u256 = 4
+            ret
+        }
+
+        EmitE7NoIdx -> u256 uses (mut log) {
+            log.emit(E7NoIdx { f0: 0, f1: 1, f2: 2, f3: 3, f4: 4, f5: 5, f6: 6 })
+            let ret: u256 = 5
+            ret
+        }
+    }
+}
+
+#[test]
+fn topic0_e6data() {
+    assert!(E6Data::TOPIC0 == 0x7463918f4764895eb86587f42b18b64e71ab12ab37bbc6fe496d5fb1e6afcca1)
+}
+
+#[test]
+fn topic0_e7data() {
+    assert!(E7Data::TOPIC0 == 0x492ad8dcfdc2ae45e68d9860da28463849e0b3786764cf67ff41f547b722344f)
+}
+
+#[test]
+fn topic0_e8data() {
+    assert!(E8Data::TOPIC0 == 0x47ca2fecc9a425cabbe700e22b112fbd1cfe9a9b18d13ad3d3f369d4909a73f8)
+}
+
+#[test]
+fn topic0_e16data() {
+    assert!(E16Data::TOPIC0 == 0x7b8ff7a566201b2975dd0fe44b67e5c8c6cfe52a44562086e166c9cdd54d501a)
+}
+
+#[test]
+fn topic0_e7noidx() {
+    assert!(E7NoIdx::TOPIC0 == 0x34dd3fca85336d31367714898b156d6672983033983d23af9534a4f89df503c2)
+}
+
+#[test]
+fn emit_many_field_events() uses (evm: mut Evm) {
+    let c = evm.create2<Probe>(value: 0, args: (), salt: 0)
+    let r0: u256 = evm.call(addr: c, gas: 5000000, value: 0, message: ProbeMsg::EmitE6Data {})
+    assert!(r0 == 1)
+    let r1: u256 = evm.call(addr: c, gas: 5000000, value: 0, message: ProbeMsg::EmitE7Data {})
+    assert!(r1 == 2)
+    let r2: u256 = evm.call(addr: c, gas: 5000000, value: 0, message: ProbeMsg::EmitE8Data {})
+    assert!(r2 == 3)
+    let r3: u256 = evm.call(addr: c, gas: 5000000, value: 0, message: ProbeMsg::EmitE16Data {})
+    assert!(r3 == 4)
+    let r4: u256 = evm.call(addr: c, gas: 5000000, value: 0, message: ProbeMsg::EmitE7NoIdx {})
+    assert!(r4 == 5)
+}

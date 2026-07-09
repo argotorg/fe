@@ -1,0 +1,21 @@
+use std::evm::Address
+
+// 13 total fields -> 28 signature-tuple elements, which exceeds the
+// `AsBytes` tuple arity limit (16), so the TOPIC0 keccak tuple is nested.
+#[event]
+pub struct ManyFields {
+    #[indexed]
+    pub who: Address,
+    pub f0: u256,
+    pub f1: u256,
+    pub f2: u256,
+    pub f3: u256,
+    pub f4: u256,
+    pub f5: u256,
+    pub f6: u256,
+    pub f7: u256,
+    pub f8: u256,
+    pub f9: u256,
+    pub f10: u256,
+    pub f11: u256,
+}

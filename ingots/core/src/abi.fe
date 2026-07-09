@@ -1337,6 +1337,178 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> AbiSize for (T0, T1, T2, 
     }
 }
 
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12> AbiSize for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12)
+    where T0: AbiSize,
+          T1: AbiSize,
+          T2: AbiSize,
+          T3: AbiSize,
+          T4: AbiSize,
+          T5: AbiSize,
+          T6: AbiSize,
+          T7: AbiSize,
+          T8: AbiSize,
+          T9: AbiSize,
+          T10: AbiSize,
+          T11: AbiSize,
+          T12: AbiSize
+{
+    const HEAD_SIZE: u256 =
+        abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>() + abi_field_head_size<T4>() + abi_field_head_size<T5>() + abi_field_head_size<T6>() + abi_field_head_size<T7>() + abi_field_head_size<T8>() + abi_field_head_size<T9>() + abi_field_head_size<T10>() + abi_field_head_size<T11>() + abi_field_head_size<T12>()
+    const IS_DYNAMIC: bool =
+        T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC || T6::IS_DYNAMIC || T7::IS_DYNAMIC || T8::IS_DYNAMIC || T9::IS_DYNAMIC || T10::IS_DYNAMIC || T11::IS_DYNAMIC || T12::IS_DYNAMIC
+
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    fn payload_size(self) -> u256 {
+        Self::HEAD_SIZE
+            + dynamic_payload_size(self.0)
+            + dynamic_payload_size(self.1)
+            + dynamic_payload_size(self.2)
+            + dynamic_payload_size(self.3)
+            + dynamic_payload_size(self.4)
+            + dynamic_payload_size(self.5)
+            + dynamic_payload_size(self.6)
+            + dynamic_payload_size(self.7)
+            + dynamic_payload_size(self.8)
+            + dynamic_payload_size(self.9)
+            + dynamic_payload_size(self.10)
+            + dynamic_payload_size(self.11)
+            + dynamic_payload_size(self.12)
+    }
+}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13> AbiSize for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13)
+    where T0: AbiSize,
+          T1: AbiSize,
+          T2: AbiSize,
+          T3: AbiSize,
+          T4: AbiSize,
+          T5: AbiSize,
+          T6: AbiSize,
+          T7: AbiSize,
+          T8: AbiSize,
+          T9: AbiSize,
+          T10: AbiSize,
+          T11: AbiSize,
+          T12: AbiSize,
+          T13: AbiSize
+{
+    const HEAD_SIZE: u256 =
+        abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>() + abi_field_head_size<T4>() + abi_field_head_size<T5>() + abi_field_head_size<T6>() + abi_field_head_size<T7>() + abi_field_head_size<T8>() + abi_field_head_size<T9>() + abi_field_head_size<T10>() + abi_field_head_size<T11>() + abi_field_head_size<T12>() + abi_field_head_size<T13>()
+    const IS_DYNAMIC: bool =
+        T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC || T6::IS_DYNAMIC || T7::IS_DYNAMIC || T8::IS_DYNAMIC || T9::IS_DYNAMIC || T10::IS_DYNAMIC || T11::IS_DYNAMIC || T12::IS_DYNAMIC || T13::IS_DYNAMIC
+
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    fn payload_size(self) -> u256 {
+        Self::HEAD_SIZE
+            + dynamic_payload_size(self.0)
+            + dynamic_payload_size(self.1)
+            + dynamic_payload_size(self.2)
+            + dynamic_payload_size(self.3)
+            + dynamic_payload_size(self.4)
+            + dynamic_payload_size(self.5)
+            + dynamic_payload_size(self.6)
+            + dynamic_payload_size(self.7)
+            + dynamic_payload_size(self.8)
+            + dynamic_payload_size(self.9)
+            + dynamic_payload_size(self.10)
+            + dynamic_payload_size(self.11)
+            + dynamic_payload_size(self.12)
+            + dynamic_payload_size(self.13)
+    }
+}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14> AbiSize for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14)
+    where T0: AbiSize,
+          T1: AbiSize,
+          T2: AbiSize,
+          T3: AbiSize,
+          T4: AbiSize,
+          T5: AbiSize,
+          T6: AbiSize,
+          T7: AbiSize,
+          T8: AbiSize,
+          T9: AbiSize,
+          T10: AbiSize,
+          T11: AbiSize,
+          T12: AbiSize,
+          T13: AbiSize,
+          T14: AbiSize
+{
+    const HEAD_SIZE: u256 =
+        abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>() + abi_field_head_size<T4>() + abi_field_head_size<T5>() + abi_field_head_size<T6>() + abi_field_head_size<T7>() + abi_field_head_size<T8>() + abi_field_head_size<T9>() + abi_field_head_size<T10>() + abi_field_head_size<T11>() + abi_field_head_size<T12>() + abi_field_head_size<T13>() + abi_field_head_size<T14>()
+    const IS_DYNAMIC: bool =
+        T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC || T6::IS_DYNAMIC || T7::IS_DYNAMIC || T8::IS_DYNAMIC || T9::IS_DYNAMIC || T10::IS_DYNAMIC || T11::IS_DYNAMIC || T12::IS_DYNAMIC || T13::IS_DYNAMIC || T14::IS_DYNAMIC
+
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    fn payload_size(self) -> u256 {
+        Self::HEAD_SIZE
+            + dynamic_payload_size(self.0)
+            + dynamic_payload_size(self.1)
+            + dynamic_payload_size(self.2)
+            + dynamic_payload_size(self.3)
+            + dynamic_payload_size(self.4)
+            + dynamic_payload_size(self.5)
+            + dynamic_payload_size(self.6)
+            + dynamic_payload_size(self.7)
+            + dynamic_payload_size(self.8)
+            + dynamic_payload_size(self.9)
+            + dynamic_payload_size(self.10)
+            + dynamic_payload_size(self.11)
+            + dynamic_payload_size(self.12)
+            + dynamic_payload_size(self.13)
+            + dynamic_payload_size(self.14)
+    }
+}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15> AbiSize for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15)
+    where T0: AbiSize,
+          T1: AbiSize,
+          T2: AbiSize,
+          T3: AbiSize,
+          T4: AbiSize,
+          T5: AbiSize,
+          T6: AbiSize,
+          T7: AbiSize,
+          T8: AbiSize,
+          T9: AbiSize,
+          T10: AbiSize,
+          T11: AbiSize,
+          T12: AbiSize,
+          T13: AbiSize,
+          T14: AbiSize,
+          T15: AbiSize
+{
+    const HEAD_SIZE: u256 =
+        abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>() + abi_field_head_size<T4>() + abi_field_head_size<T5>() + abi_field_head_size<T6>() + abi_field_head_size<T7>() + abi_field_head_size<T8>() + abi_field_head_size<T9>() + abi_field_head_size<T10>() + abi_field_head_size<T11>() + abi_field_head_size<T12>() + abi_field_head_size<T13>() + abi_field_head_size<T14>() + abi_field_head_size<T15>()
+    const IS_DYNAMIC: bool =
+        T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC || T6::IS_DYNAMIC || T7::IS_DYNAMIC || T8::IS_DYNAMIC || T9::IS_DYNAMIC || T10::IS_DYNAMIC || T11::IS_DYNAMIC || T12::IS_DYNAMIC || T13::IS_DYNAMIC || T14::IS_DYNAMIC || T15::IS_DYNAMIC
+
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    fn payload_size(self) -> u256 {
+        Self::HEAD_SIZE
+            + dynamic_payload_size(self.0)
+            + dynamic_payload_size(self.1)
+            + dynamic_payload_size(self.2)
+            + dynamic_payload_size(self.3)
+            + dynamic_payload_size(self.4)
+            + dynamic_payload_size(self.5)
+            + dynamic_payload_size(self.6)
+            + dynamic_payload_size(self.7)
+            + dynamic_payload_size(self.8)
+            + dynamic_payload_size(self.9)
+            + dynamic_payload_size(self.10)
+            + dynamic_payload_size(self.11)
+            + dynamic_payload_size(self.12)
+            + dynamic_payload_size(self.13)
+            + dynamic_payload_size(self.14)
+            + dynamic_payload_size(self.15)
+    }
+}
+
 impl<T> AbiSize for DynArray<T>
     where T: AbiSize
 {
@@ -3892,6 +4064,360 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> Encode<A>
     }
 }
 
+impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12> Encode<A>
+    for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12)
+    where T0: Encode<A> + AbiSize,
+          T1: Encode<A> + AbiSize,
+          T2: Encode<A> + AbiSize,
+          T3: Encode<A> + AbiSize,
+          T4: Encode<A> + AbiSize,
+          T5: Encode<A> + AbiSize,
+          T6: Encode<A> + AbiSize,
+          T7: Encode<A> + AbiSize,
+          T8: Encode<A> + AbiSize,
+          T9: Encode<A> + AbiSize,
+          T10: Encode<A> + AbiSize,
+          T11: Encode<A> + AbiSize,
+          T12: Encode<A> + AbiSize
+{
+    const DIRECT_ENCODE: bool =
+        T0::DIRECT_ENCODE && T1::DIRECT_ENCODE && T2::DIRECT_ENCODE && T3::DIRECT_ENCODE && T4::DIRECT_ENCODE && T5::DIRECT_ENCODE && T6::DIRECT_ENCODE && T7::DIRECT_ENCODE && T8::DIRECT_ENCODE && T9::DIRECT_ENCODE && T10::DIRECT_ENCODE && T11::DIRECT_ENCODE && T12::DIRECT_ENCODE
+
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
+        let base = e.base()
+        let mut tail = base + Self::HEAD_SIZE
+        let head1 = base + abi_field_head_size<T0>()
+        let head2 = head1 + abi_field_head_size<T1>()
+        let head3 = head2 + abi_field_head_size<T2>()
+        let head4 = head3 + abi_field_head_size<T3>()
+        let head5 = head4 + abi_field_head_size<T4>()
+        let head6 = head5 + abi_field_head_size<T5>()
+        let head7 = head6 + abi_field_head_size<T6>()
+        let head8 = head7 + abi_field_head_size<T7>()
+        let head9 = head8 + abi_field_head_size<T8>()
+        let head10 = head9 + abi_field_head_size<T9>()
+        let head11 = head10 + abi_field_head_size<T10>()
+        let head12 = head11 + abi_field_head_size<T11>()
+        encode_field_at<A, T0, E>(self.0, mut e, base, head_pos: base, mut tail)
+        encode_field_at<A, T1, E>(self.1, mut e, base, head_pos: head1, mut tail)
+        encode_field_at<A, T2, E>(self.2, mut e, base, head_pos: head2, mut tail)
+        encode_field_at<A, T3, E>(self.3, mut e, base, head_pos: head3, mut tail)
+        encode_field_at<A, T4, E>(self.4, mut e, base, head_pos: head4, mut tail)
+        encode_field_at<A, T5, E>(self.5, mut e, base, head_pos: head5, mut tail)
+        encode_field_at<A, T6, E>(self.6, mut e, base, head_pos: head6, mut tail)
+        encode_field_at<A, T7, E>(self.7, mut e, base, head_pos: head7, mut tail)
+        encode_field_at<A, T8, E>(self.8, mut e, base, head_pos: head8, mut tail)
+        encode_field_at<A, T9, E>(self.9, mut e, base, head_pos: head9, mut tail)
+        encode_field_at<A, T10, E>(self.10, mut e, base, head_pos: head10, mut tail)
+        encode_field_at<A, T11, E>(self.11, mut e, base, head_pos: head11, mut tail)
+        encode_field_at<A, T12, E>(self.12, mut e, base, head_pos: head12, mut tail)
+        e.set_pos(base + Self::HEAD_SIZE)
+    }
+
+    #[arithmetic(unchecked)]
+    fn encode_to_ptr(own self, _ ptr: u256) {
+        self.0.encode_to_ptr(ptr)
+        self.1.encode_to_ptr(ptr + T0::HEAD_SIZE)
+        self.2
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE)
+        self.3
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE)
+        self.4
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE)
+        self.5
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE)
+        self.6
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE)
+        self.7
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE)
+        self.8
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE)
+        self.9
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE)
+        self.10
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE + T9::HEAD_SIZE)
+        self.11
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE + T9::HEAD_SIZE + T10::HEAD_SIZE)
+        self.12
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE + T9::HEAD_SIZE + T10::HEAD_SIZE + T11::HEAD_SIZE)
+    }
+}
+
+impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13> Encode<A>
+    for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13)
+    where T0: Encode<A> + AbiSize,
+          T1: Encode<A> + AbiSize,
+          T2: Encode<A> + AbiSize,
+          T3: Encode<A> + AbiSize,
+          T4: Encode<A> + AbiSize,
+          T5: Encode<A> + AbiSize,
+          T6: Encode<A> + AbiSize,
+          T7: Encode<A> + AbiSize,
+          T8: Encode<A> + AbiSize,
+          T9: Encode<A> + AbiSize,
+          T10: Encode<A> + AbiSize,
+          T11: Encode<A> + AbiSize,
+          T12: Encode<A> + AbiSize,
+          T13: Encode<A> + AbiSize
+{
+    const DIRECT_ENCODE: bool =
+        T0::DIRECT_ENCODE && T1::DIRECT_ENCODE && T2::DIRECT_ENCODE && T3::DIRECT_ENCODE && T4::DIRECT_ENCODE && T5::DIRECT_ENCODE && T6::DIRECT_ENCODE && T7::DIRECT_ENCODE && T8::DIRECT_ENCODE && T9::DIRECT_ENCODE && T10::DIRECT_ENCODE && T11::DIRECT_ENCODE && T12::DIRECT_ENCODE && T13::DIRECT_ENCODE
+
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
+        let base = e.base()
+        let mut tail = base + Self::HEAD_SIZE
+        let head1 = base + abi_field_head_size<T0>()
+        let head2 = head1 + abi_field_head_size<T1>()
+        let head3 = head2 + abi_field_head_size<T2>()
+        let head4 = head3 + abi_field_head_size<T3>()
+        let head5 = head4 + abi_field_head_size<T4>()
+        let head6 = head5 + abi_field_head_size<T5>()
+        let head7 = head6 + abi_field_head_size<T6>()
+        let head8 = head7 + abi_field_head_size<T7>()
+        let head9 = head8 + abi_field_head_size<T8>()
+        let head10 = head9 + abi_field_head_size<T9>()
+        let head11 = head10 + abi_field_head_size<T10>()
+        let head12 = head11 + abi_field_head_size<T11>()
+        let head13 = head12 + abi_field_head_size<T12>()
+        encode_field_at<A, T0, E>(self.0, mut e, base, head_pos: base, mut tail)
+        encode_field_at<A, T1, E>(self.1, mut e, base, head_pos: head1, mut tail)
+        encode_field_at<A, T2, E>(self.2, mut e, base, head_pos: head2, mut tail)
+        encode_field_at<A, T3, E>(self.3, mut e, base, head_pos: head3, mut tail)
+        encode_field_at<A, T4, E>(self.4, mut e, base, head_pos: head4, mut tail)
+        encode_field_at<A, T5, E>(self.5, mut e, base, head_pos: head5, mut tail)
+        encode_field_at<A, T6, E>(self.6, mut e, base, head_pos: head6, mut tail)
+        encode_field_at<A, T7, E>(self.7, mut e, base, head_pos: head7, mut tail)
+        encode_field_at<A, T8, E>(self.8, mut e, base, head_pos: head8, mut tail)
+        encode_field_at<A, T9, E>(self.9, mut e, base, head_pos: head9, mut tail)
+        encode_field_at<A, T10, E>(self.10, mut e, base, head_pos: head10, mut tail)
+        encode_field_at<A, T11, E>(self.11, mut e, base, head_pos: head11, mut tail)
+        encode_field_at<A, T12, E>(self.12, mut e, base, head_pos: head12, mut tail)
+        encode_field_at<A, T13, E>(self.13, mut e, base, head_pos: head13, mut tail)
+        e.set_pos(base + Self::HEAD_SIZE)
+    }
+
+    #[arithmetic(unchecked)]
+    fn encode_to_ptr(own self, _ ptr: u256) {
+        self.0.encode_to_ptr(ptr)
+        self.1.encode_to_ptr(ptr + T0::HEAD_SIZE)
+        self.2
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE)
+        self.3
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE)
+        self.4
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE)
+        self.5
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE)
+        self.6
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE)
+        self.7
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE)
+        self.8
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE)
+        self.9
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE)
+        self.10
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE + T9::HEAD_SIZE)
+        self.11
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE + T9::HEAD_SIZE + T10::HEAD_SIZE)
+        self.12
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE + T9::HEAD_SIZE + T10::HEAD_SIZE + T11::HEAD_SIZE)
+        self.13
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE + T9::HEAD_SIZE + T10::HEAD_SIZE + T11::HEAD_SIZE + T12::HEAD_SIZE)
+    }
+}
+
+impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14> Encode<A>
+    for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14)
+    where T0: Encode<A> + AbiSize,
+          T1: Encode<A> + AbiSize,
+          T2: Encode<A> + AbiSize,
+          T3: Encode<A> + AbiSize,
+          T4: Encode<A> + AbiSize,
+          T5: Encode<A> + AbiSize,
+          T6: Encode<A> + AbiSize,
+          T7: Encode<A> + AbiSize,
+          T8: Encode<A> + AbiSize,
+          T9: Encode<A> + AbiSize,
+          T10: Encode<A> + AbiSize,
+          T11: Encode<A> + AbiSize,
+          T12: Encode<A> + AbiSize,
+          T13: Encode<A> + AbiSize,
+          T14: Encode<A> + AbiSize
+{
+    const DIRECT_ENCODE: bool =
+        T0::DIRECT_ENCODE && T1::DIRECT_ENCODE && T2::DIRECT_ENCODE && T3::DIRECT_ENCODE && T4::DIRECT_ENCODE && T5::DIRECT_ENCODE && T6::DIRECT_ENCODE && T7::DIRECT_ENCODE && T8::DIRECT_ENCODE && T9::DIRECT_ENCODE && T10::DIRECT_ENCODE && T11::DIRECT_ENCODE && T12::DIRECT_ENCODE && T13::DIRECT_ENCODE && T14::DIRECT_ENCODE
+
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
+        let base = e.base()
+        let mut tail = base + Self::HEAD_SIZE
+        let head1 = base + abi_field_head_size<T0>()
+        let head2 = head1 + abi_field_head_size<T1>()
+        let head3 = head2 + abi_field_head_size<T2>()
+        let head4 = head3 + abi_field_head_size<T3>()
+        let head5 = head4 + abi_field_head_size<T4>()
+        let head6 = head5 + abi_field_head_size<T5>()
+        let head7 = head6 + abi_field_head_size<T6>()
+        let head8 = head7 + abi_field_head_size<T7>()
+        let head9 = head8 + abi_field_head_size<T8>()
+        let head10 = head9 + abi_field_head_size<T9>()
+        let head11 = head10 + abi_field_head_size<T10>()
+        let head12 = head11 + abi_field_head_size<T11>()
+        let head13 = head12 + abi_field_head_size<T12>()
+        let head14 = head13 + abi_field_head_size<T13>()
+        encode_field_at<A, T0, E>(self.0, mut e, base, head_pos: base, mut tail)
+        encode_field_at<A, T1, E>(self.1, mut e, base, head_pos: head1, mut tail)
+        encode_field_at<A, T2, E>(self.2, mut e, base, head_pos: head2, mut tail)
+        encode_field_at<A, T3, E>(self.3, mut e, base, head_pos: head3, mut tail)
+        encode_field_at<A, T4, E>(self.4, mut e, base, head_pos: head4, mut tail)
+        encode_field_at<A, T5, E>(self.5, mut e, base, head_pos: head5, mut tail)
+        encode_field_at<A, T6, E>(self.6, mut e, base, head_pos: head6, mut tail)
+        encode_field_at<A, T7, E>(self.7, mut e, base, head_pos: head7, mut tail)
+        encode_field_at<A, T8, E>(self.8, mut e, base, head_pos: head8, mut tail)
+        encode_field_at<A, T9, E>(self.9, mut e, base, head_pos: head9, mut tail)
+        encode_field_at<A, T10, E>(self.10, mut e, base, head_pos: head10, mut tail)
+        encode_field_at<A, T11, E>(self.11, mut e, base, head_pos: head11, mut tail)
+        encode_field_at<A, T12, E>(self.12, mut e, base, head_pos: head12, mut tail)
+        encode_field_at<A, T13, E>(self.13, mut e, base, head_pos: head13, mut tail)
+        encode_field_at<A, T14, E>(self.14, mut e, base, head_pos: head14, mut tail)
+        e.set_pos(base + Self::HEAD_SIZE)
+    }
+
+    #[arithmetic(unchecked)]
+    fn encode_to_ptr(own self, _ ptr: u256) {
+        self.0.encode_to_ptr(ptr)
+        self.1.encode_to_ptr(ptr + T0::HEAD_SIZE)
+        self.2
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE)
+        self.3
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE)
+        self.4
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE)
+        self.5
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE)
+        self.6
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE)
+        self.7
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE)
+        self.8
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE)
+        self.9
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE)
+        self.10
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE + T9::HEAD_SIZE)
+        self.11
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE + T9::HEAD_SIZE + T10::HEAD_SIZE)
+        self.12
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE + T9::HEAD_SIZE + T10::HEAD_SIZE + T11::HEAD_SIZE)
+        self.13
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE + T9::HEAD_SIZE + T10::HEAD_SIZE + T11::HEAD_SIZE + T12::HEAD_SIZE)
+        self.14
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE + T9::HEAD_SIZE + T10::HEAD_SIZE + T11::HEAD_SIZE + T12::HEAD_SIZE + T13::HEAD_SIZE)
+    }
+}
+
+impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15> Encode<A>
+    for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15)
+    where T0: Encode<A> + AbiSize,
+          T1: Encode<A> + AbiSize,
+          T2: Encode<A> + AbiSize,
+          T3: Encode<A> + AbiSize,
+          T4: Encode<A> + AbiSize,
+          T5: Encode<A> + AbiSize,
+          T6: Encode<A> + AbiSize,
+          T7: Encode<A> + AbiSize,
+          T8: Encode<A> + AbiSize,
+          T9: Encode<A> + AbiSize,
+          T10: Encode<A> + AbiSize,
+          T11: Encode<A> + AbiSize,
+          T12: Encode<A> + AbiSize,
+          T13: Encode<A> + AbiSize,
+          T14: Encode<A> + AbiSize,
+          T15: Encode<A> + AbiSize
+{
+    const DIRECT_ENCODE: bool =
+        T0::DIRECT_ENCODE && T1::DIRECT_ENCODE && T2::DIRECT_ENCODE && T3::DIRECT_ENCODE && T4::DIRECT_ENCODE && T5::DIRECT_ENCODE && T6::DIRECT_ENCODE && T7::DIRECT_ENCODE && T8::DIRECT_ENCODE && T9::DIRECT_ENCODE && T10::DIRECT_ENCODE && T11::DIRECT_ENCODE && T12::DIRECT_ENCODE && T13::DIRECT_ENCODE && T14::DIRECT_ENCODE && T15::DIRECT_ENCODE
+
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
+        let base = e.base()
+        let mut tail = base + Self::HEAD_SIZE
+        let head1 = base + abi_field_head_size<T0>()
+        let head2 = head1 + abi_field_head_size<T1>()
+        let head3 = head2 + abi_field_head_size<T2>()
+        let head4 = head3 + abi_field_head_size<T3>()
+        let head5 = head4 + abi_field_head_size<T4>()
+        let head6 = head5 + abi_field_head_size<T5>()
+        let head7 = head6 + abi_field_head_size<T6>()
+        let head8 = head7 + abi_field_head_size<T7>()
+        let head9 = head8 + abi_field_head_size<T8>()
+        let head10 = head9 + abi_field_head_size<T9>()
+        let head11 = head10 + abi_field_head_size<T10>()
+        let head12 = head11 + abi_field_head_size<T11>()
+        let head13 = head12 + abi_field_head_size<T12>()
+        let head14 = head13 + abi_field_head_size<T13>()
+        let head15 = head14 + abi_field_head_size<T14>()
+        encode_field_at<A, T0, E>(self.0, mut e, base, head_pos: base, mut tail)
+        encode_field_at<A, T1, E>(self.1, mut e, base, head_pos: head1, mut tail)
+        encode_field_at<A, T2, E>(self.2, mut e, base, head_pos: head2, mut tail)
+        encode_field_at<A, T3, E>(self.3, mut e, base, head_pos: head3, mut tail)
+        encode_field_at<A, T4, E>(self.4, mut e, base, head_pos: head4, mut tail)
+        encode_field_at<A, T5, E>(self.5, mut e, base, head_pos: head5, mut tail)
+        encode_field_at<A, T6, E>(self.6, mut e, base, head_pos: head6, mut tail)
+        encode_field_at<A, T7, E>(self.7, mut e, base, head_pos: head7, mut tail)
+        encode_field_at<A, T8, E>(self.8, mut e, base, head_pos: head8, mut tail)
+        encode_field_at<A, T9, E>(self.9, mut e, base, head_pos: head9, mut tail)
+        encode_field_at<A, T10, E>(self.10, mut e, base, head_pos: head10, mut tail)
+        encode_field_at<A, T11, E>(self.11, mut e, base, head_pos: head11, mut tail)
+        encode_field_at<A, T12, E>(self.12, mut e, base, head_pos: head12, mut tail)
+        encode_field_at<A, T13, E>(self.13, mut e, base, head_pos: head13, mut tail)
+        encode_field_at<A, T14, E>(self.14, mut e, base, head_pos: head14, mut tail)
+        encode_field_at<A, T15, E>(self.15, mut e, base, head_pos: head15, mut tail)
+        e.set_pos(base + Self::HEAD_SIZE)
+    }
+
+    #[arithmetic(unchecked)]
+    fn encode_to_ptr(own self, _ ptr: u256) {
+        self.0.encode_to_ptr(ptr)
+        self.1.encode_to_ptr(ptr + T0::HEAD_SIZE)
+        self.2
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE)
+        self.3
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE)
+        self.4
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE)
+        self.5
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE)
+        self.6
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE)
+        self.7
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE)
+        self.8
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE)
+        self.9
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE)
+        self.10
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE + T9::HEAD_SIZE)
+        self.11
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE + T9::HEAD_SIZE + T10::HEAD_SIZE)
+        self.12
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE + T9::HEAD_SIZE + T10::HEAD_SIZE + T11::HEAD_SIZE)
+        self.13
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE + T9::HEAD_SIZE + T10::HEAD_SIZE + T11::HEAD_SIZE + T12::HEAD_SIZE)
+        self.14
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE + T9::HEAD_SIZE + T10::HEAD_SIZE + T11::HEAD_SIZE + T12::HEAD_SIZE + T13::HEAD_SIZE)
+        self.15
+            .encode_to_ptr(ptr + T0::HEAD_SIZE + T1::HEAD_SIZE + T2::HEAD_SIZE + T3::HEAD_SIZE + T4::HEAD_SIZE + T5::HEAD_SIZE + T6::HEAD_SIZE + T7::HEAD_SIZE + T8::HEAD_SIZE + T9::HEAD_SIZE + T10::HEAD_SIZE + T11::HEAD_SIZE + T12::HEAD_SIZE + T13::HEAD_SIZE + T14::HEAD_SIZE)
+    }
+}
+
 impl<A: Abi, T0, T1, T2, T3, T4, T5> EventAbiEncode<A> for (T0, T1, T2, T3, T4, T5)
     where T0: Encode<A> + AbiSize,
           T1: Encode<A> + AbiSize,
@@ -4155,6 +4681,224 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> EventAbiEncode<A>
         tail = encode_event_field_at<A, T9>(v9, ptr, head_pos: head9, tail)
         tail = encode_event_field_at<A, T10>(v10, ptr, head_pos: head10, tail)
         tail = encode_event_field_at<A, T11>(v11, ptr, head_pos: head11, tail)
+    }
+}
+
+impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12> EventAbiEncode<A> for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12)
+    where T0: Encode<A> + AbiSize,
+          T1: Encode<A> + AbiSize,
+          T2: Encode<A> + AbiSize,
+          T3: Encode<A> + AbiSize,
+          T4: Encode<A> + AbiSize,
+          T5: Encode<A> + AbiSize,
+          T6: Encode<A> + AbiSize,
+          T7: Encode<A> + AbiSize,
+          T8: Encode<A> + AbiSize,
+          T9: Encode<A> + AbiSize,
+          T10: Encode<A> + AbiSize,
+          T11: Encode<A> + AbiSize,
+          T12: Encode<A> + AbiSize
+{
+    const DIRECT_EVENT_ENCODE: bool = true
+
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    fn encode_event_to_ptr(own self, _ ptr: u256) {
+        let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12) = self
+        let mut tail = ptr + Self::HEAD_SIZE
+        let head1 = ptr + abi_field_head_size<T0>()
+        let head2 = head1 + abi_field_head_size<T1>()
+        let head3 = head2 + abi_field_head_size<T2>()
+        let head4 = head3 + abi_field_head_size<T3>()
+        let head5 = head4 + abi_field_head_size<T4>()
+        let head6 = head5 + abi_field_head_size<T5>()
+        let head7 = head6 + abi_field_head_size<T6>()
+        let head8 = head7 + abi_field_head_size<T7>()
+        let head9 = head8 + abi_field_head_size<T8>()
+        let head10 = head9 + abi_field_head_size<T9>()
+        let head11 = head10 + abi_field_head_size<T10>()
+        let head12 = head11 + abi_field_head_size<T11>()
+        tail = encode_event_field_at<A, T0>(v0, ptr, head_pos: ptr, tail)
+        tail = encode_event_field_at<A, T1>(v1, ptr, head_pos: head1, tail)
+        tail = encode_event_field_at<A, T2>(v2, ptr, head_pos: head2, tail)
+        tail = encode_event_field_at<A, T3>(v3, ptr, head_pos: head3, tail)
+        tail = encode_event_field_at<A, T4>(v4, ptr, head_pos: head4, tail)
+        tail = encode_event_field_at<A, T5>(v5, ptr, head_pos: head5, tail)
+        tail = encode_event_field_at<A, T6>(v6, ptr, head_pos: head6, tail)
+        tail = encode_event_field_at<A, T7>(v7, ptr, head_pos: head7, tail)
+        tail = encode_event_field_at<A, T8>(v8, ptr, head_pos: head8, tail)
+        tail = encode_event_field_at<A, T9>(v9, ptr, head_pos: head9, tail)
+        tail = encode_event_field_at<A, T10>(v10, ptr, head_pos: head10, tail)
+        tail = encode_event_field_at<A, T11>(v11, ptr, head_pos: head11, tail)
+        tail = encode_event_field_at<A, T12>(v12, ptr, head_pos: head12, tail)
+    }
+}
+
+impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13> EventAbiEncode<A> for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13)
+    where T0: Encode<A> + AbiSize,
+          T1: Encode<A> + AbiSize,
+          T2: Encode<A> + AbiSize,
+          T3: Encode<A> + AbiSize,
+          T4: Encode<A> + AbiSize,
+          T5: Encode<A> + AbiSize,
+          T6: Encode<A> + AbiSize,
+          T7: Encode<A> + AbiSize,
+          T8: Encode<A> + AbiSize,
+          T9: Encode<A> + AbiSize,
+          T10: Encode<A> + AbiSize,
+          T11: Encode<A> + AbiSize,
+          T12: Encode<A> + AbiSize,
+          T13: Encode<A> + AbiSize
+{
+    const DIRECT_EVENT_ENCODE: bool = true
+
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    fn encode_event_to_ptr(own self, _ ptr: u256) {
+        let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13) = self
+        let mut tail = ptr + Self::HEAD_SIZE
+        let head1 = ptr + abi_field_head_size<T0>()
+        let head2 = head1 + abi_field_head_size<T1>()
+        let head3 = head2 + abi_field_head_size<T2>()
+        let head4 = head3 + abi_field_head_size<T3>()
+        let head5 = head4 + abi_field_head_size<T4>()
+        let head6 = head5 + abi_field_head_size<T5>()
+        let head7 = head6 + abi_field_head_size<T6>()
+        let head8 = head7 + abi_field_head_size<T7>()
+        let head9 = head8 + abi_field_head_size<T8>()
+        let head10 = head9 + abi_field_head_size<T9>()
+        let head11 = head10 + abi_field_head_size<T10>()
+        let head12 = head11 + abi_field_head_size<T11>()
+        let head13 = head12 + abi_field_head_size<T12>()
+        tail = encode_event_field_at<A, T0>(v0, ptr, head_pos: ptr, tail)
+        tail = encode_event_field_at<A, T1>(v1, ptr, head_pos: head1, tail)
+        tail = encode_event_field_at<A, T2>(v2, ptr, head_pos: head2, tail)
+        tail = encode_event_field_at<A, T3>(v3, ptr, head_pos: head3, tail)
+        tail = encode_event_field_at<A, T4>(v4, ptr, head_pos: head4, tail)
+        tail = encode_event_field_at<A, T5>(v5, ptr, head_pos: head5, tail)
+        tail = encode_event_field_at<A, T6>(v6, ptr, head_pos: head6, tail)
+        tail = encode_event_field_at<A, T7>(v7, ptr, head_pos: head7, tail)
+        tail = encode_event_field_at<A, T8>(v8, ptr, head_pos: head8, tail)
+        tail = encode_event_field_at<A, T9>(v9, ptr, head_pos: head9, tail)
+        tail = encode_event_field_at<A, T10>(v10, ptr, head_pos: head10, tail)
+        tail = encode_event_field_at<A, T11>(v11, ptr, head_pos: head11, tail)
+        tail = encode_event_field_at<A, T12>(v12, ptr, head_pos: head12, tail)
+        tail = encode_event_field_at<A, T13>(v13, ptr, head_pos: head13, tail)
+    }
+}
+
+impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14> EventAbiEncode<A> for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14)
+    where T0: Encode<A> + AbiSize,
+          T1: Encode<A> + AbiSize,
+          T2: Encode<A> + AbiSize,
+          T3: Encode<A> + AbiSize,
+          T4: Encode<A> + AbiSize,
+          T5: Encode<A> + AbiSize,
+          T6: Encode<A> + AbiSize,
+          T7: Encode<A> + AbiSize,
+          T8: Encode<A> + AbiSize,
+          T9: Encode<A> + AbiSize,
+          T10: Encode<A> + AbiSize,
+          T11: Encode<A> + AbiSize,
+          T12: Encode<A> + AbiSize,
+          T13: Encode<A> + AbiSize,
+          T14: Encode<A> + AbiSize
+{
+    const DIRECT_EVENT_ENCODE: bool = true
+
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    fn encode_event_to_ptr(own self, _ ptr: u256) {
+        let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14) = self
+        let mut tail = ptr + Self::HEAD_SIZE
+        let head1 = ptr + abi_field_head_size<T0>()
+        let head2 = head1 + abi_field_head_size<T1>()
+        let head3 = head2 + abi_field_head_size<T2>()
+        let head4 = head3 + abi_field_head_size<T3>()
+        let head5 = head4 + abi_field_head_size<T4>()
+        let head6 = head5 + abi_field_head_size<T5>()
+        let head7 = head6 + abi_field_head_size<T6>()
+        let head8 = head7 + abi_field_head_size<T7>()
+        let head9 = head8 + abi_field_head_size<T8>()
+        let head10 = head9 + abi_field_head_size<T9>()
+        let head11 = head10 + abi_field_head_size<T10>()
+        let head12 = head11 + abi_field_head_size<T11>()
+        let head13 = head12 + abi_field_head_size<T12>()
+        let head14 = head13 + abi_field_head_size<T13>()
+        tail = encode_event_field_at<A, T0>(v0, ptr, head_pos: ptr, tail)
+        tail = encode_event_field_at<A, T1>(v1, ptr, head_pos: head1, tail)
+        tail = encode_event_field_at<A, T2>(v2, ptr, head_pos: head2, tail)
+        tail = encode_event_field_at<A, T3>(v3, ptr, head_pos: head3, tail)
+        tail = encode_event_field_at<A, T4>(v4, ptr, head_pos: head4, tail)
+        tail = encode_event_field_at<A, T5>(v5, ptr, head_pos: head5, tail)
+        tail = encode_event_field_at<A, T6>(v6, ptr, head_pos: head6, tail)
+        tail = encode_event_field_at<A, T7>(v7, ptr, head_pos: head7, tail)
+        tail = encode_event_field_at<A, T8>(v8, ptr, head_pos: head8, tail)
+        tail = encode_event_field_at<A, T9>(v9, ptr, head_pos: head9, tail)
+        tail = encode_event_field_at<A, T10>(v10, ptr, head_pos: head10, tail)
+        tail = encode_event_field_at<A, T11>(v11, ptr, head_pos: head11, tail)
+        tail = encode_event_field_at<A, T12>(v12, ptr, head_pos: head12, tail)
+        tail = encode_event_field_at<A, T13>(v13, ptr, head_pos: head13, tail)
+        tail = encode_event_field_at<A, T14>(v14, ptr, head_pos: head14, tail)
+    }
+}
+
+impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15> EventAbiEncode<A> for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15)
+    where T0: Encode<A> + AbiSize,
+          T1: Encode<A> + AbiSize,
+          T2: Encode<A> + AbiSize,
+          T3: Encode<A> + AbiSize,
+          T4: Encode<A> + AbiSize,
+          T5: Encode<A> + AbiSize,
+          T6: Encode<A> + AbiSize,
+          T7: Encode<A> + AbiSize,
+          T8: Encode<A> + AbiSize,
+          T9: Encode<A> + AbiSize,
+          T10: Encode<A> + AbiSize,
+          T11: Encode<A> + AbiSize,
+          T12: Encode<A> + AbiSize,
+          T13: Encode<A> + AbiSize,
+          T14: Encode<A> + AbiSize,
+          T15: Encode<A> + AbiSize
+{
+    const DIRECT_EVENT_ENCODE: bool = true
+
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    fn encode_event_to_ptr(own self, _ ptr: u256) {
+        let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15) = self
+        let mut tail = ptr + Self::HEAD_SIZE
+        let head1 = ptr + abi_field_head_size<T0>()
+        let head2 = head1 + abi_field_head_size<T1>()
+        let head3 = head2 + abi_field_head_size<T2>()
+        let head4 = head3 + abi_field_head_size<T3>()
+        let head5 = head4 + abi_field_head_size<T4>()
+        let head6 = head5 + abi_field_head_size<T5>()
+        let head7 = head6 + abi_field_head_size<T6>()
+        let head8 = head7 + abi_field_head_size<T7>()
+        let head9 = head8 + abi_field_head_size<T8>()
+        let head10 = head9 + abi_field_head_size<T9>()
+        let head11 = head10 + abi_field_head_size<T10>()
+        let head12 = head11 + abi_field_head_size<T11>()
+        let head13 = head12 + abi_field_head_size<T12>()
+        let head14 = head13 + abi_field_head_size<T13>()
+        let head15 = head14 + abi_field_head_size<T14>()
+        tail = encode_event_field_at<A, T0>(v0, ptr, head_pos: ptr, tail)
+        tail = encode_event_field_at<A, T1>(v1, ptr, head_pos: head1, tail)
+        tail = encode_event_field_at<A, T2>(v2, ptr, head_pos: head2, tail)
+        tail = encode_event_field_at<A, T3>(v3, ptr, head_pos: head3, tail)
+        tail = encode_event_field_at<A, T4>(v4, ptr, head_pos: head4, tail)
+        tail = encode_event_field_at<A, T5>(v5, ptr, head_pos: head5, tail)
+        tail = encode_event_field_at<A, T6>(v6, ptr, head_pos: head6, tail)
+        tail = encode_event_field_at<A, T7>(v7, ptr, head_pos: head7, tail)
+        tail = encode_event_field_at<A, T8>(v8, ptr, head_pos: head8, tail)
+        tail = encode_event_field_at<A, T9>(v9, ptr, head_pos: head9, tail)
+        tail = encode_event_field_at<A, T10>(v10, ptr, head_pos: head10, tail)
+        tail = encode_event_field_at<A, T11>(v11, ptr, head_pos: head11, tail)
+        tail = encode_event_field_at<A, T12>(v12, ptr, head_pos: head12, tail)
+        tail = encode_event_field_at<A, T13>(v13, ptr, head_pos: head13, tail)
+        tail = encode_event_field_at<A, T14>(v14, ptr, head_pos: head14, tail)
+        tail = encode_event_field_at<A, T15>(v15, ptr, head_pos: head15, tail)
     }
 }
 
