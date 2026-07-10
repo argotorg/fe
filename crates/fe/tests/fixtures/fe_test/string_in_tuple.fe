@@ -1,0 +1,22 @@
+// Regression test: a short string (backing narrower than a word) inside a
+// tuple used to crash Sonatina emission with "global initializer immediate
+// type does not match global type" — the tuple's const-region global typed
+// the field I256 (a `String<N>` class is always a full word) while the
+// immediate was typed from the literal's byte length (e.g. I128 for 10
+// bytes).
+
+#[test]
+fn test_short_string_in_tuple() {
+    let s: String<10> = "Uniswap V2"
+    let t = (s, 1 as u8)
+    assert!(t.0.len() == 10)
+    assert!(t.1 == 1)
+}
+
+#[test]
+fn test_tiny_string_in_nested_tuple() {
+    let s: String<3> = "ab"
+    let t = ((s,), 7 as u64)
+    assert!(t.0.0.len() == 2)
+    assert!(t.1 == 7)
+}

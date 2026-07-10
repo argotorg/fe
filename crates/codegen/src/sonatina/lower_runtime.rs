@@ -225,7 +225,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         }
 
         let ty = self.ty_for_layout(region.layout(self.db))?;
-        let init = self.gv_initializer_for_const(region.value(self.db).clone())?;
+        let init = self.gv_initializer_for_const(region.value(self.db).clone(), None)?;
         let name = self.const_name(region);
         let gv = self.builder.declare_gv(GlobalVariableData::constant(
             name,
@@ -240,10 +240,11 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
     fn gv_initializer_for_const(
         &mut self,
         node: ConstNode<'db>,
+        class: Option<&RuntimeClass<'db>>,
     ) -> Result<sonatina_ir::global_variable::GvInitializer, LowerError> {
         Ok(match node {
             ConstNode::Scalar(scalar) => sonatina_ir::global_variable::GvInitializer::make_imm(
-                self.immediate_for_const(&scalar, None)?,
+                self.immediate_for_const(&scalar, class)?,
             ),
             ConstNode::Aggregate { layout, fields } => {
                 let ty = self.ty_for_layout(layout)?;
@@ -252,20 +253,37 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 })?;
                 match compound {
                     CompoundType::Array { .. } => {
+                        let Layout::Array(data) = layout.data(self.db) else {
+                            return Err(LowerError::Internal(format!(
+                                "array const global should have an array layout, got `{layout:?}`"
+                            )));
+                        };
+                        let elem_class = data.elem.clone();
                         sonatina_ir::global_variable::GvInitializer::make_array(
                             fields
                                 .iter()
                                 .cloned()
-                                .map(|field| self.gv_initializer_for_const(field))
+                                .map(|field| {
+                                    self.gv_initializer_for_const(field, Some(&elem_class))
+                                })
                                 .collect::<Result<Vec<_>, _>>()?,
                         )
                     }
                     CompoundType::Struct(_) => {
+                        let Layout::Struct(data) = layout.data(self.db) else {
+                            return Err(LowerError::Internal(format!(
+                                "struct const global should have a struct layout, got `{layout:?}`"
+                            )));
+                        };
+                        let field_classes = data.fields.clone();
                         sonatina_ir::global_variable::GvInitializer::make_struct(
                             fields
                                 .iter()
                                 .cloned()
-                                .map(|field| self.gv_initializer_for_const(field))
+                                .enumerate()
+                                .map(|(idx, field)| {
+                                    self.gv_initializer_for_const(field, field_classes.get(idx))
+                                })
                                 .collect::<Result<Vec<_>, _>>()?,
                         )
                     }
@@ -516,10 +534,19 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 signed,
                 words,
             } => Immediate::from_i256(bytes_to_i256(words, *signed), int_ty(*bits)),
-            ConstScalar::FixedBytes(bytes) => Immediate::from_i256(
-                bytes_to_i256(bytes, false),
-                fixed_bytes_ty(bytes.len() as u16),
-            ),
+            ConstScalar::FixedBytes(bytes) => {
+                // The value may hold fewer bytes than the declared class
+                // (e.g. a short string literal for a `String<N>` slot), so
+                // type the immediate from the class when we have one.
+                let ty = match class {
+                    Some(RuntimeClass::Scalar(ScalarClass {
+                        repr: mir::ScalarRepr::FixedBytes { len },
+                        ..
+                    })) => fixed_bytes_ty(*len),
+                    _ => fixed_bytes_ty(bytes.len() as u16),
+                };
+                Immediate::from_i256(bytes_to_i256(bytes, false), ty)
+            }
             ConstScalar::Address { bytes, .. } => {
                 Immediate::from_i256(bytes_to_i256(bytes, false), Type::I256)
             }
