@@ -197,6 +197,38 @@ impl<K: StorageKey + Copy, const LEN_SALT: u256, const WORD_SALT: u256>
         }
     }
 
+    /// Copy the stored bytes into freshly allocated memory.
+    ///
+    /// Returns the memory offset of the first payload byte and the byte
+    /// length. Unlike `encode_return`, this does not end the call, so the
+    /// bytes can be post-processed (hashed, deployed via `create2_raw`, etc).
+    /// The trailing partial word, if any, is zero-padded.
+    pub fn to_memory(self, key: K) -> (u256, u256) {
+        let lengths: StorageMap<K, u256, LEN_SALT> = StorageMap::new_unchecked()
+        let words: StorageMap<(K, u256), u256, WORD_SALT> = StorageMap::new_unchecked()
+
+        let len = lengths.get_unchecked(key)
+        let word_count = ceil_words(len)
+        let ptr = mem::alloc(word_count * 32)
+
+        let mut i: u256 = 0
+        while i < word_count {
+            ops::mstore(addr: ptr + i * 32, value: words.get_unchecked((key, i)))
+            i += 1
+        }
+
+        (ptr, len)
+    }
+
+    /// Load the 32-byte payload word at word `index` for `key`.
+    ///
+    /// The last word of a non-word-multiple length is zero-padded; indices
+    /// past `ceil_words(len(key))` read as zero.
+    pub fn word_at(self, key: K, index: u256) -> u256 {
+        let words: StorageMap<(K, u256), u256, WORD_SALT> = StorageMap::new_unchecked()
+        words.get_unchecked((key, index))
+    }
+
     /// Return ABI-encoded `bytes` from storage.
     pub fn encode_return(self, key: K) -> ! {
         let lengths: StorageMap<K, u256, LEN_SALT> = StorageMap::new_unchecked()
