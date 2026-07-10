@@ -514,6 +514,15 @@ impl Address {
     {
         call.call(addr: self, gas: ops::gas(), value: 0, message)
     }
+
+    /// `STATICCALL` a contract at this address with a typed message.
+    ///
+    /// Forwards all available gas. Bubbles the callee's revert data on failure.
+    pub fn static<M>(self, _ message: own M) -> M::Return
+    uses (call: mut Call) where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
+    {
+        call.static(addr: self, gas: ops::gas(), message)
+    }
 }
 
 /// Combined EVM capability: provides all EVM effects.
@@ -745,6 +754,15 @@ where M: Encode<Sol>
     message.encode(mut encoder)
 
     (ptr, total_len)
+}
+
+/// ABI-encode a message (4-byte selector + payload) into freshly allocated
+/// memory without performing a call. Returns `(offset, length)` suitable for
+/// `Call::raw_call` / `Call::raw_staticcall`.
+pub fn encode_msg_calldata<M>(_ message: own M) -> (u256, u256)
+where M: MsgVariant<Sol> + Encode<Sol>
+{
+    encode_calldata(<M as MsgVariant<Sol>>::SELECTOR, message)
 }
 
 fn copy_returndata() -> MemoryBytes {
