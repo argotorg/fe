@@ -19,7 +19,7 @@ use super::{
     binder::Binder,
     canonical::Canonical,
     diagnostics::{ImplDiag, TyDiagCollection},
-    fold::TyFoldable as _,
+    fold::{TyFoldable, TyFolder},
     trait_lower::collect_implementor_methods,
     trait_resolution::{
         TraitSolveCx, constraint::collect_constraints, is_goal_satisfiable,
@@ -27,6 +27,7 @@ use super::{
     },
     ty_def::TyId,
     unify::UnificationTable,
+    visitor::{TyVisitable, TyVisitor},
 };
 use crate::analysis::HirAnalysisDb;
 
@@ -163,7 +164,7 @@ fn std_evm_contract_trait_def<'db>(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub(crate) enum ImplementorOrigin<'db> {
+pub enum ImplementorOrigin<'db> {
     Hir(ImplTrait<'db>),
     VirtualContract(Contract<'db>),
     Assumption,
@@ -191,6 +192,113 @@ fn ingot_trait_env_cycle_recover<'db>(
     salsa::CycleRecoveryAction::Iterate
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub struct ResolvedImplInstance<'db> {
+    selected: ImplementorId<'db>,
+    instantiated: ImplementorId<'db>,
+    trait_inst: TraitInstId<'db>,
+}
+
+impl<'db> ResolvedImplInstance<'db> {
+    pub fn selected(self) -> ImplementorId<'db> {
+        self.selected
+    }
+
+    pub fn trait_inst(self) -> TraitInstId<'db> {
+        self.trait_inst
+    }
+
+    pub fn impl_args(self, db: &'db dyn HirAnalysisDb) -> &'db [TyId<'db>] {
+        self.instantiated.params(db)
+    }
+
+    pub fn impl_params(self, db: &'db dyn HirAnalysisDb) -> &'db [TyId<'db>] {
+        self.selected.params(db)
+    }
+
+    pub fn assoc_ty_template(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        name: IdentId<'db>,
+    ) -> Option<TyId<'db>> {
+        self.selected.assoc_ty(db, name)
+    }
+
+    pub fn instantiated_assoc_ty(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        name: IdentId<'db>,
+    ) -> Option<TyId<'db>> {
+        self.instantiated.assoc_ty(db, name)
+    }
+}
+
+impl<'db> TyFoldable<'db> for ResolvedImplInstance<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        Self {
+            selected: self.selected,
+            instantiated: self.instantiated.fold_with(db, folder),
+            trait_inst: self.trait_inst.fold_with(db, folder),
+        }
+    }
+}
+
+impl<'db> TyVisitable<'db> for ResolvedImplInstance<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        self.instantiated.visit_with(visitor);
+        self.trait_inst.visit_with(visitor);
+    }
+}
+
+fn instantiate_selected_impl<'db>(
+    db: &'db dyn HirAnalysisDb,
+    selected: ImplementorId<'db>,
+    inst: TraitInstId<'db>,
+) -> Option<ResolvedImplInstance<'db>> {
+    if matches!(selected.origin(db), ImplementorOrigin::Assumption) {
+        return Some(ResolvedImplInstance {
+            selected,
+            instantiated: selected,
+            trait_inst: inst,
+        });
+    }
+
+    let mut table = UnificationTable::new(db);
+    let instantiated = table.instantiate_with_fresh_vars(Binder::bind(selected));
+    table.unify(instantiated.trait_inst(db), inst).ok()?;
+    Some(ResolvedImplInstance {
+        selected,
+        instantiated: instantiated.fold_with(db, &mut table),
+        trait_inst: inst.fold_with(db, &mut table),
+    })
+}
+
+pub(crate) fn resolve_trait_impl_instance<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    inst: TraitInstId<'db>,
+) -> Selection<ResolvedImplInstance<'db>> {
+    let assumptions = solve_cx.assumptions();
+    let norm_scope = solve_cx.normalization_scope_for_trait_inst(db, inst);
+    let inst = normalize_trait_inst_preserving_validity(db, inst, norm_scope, assumptions);
+    match solve_cx.select_impl(db, inst) {
+        Selection::Unique(selected) => instantiate_selected_impl(db, selected, inst)
+            .map_or(Selection::NotFound, Selection::Unique),
+        // There is deliberately no resolved instance for a non-unique
+        // selection. Re-unifying each candidate would both fabricate evidence
+        // the caller must not consume and attempt to fold inference variables
+        // owned by the caller through a fresh local table.
+        Selection::Ambiguous(_) => Selection::Ambiguous(IndexSet::new()),
+        Selection::NotFound => Selection::NotFound,
+    }
+}
+
 /// Resolves the concrete HIR function that implements `method` for the given
 /// trait instance, returning both the function and the impl's instantiated
 /// generic arguments.
@@ -200,15 +308,12 @@ pub fn resolve_trait_method_instance<'db>(
     inst: TraitInstId<'db>,
     method: IdentId<'db>,
 ) -> Option<(Func<'db>, Vec<TyId<'db>>)> {
-    let assumptions = solve_cx.assumptions();
-    let norm_scope = solve_cx.normalization_scope_for_trait_inst(db, inst);
-    let inst = normalize_trait_inst_preserving_validity(db, inst, norm_scope, assumptions);
-
-    let implementor = match solve_cx.select_impl(db, inst) {
-        Selection::Unique(implementor) => implementor,
+    let resolved = match resolve_trait_impl_instance(db, solve_cx, inst) {
+        Selection::Unique(resolved) => resolved,
         Selection::Ambiguous(_ambiguous) => return None,
         Selection::NotFound => return None,
     };
+    let implementor = resolved.selected();
     let explicit_method = implementor.methods(db).get(&method).copied();
     let trait_method = implementor
         .trait_def(db)
@@ -217,20 +322,12 @@ pub fn resolve_trait_method_instance<'db>(
         .copied()
         .filter(|method| method.body(db).is_some());
 
-    let mut table = UnificationTable::new(db);
-    let implementor = table.instantiate_with_fresh_vars(Binder::bind(implementor));
-    table.unify(implementor.trait_inst(db), inst).ok()?;
     if let Some(func) = explicit_method {
-        let impl_args = implementor
-            .params(db)
-            .iter()
-            .map(|&ty| ty.fold_with(db, &mut table))
-            .collect();
-        return Some((func, impl_args));
+        return Some((func, resolved.impl_args(db).to_vec()));
     }
 
     let func = trait_method?;
-    let trait_args = inst.args(db).to_vec();
+    let trait_args = resolved.trait_inst().args(db).to_vec();
     Some((func, trait_args))
 }
 
@@ -399,15 +496,12 @@ pub fn assoc_const_body_and_impl_args_for_trait_inst<'db>(
     inst: TraitInstId<'db>,
     const_name: IdentId<'db>,
 ) -> Option<(crate::hir_def::Body<'db>, Vec<TyId<'db>>)> {
-    let assumptions = solve_cx.assumptions();
-    let norm_scope = solve_cx.normalization_scope_for_trait_inst(db, inst);
-    let inst = normalize_trait_inst_preserving_validity(db, inst, norm_scope, assumptions);
-
-    let implementor = match solve_cx.select_impl(db, inst) {
-        Selection::Unique(implementor) => implementor,
+    let resolved = match resolve_trait_impl_instance(db, solve_cx, inst) {
+        Selection::Unique(resolved) => resolved,
         Selection::Ambiguous(_ambiguous) => return None,
         Selection::NotFound => return None,
     };
+    let implementor = resolved.selected();
     let hir_impl = match implementor.origin(db) {
         ImplementorOrigin::Hir(impl_trait) => impl_trait,
         ImplementorOrigin::VirtualContract(_) | ImplementorOrigin::Assumption => return None,
@@ -418,15 +512,7 @@ pub fn assoc_const_body_and_impl_args_for_trait_inst<'db>(
         .find(|c| c.name.to_opt() == Some(const_name))?;
     let body = def.value.to_opt()?;
 
-    let mut table = UnificationTable::new(db);
-    let implementor = table.instantiate_with_fresh_vars(Binder::bind(implementor));
-    table.unify(implementor.trait_inst(db), inst).ok()?;
-    let impl_args = implementor
-        .params(db)
-        .iter()
-        .map(|&ty| ty.fold_with(db, &mut table))
-        .collect();
-    Some((body, impl_args))
+    Some((body, resolved.impl_args(db).to_vec()))
 }
 
 /// Whether `inst` is satisfied by a uniquely-selected concrete impl rather than
@@ -442,13 +528,11 @@ pub fn trait_inst_selects_concrete_impl<'db>(
     solve_cx: TraitSolveCx<'db>,
     inst: TraitInstId<'db>,
 ) -> bool {
-    let assumptions = solve_cx.assumptions();
-    let norm_scope = solve_cx.normalization_scope_for_trait_inst(db, inst);
-    let inst = normalize_trait_inst_preserving_validity(db, inst, norm_scope, assumptions);
-    match solve_cx.select_impl(db, inst) {
-        Selection::Unique(implementor) => {
-            !matches!(implementor.origin(db), ImplementorOrigin::Assumption)
-        }
+    match resolve_trait_impl_instance(db, solve_cx, inst) {
+        Selection::Unique(resolved) => !matches!(
+            resolved.selected().origin(db),
+            ImplementorOrigin::Assumption
+        ),
         Selection::Ambiguous(_) | Selection::NotFound => false,
     }
 }
@@ -509,7 +593,7 @@ impl<'db> TraitEnv<'db> {
 /// `ImplTrait` item and its lowered trait instance.
 #[salsa::interned]
 #[derive(Debug)]
-pub(crate) struct ImplementorId<'db> {
+pub struct ImplementorId<'db> {
     /// The trait instance that this impl realizes.
     pub(crate) trait_: TraitInstId<'db>,
 
@@ -856,9 +940,11 @@ impl<'db> TraitInstId<'db> {
 #[cfg(test)]
 mod tests {
     use camino::Utf8PathBuf;
+    use common::indexmap::IndexMap;
 
-    use super::impls_for_trait_def;
-    use crate::hir_def::ItemKind;
+    use super::{TraitInstId, impls_for_trait_def, resolve_trait_impl_instance};
+    use crate::analysis::ty::trait_resolution::{Selection, TraitSolveCx};
+    use crate::hir_def::{IdentId, ItemKind};
     use crate::test_db::HirAnalysisTestDb;
 
     #[test]
@@ -892,5 +978,65 @@ impl<T> Foo for T where T: Marker {}
 
         let impls = impls_for_trait_def(&db, top_mod.ingot(&db), trait_);
         assert_eq!(impls.len(), 2);
+    }
+
+    #[test]
+    fn resolved_impl_instance_preserves_default_assoc_template_and_concrete_args() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from(
+                "resolved_impl_instance_preserves_default_assoc_template_and_concrete_args.fe",
+            ),
+            r#"
+trait Projects<T> {
+    type Output = T
+}
+
+struct Wrapper<T> {}
+
+impl<T> Projects<T> for Wrapper<T> {}
+
+fn probe(value: own Wrapper<u16>) {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let trait_ = top_mod
+            .children_non_nested(&db)
+            .find_map(|item| match item {
+                ItemKind::Trait(trait_) => Some(trait_),
+                _ => None,
+            })
+            .expect("missing Projects trait");
+        let func = top_mod
+            .children_non_nested(&db)
+            .find_map(|item| match item {
+                ItemKind::Func(func) => Some(func),
+                _ => None,
+            })
+            .expect("missing probe function");
+        let self_ty = func
+            .params(&db)
+            .next()
+            .expect("missing probe parameter")
+            .ty(&db);
+        let projected_arg = self_ty.generic_args(&db)[0];
+        let inst = TraitInstId::new(&db, trait_, vec![self_ty, projected_arg], IndexMap::new());
+        let Selection::Unique(resolved) =
+            resolve_trait_impl_instance(&db, TraitSolveCx::new(&db, func.scope()), inst)
+        else {
+            panic!("expected one concrete Projects implementation");
+        };
+        let output = IdentId::new(&db, "Output");
+        let template = resolved
+            .assoc_ty_template(&db, output)
+            .expect("missing default associated type template");
+        let instantiated = resolved
+            .instantiated_assoc_ty(&db, output)
+            .expect("missing instantiated default associated type");
+
+        assert!(template.has_param(&db));
+        assert_eq!(instantiated.pretty_print(&db).to_string(), "u16");
+        assert_eq!(resolved.impl_args(&db), &[instantiated]);
     }
 }
