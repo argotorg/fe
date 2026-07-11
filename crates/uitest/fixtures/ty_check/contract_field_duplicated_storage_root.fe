@@ -1,0 +1,16 @@
+use core::effect_ref::StorPtr
+
+struct Slot<T, const ROOT: u256 = _> {}
+
+struct Pair<T> {
+    left: T,
+    right: T,
+}
+
+struct S<T> {
+    p: Pair<T>,
+}
+
+contract C {
+    values: StorPtr<S<Slot<u256>>>,
+}

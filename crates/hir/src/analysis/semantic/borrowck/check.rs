@@ -527,7 +527,7 @@ impl<'db> Borrowck<'db> {
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
         let active = self.effective_loans(state, live);
         match &stmt.kind {
-            NSStmtKind::Assign { expr, .. } => match expr {
+            NSStmtKind::Assign { dst, expr } => match expr {
                 NExpr::ReadPlace { place, mode } => {
                     let targets = self.canon().canonicalize_place(state, place, stmt.origin)?;
                     self.check_moved_overlap(
@@ -548,7 +548,12 @@ impl<'db> Borrowck<'db> {
                         stmt.origin,
                         "cannot borrow a moved value",
                     )?;
-                    if let Some(conflict) = self.first_loan_conflict(&active, *kind, &targets) {
+                    if let Some(conflict) = self.first_loan_conflict(
+                        &active,
+                        self.loan_for_local.get(dst).copied(),
+                        *kind,
+                        &targets,
+                    ) {
                         return Err(self.borrow_conflict_diag(
                             stmt.origin,
                             self.overlapping_loans_msg(conflict, *kind),
@@ -703,14 +708,20 @@ impl<'db> Borrowck<'db> {
     fn first_loan_conflict(
         &self,
         active: &[LoanId],
+        new_loan: Option<LoanId>,
         new_kind: BorrowKind,
         targets: &FxHashSet<CanonPlace<'db>>,
     ) -> Option<LoanId> {
-        active.iter().copied().find(|loan| {
-            let loan = &self.loans[loan.0 as usize];
-            !matches!((loan.kind, new_kind), (BorrowKind::Ref, BorrowKind::Ref))
-                && place_set_overlaps(&loan.targets, targets)
-        })
+        let reborrow_parents = new_loan.map(|loan| &self.loans[loan.0 as usize].parents);
+        active
+            .iter()
+            .copied()
+            .filter(|loan| reborrow_parents.is_none_or(|parents| !parents.contains(loan)))
+            .find(|loan| {
+                let loan = &self.loans[loan.0 as usize];
+                !matches!((loan.kind, new_kind), (BorrowKind::Ref, BorrowKind::Ref))
+                    && place_set_overlaps(&loan.targets, targets)
+            })
     }
 
     fn check_move_out(

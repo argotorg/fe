@@ -908,6 +908,91 @@ pub contract C {
     client.shutdown().await;
 }
 
+#[tokio::test]
+async fn mock_lsp_hover_distinguishes_explicit_layout_roots() {
+    let mut client = MockLspClient::start().await;
+    client.initialize().await;
+
+    let uri = lib_url();
+    client.did_open(&uri, "");
+    client.settle(500).await;
+
+    let code = r#"struct Slot<const ROOT: u256 = _> {}
+
+pub contract C {
+  mut reserved: Slot<1>
+  mut inferred: Slot
+}
+"#;
+    client.did_change(&uri, 701, code);
+    client.settle(1000).await;
+
+    let hover = hover_eventually(&mut client, &uri, 3, 7).await;
+    let text = hover_text(&hover);
+    assert!(
+        text.contains("explicit root: slot 1 (storage)"),
+        "expected explicit reservation details, got:\n{text}"
+    );
+    assert!(
+        text.contains("count: 0"),
+        "explicit reservations must remain outside the compiler-owned range:\n{text}"
+    );
+
+    client.shutdown().await;
+}
+
+#[tokio::test]
+async fn mock_lsp_hover_shows_layout_families_and_transactional_failures() {
+    let mut client = MockLspClient::start().await;
+    client.initialize().await;
+
+    let uri = lib_url();
+    client.did_open(&uri, "");
+    client.settle(500).await;
+
+    let family_code = r#"use std::evm::StorageMap
+
+pub contract C {
+  mut maps: [StorageMap<u256, u256>; 3]
+}
+"#;
+    client.did_change(&uri, 710, family_code);
+    client.settle(1000).await;
+    let family_hover = hover_eventually(&mut client, &uri, 3, 7).await;
+    let family_text = hover_text(&family_hover);
+    assert!(
+        family_text.contains("root family:")
+            && family_text.contains("dimensions [3]")
+            && family_text.contains("root ="),
+        "expected indexed-family details, got:\n{family_text}"
+    );
+
+    let invalid_code = r#"struct Good<const ROOT: u256 = _> {}
+struct Bad<const ROOT: u8 = _> {}
+
+pub contract C {
+  mut good: Good
+  mut bad: Bad
+}
+"#;
+    client.did_change(&uri, 711, invalid_code);
+    client.settle(1000).await;
+    let good_hover = hover_eventually(&mut client, &uri, 4, 7).await;
+    let good_text = hover_text(&good_hover);
+    assert!(
+        good_text.contains("allocation unavailable because another contract field"),
+        "expected transactional allocation status, got:\n{good_text}"
+    );
+    let bad_hover = hover_eventually(&mut client, &uri, 5, 7).await;
+    let bad_text = hover_text(&bad_hover);
+    assert!(
+        bad_text.contains("layout: invalid") && bad_text.contains("not a `u256` or `usize`"),
+        "expected primary layout failure, got:\n{bad_text}"
+    );
+
+    client.shutdown().await;
+}
+
 /// Regression test for the "goto def → freeze" bug observed in Zed.
 ///
 /// # History

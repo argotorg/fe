@@ -2,21 +2,22 @@ use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::{One, ToPrimitive, Zero};
 
 use crate::core::hir_def::{
-    BinOp, Body, Const, EnumVariant, Expr, ExprId, Func, GenericArgListId, GenericParamOwner,
-    IdentId, IntegerId, LitKind, Partial, PathId, Stmt, TypeAlias as HirTypeAlias,
-    TypeId as HirTypeId,
+    BinOp, Body, Const, Contract, EnumVariant, Expr, ExprId, Func, GenericArgListId,
+    GenericParamOwner, IdentId, IntegerId, LitKind, Partial, PatId, PathId, Stmt,
+    TypeAlias as HirTypeAlias, TypeId as HirTypeId,
 };
 use salsa::Update;
 
 use super::const_expr::{ConstExpr, ConstExprId, pretty_print_un_op};
 use super::{
+    adt_def::AdtDef,
     assoc_const::{AssocConstUse, InherentConstUse},
     binder::Binder,
     diagnostics::{BodyDiag, FuncBodyDiag},
     fold::{AssocTySubst, TyFoldable},
     normalize::normalize_ty,
-    trait_def::TraitInstId,
-    trait_resolution::{TraitSolveCx, constraint::collect_constraints},
+    trait_def::{ImplementorId, ImplementorOrigin, ResolvedImplInstance, TraitInstId},
+    trait_resolution::{Selection, TraitSolveCx, constraint::collect_constraints},
     ty_check::{check_anon_const_body, check_const_body},
     ty_def::{InvalidCause, TyId, TyParam, TyVar},
     ty_lower::{ConstDefaultCompletion, collect_generic_params},
@@ -27,7 +28,8 @@ use crate::analysis::{
     name_resolution::{PathRes, resolve_path},
     semantic::{
         CtfeError, SemConstId, SemConstValue, SemOrigin, VariantIndex, eval_body_owner_const,
-        eval_body_owner_const_with_args, int_ty_shape, normalize_int_to_shape, sem_const_from_ty,
+        eval_body_owner_const_with_args, instantiate_with_generic_args, int_ty_shape,
+        normalize_int_to_shape, sem_const_from_ty,
     },
     ty::trait_resolution::PredicateListId,
     ty::ty_def::{Kind, PrimTy, TyBase, TyData, TyVarSort},
@@ -40,6 +42,46 @@ use rustc_hash::{FxHashMap, FxHashSet};
 pub enum LayoutHoleArgSite<'db> {
     Path(PathId<'db>),
     GenericArgList(GenericArgListId<'db>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub struct LayoutIntroSite<'db> {
+    pub root: LayoutIntroRoot<'db>,
+    pub path: Vec<LayoutIntroStep>,
+}
+
+impl<'db> LayoutIntroSite<'db> {
+    pub(crate) fn definition(owner: GenericParamOwner<'db>, param_idx: usize) -> Self {
+        Self {
+            root: LayoutIntroRoot::Definition { owner },
+            path: vec![LayoutIntroStep::ConstParam(param_idx as u32)],
+        }
+    }
+
+    pub(crate) fn lowering(site: LayoutHoleArgSite<'db>, arg_idx: usize) -> Self {
+        Self {
+            root: LayoutIntroRoot::Lowering { site },
+            path: vec![LayoutIntroStep::ExplicitArg(arg_idx as u32)],
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub enum LayoutIntroRoot<'db> {
+    Definition { owner: GenericParamOwner<'db> },
+    Lowering { site: LayoutHoleArgSite<'db> },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum LayoutIntroStep {
+    ExplicitArg(u32),
+    ConstParam(u32),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub struct LayoutHoleTrace<'db> {
+    pub introduced_at: LayoutIntroSite<'db>,
+    pub landings: Vec<LayoutInstantiationId<'db>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -83,7 +125,7 @@ impl<'db> ConstCanonEnv<'db> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
 pub enum CallableInputLayoutHoleOrigin {
     Receiver,
     ValueParam(usize),
@@ -99,11 +141,32 @@ pub enum HoleId<'db> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BoundHoleId<'db> {
     Opaque,
+    LayoutShape {
+        ordinal: u32,
+        kind: LayoutShapeHoleKind,
+    },
     CallableInput {
         func: Func<'db>,
         origin: CallableInputLayoutHoleOrigin,
         ordinal: usize,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LayoutShapeHoleKind {
+    ExplicitWildcard,
+    DefaultHoleParam,
+    EffectKeyExistential,
+}
+
+impl StructuralHoleOrigin<'_> {
+    pub(crate) fn shape_kind(self) -> LayoutShapeHoleKind {
+        match self {
+            Self::ExplicitWildcard { .. } => LayoutShapeHoleKind::ExplicitWildcard,
+            Self::DefaultHoleParam { .. } => LayoutShapeHoleKind::DefaultHoleParam,
+            Self::EffectKeyExistential { .. } => LayoutShapeHoleKind::EffectKeyExistential,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
@@ -124,73 +187,225 @@ pub enum StructuralHoleOrigin<'db> {
     },
 }
 
+/// A unique syntax position within a body that can introduce layout holes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum BodyHoleSite {
+    Expr(ExprId),
+    Pat(PatId),
+}
+
 /// Where a structural hole's identity is anchored.
 ///
 /// During the shared, content-keyed lowering a hole is anchored at the memo
-/// key of the execution that minted it (`Template*`); since distinct memo
-/// entries have distinct keys, ordinals from different executions can never
-/// collide. Anchored entry points re-anchor template holes at a genuinely
-/// unique item position (added in later phases).
+/// key of the execution that minted it (`Template*`), including its active
+/// assumptions; since distinct memo entries have distinct keys, ordinals from
+/// different executions can never collide. Anchored entry points re-anchor
+/// template holes at a genuinely unique item position (added in later phases).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub enum HoleAnchor<'db> {
     /// Minted while lowering a HIR type (the `lower_hir_ty` memo key).
     TemplateTy {
         ty: HirTypeId<'db>,
         scope: ScopeId<'db>,
+        assumptions: PredicateListId<'db>,
     },
     /// Minted while resolving a path outside any enclosing HIR-type lowering
     /// (e.g. path expressions in bodies).
     TemplatePath {
         path: PathId<'db>,
         scope: ScopeId<'db>,
+        assumptions: PredicateListId<'db>,
     },
-    /// Minted while lowering a standalone generic-arg list (e.g. explicit
-    /// call-site generic args).
-    TemplateArgs {
-        args: GenericArgListId<'db>,
-        scope: ScopeId<'db>,
-    },
+    /// Minted at a unique expression or pattern occurrence in a body. Unlike
+    /// content-interned HIR types, paths, and argument lists, this is already a
+    /// stable semantic source position and must not be re-anchored.
+    BodySyntax { body: Body<'db>, site: BodyHoleSite },
     /// A hole owned by a type alias's right-hand side. Instantiating the
     /// alias at a use site replaces these with fresh holes minted from the
     /// use site's minter.
     AliasTemplate(HirTypeAlias<'db>),
+    /// A unique associated-type definition in a trait impl. Besides giving
+    /// holes a position-stable owner, this tells path lowering that
+    /// `Self::Assoc` denotes an impl-local binding rather than a signature
+    /// projection.
+    ImplAssocType {
+        impl_trait: crate::hir_def::ImplTrait<'db>,
+        index: u32,
+    },
+    /// A unique callable input position used as the parent of structural
+    /// projection landings discovered for that input.
+    CallableInput {
+        func: Func<'db>,
+        origin: CallableInputLayoutHoleOrigin,
+    },
+    /// The declared result position of one callable. Output evidence is a
+    /// signature property and must never be keyed by a lowered body.
+    CallableOutput { func: Func<'db> },
+    /// A canonical parent for nested evidence landings in one semantic value.
+    /// This identity is local to schema derivation and is never an allocation
+    /// identity in a contract root graph.
+    SemanticValue { body: Body<'db>, local: u32 },
 }
 
 impl<'db> HoleAnchor<'db> {
     /// Whether this anchor is a content-keyed lowering template (as opposed
     /// to an alias template or, in later phases, a unique item position).
     pub(crate) fn is_lowering_template(self) -> bool {
-        matches!(
-            self,
-            Self::TemplateTy { .. } | Self::TemplatePath { .. } | Self::TemplateArgs { .. }
-        )
+        matches!(self, Self::TemplateTy { .. } | Self::TemplatePath { .. })
     }
 }
 
-/// Mints `(anchor, ordinal)` hole identities for one lowering execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum LayoutBoundaryIdentity<'db> {
+    ContractField {
+        contract: Contract<'db>,
+        field_index: u32,
+    },
+    AdtApplication(AdtDef<'db>),
+    AliasUse(HirTypeAlias<'db>),
+    ProviderTarget(ImplementorId<'db>),
+    ArrayElement,
+    CallableInput {
+        func: Func<'db>,
+        origin: CallableInputLayoutHoleOrigin,
+    },
+    CallableOutput(Func<'db>),
+    SemanticValue {
+        body: Body<'db>,
+        local: u32,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum LayoutOccurrenceStep {
+    Instantiation(u32),
+    TypeParam(u32),
+    ConstParam(u32),
+    GenericArg(u32),
+    StructField(u32),
+    EnumVariant(u32),
+    EnumPayloadField(u32),
+    TupleElem(u32),
+    ArrayDimension(u32),
+    Normalization,
+    TemplateBody,
+}
+
+pub type LayoutOccurrencePath = Vec<LayoutOccurrenceStep>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum LayoutInstantiationContext<'db> {
+    Lowering(HoleAnchor<'db>),
+    Nested(LayoutInstantiationId<'db>),
+}
+
+#[salsa::interned]
+#[derive(Debug)]
+pub struct LayoutInstantiationId<'db> {
+    pub context: LayoutInstantiationContext<'db>,
+    pub boundary: LayoutBoundaryIdentity<'db>,
+    pub occurrence: LayoutOccurrencePath,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum LayoutRootIdentity<'db> {
+    Source {
+        anchor: HoleAnchor<'db>,
+        ordinal: u32,
+    },
+    Landing {
+        source: LayoutRootId<'db>,
+        instance: LayoutInstantiationId<'db>,
+    },
+}
+
+#[salsa::interned]
+#[derive(Debug)]
+pub struct LayoutRootId<'db> {
+    pub identity: LayoutRootIdentity<'db>,
+}
+
+impl<'db> LayoutRootId<'db> {
+    pub fn source(db: &'db dyn HirAnalysisDb, anchor: HoleAnchor<'db>, ordinal: u32) -> Self {
+        Self::new(db, LayoutRootIdentity::Source { anchor, ordinal })
+    }
+
+    pub fn landing(
+        db: &'db dyn HirAnalysisDb,
+        source: Self,
+        instance: LayoutInstantiationId<'db>,
+    ) -> Self {
+        Self::new(db, LayoutRootIdentity::Landing { source, instance })
+    }
+
+    pub(crate) fn source_anchor(self, db: &'db dyn HirAnalysisDb) -> HoleAnchor<'db> {
+        match self.identity(db) {
+            LayoutRootIdentity::Source { anchor, .. } => anchor,
+            LayoutRootIdentity::Landing { source, .. } => source.source_anchor(db),
+        }
+    }
+}
+
+/// Mints source layout-root identities for one lowering execution.
 ///
 /// Threaded by reference through the lowering descent so that every mint
 /// event within one execution receives a distinct ordinal; a hole cannot be
 /// minted without one, which makes "forgot to re-key after a memoized call"
 /// impossible by construction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConstBodyLowering {
+    Eager,
+    Deferred,
+}
+
 #[derive(Debug)]
 pub(crate) struct HoleMinter<'db> {
     anchor: HoleAnchor<'db>,
+    const_bodies: ConstBodyLowering,
     counter: std::cell::Cell<u32>,
+    instantiation_counter: std::cell::Cell<u32>,
 }
 
 impl<'db> HoleMinter<'db> {
     pub(crate) fn new(anchor: HoleAnchor<'db>) -> Self {
         Self {
             anchor,
+            const_bodies: ConstBodyLowering::Eager,
             counter: std::cell::Cell::new(0),
+            instantiation_counter: std::cell::Cell::new(0),
         }
     }
 
-    pub(crate) fn mint(&self) -> (HoleAnchor<'db>, u32) {
+    /// Creates lowering state for an item signature. Const bodies stay as
+    /// typed-later metadata so candidate discovery never depends on body type
+    /// checking or trait selection.
+    pub(crate) fn deferred(anchor: HoleAnchor<'db>) -> Self {
+        Self {
+            anchor,
+            const_bodies: ConstBodyLowering::Deferred,
+            counter: std::cell::Cell::new(0),
+            instantiation_counter: std::cell::Cell::new(0),
+        }
+    }
+
+    pub(crate) fn const_bodies(&self) -> ConstBodyLowering {
+        self.const_bodies
+    }
+
+    pub(crate) fn anchor(&self) -> HoleAnchor<'db> {
+        self.anchor
+    }
+
+    pub(crate) fn mint(&self, db: &'db dyn HirAnalysisDb) -> LayoutRootId<'db> {
         let ordinal = self.counter.get();
         self.counter.set(ordinal + 1);
-        (self.anchor, ordinal)
+        LayoutRootId::source(db, self.anchor, ordinal)
+    }
+
+    pub(crate) fn next_instantiation_ordinal(&self) -> u32 {
+        let ordinal = self.instantiation_counter.get();
+        self.instantiation_counter.set(ordinal + 1);
+        ordinal
     }
 }
 
@@ -199,17 +414,49 @@ impl<'db> HoleMinter<'db> {
 /// HIR ids (`TypeId`, `PathId`, `GenericArgListId`) are content-interned, so
 /// a hole's creation site alone cannot identify a syntactic occurrence:
 /// `(Slot<_>, Slot<_>)` shares one child HIR type and `(M, M)` one alias
-/// path. Identity is therefore assigned at mint time: the `anchor` names the
-/// lowering execution (or alias template) that minted the hole and the
-/// `ordinal` distinguishes mint events within it. Two holes silently merging
-/// means aliased storage slots, so minting errs on the side of distinctness.
+/// path. Source identity is therefore assigned at mint time: the `anchor`
+/// names the lowering execution (or alias template) that minted the hole and
+/// the `ordinal` distinguishes mint events within it. Structural landing
+/// identity is derived separately from the source root and an explicit
+/// instantiation instance. Diagnostic trace changes never change either
+/// identity. Two holes silently merging means aliased storage slots, so
+/// minting errs on the side of distinctness.
 #[salsa::interned]
 #[derive(Debug)]
 pub struct StructuralHoleId<'db> {
     pub expected_ty: TyId<'db>,
+    pub root: LayoutRootId<'db>,
     pub origin: StructuralHoleOrigin<'db>,
-    pub anchor: HoleAnchor<'db>,
-    pub ordinal: u32,
+    pub trace: LayoutHoleTrace<'db>,
+}
+
+impl<'db> StructuralHoleId<'db> {
+    pub(crate) fn with_intro(
+        db: &'db dyn HirAnalysisDb,
+        expected_ty: TyId<'db>,
+        root: LayoutRootId<'db>,
+        origin: StructuralHoleOrigin<'db>,
+        introduced_at: LayoutIntroSite<'db>,
+    ) -> Self {
+        Self::new(
+            db,
+            expected_ty,
+            root,
+            origin,
+            LayoutHoleTrace {
+                introduced_at,
+                landings: Vec::new(),
+            },
+        )
+    }
+
+    pub(crate) fn anchor(self, db: &'db dyn HirAnalysisDb) -> HoleAnchor<'db> {
+        self.root(db).source_anchor(db)
+    }
+
+    pub(crate) fn introduced_at(self, db: &'db dyn HirAnalysisDb) -> LayoutIntroSite<'db> {
+        self.trace(db).introduced_at
+    }
 }
 
 impl<'db> HoleId<'db> {
@@ -233,14 +480,15 @@ impl<'db> HoleId<'db> {
         db: &'db dyn HirAnalysisDb,
         expected_ty: TyId<'db>,
         origin: StructuralHoleOrigin<'db>,
-        identity: (HoleAnchor<'db>, u32),
+        introduced_at: LayoutIntroSite<'db>,
+        root: LayoutRootId<'db>,
     ) -> Self {
-        Self::Structural(StructuralHoleId::new(
+        Self::Structural(StructuralHoleId::with_intro(
             db,
             expected_ty,
+            root,
             origin,
-            identity.0,
-            identity.1,
+            introduced_at,
         ))
     }
 }
@@ -903,6 +1151,7 @@ pub fn canonicalize_const_ty_for_mode<'db>(
             const_def,
             generic_args,
             preserve_unevaluated,
+            defer_validation,
         } => ConstTyId::new(
             db,
             ConstTyData::UnEvaluated {
@@ -915,6 +1164,7 @@ pub fn canonicalize_const_ty_for_mode<'db>(
                     .map(|arg| canonicalize_ty_for_mode(db, arg, env, mode))
                     .collect(),
                 preserve_unevaluated: *preserve_unevaluated,
+                defer_validation: *defer_validation,
             },
         ),
     };
@@ -1232,6 +1482,346 @@ pub struct ConstTyId<'db> {
     pub data: ConstTyData<'db>,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct CheckedIntTy {
+    bits: u16,
+    signed: bool,
+}
+
+fn checked_int_ty_from_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    expected: Option<TyId<'db>>,
+) -> Option<CheckedIntTy> {
+    let expected = expected?;
+    let base_ty = expected.base_ty(db);
+    let TyData::TyBase(TyBase::Prim(prim)) = base_ty.data(db) else {
+        return None;
+    };
+    Some(match prim {
+        PrimTy::U8 => CheckedIntTy {
+            bits: 8,
+            signed: false,
+        },
+        PrimTy::U16 => CheckedIntTy {
+            bits: 16,
+            signed: false,
+        },
+        PrimTy::U32 => CheckedIntTy {
+            bits: 32,
+            signed: false,
+        },
+        PrimTy::U64 => CheckedIntTy {
+            bits: 64,
+            signed: false,
+        },
+        PrimTy::U128 => CheckedIntTy {
+            bits: 128,
+            signed: false,
+        },
+        PrimTy::U256 | PrimTy::Usize => CheckedIntTy {
+            bits: 256,
+            signed: false,
+        },
+        PrimTy::I8 => CheckedIntTy {
+            bits: 8,
+            signed: true,
+        },
+        PrimTy::I16 => CheckedIntTy {
+            bits: 16,
+            signed: true,
+        },
+        PrimTy::I32 => CheckedIntTy {
+            bits: 32,
+            signed: true,
+        },
+        PrimTy::I64 => CheckedIntTy {
+            bits: 64,
+            signed: true,
+        },
+        PrimTy::I128 => CheckedIntTy {
+            bits: 128,
+            signed: true,
+        },
+        PrimTy::I256 | PrimTy::Isize => CheckedIntTy {
+            bits: 256,
+            signed: true,
+        },
+        _ => return None,
+    })
+}
+
+fn u256_modulus() -> BigUint {
+    BigUint::one() << 256usize
+}
+
+fn signed_bounds(ty: CheckedIntTy) -> (BigInt, BigInt) {
+    debug_assert!(ty.signed);
+    let half = BigInt::one() << ((ty.bits - 1) as usize);
+    let min = -half.clone();
+    let max = half - BigInt::one();
+    (min, max)
+}
+
+fn unsigned_max(ty: CheckedIntTy) -> BigInt {
+    debug_assert!(!ty.signed);
+    (BigInt::one() << (ty.bits as usize)) - BigInt::one()
+}
+
+fn int_in_range(value: &BigInt, ty: CheckedIntTy) -> bool {
+    if ty.signed {
+        let (min, max) = signed_bounds(ty);
+        value >= &min && value <= &max
+    } else {
+        value >= &BigInt::zero() && value <= &unsigned_max(ty)
+    }
+}
+
+fn bigint_to_u256_word(value: &BigInt) -> Option<BigUint> {
+    let modulus = u256_modulus();
+    match value.sign() {
+        Sign::Minus => {
+            let abs = value.magnitude();
+            if abs > &modulus {
+                return None;
+            }
+            if abs.is_zero() {
+                Some(BigUint::zero())
+            } else {
+                Some(&modulus - abs)
+            }
+        }
+        _ => value
+            .to_biguint()
+            .and_then(|value| (value < modulus).then_some(value)),
+    }
+}
+
+fn u256_word_to_bigint(word: &BigUint, ty: CheckedIntTy) -> BigInt {
+    if !ty.signed {
+        return BigInt::from(word.clone());
+    }
+
+    let bits = ty.bits as usize;
+    let mask = if bits == 256 {
+        (BigUint::one() << 256usize) - BigUint::one()
+    } else {
+        (BigUint::one() << bits) - BigUint::one()
+    };
+    let value_bits = word & mask;
+    let sign_bit = BigUint::one() << ((ty.bits - 1) as usize);
+    if (value_bits.clone() & sign_bit).is_zero() {
+        BigInt::from(value_bits)
+    } else {
+        BigInt::from(value_bits) - (BigInt::one() << bits)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ConstIntError {
+    Overflow,
+    DivisionByZero,
+    NegativeExponent,
+    /// The expression is not a pure integer expression. Callers may fall
+    /// through to full CTFE rather than reporting an arithmetic error.
+    NotIntExpr,
+}
+
+fn invalid_cause_from_const_int_error<'db>(
+    body: Body<'db>,
+    expr: ExprId,
+    err: ConstIntError,
+) -> Option<InvalidCause<'db>> {
+    match err {
+        ConstIntError::Overflow => Some(InvalidCause::ConstEvalArithmeticOverflow { body, expr }),
+        ConstIntError::DivisionByZero => Some(InvalidCause::ConstEvalDivisionByZero { body, expr }),
+        ConstIntError::NegativeExponent => {
+            Some(InvalidCause::ConstEvalNegativeExponent { body, expr })
+        }
+        ConstIntError::NotIntExpr => None,
+    }
+}
+
+fn eval_int_expr<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    expr: &Expr<'db>,
+    expected: Option<CheckedIntTy>,
+    generic_args: &[TyId<'db>],
+) -> Result<BigInt, ConstIntError> {
+    match expr {
+        Expr::Block(stmts) => {
+            let [stmt] = stmts.as_slice() else {
+                return Err(ConstIntError::NotIntExpr);
+            };
+            let Partial::Present(stmt) = stmt.data(db, body) else {
+                return Err(ConstIntError::NotIntExpr);
+            };
+            let Stmt::Expr(expr_id) = stmt else {
+                return Err(ConstIntError::NotIntExpr);
+            };
+            let Partial::Present(inner) = expr_id.data(db, body) else {
+                return Err(ConstIntError::NotIntExpr);
+            };
+            eval_int_expr(db, body, inner, expected, generic_args)
+        }
+        Expr::Lit(LitKind::Int(value)) => Ok(BigInt::from(value.data(db).clone())),
+        Expr::Un(inner, op) => {
+            let Partial::Present(inner) = inner.data(db, body) else {
+                return Err(ConstIntError::Overflow);
+            };
+            let value = eval_int_expr(db, body, inner, expected, generic_args)?;
+            match op {
+                crate::core::hir_def::expr::UnOp::Minus => {
+                    let Some(expected) = expected else {
+                        return Err(ConstIntError::Overflow);
+                    };
+                    let value = -value;
+                    int_in_range(&value, expected)
+                        .then_some(value)
+                        .ok_or(ConstIntError::Overflow)
+                }
+                crate::core::hir_def::expr::UnOp::Plus => Ok(value),
+                _ => Err(ConstIntError::NotIntExpr),
+            }
+        }
+        Expr::Bin(lhs_id, rhs_id, op) => {
+            let Partial::Present(lhs) = lhs_id.data(db, body) else {
+                return Err(ConstIntError::Overflow);
+            };
+            let Partial::Present(rhs) = rhs_id.data(db, body) else {
+                return Err(ConstIntError::Overflow);
+            };
+            let expected = expected.unwrap_or(CheckedIntTy {
+                bits: 256,
+                signed: false,
+            });
+            let lhs = eval_int_expr(db, body, lhs, Some(expected), generic_args)?;
+            let rhs = eval_int_expr(db, body, rhs, Some(expected), generic_args)?;
+
+            let result = match op {
+                crate::core::hir_def::expr::BinOp::Arith(op) => match op {
+                    crate::core::hir_def::expr::ArithBinOp::Add => lhs + rhs,
+                    crate::core::hir_def::expr::ArithBinOp::Sub => lhs - rhs,
+                    crate::core::hir_def::expr::ArithBinOp::Mul => lhs * rhs,
+                    crate::core::hir_def::expr::ArithBinOp::Div => {
+                        if rhs.is_zero() {
+                            return Err(ConstIntError::DivisionByZero);
+                        }
+                        if expected.signed {
+                            let (min, _) = signed_bounds(expected);
+                            if lhs == min && rhs == -BigInt::one() {
+                                return Err(ConstIntError::Overflow);
+                            }
+                        }
+                        lhs / rhs
+                    }
+                    crate::core::hir_def::expr::ArithBinOp::Rem => {
+                        if rhs.is_zero() {
+                            return Err(ConstIntError::DivisionByZero);
+                        }
+                        lhs % rhs
+                    }
+                    crate::core::hir_def::expr::ArithBinOp::Pow => {
+                        if rhs.sign() == Sign::Minus {
+                            return Err(ConstIntError::NegativeExponent);
+                        }
+                        let Some(mut exp) = rhs.to_biguint() else {
+                            return Err(ConstIntError::NegativeExponent);
+                        };
+                        let mut result = BigInt::one();
+                        let mut base = lhs;
+                        while !exp.is_zero() {
+                            if (&exp & BigUint::one()) == BigUint::one() {
+                                result *= base.clone();
+                                if !int_in_range(&result, expected) {
+                                    return Err(ConstIntError::Overflow);
+                                }
+                            }
+                            exp >>= 1usize;
+                            if exp.is_zero() {
+                                break;
+                            }
+                            base = base.clone() * base;
+                            if !int_in_range(&base, expected) {
+                                return Err(ConstIntError::Overflow);
+                            }
+                        }
+                        return Ok(result);
+                    }
+                    _ => return Err(ConstIntError::NotIntExpr),
+                },
+                _ => return Err(ConstIntError::NotIntExpr),
+            };
+            int_in_range(&result, expected)
+                .then_some(result)
+                .ok_or(ConstIntError::Overflow)
+        }
+        Expr::Path(path) => {
+            if !generic_args.is_empty() {
+                return Err(ConstIntError::NotIntExpr);
+            }
+            let Some(path) = path.to_opt() else {
+                return Err(ConstIntError::NotIntExpr);
+            };
+            let assumptions = assumptions_for_body(db, body);
+            let resolved = resolve_path(db, path, body.scope(), assumptions, true)
+                .map_err(|_| ConstIntError::NotIntExpr)?;
+            let const_ty = match resolved {
+                PathRes::Const(const_def, declared_ty) => {
+                    let body = const_def
+                        .body(db)
+                        .to_opt()
+                        .ok_or(ConstIntError::NotIntExpr)?;
+                    ConstTyId::from_body(db, body, Some(declared_ty), Some(const_def))
+                }
+                PathRes::TraitConst(_, inst, name) => {
+                    let solve_cx =
+                        TraitSolveCx::new(db, body.scope()).with_assumptions(assumptions);
+                    const_ty_from_trait_const(db, solve_cx, inst, name)
+                        .ok_or(ConstIntError::NotIntExpr)?
+                }
+                PathRes::InherentConst(recv_ty, impl_, name) => {
+                    const_ty_from_inherent_const(db, impl_, recv_ty, name)
+                        .ok_or(ConstIntError::NotIntExpr)?
+                }
+                _ => return Err(ConstIntError::NotIntExpr),
+            };
+            match const_ty.evaluate(db, None).data(db) {
+                ConstTyData::Evaluated(EvaluatedConstTy::LitInt(value), _) => {
+                    Ok(u256_word_to_bigint(
+                        value.data(db),
+                        expected.unwrap_or(CheckedIntTy {
+                            bits: 256,
+                            signed: false,
+                        }),
+                    ))
+                }
+                _ => Err(ConstIntError::NotIntExpr),
+            }
+        }
+        _ => Err(ConstIntError::NotIntExpr),
+    }
+}
+
+pub(super) fn try_eval_const_int_expr<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    expr: ExprId,
+    expected_ty: TyId<'db>,
+) -> Option<BigInt> {
+    let Partial::Present(expr) = expr.data(db, body) else {
+        return None;
+    };
+    eval_int_expr(
+        db,
+        body,
+        expr,
+        checked_int_ty_from_ty(db, Some(expected_ty)),
+        &[],
+    )
+    .ok()
+}
+
 #[salsa::tracked(cycle_initial=evaluate_const_ty_cycle_initial, cycle_fn=evaluate_const_ty_cycle_recover)]
 pub(crate) fn evaluate_const_ty<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -1321,369 +1911,6 @@ pub(crate) fn evaluate_const_ty<'db>(
     };
 
     let expr = expr.clone();
-
-    #[derive(Clone, Copy, Debug)]
-    struct CheckedIntTy {
-        bits: u16,
-        signed: bool,
-    }
-
-    fn checked_int_ty_from_ty<'db>(
-        db: &'db dyn HirAnalysisDb,
-        expected: Option<TyId<'db>>,
-    ) -> Option<CheckedIntTy> {
-        let expected = expected?;
-        let base_ty = expected.base_ty(db);
-        let TyData::TyBase(TyBase::Prim(prim)) = base_ty.data(db) else {
-            return None;
-        };
-        Some(match prim {
-            // unsigned
-            PrimTy::U8 => CheckedIntTy {
-                bits: 8,
-                signed: false,
-            },
-            PrimTy::U16 => CheckedIntTy {
-                bits: 16,
-                signed: false,
-            },
-            PrimTy::U32 => CheckedIntTy {
-                bits: 32,
-                signed: false,
-            },
-            PrimTy::U64 => CheckedIntTy {
-                bits: 64,
-                signed: false,
-            },
-            PrimTy::U128 => CheckedIntTy {
-                bits: 128,
-                signed: false,
-            },
-            PrimTy::U256 | PrimTy::Usize => CheckedIntTy {
-                bits: 256,
-                signed: false,
-            },
-            // signed
-            PrimTy::I8 => CheckedIntTy {
-                bits: 8,
-                signed: true,
-            },
-            PrimTy::I16 => CheckedIntTy {
-                bits: 16,
-                signed: true,
-            },
-            PrimTy::I32 => CheckedIntTy {
-                bits: 32,
-                signed: true,
-            },
-            PrimTy::I64 => CheckedIntTy {
-                bits: 64,
-                signed: true,
-            },
-            PrimTy::I128 => CheckedIntTy {
-                bits: 128,
-                signed: true,
-            },
-            PrimTy::I256 | PrimTy::Isize => CheckedIntTy {
-                bits: 256,
-                signed: true,
-            },
-            _ => return None,
-        })
-    }
-
-    fn u256_modulus() -> BigUint {
-        BigUint::one() << 256usize
-    }
-
-    fn signed_bounds(ty: CheckedIntTy) -> (BigInt, BigInt) {
-        debug_assert!(ty.signed);
-        let half = BigInt::one() << ((ty.bits - 1) as usize);
-        let min = -half.clone();
-        let max = half - BigInt::one();
-        (min, max)
-    }
-
-    fn unsigned_max(ty: CheckedIntTy) -> BigInt {
-        debug_assert!(!ty.signed);
-        (BigInt::one() << (ty.bits as usize)) - BigInt::one()
-    }
-
-    fn in_range(value: &BigInt, ty: CheckedIntTy) -> bool {
-        if ty.signed {
-            let (min, max) = signed_bounds(ty);
-            value >= &min && value <= &max
-        } else {
-            value >= &BigInt::zero() && value <= &unsigned_max(ty)
-        }
-    }
-
-    fn bigint_to_u256_word(value: &BigInt) -> Option<BigUint> {
-        let modulus = u256_modulus();
-        match value.sign() {
-            Sign::Minus => {
-                let abs = value.magnitude();
-                if abs > &modulus {
-                    return None;
-                }
-                if abs.is_zero() {
-                    Some(BigUint::zero())
-                } else {
-                    Some(&modulus - abs)
-                }
-            }
-            _ => value.to_biguint().and_then(|v| (v < modulus).then_some(v)),
-        }
-    }
-
-    fn u256_word_to_bigint(word: &BigUint, ty: CheckedIntTy) -> BigInt {
-        if !ty.signed {
-            return BigInt::from(word.clone());
-        }
-
-        let bits = ty.bits as usize;
-        let mask = if bits == 256 {
-            (BigUint::one() << 256usize) - BigUint::one()
-        } else {
-            (BigUint::one() << (ty.bits as usize)) - BigUint::one()
-        };
-        let value_bits = word & mask;
-        let sign_bit = BigUint::one() << ((ty.bits - 1) as usize);
-        if (value_bits.clone() & sign_bit).is_zero() {
-            BigInt::from(value_bits)
-        } else {
-            BigInt::from(value_bits) - (BigInt::one() << (ty.bits as usize))
-        }
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    enum ConstIntError {
-        Overflow,
-        DivisionByZero,
-        NegativeExponent,
-        /// The expression is not a pure integer expression (e.g. contains
-        /// function calls). Fall through to CTFE instead of reporting an error.
-        NotIntExpr,
-    }
-
-    fn invalid_cause_from_const_int_error<'db>(
-        body: Body<'db>,
-        expr: ExprId,
-        err: ConstIntError,
-    ) -> Option<InvalidCause<'db>> {
-        match err {
-            ConstIntError::Overflow => {
-                Some(InvalidCause::ConstEvalArithmeticOverflow { body, expr })
-            }
-            ConstIntError::DivisionByZero => {
-                Some(InvalidCause::ConstEvalDivisionByZero { body, expr })
-            }
-            ConstIntError::NegativeExponent => {
-                Some(InvalidCause::ConstEvalNegativeExponent { body, expr })
-            }
-            ConstIntError::NotIntExpr => None,
-        }
-    }
-
-    fn eval_int_expr<'db>(
-        db: &'db dyn HirAnalysisDb,
-        body: Body<'db>,
-        expr: &Expr<'db>,
-        expected: Option<CheckedIntTy>,
-        generic_args: &[TyId<'db>],
-    ) -> Result<BigInt, ConstIntError> {
-        match expr {
-            Expr::Block(stmts) => {
-                let [stmt] = stmts.as_slice() else {
-                    return Err(ConstIntError::NotIntExpr);
-                };
-                let Partial::Present(stmt) = stmt.data(db, body) else {
-                    return Err(ConstIntError::NotIntExpr);
-                };
-                let Stmt::Expr(expr_id) = stmt else {
-                    return Err(ConstIntError::NotIntExpr);
-                };
-                let Partial::Present(inner) = expr_id.data(db, body) else {
-                    return Err(ConstIntError::NotIntExpr);
-                };
-                eval_int_expr(db, body, inner, expected, generic_args)
-            }
-
-            Expr::Lit(LitKind::Int(i)) => Ok(BigInt::from(i.data(db).clone())),
-
-            Expr::Un(inner, op) => {
-                let Partial::Present(inner) = inner.data(db, body) else {
-                    return Err(ConstIntError::Overflow);
-                };
-                let value = eval_int_expr(db, body, inner, expected, generic_args)?;
-                match op {
-                    crate::core::hir_def::expr::UnOp::Minus => {
-                        let Some(expected) = expected else {
-                            return Err(ConstIntError::Overflow);
-                        };
-                        let neg = -value;
-                        if !in_range(&neg, expected) {
-                            return Err(ConstIntError::Overflow);
-                        }
-                        Ok(neg)
-                    }
-                    crate::core::hir_def::expr::UnOp::Plus => Ok(value),
-                    _ => Err(ConstIntError::NotIntExpr),
-                }
-            }
-
-            Expr::Bin(lhs_id, rhs_id, op) => {
-                let Partial::Present(lhs) = lhs_id.data(db, body) else {
-                    return Err(ConstIntError::Overflow);
-                };
-                let Partial::Present(rhs) = rhs_id.data(db, body) else {
-                    return Err(ConstIntError::Overflow);
-                };
-                let expected = expected.unwrap_or(CheckedIntTy {
-                    bits: 256,
-                    signed: false,
-                });
-
-                let lhs = eval_int_expr(db, body, lhs, Some(expected), generic_args)?;
-                let rhs = eval_int_expr(db, body, rhs, Some(expected), generic_args)?;
-
-                match op {
-                    crate::core::hir_def::expr::BinOp::Arith(op) => match op {
-                        crate::core::hir_def::expr::ArithBinOp::Add => {
-                            let result = lhs + rhs;
-                            if !in_range(&result, expected) {
-                                Err(ConstIntError::Overflow)
-                            } else {
-                                Ok(result)
-                            }
-                        }
-                        crate::core::hir_def::expr::ArithBinOp::Sub => {
-                            let result = lhs - rhs;
-                            if !in_range(&result, expected) {
-                                Err(ConstIntError::Overflow)
-                            } else {
-                                Ok(result)
-                            }
-                        }
-                        crate::core::hir_def::expr::ArithBinOp::Mul => {
-                            let result = lhs * rhs;
-                            if !in_range(&result, expected) {
-                                Err(ConstIntError::Overflow)
-                            } else {
-                                Ok(result)
-                            }
-                        }
-                        crate::core::hir_def::expr::ArithBinOp::Div => {
-                            if rhs.is_zero() {
-                                return Err(ConstIntError::DivisionByZero);
-                            }
-                            if expected.signed {
-                                let (min, _) = signed_bounds(expected);
-                                if lhs == min && rhs == -BigInt::one() {
-                                    return Err(ConstIntError::Overflow);
-                                }
-                            }
-                            let result = lhs / rhs;
-                            if !in_range(&result, expected) {
-                                Err(ConstIntError::Overflow)
-                            } else {
-                                Ok(result)
-                            }
-                        }
-                        crate::core::hir_def::expr::ArithBinOp::Rem => {
-                            if rhs.is_zero() {
-                                return Err(ConstIntError::DivisionByZero);
-                            }
-                            let result = lhs % rhs;
-                            if !in_range(&result, expected) {
-                                Err(ConstIntError::Overflow)
-                            } else {
-                                Ok(result)
-                            }
-                        }
-                        crate::core::hir_def::expr::ArithBinOp::Pow => {
-                            if rhs.sign() == Sign::Minus {
-                                return Err(ConstIntError::NegativeExponent);
-                            }
-                            let Some(exp) = rhs.to_biguint() else {
-                                return Err(ConstIntError::NegativeExponent);
-                            };
-                            let mut acc = BigInt::one();
-                            let mut base = lhs;
-                            let mut exp = exp;
-                            while !exp.is_zero() {
-                                if (&exp & BigUint::one()) == BigUint::one() {
-                                    acc *= base.clone();
-                                    if !in_range(&acc, expected) {
-                                        return Err(ConstIntError::Overflow);
-                                    }
-                                }
-                                exp >>= 1usize;
-                                if exp.is_zero() {
-                                    break;
-                                }
-                                base = base.clone() * base;
-                                if !in_range(&base, expected) {
-                                    return Err(ConstIntError::Overflow);
-                                }
-                            }
-                            Ok(acc)
-                        }
-                        _ => Err(ConstIntError::NotIntExpr),
-                    },
-                    _ => Err(ConstIntError::NotIntExpr),
-                }
-            }
-
-            Expr::Path(path) => {
-                if !generic_args.is_empty() {
-                    return Err(ConstIntError::NotIntExpr);
-                }
-                let Some(path) = path.to_opt() else {
-                    return Err(ConstIntError::NotIntExpr);
-                };
-                let assumptions = assumptions_for_body(db, body);
-                let resolved = resolve_path(db, path, body.scope(), assumptions, true)
-                    .map_err(|_| ConstIntError::NotIntExpr)?;
-
-                let const_ty = match resolved {
-                    PathRes::Const(const_def, declared_ty) => {
-                        let body = const_def
-                            .body(db)
-                            .to_opt()
-                            .ok_or(ConstIntError::NotIntExpr)?;
-                        ConstTyId::from_body(db, body, Some(declared_ty), Some(const_def))
-                    }
-                    PathRes::TraitConst(_recv_ty, inst, name) => {
-                        let solve_cx =
-                            TraitSolveCx::new(db, body.scope()).with_assumptions(assumptions);
-                        const_ty_from_trait_const(db, solve_cx, inst, name)
-                            .ok_or(ConstIntError::NotIntExpr)?
-                    }
-                    PathRes::InherentConst(recv_ty, impl_, name) => {
-                        const_ty_from_inherent_const(db, impl_, recv_ty, name)
-                            .ok_or(ConstIntError::NotIntExpr)?
-                    }
-                    _ => return Err(ConstIntError::NotIntExpr),
-                };
-
-                let evaluated = const_ty.evaluate(db, None);
-                match evaluated.data(db) {
-                    ConstTyData::Evaluated(EvaluatedConstTy::LitInt(i), _) => {
-                        let word = i.data(db);
-                        let expected_for_interpretation = expected.unwrap_or(CheckedIntTy {
-                            bits: 256,
-                            signed: false,
-                        });
-                        Ok(u256_word_to_bigint(word, expected_for_interpretation))
-                    }
-                    _ => Err(ConstIntError::NotIntExpr),
-                }
-            }
-
-            _ => Err(ConstIntError::NotIntExpr),
-        }
-    }
 
     if generic_args.is_empty()
         && let Expr::Path(path) = &expr
@@ -1874,10 +2101,17 @@ pub(crate) fn evaluate_const_ty<'db>(
             body,
             expected: validated.expected_ty,
         },
-        generic_args,
+        generic_args.clone(),
     )
-    .map(|value| const_ty_from_sem_const(db, value))
-    {
+    .map(|value| {
+        let evaluated = const_ty_from_sem_const(db, value);
+        let instantiated =
+            instantiate_with_generic_args(db, TyId::const_ty(db, evaluated), &generic_args);
+        let TyData::ConstTy(instantiated) = instantiated.data(db) else {
+            unreachable!("instantiating a const value must retain its const type")
+        };
+        *instantiated
+    }) {
         Ok(value) => value,
         Err(CtfeError::NotConstEvaluable { .. }) => validated.const_ty,
         Err(err) => {
@@ -2306,26 +2540,37 @@ pub(super) fn const_ty_from_trait_const<'db>(
     inst: TraitInstId<'db>,
     name: IdentId<'db>,
 ) -> Option<ConstTyId<'db>> {
-    let trait_ = inst.def(db);
-    let selected = crate::analysis::ty::trait_def::assoc_const_body_and_impl_args_for_trait_inst(
-        db, solve_cx, inst, name,
-    );
-    let (body, generic_args) = if let Some(selected) = selected {
-        selected
-    } else if crate::analysis::ty::trait_def::trait_inst_selects_concrete_impl(db, solve_cx, inst) {
-        // A concrete impl is selected but inherits the trait default for this
-        // const, so the default is its value. (When the instance is satisfied
-        // only by an assumption, e.g. `T: Trait`, no concrete impl is selected:
-        // fall through to `None` so the const stays abstract and a later
-        // overriding impl specializes correctly instead of being fixed to the
-        // default.)
-        trait_
-            .const_(db, name)
-            .and_then(|c| c.default_body(db))
-            .map(|body| (body, inst.args(db).clone()))?
-    } else {
+    let Selection::Unique(resolved) =
+        crate::analysis::ty::trait_def::resolve_trait_impl_instance(db, solve_cx, inst)
+    else {
         return None;
     };
+    const_ty_from_resolved_trait_const(db, resolved, name)
+}
+
+pub(super) fn const_ty_from_resolved_trait_const<'db>(
+    db: &'db dyn HirAnalysisDb,
+    resolved: ResolvedImplInstance<'db>,
+    name: IdentId<'db>,
+) -> Option<ConstTyId<'db>> {
+    let inst = resolved.trait_inst();
+    let trait_ = inst.def(db);
+    let explicit = match resolved.selected().origin(db) {
+        ImplementorOrigin::Hir(impl_trait) => impl_trait
+            .hir_consts(db)
+            .iter()
+            .find(|const_| const_.name.to_opt() == Some(name))
+            .and_then(|const_| const_.value.to_opt())
+            .map(|body| (body, resolved.impl_args(db).to_vec())),
+        ImplementorOrigin::VirtualContract(_) => None,
+        ImplementorOrigin::Assumption => return None,
+    };
+    let (body, generic_args) = explicit.or_else(|| {
+        trait_
+            .const_(db, name)
+            .and_then(|const_| const_.default_body(db))
+            .map(|body| (body, inst.args(db).to_vec()))
+    })?;
 
     let declared_ty = trait_
         .const_(db, name)
@@ -2589,12 +2834,13 @@ impl<'db> ConstTyId<'db> {
         const_def: Option<Const<'db>>,
         generic_args: Vec<TyId<'db>>,
     ) -> Self {
-        Self::from_body_with_generic_args_and_preservation(
+        Self::from_body_with_generic_args_and_options(
             db,
             body,
             ty,
             const_def,
             generic_args,
+            false,
             false,
         )
     }
@@ -2607,12 +2853,33 @@ impl<'db> ConstTyId<'db> {
         generic_args: Vec<TyId<'db>>,
         preserve_unevaluated: bool,
     ) -> Self {
+        Self::from_body_with_generic_args_and_options(
+            db,
+            body,
+            ty,
+            const_def,
+            generic_args,
+            preserve_unevaluated,
+            false,
+        )
+    }
+
+    fn from_body_with_generic_args_and_options(
+        db: &'db dyn HirAnalysisDb,
+        body: Body<'db>,
+        ty: Option<TyId<'db>>,
+        const_def: Option<Const<'db>>,
+        generic_args: Vec<TyId<'db>>,
+        preserve_unevaluated: bool,
+        defer_validation: bool,
+    ) -> Self {
         let data = ConstTyData::UnEvaluated {
             body,
             ty,
             const_def,
             generic_args,
             preserve_unevaluated,
+            defer_validation,
         };
         Self::new(db, data)
     }
@@ -2639,6 +2906,26 @@ impl<'db> ConstTyId<'db> {
                 None,
                 generic_args,
                 preserve_unevaluated,
+            ),
+            Partial::Absent => Self::invalid(db, InvalidCause::ParseError),
+        }
+    }
+
+    pub(super) fn from_opt_body_deferred(
+        db: &'db dyn HirAnalysisDb,
+        body: Partial<Body<'db>>,
+        ty: Option<TyId<'db>>,
+        generic_args: Vec<TyId<'db>>,
+    ) -> Self {
+        match body {
+            Partial::Present(body) => Self::from_body_with_generic_args_and_options(
+                db,
+                body,
+                ty,
+                None,
+                generic_args,
+                true,
+                true,
             ),
             Partial::Absent => Self::invalid(db, InvalidCause::ParseError),
         }
@@ -2671,9 +2958,14 @@ impl<'db> ConstTyId<'db> {
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
         origin: StructuralHoleOrigin<'db>,
-        identity: (HoleAnchor<'db>, u32),
+        introduced_at: LayoutIntroSite<'db>,
+        root: LayoutRootId<'db>,
     ) -> Self {
-        Self::hole_with_id(db, ty, HoleId::structural(db, ty, origin, identity))
+        Self::hole_with_id(
+            db,
+            ty,
+            HoleId::structural(db, ty, origin, introduced_at, root),
+        )
     }
 
     pub fn bound_callable_hole(
@@ -2693,13 +2985,15 @@ impl<'db> ConstTyId<'db> {
             ConstTyData::Hole(_, hole_id) => ConstTyData::Hole(
                 ty,
                 match hole_id {
-                    HoleId::Structural(hole_id) => HoleId::Structural(StructuralHoleId::new(
-                        db,
-                        ty,
-                        hole_id.origin(db),
-                        hole_id.anchor(db),
-                        hole_id.ordinal(db),
-                    )),
+                    HoleId::Structural(hole_id) => {
+                        HoleId::Structural(StructuralHoleId::with_intro(
+                            db,
+                            ty,
+                            hole_id.root(db),
+                            hole_id.origin(db),
+                            hole_id.introduced_at(db).clone(),
+                        ))
+                    }
                     HoleId::Bound(hole_id) => HoleId::Bound(*hole_id),
                 },
             ),
@@ -2710,6 +3004,7 @@ impl<'db> ConstTyId<'db> {
                 const_def,
                 generic_args,
                 preserve_unevaluated,
+                defer_validation,
                 ..
             } => ConstTyData::UnEvaluated {
                 body: *body,
@@ -2717,6 +3012,7 @@ impl<'db> ConstTyId<'db> {
                 const_def: *const_def,
                 generic_args: generic_args.clone(),
                 preserve_unevaluated: *preserve_unevaluated,
+                defer_validation: *defer_validation,
             },
         };
 
@@ -2737,6 +3033,7 @@ pub enum ConstTyData<'db> {
         const_def: Option<Const<'db>>,
         generic_args: Vec<TyId<'db>>,
         preserve_unevaluated: bool,
+        defer_validation: bool,
     },
 }
 

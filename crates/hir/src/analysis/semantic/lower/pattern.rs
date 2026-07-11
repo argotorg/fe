@@ -15,9 +15,11 @@ use crate::{
             },
             normalize::normalize_ty,
             pattern_analysis::PatternMatrix,
-            pattern_ir::{ConstructorKind, ValidatedPatId},
+            pattern_ir::{ConstructorKind, PatternStore, ValidatedPatId, ValidatedPatKind},
             pattern_types::{
-                PatternProjectionStep, pattern_match_expected_ty, project_pattern_child_carrier_ty,
+                PatternProjectionStep, apply_pattern_borrow_mode, destructure_pattern_source,
+                pattern_match_expected_ty, project_pattern_child_carrier_ty,
+                project_pattern_child_source_ty,
             },
             ty_def::{PrimTy, TyBase, TyData, TyId},
         },
@@ -44,12 +46,112 @@ pub(super) struct PatternValue<'db> {
 #[derive(Clone)]
 struct DecisionTreeProjectionCache<'db> {
     entries: Vec<(ProjectionPath<'db>, PatternValue<'db>)>,
+    carrier_tys: Vec<(ProjectionPath<'db>, TyId<'db>)>,
+}
+
+fn assigned_pattern_child_carrier_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    pattern_store: &PatternStore<'db>,
+    parent_carrier_ty: TyId<'db>,
+    child: ValidatedPatId,
+    projection: PatternProjectionStep<'db>,
+) -> TyId<'db> {
+    let (container_ty, parent_mode) = destructure_pattern_source(db, parent_carrier_ty);
+    let projected_source = project_pattern_child_source_ty(db, container_ty, projection);
+    let (_, child_mode) = destructure_pattern_source(db, projected_source);
+    let assigned_match = pattern_store.node(child).match_ty().raw();
+    let assigned_carrier = apply_pattern_borrow_mode(db, child_mode, assigned_match);
+    apply_pattern_borrow_mode(db, parent_mode, assigned_carrier)
 }
 
 impl<'db> DecisionTreeProjectionCache<'db> {
-    fn new(root_value: PatternValue<'db>) -> Self {
-        Self {
+    fn new(
+        db: &'db dyn HirAnalysisDb,
+        pattern_store: &PatternStore<'db>,
+        roots: &[ValidatedPatId],
+        root_value: PatternValue<'db>,
+    ) -> Self {
+        let mut cache = Self {
             entries: vec![(ProjectionPath::default(), root_value)],
+            carrier_tys: vec![(ProjectionPath::default(), root_value.carrier_ty.0)],
+        };
+        for root in roots {
+            cache.collect_pattern_carrier_tys(
+                db,
+                pattern_store,
+                *root,
+                root_value.carrier_ty.0,
+                &ProjectionPath::default(),
+            );
+        }
+        cache
+    }
+
+    fn collect_pattern_carrier_tys(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        pattern_store: &PatternStore<'db>,
+        pat: ValidatedPatId,
+        carrier_ty: TyId<'db>,
+        path: &ProjectionPath<'db>,
+    ) {
+        match pattern_store.node(pat).kind() {
+            ValidatedPatKind::Wildcard { .. } => {}
+            ValidatedPatKind::Or(pats) => {
+                for pat in pats {
+                    self.collect_pattern_carrier_tys(db, pattern_store, *pat, carrier_ty, path);
+                }
+            }
+            ValidatedPatKind::Constructor { ctor, fields } => {
+                for (field_idx, field) in fields.iter().copied().enumerate() {
+                    let (projection, pattern_projection) = match ctor {
+                        ConstructorKind::Variant(variant, enum_ty) => (
+                            Projection::VariantField {
+                                variant: *variant,
+                                enum_ty: *enum_ty,
+                                field_idx,
+                            },
+                            PatternProjectionStep::VariantField {
+                                variant: *variant,
+                                field_idx,
+                            },
+                        ),
+                        ConstructorKind::Type(_) => (
+                            Projection::Field(field_idx),
+                            PatternProjectionStep::Field(field_idx),
+                        ),
+                        ConstructorKind::Literal(..) => continue,
+                    };
+                    let child_ty = assigned_pattern_child_carrier_ty(
+                        db,
+                        pattern_store,
+                        carrier_ty,
+                        field,
+                        pattern_projection,
+                    );
+                    let mut child_path = path.clone();
+                    child_path.push(projection);
+                    if let Some((_, existing)) = self
+                        .carrier_tys
+                        .iter()
+                        .find(|(existing_path, _)| existing_path == &child_path)
+                    {
+                        assert_eq!(
+                            *existing, child_ty,
+                            "one decision-tree projection must have one carrier type"
+                        );
+                    } else {
+                        self.carrier_tys.push((child_path.clone(), child_ty));
+                    }
+                    self.collect_pattern_carrier_tys(
+                        db,
+                        pattern_store,
+                        field,
+                        child_ty,
+                        &child_path,
+                    );
+                }
+            }
         }
     }
 
@@ -63,6 +165,12 @@ impl<'db> DecisionTreeProjectionCache<'db> {
         if self.get(&path).is_none() {
             self.entries.push((path, value));
         }
+    }
+
+    fn carrier_ty(&self, path: &ProjectionPath<'db>) -> Option<TyId<'db>> {
+        self.carrier_tys
+            .iter()
+            .find_map(|(candidate, ty)| (candidate == path).then_some(*ty))
     }
 
     fn longest_prefix(
@@ -122,12 +230,15 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         &mut self,
         base: PatternValue<'db>,
         field_idx: usize,
+        assigned_ty: Option<TyId<'db>>,
     ) -> PatternValue<'db> {
-        let ty = project_pattern_child_carrier_ty(
-            self.db,
-            base.carrier_ty.0,
-            PatternProjectionStep::Field(field_idx),
-        );
+        let ty = assigned_ty.unwrap_or_else(|| {
+            project_pattern_child_carrier_ty(
+                self.db,
+                base.carrier_ty.0,
+                PatternProjectionStep::Field(field_idx),
+            )
+        });
         let value = self.emit_expr(
             ty,
             SExpr::Field {
@@ -146,12 +257,15 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         base: PatternValue<'db>,
         variant: crate::hir_def::EnumVariant<'db>,
         field_idx: usize,
+        assigned_ty: Option<TyId<'db>>,
     ) -> PatternValue<'db> {
-        let ty = project_pattern_child_carrier_ty(
-            self.db,
-            base.carrier_ty.0,
-            PatternProjectionStep::VariantField { variant, field_idx },
-        );
+        let ty = assigned_ty.unwrap_or_else(|| {
+            project_pattern_child_carrier_ty(
+                self.db,
+                base.carrier_ty.0,
+                PatternProjectionStep::VariantField { variant, field_idx },
+            )
+        });
         let value = self.emit_expr(
             ty,
             SExpr::ExtractEnumField {
@@ -196,6 +310,21 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         );
     }
 
+    fn validated_pattern_child_carrier_ty(
+        &self,
+        parent: PatternValue<'db>,
+        child: ValidatedPatId,
+        projection: PatternProjectionStep<'db>,
+    ) -> TyId<'db> {
+        assigned_pattern_child_carrier_ty(
+            self.db,
+            self.typed_body.pattern_store(),
+            parent.carrier_ty.0,
+            child,
+            projection,
+        )
+    }
+
     fn bind_validated_pattern(&mut self, pat: ValidatedPatId, value: PatternValue<'db>) {
         let pattern_store = self.typed_body.pattern_store();
         if let Some(binding) = pattern_store.wildcard_binding(pat).flatten() {
@@ -214,7 +343,20 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         let field_pat = pattern_store
                             .child(pat, idx)
                             .expect("pattern child should exist");
-                        let field = self.project_pattern_variant_field(value, variant, idx);
+                        let assigned_ty = self.validated_pattern_child_carrier_ty(
+                            value,
+                            field_pat,
+                            PatternProjectionStep::VariantField {
+                                variant,
+                                field_idx: idx,
+                            },
+                        );
+                        let field = self.project_pattern_variant_field(
+                            value,
+                            variant,
+                            idx,
+                            Some(assigned_ty),
+                        );
                         self.bind_validated_pattern(field_pat, field);
                     }
                 }
@@ -223,7 +365,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         let field_pat = pattern_store
                             .child(pat, idx)
                             .expect("pattern child should exist");
-                        let field = self.project_pattern_field(value, idx);
+                        let assigned_ty = self.validated_pattern_child_carrier_ty(
+                            value,
+                            field_pat,
+                            PatternProjectionStep::Field(idx),
+                        );
+                        let field = self.project_pattern_field(value, idx, Some(assigned_ty));
                         self.bind_validated_pattern(field_pat, field);
                     }
                 }
@@ -251,7 +398,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             self.db,
             &PatternMatrix::from_roots(self.typed_body.pattern_store(), &roots),
         );
-        let mut projections = DecisionTreeProjectionCache::new(value);
+        let mut projections = DecisionTreeProjectionCache::new(
+            self.db,
+            self.typed_body.pattern_store(),
+            &roots,
+            value,
+        );
         if !self.lower_decision_tree(&tree, &mut projections, result, join_bb, arms) {
             self.set_synthetic_terminator(join_bb, STerminatorKind::Goto(join_bb));
         }
@@ -525,7 +677,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             .iter()
         {
             current_path.push(projection.clone());
-            value = self.project_decision_tree_value(value, projection);
+            value = self.project_decision_tree_value(
+                value,
+                projection,
+                projections.carrier_ty(&current_path),
+            );
             projections.insert(current_path.clone(), value);
         }
         value
@@ -535,12 +691,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         &mut self,
         base: PatternValue<'db>,
         projection: &Projection<'db>,
+        assigned_ty: Option<TyId<'db>>,
     ) -> PatternValue<'db> {
         match projection {
-            Projection::Field(field) => self.project_pattern_field(base, *field),
+            Projection::Field(field) => self.project_pattern_field(base, *field, assigned_ty),
             Projection::VariantField {
                 variant, field_idx, ..
-            } => self.project_pattern_variant_field(base, *variant, *field_idx),
+            } => self.project_pattern_variant_field(base, *variant, *field_idx, assigned_ty),
             Projection::Discriminant => {
                 let ty = enum_tag_ty(
                     self.db,
@@ -590,7 +747,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
 
         let refutable_len = refutable_fields.len();
         for (idx, (field_idx, field_pat)) in refutable_fields.into_iter().enumerate() {
-            let field_value = self.project_pattern_field(value, field_idx);
+            let assigned_ty = self.validated_pattern_child_carrier_ty(
+                value,
+                field_pat,
+                PatternProjectionStep::Field(field_idx),
+            );
+            let field_value = self.project_pattern_field(value, field_idx, Some(assigned_ty));
             let next_then = if idx + 1 == refutable_len {
                 then_bb
             } else {
@@ -628,7 +790,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
 
         let refutable_len = refutable_fields.len();
         for (idx, (field_idx, field_pat)) in refutable_fields.into_iter().enumerate() {
-            let field_value = self.project_pattern_variant_field(value, variant, field_idx);
+            let assigned_ty = self.validated_pattern_child_carrier_ty(
+                value,
+                field_pat,
+                PatternProjectionStep::VariantField { variant, field_idx },
+            );
+            let field_value =
+                self.project_pattern_variant_field(value, variant, field_idx, Some(assigned_ty));
             let next_then = if idx + 1 == refutable_len {
                 then_bb
             } else {

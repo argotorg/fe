@@ -3,12 +3,14 @@ use hir::semantic::{RecvArmAbiInfo, RecvArmView};
 use hir::{
     analysis::{
         semantic::{
-            GenericSubst, ImplEnv, ManualContractSection, RootSemanticInstanceError,
-            SemanticInstance, SemanticInstanceKey, get_or_build_semantic_instance,
-            owner_effect_bindings, root_semantic_instance_key, same_owner_effect_binding,
+            GenericSubst, ImplEnv, LayoutEvidenceBase, ManualContractSection,
+            RootSemanticInstanceError, SemanticInstance, SemanticInstanceKey,
+            get_or_build_semantic_instance, owner_effect_bindings, root_semantic_instance_key,
+            same_owner_effect_binding,
         },
         ty::{
-            const_ty::ConstTyData,
+            CallableLayoutParamPort, LayoutEvidencePathStep,
+            const_ty::{CallableInputLayoutHoleOrigin, ConstTyData},
             corelib::{resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path},
             trait_def::{TraitInstId, resolve_trait_method_instance},
             trait_resolution::TraitSolveCx,
@@ -37,7 +39,7 @@ use crate::{
         RuntimeTypeEnv, provider_class_for_target_in_env, top_level_class_for_ty_in_env,
     },
     runtime::root_effects::{
-        EntryEffectContext, entry_effect_arg_plans, target_root_provider_materialization,
+        EntryEffectContext, entry_semantic_args_plan, target_root_provider_materialization,
     },
     runtime::stable_key::{
         item_identity, semantic_instance_identity, semantic_instance_symbol_identity,
@@ -45,12 +47,13 @@ use crate::{
     },
     runtime::{
         AddressSpaceKind, ConstRegionId, ContractInitAbiPlan, ContractRecvAbiPlan, DispatchArm,
-        DispatchDefault, EntryEffectArgPlan, InitArgsPlan, LayoutId, LayoutKey, RefKind, RefView,
-        ResolvedCodeRegion, RuntimeClass, RuntimeCodeRegion, RuntimeCodeRegionKey, RuntimeFunction,
-        RuntimeFunctionOwner, RuntimeInlineHint, RuntimeInputPlan, RuntimeLinkage, RuntimeObject,
-        RuntimePackage, RuntimePackagePlan, RuntimeReturnPlan, RuntimeSection, RuntimeSectionName,
-        RuntimeSectionRef, RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole,
-        TargetRootProviderBinding, TargetRootProviderMaterialization,
+        DispatchDefault, EntryEffectArgPlan, EntrySemanticArgsPlan, InitArgsPlan, LayoutId,
+        LayoutKey, RefKind, RefView, ResolvedCodeRegion, RuntimeClass, RuntimeCodeRegion,
+        RuntimeCodeRegionKey, RuntimeFunction, RuntimeFunctionOwner, RuntimeInlineHint,
+        RuntimeInputPlan, RuntimeLinkage, RuntimeObject, RuntimePackage, RuntimePackagePlan,
+        RuntimeReturnPlan, RuntimeSection, RuntimeSectionName, RuntimeSectionRef,
+        RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole, TargetRootProviderBinding,
+        TargetRootProviderMaterialization,
     },
     verify::verify_runtime_package,
 };
@@ -116,7 +119,6 @@ struct RuntimeGraph<'db> {
     // content-identical duplicates non-deterministic.
     nodes: IndexMap<RuntimeInstance<'db>, RuntimeGraphNode<'db>>,
     object_specs: Vec<(String, Vec<(RuntimeSectionName, RuntimeInstance<'db>)>)>,
-    code_region_roots: Vec<(RuntimeCodeRegion<'db>, RuntimeInstance<'db>)>,
 }
 
 struct RuntimeGraphBuilder<'db> {
@@ -126,8 +128,6 @@ struct RuntimeGraphBuilder<'db> {
     nodes: IndexMap<RuntimeInstance<'db>, RuntimeGraphNode<'db>>,
     object_specs: Vec<(String, Vec<(RuntimeSectionName, RuntimeInstance<'db>)>)>,
     discovered_contract_specs: Vec<(String, Vec<(RuntimeSectionName, RuntimeInstance<'db>)>)>,
-    code_region_roots: Vec<(RuntimeCodeRegion<'db>, RuntimeInstance<'db>)>,
-    seen_region_roots: FxHashSet<RuntimeCodeRegion<'db>>,
     materialized_contracts: FxHashSet<Contract<'db>>,
     materialized_object_names: FxHashSet<String>,
 }
@@ -150,8 +150,6 @@ impl<'db> RuntimeGraphBuilder<'db> {
             nodes: IndexMap::new(),
             object_specs,
             discovered_contract_specs: Vec::new(),
-            code_region_roots: Vec::new(),
-            seen_region_roots: FxHashSet::default(),
             materialized_contracts,
             materialized_object_names,
         };
@@ -194,12 +192,9 @@ impl<'db> RuntimeGraphBuilder<'db> {
         self.discovered_contract_specs
             .sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
         self.object_specs.extend(self.discovered_contract_specs);
-        self.code_region_roots
-            .sort_by_key(|(region, _)| code_region_symbol(self.db, *region));
         Ok(RuntimeGraph {
             nodes: self.nodes,
             object_specs: self.object_specs,
-            code_region_roots: self.code_region_roots,
         })
     }
 
@@ -213,16 +208,10 @@ impl<'db> RuntimeGraphBuilder<'db> {
         &mut self,
         regions: &[RuntimeCodeRegion<'db>],
     ) -> Result<(), LowerError> {
-        let mut function_roots = Vec::new();
         let mut referenced_contracts = Vec::new();
         let mut referenced_manual_roots = Vec::new();
         for region in regions.iter().copied() {
             match region.key(self.db) {
-                RuntimeCodeRegionKey::FunctionRoot { .. } => {
-                    if self.seen_region_roots.insert(region) {
-                        function_roots.push(region);
-                    }
-                }
                 RuntimeCodeRegionKey::ContractInit { contract }
                 | RuntimeCodeRegionKey::ContractRuntime { contract } => {
                     if self.materialized_contracts.insert(contract) {
@@ -233,21 +222,6 @@ impl<'db> RuntimeGraphBuilder<'db> {
                     referenced_manual_roots.push(func);
                 }
             }
-        }
-
-        function_roots.sort_by_key(|region| code_region_symbol(self.db, *region));
-        for region in function_roots {
-            let RuntimeCodeRegionKey::FunctionRoot { symbol, callee } = region.key(self.db).clone()
-            else {
-                unreachable!();
-            };
-            let root = synthetic_instance(
-                self.db,
-                RuntimeSyntheticSpec::CodeRegionRoot { symbol, callee },
-                Vec::new(),
-            );
-            self.code_region_roots.push((region, root));
-            self.enqueue(root);
         }
 
         referenced_contracts.sort_by_key(|contract| contract_name(self.db, *contract));
@@ -354,25 +328,25 @@ fn build_standalone_main_package<'db>(
     let mut roots = Vec::new();
     for &func in entry_funcs {
         let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(func))?;
-        let entry_effect_args =
-            entry_effect_arg_plans(db, EntryEffectContext::StandaloneFunc { func }, semantic)?;
+        let entry_args =
+            entry_semantic_args_plan(db, EntryEffectContext::StandaloneFunc { func }, semantic)?;
         roots.push((
             func,
             runtime_instance_for_semantic(db, semantic),
-            entry_effect_args,
+            entry_args,
         ));
     }
     let entry = roots
         .iter()
         .find(|(func, _, _)| is_main_func(db, *func))
         .or_else(|| roots.first())
-        .map(|(_, instance, entry_effect_args)| (*instance, entry_effect_args.clone()))
+        .map(|(_, instance, entry_args)| (*instance, entry_args.clone()))
         .expect("entry root candidates should include the chosen entry function");
     let root = synthetic_instance(
         db,
         RuntimeSyntheticSpec::MainRoot {
             callee: entry.0,
-            entry_effect_args: entry.1.into_boxed_slice(),
+            entry_args: entry.1,
         },
         Vec::new(),
     );
@@ -494,15 +468,15 @@ pub fn build_test_runtime_package<'db>(
         }
 
         let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(func))?;
-        let entry_effect_args =
-            entry_effect_arg_plans(db, EntryEffectContext::TestFunc { func }, semantic)?;
+        let entry_args =
+            entry_semantic_args_plan(db, EntryEffectContext::TestFunc { func }, semantic)?;
         let runtime_root = runtime_instance_for_semantic(db, semantic);
         let root = synthetic_instance(
             db,
             RuntimeSyntheticSpec::TestRoot {
                 name: name.clone(),
                 callee: runtime_root,
-                entry_effect_args: entry_effect_args.into_boxed_slice(),
+                entry_args,
             },
             Vec::new(),
         );
@@ -704,7 +678,7 @@ pub(crate) fn manual_contract_root_instance<'db>(
 ) -> Result<RuntimeInstance<'db>, LowerError> {
     let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(func))?;
     let callee = runtime_instance_for_semantic(db, semantic);
-    let entry_effect_args = entry_effect_arg_plans(
+    let entry_args = entry_semantic_args_plan(
         db,
         EntryEffectContext::ManualContractRoot { func },
         semantic,
@@ -714,7 +688,7 @@ pub(crate) fn manual_contract_root_instance<'db>(
         RuntimeSyntheticSpec::ManualContractRoot {
             func,
             callee,
-            entry_effect_args: entry_effect_args.into_boxed_slice(),
+            entry_args,
         },
         Vec::new(),
     ))
@@ -800,14 +774,17 @@ fn contract_init_abi_plan<'db>(
             contract,
             payable: false,
             user_init: None,
-            entry_effect_args: Box::new([]),
+            entry_args: EntrySemanticArgsPlan {
+                effects: Box::new([]),
+                layout_evidence: Box::new([]),
+            },
             init_args: InitArgsPlan::None,
         });
     };
 
     let semantic = semantic_instance_for_root_owner(db, BodyOwner::ContractInit { contract })?;
     let user_init = Some(runtime_instance_for_semantic(db, semantic));
-    let entry_effect_args = entry_effect_arg_plans(
+    let entry_args = entry_semantic_args_plan(
         db,
         EntryEffectContext::HighLevelContract { contract },
         semantic,
@@ -831,7 +808,7 @@ fn contract_init_abi_plan<'db>(
         contract,
         payable: init.is_payable(db),
         user_init,
-        entry_effect_args: entry_effect_args.into_boxed_slice(),
+        entry_args,
         init_args,
     })
 }
@@ -851,7 +828,7 @@ fn contract_recv_wrapper<'db>(
     };
     let semantic = semantic_instance_for_root_owner(db, owner)?;
     let user_recv = runtime_instance_for_semantic(db, semantic);
-    let entry_effect_args = entry_effect_arg_plans(
+    let entry_args = entry_semantic_args_plan(
         db,
         EntryEffectContext::HighLevelContract { contract },
         semantic,
@@ -890,7 +867,7 @@ fn contract_recv_wrapper<'db>(
                     None => false,
                 },
                 user_recv,
-                entry_effect_args: entry_effect_args.into_boxed_slice(),
+                entry_args,
                 input,
                 ret,
             },
@@ -1013,18 +990,7 @@ fn build_sectioned_package<'db>(
         })
         .collect::<Vec<_>>();
 
-    if !graph.code_region_roots.is_empty() {
-        let code_regions_object =
-            build_code_regions_object(db, &graph, &functions_by_instance, &mut reachable_cache);
-        objects.push(code_regions_object);
-    }
-
-    let code_regions = resolve_code_regions(
-        db,
-        &objects,
-        &functions_by_instance,
-        &graph.code_region_roots,
-    );
+    let code_regions = resolve_code_regions(db, &objects);
     let code_region_map = code_regions
         .iter()
         .map(|region| (region.region(db), *region))
@@ -1063,34 +1029,6 @@ fn build_sectioned_package<'db>(
             primary_object,
         ),
     ))
-}
-
-fn build_code_regions_object<'db>(
-    db: &'db dyn MirDb,
-    graph: &RuntimeGraph<'db>,
-    functions_by_instance: &FxHashMap<RuntimeInstance<'db>, RuntimeFunction<'db>>,
-    reachable_cache: &mut FxHashMap<RuntimeInstance<'db>, FxHashSet<RuntimeInstance<'db>>>,
-) -> RuntimeObject<'db> {
-    let sections = graph
-        .code_region_roots
-        .iter()
-        .map(|(region, instance)| {
-            let RuntimeCodeRegionKey::FunctionRoot { symbol, .. } = region.key(db).clone() else {
-                unreachable!();
-            };
-            let entry = *functions_by_instance
-                .get(instance)
-                .expect("code-region root should be declared as a runtime function");
-            let reachable = collect_reachable_from_entry(graph, *instance, reachable_cache);
-            RuntimeSection {
-                name: RuntimeSectionName::CodeRegion(symbol),
-                entry,
-                embeds: Vec::new(),
-                const_regions: collect_const_regions_for_reachable(db, graph, &reachable),
-            }
-        })
-        .collect();
-    make_runtime_object(db, "CodeRegions".to_string(), sections)
 }
 
 fn rewrite_object_embeds<'db>(
@@ -1203,8 +1141,6 @@ fn remap_section_ref<'db>(
 fn resolve_code_regions<'db>(
     db: &'db dyn MirDb,
     objects: &[RuntimeObject<'db>],
-    functions_by_instance: &FxHashMap<RuntimeInstance<'db>, RuntimeFunction<'db>>,
-    function_roots: &[(RuntimeCodeRegion<'db>, RuntimeInstance<'db>)],
 ) -> Vec<ResolvedCodeRegion<'db>> {
     let mut resolved = Vec::new();
     for object in objects {
@@ -1221,36 +1157,6 @@ fn resolve_code_regions<'db>(
                     section: section.name.clone(),
                 },
                 section.entry,
-            ));
-        }
-    }
-
-    if let Some(code_regions_object) = objects
-        .iter()
-        .find(|object| object.name(db) == "CodeRegions")
-    {
-        for (region, root_instance) in function_roots {
-            let RuntimeCodeRegionKey::FunctionRoot { symbol, .. } = region.key(db).clone() else {
-                continue;
-            };
-            let Some(_section) = code_regions_object
-                .sections(db)
-                .iter()
-                .find(|section| section.name == RuntimeSectionName::CodeRegion(symbol.clone()))
-            else {
-                continue;
-            };
-            resolved.push(make_resolved_code_region(
-                db,
-                *region,
-                symbol.clone(),
-                RuntimeSectionRef::Local {
-                    object: *code_regions_object,
-                    section: RuntimeSectionName::CodeRegion(symbol),
-                },
-                *functions_by_instance
-                    .get(root_instance)
-                    .expect("code-region root should be declared as a runtime function"),
             ));
         }
     }
@@ -1276,9 +1182,7 @@ fn resolved_section_region<'db>(
                 RuntimeCodeRegion::new(db, RuntimeCodeRegionKey::ContractRuntime { contract }),
                 format!("{}_runtime", contract_name(db, contract)),
             )),
-            RuntimeSectionName::Main
-            | RuntimeSectionName::Test(_)
-            | RuntimeSectionName::CodeRegion(_) => None,
+            RuntimeSectionName::Main | RuntimeSectionName::Test(_) => None,
         },
         RuntimeFunctionOwner::Synthetic(RuntimeSyntheticSpec::ManualContractRoot {
             func, ..
@@ -1297,8 +1201,7 @@ fn resolved_section_region<'db>(
             RuntimeSyntheticSpec::MainRoot { .. }
             | RuntimeSyntheticSpec::TestRoot { .. }
             | RuntimeSyntheticSpec::ContractInitAbi { .. }
-            | RuntimeSyntheticSpec::ContractRecvAbi { .. }
-            | RuntimeSyntheticSpec::CodeRegionRoot { .. },
+            | RuntimeSyntheticSpec::ContractRecvAbi { .. },
         ) => None,
     }
 }
@@ -1426,8 +1329,7 @@ fn materialized_contracts_for_roots<'db>(
                 | RuntimeSyntheticSpec::TestRoot { .. }
                 | RuntimeSyntheticSpec::ManualContractRoot { .. }
                 | RuntimeSyntheticSpec::ContractInitAbi { .. }
-                | RuntimeSyntheticSpec::ContractRecvAbi { .. }
-                | RuntimeSyntheticSpec::CodeRegionRoot { .. } => None,
+                | RuntimeSyntheticSpec::ContractRecvAbi { .. } => None,
             },
             RuntimeInstanceSource::Semantic(_) => None,
         })
@@ -1502,7 +1404,7 @@ fn runtime_root_candidate<'db>(
         }
     };
     if let Err(err) =
-        entry_effect_arg_plans(db, EntryEffectContext::StandaloneFunc { func }, semantic)
+        entry_semantic_args_plan(db, EntryEffectContext::StandaloneFunc { func }, semantic)
     {
         return Ok(RuntimeRootCandidate::Rejected(RuntimeRootRejection {
             func,
@@ -2051,49 +1953,48 @@ fn runtime_synthetic_spec_symbol_key<'db>(
     spec: RuntimeSyntheticSpec<'db>,
 ) -> String {
     match spec {
-        RuntimeSyntheticSpec::MainRoot {
-            callee,
-            entry_effect_args,
-        } => format!(
+        RuntimeSyntheticSpec::MainRoot { callee, entry_args } => format!(
             "__synthetic:main_root:{}:{}",
             runtime_instance_symbol_key(db, callee),
-            entry_effect_args_sort_key(db, entry_effect_args.as_ref())
+            entry_semantic_args_sort_key(db, &entry_args)
         ),
         RuntimeSyntheticSpec::TestRoot {
             name,
             callee,
-            entry_effect_args,
+            entry_args,
         } => format!(
             "__synthetic:test_root:{name}:{}:{}",
             runtime_instance_symbol_key(db, callee),
-            entry_effect_args_sort_key(db, entry_effect_args.as_ref())
+            entry_semantic_args_sort_key(db, &entry_args)
         ),
         RuntimeSyntheticSpec::ManualContractRoot {
             func,
             callee,
-            entry_effect_args,
+            entry_args,
         } => format!(
             "__synthetic:manual_contract_root:{}:{}:{}",
             item_identity(db, func.into()),
             runtime_instance_symbol_key(db, callee),
-            entry_effect_args_sort_key(db, entry_effect_args.as_ref())
+            entry_semantic_args_sort_key(db, &entry_args)
         ),
         RuntimeSyntheticSpec::ContractInitAbi { plan } => format!(
-            "__synthetic:contract_init_abi:{}:{}:{}:{}",
+            "__synthetic:contract_init_abi:{}:{}:{}:{}:{}",
             item_identity(db, plan.contract.into()),
             plan.payable,
             plan.user_init
                 .map(|instance| runtime_instance_symbol_key(db, instance))
                 .unwrap_or_default(),
+            entry_semantic_args_sort_key(db, &plan.entry_args),
             init_args_plan_symbol_key(db, &plan.init_args)
         ),
         RuntimeSyntheticSpec::ContractRecvAbi { plan } => format!(
-            "__synthetic:contract_recv_abi:{}:{}:{}:{}:{}",
+            "__synthetic:contract_recv_abi:{}:{}:{}:{}:{}:{}",
             item_identity(db, plan.contract.into()),
             plan.selector
                 .map_or_else(|| "fallback".to_string(), |selector| selector.to_string()),
             plan.payable,
             runtime_instance_symbol_key(db, plan.user_recv),
+            entry_semantic_args_sort_key(db, &plan.entry_args),
             runtime_input_plan_symbol_key(db, &plan.input)
         ),
         RuntimeSyntheticSpec::ContractInitRoot {
@@ -2124,12 +2025,6 @@ fn runtime_synthetic_spec_symbol_key<'db>(
                 .join(","),
             dispatch_default_symbol_key(db, &default)
         ),
-        RuntimeSyntheticSpec::CodeRegionRoot { symbol, callee } => {
-            format!(
-                "__synthetic:code_region_root:{symbol}:{}",
-                runtime_instance_symbol_key(db, callee)
-            )
-        }
     }
 }
 
@@ -2138,49 +2033,48 @@ fn runtime_synthetic_spec_sort_key<'db>(
     spec: RuntimeSyntheticSpec<'db>,
 ) -> String {
     match spec {
-        RuntimeSyntheticSpec::MainRoot {
-            callee,
-            entry_effect_args,
-        } => format!(
+        RuntimeSyntheticSpec::MainRoot { callee, entry_args } => format!(
             "__synthetic:main_root:{}:{}",
             runtime_instance_sort_key(db, callee),
-            entry_effect_args_sort_key(db, entry_effect_args.as_ref())
+            entry_semantic_args_sort_key(db, &entry_args)
         ),
         RuntimeSyntheticSpec::TestRoot {
             name,
             callee,
-            entry_effect_args,
+            entry_args,
         } => format!(
             "__synthetic:test_root:{name}:{}:{}",
             runtime_instance_sort_key(db, callee),
-            entry_effect_args_sort_key(db, entry_effect_args.as_ref())
+            entry_semantic_args_sort_key(db, &entry_args)
         ),
         RuntimeSyntheticSpec::ManualContractRoot {
             func,
             callee,
-            entry_effect_args,
+            entry_args,
         } => format!(
             "__synthetic:manual_contract_root:{}:{}:{}",
             item_identity(db, func.into()),
             runtime_instance_sort_key(db, callee),
-            entry_effect_args_sort_key(db, entry_effect_args.as_ref())
+            entry_semantic_args_sort_key(db, &entry_args)
         ),
         RuntimeSyntheticSpec::ContractInitAbi { plan } => format!(
-            "__synthetic:contract_init_abi:{}:{}:{}:{}",
+            "__synthetic:contract_init_abi:{}:{}:{}:{}:{}",
             item_identity(db, plan.contract.into()),
             plan.payable,
             plan.user_init
                 .map(|instance| runtime_instance_sort_key(db, instance))
                 .unwrap_or_default(),
+            entry_semantic_args_sort_key(db, &plan.entry_args),
             init_args_plan_sort_key(db, &plan.init_args)
         ),
         RuntimeSyntheticSpec::ContractRecvAbi { plan } => format!(
-            "__synthetic:contract_recv_abi:{}:{}:{}:{}:{}",
+            "__synthetic:contract_recv_abi:{}:{}:{}:{}:{}:{}",
             item_identity(db, plan.contract.into()),
             plan.selector
                 .map_or_else(|| "fallback".to_string(), |selector| selector.to_string()),
             plan.payable,
             runtime_instance_sort_key(db, plan.user_recv),
+            entry_semantic_args_sort_key(db, &plan.entry_args),
             runtime_input_plan_sort_key(db, &plan.input)
         ),
         RuntimeSyntheticSpec::ContractInitRoot {
@@ -2211,13 +2105,75 @@ fn runtime_synthetic_spec_sort_key<'db>(
                 .join(","),
             dispatch_default_sort_key(db, &default)
         ),
-        RuntimeSyntheticSpec::CodeRegionRoot { symbol, callee } => {
-            format!(
-                "__synthetic:code_region_root:{symbol}:{}",
-                runtime_instance_sort_key(db, callee)
-            )
-        }
     }
+}
+
+fn entry_semantic_args_sort_key<'db>(
+    db: &'db dyn MirDb,
+    args: &EntrySemanticArgsPlan<'db>,
+) -> String {
+    let effects = entry_effect_args_sort_key(db, &args.effects);
+    let evidence = args
+        .layout_evidence
+        .iter()
+        .map(|arg| {
+            let target = callable_layout_param_port_sort_key(&arg.target);
+            let map_ty = &arg.value.map_ty;
+            let dimensions = map_ty
+                .dimensions
+                .iter()
+                .map(usize::to_string)
+                .collect::<Vec<_>>()
+                .join(".");
+            let strides = arg
+                .value
+                .strides
+                .iter()
+                .map(usize::to_string)
+                .collect::<Vec<_>>()
+                .join(".");
+            let base = match arg.value.base {
+                LayoutEvidenceBase::Root(root) => format!("root:{}", type_identity(db, root)),
+                LayoutEvidenceBase::Slot(slot) => format!("slot:{slot}"),
+            };
+            format!(
+                "{target}:{}:[{dimensions}]:{base}:[{strides}]",
+                type_identity(db, map_ty.scalar_ty),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("effects[{effects}]:evidence[{evidence}]")
+}
+
+fn callable_layout_param_port_sort_key(port: &CallableLayoutParamPort) -> String {
+    let (prefix, port) = match port {
+        CallableLayoutParamPort::Input(port) => (
+            match port.origin {
+                CallableInputLayoutHoleOrigin::Receiver => "input:receiver".to_string(),
+                CallableInputLayoutHoleOrigin::ValueParam(index) => {
+                    format!("input:value:{index}")
+                }
+                CallableInputLayoutHoleOrigin::Effect(index) => {
+                    format!("input:effect:{index}")
+                }
+            },
+            &port.component,
+        ),
+        CallableLayoutParamPort::OutputWitness(port) => ("output".to_string(), port),
+    };
+    let path = port
+        .value_path
+        .iter()
+        .map(|step| match step {
+            LayoutEvidencePathStep::Field(field) => format!("f{field}"),
+            LayoutEvidencePathStep::Variant(variant) => format!("v{variant}"),
+            LayoutEvidencePathStep::Index => "i".to_string(),
+            LayoutEvidencePathStep::EffectTarget => "t".to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(".");
+    format!("{prefix}:{path}:p{}r{}", port.root.param, port.root.ordinal,)
 }
 
 fn entry_effect_args_sort_key<'db>(db: &'db dyn MirDb, args: &[EntryEffectArgPlan<'db>]) -> String {
@@ -2242,6 +2198,14 @@ fn entry_effect_args_sort_key<'db>(db: &'db dyn MirDb, args: &[EntryEffectArgPla
         .join(",")
 }
 
+fn projected_fields_sort_key(projected_fields: &[u32]) -> String {
+    projected_fields
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
 fn init_args_plan_symbol_key<'db>(db: &'db dyn MirDb, plan: &InitArgsPlan<'db>) -> String {
     match plan {
         InitArgsPlan::None => "none".to_string(),
@@ -2250,9 +2214,10 @@ fn init_args_plan_symbol_key<'db>(db: &'db dyn MirDb, plan: &InitArgsPlan<'db>) 
             decode_fn,
             projected_fields,
         } => format!(
-            "decode:{}:{}:{projected_fields:?}",
+            "decode:{}:{}:[{}]",
             type_identity(db, *tuple_ty),
-            runtime_instance_symbol_key(db, *decode_fn)
+            runtime_instance_symbol_key(db, *decode_fn),
+            projected_fields_sort_key(projected_fields),
         ),
     }
 }
@@ -2265,9 +2230,10 @@ fn init_args_plan_sort_key<'db>(db: &'db dyn MirDb, plan: &InitArgsPlan<'db>) ->
             decode_fn,
             projected_fields,
         } => format!(
-            "decode:{}:{}:{projected_fields:?}",
+            "decode:{}:{}:[{}]",
             type_identity(db, *tuple_ty),
-            runtime_instance_sort_key(db, *decode_fn)
+            runtime_instance_sort_key(db, *decode_fn),
+            projected_fields_sort_key(projected_fields),
         ),
     }
 }
@@ -2281,10 +2247,11 @@ fn runtime_input_plan_symbol_key<'db>(db: &'db dyn MirDb, plan: &RuntimeInputPla
             decode_args_fn,
             projected_fields,
         } => format!(
-            "decode:{}:{}:{}:{projected_fields:?}",
+            "decode:{}:{}:{}:[{}]",
             type_identity(db, *msg_ty),
             target_root_provider_binding_sort_key(db, host),
-            runtime_instance_symbol_key(db, *decode_args_fn)
+            runtime_instance_symbol_key(db, *decode_args_fn),
+            projected_fields_sort_key(projected_fields),
         ),
     }
 }
@@ -2298,10 +2265,11 @@ fn runtime_input_plan_sort_key<'db>(db: &'db dyn MirDb, plan: &RuntimeInputPlan<
             decode_args_fn,
             projected_fields,
         } => format!(
-            "decode:{}:{}:{}:{projected_fields:?}",
+            "decode:{}:{}:{}:[{}]",
             type_identity(db, *msg_ty),
             target_root_provider_binding_sort_key(db, host),
-            runtime_instance_sort_key(db, *decode_args_fn)
+            runtime_instance_sort_key(db, *decode_args_fn),
+            projected_fields_sort_key(projected_fields),
         ),
     }
 }
@@ -2350,12 +2318,6 @@ fn runtime_code_region_symbol_key<'db>(
         RuntimeCodeRegionKey::ManualContractRoot { func } => {
             format!("manual_root:{}", item_identity(db, func.into()))
         }
-        RuntimeCodeRegionKey::FunctionRoot { symbol, callee } => {
-            format!(
-                "function_root:{symbol}:{}",
-                runtime_instance_symbol_key(db, callee)
-            )
-        }
     }
 }
 
@@ -2369,12 +2331,6 @@ fn runtime_code_region_sort_key<'db>(db: &'db dyn MirDb, region: RuntimeCodeRegi
         }
         RuntimeCodeRegionKey::ManualContractRoot { func } => {
             format!("manual_root:{}", item_identity(db, func.into()))
-        }
-        RuntimeCodeRegionKey::FunctionRoot { symbol, callee } => {
-            format!(
-                "function_root:{symbol}:{}",
-                runtime_instance_sort_key(db, callee)
-            )
         }
     }
 }
@@ -2428,6 +2384,18 @@ fn scalar_role_sort_key<'db>(db: &'db dyn MirDb, role: &ScalarRole<'db>) -> Stri
         ScalarRole::EnumTag { enum_layout } => {
             format!("enum_tag:{}", layout_sort_key(db, *enum_layout))
         }
+        ScalarRole::LayoutMap {
+            scalar_ty,
+            dimensions,
+        } => format!(
+            "layout_map:{}:[{}]",
+            type_identity(db, *scalar_ty),
+            dimensions
+                .iter()
+                .map(usize::to_string)
+                .collect::<Vec<_>>()
+                .join(".")
+        ),
     }
 }
 
@@ -2631,9 +2599,6 @@ fn symbol_base_for_runtime_instance<'db>(
         RuntimeSyntheticSpec::ContractRuntimeRoot { contract, .. } => {
             format!("contract_runtime_root_{}", contract_name(db, *contract))
         }
-        RuntimeSyntheticSpec::CodeRegionRoot { symbol, .. } => {
-            format!("code_region_root_{}", sanitize_symbol(symbol))
-        }
     }
 }
 
@@ -2760,6 +2725,146 @@ mod tests {
         let package =
             build_test_runtime_package(&db, top_mod, filter).expect("test package should build");
         f(&db, package)
+    }
+
+    #[test]
+    fn invalid_layout_evidence_returns_a_lowering_error_instead_of_panicking() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse("file:///invalid_layout_evidence.fe").unwrap();
+        let file = db.workspace().touch(
+            &mut db,
+            file_url,
+            Some(
+                r#"
+struct Rooted<const ROOT: u256 = _> {}
+
+fn ambiguous<const ROOT: u256>(left: Rooted<ROOT>, right: Rooted<ROOT>) -> u256 {
+    ROOT
+}
+"#
+                .to_string(),
+            ),
+        );
+        let top_mod = db.top_mod(file);
+        let func = top_mod
+            .all_funcs(&db)
+            .iter()
+            .copied()
+            .find(|func| {
+                func.name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "ambiguous")
+            })
+            .expect("ambiguous function");
+        let semantic = get_or_build_semantic_instance(
+            &db,
+            hir::analysis::semantic::identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+        );
+        let runtime = runtime_instance_for_semantic(&db, semantic);
+        let signature = runtime.interface_signature(&db);
+        assert_eq!(signature.params.len(), 2);
+        let error = runtime_instance_lowered_body(&db, runtime)
+            .expect_err("layout evidence lowering must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("layout evidence lowering failed")
+        );
+        assert!(error.to_string().contains("AmbiguousConstBinding"));
+    }
+
+    #[test]
+    fn contract_entry_plan_carries_each_terminal_layout_family() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse("file:///contract_entry_layout_families.fe").unwrap();
+        let file = db.workspace().touch(
+            &mut db,
+            file_url,
+            Some(
+                r#"
+use std::abi::sol
+
+struct Slot<const ROOT: u256> {}
+
+enum Choice<const ROOT: u256 = _> {
+    Scalar(Slot<ROOT>),
+    Family([Slot<ROOT>; 3]),
+}
+
+msg Msg {
+    #[selector = sol("get()")]
+    Get {} -> u256,
+}
+
+contract C {
+    values: [Choice; 2],
+
+    recv Msg {
+        Get {} -> u256 uses (values) { 0 }
+    }
+}
+"#
+                .to_string(),
+            ),
+        );
+        let top_mod = db.top_mod(file);
+        let plan = recv_wrapper_plan(&db, top_mod, "get()");
+        assert_eq!(plan.entry_args.effects.len(), 1);
+        assert_eq!(plan.entry_args.layout_evidence.len(), 2);
+        assert_eq!(
+            plan.entry_args
+                .layout_evidence
+                .iter()
+                .map(|arg| arg.value.map_ty.dimensions.clone())
+                .collect::<Vec<_>>(),
+            [vec![2], vec![2, 3]],
+        );
+        assert_eq!(
+            plan.entry_args
+                .layout_evidence
+                .iter()
+                .map(|arg| arg.value.base)
+                .collect::<Vec<_>>(),
+            [LayoutEvidenceBase::Slot(2), LayoutEvidenceBase::Slot(2)],
+        );
+        assert_eq!(
+            plan.entry_args
+                .layout_evidence
+                .iter()
+                .map(|arg| arg.value.strides.as_ref())
+                .collect::<Vec<_>>(),
+            [&[3][..], &[3, 1][..]],
+        );
+    }
+
+    #[test]
+    fn usize_layout_evidence_uses_usize_scalar_constants() {
+        with_test_runtime_package(
+            "usize_layout_evidence_uses_usize_scalar_constants.fe",
+            r#"
+struct Rooted<const ROOT: usize = _> {}
+
+impl<const ROOT: usize> Copy for Rooted<ROOT> {}
+
+impl<const ROOT: usize> Rooted<ROOT> {
+    fn root(self) -> usize {
+        ROOT
+    }
+}
+
+fn select<const ROOT: usize>(values: [Rooted<ROOT>; 2], lane: usize) -> usize {
+    values[lane].root()
+}
+
+#[test]
+fn usize_layout_maps_lower() {
+    let values: [Rooted<7>; 2] = [Rooted {}; 2]
+    assert!(select(values: values, lane: 1) == 7)
+}
+"#,
+            Some("usize_layout_maps_lower"),
+            |_, _| {},
+        );
     }
 
     fn package_object_names(db: &DriverDataBase, package: RuntimePackage<'_>) -> Vec<String> {
@@ -2973,7 +3078,7 @@ pub contract NoInitBox {}
             "implicit constructor wrapper should not call a user init"
         );
         assert!(
-            plan.entry_effect_args.is_empty(),
+            plan.entry_args.effects.is_empty() && plan.entry_args.layout_evidence.is_empty(),
             "implicit constructor wrapper should not synthesize owner effect args"
         );
         assert!(

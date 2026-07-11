@@ -9,7 +9,7 @@ use crate::{
     instance::RuntimeInstance,
     runtime::{
         AddressSpaceKind, ConstScalar, Layout, LayoutId, PlaceElem, PlaceRoot, RBlockId, RExpr,
-        RLocalId, RStmt, RTerminator, RefKind, RefView, RuntimeBody, RuntimeBuiltin,
+        RLocalId, RStmt, RTerminator, RValueId, RefKind, RefView, RuntimeBody, RuntimeBuiltin,
         RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeFunction, RuntimeLinkage,
         RuntimeLocalRoot, RuntimeObject, RuntimePackage, RuntimePlace, RuntimeSection,
         RuntimeSectionName, RuntimeSectionRef, ScalarClass, ScalarRepr, ScalarRole, VariantId,
@@ -334,7 +334,6 @@ fn format_section_name(name: &RuntimeSectionName) -> String {
         RuntimeSectionName::Runtime => "runtime".to_string(),
         RuntimeSectionName::Main => "main".to_string(),
         RuntimeSectionName::Test(name) => format!("test({name})"),
-        RuntimeSectionName::CodeRegion(name) => format!("code_region({name})"),
     }
 }
 
@@ -368,12 +367,6 @@ fn format_code_region<'db>(db: &'db dyn MirDb, region: RuntimeCodeRegion<'db>) -
         crate::runtime::RuntimeCodeRegionKey::ManualContractRoot { func } => {
             format!("manual_contract_root({:?})", func.name(db))
         }
-        crate::runtime::RuntimeCodeRegionKey::FunctionRoot { symbol, callee } => {
-            format!(
-                "function_root({symbol}, {})",
-                format_runtime_instance(db, callee)
-            )
-        }
     }
 }
 
@@ -382,6 +375,10 @@ fn format_stmt<'db>(db: &'db dyn MirDb, stmt: &RStmt<'db>) -> String {
         RStmt::Assign { dst, expr } => {
             format!("{} = {}", format_local_id(*dst), format_expr(db, expr))
         }
+        RStmt::AssertIndexInBounds { index, len } => format!(
+            "assert_index_in_bounds {} < {len}",
+            format_value_index_source(index)
+        ),
         RStmt::EnumAssertVariant { value, variant } => format!(
             "enum_assert_variant {} := {}",
             format_local_id(*value),
@@ -420,6 +417,13 @@ fn format_stmt<'db>(db: &'db dyn MirDb, stmt: &RStmt<'db>) -> String {
                 format_variant(db, *variant)
             )
         }
+    }
+}
+
+fn format_value_index_source(index: &IndexSource<RValueId>) -> String {
+    match index {
+        IndexSource::Constant(index) => index.to_string(),
+        IndexSource::Dynamic(index) => format_local_id(*index),
     }
 }
 
@@ -496,6 +500,41 @@ fn format_expr<'db>(db: &'db dyn MirDb, expr: &RExpr<'db>) -> String {
                 .join(", ");
             format!("aggregate_make {}({fields})", format_layout(db, *layout))
         }
+        RExpr::LayoutMapAffine { base, strides, .. } => {
+            let strides = strides
+                .iter()
+                .map(|value| format_local_id(*value))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("layout_map_affine {} [{strides}]", format_local_id(*base))
+        }
+        RExpr::LayoutMapDense { elements, .. } => {
+            let elements = elements
+                .iter()
+                .map(|value| format_local_id(*value))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("layout_map_dense [{elements}]")
+        }
+        RExpr::LayoutMapRepeat { element, .. } => {
+            format!("layout_map_repeat {}", format_local_id(*element))
+        }
+        RExpr::LayoutMapProject { source, index, .. } => format!(
+            "layout_map_project {}, {}",
+            format_local_id(*source),
+            format_local_id(*index)
+        ),
+        RExpr::LayoutMapPatch {
+            source,
+            index,
+            replacement,
+            ..
+        } => format!(
+            "layout_map_patch {}, {} := {}",
+            format_local_id(*source),
+            format_local_id(*index),
+            format_local_id(*replacement)
+        ),
         RExpr::Call { callee, args } => {
             let args = args
                 .iter()
@@ -973,6 +1012,13 @@ fn format_scalar_class<'db>(db: &'db dyn MirDb, class: &ScalarClass<'db>) -> Str
         ScalarRole::EnumTag { enum_layout } => {
             format!("{repr}<tag {}>", format_layout(db, *enum_layout))
         }
+        ScalarRole::LayoutMap {
+            scalar_ty,
+            dimensions,
+        } => format!(
+            "{repr}<layout_map {} {dimensions:?}>",
+            scalar_ty.pretty_print(db)
+        ),
     }
 }
 

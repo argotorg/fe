@@ -68,26 +68,6 @@ pub(super) fn normalize_error_to_diag<'db>(
                 SemanticBorrowDiagnosticSpan::LocalSourceOrBody { instance, local },
             )
         }
-        SemanticNormalizeError::IllegalCarrierPlace { local, origin } => {
-            let message = if let Some(body) = hir_body
-                && let Some(raw_local) = instance.body(db).local(local)
-                && let Some(source) = raw_local.source
-            {
-                format!(
-                    "cannot normalize carrier-style place access for `{}`",
-                    source.pretty_name_in_body(db, body)
-                )
-            } else {
-                format!(
-                    "cannot normalize carrier-style place access for `%{}`",
-                    local.index()
-                )
-            };
-            (
-                message,
-                SemanticBorrowDiagnosticSpan::Origin { owner, origin },
-            )
-        }
         SemanticNormalizeError::LocalProvenanceCycle { local, .. } => (
             format!(
                 "detected a cycle while normalizing derived-place provenance for `%{}`",
@@ -228,7 +208,7 @@ impl<'db> SemanticBorrowDiagnosticSpan<'db> {
     }
 }
 
-fn resolve_local_source_span<'db>(
+pub(crate) fn resolve_local_source_span<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     instance: SemanticInstance<'db>,
     local: SLocalId,
@@ -246,7 +226,7 @@ fn resolve_local_source_span<'db>(
         .or_else(|| hir_body.and_then(|body| body.span().resolve(db)))
 }
 
-pub(super) fn span_for_origin_from_body<'db>(
+pub(crate) fn span_for_origin_from_body<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     body: Option<Body<'db>>,
     origin: SemOrigin<'db>,
@@ -260,7 +240,7 @@ pub(super) fn span_for_origin_from_body<'db>(
     }
 }
 
-pub(super) fn checker_name<'db>(
+pub(crate) fn checker_name<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> String {

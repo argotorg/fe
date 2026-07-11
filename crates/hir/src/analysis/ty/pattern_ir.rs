@@ -4,9 +4,9 @@ use salsa::Update;
 use smallvec1::SmallVec;
 
 use crate::analysis::HirAnalysisDb;
-use crate::analysis::ty::adt_def::AdtRef;
+use crate::analysis::ty::adt_def::{AdtRef, instantiate_adt_field_shape};
 use crate::analysis::ty::fold::{TyFoldable, TyFolder};
-use crate::analysis::ty::ty_def::{TyId, instantiate_adt_field_ty};
+use crate::analysis::ty::ty_def::TyId;
 use crate::analysis::ty::visitor::{TyVisitable, TyVisitor};
 use crate::core::hir_def::{EnumVariant, FieldParent, IdentId, LitKind, PatId, VariantKind};
 
@@ -222,7 +222,7 @@ impl<'db> ConstructorKind<'db> {
                                 .iter_types(db)
                                 .enumerate()
                                 .map(|(field_idx, _)| {
-                                    instantiate_adt_field_ty(
+                                    instantiate_adt_field_shape(
                                         db,
                                         adt_def,
                                         variant.idx as usize,

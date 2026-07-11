@@ -9,17 +9,9 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 
 use crate::analysis::{
-    analysis_pass::{
-        AnalysisPassManager, AttrMisusePass, ErrorLowerPass, EventLowerPass, MsgLowerPass,
-        ParsingPass,
-    },
+    analysis_pass::AnalysisPassManager,
     diagnostics::{DiagnosticVoucher, SpannedHirAnalysisDb},
-    name_resolution::ImportAnalysisPass,
-    ty::{
-        AdtDefAnalysisPass, BodyAnalysisPass, DefConflictAnalysisPass, FuncAnalysisPass,
-        ImplAnalysisPass, ImplTraitAnalysisPass, MsgSelectorAnalysisPass, TraitAnalysisPass,
-        TypeAliasAnalysisPass,
-    },
+    initialize_pre_contract_analysis_pass,
 };
 use crate::{
     Ingot, SpannedHirDb,
@@ -241,7 +233,7 @@ impl HirAnalysisTestDb {
     }
 
     pub fn assert_no_diags(&self, top_mod: TopLevelMod) {
-        let mut manager = initialize_analysis_pass();
+        let mut manager = initialize_test_analysis_pass();
         let diags = manager.run_on_module(self, top_mod);
 
         if !diags.is_empty() {
@@ -255,7 +247,7 @@ impl HirAnalysisTestDb {
         &'db self,
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
-        let mut manager = initialize_analysis_pass();
+        let mut manager = initialize_test_analysis_pass();
         manager.run_on_module(self, top_mod)
     }
 
@@ -263,7 +255,7 @@ impl HirAnalysisTestDb {
         &'db self,
         ingot: Ingot<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
-        let mut manager = initialize_analysis_pass();
+        let mut manager = initialize_test_analysis_pass();
         let tree = module_tree(self, ingot);
         manager.run_on_module_tree(self, tree)
     }
@@ -362,24 +354,11 @@ impl Default for HirPropertyFormatter<'_> {
     }
 }
 
-pub fn initialize_analysis_pass() -> AnalysisPassManager {
-    let mut pass_manager = AnalysisPassManager::new();
-    pass_manager.add_module_pass("Parsing", Box::new(ParsingPass {}));
-    pass_manager.add_module_pass("AttrMisuse", Box::new(AttrMisusePass {}));
-    pass_manager.add_module_pass("MsgLower", Box::new(MsgLowerPass {}));
-    pass_manager.add_module_pass("EventLower", Box::new(EventLowerPass {}));
-    pass_manager.add_module_pass("ErrorLower", Box::new(ErrorLowerPass {}));
-    pass_manager.add_module_pass("MsgSelector", Box::new(MsgSelectorAnalysisPass {}));
-    pass_manager.add_module_pass("DefConflict", Box::new(DefConflictAnalysisPass {}));
-    pass_manager.add_module_pass("Import", Box::new(ImportAnalysisPass {}));
-    pass_manager.add_module_pass("AdtDef", Box::new(AdtDefAnalysisPass {}));
-    pass_manager.add_module_pass("TypeAlias", Box::new(TypeAliasAnalysisPass {}));
-    pass_manager.add_module_pass("Trait", Box::new(TraitAnalysisPass {}));
-    pass_manager.add_module_pass("Impl", Box::new(ImplAnalysisPass {}));
-    pass_manager.add_module_pass("ImplTrait", Box::new(ImplTraitAnalysisPass {}));
-    pass_manager.add_module_pass("Func", Box::new(FuncAnalysisPass {}));
-    pass_manager.add_module_pass("Body", Box::new(BodyAnalysisPass {}));
-    pass_manager
+/// The focused HIR-test pipeline, which deliberately stops before contract
+/// policy checks so type-check fixtures can contain partial contracts. Tests
+/// of user-facing diagnostics must use [`crate::analysis::initialize_analysis_pass`].
+pub fn initialize_test_analysis_pass() -> AnalysisPassManager {
+    initialize_pre_contract_analysis_pass()
 }
 
 // --- Simple test database for unit tests ---

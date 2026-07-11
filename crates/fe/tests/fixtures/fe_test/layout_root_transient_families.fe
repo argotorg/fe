@@ -1,0 +1,28 @@
+use std::evm::{Create, Evm}
+use std::evm::effects::TSlot
+
+msg M {
+    #[selector = 1]
+    Exercise -> u256,
+}
+
+pub contract C {
+    mut values: [TSlot<u256>; 2],
+    mut after: TSlot<u256>,
+
+    recv M {
+        Exercise -> u256 uses (mut values, mut after) {
+            values[0].write(11)
+            values[1].write(22)
+            after.write(33)
+            values[0].read() * 10000 + values[1].read() * 100 + after.read()
+        }
+    }
+}
+
+#[test]
+fn transient_root_families_are_distinct() uses (create: mut Create, evm: mut Evm) {
+    let c = create.create2<C>(value: 0, args: (), salt: 1)
+    let result = evm.call(addr: c, gas: 200000, value: 0, message: M::Exercise {})
+    assert!(result == 112233)
+}

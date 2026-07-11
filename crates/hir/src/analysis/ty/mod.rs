@@ -9,14 +9,14 @@ use crate::core::hir_def::{
     IdentId, ItemKind, PathId, TopLevelMod, Trait, TypeAlias,
     scope_graph::{ScopeGraph, ScopeId},
 };
-use adt_def::{AdtDef, AdtRef};
+use adt_def::{AdtDef, AdtRef, instantiate_adt_field_shape};
 use common::indexmap::IndexMap;
 use diagnostics::{DefConflictError, TraitLowerDiag, TyLowerDiag};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::SmallVec;
 use trait_def::impls_for_trait_def;
 use trait_resolution::constraint::super_trait_cycle;
-use ty_def::{BorrowKind, InvalidCause, TyBase, TyData, TyId, instantiate_adt_field_ty};
+use ty_def::{BorrowKind, InvalidCause, TyData, TyId};
 use ty_lower::{collect_generic_params, lower_type_alias};
 
 use crate::analysis::name_resolution::{PathRes, resolve_path};
@@ -39,6 +39,7 @@ pub mod msg_selector;
 pub mod decision_tree;
 pub mod diagnostics;
 pub mod fold;
+pub mod layout_bundle;
 pub(crate) mod layout_holes;
 pub(crate) mod method_cmp;
 pub mod method_table;
@@ -58,33 +59,24 @@ pub mod ty_lower;
 pub mod unify;
 pub mod visitor;
 
-pub use layout_holes::ty_contains_const_hole;
+pub use layout_bundle::{
+    CallableLayoutBundleInput, CallableLayoutBundleSignature, CallableLayoutParamPort,
+    CallableLayoutPort, LayoutBundleComponent, LayoutBundleComponentId, LayoutBundleComponentKey,
+    LayoutBundlePath, LayoutBundlePathStep, LayoutBundleSchema, LayoutBundleSchemaError,
+    LayoutBundleTransport, LayoutEvidencePath, LayoutEvidencePathStep, LayoutMapTy, LayoutPortKey,
+    LayoutRootPort, LayoutViewAlias, NonRegularLayoutViewCycle,
+};
+pub use layout_holes::{
+    LayoutShapeKey, layout_root_descends_from, layout_root_id, layout_root_placeholder,
+    layout_shape_key, layout_shape_ty, ty_contains_const_hole,
+};
 pub use msg_selector::MsgSelectorAnalysisPass;
 pub use provider::{
     ProviderAddressSpace, ProviderKind, ProviderSemantics, ProviderTransport,
-    RootProviderRegistration, RootProviderSiteKind, effect_space_from_trait_const,
-    provider_semantics, registered_root_providers,
+    RootProviderRegistration, RootProviderSiteKind, provider_semantics, registered_root_providers,
 };
 
 const DEFAULT_TARGET_TY_PATH: &[&str] = &["std", "evm", "EvmTarget"];
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct EffectHandleMetadata<'db> {
-    /// `None` when the handle's impl cannot be selected yet (e.g. the type
-    /// still contains inference variables).
-    pub address_space: Option<provider::ProviderAddressSpace>,
-    pub target_ty: TyId<'db>,
-}
-
-fn ty_may_require_effect_handle_metadata<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
-    matches!(
-        ty.base_ty(db).data(db),
-        TyData::TyParam(_)
-            | TyData::AssocTy(_)
-            | TyData::QualifiedTy(_)
-            | TyData::TyBase(TyBase::Adt(_))
-    )
-}
 
 pub fn ty_is_borrow<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -241,7 +233,7 @@ pub fn ty_is_noesc<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
                             variant.iter_types(db).enumerate().any(|(field_idx, _)| {
                                 inner(
                                     db,
-                                    instantiate_adt_field_ty(
+                                    instantiate_adt_field_shape(
                                         db,
                                         adt_def,
                                         variant_idx,
@@ -379,12 +371,11 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
         // Check function and const bodies; contract-specific analysis is handled separately.
-        let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = top_mod
-            .all_funcs(db)
-            .iter()
-            .flat_map(|func| &ty_check::check_func_body(db, *func).0)
-            .map(|diag| diag.to_voucher())
-            .collect();
+        let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = Vec::new();
+        for func in top_mod.all_funcs(db) {
+            let (body_diags, _) = ty_check::check_func_body(db, *func);
+            diags.extend(body_diags.iter().map(|diag| diag.to_voucher()));
+        }
 
         diags.extend(
             top_mod
@@ -563,12 +554,8 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
             );
 
             if contract.init(db).is_some() {
-                diags.extend(
-                    ty_check::check_contract_init_body(db, contract)
-                        .0
-                        .iter()
-                        .map(|diag| diag.to_voucher()),
-                );
+                let (body_diags, _) = ty_check::check_contract_init_body(db, contract);
+                diags.extend(body_diags.iter().map(|diag| diag.to_voucher()));
             }
 
             let recvs = contract.recvs(db);
@@ -580,17 +567,13 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
                 );
 
                 for (arm_idx, _) in recv.arms.data(db).iter().enumerate() {
-                    diags.extend(
-                        ty_check::check_contract_recv_arm_body(
-                            db,
-                            contract,
-                            recv_idx as u32,
-                            arm_idx as u32,
-                        )
-                        .0
-                        .iter()
-                        .map(|diag| diag.to_voucher()),
+                    let (body_diags, _) = ty_check::check_contract_recv_arm_body(
+                        db,
+                        contract,
+                        recv_idx as u32,
+                        arm_idx as u32,
                     );
+                    diags.extend(body_diags.iter().map(|diag| diag.to_voucher()));
                 }
             }
         }
@@ -621,42 +604,6 @@ pub fn resolve_default_root_effect_ty<'db>(
         scope,
         assumptions,
     ))
-}
-
-pub fn effect_handle_metadata<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-    ty: TyId<'db>,
-) -> Option<EffectHandleMetadata<'db>> {
-    let ty = ty_def::strip_derived_adt_layout_args(db, ty);
-    if ty.as_capability(db).is_some() || !ty_may_require_effect_handle_metadata(db, ty) {
-        return None;
-    }
-    let effect_handle = corelib::resolve_core_trait(db, scope, &["EffectHandle"])?;
-    let target_ident = IdentId::new(db, "Target".to_string());
-    let inst = trait_def::TraitInstId::new(db, effect_handle, vec![ty], IndexMap::new());
-    match is_goal_satisfiable(
-        db,
-        TraitSolveCx::new(db, scope).with_assumptions(assumptions),
-        inst,
-    ) {
-        GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => None,
-        GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation(_) => {
-            let address_space =
-                provider::effect_space_from_trait_const(db, scope, assumptions, inst);
-            let target_ty = normalize::normalize_ty(
-                db,
-                inst.assoc_ty(db, target_ident).unwrap_or(ty),
-                scope,
-                assumptions,
-            );
-            (!target_ty.has_invalid(db)).then_some(EffectHandleMetadata {
-                address_space,
-                target_ty,
-            })
-        }
-    }
 }
 
 pub(crate) fn instantiate_trait_self<'db>(

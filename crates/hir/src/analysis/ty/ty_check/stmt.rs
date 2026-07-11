@@ -5,6 +5,7 @@ use crate::core::hir_def::{ExprId, IdentId, Partial, Pat, PatId, Stmt, StmtId};
 
 use super::{Callable, LocalBinding, TyChecker, instantiate_trait_method};
 use crate::analysis::ty::{
+    LayoutBundlePathStep,
     canonical::Canonical,
     corelib::resolve_core_trait,
     diagnostics::BodyDiag,
@@ -35,6 +36,10 @@ pub struct ForLoopSeq<'db> {
     pub len_effect_args: Vec<super::ResolvedEffectArg<'db>>,
     /// Resolved effect arguments for Seq::get, in callee effect-param order.
     pub get_effect_args: Vec<super::ResolvedEffectArg<'db>>,
+    /// The loop element is the indexed layout projection of the iterable.
+    /// Semantic lowering uses this explicit desugaring fact to retain the
+    /// dynamic array-index source on the synthesized `Seq::get` result.
+    pub element_layout_backing_source: bool,
 }
 
 impl<'db> TyVisitable<'db> for ForLoopSeq<'db> {
@@ -63,6 +68,7 @@ impl<'db> TyFoldable<'db> for ForLoopSeq<'db> {
             get_callable: self.get_callable.fold_with(db, folder),
             len_effect_args: self.len_effect_args,
             get_effect_args: self.get_effect_args,
+            element_layout_backing_source: self.element_layout_backing_source,
         }
     }
 }
@@ -100,7 +106,8 @@ impl<'db> TyChecker<'db> {
                 self.check_expr_unknown(*expr)
             };
             let (pat_expected, mode) = self.destructure_source_mode(prop.ty);
-            self.check_pat(*pat, pat_expected);
+            let layout = self.pattern_layout_context(*expr);
+            self.check_pat_with_layout(*pat, pat_expected, layout.as_ref());
             if let Some(LocalBinding::Local { pat, .. }) = self.env.pat_binding(*pat) {
                 self.env
                     .set_local_borrow_provider(pat, prop.borrow_provider);
@@ -189,12 +196,20 @@ impl<'db> TyChecker<'db> {
         // Resolve Seq implementation and get element type
         let (elem_ty, for_loop_seq) = self.resolve_seq_info(expr_ty, *expr, stmt);
 
-        // Store the resolved Seq info for MIR lowering
-        if let Some(seq_info) = for_loop_seq {
+        let layout =
+            self.pattern_layout_context_for_projection(*expr, &[LayoutBundlePathStep::Index]);
+        let layout = layout.filter(|layout| {
+            self.projected_pattern_layout_ty(layout, &[])
+                .is_some_and(|projected| {
+                    crate::analysis::ty::layout_shape_key(self.db, projected)
+                        == crate::analysis::ty::layout_shape_key(self.db, elem_ty)
+                })
+        });
+        if let Some(mut seq_info) = for_loop_seq {
+            seq_info.element_layout_backing_source = layout.is_some();
             self.env.register_for_loop_seq(stmt, seq_info);
         }
-
-        self.check_pat(*pat, elem_ty);
+        self.check_pat_with_layout(*pat, elem_ty, layout.as_ref());
 
         self.env.enter_loop(stmt);
         self.env.enter_scope(*body);
@@ -349,6 +364,7 @@ impl<'db> TyChecker<'db> {
                         get_callable,
                         len_effect_args,
                         get_effect_args,
+                        element_layout_backing_source: false,
                     };
 
                     self.commit_state(snapshot);

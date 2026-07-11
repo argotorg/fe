@@ -25,6 +25,21 @@ fn match_bound_const(value: u32) -> bool {
 
 fn use_bound_const_in_type<T: BoundConst<X = u32>>(_ slot: ConstSlot<{ T::C }>) {}
 
+// Candidate collection lowers associated-type const arguments without
+// validating their bodies. Once the impl is selected, `Self::X` in an
+// associated-const header must use the checked associated type rather than
+// leaking that deferred candidate representation into type equality.
+struct TextBoundConstStruct {}
+
+impl BoundConst for TextBoundConstStruct {
+    type X = String<4>
+    const C: Self::X = "test"
+}
+
+fn use_text_bound_const() -> String<4> {
+    TextBoundConstStruct::C
+}
+
 trait DefaultBoundConst {
     type X
     const C: Self::X = 1

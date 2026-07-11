@@ -1,6 +1,9 @@
 use crate::{analysis::HirAnalysisDb, core::hir_def::EnumVariant};
 
-use super::ty_def::{BorrowKind, CapabilityKind, InvalidCause, TyId, instantiate_adt_field_ty};
+use super::{
+    adt_def::instantiate_adt_field_shape,
+    ty_def::{BorrowKind, CapabilityKind, InvalidCause, TyId},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PatternDestructureMode {
@@ -74,7 +77,7 @@ pub fn project_pattern_child_source_ty<'db>(
                     .get(variant.idx as usize)
                     .filter(|fields| field_idx < fields.num_types())
                     .map(|_| {
-                        instantiate_adt_field_ty(
+                        instantiate_adt_field_shape(
                             db,
                             adt_def,
                             variant.idx as usize,

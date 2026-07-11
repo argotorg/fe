@@ -19,7 +19,7 @@ use super::classify::{
     runtime_class_for_effect_binding_provider_in_context, snapshot_source_place,
 };
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(super) enum RuntimeSourceMode<'roots, 'db> {
     Abstract,
     Concrete(&'roots [RuntimeLocalRoot<'db>]),
@@ -88,7 +88,7 @@ impl<'a, 'carriers, 'roots, 'db> RuntimeSourceQuery<'a, 'carriers, 'roots, 'db> 
                 Some(NBorrowRoot::Param { local, .. } | NBorrowRoot::LocalSlot { local }) => {
                     self.local_has_existing_runtime_root(*local)
                 }
-                Some(NBorrowRoot::Provider { binding }) => {
+                Some(NBorrowRoot::Provider { binding, .. }) => {
                     self.provider_place_root_is_lowerable(binding)
                 }
                 None => false,
@@ -228,7 +228,7 @@ impl<'a, 'carriers, 'roots, 'db> RuntimeSourceQuery<'a, 'carriers, 'roots, 'db> 
                 Some(NBorrowRoot::Param { local, .. } | NBorrowRoot::LocalSlot { local }) => {
                     self.semantic_place_root_is_lowerable(*local, visiting)
                 }
-                Some(NBorrowRoot::Provider { binding }) => {
+                Some(NBorrowRoot::Provider { binding, .. }) => {
                     self.provider_place_root_is_lowerable(binding)
                 }
                 None => false,
@@ -277,9 +277,13 @@ pub(super) fn alias_source_place_for_local<'db>(
         return Some(place.clone());
     }
     match &local_data.lowering {
-        NormalizedBindingLowering::CarrierLocal { provider, .. } => {
+        NormalizedBindingLowering::CarrierLocal {
+            provider,
+            target_ty,
+            ..
+        } => {
             let root = if let Some(provider) = provider {
-                NSPlaceRoot::Root(provider_borrow_root(body, provider)?)
+                NSPlaceRoot::Root(provider_borrow_root(body, provider, *target_ty)?)
             } else {
                 NSPlaceRoot::CarrierDerefLocal(local)
             };
@@ -297,10 +301,19 @@ pub(super) fn alias_source_place_for_local<'db>(
 fn provider_borrow_root<'db>(
     body: &NormalizedSemanticBody<'db>,
     provider: &hir::semantic::ProviderBinding<'db>,
+    value_ty: TyId<'db>,
 ) -> Option<NBorrowRootId> {
     body.borrow_roots
         .iter()
-        .position(|root| matches!(root, NBorrowRoot::Provider { binding } if binding == provider))
+        .position(|root| {
+            matches!(
+                root,
+                NBorrowRoot::Provider {
+                    binding,
+                    value_ty: root_value_ty,
+                } if binding == provider && *root_value_ty == value_ty
+            )
+        })
         .map(|idx| NBorrowRootId::from_u32(idx as u32))
 }
 

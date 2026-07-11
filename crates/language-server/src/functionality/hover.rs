@@ -4,12 +4,9 @@ use async_lsp::lsp_types::Hover;
 use common::file::File;
 use hir::{
     HirDb,
-    analysis::ty::{
-        ProviderAddressSpace,
-        ty_check::{EffectParamSite, LocalBinding, ParamSite},
-    },
+    analysis::ty::ty_check::{EffectParamSite, LocalBinding, ParamSite},
     core::semantic::{
-        EffectEnvView, ProviderSource,
+        ContractFieldId, EffectEnvView, FieldStorageLayout, FieldView, ProviderSource,
         reference::{ReferenceView, Target},
     },
     hir_def::{FieldParent, ItemKind, PathId, scope_graph::ScopeId},
@@ -102,39 +99,39 @@ fn effect_binding_provider_source_at_site<'db>(
         .map(|provider| provider.source)
 }
 
-fn contract_field_layout_by_index<'db>(
+fn contract_field_id_by_index<'db>(
     db: &'db DriverDataBase,
     contract: hir::hir_def::Contract<'db>,
     field_idx: u32,
-) -> Option<(usize, usize, ProviderAddressSpace)> {
-    let field = contract
-        .field_layout(db)
-        .values()
-        .find(|field| field.index == field_idx)?;
-    Some((field.slot_offset, field.slot_count, field.address_space))
+) -> Option<ContractFieldId<'db>> {
+    hir::hir_def::FieldParent::Contract(contract)
+        .fields(db)
+        .filter_map(|field| field.name(db))
+        .nth(field_idx as usize)?;
+    Some(ContractFieldId {
+        contract,
+        index: field_idx,
+    })
 }
 
-fn contract_field_layout_from_scope<'db>(
+fn contract_field_id_from_scope<'db>(
     db: &'db DriverDataBase,
     scope: ScopeId<'db>,
-) -> Option<(usize, usize, ProviderAddressSpace)> {
+) -> Option<ContractFieldId<'db>> {
     let ScopeId::Field(FieldParent::Contract(contract), idx) = scope else {
         return None;
     };
-
-    if let Some(name) = scope.name(db)
-        && let Some(field) = contract.field_layout(db).get(&name)
-    {
-        return Some((field.slot_offset, field.slot_count, field.address_space));
+    FieldView {
+        parent: FieldParent::Contract(contract),
+        idx: usize::from(idx),
     }
-
-    contract_field_layout_by_index(db, contract, idx as u32)
+    .contract_field_id(db)
 }
 
-fn contract_field_layout_from_local_binding<'db>(
+fn contract_field_id_from_local_binding<'db>(
     db: &'db DriverDataBase,
     binding: LocalBinding<'db>,
-) -> Option<(usize, usize, ProviderAddressSpace)> {
+) -> Option<ContractFieldId<'db>> {
     match binding {
         LocalBinding::Param {
             site: ParamSite::EffectField(effect_site),
@@ -144,8 +141,18 @@ fn contract_field_layout_from_local_binding<'db>(
             let contract = contract_from_effect_site(db, effect_site)?;
             let key_path = effect_key_path_at_site(db, effect_site, idx)?;
             let name = key_path.ident(db).to_opt()?;
-            let field = contract.field_layout(db).get(&name)?;
-            Some((field.slot_offset, field.slot_count, field.address_space))
+            contract
+                .storage_layout(db)
+                .values()
+                .find(|field| field.name == name)
+                .map(|field| field.field)
+                .or_else(|| {
+                    FieldParent::Contract(contract)
+                        .fields(db)
+                        .filter_map(|field| field.name(db))
+                        .position(|field_name| field_name == name)
+                        .and_then(|idx| contract_field_id_by_index(db, contract, idx as u32))
+                })
         }
         LocalBinding::EffectParam { site, idx, .. } => {
             let ProviderSource::ContractField { field_idx, .. } =
@@ -154,24 +161,144 @@ fn contract_field_layout_from_local_binding<'db>(
                 return None;
             };
             let contract = contract_from_effect_site(db, site)?;
-            contract_field_layout_by_index(db, contract, field_idx)
+            contract_field_id_by_index(db, contract, field_idx)
         }
         _ => None,
     }
+}
+
+fn allocated_layout_footer(db: &DriverDataBase, field: &FieldStorageLayout<'_>) -> String {
+    let end = field.slot_offset + field.slot_count;
+    let mut lines = vec![
+        format!(
+            "slot: {} (range: {}..{}, count: {})",
+            field.slot_offset, field.slot_offset, end, field.slot_count
+        ),
+        format!("space: {}", field.address_space.pretty()),
+    ];
+    let mut explicit = Vec::new();
+    for occurrence in &field.concrete_occurrences {
+        let root = (occurrence.space, occurrence.value);
+        if explicit.contains(&root) {
+            continue;
+        }
+        explicit.push(root);
+        lines.push(format!(
+            "explicit root: slot {} ({})",
+            occurrence.value.data(db),
+            occurrence.space.pretty()
+        ));
+    }
+    for cell in &field.cells {
+        if let Some(allocation) = cell.allocation {
+            lines.push(format!(
+                "scalar root: slot {} ({})",
+                allocation.slot,
+                allocation.space.pretty()
+            ));
+        }
+    }
+    for family in &field.families {
+        let Some(allocation) = family.allocation else {
+            continue;
+        };
+        let end = allocation.slot + family.extent;
+        let formula = family
+            .strides
+            .iter()
+            .enumerate()
+            .map(|(idx, stride)| {
+                if *stride == 1 {
+                    format!("i{idx}")
+                } else {
+                    format!("i{idx}*{stride}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" + ");
+        let dimensions = family
+            .dimensions
+            .iter()
+            .map(|dimension| dimension.len.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!(
+            "root family: slots {}..{} ({}, dimensions [{}], root = {} + {})",
+            allocation.slot,
+            end,
+            allocation.space.pretty(),
+            dimensions,
+            allocation.slot,
+            formula,
+        ));
+    }
+    lines.join("\n")
+}
+
+fn contract_field_layout_footer_for_id<'db>(
+    db: &'db DriverDataBase,
+    field: ContractFieldId<'db>,
+) -> Option<String> {
+    let result = field.contract.storage_layout(db);
+    if let Some(layout) = result.values().find(|layout| layout.field == field) {
+        return Some(allocated_layout_footer(db, layout));
+    }
+    if let Some(errors) = result.field_errors_for_id(field) {
+        return Some(format!(
+            "layout: invalid ({})",
+            errors
+                .first()
+                .map_or("unknown layout error", |error| error.summary())
+        ));
+    }
+    Some(
+        "layout: allocation unavailable because another contract field has an invalid layout"
+            .to_string(),
+    )
 }
 
 fn contract_field_layout_footer<'db>(
     db: &'db DriverDataBase,
     target: &Target<'db>,
 ) -> Option<String> {
-    let (slot_offset, slot_count, address_space) = match target {
-        Target::Scope(scope) => contract_field_layout_from_scope(db, *scope)?,
-        Target::Local { binding, .. } => contract_field_layout_from_local_binding(db, *binding)?,
+    let field = match target {
+        Target::Scope(scope) => contract_field_id_from_scope(db, *scope)?,
+        Target::Local { binding, .. } => contract_field_id_from_local_binding(db, *binding)?,
     };
-    Some(format!(
-        "slot: {slot_offset} (count: {slot_count})\nspace: {}",
-        address_space.pretty()
-    ))
+    contract_field_layout_footer_for_id(db, field)
+}
+
+fn contract_field_definition_hover(
+    db: &DriverDataBase,
+    top_mod: hir::hir_def::TopLevelMod<'_>,
+    cursor: Cursor,
+) -> Option<Hover> {
+    for item in top_mod.scope_graph(db).items_dfs(db) {
+        let ItemKind::Contract(contract) = item else {
+            continue;
+        };
+        for field in FieldParent::Contract(contract).fields(db) {
+            let scope = ScopeId::Field(FieldParent::Contract(contract), field.idx as u16);
+            let Some(span) = scope.name_span(db).and_then(|span| span.resolve(db)) else {
+                continue;
+            };
+            if !span.range.contains(cursor) {
+                continue;
+            }
+            let field = contract_field_id_from_scope(db, scope)?;
+            let footer = contract_field_layout_footer_for_id(db, field)?;
+            return Some(Hover {
+                contents: async_lsp::lsp_types::HoverContents::Markup(
+                    async_lsp::lsp_types::MarkupContent {
+                        kind: async_lsp::lsp_types::MarkupKind::Markdown,
+                        value: footer,
+                    },
+                ),
+                range: to_lsp_range_from_span(span, db).ok(),
+            });
+        }
+    }
+    None
 }
 
 fn hover_markdown_for_target<'db>(
@@ -225,7 +352,7 @@ pub fn hover_helper(
 
     // Get the reference at cursor and resolve it
     let Some(r) = top_mod.reference_at(db, cursor) else {
-        return Ok((None, None));
+        return Ok((contract_field_definition_hover(db, top_mod, cursor), None));
     };
 
     let resolution = r.target_at(db, cursor);

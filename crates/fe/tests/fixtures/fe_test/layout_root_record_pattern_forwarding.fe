@@ -1,0 +1,76 @@
+use std::evm::{Evm, StorageMap}
+
+struct Pair<T> {
+    left: T,
+    right: T,
+}
+
+impl Pair<StorageMap<u256, u256>> {
+    fn get_left(self, key: u256) -> u256 {
+        let Self { left, .. } = self
+        left.get(key: key)
+    }
+
+    fn get_right(self, key: u256) -> u256 {
+        let Self { right, .. } = self
+        right.get(key: key)
+    }
+}
+
+msg Msg {
+    #[selector = 1]
+    Set { key: u256, left: u256, right: u256 },
+
+    #[selector = 2]
+    Get { key: u256 } -> (u256, u256),
+
+    #[selector = 3]
+    GetDirect { key: u256 } -> (u256, u256),
+}
+
+pub contract C {
+    mut pair: Pair<StorageMap<u256, u256>>,
+
+    recv Msg {
+        Set { key, left, right } uses (mut pair) {
+            pair.left.set(key: key, value: left)
+            pair.right.set(key: key, value: right)
+        }
+
+        Get { key } -> (u256, u256) uses (pair) {
+            (pair.get_left(key: key), pair.get_right(key: key))
+        }
+
+        GetDirect { key } -> (u256, u256) uses (pair) {
+            let Pair { left, right } = pair
+            (left.get(key: key), right.get(key: key))
+        }
+    }
+}
+
+#[test]
+fn record_patterns_preserve_projected_layout_roots() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 1)
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::Set { key: 7, left: 42, right: 99 },
+    )
+    let values: (u256, u256) = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::Get { key: 7 },
+    )
+    assert!(values.0 == 42)
+    assert!(values.1 == 99)
+    let direct: (u256, u256) = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::GetDirect { key: 7 },
+    )
+    assert!(direct.0 == 42)
+    assert!(direct.1 == 99)
+}

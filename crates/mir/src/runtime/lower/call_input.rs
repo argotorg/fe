@@ -1,6 +1,6 @@
 use hir::analysis::{
-    semantic::{NBorrowRoot, NEffectArg, NEffectArgValue, NSPlace, NSPlaceRoot, SemanticInstance},
-    ty::{ty_check::EffectPassMode, ty_def::TyId},
+    semantic::{NEffectArg, NEffectArgValue, SemanticInstance},
+    ty::ty_check::EffectPassMode,
 };
 
 use crate::{
@@ -218,22 +218,8 @@ fn effect_arg_is_runtime_zst<'db>(
         NEffectArgValue::Value(value) => body.local(value.local).is_some_and(|local| {
             runtime_zero_sized_transport_ty(db, local.ty, type_env.scope, type_env.assumptions)
         }),
-        NEffectArgValue::Place(place) => place_root_ty(body, place).is_some_and(|ty| {
+        NEffectArgValue::Place(place) => body.place_root_ty(&place.root).is_some_and(|ty| {
             runtime_zero_sized_transport_ty(db, ty, type_env.scope, type_env.assumptions)
         }),
     }
-}
-
-fn place_root_ty<'db>(
-    body: &hir::analysis::semantic::borrowck::NormalizedSemanticBody<'db>,
-    place: &NSPlace<'db>,
-) -> Option<TyId<'db>> {
-    let local = match place.root {
-        NSPlaceRoot::CarrierDerefLocal(local) => local,
-        NSPlaceRoot::Root(root) => match body.root(root)? {
-            NBorrowRoot::Param { local, .. } | NBorrowRoot::LocalSlot { local } => *local,
-            NBorrowRoot::Provider { .. } => return None,
-        },
-    };
-    body.local(local).map(|local| local.ty)
 }

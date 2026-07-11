@@ -1,7 +1,9 @@
 use hir::analysis::{
     semantic::{SemanticInstance, owner_effect_bindings, same_owner_effect_binding},
-    ty::ty_check::{BodyOwner, LocalBinding, ParamSite},
-    ty::ty_def::TyId,
+    ty::{
+        ty_check::{BodyOwner, LocalBinding, ParamSite},
+        ty_def::TyId,
+    },
 };
 
 use crate::{
@@ -96,7 +98,7 @@ pub(crate) fn runtime_visible_binding_plans<'db>(
         if !matches!(plan, RuntimeParamPlan::Erased) {
             entries.push(RuntimeVisibleBindingPlan {
                 binding,
-                local: runtime_visible_binding_local(db, owner, typed_body, binding),
+                local: runtime_visible_binding_local(db, semantic, binding),
                 semantic_ty: runtime_visible_binding_semantic_ty(db, semantic, typed_body, binding),
                 plan,
             });
@@ -149,42 +151,18 @@ pub(crate) fn runtime_visible_binding_plans<'db>(
 
 fn runtime_visible_binding_local<'db>(
     db: &'db dyn MirDb,
-    owner: BodyOwner<'db>,
-    typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
+    semantic: SemanticInstance<'db>,
     binding: LocalBinding<'db>,
 ) -> hir::analysis::semantic::SLocalId {
-    let mut next = 0u32;
-    let mut param_idx = 0;
-    while let Some(param_binding) = typed_body.param_binding(param_idx) {
-        if param_binding == binding {
-            return hir::analysis::semantic::SLocalId::from_u32(next);
-        }
-        next += 1;
-        param_idx += 1;
-    }
-    if let BodyOwner::ContractRecvArm {
-        contract,
-        recv_idx,
-        arm_idx,
-    } = owner
-    {
-        let recv = hir::semantic::RecvView::new(db, contract, recv_idx);
-        let arm = hir::semantic::RecvArmView::new(db, recv, arm_idx);
-        for arg_binding in arm.arg_bindings(db) {
-            let Some(pat_binding) = typed_body.pat_binding(arg_binding.pat) else {
-                continue;
-            };
-            if pat_binding == binding {
-                return hir::analysis::semantic::SLocalId::from_u32(next);
-            }
-            next += 1;
-        }
-    }
-    for effect_binding in owner_effect_bindings(db, owner) {
-        if same_owner_effect_binding(effect_binding, binding) {
-            return hir::analysis::semantic::SLocalId::from_u32(next);
-        }
-        next += 1;
+    let body = semantic.body(db);
+    if let Some(local) = body.entry_locals.iter().copied().find(|local| {
+        body.local(*local)
+            .and_then(|local| local.source)
+            .is_some_and(|candidate| {
+                candidate == binding || same_owner_effect_binding(candidate, binding)
+            })
+    }) {
+        return local;
     }
     panic!("missing semantic local for runtime-visible binding {binding:?}")
 }

@@ -17,7 +17,7 @@ pub use name_resolver::{
     EarlyNameQueryId, NameDerivation, NameDomain, NameRes, NameResBucket, NameResKind,
     NameResolutionError, QueryDirective,
 };
-pub(crate) use path_resolver::resolve_path_with_minter;
+pub(crate) use path_resolver::resolve_type_path_definition;
 pub(crate) use path_resolver::{FindAssociatedTypeError, find_associated_type};
 pub use path_resolver::{
     PathRes, PathResError, PathResErrorKind, ResolvedVariant, resolve_ident_to_bucket,
@@ -25,6 +25,9 @@ pub use path_resolver::{
 };
 pub(crate) use path_resolver::{
     earliest_conflicting_inherent_const_impl, shadowed_inherent_fn_for_const,
+};
+pub(crate) use path_resolver::{
+    resolve_name_res_with_minter, resolve_path_with_minter, resolve_path_with_observer_and_minter,
 };
 use tracing::debug;
 pub use traits_in_scope::available_traits_in_scope;

@@ -793,14 +793,16 @@ pub fn check_contract_immutable_fields_initialized<'db>(
     contract: Contract<'db>,
 ) -> Vec<FuncBodyDiag<'db>> {
     let valid_fields = contract
-        .field_layout(db)
+        .storage_layout(db)
         .values()
         .filter(|field| field.slot_count != 0)
-        .filter(|field| !field.declared_ty.has_invalid(db) && !field.target_ty.has_invalid(db))
+        .filter(|field| {
+            !field.declared.template.has_invalid(db) && !field.target.template.has_invalid(db)
+        })
         .filter(|field| {
             FieldView {
                 parent: FieldParent::Contract(contract),
-                idx: field.index as usize,
+                idx: field.field.index as usize,
             }
             .ty_diags(db)
             .is_empty()
@@ -809,15 +811,21 @@ pub fn check_contract_immutable_fields_initialized<'db>(
         .collect::<Vec<_>>();
     let mut diags = valid_fields
         .iter()
-        .filter(|field| field.address_space == ProviderAddressSpace::Memory)
+        .filter(|field| {
+            matches!(
+                field.address_space,
+                ProviderAddressSpace::Memory | ProviderAddressSpace::Calldata
+            )
+        })
         .map(|field| {
-            BodyDiag::UnsupportedMemoryContractField {
+            BodyDiag::UnsupportedContractFieldAddressSpace {
                 primary: FieldView {
                     parent: FieldParent::Contract(contract),
-                    idx: field.index as usize,
+                    idx: field.field.index as usize,
                 }
                 .ty_span(),
                 field: field.name,
+                space: field.address_space,
             }
             .into()
         })
@@ -832,7 +840,7 @@ pub fn check_contract_immutable_fields_initialized<'db>(
 
     let required = required_fields
         .iter()
-        .map(|field| field.index)
+        .map(|field| field.field.index)
         .collect::<FxHashSet<_>>();
     let init = contract.init(db);
     let missing = if init.is_some() {
@@ -861,9 +869,10 @@ pub fn check_contract_immutable_fields_initialized<'db>(
 
     let init_span = init.map(|_| contract.span().init_block().body().into());
     diags.extend(required_fields.into_iter().filter_map(|field| {
-        missing.contains(&field.index).then(|| {
+        missing.contains(&field.field.index).then(|| {
             BodyDiag::ImmutableContractFieldNotInitialized {
-                primary: FieldParent::Contract(contract).field_name_span(field.index as usize),
+                primary: FieldParent::Contract(contract)
+                    .field_name_span(field.field.index as usize),
                 field: field.name,
                 init: init_span.clone(),
             }

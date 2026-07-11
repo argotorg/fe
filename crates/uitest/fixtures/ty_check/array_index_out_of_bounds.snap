@@ -8,3 +8,27 @@ error[8-0084]: index out of bounds
   │
 3 │     arr[5]
   │         ^ index `5` is out of bounds for array of length `3`
+
+error[8-0084]: index out of bounds
+   ┌─ array_index_out_of_bounds.fe:10:9
+   │
+10 │     arr[OUT_OF_BOUNDS]
+   │         ^^^^^^^^^^^^^ index `5` is out of bounds for array of length `3`
+
+error[8-0084]: index out of bounds
+   ┌─ array_index_out_of_bounds.fe:15:9
+   │
+15 │     arr[18446744073709551616]
+   │         ^^^^^^^^^^^^^^^^^^^^ index `18446744073709551616` is out of bounds for array of length `3`
+
+error[8-0084]: index out of bounds
+   ┌─ array_index_out_of_bounds.fe:22:9
+   │
+22 │     arr[BASE + 1]
+   │         ^^^^^^^^ index `5` is out of bounds for array of length `3`
+
+error[8-0084]: index out of bounds
+   ┌─ array_index_out_of_bounds.fe:27:9
+   │
+27 │     arr[(2 * 2) - 1]
+   │         ^^^^^^^^^^^ index `3` is out of bounds for array of length `3`

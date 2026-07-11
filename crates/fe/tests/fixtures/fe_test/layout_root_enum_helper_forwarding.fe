@@ -1,0 +1,63 @@
+use std::evm::{Evm, StorageMap}
+
+enum Choice<T> {
+    Primary(T),
+    Secondary(T),
+}
+
+impl Choice<StorageMap<u256, u256>> {
+    fn set(mut self, key: u256, value: u256) {
+        match self {
+            Choice::Primary(mut map) => map.set(key: key, value: value),
+            Choice::Secondary(mut map) => map.set(key: key, value: value),
+        }
+    }
+
+    fn get(self, key: u256) -> u256 {
+        if let Choice::Primary(map) = self {
+            map.get(key: key)
+        } else {
+            0
+        }
+    }
+}
+
+msg Msg {
+    #[selector = 1]
+    Set { key: u256, value: u256 },
+
+    #[selector = 2]
+    Get { key: u256 } -> u256,
+}
+
+pub contract C {
+    mut choice: Choice<StorageMap<u256, u256>>,
+
+    recv Msg {
+        Set { key, value } uses (mut choice) {
+            choice.set(key: key, value: value)
+        }
+
+        Get { key } -> u256 uses (choice) {
+            choice.get(key: key)
+        }
+    }
+}
+
+#[test]
+fn enum_payload_layout_roots_cross_method_boundaries() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 1)
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::Set { key: 7, value: 42 },
+    )
+    let value: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::Get { key: 7 },
+    )
+    assert!(value == 42)
+}

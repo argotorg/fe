@@ -519,7 +519,7 @@ pub(crate) enum WellFormedness<'db> {
 }
 
 impl WellFormedness<'_> {
-    fn is_wf(self) -> bool {
+    pub(crate) fn is_wf(self) -> bool {
         matches!(self, WellFormedness::WellFormed)
     }
 }

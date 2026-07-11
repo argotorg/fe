@@ -49,9 +49,9 @@ func private %get(v0.constref<[i64; 25]>, v1.i256) -> i64 {
         jump block1;
 
     block1:
-        v5.i1 = lt v1 25.i256;
-        v6.i1 = is_zero v5;
-        br v6 block2 block3;
+        v4.i1 = lt v1 25.i256;
+        v5.i1 = is_zero v4;
+        br v5 block2 block3;
 
     block2:
         evm_revert 0.i256 0.i256;

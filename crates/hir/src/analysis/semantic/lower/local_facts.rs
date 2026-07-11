@@ -1,12 +1,24 @@
 use cranelift_entity::EntityRef;
 
-use crate::analysis::{
-    semantic::{
-        PlaceProvenance, SExpr, SLocalId, SPlace, SStmtKind, SemanticLocalRole, ValueProvenance,
-    },
-    ty::{effect_handle_metadata, normalize::normalize_ty, ty_def::TyId},
-};
 use crate::semantic::ProviderBinding;
+use crate::{
+    analysis::{
+        semantic::{
+            FieldIndex, LayoutBackingPlace, LayoutBackingProjection, LayoutBackingSource,
+            PlaceProvenance, SEffectArgValue, SExpr, SLocalId, SPlace, SStmtKind,
+            SemanticLocalRole, SemanticProjectionPath, ValueProvenance, VariantIndex,
+        },
+        ty::{
+            adt_def::instantiate_adt_field_shape,
+            const_ty::CallableInputLayoutHoleOrigin,
+            normalize::normalize_ty,
+            provider::{ProviderLayoutEvidence, provider_semantics},
+            ty_check::{LocalBinding, ParamSite, ReturnProjectionStep, ReturnProvenance},
+            ty_def::TyId,
+        },
+    },
+    projection::{IndexSource, Projection},
+};
 
 use super::body::SmirLowerCtxt;
 
@@ -26,6 +38,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             .as_ref()
             .map(|_| self.classify_expr_local_role(self.locals[dst_idx].ty, expr));
         let next_snapshot = self.classify_expr_snapshot_source(expr);
+        let next_layout_backing_sources = self.classify_expr_layout_backing_sources(expr);
 
         if let Some((next_role, fallback)) = next_role.zip(fallback) {
             self.locals[dst_idx].role =
@@ -38,6 +51,15 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             self.locals[dst_idx].snapshot_source = next_snapshot;
             self.assigned_snapshots[dst_idx] = true;
         }
+        if self.assigned_layout_backing_sources[dst_idx] {
+            self.locals[dst_idx].layout_backing_sources = merge_layout_backing_sources(
+                self.locals[dst_idx].layout_backing_sources.clone(),
+                next_layout_backing_sources,
+            );
+        } else {
+            self.locals[dst_idx].layout_backing_sources = next_layout_backing_sources;
+            self.assigned_layout_backing_sources[dst_idx] = true;
+        }
     }
 
     fn fallback_local_role(&self, ty: TyId<'db>) -> SemanticLocalRole<'db> {
@@ -48,13 +70,16 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 value_ty: normalize_ty(self.db, value_ty, self.body.scope(), self.assumptions),
             };
         }
-        effect_handle_metadata(self.db, self.body.scope(), self.assumptions, ty).map_or(
-            ordinary_direct_value_role(),
-            |metadata| SemanticLocalRole::DirectCarrier {
-                provider: None,
-                target_ty: metadata.target_ty,
-            },
-        )
+        let semantics = provider_semantics(self.db, self.body.scope(), self.assumptions, ty);
+        match (semantics.evidence, semantics.target_ty) {
+            (ProviderLayoutEvidence::ResolvedHandle(_), Some(target_ty)) => {
+                SemanticLocalRole::DirectCarrier {
+                    provider: None,
+                    target_ty,
+                }
+            }
+            _ => ordinary_direct_value_role(),
+        }
     }
 
     fn classify_expr_local_role(
@@ -153,6 +178,286 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         }
     }
 
+    fn classify_expr_layout_backing_sources(
+        &self,
+        expr: &SExpr<'db>,
+    ) -> Vec<LayoutBackingSource<'db>> {
+        match expr {
+            SExpr::Forward(value) | SExpr::UseValue(value) => {
+                self.local_layout_backing_sources(value.value)
+            }
+            SExpr::ReadPlace { place } | SExpr::Borrow { place, .. } => {
+                self.layout_backing_sources_for_place(place)
+            }
+            SExpr::Field { base, field } => {
+                self.layout_backing_sources_for_place(&SPlace::field(base.value, *field))
+            }
+            SExpr::Index { base, index } => self
+                .layout_backing_sources_for_place(&SPlace::dynamic_index(base.value, index.value)),
+            SExpr::ExtractEnumField {
+                value,
+                variant,
+                field,
+            } => self.layout_backing_sources_for_place(&SPlace::variant_field(
+                value.value,
+                *variant,
+                self.locals[value.value.index()].ty,
+                *field,
+            )),
+            SExpr::Call {
+                callee,
+                args,
+                effect_args,
+                ..
+            } => self.classify_call_layout_backing_sources(*callee, args, effect_args),
+            SExpr::ArrayRepeat { value, .. } => {
+                let mut sources = self.local_layout_backing_sources(value.value);
+                prefix_layout_backing_sources(&mut sources, LayoutBackingProjection::Index(None));
+                sources
+            }
+            SExpr::AggregateMake { ty, fields } => {
+                let mut sources = Vec::new();
+                for (idx, field) in fields.iter().enumerate() {
+                    let mut field_sources = self.local_layout_backing_sources(field.value);
+                    let projection = if ty.is_array(self.db) {
+                        LayoutBackingProjection::Index(Some(idx))
+                    } else {
+                        let Ok(idx) = u16::try_from(idx) else {
+                            continue;
+                        };
+                        LayoutBackingProjection::Field(FieldIndex(idx))
+                    };
+                    prefix_layout_backing_sources(&mut field_sources, projection);
+                    sources.extend(field_sources);
+                }
+                dedup_layout_backing_sources(sources)
+            }
+            SExpr::EnumMake {
+                enum_ty: _,
+                variant,
+                fields,
+            } => {
+                let mut sources = Vec::new();
+                for (idx, field) in fields.iter().enumerate() {
+                    let Ok(idx) = u16::try_from(idx) else {
+                        continue;
+                    };
+                    let mut field_sources = self.local_layout_backing_sources(field.value);
+                    prefix_layout_backing_sources(
+                        &mut field_sources,
+                        LayoutBackingProjection::VariantField {
+                            variant: *variant,
+                            field: FieldIndex(idx),
+                        },
+                    );
+                    sources.extend(field_sources);
+                }
+                dedup_layout_backing_sources(sources)
+            }
+            SExpr::CodeRegionRef { .. }
+            | SExpr::Const(_)
+            | SExpr::Unary { .. }
+            | SExpr::Binary { .. }
+            | SExpr::Cast { .. }
+            | SExpr::GetEnumTag { .. }
+            | SExpr::IsEnumVariant { .. }
+            | SExpr::CodeRegionOffset { .. }
+            | SExpr::CodeRegionLen { .. } => Vec::new(),
+        }
+    }
+
+    fn classify_call_layout_backing_sources(
+        &self,
+        callee: crate::analysis::semantic::SemanticCalleeRef<'db>,
+        args: &[crate::analysis::semantic::SOperand],
+        effect_args: &[crate::analysis::semantic::SEffectArg<'db>],
+    ) -> Vec<LayoutBackingSource<'db>> {
+        let ReturnProvenance::Forwarded(return_sources) =
+            callee.key.typed_body(self.db).return_provenance(self.db)
+        else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for return_source in return_sources {
+            let (base_ty, base_sources) = match return_source.origin {
+                CallableInputLayoutHoleOrigin::Receiver => {
+                    let Some(base) = args.first().map(|arg| arg.value) else {
+                        continue;
+                    };
+                    (
+                        self.locals[base.index()].ty,
+                        self.local_layout_backing_sources(base),
+                    )
+                }
+                CallableInputLayoutHoleOrigin::ValueParam(param_idx) => {
+                    let Some(base) = args.get(param_idx).map(|arg| arg.value) else {
+                        continue;
+                    };
+                    (
+                        self.locals[base.index()].ty,
+                        self.local_layout_backing_sources(base),
+                    )
+                }
+                CallableInputLayoutHoleOrigin::Effect(effect_idx) => {
+                    let Some(effect_arg) = effect_args
+                        .iter()
+                        .find(|arg| arg.binding_idx as usize == effect_idx)
+                    else {
+                        continue;
+                    };
+                    match &effect_arg.arg {
+                        SEffectArgValue::Place(place) => (
+                            effect_arg
+                                .target_ty
+                                .unwrap_or(self.locals[place.local.index()].ty),
+                            self.layout_backing_sources_for_place(place),
+                        ),
+                        SEffectArgValue::Value(value) => {
+                            let base = value.value;
+                            (
+                                effect_arg.target_ty.unwrap_or(self.locals[base.index()].ty),
+                                self.local_layout_backing_sources(base),
+                            )
+                        }
+                    }
+                }
+            };
+            let Some((target, path)) =
+                self.return_projection_path(base_ty, &return_source.projection, args)
+            else {
+                continue;
+            };
+            let mut projected = project_layout_backing_sources(base_sources, &target, &path);
+            let Some(result_target) = self.return_result_target(&return_source.result_projection)
+            else {
+                continue;
+            };
+            prefix_layout_backing_source_path(&mut projected, &result_target);
+            out.extend(projected);
+        }
+        dedup_layout_backing_sources(out)
+    }
+
+    fn return_projection_path(
+        &self,
+        base_ty: TyId<'db>,
+        projection: &[ReturnProjectionStep],
+        args: &[crate::analysis::semantic::SOperand],
+    ) -> Option<(Vec<LayoutBackingProjection>, SemanticProjectionPath<'db>)> {
+        let mut target = Vec::new();
+        let mut path = SemanticProjectionPath::new();
+        let mut ty = base_ty
+            .as_capability(self.db)
+            .map_or(base_ty, |(_, inner)| inner);
+        for step in projection {
+            match *step {
+                ReturnProjectionStep::Field(field) => {
+                    target.push(LayoutBackingProjection::Field(FieldIndex(field)));
+                    path.push(Projection::Field(field as usize));
+                    ty = *ty.field_types(self.db).get(field as usize)?;
+                }
+                ReturnProjectionStep::VariantField { variant, field } => {
+                    target.push(LayoutBackingProjection::VariantField {
+                        variant: VariantIndex(variant),
+                        field: FieldIndex(field),
+                    });
+                    let enum_ty = ty;
+                    let adt = ty.adt_def(self.db)?;
+                    path.push(Projection::VariantField {
+                        variant: VariantIndex(variant),
+                        enum_ty,
+                        field_idx: field as usize,
+                    });
+                    ty = instantiate_adt_field_shape(
+                        self.db,
+                        adt,
+                        variant as usize,
+                        field as usize,
+                        ty.generic_args(self.db),
+                    );
+                }
+                ReturnProjectionStep::ConstantIndex(index) => {
+                    target.push(LayoutBackingProjection::Index(Some(index)));
+                    path.push(Projection::Index(IndexSource::Constant(index)));
+                    ty = *ty.generic_args(self.db).first()?;
+                }
+                ReturnProjectionStep::ParamIndex(param_idx) => {
+                    target.push(LayoutBackingProjection::Index(None));
+                    path.push(Projection::Index(IndexSource::Dynamic(
+                        args.get(param_idx)?.value,
+                    )));
+                    ty = *ty.generic_args(self.db).first()?;
+                }
+                ReturnProjectionStep::AnyIndex => {
+                    target.push(LayoutBackingProjection::Index(None));
+                    path.push(Projection::Index(IndexSource::Constant(0)));
+                    ty = *ty.generic_args(self.db).first()?;
+                }
+            }
+        }
+        Some((target, path))
+    }
+
+    fn return_result_target(
+        &self,
+        projection: &[ReturnProjectionStep],
+    ) -> Option<Vec<LayoutBackingProjection>> {
+        projection
+            .iter()
+            .map(|step| match *step {
+                ReturnProjectionStep::Field(field) => {
+                    Some(LayoutBackingProjection::Field(FieldIndex(field)))
+                }
+                ReturnProjectionStep::VariantField { variant, field } => {
+                    Some(LayoutBackingProjection::VariantField {
+                        variant: VariantIndex(variant),
+                        field: FieldIndex(field),
+                    })
+                }
+                ReturnProjectionStep::ConstantIndex(index) => {
+                    Some(LayoutBackingProjection::Index(Some(index)))
+                }
+                ReturnProjectionStep::AnyIndex => Some(LayoutBackingProjection::Index(None)),
+                ReturnProjectionStep::ParamIndex(_) => None,
+            })
+            .collect()
+    }
+
+    fn layout_backing_sources_for_place(
+        &self,
+        place: &SPlace<'db>,
+    ) -> Vec<LayoutBackingSource<'db>> {
+        let base_sources = self.local_layout_backing_sources(place.local);
+        let target = layout_backing_source_target_for_path(&place.path);
+        let projected = target.map_or_else(Vec::new, |target| {
+            project_layout_backing_sources(base_sources, &target, &place.path)
+        });
+        if projected.is_empty() {
+            whole_layout_backing_source(LayoutBackingPlace::Local(place.clone()))
+        } else {
+            projected
+        }
+    }
+
+    fn local_layout_backing_sources(&self, local: SLocalId) -> Vec<LayoutBackingSource<'db>> {
+        if !self.locals[local.index()].layout_backing_sources.is_empty() {
+            return self.locals[local.index()].layout_backing_sources.clone();
+        }
+        if matches!(
+            self.locals[local.index()].source,
+            Some(
+                LocalBinding::Param {
+                    site: ParamSite::Func(_) | ParamSite::EffectField(_),
+                    ..
+                } | LocalBinding::EffectParam { .. }
+            )
+        ) {
+            whole_layout_backing_source(LayoutBackingPlace::Local(SPlace::new(local)))
+        } else {
+            Vec::new()
+        }
+    }
+
     fn classify_projection_snapshot_source(
         &self,
         place: SPlace<'db>,
@@ -222,9 +527,25 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     ) -> SemanticLocalRole<'db> {
         let fallback = self.fallback_local_role(dst_ty);
         let base_role = self.locals[place.local.index()].role.clone();
+        let base_value_ty = match &base_role {
+            SemanticLocalRole::PlaceCarrier { value_ty, .. }
+            | SemanticLocalRole::PlaceBoundValue { value_ty, .. } => Some(*value_ty),
+            SemanticLocalRole::DirectCarrier { target_ty, .. } => Some(*target_ty),
+            SemanticLocalRole::Erased | SemanticLocalRole::DirectValue { .. } => None,
+        };
         match fallback {
             SemanticLocalRole::Erased => SemanticLocalRole::Erased,
             SemanticLocalRole::DirectValue { .. } => fallback,
+            SemanticLocalRole::PlaceCarrier { value_ty, .. }
+                if value_ty.is_zero_sized(self.db)
+                    && base_value_ty.is_some_and(|ty| ty.is_zero_sized(self.db)) =>
+            {
+                // A projection out of a layout-only aggregate has no runtime
+                // backing place to bind. Keep it as its own zero-sized
+                // carrier while layout-backing provenance retains the exact
+                // physical origin that borrow normalization must keep rooted.
+                fallback
+            }
             SemanticLocalRole::PlaceCarrier { value_ty, .. }
             | SemanticLocalRole::PlaceBoundValue { value_ty, .. }
                 if local_role_supports_place_provenance(&base_role) =>
@@ -251,6 +572,151 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 }),
         }
     }
+}
+
+fn whole_layout_backing_source<'db>(
+    source: LayoutBackingPlace<'db>,
+) -> Vec<LayoutBackingSource<'db>> {
+    vec![LayoutBackingSource {
+        target: Vec::new(),
+        source,
+    }]
+}
+
+fn dedup_layout_backing_sources<'db>(
+    sources: Vec<LayoutBackingSource<'db>>,
+) -> Vec<LayoutBackingSource<'db>> {
+    let mut deduped = Vec::new();
+    for source in sources {
+        if !deduped.contains(&source) {
+            deduped.push(source);
+        }
+    }
+    deduped
+}
+
+fn merge_layout_backing_sources<'db>(
+    current: Vec<LayoutBackingSource<'db>>,
+    incoming: Vec<LayoutBackingSource<'db>>,
+) -> Vec<LayoutBackingSource<'db>> {
+    current
+        .into_iter()
+        .filter(|source| incoming.contains(source))
+        .collect()
+}
+
+fn prefix_layout_backing_sources<'db>(
+    sources: &mut [LayoutBackingSource<'db>],
+    projection: LayoutBackingProjection,
+) {
+    for source in sources {
+        source.target.insert(0, projection);
+    }
+}
+
+fn prefix_layout_backing_source_path<'db>(
+    sources: &mut [LayoutBackingSource<'db>],
+    prefix: &[LayoutBackingProjection],
+) {
+    for source in sources {
+        let mut target = prefix.to_vec();
+        target.append(&mut source.target);
+        source.target = target;
+    }
+}
+
+fn layout_backing_source_projection_matches(
+    pattern: LayoutBackingProjection,
+    candidate: LayoutBackingProjection,
+) -> bool {
+    pattern == candidate
+        || matches!(
+            (pattern, candidate),
+            (
+                LayoutBackingProjection::Index(None),
+                LayoutBackingProjection::Index(_)
+            )
+        )
+}
+
+fn layout_backing_source_path_is_prefix(
+    prefix: &[LayoutBackingProjection],
+    path: &[LayoutBackingProjection],
+) -> bool {
+    prefix.len() <= path.len()
+        && prefix
+            .iter()
+            .copied()
+            .zip(path.iter().copied())
+            .all(|(pattern, candidate)| {
+                layout_backing_source_projection_matches(pattern, candidate)
+            })
+}
+
+fn append_layout_backing_source_path<'db>(
+    source: &mut LayoutBackingPlace<'db>,
+    suffix: &SemanticProjectionPath<'db>,
+) {
+    match source {
+        LayoutBackingPlace::Local(place) => place.path = place.path.concat(suffix),
+        LayoutBackingPlace::RootProvider { path, .. } => *path = path.concat(suffix),
+    }
+}
+
+fn project_layout_backing_sources<'db>(
+    sources: Vec<LayoutBackingSource<'db>>,
+    target: &[LayoutBackingProjection],
+    path: &SemanticProjectionPath<'db>,
+) -> Vec<LayoutBackingSource<'db>> {
+    debug_assert_eq!(target.len(), path.len());
+    let mut projected = Vec::new();
+    for mut source in sources {
+        if layout_backing_source_path_is_prefix(&source.target, target) {
+            let mut suffix = SemanticProjectionPath::new();
+            for projection in path.iter().skip(source.target.len()) {
+                suffix.push(projection.clone());
+            }
+            append_layout_backing_source_path(&mut source.source, &suffix);
+            source.target.clear();
+            projected.push(source);
+        } else if layout_backing_source_path_is_prefix(target, &source.target) {
+            source.target.drain(..target.len());
+            projected.push(source);
+        }
+    }
+    dedup_layout_backing_sources(projected)
+}
+
+fn layout_backing_source_target_for_path<'db>(
+    path: &SemanticProjectionPath<'db>,
+) -> Option<Vec<LayoutBackingProjection>> {
+    path.iter()
+        .filter_map(|projection| match projection {
+            Projection::Field(field) => u16::try_from(*field)
+                .ok()
+                .map(FieldIndex)
+                .map(LayoutBackingProjection::Field)
+                .map(Some),
+            Projection::VariantField {
+                variant, field_idx, ..
+            } => u16::try_from(*field_idx)
+                .ok()
+                .map(FieldIndex)
+                .map(|field| LayoutBackingProjection::VariantField {
+                    variant: *variant,
+                    field,
+                })
+                .map(Some),
+            Projection::Index(IndexSource::Constant(index)) => {
+                Some(Some(LayoutBackingProjection::Index(Some(*index))))
+            }
+            Projection::Index(IndexSource::Dynamic(_)) => {
+                Some(Some(LayoutBackingProjection::Index(None)))
+            }
+            Projection::Deref => None,
+            Projection::Discriminant => Some(None),
+        })
+        .collect()
 }
 
 pub(super) fn ordinary_direct_value_role<'db>() -> SemanticLocalRole<'db> {

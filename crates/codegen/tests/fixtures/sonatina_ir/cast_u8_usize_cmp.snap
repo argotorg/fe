@@ -12,9 +12,9 @@ func private %cast_u8_usize_cmp(v0.constref<[i8; 8]>, v1.i256, v2.i256) -> i8 {
         jump block1;
 
     block1:
-        v6.i1 = lt v1 8.i256;
-        v7.i1 = is_zero v6;
-        br v7 block11 block12;
+        v5.i1 = lt v1 8.i256;
+        v6.i1 = is_zero v5;
+        br v6 block11 block12;
 
     block2:
         return 1.i8;

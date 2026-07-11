@@ -19,7 +19,52 @@ fn use_it(s: S<7>) {
     needs_tr(s)
 }
 
-// Evaluating `pick()` selects `impl Cap for H` through the ingot trait env,
-// and building the trait env lowers this impl's header, which CTFE-forces
-// `pick()`. The `ingot_trait_env` salsa cycle must converge to the full env
-// (least-fixpoint from an empty initial), not silently drop the impl.
+// Distinct arithmetic bodies in both the trait-argument and self-type portions
+// of impl headers must also be deferred until after raw candidate collection.
+// Two bodies are important: both ask for the same `impls_for_ty(u256)` query,
+// exposing re-entry that a single cached body can hide.
+trait Shift<const VALUE: u256> {}
+trait Tag {}
+
+struct First<const VALUE: u256> {}
+struct Second<const VALUE: u256> {}
+
+impl<const VALUE: u256> Shift<{ VALUE + 1 }> for First<VALUE> {}
+impl<const VALUE: u256> Shift<{ VALUE + 2 }> for Second<VALUE> {}
+
+impl<const VALUE: u256> Tag for First<{ VALUE + 3 }> {}
+impl<const VALUE: u256> Tag for Second<{ VALUE + 4 }> {}
+
+// A generic self type is indexed as a blanket candidate for every receiver.
+// Its trait arguments still must not be checked while the candidate index is
+// being queried, or resolving `+` recursively lowers the same candidate.
+trait Blanket<const VALUE: u256> {}
+impl<T, const VALUE: u256> Blanket<{ VALUE + 5 }> for T {}
+
+// Alias templates and associated-type definitions/defaults are signature
+// metadata too. Distinct bodies prevent query caching from hiding re-entry.
+trait AliasTag {}
+type Aliased<const VALUE: u256> = First<{ VALUE + 6 }>
+type AliasedAgain<const VALUE: u256> = Second<{ VALUE + 7 }>
+impl<const VALUE: u256> AliasTag for Aliased<VALUE> {}
+impl<const VALUE: u256> AliasTag for AliasedAgain<VALUE> {}
+
+trait HasType { type Out }
+trait HasDefault { type Out = First<{ 1 + 9 }> }
+impl<T> HasType for T { type Out = First<{ 1 + 8 }> }
+impl<T> HasDefault for T {}
+
+// Constraint collection is another signature phase. Two independent bodies
+// ensure one in-progress constraint query cannot be satisfied from a cached
+// result for the other.
+trait Bound<const VALUE: u256> {}
+trait WhereTag {}
+trait WhereTagAgain {}
+impl<const VALUE: u256> Bound<VALUE> for u256 {}
+impl<T> WhereTag for T where u256: Bound<{ 1 + 10 }> {}
+impl<T> WhereTagAgain for T where u256: Bound<{ 1 + 11 }> {}
+
+// Evaluating `pick()` selects `impl Cap for H` through the ingot trait env.
+// Raw environment construction must remain syntax-only: semantically lowering
+// this impl header while collecting candidates would CTFE-force `pick()` and
+// re-enter the environment query.

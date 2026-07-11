@@ -1,0 +1,96 @@
+use std::evm::{Evm, StorageMap}
+
+enum Choice {
+    Left(StorageMap<u256, u256>),
+    Right(StorageMap<u256, u256>),
+}
+
+impl Choice {
+    fn set(mut self, key: u256, value: u256) {
+        match self {
+            Choice::Left(mut map) => map.set(key: key, value: value),
+            Choice::Right(mut map) => map.set(key: key, value: value),
+        }
+    }
+
+    fn get(self, key: u256) -> u256 {
+        match self {
+            Choice::Left(map) => map.get(key: key),
+            Choice::Right(map) => map.get(key: key),
+        }
+    }
+
+    fn flip(mut self) {
+        match self {
+            Choice::Left(map) => self = Choice::Right(map),
+            Choice::Right(map) => self = Choice::Left(map),
+        }
+    }
+}
+
+msg Msg {
+    #[selector = 1]
+    Set { key: u256, value: u256 },
+
+    #[selector = 2]
+    Get { key: u256 } -> u256,
+
+    #[selector = 3]
+    Flip,
+}
+
+pub contract C {
+    mut choice: Choice,
+
+    recv Msg {
+        Set { key, value } uses (mut choice) {
+            choice.set(key: key, value: value)
+        }
+
+        Get { key } -> u256 uses (choice) {
+            choice.get(key: key)
+        }
+
+        Flip uses (mut choice) {
+            choice.flip()
+        }
+    }
+}
+
+/// Enum variants overlay their physical storage lanes. Changing the tag does
+/// not and cannot enumerate or clear keyed storage reachable through the old
+/// payload, so the overlaid mapping remains visible after either transition.
+#[test]
+fn variant_switches_preserve_out_of_line_overlay_storage() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 1)
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::Set { key: 7, value: 11 },
+    )
+
+    evm.call(addr: c, gas: 200000, value: 0, message: Msg::Flip {})
+    let right: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::Get { key: 7 },
+    )
+    assert!(right == 11)
+
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::Set { key: 7, value: 22 },
+    )
+    evm.call(addr: c, gas: 200000, value: 0, message: Msg::Flip {})
+    let left: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::Get { key: 7 },
+    )
+    assert!(left == 22)
+}

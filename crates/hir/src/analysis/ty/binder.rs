@@ -267,6 +267,7 @@ fn backfill_unevaluated_const_generic_args<'db>(
         const_def,
         generic_args,
         preserve_unevaluated,
+        defer_validation,
     } = const_ty.data(db)
     else {
         return None;
@@ -287,6 +288,7 @@ fn backfill_unevaluated_const_generic_args<'db>(
             const_def: *const_def,
             generic_args: args.to_vec(),
             preserve_unevaluated: *preserve_unevaluated,
+            defer_validation: *defer_validation,
         },
     ))
 }
@@ -323,13 +325,15 @@ where
 
             match ty.data(self.db) {
                 TyData::TyParam(param) if !param.is_effect() => self.record_owner(param.owner),
-                TyData::ConstTy(const_ty) => {
-                    if let ConstTyData::TyParam(param, _) = const_ty.data(self.db) {
-                        self.record_owner(param.owner);
-                        return;
+                TyData::ConstTy(const_ty) => match const_ty.data(self.db) {
+                    ConstTyData::TyParam(param, _) => self.record_owner(param.owner),
+                    ConstTyData::UnEvaluated { body, .. } => {
+                        if let Some(owner) = unevaluated_const_owner_scope(self.db, *body) {
+                            self.record_owner(owner);
+                        }
                     }
-                    walk_ty(self, ty);
-                }
+                    _ => walk_ty(self, ty),
+                },
                 _ => walk_ty(self, ty),
             }
         }

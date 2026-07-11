@@ -1,0 +1,214 @@
+use std::evm::{Create, Evm, StorageMap}
+
+struct Slot<const ROOT: u256> {}
+
+impl<const ROOT: u256> Slot<ROOT> {
+    fn root(self) -> u256 {
+        ROOT
+    }
+}
+
+enum Choice<const ROOT: u256 = _> {
+    Scalar(Slot<ROOT>),
+    Family([Slot<ROOT>; 3]),
+}
+
+impl<const ROOT: u256> Choice<ROOT> {
+    fn root(self, lane: usize) -> u256 {
+        match self {
+            Choice::Scalar(slot) => slot.root(),
+            Choice::Family(slots) => slots[lane].root(),
+        }
+    }
+}
+
+msg Msg {
+    #[selector = 1]
+    UseFamily { element: usize },
+
+    #[selector = 2]
+    Root { element: usize, lane: usize } -> u256,
+
+    #[selector = 3]
+    FirstRoot { lane: usize } -> u256,
+
+    #[selector = 4]
+    SecondRoot -> u256,
+}
+
+pub contract C {
+    mut values: [Choice; 2],
+
+    recv Msg {
+        UseFamily { element } uses (mut values) {
+            values[element] = Choice::Family([Slot {}, Slot {}, Slot {}])
+        }
+
+        Root { element, lane } -> u256 uses (values) {
+            values[element].root(lane: lane)
+        }
+
+        FirstRoot { lane } -> u256 uses (values) {
+            values[0].root(lane: lane)
+        }
+
+        SecondRoot -> u256 uses (values) {
+            values[1].root(lane: 0)
+        }
+    }
+}
+
+#[test]
+fn enum_root_overlay_repeats_per_array_element() uses (create: mut Create, evm: mut Evm) {
+    let c = create.create2<C>(value: 0, args: (), salt: 1)
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::UseFamily { element: 0 },
+    )
+    let family: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::Root { element: 0, lane: 1 },
+    )
+    let scalar: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::Root { element: 1, lane: 0 },
+    )
+    assert!(family == 3)
+    assert!(scalar == 5)
+    let static_family: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::FirstRoot { lane: 2 },
+    )
+    let static_scalar: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::SecondRoot {},
+    )
+    assert!(static_family == 4)
+    assert!(static_scalar == 5)
+}
+
+enum MapChoice {
+    Family([StorageMap<u256, u256>; 3]),
+    Scalar(StorageMap<u256, u256>),
+}
+
+impl MapChoice {
+    fn collapse(mut self) {
+        match self {
+            MapChoice::Family(maps) => self = MapChoice::Scalar(maps[0]),
+            MapChoice::Scalar(_) => {}
+        }
+    }
+
+    fn set(mut self, lane: usize, key: u256, value: u256) {
+        match self {
+            MapChoice::Scalar(mut map) => map.set(key: key, value: value),
+            MapChoice::Family(mut maps) => maps[lane].set(key: key, value: value),
+        }
+    }
+
+    fn get(self, lane: usize, key: u256) -> u256 {
+        match self {
+            MapChoice::Scalar(map) => map.get(key: key),
+            MapChoice::Family(maps) => maps[lane].get(key: key),
+        }
+    }
+}
+
+msg MapMsg {
+    #[selector = 1]
+    Collapse { element: usize },
+
+    #[selector = 2]
+    Set { element: usize, lane: usize, key: u256, value: u256 },
+
+    #[selector = 3]
+    Get { element: usize, lane: usize, key: u256 } -> u256,
+}
+
+pub contract MapC {
+    mut maps: [MapChoice; 2],
+
+    recv MapMsg {
+        Collapse { element } uses (mut maps) {
+            maps[element].collapse()
+        }
+
+        Set { element, lane, key, value } uses (mut maps) {
+            maps[element].set(lane: lane, key: key, value: value)
+        }
+
+        Get { element, lane, key } -> u256 uses (maps) {
+            maps[element].get(lane: lane, key: key)
+        }
+    }
+}
+
+#[test]
+fn array_enum_storage_families_do_not_alias_other_elements() uses (evm: mut Evm) {
+    let c = evm.create2<MapC>(value: 0, args: (), salt: 2)
+    evm.call(addr: c, gas: 200000, value: 0, message: MapMsg::Collapse { element: 1 })
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: MapMsg::Set { element: 0, lane: 0, key: 7, value: 10 },
+    )
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: MapMsg::Set { element: 0, lane: 1, key: 7, value: 11 },
+    )
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: MapMsg::Set { element: 0, lane: 2, key: 7, value: 12 },
+    )
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: MapMsg::Set { element: 1, lane: 0, key: 7, value: 22 },
+    )
+
+    let first: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: MapMsg::Get { element: 0, lane: 0, key: 7 },
+    )
+    let middle: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: MapMsg::Get { element: 0, lane: 1, key: 7 },
+    )
+    let last: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: MapMsg::Get { element: 0, lane: 2, key: 7 },
+    )
+    let other: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: MapMsg::Get { element: 1, lane: 0, key: 7 },
+    )
+    assert!(first == 10)
+    assert!(middle == 11)
+    assert!(last == 12)
+    assert!(other == 22)
+}

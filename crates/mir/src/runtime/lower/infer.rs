@@ -29,7 +29,7 @@ use crate::{
 use super::{
     classify::{
         AssignmentId, BodyEnv, BodyStaticFacts, InferClassCache, RuntimeBodyCx,
-        carrier_value_class, provider_erases_runtime_root,
+        carrier_value_class, local_uses_effect_handle_transport, provider_erases_runtime_root,
         runtime_class_for_direct_value_provider_in_context,
         runtime_class_for_effect_binding_provider_in_context, runtime_class_for_provider_binding,
     },
@@ -37,8 +37,8 @@ use super::{
     returns::runtime_return_class,
     source::local_read_places_extractable_from_value,
     type_info::{
-        effect_handle_class_for_ty_in_context, provider_class_for_target_in_context,
-        runtime_repr_ty_in_context, runtime_zero_sized_transport_ty,
+        effect_handle_transport_class_for_ty_in_context, provider_class_for_target_in_context,
+        runtime_repr_ty_in_context, runtime_zero_sized_transport_ty, runtime_zero_sized_ty,
         stored_class_for_ty_in_context, top_level_class_for_ty_in_context,
     },
 };
@@ -320,8 +320,9 @@ pub(crate) fn desired_runtime_value_carrier<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> RuntimeCarrier<'db> {
-    if let Some(transport_class) =
-        effect_handle_class_for_ty_in_context(db, local.ty, scope, assumptions)
+    if local_uses_effect_handle_transport(local)
+        && let Some(transport_class) =
+            effect_handle_transport_class_for_ty_in_context(db, local.ty, scope, assumptions)
     {
         return RuntimeCarrier::Value(transport_class);
     }
@@ -587,7 +588,11 @@ fn lower_semantic_locals<'db>(
                 let place_class =
                     normalized_local_place_class(db, body, SLocalId::from_u32(idx as u32), carriers)
                         .unwrap_or_else(|| {
-                    panic!("missing normalized place class for place-bound semantic local {idx}")
+                    panic!(
+                        "missing normalized place class for place-bound semantic local {idx}: local={local:?}, carrier={:?}, backing={:?}",
+                        carriers[idx],
+                        local.backing_place(),
+                    )
                 });
                 let provider = origin.root_provider().map(|provider| {
                     runtime_provider_binding_id(&provider_bindings, provider).unwrap_or_else(|| {
@@ -950,7 +955,14 @@ pub(super) fn fallback_root_transport_class<'db>(
                 panic!("place-carrier local missing carrier lowering");
             };
             let local_is_effect_handle =
-                effect_handle_class_for_ty_in_context(db, local.ty, scope, assumptions).is_some();
+                effect_handle_transport_class_for_ty_in_context(db, local.ty, scope, assumptions)
+                    .is_some();
+            if local_is_effect_handle
+                && !local_uses_effect_handle_transport(local)
+                && runtime_zero_sized_ty(db, local.ty, scope, assumptions)
+            {
+                return None;
+            }
             if runtime_zero_sized_transport_ty(db, local.ty, scope, assumptions)
                 || (!local_is_effect_handle
                     && runtime_zero_sized_transport_ty(db, *target_ty, scope, assumptions))
@@ -994,7 +1006,14 @@ pub(super) fn fallback_root_transport_class<'db>(
                 panic!("direct-carrier local missing carrier lowering");
             };
             let local_is_effect_handle =
-                effect_handle_class_for_ty_in_context(db, local.ty, scope, assumptions).is_some();
+                effect_handle_transport_class_for_ty_in_context(db, local.ty, scope, assumptions)
+                    .is_some();
+            if local_is_effect_handle
+                && !local_uses_effect_handle_transport(local)
+                && runtime_zero_sized_ty(db, local.ty, scope, assumptions)
+            {
+                return None;
+            }
             if runtime_zero_sized_transport_ty(db, local.ty, scope, assumptions)
                 || (!local_is_effect_handle
                     && runtime_zero_sized_transport_ty(db, *target_ty, scope, assumptions))

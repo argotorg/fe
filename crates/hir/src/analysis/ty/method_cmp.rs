@@ -16,7 +16,8 @@ use super::{
     },
     fold::{AssocTySubst, TyFoldable, TyFolder},
     layout_holes::{
-        alpha_rename_hidden_layout_placeholders, callable_input_layout_bindings_by_origin,
+        callable_input_layout_bindings_by_origin, layout_shape_key, layout_shape_ty,
+        layout_shape_value,
     },
     normalize::normalize_ty,
     trait_def::TraitInstId,
@@ -262,14 +263,11 @@ fn compare_ty<'db>(
             trait_inst,
             false,
         );
-        let trait_m_ty_normalized = alpha_rename_hidden_layout_placeholders(
-            db,
-            trait_m_ty_normalized,
-            impl_m_ty_normalized,
-        );
-
         // 4) Compare for equality
-        if !impl_m_ty.has_invalid(db) && trait_m_ty_normalized != impl_m_ty_normalized {
+        if !impl_m_ty.has_invalid(db)
+            && layout_shape_key(db, trait_m_ty_normalized)
+                != layout_shape_key(db, impl_m_ty_normalized)
+        {
             sink.push(
                 ImplDiag::MethodArgTyMismatch {
                     trait_m,
@@ -313,15 +311,10 @@ fn compare_ty<'db>(
         trait_inst,
         false,
     );
-    let trait_m_ret_ty_normalized = alpha_rename_hidden_layout_placeholders(
-        db,
-        trait_m_ret_ty_normalized,
-        impl_m_ret_ty_normalized,
-    );
-
     if !impl_m_ret_ty.has_invalid(db)
         && !trait_m_ret_ty.has_invalid(db)
-        && trait_m_ret_ty_normalized != impl_m_ret_ty_normalized
+        && layout_shape_key(db, trait_m_ret_ty_normalized)
+            != layout_shape_key(db, impl_m_ret_ty_normalized)
     {
         sink.push(
             ImplDiag::MethodRetTyMismatch {
@@ -602,6 +595,8 @@ pub(crate) fn trait_effect_key_matches_with<'db>(
         return false;
     }
 
+    let expected = layout_shape_value(db, expected);
+    let actual = layout_shape_value(db, actual);
     let expected_assoc = expected.assoc_type_bindings(db);
     let actual_assoc = actual.assoc_type_bindings(db);
     if expected_assoc.len() != actual_assoc.len() {
@@ -614,7 +609,6 @@ pub(crate) fn trait_effect_key_matches_with<'db>(
         .skip(1)
         .zip(actual.args(db).iter().skip(1))
     {
-        let expected_arg = alpha_rename_hidden_layout_placeholders(db, expected_arg, actual_arg);
         if !cmp(expected_arg, actual_arg) {
             return false;
         }
@@ -624,7 +618,6 @@ pub(crate) fn trait_effect_key_matches_with<'db>(
         let Some(&actual_ty) = actual_assoc.get(name) else {
             return false;
         };
-        let expected_ty = alpha_rename_hidden_layout_placeholders(db, expected_ty, actual_ty);
         if !cmp(expected_ty, actual_ty) {
             return false;
         }
@@ -668,8 +661,9 @@ fn effect_identity_tys_match<'db>(
     expected: TyId<'db>,
     actual: TyId<'db>,
 ) -> bool {
-    let expected = alpha_rename_hidden_layout_placeholders(db, expected, actual);
-    UnificationTable::new(db).unify(expected, actual).is_ok()
+    UnificationTable::new(db)
+        .unify(layout_shape_ty(db, expected), layout_shape_ty(db, actual))
+        .is_ok()
 }
 
 fn instantiate_with_partial_map<'db, T>(
@@ -996,6 +990,14 @@ fn compare_constraints<'db>(
     );
     let mut unsatisfied_goals = ThinVec::new();
     for &goal in impl_m_constraints.list(db) {
+        // Source-level concrete assumptions are rejected, so the solver does
+        // not consult assumptions for concrete goals. Method comparison can
+        // legitimately produce a concrete goal after substituting the owning
+        // impl, and an identical declared trait bound entails itself without
+        // requiring trait selection.
+        if trait_m_constraints.list(db).contains(&goal) {
+            continue;
+        }
         match is_goal_satisfiable(
             db,
             TraitSolveCx::new(db, trait_m.scope()).with_assumptions(trait_m_constraints),

@@ -26,6 +26,7 @@ use url::Url;
 
 use crate::{
     BuildEmit,
+    dependency_diagnostics::DependencyIssues,
     report::{
         ReportStaging, copy_input_into_report, create_dir_all_utf8, create_report_staging_root,
         enable_panic_report, normalize_report_out_path, tar_gz_dir, write_report_meta,
@@ -361,7 +362,9 @@ fn build_file(
         hir_diags.emit(db);
         has_errors = true;
     }
-    let mir_diags = if hir_has_errors {
+    let dependency_has_errors = emit_dependency_diagnostics(db, &url);
+    has_errors |= dependency_has_errors;
+    let mir_diags = if hir_has_errors || dependency_has_errors {
         Vec::new()
     } else {
         db.mir_diagnostics_for_top_mod(top_mod)
@@ -695,7 +698,9 @@ fn analyze_ingot_build_artifacts(
         hir_diags.emit(db);
         has_errors = true;
     }
-    let mir_diags = if hir_has_errors {
+    let dependency_has_errors = emit_dependency_diagnostics(db, ingot_url);
+    has_errors |= dependency_has_errors;
+    let mir_diags = if hir_has_errors || dependency_has_errors {
         Vec::new()
     } else {
         db.mir_diagnostics_for_ingot(ingot)
@@ -722,6 +727,15 @@ fn analyze_ingot_build_artifacts(
         contract_names,
         abi_artifact_names,
     })
+}
+
+fn emit_dependency_diagnostics(db: &DriverDataBase, ingot_url: &Url) -> bool {
+    let issues = DependencyIssues::collect_all(db, ingot_url);
+    if issues.is_empty() {
+        return false;
+    }
+    eprint!("{}", issues.format(db));
+    true
 }
 
 fn check_workspace_artifact_name_collisions(
@@ -878,7 +892,9 @@ fn build_ingot_url(
         hir_diags.emit(db);
         has_errors = true;
     }
-    let mir_diags = if hir_has_errors {
+    let dependency_has_errors = emit_dependency_diagnostics(db, ingot_url);
+    has_errors |= dependency_has_errors;
+    let mir_diags = if hir_has_errors || dependency_has_errors {
         Vec::new()
     } else {
         db.mir_diagnostics_for_ingot(ingot)

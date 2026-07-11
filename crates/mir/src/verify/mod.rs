@@ -24,6 +24,7 @@ pub enum VerifyError<'db> {
     MissingEnumVariantProof(RLocalId),
     InvalidReturnClass,
     InvalidExprClass(RLocalId),
+    InvalidIndexClass(crate::runtime::RValueId),
     InvalidStoreClass,
     InvalidCopyClass,
     InvalidTerminalCall(RuntimeInstance<'db>),
@@ -45,7 +46,8 @@ impl<'db> VerifyError<'db> {
             VerifyError::MissingRuntimeLocal(local)
             | VerifyError::SlotCarrierMismatch(local)
             | VerifyError::MissingEnumVariantProof(local)
-            | VerifyError::InvalidExprClass(local) => Some(*local),
+            | VerifyError::InvalidExprClass(local)
+            | VerifyError::InvalidIndexClass(local) => Some(*local),
             VerifyError::MissingRuntimeBlock(_)
             | VerifyError::ErasedRuntimeValue(_)
             | VerifyError::InvalidLayoutRefView(_)

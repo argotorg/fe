@@ -8,7 +8,7 @@ use fe_hir::analysis::ty::{
     trait_resolution::{GoalSatisfiability, TraitSolveCx, is_goal_satisfiable},
     ty_check::check_func_body,
 };
-use fe_hir::hir_def::{Expr, LitKind, Partial};
+use fe_hir::hir_def::{Expr, HirIngot, LitKind, Partial};
 use fe_hir::test_db::HirAnalysisTestDb;
 use salsa::Setter;
 use url::Url;
@@ -68,6 +68,42 @@ fn analyze_corelib_under_release_profile() {
     let core = db.builtin_core();
     let core_diags = db.run_on_ingot(core);
     assert_builtin_clean(&db, core_diags, "core (release profile)");
+}
+
+#[test]
+fn builtin_core_calls_have_semantic_lowerings() {
+    let db = DriverDataBase::default();
+    let core = db.builtin_core();
+    let mut missing = Vec::new();
+
+    // Query in reverse declaration order so semantic call metadata cannot
+    // accidentally depend on callers having been checked before callees.
+    for &func in core.all_funcs(&db).iter().rev() {
+        let Some(body) = func.body(&db) else {
+            continue;
+        };
+        let typed = &check_func_body(&db, func).1;
+        for (expr, expr_data) in body.exprs(&db).iter() {
+            if matches!(
+                expr_data,
+                Partial::Present(Expr::Call(..) | Expr::MethodCall(..))
+            ) && typed.semantic_expr_lowering(expr).is_none()
+            {
+                let name = func
+                    .name(&db)
+                    .to_opt()
+                    .map(|name| name.data(&db).to_string())
+                    .unwrap_or_else(|| "<fn>".to_string());
+                missing.push(format!("{name}: {expr:?}"));
+            }
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "typed core calls without semantic lowerings:\n{}",
+        missing.join("\n")
+    );
 }
 
 #[test]

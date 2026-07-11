@@ -1,0 +1,73 @@
+use std::evm::{Evm, StorageMap}
+
+fn get_lane(
+    maps: [[StorageMap<u256, u256>; 3]; 2],
+    row: usize,
+    col: usize,
+    key: u256,
+) -> u256 {
+    maps[row][col].get(key: key)
+}
+
+msg NestedArrayMsg {
+    #[selector = 1]
+    Set { row: usize, col: usize, key: u256, value: u256 },
+
+    #[selector = 2]
+    Get { row: usize, col: usize, key: u256 } -> u256,
+}
+
+pub contract NestedArrayHelper {
+    mut maps: [[StorageMap<u256, u256>; 3]; 2],
+
+    recv NestedArrayMsg {
+        Set { row, col, key, value } uses (mut maps) {
+            maps[row][col].set(key: key, value: value)
+        }
+
+        Get { row, col, key } -> u256 uses (maps) {
+            get_lane(maps: maps, row: row, col: col, key: key)
+        }
+    }
+}
+
+#[test]
+fn nested_array_helpers_apply_row_major_strides() uses (evm: mut Evm) {
+    let c = evm.create2<NestedArrayHelper>(value: 0, args: (), salt: 1)
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: NestedArrayMsg::Set { row: 1, col: 2, key: 7, value: 42 },
+    )
+    let value: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: NestedArrayMsg::Get { row: 1, col: 2, key: 7 },
+    )
+    assert!(value == 42)
+}
+
+#[test(should_revert)]
+fn nested_array_helper_rejects_oob_outer_index() uses (evm: mut Evm) {
+    let c = evm.create2<NestedArrayHelper>(value: 0, args: (), salt: 2)
+    let value: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: NestedArrayMsg::Get { row: 2, col: 0, key: 7 },
+    )
+    assert!(value == 0)
+}
+
+#[test(should_revert)]
+fn nested_array_helper_rejects_oob_inner_index() uses (evm: mut Evm) {
+    let c = evm.create2<NestedArrayHelper>(value: 0, args: (), salt: 3)
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: NestedArrayMsg::Set { row: 0, col: 3, key: 7, value: 42 },
+    )
+}

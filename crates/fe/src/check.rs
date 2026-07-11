@@ -384,7 +384,8 @@ fn check_ingot_and_dependencies(
         has_errors = true;
     }
 
-    let mir_diags = if hir_has_errors {
+    let dependency_errors = DependencyIssues::collect(db, ingot_url, seen);
+    let mir_diags = if hir_has_errors || !dependency_errors.is_empty() {
         Vec::new()
     } else {
         db.mir_diagnostics_for_ingot(ingot)
@@ -394,18 +395,6 @@ fn check_ingot_and_dependencies(
         has_errors = true;
     }
 
-    if !has_errors {
-        let root_mod = ingot.root_mod(db);
-        if dump_mir {
-            dump_module_mir(db, root_mod);
-        }
-        if let Some(report) = report {
-            write_check_artifacts(db, root_mod, report);
-        }
-    }
-
-    let dependency_errors = DependencyIssues::collect(db, ingot_url, seen);
-
     if !dependency_errors.is_empty() {
         has_errors = true;
         let formatted = dependency_errors.format(db);
@@ -413,6 +402,16 @@ fn check_ingot_and_dependencies(
 
         if let Some(report) = report {
             write_report_file(report, "errors/dependency_diagnostics.txt", &formatted);
+        }
+    }
+
+    if !has_errors {
+        let root_mod = ingot.root_mod(db);
+        if dump_mir {
+            dump_module_mir(db, root_mod);
+        }
+        if let Some(report) = report {
+            write_check_artifacts(db, root_mod, report);
         }
     }
 
@@ -479,7 +478,8 @@ fn check_single_file(
             has_errors = true;
         }
 
-        let mir_diags = if hir_has_errors {
+        let dependency_errors = DependencyIssues::collect_all(db, &file_url);
+        let mir_diags = if hir_has_errors || !dependency_errors.is_empty() {
             Vec::new()
         } else {
             db.mir_diagnostics_for_top_mod(top_mod)
@@ -490,6 +490,14 @@ fn check_single_file(
                 eprintln!();
             }
             db.emit_complete_diagnostics(&mir_diags);
+            has_errors = true;
+        }
+        if !dependency_errors.is_empty() {
+            let formatted = dependency_errors.format(db);
+            eprint!("{formatted}");
+            if let Some(report) = report {
+                write_report_file(report, "errors/dependency_diagnostics.txt", &formatted);
+            }
             has_errors = true;
         }
 

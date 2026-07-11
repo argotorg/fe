@@ -8,7 +8,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-const FE_CHECK_TIMEOUT: Duration = Duration::from_secs(15);
+// This is a termination guard, not a performance assertion. The full release
+// suite runs many compiler processes concurrently, so valid malformed-input
+// checks need headroom above their loaded wall-clock time.
+const FE_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 
 struct FeCheckRun {
     code: i32,

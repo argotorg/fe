@@ -8,7 +8,7 @@ use fe_hir::analysis::ty::{
 };
 use fe_hir::hir_def::TopLevelMod;
 use fe_hir::span::LazySpan;
-use fe_hir::test_db::{HirAnalysisTestDb, initialize_analysis_pass};
+use fe_hir::test_db::{HirAnalysisTestDb, initialize_test_analysis_pass};
 use test_utils::snap_test;
 
 #[dir_test(
@@ -162,11 +162,36 @@ fn probe() -> u256 {
     db.assert_no_diags(top_mod);
 }
 
+#[test]
+fn diverging_match_arm_does_not_fix_the_result_type_to_never() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "diverging_match_arm_does_not_fix_the_result_type_to_never.fe".into(),
+        r#"
+enum E {
+    A,
+    B,
+}
+
+fn probe(e: E) -> u256 {
+    let value = match e {
+        E::A => { return 0 }
+        E::B => { 1 }
+    }
+    value + 1
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+
+    db.assert_no_diags(top_mod);
+}
+
 fn diagnostics_for<'db>(
     db: &'db HirAnalysisTestDb,
     top_mod: TopLevelMod<'db>,
 ) -> Vec<CompleteDiagnostic> {
-    let mut manager = initialize_analysis_pass();
+    let mut manager = initialize_test_analysis_pass();
     let mut diags: Vec<_> = manager
         .run_on_module(db, top_mod)
         .into_iter()

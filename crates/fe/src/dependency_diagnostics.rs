@@ -1,4 +1,7 @@
-use std::{collections::HashSet, fmt::Write as _};
+use std::{
+    collections::{HashSet, VecDeque},
+    fmt::Write as _,
+};
 
 use common::{InputDb, diagnostics::CompleteDiagnostic, file::IngotFileKind};
 use driver::{DriverDataBase, db::DiagnosticsCollection};
@@ -43,37 +46,63 @@ impl DependencyIssue<'_> {
 }
 
 impl<'db> DependencyIssues<'db> {
+    pub(crate) fn collect_all(db: &'db DriverDataBase, ingot_url: &Url) -> Self {
+        let mut seen = HashSet::new();
+        Self::collect(db, ingot_url, &mut seen)
+    }
+
     pub(crate) fn collect(
         db: &'db DriverDataBase,
         ingot_url: &Url,
         seen: &mut HashSet<Url>,
     ) -> Self {
-        let mut issues = Vec::new();
-        for dependency_url in db.dependency_graph().dependency_urls(db, ingot_url) {
+        let Some(root) = db.workspace().containing_ingot(db, ingot_url.clone()) else {
+            return Self { issues: Vec::new() };
+        };
+        seen.insert(root.base(db));
+
+        let mut pending = root
+            .dependencies(db)
+            .into_iter()
+            .map(|(_, url)| url)
+            .collect::<VecDeque<_>>();
+        let mut dependencies = Vec::new();
+        while let Some(dependency_url) = pending.pop_front() {
             if !seen.insert(dependency_url.clone()) {
                 continue;
             }
             let Some(ingot) = db.workspace().containing_ingot(db, dependency_url.clone()) else {
                 continue;
             };
+            pending.extend(ingot.dependencies(db).into_iter().map(|(_, url)| url));
             if !ingot_has_source_files(db, ingot) {
-                issues.push(DependencyIssue::MissingSourceFiles(dependency_url));
+                dependencies.push(Err(dependency_url));
                 continue;
             }
             let hir = db.run_on_ingot(ingot);
-            let mir = if hir.has_errors(db) {
-                Vec::new()
-            } else {
-                db.mir_diagnostics_for_ingot(ingot)
-            };
-            if !hir.is_empty() || !mir.is_empty() {
-                issues.push(DependencyIssue::Diagnostics {
-                    url: dependency_url,
-                    hir,
-                    mir,
-                });
-            }
+            dependencies.push(Ok((dependency_url, ingot, hir)));
         }
+
+        let hir_has_errors = dependencies.iter().any(|dependency| match dependency {
+            Ok((_, _, hir)) => hir.has_errors(db),
+            Err(_) => true,
+        });
+        let issues =
+            dependencies
+                .into_iter()
+                .filter_map(|dependency| match dependency {
+                    Err(url) => Some(DependencyIssue::MissingSourceFiles(url)),
+                    Ok((url, ingot, hir)) => {
+                        let mir = if hir_has_errors {
+                            Vec::new()
+                        } else {
+                            db.mir_diagnostics_for_ingot(ingot)
+                        };
+                        (!hir.is_empty() || !mir.is_empty())
+                            .then_some(DependencyIssue::Diagnostics { url, hir, mir })
+                    }
+                })
+                .collect();
         Self { issues }
     }
 
@@ -122,4 +151,45 @@ fn append_dependency_header(db: &DriverDataBase, dependency_url: &Url, out: &mut
         "Dependency: <unknown>".to_string()
     };
     let _ = writeln!(out, "\n{dependency}\nURL: {dependency_url}\n");
+}
+
+#[cfg(test)]
+mod tests {
+    use common::{InputDb, stdlib::BUILTIN_CORE_BASE_URL};
+    use driver::DriverDataBase;
+    use url::Url;
+
+    use super::DependencyIssues;
+
+    #[test]
+    fn builtin_hir_errors_are_reported_before_dependent_codegen() {
+        let root_url = Url::parse("file:///dependency_diagnostics_root.fe").unwrap();
+        let mut clean_db = DriverDataBase::default();
+        clean_db.workspace().touch(
+            &mut clean_db,
+            root_url.clone(),
+            Some("fn root() {}".to_string()),
+        );
+        assert!(DependencyIssues::collect_all(&clean_db, &root_url).is_empty());
+
+        let mut db = DriverDataBase::default();
+        db.workspace()
+            .touch(&mut db, root_url.clone(), Some("fn root() {}".to_string()));
+
+        let core_url = Url::parse(BUILTIN_CORE_BASE_URL)
+            .unwrap()
+            .join("src/effect_ref.fe")
+            .unwrap();
+        let core_file = db.workspace().get(&db, &core_url).unwrap();
+        let mut core_source = core_file.text(&db).to_string();
+        core_source.push_str("\nfn invalid_self_ingot_path() { core::effect_ref::read(0) }\n");
+        db.workspace().update(&mut db, core_url, core_source);
+
+        let issues = DependencyIssues::collect_all(&db, &root_url);
+        let formatted = issues.format(&db);
+
+        assert!(formatted.contains("Errors in dependency"));
+        assert!(formatted.contains("Dependency: core"));
+        assert!(formatted.contains("`core` is not found"));
+    }
 }

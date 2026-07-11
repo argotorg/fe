@@ -1,0 +1,378 @@
+use std::evm::{Evm, StorageMap}
+
+fn reorder<const ROOT: u256>(
+    maps: own [StorageMap<u256, u256, ROOT>; 3],
+) -> [StorageMap<u256, u256, ROOT>; 3] {
+    [maps[2], maps[0], maps[1]]
+}
+
+fn repeat_first<const ROOT: u256>(
+    maps: own [StorageMap<u256, u256, ROOT>; 3],
+) -> [StorageMap<u256, u256, ROOT>; 3] {
+    [maps[0]; 3]
+}
+
+fn replace<const ROOT: u256>(
+    maps: own [StorageMap<u256, u256, ROOT>; 3],
+    lane: usize,
+    replacement: StorageMap<u256, u256, ROOT>,
+) -> [StorageMap<u256, u256, ROOT>; 3] {
+    let mut result = reorder(maps: maps)
+    result[lane] = replacement
+    result
+}
+
+fn matrix<const ROOT: u256>(
+    maps: own [StorageMap<u256, u256, ROOT>; 3],
+) -> [[StorageMap<u256, u256, ROOT>; 2]; 2] {
+    [[maps[0], maps[1]], [maps[2], maps[0]]]
+}
+
+fn replace_matrix<const ROOT: u256>(
+    maps: own [StorageMap<u256, u256, ROOT>; 3],
+    row: usize,
+    column: usize,
+    replacement: StorageMap<u256, u256, ROOT>,
+) -> [[StorageMap<u256, u256, ROOT>; 2]; 2] {
+    let mut result = matrix(maps: maps)
+    result[row][column] = replacement
+    result
+}
+
+fn rotate_many<const ROOT: u256>(
+    maps: own [StorageMap<u256, u256, ROOT>; 3],
+    rounds: usize,
+) -> [StorageMap<u256, u256, ROOT>; 3] {
+    let mut result = maps
+    let mut step: usize = 0
+    while step < rounds {
+        let lane = step % 3
+        let source = (lane + 1) % 3
+        result[lane] = result[source]
+        step += 1
+    }
+    result
+}
+
+enum MapChoice {
+    Scalar(StorageMap<u256, u256>),
+    Family([StorageMap<u256, u256>; 3]),
+}
+
+impl MapChoice {
+    fn identity(self) -> Self {
+        self
+    }
+
+    fn expanded(mut self) -> Self {
+        match self {
+            MapChoice::Scalar(map) => self = MapChoice::Family([map, map, map]),
+            MapChoice::Family(_) => {}
+        }
+        self.identity()
+    }
+}
+
+fn read_expanded(mut choice: own MapChoice, lane: usize) -> u256 {
+    match choice.expanded() {
+        MapChoice::Scalar(map) => map.get(key: 7),
+        MapChoice::Family(maps) => maps[lane].get(key: 7),
+    }
+}
+
+struct UsizeRoot<const ROOT: usize = _> {}
+
+impl<const ROOT: usize> Copy for UsizeRoot<ROOT> {}
+
+impl<const ROOT: usize> UsizeRoot<ROOT> {
+    fn root(self) -> usize {
+        ROOT
+    }
+}
+
+fn fresh_usize_root<const ROOT: usize>() -> UsizeRoot<ROOT> {
+    UsizeRoot {}
+}
+
+fn replace_usize_root<const ROOT: usize>(
+    values: own [UsizeRoot<ROOT>; 2],
+    lane: usize,
+) -> [UsizeRoot<ROOT>; 2] {
+    let mut result = values
+    result[lane] = fresh_usize_root()
+    result
+}
+
+struct ExplicitRoot<const ROOT: u256 = _> {}
+
+impl<const ROOT: u256> Copy for ExplicitRoot<ROOT> {}
+
+fn explicit_root<const ROOT: u256>(_ value: ExplicitRoot<ROOT>) -> u256 {
+    ROOT
+}
+
+fn explicit_root_at<const ROOT: u256>(
+    values: [ExplicitRoot<ROOT>; 2],
+    lane: usize,
+) -> u256 {
+    explicit_root(value: values[lane])
+}
+
+msg Msg {
+    #[selector = 1]
+    Set { lane: usize, value: u256 },
+
+    #[selector = 2]
+    GetReordered { lane: usize } -> u256,
+
+    #[selector = 3]
+    GetRepeated { lane: usize } -> u256,
+
+    #[selector = 4]
+    GetReplaced { patch_lane: usize, lane: usize } -> u256,
+
+    #[selector = 5]
+    GetMatrix { row: usize, column: usize } -> u256,
+
+    #[selector = 6]
+    GetReplacedMatrix {
+        patch_row: usize,
+        patch_column: usize,
+        row: usize,
+        column: usize,
+    } -> u256,
+
+    #[selector = 7]
+    GetExpanded { source: usize, lane: usize } -> u256,
+
+    #[selector = 8]
+    GetRotatedMany { rounds: usize, lane: usize } -> u256,
+}
+
+pub contract C {
+    mut maps: [StorageMap<u256, u256>; 3],
+
+    recv Msg {
+        Set { lane, value } uses (mut maps) {
+            maps[lane].set(key: 7, value: value)
+        }
+
+        GetReordered { lane } -> u256 uses (maps) {
+            reorder(maps: maps)[lane].get(key: 7)
+        }
+
+        GetRepeated { lane } -> u256 uses (maps) {
+            repeat_first(maps: maps)[lane].get(key: 7)
+        }
+
+        GetReplaced { patch_lane, lane } -> u256 uses (maps) {
+            replace(maps: maps, lane: patch_lane, replacement: maps[0])[lane].get(key: 7)
+        }
+
+        GetMatrix { row, column } -> u256 uses (maps) {
+            matrix(maps: maps)[row][column].get(key: 7)
+        }
+
+        GetReplacedMatrix {
+            patch_row,
+            patch_column,
+            row,
+            column,
+        } -> u256 uses (maps) {
+            replace_matrix(
+                maps: maps,
+                row: patch_row,
+                column: patch_column,
+                replacement: maps[1],
+            )[row][column].get(key: 7)
+        }
+
+
+        GetExpanded { source, lane } -> u256 uses (maps) {
+            read_expanded(choice: MapChoice::Scalar(maps[source]), lane: lane)
+        }
+
+        GetRotatedMany { rounds, lane } -> u256 uses (maps) {
+            rotate_many(maps: maps, rounds: rounds)[lane].get(key: 7)
+        }
+    }
+}
+
+msg UsizeMsg {
+    #[selector = 1]
+    Get { lane: usize } -> usize,
+
+    #[selector = 2]
+    Replace { patch_lane: usize, read_lane: usize } -> usize,
+}
+
+pub contract UsizeRoots {
+    mut roots: [UsizeRoot; 2],
+
+    recv UsizeMsg {
+        Get { lane } -> usize uses (roots) {
+            roots[lane].root()
+        }
+
+        Replace { patch_lane, read_lane } -> usize uses (roots) {
+            replace_usize_root(values: roots, lane: patch_lane)[read_lane].root()
+        }
+    }
+}
+
+#[test]
+fn runtime_layout_map_nodes_preserve_reorders_repeats_and_patches() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 1)
+    evm.call(
+        addr: c,
+        gas: 300000,
+        value: 0,
+        message: Msg::Set { lane: 0, value: 10 },
+    )
+    evm.call(
+        addr: c,
+        gas: 300000,
+        value: 0,
+        message: Msg::Set { lane: 1, value: 20 },
+    )
+    evm.call(
+        addr: c,
+        gas: 300000,
+        value: 0,
+        message: Msg::Set { lane: 2, value: 30 },
+    )
+
+    let reordered: u256 = evm.call(
+        addr: c,
+        gas: 300000,
+        value: 0,
+        message: Msg::GetReordered { lane: 0 },
+    )
+    assert!(reordered == 30)
+
+    let repeated: u256 = evm.call(
+        addr: c,
+        gas: 300000,
+        value: 0,
+        message: Msg::GetRepeated { lane: 2 },
+    )
+    assert!(repeated == 10)
+
+    let replaced: u256 = evm.call(
+        addr: c,
+        gas: 300000,
+        value: 0,
+        message: Msg::GetReplaced { patch_lane: 0, lane: 0 },
+    )
+    assert!(replaced == 10)
+    let unpatched: u256 = evm.call(
+        addr: c,
+        gas: 300000,
+        value: 0,
+        message: Msg::GetReplaced { patch_lane: 0, lane: 2 },
+    )
+    assert!(unpatched == 20)
+
+    let nested: u256 = evm.call(
+        addr: c,
+        gas: 300000,
+        value: 0,
+        message: Msg::GetMatrix { row: 1, column: 0 },
+    )
+    assert!(nested == 30)
+
+    let nested_replaced: u256 = evm.call(
+        addr: c,
+        gas: 300000,
+        value: 0,
+        message: Msg::GetReplacedMatrix {
+            patch_row: 1,
+            patch_column: 0,
+            row: 1,
+            column: 0,
+        },
+    )
+    assert!(nested_replaced == 20)
+    let nested_unpatched: u256 = evm.call(
+        addr: c,
+        gas: 300000,
+        value: 0,
+        message: Msg::GetReplacedMatrix {
+            patch_row: 1,
+            patch_column: 0,
+            row: 0,
+            column: 1,
+        },
+    )
+    assert!(nested_unpatched == 20)
+
+    let expanded: u256 = evm.call(
+        addr: c,
+        gas: 300000,
+        value: 0,
+        message: Msg::GetExpanded { source: 2, lane: 1 },
+    )
+    assert!(expanded == 30)
+
+    let rotated_first: u256 = evm.call(
+        addr: c,
+        gas: 300000,
+        value: 0,
+        message: Msg::GetRotatedMany { rounds: 6, lane: 0 },
+    )
+    let rotated_middle: u256 = evm.call(
+        addr: c,
+        gas: 300000,
+        value: 0,
+        message: Msg::GetRotatedMany { rounds: 6, lane: 1 },
+    )
+    let rotated_last: u256 = evm.call(
+        addr: c,
+        gas: 300000,
+        value: 0,
+        message: Msg::GetRotatedMany { rounds: 6, lane: 2 },
+    )
+    assert!(rotated_first == 30)
+    assert!(rotated_middle == 20)
+    assert!(rotated_last == 30)
+}
+
+#[test]
+fn usize_layout_roots_use_the_same_runtime_map_algebra() uses (evm: mut Evm) {
+    let c = evm.create2<UsizeRoots>(value: 0, args: (), salt: 2)
+    let first: usize = evm.call(
+        addr: c,
+        gas: 300000,
+        value: 0,
+        message: UsizeMsg::Get { lane: 0 },
+    )
+    let second: usize = evm.call(
+        addr: c,
+        gas: 300000,
+        value: 0,
+        message: UsizeMsg::Get { lane: 1 },
+    )
+    assert!(first == 0)
+    assert!(second == 1)
+
+    let replaced: usize = evm.call(
+        addr: c,
+        gas: 300000,
+        value: 0,
+        message: UsizeMsg::Replace { patch_lane: 1, read_lane: 1 },
+    )
+    assert!(replaced == 1)
+}
+
+#[test]
+fn explicit_layout_values_keep_distinct_specializations() {
+    let eleven: ExplicitRoot<11> = ExplicitRoot {}
+    let twenty_two: ExplicitRoot<22> = ExplicitRoot {}
+    assert!(explicit_root(value: eleven) == 11)
+    assert!(explicit_root(value: twenty_two) == 22)
+
+    let elevens: [ExplicitRoot<11>; 2] = [ExplicitRoot {}; 2]
+    let twenty_twos: [ExplicitRoot<22>; 2] = [ExplicitRoot {}; 2]
+    assert!(explicit_root_at(values: elevens, lane: 1) == 11)
+    assert!(explicit_root_at(values: twenty_twos, lane: 0) == 22)
+}

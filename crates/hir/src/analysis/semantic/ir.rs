@@ -56,6 +56,8 @@ unsafe impl<'db> Update for SemanticProjectionPath<'db> {
 pub struct SemanticBody<'db> {
     pub owner: SemanticInstance<'db>,
     pub template_owner: BodyOwner<'db>,
+    /// Locals initialized by the callable boundary before the entry block.
+    pub entry_locals: Vec<SLocalId>,
     pub locals: Vec<SLocal<'db>>,
     pub blocks: Vec<SBlock<'db>>,
 }
@@ -93,6 +95,7 @@ pub struct SLocal<'db> {
     pub source: Option<LocalBinding<'db>>,
     pub role: SemanticLocalRole<'db>,
     pub snapshot_source: Option<PlaceProvenance<'db>>,
+    pub layout_backing_sources: Vec<LayoutBackingSource<'db>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -107,7 +110,56 @@ pub enum PlaceProvenance<'db> {
     Derived(SPlace<'db>),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum LayoutBackingProjection {
+    Field(FieldIndex),
+    VariantField {
+        variant: VariantIndex,
+        field: FieldIndex,
+    },
+    Index(Option<usize>),
+}
+
+/// Physical place provenance for layout-bearing value projections.
+///
+/// This keeps backing storage alive and lets borrow normalization recover a
+/// projectable carrier place. It is deliberately separate from
+/// `LayoutEvidenceBody`, which transports semantic runtime-root values.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum LayoutBackingPlace<'db> {
+    Local(SPlace<'db>),
+    RootProvider {
+        provider: ProviderBinding<'db>,
+        /// Semantic type of the provider-backed root before `path` is applied.
+        ///
+        /// This is intentionally distinct from `provider.provider_ty`: root-object
+        /// effect keys and physical handle types need not be the type of the value
+        /// projected through this place.
+        value_ty: TyId<'db>,
+        path: SemanticProjectionPath<'db>,
+    },
+}
+
+/// Maps a projection in the current value to the place that physically backs
+/// it. This is carrier provenance, not runtime layout evidence.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub struct LayoutBackingSource<'db> {
+    pub target: Vec<LayoutBackingProjection>,
+    pub source: LayoutBackingPlace<'db>,
+}
+
 impl<'db> PlaceProvenance<'db> {
+    pub fn into_layout_backing_place(self, value_ty: TyId<'db>) -> LayoutBackingPlace<'db> {
+        match self {
+            PlaceProvenance::RootProvider(provider) => LayoutBackingPlace::RootProvider {
+                provider,
+                value_ty,
+                path: SemanticProjectionPath::new(),
+            },
+            PlaceProvenance::Derived(place) => LayoutBackingPlace::Local(place),
+        }
+    }
+
     pub fn root_provider(&self, locals: &[SLocal<'db>]) -> Option<ProviderBinding<'db>> {
         match self {
             Self::RootProvider(provider) => Some(provider.clone()),
@@ -155,6 +207,16 @@ impl<'db> SemanticLocalRole<'db> {
             Self::PlaceCarrier { .. } => SemanticLocalKind::PlaceCarrier,
             Self::PlaceBoundValue { .. } => SemanticLocalKind::PlaceBoundValue,
             Self::DirectCarrier { .. } => SemanticLocalKind::DirectCarrier,
+        }
+    }
+
+    pub fn layout_ty(&self, local_ty: TyId<'db>) -> TyId<'db> {
+        match self {
+            Self::PlaceCarrier { value_ty, .. } | Self::PlaceBoundValue { value_ty, .. } => {
+                *value_ty
+            }
+            Self::DirectCarrier { target_ty, .. } => *target_ty,
+            Self::Erased | Self::DirectValue { .. } => local_ty,
         }
     }
 

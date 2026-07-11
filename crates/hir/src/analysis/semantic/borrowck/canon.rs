@@ -187,16 +187,7 @@ impl<'a, 'db> BorrowCanonCx<'a, 'db> {
             return FxHashSet::default();
         };
         if let Some(place) = local_data.lowering.place() {
-            return place
-                .root
-                .borrow_root()
-                .and_then(|root| self.root_to_borrow_root(root))
-                .into_iter()
-                .map(|root| CanonPlace {
-                    root,
-                    proj: place.path.clone(),
-                })
-                .collect();
+            return self.canonicalize_place_targets(state, place);
         }
         let root = match &local_data.lowering {
             NormalizedBindingLowering::CarrierLocal { root, provider, .. } => provider
@@ -232,16 +223,7 @@ impl<'a, 'db> BorrowCanonCx<'a, 'db> {
             return FxHashSet::default();
         };
         if let Some(place) = local_data.lowering.place() {
-            return place
-                .root
-                .borrow_root()
-                .and_then(|root| self.root_to_borrow_root(root))
-                .into_iter()
-                .map(|root| CanonPlace {
-                    root,
-                    proj: place.path.clone(),
-                })
-                .collect();
+            return self.canonicalize_place_targets(state, place);
         }
         match &local_data.lowering {
             NormalizedBindingLowering::CarrierLocal { root, provider, .. } => provider
@@ -266,13 +248,28 @@ impl<'a, 'db> BorrowCanonCx<'a, 'db> {
         place: &NSPlace<'db>,
         origin: SemOrigin<'db>,
     ) -> Result<FxHashSet<CanonPlace<'db>>, SemanticBorrowDiagnostic<'db>> {
+        let out = self.canonicalize_place_targets(state, place);
+        if out.is_empty() {
+            return Err(self.internal_diag(
+                origin,
+                "cannot canonicalize carrier-rooted place".to_string(),
+            ));
+        }
+        Ok(out)
+    }
+
+    fn canonicalize_place_targets(
+        &self,
+        state: &State,
+        place: &NSPlace<'db>,
+    ) -> FxHashSet<CanonPlace<'db>> {
         match place.root {
-            NSPlaceRoot::Root(root) => Ok(FxHashSet::from_iter([CanonPlace {
+            NSPlaceRoot::Root(root) => FxHashSet::from_iter([CanonPlace {
                 root: self
                     .root_to_borrow_root(root)
                     .expect("normalized borrow root"),
                 proj: place.path.clone(),
-            }])),
+            }]),
             NSPlaceRoot::CarrierDerefLocal(local) => {
                 let suffix = place.path.clone();
                 let mut out = FxHashSet::default();
@@ -300,13 +297,7 @@ impl<'a, 'db> BorrowCanonCx<'a, 'db> {
                         out.insert(CanonPlace { root, proj: suffix });
                     }
                 }
-                if out.is_empty() {
-                    return Err(self.internal_diag(
-                        origin,
-                        "cannot canonicalize carrier-rooted place".to_string(),
-                    ));
-                }
-                Ok(out)
+                out
             }
         }
     }
@@ -315,7 +306,7 @@ impl<'a, 'db> BorrowCanonCx<'a, 'db> {
         match self.body.root(root)? {
             NBorrowRoot::Param { param_idx, .. } => Some(BorrowRoot::Param(*param_idx)),
             NBorrowRoot::LocalSlot { local } => Some(BorrowRoot::Local(*local)),
-            NBorrowRoot::Provider { binding } => Some(BorrowRoot::Provider(binding.clone())),
+            NBorrowRoot::Provider { binding, .. } => Some(BorrowRoot::Provider(binding.clone())),
         }
     }
 

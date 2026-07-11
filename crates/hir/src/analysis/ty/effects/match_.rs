@@ -584,7 +584,6 @@ impl<'a, 'db> EffectKeyIdentityInstantiator<'a, 'db> {
 
 impl<'a, 'db> TyFolder<'db> for EffectKeyIdentityInstantiator<'a, 'db> {
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-        let ty = crate::analysis::ty::ty_def::strip_derived_adt_layout_args(db, ty);
         if let Some(expected) = effect_key_identity_const_expected_ty(self.db, ty) {
             let key = self
                 .table

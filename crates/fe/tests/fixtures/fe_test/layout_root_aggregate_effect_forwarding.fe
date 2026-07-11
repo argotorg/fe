@@ -1,0 +1,122 @@
+use std::evm::{Evm, StorageMap}
+
+struct Store {
+    primary: StorageMap<u256, u256>,
+    secondary: StorageMap<u256, u256>,
+}
+
+fn read_primary(key: u256) -> u256
+    uses (store: Store)
+{
+    store.primary.get(key: key)
+}
+
+fn read_primary_nested(key: u256) -> u256
+    uses (store: Store)
+{
+    read_primary(key: key)
+}
+
+fn read_secondary(key: u256) -> u256
+    uses (store: Store)
+{
+    store.secondary.get(key: key)
+}
+
+fn read_secondary_nested(key: u256) -> u256
+    uses (store: Store)
+{
+    read_secondary(key: key)
+}
+
+fn write_primary(key: u256, value: u256)
+    uses (store: mut Store)
+{
+    store.primary.set(key: key, value: value)
+}
+
+fn write_primary_nested(key: u256, value: u256)
+    uses (store: mut Store)
+{
+    write_primary(key: key, value: value)
+}
+
+fn write_secondary(key: u256, value: u256)
+    uses (store: mut Store)
+{
+    store.secondary.set(key: key, value: value)
+}
+
+fn write_secondary_nested(key: u256, value: u256)
+    uses (store: mut Store)
+{
+    write_secondary(key: key, value: value)
+}
+
+msg Msg {
+    #[selector = 1]
+    SetPrimary { key: u256, value: u256 },
+
+    #[selector = 2]
+    SetSecondary { key: u256, value: u256 },
+
+    #[selector = 3]
+    GetPrimary { key: u256 } -> u256,
+
+    #[selector = 4]
+    GetSecondary { key: u256 } -> u256,
+}
+
+pub contract C {
+    mut store: Store,
+
+    recv Msg {
+        SetPrimary { key, value } uses (mut store) {
+            write_primary_nested(key: key, value: value)
+        }
+
+        SetSecondary { key, value } uses (mut store) {
+            write_secondary_nested(key: key, value: value)
+        }
+
+        GetPrimary { key } -> u256 uses (store) {
+            read_primary_nested(key: key)
+        }
+
+        GetSecondary { key } -> u256 uses (store) {
+            read_secondary_nested(key: key)
+        }
+    }
+}
+
+#[test]
+fn aggregate_effect_helpers_forward_projected_roots() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 1)
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::SetPrimary { key: 7, value: 42 },
+    )
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::SetSecondary { key: 7, value: 99 },
+    )
+
+    let primary: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::GetPrimary { key: 7 },
+    )
+    let secondary: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::GetSecondary { key: 7 },
+    )
+    assert!(primary == 42)
+    assert!(secondary == 99)
+}

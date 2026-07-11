@@ -3,35 +3,43 @@ use std::{collections::HashSet, mem::size_of};
 use cranelift_entity::EntityRef;
 use hir::analysis::{
     semantic::{
-        EffectProviderSubst, FieldIndex, GenericSubst, ImplEnv, SBlockId, SConst, SLocalId,
-        SemConstId, SemConstScalar, SemConstValue, SemanticCalleeRef, SemanticCodeRegionRef,
-        SemanticCodeRegionTarget, SemanticConstRef, SemanticInstance, SemanticInstanceKey,
-        SemanticLocalKind, VariantIndex,
+        EffectProviderSubst, FieldIndex, GenericSubst, ImplEnv, LayoutEvidenceBase,
+        LayoutEvidenceBody, LayoutEvidenceComponentValue, LayoutEvidenceConstBinding,
+        LayoutEvidenceConstant, LayoutEvidenceExpr, LayoutEvidenceIndex, LayoutEvidenceOperand,
+        LayoutEvidenceProjectionTerm, SBlockId, SConst, SLocalId, SemConstId, SemConstScalar,
+        SemConstValue, SemanticCalleeRef, SemanticCodeRegionRef, SemanticCodeRegionTarget,
+        SemanticConstRef, SemanticInstance, SemanticInstanceKey, SemanticLocalKind, VariantIndex,
         borrowck::{
             NBorrowRoot, NEffectArg, NExpr, NLocalOrigin, NOperand, NSPlace, NSPlaceRoot, NSStmt,
             NSStmtKind, NSTerminator, NSTerminatorKind, NormalizedSemanticBody,
             normalize_semantic_body,
         },
-        get_or_build_semantic_instance, reify_runtime_const_for_ty, sem_const_ty,
+        get_or_build_semantic_instance, layout_evidence_body, reify_runtime_const_for_ty,
+        sem_const_ty, verify_layout_evidence_runtime_compatibility,
     },
     ty::{
+        CallableLayoutParamPort,
+        const_ty::ConstTyData,
         corelib::{
             PrimitiveWrapperCallKind, RuntimeBuiltinFuncKind, core_primitive_wrapper_call_kind,
             resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path,
             runtime_builtin_func_kind,
         },
+        pattern_types::{PatternProjectionStep, project_pattern_child_source_ty},
         trait_def::TraitInstId,
         trait_resolution::{
             GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
         },
         ty_check::BodyOwner,
-        ty_def::TyId,
+        ty_def::{TyData, TyId},
     },
 };
 use hir::hir_def::{
-    ArithBinOp, BinOp, CompBinOp, Func, UnOp, attr::ArithmeticMode, scope_graph::ScopeId,
+    ArithBinOp, BinOp, CompBinOp, EnumVariant, Func, IdentId, UnOp, attr::ArithmeticMode,
+    scope_graph::ScopeId,
 };
 use hir::projection::{IndexSource, Projection};
+use hir::semantic::ProviderBinding;
 
 use crate::{
     db::MirDb,
@@ -41,15 +49,16 @@ use crate::{
         AddressSpaceKind, ConstRegionId, ConstScalar, IntrinsicArithBinOp, LayoutId, PlaceElem,
         PlaceRoot, RBlock, RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView,
         RuntimeBody, RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeExitBehavior,
-        RuntimeInterfaceSignature, RuntimeLocalLowering, RuntimeLocalRoot, RuntimePlace,
-        RuntimeProviderBinding, RuntimeProviderBindingId, ScalarClass, ScalarRepr, ScalarRole,
-        VariantId,
+        RuntimeInterfaceSignature, RuntimeLayoutMap, RuntimeLocalLowering, RuntimeLocalRoot,
+        RuntimePlace, RuntimeProviderBinding, RuntimeProviderBindingId, ScalarClass, ScalarRepr,
+        ScalarRole, VariantId,
         code_region::runtime_code_region_for_semantic_ref,
         package::{LowerError, runtime_instance_for_semantic},
     },
 };
 
 use super::{
+    abi::{RuntimeAbiPlan, runtime_abi_plan},
     arg_selector::RuntimeArgSelector,
     boundary::{BoundarySiteAllocator, RuntimeValueUsePlan, boundary_spec_for_ty_in_env},
     call_input::{CompiledCallInputPlan, compile_call_input_plan_for_semantic},
@@ -66,9 +75,13 @@ use super::{
     },
     conversion::{RuntimeConversionEmitter, RuntimeConversionError, emit_runtime_coercion},
     infer::{InferenceResult, LocalStateInferer, merge_runtime_class},
+    interface::{runtime_param_plans, runtime_visible_binding_plans},
     layout::{
         AggregateCtorElem, aggregate_ctor_elems_for_layout, layout_for_aggregate_instance_in_env,
         layout_for_enum_variant_instance_in_env, layout_for_ty_in_env,
+    },
+    layout_evidence::{
+        runtime_layout_map_for_map_ty, runtime_layout_map_for_shape, runtime_layout_scalar_const,
     },
     place::{project_field_class, project_index_class, project_variant_field_class},
     realize::{
@@ -81,7 +94,8 @@ use super::{
     },
     tuple::RuntimeTupleFieldEmitter,
     type_info::{
-        RuntimeTypeEnv, effect_handle_class_for_ty_in_context, provider_class_for_target_in_env,
+        RuntimeTypeEnv, effect_handle_transport_class_for_ty_in_context,
+        provider_class_for_target_in_env, runtime_effect_handle_info,
         stored_class_for_ty_in_context, top_level_class_for_ty_in_env,
     },
 };
@@ -94,15 +108,15 @@ pub fn lower_to_rmir<'db>(
     let semantic = key
         .semantic(db)
         .expect("semantic lowering only applies to semantic runtime instances");
-    let normalized_body = normalize_semantic_body(db, semantic).unwrap_or_else(|err| {
-        panic!(
-            "semantic normalization failed for {:?}: {err:?}",
+    let normalized_body = normalize_semantic_body(db, semantic).map_err(|error| {
+        LowerError::Unsupported(format!(
+            "semantic normalization failed for {:?}: {error:?}",
             semantic.key(db)
-        )
-    });
+        ))
+    })?;
     check_runtime_body_supported(db, semantic.key(db), &normalized_body)?;
     let facts = BodyStaticFacts::new(db, &normalized_body);
-    let signature = instance.interface_signature(db);
+    let abi = runtime_abi_plan(db, key);
     let param_locals =
         crate::runtime::lower::interface::runtime_param_locals(db, semantic, key.params(db));
     let mut inferer = LocalStateInferer::new(
@@ -110,8 +124,8 @@ pub fn lower_to_rmir<'db>(
         key.params(db),
         &param_locals,
     );
-    if let Some(ret_class) = signature
-        .ret
+    let visible_ret_class = abi.returns.visible.clone();
+    if let Some(ret_class) = visible_ret_class
         .clone()
         .filter(|class| class.contains_transport(db))
     {
@@ -130,16 +144,9 @@ pub fn lower_to_rmir<'db>(
         inferer.seed_return_class(&return_locals, ret_class);
     }
     let inferred = inferer.run();
-    let mut emitter = RmirEmitter::new(
-        db,
-        instance,
-        normalized_body,
-        facts,
-        inferred,
-        signature.clone(),
-    );
+    let mut emitter = RmirEmitter::new(db, instance, normalized_body, facts, inferred, abi)?;
     emitter.lower_blocks();
-    Ok(emitter.finish(signature))
+    Ok(emitter.finish())
 }
 
 fn check_runtime_body_supported<'db>(
@@ -243,9 +250,7 @@ fn trait_goal_satisfied<'db>(
 
 fn expr_requires_runtime_eval_when_erased(expr: &NExpr<'_>) -> bool {
     match expr {
-        NExpr::ArrayRepeat { .. } => {
-            panic!("array repeat with non-concrete length reached runtime lowering: {expr:?}")
-        }
+        NExpr::ArrayRepeat { .. } => false,
         NExpr::Unary {
             op: UnOp::Minus, ..
         }
@@ -309,13 +314,15 @@ pub(super) struct RmirEmitter<'db> {
     pub(super) instance: RuntimeInstance<'db>,
     pub(super) key: RuntimeInstanceKey<'db>,
     pub(super) semantic_body: NormalizedSemanticBody<'db>,
+    pub(super) layout_evidence: LayoutEvidenceBody<'db>,
     pub(super) facts: BodyStaticFacts<'db>,
-    pub(super) ret_class: Option<RuntimeClass<'db>>,
+    pub(super) abi: RuntimeAbiPlan<'db>,
     pub(super) env: RuntimeTypeEnv<'db>,
     const_ref_regions: HashSet<ConstRegionId<'db>>,
     pub(super) semantic_carriers: Vec<RuntimeCarrier<'db>>,
     pub(super) semantic_locals: Vec<RuntimeLocalLowering<'db>>,
     pub(super) provider_bindings: Vec<RuntimeProviderBinding<'db>>,
+    layout_evidence_locals: Vec<RLocalId>,
     pub(super) locals: Vec<RLocal<'db>>,
     pub(super) blocks: Vec<RBlock<'db>>,
     pub(super) terminated_blocks: Vec<bool>,
@@ -431,8 +438,8 @@ impl<'db> RmirEmitter<'db> {
         semantic_body: NormalizedSemanticBody<'db>,
         facts: BodyStaticFacts<'db>,
         inferred: InferenceResult<'db>,
-        signature: RuntimeInterfaceSignature<'db>,
-    ) -> Self {
+        abi: RuntimeAbiPlan<'db>,
+    ) -> Result<Self, LowerError> {
         let key = instance.key(db);
         let semantic = key
             .semantic(db)
@@ -445,9 +452,22 @@ impl<'db> RmirEmitter<'db> {
         } = inferred;
         let semantic_carriers = carriers.clone();
         let env = RuntimeTypeEnv::for_semantic(db, semantic);
+        let layout_evidence = layout_evidence_body(db, semantic).map_err(|error| {
+            LowerError::Unsupported(format!(
+                "layout evidence lowering failed for {:?}: {error:?}",
+                semantic.key(db)
+            ))
+        })?;
+        verify_layout_evidence_runtime_compatibility(db, &semantic_body, &layout_evidence)
+            .map_err(|error| {
+                LowerError::Unsupported(format!(
+                    "layout evidence is incompatible with runtime semantic body for {:?}: {error:?}",
+                    semantic.key(db)
+                ))
+            })?;
         let const_ref_regions = collect_const_ref_regions(db, env, &semantic_body);
         let terminated_blocks = vec![false; semantic_body.blocks.len()];
-        let locals = semantic_body
+        let mut locals = semantic_body
             .locals
             .iter()
             .enumerate()
@@ -457,26 +477,88 @@ impl<'db> RmirEmitter<'db> {
                 root: roots.get(idx).cloned().unwrap_or(RuntimeLocalRoot::None),
             })
             .collect::<Vec<_>>();
+        let mut layout_evidence_locals = vec![None; layout_evidence.locals.len()];
+        for abi_param in &abi.evidence_params {
+            let mut matching = layout_evidence.params.iter().copied().filter(|local| {
+                layout_evidence.locals[local.index()].param.as_ref() == Some(&abi_param.source)
+            });
+            let evidence_local = matching.next().ok_or_else(|| {
+                LowerError::Unsupported(format!(
+                    "layout evidence ABI parameter has no body local: {:?}",
+                    abi_param.source
+                ))
+            })?;
+            if matching.next().is_some() {
+                return Err(LowerError::Unsupported(format!(
+                    "layout evidence ABI parameter has multiple body locals: {:?}",
+                    abi_param.source
+                )));
+            }
+            let runtime_local = RLocalId::from_u32(locals.len() as u32);
+            let map = runtime_layout_map_for_map_ty(db, env, &abi_param.map_ty);
+            if abi_param.param.local != runtime_local || abi_param.param.class != map.class() {
+                return Err(LowerError::Unsupported(format!(
+                    "layout evidence ABI parameter does not match its body local: {:?}",
+                    abi_param.source
+                )));
+            }
+            locals.push(RLocal {
+                semantic_ty: abi_param.map_ty.scalar_ty,
+                carrier: RuntimeCarrier::Value(map.class()),
+                root: RuntimeLocalRoot::None,
+            });
+            layout_evidence_locals[evidence_local.index()] = Some(runtime_local);
+        }
+        for (index, metadata) in layout_evidence.locals.iter().enumerate() {
+            if layout_evidence_locals[index].is_some() {
+                continue;
+            }
+            if metadata.param.is_some() {
+                return Err(LowerError::Unsupported(format!(
+                    "layout evidence body parameter is absent from its ABI: {:?}",
+                    metadata.param
+                )));
+            }
+            let runtime_local = RLocalId::from_u32(locals.len() as u32);
+            locals.push(RLocal {
+                semantic_ty: metadata.map_ty.scalar_ty,
+                carrier: RuntimeCarrier::Value(
+                    runtime_layout_map_for_map_ty(db, env, &metadata.map_ty).class(),
+                ),
+                root: RuntimeLocalRoot::None,
+            });
+            layout_evidence_locals[index] = Some(runtime_local);
+        }
+        let layout_evidence_locals = layout_evidence_locals
+            .into_iter()
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| {
+                LowerError::Unsupported(
+                    "layout evidence body contains an unmapped local".to_string(),
+                )
+            })?;
         let blocks = Vec::with_capacity(semantic_body.blocks.len());
-        Self {
+        Ok(Self {
             db,
             instance,
             key,
             semantic_body,
+            layout_evidence,
             facts,
-            ret_class: signature.ret.clone(),
+            abi,
             env,
             const_ref_regions,
             semantic_carriers,
             semantic_locals,
             provider_bindings,
+            layout_evidence_locals,
             locals,
             blocks,
             terminated_blocks,
-        }
+        })
     }
 
-    fn finish(mut self, signature: RuntimeInterfaceSignature<'db>) -> RuntimeBody<'db> {
+    fn finish(mut self) -> RuntimeBody<'db> {
         while self.blocks.len() < self.semantic_body.blocks.len() {
             self.blocks.push(RBlock {
                 stmts: Vec::new(),
@@ -486,7 +568,7 @@ impl<'db> RmirEmitter<'db> {
         RuntimeBody {
             owner: self.instance,
             key: self.key,
-            signature,
+            signature: self.abi.signature(),
             semantic_locals: self.semantic_locals,
             provider_bindings: self.provider_bindings,
             locals: self.locals,
@@ -496,6 +578,369 @@ impl<'db> RmirEmitter<'db> {
 
     fn layout_for_ty(&self, ty: TyId<'db>) -> LayoutId<'db> {
         layout_for_ty_in_env(self.db, self.env, ty)
+    }
+
+    fn runtime_layout_map_for_evidence_local(
+        &self,
+        local: hir::analysis::semantic::LayoutEvidenceLocalId,
+    ) -> RuntimeLayoutMap<'db> {
+        runtime_layout_map_for_map_ty(
+            self.db,
+            self.env,
+            &self.layout_evidence.locals[local.index()].map_ty,
+        )
+    }
+
+    fn layout_evidence_runtime_local(
+        &self,
+        local: hir::analysis::semantic::LayoutEvidenceLocalId,
+    ) -> RLocalId {
+        self.layout_evidence_locals[local.index()]
+    }
+
+    fn alloc_layout_map_temp(&mut self, map: &RuntimeLayoutMap<'db>) -> RLocalId {
+        self.alloc_runtime_temp(map.scalar_ty(), RuntimeCarrier::Value(map.class()))
+    }
+
+    fn lower_layout_base(
+        &mut self,
+        bb: RBlockId,
+        map: &RuntimeLayoutMap<'db>,
+        base: LayoutEvidenceBase<'db>,
+    ) -> RLocalId {
+        match base {
+            LayoutEvidenceBase::Slot(slot) => self.alloc_layout_scalar(bb, map, slot),
+            LayoutEvidenceBase::Root(root) => {
+                let TyData::ConstTy(const_ty) = root.data(self.db) else {
+                    panic!("static layout root must be a const value: {root:?}")
+                };
+                let ty = const_ty.ty(self.db);
+                let value =
+                    SemConstId::new(self.db, SemConstValue::TypeLevel { ty, const_ty: root });
+                self.lower_sem_const_as_class(
+                    bb,
+                    value,
+                    ty,
+                    &RuntimeClass::Scalar(map.scalar().clone()),
+                    &[],
+                )
+            }
+        }
+    }
+
+    fn lower_layout_constant(
+        &mut self,
+        bb: RBlockId,
+        map: &RuntimeLayoutMap<'db>,
+        value: &LayoutEvidenceConstant<'db>,
+    ) -> RLocalId {
+        assert_eq!(map.rank(), value.strides.len());
+        let base = self.lower_layout_base(bb, map, value.base);
+        if map.rank() == 0 {
+            return base;
+        }
+        let strides = value
+            .strides
+            .iter()
+            .copied()
+            .map(|stride| self.alloc_layout_scalar(bb, map, stride))
+            .collect::<Vec<_>>();
+        let result = self.alloc_layout_map_temp(map);
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: result,
+                expr: RExpr::LayoutMapAffine {
+                    map: map.clone(),
+                    base,
+                    strides: strides.into_boxed_slice(),
+                },
+            },
+        );
+        result
+    }
+
+    fn alloc_layout_scalar(
+        &mut self,
+        bb: RBlockId,
+        map: &RuntimeLayoutMap<'db>,
+        value: usize,
+    ) -> RLocalId {
+        let local = self.alloc_runtime_temp(
+            map.scalar_ty(),
+            RuntimeCarrier::Value(RuntimeClass::Scalar(map.scalar().clone())),
+        );
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: local,
+                expr: RExpr::ConstScalar(runtime_layout_scalar_const(map, value)),
+            },
+        );
+        local
+    }
+
+    fn lower_layout_operand(
+        &mut self,
+        bb: RBlockId,
+        map: &RuntimeLayoutMap<'db>,
+        operand: &LayoutEvidenceOperand<'db>,
+    ) -> RLocalId {
+        match operand {
+            LayoutEvidenceOperand::Local(local) => self.layout_evidence_runtime_local(*local),
+            LayoutEvidenceOperand::Constant(value) => self.lower_layout_constant(bb, map, value),
+        }
+    }
+
+    fn lower_layout_index(&mut self, bb: RBlockId, index: LayoutEvidenceIndex) -> RLocalId {
+        match index {
+            LayoutEvidenceIndex::Constant(index) => self.alloc_u256_const(bb, index),
+            LayoutEvidenceIndex::Dynamic(index) => self.read_semantic_operand(bb, index),
+        }
+    }
+
+    fn project_layout_map_once(
+        &mut self,
+        bb: RBlockId,
+        source_map: &RuntimeLayoutMap<'db>,
+        source: RLocalId,
+        index: RLocalId,
+    ) -> RLocalId {
+        let child_map = source_map
+            .projected()
+            .expect("layout-map projection requires a ranked source");
+        let child = self.alloc_layout_map_temp(&child_map);
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: child,
+                expr: RExpr::LayoutMapProject {
+                    map: source_map.clone(),
+                    source,
+                    index,
+                },
+            },
+        );
+        child
+    }
+
+    fn lower_layout_array(
+        &mut self,
+        bb: RBlockId,
+        map: &RuntimeLayoutMap<'db>,
+        elements: &[LayoutEvidenceExpr<'db>],
+    ) -> RLocalId {
+        assert_eq!(map.dimensions().first().copied(), Some(elements.len()));
+        let child_map = map
+            .projected()
+            .expect("layout-map array construction requires a ranked map");
+        let result = self.alloc_layout_map_temp(map);
+        if let Some(first) = elements.first()
+            && elements.iter().all(|element| element == first)
+        {
+            let element = self.lower_layout_expr(bb, &child_map, first);
+            self.push_stmt(
+                bb,
+                RStmt::Assign {
+                    dst: result,
+                    expr: RExpr::LayoutMapRepeat {
+                        map: map.clone(),
+                        element,
+                    },
+                },
+            );
+            return result;
+        }
+        let elements = elements
+            .iter()
+            .map(|element| self.lower_layout_expr(bb, &child_map, element))
+            .collect::<Vec<_>>();
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: result,
+                expr: RExpr::LayoutMapDense {
+                    map: map.clone(),
+                    elements: elements.into_boxed_slice(),
+                },
+            },
+        );
+        result
+    }
+
+    fn lower_layout_repeat(
+        &mut self,
+        bb: RBlockId,
+        map: &RuntimeLayoutMap<'db>,
+        element: &LayoutEvidenceExpr<'db>,
+    ) -> RLocalId {
+        let child_map = map
+            .projected()
+            .expect("layout-map repeat construction requires a ranked map");
+        let element = self.lower_layout_expr(bb, &child_map, element);
+        let result = self.alloc_layout_map_temp(map);
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: result,
+                expr: RExpr::LayoutMapRepeat {
+                    map: map.clone(),
+                    element,
+                },
+            },
+        );
+        result
+    }
+
+    fn update_layout_map(
+        &mut self,
+        bb: RBlockId,
+        source_map: &RuntimeLayoutMap<'db>,
+        source: RLocalId,
+        terms: &[LayoutEvidenceProjectionTerm],
+        replacement_map: &RuntimeLayoutMap<'db>,
+        replacement: RLocalId,
+    ) -> RLocalId {
+        let Some((term, remaining)) = terms.split_first() else {
+            assert_eq!(source_map, replacement_map);
+            return replacement;
+        };
+        assert_eq!(source_map.dimensions().first().copied(), Some(term.len));
+        let child_map = source_map
+            .projected()
+            .expect("layout-map update requires a ranked source");
+        let index = self.lower_layout_index(bb, term.index);
+        let replacement = if remaining.is_empty() {
+            assert_eq!(&child_map, replacement_map);
+            replacement
+        } else {
+            let original = self.project_layout_map_once(bb, source_map, source, index);
+            self.update_layout_map(
+                bb,
+                &child_map,
+                original,
+                remaining,
+                replacement_map,
+                replacement,
+            )
+        };
+        let result = self.alloc_layout_map_temp(source_map);
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: result,
+                expr: RExpr::LayoutMapPatch {
+                    map: source_map.clone(),
+                    source,
+                    index,
+                    replacement,
+                },
+            },
+        );
+        result
+    }
+
+    fn lower_layout_expr(
+        &mut self,
+        bb: RBlockId,
+        map: &RuntimeLayoutMap<'db>,
+        expr: &LayoutEvidenceExpr<'db>,
+    ) -> RLocalId {
+        match expr {
+            LayoutEvidenceExpr::Use(operand) => self.lower_layout_operand(bb, map, operand),
+            LayoutEvidenceExpr::Project { source, terms, .. } => {
+                let mut source_map = match source {
+                    LayoutEvidenceOperand::Local(local) => {
+                        self.runtime_layout_map_for_evidence_local(*local)
+                    }
+                    LayoutEvidenceOperand::Constant(_) => {
+                        let mut shape = terms.iter().map(|term| term.len).collect::<Vec<_>>();
+                        shape.extend_from_slice(map.dimensions());
+                        runtime_layout_map_for_shape(self.db, self.env, map.scalar_ty(), &shape)
+                    }
+                };
+                let mut value = self.lower_layout_operand(bb, &source_map, source);
+                for term in terms {
+                    let index = self.lower_layout_index(bb, term.index);
+                    value = self.project_layout_map_once(bb, &source_map, value, index);
+                    source_map = source_map
+                        .projected()
+                        .expect("layout-map projection consumed too many axes");
+                }
+                assert_eq!(&source_map, map);
+                value
+            }
+            LayoutEvidenceExpr::Array { elements } => self.lower_layout_array(bb, map, elements),
+            LayoutEvidenceExpr::Repeat { len, element } => {
+                assert_eq!(map.dimensions().first(), Some(len));
+                self.lower_layout_repeat(bb, map, element)
+            }
+            LayoutEvidenceExpr::Update {
+                source,
+                terms,
+                value,
+            } => {
+                assert!(terms.len() <= map.rank());
+                let replacement_map = runtime_layout_map_for_shape(
+                    self.db,
+                    self.env,
+                    map.scalar_ty(),
+                    &map.dimensions()[terms.len()..],
+                );
+                let replacement = self.lower_layout_expr(bb, &replacement_map, value);
+                let source = self.lower_layout_operand(bb, map, source);
+                self.update_layout_map(bb, map, source, terms, &replacement_map, replacement)
+            }
+            LayoutEvidenceExpr::CallResult { .. } => {
+                panic!("call-result layout evidence must be unpacked by call lowering")
+            }
+        }
+    }
+
+    fn lower_layout_value_args(
+        &mut self,
+        bb: RBlockId,
+        local: SLocalId,
+        semantic: SemanticInstance<'db>,
+        abi: &RuntimeAbiPlan<'db>,
+    ) -> Vec<RLocalId> {
+        let callee_env = RuntimeTypeEnv::for_semantic(self.db, semantic);
+        let value = self.layout_evidence.semantic_values[local.index()].clone();
+        let mut args = Vec::new();
+        for expected in &abi.evidence_params {
+            let port = match &expected.source {
+                CallableLayoutParamPort::Input(port) => &port.component,
+                CallableLayoutParamPort::OutputWitness(port) => port,
+            };
+            let candidates = value
+                .schema
+                .components
+                .iter()
+                .enumerate()
+                .filter(|(_, component)| component.port == *port)
+                .collect::<Vec<_>>();
+            let (idx, actual) = match candidates.as_slice() {
+                [candidate] => *candidate,
+                [] | [_, _, ..] => panic!(
+                    "layout evidence source does not uniquely match call parameter: local={local:?}, expected={expected:?}, actual={:?}",
+                    value.schema.components,
+                ),
+            };
+            let operand = match &value.components[idx] {
+                LayoutEvidenceComponentValue::Known(value) => {
+                    LayoutEvidenceOperand::Constant(value.clone())
+                }
+                LayoutEvidenceComponentValue::Dynamic(local) => {
+                    LayoutEvidenceOperand::Local(*local)
+                }
+            };
+            assert_eq!(actual.map_ty(), expected.map_ty);
+            let expr = LayoutEvidenceExpr::Use(operand);
+            let map = runtime_layout_map_for_map_ty(self.db, callee_env, &expected.map_ty);
+            assert_eq!(map.class(), expected.param.class);
+            args.push(self.lower_layout_expr(bb, &map, &expr));
+        }
+        args
     }
 
     fn current_semantic_key(&self) -> SemanticInstanceKey<'db> {
@@ -542,14 +987,57 @@ impl<'db> RmirEmitter<'db> {
     }
 
     fn lower_stmt(&mut self, bb: RBlockId, stmt_idx: usize, stmt: &NSStmt<'db>) {
+        self.lower_stmt_index_checks(bb, &stmt.kind);
         match &stmt.kind {
             NSStmtKind::Assign { dst, expr } => self.lower_assign(bb, stmt_idx, *dst, expr),
             NSStmtKind::Store { dst, src } => {
-                let place = self.lower_place(bb, dst);
-                let target = self.project_place_class(&place);
-                let value = self.read_semantic_value(bb, src.local);
-                self.write_value_to_place(bb, place, value, &target);
+                if self
+                    .with_current_body_cx(|cx| cx.normalized_place_class(dst))
+                    .is_some()
+                {
+                    let place = self.lower_place(bb, dst);
+                    let target = self.project_place_class(&place);
+                    let value = self.read_semantic_value(bb, src.local);
+                    self.write_value_to_place(bb, place, value, &target);
+                }
             }
+        }
+        if !matches!(
+            &stmt.kind,
+            NSStmtKind::Assign {
+                expr: NExpr::Call { .. },
+                ..
+            }
+        ) && !self.terminated_blocks[bb.index()]
+        {
+            self.lower_layout_evidence_statement(bb, stmt_idx);
+        }
+    }
+
+    fn lower_layout_evidence_statement(&mut self, bb: RBlockId, stmt_idx: usize) {
+        let statement = self.layout_evidence.blocks[bb.index()].statements[stmt_idx].clone();
+        debug_assert!(statement.call.is_none());
+        for assignment in statement.assignments {
+            self.lower_layout_evidence_assignment(bb, &assignment);
+        }
+    }
+
+    fn lower_layout_evidence_assignment(
+        &mut self,
+        bb: RBlockId,
+        assignment: &hir::analysis::semantic::LayoutEvidenceAssignment<'db>,
+    ) {
+        let map = self.runtime_layout_map_for_evidence_local(assignment.dst);
+        let value = self.lower_layout_expr(bb, &map, &assignment.expr);
+        let dst = self.layout_evidence_runtime_local(assignment.dst);
+        if value != dst {
+            self.push_stmt(
+                bb,
+                RStmt::Assign {
+                    dst,
+                    expr: RExpr::Use(value),
+                },
+            );
         }
     }
 
@@ -569,7 +1057,7 @@ impl<'db> RmirEmitter<'db> {
                     RuntimeCarrier::Erased,
                 );
                 self.locals[sink.index()].carrier = carrier;
-                self.lower_expr_into(bb, sink, expr);
+                self.lower_expr_into(bb, stmt_idx, sink, expr);
             }
             Some(desired) => {
                 if self.semantic_local_is_derived_place_bound_alias(dst) {
@@ -578,14 +1066,14 @@ impl<'db> RmirEmitter<'db> {
                 }
                 if self.semantic_local_is_direct(dst) {
                     self.specialize_direct_assign_target_from_expr(dst, expr);
-                    self.lower_expr_into(bb, self.runtime_value(dst), expr);
+                    self.lower_expr_into(bb, stmt_idx, self.runtime_value(dst), expr);
                     return;
                 }
                 let temp = self.alloc_runtime_temp(
                     self.locals[dst.index()].semantic_ty,
                     RuntimeCarrier::Value(desired),
                 );
-                self.lower_expr_into(bb, temp, expr);
+                self.lower_expr_into(bb, stmt_idx, temp, expr);
                 self.write_semantic_value(bb, dst, temp);
             }
         }
@@ -625,13 +1113,6 @@ impl<'db> RmirEmitter<'db> {
             .facts
             .root_demand
             .disallows_const_ref_storage()
-            && effect_handle_class_for_ty_in_context(
-                self.db,
-                self.semantic_body.locals[dst.index()].ty,
-                self.env.scope,
-                self.env.assumptions,
-            )
-            .is_none()
             && let NExpr::Const(SConst::Ref(cref)) = expr
             && let Some(actual) =
                 self.const_ref_runtime_class(*cref, self.locals[dst_value.index()].semantic_ty)
@@ -649,11 +1130,7 @@ impl<'db> RmirEmitter<'db> {
                     .map(|selected| selected.class),
                 NExpr::Borrow { place, .. } => cx.normalized_place_address_class(place),
                 NExpr::ReadPlace { place, .. } => cx.normalized_place_class(place),
-                NExpr::ArrayRepeat { .. } => {
-                    panic!(
-                        "array repeat with non-concrete length reached runtime lowering: {expr:?}"
-                    )
-                }
+                NExpr::ArrayRepeat { .. } => None,
                 NExpr::Const(_)
                 | NExpr::CodeRegionRef { .. }
                 | NExpr::Unary { .. }
@@ -710,7 +1187,7 @@ impl<'db> RmirEmitter<'db> {
         self.refine_local_runtime_class(dst_value, target);
     }
 
-    fn lower_expr_into(&mut self, bb: RBlockId, dst: RLocalId, expr: &NExpr<'db>) {
+    fn lower_expr_into(&mut self, bb: RBlockId, stmt_idx: usize, dst: RLocalId, expr: &NExpr<'db>) {
         let Some(dst_class) = self.value_class(dst).cloned() else {
             if let NExpr::Call {
                 callee,
@@ -719,7 +1196,7 @@ impl<'db> RmirEmitter<'db> {
                 ..
             } = expr
             {
-                let _ = self.lower_call(bb, *callee, args, effect_args);
+                let _ = self.lower_call(bb, stmt_idx, *callee, args, effect_args);
             }
             return;
         };
@@ -738,9 +1215,6 @@ impl<'db> RmirEmitter<'db> {
             }
             NExpr::ReadPlace { place, .. } => {
                 if self.lower_value_extract_place_read(bb, dst, place) {
-                    return;
-                }
-                if self.lower_single_field_transport_place_read(bb, dst, place) {
                     return;
                 }
                 let place = self.lower_place(bb, place);
@@ -802,7 +1276,12 @@ impl<'db> RmirEmitter<'db> {
                     },
                 );
             }
-            NExpr::Const(const_) => self.lower_const_into(bb, dst, const_),
+            NExpr::Const(const_) => {
+                let bindings = self.layout_evidence.blocks[bb.index()].statements[stmt_idx]
+                    .const_bindings
+                    .clone();
+                self.lower_const_into(bb, dst, const_, &bindings);
+            }
             NExpr::Unary { op, value } => {
                 let value = self.read_semantic_operand(bb, *value);
                 self.push_stmt(
@@ -837,9 +1316,7 @@ impl<'db> RmirEmitter<'db> {
                     },
                 );
             }
-            NExpr::ArrayRepeat { .. } => {
-                panic!("array repeat with non-concrete length reached runtime lowering: {expr:?}")
-            }
+            NExpr::ArrayRepeat { ty, value } => self.lower_array_repeat(bb, dst, *ty, *value),
             NExpr::AggregateMake { ty, fields } => self.lower_aggregate_make(bb, dst, *ty, fields),
             NExpr::EnumMake {
                 enum_ty,
@@ -919,7 +1396,7 @@ impl<'db> RmirEmitter<'db> {
                 effect_args,
                 ..
             } => {
-                let value = self.lower_call(bb, *callee, args, effect_args);
+                let value = self.lower_call(bb, stmt_idx, *callee, args, effect_args);
                 if self.terminated_blocks[bb.index()] {
                     return;
                 }
@@ -967,7 +1444,13 @@ impl<'db> RmirEmitter<'db> {
         }
     }
 
-    fn lower_const_into(&mut self, bb: RBlockId, dst: RLocalId, const_: &SConst<'db>) {
+    fn lower_const_into(
+        &mut self,
+        bb: RBlockId,
+        dst: RLocalId,
+        const_: &SConst<'db>,
+        bindings: &[LayoutEvidenceConstBinding<'db>],
+    ) {
         match const_ {
             SConst::Value(value) => {
                 if sem_const_ty(self.db, *value) == TyId::unit(self.db) {
@@ -979,7 +1462,7 @@ impl<'db> RmirEmitter<'db> {
                     .expect("const destination should have a runtime class");
                 let expected_ty =
                     self.const_lowering_ty(self.locals[dst.index()].semantic_ty, &target);
-                self.lower_sem_const_for_class(bb, dst, *value, expected_ty, &target);
+                self.lower_sem_const_for_class(bb, dst, *value, expected_ty, &target, bindings);
             }
             SConst::Ref(cref) => {
                 let value = evaluated_const_ref_value(self.db, *cref);
@@ -992,7 +1475,7 @@ impl<'db> RmirEmitter<'db> {
                     .expect("const destination should have a runtime class");
                 let expected_ty =
                     self.const_lowering_ty(self.locals[dst.index()].semantic_ty, &target);
-                self.lower_const_ref_for_class(bb, dst, value, expected_ty, &target);
+                self.lower_const_ref_for_class(bb, dst, value, expected_ty, &target, bindings);
             }
         }
     }
@@ -1004,6 +1487,7 @@ impl<'db> RmirEmitter<'db> {
         value: SemConstId<'db>,
         expected_ty: TyId<'db>,
         target: &RuntimeClass<'db>,
+        bindings: &[LayoutEvidenceConstBinding<'db>],
     ) {
         let value = self.reify_runtime_const(expected_ty, value);
         if aggregate_const_ref_class(self.db, self.env, value).is_some()
@@ -1023,7 +1507,7 @@ impl<'db> RmirEmitter<'db> {
                 },
             );
         } else {
-            self.lower_sem_const_for_class(bb, dst, value, expected_ty, target);
+            self.lower_sem_const_for_class(bb, dst, value, expected_ty, target, bindings);
         }
     }
 
@@ -1034,9 +1518,9 @@ impl<'db> RmirEmitter<'db> {
         value: SemConstId<'db>,
         expected_ty: TyId<'db>,
         target: &RuntimeClass<'db>,
+        bindings: &[LayoutEvidenceConstBinding<'db>],
     ) {
-        let value = self.reify_runtime_const(expected_ty, value);
-        let src = self.lower_sem_const_as_class(bb, value, expected_ty, target);
+        let src = self.lower_sem_const_as_class(bb, value, expected_ty, target, bindings);
         let actual = self.value_class(src).cloned();
         let value = if self.value_class(src) == Some(target) {
             src
@@ -1067,7 +1551,11 @@ impl<'db> RmirEmitter<'db> {
         value: SemConstId<'db>,
         expected_ty: TyId<'db>,
         target: &RuntimeClass<'db>,
+        bindings: &[LayoutEvidenceConstBinding<'db>],
     ) -> RLocalId {
+        if let Some(value) = self.runtime_layout_root_value_for_const(bb, value, bindings) {
+            return value;
+        }
         let expected_ty = self.const_lowering_ty(expected_ty, target);
         let value = self.reify_runtime_const(expected_ty, value);
         let ty = expected_ty;
@@ -1118,19 +1606,20 @@ impl<'db> RmirEmitter<'db> {
                     pointee.aggregate_layout().is_some(),
                     "object ref const target should have aggregate layout"
                 );
-                self.lower_non_scalar_const_as_class(bb, value, ty, target)
+                self.lower_non_scalar_const_as_class(bb, value, ty, target, bindings)
             }
             RuntimeClass::Ref {
                 kind: RefKind::Provider { .. },
                 ..
-            } => self.lower_non_scalar_const_as_class(bb, value, ty, target),
+            } => self.lower_non_scalar_const_as_class(bb, value, ty, target, bindings),
             RuntimeClass::Ref { .. } => {
                 panic!(
                     "non-scalar semantic const {value:?} cannot lower directly to ref class {target:?}"
                 )
             }
             RuntimeClass::AggregateValue { layout: _ } => {
-                let src = self.lower_non_scalar_const_as_class(bb, value, expected_ty, target);
+                let src =
+                    self.lower_non_scalar_const_as_class(bb, value, expected_ty, target, bindings);
                 let actual = self.value_class(src).cloned();
                 if self.value_class(src) == Some(target)
                     || actual.as_ref().is_some_and(|actual| {
@@ -1143,7 +1632,7 @@ impl<'db> RmirEmitter<'db> {
                 }
             }
             RuntimeClass::RawAddr { .. } => {
-                self.lower_non_scalar_const_as_class(bb, value, ty, target)
+                self.lower_non_scalar_const_as_class(bb, value, ty, target, bindings)
             }
         }
     }
@@ -1164,7 +1653,11 @@ impl<'db> RmirEmitter<'db> {
         bb: RBlockId,
         value: SemConstId<'db>,
         expected_ty: TyId<'db>,
+        bindings: &[LayoutEvidenceConstBinding<'db>],
     ) -> RLocalId {
+        if let Some(value) = self.runtime_layout_root_value_for_const(bb, value, bindings) {
+            return value;
+        }
         let value = self.reify_runtime_const(expected_ty, value);
         let ty = expected_ty;
         if let Some(value) = self.try_lower_dyn_string_literal(bb, ty, value) {
@@ -1201,6 +1694,7 @@ impl<'db> RmirEmitter<'db> {
                 value,
                 ty,
                 &RuntimeClass::AggregateValue { layout },
+                bindings,
             ),
             SemConstValue::Unit
             | SemConstValue::Scalar { .. }
@@ -1540,6 +2034,7 @@ impl<'db> RmirEmitter<'db> {
         value: SemConstId<'db>,
         ty: TyId<'db>,
         target: &RuntimeClass<'db>,
+        bindings: &[LayoutEvidenceConstBinding<'db>],
     ) -> RLocalId {
         debug_assert!(!matches!(
             value.value(self.db),
@@ -1555,7 +2050,9 @@ impl<'db> RmirEmitter<'db> {
                     .iter()
                     .copied()
                     .zip(field_tys)
-                    .map(|(field, field_ty)| self.lower_const_value_field(bb, field, field_ty))
+                    .map(|(field, field_ty)| {
+                        self.lower_const_value_field(bb, field, field_ty, bindings)
+                    })
                     .unzip();
                 self.lower_aggregate_const_fields_as_class(
                     bb,
@@ -1590,7 +2087,7 @@ impl<'db> RmirEmitter<'db> {
                     .zip(field_tys)
                     .zip(layout_data.variants[variant.0 as usize].fields.iter())
                     .map(|((field, field_ty), field_class)| {
-                        self.lower_sem_const_as_class(bb, field, field_ty, field_class)
+                        self.lower_sem_const_as_class(bb, field, field_ty, field_class, bindings)
                     })
                     .collect::<Vec<_>>();
                 let dst_class = match target {
@@ -1691,6 +2188,16 @@ impl<'db> RmirEmitter<'db> {
         self.lower_aggregate_values(bb, dst, layout, &ctor_elems, &field_values);
     }
 
+    fn lower_array_repeat(&mut self, bb: RBlockId, dst: RLocalId, ty: TyId<'db>, value: NOperand) {
+        let len = ty.array_len(self.db).unwrap_or_else(|| {
+            panic!(
+                "array repeat with non-concrete length reached runtime lowering: {}",
+                ty.pretty_print(self.db)
+            )
+        });
+        self.lower_aggregate_make(bb, dst, ty, &vec![value; len]);
+    }
+
     fn lower_aggregate_values(
         &mut self,
         bb: RBlockId,
@@ -1761,18 +2268,13 @@ impl<'db> RmirEmitter<'db> {
                     self.write_value_to_place(bb, place, value, &elem.class);
                 }
             }
-            provider @ RuntimeClass::Ref {
+            class @ RuntimeClass::Ref {
                 kind: RefKind::Provider { .. },
                 ..
-            } => {
-                self.lower_single_field_transport_ctor(bb, dst, provider, field_values, "provider")
             }
-            raw_addr @ RuntimeClass::RawAddr { .. } => self.lower_single_field_transport_ctor(
-                bb,
-                dst,
-                raw_addr,
-                field_values,
-                "raw-address",
+            | class @ RuntimeClass::RawAddr { .. } => panic!(
+                "aggregate construction must produce an aggregate representation, found {class:?} for {}",
+                self.locals[dst.index()].semantic_ty.pretty_print(self.db),
             ),
             RuntimeClass::Ref {
                 kind: RefKind::Const,
@@ -1786,27 +2288,6 @@ impl<'db> RmirEmitter<'db> {
                 )
             }
         }
-    }
-
-    fn lower_single_field_transport_ctor(
-        &mut self,
-        bb: RBlockId,
-        dst: RLocalId,
-        dst_class: RuntimeClass<'db>,
-        field_values: &[RLocalId],
-        kind_name: &str,
-    ) {
-        let [value] = field_values else {
-            panic!("{kind_name} aggregate construction requires exactly one field");
-        };
-        let value = self.coerce_value(bb, *value, &dst_class);
-        self.push_stmt(
-            bb,
-            RStmt::Assign {
-                dst,
-                expr: RExpr::Use(value),
-            },
-        );
     }
 
     fn lower_enum_make(
@@ -1893,6 +2374,7 @@ impl<'db> RmirEmitter<'db> {
         bb: RBlockId,
         field: SemConstId<'db>,
         field_ty: TyId<'db>,
+        bindings: &[LayoutEvidenceConstBinding<'db>],
     ) -> (RLocalId, RuntimeClass<'db>) {
         let stored =
             stored_class_for_ty_in_context(self.db, field_ty, self.env.scope, self.env.assumptions);
@@ -1900,7 +2382,7 @@ impl<'db> RmirEmitter<'db> {
             let value = self.lower_zst_value_placeholder(bb, field_ty, stored.clone());
             return (value, stored);
         }
-        let value = self.lower_sem_const_as_value(bb, field, field_ty);
+        let value = self.lower_sem_const_as_value(bb, field, field_ty, bindings);
         let class = self.value_class(value).cloned().unwrap_or(stored);
         (value, class)
     }
@@ -2022,11 +2504,6 @@ impl<'db> RmirEmitter<'db> {
         {
             return;
         }
-        if let PlaceElem::Field(FieldIndex(field_idx)) = &elem
-            && self.lower_single_field_transport_local_read(bb, dst, base, *field_idx as usize)
-        {
-            return;
-        }
         let mut place = self.semantic_place(bb, base);
         place.path = vec![elem].into_boxed_slice();
         let projected = self.project_place_class(&place);
@@ -2076,7 +2553,13 @@ impl<'db> RmirEmitter<'db> {
             NSPlaceRoot::CarrierDerefLocal(base) => base,
             NSPlaceRoot::Root(root) => match self.semantic_body.root(root) {
                 Some(NBorrowRoot::Param { local, .. } | NBorrowRoot::LocalSlot { local }) => *local,
-                Some(NBorrowRoot::Provider { .. }) | None => return false,
+                Some(NBorrowRoot::Provider { binding, .. }) => {
+                    let binding = binding.clone();
+                    let path = place.path.iter().cloned().collect::<Vec<_>>();
+                    return self
+                        .lower_effect_handle_provider_extract_path_read(bb, dst, &binding, &path);
+                }
+                None => return false,
             },
         };
         let path = place.path.iter().cloned().collect::<Vec<_>>();
@@ -2103,10 +2586,58 @@ impl<'db> RmirEmitter<'db> {
         if !matches!(self.locals[base.index()].root, RuntimeLocalRoot::None) {
             return false;
         }
-        let mut value = self.runtime_value(base);
-        let Some(mut class) = self.value_class(value).cloned() else {
+        let value = self.runtime_value(base);
+        let Some(class) = self.value_class(value).cloned() else {
             return false;
         };
+        self.lower_value_extract_from_value(bb, dst, value, class, path)
+    }
+
+    fn lower_effect_handle_provider_extract_path_read(
+        &mut self,
+        bb: RBlockId,
+        dst: RLocalId,
+        binding: &ProviderBinding<'db>,
+        path: &[Projection<TyId<'db>, VariantIndex, SLocalId>],
+    ) -> bool {
+        let Some(local) = self.facts.root_provider_local(binding) else {
+            return false;
+        };
+        let transport_class = match effect_handle_transport_class_for_ty_in_context(
+            self.db,
+            binding.provider_ty,
+            self.env.scope,
+            self.env.assumptions,
+        ) {
+            Some(class) => class,
+            None => return false,
+        };
+        let transport = self
+            .provider_binding_id_for_semantic(binding)
+            .map(|provider| self.provider_binding_value(provider))
+            .unwrap_or_else(|| self.runtime_value(local));
+        if self.value_class(transport) != Some(&transport_class) {
+            return false;
+        }
+        let value_ty = self.semantic_body.locals[local.index()].ty;
+        let class =
+            stored_class_for_ty_in_context(self.db, value_ty, self.env.scope, self.env.assumptions);
+        let value = self.coerce_value(bb, transport, &class);
+        debug_assert_eq!(
+            self.locals[transport.index()].semantic_ty,
+            self.semantic_body.locals[local.index()].ty,
+        );
+        self.lower_value_extract_from_value(bb, dst, value, class, path)
+    }
+
+    fn lower_value_extract_from_value(
+        &mut self,
+        bb: RBlockId,
+        dst: RLocalId,
+        mut value: RLocalId,
+        mut class: RuntimeClass<'db>,
+        path: &[Projection<TyId<'db>, VariantIndex, SLocalId>],
+    ) -> bool {
         if path.is_empty() {
             let target = self
                 .value_class(dst)
@@ -2221,85 +2752,6 @@ impl<'db> RmirEmitter<'db> {
             }
         };
         self.push_stmt(bb, RStmt::Assign { dst, expr });
-    }
-
-    fn lower_single_field_transport_place_read(
-        &mut self,
-        bb: RBlockId,
-        dst: RLocalId,
-        place: &NSPlace<'db>,
-    ) -> bool {
-        let Some(Projection::Field(field_idx)) = place.path.iter().next() else {
-            return false;
-        };
-        if place.path.len() != 1 {
-            return false;
-        }
-        let base = match place.root {
-            NSPlaceRoot::CarrierDerefLocal(base) => base,
-            NSPlaceRoot::Root(root) => match self.semantic_body.root(root) {
-                Some(NBorrowRoot::Param { local, .. } | NBorrowRoot::LocalSlot { local }) => *local,
-                Some(NBorrowRoot::Provider { .. }) => return false,
-                None => return false,
-            },
-        };
-        self.lower_single_field_transport_local_read(bb, dst, base, *field_idx)
-    }
-
-    fn lower_single_field_transport_local_read(
-        &mut self,
-        bb: RBlockId,
-        dst: RLocalId,
-        base: SLocalId,
-        field_idx: usize,
-    ) -> bool {
-        if field_idx != 0 {
-            return false;
-        }
-        let base_ty = self.locals[base.index()].semantic_ty;
-        self.lower_single_field_transport_value_read(bb, dst, self.runtime_value(base), base_ty)
-    }
-
-    fn lower_single_field_transport_value_read(
-        &mut self,
-        bb: RBlockId,
-        dst: RLocalId,
-        value: RLocalId,
-        value_ty: TyId<'db>,
-    ) -> bool {
-        if effect_handle_class_for_ty_in_context(
-            self.db,
-            value_ty,
-            self.env.scope,
-            self.env.assumptions,
-        )
-        .is_none()
-        {
-            return false;
-        }
-        let Some(base_class) = self.value_class(value) else {
-            return false;
-        };
-        let Some(target) = self.value_class(dst).cloned() else {
-            return false;
-        };
-        if !base_class.is_transport()
-            || !matches!(
-                target,
-                RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. }
-            )
-        {
-            return false;
-        }
-        let raw = self.coerce_value(bb, value, &target);
-        self.push_stmt(
-            bb,
-            RStmt::Assign {
-                dst,
-                expr: RExpr::Use(raw),
-            },
-        );
-        true
     }
 
     fn lower_enum_tag(&mut self, bb: RBlockId, dst: RLocalId, value: NOperand) {
@@ -2780,10 +3232,18 @@ impl<'db> RmirEmitter<'db> {
     fn lower_call(
         &mut self,
         bb: RBlockId,
+        stmt_idx: usize,
         callee: SemanticCalleeRef<'db>,
         args: &[NOperand],
         effect_args: &[NEffectArg<'db>],
     ) -> RLocalId {
+        let layout_statement = self.layout_evidence.blocks[bb.index()].statements[stmt_idx].clone();
+        let layout_call = layout_statement.call.as_ref();
+        for assignment in &layout_statement.assignments {
+            if !matches!(assignment.expr, LayoutEvidenceExpr::CallResult { .. }) {
+                self.lower_layout_evidence_assignment(bb, assignment);
+            }
+        }
         let caller_key = self.current_semantic_key();
         let caller_typed_body = caller_key.instantiate_typed_body(self.db);
         let callee_key = resolve_runtime_call_key(
@@ -2803,12 +3263,15 @@ impl<'db> RmirEmitter<'db> {
             )
         });
         let semantic = get_or_build_semantic_instance(self.db, callee_key);
-        if let Some(ret) = self.lower_core_primitive_wrapper_call(bb, semantic, args) {
-            return ret;
+        if layout_call.is_none() {
+            if let Some(ret) = self.lower_core_primitive_wrapper_call(bb, semantic, args) {
+                return ret;
+            }
+            if let Some(ret) = self.lower_extern_builtin_call(bb, semantic, args, effect_args) {
+                return ret;
+            }
         }
-        if let Some(ret) = self.lower_extern_builtin_call(bb, semantic, args, effect_args) {
-            return ret;
-        }
+        self.lower_erased_effect_handle_call_inputs(bb, semantic, args);
         let mut boundary_sites = BoundarySiteAllocator::default();
         let call_input_plan = compile_call_input_plan_for_semantic(
             self.db,
@@ -2818,14 +3281,32 @@ impl<'db> RmirEmitter<'db> {
             effect_args,
             &mut boundary_sites,
         );
-        let (runtime_args, runtime_classes) =
+        let (mut runtime_args, runtime_classes) =
             self.lower_runtime_call_inputs(bb, args, effect_args, &call_input_plan);
-        let callee_key = RuntimeInstanceKey::new(
+        let runtime_key = RuntimeInstanceKey::new(
             self.db,
             crate::instance::RuntimeInstanceSource::Semantic(semantic),
             runtime_classes,
         );
-        let callee = get_or_build_runtime_instance(self.db, callee_key);
+        let abi = runtime_abi_plan(self.db, runtime_key);
+        let callee_env = RuntimeTypeEnv::for_semantic(self.db, semantic);
+        for param in &abi.evidence_params {
+            let args = layout_call
+                .into_iter()
+                .flat_map(|call| call.args.iter())
+                .filter(|arg| arg.target == param.source)
+                .collect::<Vec<_>>();
+            let [arg] = args.as_slice() else {
+                panic!(
+                    "runtime layout-evidence parameter does not have one matching call argument: {:?}",
+                    param.source
+                );
+            };
+            let map = runtime_layout_map_for_map_ty(self.db, callee_env, &param.map_ty);
+            assert_eq!(map.class(), param.param.class);
+            runtime_args.push(self.lower_layout_expr(bb, &map, &arg.value));
+        }
+        let callee = get_or_build_runtime_instance(self.db, runtime_key);
         if callee.exit_behavior(self.db) == RuntimeExitBehavior::NeverReturns {
             self.set_terminator(
                 bb,
@@ -2837,8 +3318,7 @@ impl<'db> RmirEmitter<'db> {
             return self.alloc_runtime_temp(TyId::unit(self.db), RuntimeCarrier::Erased);
         }
         let ret_ty = semantic_return_ty(self.db, semantic);
-
-        let Some(ret_class) = runtime_return_class(self.db, callee_key) else {
+        let Some(call_class) = abi.returns.class.clone() else {
             let ret = self.alloc_runtime_temp(TyId::unit(self.db), RuntimeCarrier::Erased);
             self.push_stmt(
                 bb,
@@ -2852,18 +3332,220 @@ impl<'db> RmirEmitter<'db> {
             );
             return ret;
         };
-        let ret = self.alloc_runtime_temp(ret_ty, RuntimeCarrier::Value(ret_class));
+        let call_result = self.alloc_runtime_temp(ret_ty, RuntimeCarrier::Value(call_class));
         self.push_stmt(
             bb,
             RStmt::Assign {
-                dst: ret,
+                dst: call_result,
                 expr: RExpr::Call {
                     callee,
                     args: runtime_args.into_boxed_slice(),
                 },
             },
         );
-        ret
+        let Some(envelope_layout) = abi.returns.layout else {
+            return call_result;
+        };
+        let mut field = 0u32;
+        let visible_result = abi.returns.visible.clone().map(|class| {
+            let result = self.alloc_runtime_temp(ret_ty, RuntimeCarrier::Value(class));
+            self.push_stmt(
+                bb,
+                RStmt::Assign {
+                    dst: result,
+                    expr: RExpr::AggregateExtract {
+                        value: call_result,
+                        index: field,
+                    },
+                },
+            );
+            field += 1;
+            result
+        });
+        for result in &abi.returns.evidence {
+            let assignment = layout_statement
+                .assignments
+                .iter()
+                .find(|assignment| {
+                    matches!(
+                        assignment.expr,
+                        LayoutEvidenceExpr::CallResult { component }
+                            if component == result.component
+                    )
+                })
+                .expect("verified call evidence must assign every ABI result component");
+            assert_eq!(
+                self.layout_evidence.locals[assignment.dst.index()].map_ty,
+                result.map_ty,
+            );
+            let extracted = self.alloc_runtime_temp(
+                self.layout_evidence.locals[assignment.dst.index()]
+                    .map_ty
+                    .scalar_ty,
+                RuntimeCarrier::Value(result.class.clone()),
+            );
+            self.push_stmt(
+                bb,
+                RStmt::Assign {
+                    dst: extracted,
+                    expr: RExpr::AggregateExtract {
+                        value: call_result,
+                        index: field,
+                    },
+                },
+            );
+            let dst = self.layout_evidence_runtime_local(assignment.dst);
+            self.push_stmt(
+                bb,
+                RStmt::Assign {
+                    dst,
+                    expr: RExpr::Use(extracted),
+                },
+            );
+            field += 1;
+        }
+        let _ = envelope_layout;
+        debug_assert_eq!(
+            field as usize,
+            abi.returns.evidence.len() + usize::from(visible_result.is_some())
+        );
+        visible_result
+            .unwrap_or_else(|| self.alloc_runtime_temp(TyId::unit(self.db), RuntimeCarrier::Erased))
+    }
+
+    fn lower_erased_effect_handle_call_inputs(
+        &mut self,
+        bb: RBlockId,
+        callee: SemanticInstance<'db>,
+        args: &[NOperand],
+    ) {
+        let typed_body = callee.key(self.db).typed_body(self.db);
+        for (idx, (arg, plan)) in args
+            .iter()
+            .copied()
+            .zip(runtime_param_plans(self.db, callee).iter())
+            .enumerate()
+        {
+            if !matches!(plan, crate::runtime::RuntimeParamPlan::Erased) {
+                continue;
+            }
+            let Some(binding) = typed_body.param_binding(idx) else {
+                continue;
+            };
+            let handle_ty = callee.binding_ty(self.db, binding);
+            let Some(transport) = effect_handle_transport_class_for_ty_in_context(
+                self.db,
+                handle_ty,
+                self.env.scope,
+                self.env.assumptions,
+            ) else {
+                continue;
+            };
+            let Some(value) = self.handle_like_semantic_value(arg.local) else {
+                continue;
+            };
+            if self.value_class(value) != Some(&transport) {
+                continue;
+            }
+            let word = RuntimeClass::Scalar(word_scalar_class());
+            let raw =
+                self.emit_plain_runtime_coercion(bb, value, transport, &word, TyId::u256(self.db));
+            let converted = self.lower_effect_handle_method_call(
+                bb,
+                handle_ty,
+                "from_raw",
+                raw,
+                Some(arg.local),
+            );
+            assert!(
+                self.value_class(converted).is_none(),
+                "erased EffectHandle parameter conversion must produce an erased value"
+            );
+        }
+    }
+
+    fn lower_stmt_index_checks(&mut self, bb: RBlockId, stmt: &NSStmtKind<'db>) {
+        match stmt {
+            NSStmtKind::Assign { expr, .. } => {
+                expr.for_each_place_operand(|place| self.lower_place_index_checks(bb, place));
+            }
+            NSStmtKind::Store { dst, .. } => self.lower_place_index_checks(bb, dst),
+        }
+    }
+
+    fn lower_place_index_checks(&mut self, bb: RBlockId, place: &NSPlace<'db>) {
+        if !place
+            .path
+            .iter()
+            .any(|projection| matches!(projection, Projection::Index(_)))
+        {
+            return;
+        }
+        let Some(mut ty) = self.semantic_place_root_ty(place) else {
+            return;
+        };
+        for projection in place.path.iter() {
+            while let Some((_, inner)) = ty.as_capability(self.db) {
+                ty = inner;
+            }
+            ty = match projection {
+                Projection::Field(index) => Some(project_pattern_child_source_ty(
+                    self.db,
+                    ty,
+                    PatternProjectionStep::Field(*index),
+                )),
+                Projection::VariantField {
+                    variant,
+                    enum_ty: _,
+                    field_idx,
+                } => ty.as_enum(self.db).map(|enum_| {
+                    project_pattern_child_source_ty(
+                        self.db,
+                        ty,
+                        PatternProjectionStep::VariantField {
+                            variant: EnumVariant::new(enum_, variant.0 as usize),
+                            field_idx: *field_idx,
+                        },
+                    )
+                }),
+                Projection::Index(index) => {
+                    let len = ty
+                        .array_len(self.db)
+                        .expect("normalized index projection must retain a concrete array length");
+                    let index = match index {
+                        IndexSource::Constant(index) => IndexSource::Constant(*index),
+                        IndexSource::Dynamic(index) => {
+                            IndexSource::Dynamic(self.read_semantic_value(bb, *index))
+                        }
+                    };
+                    self.push_stmt(
+                        bb,
+                        RStmt::AssertIndexInBounds {
+                            index,
+                            len: len
+                                .try_into()
+                                .expect("array length must fit the runtime index representation"),
+                        },
+                    );
+                    ty.generic_args(self.db).first().copied()
+                }
+                Projection::Deref => ty
+                    .as_borrow(self.db)
+                    .map(|(_, inner)| inner)
+                    .or_else(|| ty.as_capability(self.db).map(|(_, inner)| inner)),
+                Projection::Discriminant => None,
+            }
+            .unwrap_or_else(|| {
+                panic!(
+                    "invalid semantic place projection while lowering index checks: ty={}, projection={projection:?}",
+                    ty.pretty_print(self.db),
+                )
+            });
+        }
+    }
+
+    fn semantic_place_root_ty(&self, place: &NSPlace<'db>) -> Option<TyId<'db>> {
+        self.semantic_body.place_root_ty(&place.root)
     }
 
     fn lower_extern_builtin_call(
@@ -3951,13 +4633,57 @@ impl<'db> RmirEmitter<'db> {
             }
             NSTerminatorKind::Assert { message } => self.lower_assert_terminator(bb, *message),
             NSTerminatorKind::Return(value) => {
-                let ret_class = self.ret_class.clone();
-                RTerminator::Return(match ret_class {
-                    Some(class) => {
-                        value.map(|value| self.lower_semantic_operand_for_class(bb, value, &class))
-                    }
-                    None => None,
-                })
+                let semantic = self
+                    .key
+                    .semantic(self.db)
+                    .expect("runtime body must have a semantic owner");
+                let returns = self.abi.returns.clone();
+                let Some(layout) = returns.layout else {
+                    return RTerminator::Return(match returns.visible {
+                        Some(class) => value
+                            .map(|value| self.lower_semantic_operand_for_class(bb, value, &class)),
+                        None => None,
+                    });
+                };
+                let mut fields = Vec::with_capacity(
+                    returns.evidence.len() + usize::from(returns.visible.is_some()),
+                );
+                if let Some(class) = &returns.visible {
+                    fields.push(
+                        value
+                            .map(|value| self.lower_semantic_operand_for_class(bb, value, class))
+                            .expect("visible runtime return must have a semantic value"),
+                    );
+                }
+                let operands = self.layout_evidence.blocks[bb.index()]
+                    .terminator
+                    .returns
+                    .clone();
+                assert_eq!(operands.len(), returns.evidence.len());
+                for result in &returns.evidence {
+                    let returned = operands
+                        .iter()
+                        .find(|returned| returned.component == result.component)
+                        .expect("verified layout evidence must return every ABI component");
+                    let map = runtime_layout_map_for_map_ty(self.db, self.env, &result.map_ty);
+                    assert_eq!(map.class(), result.class);
+                    fields.push(self.lower_layout_operand(bb, &map, &returned.value));
+                }
+                let result = self.alloc_runtime_temp(
+                    semantic_return_ty(self.db, semantic),
+                    RuntimeCarrier::Value(RuntimeClass::AggregateValue { layout }),
+                );
+                self.push_stmt(
+                    bb,
+                    RStmt::Assign {
+                        dst: result,
+                        expr: RExpr::AggregateMake {
+                            layout,
+                            fields: fields.into_boxed_slice(),
+                        },
+                    },
+                );
+                RTerminator::Return(Some(result))
             }
         }
     }
@@ -3990,6 +4716,13 @@ impl<'db> RmirEmitter<'db> {
         src: RLocalId,
         target: &RuntimeClass<'db>,
     ) -> RLocalId {
+        let semantic_ty = self.locals[src.index()].semantic_ty;
+        if self.value_class(src).is_none()
+            && let Some(value) =
+                self.lower_erased_effect_handle_coercion(bb, src, target, semantic_ty)
+        {
+            return value;
+        }
         let source = self
             .value_class(src)
             .cloned()
@@ -4003,10 +4736,274 @@ impl<'db> RmirEmitter<'db> {
                     self.locals,
                 )
             });
-        let semantic_ty = self.locals[src.index()].semantic_ty;
+        if let Some(value) =
+            self.lower_effect_handle_coercion(bb, src, &source, target, semantic_ty)
+        {
+            return value;
+        }
+        self.emit_plain_runtime_coercion(bb, src, source, target, semantic_ty)
+    }
+
+    fn lower_erased_effect_handle_coercion(
+        &mut self,
+        bb: RBlockId,
+        src: RLocalId,
+        target: &RuntimeClass<'db>,
+        handle_ty: TyId<'db>,
+    ) -> Option<RLocalId> {
+        let transport = effect_handle_transport_class_for_ty_in_context(
+            self.db,
+            handle_ty,
+            self.env.scope,
+            self.env.assumptions,
+        )?;
+        let ordinary = stored_class_for_ty_in_context(
+            self.db,
+            handle_ty,
+            self.env.scope,
+            self.env.assumptions,
+        );
+        if target != &transport || ordinary.span_words(self.db) != 0 {
+            return None;
+        }
+        let raw = self.lower_effect_handle_method_call(
+            bb,
+            handle_ty,
+            "raw",
+            src,
+            self.semantic_source_local_for_runtime_value(src),
+        );
+        let raw_class = self
+            .value_class(raw)
+            .cloned()
+            .expect("EffectHandle::raw must return a runtime value");
+        Some(self.emit_plain_runtime_coercion(bb, raw, raw_class, target, TyId::u256(self.db)))
+    }
+
+    fn emit_plain_runtime_coercion(
+        &mut self,
+        bb: RBlockId,
+        src: RLocalId,
+        source: RuntimeClass<'db>,
+        target: &RuntimeClass<'db>,
+        semantic_ty: TyId<'db>,
+    ) -> RLocalId {
         let db = self.db;
         emit_runtime_coercion(self, db, bb, src, source, target, semantic_ty)
             .unwrap_or_else(|err| self.panic_unsupported_conversion(src, err))
+    }
+
+    fn lower_effect_handle_coercion(
+        &mut self,
+        bb: RBlockId,
+        src: RLocalId,
+        source: &RuntimeClass<'db>,
+        target: &RuntimeClass<'db>,
+        handle_ty: TyId<'db>,
+    ) -> Option<RLocalId> {
+        let transport = effect_handle_transport_class_for_ty_in_context(
+            self.db,
+            handle_ty,
+            self.env.scope,
+            self.env.assumptions,
+        )?;
+        let ordinary = stored_class_for_ty_in_context(
+            self.db,
+            handle_ty,
+            self.env.scope,
+            self.env.assumptions,
+        );
+        let source_local = self.semantic_source_local_for_runtime_value(src);
+        if target == &transport
+            && source
+                .aggregate_value_class()
+                .is_some_and(|source| source.shares_runtime_rep_with(self.db, &ordinary))
+        {
+            let source =
+                self.emit_plain_runtime_coercion(bb, src, source.clone(), &ordinary, handle_ty);
+            let raw =
+                self.lower_effect_handle_method_call(bb, handle_ty, "raw", source, source_local);
+            let raw_class = self
+                .value_class(raw)
+                .cloned()
+                .expect("EffectHandle::raw must return a runtime value");
+            return Some(self.emit_plain_runtime_coercion(
+                bb,
+                raw,
+                raw_class,
+                target,
+                TyId::u256(self.db),
+            ));
+        }
+
+        if source == &transport
+            && target
+                .aggregate_value_class()
+                .is_some_and(|target| target.shares_runtime_rep_with(self.db, &ordinary))
+        {
+            let word = RuntimeClass::Scalar(ScalarClass {
+                repr: ScalarRepr::Int {
+                    bits: 256,
+                    signed: false,
+                },
+                role: ScalarRole::Plain,
+            });
+            let raw = self.emit_plain_runtime_coercion(
+                bb,
+                src,
+                source.clone(),
+                &word,
+                TyId::u256(self.db),
+            );
+            let value =
+                self.lower_effect_handle_method_call(bb, handle_ty, "from_raw", raw, source_local);
+            let value_class = self
+                .value_class(value)
+                .cloned()
+                .expect("non-zero-sized EffectHandle::from_raw must return a runtime value");
+            return Some(self.emit_plain_runtime_coercion(
+                bb,
+                value,
+                value_class,
+                target,
+                handle_ty,
+            ));
+        }
+
+        None
+    }
+
+    fn semantic_source_local_for_runtime_value(&self, value: RLocalId) -> Option<SLocalId> {
+        (value.index() < self.semantic_body.locals.len())
+            .then(|| SLocalId::from_u32(value.as_u32()))
+    }
+
+    fn lower_effect_handle_method_call(
+        &mut self,
+        bb: RBlockId,
+        handle_ty: TyId<'db>,
+        method_name: &str,
+        arg: RLocalId,
+        layout_source: Option<SLocalId>,
+    ) -> RLocalId {
+        let semantic = self.resolve_effect_handle_method(handle_ty, method_name);
+        let visible_bindings = runtime_visible_binding_plans(self.db, semantic);
+        let (mut args, params) = match visible_bindings.as_slice() {
+            [] => (Vec::new(), Vec::new()),
+            [_] => {
+                let class = self
+                    .value_class(arg)
+                    .cloned()
+                    .expect("EffectHandle method argument must have a runtime class");
+                (vec![arg], vec![class])
+            }
+            _ => panic!(
+                "EffectHandle::{method_name} must have exactly one semantic argument and at most one runtime argument"
+            ),
+        };
+        let callee_key = RuntimeInstanceKey::new(
+            self.db,
+            crate::instance::RuntimeInstanceSource::Semantic(semantic),
+            params,
+        );
+        let callee = get_or_build_runtime_instance(self.db, callee_key);
+        let abi = runtime_abi_plan(self.db, callee_key);
+        if !abi.evidence_params.is_empty() {
+            let source = layout_source.unwrap_or_else(|| {
+                panic!(
+                    "EffectHandle::{method_name} requires runtime layout evidence without a semantic source"
+                )
+            });
+            args.extend(self.lower_layout_value_args(bb, source, semantic, &abi));
+        }
+        let signature = abi.signature();
+        assert_eq!(
+            args.len(),
+            signature.params.len(),
+            "EffectHandle::{method_name} runtime argument count mismatch"
+        );
+        let ret_ty = semantic_return_ty(self.db, semantic);
+        let Some(call_class) = abi.returns.class.clone() else {
+            let ret = self.alloc_runtime_temp(ret_ty, RuntimeCarrier::Erased);
+            self.push_stmt(
+                bb,
+                RStmt::Assign {
+                    dst: ret,
+                    expr: RExpr::Call {
+                        callee,
+                        args: args.into_boxed_slice(),
+                    },
+                },
+            );
+            return ret;
+        };
+        let call_result = self.alloc_runtime_temp(ret_ty, RuntimeCarrier::Value(call_class));
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: call_result,
+                expr: RExpr::Call {
+                    callee,
+                    args: args.into_boxed_slice(),
+                },
+            },
+        );
+        let Some(_) = abi.returns.layout else {
+            return call_result;
+        };
+        let Some(visible) = abi.returns.visible else {
+            return self.alloc_runtime_temp(ret_ty, RuntimeCarrier::Erased);
+        };
+        let result = self.alloc_runtime_temp(ret_ty, RuntimeCarrier::Value(visible));
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: result,
+                expr: RExpr::AggregateExtract {
+                    value: call_result,
+                    index: 0,
+                },
+            },
+        );
+        result
+    }
+
+    fn resolve_effect_handle_method(
+        &self,
+        handle_ty: TyId<'db>,
+        method_name: &str,
+    ) -> SemanticInstance<'db> {
+        let scope = self
+            .env
+            .scope
+            .or_else(|| handle_ty.as_scope(self.db))
+            .expect("EffectHandle method resolution requires a scope");
+        let impl_instance =
+            runtime_effect_handle_info(self.db, handle_ty, Some(scope), self.env.assumptions)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "failed to resolve EffectHandle implementation for {}",
+                        handle_ty.pretty_print(self.db),
+                    )
+                })
+                .impl_instance;
+        let trait_inst = impl_instance.trait_inst();
+        let (func, impl_args) = impl_instance
+            .method_instance(self.db, IdentId::new(self.db, method_name.to_string()))
+            .unwrap_or_else(|| {
+                panic!(
+                    "failed to resolve EffectHandle::{method_name} for {}",
+                    handle_ty.pretty_print(self.db),
+                )
+            });
+        let key = SemanticInstanceKey::new(
+            self.db,
+            BodyOwner::Func(func),
+            GenericSubst::new(self.db, impl_args),
+            EffectProviderSubst::empty(self.db),
+            ImplEnv::new(self.db, scope, self.env.assumptions, vec![trait_inst]),
+        );
+        get_or_build_semantic_instance(self.db, key)
     }
 
     fn panic_unsupported_conversion(&self, src: RLocalId, err: RuntimeConversionError<'db>) -> ! {
@@ -4280,7 +5277,7 @@ impl<'db> RmirEmitter<'db> {
                 NBorrowRoot::Param { local, .. } | NBorrowRoot::LocalSlot { local } => {
                     self.try_semantic_place(bb, *local)?
                 }
-                NBorrowRoot::Provider { binding } => RuntimePlace {
+                NBorrowRoot::Provider { binding, .. } => RuntimePlace {
                     root: self.provider_place_root(binding)?,
                     path: Box::default(),
                 },
@@ -4740,7 +5737,7 @@ impl<'db> RmirEmitter<'db> {
                         self.semantic_local_lowering(*local),
                         self.locals[self.runtime_value(*local).index()].root,
                     ),
-                    Some(NBorrowRoot::Provider { binding }) => {
+                    Some(NBorrowRoot::Provider { binding, .. }) => {
                         format!("provider root={root:?} binding={binding:?} provider_place_root={:?}", self.provider_place_root(binding))
                     }
                     None => format!("missing root {root:?}"),
@@ -4969,14 +5966,72 @@ impl<'db> RmirEmitter<'db> {
             .semantic(self.db)
             .expect("runtime const reification requires a semantic instance");
         reify_runtime_const_for_ty(self.db, semantic, expected_ty, value).unwrap_or_else(|| {
+            let owner = semantic.key(self.db).owner(self.db);
+            let owner_name = match owner {
+                BodyOwner::Func(func) => func
+                    .name(self.db)
+                    .to_opt()
+                    .map(|name| {
+                        format!(
+                            "{} on {}",
+                            name.data(self.db),
+                            func.expected_self_ty(self.db)
+                                .map(|ty| ty.pretty_print(self.db).to_string())
+                                .unwrap_or_else(|| "<free function>".to_string()),
+                        )
+                    })
+                    .unwrap_or_else(|| "<anonymous>".to_string()),
+                _ => format!("{owner:?}"),
+            };
             panic!(
-                "semantic const should reify for runtime lowering: `{}` (expected type `{}`). \
-                 This is a compiler bug: the const failed to evaluate but no diagnostic was \
-                 reported during type checking.",
+                "semantic const should reify for runtime lowering: value={} ({value:?}), \
+                 expected={}, owner={owner_name} ({owner:?}), subst={:?}. This is a compiler \
+                 bug: the const failed to evaluate but no diagnostic was reported during type \
+                 checking.",
                 value.pretty_print(self.db),
                 expected_ty.pretty_print(self.db),
+                semantic
+                    .key(self.db)
+                    .subst(self.db)
+                    .generic_args(self.db)
+                    .iter()
+                    .map(|arg| arg.pretty_print(self.db).to_string())
+                    .collect::<Vec<_>>(),
             )
         })
+    }
+
+    fn runtime_layout_root_value_for_const(
+        &mut self,
+        bb: RBlockId,
+        value: SemConstId<'db>,
+        bindings: &[LayoutEvidenceConstBinding<'db>],
+    ) -> Option<RLocalId> {
+        let SemConstValue::TypeLevel {
+            const_ty: param_ty, ..
+        } = value.value(self.db)
+        else {
+            return None;
+        };
+        let TyData::ConstTy(const_ty) = param_ty.data(self.db) else {
+            return None;
+        };
+        let ConstTyData::TyParam(_, _) = const_ty.data(self.db) else {
+            return None;
+        };
+        let binding = bindings.iter().find(|binding| binding.param == param_ty)?;
+        let map_ty = match &binding.value {
+            LayoutEvidenceOperand::Local(local) => {
+                &self.layout_evidence.locals[local.index()].map_ty
+            }
+            LayoutEvidenceOperand::Constant(value) => &value.map_ty,
+        };
+        let map = runtime_layout_map_for_map_ty(self.db, self.env, map_ty);
+        if map.rank() != 0 {
+            panic!("ranked layout map cannot bind a scalar const: {map_ty:?}");
+        }
+        let value = self.lower_layout_operand(bb, &map, &binding.value);
+        Some(value)
     }
 
     fn const_lowering_ty(&self, fallback: TyId<'db>, target: &RuntimeClass<'db>) -> TyId<'db> {

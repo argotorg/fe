@@ -34,7 +34,6 @@ use mir::{build_runtime_package, build_test_runtime_package, format_runtime_pack
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Setter;
 use std::{
-    collections::HashSet,
     fmt::Write as _,
     sync::Arc,
     time::{Duration, Instant},
@@ -1532,7 +1531,8 @@ fn prepare_tests_single_file(
         formatted.push_str(&hir_diags.format_diags(db));
         has_errors = true;
     }
-    let mir_diags = if hir_has_errors {
+    let dependency_errors = DependencyIssues::collect_all(db, &file_url);
+    let mir_diags = if hir_has_errors || !dependency_errors.is_empty() {
         Vec::new()
     } else {
         db.mir_diagnostics_for_top_mod(top_mod)
@@ -1554,6 +1554,18 @@ fn prepare_tests_single_file(
                 "compile",
                 format!("Compilation errors in {file_url}"),
             ),
+            single_jobs: Vec::new(),
+        };
+    }
+
+    if !dependency_errors.is_empty() {
+        let formatted = dependency_errors.format(db);
+        let _ = write!(output, "{formatted}");
+        if let Some(report) = report {
+            write_report_error(report, "compilation_errors.txt", &formatted);
+        }
+        return SuitePreparation {
+            results: suite_error_result(suite, "compile", dependency_errors.message().to_string()),
             single_jobs: Vec::new(),
         };
     }
@@ -1695,7 +1707,8 @@ fn prepare_tests_ingot(
         formatted.push_str(&hir_diags.format_diags(db));
         has_errors = true;
     }
-    let mir_diags = if hir_has_errors {
+    let dependency_errors = DependencyIssues::collect_all(db, &ingot_url);
+    let mir_diags = if hir_has_errors || !dependency_errors.is_empty() {
         Vec::new()
     } else {
         db.mir_diagnostics_for_ingot(ingot)
@@ -1715,8 +1728,6 @@ fn prepare_tests_ingot(
         };
     }
 
-    let mut seen = HashSet::from([ingot_url.clone()]);
-    let dependency_errors = DependencyIssues::collect(db, &ingot_url, &mut seen);
     if !dependency_errors.is_empty() {
         let formatted = dependency_errors.format(db);
         let _ = write!(output, "{formatted}");

@@ -30,7 +30,10 @@ use crate::{
                 runtime_builtin_func_kind,
             },
             normalize::normalize_ty,
-            ty_check::{BodyOwner, check_anon_const_body, check_const_body, check_func_body},
+            ty_check::{
+                BodyOwner, LocalBinding, ParamSite, check_anon_const_body, check_const_body,
+                check_func_body,
+            },
             ty_def::{PrimTy, TyBase, TyData, TyId},
         },
     },
@@ -1102,8 +1105,40 @@ impl<'db> CtfeMachine<'db> {
 
         let body = self.body_for_instance(instance);
         let mut locals = vec![CtfeSlot::Uninit; body.locals.len()];
-        for (idx, arg) in args.into_iter().enumerate() {
-            let Some(slot) = locals.get_mut(idx) else {
+        let mut arg_locals = match instance.key(self.db).owner(self.db) {
+            BodyOwner::Func(func) => body
+                .entry_locals
+                .iter()
+                .filter_map(|local| match body.local(*local)?.source? {
+                    LocalBinding::Param {
+                        site: ParamSite::Func(candidate),
+                        idx,
+                        ..
+                    } if candidate == func => Some((idx, *local)),
+                    LocalBinding::Local { .. }
+                    | LocalBinding::EffectParam { .. }
+                    | LocalBinding::Param { .. } => None,
+                })
+                .collect::<Vec<_>>(),
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::ContractInit { .. }
+            | BodyOwner::ContractRecvArm { .. } => Vec::new(),
+        };
+        arg_locals.sort_unstable_by_key(|(idx, _)| *idx);
+        if args.len() != arg_locals.len()
+            || arg_locals
+                .iter()
+                .enumerate()
+                .any(|(expected, (actual, _))| expected != *actual)
+        {
+            return Err(CtfeError::InvalidOperation {
+                origin,
+                message: "CTFE call arity mismatch".into(),
+            });
+        }
+        for ((_, local), arg) in arg_locals.into_iter().zip(args) {
+            let Some(slot) = locals.get_mut(local.index()) else {
                 return Err(CtfeError::InvalidOperation {
                     origin,
                     message: "CTFE call arity mismatch".into(),

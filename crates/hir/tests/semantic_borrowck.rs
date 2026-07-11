@@ -13,7 +13,7 @@ use fe_hir::{
         },
         ty::{
             ProviderAddressSpace,
-            ty_check::BodyOwner,
+            ty_check::{BodyOwner, LocalBinding},
             ty_def::{BorrowKind, TyData},
         },
     },
@@ -214,6 +214,45 @@ fn normalized_func_body<'db>(
         })
         .unwrap_or_else(|| panic!("missing function `{func_name}`"));
     normalize_semantic_body(db, instance).expect("normalized body")
+}
+
+#[test]
+fn self_referential_param_layout_backing_sources_use_the_param_root() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_borrowck.fe".into(),
+        r#"
+struct Pair {
+    x: u256,
+    y: u256,
+}
+
+fn rebuild(mut _ value: own Pair) -> Pair {
+    let x = value.x
+    value = Pair { x, y: value.y }
+    value
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let normalized = normalized_func_body(&db, top_mod, "rebuild");
+    let param = normalized
+        .locals
+        .iter()
+        .find(|local| matches!(local.source, Some(LocalBinding::Param { idx: 0, .. })))
+        .expect("missing value parameter");
+    let root = param
+        .lowering
+        .root()
+        .expect("mutable owned aggregate parameter must have a root");
+
+    assert!(!param.layout_backing_sources().is_empty());
+    assert!(
+        param
+            .layout_backing_sources()
+            .iter()
+            .all(|source| source.source.root.borrow_root() == Some(root))
+    );
 }
 
 #[test]
@@ -479,6 +518,197 @@ fn bad() {
     assert!(
         diags.contains("cannot mutably borrow") || diags.contains("mutable borrow"),
         "{diags:?}",
+    );
+}
+
+#[test]
+fn mutable_enum_payload_reborrow_suspends_the_parent_loan() {
+    let diags = borrow_diags(
+        r#"
+struct Item {
+    value: u256,
+}
+
+impl Item {
+    fn set(mut self, value: u256) {
+        self.value = value
+    }
+}
+
+enum Choice {
+    Pair([Item; 2]),
+    Triple([Item; 3]),
+}
+
+impl Choice {
+    fn set(mut self, index: usize, value: u256) {
+        match self {
+            Choice::Pair(mut items) => items[index].set(value: value),
+            Choice::Triple(mut items) => items[index].set(value: value),
+        }
+    }
+}
+"#,
+    );
+
+    assert!(diags.is_empty(), "{diags:?}");
+}
+
+#[test]
+fn mutable_enum_payload_reborrow_still_rejects_independent_aliases() {
+    let diags = borrow_diags(
+        r#"
+struct Item {
+    value: u256,
+}
+
+enum Choice {
+    Item(Item),
+}
+
+fn bad(mut choice: Choice) {
+    match choice {
+        Choice::Item(mut item) => {
+            let first: mut u256 = mut item.value
+            let second: mut u256 = mut item.value
+            second = 1
+            first = 2
+        }
+    }
+}
+"#,
+    );
+
+    assert!(diags.contains("borrow conflict in `fn bad`"), "{diags:?}");
+    assert!(diags.contains("cannot mutably borrow"), "{diags:?}");
+}
+
+#[test]
+fn destructured_tuple_param_field_projection_resolves_its_carrier_root() {
+    let diags = borrow_diags(
+        r#"
+struct Byte {
+    val: u8,
+}
+
+fn read(input: (Byte, u256)) -> u8 {
+    let (byte, _) = input
+    byte.val
+}
+"#,
+    );
+
+    assert!(diags.is_empty(), "{diags:?}");
+}
+
+#[test]
+fn ordinary_effect_handle_fields_use_the_handle_backing_place() {
+    let source = r#"
+use core::{AddressSpace, EffectHandle}
+
+struct TaggedPtr<T> {
+    tag: u256,
+    addr: u256,
+}
+
+impl<T> EffectHandle for TaggedPtr<T> {
+    type Target = T
+    const SPACE: AddressSpace = AddressSpace::Memory
+
+    fn from_raw(_ raw: u256) -> Self {
+        Self { tag: 1, addr: raw }
+    }
+
+    fn raw(self) -> u256 {
+        self.addr
+    }
+}
+
+fn identity(_ ptr: TaggedPtr<u256>) -> TaggedPtr<u256> {
+    ptr
+}
+
+fn read_call_result() -> u256 {
+    let ptr = identity(TaggedPtr { tag: 7, addr: 8 })
+    ptr.tag
+}
+
+fn read_nested_array() -> u256 {
+    let ptrs: [TaggedPtr<u256>; 2] = [
+        TaggedPtr { tag: 7, addr: 8 },
+        TaggedPtr { tag: 9, addr: 10 },
+    ]
+    ptrs[1].tag
+}
+
+fn mutate(mut _ ptr: own TaggedPtr<u256>) -> u256 {
+    ptr.tag = 11
+    ptr.tag
+}
+"#;
+    assert!(borrow_diags(source).is_empty());
+
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("semantic_borrowck.fe".into(), source);
+    let (top_mod, _) = db.top_mod(file);
+    let normalized = normalized_func_body(&db, top_mod, "read_call_result");
+    let place = normalized
+        .blocks
+        .iter()
+        .flat_map(|block| block.stmts.iter())
+        .find_map(|stmt| match &stmt.kind {
+            NSStmtKind::Assign {
+                expr: NExpr::ReadPlace { place, .. },
+                ..
+            } if matches!(place.path.iter().next(), Some(Projection::Field(0))) => Some(place),
+            _ => None,
+        })
+        .expect("tag field read");
+    let root = place
+        .root
+        .borrow_root()
+        .expect("ordinary handle backing root");
+    assert!(
+        matches!(normalized.root(root), Some(NBorrowRoot::LocalSlot { .. })),
+        "ordinary handle field should read its ADT backing local: {place:#?}"
+    );
+}
+
+#[test]
+fn ordinary_effect_handle_field_borrows_still_conflict() {
+    let diags = borrow_diags(
+        r#"
+use core::{AddressSpace, EffectHandle}
+
+struct TaggedPtr<T> {
+    tag: u256,
+    addr: u256,
+}
+
+impl<T> EffectHandle for TaggedPtr<T> {
+    type Target = T
+    const SPACE: AddressSpace = AddressSpace::Memory
+
+    fn from_raw(_ raw: u256) -> Self {
+        Self { tag: 1, addr: raw }
+    }
+
+    fn raw(self) -> u256 {
+        self.addr
+    }
+}
+
+fn conflict(mut _ ptr: own TaggedPtr<u256>) {
+    let first: mut u256 = mut ptr.tag
+    let second: mut u256 = mut ptr.tag
+    second = 1
+    first = 2
+}
+"#,
+    );
+    assert!(
+        diags.contains("borrow conflict in `fn conflict`"),
+        "{diags}"
     );
 }
 
@@ -1244,11 +1474,13 @@ fn read_balance(addr: Address) -> u256 uses (store: TokenStore) {
             .expect("store binding should preserve a borrow root"),
         ref lowering => panic!("unexpected lowering for store binding: {lowering:?}"),
     };
-    assert!(
-        matches!(normalized.root(root), Some(NBorrowRoot::Provider { .. })),
-        "expected provider root for store binding, got {:?}",
-        normalized.root(root)
-    );
+    let Some(NBorrowRoot::Provider { value_ty, .. }) = normalized.root(root) else {
+        panic!(
+            "expected provider root for store binding, got {:?}",
+            normalized.root(root)
+        );
+    };
+    assert_eq!(*value_ty, store_local.1.layout_ty());
     assert_eq!(
         store_local.1.facts.interface,
         SemanticLocalKind::DirectValue
@@ -1302,14 +1534,13 @@ fn read_balance(addr: Address) -> u256 uses (store: TokenStore) {
         .root
         .borrow_root()
         .expect("field projection snapshot source root");
-    assert!(
-        matches!(
-            normalized.root(snapshot_root),
-            Some(NBorrowRoot::Provider { .. })
-        ),
-        "expected provider-root snapshot source for provider field temp, got {:?}",
-        normalized.root(snapshot_root)
-    );
+    let Some(NBorrowRoot::Provider { value_ty, .. }) = normalized.root(snapshot_root) else {
+        panic!(
+            "expected provider-root snapshot source for provider field temp, got {:?}",
+            normalized.root(snapshot_root)
+        );
+    };
+    assert_eq!(*value_ty, store_local.1.layout_ty());
     assert_eq!(
         snapshot_source.path.iter().next(),
         Some(&fe_hir::projection::Projection::Field(0))

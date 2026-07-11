@@ -511,7 +511,7 @@ fn runtime() uses (evm: mut Evm) {}"#,
 }
 
 #[test]
-fn array_repeat_lowering_keeps_repeat_expr_until_normalization() {
+fn array_repeat_lowering_preserves_repeat_expr_through_normalization() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         "array_repeat_lowering_keeps_repeat_expr_until_normalization.fe".into(),
@@ -543,19 +543,19 @@ fn array_repeat_lowering_keeps_repeat_expr_until_normalization() {
         .expect("expected array repeat in raw semantic lowering");
 
     let normalized = normalize_semantic_body(&db, instance).expect("normalized body");
-    let normalized_array_arity = normalized
+    let normalized_array_len = normalized
         .blocks
         .iter()
         .flat_map(|block| block.stmts.iter())
         .find_map(|stmt| match &stmt.kind {
             NSStmtKind::Assign {
-                expr: NExpr::AggregateMake { ty, fields },
+                expr: NExpr::ArrayRepeat { ty, .. },
                 ..
-            } if ty.is_array(&db) => Some(fields.len()),
+            } if ty.is_array(&db) => ty.array_len(&db),
             NSStmtKind::Assign { .. } | NSStmtKind::Store { .. } => None,
         })
-        .expect("expected concrete array repeat to normalize into aggregate make");
-    assert_eq!(normalized_array_arity, 4);
+        .expect("expected concrete array repeat to remain structural after normalization");
+    assert_eq!(normalized_array_len, 4);
 }
 
 #[test]

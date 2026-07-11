@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use dir_test::{Fixture, dir_test};
-use fe_hir::test_db::{HirAnalysisTestDb, format_diagnostics, initialize_analysis_pass};
+use fe_hir::test_db::{HirAnalysisTestDb, format_diagnostics, initialize_test_analysis_pass};
 use test_utils::snap_test;
 
 #[dir_test(
@@ -17,7 +17,7 @@ fn exhaustive_matches(fixture: Fixture<&str>) {
     let (top_mod, _) = db.top_mod(file);
 
     // Exhaustive tests should have no diagnostics
-    let mut manager = initialize_analysis_pass();
+    let mut manager = initialize_test_analysis_pass();
     let diags = manager.run_on_module(&db, top_mod);
 
     if !diags.is_empty() {
@@ -48,7 +48,7 @@ fn non_exhaustive_matches(fixture: Fixture<&str>) {
     let file = db.new_stand_alone(file_name.into(), fixture.content());
     let (top_mod, _) = db.top_mod(file);
 
-    let mut manager = initialize_analysis_pass();
+    let mut manager = initialize_test_analysis_pass();
 
     let diags = manager.run_on_module(&db, top_mod);
 
@@ -78,7 +78,7 @@ fn unreachable_patterns(fixture: Fixture<&str>) {
     let file = db.new_stand_alone(file_name.into(), fixture.content());
     let (top_mod, _) = db.top_mod(file);
 
-    let mut manager = initialize_analysis_pass();
+    let mut manager = initialize_test_analysis_pass();
 
     let diags = manager.run_on_module(&db, top_mod);
 
@@ -109,7 +109,7 @@ fn misc_pattern_tests(fixture: Fixture<&str>) {
     let (top_mod, _) = db.top_mod(file);
 
     // Misc tests may have diagnostics (for testing error cases) or no diagnostics (for testing correct behavior)
-    let mut manager = initialize_analysis_pass();
+    let mut manager = initialize_test_analysis_pass();
     let diags = manager.run_on_module(&db, top_mod);
 
     if !diags.is_empty() {
@@ -139,7 +139,7 @@ fn stress_pattern_tests(fixture: Fixture<&str>) {
     let (top_mod, _) = db.top_mod(file);
 
     // Stress tests should have no diagnostics (they test performance and correctness)
-    let mut manager = initialize_analysis_pass();
+    let mut manager = initialize_test_analysis_pass();
     let diags = manager.run_on_module(&db, top_mod);
 
     if !diags.is_empty() {
@@ -188,7 +188,7 @@ fn invalid_record_pattern(e: E) -> u8 {
 "#,
     );
     let (top_mod, _) = db.top_mod(file);
-    let mut manager = initialize_analysis_pass();
+    let mut manager = initialize_test_analysis_pass();
     let diags = manager.run_on_module(&db, top_mod);
     let rendered = format_diagnostics(&db, &diags);
 

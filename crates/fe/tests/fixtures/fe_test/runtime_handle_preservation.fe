@@ -55,6 +55,17 @@ fn test_zst_target_effect_handles_keep_runtime_carriers() uses (evm: Evm) {
 }
 
 #[test]
+fn effect_handle_read_write_helpers_delegate_to_the_free_functions() uses (evm: Evm) {
+    let mp: MemPtr<u256> = evm.mem_ptr(0x160)
+    mp.write(41)
+    assert!(mp.read() == 41)
+
+    let sp: StorPtr<u256> = evm.stor_ptr(0xabc)
+    sp.write(42)
+    assert!(sp.read() == 42)
+}
+
+#[test]
 fn test_explicit_root_provider_params_keep_runtime_carriers() uses (evm: mut Evm) {
     let generic_len = host_input_len(mut evm)
     let direct_len = evm.input().len()

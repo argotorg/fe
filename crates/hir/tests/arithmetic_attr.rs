@@ -1,5 +1,5 @@
 use common::diagnostics::DiagnosticPass;
-use fe_hir::test_db::{HirAnalysisTestDb, initialize_analysis_pass};
+use fe_hir::test_db::{HirAnalysisTestDb, initialize_test_analysis_pass};
 
 #[test]
 fn test_db_analysis_pipeline_reports_arithmetic_attr_errors() {
@@ -11,7 +11,7 @@ fn bad() {}"#,
     );
     let (top_mod, _) = db.top_mod(file);
 
-    let mut pass_manager = initialize_analysis_pass();
+    let mut pass_manager = initialize_test_analysis_pass();
     let diags = pass_manager.run_on_module(&db, top_mod);
 
     assert!(

@@ -20,7 +20,7 @@ pub use crate::analysis::ty::ProviderAddressSpace;
 use crate::analysis::ty::corelib::resolve_lib_type_path;
 use crate::analysis::ty::fold::TyFoldable;
 use crate::analysis::ty::method_table::ProbedMethod;
-use crate::analysis::ty::provider::{ProviderKind, provider_semantics};
+use crate::analysis::ty::provider::{ProviderKind, ProviderLayoutEvidence, provider_semantics};
 use crate::analysis::ty::trait_lower::lower_impl_trait;
 use crate::analysis::ty::trait_resolution::constraint::{
     PredicateSource, collect_func_decl_constraint_pairs,
@@ -48,16 +48,18 @@ pub use env::{
     EffectParamSite, ExprProp, LocalBinding, ParamSite, PatBindingMode, PathReadSemantics,
 };
 pub(super) use expr::TraitOps;
+use num_traits::ToPrimitive;
 pub use owner::BodyOwner;
 pub use owner::EffectParamOwner;
 pub use stmt::ForLoopSeq;
 
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Update;
 
-use crate::analysis::place::{Place, PlaceBase};
+use crate::analysis::place::{Place, PlaceBase, PlaceProjection};
 
 use super::{
+    LayoutBundlePath, LayoutBundlePathStep,
     assoc_const::{AssocConstUse, InherentConstUse},
     canonical::{Canonical, Canonicalized},
     diagnostics::{
@@ -65,7 +67,8 @@ use super::{
         TraitConstraintDiag, TyDiagCollection, TyLowerDiag,
     },
     effects::{EffectKeyKind, ResolvedEffectKey, resolve_effect_key},
-    trait_def::TraitInstId,
+    layout_holes::merge_equated_layout_holes,
+    trait_def::{TraitInstId, resolve_trait_method_instance},
     trait_resolution::{
         CanonicalGoalQuery, GoalSatisfiability, PredicateListId, TraitSolveCx,
         is_goal_query_satisfiable, is_goal_satisfiable,
@@ -75,18 +78,26 @@ use super::{
         BorrowKind, CapabilityKind, InvalidCause, Kind, MAX_INLINE_STRING_BYTES, StringFallback,
         TyId, TyVarSort,
     },
-    ty_lower::{lower_hir_ty, resolve_callable_input_effect_key},
+    ty_lower::{
+        CallableInputLayoutBackingSource, callable_input_layout_backing_index_lengths,
+        callable_input_layout_backing_sources, collect_generic_params,
+        layout_param_projection_paths_in_ty, lower_hir_ty, resolve_callable_input_effect_key,
+    },
     unify::{InferenceKey, Snapshot, UnificationError, UnificationTable},
 };
 use crate::analysis::semantic::SemanticCodeRegionRef;
 use crate::analysis::semantic::{SemConstId, SemConstScalar, SemConstValue, eval_body_owner_const};
 use crate::analysis::ty::ty_def::{TyBase, TyData};
 use crate::analysis::ty::{
-    const_ty::{ConstTyData, invalid_cause_from_ctfe_error},
-    effect_handle_metadata,
+    const_ty::{
+        BodyHoleSite, CallableInputLayoutHoleOrigin, ConstTyData, HoleAnchor, HoleMinter,
+        invalid_cause_from_ctfe_error,
+    },
     fold::AssocTySubst,
     normalize::normalize_ty,
-    pattern_ir::{PatternAnalysisStatus, PatternStore, ValidatedPatId},
+    pattern_ir::{
+        ConstructorKind, PatternAnalysisStatus, PatternStore, ValidatedPatId, ValidatedPatKind,
+    },
     pattern_types::{
         PatternDestructureMode, apply_pattern_borrow_mode, destructure_pattern_source,
     },
@@ -95,7 +106,7 @@ use crate::analysis::ty::{
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{
-        PathRes, PathResError, diagnostics::PathResDiag, resolve_path_with_observer,
+        PathRes, PathResError, diagnostics::PathResDiag, resolve_path_with_observer_and_minter,
     },
     ty::{
         ty_def::{TyFlags, inference_keys},
@@ -537,6 +548,20 @@ enum BindingInterfaceShape<'db> {
     },
     DirectCarrier {
         target_ty: TyId<'db>,
+    },
+}
+
+#[derive(Clone)]
+pub(super) enum PatternLayoutContext<'db> {
+    ContractField {
+        field: &'db crate::semantic::FieldStorageLayout<'db>,
+        view: crate::semantic::LayoutViewKind,
+        base_projections: Vec<crate::semantic::LayoutProjection>,
+    },
+    CallableInput {
+        func: Func<'db>,
+        origin: crate::analysis::ty::const_ty::CallableInputLayoutHoleOrigin,
+        base_path: LayoutBundlePath,
     },
 }
 
@@ -1351,6 +1376,10 @@ impl<'db> TyChecker<'db> {
                     &mut callable,
                     this,
                     generic_args,
+                    HoleAnchor::BodySyntax {
+                        body,
+                        site: BodyHoleSite::Expr(pending.expr),
+                    },
                     |this, _, given, current| this.table.unify(given, *current).is_ok(),
                 ) {
                     Ok(()) => {}
@@ -1504,6 +1533,10 @@ impl<'db> TyChecker<'db> {
                                 if !callable.unify_generic_args(
                                     self,
                                     generic_args,
+                                    HoleAnchor::BodySyntax {
+                                        body,
+                                        site: BodyHoleSite::Expr(pending.expr),
+                                    },
                                     call_span.clone().generic_args(),
                                 ) {
                                     progressed = true;
@@ -1516,6 +1549,11 @@ impl<'db> TyChecker<'db> {
                                     call_span.clone().args(),
                                     Some((receiver, receiver_prop)),
                                     true,
+                                );
+                                self.specialize_callable_layout_args(
+                                    &mut callable,
+                                    Some(receiver),
+                                    call_args,
                                 );
 
                                 self.check_callable_effects(pending.expr, &mut callable);
@@ -1763,11 +1801,14 @@ impl<'db> TyChecker<'db> {
                 value_ty: self.normalize_ty(value_ty),
             };
         }
-        if let Some(metadata) =
-            effect_handle_metadata(self.db, self.env.scope(), self.env.assumptions(), ty)
+        let semantics = provider_semantics(self.db, self.env.scope(), self.env.assumptions(), ty);
+        if matches!(
+            semantics.evidence,
+            ProviderLayoutEvidence::ResolvedHandle(_)
+        ) && let Some(target_ty) = semantics.target_ty
         {
             return BindingInterfaceShape::DirectCarrier {
-                target_ty: self.normalize_ty(metadata.target_ty),
+                target_ty: self.normalize_ty(target_ty),
             };
         }
 
@@ -2308,7 +2349,8 @@ impl<'db> TyChecker<'db> {
                 if actual.is_never(self.db) {
                     expected
                 } else {
-                    actual
+                    let expected = expected.fold_with(self.db, &mut self.table);
+                    merge_equated_layout_holes(self.db, actual, expected)
                 }
             }
 
@@ -2338,6 +2380,7 @@ impl<'db> TyChecker<'db> {
         path: PathId<'db>,
         resolve_tail_as_value: bool,
         span: LazyPathSpan<'db>,
+        minter: &HoleMinter<'db>,
     ) -> Result<PathRes<'db>, PathResError<'db>> {
         let scope = self.env.scope();
         let mut invisible = None;
@@ -2350,13 +2393,14 @@ impl<'db> TyChecker<'db> {
             }
         };
 
-        let res = match resolve_path_with_observer(
+        let res = match resolve_path_with_observer_and_minter(
             self.db,
             path,
             scope,
             self.env.assumptions(),
             resolve_tail_as_value,
             &mut check_visibility,
+            minter,
         ) {
             Ok(r) => Ok(r.map_over_ty(|ty| self.instantiate_to_term(ty))),
             Err(err) => Err(err),
@@ -2589,14 +2633,164 @@ pub struct TypedBody<'db> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BindingSource {
     pub init_expr: ExprId,
-    pub field_path: Vec<usize>,
+    pub projection: Vec<ReturnProjectionStep>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ReturnProjectionStep {
+    Field(u16),
+    VariantField { variant: u16, field: u16 },
+    ConstantIndex(usize),
+    ParamIndex(usize),
+    AnyIndex,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ReturnSource {
+    pub result_projection: Vec<ReturnProjectionStep>,
+    pub origin: CallableInputLayoutHoleOrigin,
+    pub projection: Vec<ReturnProjectionStep>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReturnProvenance {
     Fresh,
-    ForwardedParams(Vec<usize>),
+    Forwarded(Vec<ReturnSource>),
     Unknown,
+}
+
+#[salsa::tracked(
+    return_ref,
+    cycle_fn=func_return_provenance_cycle_recover,
+    cycle_initial=func_return_provenance_cycle_initial
+)]
+fn func_return_provenance<'db>(db: &'db dyn HirAnalysisDb, func: Func<'db>) -> ReturnProvenance {
+    let (diags, typed_body) = check_func_body(db, func);
+    if !diags.is_empty() {
+        return ReturnProvenance::Unknown;
+    }
+    typed_body.return_provenance_for_func(db, func, &mut FxHashSet::default())
+}
+
+fn func_return_provenance_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _func: Func<'db>,
+) -> ReturnProvenance {
+    ReturnProvenance::Forwarded(Vec::new())
+}
+
+fn func_return_provenance_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &ReturnProvenance,
+    _count: u32,
+    _func: Func<'db>,
+) -> salsa::CycleRecoveryAction<ReturnProvenance> {
+    salsa::CycleRecoveryAction::Iterate
+}
+
+fn call_like_expr_args(expr: &Expr<'_>) -> Option<Vec<ExprId>> {
+    match expr {
+        Expr::Call(_, args) => Some(args.iter().map(|arg| arg.expr).collect()),
+        Expr::MethodCall(receiver, _, _, args) => {
+            let mut call_args = Vec::with_capacity(args.len() + 1);
+            call_args.push(*receiver);
+            call_args.extend(args.iter().map(|arg| arg.expr));
+            Some(call_args)
+        }
+        Expr::Un(receiver, _) => Some(vec![*receiver]),
+        Expr::Bin(receiver, arg, _) | Expr::AugAssign(receiver, arg, _) => {
+            Some(vec![*receiver, *arg])
+        }
+        _ => None,
+    }
+}
+
+fn resolved_callable_instance<'db>(
+    db: &'db dyn HirAnalysisDb,
+    typed: &TypedBody<'db>,
+    body: Body<'db>,
+    callable: &Callable<'db>,
+) -> Option<(Func<'db>, Vec<TyId<'db>>)> {
+    let CallableDef::Func(mut func) = callable.callable_def() else {
+        return None;
+    };
+    let mut generic_args = callable.generic_args().to_vec();
+    if let Some(inst) = callable.trait_inst()
+        && let Some(name) = func.name(db).to_opt()
+        && let Some((impl_func, impl_args)) = resolve_trait_method_instance(
+            db,
+            TraitSolveCx::new(db, body.scope()).with_assumptions(typed.assumptions()),
+            inst,
+            name,
+        )
+    {
+        let trait_arg_len = inst.args(db).len();
+        let mut resolved_args = impl_args;
+        resolved_args.extend_from_slice(
+            generic_args
+                .get(trait_arg_len..)
+                .unwrap_or(generic_args.as_slice()),
+        );
+        func = impl_func;
+        generic_args = resolved_args;
+    }
+    Some((func, generic_args))
+}
+
+type LayoutBackingEquivalenceKey = (
+    usize,
+    Option<(CallableInputLayoutHoleOrigin, Vec<LayoutBundlePathStep>)>,
+);
+
+fn layout_backing_equivalence_key(
+    param_idx: usize,
+    source: &CallableInputLayoutBackingSource,
+) -> LayoutBackingEquivalenceKey {
+    let family = source
+        .projection
+        .iter()
+        .rposition(|step| matches!(step, LayoutBundlePathStep::Index))
+        .map(|last_index| (source.origin, source.projection[..=last_index].to_vec()));
+    (param_idx, family)
+}
+
+fn degenerate_return_projection(
+    path: &[LayoutBundlePathStep],
+    index_lengths: &[usize],
+) -> Option<Vec<ReturnProjectionStep>> {
+    let mut projection = Vec::new();
+    let mut path_idx = 0;
+    let mut length_idx = 0;
+    while path_idx < path.len() {
+        match path[path_idx] {
+            LayoutBundlePathStep::Field(field) => {
+                projection.push(ReturnProjectionStep::Field(field));
+                path_idx += 1;
+            }
+            LayoutBundlePathStep::Variant(variant) => {
+                let Some(LayoutBundlePathStep::Field(field)) = path.get(path_idx + 1) else {
+                    return None;
+                };
+                projection.push(ReturnProjectionStep::VariantField {
+                    variant,
+                    field: *field,
+                });
+                path_idx += 2;
+            }
+            LayoutBundlePathStep::Index => {
+                if index_lengths.get(length_idx) != Some(&1) {
+                    return None;
+                }
+                projection.push(ReturnProjectionStep::ConstantIndex(0));
+                path_idx += 1;
+                length_idx += 1;
+            }
+            LayoutBundlePathStep::ConstParam(_) => {
+                path_idx += 1;
+            }
+        }
+    }
+    (length_idx == index_lengths.len()).then_some(projection)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Update)]
@@ -2660,7 +2854,14 @@ impl<'db> TyFoldable<'db> for ValuePathRef<'db> {
                 ty: variant.ty.fold_with(db, folder),
                 ..variant
             }),
-            Self::TypeConst(ty) => Self::TypeConst(ty.fold_with(db, folder)),
+            // A type-level value path is a symbolic reference into the
+            // template owner's generic parameter list. Keep that reference
+            // formal: semantic const evaluation applies the instance's
+            // substitution explicitly, while runtime lowering needs the
+            // original parameter index to select an exact runtime ABI value.
+            // Folding it here would retain only the actual value and erase
+            // which formal const parameter the expression referenced.
+            Self::TypeConst(ty) => Self::TypeConst(ty),
         }
     }
 }
@@ -2879,13 +3080,9 @@ impl<'db> TypedBody<'db> {
                     && self.expr_code_region_ref(db, expr).is_none()
                     && self.value_path_ref(expr).is_none()
             }
-            Expr::Call(..) | Expr::MethodCall(..) => {
-                expr_ty.has_invalid(db) && self.semantic_expr_lowering(expr).is_none()
-            }
+            Expr::Call(..) | Expr::MethodCall(..) => self.semantic_expr_lowering(expr).is_none(),
             Expr::Assert(_) => expr_ty.has_invalid(db),
-            Expr::RecordInit(..) => {
-                expr_ty.has_invalid(db) && self.record_init_lowering(expr).is_none()
-            }
+            Expr::RecordInit(..) => self.record_init_lowering(expr).is_none(),
             Expr::Un(inner, crate::hir_def::expr::UnOp::Mut | crate::hir_def::expr::UnOp::Ref) => {
                 expr_ty.has_invalid(db) && self.expr_place(*inner).is_none()
             }
@@ -3072,11 +3269,11 @@ impl<'db> TypedBody<'db> {
 
         for (_, stmt) in body.stmts(db).iter() {
             if let Partial::Present(crate::hir_def::Stmt::Let(stmt_pat, _, Some(init_expr))) = stmt
-                && let Some(field_path) = self.binding_field_path_in_pat(db, body, *stmt_pat, pat)
+                && let Some(projection) = self.binding_projection_in_pat(*stmt_pat, pat)
             {
                 return Some(BindingSource {
                     init_expr: *init_expr,
-                    field_path,
+                    projection,
                 });
             }
         }
@@ -3084,54 +3281,51 @@ impl<'db> TypedBody<'db> {
         None
     }
 
-    fn binding_field_path_in_pat(
+    fn binding_projection_in_pat(
         &self,
-        db: &'db dyn HirAnalysisDb,
-        body: Body<'db>,
         pat: PatId,
         binding_pat: PatId,
-    ) -> Option<Vec<usize>> {
-        if pat == binding_pat {
-            return Some(Vec::new());
-        }
+    ) -> Option<Vec<ReturnProjectionStep>> {
+        self.binding_projection_in_validated_pat(self.pattern_root(pat)?, binding_pat)
+    }
 
-        match pat.data(db, body) {
-            Partial::Present(Pat::Tuple(pats)) | Partial::Present(Pat::PathTuple(_, pats)) => {
-                pats.iter().enumerate().find_map(|(field_idx, pat)| {
-                    self.binding_field_path_in_pat(db, body, *pat, binding_pat)
-                        .map(|suffix| {
-                            let mut path = Vec::with_capacity(suffix.len() + 1);
-                            path.push(field_idx);
-                            path.extend(suffix);
-                            path
-                        })
+    fn binding_projection_in_validated_pat(
+        &self,
+        pat: ValidatedPatId,
+        binding_pat: PatId,
+    ) -> Option<Vec<ReturnProjectionStep>> {
+        match self.pattern_store.node(pat).kind() {
+            ValidatedPatKind::Wildcard { binding } => binding
+                .filter(|binding| binding.representative_pat == binding_pat)
+                .map(|_| Vec::new()),
+            ValidatedPatKind::Constructor { ctor, fields } => {
+                fields.iter().enumerate().find_map(|(field_idx, child)| {
+                    let suffix = self.binding_projection_in_validated_pat(*child, binding_pat)?;
+                    let field = u16::try_from(field_idx).ok()?;
+                    let step = match ctor {
+                        ConstructorKind::Variant(variant, _) => {
+                            ReturnProjectionStep::VariantField {
+                                variant: variant.idx,
+                                field,
+                            }
+                        }
+                        ConstructorKind::Type(_) => ReturnProjectionStep::Field(field),
+                        ConstructorKind::Literal(_, _) => return None,
+                    };
+                    let mut path = Vec::with_capacity(suffix.len() + 1);
+                    path.push(step);
+                    path.extend(suffix);
+                    Some(path)
                 })
             }
-            Partial::Present(Pat::Record(_, fields)) => {
-                let owner_ty = self.pat_ty(db, pat);
-                fields.iter().find_map(|field| {
-                    let label = field.label(db, body)?;
-                    let field_idx = RecordLike::Type(owner_ty).record_field_idx(db, label)?;
-                    self.binding_field_path_in_pat(db, body, field.pat, binding_pat)
-                        .map(|suffix| {
-                            let mut path = Vec::with_capacity(suffix.len() + 1);
-                            path.push(field_idx);
-                            path.extend(suffix);
-                            path
-                        })
-                })
+            ValidatedPatKind::Or(pats) => {
+                let mut paths = pats
+                    .iter()
+                    .filter_map(|pat| self.binding_projection_in_validated_pat(*pat, binding_pat))
+                    .collect::<Vec<_>>();
+                let first = paths.pop()?;
+                paths.into_iter().all(|path| path == first).then_some(first)
             }
-            Partial::Present(Pat::Or(lhs, rhs)) => {
-                let lhs = self.binding_field_path_in_pat(db, body, *lhs, binding_pat);
-                let rhs = self.binding_field_path_in_pat(db, body, *rhs, binding_pat);
-                match (lhs, rhs) {
-                    (Some(lhs), Some(rhs)) if lhs == rhs => Some(lhs),
-                    (Some(path), None) | (None, Some(path)) => Some(path),
-                    _ => None,
-                }
-            }
-            Partial::Present(Pat::WildCard | Pat::Rest | Pat::Lit(_) | Pat::Path(_, _))
-            | Partial::Absent => None,
         }
     }
 
@@ -3142,8 +3336,22 @@ impl<'db> TypedBody<'db> {
         let Some(func) = body.containing_func(db) else {
             return ReturnProvenance::Unknown;
         };
-        let mut seen = FxHashSet::default();
-        self.return_provenance_for_func(db, func, &mut seen)
+        match func_return_provenance(db, func) {
+            ReturnProvenance::Forwarded(sources) if sources.is_empty() => ReturnProvenance::Fresh,
+            provenance => provenance.clone(),
+        }
+    }
+
+    pub fn forwarded_return_sources(&self, db: &'db dyn HirAnalysisDb) -> Vec<ReturnSource> {
+        let Some(body) = self.body() else {
+            return Vec::new();
+        };
+        let Some(func) = body.containing_func(db) else {
+            return Vec::new();
+        };
+        self.collect_return_sources_for_func(db, func, &mut FxHashSet::default())
+            .map(|(sources, _)| sources)
+            .unwrap_or_default()
     }
 
     fn return_provenance_for_func(
@@ -3152,22 +3360,39 @@ impl<'db> TypedBody<'db> {
         func: Func<'db>,
         seen: &mut FxHashSet<Func<'db>>,
     ) -> ReturnProvenance {
-        if !seen.insert(func) {
+        let Some((sources, saw_non_param)) = self.collect_return_sources_for_func(db, func, seen)
+        else {
             return ReturnProvenance::Unknown;
+        };
+        if !saw_non_param {
+            ReturnProvenance::Forwarded(sources)
+        } else {
+            ReturnProvenance::Fresh
+        }
+    }
+
+    fn collect_return_sources_for_func(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        func: Func<'db>,
+        seen: &mut FxHashSet<Func<'db>>,
+    ) -> Option<(Vec<ReturnSource>, bool)> {
+        if !seen.insert(func) {
+            return None;
         }
 
         let (diags, typed_body) = check_func_body(db, func);
         if !diags.is_empty() {
             seen.remove(&func);
-            return ReturnProvenance::Unknown;
+            return None;
         }
         let Some(body) = typed_body.body() else {
             seen.remove(&func);
-            return ReturnProvenance::Unknown;
+            return None;
         };
         let Some(func_body) = func.body(db) else {
             seen.remove(&func);
-            return ReturnProvenance::Unknown;
+            return None;
         };
         let root_expr = func_body.expr(db);
         let mut out = FxHashSet::default();
@@ -3188,17 +3413,10 @@ impl<'db> TypedBody<'db> {
             &mut saw_non_param,
             seen,
         );
-        if !saw_non_param && !out.is_empty() {
-            let mut indices = out.into_iter().collect::<Vec<_>>();
-            indices.sort_unstable();
-            if !indices.is_empty() {
-                seen.remove(&func);
-                return ReturnProvenance::ForwardedParams(indices);
-            }
-        }
-
+        let mut sources = out.into_iter().collect::<Vec<_>>();
+        sources.sort_unstable();
         seen.remove(&func);
-        ReturnProvenance::Fresh
+        Some((sources, saw_non_param))
     }
 
     fn forwarded_return_param_sources_from_expr(
@@ -3208,12 +3426,65 @@ impl<'db> TypedBody<'db> {
         expr: ExprId,
         seen: &mut FxHashSet<Func<'db>>,
         visited_locals: &mut FxHashSet<PatId>,
-    ) -> Option<Vec<usize>> {
+    ) -> Option<Vec<ReturnSource>> {
         let Partial::Present(expr_data) = expr.data(db, body) else {
             return None;
         };
 
-        match expr_data {
+        if let Some(SemanticExprLowering::Call { callable }) = self.semantic_expr_lowering(expr) {
+            let args = call_like_expr_args(expr_data)?;
+            if let CallableDef::VariantCtor(variant) = callable.callable_def() {
+                let mut sources = Vec::new();
+                for (field, arg) in args.into_iter().enumerate() {
+                    let Some(mut field_sources) = self.forwarded_return_param_sources_from_expr(
+                        db,
+                        body,
+                        arg,
+                        seen,
+                        visited_locals,
+                    ) else {
+                        continue;
+                    };
+                    prefix_return_sources(
+                        &mut field_sources,
+                        &[ReturnProjectionStep::VariantField {
+                            variant: variant.idx,
+                            field: u16::try_from(field).ok()?,
+                        }],
+                    );
+                    sources.extend(field_sources);
+                }
+                return (!sources.is_empty())
+                    .then_some(sources)
+                    .or_else(|| self.inferred_fresh_layout_return_sources(db, body, expr));
+            }
+            return self.forwarded_return_param_sources_from_call(
+                db,
+                body,
+                expr,
+                &args,
+                seen,
+                visited_locals,
+            );
+        }
+
+        if (!matches!(expr_data, Expr::Path(_))
+            || matches!(
+                self.path_expr_read_semantics(expr),
+                Some(PathReadSemantics::ReuseLocal | PathReadSemantics::ForwardInterface)
+            )
+            || {
+                let ty = self.expr_ty(db, expr);
+                ty.has_param(db) || ty.has_var(db) || ty_contains_const_hole(db, ty)
+            })
+            && let Some(place) = self.expr_place(expr).cloned()
+            && let Some(sources) =
+                self.forwarded_return_sources_from_place(db, body, &place, seen, visited_locals)
+        {
+            return Some(sources);
+        }
+
+        let forwarded = match expr_data {
             Expr::Block(stmts) => {
                 let tail = stmts.last()?;
                 match tail.data(db, body) {
@@ -3281,138 +3552,361 @@ impl<'db> TypedBody<'db> {
                 seen,
                 visited_locals,
             ),
-            Expr::RecordInit(_, fields)
-                if self.expr_ty(db, expr).field_types(db).len() == 1 && fields.len() == 1 =>
-            {
-                self.forwarded_return_param_sources_from_expr(
-                    db,
-                    body,
-                    fields[0].expr,
-                    seen,
-                    visited_locals,
-                )
-            }
-            Expr::Tuple(items)
-                if self.expr_ty(db, expr).field_types(db).len() == 1 && items.len() == 1 =>
-            {
-                self.forwarded_return_param_sources_from_expr(
-                    db,
-                    body,
-                    items[0],
-                    seen,
-                    visited_locals,
-                )
-            }
-            Expr::Path(_) => match self.expr_binding(expr)? {
-                LocalBinding::Param { idx, .. } => {
-                    self.path_expr_reuses_local(expr).then_some(vec![idx])
-                }
-                binding @ LocalBinding::Local { pat, .. } => {
-                    if !visited_locals.insert(pat) {
-                        return None;
+            Expr::Un(inner, crate::hir_def::UnOp::Mut | crate::hir_def::UnOp::Ref) => self
+                .forwarded_return_param_sources_from_expr(db, body, *inner, seen, visited_locals),
+            Expr::RecordInit(_, fields) => {
+                let (record_like, variant) = match self.record_init_lowering(expr)? {
+                    RecordInitLowering::Struct => (RecordLike::Type(self.expr_ty(db, expr)), None),
+                    RecordInitLowering::EnumVariant(variant) => {
+                        (RecordLike::from_variant(variant), Some(variant.variant.idx))
                     }
-                    if !self.path_expr_reuses_local(expr) {
-                        visited_locals.remove(&pat);
-                        return None;
-                    }
-                    let sources = self
-                        .binding_source(db, binding)
-                        .and_then(|source| source.field_path.is_empty().then_some(source.init_expr))
-                        .and_then(|init_expr| {
-                            self.forwarded_return_param_sources_from_expr(
-                                db,
-                                body,
-                                init_expr,
-                                seen,
-                                visited_locals,
-                            )
+                };
+                let mut sources = Vec::new();
+                for field in fields {
+                    let label = field.label_eagerly(db, body)?;
+                    let field_idx = record_like.record_field_idx(db, label)?;
+                    let field_idx = u16::try_from(field_idx).ok()?;
+                    let Some(mut field_sources) = self.forwarded_return_param_sources_from_expr(
+                        db,
+                        body,
+                        field.expr,
+                        seen,
+                        visited_locals,
+                    ) else {
+                        continue;
+                    };
+                    let projection =
+                        variant.map_or(ReturnProjectionStep::Field(field_idx), |variant| {
+                            ReturnProjectionStep::VariantField {
+                                variant,
+                                field: field_idx,
+                            }
                         });
-                    visited_locals.remove(&pat);
-                    sources
+                    prefix_return_sources(&mut field_sources, &[projection]);
+                    sources.extend(field_sources);
                 }
-                LocalBinding::EffectParam { .. } => None,
-            },
-            Expr::Call(_, args) => {
-                let callable = self.callable_expr(expr)?;
-                let CallableDef::Func(func) = callable.callable_def else {
-                    return None;
-                };
-                let callee_sources =
-                    self.forwarded_return_param_sources_from_callable(db, func, seen)?;
-                let mut merged = FxHashSet::default();
-                for idx in callee_sources {
-                    let arg = args.get(idx)?;
-                    for source in self.forwarded_return_param_sources_from_expr(
+                (!sources.is_empty()).then_some(sources)
+            }
+            Expr::Tuple(items) | Expr::Array(items) => {
+                let is_array = matches!(expr_data, Expr::Array(_));
+                let mut sources = Vec::new();
+                for (idx, item) in items.iter().copied().enumerate() {
+                    let Some(mut item_sources) = self.forwarded_return_param_sources_from_expr(
                         db,
                         body,
-                        arg.expr,
+                        item,
                         seen,
                         visited_locals,
-                    )? {
-                        merged.insert(source);
-                    }
+                    ) else {
+                        continue;
+                    };
+                    let projection = if is_array {
+                        ReturnProjectionStep::ConstantIndex(idx)
+                    } else {
+                        ReturnProjectionStep::Field(u16::try_from(idx).ok()?)
+                    };
+                    prefix_return_sources(&mut item_sources, &[projection]);
+                    sources.extend(item_sources);
                 }
-                let mut out = merged.into_iter().collect::<Vec<_>>();
-                out.sort_unstable();
-                Some(out)
+                (!sources.is_empty()).then_some(sources)
             }
-            Expr::MethodCall(receiver, _, _, args) => {
-                let callable = self.callable_expr(expr)?;
-                let CallableDef::Func(func) = callable.callable_def else {
-                    return None;
-                };
-                let callee_sources =
-                    self.forwarded_return_param_sources_from_callable(db, func, seen)?;
-                let mut call_args = Vec::with_capacity(args.len() + 1);
-                call_args.push(*receiver);
-                call_args.extend(args.iter().map(|arg| arg.expr));
-                let mut merged = FxHashSet::default();
-                for idx in callee_sources {
-                    let arg_expr = *call_args.get(idx)?;
-                    for source in self.forwarded_return_param_sources_from_expr(
-                        db,
-                        body,
-                        arg_expr,
-                        seen,
-                        visited_locals,
-                    )? {
-                        merged.insert(source);
-                    }
-                }
-                let mut out = merged.into_iter().collect::<Vec<_>>();
-                out.sort_unstable();
-                Some(out)
+            Expr::ArrayRep(value, _) => {
+                let mut sources = self.forwarded_return_param_sources_from_expr(
+                    db,
+                    body,
+                    *value,
+                    seen,
+                    visited_locals,
+                )?;
+                prefix_return_sources(&mut sources, &[ReturnProjectionStep::AnyIndex]);
+                Some(sources)
             }
+            Expr::Path(_) => None,
+            Expr::Call(..) | Expr::MethodCall(..) => None,
             _ => None,
+        };
+        forwarded.or_else(|| self.inferred_fresh_layout_return_sources(db, body, expr))
+    }
+
+    fn inferred_fresh_layout_return_sources(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        body: Body<'db>,
+        expr: ExprId,
+    ) -> Option<Vec<ReturnSource>> {
+        let func = body.containing_func(db)?;
+        let result_ty = self.expr_ty(db, expr);
+        let mut out = FxHashSet::default();
+        let mut found_result_root = false;
+        for param_idx in collect_generic_params(db, func.into())
+            .params(db)
+            .iter()
+            .filter_map(|param| match param.data(db) {
+                TyData::ConstTy(const_ty) => match const_ty.data(db) {
+                    ConstTyData::TyParam(param, _) => Some(param.idx),
+                    _ => None,
+                },
+                _ => None,
+            })
+        {
+            let output_paths = layout_param_projection_paths_in_ty(db, result_ty, param_idx);
+            if output_paths.is_empty() {
+                continue;
+            }
+            found_result_root = true;
+            let output_projections = output_paths
+                .iter()
+                .map(|(path, lengths)| degenerate_return_projection(path, lengths))
+                .collect::<Option<Vec<_>>>()?;
+            let mut input_groups = FxHashMap::default();
+            for source in callable_input_layout_backing_sources(db, func, param_idx) {
+                let lengths = callable_input_layout_backing_index_lengths(db, func, &source)?;
+                let Some(projection) = degenerate_return_projection(&source.projection, &lengths)
+                else {
+                    continue;
+                };
+                input_groups
+                    .entry(layout_backing_equivalence_key(param_idx, &source))
+                    .or_insert((source.origin, projection));
+            }
+            if input_groups.len() != 1 {
+                return None;
+            }
+            let (origin, projection) = input_groups
+                .into_values()
+                .next()
+                .expect("one layout-source equivalence group must contain one source");
+            for result_projection in output_projections {
+                out.insert(ReturnSource {
+                    result_projection,
+                    origin,
+                    projection: projection.clone(),
+                });
+            }
         }
+        if !found_result_root || out.is_empty() {
+            return None;
+        }
+        let mut out = out.into_iter().collect::<Vec<_>>();
+        out.sort_unstable();
+        Some(out)
+    }
+
+    fn forwarded_return_param_sources_from_call(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        body: Body<'db>,
+        expr: ExprId,
+        call_args: &[ExprId],
+        seen: &mut FxHashSet<Func<'db>>,
+        visited_locals: &mut FxHashSet<PatId>,
+    ) -> Option<Vec<ReturnSource>> {
+        let callable = self.callable_expr(expr)?;
+        let (func, _) = resolved_callable_instance(db, self, body, callable)?;
+        let callee_sources = self.forwarded_return_param_sources_from_callable(db, func)?;
+        let mut merged = FxHashSet::default();
+        for callee_source in callee_sources {
+            for source in self.forwarded_return_sources_from_call_source(
+                db,
+                expr,
+                &callee_source,
+                call_args,
+                seen,
+                visited_locals,
+            )? {
+                merged.insert(source);
+            }
+        }
+        let mut out = merged.into_iter().collect::<Vec<_>>();
+        out.sort_unstable();
+        Some(out)
+    }
+
+    fn forwarded_return_sources_from_place(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        body: Body<'db>,
+        place: &Place<'db>,
+        seen: &mut FxHashSet<Func<'db>>,
+        visited_locals: &mut FxHashSet<PatId>,
+    ) -> Option<Vec<ReturnSource>> {
+        let PlaceBase::Binding(binding) = place.base;
+        let sources = match binding {
+            LocalBinding::Param {
+                site: ParamSite::Func(func),
+                idx,
+                ..
+            } => vec![ReturnSource {
+                result_projection: Vec::new(),
+                origin: if func.is_method(db) && idx == 0 {
+                    CallableInputLayoutHoleOrigin::Receiver
+                } else {
+                    CallableInputLayoutHoleOrigin::ValueParam(idx)
+                },
+                projection: Vec::new(),
+            }],
+            LocalBinding::Param {
+                site: ParamSite::EffectField(_),
+                idx,
+                ..
+            }
+            | LocalBinding::EffectParam { idx, .. } => vec![ReturnSource {
+                result_projection: Vec::new(),
+                origin: CallableInputLayoutHoleOrigin::Effect(idx),
+                projection: Vec::new(),
+            }],
+            binding @ LocalBinding::Local { pat, .. } => {
+                if !visited_locals.insert(pat) {
+                    return None;
+                }
+                let sources = self.binding_source(db, binding).and_then(|binding_source| {
+                    let sources = self.forwarded_return_param_sources_from_expr(
+                        db,
+                        body,
+                        binding_source.init_expr,
+                        seen,
+                        visited_locals,
+                    )?;
+                    project_return_sources(sources, &binding_source.projection)
+                });
+                visited_locals.remove(&pat);
+                sources?
+            }
+            LocalBinding::Param {
+                site: ParamSite::ContractInit(_),
+                ..
+            } => return None,
+        };
+        let projection = place
+            .projections
+            .iter()
+            .map(|projection| match projection {
+                PlaceProjection::Field { index, .. } => Some(ReturnProjectionStep::Field(*index)),
+                PlaceProjection::Index { index_expr, .. } => {
+                    self.return_index_projection(db, body, *index_expr)
+                }
+            })
+            .collect::<Option<Vec<_>>>()?;
+        project_return_sources(sources, &projection)
+    }
+
+    fn forwarded_return_sources_from_call_source(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        call_expr: ExprId,
+        callee_source: &ReturnSource,
+        call_args: &[ExprId],
+        seen: &mut FxHashSet<Func<'db>>,
+        visited_locals: &mut FxHashSet<PatId>,
+    ) -> Option<Vec<ReturnSource>> {
+        let body = self.body()?;
+        let sources = match callee_source.origin {
+            CallableInputLayoutHoleOrigin::Receiver => self
+                .forwarded_return_param_sources_from_expr(
+                    db,
+                    body,
+                    *call_args.first()?,
+                    seen,
+                    visited_locals,
+                ),
+            CallableInputLayoutHoleOrigin::ValueParam(param_idx) => self
+                .forwarded_return_param_sources_from_expr(
+                    db,
+                    body,
+                    *call_args.get(param_idx)?,
+                    seen,
+                    visited_locals,
+                ),
+            CallableInputLayoutHoleOrigin::Effect(effect_idx) => {
+                let effect_arg = self
+                    .call_effect_args(call_expr)?
+                    .iter()
+                    .find(|arg| arg.binding_idx as usize == effect_idx)?;
+                match &effect_arg.arg {
+                    EffectArg::Place(place) => self.forwarded_return_sources_from_place(
+                        db,
+                        body,
+                        place,
+                        seen,
+                        visited_locals,
+                    ),
+                    EffectArg::Value(expr) => self.forwarded_return_param_sources_from_expr(
+                        db,
+                        body,
+                        *expr,
+                        seen,
+                        visited_locals,
+                    ),
+                    EffectArg::Binding(binding) => self.forwarded_return_sources_from_place(
+                        db,
+                        body,
+                        &Place::new(PlaceBase::Binding(*binding)),
+                        seen,
+                        visited_locals,
+                    ),
+                    EffectArg::Unknown => None,
+                }
+            }
+        }?;
+        let projection =
+            self.instantiate_return_projection(db, body, &callee_source.projection, call_args)?;
+        let mut sources = project_return_sources(sources, &projection)?;
+        prefix_return_sources(&mut sources, &callee_source.result_projection);
+        Some(sources)
+    }
+
+    fn return_index_projection(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        body: Body<'db>,
+        expr: ExprId,
+    ) -> Option<ReturnProjectionStep> {
+        if let Partial::Present(Expr::Lit(LitKind::Int(value))) = expr.data(db, body) {
+            return value
+                .data(db)
+                .to_usize()
+                .map(ReturnProjectionStep::ConstantIndex);
+        }
+        match self.expr_binding(expr)? {
+            LocalBinding::Param {
+                site: ParamSite::Func(_),
+                idx,
+                ..
+            } => Some(ReturnProjectionStep::ParamIndex(idx)),
+            LocalBinding::Local { .. }
+            | LocalBinding::Param { .. }
+            | LocalBinding::EffectParam { .. } => None,
+        }
+    }
+
+    fn instantiate_return_projection(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        body: Body<'db>,
+        projection: &[ReturnProjectionStep],
+        call_args: &[ExprId],
+    ) -> Option<Vec<ReturnProjectionStep>> {
+        projection
+            .iter()
+            .map(|step| match *step {
+                ReturnProjectionStep::ParamIndex(param_idx) => {
+                    self.return_index_projection(db, body, *call_args.get(param_idx)?)
+                }
+                ReturnProjectionStep::AnyIndex => Some(ReturnProjectionStep::AnyIndex),
+                step => Some(step),
+            })
+            .collect()
     }
 
     fn forwarded_return_param_sources_from_callable(
         &self,
         db: &'db dyn HirAnalysisDb,
         func: Func<'db>,
-        seen: &mut FxHashSet<Func<'db>>,
-    ) -> Option<Vec<usize>> {
-        if !seen.insert(func) {
-            return None;
+    ) -> Option<Vec<ReturnSource>> {
+        match func_return_provenance(db, func) {
+            ReturnProvenance::Forwarded(sources) => Some(sources.clone()),
+            ReturnProvenance::Fresh | ReturnProvenance::Unknown => None,
         }
-
-        let (diags, typed_body) = check_func_body(db, func);
-        if !diags.is_empty() {
-            seen.remove(&func);
-            return None;
-        }
-        let body = typed_body.body()?;
-        let root_expr = func.body(db)?.expr(db);
-        let sources = typed_body.forwarded_return_param_sources_from_expr(
-            db,
-            body,
-            root_expr,
-            seen,
-            &mut FxHashSet::default(),
-        );
-        seen.remove(&func);
-        sources
     }
 
     fn collect_explicit_return_param_sources_in_stmt(
@@ -3420,7 +3914,7 @@ impl<'db> TypedBody<'db> {
         db: &'db dyn HirAnalysisDb,
         body: Body<'db>,
         stmt: StmtId,
-        out: &mut FxHashSet<usize>,
+        out: &mut FxHashSet<ReturnSource>,
         saw_non_param: &mut bool,
         seen: &mut FxHashSet<Func<'db>>,
     ) {
@@ -3509,7 +4003,7 @@ impl<'db> TypedBody<'db> {
         db: &'db dyn HirAnalysisDb,
         body: Body<'db>,
         expr: ExprId,
-        out: &mut FxHashSet<usize>,
+        out: &mut FxHashSet<ReturnSource>,
         saw_non_param: &mut bool,
         seen: &mut FxHashSet<Func<'db>>,
     ) {
@@ -3721,7 +4215,7 @@ impl<'db> TypedBody<'db> {
         db: &'db dyn HirAnalysisDb,
         body: Body<'db>,
         expr: ExprId,
-        out: &mut FxHashSet<usize>,
+        out: &mut FxHashSet<ReturnSource>,
         saw_non_param: &mut bool,
         seen: &mut FxHashSet<Func<'db>>,
     ) {
@@ -3809,7 +4303,7 @@ impl<'db> TypedBody<'db> {
         db: &'db dyn HirAnalysisDb,
         body: Body<'db>,
         cond: crate::hir_def::CondId,
-        out: &mut FxHashSet<usize>,
+        out: &mut FxHashSet<ReturnSource>,
         saw_non_param: &mut bool,
         seen: &mut FxHashSet<Func<'db>>,
     ) {
@@ -4076,16 +4570,74 @@ fn strip_code_region_token_wrapper<'db>(
 }
 
 fn merge_forwarded_param_sets(
-    lhs: Option<Vec<usize>>,
-    rhs: Option<Vec<usize>>,
-) -> Option<Vec<usize>> {
+    lhs: Option<Vec<ReturnSource>>,
+    rhs: Option<Vec<ReturnSource>>,
+) -> Option<Vec<ReturnSource>> {
     let mut merged = FxHashSet::default();
-    for idx in lhs?.into_iter().chain(rhs?) {
-        merged.insert(idx);
+    for source in lhs?.into_iter().chain(rhs?) {
+        merged.insert(source);
     }
     let mut out = merged.into_iter().collect::<Vec<_>>();
     out.sort_unstable();
     Some(out)
+}
+
+fn return_projection_step_matches(
+    pattern: ReturnProjectionStep,
+    candidate: ReturnProjectionStep,
+) -> bool {
+    pattern == candidate
+        || matches!(
+            (pattern, candidate),
+            (
+                ReturnProjectionStep::AnyIndex,
+                ReturnProjectionStep::AnyIndex
+                    | ReturnProjectionStep::ConstantIndex(_)
+                    | ReturnProjectionStep::ParamIndex(_)
+            )
+        )
+}
+
+fn return_projection_is_prefix(
+    prefix: &[ReturnProjectionStep],
+    path: &[ReturnProjectionStep],
+) -> bool {
+    prefix.len() <= path.len()
+        && prefix
+            .iter()
+            .copied()
+            .zip(path.iter().copied())
+            .all(|(pattern, candidate)| return_projection_step_matches(pattern, candidate))
+}
+
+fn project_return_sources(
+    sources: Vec<ReturnSource>,
+    projection: &[ReturnProjectionStep],
+) -> Option<Vec<ReturnSource>> {
+    let mut projected = FxHashSet::default();
+    for mut source in sources {
+        if return_projection_is_prefix(&source.result_projection, projection) {
+            source
+                .projection
+                .extend_from_slice(&projection[source.result_projection.len()..]);
+            source.result_projection.clear();
+            projected.insert(source);
+        } else if return_projection_is_prefix(projection, &source.result_projection) {
+            source.result_projection.drain(..projection.len());
+            projected.insert(source);
+        }
+    }
+    let mut projected = projected.into_iter().collect::<Vec<_>>();
+    projected.sort_unstable();
+    (!projected.is_empty()).then_some(projected)
+}
+
+fn prefix_return_sources(sources: &mut [ReturnSource], prefix: &[ReturnProjectionStep]) {
+    for source in sources {
+        let mut result_projection = prefix.to_vec();
+        result_projection.append(&mut source.result_projection);
+        source.result_projection = result_projection;
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, derive_more::From)]

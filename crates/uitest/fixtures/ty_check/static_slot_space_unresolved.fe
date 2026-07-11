@@ -1,8 +1,6 @@
-// A `StaticSlot` whose `SPACE` depends on a generic parameter cannot have its
-// address space resolved from the impl's generic form, so a contract field
-// using it as a layout hole is rejected rather than silently numbered from the
-// field's own (possibly wrong) address-space counter — which would risk a
-// cross-space slot collision.
+// `StaticSlot::SPACE` is resolved from the concrete owner occurrence, so a
+// generic impl may route a layout root through a concrete address-space
+// argument without reconstructing or guessing from the impl's generic form.
 use core::effect_ref::{AddressSpace, StaticSlot}
 
 struct ParamSlot<const SP: AddressSpace, const SLOT: u256 = _> {}
@@ -12,7 +10,7 @@ impl<const SP: AddressSpace, const SLOT: u256> StaticSlot for ParamSlot<SP, SLOT
 }
 
 contract C {
-    // `SLOT` is left to its `= _` default (a storage-slot hole); `SP` is fixed,
-    // but the impl's `SPACE = SP` cannot be resolved from the generic form.
+    // `SLOT` is left to its `= _` default and `SP` concretely selects transient
+    // storage for that root allocation.
     lock: ParamSlot<AddressSpace::TransientStorage>,
 }

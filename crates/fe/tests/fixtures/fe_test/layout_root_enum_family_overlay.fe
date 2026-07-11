@@ -1,0 +1,169 @@
+use std::evm::{Evm, StorageMap}
+
+enum SmallFirst {
+    Small([StorageMap<u256, u256>; 2]),
+    Large([StorageMap<u256, u256>; 3]),
+}
+
+impl SmallFirst {
+    fn set(mut self, lane: usize, key: u256, value: u256) {
+        match self {
+            SmallFirst::Small(mut maps) => maps[lane].set(key: key, value: value),
+            SmallFirst::Large(mut maps) => maps[lane].set(key: key, value: value),
+        }
+    }
+
+    fn get(self, lane: usize, key: u256) -> u256 {
+        match self {
+            SmallFirst::Small(maps) => maps[lane].get(key: key),
+            SmallFirst::Large(maps) => maps[lane].get(key: key),
+        }
+    }
+}
+
+enum LargeFirst {
+    Large([StorageMap<u256, u256>; 3]),
+    Small([StorageMap<u256, u256>; 2]),
+}
+
+impl LargeFirst {
+    fn set(mut self, lane: usize, key: u256, value: u256) {
+        match self {
+            LargeFirst::Large(mut maps) => maps[lane].set(key: key, value: value),
+            LargeFirst::Small(mut maps) => maps[lane].set(key: key, value: value),
+        }
+    }
+
+    fn get(self, lane: usize, key: u256) -> u256 {
+        match self {
+            LargeFirst::Large(maps) => maps[lane].get(key: key),
+            LargeFirst::Small(maps) => maps[lane].get(key: key),
+        }
+    }
+}
+
+msg SmallFirstMsg {
+    #[selector = 1]
+    Set { lane: usize, key: u256, value: u256 },
+
+    #[selector = 2]
+    Get { lane: usize, key: u256 } -> u256,
+}
+
+msg LargeFirstMsg {
+    #[selector = 11]
+    Set { lane: usize, key: u256, value: u256 },
+
+    #[selector = 12]
+    Get { lane: usize, key: u256 } -> u256,
+}
+
+pub contract SmallFirstContract {
+    mut choice: SmallFirst,
+
+    recv SmallFirstMsg {
+        Set { lane, key, value } uses (mut choice) {
+            choice.set(lane: lane, key: key, value: value)
+        }
+
+        Get { lane, key } -> u256 uses (choice) {
+            choice.get(lane: lane, key: key)
+        }
+    }
+}
+
+pub contract LargeFirstContract {
+    mut choice: LargeFirst,
+
+    recv LargeFirstMsg {
+        Set { lane, key, value } uses (mut choice) {
+            choice.set(lane: lane, key: key, value: value)
+        }
+
+        Get { lane, key } -> u256 uses (choice) {
+            choice.get(lane: lane, key: key)
+        }
+    }
+}
+
+#[test]
+fn unequal_enum_root_families_overlay_without_aliasing_members() uses (evm: mut Evm) {
+    let small = evm.create2<SmallFirstContract>(value: 0, args: (), salt: 1)
+    evm.call(
+        addr: small,
+        gas: 200000,
+        value: 0,
+        message: SmallFirstMsg::Set { lane: 0, key: 7, value: 11 },
+    )
+    evm.call(
+        addr: small,
+        gas: 200000,
+        value: 0,
+        message: SmallFirstMsg::Set { lane: 1, key: 7, value: 22 },
+    )
+    let small_0: u256 = evm.call(
+        addr: small,
+        gas: 200000,
+        value: 0,
+        message: SmallFirstMsg::Get { lane: 0, key: 7 },
+    )
+    let small_1: u256 = evm.call(
+        addr: small,
+        gas: 200000,
+        value: 0,
+        message: SmallFirstMsg::Get { lane: 1, key: 7 },
+    )
+    assert!(small_0 == 11)
+    assert!(small_1 == 22)
+
+    let large = evm.create2<LargeFirstContract>(value: 0, args: (), salt: 2)
+    evm.call(
+        addr: large,
+        gas: 200000,
+        value: 0,
+        message: LargeFirstMsg::Set { lane: 0, key: 7, value: 33 },
+    )
+    evm.call(
+        addr: large,
+        gas: 200000,
+        value: 0,
+        message: LargeFirstMsg::Set { lane: 2, key: 7, value: 44 },
+    )
+    let large_0: u256 = evm.call(
+        addr: large,
+        gas: 200000,
+        value: 0,
+        message: LargeFirstMsg::Get { lane: 0, key: 7 },
+    )
+    let large_2: u256 = evm.call(
+        addr: large,
+        gas: 200000,
+        value: 0,
+        message: LargeFirstMsg::Get { lane: 2, key: 7 },
+    )
+    assert!(large_0 == 33)
+    assert!(large_2 == 44)
+}
+
+#[test(should_revert)]
+fn smaller_enum_variant_uses_its_own_array_bound() uses (evm: mut Evm) {
+    let c = evm.create2<SmallFirstContract>(value: 0, args: (), salt: 3)
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: SmallFirstMsg::Set { lane: 2, key: 7, value: 55 },
+    )
+}
+
+#[test(should_revert)]
+fn larger_enum_variant_rejects_its_first_oob_index() uses (evm: mut Evm) {
+    let c = evm.create2<LargeFirstContract>(value: 0, args: (), salt: 4)
+    let value: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: LargeFirstMsg::Get { lane: 3, key: 7 },
+    )
+    assert!(value == 0)
+}

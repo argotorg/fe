@@ -1,0 +1,54 @@
+use std::evm::{Evm, StorageMap}
+
+enum Wrapped<const ROOT: u256 = _> {
+    Map(StorageMap<u256, u256, ROOT>),
+}
+
+fn unwrap_map<const ROOT: u256>(
+    wrapped: Wrapped<ROOT>,
+) -> StorageMap<u256, u256, ROOT> {
+    let Wrapped::Map(map) = wrapped
+    map
+}
+
+msg Msg {
+    #[selector = 1]
+    Set { lane: usize, key: u256, value: u256 },
+
+    #[selector = 2]
+    Get { lane: usize, key: u256 } -> u256,
+}
+
+pub contract C {
+    mut wrapped: [Wrapped; 2],
+
+    recv Msg {
+        Set { lane, key, value } uses (mut wrapped) {
+            match wrapped[lane] {
+                Wrapped::Map(mut map) => map.set(key: key, value: value),
+            }
+        }
+
+        Get { lane, key } -> u256 uses (wrapped) {
+            unwrap_map(wrapped: wrapped[lane]).get(key: key)
+        }
+    }
+}
+
+#[test]
+fn returned_variant_values_preserve_layout_sources() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 1)
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::Set { lane: 1, key: 7, value: 42 },
+    )
+    let value: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::Get { lane: 1, key: 7 },
+    )
+    assert!(value == 42)
+}

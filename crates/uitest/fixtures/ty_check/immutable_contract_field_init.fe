@@ -200,6 +200,10 @@ contract MemorySpaceField {
     ptr: std::evm::MemPtr<u256>
 }
 
+contract CalldataSpaceField {
+    ptr: std::evm::CalldataPtr<u256>
+}
+
 contract InitViaAugAssign {
     x: u256
 

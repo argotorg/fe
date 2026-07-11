@@ -2,13 +2,16 @@ use common::layout::EVM_LAYOUT;
 use cranelift_entity::EntityRef;
 use hir::{
     analysis::{
-        semantic::{GenericSubst, ImplEnv, SemanticInstanceKey, get_or_build_semantic_instance},
+        semantic::{
+            GenericSubst, ImplEnv, LayoutEvidenceBase, LayoutEvidenceConstant, SemConstId,
+            SemConstValue, SemanticInstanceKey, get_or_build_semantic_instance,
+        },
         ty::{
             corelib::{resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path},
             trait_def::{TraitInstId, resolve_trait_method_instance},
             trait_resolution::{PredicateListId, TraitSolveCx},
             ty_check::BodyOwner,
-            ty_def::{InvalidCause, TyId},
+            ty_def::{InvalidCause, TyData, TyId},
         },
     },
     hir_def::{
@@ -25,17 +28,21 @@ use crate::{
     layout_size_bytes,
     runtime::{
         AddressSpaceKind, BorrowAccess, ConstScalar, ContractFieldSlot, ContractInitAbiPlan,
-        ContractRecvAbiPlan, DispatchDefault, EntryEffectArgPlan, InitArgsPlan, PlaceElem,
-        PlaceRoot, RBlock, RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView,
-        RuntimeBody, RuntimeBoundarySpec, RuntimeBuiltin, RuntimeCarrier, RuntimeClass,
-        RuntimeExitBehavior, RuntimeInputPlan, RuntimeInterfaceSignature, RuntimeLocalRoot,
-        RuntimeParamPlan, RuntimePlace, RuntimeReturnPlan, RuntimeSyntheticSpec, ScalarClass,
-        ScalarRepr, ScalarRole, TargetRootProviderBinding, TargetRootProviderMaterialization,
+        ContractRecvAbiPlan, DispatchDefault, EntryEffectArgPlan, EntrySemanticArgsPlan,
+        InitArgsPlan, PlaceElem, PlaceRoot, RBlock, RBlockId, RExpr, RLocal, RLocalId, RStmt,
+        RTerminator, RuntimeBody, RuntimeBoundarySpec, RuntimeBuiltin, RuntimeCarrier,
+        RuntimeClass, RuntimeExitBehavior, RuntimeInputPlan, RuntimeInterfaceSignature,
+        RuntimeLayoutMap, RuntimeLocalRoot, RuntimeParamPlan, RuntimePlace, RuntimeReturnPlan,
+        RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole, TargetRootProviderBinding,
+        TargetRootProviderMaterialization,
         lower::{
+            abi::runtime_abi_plan,
             boundary::{RuntimeValueAddress, RuntimeValueSource},
             classify::{ref_class_for_place_result, semantic_return_ty},
+            const_scalar_from_value,
             conversion::{RuntimeConversionEmitter, emit_runtime_coercion},
             interface::runtime_visible_binding_plans,
+            layout_evidence::{runtime_layout_map_for_map_ty, runtime_layout_scalar_const},
             realize::{
                 RuntimeValueArgSelectionCx, RuntimeValueArgSelector, RuntimeValueUseEmitter,
                 SelectedRuntimeValueArg, emit_selected_runtime_value_args,
@@ -59,8 +66,7 @@ pub(crate) fn runtime_synthetic_exit_behavior<'db>(
         | RuntimeSyntheticSpec::ManualContractRoot { .. }
         | RuntimeSyntheticSpec::ContractRecvAbi { .. }
         | RuntimeSyntheticSpec::ContractInitRoot { .. }
-        | RuntimeSyntheticSpec::ContractRuntimeRoot { .. }
-        | RuntimeSyntheticSpec::CodeRegionRoot { .. } => RuntimeExitBehavior::NeverReturns,
+        | RuntimeSyntheticSpec::ContractRuntimeRoot { .. } => RuntimeExitBehavior::NeverReturns,
     }
 }
 
@@ -80,23 +86,13 @@ pub(crate) fn lower_synthetic_runtime_body<'db>(
 ) -> RuntimeBody<'db> {
     let mut builder = SyntheticBodyBuilder::new(db, instance);
     match spec {
-        RuntimeSyntheticSpec::MainRoot {
-            callee,
-            entry_effect_args,
-        }
+        RuntimeSyntheticSpec::MainRoot { callee, entry_args }
         | RuntimeSyntheticSpec::TestRoot {
-            callee,
-            entry_effect_args,
-            ..
+            callee, entry_args, ..
         }
         | RuntimeSyntheticSpec::ManualContractRoot {
-            callee,
-            entry_effect_args,
-            ..
-        } => builder.build_entry_root(callee, &entry_effect_args),
-        RuntimeSyntheticSpec::CodeRegionRoot { callee, .. } => {
-            builder.build_passthrough_root(callee)
-        }
+            callee, entry_args, ..
+        } => builder.build_entry_root(callee, &entry_args),
         RuntimeSyntheticSpec::ContractInitAbi { plan } => builder.build_contract_init_abi(plan),
         RuntimeSyntheticSpec::ContractRecvAbi { plan } => builder.build_contract_recv_abi(plan),
         RuntimeSyntheticSpec::ContractInitRoot {
@@ -117,6 +113,18 @@ struct SyntheticBodyBuilder<'db> {
     instance: RuntimeInstance<'db>,
     locals: Vec<RLocal<'db>>,
     blocks: Vec<RBlock<'db>>,
+}
+
+struct SyntheticOwnerCallArgs {
+    effects: Vec<RLocalId>,
+    layout_evidence: Vec<RLocalId>,
+}
+
+impl SyntheticOwnerCallArgs {
+    fn append_to(self, args: &mut Vec<RLocalId>) {
+        args.extend(self.effects);
+        args.extend(self.layout_evidence);
+    }
 }
 
 impl<'db> RuntimeConversionEmitter<'db> for SyntheticBodyBuilder<'db> {
@@ -298,37 +306,11 @@ impl<'db> SyntheticBodyBuilder<'db> {
     fn build_entry_root(
         &mut self,
         callee: RuntimeInstance<'db>,
-        entry_effect_args: &[EntryEffectArgPlan<'db>],
+        entry_args: &EntrySemanticArgsPlan<'db>,
     ) {
-        let args = self.emit_entry_effect_args(RBlockId::from_u32(0), entry_effect_args);
-        self.build_root_call(callee, args);
-    }
-
-    fn build_passthrough_root(&mut self, callee: RuntimeInstance<'db>) {
-        let signature = self.runtime_interface_signature(callee);
-        let semantic = callee.key(self.db).semantic(self.db);
-        let param_entries =
-            semantic.map(|semantic| runtime_visible_binding_plans(self.db, semantic));
-        if let Some(entries) = param_entries {
-            assert_eq!(
-                entries.len(),
-                signature.params.len(),
-                "synthetic passthrough arg count mismatch for {callee:?}"
-            );
-        }
-        let mut args = Vec::with_capacity(signature.params.len());
-        for (idx, param) in signature.params.iter().enumerate() {
-            let semantic_ty = param_entries
-                .and_then(|entries| entries.get(idx))
-                .map(|entry| entry.semantic_ty)
-                .unwrap_or_else(|| TyId::invalid(self.db, InvalidCause::Other));
-            args.push(self.push_synthetic_default_value(
-                RBlockId::from_u32(0),
-                semantic_ty,
-                &param.class,
-            ));
-        }
-
+        let mut args = Vec::new();
+        self.owner_call_args(RBlockId::from_u32(0), callee, 0, entry_args)
+            .append_to(&mut args);
         self.build_root_call(callee, args);
     }
 
@@ -464,7 +446,12 @@ impl<'db> SyntheticBodyBuilder<'db> {
         let immut_ptr = if immut_slots == 0 {
             None
         } else {
-            let immut_len = self.push_const_word(cont_bb, immut_slots.saturating_mul(32));
+            let immut_len = self.push_const_word(
+                cont_bb,
+                immut_slots
+                    .checked_mul(32)
+                    .expect("code-space byte extent was validated by contract layout"),
+            );
             Some(self.push_builtin_value(
                 cont_bb,
                 TyId::u256(self.db),
@@ -474,20 +461,19 @@ impl<'db> SyntheticBodyBuilder<'db> {
         };
 
         if let Some(user_init) = plan.user_init {
-            let effect_args = self.owner_effect_call_args(
-                cont_bb,
-                user_init,
-                call_args.len(),
-                &plan.entry_effect_args,
-            );
-            call_args.extend(effect_args.iter().copied());
+            let SyntheticOwnerCallArgs {
+                effects,
+                layout_evidence,
+            } = self.owner_call_args(cont_bb, user_init, call_args.len(), &plan.entry_args);
+            call_args.extend(effects.iter().copied());
+            call_args.extend(layout_evidence);
             let _ = self.push_ignored_call(cont_bb, user_init, call_args);
             if let Some(immut_ptr) = immut_ptr {
                 self.serialize_init_immutables_into_buffer(
                     cont_bb,
                     immut_ptr,
-                    &plan.entry_effect_args,
-                    &effect_args,
+                    &plan.entry_args.effects,
+                    &effects,
                 );
             }
         }
@@ -534,12 +520,8 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 ));
             }
         }
-        call_args.extend(self.owner_effect_call_args(
-            cont_bb,
-            plan.user_recv,
-            call_args.len(),
-            &plan.entry_effect_args,
-        ));
+        self.owner_call_args(cont_bb, plan.user_recv, call_args.len(), &plan.entry_args)
+            .append_to(&mut call_args);
 
         let ret = self.push_call(cont_bb, plan.user_recv, call_args);
         match plan.ret {
@@ -549,15 +531,11 @@ impl<'db> SyntheticBodyBuilder<'db> {
                     len: zero,
                 };
             }
-            RuntimeReturnPlan::Value { .. } => {
+            RuntimeReturnPlan::Value { ty } => {
                 let ret_value = ret.expect("value-returning recv wrapper should produce a value");
                 let scope = plan.contract.scope();
-                let encode_alloc = resolve_sol_encode_single_root_alloc(
-                    self.db,
-                    scope,
-                    self.locals[ret_value.index()].semantic_ty,
-                )
-                .expect("encode_single_root_alloc");
+                let encode_alloc = resolve_sol_encode_single_root_alloc(self.db, scope, ty)
+                    .expect("encode_single_root_alloc");
                 let encoded = self.push_call_result(cont_bb, encode_alloc, vec![ret_value]);
                 let fields = self.extract_tuple_fields(
                     cont_bb,
@@ -624,7 +602,12 @@ impl<'db> SyntheticBodyBuilder<'db> {
             RuntimeClass::Scalar(word_scalar_class()),
             RuntimeBuiltin::Mload { addr: zero },
         );
-        let immut_len = self.push_const_word(entry, immut_slots.saturating_mul(32));
+        let immut_len = self.push_const_word(
+            entry,
+            immut_slots
+                .checked_mul(32)
+                .expect("code-space byte extent was validated by contract layout"),
+        );
 
         let out_len = self.push_binary_word(entry, ArithBinOp::Add, runtime_len, immut_len);
         let out_ptr = self.push_builtin_value(
@@ -656,10 +639,8 @@ impl<'db> SyntheticBodyBuilder<'db> {
         };
     }
 
-    fn contract_code_address_space_slots(&self, contract: Contract<'db>) -> u32 {
-        u32::try_from(contract.code_address_space_slot_count(self.db)).unwrap_or_else(|_| {
-            panic!("contract requires too many code-backed slots for init-time immutables buffer")
-        })
+    fn contract_code_address_space_slots(&self, contract: Contract<'db>) -> usize {
+        contract.code_address_space_slot_count(self.db)
     }
 
     fn serialize_init_immutables_into_buffer(
@@ -706,7 +687,8 @@ impl<'db> SyntheticBodyBuilder<'db> {
             let ContractFieldSlot::Words(slot_words) = binding.slot else {
                 panic!("init-time immutable field binding should carry a word slot offset");
             };
-            let slot_words = u32::try_from(slot_words).expect("contract field slot fits in u32");
+            let slot_words = usize::try_from(slot_words)
+                .expect("contract field slot was allocated from a usize layout extent");
             let slot_words = self.push_const_word(bb, slot_words);
             let slot_bytes = self.push_binary_word(bb, ArithBinOp::Mul, slot_words, thirty_two);
             let dst_addr = self.push_binary_word(bb, ArithBinOp::Add, buffer_ptr, slot_bytes);
@@ -870,25 +852,146 @@ impl<'db> SyntheticBodyBuilder<'db> {
         }
     }
 
-    fn owner_effect_call_args(
+    fn owner_call_args(
         &mut self,
         bb: RBlockId,
         callee: RuntimeInstance<'db>,
         provided_prefix: usize,
-        bindings: &[EntryEffectArgPlan<'db>],
-    ) -> Vec<RLocalId> {
-        let needed = self
-            .runtime_interface_signature(callee)
-            .params
-            .len()
-            .saturating_sub(provided_prefix);
-        let args = self.emit_entry_effect_args(bb, bindings);
+        plan: &EntrySemanticArgsPlan<'db>,
+    ) -> SyntheticOwnerCallArgs {
+        let abi = runtime_abi_plan(self.db, callee.key(self.db));
+        let needed = abi.visible_params.len();
+        assert!(
+            provided_prefix <= needed,
+            "synthetic call provided more explicit arguments than the callee accepts"
+        );
+        let needed = needed - provided_prefix;
+        let effects = self.emit_entry_effect_args(bb, &plan.effects);
         assert_eq!(
-            args.len(),
+            effects.len(),
             needed,
             "synthetic owner-effect arg count mismatch for {callee:?}"
         );
-        args
+        let semantic = callee
+            .key(self.db)
+            .semantic(self.db)
+            .expect("synthetic owner call must target a semantic instance");
+        let env = RuntimeTypeEnv::for_semantic(self.db, semantic);
+        let layout_evidence = abi
+            .evidence_params
+            .iter()
+            .map(|param| {
+                let matches = plan
+                    .layout_evidence
+                    .iter()
+                    .filter(|arg| arg.target == param.source)
+                    .collect::<Vec<_>>();
+                let [arg] = matches.as_slice() else {
+                    panic!(
+                        "synthetic layout-evidence argument does not have one matching ABI parameter: {:?}",
+                        param.source
+                    );
+                };
+                assert_eq!(
+                    arg.value.map_ty, param.map_ty,
+                    "synthetic layout-evidence argument type mismatch for {:?}",
+                    param.source,
+                );
+                self.emit_layout_evidence_constant(bb, env, &arg.value)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            layout_evidence.len(),
+            plan.layout_evidence.len(),
+            "synthetic entry plan contains layout evidence absent from the callee ABI"
+        );
+        SyntheticOwnerCallArgs {
+            effects,
+            layout_evidence,
+        }
+    }
+
+    fn emit_layout_evidence_constant(
+        &mut self,
+        bb: RBlockId,
+        env: RuntimeTypeEnv<'db>,
+        value: &LayoutEvidenceConstant<'db>,
+    ) -> RLocalId {
+        let map = runtime_layout_map_for_map_ty(self.db, env, &value.map_ty);
+        assert_eq!(map.rank(), value.strides.len());
+        let base = match value.base {
+            LayoutEvidenceBase::Slot(slot) => self.push_layout_scalar(bb, &map, slot),
+            LayoutEvidenceBase::Root(root) => {
+                let TyData::ConstTy(_) = root.data(self.db) else {
+                    panic!("static layout root must be a const value: {root:?}")
+                };
+                let value = SemConstId::new(
+                    self.db,
+                    SemConstValue::TypeLevel {
+                        ty: map.scalar_ty(),
+                        const_ty: root,
+                    },
+                );
+                let scalar = const_scalar_from_value(self.db, env, value)
+                    .expect("static entry layout root must evaluate to a scalar");
+                self.push_layout_const_scalar(bb, &map, scalar)
+            }
+        };
+        if map.rank() == 0 {
+            return base;
+        }
+        let strides = value
+            .strides
+            .iter()
+            .map(|stride| self.push_layout_scalar(bb, &map, *stride))
+            .collect::<Vec<_>>();
+        let result = self.push_local(
+            map.scalar_ty(),
+            RuntimeCarrier::Value(map.class()),
+            RuntimeLocalRoot::None,
+        );
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: result,
+                expr: RExpr::LayoutMapAffine {
+                    map,
+                    base,
+                    strides: strides.into_boxed_slice(),
+                },
+            },
+        );
+        result
+    }
+
+    fn push_layout_scalar(
+        &mut self,
+        bb: RBlockId,
+        map: &RuntimeLayoutMap<'db>,
+        value: usize,
+    ) -> RLocalId {
+        self.push_layout_const_scalar(bb, map, runtime_layout_scalar_const(map, value))
+    }
+
+    fn push_layout_const_scalar(
+        &mut self,
+        bb: RBlockId,
+        map: &RuntimeLayoutMap<'db>,
+        value: ConstScalar,
+    ) -> RLocalId {
+        let dst = self.push_local(
+            map.scalar_ty(),
+            RuntimeCarrier::Value(RuntimeClass::Scalar(map.scalar().clone())),
+            RuntimeLocalRoot::None,
+        );
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst,
+                expr: RExpr::ConstScalar(value),
+            },
+        );
+        dst
     }
 
     fn runtime_type_env(
@@ -1013,11 +1116,40 @@ impl<'db> SyntheticBodyBuilder<'db> {
         RuntimeInterfaceSignature<'db>,
         Vec<RLocalId>,
     ) {
-        let selected = self.select_call_args(callee, &args);
+        let initial_abi = runtime_abi_plan(self.db, callee.key(self.db));
+        let visible_len = initial_abi.visible_params.len();
+        assert_eq!(
+            args.len(),
+            visible_len + initial_abi.evidence_params.len(),
+            "synthetic call arg count mismatch for {callee:?}"
+        );
+        let (visible_args, evidence_args) = args.split_at(visible_len);
+        let selected = self.select_call_args(callee, visible_args);
         let callee = self.specialize_callee_for_selected_args(callee, &selected);
-        let signature = self.runtime_interface_signature(callee);
-        self.assert_selected_args_match_signature(callee, &selected, &signature);
-        let args = self.lower_selected_call_args(bb, &selected);
+        let abi = runtime_abi_plan(self.db, callee.key(self.db));
+        self.assert_selected_args_match_params(callee, &selected, &abi.visible_params);
+        assert_eq!(
+            initial_abi
+                .evidence_params
+                .iter()
+                .map(|param| (&param.source, &param.map_ty))
+                .collect::<Vec<_>>(),
+            abi.evidence_params
+                .iter()
+                .map(|param| (&param.source, &param.map_ty))
+                .collect::<Vec<_>>(),
+            "synthetic call specialization changed its layout-evidence ABI"
+        );
+        for (arg, param) in evidence_args.iter().zip(&abi.evidence_params) {
+            assert_eq!(
+                self.locals[arg.index()].carrier.value_class(),
+                Some(&param.param.class),
+                "synthetic layout-evidence argument class mismatch for {callee:?}"
+            );
+        }
+        let mut args = self.lower_selected_call_args(bb, &selected);
+        args.extend_from_slice(evidence_args);
+        let signature = abi.signature();
         (callee, signature, args)
     }
 
@@ -1036,8 +1168,8 @@ impl<'db> SyntheticBodyBuilder<'db> {
         callee: RuntimeInstance<'db>,
         args: &[RLocalId],
     ) -> Vec<SelectedRuntimeValueArg<'db>> {
-        let signature = self.runtime_interface_signature(callee);
-        if args.is_empty() && signature.params.is_empty() {
+        let abi = runtime_abi_plan(self.db, callee.key(self.db));
+        if args.is_empty() && abi.visible_params.is_empty() {
             return Vec::new();
         }
         let param_entries = callee
@@ -1047,18 +1179,18 @@ impl<'db> SyntheticBodyBuilder<'db> {
         if let Some(entries) = param_entries {
             assert_eq!(
                 entries.len(),
-                signature.params.len(),
+                abi.visible_params.len(),
                 "synthetic semantic/runtime param metadata mismatch for {callee:?}"
             );
         }
         assert_eq!(
             args.len(),
-            signature.params.len(),
-            "synthetic call arg count mismatch for {callee:?}"
+            abi.visible_params.len(),
+            "synthetic visible call arg count mismatch for {callee:?}"
         );
         let arg_plans = args
             .iter()
-            .zip(signature.params.iter().enumerate())
+            .zip(abi.visible_params.iter().enumerate())
             .map(|(arg, (idx, param))| {
                 let (semantic_ty, plan) = param_entries
                     .and_then(|entries| entries.get(idx))
@@ -1094,11 +1226,11 @@ impl<'db> SyntheticBodyBuilder<'db> {
         let RuntimeInstanceSource::Semantic(semantic) = callee.key(self.db).source(self.db) else {
             return callee;
         };
-        let signature = self.runtime_interface_signature(callee);
+        let abi = runtime_abi_plan(self.db, callee.key(self.db));
         let param_entries = runtime_visible_binding_plans(self.db, semantic);
         assert_eq!(
             param_entries.len(),
-            signature.params.len(),
+            abi.visible_params.len(),
             "synthetic specialized callee metadata mismatch for {callee:?}"
         );
         let params: Vec<RuntimeClass<'db>> = args.iter().map(|arg| arg.class.clone()).collect();
@@ -1111,18 +1243,18 @@ impl<'db> SyntheticBodyBuilder<'db> {
         }
     }
 
-    fn assert_selected_args_match_signature(
+    fn assert_selected_args_match_params(
         &self,
         callee: RuntimeInstance<'db>,
         selected: &[SelectedRuntimeValueArg<'db>],
-        signature: &RuntimeInterfaceSignature<'db>,
+        params: &[crate::runtime::RuntimeParam<'db>],
     ) {
         assert_eq!(
             selected.len(),
-            signature.params.len(),
+            params.len(),
             "synthetic selected arg count mismatch for {callee:?}"
         );
-        for (idx, (selected, param)) in selected.iter().zip(signature.params.iter()).enumerate() {
+        for (idx, (selected, param)) in selected.iter().zip(params.iter()).enumerate() {
             assert_eq!(
                 selected.class, param.class,
                 "synthetic selected arg class mismatch for {callee:?} param {idx}"
@@ -1294,7 +1426,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         dst
     }
 
-    fn push_const_word(&mut self, bb: RBlockId, value: u32) -> RLocalId {
+    fn push_const_word(&mut self, bb: RBlockId, value: usize) -> RLocalId {
         self.push_const_scalar(
             bb,
             ConstScalar::Int {
@@ -1401,61 +1533,6 @@ impl<'db> SyntheticBodyBuilder<'db> {
             },
         );
         local
-    }
-
-    fn push_synthetic_default_value(
-        &mut self,
-        bb: RBlockId,
-        semantic_ty: TyId<'db>,
-        class: &RuntimeClass<'db>,
-    ) -> RLocalId {
-        match class {
-            RuntimeClass::RawAddr {
-                space: AddressSpaceKind::Memory,
-                target: Some(layout),
-            } => self.push_zeroed_memory_raw_root(bb, semantic_ty, *layout),
-            RuntimeClass::Ref {
-                pointee,
-                kind:
-                    RefKind::Object
-                    | RefKind::Provider {
-                        space: AddressSpaceKind::Memory,
-                        ..
-                    },
-                view: RefView::Whole,
-            } if pointee.aggregate_layout().is_some() => {
-                let object = self.push_zeroed_memory_object_ref(
-                    bb,
-                    semantic_ty,
-                    pointee.aggregate_layout().expect("aggregate ref layout"),
-                );
-                if self.locals[object.index()].carrier.value_class() == Some(class) {
-                    object
-                } else {
-                    self.coerce_runtime_value(bb, object, class, semantic_ty)
-                }
-            }
-            RuntimeClass::Scalar(_)
-            | RuntimeClass::AggregateValue { .. }
-            | RuntimeClass::RawAddr { .. }
-            | RuntimeClass::Ref { .. } => {
-                let local = self.push_local(
-                    semantic_ty,
-                    RuntimeCarrier::Value(class.clone()),
-                    RuntimeLocalRoot::None,
-                );
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst: local,
-                        expr: RExpr::Placeholder {
-                            class: class.clone(),
-                        },
-                    },
-                );
-                local
-            }
-        }
     }
 
     fn push_zeroed_memory_raw_root(
@@ -1737,9 +1814,93 @@ mod tests {
     use url::Url;
 
     use crate::{
-        build_test_runtime_package,
+        build_runtime_package, build_test_runtime_package,
         runtime::{RuntimeBuiltin, RuntimeFunctionOwner, RuntimeSyntheticSpec},
     };
+
+    #[test]
+    fn contract_recv_abi_encodes_the_declared_return_type() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse("file:///contract_recv_abi_declared_return_type.fe").unwrap();
+        let file = db.workspace().touch(
+            &mut db,
+            file_url,
+            Some(
+                r#"
+use std::abi::sol
+
+msg ReturnMsg {
+    #[selector = sol("symbol()")]
+    Symbol -> String<8>,
+}
+
+pub contract ReturnContract {
+    recv ReturnMsg {
+        Symbol -> String<8> { "COOL" }
+    }
+}
+"#
+                .to_string(),
+            ),
+        );
+        let top_mod = db.top_mod(file);
+        let package = build_runtime_package(&db, top_mod).expect("runtime package should build");
+        let wrapper = package
+            .functions(&db)
+            .into_iter()
+            .find(|function| {
+                matches!(
+                    function.owner(&db),
+                    RuntimeFunctionOwner::Synthetic(RuntimeSyntheticSpec::ContractRecvAbi { .. })
+                )
+            })
+            .expect("missing contract recv wrapper");
+        let RuntimeFunctionOwner::Synthetic(RuntimeSyntheticSpec::ContractRecvAbi { plan }) =
+            wrapper.owner(&db)
+        else {
+            unreachable!()
+        };
+        let RuntimeReturnPlan::Value { ty: declared_ty } = plan.ret else {
+            panic!("recv wrapper should return a value")
+        };
+        let body = wrapper.instance(&db).body(&db);
+        let encoded_ty = body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.stmts)
+            .find_map(|stmt| {
+                let RStmt::Assign {
+                    expr: RExpr::Call { callee, .. },
+                    ..
+                } = stmt
+                else {
+                    return None;
+                };
+                let RuntimeInstanceSource::Semantic(semantic) = callee.key(&db).source(&db) else {
+                    return None;
+                };
+                let key = semantic.key(&db);
+                let BodyOwner::Func(func) = key.owner(&db) else {
+                    return None;
+                };
+                if func
+                    .name(&db)
+                    .to_opt()
+                    .is_none_or(|name| name.data(&db) != "encode_single_root_alloc")
+                {
+                    return None;
+                }
+                key.subst(&db).generic_args(&db).get(1).copied()
+            })
+            .expect("recv wrapper should call encode_single_root_alloc");
+
+        assert_eq!(encoded_ty, declared_ty);
+        assert_ne!(
+            encoded_ty.pretty_print(&db),
+            "String<4>",
+            "the literal's narrower inferred type must not replace the declared ABI type"
+        );
+    }
 
     #[test]
     fn test_roots_erase_inert_raw_mem_root_providers() {

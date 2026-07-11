@@ -11,9 +11,9 @@ use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{PathRes, ResolvedVariant, diagnostics::PathResDiag, is_scope_visible_from},
     ty::{
-        adt_def::{AdtDef, AdtRef},
+        adt_def::{AdtDef, AdtRef, instantiate_adt_field_shape},
         diagnostics::{BodyDiag, FuncBodyDiag},
-        ty_def::{InvalidCause, TyData, TyId, instantiate_adt_field_ty},
+        ty_def::{InvalidCause, TyData, TyId},
     },
 };
 
@@ -185,7 +185,7 @@ impl<'db> RecordLike<'db> {
                     _ => return None,
                 };
                 let args = ty.generic_args(db);
-                let field_ty = instantiate_adt_field_ty(db, adt_def, 0, field_idx, args);
+                let field_ty = instantiate_adt_field_shape(db, adt_def, 0, field_idx, args);
 
                 if field_ty.is_star_kind(db) {
                     Some(field_ty)
@@ -202,7 +202,7 @@ impl<'db> RecordLike<'db> {
                     _ => return None,
                 };
                 let args = variant.ty.generic_args(db);
-                let field_ty = instantiate_adt_field_ty(
+                let field_ty = instantiate_adt_field_shape(
                     db,
                     adt_def,
                     variant.variant.idx as usize,

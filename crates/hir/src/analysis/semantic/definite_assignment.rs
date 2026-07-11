@@ -297,7 +297,7 @@ impl<'a, 'db> DefiniteAssignment<'a, 'db> {
         }
         match &place.root {
             NSPlaceRoot::Root(root_id) => match self.body.root(*root_id)? {
-                NBorrowRoot::Provider { binding } => match binding.source {
+                NBorrowRoot::Provider { binding, .. } => match binding.source {
                     ProviderSource::ContractField {
                         contract,
                         field_idx,

@@ -1,3 +1,4 @@
+pub(crate) mod abi;
 pub(crate) mod arg_selector;
 pub mod body;
 pub(crate) mod boundary;
@@ -9,6 +10,7 @@ pub(crate) mod conversion;
 pub(crate) mod infer;
 pub(crate) mod interface;
 pub(crate) mod layout;
+pub(crate) mod layout_evidence;
 mod place;
 pub(crate) mod realize;
 pub(crate) mod returns;
@@ -18,3 +20,4 @@ pub(crate) mod type_info;
 
 pub use body::lower_to_rmir;
 pub use call::collect_runtime_calls;
+pub(crate) use consts::const_scalar_from_value;

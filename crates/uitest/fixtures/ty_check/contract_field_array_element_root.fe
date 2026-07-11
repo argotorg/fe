@@ -1,0 +1,8 @@
+use core::effect_ref::StorPtr
+
+struct Slot<T, const ROOT: u256 = _> {}
+
+contract C {
+    // A fixed root-bearing element layout is represented by an indexed family.
+    values: StorPtr<[Slot<u256>; 2]>,
+}

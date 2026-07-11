@@ -304,6 +304,7 @@ fn provider_root_trait_receivers_preserve_concrete_runtime_layouts() {
                         ..
                     } => args.first().map(|arg| (*callee, *arg)),
                     RStmt::Assign { .. }
+                    | RStmt::AssertIndexInBounds { .. }
                     | RStmt::EnumAssertVariant { .. }
                     | RStmt::Store { .. }
                     | RStmt::CopyInto { .. }
@@ -415,9 +416,9 @@ fn view_receiver_with_storage_aggregate_keeps_receiver_runtime_visible() {
 }
 
 #[test]
-fn effect_handle_from_raw_helpers_preserve_transport_in_rmir() {
+fn effect_handle_from_raw_helpers_build_ordinary_values_in_rmir() {
     with_runtime_package!(
-        "effect_handle_from_raw_helpers_preserve_transport_in_rmir.fe",
+        "effect_handle_from_raw_helpers_build_ordinary_values_in_rmir.fe",
         include_str!("fixtures/effect_handle_field_deref.fe").to_string(),
         |db, package| {
             let from_raw_helpers = package
@@ -441,12 +442,12 @@ fn effect_handle_from_raw_helpers_preserve_transport_in_rmir() {
                             matches!(
                                 stmt,
                                 RStmt::Assign {
-                                    expr: RExpr::ProviderFromRaw { .. },
+                                    expr: RExpr::AggregateMake { .. },
                                     ..
                                 }
                             )
                         }),
-                    "from_raw helper should rebuild the handle from the raw word:\n{body:#?}"
+                    "from_raw helper should build the ordinary handle value:\n{body:#?}"
                 );
                 assert!(
                     !body
@@ -462,7 +463,7 @@ fn effect_handle_from_raw_helpers_preserve_transport_in_rmir() {
                                 } | RStmt::CopyInto { .. }
                             )
                         }),
-                    "from_raw helper should not materialize or take the address of the raw slot:\n{body:#?}"
+                    "from_raw helper should build its value directly without temporary object storage:\n{body:#?}"
                 );
             }
         }
@@ -470,9 +471,9 @@ fn effect_handle_from_raw_helpers_preserve_transport_in_rmir() {
 }
 
 #[test]
-fn mem_ptr_from_raw_helpers_use_raw_addr_transport_in_rmir() {
+fn mem_ptr_from_raw_helpers_build_ordinary_values_in_rmir() {
     with_runtime_package!(
-        "mem_ptr_from_raw_helpers_use_raw_addr_transport_in_rmir.fe",
+        "mem_ptr_from_raw_helpers_build_ordinary_values_in_rmir.fe",
         include_str!("fixtures/raw_log_emit.fe").to_string(),
         |db, package| {
             let from_raw_helpers = package
@@ -496,15 +497,12 @@ fn mem_ptr_from_raw_helpers_use_raw_addr_transport_in_rmir() {
                             matches!(
                                 stmt,
                                 RStmt::Assign {
-                                    expr: RExpr::WordToRawAddr {
-                                        space: AddressSpaceKind::Memory,
-                                        ..
-                                    },
+                                    expr: RExpr::AggregateMake { .. },
                                     ..
                                 }
                             )
                         }),
-                    "MemPtr::from_raw should keep memory handles as raw-address transport:\n{body:#?}"
+                    "MemPtr::from_raw should build the ordinary pointer value:\n{body:#?}"
                 );
                 assert!(
                     !body
@@ -515,15 +513,13 @@ fn mem_ptr_from_raw_helpers_use_raw_addr_transport_in_rmir() {
                             matches!(
                                 stmt,
                                 RStmt::Assign {
-                                    expr: RExpr::ProviderFromRaw {
-                                        space: AddressSpaceKind::Memory,
-                                        ..
-                                    },
+                                    expr: RExpr::ProviderFromRaw { .. }
+                                        | RExpr::WordToRawAddr { .. },
                                     ..
                                 }
                             )
                         }),
-                    "MemPtr::from_raw must not reconstruct memory provider refs:\n{body:#?}"
+                    "MemPtr::from_raw must not use backend transport inside its ordinary method body:\n{body:#?}"
                 );
             }
         }
@@ -603,6 +599,7 @@ fn storage_backed_nested_handle_field_borrows_use_storage_transport() {
                 Some(*dst)
             }
             RStmt::Assign { .. }
+            | RStmt::AssertIndexInBounds { .. }
             | RStmt::EnumAssertVariant { .. }
             | RStmt::Store { .. }
             | RStmt::CopyInto { .. }

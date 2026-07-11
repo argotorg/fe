@@ -15,7 +15,7 @@ use fe_hir::analysis::ty::ty_check::{
     BodyOwner, EffectArg, EffectPassMode, TypedBody, check_contract_recv_arm_body, check_func_body,
 };
 use fe_hir::hir_def::{CallableDef, Contract, Expr, ExprId, Func, ItemKind, Partial, TopLevelMod};
-use fe_hir::test_db::{HirAnalysisTestDb, initialize_analysis_pass};
+use fe_hir::test_db::{HirAnalysisTestDb, initialize_test_analysis_pass};
 
 fn find_func<'db>(db: &'db HirAnalysisTestDb, top_mod: TopLevelMod<'db>, name: &str) -> Func<'db> {
     top_mod
@@ -232,7 +232,7 @@ fn diagnostics_for<'db>(
     db: &'db HirAnalysisTestDb,
     top_mod: TopLevelMod<'db>,
 ) -> Vec<CompleteDiagnostic> {
-    let mut manager = initialize_analysis_pass();
+    let mut manager = initialize_test_analysis_pass();
     let mut diags: Vec<_> = manager
         .run_on_module(db, top_mod)
         .into_iter()

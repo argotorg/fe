@@ -5,7 +5,10 @@ use crate::core::hir_def::{
 };
 use either::Either;
 
-use super::{ConstRef, RecordLike, TyChecker, env::LocalBinding, path::RecordInitChecker};
+use super::{
+    ConstRef, PatternLayoutContext, RecordLike, TyChecker, env::LocalBinding,
+    path::RecordInitChecker,
+};
 use crate::analysis::{
     name_resolution::{ExpectedPathKind, PathRes, ResolvedVariant},
     semantic::{
@@ -14,9 +17,10 @@ use crate::analysis::{
     },
     ty::adt_def::AdtRef,
     ty::{
+        LayoutBundlePathStep,
         assoc_const::{AssocConstUse, InherentConstUse},
         binder::Binder,
-        const_ty::instantiate_inherent_const_decl_ty,
+        const_ty::{BodyHoleSite, HoleAnchor, HoleMinter, instantiate_inherent_const_decl_ty},
         diagnostics::{BodyDiag, TraitConstraintDiag, TyDiagCollection},
         fold::TyFoldable,
         pattern_ir::{
@@ -49,6 +53,15 @@ pub(super) struct PatCheckResult<'db> {
 
 impl<'db> TyChecker<'db> {
     pub(super) fn check_pat(&mut self, pat: PatId, expected: TyId<'db>) -> PatCheckResult<'db> {
+        self.check_pat_with_layout(pat, expected, None)
+    }
+
+    pub(super) fn check_pat_with_layout(
+        &mut self,
+        pat: PatId,
+        expected: TyId<'db>,
+        layout: Option<&PatternLayoutContext<'db>>,
+    ) -> PatCheckResult<'db> {
         let Partial::Present(pat_data) = pat.data(self.db, self.body()) else {
             return self.finish_pat_check(
                 pat,
@@ -75,14 +88,14 @@ impl<'db> TyChecker<'db> {
                 )
             }
             Pat::Lit(..) => self.check_lit_pat(pat, pat_data, expected),
-            Pat::Tuple(..) => self.check_tuple_pat(pat, pat_data, expected),
+            Pat::Tuple(..) => self.check_tuple_pat(pat, pat_data, expected, layout),
             Pat::Path(..) => self.check_path_pat(pat, pat_data, expected),
-            Pat::PathTuple(..) => self.check_path_tuple_pat(pat, pat_data, expected),
-            Pat::Record(..) => self.check_record_pat(pat, pat_data, expected),
+            Pat::PathTuple(..) => self.check_path_tuple_pat(pat, pat_data, expected, layout),
+            Pat::Record(..) => self.check_record_pat(pat, pat_data, expected, layout),
 
             Pat::Or(lhs_pat, rhs_pat) => {
-                let lhs = self.check_pat(*lhs_pat, expected);
-                let rhs = self.check_pat(*rhs_pat, expected);
+                let lhs = self.check_pat_with_layout(*lhs_pat, expected, layout);
+                let rhs = self.check_pat_with_layout(*rhs_pat, expected, layout);
                 let analysis =
                     if self.pattern_binds_any(*lhs_pat) || self.pattern_binds_any(*rhs_pat) {
                         self.push_diag(BodyDiag::BindingsInOrPat(pat.span(self.body()).into()));
@@ -183,7 +196,11 @@ impl<'db> TyChecker<'db> {
         }
     }
 
-    fn canonical_pattern_ty(&mut self, resolved_ty: TyId<'db>, expected: TyId<'db>) -> TyId<'db> {
+    pub(super) fn canonical_nominal_ty_from_expected(
+        &mut self,
+        resolved_ty: TyId<'db>,
+        expected: TyId<'db>,
+    ) -> TyId<'db> {
         let resolved_ty = resolved_ty.fold_with(self.db, &mut self.table);
         let resolved_ty = self.normalize_ty(resolved_ty);
         let expected = expected.fold_with(self.db, &mut self.table);
@@ -203,7 +220,7 @@ impl<'db> TyChecker<'db> {
         resolved_ty: TyId<'db>,
         expected: TyId<'db>,
     ) -> ConstructorKind<'db> {
-        ConstructorKind::Type(self.canonical_pattern_ty(resolved_ty, expected))
+        ConstructorKind::Type(self.canonical_nominal_ty_from_expected(resolved_ty, expected))
     }
 
     fn literal_constructor_status(
@@ -312,6 +329,7 @@ impl<'db> TyChecker<'db> {
         pat: PatId,
         pat_data: &Pat<'db>,
         expected: TyId<'db>,
+        layout: Option<&PatternLayoutContext<'db>>,
     ) -> PatCheckResult<'db> {
         let Pat::Tuple(pat_tup) = pat_data else {
             unreachable!()
@@ -334,7 +352,24 @@ impl<'db> TyChecker<'db> {
             return self.finish_pat_check(pat, expected, unified, PatternAnalysisStatus::Invalid);
         }
 
-        let elem_tys = unified.decompose_ty_app(self.db).1.to_vec();
+        let elem_tys = unified
+            .decompose_ty_app(self.db)
+            .1
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(idx, ty)| {
+                layout
+                    .and_then(|layout| {
+                        let field = u16::try_from(idx).ok()?;
+                        self.projected_pattern_layout_ty(
+                            layout,
+                            &[LayoutBundlePathStep::Field(field)],
+                        )
+                    })
+                    .unwrap_or(ty)
+            })
+            .collect::<Vec<_>>();
         let fields = self.check_tuple_like_pattern_elems(pat_tup, &elem_tys, rest_range, None);
         let ctor = self.type_constructor_kind(unified, expected);
         let analysis = if is_valid {
@@ -381,7 +416,11 @@ impl<'db> TyChecker<'db> {
         }
 
         let span = pat.span(self.body()).into_path_pat();
-        let res = self.resolve_path(*path, true, span.clone().path());
+        let minter = HoleMinter::new(HoleAnchor::BodySyntax {
+            body: self.body(),
+            site: BodyHoleSite::Pat(pat),
+        });
+        let res = self.resolve_path(*path, true, span.clone().path(), &minter);
 
         // Bare identifiers that don't resolve to a type/variant are local bindings,
         // unless the expected type is a msg type, in which case we try to resolve
@@ -554,7 +593,7 @@ impl<'db> TyChecker<'db> {
                     let semantic_ty = if semantic_ty.has_invalid(self.db) {
                         semantic_ty
                     } else {
-                        self.canonical_pattern_ty(semantic_ty, expected)
+                        self.canonical_nominal_ty_from_expected(semantic_ty, expected)
                     };
                     (
                         semantic_ty,
@@ -625,6 +664,7 @@ impl<'db> TyChecker<'db> {
         pat: PatId,
         pat_data: &Pat<'db>,
         expected: TyId<'db>,
+        layout: Option<&PatternLayoutContext<'db>>,
     ) -> PatCheckResult<'db> {
         let Pat::PathTuple(Partial::Present(path), elems) = pat_data else {
             return self.finish_pat_check(
@@ -661,10 +701,10 @@ impl<'db> TyChecker<'db> {
         let semantic_ty = if semantic_ty.has_invalid(self.db) {
             semantic_ty
         } else {
-            self.canonical_pattern_ty(semantic_ty, expected)
+            self.canonical_nominal_ty_from_expected(semantic_ty, expected)
         };
         let variant_ty = if semantic_ty.has_invalid(self.db) {
-            self.canonical_pattern_ty(variant.ty, expected)
+            self.canonical_nominal_ty_from_expected(variant.ty, expected)
         } else {
             semantic_ty
         };
@@ -674,7 +714,25 @@ impl<'db> TyChecker<'db> {
             rest_range,
             is_valid,
         } = self.unpack_rest_pat(elems, Some(expected_len));
-        let elem_tys = self.instantiate_tuple_variant_elem_tys(variant, variant_ty, expected_elems);
+        let elem_tys = self
+            .instantiate_tuple_variant_elem_tys(variant, variant_ty, expected_elems)
+            .into_iter()
+            .enumerate()
+            .map(|(idx, ty)| {
+                layout
+                    .and_then(|layout| {
+                        let field = u16::try_from(idx).ok()?;
+                        self.projected_pattern_layout_ty(
+                            layout,
+                            &[
+                                LayoutBundlePathStep::Variant(variant.variant.idx),
+                                LayoutBundlePathStep::Field(field),
+                            ],
+                        )
+                    })
+                    .unwrap_or(ty)
+            })
+            .collect::<Vec<_>>();
         let fields = self.check_tuple_like_pattern_elems(
             elems,
             &elem_tys,
@@ -715,7 +773,11 @@ impl<'db> TyChecker<'db> {
         path: PathId<'db>,
     ) -> TupleVariantResolution<'db> {
         let span = pat.span(self.body()).into_path_tuple_pat();
-        match self.resolve_path(path, true, span.clone().path()) {
+        let minter = HoleMinter::new(HoleAnchor::BodySyntax {
+            body: self.body(),
+            site: BodyHoleSite::Pat(pat),
+        });
+        match self.resolve_path(path, true, span.clone().path(), &minter) {
             Ok(res) => match res {
                 PathRes::Ty(ty)
                 | PathRes::TyAlias(_, ty)
@@ -856,6 +918,7 @@ impl<'db> TyChecker<'db> {
         pat: PatId,
         pat_data: &Pat<'db>,
         expected: TyId<'db>,
+        layout: Option<&PatternLayoutContext<'db>>,
     ) -> PatCheckResult<'db> {
         let Pat::Record(Partial::Present(path), _) = pat_data else {
             return self.finish_pat_check(
@@ -871,7 +934,7 @@ impl<'db> TyChecker<'db> {
         if let Some(expected) = self.expected_msg_variant_for_named_recv_pat(pat, *path, expected) {
             let record_like = RecordLike::from_ty(expected);
             if record_like.is_record(self.db) {
-                let analysis = self.check_record_pat_fields(record_like, pat, expected);
+                let analysis = self.check_record_pat_fields(record_like, pat, expected, layout);
                 return self.finish_pat_check(pat, expected, expected, analysis);
             }
 
@@ -886,7 +949,12 @@ impl<'db> TyChecker<'db> {
             );
         }
 
-        let (actual, analysis) = match self.resolve_path(*path, true, span.clone().path()) {
+        let minter = HoleMinter::new(HoleAnchor::BodySyntax {
+            body: self.body(),
+            site: BodyHoleSite::Pat(pat),
+        });
+        let (actual, analysis) = match self.resolve_path(*path, true, span.clone().path(), &minter)
+        {
             Ok(reso) => match reso {
                 PathRes::Ty(ty) | PathRes::TyAlias(_, ty)
                     if RecordLike::from_ty(ty).is_record(self.db) =>
@@ -895,7 +963,7 @@ impl<'db> TyChecker<'db> {
                     let semantic_ty = if semantic_ty.has_invalid(self.db) {
                         semantic_ty
                     } else {
-                        self.canonical_pattern_ty(semantic_ty, expected)
+                        self.canonical_nominal_ty_from_expected(semantic_ty, expected)
                     };
                     let record_like = if semantic_ty.has_invalid(self.db) {
                         RecordLike::Type(ty)
@@ -904,7 +972,7 @@ impl<'db> TyChecker<'db> {
                     };
                     (
                         semantic_ty,
-                        self.check_record_pat_fields(record_like, pat, semantic_ty),
+                        self.check_record_pat_fields(record_like, pat, semantic_ty, layout),
                     )
                 }
 
@@ -947,7 +1015,7 @@ impl<'db> TyChecker<'db> {
                         let semantic_ty = if semantic_ty.has_invalid(self.db) {
                             semantic_ty
                         } else {
-                            self.canonical_pattern_ty(semantic_ty, expected)
+                            self.canonical_nominal_ty_from_expected(semantic_ty, expected)
                         };
                         let record_like = if semantic_ty.has_invalid(self.db) {
                             record_like
@@ -959,7 +1027,7 @@ impl<'db> TyChecker<'db> {
                         };
                         (
                             semantic_ty,
-                            self.check_record_pat_fields(record_like, pat, semantic_ty),
+                            self.check_record_pat_fields(record_like, pat, semantic_ty, layout),
                         )
                     } else {
                         let diag = BodyDiag::record_expected(
@@ -1009,7 +1077,8 @@ impl<'db> TyChecker<'db> {
                         // The pattern matches the expected struct type
                         let record_like = RecordLike::from_ty(expected);
                         if record_like.is_record(self.db) {
-                            let analysis = self.check_record_pat_fields(record_like, pat, expected);
+                            let analysis =
+                                self.check_record_pat_fields(record_like, pat, expected, layout);
                             return self.finish_pat_check(pat, expected, expected, analysis);
                         }
                     }
@@ -1055,6 +1124,7 @@ impl<'db> TyChecker<'db> {
         record_like: RecordLike<'db>,
         pat: PatId,
         semantic_ty: TyId<'db>,
+        layout: Option<&PatternLayoutContext<'db>>,
     ) -> PatternAnalysisStatus {
         let Partial::Present(Pat::Record(_, fields)) = pat.data(self.db, self.body()) else {
             unreachable!()
@@ -1064,6 +1134,10 @@ impl<'db> TyChecker<'db> {
         let mut contains_rest = false;
         let mut invalid = false;
         let mut field_status_by_idx = rustc_hash::FxHashMap::default();
+        let variant_idx = match &record_like {
+            RecordLike::Type(_) => None,
+            RecordLike::EnumVariant(variant) => Some(variant.variant.idx),
+        };
 
         let pat_span = pat.span(self.body()).into_record_pat();
         let mut rec_checker = RecordInitChecker::new(self, &record_like);
@@ -1097,6 +1171,24 @@ impl<'db> TyChecker<'db> {
                         TyId::invalid(rec_checker.tc.db, InvalidCause::Other)
                     }
                 };
+            let field_idx = label.and_then(|label| record_like.record_field_idx(hir_db, label));
+            let expected = field_idx
+                .and_then(|field_idx| {
+                    let field = u16::try_from(field_idx).ok()?;
+                    let path = variant_idx.map_or_else(
+                        || vec![LayoutBundlePathStep::Field(field)],
+                        |variant| {
+                            vec![
+                                LayoutBundlePathStep::Variant(variant),
+                                LayoutBundlePathStep::Field(field),
+                            ]
+                        },
+                    );
+                    layout.and_then(|layout| {
+                        rec_checker.tc.projected_pattern_layout_ty(layout, &path)
+                    })
+                })
+                .unwrap_or(expected);
 
             let (pat_expected, mode) = rec_checker.tc.destructure_source_mode(expected);
             let result = rec_checker.tc.check_pat(field_pat.pat, pat_expected);
@@ -1105,9 +1197,7 @@ impl<'db> TyChecker<'db> {
                     .tc
                     .retype_pattern_bindings_for_borrow(field_pat.pat, kind);
             }
-            if let Some(label) = label
-                && let Some(field_idx) = record_like.record_field_idx(hir_db, label)
-            {
+            if let Some(field_idx) = field_idx {
                 field_status_by_idx.insert(field_idx, result.analysis);
             }
         }
@@ -1123,7 +1213,28 @@ impl<'db> TyChecker<'db> {
                 ConstructorKind::Variant(variant.variant, variant.ty)
             }
         };
-        let field_tys = ctor.field_types(self.db);
+        let field_tys = ctor
+            .field_types(self.db)
+            .into_iter()
+            .enumerate()
+            .map(|(field_idx, ty)| {
+                let Some(field) = u16::try_from(field_idx).ok() else {
+                    return ty;
+                };
+                let path = variant_idx.map_or_else(
+                    || vec![LayoutBundlePathStep::Field(field)],
+                    |variant| {
+                        vec![
+                            LayoutBundlePathStep::Variant(variant),
+                            LayoutBundlePathStep::Field(field),
+                        ]
+                    },
+                );
+                layout
+                    .and_then(|layout| self.projected_pattern_layout_ty(layout, &path))
+                    .unwrap_or(ty)
+            })
+            .collect::<Vec<_>>();
         let mut canonical_fields = Vec::with_capacity(field_tys.len());
         for (field_idx, field_ty) in field_tys.into_iter().enumerate() {
             match field_status_by_idx.remove(&field_idx) {
