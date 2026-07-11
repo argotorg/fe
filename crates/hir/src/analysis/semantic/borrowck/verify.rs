@@ -67,7 +67,7 @@ pub fn verify_normalized_semantic_body<'db>(
                         "normalized local {} has mismatched interface/lowering: {:?} vs {:?}",
                         local_id.index(),
                         local.facts.interface,
-                        &local.lowering,
+                        local.lowering,
                     ),
                 ));
             }
