@@ -1,0 +1,179 @@
+use core::option
+use core::functional::Fn
+
+pub struct A { x: u256 }
+
+struct Doubler {}
+impl Fn<u256, u256> for Doubler {
+    fn call(self, _ x: own u256) -> u256 {
+        x * 2
+    }
+}
+
+#[test]
+fn option_is_some_none() {
+    let opt: Option<i32> = Option::Some(10)
+    assert!(opt.is_some())
+    let opt = Option::Some(A { x: 10 })
+    assert!(opt.is_some())
+    // `Option::default()` yields `None`.
+    let opt: Option<()> = Option::default()
+    assert!(opt.is_none())
+}
+
+#[test]
+fn option_map() {
+    // `map`'s result type is not inferred, so annotate it explicitly.
+    let n: Option<u256> = Option::Some(42)
+    let m: Option<u256> = n.map(Doubler {})
+    assert!(m.unwrap() == 84)
+
+    // None propagates without calling the function.
+    let x: Option<u256> = Option::None
+    let y: Option<u256> = x.map(Doubler {})
+    assert!(y.is_none())
+}
+
+// --- ok_or / ok_or_else: Option<T> -> Result<E, T> ---------------------
+//   Some(v).ok_or(err)     -> Ok(v)
+//   None.ok_or(err)        -> Err(err)
+//   Some(v).ok_or_else(f)  -> Ok(v)     (f not called)
+//   None.ok_or_else(f)     -> Err(f())
+// Chaining .unwrap() on an Err emits a Solidity-compatible panic revert via
+// panic_with_value (the should_revert cases below).
+
+#[error]
+struct MyError { pub code: u256 }
+
+struct MakeMyError {}
+impl Fn<(), MyError> for MakeMyError {
+    fn call(self, _ args: own ()) -> MyError {
+        MyError { code: 7 }
+    }
+}
+
+struct MakePanic {}
+impl Fn<(), Panic> for MakePanic {
+    fn call(self, _ args: own ()) -> Panic {
+        Panic { code: 0x31 }
+    }
+}
+
+#[test]
+fn option_ok_or_some_to_ok() {
+    let opt: Option<u256> = Option::Some(42)
+    let r: Result<MyError, u256> = opt.ok_or(MyError { code: 7 })
+    assert!(r.unwrap() == 42)
+}
+
+#[test]
+fn option_ok_or_none_to_err() {
+    let opt: Option<u256> = Option::None
+    let r: Result<MyError, u256> = opt.ok_or(MyError { code: 7 })
+    assert!(r.unwrap_err().code == 7)
+}
+
+#[test(should_revert, panic = 0x31)]
+fn option_ok_or_unwrap_panics() uses (evm: mut Evm) {
+    let opt: Option<u256> = Option::None
+    let r: Result<Panic, u256> = opt.ok_or(Panic { code: 0x31 })
+    r.unwrap()
+}
+
+#[test]
+fn option_ok_or_else_some_to_ok() {
+    let opt: Option<u256> = Option::Some(42)
+    let r: Result<MyError, u256> = opt.ok_or_else(MakeMyError {})
+    assert!(r.unwrap() == 42)
+}
+
+#[test]
+fn option_ok_or_else_none_calls_fn() {
+    let opt: Option<u256> = Option::None
+    let r: Result<MyError, u256> = opt.ok_or_else(MakeMyError {})
+    assert!(r.unwrap_err().code == 7)
+}
+
+#[test(should_revert, panic = 0x31)]
+fn option_ok_or_else_unwrap_panics() uses (evm: mut Evm) {
+    let opt: Option<u256> = Option::None
+    let r: Result<Panic, u256> = opt.ok_or_else(MakePanic {})
+    r.unwrap()
+}
+
+#[test(should_revert, panic = 0x31)]
+fn option_ok_or_panic_from_chain() uses (evm: mut Evm) {
+    // `Panic::from(code)` is a one-arg shorthand for `Panic { code: code }`.
+    let opt: Option<u256> = Option::None
+    opt.ok_or(Panic::from(0x31)).unwrap()
+}
+
+// --- and_then -----------------------------------------------------------
+// Guards on the runtime parameter on purpose: an `Fn` body that reads a
+// constant struct field in a folding `if` condition triggers codegen bug
+// IR0600 — see BUG_and_then_codegen.md.
+struct HalfIfEven {}
+impl Fn<u256, Option<u256>> for HalfIfEven {
+    fn call(self, _ x: own u256) -> Option<u256> {
+        if x % 2 == 0 {
+            Option::Some(x / 2)
+        } else {
+            Option::None
+        }
+    }
+}
+
+#[test]
+fn option_and_then() {
+    // Some(10) -> Some(5): the function runs and its Option result is flattened.
+    let n: Option<u256> = Option::Some(10)
+    let r: Option<u256> = n.and_then(HalfIfEven {})
+    assert!(r.unwrap() == 5)
+
+    // Some(7) -> None: the function returns None, which propagates.
+    let odd: Option<u256> = Option::Some(7)
+    let r2: Option<u256> = odd.and_then(HalfIfEven {})
+    assert!(r2.is_none())
+
+    // None input short-circuits: the function is never called.
+    let none: Option<u256> = Option::None
+    let r3: Option<u256> = none.and_then(HalfIfEven {})
+    assert!(r3.is_none())
+}
+
+// --- unwrap family ------------------------------------------------------
+
+struct ConstSeven {}
+impl Fn<(), u256> for ConstSeven {
+    fn call(self, _ args: own ()) -> u256 {
+        7
+    }
+}
+
+#[test]
+fn option_unwrap_family() {
+    // unwrap(): only the Some case is tested — unwrap() on None calls bare
+    // panic(), which the harness cannot assert (halts with InvalidFEOpcode).
+    let s: Option<u256> = Option::Some(42)
+    assert!(s.unwrap() == 42)
+
+    // unwrap_or(default:): the `default:` label is required (the param is
+    // `default: own T`, no `_` prefix). Each method consumes `own self`, so a
+    // fresh value is used per call.
+    let s: Option<u256> = Option::Some(42)
+    assert!(s.unwrap_or(default: 0) == 42)
+    let n: Option<u256> = Option::None
+    assert!(n.unwrap_or(default: 7) == 7)
+
+    // unwrap_or_else(Fn): Some skips the function; None calls it.
+    let s: Option<u256> = Option::Some(42)
+    assert!(s.unwrap_or_else(ConstSeven {}) == 42)
+    let n: Option<u256> = Option::None
+    assert!(n.unwrap_or_else(ConstSeven {}) == 7)
+
+    // unwrap_or_default(): None -> T::default(); u256: Default == 0.
+    let s: Option<u256> = Option::Some(42)
+    assert!(s.unwrap_or_default() == 42)
+    let n: Option<u256> = Option::None
+    assert!(n.unwrap_or_default() == 0)
+}
