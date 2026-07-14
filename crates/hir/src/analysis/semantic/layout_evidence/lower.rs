@@ -30,10 +30,10 @@ use crate::projection::{IndexSource, Projection};
 use crate::semantic::{AssignedRootValue, LayoutProjection, LayoutViewKind, ProviderBinding};
 
 use super::{
-    LayoutEvidenceAssignment, LayoutEvidenceBase, LayoutEvidenceBlock, LayoutEvidenceBody,
-    LayoutEvidenceCall, LayoutEvidenceCallArg, LayoutEvidenceComponentValue,
-    LayoutEvidenceConstBinding, LayoutEvidenceConstant, LayoutEvidenceError, LayoutEvidenceExpr,
-    LayoutEvidenceIndex, LayoutEvidenceLocal, LayoutEvidenceLocalId, LayoutEvidenceOperand,
+    LayoutEvidenceAssignment, LayoutEvidenceBase, LayoutEvidenceBody, LayoutEvidenceCall,
+    LayoutEvidenceCallArg, LayoutEvidenceComponentValue, LayoutEvidenceConstBinding,
+    LayoutEvidenceConstant, LayoutEvidenceError, LayoutEvidenceExpr, LayoutEvidenceIndex,
+    LayoutEvidenceLocal, LayoutEvidenceLocalId, LayoutEvidenceOperand,
     LayoutEvidenceProjectionTerm, LayoutEvidenceReturn, LayoutEvidenceStatement,
     LayoutEvidenceTerminator, LayoutEvidenceValue, layout_const_param_uses,
     verify_layout_evidence_body,
@@ -2261,15 +2261,34 @@ pub fn layout_evidence_body<'db>(
         params.push(local);
     }
     builder.propagate_layout_context()?;
-    let blocks = normalized
+    let statement_count = normalized
+        .blocks
+        .iter()
+        .map(|block| block.stmts.len())
+        .sum();
+    let mut statements = vec![None; statement_count];
+    for statement in normalized.blocks.iter().flat_map(|block| &block.stmts) {
+        let slot = statements
+            .get_mut(statement.id.index())
+            .ok_or(LayoutEvidenceError::InvalidStatementIdentity(statement.id))?;
+        if slot.is_some() {
+            return Err(LayoutEvidenceError::InvalidStatementIdentity(statement.id));
+        }
+        *slot = Some(builder.lower_statement(statement)?);
+    }
+    let statements = statements
+        .into_iter()
+        .enumerate()
+        .map(|(idx, statement)| {
+            statement.ok_or(LayoutEvidenceError::InvalidStatementIdentity(
+                crate::analysis::semantic::SStmtId::from_u32(idx as u32),
+            ))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let terminators = normalized
         .blocks
         .iter()
         .map(|block| {
-            let statements = block
-                .stmts
-                .iter()
-                .map(|stmt| builder.lower_statement(stmt))
-                .collect::<Result<Vec<_>, _>>()?;
             let returns = match block.terminator.kind {
                 NSTerminatorKind::Return(Some(value)) => {
                     builder.return_operands(value.local, &signature.output)?
@@ -2280,10 +2299,7 @@ pub fn layout_evidence_body<'db>(
                 | NSTerminatorKind::Assert { .. }
                 | NSTerminatorKind::Return(None) => Box::new([]),
             };
-            Ok(LayoutEvidenceBlock {
-                statements,
-                terminator: LayoutEvidenceTerminator { returns },
-            })
+            Ok(LayoutEvidenceTerminator { returns })
         })
         .collect::<Result<Vec<_>, LayoutEvidenceError<'db>>>()?;
     let evidence = LayoutEvidenceBody {
@@ -2293,7 +2309,8 @@ pub fn layout_evidence_body<'db>(
         semantic_values: builder.semantic_values,
         params,
         output: signature.output,
-        blocks,
+        statements,
+        terminators,
     };
     verify_layout_evidence_body(db, &normalized, &evidence).map_err(LayoutEvidenceError::Verify)?;
     Ok(evidence)

@@ -173,6 +173,7 @@ fn canonicalize_stmt<'db>(
         }
     };
     SStmt {
+        id: stmt.id,
         origin: stmt.origin,
         kind,
     }

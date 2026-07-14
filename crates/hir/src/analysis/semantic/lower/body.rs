@@ -11,7 +11,7 @@ use crate::{
         HirAnalysisDb,
         semantic::{
             CallSiteId, FieldIndex, LayoutBackingPlace, LayoutBackingSource, Mutability, SBlock,
-            SBlockId, SConst, SExpr, SLocal, SLocalId, SOperand, SPlace, SStmt, SStmtKind,
+            SBlockId, SConst, SExpr, SLocal, SLocalId, SOperand, SPlace, SStmt, SStmtId, SStmtKind,
             STerminator, STerminatorKind, SValueId, SemConstValue, SemOrigin, SemanticBody,
             SemanticCodeRegionTarget, SemanticLocalRole, VariantIndex, bool_const, bytes_const,
             int_const, reify_runtime_const_for_ty, runtime_size_bytes, sem_const_from_ty,
@@ -194,6 +194,7 @@ pub(super) struct SmirLowerCtxt<'a, 'db> {
     pub(super) binding_locals: FxHashMap<LocalBinding<'db>, SLocalId>,
     pub(super) with_binding_values: FxHashMap<ExprId, SValueId>,
     pub(super) current: SBlockId,
+    pub(super) next_stmt_id: u32,
     pub(super) loop_stack: Vec<LoopScope>,
 }
 
@@ -266,6 +267,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             binding_locals: FxHashMap::default(),
             with_binding_values: FxHashMap::default(),
             current: SBlockId::from_u32(0),
+            next_stmt_id: 0,
             loop_stack: Vec::new(),
         };
         cx.collect_binding_locals();
@@ -429,9 +431,14 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     pub(super) fn push_stmt(&mut self, origin: SemOrigin<'db>, kind: SStmtKind<'db>) {
         if !self.is_terminated(self.current) {
             self.update_stmt_local_facts(&kind);
+            let id = SStmtId::from_u32(self.next_stmt_id);
+            self.next_stmt_id = self
+                .next_stmt_id
+                .checked_add(1)
+                .expect("semantic statement id overflow");
             self.blocks[self.current.index()]
                 .stmts
-                .push(SStmt { origin, kind });
+                .push(SStmt { id, origin, kind });
         }
     }
 

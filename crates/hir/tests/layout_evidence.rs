@@ -6,10 +6,10 @@ use fe_hir::{
             EffectProviderSubst, GenericSubst, ImplEnv, LayoutEvidenceBase,
             LayoutEvidenceComponentValue, LayoutEvidenceError, LayoutEvidenceExpr,
             LayoutEvidenceIndex, LayoutEvidenceOperand, LayoutEvidenceVerifyError, NExpr,
-            NSStmtKind, SemanticInstanceKey, collect_layout_evidence_diagnostic_vouchers,
+            NSStmtKind, SStmtId, SemanticInstanceKey, collect_layout_evidence_diagnostic_vouchers,
             get_or_build_semantic_instance, identity_semantic_instance_key, layout_evidence_body,
-            normalize_semantic_body, verify_layout_evidence_body,
-            verify_layout_evidence_runtime_compatibility,
+            normalize_semantic_body, normalize_semantic_body_for_layout_evidence,
+            verify_layout_evidence_body, verify_layout_evidence_runtime_compatibility,
         },
         ty::{
             CallableLayoutParamPort, CallableLayoutPort, LayoutBundleSchemaError,
@@ -152,9 +152,8 @@ fn root<const ROOT: u256>(map: StorageMap<u256, u256, ROOT>) -> u256 {
     let normalized = normalize_semantic_body(&db, instance).expect("normalization failed");
     let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
     let bindings = evidence
-        .blocks
+        .statements
         .iter()
-        .flat_map(|block| &block.statements)
         .flat_map(|statement| &statement.const_bindings)
         .collect::<Vec<_>>();
     let [binding] = bindings.as_slice() else {
@@ -232,9 +231,8 @@ fn first<const FIRST: u256, const SECOND: u256>(
     let instance = get_or_build_semantic_instance(&db, key);
     let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
     let bindings = evidence
-        .blocks
+        .statements
         .iter()
-        .flat_map(|block| &block.statements)
         .flat_map(|statement| &statement.const_bindings)
         .collect::<Vec<_>>();
     let [binding] = bindings.as_slice() else {
@@ -295,9 +293,8 @@ fn forward<const ROOT: u256>(value: Rooted<ROOT>) -> Rooted<ROOT> {
     );
     let evidence = layout_evidence_body(&db, forward).expect("forward layoutization failed");
     let call = evidence
-        .blocks
+        .statements
         .iter()
-        .flat_map(|block| &block.statements)
         .find_map(|statement| statement.call.as_ref())
         .expect("missing call evidence");
     assert_eq!(call.args.len(), 2);
@@ -1194,18 +1191,18 @@ fn select<const ROOT: u256>(
     assert_eq!(evidence.output.components.len(), 1);
     assert_eq!(evidence.output.components[0].rank(), 0);
     assert_eq!(evidence.output.runtime_descriptor_count(), 1);
-    assert_eq!(evidence.blocks.len(), normalized.blocks.len());
-    assert!(
-        evidence
+    assert_eq!(evidence.terminators.len(), normalized.blocks.len());
+    assert_eq!(
+        evidence.statements.len(),
+        normalized
             .blocks
             .iter()
-            .zip(&normalized.blocks)
-            .all(|(layout_block, block)| layout_block.statements.len() == block.stmts.len())
+            .map(|block| block.stmts.len())
+            .sum()
     );
     let (source, terms) = evidence
-        .blocks
+        .statements
         .iter()
-        .flat_map(|block| &block.statements)
         .flat_map(|stmt| stmt.assignments.iter())
         .find_map(|assignment| match &assignment.expr {
             LayoutEvidenceExpr::Project { source, terms } => Some((source, terms)),
@@ -1229,11 +1226,9 @@ fn select<const ROOT: u256>(
     assert!(matches!(terms[0].index, LayoutEvidenceIndex::Dynamic(_)));
     assert!(matches!(terms[1].index, LayoutEvidenceIndex::Dynamic(_)));
     let returns = evidence
-        .blocks
+        .terminators
         .iter()
-        .find_map(|block| {
-            (!block.terminator.returns.is_empty()).then_some(&block.terminator.returns)
-        })
+        .find_map(|terminator| (!terminator.returns.is_empty()).then_some(&terminator.returns))
         .expect("missing layout evidence return");
     assert_eq!(returns.len(), 1);
     assert!(matches!(&returns[0].value, LayoutEvidenceOperand::Local(_)));
@@ -1279,9 +1274,8 @@ pub contract C {
     );
     let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
     let (source, terms) = evidence
-        .blocks
+        .statements
         .iter()
-        .flat_map(|block| &block.statements)
         .flat_map(|stmt| stmt.assignments.iter())
         .find_map(|assignment| match &assignment.expr {
             LayoutEvidenceExpr::Project { source, terms, .. } => Some((source, terms)),
@@ -1338,9 +1332,8 @@ fn read<const ROOT: u256>(
     );
     let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
     let calls = evidence
-        .blocks
+        .statements
         .iter()
-        .flat_map(|block| &block.statements)
         .filter_map(|stmt| stmt.call.as_ref())
         .collect::<Vec<_>>();
     let family_call = calls
@@ -1349,9 +1342,8 @@ fn read<const ROOT: u256>(
         .expect("missing whole-family call evidence");
 
     let assignments = evidence
-        .blocks
+        .statements
         .iter()
-        .flat_map(|block| &block.statements)
         .flat_map(|stmt| stmt.assignments.iter())
         .collect::<Vec<_>>();
     let forwarded = family_call
@@ -1383,9 +1375,8 @@ fn read<const ROOT: u256>(
     );
     assert!(
         evidence
-            .blocks
+            .statements
             .iter()
-            .flat_map(|block| &block.statements)
             .flat_map(|stmt| stmt.assignments.iter())
             .any(|assignment| matches!(assignment.expr, LayoutEvidenceExpr::CallResult { .. }))
     );
@@ -1394,9 +1385,8 @@ fn read<const ROOT: u256>(
     verify_layout_evidence_body(&db, &normalized, &evidence).expect("evidence must verify");
     let mut malformed = evidence.clone();
     let call = malformed
-        .blocks
+        .statements
         .iter_mut()
-        .flat_map(|block| &mut block.statements)
         .find_map(|statement| statement.call.as_mut().filter(|call| call.args.len() == 1))
         .expect("missing mutable family call");
     call.args = Box::new([]);
@@ -1418,7 +1408,7 @@ fn compile_time_call_outputs_materialize_without_runtime_call_evidence() {
         r#"
 struct Rooted<const ROOT: u256 = _> {}
 
-fn fixed() -> Rooted<7> {
+const fn fixed() -> Rooted<7> {
     Rooted {}
 }
 
@@ -1434,11 +1424,55 @@ fn pass() -> Rooted<7> {
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "pass"))),
     );
     let normalized = normalize_semantic_body(&db, instance).expect("normalization failed");
-    let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
-    let assignment = evidence
+    let layout_normalized = normalize_semantic_body_for_layout_evidence(&db, instance)
+        .expect("layout normalization failed");
+    let runtime_ids = normalized
         .blocks
         .iter()
-        .flat_map(|block| &block.statements)
+        .flat_map(|block| block.stmts.iter().map(|statement| statement.id))
+        .collect::<Vec<_>>();
+    let layout_ids = layout_normalized
+        .blocks
+        .iter()
+        .flat_map(|block| block.stmts.iter().map(|statement| statement.id))
+        .collect::<Vec<_>>();
+    assert_eq!(runtime_ids, layout_ids);
+    assert!(
+        runtime_ids
+            .iter()
+            .enumerate()
+            .all(|(idx, id)| id.index() == idx)
+    );
+    assert!(
+        normalized
+            .blocks
+            .iter()
+            .zip(&layout_normalized.blocks)
+            .any(
+                |(runtime, layout)| runtime.stmts.iter().zip(&layout.stmts).any(
+                    |(runtime, layout)| {
+                        runtime.id == layout.id
+                            && matches!(
+                                (&runtime.kind, &layout.kind),
+                                (
+                                    NSStmtKind::Assign {
+                                        expr: NExpr::Const(_),
+                                        ..
+                                    },
+                                    NSStmtKind::Assign {
+                                        expr: NExpr::Call { .. },
+                                        ..
+                                    }
+                                )
+                            )
+                    }
+                )
+            )
+    );
+    let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
+    let assignment = evidence
+        .statements
+        .iter()
         .inspect(|statement| assert!(statement.call.is_none()))
         .flat_map(|statement| &statement.assignments)
         .find(|assignment| {
@@ -1456,9 +1490,9 @@ fn pass() -> Rooted<7> {
     assert_eq!(evidence.output.runtime_descriptor_count(), 0);
     assert!(
         evidence
-            .blocks
+            .terminators
             .iter()
-            .all(|block| block.terminator.returns.is_empty())
+            .all(|terminator| terminator.returns.is_empty())
     );
     verify_layout_evidence_body(&db, &normalized, &evidence).expect("evidence must verify");
     verify_layout_evidence_runtime_compatibility(&db, &normalized, &evidence)
@@ -1482,6 +1516,7 @@ const fn alternate<const ROOT: u256>() -> Rooted<ROOT> {
 }
 
 fn pass<const ROOT: u256>(anchor: Rooted<ROOT>) -> Rooted<ROOT> {
+    let _preserved = anchor
     fresh()
 }
 "#,
@@ -1507,20 +1542,81 @@ fn pass<const ROOT: u256>(anchor: Rooted<ROOT>) -> Rooted<ROOT> {
     let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
     assert!(
         evidence
-            .blocks
+            .statements
             .iter()
-            .flat_map(|block| &block.statements)
             .any(|statement| statement.call.is_some())
     );
     verify_layout_evidence_body(&db, &normalized, &evidence).expect("evidence must verify");
     verify_layout_evidence_runtime_compatibility(&db, &normalized, &evidence)
         .expect("evidence must match the runtime body");
 
-    let mut malformed = evidence.clone();
-    malformed
+    let mut reordered = normalized.clone();
+    let positions = reordered
+        .blocks
+        .iter()
+        .enumerate()
+        .flat_map(|(block, data)| {
+            data.stmts
+                .iter()
+                .enumerate()
+                .map(move |(statement, _)| (block, statement))
+        })
+        .take(2)
+        .collect::<Vec<_>>();
+    let [
+        (first_block, first_statement),
+        (second_block, second_statement),
+    ] = positions.as_slice()
+    else {
+        panic!("fixture must contain two statements")
+    };
+    let first = reordered.blocks[*first_block].stmts[*first_statement].clone();
+    let second = reordered.blocks[*second_block].stmts[*second_statement].clone();
+    reordered.blocks[*first_block].stmts[*first_statement] = second;
+    reordered.blocks[*second_block].stmts[*second_statement] = first;
+    verify_layout_evidence_runtime_compatibility(&db, &reordered, &evidence)
+        .expect("statement identity must make evidence independent of statement position");
+
+    let mut duplicate = normalized.clone();
+    let duplicate_id = duplicate
+        .blocks
+        .iter()
+        .flat_map(|block| &block.stmts)
+        .next()
+        .expect("fixture must contain a statement")
+        .id;
+    duplicate
         .blocks
         .iter_mut()
-        .flat_map(|block| &mut block.statements)
+        .flat_map(|block| &mut block.stmts)
+        .nth(1)
+        .expect("fixture must contain another statement")
+        .id = duplicate_id;
+    assert_eq!(
+        verify_layout_evidence_runtime_compatibility(&db, &duplicate, &evidence),
+        Err(LayoutEvidenceVerifyError::DuplicateStatementId(
+            duplicate_id
+        ))
+    );
+
+    let mut invalid = normalized.clone();
+    let invalid_id = SStmtId::from_u32(evidence.statements.len() as u32);
+    invalid
+        .blocks
+        .iter_mut()
+        .flat_map(|block| &mut block.stmts)
+        .next()
+        .expect("fixture must contain a statement")
+        .id = invalid_id;
+    assert!(matches!(
+        verify_layout_evidence_runtime_compatibility(&db, &invalid, &evidence),
+        Err(LayoutEvidenceVerifyError::InvalidStatementId { id, .. }) if id == invalid_id
+    ));
+
+    let mut malformed = evidence.clone();
+    malformed
+        .statements
+        .iter_mut()
         .find(|statement| statement.call.is_some())
         .expect("missing runtime evidence call")
         .call = None;
@@ -1962,33 +2058,36 @@ fn replace<const ROOT: usize>(
     );
     let normalized = normalize_semantic_body(&db, instance).expect("normalization failed");
     let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
-    let (block_idx, statement_idx, index_local) = evidence
+    let (block_idx, statement_idx, index_local) = normalized
         .blocks
         .iter()
         .enumerate()
         .find_map(|(block_idx, block)| {
             block
-                .statements
+                .stmts
                 .iter()
                 .enumerate()
-                .find_map(|(statement_idx, statement)| {
-                    statement.call.as_ref().and_then(|call| {
-                        call.args.iter().find_map(|arg| match &arg.value {
-                            LayoutEvidenceExpr::Project { terms, .. } => {
-                                terms.iter().find_map(|term| match term.index {
-                                    LayoutEvidenceIndex::Dynamic(index) => {
-                                        Some((block_idx, statement_idx, index.local))
-                                    }
-                                    LayoutEvidenceIndex::Constant(_) => None,
-                                })
-                            }
-                            LayoutEvidenceExpr::Use(_)
-                            | LayoutEvidenceExpr::Array { .. }
-                            | LayoutEvidenceExpr::Repeat { .. }
-                            | LayoutEvidenceExpr::Update { .. }
-                            | LayoutEvidenceExpr::CallResult { .. } => None,
+                .find_map(|(statement_idx, normalized_statement)| {
+                    evidence
+                        .statement(normalized_statement.id)
+                        .and_then(|statement| statement.call.as_ref())
+                        .and_then(|call| {
+                            call.args.iter().find_map(|arg| match &arg.value {
+                                LayoutEvidenceExpr::Project { terms, .. } => {
+                                    terms.iter().find_map(|term| match term.index {
+                                        LayoutEvidenceIndex::Dynamic(index) => {
+                                            Some((block_idx, statement_idx, index.local))
+                                        }
+                                        LayoutEvidenceIndex::Constant(_) => None,
+                                    })
+                                }
+                                LayoutEvidenceExpr::Use(_)
+                                | LayoutEvidenceExpr::Array { .. }
+                                | LayoutEvidenceExpr::Repeat { .. }
+                                | LayoutEvidenceExpr::Update { .. }
+                                | LayoutEvidenceExpr::CallResult { .. } => None,
+                            })
                         })
-                    })
                 })
         })
         .expect("fresh call must receive a dynamically projected output witness");
@@ -2020,7 +2119,8 @@ fn replace<const ROOT: usize>(
         })
         .expect("fixture must define another usize call result after fresh");
     let mut malformed = evidence.clone();
-    let term = malformed.blocks[block_idx].statements[statement_idx]
+    let statement_id = normalized.blocks[block_idx].stmts[statement_idx].id;
+    let term = malformed.statements[statement_id.index()]
         .call
         .as_mut()
         .and_then(|call| {
@@ -2107,9 +2207,8 @@ fn caller<const LEFT: u256, const RIGHT: u256>(
 
     let mut malformed = evidence.clone();
     let assignments = malformed
-        .blocks
+        .statements
         .iter_mut()
-        .flat_map(|block| &mut block.statements)
         .find_map(|statement| {
             statement
                 .call
@@ -2136,11 +2235,9 @@ fn caller<const LEFT: u256, const RIGHT: u256>(
 
     let mut malformed = evidence.clone();
     let returns = malformed
-        .blocks
+        .terminators
         .iter_mut()
-        .find_map(|block| {
-            (block.terminator.returns.len() == 2).then_some(&mut block.terminator.returns)
-        })
+        .find_map(|terminator| (terminator.returns.len() == 2).then_some(&mut terminator.returns))
         .expect("missing two-component evidence return");
     returns.swap(0, 1);
     assert!(matches!(
@@ -2190,9 +2287,8 @@ fn first<const ROOT: u256>(values: [Rooted<ROOT>; 2]) -> Rooted<ROOT> {
 
     let mut malformed = call_evidence.clone();
     let arg = malformed
-        .blocks
+        .statements
         .iter_mut()
-        .flat_map(|block| &mut block.statements)
         .find_map(|statement| statement.call.as_mut())
         .and_then(|call| call.args.first_mut())
         .expect("missing layout call argument");
@@ -2204,9 +2300,8 @@ fn first<const ROOT: u256>(values: [Rooted<ROOT>; 2]) -> Rooted<ROOT> {
 
     let mut malformed = call_evidence.clone();
     let arg = malformed
-        .blocks
+        .statements
         .iter_mut()
-        .flat_map(|block| &mut block.statements)
         .find_map(|statement| statement.call.as_mut())
         .and_then(|call| call.args.first_mut())
         .expect("missing layout call argument");
@@ -2231,9 +2326,8 @@ fn first<const ROOT: u256>(values: [Rooted<ROOT>; 2]) -> Rooted<ROOT> {
     let first_evidence = layout_evidence_body(&db, first_instance).expect("layoutization failed");
     let mut malformed = first_evidence.clone();
     let term = malformed
-        .blocks
+        .statements
         .iter_mut()
-        .flat_map(|block| &mut block.statements)
         .flat_map(|statement| &mut statement.assignments)
         .find_map(|assignment| match &mut assignment.expr {
             LayoutEvidenceExpr::Project { terms, .. } => terms.first_mut(),
@@ -2278,11 +2372,9 @@ fn repeat<const ROOT: u256>(value: Rooted<ROOT>) -> [Rooted<ROOT>; 2] {
     );
     let rebuild = layout_evidence_body(&db, rebuild).expect("rebuild layoutization failed");
     let rebuild_returns = rebuild
-        .blocks
+        .terminators
         .iter()
-        .find_map(|block| {
-            (!block.terminator.returns.is_empty()).then_some(&block.terminator.returns)
-        })
+        .find_map(|terminator| (!terminator.returns.is_empty()).then_some(&terminator.returns))
         .expect("missing rebuild evidence return");
     assert_eq!(rebuild.params.len(), 1);
     assert_eq!(rebuild_returns.len(), 1);
@@ -2293,19 +2385,16 @@ fn repeat<const ROOT: u256>(value: Rooted<ROOT>) -> [Rooted<ROOT>; 2] {
     );
     let repeat = layout_evidence_body(&db, repeat).expect("repeat layoutization failed");
     let repeat_returns = repeat
-        .blocks
+        .terminators
         .iter()
-        .find_map(|block| {
-            (!block.terminator.returns.is_empty()).then_some(&block.terminator.returns)
-        })
+        .find_map(|terminator| (!terminator.returns.is_empty()).then_some(&terminator.returns))
         .expect("missing repeat evidence return");
     assert_eq!(repeat.output.components[0].rank(), 1);
     assert_eq!(repeat_returns.len(), 1);
     assert!(
         repeat
-            .blocks
+            .statements
             .iter()
-            .flat_map(|block| &block.statements)
             .flat_map(|stmt| stmt.assignments.iter())
             .any(|assignment| matches!(
                 &assignment.expr,
@@ -2443,9 +2532,8 @@ fn inspect_views<const PHYSICAL: u256, const LOGICAL: u256>(
     };
     assert!(
         evidence
-            .blocks
+            .statements
             .iter()
-            .flat_map(|block| &block.statements)
             .flat_map(|statement| &statement.assignments)
             .any(|assignment| matches!(
                 assignment.expr,
@@ -2503,8 +2591,11 @@ fn inspect_views<const PHYSICAL: u256, const LOGICAL: u256>(
     let evidence = layout_evidence_body(&db, replace_raw)
         .expect("physical EffectHandle field writes must preserve target evidence opaquely");
     let mut stores = 0;
-    for (block, evidence_block) in normalized.blocks.iter().zip(&evidence.blocks) {
-        for (statement, evidence_statement) in block.stmts.iter().zip(&evidence_block.statements) {
+    for block in &normalized.blocks {
+        for statement in &block.stmts {
+            let evidence_statement = evidence
+                .statement(statement.id)
+                .expect("missing statement evidence");
             if matches!(statement.kind, NSStmtKind::Store { .. }) {
                 stores += 1;
                 assert!(
@@ -2697,9 +2788,8 @@ fn reorder<const ROOT: u256>(
             .unwrap_or_else(|error| panic!("failed to layoutize {name}: {error:?}"));
         assert!(
             evidence
-                .blocks
+                .statements
                 .iter()
-                .flat_map(|block| &block.statements)
                 .flat_map(|statement| &statement.assignments)
                 .any(|assignment| matches!(
                     &assignment.expr,
@@ -2737,9 +2827,8 @@ fn replace<const ROOT: u256>(
     let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
     assert!(
         evidence
-            .blocks
+            .statements
             .iter()
-            .flat_map(|block| &block.statements)
             .flat_map(|statement| &statement.assignments)
             .any(|assignment| matches!(
                 &assignment.expr,
@@ -2940,9 +3029,8 @@ fn specialized_array_enum_leaf_methods_bind_runtime_layout_consts() {
             found = true;
             assert!(
                 evidence
-                    .blocks
+                    .statements
                     .iter()
-                    .flat_map(|block| &block.statements)
                     .any(|statement| !statement.const_bindings.is_empty()),
                 "specialized Slot::root must bind ROOT from receiver evidence: {evidence:#?}",
             );

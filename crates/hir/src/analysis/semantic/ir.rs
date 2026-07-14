@@ -37,6 +37,15 @@ entity_impl!(SLocalId);
 pub struct SBlockId(u32);
 entity_impl!(SBlockId);
 
+/// Stable identity of one statement within a semantic body.
+///
+/// Constant canonicalization may replace the statement's expression, but it
+/// must preserve this identity so side tables can follow the semantic
+/// operation without relying on block/statement coordinates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+pub struct SStmtId(u32);
+entity_impl!(SStmtId);
+
 pub type SValueId = SLocalId;
 pub type SemanticProjectionPath<'db> = ProjectionPath<TyId<'db>, VariantIndex, SLocalId>;
 
@@ -496,6 +505,7 @@ pub enum SConst<'db> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct SStmt<'db> {
+    pub id: SStmtId,
     pub origin: SemOrigin<'db>,
     pub kind: SStmtKind<'db>,
 }

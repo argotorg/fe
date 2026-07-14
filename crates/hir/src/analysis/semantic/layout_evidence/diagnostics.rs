@@ -241,6 +241,7 @@ impl LayoutEvidenceDiagnostic<'_> {
             LayoutEvidenceError::Normalize(_)
             | LayoutEvidenceError::MissingBody(_)
             | LayoutEvidenceError::TemplateLocalCountMismatch { .. }
+            | LayoutEvidenceError::InvalidStatementIdentity(_)
             | LayoutEvidenceError::InvalidSchema { local: None, .. }
             | LayoutEvidenceError::DuplicateInput(_)
             | LayoutEvidenceError::InvalidPlace

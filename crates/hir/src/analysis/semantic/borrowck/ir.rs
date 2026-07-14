@@ -5,7 +5,7 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            FieldIndex, LayoutBackingProjection, Mutability, SConst, SLocalId, SemOrigin,
+            FieldIndex, LayoutBackingProjection, Mutability, SConst, SLocalId, SStmtId, SemOrigin,
             SemanticBody, SemanticCalleeRef, SemanticCodeRegionRef, SemanticCodeRegionTarget,
             SemanticLocalKind, SemanticProjectionPath, VariantIndex,
         },
@@ -511,6 +511,7 @@ impl<'db> NExpr<'db> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct NSStmt<'db> {
+    pub id: SStmtId,
     pub origin: SemOrigin<'db>,
     pub kind: NSStmtKind<'db>,
 }

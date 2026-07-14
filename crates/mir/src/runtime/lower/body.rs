@@ -6,9 +6,10 @@ use hir::analysis::{
         EffectProviderSubst, FieldIndex, GenericSubst, ImplEnv, LayoutEvidenceBase,
         LayoutEvidenceBody, LayoutEvidenceComponentValue, LayoutEvidenceConstBinding,
         LayoutEvidenceConstant, LayoutEvidenceExpr, LayoutEvidenceIndex, LayoutEvidenceOperand,
-        LayoutEvidenceProjectionTerm, SBlockId, SConst, SLocalId, SemConstId, SemConstScalar,
-        SemConstValue, SemanticCalleeRef, SemanticCodeRegionRef, SemanticCodeRegionTarget,
-        SemanticConstRef, SemanticInstance, SemanticInstanceKey, SemanticLocalKind, VariantIndex,
+        LayoutEvidenceProjectionTerm, SBlockId, SConst, SLocalId, SStmtId, SemConstId,
+        SemConstScalar, SemConstValue, SemanticCalleeRef, SemanticCodeRegionRef,
+        SemanticCodeRegionTarget, SemanticConstRef, SemanticInstance, SemanticInstanceKey,
+        SemanticLocalKind, VariantIndex,
         borrowck::{
             NBorrowRoot, NEffectArg, NExpr, NLocalOrigin, NOperand, NSPlace, NSPlaceRoot, NSStmt,
             NSStmtKind, NSTerminator, NSTerminatorKind, NormalizedSemanticBody,
@@ -989,7 +990,9 @@ impl<'db> RmirEmitter<'db> {
     fn lower_stmt(&mut self, bb: RBlockId, stmt_idx: usize, stmt: &NSStmt<'db>) {
         self.lower_stmt_index_checks(bb, &stmt.kind);
         match &stmt.kind {
-            NSStmtKind::Assign { dst, expr } => self.lower_assign(bb, stmt_idx, *dst, expr),
+            NSStmtKind::Assign { dst, expr } => {
+                self.lower_assign(bb, stmt_idx, stmt.id, *dst, expr)
+            }
             NSStmtKind::Store { dst, src } => {
                 if self
                     .with_current_body_cx(|cx| cx.normalized_place_class(dst))
@@ -1010,12 +1013,16 @@ impl<'db> RmirEmitter<'db> {
             }
         ) && !self.terminated_blocks[bb.index()]
         {
-            self.lower_layout_evidence_statement(bb, stmt_idx);
+            self.lower_layout_evidence_statement(bb, stmt.id);
         }
     }
 
-    fn lower_layout_evidence_statement(&mut self, bb: RBlockId, stmt_idx: usize) {
-        let statement = self.layout_evidence.blocks[bb.index()].statements[stmt_idx].clone();
+    fn lower_layout_evidence_statement(&mut self, bb: RBlockId, stmt_id: SStmtId) {
+        let statement = self
+            .layout_evidence
+            .statement(stmt_id)
+            .expect("verified layout evidence must contain every semantic statement")
+            .clone();
         debug_assert!(statement.call.is_none());
         for assignment in statement.assignments {
             self.lower_layout_evidence_assignment(bb, &assignment);
@@ -1041,7 +1048,14 @@ impl<'db> RmirEmitter<'db> {
         }
     }
 
-    fn lower_assign(&mut self, bb: RBlockId, stmt_idx: usize, dst: SLocalId, expr: &NExpr<'db>) {
+    fn lower_assign(
+        &mut self,
+        bb: RBlockId,
+        stmt_idx: usize,
+        stmt_id: SStmtId,
+        dst: SLocalId,
+        expr: &NExpr<'db>,
+    ) {
         let desired = self.semantic_value_class(dst);
         match desired {
             None => {
@@ -1057,7 +1071,7 @@ impl<'db> RmirEmitter<'db> {
                     RuntimeCarrier::Erased,
                 );
                 self.locals[sink.index()].carrier = carrier;
-                self.lower_expr_into(bb, stmt_idx, sink, expr);
+                self.lower_expr_into(bb, stmt_id, sink, expr);
             }
             Some(desired) => {
                 if self.semantic_local_is_derived_place_bound_alias(dst) {
@@ -1066,14 +1080,14 @@ impl<'db> RmirEmitter<'db> {
                 }
                 if self.semantic_local_is_direct(dst) {
                     self.specialize_direct_assign_target_from_expr(dst, expr);
-                    self.lower_expr_into(bb, stmt_idx, self.runtime_value(dst), expr);
+                    self.lower_expr_into(bb, stmt_id, self.runtime_value(dst), expr);
                     return;
                 }
                 let temp = self.alloc_runtime_temp(
                     self.locals[dst.index()].semantic_ty,
                     RuntimeCarrier::Value(desired),
                 );
-                self.lower_expr_into(bb, stmt_idx, temp, expr);
+                self.lower_expr_into(bb, stmt_id, temp, expr);
                 self.write_semantic_value(bb, dst, temp);
             }
         }
@@ -1187,7 +1201,13 @@ impl<'db> RmirEmitter<'db> {
         self.refine_local_runtime_class(dst_value, target);
     }
 
-    fn lower_expr_into(&mut self, bb: RBlockId, stmt_idx: usize, dst: RLocalId, expr: &NExpr<'db>) {
+    fn lower_expr_into(
+        &mut self,
+        bb: RBlockId,
+        stmt_id: SStmtId,
+        dst: RLocalId,
+        expr: &NExpr<'db>,
+    ) {
         let Some(dst_class) = self.value_class(dst).cloned() else {
             if let NExpr::Call {
                 callee,
@@ -1196,7 +1216,7 @@ impl<'db> RmirEmitter<'db> {
                 ..
             } = expr
             {
-                let _ = self.lower_call(bb, stmt_idx, *callee, args, effect_args);
+                let _ = self.lower_call(bb, stmt_id, *callee, args, effect_args);
             }
             return;
         };
@@ -1277,7 +1297,10 @@ impl<'db> RmirEmitter<'db> {
                 );
             }
             NExpr::Const(const_) => {
-                let bindings = self.layout_evidence.blocks[bb.index()].statements[stmt_idx]
+                let bindings = self
+                    .layout_evidence
+                    .statement(stmt_id)
+                    .expect("verified layout evidence must contain every semantic statement")
                     .const_bindings
                     .clone();
                 self.lower_const_into(bb, dst, const_, &bindings);
@@ -1396,7 +1419,7 @@ impl<'db> RmirEmitter<'db> {
                 effect_args,
                 ..
             } => {
-                let value = self.lower_call(bb, stmt_idx, *callee, args, effect_args);
+                let value = self.lower_call(bb, stmt_id, *callee, args, effect_args);
                 if self.terminated_blocks[bb.index()] {
                     return;
                 }
@@ -3232,12 +3255,16 @@ impl<'db> RmirEmitter<'db> {
     fn lower_call(
         &mut self,
         bb: RBlockId,
-        stmt_idx: usize,
+        stmt_id: SStmtId,
         callee: SemanticCalleeRef<'db>,
         args: &[NOperand],
         effect_args: &[NEffectArg<'db>],
     ) -> RLocalId {
-        let layout_statement = self.layout_evidence.blocks[bb.index()].statements[stmt_idx].clone();
+        let layout_statement = self
+            .layout_evidence
+            .statement(stmt_id)
+            .expect("verified layout evidence must contain every semantic statement")
+            .clone();
         let layout_call = layout_statement.call.as_ref();
         for assignment in &layout_statement.assignments {
             if !matches!(assignment.expr, LayoutEvidenceExpr::CallResult { .. }) {
@@ -4655,8 +4682,10 @@ impl<'db> RmirEmitter<'db> {
                             .expect("visible runtime return must have a semantic value"),
                     );
                 }
-                let operands = self.layout_evidence.blocks[bb.index()]
-                    .terminator
+                let operands = self
+                    .layout_evidence
+                    .terminator(SBlockId::from_u32(bb.as_u32()))
+                    .expect("verified layout evidence must contain every semantic terminator")
                     .returns
                     .clone();
                 assert_eq!(operands.len(), returns.evidence.len());

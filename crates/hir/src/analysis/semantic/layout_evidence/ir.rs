@@ -1,11 +1,11 @@
-use cranelift_entity::entity_impl;
+use cranelift_entity::{EntityRef, entity_impl};
 use salsa::Update;
 
 use crate::analysis::{
     HirAnalysisDb,
     semantic::{
-        NOperand, SLocalId, SemConstId, SemConstValue, SemanticBorrowDiagnostic, SemanticCalleeRef,
-        SemanticInstance,
+        NOperand, SBlockId, SLocalId, SStmtId, SemConstId, SemConstValue, SemanticBorrowDiagnostic,
+        SemanticCalleeRef, SemanticInstance,
     },
     ty::{
         CallableLayoutParamPort, LayoutBundleComponentId, LayoutBundleSchema,
@@ -157,9 +157,9 @@ pub struct LayoutEvidenceCallArg<'db> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct LayoutEvidenceCall<'db> {
-    /// The semantic call this evidence belongs to. Statement coordinates alone
-    /// are not sufficient phase identity: normalization must not silently pair
-    /// evidence arguments with a different callee at the same coordinate.
+    /// The semantic call this evidence belongs to. Verification must not
+    /// silently pair evidence arguments with a different callee carrying the
+    /// same stable statement identity.
     pub callee: SemanticCalleeRef<'db>,
     pub args: Box<[LayoutEvidenceCallArg<'db>]>,
 }
@@ -193,12 +193,6 @@ pub struct LayoutEvidenceReturn<'db> {
     pub value: LayoutEvidenceOperand<'db>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update, Default)]
-pub struct LayoutEvidenceBlock<'db> {
-    pub statements: Vec<LayoutEvidenceStatement<'db>>,
-    pub terminator: LayoutEvidenceTerminator<'db>,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct LayoutEvidenceBody<'db> {
     pub owner: SemanticInstance<'db>,
@@ -207,7 +201,20 @@ pub struct LayoutEvidenceBody<'db> {
     pub semantic_values: Vec<LayoutEvidenceValue<'db>>,
     pub params: Vec<LayoutEvidenceLocalId>,
     pub output: LayoutBundleSchema<'db>,
-    pub blocks: Vec<LayoutEvidenceBlock<'db>>,
+    /// Evidence operations indexed by stable semantic statement identity.
+    pub statements: Vec<LayoutEvidenceStatement<'db>>,
+    /// Return evidence indexed by semantic block identity.
+    pub terminators: Vec<LayoutEvidenceTerminator<'db>>,
+}
+
+impl<'db> LayoutEvidenceBody<'db> {
+    pub fn statement(&self, id: SStmtId) -> Option<&LayoutEvidenceStatement<'db>> {
+        self.statements.get(id.index())
+    }
+
+    pub fn terminator(&self, id: SBlockId) -> Option<&LayoutEvidenceTerminator<'db>> {
+        self.terminators.get(id.index())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -218,6 +225,7 @@ pub enum LayoutEvidenceError<'db> {
         expected: usize,
         actual: usize,
     },
+    InvalidStatementIdentity(SStmtId),
     InvalidSchema {
         local: Option<SLocalId>,
         error: LayoutBundleSchemaError,
@@ -285,10 +293,15 @@ pub enum LayoutEvidenceVerifyError {
         actual: usize,
     },
     StatementCount {
-        block: usize,
         expected: usize,
         actual: usize,
     },
+    InvalidStatementId {
+        block: usize,
+        statement: usize,
+        id: SStmtId,
+    },
+    DuplicateStatementId(SStmtId),
     InvalidSchema {
         local: Option<SLocalId>,
         error: LayoutBundleSchemaError,

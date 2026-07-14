@@ -257,6 +257,7 @@ impl<'db> NormalizeCtxt<'db> {
                 .iter()
                 .map(|stmt| {
                     Ok(NSStmt {
+                        id: stmt.id,
                         origin: stmt.origin,
                         kind: self.normalize_stmt(stmt.origin, &stmt.kind)?,
                     })

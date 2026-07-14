@@ -433,21 +433,22 @@ fn verify_definitions(
     normalized: &NormalizedSemanticBody<'_>,
     body: &LayoutEvidenceBody<'_>,
 ) -> Result<(), LayoutEvidenceVerifyError> {
-    if body.blocks.is_empty() {
+    if normalized.blocks.is_empty() {
         return Ok(());
     }
     let evidence_all = (0..body.locals.len())
         .map(|idx| LayoutEvidenceLocalId::from_u32(idx as u32))
         .collect::<FxHashSet<_>>();
-    let evidence_defs = body
+    let evidence_defs = normalized
         .blocks
         .iter()
         .map(|block| {
             block
-                .statements
+                .stmts
                 .iter()
                 .flat_map(|statement| {
-                    statement
+                    body.statement(statement.id)
+                        .expect("statement identity set was verified")
                         .assignments
                         .iter()
                         .map(|assignment| assignment.dst)
@@ -472,7 +473,7 @@ fn verify_definitions(
                 .collect::<FxHashSet<_>>()
         })
         .collect::<Vec<_>>();
-    let mut predecessors = vec![Vec::new(); body.blocks.len()];
+    let mut predecessors = vec![Vec::new(); normalized.blocks.len()];
     let mut reachable = FxHashSet::from_iter([0]);
     let mut work = vec![0];
     while let Some(block) = work.pop() {
@@ -505,7 +506,7 @@ fn verify_definitions(
         &predecessors,
         &reachable,
     );
-    for (block_idx, block) in body.blocks.iter().enumerate() {
+    for (block_idx, block) in normalized.blocks.iter().enumerate() {
         let mut defined_evidence = if reachable.contains(&block_idx) {
             evidence_inputs[block_idx].clone()
         } else {
@@ -516,7 +517,10 @@ fn verify_definitions(
         } else {
             semantic_params.clone()
         };
-        for (statement_idx, statement) in block.statements.iter().enumerate() {
+        for (statement_idx, normalized_statement) in block.stmts.iter().enumerate() {
+            let statement = body
+                .statement(normalized_statement.id)
+                .expect("statement identity set was verified");
             for binding in &statement.const_bindings {
                 if let LayoutEvidenceOperand::Local(local) = &binding.value
                     && !defined_evidence.contains(local)
@@ -549,14 +553,11 @@ fn verify_definitions(
                 )?;
                 defined_evidence.insert(assignment.dst);
             }
-            if let NSStmtKind::Assign { dst, .. } =
-                normalized.blocks[block_idx].stmts[statement_idx].kind
-            {
+            if let NSStmtKind::Assign { dst, .. } = normalized_statement.kind {
                 defined_semantic.insert(dst);
             }
         }
-        for local in block
-            .terminator
+        for local in body.terminators[block_idx]
             .returns
             .iter()
             .filter_map(|returned| match &returned.value {
@@ -587,13 +588,48 @@ fn dynamic_locals(value: &super::LayoutEvidenceValue<'_>) -> Vec<LayoutEvidenceL
         .collect()
 }
 
-/// Verifies the statement-coordinate contract between layout evidence and the
+fn verify_statement_id_set(
+    normalized: &NormalizedSemanticBody<'_>,
+    body: &LayoutEvidenceBody<'_>,
+) -> Result<(), LayoutEvidenceVerifyError> {
+    let expected = normalized
+        .blocks
+        .iter()
+        .map(|block| block.stmts.len())
+        .sum();
+    if body.statements.len() != expected {
+        return Err(LayoutEvidenceVerifyError::StatementCount {
+            expected,
+            actual: body.statements.len(),
+        });
+    }
+    let mut seen = FxHashSet::default();
+    for (block, normalized_block) in normalized.blocks.iter().enumerate() {
+        for (statement, normalized_statement) in normalized_block.stmts.iter().enumerate() {
+            if body.statement(normalized_statement.id).is_none() {
+                return Err(LayoutEvidenceVerifyError::InvalidStatementId {
+                    block,
+                    statement,
+                    id: normalized_statement.id,
+                });
+            }
+            if !seen.insert(normalized_statement.id) {
+                return Err(LayoutEvidenceVerifyError::DuplicateStatementId(
+                    normalized_statement.id,
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Verifies the statement-identity contract between layout evidence and the
 /// fully canonicalized runtime semantic body.
 ///
 /// Layout evidence is derived from a non-folding semantic view so aggregate
 /// construction remains visible. Runtime canonicalization may replace value
-/// expressions, but it must preserve block and statement topology, and it may
-/// erase a call only when that call has no runtime layout-evidence ABI.
+/// expressions, but it must preserve statement identity, and it may erase a
+/// call only when that call has no runtime layout-evidence ABI.
 pub fn verify_layout_evidence_runtime_compatibility<'db>(
     db: &'db dyn HirAnalysisDb,
     runtime: &NormalizedSemanticBody<'db>,
@@ -611,28 +647,18 @@ pub fn verify_layout_evidence_runtime_compatibility<'db>(
             actual: body.semantic_values.len(),
         });
     }
-    if body.blocks.len() != runtime.blocks.len() {
+    if body.terminators.len() != runtime.blocks.len() {
         return Err(LayoutEvidenceVerifyError::BlockCount {
             expected: runtime.blocks.len(),
-            actual: body.blocks.len(),
+            actual: body.terminators.len(),
         });
     }
-    for (block_idx, (runtime_block, evidence_block)) in
-        runtime.blocks.iter().zip(&body.blocks).enumerate()
-    {
-        if evidence_block.statements.len() != runtime_block.stmts.len() {
-            return Err(LayoutEvidenceVerifyError::StatementCount {
-                block: block_idx,
-                expected: runtime_block.stmts.len(),
-                actual: evidence_block.statements.len(),
-            });
-        }
-        for (statement_idx, (runtime_statement, evidence_statement)) in runtime_block
-            .stmts
-            .iter()
-            .zip(&evidence_block.statements)
-            .enumerate()
-        {
+    verify_statement_id_set(runtime, body)?;
+    for (block_idx, runtime_block) in runtime.blocks.iter().enumerate() {
+        for (statement_idx, runtime_statement) in runtime_block.stmts.iter().enumerate() {
+            let evidence_statement = body
+                .statement(runtime_statement.id)
+                .expect("statement identity set was verified");
             let runtime_callee = match &runtime_statement.kind {
                 NSStmtKind::Assign {
                     expr: NExpr::Call { callee, .. },
@@ -682,12 +708,13 @@ pub fn verify_layout_evidence_body<'db>(
             actual: body.semantic_values.len(),
         });
     }
-    if body.blocks.len() != normalized.blocks.len() {
+    if body.terminators.len() != normalized.blocks.len() {
         return Err(LayoutEvidenceVerifyError::BlockCount {
             expected: normalized.blocks.len(),
-            actual: body.blocks.len(),
+            actual: body.terminators.len(),
         });
     }
+    verify_statement_id_set(normalized, body)?;
     body.output
         .validate()
         .map_err(|error| LayoutEvidenceVerifyError::InvalidSchema { local: None, error })?;
@@ -808,22 +835,11 @@ pub fn verify_layout_evidence_body<'db>(
         return Err(LayoutEvidenceVerifyError::OrphanEvidenceLocal(local));
     }
 
-    for (block_idx, (normalized_block, block)) in
-        normalized.blocks.iter().zip(&body.blocks).enumerate()
-    {
-        if block.statements.len() != normalized_block.stmts.len() {
-            return Err(LayoutEvidenceVerifyError::StatementCount {
-                block: block_idx,
-                expected: normalized_block.stmts.len(),
-                actual: block.statements.len(),
-            });
-        }
-        for (statement_idx, (normalized_statement, statement)) in normalized_block
-            .stmts
-            .iter()
-            .zip(&block.statements)
-            .enumerate()
-        {
+    for (block_idx, normalized_block) in normalized.blocks.iter().enumerate() {
+        for (statement_idx, normalized_statement) in normalized_block.stmts.iter().enumerate() {
+            let statement = body
+                .statement(normalized_statement.id)
+                .expect("statement identity set was verified");
             let (dst, call_signature) = match &normalized_statement.kind {
                 NSStmtKind::Assign {
                     dst,
@@ -1017,11 +1033,16 @@ pub fn verify_layout_evidence_body<'db>(
             | NSTerminatorKind::Return(None) => None,
         };
         let expected_returns = returned_local.map_or(0, |_| body.output.runtime_descriptor_count());
-        if block.terminator.returns.len() != expected_returns {
+        let terminator = body
+            .terminator(crate::analysis::semantic::SBlockId::from_u32(
+                block_idx as u32,
+            ))
+            .expect("block count was verified");
+        if terminator.returns.len() != expected_returns {
             return Err(LayoutEvidenceVerifyError::ReturnCount {
                 block: block_idx,
                 expected: expected_returns,
-                actual: block.terminator.returns.len(),
+                actual: terminator.returns.len(),
             });
         }
         let expected = body
@@ -1029,7 +1050,7 @@ pub fn verify_layout_evidence_body<'db>(
             .components
             .iter()
             .filter(|component| component.is_runtime());
-        for (evidence_return, expected) in block.terminator.returns.iter().zip(expected) {
+        for (evidence_return, expected) in terminator.returns.iter().zip(expected) {
             if evidence_return.component != expected.id {
                 return Err(LayoutEvidenceVerifyError::ReturnComponentMismatch {
                     block: block_idx,
