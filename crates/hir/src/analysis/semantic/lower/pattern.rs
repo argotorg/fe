@@ -5,8 +5,8 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            FieldIndex, SBlockId, SConst, SExpr, SOperand, SStmtKind, STerminatorKind, SValueId,
-            VariantIndex, bool_const, bytes_const, int_const,
+            FieldIndex, SBlockId, SConst, SExpr, SOperand, SPlace, SStmtKind, STerminatorKind,
+            SValueId, VariantIndex, bool_const, bytes_const, int_const,
         },
         ty::{
             decision_tree::{
@@ -21,6 +21,7 @@ use crate::{
                 pattern_match_expected_ty, project_pattern_child_carrier_ty,
                 project_pattern_child_source_ty,
             },
+            ty_check::PatBindingMode,
             ty_def::{PrimTy, TyBase, TyData, TyId},
         },
     },
@@ -330,10 +331,33 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         if let Some(binding) = pattern_store.wildcard_binding(pat).flatten() {
             if let Some(local_binding) = self.typed_body.pat_binding(binding.representative_pat) {
                 let dst = self.alloc_binding_local(local_binding);
-                self.debug_assert_pattern_binding_ty_matches(dst, value);
+                let dst_ty = self.locals[dst.index()].ty;
+                let by_borrow = self.typed_body.pat_binding_mode(binding.representative_pat)
+                    == Some(PatBindingMode::ByBorrow);
+                let source_matches_dst = {
+                    let scope = self.body.scope();
+                    normalize_ty(self.db, value.carrier_ty.0, scope, self.assumptions)
+                        == normalize_ty(self.db, dst_ty, scope, self.assumptions)
+                };
+                let needs_borrow_read = by_borrow && !source_matches_dst;
+                let binding_value = if needs_borrow_read {
+                    PatternValue {
+                        value: value.value,
+                        carrier_ty: PatternCarrierTy(dst_ty),
+                    }
+                } else {
+                    value
+                };
+                self.debug_assert_pattern_binding_ty_matches(dst, binding_value);
                 self.push_synthetic_stmt(SStmtKind::Assign {
                     dst,
-                    expr: SExpr::UseValue(SOperand::synthetic(value.value)),
+                    expr: if needs_borrow_read {
+                        SExpr::ReadPlace {
+                            place: SPlace::new(value.value),
+                        }
+                    } else {
+                        SExpr::UseValue(SOperand::synthetic(value.value))
+                    },
                 });
             }
         } else if let Some(ctor) = pattern_store.constructor_kind(pat) {
