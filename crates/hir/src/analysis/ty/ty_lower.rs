@@ -1,3 +1,5 @@
+use std::iter;
+
 use crate::core::hir_def::{
     Body, CallableDef, ConstGenericArgValue, Expr, GenericArg, GenericArgListId, GenericParam,
     GenericParamOwner, GenericParamView, IdentId, KindBound as HirKindBound, Partial, PathId, Stmt,
@@ -21,10 +23,10 @@ use super::{
     fold::{TyFoldable, TyFolder},
     layout_bundle::{
         CallableLayoutBundleInput, CallableLayoutBundleSignature, LayoutBundleComponent,
-        LayoutBundleComponentDeclaration, LayoutBundleComponentId, LayoutBundleComponentKey,
-        LayoutBundlePath, LayoutBundlePathStep, LayoutBundleSchema, LayoutBundleTransport,
-        LayoutEvidencePath, LayoutEvidencePathStep, LayoutPortKey, LayoutRootPort, LayoutViewAlias,
-        NonRegularLayoutViewCycle,
+        LayoutBundleComponentDeclaration, LayoutBundleComponentKey, LayoutBundleComponentTransport,
+        LayoutBundleInterface, LayoutBundlePath, LayoutBundlePathStep, LayoutBundleSchema,
+        LayoutBundleTransport, LayoutEvidencePath, LayoutEvidencePathStep, LayoutPortKey,
+        LayoutRootPort, LayoutViewAlias, NonRegularLayoutViewCycle,
     },
     layout_holes::{
         LayoutInstantiation, LayoutRootUse, LayoutViewRecurrence,
@@ -643,6 +645,7 @@ struct CallableLayoutProjections<'db> {
     /// aggregate carrier alias and its physical descendant.
     component_refined_ports: Vec<Vec<LayoutPortKey>>,
     schema: LayoutBundleSchema<'db>,
+    transport: LayoutBundleTransport,
     tys: FxHashMap<LayoutBundlePath, TyId<'db>>,
     paths: Vec<LayoutBundlePath>,
     index_lengths: FxHashMap<LayoutBundlePath, Vec<usize>>,
@@ -1345,6 +1348,7 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
             Vec<TyId<'db>>,
             Vec<LayoutPortKey>,
         )>::new();
+        let mut component_by_port = FxHashMap::<LayoutPortKey, usize>::default();
         for occurrence in value_occurrences {
             let placeholders = match &occurrence.representative {
                 LayoutBundleComponentKey::Root(root) => self
@@ -1365,10 +1369,9 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                 })
                 .map(|ancestor| ancestor.port.clone())
                 .collect::<Vec<_>>();
-            if let Some((component, existing_placeholders, existing_refined_ports)) = all_components
-                .iter_mut()
-                .find(|(component, _, _)| component.port == occurrence.port)
-            {
+            if let Some(existing) = component_by_port.get(&occurrence.port).copied() {
+                let (component, existing_placeholders, existing_refined_ports) =
+                    &mut all_components[existing];
                 assert_eq!(
                     component.representative,
                     Some(occurrence.representative),
@@ -1397,19 +1400,11 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                     }
                 }
             } else {
+                component_by_port.insert(occurrence.port.clone(), all_components.len());
                 all_components.push((
                     LayoutBundleComponent {
-                        id: LayoutBundleComponentId(all_components.len() as u32),
                         port: occurrence.port,
                         declaration: occurrence.declaration,
-                        transport: if matches!(
-                            occurrence.representative,
-                            LayoutBundleComponentKey::Static(_)
-                        ) {
-                            LayoutBundleTransport::CompileTime
-                        } else {
-                            LayoutBundleTransport::Runtime
-                        },
                         representative: Some(occurrence.representative),
                         ty: occurrence.ty,
                         supplied_const_params: Vec::new(),
@@ -1422,9 +1417,6 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
             }
         }
 
-        for (idx, (component, _, _)) in all_components.iter_mut().enumerate() {
-            component.id = LayoutBundleComponentId(idx as u32);
-        }
         let mut components = Vec::with_capacity(all_components.len());
         let mut component_placeholders = Vec::with_capacity(all_components.len());
         let mut component_refined_ports = Vec::with_capacity(all_components.len());
@@ -1439,6 +1431,7 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
             view_aliases: self.view_aliases,
             non_regular_view_cycle: self.non_regular_view_cycle,
         };
+        let transport = LayoutBundleTransport::inferred(&schema);
         debug_assert!(
             schema.non_regular_view_cycle.is_some() || schema.validate().is_ok(),
             "callable layout collector produced an invalid schema: {schema:#?}",
@@ -1448,6 +1441,7 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
             component_placeholders,
             component_refined_ports,
             schema,
+            transport,
             tys: self.tys,
             paths: self.paths,
             index_lengths: self.index_lengths,
@@ -1566,8 +1560,8 @@ pub(crate) struct FuncImplicitParamPlan<'db> {
     pub(crate) bindings_by_origin:
         FxHashMap<CallableInputLayoutHoleOrigin, Vec<(TyId<'db>, TyId<'db>)>>,
     pub(crate) provider_param_index_by_effect: Vec<Option<usize>>,
-    layout_bundle_schemas_by_origin:
-        FxHashMap<CallableInputLayoutHoleOrigin, LayoutBundleSchema<'db>>,
+    layout_bundle_interfaces_by_origin:
+        FxHashMap<CallableInputLayoutHoleOrigin, LayoutBundleInterface<'db>>,
     layout_projected_tys_by_origin:
         FxHashMap<CallableInputLayoutHoleOrigin, FxHashMap<LayoutBundlePath, TyId<'db>>>,
     layout_port_tys_by_origin:
@@ -1668,12 +1662,12 @@ fn callable_input_carrier_projections<'db>(
         .collect()
 }
 
-fn bind_callable_layout_bundle_schema<'db>(
+fn bind_callable_layout_bundle_interface<'db>(
     db: &'db dyn HirAnalysisDb,
     site: CallableLayoutSchemaSite<'db>,
     projection: &CallableLayoutProjections<'db>,
     bindings: &[(TyId<'db>, TyId<'db>)],
-) -> LayoutBundleSchema<'db> {
+) -> LayoutBundleInterface<'db> {
     let mut schema = projection.schema.clone();
     bind_direct_layout_const_params(db, &mut schema);
     bind_projected_component_const_metadata(db, site, &mut schema, &projection.port_tys);
@@ -1705,7 +1699,10 @@ fn bind_callable_layout_bundle_schema<'db>(
             component.representative = Some(LayoutBundleComponentKey::Param(param));
         }
     }
-    schema
+    LayoutBundleInterface {
+        schema,
+        transport: projection.transport.clone(),
+    }
 }
 
 fn bind_direct_layout_const_params<'db>(
@@ -1797,34 +1794,30 @@ fn preserve_declared_component_metadata<'db>(
     declared: &LayoutBundleSchema<'db>,
     declared_port_tys: &FxHashMap<LayoutPortKey, TyId<'db>>,
 ) {
+    let declared_by_port = declared
+        .components
+        .iter()
+        .map(|component| (&component.port, component))
+        .collect::<FxHashMap<_, _>>();
     for (component, refined_ports) in schema.components.iter_mut().zip(component_refined_ports) {
-        if let Some(declared) = declared
-            .components
-            .iter()
-            .find(|candidate| candidate.port == component.port)
-        {
+        if let Some(declared) = declared_by_port.get(&component.port).copied() {
             component.declaration = declared.declaration.clone();
             component.supplied_const_params = declared.supplied_const_params.clone();
             component.dependent_const_params = declared.dependent_const_params.clone();
         } else {
-            for param in declared
-                .components
+            for declared in refined_ports
                 .iter()
-                .filter(|declared| refined_ports.contains(&declared.port))
-                .flat_map(|declared| &declared.supplied_const_params)
+                .filter_map(|port| declared_by_port.get(port).copied())
             {
-                if !component.supplied_const_params.contains(param) {
-                    component.supplied_const_params.push(*param);
+                for param in &declared.supplied_const_params {
+                    if !component.supplied_const_params.contains(param) {
+                        component.supplied_const_params.push(*param);
+                    }
                 }
-            }
-            for param in declared
-                .components
-                .iter()
-                .filter(|declared| refined_ports.contains(&declared.port))
-                .flat_map(|declared| &declared.dependent_const_params)
-            {
-                if !component.dependent_const_params.contains(param) {
-                    component.dependent_const_params.push(*param);
+                for param in &declared.dependent_const_params {
+                    if !component.dependent_const_params.contains(param) {
+                        component.dependent_const_params.push(*param);
+                    }
                 }
             }
         }
@@ -1832,32 +1825,26 @@ fn preserve_declared_component_metadata<'db>(
     bind_projected_component_const_metadata(db, site, schema, declared_port_tys);
 }
 
-fn output_witness_layout_schema<'db>(
+fn output_witness_layout_interface<'db>(
     inputs: &[CallableLayoutBundleInput<'db>],
-    output: &LayoutBundleSchema<'db>,
-) -> LayoutBundleSchema<'db> {
-    let mut components = output
-        .components
-        .iter()
-        .filter(|component| {
-            if !component.is_runtime() {
-                return false;
-            }
-            !inputs
+    output: &LayoutBundleInterface<'db>,
+) -> LayoutBundleInterface<'db> {
+    let components = output
+        .runtime_components()
+        .filter_map(|(_, component)| {
+            (!inputs
                 .iter()
-                .flat_map(|input| &input.schema.components)
-                .any(|candidate| component.formally_derivable_from(candidate))
+                .flat_map(|input| &input.interface.schema.components)
+                .any(|candidate| component.formally_derivable_from(candidate)))
+            .then_some(component.clone())
         })
-        .cloned()
         .collect::<Vec<_>>();
-    for (idx, component) in components.iter_mut().enumerate() {
-        component.id = LayoutBundleComponentId(idx as u32);
-    }
-    LayoutBundleSchema {
+    let schema = LayoutBundleSchema {
         components,
-        view_aliases: output.view_aliases.clone(),
-        non_regular_view_cycle: output.non_regular_view_cycle.clone(),
-    }
+        view_aliases: output.schema.view_aliases.clone(),
+        non_regular_view_cycle: output.schema.non_regular_view_cycle.clone(),
+    };
+    LayoutBundleInterface::all_runtime(schema)
 }
 
 pub fn callable_layout_bundle_signature<'db>(
@@ -1869,8 +1856,12 @@ pub fn callable_layout_bundle_signature<'db>(
     let inputs = projections
         .into_iter()
         .filter_map(|(origin, _)| {
-            let schema = plan.layout_bundle_schemas_by_origin.get(&origin)?.clone();
-            (!schema.components.is_empty()).then_some(CallableLayoutBundleInput { origin, schema })
+            let interface = plan
+                .layout_bundle_interfaces_by_origin
+                .get(&origin)?
+                .clone();
+            (!interface.schema.components.is_empty())
+                .then_some(CallableLayoutBundleInput { origin, interface })
         })
         .collect::<Vec<_>>();
     let mut output = callable_layout_projections_for_ty(
@@ -1885,8 +1876,11 @@ pub fn callable_layout_bundle_signature<'db>(
         &mut output.schema,
         &output.port_tys,
     );
-    let output = output.schema;
-    let output_witnesses = output_witness_layout_schema(&inputs, &output);
+    let output = LayoutBundleInterface {
+        schema: output.schema,
+        transport: output.transport,
+    };
+    let output_witnesses = output_witness_layout_interface(&inputs, &output);
     CallableLayoutBundleSignature {
         inputs,
         output_witnesses,
@@ -1913,22 +1907,21 @@ fn specialized_layout_component_key<'db>(
 /// equality must never decide whether a declaration-relative port exists.
 fn preserve_declared_component_ports<'db>(
     projection: &mut CallableLayoutProjections<'db>,
-    declared: &LayoutBundleSchema<'db>,
+    declared: &LayoutBundleInterface<'db>,
 ) -> Vec<LayoutPortKey> {
-    let missing = declared
+    let projected_ports = projection
+        .schema
         .components
         .iter()
-        .filter(|declared| {
-            !projection
-                .schema
-                .components
-                .iter()
-                .zip(&projection.component_refined_ports)
-                .any(|(component, refined)| {
-                    component.port == declared.port || refined.contains(&declared.port)
-                })
-        })
+        .zip(&projection.component_refined_ports)
+        .flat_map(|(component, refined)| iter::once(&component.port).chain(refined))
         .cloned()
+        .collect::<FxHashSet<_>>();
+    let missing = declared
+        .schema
+        .indexed_components()
+        .filter(|(_, declared)| !projected_ports.contains(&declared.port))
+        .map(|(_, component)| component.clone())
         .collect::<Vec<_>>();
     let missing_ports = missing
         .iter()
@@ -1939,37 +1932,40 @@ fn preserve_declared_component_ports<'db>(
         projection.component_placeholders.push(Vec::new());
         projection.component_refined_ports.push(Vec::new());
     }
-    for alias in &declared.view_aliases {
+    for alias in &declared.schema.view_aliases {
         if !projection.schema.view_aliases.contains(alias) {
             projection.schema.view_aliases.push(alias.clone());
         }
     }
     if projection.schema.non_regular_view_cycle.is_none() {
-        projection.schema.non_regular_view_cycle = declared.non_regular_view_cycle.clone();
+        projection.schema.non_regular_view_cycle = declared.schema.non_regular_view_cycle.clone();
     }
-    for (idx, component) in projection.schema.components.iter_mut().enumerate() {
-        component.id = LayoutBundleComponentId(idx as u32);
-    }
-    for (component, refined) in projection
+    let declared_transport = declared
+        .schema
+        .indexed_components()
+        .map(|(id, component)| {
+            (
+                component.port.clone(),
+                declared
+                    .transport
+                    .component(id)
+                    .expect("declared layout interface must have aligned transport"),
+            )
+        })
+        .collect::<FxHashMap<_, _>>();
+    projection.transport.components = projection
         .schema
         .components
-        .iter_mut()
+        .iter()
         .zip(&projection.component_refined_ports)
-    {
-        component.transport = declared
-            .components
-            .iter()
-            .find(|declared| declared.port == component.port)
-            .or_else(|| {
-                declared
-                    .components
-                    .iter()
-                    .find(|declared| refined.contains(&declared.port))
-            })
-            .map_or(LayoutBundleTransport::Runtime, |declared| {
-                declared.transport
-            });
-    }
+        .map(|(component, refined)| {
+            declared_transport
+                .get(&component.port)
+                .or_else(|| refined.iter().find_map(|port| declared_transport.get(port)))
+                .copied()
+                .unwrap_or(LayoutBundleComponentTransport::Runtime)
+        })
+        .collect();
     missing_ports
 }
 
@@ -1985,21 +1981,19 @@ fn specialize_component_representative<'db>(
     component.ty = Binder::bind(component.ty).instantiate(db, args);
 }
 
-fn specialize_callable_input_layout_schema<'db>(
+fn specialize_callable_input_layout_interface<'db>(
     db: &'db dyn HirAnalysisDb,
     site: CallableLayoutSchemaSite<'db>,
     mut projection: CallableLayoutProjections<'db>,
-    declared: Option<&LayoutBundleSchema<'db>>,
+    declared: Option<&LayoutBundleInterface<'db>>,
     declared_port_tys: Option<&FxHashMap<LayoutPortKey, TyId<'db>>>,
     bindings: &[(TyId<'db>, TyId<'db>)],
     args: &[TyId<'db>],
-) -> LayoutBundleSchema<'db> {
+) -> LayoutBundleInterface<'db> {
     let restored_ports = if let Some(declared) = declared {
         preserve_declared_component_ports(&mut projection, declared)
     } else {
-        for component in &mut projection.schema.components {
-            component.transport = LayoutBundleTransport::Runtime;
-        }
+        projection.transport = LayoutBundleTransport::all_runtime(&projection.schema);
         Vec::new()
     };
     for (component, placeholders) in projection
@@ -2042,7 +2036,7 @@ fn specialize_callable_input_layout_schema<'db>(
             site,
             &mut schema,
             &component_refined_ports,
-            declared,
+            &declared.schema,
             declared_port_tys.expect("declared input schema must have projected types"),
         );
     }
@@ -2050,7 +2044,10 @@ fn specialize_callable_input_layout_schema<'db>(
         schema.non_regular_view_cycle.is_some() || schema.validate().is_ok(),
         "layout specialization produced an invalid schema: {schema:#?}",
     );
-    schema
+    LayoutBundleInterface {
+        schema,
+        transport: projection.transport,
+    }
 }
 
 /// Derives the complete layout ABI for one monomorphized callable type.
@@ -2090,16 +2087,17 @@ pub(crate) fn specialized_callable_layout_bundle_signature_with_normalizer<'db>(
                 CallableLayoutSchemaSite::Input { func, origin },
                 ty,
             );
-            let schema = specialize_callable_input_layout_schema(
+            let interface = specialize_callable_input_layout_interface(
                 db,
                 CallableLayoutSchemaSite::Input { func, origin },
                 projection,
-                plan.layout_bundle_schemas_by_origin.get(&origin),
+                plan.layout_bundle_interfaces_by_origin.get(&origin),
                 plan.layout_port_tys_by_origin.get(&origin),
                 bindings,
                 args,
             );
-            (!schema.components.is_empty()).then_some(CallableLayoutBundleInput { origin, schema })
+            (!interface.schema.components.is_empty())
+                .then_some(CallableLayoutBundleInput { origin, interface })
         })
         .collect::<Vec<_>>();
     let output_ty = normalize(Binder::bind(func.return_ty(db)).instantiate(db, args));
@@ -2115,27 +2113,36 @@ pub(crate) fn specialized_callable_layout_bundle_signature_with_normalizer<'db>(
         func.return_ty(db),
     );
     bind_direct_layout_const_params(db, &mut declared_output.schema);
-    let restored_ports = preserve_declared_component_ports(&mut output, &declared_output.schema);
+    let declared_output_interface = LayoutBundleInterface {
+        schema: declared_output.schema.clone(),
+        transport: declared_output.transport.clone(),
+    };
+    let restored_ports = preserve_declared_component_ports(&mut output, &declared_output_interface);
     for component in &mut output.schema.components {
         if restored_ports.contains(&component.port) {
             specialize_component_representative(db, component, args);
         }
     }
     let component_refined_ports = output.component_refined_ports;
-    let mut output = output.schema;
+    let output_transport = output.transport;
+    let mut output_schema = output.schema;
     preserve_declared_component_metadata(
         db,
         CallableLayoutSchemaSite::Output { func },
-        &mut output,
+        &mut output_schema,
         &component_refined_ports,
         &declared_output.schema,
         &declared_output.port_tys,
     );
     debug_assert!(
-        output.non_regular_view_cycle.is_some() || output.validate().is_ok(),
-        "layout output specialization produced an invalid schema: {output:#?}",
+        output_schema.non_regular_view_cycle.is_some() || output_schema.validate().is_ok(),
+        "layout output specialization produced an invalid schema: {output_schema:#?}",
     );
-    let output_witnesses = output_witness_layout_schema(&inputs, &output);
+    let output = LayoutBundleInterface {
+        schema: output_schema,
+        transport: output_transport,
+    };
+    let output_witnesses = output_witness_layout_interface(&inputs, &output);
     CallableLayoutBundleSignature {
         inputs,
         output_witnesses,
@@ -2158,7 +2165,11 @@ pub fn layout_bundle_schema_for_semantic_value<'db>(
         template_ty,
     );
     bind_direct_layout_const_params(db, &mut template.schema);
-    preserve_declared_component_ports(&mut schema, &template.schema);
+    let template_interface = LayoutBundleInterface {
+        schema: template.schema.clone(),
+        transport: template.transport.clone(),
+    };
+    preserve_declared_component_ports(&mut schema, &template_interface);
     let component_refined_ports = schema.component_refined_ports;
     let mut schema = schema.schema;
     preserve_declared_component_metadata(
@@ -2527,7 +2538,7 @@ pub(crate) fn func_implicit_param_plan<'db>(
     let mut carrier_projected_tys_by_origin = FxHashMap::default();
     let mut projected_paths_by_origin = FxHashMap::default();
     let mut projected_index_lengths_by_origin = FxHashMap::default();
-    let mut layout_bundle_schemas_by_origin = FxHashMap::default();
+    let mut layout_bundle_interfaces_by_origin = FxHashMap::default();
     for (origin, projection) in projections {
         let args = bindings_by_origin
             .get(&origin)
@@ -2535,7 +2546,7 @@ pub(crate) fn func_implicit_param_plan<'db>(
             .flatten()
             .copied()
             .collect::<FxHashMap<_, _>>();
-        let schema = bind_callable_layout_bundle_schema(
+        let interface = bind_callable_layout_bundle_interface(
             db,
             CallableLayoutSchemaSite::Input { func, origin },
             &projection,
@@ -2555,7 +2566,7 @@ pub(crate) fn func_implicit_param_plan<'db>(
         layout_port_tys_by_origin.insert(origin, port_tys);
         projected_index_lengths_by_origin.insert(origin, projection.index_lengths);
         projected_paths_by_origin.insert(origin, projection.paths);
-        layout_bundle_schemas_by_origin.insert(origin, schema);
+        layout_bundle_interfaces_by_origin.insert(origin, interface);
     }
     for (origin, projection) in callable_input_carrier_projections(db, func) {
         let args = bindings_by_origin
@@ -2576,7 +2587,7 @@ pub(crate) fn func_implicit_param_plan<'db>(
         implicit_precursors,
         bindings_by_origin,
         provider_param_index_by_effect,
-        layout_bundle_schemas_by_origin,
+        layout_bundle_interfaces_by_origin,
         layout_projected_tys_by_origin,
         layout_port_tys_by_origin,
         carrier_projected_tys_by_origin,
@@ -2591,9 +2602,9 @@ pub fn callable_input_layout_bundle_schema<'db>(
     origin: CallableInputLayoutHoleOrigin,
 ) -> Option<LayoutBundleSchema<'db>> {
     func_implicit_param_plan(db, func)
-        .layout_bundle_schemas_by_origin
+        .layout_bundle_interfaces_by_origin
         .get(&origin)
-        .cloned()
+        .map(|interface| interface.schema.clone())
 }
 
 /// Returns terminal callable input projections that can physically back a

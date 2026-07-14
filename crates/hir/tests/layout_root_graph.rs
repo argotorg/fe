@@ -8,9 +8,9 @@ use fe_hir::{
             normalize_semantic_body,
         },
         ty::{
-            LayoutBundleComponentId, LayoutBundleComponentKey, LayoutBundlePathStep,
-            LayoutBundleSchemaError, LayoutBundleTransport, LayoutEvidencePathStep,
-            ProviderAddressSpace,
+            LayoutBundleComponentId, LayoutBundleComponentKey, LayoutBundleComponentTransport,
+            LayoutBundleInterfaceError, LayoutBundlePathStep, LayoutBundleSchemaError,
+            LayoutEvidencePathStep, ProviderAddressSpace,
             const_ty::CallableInputLayoutHoleOrigin,
             ty_check::{
                 BodyOwner, ReturnProjectionStep, ReturnProvenance, ReturnSource,
@@ -1783,7 +1783,7 @@ fn pass<const VALUE: u8>(value: Ordinary<VALUE>) -> Ordinary<VALUE> {
     let signature = callable_layout_bundle_signature(&db, func);
 
     assert!(signature.inputs.is_empty());
-    assert!(signature.output.components.is_empty());
+    assert!(signature.output.schema.components.is_empty());
 }
 
 #[test]
@@ -2746,26 +2746,35 @@ fn concrete_array(maps: [StorageMap<u256, u256, 7>; 2]) {}
         signature.inputs[0].origin,
         CallableInputLayoutHoleOrigin::ValueParam(0)
     );
-    assert_eq!(signature.inputs[0].schema.components.len(), 1);
-    assert_eq!(signature.output.components.len(), 1);
+    assert_eq!(signature.inputs[0].interface.schema.components.len(), 1);
+    assert_eq!(signature.output.schema.components.len(), 1);
     assert!(matches!(
-        signature.inputs[0].schema.components[0].representative,
+        signature.inputs[0].interface.schema.components[0].representative,
         Some(LayoutBundleComponentKey::Param(_))
     ));
     assert_eq!(
-        signature.inputs[0].schema.components[0].representative,
-        signature.output.components[0].representative
+        signature.inputs[0].interface.schema.components[0].representative,
+        signature.output.schema.components[0].representative
     );
-    assert_eq!(signature.inputs[0].schema.components[0].rank(), 0);
-    assert_eq!(signature.output.components[0].rank(), 0);
-    assert_eq!(signature.inputs[0].schema.runtime_descriptor_count(), 1);
+    assert_eq!(signature.inputs[0].interface.schema.components[0].rank(), 0);
+    assert_eq!(signature.output.schema.components[0].rank(), 0);
+    assert_eq!(signature.inputs[0].interface.runtime_descriptor_count(), 1);
     assert_eq!(signature.output.runtime_descriptor_count(), 1);
-    assert_eq!(signature.output.components[0].port.value_path, []);
-    let mut invalid = signature.inputs[0].schema.clone();
-    invalid.components[0].transport = LayoutBundleTransport::CompileTime;
+    assert_eq!(signature.output.schema.components[0].port.value_path, []);
+    let mut invalid = signature.inputs[0].interface.clone();
+    invalid.transport.components[0] = LayoutBundleComponentTransport::CompileTime;
     assert!(matches!(
         invalid.validate(),
-        Err(LayoutBundleSchemaError::InvalidCompileTimeComponent { .. })
+        Err(LayoutBundleInterfaceError::InvalidCompileTimeComponent { .. })
+    ));
+    let mut invalid = signature.inputs[0].interface.clone();
+    invalid.transport.components.pop();
+    assert!(matches!(
+        invalid.validate(),
+        Err(LayoutBundleInterfaceError::ComponentCount {
+            expected: 1,
+            actual: 0,
+        })
     ));
 
     let concrete = top_mod
@@ -2799,22 +2808,31 @@ fn concrete_array(maps: [StorageMap<u256, u256, 7>; 2]) {}
     );
     let specialized = key.layout_bundle_signature(&db);
     assert!(matches!(
-        specialized.inputs[0].schema.components[0].representative,
+        specialized.inputs[0].interface.schema.components[0].representative,
         Some(LayoutBundleComponentKey::Static(value)) if value == root
     ));
     assert!(matches!(
-        specialized.output.components[0].representative,
+        specialized.output.schema.components[0].representative,
         Some(LayoutBundleComponentKey::Static(value)) if value == root
     ));
     assert_eq!(
-        specialized.inputs[0].schema.components[0].transport,
-        LayoutBundleTransport::Runtime
+        specialized.inputs[0]
+            .interface
+            .transport
+            .component(LayoutBundleComponentId(0)),
+        Some(LayoutBundleComponentTransport::Runtime)
     );
     assert_eq!(
-        specialized.output.components[0].transport,
-        LayoutBundleTransport::Runtime
+        specialized
+            .output
+            .transport
+            .component(LayoutBundleComponentId(0)),
+        Some(LayoutBundleComponentTransport::Runtime)
     );
-    assert_eq!(specialized.inputs[0].schema.runtime_descriptor_count(), 1);
+    assert_eq!(
+        specialized.inputs[0].interface.runtime_descriptor_count(),
+        1
+    );
     assert_eq!(specialized.output.runtime_descriptor_count(), 1);
 
     let concrete_array = top_mod
@@ -2833,13 +2851,21 @@ fn concrete_array(maps: [StorageMap<u256, u256, 7>; 2]) {}
         .expect("missing concrete_array function");
     let array_signature = callable_layout_bundle_signature(&db, concrete_array);
     assert_eq!(array_signature.inputs.len(), 1);
-    assert_eq!(array_signature.inputs[0].schema.components.len(), 1);
-    assert_eq!(array_signature.inputs[0].schema.components[0].rank(), 1);
     assert_eq!(
-        array_signature.inputs[0].schema.runtime_descriptor_count(),
+        array_signature.inputs[0].interface.schema.components.len(),
+        1
+    );
+    assert_eq!(
+        array_signature.inputs[0].interface.schema.components[0].rank(),
+        1
+    );
+    assert_eq!(
+        array_signature.inputs[0]
+            .interface
+            .runtime_descriptor_count(),
         0
     );
-    let mut invalid = array_signature.inputs[0].schema.clone();
+    let mut invalid = array_signature.inputs[0].interface.schema.clone();
     invalid.components[0].dimensions[0] = 0;
     assert!(matches!(
         invalid.validate(),
@@ -2922,25 +2948,26 @@ fn call(value: Wrapper<Rooted<7>, 9>) -> Rooted<7> {
         .expect("call must resolve Wrapper::get");
 
     assert_eq!(signature.inputs.len(), 1);
-    assert_eq!(signature.inputs[0].schema.components.len(), 2);
-    assert_eq!(signature.output.components.len(), 1);
+    assert_eq!(signature.inputs[0].interface.schema.components.len(), 2);
+    assert_eq!(signature.output.schema.components.len(), 1);
     assert_eq!(
-        signature.inputs[0].schema.components[0].port.value_path,
+        signature.inputs[0].interface.schema.components[0]
+            .port
+            .value_path,
         [LayoutEvidencePathStep::Field(0)]
     );
     assert_eq!(
-        signature.inputs[0].schema.components[1].port.value_path,
+        signature.inputs[0].interface.schema.components[1]
+            .port
+            .value_path,
         [LayoutEvidencePathStep::Field(1)]
     );
-    assert_eq!(signature.output.components[0].port.value_path, []);
-    assert!(
-        signature.inputs[0]
-            .schema
-            .components
-            .iter()
-            .all(|component| component.is_runtime())
+    assert_eq!(signature.output.schema.components[0].port.value_path, []);
+    assert_eq!(
+        signature.inputs[0].interface.runtime_components().count(),
+        2
     );
-    assert!(signature.output.components[0].is_runtime());
+    assert!(signature.output.is_runtime(LayoutBundleComponentId(0)));
 }
 
 #[test]
@@ -3005,7 +3032,7 @@ fn call<const ROOT: u256>(value: Outer<ROOT, ROOT>) {
         })
         .expect("call must resolve consume");
 
-    let components = &signature.inputs[0].schema.components;
+    let components = &signature.inputs[0].interface.schema.components;
     assert_eq!(components.len(), 2, "{components:#?}");
     assert!(
         components
@@ -3076,6 +3103,7 @@ fn consume_outer<const WRAPPER: u256, const TARGET: u256>(
         .into_iter()
         .find(|input| input.origin == CallableInputLayoutHoleOrigin::Receiver)
         .expect("missing receiver layout schema")
+        .interface
         .schema;
     assert_eq!(landing_schema.components.len(), 2);
     assert_ne!(
@@ -3111,6 +3139,7 @@ fn consume_outer<const WRAPPER: u256, const TARGET: u256>(
     .into_iter()
     .find(|input| input.origin == CallableInputLayoutHoleOrigin::ValueParam(0))
     .expect("missing value layout schema")
+    .interface
     .schema;
     assert_eq!(value_schema.components.len(), 2);
     assert_eq!(
@@ -3149,6 +3178,7 @@ fn consume_outer<const WRAPPER: u256, const TARGET: u256>(
     .into_iter()
     .find(|input| input.origin == CallableInputLayoutHoleOrigin::ValueParam(0))
     .expect("missing outer value layout schema")
+    .interface
     .schema;
     assert_eq!(outer_schema.components.len(), 2, "{outer_schema:#?}");
     assert_eq!(outer_schema.components[0].port.value_path, []);
@@ -3242,7 +3272,6 @@ fn ignore(values: [Slot; 0]) {}
     .expect("missing zero-length input schema");
 
     assert!(schema.components.is_empty());
-    assert_eq!(schema.runtime_descriptor_count(), 0);
     assert!(
         callable_layout_bundle_signature(&db, func)
             .inputs

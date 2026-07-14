@@ -60,11 +60,13 @@ pub mod unify;
 pub mod visitor;
 
 pub use layout_bundle::{
-    CallableLayoutBundleInput, CallableLayoutBundleSignature, CallableLayoutParamPort,
-    CallableLayoutPort, LayoutBundleComponent, LayoutBundleComponentId, LayoutBundleComponentKey,
+    CallableLayoutBundleInput, CallableLayoutBundleParam, CallableLayoutBundleResult,
+    CallableLayoutBundleSignature, CallableLayoutParamPort, CallableLayoutPort,
+    LayoutBundleComponent, LayoutBundleComponentId, LayoutBundleComponentKey,
+    LayoutBundleComponentTransport, LayoutBundleInterface, LayoutBundleInterfaceError,
     LayoutBundlePath, LayoutBundlePathStep, LayoutBundleSchema, LayoutBundleSchemaError,
-    LayoutBundleTransport, LayoutEvidencePath, LayoutEvidencePathStep, LayoutMapTy, LayoutPortKey,
-    LayoutRootPort, LayoutViewAlias, NonRegularLayoutViewCycle,
+    LayoutBundleTransport, LayoutBundleViewMapping, LayoutEvidencePath, LayoutEvidencePathStep,
+    LayoutMapTy, LayoutPortKey, LayoutRootPort, LayoutViewAlias, NonRegularLayoutViewCycle,
 };
 pub use layout_holes::{
     LayoutShapeKey, layout_root_descends_from, layout_root_id, layout_root_placeholder,

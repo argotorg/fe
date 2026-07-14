@@ -4,12 +4,13 @@ use salsa::Update;
 use crate::analysis::{
     HirAnalysisDb,
     semantic::{
-        NOperand, SBlockId, SLocalId, SStmtId, SemConstId, SemConstValue, SemanticBorrowDiagnostic,
+        SBlockId, SLocalId, SStmtId, SemConstId, SemConstValue, SemanticBorrowDiagnostic,
         SemanticCalleeRef, SemanticInstance,
     },
     ty::{
-        CallableLayoutParamPort, LayoutBundleComponentId, LayoutBundleSchema,
-        LayoutBundleSchemaError, LayoutMapTy, LayoutPortKey,
+        CallableLayoutParamPort, LayoutBundleComponentId, LayoutBundleInterface,
+        LayoutBundleInterfaceError, LayoutBundleSchema, LayoutBundleSchemaError, LayoutMapTy,
+        LayoutPortKey,
         const_ty::{CallableInputLayoutHoleOrigin, ConstTyData},
         ty_check::BodyOwner,
         ty_def::{TyData, TyId},
@@ -105,13 +106,7 @@ pub enum LayoutEvidenceOperand<'db> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
 pub enum LayoutEvidenceIndex {
     Constant(usize),
-    Dynamic(NOperand),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
-pub struct LayoutEvidenceProjectionTerm {
-    pub index: LayoutEvidenceIndex,
-    pub len: usize,
+    Dynamic(SLocalId),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -121,7 +116,7 @@ pub enum LayoutEvidenceExpr<'db> {
     /// arithmetic or dense lookup according to its runtime representation.
     Project {
         source: LayoutEvidenceOperand<'db>,
-        terms: Box<[LayoutEvidenceProjectionTerm]>,
+        indices: Box<[LayoutEvidenceIndex]>,
     },
     /// Build one array axis from independently supplied elements.
     Array {
@@ -135,7 +130,7 @@ pub enum LayoutEvidenceExpr<'db> {
     /// Functionally replace one indexed sub-map.
     Update {
         source: LayoutEvidenceOperand<'db>,
-        terms: Box<[LayoutEvidenceProjectionTerm]>,
+        indices: Box<[LayoutEvidenceIndex]>,
         value: Box<LayoutEvidenceExpr<'db>>,
     },
     CallResult {
@@ -200,7 +195,7 @@ pub struct LayoutEvidenceBody<'db> {
     pub locals: Vec<LayoutEvidenceLocal<'db>>,
     pub semantic_values: Vec<LayoutEvidenceValue<'db>>,
     pub params: Vec<LayoutEvidenceLocalId>,
-    pub output: LayoutBundleSchema<'db>,
+    pub output: LayoutBundleInterface<'db>,
     /// Evidence operations indexed by stable semantic statement identity.
     pub statements: Vec<LayoutEvidenceStatement<'db>>,
     /// Return evidence indexed by semantic block identity.
@@ -229,6 +224,10 @@ pub enum LayoutEvidenceError<'db> {
     InvalidSchema {
         local: Option<SLocalId>,
         error: LayoutBundleSchemaError,
+    },
+    InvalidInterface {
+        local: Option<SLocalId>,
+        error: LayoutBundleInterfaceError,
     },
     DuplicateInput(CallableInputLayoutHoleOrigin),
     InvalidPlace,
@@ -305,6 +304,10 @@ pub enum LayoutEvidenceVerifyError {
     InvalidSchema {
         local: Option<SLocalId>,
         error: LayoutBundleSchemaError,
+    },
+    InvalidInterface {
+        local: Option<SLocalId>,
+        error: LayoutBundleInterfaceError,
     },
     InvalidEvidenceLocal(LayoutEvidenceLocalId),
     DuplicateEvidenceLocal(LayoutEvidenceLocalId),

@@ -6,10 +6,9 @@ use hir::analysis::{
         EffectProviderSubst, FieldIndex, GenericSubst, ImplEnv, LayoutEvidenceBase,
         LayoutEvidenceBody, LayoutEvidenceComponentValue, LayoutEvidenceConstBinding,
         LayoutEvidenceConstant, LayoutEvidenceExpr, LayoutEvidenceIndex, LayoutEvidenceOperand,
-        LayoutEvidenceProjectionTerm, SBlockId, SConst, SLocalId, SStmtId, SemConstId,
-        SemConstScalar, SemConstValue, SemanticCalleeRef, SemanticCodeRegionRef,
-        SemanticCodeRegionTarget, SemanticConstRef, SemanticInstance, SemanticInstanceKey,
-        SemanticLocalKind, VariantIndex,
+        SBlockId, SConst, SLocalId, SStmtId, SemConstId, SemConstScalar, SemConstValue,
+        SemanticCalleeRef, SemanticCodeRegionRef, SemanticCodeRegionTarget, SemanticConstRef,
+        SemanticInstance, SemanticInstanceKey, SemanticLocalKind, VariantIndex,
         borrowck::{
             NBorrowRoot, NEffectArg, NExpr, NLocalOrigin, NOperand, NSPlace, NSPlaceRoot, NSStmt,
             NSStmtKind, NSTerminator, NSTerminatorKind, NormalizedSemanticBody,
@@ -478,20 +477,24 @@ impl<'db> RmirEmitter<'db> {
                 root: roots.get(idx).cloned().unwrap_or(RuntimeLocalRoot::None),
             })
             .collect::<Vec<_>>();
+        if abi.evidence_params.len() != layout_evidence.params.len() {
+            return Err(LowerError::Unsupported(
+                "layout evidence ABI parameter count does not match its body".into(),
+            ));
+        }
         let mut layout_evidence_locals = vec![None; layout_evidence.locals.len()];
-        for abi_param in &abi.evidence_params {
-            let mut matching = layout_evidence.params.iter().copied().filter(|local| {
-                layout_evidence.locals[local.index()].param.as_ref() == Some(&abi_param.source)
-            });
-            let evidence_local = matching.next().ok_or_else(|| {
-                LowerError::Unsupported(format!(
-                    "layout evidence ABI parameter has no body local: {:?}",
-                    abi_param.source
-                ))
-            })?;
-            if matching.next().is_some() {
+        for (abi_param, evidence_local) in abi
+            .evidence_params
+            .iter()
+            .zip(layout_evidence.params.iter().copied())
+        {
+            if layout_evidence.locals[evidence_local.index()]
+                .param
+                .as_ref()
+                != Some(&abi_param.source)
+            {
                 return Err(LowerError::Unsupported(format!(
-                    "layout evidence ABI parameter has multiple body locals: {:?}",
+                    "layout evidence ABI parameter does not match its body local: {:?}",
                     abi_param.source
                 )));
             }
@@ -696,7 +699,7 @@ impl<'db> RmirEmitter<'db> {
     fn lower_layout_index(&mut self, bb: RBlockId, index: LayoutEvidenceIndex) -> RLocalId {
         match index {
             LayoutEvidenceIndex::Constant(index) => self.alloc_u256_const(bb, index),
-            LayoutEvidenceIndex::Dynamic(index) => self.read_semantic_operand(bb, index),
+            LayoutEvidenceIndex::Dynamic(index) => self.read_semantic_value(bb, index),
         }
     }
 
@@ -798,19 +801,18 @@ impl<'db> RmirEmitter<'db> {
         bb: RBlockId,
         source_map: &RuntimeLayoutMap<'db>,
         source: RLocalId,
-        terms: &[LayoutEvidenceProjectionTerm],
+        indices: &[LayoutEvidenceIndex],
         replacement_map: &RuntimeLayoutMap<'db>,
         replacement: RLocalId,
     ) -> RLocalId {
-        let Some((term, remaining)) = terms.split_first() else {
+        let Some((index, remaining)) = indices.split_first() else {
             assert_eq!(source_map, replacement_map);
             return replacement;
         };
-        assert_eq!(source_map.dimensions().first().copied(), Some(term.len));
         let child_map = source_map
             .projected()
             .expect("layout-map update requires a ranked source");
-        let index = self.lower_layout_index(bb, term.index);
+        let index = self.lower_layout_index(bb, *index);
         let replacement = if remaining.is_empty() {
             assert_eq!(&child_map, replacement_map);
             replacement
@@ -849,20 +851,18 @@ impl<'db> RmirEmitter<'db> {
     ) -> RLocalId {
         match expr {
             LayoutEvidenceExpr::Use(operand) => self.lower_layout_operand(bb, map, operand),
-            LayoutEvidenceExpr::Project { source, terms, .. } => {
+            LayoutEvidenceExpr::Project { source, indices } => {
                 let mut source_map = match source {
                     LayoutEvidenceOperand::Local(local) => {
                         self.runtime_layout_map_for_evidence_local(*local)
                     }
-                    LayoutEvidenceOperand::Constant(_) => {
-                        let mut shape = terms.iter().map(|term| term.len).collect::<Vec<_>>();
-                        shape.extend_from_slice(map.dimensions());
-                        runtime_layout_map_for_shape(self.db, self.env, map.scalar_ty(), &shape)
+                    LayoutEvidenceOperand::Constant(value) => {
+                        runtime_layout_map_for_map_ty(self.db, self.env, &value.map_ty)
                     }
                 };
                 let mut value = self.lower_layout_operand(bb, &source_map, source);
-                for term in terms {
-                    let index = self.lower_layout_index(bb, term.index);
+                for index in indices {
+                    let index = self.lower_layout_index(bb, *index);
                     value = self.project_layout_map_once(bb, &source_map, value, index);
                     source_map = source_map
                         .projected()
@@ -878,19 +878,19 @@ impl<'db> RmirEmitter<'db> {
             }
             LayoutEvidenceExpr::Update {
                 source,
-                terms,
+                indices,
                 value,
             } => {
-                assert!(terms.len() <= map.rank());
+                assert!(indices.len() <= map.rank());
                 let replacement_map = runtime_layout_map_for_shape(
                     self.db,
                     self.env,
                     map.scalar_ty(),
-                    &map.dimensions()[terms.len()..],
+                    &map.dimensions()[indices.len()..],
                 );
                 let replacement = self.lower_layout_expr(bb, &replacement_map, value);
                 let source = self.lower_layout_operand(bb, map, source);
-                self.update_layout_map(bb, map, source, terms, &replacement_map, replacement)
+                self.update_layout_map(bb, map, source, indices, &replacement_map, replacement)
             }
             LayoutEvidenceExpr::CallResult { .. } => {
                 panic!("call-result layout evidence must be unpacked by call lowering")
@@ -913,21 +913,13 @@ impl<'db> RmirEmitter<'db> {
                 CallableLayoutParamPort::Input(port) => &port.component,
                 CallableLayoutParamPort::OutputWitness(port) => port,
             };
-            let candidates = value
-                .schema
-                .components
-                .iter()
-                .enumerate()
-                .filter(|(_, component)| component.port == *port)
-                .collect::<Vec<_>>();
-            let (idx, actual) = match candidates.as_slice() {
-                [candidate] => *candidate,
-                [] | [_, _, ..] => panic!(
-                    "layout evidence source does not uniquely match call parameter: local={local:?}, expected={expected:?}, actual={:?}",
+            let (component_id, actual) = value.schema.component_by_port(port).unwrap_or_else(|| {
+                panic!(
+                    "layout evidence source does not match call parameter: local={local:?}, expected={expected:?}, actual={:?}",
                     value.schema.components,
-                ),
-            };
-            let operand = match &value.components[idx] {
+                )
+            });
+            let operand = match &value.components[component_id.index()] {
                 LayoutEvidenceComponentValue::Known(value) => {
                     LayoutEvidenceOperand::Constant(value.clone())
                 }
@@ -3317,18 +3309,14 @@ impl<'db> RmirEmitter<'db> {
         );
         let abi = runtime_abi_plan(self.db, runtime_key);
         let callee_env = RuntimeTypeEnv::for_semantic(self.db, semantic);
-        for param in &abi.evidence_params {
-            let args = layout_call
-                .into_iter()
-                .flat_map(|call| call.args.iter())
-                .filter(|arg| arg.target == param.source)
-                .collect::<Vec<_>>();
-            let [arg] = args.as_slice() else {
-                panic!(
-                    "runtime layout-evidence parameter does not have one matching call argument: {:?}",
-                    param.source
-                );
-            };
+        let layout_args = layout_call.map_or(&[][..], |call| call.args.as_ref());
+        assert_eq!(
+            abi.evidence_params.len(),
+            layout_args.len(),
+            "runtime layout-evidence argument count must match the canonical ABI",
+        );
+        for (param, arg) in abi.evidence_params.iter().zip(layout_args) {
+            assert_eq!(arg.target, param.source);
             let map = runtime_layout_map_for_map_ty(self.db, callee_env, &param.map_ty);
             assert_eq!(map.class(), param.param.class);
             runtime_args.push(self.lower_layout_expr(bb, &map, &arg.value));
@@ -3397,7 +3385,7 @@ impl<'db> RmirEmitter<'db> {
                     matches!(
                         assignment.expr,
                         LayoutEvidenceExpr::CallResult { component }
-                            if component == result.component
+                            if component == result.component_id
                     )
                 })
                 .expect("verified call evidence must assign every ABI result component");
@@ -4689,11 +4677,8 @@ impl<'db> RmirEmitter<'db> {
                     .returns
                     .clone();
                 assert_eq!(operands.len(), returns.evidence.len());
-                for result in &returns.evidence {
-                    let returned = operands
-                        .iter()
-                        .find(|returned| returned.component == result.component)
-                        .expect("verified layout evidence must return every ABI component");
+                for (result, returned) in returns.evidence.iter().zip(operands) {
+                    assert_eq!(returned.component, result.component_id);
                     let map = runtime_layout_map_for_map_ty(self.db, self.env, &result.map_ty);
                     assert_eq!(map.class(), result.class);
                     fields.push(self.lower_layout_operand(bb, &map, &returned.value));
@@ -6319,9 +6304,67 @@ fn intrinsic_numeric_name_parts(name: &str) -> Option<(&str, &str)> {
 mod tests {
     use common::InputDb;
     use driver::DriverDataBase;
+    use hir::analysis::{
+        semantic::{get_or_build_semantic_instance, identity_semantic_instance_key},
+        ty::ty_check::BodyOwner,
+    };
     use url::Url;
 
-    use crate::build_test_runtime_package;
+    use crate::{build_test_runtime_package, runtime::package::runtime_instance_for_semantic};
+
+    #[test]
+    fn mixed_compile_time_and_runtime_layout_components_lower_through_calls() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::from_file_path(
+            std::env::temp_dir().join("mixed_layout_component_runtime_lowering.fe"),
+        )
+        .expect("fixture path should be absolute");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+use std::evm::StorageMap
+
+struct Mixed<const ROOT: u256> {
+    fixed: StorageMap<u256, u256, 7>,
+    dynamic: StorageMap<u256, u256, ROOT>,
+}
+
+fn pass<const ROOT: u256>(value: Mixed<ROOT>) -> Mixed<ROOT> {
+    value
+}
+
+fn forward<const ROOT: u256>(value: Mixed<ROOT>) -> Mixed<ROOT> {
+    pass(value: value)
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        for name in ["pass", "forward"] {
+            let func = top_mod
+                .all_funcs(&db)
+                .iter()
+                .copied()
+                .find(|func| {
+                    func.name(&db)
+                        .to_opt()
+                        .is_some_and(|func_name| func_name.data(&db) == name)
+                })
+                .unwrap_or_else(|| panic!("missing function `{name}`"));
+            let semantic = get_or_build_semantic_instance(
+                &db,
+                identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+            );
+            let _ = runtime_instance_for_semantic(&db, semantic).body(&db);
+        }
+    }
 
     #[test]
     fn poseidon_mock_range_consts_with_zst_fields_lower_into_runtime_package() {

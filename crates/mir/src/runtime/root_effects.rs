@@ -87,7 +87,7 @@ pub(crate) fn entry_semantic_args_plan<'db>(
     let signature = semantic.key(db).layout_bundle_signature(db);
     let mut layout_evidence = Vec::new();
     for input in &signature.inputs {
-        if input.schema.runtime_descriptor_count() == 0 {
+        if input.interface.runtime_descriptor_count() == 0 {
             continue;
         }
         let CallableInputLayoutHoleOrigin::Effect(_) = input.origin else {
@@ -109,27 +109,18 @@ pub(crate) fn entry_semantic_args_plan<'db>(
                 input.origin,
             )));
         };
-        let values =
-            assigned_provider_layout_evidence(db, provider, &input.schema).map_err(|error| {
+        let values = assigned_provider_layout_evidence(db, provider, &input.interface.schema)
+            .map_err(|error| {
                 LowerError::Unsupported(format!(
                     "{} cannot resolve assigned layout evidence for input {:?}: {error:?}",
                     context.label(db),
                     input.origin,
                 ))
             })?;
-        for component in input
-            .schema
-            .components
-            .iter()
-            .filter(|component| component.is_runtime())
-        {
-            let values = values
-                .iter()
-                .filter(|(port, _)| port == &component.port)
-                .collect::<Vec<_>>();
-            let [(_, value)] = values.as_slice() else {
+        for (_, component) in input.interface.runtime_components() {
+            let Some(value) = values.component(&component.port) else {
                 return Err(LowerError::Unsupported(format!(
-                    "{} has no unique assigned value for layout-evidence component {:?}",
+                    "{} has no assigned value for layout-evidence component {:?}",
                     context.label(db),
                     component.port,
                 )));
@@ -139,7 +130,7 @@ pub(crate) fn entry_semantic_args_plan<'db>(
                     origin: input.origin,
                     component: component.port.clone(),
                 }),
-                value: (*value).clone(),
+                value: value.clone(),
             });
         }
     }

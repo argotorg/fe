@@ -13,7 +13,7 @@ use crate::{
             verify_semantic_body,
         },
         ty::{
-            CallableLayoutBundleInput, CallableLayoutBundleSignature,
+            CallableLayoutBundleInput, CallableLayoutBundleSignature, LayoutBundleInterface,
             adt_def::{AdtDef, AdtRef, instantiate_adt_field_shape},
             corelib::{RuntimeBuiltinFuncKind, runtime_builtin_func_kind},
             effects::place_effect_provider_param_index_map,
@@ -116,8 +116,10 @@ pub fn semantic_layout_bundle_signature<'db>(
                         ty,
                         ty,
                     );
-                    (!schema.components.is_empty())
-                        .then_some(CallableLayoutBundleInput { origin, schema })
+                    (!schema.components.is_empty()).then(|| CallableLayoutBundleInput {
+                        origin,
+                        interface: LayoutBundleInterface::inferred(schema),
+                    })
                 })
                 .collect();
             CallableLayoutBundleSignature {

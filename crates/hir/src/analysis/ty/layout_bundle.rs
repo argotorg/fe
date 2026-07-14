@@ -1,3 +1,4 @@
+use rustc_hash::FxHashMap;
 use salsa::Update;
 
 use super::{
@@ -128,6 +129,10 @@ impl LayoutPortKey {
 pub struct LayoutBundleComponentId(pub u32);
 
 impl LayoutBundleComponentId {
+    pub fn from_index(index: usize) -> Self {
+        Self(u32::try_from(index).expect("layout bundle has more than u32::MAX components"))
+    }
+
     pub fn index(self) -> usize {
         self.0 as usize
     }
@@ -157,7 +162,7 @@ pub enum LayoutBundleComponentDeclaration<'db> {
     Static(TyId<'db>),
 }
 
-/// Whether a component is part of the runtime layout-evidence ABI.
+/// Whether a component is part of a particular runtime layout-evidence ABI.
 ///
 /// This is intentionally independent of [`LayoutBundleComponentKey`]. Generic
 /// specialization can give a declaration-level layout parameter a concrete
@@ -165,7 +170,7 @@ pub enum LayoutBundleComponentDeclaration<'db> {
 /// different root. Conversely, a concrete component written in the callable's
 /// declaration needs no runtime transport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum LayoutBundleTransport {
+pub enum LayoutBundleComponentTransport {
     CompileTime,
     Runtime,
 }
@@ -182,11 +187,9 @@ pub enum LayoutBundleTransport {
 /// specialize to different scalar values deliberately have no representative.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct LayoutBundleComponent<'db> {
-    pub id: LayoutBundleComponentId,
     pub port: LayoutPortKey,
     pub declaration: LayoutBundleComponentDeclaration<'db>,
     pub representative: Option<LayoutBundleComponentKey<'db>>,
-    pub transport: LayoutBundleTransport,
     pub ty: TyId<'db>,
     /// Declaration-level const parameters whose exact scalar value is
     /// supplied by this port. These identities survive specialization:
@@ -208,14 +211,6 @@ impl<'db> LayoutBundleComponent<'db> {
     /// arbitrary value transformations may require a dense map.
     pub fn rank(&self) -> usize {
         self.dimensions.len()
-    }
-
-    pub fn runtime_descriptor_count(&self) -> usize {
-        usize::from(self.is_runtime())
-    }
-
-    pub fn is_runtime(&self) -> bool {
-        matches!(self.transport, LayoutBundleTransport::Runtime)
     }
 
     pub fn map_ty(&self) -> LayoutMapTy<'db> {
@@ -246,12 +241,6 @@ impl<'db> LayoutBundleComponent<'db> {
                         || matches!(candidate.declaration, LayoutBundleComponentDeclaration::Param(value) if value == *required)
                 }))
     }
-
-    /// Whether `candidate` can directly supply this exact map value inside the
-    /// same callable declaration.
-    pub fn formally_supplied_by(&self, candidate: &Self) -> bool {
-        self.map_ty() == candidate.map_ty() && self.formally_derivable_from(candidate)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update, Default)]
@@ -263,10 +252,6 @@ pub struct LayoutBundleSchema<'db> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub enum LayoutBundleSchemaError {
-    InvalidComponentId {
-        expected: LayoutBundleComponentId,
-        actual: LayoutBundleComponentId,
-    },
     InvalidOccurrenceRank {
         component: LayoutBundleComponentId,
         path_indices: usize,
@@ -275,9 +260,6 @@ pub enum LayoutBundleSchemaError {
     EmptyDimension {
         component: LayoutBundleComponentId,
         axis: usize,
-    },
-    InvalidCompileTimeComponent {
-        component: LayoutBundleComponentId,
     },
     DuplicateComponent {
         first: LayoutBundleComponentId,
@@ -312,7 +294,7 @@ pub enum LayoutBundleSchemaError {
     },
 }
 
-impl LayoutBundleSchema<'_> {
+impl<'db> LayoutBundleSchema<'db> {
     pub fn validate(&self) -> Result<(), LayoutBundleSchemaError> {
         if let Some(cycle) = &self.non_regular_view_cycle {
             return Err(LayoutBundleSchemaError::NonRegularViewCycle {
@@ -351,14 +333,9 @@ impl LayoutBundleSchema<'_> {
                 return Err(LayoutBundleSchemaError::InvalidViewAlias { alias: idx });
             }
         }
+        let mut component_ports = FxHashMap::default();
         for (idx, component) in self.components.iter().enumerate() {
-            let expected = LayoutBundleComponentId(idx as u32);
-            if component.id != expected {
-                return Err(LayoutBundleSchemaError::InvalidComponentId {
-                    expected,
-                    actual: component.id,
-                });
-            }
+            let id = LayoutBundleComponentId::from_index(idx);
             let path_indices = component
                 .port
                 .value_path
@@ -367,7 +344,7 @@ impl LayoutBundleSchema<'_> {
                 .count();
             if path_indices != component.dimensions.len() {
                 return Err(LayoutBundleSchemaError::InvalidOccurrenceRank {
-                    component: component.id,
+                    component: id,
                     path_indices,
                     dimensions: component.dimensions.len(),
                 });
@@ -378,29 +355,12 @@ impl LayoutBundleSchema<'_> {
                 .position(|dimension| *dimension == 0)
             {
                 return Err(LayoutBundleSchemaError::EmptyDimension {
-                    component: component.id,
+                    component: id,
                     axis,
                 });
             }
-            if !component.is_runtime()
-                && !matches!(
-                    component.representative,
-                    Some(LayoutBundleComponentKey::Static(_))
-                )
-            {
-                return Err(LayoutBundleSchemaError::InvalidCompileTimeComponent {
-                    component: component.id,
-                });
-            }
-            if let Some((first, _)) = self.components[..idx]
-                .iter()
-                .enumerate()
-                .find(|(_, other)| other.port == component.port)
-            {
-                return Err(LayoutBundleSchemaError::DuplicateComponent {
-                    first: LayoutBundleComponentId(first as u32),
-                    second: component.id,
-                });
+            if let Some(first) = component_ports.insert(&component.port, id) {
+                return Err(LayoutBundleSchemaError::DuplicateComponent { first, second: id });
             }
             if component
                 .supplied_const_params
@@ -408,9 +368,7 @@ impl LayoutBundleSchema<'_> {
                 .enumerate()
                 .any(|(idx, param)| component.supplied_const_params[..idx].contains(param))
             {
-                return Err(LayoutBundleSchemaError::DuplicateSuppliedConstParam {
-                    component: component.id,
-                });
+                return Err(LayoutBundleSchemaError::DuplicateSuppliedConstParam { component: id });
             }
             if component
                 .dependent_const_params
@@ -419,7 +377,7 @@ impl LayoutBundleSchema<'_> {
                 .any(|(idx, param)| component.dependent_const_params[..idx].contains(param))
             {
                 return Err(LayoutBundleSchemaError::DuplicateDependentConstParam {
-                    component: component.id,
+                    component: id,
                 });
             }
             if component
@@ -427,15 +385,11 @@ impl LayoutBundleSchema<'_> {
                 .iter()
                 .any(|param| !component.dependent_const_params.contains(param))
             {
-                return Err(LayoutBundleSchemaError::InvalidSuppliedConstParam {
-                    component: component.id,
-                });
+                return Err(LayoutBundleSchemaError::InvalidSuppliedConstParam { component: id });
             }
             if self.canonicalize_view_path(&component.port.value_path) != component.port.value_path
             {
-                return Err(LayoutBundleSchemaError::NonCanonicalComponent {
-                    component: component.id,
-                });
+                return Err(LayoutBundleSchemaError::NonCanonicalComponent { component: id });
             }
         }
         Ok(())
@@ -497,42 +451,244 @@ impl LayoutBundleSchema<'_> {
         }
     }
 
-    /// Whether the runtime components in this schema are supplied by one
-    /// semantic view of `source`.
-    ///
-    /// Component ports are schema-relative, so crossing a callable boundary
-    /// must rebase them through an explicit view instead of comparing the two
-    /// schemas' raw paths. Declaration identity prevents same-shaped but
-    /// unrelated roots from becoming interchangeable during that rebasing.
-    pub fn runtime_components_supplied_by_view(
+    pub fn indexed_components(
         &self,
-        source: &Self,
-        view: &[LayoutEvidencePathStep],
-    ) -> bool {
+    ) -> impl ExactSizeIterator<Item = (LayoutBundleComponentId, &LayoutBundleComponent<'db>)> + '_
+    {
         self.components
             .iter()
-            .filter(|component| component.is_runtime())
-            .all(|component| {
-                source.components.iter().any(|candidate| {
-                    component.formally_supplied_by(candidate)
-                        && source.projected_port(&candidate.port, view).as_ref()
-                            == Some(&component.port)
+            .enumerate()
+            .map(|(idx, component)| (LayoutBundleComponentId::from_index(idx), component))
+    }
+
+    pub fn component(&self, id: LayoutBundleComponentId) -> Option<&LayoutBundleComponent<'db>> {
+        self.components.get(id.index())
+    }
+
+    pub fn component_by_port(
+        &self,
+        port: &LayoutPortKey,
+    ) -> Option<(LayoutBundleComponentId, &LayoutBundleComponent<'db>)> {
+        self.indexed_components()
+            .find(|(_, component)| component.port == *port)
+    }
+}
+
+/// The context-specific transport policy for one structural bundle schema.
+///
+/// Entries are indexed by [`LayoutBundleComponentId`]. Keeping this mask out of
+/// [`LayoutBundleSchema`] lets one immutable value shape participate in a
+/// declaration ABI, a specialized ABI, and local evidence SSA without mutating
+/// its structural component metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update, Default)]
+pub struct LayoutBundleTransport {
+    pub components: Vec<LayoutBundleComponentTransport>,
+}
+
+impl LayoutBundleTransport {
+    pub fn inferred(schema: &LayoutBundleSchema<'_>) -> Self {
+        Self {
+            components: schema
+                .components
+                .iter()
+                .map(|component| {
+                    if matches!(
+                        component.representative,
+                        Some(LayoutBundleComponentKey::Static(_))
+                    ) {
+                        LayoutBundleComponentTransport::CompileTime
+                    } else {
+                        LayoutBundleComponentTransport::Runtime
+                    }
                 })
+                .collect(),
+        }
+    }
+
+    pub fn all_runtime(schema: &LayoutBundleSchema<'_>) -> Self {
+        Self {
+            components: vec![LayoutBundleComponentTransport::Runtime; schema.components.len()],
+        }
+    }
+
+    pub fn component(&self, id: LayoutBundleComponentId) -> Option<LayoutBundleComponentTransport> {
+        self.components.get(id.index()).copied()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub enum LayoutBundleInterfaceError {
+    Schema(LayoutBundleSchemaError),
+    ComponentCount { expected: usize, actual: usize },
+    InvalidCompileTimeComponent { component: LayoutBundleComponentId },
+}
+
+/// A structural bundle schema paired with the transport policy of one ABI.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update, Default)]
+pub struct LayoutBundleInterface<'db> {
+    pub schema: LayoutBundleSchema<'db>,
+    pub transport: LayoutBundleTransport,
+}
+
+impl<'db> LayoutBundleInterface<'db> {
+    pub fn inferred(schema: LayoutBundleSchema<'db>) -> Self {
+        let transport = LayoutBundleTransport::inferred(&schema);
+        Self { schema, transport }
+    }
+
+    pub fn all_runtime(schema: LayoutBundleSchema<'db>) -> Self {
+        let transport = LayoutBundleTransport::all_runtime(&schema);
+        Self { schema, transport }
+    }
+
+    pub fn validate(&self) -> Result<(), LayoutBundleInterfaceError> {
+        self.schema
+            .validate()
+            .map_err(LayoutBundleInterfaceError::Schema)?;
+        if self.schema.components.len() != self.transport.components.len() {
+            return Err(LayoutBundleInterfaceError::ComponentCount {
+                expected: self.schema.components.len(),
+                actual: self.transport.components.len(),
+            });
+        }
+        for (id, component, transport) in self.indexed_components_with_transport() {
+            if matches!(transport, LayoutBundleComponentTransport::CompileTime)
+                && !matches!(
+                    component.representative,
+                    Some(LayoutBundleComponentKey::Static(_))
+                )
+            {
+                return Err(LayoutBundleInterfaceError::InvalidCompileTimeComponent {
+                    component: id,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn indexed_components_with_transport(
+        &self,
+    ) -> impl ExactSizeIterator<
+        Item = (
+            LayoutBundleComponentId,
+            &LayoutBundleComponent<'db>,
+            LayoutBundleComponentTransport,
+        ),
+    > + '_ {
+        assert_eq!(
+            self.schema.components.len(),
+            self.transport.components.len(),
+            "layout bundle schema and transport must have the same component count"
+        );
+        self.schema
+            .indexed_components()
+            .map(|(id, component)| (id, component, self.transport.components[id.index()]))
+    }
+
+    pub fn is_runtime(&self, id: LayoutBundleComponentId) -> bool {
+        matches!(
+            self.transport.component(id),
+            Some(LayoutBundleComponentTransport::Runtime)
+        )
+    }
+
+    pub fn runtime_components(
+        &self,
+    ) -> impl Iterator<Item = (LayoutBundleComponentId, &LayoutBundleComponent<'db>)> + '_ {
+        self.indexed_components_with_transport()
+            .filter_map(|(id, component, transport)| {
+                matches!(transport, LayoutBundleComponentTransport::Runtime)
+                    .then_some((id, component))
             })
     }
 
     pub fn runtime_descriptor_count(&self) -> usize {
-        self.components
-            .iter()
-            .map(LayoutBundleComponent::runtime_descriptor_count)
-            .sum()
+        self.runtime_components().count()
+    }
+
+    fn runtime_mapping(
+        &self,
+        source: &LayoutBundleSchema<'db>,
+        view: &[LayoutEvidencePathStep],
+        mut compatible: impl FnMut(&LayoutBundleComponent<'db>, &LayoutBundleComponent<'db>) -> bool,
+    ) -> Option<LayoutBundleViewMapping> {
+        let mut sources = vec![None; self.schema.components.len()];
+        for (target, component) in self.runtime_components() {
+            let mut candidates = source
+                .indexed_components()
+                .filter(|(_, candidate)| {
+                    compatible(component, candidate)
+                        && source.projected_port(&candidate.port, view).as_ref()
+                            == Some(&component.port)
+                })
+                .map(|(source, _)| source);
+            let source = candidates.next()?;
+            if candidates.next().is_some() {
+                return None;
+            }
+            sources[target.index()] = Some(source);
+        }
+        Some(LayoutBundleViewMapping { sources })
+    }
+
+    /// Maps a type-checked value projection to a specialized callable input.
+    ///
+    /// The semantic type relation already proves that the value may cross the
+    /// boundary. Substitution and structural-hole re-anchoring can change root
+    /// declarations, so exact port and map shape are the remaining transport
+    /// identity at this boundary.
+    pub fn runtime_call_mapping(
+        &self,
+        source: &LayoutBundleSchema<'db>,
+    ) -> Option<LayoutBundleViewMapping> {
+        self.runtime_mapping(source, &[], |target, candidate| {
+            target.map_ty() == candidate.map_ty()
+        })
+    }
+
+    /// Maps every runtime target component to its unique source component in
+    /// one semantic view.
+    ///
+    /// Unlike a direct type-checked projection, selecting among semantic views
+    /// must retain declaration identity so same-shaped but unrelated physical
+    /// and logical roots cannot become interchangeable.
+    pub fn runtime_view_mapping(
+        &self,
+        source: &LayoutBundleSchema<'db>,
+        view: &[LayoutEvidencePathStep],
+    ) -> Option<LayoutBundleViewMapping> {
+        self.runtime_mapping(source, view, |target, candidate| {
+            target.map_ty() == candidate.map_ty() && target.formally_derivable_from(candidate)
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update, Default)]
+pub struct LayoutBundleViewMapping {
+    sources: Vec<Option<LayoutBundleComponentId>>,
+}
+
+impl LayoutBundleViewMapping {
+    pub fn source(&self, target: LayoutBundleComponentId) -> Option<LayoutBundleComponentId> {
+        self.sources.get(target.index()).copied().flatten()
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct CallableLayoutBundleInput<'db> {
     pub origin: CallableInputLayoutHoleOrigin,
-    pub schema: LayoutBundleSchema<'db>,
+    pub interface: LayoutBundleInterface<'db>,
+}
+
+pub struct CallableLayoutBundleParam<'a, 'db> {
+    pub source: CallableLayoutParamPort,
+    pub component_id: LayoutBundleComponentId,
+    pub component: &'a LayoutBundleComponent<'db>,
+}
+
+pub struct CallableLayoutBundleResult<'a, 'db> {
+    pub component_id: LayoutBundleComponentId,
+    pub component: &'a LayoutBundleComponent<'db>,
 }
 
 /// The complete layout-evidence calling convention declared by one function.
@@ -544,11 +700,58 @@ pub struct CallableLayoutBundleSignature<'db> {
     pub inputs: Vec<CallableLayoutBundleInput<'db>>,
     /// Evidence required by output components that have no compatible input
     /// component. Witnesses are ordinary input parameters in the runtime ABI.
-    pub output_witnesses: LayoutBundleSchema<'db>,
-    pub output: LayoutBundleSchema<'db>,
+    pub output_witnesses: LayoutBundleInterface<'db>,
+    pub output: LayoutBundleInterface<'db>,
 }
 
-impl CallableLayoutBundleSignature<'_> {
+impl<'db> CallableLayoutBundleSignature<'db> {
+    pub fn input(
+        &self,
+        origin: CallableInputLayoutHoleOrigin,
+    ) -> Option<&CallableLayoutBundleInput<'db>> {
+        self.inputs.iter().find(|input| input.origin == origin)
+    }
+
+    /// Runtime evidence parameters in their canonical ABI order.
+    pub fn runtime_params(&self) -> impl Iterator<Item = CallableLayoutBundleParam<'_, 'db>> + '_ {
+        self.inputs
+            .iter()
+            .flat_map(|input| {
+                input
+                    .interface
+                    .runtime_components()
+                    .map(move |(component_id, component)| CallableLayoutBundleParam {
+                        source: CallableLayoutParamPort::Input(CallableLayoutPort {
+                            origin: input.origin,
+                            component: component.port.clone(),
+                        }),
+                        component_id,
+                        component,
+                    })
+            })
+            .chain(
+                self.output_witnesses
+                    .runtime_components()
+                    .map(|(component_id, component)| CallableLayoutBundleParam {
+                        source: CallableLayoutParamPort::OutputWitness(component.port.clone()),
+                        component_id,
+                        component,
+                    }),
+            )
+    }
+
+    /// Runtime evidence results in their canonical ABI order.
+    pub fn runtime_results(
+        &self,
+    ) -> impl Iterator<Item = CallableLayoutBundleResult<'_, 'db>> + '_ {
+        self.output
+            .runtime_components()
+            .map(|(component_id, component)| CallableLayoutBundleResult {
+                component_id,
+                component,
+            })
+    }
+
     /// Whether a call must remain in the runtime body to transport layout
     /// evidence across its ABI boundary.
     ///
@@ -557,10 +760,6 @@ impl CallableLayoutBundleSignature<'_> {
     /// output component must remain explicit so the parallel evidence body can
     /// supply and receive their descriptors.
     pub fn has_runtime_evidence(&self) -> bool {
-        self.inputs
-            .iter()
-            .any(|input| input.schema.runtime_descriptor_count() != 0)
-            || self.output_witnesses.runtime_descriptor_count() != 0
-            || self.output.runtime_descriptor_count() != 0
+        self.runtime_params().next().is_some() || self.runtime_results().next().is_some()
     }
 }

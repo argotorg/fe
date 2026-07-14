@@ -1,7 +1,5 @@
 use cranelift_entity::EntityRef;
-use hir::analysis::ty::{
-    CallableLayoutParamPort, CallableLayoutPort, LayoutBundleComponentId, LayoutMapTy,
-};
+use hir::analysis::ty::{CallableLayoutParamPort, LayoutBundleComponentId, LayoutMapTy};
 
 use crate::{
     db::MirDb,
@@ -26,7 +24,7 @@ pub(crate) struct RuntimeAbiEvidenceParam<'db> {
 
 #[derive(Clone, Debug)]
 pub(crate) struct RuntimeAbiEvidenceResult<'db> {
-    pub component: LayoutBundleComponentId,
+    pub component_id: LayoutBundleComponentId,
     pub map_ty: LayoutMapTy<'db>,
     pub class: RuntimeClass<'db>,
 }
@@ -94,37 +92,8 @@ pub(crate) fn runtime_abi_plan<'db>(
     let env = RuntimeTypeEnv::for_semantic(db, semantic);
     let first_local = semantic.body(db).locals.len();
     let evidence_param_specs = signature
-        .inputs
-        .iter()
-        .flat_map(|input| {
-            input
-                .schema
-                .components
-                .iter()
-                .filter(|component| component.is_runtime())
-                .map(|component| {
-                    (
-                        CallableLayoutParamPort::Input(CallableLayoutPort {
-                            origin: input.origin,
-                            component: component.port.clone(),
-                        }),
-                        component.map_ty(),
-                    )
-                })
-        })
-        .chain(
-            signature
-                .output_witnesses
-                .components
-                .iter()
-                .filter(|component| component.is_runtime())
-                .map(|component| {
-                    (
-                        CallableLayoutParamPort::OutputWitness(component.port.clone()),
-                        component.map_ty(),
-                    )
-                }),
-        )
+        .runtime_params()
+        .map(|param| (param.source, param.component.map_ty()))
         .collect::<Vec<_>>();
     let evidence_params = evidence_param_specs
         .into_iter()
@@ -144,14 +113,11 @@ pub(crate) fn runtime_abi_plan<'db>(
 
     let visible = runtime_return_class(db, key);
     let evidence = signature
-        .output
-        .components
-        .iter()
-        .filter(|component| component.is_runtime())
-        .map(|component| {
-            let map_ty = component.map_ty();
+        .runtime_results()
+        .map(|result| {
+            let map_ty = result.component.map_ty();
             RuntimeAbiEvidenceResult {
-                component: component.id,
+                component_id: result.component_id,
                 class: runtime_layout_map_for_map_ty(db, env, &map_ty).class(),
                 map_ty,
             }

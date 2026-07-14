@@ -12,9 +12,9 @@ use fe_hir::{
             verify_layout_evidence_body, verify_layout_evidence_runtime_compatibility,
         },
         ty::{
-            CallableLayoutParamPort, CallableLayoutPort, LayoutBundleSchemaError,
-            LayoutEvidencePathStep, LayoutViewAlias, const_ty::CallableInputLayoutHoleOrigin,
-            ty_check::BodyOwner,
+            CallableLayoutParamPort, CallableLayoutPort, LayoutBundleComponentId,
+            LayoutBundleComponentTransport, LayoutBundleSchemaError, LayoutEvidencePathStep,
+            LayoutViewAlias, const_ty::CallableInputLayoutHoleOrigin, ty_check::BodyOwner,
         },
     },
     core::semantic::ContractLayoutError,
@@ -280,7 +280,7 @@ fn forward<const ROOT: u256>(value: Rooted<ROOT>) -> Rooted<ROOT> {
     );
     let signature = convert.key(&db).layout_bundle_signature(&db);
     assert_eq!(
-        signature.output_witnesses.components.len(),
+        signature.output_witnesses.schema.components.len(),
         1,
         "equal instantiated values must not make independent formal ports interchangeable"
     );
@@ -634,17 +634,18 @@ fn take_right(value: Right) {}
         panic!("take_right must have one layout input")
     };
     assert_eq!(
-        left.schema.components[0].port,
-        right.schema.components[0].port
+        left.interface.schema.components[0].port,
+        right.interface.schema.components[0].port
     );
     assert_eq!(
-        left.schema.components[0].map_ty(),
-        right.schema.components[0].map_ty()
+        left.interface.schema.components[0].map_ty(),
+        right.interface.schema.components[0].map_ty()
     );
     assert!(
-        !right
-            .schema
-            .runtime_components_supplied_by_view(&left.schema, &[])
+        right
+            .interface
+            .runtime_view_mapping(&left.interface.schema, &[])
+            .is_none()
     );
 }
 
@@ -767,30 +768,30 @@ contract C {
     let [input] = signature.inputs.as_slice() else {
         panic!("self-recursive handle must have one layout-bearing input")
     };
-    assert_eq!(input.schema.components.len(), 1);
-    assert_eq!(input.schema.view_aliases.len(), 1);
+    assert_eq!(input.interface.schema.components.len(), 1);
+    assert_eq!(input.interface.schema.view_aliases.len(), 1);
     assert_eq!(
-        input.schema.view_aliases[0].alias,
+        input.interface.schema.view_aliases[0].alias,
         [LayoutEvidencePathStep::EffectTarget]
     );
-    assert!(input.schema.view_aliases[0].canonical.is_empty());
-    assert!(input.schema.validate().is_ok());
+    assert!(input.interface.schema.view_aliases[0].canonical.is_empty());
+    assert!(input.interface.schema.validate().is_ok());
 
-    let mut invalid = input.schema.clone();
+    let mut invalid = input.interface.schema.clone();
     invalid.view_aliases[0].canonical = vec![LayoutEvidencePathStep::Field(0)];
     assert!(matches!(
         invalid.validate(),
         Err(LayoutBundleSchemaError::InvalidViewAlias { alias: 0 })
     ));
 
-    let mut invalid = input.schema.clone();
+    let mut invalid = input.interface.schema.clone();
     invalid.components[0].port.value_path = vec![LayoutEvidencePathStep::EffectTarget];
     assert!(matches!(
         invalid.validate(),
         Err(LayoutBundleSchemaError::NonCanonicalComponent { .. })
     ));
 
-    let mut invalid = input.schema.clone();
+    let mut invalid = input.interface.schema.clone();
     invalid.view_aliases.push(LayoutViewAlias {
         alias: vec![
             LayoutEvidencePathStep::EffectTarget,
@@ -1008,13 +1009,13 @@ contract C {
     let [input] = signature.inputs.as_slice() else {
         panic!("permuted recursive handle must have one layout-bearing input")
     };
-    assert_eq!(input.schema.components.len(), 8);
-    assert_eq!(input.schema.view_aliases.len(), 1);
+    assert_eq!(input.interface.schema.components.len(), 8);
+    assert_eq!(input.interface.schema.view_aliases.len(), 1);
     assert_eq!(
-        input.schema.view_aliases[0].alias,
+        input.interface.schema.view_aliases[0].alias,
         vec![LayoutEvidencePathStep::EffectTarget; 4]
     );
-    assert!(input.schema.view_aliases[0].canonical.is_empty());
+    assert!(input.interface.schema.view_aliases[0].canonical.is_empty());
 }
 
 #[test]
@@ -1059,7 +1060,13 @@ contract C {
         errors,
         Some([ContractLayoutError::NonRegularProviderCycle, ..])
     ));
-    assert!(signature.inputs[0].schema.non_regular_view_cycle.is_some());
+    assert!(
+        signature.inputs[0]
+            .interface
+            .schema
+            .non_regular_view_cycle
+            .is_some()
+    );
     let field_diagnostics = initialize_analysis_pass()
         .run_on_module(&db, top_mod)
         .iter()
@@ -1188,8 +1195,8 @@ fn select<const ROOT: u256>(
     assert_eq!(evidence.params, [*descriptor]);
     assert_eq!(evidence.locals[descriptor.index()].map_ty.rank(), 2);
     assert_eq!(evidence.semantic_values.len(), normalized.locals.len());
-    assert_eq!(evidence.output.components.len(), 1);
-    assert_eq!(evidence.output.components[0].rank(), 0);
+    assert_eq!(evidence.output.schema.components.len(), 1);
+    assert_eq!(evidence.output.schema.components[0].rank(), 0);
     assert_eq!(evidence.output.runtime_descriptor_count(), 1);
     assert_eq!(evidence.terminators.len(), normalized.blocks.len());
     assert_eq!(
@@ -1200,12 +1207,12 @@ fn select<const ROOT: u256>(
             .map(|block| block.stmts.len())
             .sum()
     );
-    let (source, terms) = evidence
+    let (source, indices) = evidence
         .statements
         .iter()
         .flat_map(|stmt| stmt.assignments.iter())
         .find_map(|assignment| match &assignment.expr {
-            LayoutEvidenceExpr::Project { source, terms } => Some((source, terms)),
+            LayoutEvidenceExpr::Project { source, indices } => Some((source, indices)),
             LayoutEvidenceExpr::Use(_)
             | LayoutEvidenceExpr::Array { .. }
             | LayoutEvidenceExpr::Repeat { .. }
@@ -1214,17 +1221,17 @@ fn select<const ROOT: u256>(
         })
         .expect("nested indexing must emit a descriptor projection");
     assert_eq!(source, &LayoutEvidenceOperand::Local(evidence.params[0]));
-    assert_eq!(terms.len(), 2);
+    assert_eq!(indices.len(), 2);
     assert_eq!(
         evidence.locals[descriptor.index()]
             .map_ty
-            .projected(terms.len())
+            .projected(indices.len())
             .expect("valid projection")
             .rank(),
         0
     );
-    assert!(matches!(terms[0].index, LayoutEvidenceIndex::Dynamic(_)));
-    assert!(matches!(terms[1].index, LayoutEvidenceIndex::Dynamic(_)));
+    assert!(matches!(indices[0], LayoutEvidenceIndex::Dynamic(_)));
+    assert!(matches!(indices[1], LayoutEvidenceIndex::Dynamic(_)));
     let returns = evidence
         .terminators
         .iter()
@@ -1273,12 +1280,14 @@ pub contract C {
         ),
     );
     let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
-    let (source, terms) = evidence
+    let (source, indices) = evidence
         .statements
         .iter()
         .flat_map(|stmt| stmt.assignments.iter())
         .find_map(|assignment| match &assignment.expr {
-            LayoutEvidenceExpr::Project { source, terms, .. } => Some((source, terms)),
+            LayoutEvidenceExpr::Project {
+                source, indices, ..
+            } => Some((source, indices)),
             LayoutEvidenceExpr::Use(_)
             | LayoutEvidenceExpr::Array { .. }
             | LayoutEvidenceExpr::Repeat { .. }
@@ -1292,9 +1301,9 @@ pub contract C {
     };
     assert_eq!(source.base, LayoutEvidenceBase::Slot(0));
     assert_eq!(source.strides.as_ref(), [1]);
-    assert_eq!(terms.len(), 1);
-    assert_eq!(terms[0].len, 2);
-    assert!(matches!(terms[0].index, LayoutEvidenceIndex::Dynamic(_)));
+    assert_eq!(indices.len(), 1);
+    assert_eq!(source.map_ty.dimensions, [2]);
+    assert!(matches!(indices[0], LayoutEvidenceIndex::Dynamic(_)));
 }
 
 #[test]
@@ -1398,6 +1407,79 @@ fn read<const ROOT: u256>(
             ..
         })
     ));
+}
+
+#[test]
+fn mixed_compile_time_and_runtime_components_use_canonical_abi_order() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "mixed_compile_time_and_runtime_components_use_canonical_abi_order.fe".into(),
+        r#"
+use std::evm::StorageMap
+
+struct Mixed<const ROOT: u256> {
+    fixed: StorageMap<u256, u256, 7>,
+    dynamic: StorageMap<u256, u256, ROOT>,
+}
+
+fn pass<const ROOT: u256>(value: Mixed<ROOT>) -> Mixed<ROOT> {
+    value
+}
+
+fn forward<const ROOT: u256>(value: Mixed<ROOT>) -> Mixed<ROOT> {
+    pass(value: value)
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let pass = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "pass"))),
+    );
+    let signature = pass.key(&db).layout_bundle_signature(&db);
+    let input = &signature.inputs[0].interface;
+    assert_eq!(input.schema.components.len(), 2);
+    assert_eq!(
+        input.transport.component(LayoutBundleComponentId(0)),
+        Some(LayoutBundleComponentTransport::CompileTime)
+    );
+    assert_eq!(
+        input.transport.component(LayoutBundleComponentId(1)),
+        Some(LayoutBundleComponentTransport::Runtime)
+    );
+    let mapping = input
+        .runtime_view_mapping(&input.schema, &[])
+        .expect("identity view must map the runtime component");
+    assert_eq!(mapping.source(LayoutBundleComponentId(0)), None);
+    assert_eq!(
+        mapping.source(LayoutBundleComponentId(1)),
+        Some(LayoutBundleComponentId(1))
+    );
+    let params = signature.runtime_params().collect::<Vec<_>>();
+    assert_eq!(params.len(), 1);
+    assert_eq!(params[0].component_id, LayoutBundleComponentId(1));
+    layout_evidence_body(&db, pass).expect("pass layoutization failed");
+
+    let forward = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "forward"))),
+    );
+    let normalized = normalize_semantic_body(&db, forward).expect("normalization failed");
+    let evidence = layout_evidence_body(&db, forward).expect("layoutization failed");
+    let call = evidence
+        .statements
+        .iter()
+        .find_map(|statement| statement.call.as_ref())
+        .expect("missing call evidence");
+    assert_eq!(call.args.len(), 1);
+    assert!(matches!(
+        &call.args[0].target,
+        CallableLayoutParamPort::Input(port)
+            if port.component == input.schema.components[1].port
+    ));
+    verify_layout_evidence_body(&db, &normalized, &evidence).expect("evidence must verify");
 }
 
 #[test]
@@ -1708,6 +1790,7 @@ fn rebuild<const ROOT: u256>(seed: Rooted<ROOT>) -> Rooted<ROOT> {
                     .key(&db)
                     .layout_bundle_signature(&db)
                     .output_witnesses
+                    .schema
                     .components
                     .is_empty()
             );
@@ -1740,7 +1823,7 @@ fn fresh_from<const ROOT: u256>(
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "fresh_from"))),
     );
     let signature = instance.key(&db).layout_bundle_signature(&db);
-    assert!(signature.output_witnesses.components.is_empty());
+    assert!(signature.output_witnesses.schema.components.is_empty());
     assert!(matches!(
         layout_evidence_body(&db, instance),
         Err(LayoutEvidenceError::AmbiguousComponentBinding { sources, .. })
@@ -1990,7 +2073,7 @@ fn empty<const ROOT: u256>() -> [Rooted<ROOT>; 0] {
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "empty"))),
     );
     let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
-    assert!(evidence.output.components.is_empty());
+    assert!(evidence.output.schema.components.is_empty());
     assert!(evidence.params.is_empty());
 }
 
@@ -2073,10 +2156,10 @@ fn replace<const ROOT: usize>(
                         .and_then(|statement| statement.call.as_ref())
                         .and_then(|call| {
                             call.args.iter().find_map(|arg| match &arg.value {
-                                LayoutEvidenceExpr::Project { terms, .. } => {
-                                    terms.iter().find_map(|term| match term.index {
+                                LayoutEvidenceExpr::Project { indices, .. } => {
+                                    indices.iter().find_map(|index| match index {
                                         LayoutEvidenceIndex::Dynamic(index) => {
-                                            Some((block_idx, statement_idx, index.local))
+                                            Some((block_idx, statement_idx, *index))
                                         }
                                         LayoutEvidenceIndex::Constant(_) => None,
                                     })
@@ -2120,14 +2203,14 @@ fn replace<const ROOT: usize>(
         .expect("fixture must define another usize call result after fresh");
     let mut malformed = evidence.clone();
     let statement_id = normalized.blocks[block_idx].stmts[statement_idx].id;
-    let term = malformed.statements[statement_id.index()]
+    let index = malformed.statements[statement_id.index()]
         .call
         .as_mut()
         .and_then(|call| {
             call.args.iter_mut().find_map(|arg| match &mut arg.value {
-                LayoutEvidenceExpr::Project { terms, .. } => {
-                    terms.iter_mut().find(|term| {
-                        matches!(term.index, LayoutEvidenceIndex::Dynamic(index) if index.local == index_local)
+                LayoutEvidenceExpr::Project { indices, .. } => {
+                    indices.iter_mut().find(|index| {
+                        matches!(index, LayoutEvidenceIndex::Dynamic(local) if *local == index_local)
                     })
                 }
                 LayoutEvidenceExpr::Use(_)
@@ -2138,11 +2221,7 @@ fn replace<const ROOT: usize>(
             })
         })
         .expect("missing dynamic output-witness projection");
-    let LayoutEvidenceIndex::Dynamic(mut index) = term.index else {
-        unreachable!()
-    };
-    index.local = future_index;
-    term.index = LayoutEvidenceIndex::Dynamic(index);
+    *index = LayoutEvidenceIndex::Dynamic(future_index);
     assert_eq!(
         verify_layout_evidence_body(&db, &normalized, &malformed),
         Err(LayoutEvidenceVerifyError::UndefinedIndexLocal {
@@ -2325,12 +2404,12 @@ fn first<const ROOT: u256>(values: [Rooted<ROOT>; 2]) -> Rooted<ROOT> {
         normalize_semantic_body(&db, first_instance).expect("normalization failed");
     let first_evidence = layout_evidence_body(&db, first_instance).expect("layoutization failed");
     let mut malformed = first_evidence.clone();
-    let term = malformed
+    let index = malformed
         .statements
         .iter_mut()
         .flat_map(|statement| &mut statement.assignments)
         .find_map(|assignment| match &mut assignment.expr {
-            LayoutEvidenceExpr::Project { terms, .. } => terms.first_mut(),
+            LayoutEvidenceExpr::Project { indices, .. } => indices.first_mut(),
             LayoutEvidenceExpr::Use(_)
             | LayoutEvidenceExpr::Array { .. }
             | LayoutEvidenceExpr::Repeat { .. }
@@ -2338,7 +2417,7 @@ fn first<const ROOT: u256>(values: [Rooted<ROOT>; 2]) -> Rooted<ROOT> {
             | LayoutEvidenceExpr::CallResult { .. } => None,
         })
         .expect("missing constant layout projection");
-    term.index = LayoutEvidenceIndex::Constant(2);
+    *index = LayoutEvidenceIndex::Constant(2);
     assert!(matches!(
         verify_layout_evidence_body(&db, &first_normalized, &malformed),
         Err(LayoutEvidenceVerifyError::InvalidProjection)
@@ -2389,7 +2468,7 @@ fn repeat<const ROOT: u256>(value: Rooted<ROOT>) -> [Rooted<ROOT>; 2] {
         .iter()
         .find_map(|terminator| (!terminator.returns.is_empty()).then_some(&terminator.returns))
         .expect("missing repeat evidence return");
-    assert_eq!(repeat.output.components[0].rank(), 1);
+    assert_eq!(repeat.output.schema.components[0].rank(), 1);
     assert_eq!(repeat_returns.len(), 1);
     assert!(
         repeat
@@ -2625,7 +2704,7 @@ fn inspect_views<const PHYSICAL: u256, const LOGICAL: u256>(
     let [input] = signature.inputs.as_slice() else {
         panic!("dual-view handle must have one layout-bearing input")
     };
-    let [physical, target] = input.schema.components.as_slice() else {
+    let [physical, target] = input.interface.schema.components.as_slice() else {
         panic!("dual-view handle must retain one physical and one target component")
     };
     assert!(
@@ -2737,6 +2816,7 @@ fn right_first<const ROOT: u256>(value: Split<ROOT>) -> StorageMap<u256, u256, R
         assert_eq!(
             evidence
                 .output
+                .schema
                 .components
                 .iter()
                 .map(|component| component.rank())
@@ -2746,12 +2826,13 @@ fn right_first<const ROOT: u256>(value: Split<ROOT>) -> StorageMap<u256, u256, R
         assert_eq!(
             evidence
                 .output
+                .schema
                 .components
                 .iter()
                 .map(|component| &component.port)
                 .collect::<std::collections::HashSet<_>>()
                 .len(),
-            evidence.output.components.len(),
+            evidence.output.schema.components.len(),
         );
     }
 }
@@ -2832,9 +2913,9 @@ fn replace<const ROOT: u256>(
             .flat_map(|statement| &statement.assignments)
             .any(|assignment| matches!(
                 &assignment.expr,
-                LayoutEvidenceExpr::Update { terms, .. }
-                    if terms.len() == 1
-                        && matches!(terms[0].index, LayoutEvidenceIndex::Dynamic(_))
+                LayoutEvidenceExpr::Update { indices, .. }
+                    if indices.len() == 1
+                        && matches!(indices[0], LayoutEvidenceIndex::Dynamic(_))
             ))
     );
 }

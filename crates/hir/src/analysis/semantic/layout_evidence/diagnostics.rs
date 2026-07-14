@@ -13,8 +13,9 @@ use crate::{
             identity_semantic_instance_key,
         },
         ty::{
-            CallableLayoutParamPort, LayoutBundleSchemaError, LayoutEvidencePathStep,
-            LayoutPortKey, const_ty::CallableInputLayoutHoleOrigin, ty_check::BodyOwner,
+            CallableLayoutParamPort, LayoutBundleInterfaceError, LayoutBundleSchemaError,
+            LayoutEvidencePathStep, LayoutPortKey, const_ty::CallableInputLayoutHoleOrigin,
+            ty_check::BodyOwner,
         },
     },
     hir_def::{ItemKind, TopLevelMod},
@@ -139,6 +140,13 @@ impl DiagnosticVoucher for LayoutEvidenceDiagnostic<'_> {
             LayoutEvidenceError::InvalidSchema {
                 error: LayoutBundleSchemaError::NonRegularViewCycle { .. },
                 ..
+            }
+            | LayoutEvidenceError::InvalidInterface {
+                error:
+                    LayoutBundleInterfaceError::Schema(
+                        LayoutBundleSchemaError::NonRegularViewCycle { .. },
+                    ),
+                ..
             } => (
                 7,
                 "a recursive `EffectHandle::Target` cycle changes its layout arguments and cannot be represented by a finite layout-evidence interface".to_string(),
@@ -229,6 +237,9 @@ impl LayoutEvidenceDiagnostic<'_> {
             LayoutEvidenceError::InvalidSchema {
                 local: Some(local), ..
             }
+            | LayoutEvidenceError::InvalidInterface {
+                local: Some(local), ..
+            }
             | LayoutEvidenceError::ShapeMismatch { dst: local, .. }
             | LayoutEvidenceError::MissingComponent { local, .. }
             | LayoutEvidenceError::MissingPort { local, .. }
@@ -243,6 +254,7 @@ impl LayoutEvidenceDiagnostic<'_> {
             | LayoutEvidenceError::TemplateLocalCountMismatch { .. }
             | LayoutEvidenceError::InvalidStatementIdentity(_)
             | LayoutEvidenceError::InvalidSchema { local: None, .. }
+            | LayoutEvidenceError::InvalidInterface { local: None, .. }
             | LayoutEvidenceError::DuplicateInput(_)
             | LayoutEvidenceError::InvalidPlace
             | LayoutEvidenceError::ProviderPlace

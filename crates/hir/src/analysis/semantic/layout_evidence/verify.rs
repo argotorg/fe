@@ -8,7 +8,7 @@ use crate::analysis::{
     semantic::{NExpr, NSStmtKind, NSTerminatorKind, NormalizedSemanticBody, SConst, SLocalId},
     ty::{
         CallableLayoutParamPort, CallableLayoutPort, LayoutBundleComponent,
-        LayoutBundleComponentKey, LayoutBundleSchema, LayoutMapTy,
+        LayoutBundleComponentKey, LayoutBundleInterface, LayoutMapTy,
         const_ty::ConstTyData,
         ty_def::{PrimTy, TyBase, TyData, TyId},
     },
@@ -34,35 +34,29 @@ fn operand_map_ty<'db>(
     }
 }
 
-fn verify_projection_terms(
+fn verify_projection_indices(
     db: &dyn HirAnalysisDb,
     normalized: &NormalizedSemanticBody<'_>,
-    terms: &[super::LayoutEvidenceProjectionTerm],
+    indices: &[LayoutEvidenceIndex],
     dimensions: &[usize],
 ) -> Result<(), LayoutEvidenceVerifyError> {
-    if terms.is_empty()
-        || terms.len() > dimensions.len()
-        || terms
-            .iter()
-            .zip(dimensions)
-            .any(|(term, dimension)| term.len == 0 || term.len != *dimension)
-    {
+    if indices.is_empty() || indices.len() > dimensions.len() {
         return Err(LayoutEvidenceVerifyError::InvalidProjection);
     }
-    for (term, dimension) in terms.iter().zip(dimensions) {
-        match term.index {
-            LayoutEvidenceIndex::Constant(index) if index >= *dimension => {
+    for (index, dimension) in indices.iter().zip(dimensions) {
+        match index {
+            LayoutEvidenceIndex::Constant(index) if *index >= *dimension => {
                 return Err(LayoutEvidenceVerifyError::InvalidProjection);
             }
             LayoutEvidenceIndex::Dynamic(index)
-                if !normalized.local(index.local).is_some_and(|local| {
+                if !normalized.local(*index).is_some_and(|local| {
                     matches!(
                         local.ty.data(db),
                         TyData::TyBase(TyBase::Prim(PrimTy::Usize))
                     )
                 }) =>
             {
-                return Err(LayoutEvidenceVerifyError::InvalidIndexLocal(index.local));
+                return Err(LayoutEvidenceVerifyError::InvalidIndexLocal(*index));
             }
             LayoutEvidenceIndex::Constant(_) | LayoutEvidenceIndex::Dynamic(_) => {}
         }
@@ -75,17 +69,17 @@ fn expr_map_ty<'db>(
     normalized: &NormalizedSemanticBody<'db>,
     body: &LayoutEvidenceBody<'db>,
     expr: &LayoutEvidenceExpr<'db>,
-    call_output: Option<&'db LayoutBundleSchema<'db>>,
+    call_output: Option<&'db LayoutBundleInterface<'db>>,
     block: usize,
     statement: usize,
 ) -> Result<LayoutMapTy<'db>, LayoutEvidenceVerifyError> {
     match expr {
         LayoutEvidenceExpr::Use(operand) => operand_map_ty(body, operand),
-        LayoutEvidenceExpr::Project { source, terms } => {
+        LayoutEvidenceExpr::Project { source, indices } => {
             let source_ty = operand_map_ty(body, source)?;
-            verify_projection_terms(db, normalized, terms, &source_ty.dimensions)?;
+            verify_projection_indices(db, normalized, indices, &source_ty.dimensions)?;
             source_ty
-                .projected(terms.len())
+                .projected(indices.len())
                 .ok_or(LayoutEvidenceVerifyError::MapTypeMismatch)
         }
         LayoutEvidenceExpr::Array { elements } => {
@@ -125,20 +119,20 @@ fn expr_map_ty<'db>(
         }
         LayoutEvidenceExpr::Update {
             source,
-            terms,
+            indices,
             value,
         } => {
             let source_ty = operand_map_ty(body, source)?;
-            verify_projection_terms(db, normalized, terms, &source_ty.dimensions)?;
+            verify_projection_indices(db, normalized, indices, &source_ty.dimensions)?;
             let value_ty = expr_map_ty(db, normalized, body, value, call_output, block, statement)?;
-            if source_ty.projected(terms.len()).as_ref() != Some(&value_ty) {
+            if source_ty.projected(indices.len()).as_ref() != Some(&value_ty) {
                 return Err(LayoutEvidenceVerifyError::MapTypeMismatch);
             }
             Ok(source_ty)
         }
         LayoutEvidenceExpr::CallResult { component } => call_output
-            .and_then(|output| output.components.get(component.0 as usize))
-            .filter(|output| output.id == *component && output.is_runtime())
+            .filter(|output| output.is_runtime(*component))
+            .and_then(|output| output.schema.component(*component))
             .map(|output| output.map_ty())
             .ok_or(LayoutEvidenceVerifyError::InvalidCallResult {
                 block,
@@ -177,22 +171,22 @@ fn expr_locals(expr: &LayoutEvidenceExpr<'_>, locals: &mut Vec<LayoutEvidenceLoc
 }
 
 fn expr_index_locals(expr: &LayoutEvidenceExpr<'_>, locals: &mut Vec<SLocalId>) {
-    let mut push_terms = |terms: &[super::LayoutEvidenceProjectionTerm]| {
-        locals.extend(terms.iter().filter_map(|term| match term.index {
-            LayoutEvidenceIndex::Dynamic(index) => Some(index.local),
+    let mut push_indices = |indices: &[LayoutEvidenceIndex]| {
+        locals.extend(indices.iter().filter_map(|index| match index {
+            LayoutEvidenceIndex::Dynamic(index) => Some(*index),
             LayoutEvidenceIndex::Constant(_) => None,
         }));
     };
     match expr {
-        LayoutEvidenceExpr::Project { terms, .. } => push_terms(terms),
+        LayoutEvidenceExpr::Project { indices, .. } => push_indices(indices),
         LayoutEvidenceExpr::Array { elements } => {
             for element in elements {
                 expr_index_locals(element, locals);
             }
         }
         LayoutEvidenceExpr::Repeat { element, .. } => expr_index_locals(element, locals),
-        LayoutEvidenceExpr::Update { terms, value, .. } => {
-            push_terms(terms);
+        LayoutEvidenceExpr::Update { indices, value, .. } => {
+            push_indices(indices);
             expr_index_locals(value, locals);
         }
         LayoutEvidenceExpr::Use(_) | LayoutEvidenceExpr::CallResult { .. } => {}
@@ -241,7 +235,7 @@ fn const_binding_candidates<'db>(
         }
     }
     let signature = body.owner.key(db).layout_bundle_signature(db);
-    for component in &signature.output_witnesses.components {
+    for (_, component) in signature.output_witnesses.runtime_components() {
         is_layout_dependency |= component.dependent_const_params.contains(&param);
         if !binding_matches(component) {
             continue;
@@ -717,7 +711,7 @@ pub fn verify_layout_evidence_body<'db>(
     verify_statement_id_set(normalized, body)?;
     body.output
         .validate()
-        .map_err(|error| LayoutEvidenceVerifyError::InvalidSchema { local: None, error })?;
+        .map_err(|error| LayoutEvidenceVerifyError::InvalidInterface { local: None, error })?;
 
     let mut referenced = FxHashSet::default();
     for (local_idx, value) in body.semantic_values.iter().enumerate() {
@@ -736,20 +730,21 @@ pub fn verify_layout_evidence_body<'db>(
                 actual: value.components.len(),
             });
         }
-        for (schema, component) in value.schema.components.iter().zip(&value.components) {
+        for ((component_id, schema), component) in
+            value.schema.indexed_components().zip(&value.components)
+        {
             match component {
                 LayoutEvidenceComponentValue::Known(value) => {
                     if value.map_ty != schema.map_ty()
                         || value.strides.len() != value.map_ty.rank()
                         || matches!(value.base, super::LayoutEvidenceBase::Root(root)
                             if root.const_ty_ty(db) != Some(value.map_ty.scalar_ty))
-                        || matches!(schema.representative, Some(LayoutBundleComponentKey::Static(expected))
-                            if !schema.is_runtime()
-                                && value.base != super::LayoutEvidenceBase::Root(expected))
+                        || !matches!(schema.representative, Some(LayoutBundleComponentKey::Static(expected))
+                            if value.base == super::LayoutEvidenceBase::Root(expected))
                     {
                         return Err(LayoutEvidenceVerifyError::InvalidComponentValue {
                             local: semantic_local,
-                            component: schema.id,
+                            component: component_id,
                         });
                     }
                 }
@@ -757,9 +752,8 @@ pub fn verify_layout_evidence_body<'db>(
                     let Some(metadata) = body.locals.get(local.index()) else {
                         return Err(LayoutEvidenceVerifyError::InvalidEvidenceLocal(*local));
                     };
-                    if !schema.is_runtime()
-                        || metadata.semantic_local != Some(semantic_local)
-                        || metadata.component != schema.id
+                    if metadata.semantic_local != Some(semantic_local)
+                        || metadata.component != component_id
                         || metadata.map_ty != schema.map_ty()
                         || metadata.param
                             != normalized.locals[local_idx]
@@ -774,7 +768,7 @@ pub fn verify_layout_evidence_body<'db>(
                     {
                         return Err(LayoutEvidenceVerifyError::InvalidComponentValue {
                             local: semantic_local,
-                            component: schema.id,
+                            component: component_id,
                         });
                     }
                     if !referenced.insert(*local) {
@@ -789,41 +783,58 @@ pub fn verify_layout_evidence_body<'db>(
         return Err(LayoutEvidenceVerifyError::OutputMismatch);
     }
     let mut expected_params = Vec::new();
-    for input in &signature.inputs {
-        let local = normalized
-            .locals
-            .iter()
-            .position(|local| {
+    for param in signature.runtime_params() {
+        let evidence_local = match &param.source {
+            CallableLayoutParamPort::Input(port) => {
+                let local = normalized
+                    .locals
+                    .iter()
+                    .position(|local| {
+                        local
+                            .source
+                            .and_then(|source| source.callable_input_origin(db))
+                            == Some(port.origin)
+                    })
+                    .ok_or(LayoutEvidenceVerifyError::MissingInput(port.origin))?;
+                let value = &body.semantic_values[local];
+                if value
+                    .schema
+                    .component(param.component_id)
+                    .is_none_or(|component| component.port != param.component.port)
+                {
+                    return Err(LayoutEvidenceVerifyError::InvalidParams);
+                }
+                match value.components.get(param.component_id.index()) {
+                    Some(LayoutEvidenceComponentValue::Dynamic(local)) => *local,
+                    Some(LayoutEvidenceComponentValue::Known(_)) | None => {
+                        return Err(LayoutEvidenceVerifyError::InvalidParams);
+                    }
+                }
+            }
+            CallableLayoutParamPort::OutputWitness(_) => {
+                let candidates = body
+                    .locals
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, local)| local.param.as_ref() == Some(&param.source))
+                    .collect::<Vec<_>>();
+                let [(idx, local)] = candidates.as_slice() else {
+                    return Err(LayoutEvidenceVerifyError::InvalidParams);
+                };
+                if local.semantic_local.is_some()
+                    || local.component != param.component_id
+                    || local.map_ty != param.component.map_ty()
+                {
+                    return Err(LayoutEvidenceVerifyError::InvalidParams);
+                }
+                let local = LayoutEvidenceLocalId::from_u32(*idx as u32);
+                if !referenced.insert(local) {
+                    return Err(LayoutEvidenceVerifyError::DuplicateEvidenceLocal(local));
+                }
                 local
-                    .source
-                    .and_then(|source| source.callable_input_origin(db))
-                    == Some(input.origin)
-            })
-            .ok_or(LayoutEvidenceVerifyError::MissingInput(input.origin))?;
-        expected_params.extend(dynamic_locals(&body.semantic_values[local]));
-    }
-    for component in &signature.output_witnesses.components {
-        let param = CallableLayoutParamPort::OutputWitness(component.port.clone());
-        let candidates = body
-            .locals
-            .iter()
-            .enumerate()
-            .filter(|(_, local)| local.param.as_ref() == Some(&param))
-            .collect::<Vec<_>>();
-        let [(idx, local)] = candidates.as_slice() else {
-            return Err(LayoutEvidenceVerifyError::InvalidParams);
+            }
         };
-        if local.semantic_local.is_some()
-            || local.component != component.id
-            || local.map_ty != component.map_ty()
-        {
-            return Err(LayoutEvidenceVerifyError::InvalidParams);
-        }
-        let local = LayoutEvidenceLocalId::from_u32(*idx as u32);
-        if !referenced.insert(local) {
-            return Err(LayoutEvidenceVerifyError::DuplicateEvidenceLocal(local));
-        }
-        expected_params.push(local);
+        expected_params.push(evidence_local);
     }
     if body.params != expected_params {
         return Err(LayoutEvidenceVerifyError::InvalidParams);
@@ -884,36 +895,8 @@ pub fn verify_layout_evidence_body<'db>(
                 }
                 let signature = callee.key.layout_bundle_signature(db);
                 let expected = signature
-                    .inputs
-                    .iter()
-                    .flat_map(|input| {
-                        input
-                            .schema
-                            .components
-                            .iter()
-                            .filter(|component| component.is_runtime())
-                            .map(|component| {
-                                (
-                                    CallableLayoutParamPort::Input(CallableLayoutPort {
-                                        origin: input.origin,
-                                        component: component.port.clone(),
-                                    }),
-                                    component,
-                                )
-                            })
-                    })
-                    .chain(
-                        signature
-                            .output_witnesses
-                            .components
-                            .iter()
-                            .map(|component| {
-                                (
-                                    CallableLayoutParamPort::OutputWitness(component.port.clone()),
-                                    component,
-                                )
-                            }),
-                    )
+                    .runtime_params()
+                    .map(|param| (param.source, param.component))
                     .collect::<Vec<_>>();
                 if call.args.len() != expected.len() {
                     return Err(LayoutEvidenceVerifyError::CallArgCount {
@@ -1004,16 +987,15 @@ pub fn verify_layout_evidence_body<'db>(
                     return Err(LayoutEvidenceVerifyError::MapTypeMismatch);
                 }
                 if let LayoutEvidenceExpr::CallResult { component } = assignment.expr {
-                    let output =
-                        call_output.and_then(|output| output.components.get(component.0 as usize));
+                    let output = call_output
+                        .filter(|output| output.is_runtime(component))
+                        .and_then(|output| output.schema.component(component));
                     let destination = metadata
                         .semantic_local
                         .and_then(|local| body.semantic_values.get(local.index()))
-                        .and_then(|value| {
-                            value.schema.components.get(metadata.component.0 as usize)
-                        });
+                        .and_then(|value| value.schema.component(metadata.component));
                     if !matches!((output, destination), (Some(output), Some(destination))
-                        if output.id == component && output.port == destination.port)
+                        if output.port == destination.port)
                     {
                         return Err(LayoutEvidenceVerifyError::InvalidCallResult {
                             block: block_idx,
@@ -1045,16 +1027,12 @@ pub fn verify_layout_evidence_body<'db>(
                 actual: terminator.returns.len(),
             });
         }
-        let expected = body
-            .output
-            .components
-            .iter()
-            .filter(|component| component.is_runtime());
-        for (evidence_return, expected) in terminator.returns.iter().zip(expected) {
-            if evidence_return.component != expected.id {
+        let expected = body.output.runtime_components();
+        for (evidence_return, (component_id, expected)) in terminator.returns.iter().zip(expected) {
+            if evidence_return.component != component_id {
                 return Err(LayoutEvidenceVerifyError::ReturnComponentMismatch {
                     block: block_idx,
-                    component: expected.id,
+                    component: component_id,
                 });
             }
             let actual = operand_map_ty(body, &evidence_return.value)?;
@@ -1065,10 +1043,8 @@ pub fn verify_layout_evidence_body<'db>(
                 let value = &body.semantic_values[returned.index()];
                 let source = value
                     .schema
-                    .components
-                    .iter()
-                    .position(|component| component.port == expected.port)
-                    .and_then(|idx| value.components.get(idx));
+                    .component_by_port(&expected.port)
+                    .and_then(|(id, _)| value.components.get(id.index()));
                 let matches = match source {
                     Some(LayoutEvidenceComponentValue::Known(value)) => {
                         evidence_return.value == LayoutEvidenceOperand::Constant(value.clone())
@@ -1081,7 +1057,7 @@ pub fn verify_layout_evidence_body<'db>(
                 if !matches {
                     return Err(LayoutEvidenceVerifyError::ReturnComponentMismatch {
                         block: block_idx,
-                        component: expected.id,
+                        component: component_id,
                     });
                 }
             }
