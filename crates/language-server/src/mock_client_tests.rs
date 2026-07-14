@@ -878,7 +878,7 @@ async fn mock_lsp_hover_shows_contract_field_layout_info() {
 }
 
 pub contract C {
-  supply: i32
+  mut supply: i32
 
   recv M {
     Ping { amount } -> bool uses (mut supply) {
@@ -894,14 +894,17 @@ pub contract C {
     let field_hover = hover_eventually(&mut client, &uri, 9, 39).await;
     let field_text = hover_text(&field_hover);
     assert!(
-        field_text.contains("slot:") && field_text.contains("space:"),
+        field_text.contains("### Field Layout")
+            && field_text.contains("#### Storage")
+            && field_text.contains("- `0`: `supply` (inline field, `i32`)"),
         "expected field hover to include layout info, got:\n{field_text}"
     );
 
     let alias_hover = hover_eventually(&mut client, &uri, 10, 7).await;
     let alias_text = hover_text(&alias_hover);
     assert!(
-        alias_text.contains("slot:") && alias_text.contains("space:"),
+        alias_text.contains("### Field Layout")
+            && alias_text.contains("- `0`: `supply` (inline field, `i32`)"),
         "expected alias hover to include layout info, got:\n{alias_text}"
     );
 
@@ -909,7 +912,7 @@ pub contract C {
 }
 
 #[tokio::test]
-async fn mock_lsp_hover_distinguishes_explicit_layout_roots() {
+async fn mock_lsp_hover_labels_contract_layout_sources() {
     let mut client = MockLspClient::start().await;
     client.initialize().await;
 
@@ -917,26 +920,100 @@ async fn mock_lsp_hover_distinguishes_explicit_layout_roots() {
     client.did_open(&uri, "");
     client.settle(500).await;
 
-    let code = r#"struct Slot<const ROOT: u256 = _> {}
+    let code = r#"use std::evm::StorageMap
 
-pub contract C {
-  mut reserved: Slot<1>
-  mut inferred: Slot
+struct CounterStore {
+  global: u256,
+  counts: StorageMap<u256, u256>,
+}
+
+pub contract Counter {
+  mut store: CounterStore,
+  mut foo: u256,
+  mut baz: StorageMap<u256, u256, 0>,
 }
 "#;
     client.did_change(&uri, 701, code);
     client.settle(1000).await;
 
-    let hover = hover_eventually(&mut client, &uri, 3, 7).await;
+    let store_hover = hover_eventually(&mut client, &uri, 8, 7).await;
+    let store_text = hover_text(&store_hover);
+    assert!(
+        store_text.contains("### Field Layout")
+            && store_text.contains("- `1`: `store.global` (inline field, `u256`)")
+            && store_text.contains("- `2`: `store.counts.SALT` (inferred parameter, `u256`)")
+            && !store_text.contains("baz.SALT")
+            && !store_text.contains("`foo`"),
+        "expected source-labeled field layout, got:\n{store_text}"
+    );
+
+    let baz_hover = hover_eventually(&mut client, &uri, 10, 7).await;
+    let baz_text = hover_text(&baz_hover);
+    assert!(
+        baz_text.contains("- `0`: `baz.SALT` (explicit parameter, `u256`)")
+            && !baz_text.contains("- `4`:")
+            && !baz_text.contains("slot:")
+            && !baz_text.contains("root:"),
+        "the explicit SALT must not be confused with the allocator cursor:\n{baz_text}"
+    );
+
+    let contract_hover = hover_eventually(&mut client, &uri, 7, 14).await;
+    let contract_text = hover_text(&contract_hover);
+    for line in [
+        "- `0`: `baz.SALT` (explicit parameter, `u256`)",
+        "- `1`: `store.global` (inline field, `u256`)",
+        "- `2`: `store.counts.SALT` (inferred parameter, `u256`)",
+        "- `3`: `foo` (inline field, `u256`)",
+    ] {
+        assert!(
+            contract_text.contains(line),
+            "missing `{line}` from contract layout:\n{contract_text}"
+        );
+    }
+    let positions = ["baz.SALT", "store.global", "store.counts.SALT", "`foo`"]
+        .map(|label| contract_text.find(label).unwrap());
+    assert!(
+        positions.is_sorted(),
+        "contract entries should be ordered by assigned value:\n{contract_text}"
+    );
+
+    client.shutdown().await;
+}
+
+#[tokio::test]
+async fn mock_lsp_hover_groups_contract_layout_by_address_space() {
+    let mut client = MockLspClient::start().await;
+    client.initialize().await;
+
+    let uri = lib_url();
+    client.did_open(&uri, "");
+    client.settle(500).await;
+
+    let code = r#"use std::evm::TStorPtr
+
+pub contract Spaces {
+  mut stored: u256,
+  mut temporary: TStorPtr<u256>,
+  immutable: u256,
+}
+"#;
+    client.did_change(&uri, 702, code);
+    client.settle(1000).await;
+
+    let hover = hover_eventually(&mut client, &uri, 2, 14).await;
     let text = hover_text(&hover);
-    assert!(
-        text.contains("explicit root: slot 1 (storage)"),
-        "expected explicit reservation details, got:\n{text}"
-    );
-    assert!(
-        text.contains("count: 0"),
-        "explicit reservations must remain outside the compiler-owned range:\n{text}"
-    );
+    for section in [
+        "#### Storage",
+        "- `0`: `stored` (inline field, `u256`)",
+        "#### Transient Storage",
+        "- `0`: `temporary` (inline field, `u256`)",
+        "#### Immutable (Code)",
+        "- `0`: `immutable` (inline field, `u256`)",
+    ] {
+        assert!(text.contains(section), "missing `{section}`:\n{text}");
+    }
+    assert!(!text.contains("#### Memory"));
+    assert!(!text.contains("#### Calldata"));
 
     client.shutdown().await;
 }
@@ -961,9 +1038,8 @@ pub contract C {
     let family_hover = hover_eventually(&mut client, &uri, 3, 7).await;
     let family_text = hover_text(&family_hover);
     assert!(
-        family_text.contains("root family:")
-            && family_text.contains("dimensions [3]")
-            && family_text.contains("root ="),
+        family_text.contains("- `0 + i0` (i0: 0..3): `maps[i0].SALT` ")
+            && family_text.contains("(inferred parameter, `u256`)"),
         "expected indexed-family details, got:\n{family_text}"
     );
 
@@ -980,13 +1056,13 @@ pub contract C {
     let good_hover = hover_eventually(&mut client, &uri, 4, 7).await;
     let good_text = hover_text(&good_hover);
     assert!(
-        good_text.contains("allocation unavailable because another contract field"),
+        good_text.contains("Unavailable because another contract field"),
         "expected transactional allocation status, got:\n{good_text}"
     );
     let bad_hover = hover_eventually(&mut client, &uri, 5, 7).await;
     let bad_text = hover_text(&bad_hover);
     assert!(
-        bad_text.contains("layout: invalid") && bad_text.contains("not a `u256` or `usize`"),
+        bad_text.contains("Invalid:") && bad_text.contains("not a `u256` or `usize`"),
         "expected primary layout failure, got:\n{bad_text}"
     );
 

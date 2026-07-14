@@ -40,7 +40,9 @@ pub use reference::{
 use rustc_hash::{FxHashMap, FxHashSet};
 pub use storage_layout::{
     AllocatedContractStorageLayout, AllocationUnitId, AssignedLayoutTy, AssignedRootValue,
-    ConcreteRootOccurrence, ConcreteRootOccurrenceId, ContractFieldId, ContractLayoutError,
+    ConcreteRootOccurrence, ConcreteRootOccurrenceId, ContractFieldId, ContractLayoutEntry,
+    ContractLayoutEntryKind, ContractLayoutError, ContractLayoutParameterOrigin,
+    ContractLayoutPath, ContractLayoutPathSegment, ContractLayoutReport, ContractLayoutValue,
     ContractStorageLayoutResult, EnumOverlayGroup, ExplicitRootReservation, FieldStorageLayout,
     LayoutBinding, LayoutBindingLeaf, LayoutBindingTarget, LayoutInvariantError, LayoutProjection,
     LayoutRootFamily, LayoutRootFamilyId, LayoutSelection, LayoutViewError, LayoutViewKind,
@@ -1922,6 +1924,13 @@ impl<'db> Contract<'db> {
         db: &'db dyn HirAnalysisDb,
     ) -> &'db ContractStorageLayoutResult<'db> {
         storage_layout::build_contract_storage_layout(db, self)
+    }
+
+    pub fn layout_report(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Option<&'db ContractLayoutReport<'db>> {
+        storage_layout::build_contract_layout_report(db, self).as_ref()
     }
 
     /// Total code-address-space high-water mark. Invalid contracts publish no

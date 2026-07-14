@@ -4,12 +4,17 @@ use async_lsp::lsp_types::Hover;
 use common::file::File;
 use hir::{
     HirDb,
-    analysis::ty::ty_check::{EffectParamSite, LocalBinding, ParamSite},
+    analysis::ty::{
+        ProviderAddressSpace,
+        ty_check::{EffectParamSite, LocalBinding, ParamSite},
+    },
     core::semantic::{
-        ContractFieldId, EffectEnvView, FieldStorageLayout, FieldView, ProviderSource,
+        ContractFieldId, ContractLayoutEntry, ContractLayoutEntryKind,
+        ContractLayoutParameterOrigin, ContractLayoutValue, EffectEnvView, FieldView,
+        ProviderSource,
         reference::{ReferenceView, Target},
     },
-    hir_def::{FieldParent, ItemKind, PathId, scope_graph::ScopeId},
+    hir_def::{Contract, FieldParent, ItemKind, PathId, scope_graph::ScopeId},
     lower::map_file_to_mod,
     span::LazySpan,
 };
@@ -167,108 +172,181 @@ fn contract_field_id_from_local_binding<'db>(
     }
 }
 
-fn allocated_layout_footer(db: &DriverDataBase, field: &FieldStorageLayout<'_>) -> String {
-    let end = field.slot_offset + field.slot_count;
-    let mut lines = vec![
-        format!(
-            "slot: {} (range: {}..{}, count: {})",
-            field.slot_offset, field.slot_offset, end, field.slot_count
-        ),
-        format!("space: {}", field.address_space.pretty()),
-    ];
-    let mut explicit = Vec::new();
-    for occurrence in &field.concrete_occurrences {
-        let root = (occurrence.space, occurrence.value);
-        if explicit.contains(&root) {
-            continue;
-        }
-        explicit.push(root);
-        lines.push(format!(
-            "explicit root: slot {} ({})",
-            occurrence.value.data(db),
-            occurrence.space.pretty()
-        ));
+fn address_space_heading(space: ProviderAddressSpace) -> &'static str {
+    match space {
+        ProviderAddressSpace::Memory => "Memory",
+        ProviderAddressSpace::Storage => "Storage",
+        ProviderAddressSpace::Transient => "Transient Storage",
+        ProviderAddressSpace::Calldata => "Calldata",
+        ProviderAddressSpace::Code => "Immutable (Code)",
     }
-    for cell in &field.cells {
-        if let Some(allocation) = cell.allocation {
-            lines.push(format!(
-                "scalar root: slot {} ({})",
-                allocation.slot,
-                allocation.space.pretty()
-            ));
-        }
-    }
-    for family in &field.families {
-        let Some(allocation) = family.allocation else {
-            continue;
-        };
-        let end = allocation.slot + family.extent;
-        let formula = family
-            .strides
-            .iter()
-            .enumerate()
-            .map(|(idx, stride)| {
-                if *stride == 1 {
-                    format!("i{idx}")
-                } else {
-                    format!("i{idx}*{stride}")
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(" + ");
-        let dimensions = family
-            .dimensions
-            .iter()
-            .map(|dimension| dimension.len.to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        lines.push(format!(
-            "root family: slots {}..{} ({}, dimensions [{}], root = {} + {})",
-            allocation.slot,
-            end,
-            allocation.space.pretty(),
-            dimensions,
-            allocation.slot,
-            formula,
-        ));
-    }
-    lines.join("\n")
 }
 
-fn contract_field_layout_footer_for_id<'db>(
+fn layout_entry_markdown(db: &DriverDataBase, entry: &ContractLayoutEntry<'_>) -> String {
+    let (value, value_dimensions) = match &entry.value {
+        ContractLayoutValue::Scalar(value) => (value.data(db).to_string(), Vec::new()),
+        ContractLayoutValue::Indexed {
+            base,
+            dimensions,
+            strides,
+            ..
+        } => {
+            let mut terms = vec![base.data(db).to_string()];
+            terms.extend(strides.iter().enumerate().map(|(index, stride)| {
+                if *stride == 1 {
+                    format!("i{index}")
+                } else {
+                    format!("i{index}*{stride}")
+                }
+            }));
+            (terms.join(" + "), dimensions.clone())
+        }
+    };
+    let mut dimensions = entry
+        .path
+        .index_dimensions()
+        .map(|(index, len)| (index as usize, len))
+        .collect::<Vec<_>>();
+    if dimensions.is_empty() {
+        dimensions.extend(value_dimensions.into_iter().enumerate());
+    }
+    let dimensions = (!dimensions.is_empty()).then(|| {
+        format!(
+            " ({})",
+            dimensions
+                .into_iter()
+                .map(|(index, len)| format!("i{index}: 0..{len}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    });
+    let kind = match entry.kind {
+        ContractLayoutEntryKind::InlineField => "inline field",
+        ContractLayoutEntryKind::EnumTag => "enum tag",
+        ContractLayoutEntryKind::Parameter(ContractLayoutParameterOrigin::Explicit) => {
+            "explicit parameter"
+        }
+        ContractLayoutEntryKind::Parameter(ContractLayoutParameterOrigin::Inferred) => {
+            "inferred parameter"
+        }
+    };
+    format!(
+        "- `{value}`{}: `{}` ({kind}, `{}`)",
+        dimensions.unwrap_or_default(),
+        entry.path.display(db),
+        entry.ty.pretty_print(db),
+    )
+}
+
+fn allocated_layout_markdown<'db>(
+    db: &'db DriverDataBase,
+    title: &str,
+    entries: impl Iterator<Item = &'db ContractLayoutEntry<'db>>,
+) -> String {
+    let entries = entries.collect::<Vec<_>>();
+    let mut markdown = format!("### {title}");
+    for space in [
+        ProviderAddressSpace::Storage,
+        ProviderAddressSpace::Transient,
+        ProviderAddressSpace::Code,
+        ProviderAddressSpace::Memory,
+        ProviderAddressSpace::Calldata,
+    ] {
+        let entries = entries
+            .iter()
+            .filter(|entry| entry.address_space == space)
+            .copied()
+            .collect::<Vec<_>>();
+        if entries.is_empty() {
+            continue;
+        }
+        markdown.push_str(&format!("\n\n#### {}\n\n", address_space_heading(space)));
+        markdown.push_str(
+            &entries
+                .into_iter()
+                .map(|entry| layout_entry_markdown(db, entry))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    }
+    if entries.is_empty() {
+        markdown.push_str("\n\nNo address-space values are assigned.");
+    }
+    markdown
+}
+
+fn contract_field_layout_markdown<'db>(
     db: &'db DriverDataBase,
     field: ContractFieldId<'db>,
 ) -> Option<String> {
     let result = field.contract.storage_layout(db);
-    if let Some(layout) = result.values().find(|layout| layout.field == field) {
-        return Some(allocated_layout_footer(db, layout));
+    if let Some(report) = field.contract.layout_report(db) {
+        return Some(allocated_layout_markdown(
+            db,
+            "Field Layout",
+            report.entries_for_field(field),
+        ));
     }
     if let Some(errors) = result.field_errors_for_id(field) {
         return Some(format!(
-            "layout: invalid ({})",
+            "### Field Layout\n\nInvalid: {}",
             errors
                 .first()
                 .map_or("unknown layout error", |error| error.summary())
         ));
     }
     Some(
-        "layout: allocation unavailable because another contract field has an invalid layout"
+        "### Field Layout\n\nUnavailable because another contract field has an invalid layout."
             .to_string(),
     )
 }
 
-fn contract_field_layout_footer<'db>(
+fn contract_layout_markdown<'db>(db: &'db DriverDataBase, contract: Contract<'db>) -> String {
+    let result = contract.storage_layout(db);
+    if let Some(report) = contract.layout_report(db) {
+        return allocated_layout_markdown(db, "Contract Layout", report.entries.iter());
+    }
+    let errors = result
+        .field_results
+        .iter()
+        .filter_map(|field| {
+            Some((
+                field.name.data(db),
+                field.result.as_ref().err()?.first()?.summary(),
+            ))
+        })
+        .map(|(name, error)| format!("- `{name}`: {error}"))
+        .collect::<Vec<_>>();
+    if errors.is_empty() {
+        "### Contract Layout\n\nUnavailable because the contract layout is invalid.".to_string()
+    } else {
+        format!(
+            "### Contract Layout\n\nUnavailable because the contract has invalid field layouts:\n\n{}",
+            errors.join("\n")
+        )
+    }
+}
+
+fn layout_markdown_for_target<'db>(
     db: &'db DriverDataBase,
     target: &Target<'db>,
 ) -> Option<String> {
-    let field = match target {
-        Target::Scope(scope) => contract_field_id_from_scope(db, *scope)?,
-        Target::Local { binding, .. } => contract_field_id_from_local_binding(db, *binding)?,
-    };
-    contract_field_layout_footer_for_id(db, field)
+    match target {
+        Target::Scope(scope) => {
+            if let Some(field) = contract_field_id_from_scope(db, *scope) {
+                contract_field_layout_markdown(db, field)
+            } else if let ItemKind::Contract(contract) = scope.item() {
+                Some(contract_layout_markdown(db, contract))
+            } else {
+                None
+            }
+        }
+        Target::Local { binding, .. } => contract_field_id_from_local_binding(db, *binding)
+            .and_then(|field| contract_field_layout_markdown(db, field)),
+    }
 }
 
-fn contract_field_definition_hover(
+fn layout_definition_hover(
     db: &DriverDataBase,
     top_mod: hir::hir_def::TopLevelMod<'_>,
     cursor: Cursor,
@@ -277,6 +355,22 @@ fn contract_field_definition_hover(
         let ItemKind::Contract(contract) = item else {
             continue;
         };
+        if let Some(span) = contract
+            .scope()
+            .name_span(db)
+            .and_then(|span| span.resolve(db))
+            && span.range.contains(cursor)
+        {
+            return Some(Hover {
+                contents: async_lsp::lsp_types::HoverContents::Markup(
+                    async_lsp::lsp_types::MarkupContent {
+                        kind: async_lsp::lsp_types::MarkupKind::Markdown,
+                        value: contract_layout_markdown(db, contract),
+                    },
+                ),
+                range: to_lsp_range_from_span(span, db).ok(),
+            });
+        }
         for field in FieldParent::Contract(contract).fields(db) {
             let scope = ScopeId::Field(FieldParent::Contract(contract), field.idx as u16);
             let Some(span) = scope.name_span(db).and_then(|span| span.resolve(db)) else {
@@ -286,12 +380,12 @@ fn contract_field_definition_hover(
                 continue;
             }
             let field = contract_field_id_from_scope(db, scope)?;
-            let footer = contract_field_layout_footer_for_id(db, field)?;
+            let markdown = contract_field_layout_markdown(db, field)?;
             return Some(Hover {
                 contents: async_lsp::lsp_types::HoverContents::Markup(
                     async_lsp::lsp_types::MarkupContent {
                         kind: async_lsp::lsp_types::MarkupKind::Markdown,
-                        value: footer,
+                        value: markdown,
                     },
                 ),
                 range: to_lsp_range_from_span(span, db).ok(),
@@ -326,9 +420,9 @@ fn hover_markdown_for_target<'db>(
         }
     };
 
-    if let Some(layout_footer) = contract_field_layout_footer(db, target) {
+    if let Some(layout_markdown) = layout_markdown_for_target(db, target) {
         body.push('\n');
-        body.push_str(&layout_footer);
+        body.push_str(&layout_markdown);
         body.push('\n');
     }
 
@@ -352,7 +446,7 @@ pub fn hover_helper(
 
     // Get the reference at cursor and resolve it
     let Some(r) = top_mod.reference_at(db, cursor) else {
-        return Ok((contract_field_definition_hover(db, top_mod, cursor), None));
+        return Ok((layout_definition_hover(db, top_mod, cursor), None));
     };
 
     let resolution = r.target_at(db, cursor);
@@ -422,4 +516,106 @@ pub fn hover_helper(
         range: hover_range,
     };
     Ok((Some(result), doc_path))
+}
+
+#[cfg(test)]
+mod tests {
+    use async_lsp::lsp_types::{
+        HoverContents, HoverParams, MarkedString, Position, TextDocumentIdentifier,
+        TextDocumentPositionParams, WorkDoneProgressParams,
+    };
+    use common::InputDb;
+    use dir_test::{Fixture, dir_test};
+    use test_utils::{normalize::normalize_newlines, snap_test};
+    use url::Url;
+
+    use super::hover_helper;
+    use driver::DriverDataBase;
+
+    fn extract_hover_markers(source: &str) -> (String, Vec<(String, usize)>) {
+        let mut cleaned = String::new();
+        let mut markers = Vec::new();
+        let mut remaining = source;
+        while let Some(start) = remaining.find("<|") {
+            cleaned.push_str(&remaining[..start]);
+            let marker = &remaining[start + 2..];
+            let end = marker.find("|>").expect("unterminated hover marker");
+            let label = &marker[..end];
+            assert!(!label.is_empty(), "hover markers must be named");
+            markers.push((label.to_string(), cleaned.len()));
+            remaining = &marker[end + 2..];
+        }
+        cleaned.push_str(remaining);
+        (cleaned, markers)
+    }
+
+    fn lsp_position(source: &str, offset: usize) -> Position {
+        let prefix = &source[..offset];
+        Position::new(
+            prefix.bytes().filter(|byte| *byte == b'\n').count() as u32,
+            prefix
+                .rsplit_once('\n')
+                .map_or(prefix, |(_, line)| line)
+                .encode_utf16()
+                .count() as u32,
+        )
+    }
+
+    fn hover_contents(contents: HoverContents) -> String {
+        match contents {
+            HoverContents::Markup(content) => content.value,
+            HoverContents::Scalar(marked) => match marked {
+                MarkedString::String(text) => text,
+                MarkedString::LanguageString(text) => text.value,
+            },
+            HoverContents::Array(contents) => contents
+                .into_iter()
+                .map(|marked| match marked {
+                    MarkedString::String(text) => text,
+                    MarkedString::LanguageString(text) => text.value,
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        }
+    }
+
+    #[dir_test(
+        dir: "$CARGO_MANIFEST_DIR/test_files",
+        glob: "layout_hover.fe"
+    )]
+    fn layout_hover_snapshot(fixture: Fixture<&str>) {
+        let source = normalize_newlines(fixture.content()).into_owned();
+        let (source, markers) = extract_hover_markers(&source);
+        let uri = Url::from_file_path(fixture.path()).unwrap();
+        let mut db = DriverDataBase::default();
+        let file = db
+            .workspace()
+            .touch(&mut db, uri.clone(), Some(source.clone()));
+        let mut snapshot = String::new();
+        for (label, offset) in markers {
+            let (hover, _) = hover_helper(
+                &db,
+                file,
+                HoverParams {
+                    text_document_position_params: TextDocumentPositionParams {
+                        text_document: TextDocumentIdentifier { uri: uri.clone() },
+                        position: lsp_position(&source, offset),
+                    },
+                    work_done_progress_params: WorkDoneProgressParams::default(),
+                },
+            )
+            .unwrap();
+            let hover = hover.unwrap_or_else(|| panic!("missing hover for marker `{label}`"));
+            snapshot.push_str(&format!("## {label}\n"));
+            if let Some(range) = hover.range {
+                snapshot.push_str(&format!(
+                    "range: {}:{}..{}:{}\n\n",
+                    range.start.line, range.start.character, range.end.line, range.end.character,
+                ));
+            }
+            snapshot.push_str(&hover_contents(hover.contents));
+            snapshot.push_str("\n\n---\n\n");
+        }
+        snap_test!(snapshot, fixture.path());
+    }
 }

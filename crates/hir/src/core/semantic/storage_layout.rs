@@ -34,7 +34,7 @@ use crate::{
             ty_lower::{lower_layout_root_uses_in_hir_ty, lower_opt_hir_ty},
         },
     },
-    hir_def::{Contract, IdentId, IntegerId},
+    hir_def::{Contract, EnumVariant, FieldParent, IdentId, IntegerId, VariantKind},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
@@ -141,6 +141,7 @@ pub struct ConcreteRootOccurrence<'db> {
     pub owner: TyId<'db>,
     pub place: StoragePlace<'db>,
     pub selector: Vec<PlaceStep>,
+    pub index_dimensions: Vec<LayoutIndexDimension<'db>>,
     pub role: RootRole,
     pub space: ProviderAddressSpace,
     pub order: u32,
@@ -151,6 +152,119 @@ pub struct ExplicitRootReservation<'db> {
     pub value: IntegerId<'db>,
     pub space: ProviderAddressSpace,
     pub occurrences: Vec<(ContractFieldId<'db>, ConcreteRootOccurrenceId)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub struct ContractLayoutReport<'db> {
+    pub entries: Vec<ContractLayoutEntry<'db>>,
+}
+
+impl<'db> ContractLayoutReport<'db> {
+    pub fn entries_for_field(
+        &self,
+        field: ContractFieldId<'db>,
+    ) -> impl Iterator<Item = &ContractLayoutEntry<'db>> {
+        self.entries
+            .iter()
+            .filter(move |entry| entry.field == field)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub struct ContractLayoutEntry<'db> {
+    pub field: ContractFieldId<'db>,
+    pub path: ContractLayoutPath<'db>,
+    pub ty: TyId<'db>,
+    pub address_space: ProviderAddressSpace,
+    pub value: ContractLayoutValue<'db>,
+    pub kind: ContractLayoutEntryKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum ContractLayoutEntryKind {
+    InlineField,
+    EnumTag,
+    Parameter(ContractLayoutParameterOrigin),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum ContractLayoutParameterOrigin {
+    Explicit,
+    Inferred,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub enum ContractLayoutValue<'db> {
+    Scalar(IntegerId<'db>),
+    Indexed {
+        base: IntegerId<'db>,
+        dimensions: Vec<usize>,
+        strides: Vec<usize>,
+        extent: usize,
+    },
+}
+
+impl<'db> ContractLayoutValue<'db> {
+    pub fn base(&self) -> IntegerId<'db> {
+        match self {
+            Self::Scalar(value) => *value,
+            Self::Indexed { base, .. } => *base,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub struct ContractLayoutPath<'db> {
+    pub field: IdentId<'db>,
+    pub segments: Vec<ContractLayoutPathSegment<'db>>,
+}
+
+impl<'db> ContractLayoutPath<'db> {
+    pub fn display(&self, db: &'db dyn HirAnalysisDb) -> String {
+        let mut path = self.field.data(db).to_string();
+        for segment in &self.segments {
+            match segment {
+                ContractLayoutPathSegment::Member { name, .. } => {
+                    path.push('.');
+                    path.push_str(name.data(db));
+                }
+                ContractLayoutPathSegment::TupleElement(index) => {
+                    path.push('.');
+                    path.push_str(&index.to_string());
+                }
+                ContractLayoutPathSegment::Variant { name, .. } => {
+                    path.push_str("::");
+                    path.push_str(name.data(db));
+                }
+                ContractLayoutPathSegment::ArrayElement { dimension, .. } => {
+                    path.push_str(&format!("[i{dimension}]"));
+                }
+                ContractLayoutPathSegment::ConstParameter { name, .. } => {
+                    path.push('.');
+                    path.push_str(name.data(db));
+                }
+                ContractLayoutPathSegment::EnumTag => path.push_str(".<tag>"),
+            }
+        }
+        path
+    }
+
+    pub fn index_dimensions(&self) -> impl Iterator<Item = (u32, usize)> + '_ {
+        self.segments.iter().filter_map(|segment| match segment {
+            ContractLayoutPathSegment::ArrayElement { dimension, len } => Some((*dimension, *len)),
+            _ => None,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum ContractLayoutPathSegment<'db> {
+    Member { name: IdentId<'db>, index: u32 },
+    TupleElement(u32),
+    Variant { name: IdentId<'db>, index: u32 },
+    ArrayElement { dimension: u32, len: usize },
+    ConstParameter { name: IdentId<'db>, index: u32 },
+    EnumTag,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Update)]
@@ -602,6 +716,7 @@ pub struct FieldStorageLayout<'db> {
     pub slot_offset: usize,
     pub slot_count: usize,
     pub inline_span: usize,
+    inline_leaves: Vec<InlineLayoutLeaf<'db>>,
     pub declared: AssignedLayoutTy<'db>,
     pub target: AssignedLayoutTy<'db>,
     pub slot_basis: AssignedLayoutTy<'db>,
@@ -1074,6 +1189,7 @@ pub struct ValidatedFieldLayoutPlan<'db> {
     is_provider: bool,
     address_space: ProviderAddressSpace,
     inline_span: usize,
+    inline_leaves: Vec<InlineLayoutLeaf<'db>>,
     declared_template: TyId<'db>,
     target_template: TyId<'db>,
     slot_basis_template: TyId<'db>,
@@ -1238,7 +1354,53 @@ enum WalkEvent<'db> {
 #[derive(Clone, Debug)]
 struct WalkOutput<'db> {
     inline_span: usize,
+    inline_leaves: Vec<InlineLayoutLeaf<'db>>,
     events: Vec<WalkEvent<'db>>,
+}
+
+impl<'db> WalkOutput<'db> {
+    fn empty() -> Self {
+        Self {
+            inline_span: 0,
+            inline_leaves: Vec::new(),
+            events: Vec::new(),
+        }
+    }
+
+    fn scalar(
+        ty: TyId<'db>,
+        place: StoragePlace<'db>,
+        dimensions: &[LayoutIndexDimension<'db>],
+    ) -> Self {
+        Self {
+            inline_span: 1,
+            inline_leaves: vec![InlineLayoutLeaf {
+                place,
+                ty,
+                offset: 0,
+                dimensions: dimensions.to_vec(),
+                strides: vec![0; dimensions.len()],
+                kind: InlineLayoutLeafKind::Field,
+            }],
+            events: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+enum InlineLayoutLeafKind {
+    Field,
+    EnumTag,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+struct InlineLayoutLeaf<'db> {
+    place: StoragePlace<'db>,
+    ty: TyId<'db>,
+    offset: usize,
+    dimensions: Vec<LayoutIndexDimension<'db>>,
+    strides: Vec<usize>,
+    kind: InlineLayoutLeafKind,
 }
 
 #[derive(Clone, Debug)]
@@ -1248,11 +1410,12 @@ struct ConcreteApplication<'db> {
 }
 
 #[derive(Clone, Debug)]
-struct ReachedConcreteOwner<'db> {
-    ty: TyId<'db>,
+struct ConcreteRootSite<'db> {
+    owner: TyId<'db>,
     place: StoragePlace<'db>,
+    dimensions: Vec<LayoutIndexDimension<'db>>,
     mode: WalkMode,
-    space: ProviderAddressSpace,
+    default_space: ProviderAddressSpace,
 }
 
 #[derive(Clone, Copy)]
@@ -1352,7 +1515,7 @@ struct FieldCollector<'db> {
     concrete_occurrences: Vec<ConcreteRootOccurrence<'db>>,
     errors: Vec<ContractLayoutError<'db>>,
     applications: Vec<ConcreteApplication<'db>>,
-    reached_concrete_owners: Vec<ReachedConcreteOwner<'db>>,
+    reached_concrete_sites: Vec<ConcreteRootSite<'db>>,
     visiting: FxHashSet<(TyId<'db>, StoragePlace<'db>)>,
     expanding_providers: Vec<ExpandingProvider<'db>>,
     nonterminal_occurrences: FxHashSet<RootOccurrenceId>,
@@ -1374,7 +1537,7 @@ impl<'db> FieldCollector<'db> {
             concrete_occurrences: Vec::new(),
             errors: Vec::new(),
             applications: Vec::new(),
-            reached_concrete_owners: Vec::new(),
+            reached_concrete_sites: Vec::new(),
             visiting: FxHashSet::default(),
             expanding_providers: Vec::new(),
             nonterminal_occurrences: FxHashSet::default(),
@@ -1487,12 +1650,16 @@ impl<'db> FieldCollector<'db> {
     fn emit_concrete_root(
         &mut self,
         value: TyId<'db>,
-        owner: TyId<'db>,
-        place: StoragePlace<'db>,
+        site: ConcreteRootSite<'db>,
         selector: Vec<PlaceStep>,
-        mode: WalkMode,
-        default_space: ProviderAddressSpace,
     ) {
+        let ConcreteRootSite {
+            owner,
+            place,
+            dimensions,
+            mode,
+            default_space,
+        } = site;
         let canon_env = ConstCanonEnv::new(self.scope, self.assumptions, None);
         let value = canonicalize_ty_for_mode(self.db, value, canon_env, ConstCanonMode::Identity);
         let TyData::ConstTy(const_ty) = value.data(self.db) else {
@@ -1540,6 +1707,8 @@ impl<'db> FieldCollector<'db> {
                 && occurrence.ty == *ty
                 && occurrence.owner == owner
                 && occurrence.place == place
+                && occurrence.selector == selector
+                && occurrence.index_dimensions == dimensions
                 && occurrence.role == mode.into()
                 && occurrence.space == space
         }) {
@@ -1553,6 +1722,7 @@ impl<'db> FieldCollector<'db> {
             owner,
             place,
             selector,
+            index_dimensions: dimensions,
             role: mode.into(),
             space,
             order: id.0,
@@ -1570,20 +1740,33 @@ impl<'db> FieldCollector<'db> {
                 continue;
             }
             let owner = root_use.owner.unwrap_or(instantiation.ty);
-            let reached = self.reached_concrete_owners[reached_start..]
+            let reached = self.reached_concrete_sites[reached_start..]
                 .iter()
-                .filter(|reached| reached.ty == owner && reached.mode == mode)
+                .filter(|reached| reached.owner == owner && reached.mode == mode)
                 .cloned()
                 .collect::<Vec<_>>();
             for reached in reached {
-                self.emit_concrete_root(
-                    root_use.value,
-                    owner,
-                    reached.place.clone(),
-                    reached.place.steps,
-                    mode,
-                    reached.space,
-                );
+                let mut selector = reached.place.steps.clone();
+                let parameter = root_use
+                    .selector
+                    .iter()
+                    .rev()
+                    .find_map(|step| match step {
+                        LayoutOccurrenceStep::GenericArg(index) => Some(*index),
+                        _ => None,
+                    })
+                    .or_else(|| {
+                        root_use.selector.iter().rev().find_map(|step| match step {
+                            LayoutOccurrenceStep::ConstParam(index) => Some(*index),
+                            _ => None,
+                        })
+                    });
+                if let Some(index) = parameter
+                    && !matches!(selector.last(), Some(PlaceStep::ConstParam(last)) if *last == index)
+                {
+                    selector.push(PlaceStep::ConstParam(index));
+                }
+                self.emit_concrete_root(root_use.value, reached, selector);
             }
         }
     }
@@ -1595,7 +1778,7 @@ impl<'db> FieldCollector<'db> {
         dimensions: &[LayoutIndexDimension<'db>],
         mode: WalkMode,
     ) -> WalkOutput<'db> {
-        let reached_start = self.reached_concrete_owners.len();
+        let reached_start = self.reached_concrete_sites.len();
         let output = self.walk_ty(
             instantiation.ty,
             instantiation.instance,
@@ -1614,12 +1797,13 @@ impl<'db> FieldCollector<'db> {
         dimensions: &[LayoutIndexDimension<'db>],
         mode: WalkMode,
     ) -> WalkOutput<'db> {
-        let reached_start = self.reached_concrete_owners.len();
-        self.reached_concrete_owners.push(ReachedConcreteOwner {
-            ty: instantiation.ty,
+        let reached_start = self.reached_concrete_sites.len();
+        self.reached_concrete_sites.push(ConcreteRootSite {
+            owner: instantiation.ty,
             place: place.clone(),
+            dimensions: dimensions.to_vec(),
             mode,
-            space: self.active_space,
+            default_space: self.active_space,
         });
         let output = if self.visiting.insert((instantiation.ty, place.clone())) {
             let output = self.walk_ty_representation(
@@ -1632,10 +1816,7 @@ impl<'db> FieldCollector<'db> {
             self.visiting.remove(&(instantiation.ty, place));
             output
         } else {
-            WalkOutput {
-                inline_span: 1,
-                events: Vec::new(),
-            }
+            WalkOutput::scalar(instantiation.ty, place, dimensions)
         };
         self.emit_reached_concrete_uses(instantiation, reached_start, mode);
         output
@@ -1670,20 +1851,19 @@ impl<'db> FieldCollector<'db> {
         {
             return WalkOutput {
                 inline_span: 0,
+                inline_leaves: Vec::new(),
                 events: vec![event],
             };
         }
-        self.reached_concrete_owners.push(ReachedConcreteOwner {
-            ty,
+        self.reached_concrete_sites.push(ConcreteRootSite {
+            owner: ty,
             place: place.clone(),
+            dimensions: dimensions.to_vec(),
             mode,
-            space: self.active_space,
+            default_space: self.active_space,
         });
         if !self.visiting.insert((ty, place.clone())) {
-            return WalkOutput {
-                inline_span: 1,
-                events: Vec::new(),
-            };
+            return WalkOutput::scalar(ty, place, dimensions);
         }
 
         let provider = ty
@@ -1708,24 +1888,15 @@ impl<'db> FieldCollector<'db> {
             ),
             Some(ProviderLayoutResolution::Ambiguous) => {
                 self.push_error(ContractLayoutError::AmbiguousProviderLayout);
-                WalkOutput {
-                    inline_span: 0,
-                    events: Vec::new(),
-                }
+                WalkOutput::empty()
             }
             Some(ProviderLayoutResolution::UnresolvedTarget) => {
                 self.push_error(ContractLayoutError::UnresolvedProviderTarget);
-                WalkOutput {
-                    inline_span: 0,
-                    events: Vec::new(),
-                }
+                WalkOutput::empty()
             }
             Some(ProviderLayoutResolution::UnresolvedSpace) => {
                 self.push_error(ContractLayoutError::UnresolvedProviderSpace);
-                WalkOutput {
-                    inline_span: 0,
-                    events: Vec::new(),
-                }
+                WalkOutput::empty()
             }
             Some(ProviderLayoutResolution::NotHandle) | None => {
                 self.walk_ty_representation(ty, parent_instance, place.clone(), dimensions, mode)
@@ -1792,9 +1963,10 @@ impl<'db> FieldCollector<'db> {
             } else {
                 1
             };
-            WalkOutput {
-                inline_span,
-                events: Vec::new(),
+            if inline_span == 0 {
+                WalkOutput::empty()
+            } else {
+                WalkOutput::scalar(ty, place, dimensions)
             }
         }
     }
@@ -1892,18 +2064,28 @@ impl<'db> FieldCollector<'db> {
         mode: WalkMode,
     ) -> WalkOutput<'db> {
         let mut inline_span = 0usize;
+        let mut inline_leaves = Vec::new();
         let mut events = Vec::new();
         for (instantiation, place) in items {
-            let output = self.walk_instantiation(&instantiation, place, dimensions, mode);
+            let mut output = self.walk_instantiation(&instantiation, place, dimensions, mode);
             let Some(next) = inline_span.checked_add(output.inline_span) else {
                 self.push_error(ContractLayoutError::LayoutExtentOverflow);
                 continue;
             };
+            for leaf in &mut output.inline_leaves {
+                let Some(offset) = leaf.offset.checked_add(inline_span) else {
+                    self.push_error(ContractLayoutError::LayoutExtentOverflow);
+                    continue;
+                };
+                leaf.offset = offset;
+            }
             inline_span = next;
+            inline_leaves.extend(output.inline_leaves);
             events.extend(output.events);
         }
         WalkOutput {
             inline_span,
+            inline_leaves,
             events,
         }
     }
@@ -1919,10 +2101,7 @@ impl<'db> FieldCollector<'db> {
         let (_, args) = ty.decompose_ty_app(self.db);
         let Some(&element) = args.first() else {
             self.push_error(ContractLayoutError::IncompleteAdtLayoutProjection { ty });
-            return WalkOutput {
-                inline_span: 0,
-                events: Vec::new(),
-            };
+            return WalkOutput::empty();
         };
         let Some(len) = args
             .get(1)
@@ -1936,16 +2115,10 @@ impl<'db> FieldCollector<'db> {
             } else {
                 self.push_error(ContractLayoutError::IncompleteAdtLayoutProjection { ty });
             }
-            return WalkOutput {
-                inline_span: 0,
-                events: Vec::new(),
-            };
+            return WalkOutput::empty();
         };
         if len == 0 {
-            return WalkOutput {
-                inline_span: 0,
-                events: Vec::new(),
-            };
+            return WalkOutput::empty();
         }
         let element = instantiate_layout_template(
             self.db,
@@ -1961,7 +2134,7 @@ impl<'db> FieldCollector<'db> {
             instance: element.instance,
             len,
         });
-        let output = self.walk_ty(
+        let mut output = self.walk_ty(
             element.ty,
             element.instance,
             place.with_step(PlaceStep::ArrayElem(0)),
@@ -1972,11 +2145,16 @@ impl<'db> FieldCollector<'db> {
             self.push_error(ContractLayoutError::LayoutExtentOverflow);
             return WalkOutput {
                 inline_span: 0,
+                inline_leaves: output.inline_leaves,
                 events: output.events,
             };
         };
+        for leaf in &mut output.inline_leaves {
+            leaf.strides[dimensions.len()] = output.inline_span;
+        }
         WalkOutput {
             inline_span,
+            inline_leaves: output.inline_leaves,
             events: output.events,
         }
     }
@@ -1993,10 +2171,7 @@ impl<'db> FieldCollector<'db> {
         let args = ty.generic_args(self.db);
         if args.len() != adt.params(self.db).len() {
             self.push_error(ContractLayoutError::IncompleteAdtLayoutProjection { ty });
-            return WalkOutput {
-                inline_span: 0,
-                events: Vec::new(),
-            };
+            return WalkOutput::empty();
         }
         let direct_roots = self.direct_root_args(adt, args);
         self.applications
@@ -2024,11 +2199,14 @@ impl<'db> FieldCollector<'db> {
             {
                 self.emit_concrete_root(
                     arg,
-                    ty,
-                    place.clone(),
+                    ConcreteRootSite {
+                        owner: ty,
+                        place: place.clone(),
+                        dimensions: dimensions.to_vec(),
+                        mode,
+                        default_space: self.active_space,
+                    },
                     place.with_step(PlaceStep::ConstParam(idx as u32)).steps,
-                    mode,
-                    self.active_space,
                 );
             }
         }
@@ -2065,6 +2243,14 @@ impl<'db> FieldCollector<'db> {
             }
             AdtRef::Enum(_) => {
                 let mut variants = Vec::new();
+                let mut inline_leaves = vec![InlineLayoutLeaf {
+                    place: place.clone(),
+                    ty,
+                    offset: 0,
+                    dimensions: dimensions.to_vec(),
+                    strides: vec![0; dimensions.len()],
+                    kind: InlineLayoutLeafKind::EnumTag,
+                }];
                 let mut max_payload = 0usize;
                 for (variant_idx, variant) in adt.fields(self.db).iter().enumerate() {
                     let variant_place = place.with_step(PlaceStep::EnumVariant(variant_idx as u32));
@@ -2086,8 +2272,16 @@ impl<'db> FieldCollector<'db> {
                             variant_place.with_step(PlaceStep::EnumPayloadField(field_idx as u32));
                         items.push((inst, field_place));
                     }
-                    let output = self.walk_sequence(items, dimensions, mode);
+                    let mut output = self.walk_sequence(items, dimensions, mode);
                     max_payload = max_payload.max(output.inline_span);
+                    for leaf in &mut output.inline_leaves {
+                        let Some(offset) = leaf.offset.checked_add(1) else {
+                            self.push_error(ContractLayoutError::LayoutExtentOverflow);
+                            continue;
+                        };
+                        leaf.offset = offset;
+                    }
+                    inline_leaves.extend(output.inline_leaves);
                     variants.push(output.events);
                 }
                 let inline_span = max_payload.checked_add(1).unwrap_or_else(|| {
@@ -2097,6 +2291,7 @@ impl<'db> FieldCollector<'db> {
                 direct_events.push(WalkEvent::Enum { place, variants });
                 WalkOutput {
                     inline_span,
+                    inline_leaves,
                     events: direct_events,
                 }
             }
@@ -2609,6 +2804,7 @@ struct CollectedFieldLayoutPlan<'db> {
     is_provider: bool,
     address_space: ProviderAddressSpace,
     inline_span: usize,
+    inline_leaves: Vec<InlineLayoutLeaf<'db>>,
     declared_template: TyId<'db>,
     target_template: TyId<'db>,
     slot_basis_template: TyId<'db>,
@@ -2631,6 +2827,7 @@ fn finish_field_plan<'db>(
         is_provider,
         address_space,
         inline_span,
+        inline_leaves,
         declared_template,
         target_template,
         slot_basis_template,
@@ -2865,6 +3062,7 @@ fn finish_field_plan<'db>(
         is_provider,
         address_space,
         inline_span,
+        inline_leaves,
         declared_template,
         target_template,
         slot_basis_template,
@@ -3037,10 +3235,7 @@ fn collect_field_plan<'db>(
             WalkMode::MaterializeOnly,
         )
     } else {
-        WalkOutput {
-            inline_span: 0,
-            events: Vec::new(),
-        }
+        WalkOutput::empty()
     };
     if !collector.errors.is_empty() {
         return Some((name, Err(collector.errors)));
@@ -3067,6 +3262,7 @@ fn collect_field_plan<'db>(
                 is_provider,
                 address_space,
                 inline_span: counted.inline_span,
+                inline_leaves: counted.inline_leaves,
                 declared_template: declared.ty,
                 target_template: target.ty,
                 slot_basis_template: target.ty,
@@ -3298,6 +3494,7 @@ fn allocate_contract<'db>(
                 slot_offset,
                 slot_count,
                 inline_span: plan.inline_span,
+                inline_leaves: plan.inline_leaves,
                 declared,
                 target,
                 slot_basis,
@@ -3350,11 +3547,17 @@ fn occurrence_placeholder_ty<'db>(
     .then_some(expected)
 }
 
-fn storage_place_ty_and_space<'db>(
+struct ResolvedStoragePlace<'db> {
+    ty: TyId<'db>,
+    space: ProviderAddressSpace,
+    segments: Vec<ContractLayoutPathSegment<'db>>,
+}
+
+fn resolve_storage_place<'db>(
     db: &'db dyn HirAnalysisDb,
     field: &FieldStorageLayout<'db>,
     place: &StoragePlace<'db>,
-) -> Option<(TyId<'db>, ProviderAddressSpace)> {
+) -> Option<ResolvedStoragePlace<'db>> {
     if place.field != field.field {
         return None;
     }
@@ -3374,6 +3577,8 @@ fn storage_place_ty_and_space<'db>(
     }
     let mut space = field.address_space;
     let mut enum_variant = None;
+    let mut segments = Vec::new();
+    let mut dimension = 0u32;
     for step in steps {
         match *step {
             PlaceStep::ProviderTarget => {
@@ -3405,9 +3610,17 @@ fn storage_place_ty_and_space<'db>(
             }
             PlaceStep::StructField(field_idx) => {
                 let adt = ty.adt_def(db)?;
-                if !matches!(adt.adt_ref(db), AdtRef::Struct(_)) {
+                let AdtRef::Struct(struct_) = adt.adt_ref(db) else {
                     return None;
-                }
+                };
+                let name = FieldParent::Struct(struct_)
+                    .fields(db)
+                    .nth(field_idx as usize)
+                    .and_then(|field| field.name(db))?;
+                segments.push(ContractLayoutPathSegment::Member {
+                    name,
+                    index: field_idx,
+                });
                 ty = instantiate_adt_field_shape(
                     db,
                     adt,
@@ -3420,31 +3633,301 @@ fn storage_place_ty_and_space<'db>(
                 if !ty.is_tuple(db) {
                     return None;
                 }
+                segments.push(ContractLayoutPathSegment::TupleElement(elem_idx));
                 ty = *ty.generic_args(db).get(elem_idx as usize)?;
             }
             PlaceStep::EnumVariant(variant_idx) => {
                 let adt = ty.adt_def(db)?;
-                if !matches!(adt.adt_ref(db), AdtRef::Enum(_)) {
+                let AdtRef::Enum(enum_) = adt.adt_ref(db) else {
                     return None;
-                }
-                enum_variant = Some((adt, variant_idx as usize, ty.generic_args(db).to_vec()));
+                };
+                let variant = EnumVariant::new(enum_, variant_idx as usize);
+                segments.push(ContractLayoutPathSegment::Variant {
+                    name: variant.ident(db)?,
+                    index: variant_idx,
+                });
+                enum_variant = Some((adt, variant, ty.generic_args(db).to_vec()));
             }
             PlaceStep::EnumPayloadField(field_idx) => {
-                let (adt, variant_idx, args) = enum_variant.take()?;
-                ty = instantiate_adt_field_shape(db, adt, variant_idx, field_idx as usize, &args);
+                let (adt, variant, args) = enum_variant.take()?;
+                match variant.kind(db) {
+                    VariantKind::Record(_) => {
+                        let name = FieldParent::Variant(variant)
+                            .fields(db)
+                            .nth(field_idx as usize)
+                            .and_then(|field| field.name(db))?;
+                        segments.push(ContractLayoutPathSegment::Member {
+                            name,
+                            index: field_idx,
+                        });
+                    }
+                    VariantKind::Tuple(_) => {
+                        segments.push(ContractLayoutPathSegment::TupleElement(field_idx))
+                    }
+                    VariantKind::Unit => return None,
+                }
+                ty = instantiate_adt_field_shape(
+                    db,
+                    adt,
+                    variant.idx as usize,
+                    field_idx as usize,
+                    &args,
+                );
             }
             PlaceStep::ArrayElem(_) => {
                 if !ty.is_array(db) {
                     return None;
                 }
-                ty = *ty.generic_args(db).first()?;
+                let args = ty.generic_args(db);
+                segments.push(ContractLayoutPathSegment::ArrayElement {
+                    dimension,
+                    len: args
+                        .get(1)
+                        .copied()
+                        .and_then(|len| const_ty_to_usize(db, len))?,
+                });
+                dimension += 1;
+                ty = *args.first()?;
             }
             PlaceStep::ConstParam(param_idx) => {
+                let adt = ty.adt_def(db)?;
+                let param = adt.params(db).get(param_idx as usize)?;
+                let TyData::ConstTy(param) = param.data(db) else {
+                    return None;
+                };
+                let ConstTyData::TyParam(param, _) = param.data(db) else {
+                    return None;
+                };
+                segments.push(ContractLayoutPathSegment::ConstParameter {
+                    name: param.name,
+                    index: param_idx,
+                });
                 ty = *ty.generic_args(db).get(param_idx as usize)?;
             }
         }
     }
-    enum_variant.is_none().then_some((ty, space))
+    enum_variant.is_none().then_some(ResolvedStoragePlace {
+        ty,
+        space,
+        segments,
+    })
+}
+
+fn storage_place_ty_and_space<'db>(
+    db: &'db dyn HirAnalysisDb,
+    field: &FieldStorageLayout<'db>,
+    place: &StoragePlace<'db>,
+) -> Option<(TyId<'db>, ProviderAddressSpace)> {
+    let resolved = resolve_storage_place(db, field, place)?;
+    Some((resolved.ty, resolved.space))
+}
+
+fn resolve_storage_place_with_dimensions<'db>(
+    db: &'db dyn HirAnalysisDb,
+    field: &FieldStorageLayout<'db>,
+    place: &StoragePlace<'db>,
+    dimensions: &[LayoutIndexDimension<'db>],
+) -> Option<ResolvedStoragePlace<'db>> {
+    let resolved = resolve_storage_place(db, field, place)?;
+    resolved
+        .segments
+        .iter()
+        .filter_map(|segment| match segment {
+            ContractLayoutPathSegment::ArrayElement { len, .. } => Some(*len),
+            _ => None,
+        })
+        .eq(dimensions.iter().map(|dimension| dimension.len))
+        .then_some(resolved)
+}
+
+fn resolved_layout_parameter_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    field: &FieldStorageLayout<'db>,
+    place: &StoragePlace<'db>,
+    dimensions: &[LayoutIndexDimension<'db>],
+) -> Option<TyId<'db>> {
+    let resolved = resolve_storage_place_with_dimensions(db, field, place, dimensions)?;
+    let TyData::ConstTy(const_ty) = resolved.ty.data(db) else {
+        return None;
+    };
+    Some(const_ty.ty(db))
+}
+
+fn contract_layout_path<'db>(
+    db: &'db dyn HirAnalysisDb,
+    field: &FieldStorageLayout<'db>,
+    place: &StoragePlace<'db>,
+) -> ContractLayoutPath<'db> {
+    let segments = resolve_storage_place(db, field, place)
+        .expect("allocated layout paths are independently validated")
+        .segments;
+    ContractLayoutPath {
+        field: field.name,
+        segments,
+    }
+}
+
+fn layout_integer<'db>(db: &'db dyn HirAnalysisDb, value: usize) -> IntegerId<'db> {
+    IntegerId::new(db, BigUint::from(value))
+}
+
+fn indexed_layout_value<'db>(
+    db: &'db dyn HirAnalysisDb,
+    base: usize,
+    dimensions: &[LayoutIndexDimension<'db>],
+    strides: &[usize],
+    extent: usize,
+) -> ContractLayoutValue<'db> {
+    ContractLayoutValue::Indexed {
+        base: layout_integer(db, base),
+        dimensions: dimensions.iter().map(|dimension| dimension.len).collect(),
+        strides: strides.to_vec(),
+        extent,
+    }
+}
+
+fn inferred_parameter_entry<'db>(
+    db: &'db dyn HirAnalysisDb,
+    field: &FieldStorageLayout<'db>,
+    occurrence: &RootOccurrence<'db>,
+    address_space: ProviderAddressSpace,
+    value: ContractLayoutValue<'db>,
+) -> ContractLayoutEntry<'db> {
+    let place = StoragePlace {
+        field: occurrence.place.field,
+        steps: occurrence.selector.clone(),
+    };
+    ContractLayoutEntry {
+        field: field.field,
+        path: contract_layout_path(db, field, &place),
+        ty: occurrence_placeholder_ty(db, occurrence).unwrap_or(occurrence.placeholder),
+        address_space,
+        value,
+        kind: ContractLayoutEntryKind::Parameter(ContractLayoutParameterOrigin::Inferred),
+    }
+}
+
+fn allocated_contract_layout_report<'db>(
+    db: &'db dyn HirAnalysisDb,
+    fields: &IndexMap<IdentId<'db>, FieldStorageLayout<'db>>,
+) -> ContractLayoutReport<'db> {
+    let mut entries = Vec::new();
+    for field in fields.values() {
+        for leaf in &field.inline_leaves {
+            let base = field
+                .slot_offset
+                .checked_add(leaf.offset)
+                .expect("validated inline layout offset must fit in usize");
+            let value = if leaf.dimensions.is_empty() {
+                ContractLayoutValue::Scalar(layout_integer(db, base))
+            } else {
+                indexed_layout_value(
+                    db,
+                    base,
+                    &leaf.dimensions,
+                    &leaf.strides,
+                    affine_family_extent(&leaf.dimensions, &leaf.strides)
+                        .expect("validated inline layout family must have finite extent"),
+                )
+            };
+            let mut path = contract_layout_path(db, field, &leaf.place);
+            let kind = match leaf.kind {
+                InlineLayoutLeafKind::Field => ContractLayoutEntryKind::InlineField,
+                InlineLayoutLeafKind::EnumTag => {
+                    path.segments.push(ContractLayoutPathSegment::EnumTag);
+                    ContractLayoutEntryKind::EnumTag
+                }
+            };
+            entries.push(ContractLayoutEntry {
+                field: field.field,
+                path,
+                ty: leaf.ty,
+                address_space: field.address_space,
+                value,
+                kind,
+            });
+        }
+        for occurrence in &field.concrete_occurrences {
+            let place = StoragePlace {
+                field: occurrence.place.field,
+                steps: occurrence.selector.clone(),
+            };
+            entries.push(ContractLayoutEntry {
+                field: field.field,
+                path: contract_layout_path(db, field, &place),
+                ty: occurrence.ty,
+                address_space: occurrence.space,
+                value: ContractLayoutValue::Scalar(occurrence.value),
+                kind: ContractLayoutEntryKind::Parameter(ContractLayoutParameterOrigin::Explicit),
+            });
+        }
+        for cell in &field.cells {
+            let Some(allocation) = cell.allocation else {
+                continue;
+            };
+            for occurrence in &cell.occurrences {
+                let occurrence = &field.occurrences[occurrence.0 as usize];
+                entries.push(inferred_parameter_entry(
+                    db,
+                    field,
+                    occurrence,
+                    allocation.space,
+                    ContractLayoutValue::Scalar(layout_integer(db, allocation.slot)),
+                ));
+            }
+        }
+        for family in &field.families {
+            let Some(allocation) = family.allocation else {
+                continue;
+            };
+            for occurrence in &family.occurrences {
+                let occurrence = &field.occurrences[occurrence.0 as usize];
+                entries.push(inferred_parameter_entry(
+                    db,
+                    field,
+                    occurrence,
+                    allocation.space,
+                    indexed_layout_value(
+                        db,
+                        allocation.slot,
+                        &family.dimensions,
+                        &family.strides,
+                        family.extent,
+                    ),
+                ));
+            }
+        }
+    }
+    let mut seen = FxHashSet::default();
+    entries.retain(|entry| seen.insert(entry.clone()));
+    entries.sort_by(|first, second| {
+        let space_order = |space| match space {
+            ProviderAddressSpace::Storage => 0,
+            ProviderAddressSpace::Transient => 1,
+            ProviderAddressSpace::Code => 2,
+            ProviderAddressSpace::Memory => 3,
+            ProviderAddressSpace::Calldata => 4,
+        };
+        space_order(first.address_space)
+            .cmp(&space_order(second.address_space))
+            .then_with(|| {
+                first
+                    .value
+                    .base()
+                    .data(db)
+                    .cmp(second.value.base().data(db))
+            })
+    });
+    ContractLayoutReport { entries }
+}
+
+#[salsa::tracked(return_ref)]
+pub(crate) fn build_contract_layout_report<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+) -> Option<ContractLayoutReport<'db>> {
+    let fields = &contract.storage_layout(db).allocated.as_ref()?.fields;
+    Some(allocated_contract_layout_report(db, fields))
 }
 
 fn storage_owner_space<'db>(
@@ -3505,8 +3988,25 @@ pub fn validate_allocated_contract_layout<'db>(
         if *name != field.name
             || field.field.index as usize != field_idx
             || !seen_fields.insert(field.field)
+            || (field.inline_span == 0) != field.inline_leaves.is_empty()
         {
             return Err(LayoutInvariantError::InvalidFieldExtent { field: field.field });
+        }
+        for leaf in &field.inline_leaves {
+            let Some(extent) = affine_family_extent(&leaf.dimensions, &leaf.strides) else {
+                return Err(LayoutInvariantError::InvalidFieldExtent { field: field.field });
+            };
+            if leaf.place.field != field.field
+                || leaf.dimensions.iter().any(|dimension| dimension.len == 0)
+                || resolve_storage_place_with_dimensions(db, field, &leaf.place, &leaf.dimensions)
+                    .is_none()
+                || leaf
+                    .offset
+                    .checked_add(extent)
+                    .is_none_or(|end| end > field.inline_span)
+            {
+                return Err(LayoutInvariantError::InvalidFieldExtent { field: field.field });
+            }
         }
         for (view, assigned) in [
             (LayoutViewKind::Declared, &field.declared),
@@ -3558,11 +4058,21 @@ pub fn validate_allocated_contract_layout<'db>(
                 TyData::TyBase(TyBase::Prim(PrimTy::U256 | PrimTy::Usize))
             );
             let owner_space = storage_owner_space(db, field, &occurrence.place, occurrence.owner);
+            let selector = StoragePlace {
+                field: occurrence.place.field,
+                steps: occurrence.selector.clone(),
+            };
             if occurrence.id.0 as usize != idx
                 || occurrence.order != occurrence.id.0
                 || occurrence.place.field != field.field
                 || !occurrence.selector.starts_with(&occurrence.place.steps)
+                || occurrence
+                    .index_dimensions
+                    .iter()
+                    .any(|dimension| dimension.len == 0)
                 || !valid_ty
+                || resolved_layout_parameter_ty(db, field, &selector, &occurrence.index_dimensions)
+                    != Some(occurrence.ty)
                 || owner_space != Some(occurrence.space)
             {
                 return Err(LayoutInvariantError::InvalidConcreteOccurrence {
@@ -3616,6 +4126,10 @@ pub fn validate_allocated_contract_layout<'db>(
                         occurrence: *occurrence,
                     });
                 };
+                let selector = StoragePlace {
+                    field: data.place.field,
+                    steps: data.selector.clone(),
+                };
                 if data.id != *occurrence
                     || data.root != cell.root
                     || data.space != cell.space
@@ -3625,7 +4139,9 @@ pub fn validate_allocated_contract_layout<'db>(
                     || data
                         .index_dimensions
                         .iter()
-                        .any(|dimension| dimension.len > 1)
+                        .any(|dimension| dimension.len != 1)
+                    || resolved_layout_parameter_ty(db, field, &selector, &data.index_dimensions)
+                        != Some(expected)
                     || occurrence_units
                         .insert(*occurrence, AllocationUnitId::Scalar(cell.id))
                         .is_some()
@@ -3715,6 +4231,10 @@ pub fn validate_allocated_contract_layout<'db>(
                         occurrence: *occurrence,
                     });
                 };
+                let selector = StoragePlace {
+                    field: data.place.field,
+                    steps: data.selector.clone(),
+                };
                 if data.id != *occurrence
                     || data.root != family.lane
                     || data.index_dimensions != family.dimensions
@@ -3722,6 +4242,8 @@ pub fn validate_allocated_contract_layout<'db>(
                     || storage_place_root_space(db, field, &data.place) != Some(data.space)
                     || data.place.field != field.field
                     || !data.selector.starts_with(&data.place.steps)
+                    || resolved_layout_parameter_ty(db, field, &selector, &data.index_dimensions)
+                        != Some(expected)
                     || occurrence_units
                         .insert(*occurrence, AllocationUnitId::Indexed(family.id))
                         .is_some()

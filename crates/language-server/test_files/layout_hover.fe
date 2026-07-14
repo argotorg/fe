@@ -1,0 +1,35 @@
+use std::evm::{StorageMap, TStorPtr}
+
+struct CounterStore {
+  global: u256,
+  counts: StorageMap<u256, u256>,
+}
+
+pub contract <|contract|>Counter {
+  mut <|store|>store: CounterStore,
+  mut foo: u256,
+  mut <|explicit|>baz: StorageMap<u256, u256, 0>,
+}
+
+pub contract <|spaces|>Spaces {
+  mut stored: u256,
+  mut temporary: TStorPtr<u256>,
+  <|immutable|>immutable: u256,
+}
+
+pub contract Arrays {
+  mut <|array|>maps: [StorageMap<u256, u256>; 3],
+}
+
+struct Empty {}
+pub contract ZeroSized {
+  mut <|empty|>empty: Empty,
+}
+
+struct Good<const ROOT: u256 = _> {}
+struct Bad<const ROOT: u8 = _> {}
+
+pub contract Broken {
+  mut <|blocked|>good: Good,
+  mut <|invalid|>bad: Bad,
+}

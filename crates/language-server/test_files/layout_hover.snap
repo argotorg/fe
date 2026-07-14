@@ -1,0 +1,109 @@
+---
+source: crates/language-server/src/functionality/hover.rs
+expression: snapshot
+input_file: test_files/layout_hover.fe
+---
+## contract
+range: 7:13..7:20
+
+### Contract Layout
+
+#### Storage
+
+- `0`: `baz.SALT` (explicit parameter, `u256`)
+- `1`: `store.global` (inline field, `u256`)
+- `2`: `store.counts.SALT` (inferred parameter, `u256`)
+- `3`: `foo` (inline field, `u256`)
+
+---
+
+## store
+range: 8:6..8:11
+
+### Field Layout
+
+#### Storage
+
+- `1`: `store.global` (inline field, `u256`)
+- `2`: `store.counts.SALT` (inferred parameter, `u256`)
+
+---
+
+## explicit
+range: 10:6..10:9
+
+### Field Layout
+
+#### Storage
+
+- `0`: `baz.SALT` (explicit parameter, `u256`)
+
+---
+
+## spaces
+range: 13:13..13:19
+
+### Contract Layout
+
+#### Storage
+
+- `0`: `stored` (inline field, `u256`)
+
+#### Transient Storage
+
+- `0`: `temporary` (inline field, `u256`)
+
+#### Immutable (Code)
+
+- `0`: `immutable` (inline field, `u256`)
+
+---
+
+## immutable
+range: 16:2..16:11
+
+### Field Layout
+
+#### Immutable (Code)
+
+- `0`: `immutable` (inline field, `u256`)
+
+---
+
+## array
+range: 20:6..20:10
+
+### Field Layout
+
+#### Storage
+
+- `0 + i0` (i0: 0..3): `maps[i0].SALT` (inferred parameter, `u256`)
+
+---
+
+## empty
+range: 25:6..25:11
+
+### Field Layout
+
+No address-space values are assigned.
+
+---
+
+## blocked
+range: 32:6..32:10
+
+### Field Layout
+
+Unavailable because another contract field has an invalid layout.
+
+---
+
+## invalid
+range: 33:6..33:9
+
+### Field Layout
+
+Invalid: an unresolved const is not a `u256` or `usize` layout root
+
+---
