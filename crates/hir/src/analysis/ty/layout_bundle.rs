@@ -127,6 +127,12 @@ impl LayoutPortKey {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub struct LayoutBundleComponentId(pub u32);
 
+impl LayoutBundleComponentId {
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub enum LayoutBundleComponentKey<'db> {
     Root(LayoutRootId<'db>),
