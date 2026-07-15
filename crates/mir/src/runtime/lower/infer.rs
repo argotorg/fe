@@ -19,6 +19,7 @@ use hir::{
 
 use crate::{
     db::MirDb,
+    instance::RuntimeInstanceKey,
     runtime::{
         AddressSpaceKind, ArrayLayout, EnumLayoutKey, EnumVariantLayout, Layout, LayoutId,
         LayoutKey, RefKind, RefView, RuntimeCarrier, RuntimeClass, RuntimeLocalLowering,
@@ -51,8 +52,57 @@ pub(super) struct InferenceResult<'db> {
     pub(super) provider_bindings: Vec<RuntimeProviderBinding<'db>>,
 }
 
-pub(super) struct LocalStateInferer<'a, 'db> {
+/// Which assignments a carrier-inference run visits: either every assignment in
+/// the body, or the backward slice feeding the return locals. The same fixpoint
+/// (`CarrierInferer`) runs over both, so full-body inference and return-class
+/// inference cannot diverge.
+pub(super) trait AssignmentSpace<'db> {
+    type Node: EntityRef + Copy;
+
+    fn node_count(&self) -> usize;
+    fn seed_nodes(&self) -> Vec<Self::Node>;
+    fn assignment_id(&self, node: Self::Node) -> AssignmentId;
+    fn for_each_node_using_local(&self, local: SLocalId, f: &mut dyn FnMut(Self::Node));
+    fn dynamic_dependents(&self, local: SLocalId) -> &[SLocalId];
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct FullBodySpace<'a, 'db>(BodyEnv<'a, 'db>);
+
+impl<'db> AssignmentSpace<'db> for FullBodySpace<'_, 'db> {
+    type Node = AssignmentId;
+
+    fn node_count(&self) -> usize {
+        self.0.assignment_count()
+    }
+
+    fn seed_nodes(&self) -> Vec<AssignmentId> {
+        self.0.assignment_ids()
+    }
+
+    fn assignment_id(&self, node: AssignmentId) -> AssignmentId {
+        node
+    }
+
+    fn for_each_node_using_local(&self, local: SLocalId, f: &mut dyn FnMut(AssignmentId)) {
+        for &assign_id in self.0.assignments_using_local(local) {
+            f(assign_id);
+        }
+    }
+
+    fn dynamic_dependents(&self, local: SLocalId) -> &[SLocalId] {
+        self.0.dynamic_dependents(local)
+    }
+}
+
+pub(super) type ReturnClassLookup<'lookup, 'db> =
+    &'lookup mut dyn FnMut(RuntimeInstanceKey<'db>) -> Option<RuntimeClass<'db>>;
+
+pub(super) type LocalStateInferer<'a, 'db> = CarrierInferer<'a, 'a, 'db, FullBodySpace<'a, 'db>>;
+
+pub(super) struct CarrierInferer<'a, 'lookup, 'db, S: AssignmentSpace<'db>> {
     env: BodyEnv<'a, 'db>,
+    space: S,
     carriers: Vec<RuntimeCarrier<'db>>,
     /// Locals whose carrier is fixed by the interface signature (the runtime-visible
     /// parameters). Their carrier is the calling convention: the verifier requires it to
@@ -61,28 +111,20 @@ pub(super) struct LocalStateInferer<'a, 'db> {
     /// storage — that is satisfied by a [`RuntimeLocalRoot::Slot`] instead).
     signature_pinned: Vec<bool>,
     class_cache: InferClassCache<'db>,
-    pending_dependents: Vec<AssignmentId>,
+    pending_dependents: Vec<S::Node>,
+    /// Callee return-class lookup; `None` queries `runtime_return_class`
+    /// directly. Return-slice inference injects its own so salsa cycle
+    /// recovery stays in control of recursion.
+    lookup: Option<ReturnClassLookup<'lookup, 'db>>,
 }
 
-impl<'a, 'db> LocalStateInferer<'a, 'db> {
+impl<'a, 'lookup, 'db> CarrierInferer<'a, 'lookup, 'db, FullBodySpace<'a, 'db>> {
     pub(super) fn new(
         env: BodyEnv<'a, 'db>,
         params: &[RuntimeClass<'db>],
         param_locals: &[SLocalId],
     ) -> Self {
-        let mut carriers = vec![RuntimeCarrier::Erased; env.body().locals.len()];
-        let mut signature_pinned = vec![false; env.body().locals.len()];
-        for (class, local) in params.iter().zip(param_locals.iter().copied()) {
-            carriers[local.index()] = RuntimeCarrier::Value(class.clone());
-            signature_pinned[local.index()] = true;
-        }
-        Self {
-            env,
-            carriers,
-            signature_pinned,
-            class_cache: InferClassCache::new(env.body().locals.len()),
-            pending_dependents: Vec::new(),
-        }
+        CarrierInferer::with_space(env, FullBodySpace(env), params, param_locals, None)
     }
 
     pub(super) fn seed_return_class(
@@ -120,52 +162,6 @@ impl<'a, 'db> LocalStateInferer<'a, 'db> {
         }
     }
 
-    fn set_carrier(&mut self, local: SLocalId, desired: RuntimeCarrier<'db>) -> bool {
-        if self.signature_pinned[local.index()] {
-            return false;
-        }
-        let current = self
-            .carriers
-            .get(local.index())
-            .cloned()
-            .unwrap_or(RuntimeCarrier::Erased);
-        let desired = merge_runtime_carrier(
-            self.env.db(),
-            &self.env.body().locals[local.index()],
-            current,
-            desired,
-        );
-        if self.carriers[local.index()] == desired {
-            return false;
-        }
-        self.carriers[local.index()] = desired;
-        self.class_cache.note_carrier_changed(local);
-        true
-    }
-
-    fn collect_local_change_dependents(&mut self, changed_local: SLocalId) {
-        let mut pending = vec![changed_local];
-        let mut seen = vec![false; self.env.body().locals.len()];
-        let mut queued = SecondaryMap::with_default(false);
-        queued.resize(self.env.assignment_count());
-        self.pending_dependents.clear();
-        while let Some(local) = pending.pop() {
-            if std::mem::replace(&mut seen[local.index()], true) {
-                continue;
-            }
-            self.class_cache.invalidate_local_dynamic_facts(local);
-            for &assign_id in self.env.assignments_using_local(local) {
-                if !queued[assign_id] {
-                    queued[assign_id] = true;
-                    self.pending_dependents.push(assign_id);
-                }
-            }
-            for dependent in self.env.dynamic_dependents(local).iter().copied() {
-                pending.push(dependent);
-            }
-        }
-    }
-
     fn infer_roots(&mut self) -> Vec<RuntimeLocalRoot<'db>> {
         let carriers = self.carriers.clone();
         let cx = self.env.with_carriers(&carriers);
@@ -196,22 +192,102 @@ impl<'a, 'db> LocalStateInferer<'a, 'db> {
     }
 }
 
-impl<'a, 'db> SparseAnalysis for LocalStateInferer<'a, 'db> {
-    type Node = AssignmentId;
+impl<'a, 'lookup, 'db, S: AssignmentSpace<'db>> CarrierInferer<'a, 'lookup, 'db, S> {
+    pub(super) fn with_space(
+        env: BodyEnv<'a, 'db>,
+        space: S,
+        params: &[RuntimeClass<'db>],
+        param_locals: &[SLocalId],
+        lookup: Option<ReturnClassLookup<'lookup, 'db>>,
+    ) -> Self {
+        let mut carriers = vec![RuntimeCarrier::Erased; env.body().locals.len()];
+        let mut signature_pinned = vec![false; env.body().locals.len()];
+        for (class, local) in params.iter().zip(param_locals.iter().copied()) {
+            carriers[local.index()] = RuntimeCarrier::Value(class.clone());
+            signature_pinned[local.index()] = true;
+        }
+        Self {
+            env,
+            space,
+            carriers,
+            signature_pinned,
+            class_cache: InferClassCache::new(env.body().locals.len()),
+            pending_dependents: Vec::new(),
+            lookup,
+        }
+    }
+
+    pub(super) fn solve_carriers(mut self) -> Vec<RuntimeCarrier<'db>> {
+        seed_root_provider_carriers(self.env, &mut self.carriers);
+        solve_sparse(&mut self, &mut ());
+        self.carriers
+    }
+
+    fn set_carrier(&mut self, local: SLocalId, desired: RuntimeCarrier<'db>) -> bool {
+        if self.signature_pinned[local.index()] {
+            return false;
+        }
+        let current = self
+            .carriers
+            .get(local.index())
+            .cloned()
+            .unwrap_or(RuntimeCarrier::Erased);
+        let desired = merge_runtime_carrier(
+            self.env.db(),
+            &self.env.body().locals[local.index()],
+            current,
+            desired,
+        );
+        if self.carriers[local.index()] == desired {
+            return false;
+        }
+        self.carriers[local.index()] = desired;
+        self.class_cache.note_carrier_changed(local);
+        true
+    }
+
+    fn collect_local_change_dependents(&mut self, changed_local: SLocalId) {
+        let mut pending = vec![changed_local];
+        let mut seen = vec![false; self.env.body().locals.len()];
+        let mut queued = SecondaryMap::with_default(false);
+        queued.resize(self.space.node_count());
+        self.pending_dependents.clear();
+        while let Some(local) = pending.pop() {
+            if std::mem::replace(&mut seen[local.index()], true) {
+                continue;
+            }
+            self.class_cache.invalidate_local_dynamic_facts(local);
+            let space = &self.space;
+            let pending_dependents = &mut self.pending_dependents;
+            space.for_each_node_using_local(local, &mut |node| {
+                if !queued[node] {
+                    queued[node] = true;
+                    pending_dependents.push(node);
+                }
+            });
+            for dependent in self.space.dynamic_dependents(local).iter().copied() {
+                pending.push(dependent);
+            }
+        }
+    }
+}
+
+impl<'db, S: AssignmentSpace<'db>> SparseAnalysis for CarrierInferer<'_, '_, 'db, S> {
+    type Node = S::Node;
     type State = ();
     type Error = Infallible;
 
     fn node_count(&self) -> usize {
-        self.env.assignment_count()
+        self.space.node_count()
     }
 
     fn seed_nodes(&self) -> Vec<Self::Node> {
-        self.env.assignment_ids()
+        self.space.seed_nodes()
     }
 
     fn step(&mut self, node: Self::Node, _: &mut Self::State) -> Result<bool, Self::Error> {
         self.pending_dependents.clear();
-        let assign_id = node;
+        let assign_id = self.space.assignment_id(node);
         let assign = self
             .env
             .assignment(assign_id)
@@ -227,7 +303,12 @@ impl<'a, 'db> SparseAnalysis for LocalStateInferer<'a, 'db> {
             }
         };
         let local = &self.env.body().locals[assign.dst.index()];
-        let mut lookup_return_class = |key| runtime_return_class(self.env.db(), key);
+        let db = self.env.db();
+        let lookup = &mut self.lookup;
+        let mut lookup_return_class = move |key| match lookup.as_deref_mut() {
+            Some(f) => f(key),
+            None => runtime_return_class(db, key),
+        };
         let class = self.env.expr_direct_class(
             &self.carriers,
             assign.block_idx,
@@ -240,7 +321,7 @@ impl<'a, 'db> SparseAnalysis for LocalStateInferer<'a, 'db> {
             return Ok(false);
         };
         let desired = desired_runtime_value_carrier(
-            self.env.db(),
+            db,
             local,
             class,
             self.env.scope(),
