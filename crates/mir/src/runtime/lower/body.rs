@@ -94,9 +94,9 @@ use super::{
     },
     tuple::RuntimeTupleFieldEmitter,
     type_info::{
-        RuntimeTypeEnv, effect_handle_transport_class_for_ty_in_context,
-        provider_class_for_target_in_env, runtime_effect_handle_info,
-        stored_class_for_ty_in_context, top_level_class_for_ty_in_env,
+        RuntimeTypeEnv, effect_handle_transport_class_for_ty_in_env,
+        provider_class_for_target_in_env, runtime_effect_handle_info, stored_class_for_ty_in_env,
+        top_level_class_for_ty_in_env,
     },
 };
 
@@ -987,7 +987,7 @@ impl<'db> RmirEmitter<'db> {
             }
             NSStmtKind::Store { dst, src } => {
                 if self
-                    .with_current_body_cx(|cx| cx.normalized_place_class(dst))
+                    .with_current_body_cx(|cx| cx.env.normalized_place_class(cx.carriers, dst))
                     .is_some()
                 {
                     let place = self.lower_place(bb, dst);
@@ -2354,8 +2354,7 @@ impl<'db> RmirEmitter<'db> {
         field: NOperand,
         field_ty: TyId<'db>,
     ) -> (RLocalId, RuntimeClass<'db>) {
-        let stored =
-            stored_class_for_ty_in_context(self.db, field_ty, self.env.scope, self.env.assumptions);
+        let stored = stored_class_for_ty_in_env(self.db, self.env, field_ty);
         if self.class_is_runtime_zst(&stored) {
             let value = self.lower_zst_value_placeholder(bb, field_ty, stored.clone());
             return (value, stored);
@@ -2391,8 +2390,7 @@ impl<'db> RmirEmitter<'db> {
         field_ty: TyId<'db>,
         bindings: &[LayoutEvidenceConstBinding<'db>],
     ) -> (RLocalId, RuntimeClass<'db>) {
-        let stored =
-            stored_class_for_ty_in_context(self.db, field_ty, self.env.scope, self.env.assumptions);
+        let stored = stored_class_for_ty_in_env(self.db, self.env, field_ty);
         if self.class_is_runtime_zst(&stored) {
             let value = self.lower_zst_value_placeholder(bb, field_ty, stored.clone());
             return (value, stored);
@@ -2618,11 +2616,10 @@ impl<'db> RmirEmitter<'db> {
         let Some(local) = self.facts.root_provider_local(binding) else {
             return false;
         };
-        let transport_class = match effect_handle_transport_class_for_ty_in_context(
+        let transport_class = match effect_handle_transport_class_for_ty_in_env(
             self.db,
+            self.env,
             binding.provider_ty,
-            self.env.scope,
-            self.env.assumptions,
         ) {
             Some(class) => class,
             None => return false,
@@ -2635,8 +2632,7 @@ impl<'db> RmirEmitter<'db> {
             return false;
         }
         let value_ty = self.semantic_body.locals[local.index()].ty;
-        let class =
-            stored_class_for_ty_in_context(self.db, value_ty, self.env.scope, self.env.assumptions);
+        let class = stored_class_for_ty_in_env(self.db, self.env, value_ty);
         let value = self.coerce_value(bb, transport, &class);
         debug_assert_eq!(
             self.locals[transport.index()].semantic_ty,
@@ -3448,12 +3444,9 @@ impl<'db> RmirEmitter<'db> {
                 continue;
             };
             let handle_ty = callee.binding_ty(self.db, binding);
-            let Some(transport) = effect_handle_transport_class_for_ty_in_context(
-                self.db,
-                handle_ty,
-                self.env.scope,
-                self.env.assumptions,
-            ) else {
+            let Some(transport) =
+                effect_handle_transport_class_for_ty_in_env(self.db, self.env, handle_ty)
+            else {
                 continue;
             };
             let Some(value) = self.handle_like_semantic_value(arg.local) else {
@@ -4765,18 +4758,8 @@ impl<'db> RmirEmitter<'db> {
         target: &RuntimeClass<'db>,
         handle_ty: TyId<'db>,
     ) -> Option<RLocalId> {
-        let transport = effect_handle_transport_class_for_ty_in_context(
-            self.db,
-            handle_ty,
-            self.env.scope,
-            self.env.assumptions,
-        )?;
-        let ordinary = stored_class_for_ty_in_context(
-            self.db,
-            handle_ty,
-            self.env.scope,
-            self.env.assumptions,
-        );
+        let transport = effect_handle_transport_class_for_ty_in_env(self.db, self.env, handle_ty)?;
+        let ordinary = stored_class_for_ty_in_env(self.db, self.env, handle_ty);
         if target != &transport || ordinary.span_words(self.db) != 0 {
             return None;
         }
@@ -4815,18 +4798,8 @@ impl<'db> RmirEmitter<'db> {
         target: &RuntimeClass<'db>,
         handle_ty: TyId<'db>,
     ) -> Option<RLocalId> {
-        let transport = effect_handle_transport_class_for_ty_in_context(
-            self.db,
-            handle_ty,
-            self.env.scope,
-            self.env.assumptions,
-        )?;
-        let ordinary = stored_class_for_ty_in_context(
-            self.db,
-            handle_ty,
-            self.env.scope,
-            self.env.assumptions,
-        );
+        let transport = effect_handle_transport_class_for_ty_in_env(self.db, self.env, handle_ty)?;
+        let ordinary = stored_class_for_ty_in_env(self.db, self.env, handle_ty);
         let source_local = self.semantic_source_local_for_runtime_value(src);
         if target == &transport
             && source
