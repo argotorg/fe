@@ -60,10 +60,7 @@ use sonatina_ir::{
 };
 
 use super::{LowerError, create_module_ctx};
-use crate::{
-    TargetDataLayout,
-    function_symbols::{FunctionSymbolInput, FunctionSymbolStyle, assign_function_symbols},
-};
+use crate::function_symbols::{FunctionSymbolInput, assign_function_symbols};
 
 const PANIC_OVERFLOW: u64 = 0x11;
 const PANIC_DIVISION_BY_ZERO: u64 = 0x12;
@@ -76,9 +73,7 @@ const LAYOUT_MAP_PATCH: u64 = 3;
 pub(super) fn compile_runtime_package_sonatina(
     db: &DriverDataBase,
     package: &RuntimePackage<'_>,
-    layout: TargetDataLayout,
 ) -> Result<Module, LowerError> {
-    let _ = layout;
     let builder = ModuleBuilder::new(create_module_ctx());
     let isa = super::create_evm_isa();
     let mut lowerer = ModuleLowerer::new(db, builder, &isa, package);
@@ -571,14 +566,6 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
     }
 }
 
-const SONATINA_FUNCTION_SYMBOL_STYLE: FunctionSymbolStyle = FunctionSymbolStyle {
-    segment_separator: "__",
-    variant_separator: "_",
-    fallback_separator: "_",
-    sanitize_segment: sanitize_sonatina_ident_segment,
-    namespace_key: sonatina_symbol_namespace_key,
-};
-
 fn assign_sonatina_function_symbols<'db>(
     db: &'db DriverDataBase,
     package: &RuntimePackage<'db>,
@@ -599,39 +586,9 @@ fn assign_sonatina_function_symbols<'db>(
         .collect::<Vec<_>>();
     functions
         .into_iter()
-        .zip(assign_function_symbols(
-            db,
-            &inputs,
-            &SONATINA_FUNCTION_SYMBOL_STYLE,
-        ))
+        .zip(assign_function_symbols(db, &inputs))
         .map(|(function, symbol)| (function.instance(db), symbol))
         .collect()
-}
-
-fn sanitize_sonatina_ident_segment(value: &str) -> String {
-    let sanitized = value
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '_' {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    if sanitized
-        .chars()
-        .next()
-        .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
-    {
-        sanitized
-    } else {
-        format!("_{sanitized}")
-    }
-}
-
-fn sonatina_symbol_namespace_key(symbol: &str) -> String {
-    symbol.to_string()
 }
 
 fn describe_runtime_instance<'db>(

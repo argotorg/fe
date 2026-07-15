@@ -2124,7 +2124,7 @@ fn emit_runtime_package_ir(
 ) -> Result<(&'static str, String), String> {
     Ok((
         "sona",
-        emit_runtime_package_sonatina_ir_optimized(db, package, codegen::EVM_LAYOUT, opt_level)
+        emit_runtime_package_sonatina_ir_optimized(db, package, opt_level)
             .map_err(|err| err.to_string())?,
     ))
 }

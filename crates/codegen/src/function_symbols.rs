@@ -20,17 +20,13 @@ const GENERIC_SUFFIX_HASH_LEN: usize = 4;
 const OWNER_CONTEXT_HASH_LEN: usize = 4;
 const CONFLICT_SUFFIX_HASH_LEN: usize = 4;
 
+const SEGMENT_SEPARATOR: &str = "__";
+const VARIANT_SEPARATOR: &str = "_";
+const FALLBACK_SEPARATOR: &str = "_";
+
 struct OwnerContextCandidates {
     primary: Option<String>,
     fallback: Option<String>,
-}
-
-pub(crate) struct FunctionSymbolStyle {
-    pub segment_separator: &'static str,
-    pub variant_separator: &'static str,
-    pub fallback_separator: &'static str,
-    pub sanitize_segment: fn(&str) -> String,
-    pub namespace_key: fn(&str) -> String,
 }
 
 pub(crate) struct FunctionSymbolInput<'db> {
@@ -43,16 +39,15 @@ pub(crate) struct FunctionSymbolInput<'db> {
 pub(crate) fn assign_function_symbols<'db>(
     db: &'db DriverDataBase,
     inputs: &[FunctionSymbolInput<'db>],
-    style: &FunctionSymbolStyle,
 ) -> Vec<String> {
     let candidates = inputs
         .iter()
-        .map(|input| function_symbol_candidates(db, input, style))
+        .map(|input| function_symbol_candidates(db, input))
         .collect::<Vec<_>>();
     let mut selected = vec![0usize; candidates.len()];
 
     loop {
-        let conflicts = symbol_conflicts(&candidates, &selected, style);
+        let conflicts = symbol_conflicts(&candidates, &selected);
         if conflicts.values().all(|group| group.len() == 1) {
             break;
         }
@@ -77,24 +72,22 @@ pub(crate) fn assign_function_symbols<'db>(
         .zip(selected)
         .map(|(candidates, selected)| candidates[selected].clone())
         .collect::<Vec<_>>();
-    uniquify_function_symbols(&mut symbols, style, &candidates, inputs);
+    uniquify_function_symbols(&mut symbols, &candidates, inputs);
     symbols
 }
 
 fn function_symbol_candidates<'db>(
     db: &'db DriverDataBase,
     input: &FunctionSymbolInput<'db>,
-    style: &FunctionSymbolStyle,
 ) -> Vec<String> {
     match &input.owner {
         RuntimeFunctionOwner::Semantic(semantic) => {
-            semantic_function_symbol_candidates(db, *semantic, &input.variant_suffix, style)
+            semantic_function_symbol_candidates(db, *semantic, &input.variant_suffix)
         }
         RuntimeFunctionOwner::Synthetic(_) => {
             vec![render_raw_symbol(
                 &input.fallback_symbol,
                 &input.variant_suffix,
-                style,
             )]
         }
     }
@@ -104,7 +97,6 @@ fn semantic_function_symbol_candidates<'db>(
     db: &'db DriverDataBase,
     semantic: SemanticInstance<'db>,
     variant_suffix: &str,
-    style: &FunctionSymbolStyle,
 ) -> Vec<String> {
     let owner = semantic.key(db).owner(db);
     let leaf = semantic_leaf_component(db, owner);
@@ -114,13 +106,12 @@ fn semantic_function_symbol_candidates<'db>(
     let ingot = ingot_component_for_scope(db, owner.scope());
 
     let mut candidates = Vec::new();
-    push_symbol_candidate(&mut candidates, vec![leaf.clone()], variant_suffix, style);
+    push_symbol_candidate(&mut candidates, vec![leaf.clone()], variant_suffix);
     if let Some(generic) = &generic {
         push_symbol_candidate(
             &mut candidates,
             vec![leaf.clone(), generic.clone()],
             variant_suffix,
-            style,
         );
     }
 
@@ -132,7 +123,7 @@ fn semantic_function_symbol_candidates<'db>(
     if let Some(owner_context) = &owner_context.primary {
         let mut parts = vec![owner_context.clone()];
         parts.extend(scoped_leaf.clone());
-        push_symbol_candidate(&mut candidates, parts, variant_suffix, style);
+        push_symbol_candidate(&mut candidates, parts, variant_suffix);
     }
 
     let mut module_parts = module_path.clone();
@@ -140,78 +131,90 @@ fn semantic_function_symbol_candidates<'db>(
         module_parts.push(owner_context.clone());
     }
     module_parts.extend(scoped_leaf.clone());
-    push_symbol_candidate(&mut candidates, module_parts.clone(), variant_suffix, style);
+    push_symbol_candidate(&mut candidates, module_parts.clone(), variant_suffix);
 
     let mut ingot_parts = vec![ingot];
     ingot_parts.extend(module_parts.clone());
-    push_symbol_candidate(&mut candidates, ingot_parts, variant_suffix, style);
+    push_symbol_candidate(&mut candidates, ingot_parts, variant_suffix);
 
     if let Some(fallback_context) = &owner_context.fallback {
         let mut parts = vec![fallback_context.clone()];
         parts.extend(scoped_leaf.clone());
-        push_symbol_candidate(&mut candidates, parts, variant_suffix, style);
+        push_symbol_candidate(&mut candidates, parts, variant_suffix);
 
         let mut module_parts = module_path;
         module_parts.push(fallback_context.clone());
         module_parts.extend(scoped_leaf.clone());
-        push_symbol_candidate(&mut candidates, module_parts.clone(), variant_suffix, style);
+        push_symbol_candidate(&mut candidates, module_parts.clone(), variant_suffix);
 
         let mut ingot_parts = vec![ingot_component_for_scope(db, owner.scope())];
         ingot_parts.extend(module_parts);
-        push_symbol_candidate(&mut candidates, ingot_parts, variant_suffix, style);
+        push_symbol_candidate(&mut candidates, ingot_parts, variant_suffix);
     }
     candidates
 }
 
-fn push_symbol_candidate(
-    candidates: &mut Vec<String>,
-    parts: Vec<String>,
-    variant_suffix: &str,
-    style: &FunctionSymbolStyle,
-) {
-    let symbol = render_symbol(parts, variant_suffix, style);
-    let emitted = (style.namespace_key)(&symbol);
-    if candidates
-        .iter()
-        .all(|candidate| (style.namespace_key)(candidate) != emitted)
-    {
+fn push_symbol_candidate(candidates: &mut Vec<String>, parts: Vec<String>, variant_suffix: &str) {
+    let symbol = render_symbol(parts, variant_suffix);
+    if candidates.iter().all(|candidate| *candidate != symbol) {
         candidates.push(symbol);
     }
 }
 
-fn render_symbol(parts: Vec<String>, variant_suffix: &str, style: &FunctionSymbolStyle) -> String {
+fn render_symbol(parts: Vec<String>, variant_suffix: &str) -> String {
     let mut symbol = parts
         .into_iter()
         .filter(|part| !part.is_empty())
-        .map(|part| (style.sanitize_segment)(&part))
+        .map(|part| sanitize_ident_segment(&part))
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
-        .join(style.segment_separator);
+        .join(SEGMENT_SEPARATOR);
     if symbol.is_empty() {
-        symbol = (style.sanitize_segment)("symbol");
+        symbol = sanitize_ident_segment("symbol");
     }
     if !variant_suffix.is_empty() {
-        symbol.push_str(style.variant_separator);
-        symbol.push_str(&(style.sanitize_segment)(variant_suffix));
+        symbol.push_str(VARIANT_SEPARATOR);
+        symbol.push_str(&sanitize_ident_segment(variant_suffix));
     }
     symbol
 }
 
-fn render_raw_symbol(symbol: &str, variant_suffix: &str, style: &FunctionSymbolStyle) -> String {
-    render_symbol(vec![symbol.to_string()], variant_suffix, style)
+fn render_raw_symbol(symbol: &str, variant_suffix: &str) -> String {
+    render_symbol(vec![symbol.to_string()], variant_suffix)
+}
+
+fn sanitize_ident_segment(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if sanitized
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
+    {
+        sanitized
+    } else {
+        format!("_{sanitized}")
+    }
 }
 
 fn symbol_conflicts(
     candidates: &[Vec<String>],
     selected: &[usize],
-    style: &FunctionSymbolStyle,
 ) -> BTreeMap<String, Vec<usize>> {
     selected
         .iter()
         .enumerate()
         .fold(BTreeMap::new(), |mut conflicts, (idx, selected)| {
             conflicts
-                .entry((style.namespace_key)(&candidates[idx][*selected]))
+                .entry(candidates[idx][*selected].clone())
                 .or_insert_with(Vec::new)
                 .push(idx);
             conflicts
@@ -220,17 +223,13 @@ fn symbol_conflicts(
 
 fn uniquify_function_symbols(
     symbols: &mut [String],
-    style: &FunctionSymbolStyle,
     candidates: &[Vec<String>],
     inputs: &[FunctionSymbolInput<'_>],
 ) {
     let conflicts = symbols.iter().enumerate().fold(
         BTreeMap::<String, Vec<usize>>::new(),
         |mut conflicts, (idx, symbol)| {
-            conflicts
-                .entry((style.namespace_key)(symbol))
-                .or_default()
-                .push(idx);
+            conflicts.entry(symbol.clone()).or_default().push(idx);
             conflicts
         },
     );
@@ -251,22 +250,19 @@ fn uniquify_function_symbols(
             let base = symbols[idx].clone();
             let hash = stable_identity_hash(&inputs[idx].disambiguator);
             let candidate = format!(
-                "{base}{}{}",
-                style.fallback_separator,
+                "{base}{FALLBACK_SEPARATOR}{}",
                 &hash[..CONFLICT_SUFFIX_HASH_LEN]
             );
-            if used.insert((style.namespace_key)(&candidate)) {
+            if used.insert(candidate.clone()) {
                 symbols[idx] = candidate;
                 continue;
             }
             for suffix in 0.. {
                 let candidate = format!(
-                    "{base}{}{}{}{suffix}",
-                    style.fallback_separator,
-                    &hash[..CONFLICT_SUFFIX_HASH_LEN],
-                    style.fallback_separator
+                    "{base}{FALLBACK_SEPARATOR}{}{FALLBACK_SEPARATOR}{suffix}",
+                    &hash[..CONFLICT_SUFFIX_HASH_LEN]
                 );
-                if used.insert((style.namespace_key)(&candidate)) {
+                if used.insert(candidate.clone()) {
                     symbols[idx] = candidate;
                     break;
                 }

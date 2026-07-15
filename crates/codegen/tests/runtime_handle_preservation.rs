@@ -2111,13 +2111,8 @@ fn use_returned_array() -> u256 {
 }
 "#,
         |db, package| {
-            let output = emit_runtime_package_sonatina_ir_optimized(
-                &db,
-                &package,
-                fe_codegen::EVM_LAYOUT,
-                OptLevel::O0,
-            )
-            .expect("Sonatina IR");
+            let output = emit_runtime_package_sonatina_ir_optimized(&db, &package, OptLevel::O0)
+                .expect("Sonatina IR");
             let body = sonatina_function_body(&output, "use_returned_array");
 
             assert!(
@@ -2160,13 +2155,8 @@ fn exercise() {
 }
 "#,
         |db, package| {
-            let output = emit_runtime_package_sonatina_ir_optimized(
-                &db,
-                &package,
-                fe_codegen::EVM_LAYOUT,
-                OptLevel::O0,
-            )
-            .expect("Sonatina IR");
+            let output = emit_runtime_package_sonatina_ir_optimized(&db, &package, OptLevel::O0)
+                .expect("Sonatina IR");
             assert!(
                 output.contains("enum.set_tag"),
                 "fieldless enum object copies should set the destination enum tag explicitly:\n{output}"
