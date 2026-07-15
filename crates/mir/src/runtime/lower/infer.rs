@@ -22,8 +22,8 @@ use crate::{
     instance::RuntimeInstanceKey,
     runtime::{
         AddressSpaceKind, ArrayLayout, EnumLayoutKey, EnumVariantLayout, Layout, LayoutId,
-        LayoutKey, RefKind, RefView, RuntimeCarrier, RuntimeClass, RuntimeLocalLowering,
-        RuntimeLocalRoot, RuntimeProviderBinding, RuntimeProviderBindingId, StructLayout,
+        LayoutKey, RefKind, RefView, RuntimeCarrier, RuntimeClass, RuntimeLocalRoot,
+        RuntimeProviderBinding, RuntimeProviderBindingId, StructLayout,
     },
 };
 
@@ -43,6 +43,26 @@ use super::{
         runtime_zero_sized_ty, stored_class_for_ty_in_env, top_level_class_for_ty_in_env,
     },
 };
+
+/// How a semantic local maps onto the runtime body — lowering-internal
+/// working state shared between inference and emission; not part of the
+/// stored `RuntimeBody`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(super) enum RuntimeLocalLowering<'db> {
+    Erased,
+    DirectValue,
+    PlaceCarrier {
+        place_class: RuntimeClass<'db>,
+    },
+    PlaceBoundValue {
+        provider: Option<RuntimeProviderBindingId>,
+        place_class: RuntimeClass<'db>,
+    },
+    DirectCarrier {
+        provider: Option<RuntimeProviderBindingId>,
+        place_class: RuntimeClass<'db>,
+    },
+}
 
 #[derive(Clone, Debug)]
 pub(super) struct InferenceResult<'db> {

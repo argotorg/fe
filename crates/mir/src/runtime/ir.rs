@@ -680,7 +680,6 @@ pub struct RuntimeBody<'db> {
     pub owner: RuntimeInstance<'db>,
     pub key: RuntimeInstanceKey<'db>,
     pub signature: RuntimeInterfaceSignature<'db>,
-    pub semantic_locals: Vec<RuntimeLocalLowering<'db>>,
     pub provider_bindings: Vec<RuntimeProviderBinding<'db>>,
     pub locals: Vec<RLocal<'db>>,
     pub blocks: Vec<RBlock<'db>>,
@@ -727,23 +726,6 @@ pub enum RuntimeLocalRoot<'db> {
     Ptr {
         space: AddressSpaceKind,
         class: RuntimeClass<'db>,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
-pub enum RuntimeLocalLowering<'db> {
-    Erased,
-    DirectValue,
-    PlaceCarrier {
-        place_class: RuntimeClass<'db>,
-    },
-    PlaceBoundValue {
-        provider: Option<RuntimeProviderBindingId>,
-        place_class: RuntimeClass<'db>,
-    },
-    DirectCarrier {
-        provider: Option<RuntimeProviderBindingId>,
-        place_class: RuntimeClass<'db>,
     },
 }
 

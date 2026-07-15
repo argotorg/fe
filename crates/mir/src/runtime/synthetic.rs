@@ -289,7 +289,6 @@ impl<'db> SyntheticBodyBuilder<'db> {
             owner: self.instance,
             key: self.instance.key(self.db),
             signature,
-            semantic_locals: Vec::new(),
             provider_bindings: Vec::new(),
             locals: self.locals,
             blocks: self.blocks,
