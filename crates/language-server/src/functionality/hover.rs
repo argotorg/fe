@@ -104,21 +104,6 @@ fn effect_binding_provider_source_at_site<'db>(
         .map(|provider| provider.source)
 }
 
-fn contract_field_id_by_index<'db>(
-    db: &'db DriverDataBase,
-    contract: hir::hir_def::Contract<'db>,
-    field_idx: u32,
-) -> Option<ContractFieldId<'db>> {
-    hir::hir_def::FieldParent::Contract(contract)
-        .fields(db)
-        .filter_map(|field| field.name(db))
-        .nth(field_idx as usize)?;
-    Some(ContractFieldId {
-        contract,
-        index: field_idx,
-    })
-}
-
 fn contract_field_id_from_scope<'db>(
     db: &'db DriverDataBase,
     scope: ScopeId<'db>,
@@ -154,9 +139,8 @@ fn contract_field_id_from_local_binding<'db>(
                 .or_else(|| {
                     FieldParent::Contract(contract)
                         .fields(db)
-                        .filter_map(|field| field.name(db))
-                        .position(|field_name| field_name == name)
-                        .and_then(|idx| contract_field_id_by_index(db, contract, idx as u32))
+                        .find(|field| field.name(db) == Some(name))
+                        .and_then(|field| field.contract_field_id(db))
                 })
         }
         LocalBinding::EffectParam { site, idx, .. } => {

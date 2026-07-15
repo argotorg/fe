@@ -105,18 +105,20 @@ pub fn layout_root_placeholder<'db>(
 
 pub fn layout_root_descends_from<'db>(
     db: &'db dyn HirAnalysisDb,
-    mut root: LayoutRootId<'db>,
+    root: LayoutRootId<'db>,
     ancestor: LayoutRootId<'db>,
 ) -> bool {
-    loop {
-        if root == ancestor {
-            return true;
-        }
-        match root.identity(db) {
-            super::const_ty::LayoutRootIdentity::Source { .. } => return false,
-            super::const_ty::LayoutRootIdentity::Landing { source, .. } => root = source,
-        }
-    }
+    layout_root_lineage(db, root).any(|candidate| candidate == ancestor)
+}
+
+pub(crate) fn layout_root_lineage<'db>(
+    db: &'db dyn HirAnalysisDb,
+    root: LayoutRootId<'db>,
+) -> impl Iterator<Item = LayoutRootId<'db>> + 'db {
+    std::iter::successors(Some(root), move |root| match root.identity(db) {
+        super::const_ty::LayoutRootIdentity::Source { .. } => None,
+        super::const_ty::LayoutRootIdentity::Landing { source, .. } => Some(source),
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
@@ -903,37 +905,12 @@ pub(crate) fn collect_unique_structural_holes_in_order<'db, T>(
 where
     T: TyVisitable<'db>,
 {
-    struct StructuralHoleCollector<'a, 'db> {
-        db: &'db dyn HirAnalysisDb,
-        seen: &'a mut FxHashSet<StructuralHoleId<'db>>,
-        out: &'a mut Vec<StructuralHoleId<'db>>,
-    }
-
-    impl<'a, 'db> TyVisitor<'db> for StructuralHoleCollector<'a, 'db> {
-        fn db(&self) -> &'db dyn HirAnalysisDb {
-            self.db
-        }
-
-        fn visit_ty(&mut self, ty: TyId<'db>) {
-            if let TyData::ConstTy(const_ty) = ty.data(self.db)
-                && let ConstTyData::Hole(_, HoleId::Structural(hole_id)) = const_ty.data(self.db)
-                && self.seen.insert(*hole_id)
-            {
-                self.out.push(*hole_id);
-            }
-
-            walk_ty(self, ty);
-        }
-    }
-
     let mut seen = FxHashSet::default();
-    let mut out = Vec::new();
-    value.visit_with(&mut StructuralHoleCollector {
-        db,
-        seen: &mut seen,
-        out: &mut out,
-    });
-    out
+    collect_layout_placeholders_in_order_with_policy(db, value, LayoutPlaceholderPolicy::HolesOnly)
+        .into_iter()
+        .filter_map(|placeholder| structural_hole_id(db, placeholder))
+        .filter(|hole| seen.insert(*hole))
+        .collect()
 }
 
 pub(crate) fn collect_unique_app_bound_structural_holes_in_order<'db, T>(

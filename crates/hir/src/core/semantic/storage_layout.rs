@@ -14,14 +14,15 @@ use crate::{
             const_ty::{
                 ConstCanonEnv, ConstCanonMode, ConstTyData, ConstTyId, EvaluatedConstTy,
                 HoleAnchor, HoleMinter, LayoutBoundaryIdentity, LayoutInstantiationContext,
-                LayoutInstantiationId, LayoutOccurrenceStep, LayoutRootId, LayoutRootIdentity,
-                StructuralHoleOrigin, canonicalize_ty_for_mode,
+                LayoutInstantiationId, LayoutOccurrenceStep, LayoutRootId, StructuralHoleOrigin,
+                canonicalize_ty_for_mode,
             },
             layout_holes::{
                 LayoutIndexDimension, LayoutInstantiation, LayoutViewRecurrence,
                 classify_layout_view_recurrence, instantiate_layout_template,
-                layout_hole_fallback_ty, layout_root_id, layout_shape_key,
-                rewrite_structural_holes, structural_hole_id,
+                layout_hole_fallback_ty, layout_root_descends_from, layout_root_id,
+                layout_root_lineage, layout_shape_key, rewrite_structural_holes,
+                structural_hole_id,
             },
             normalize::{normalize_layout_root_uses, normalize_ty},
             provider::{
@@ -1555,24 +1556,12 @@ impl<'db> FieldCollector<'db> {
         }
     }
 
-    fn root_descends_from(&self, mut root: LayoutRootId<'db>, ancestor: LayoutRootId<'db>) -> bool {
-        loop {
-            if root == ancestor {
-                return true;
-            }
-            match root.identity(self.db) {
-                LayoutRootIdentity::Source { .. } => return false,
-                LayoutRootIdentity::Landing { source, .. } => root = source,
-            }
-        }
-    }
-
     fn concrete_owner(&self, root: LayoutRootId<'db>) -> Option<TyId<'db>> {
         self.applications.iter().rev().find_map(|application| {
             application
                 .direct_roots
                 .iter()
-                .any(|candidate| self.root_descends_from(root, *candidate))
+                .any(|candidate| layout_root_descends_from(self.db, root, *candidate))
                 .then_some(application.ty)
         })
     }
@@ -2047,7 +2036,7 @@ impl<'db> FieldCollector<'db> {
                 direct_roots.contains(&occurrence.root)
                     && target_roots
                         .iter()
-                        .any(|root| self.root_descends_from(*root, occurrence.root))
+                        .any(|root| layout_root_descends_from(self.db, *root, occurrence.root))
             })
             .map(|occurrence| occurrence.id)
             .collect::<Vec<_>>();
@@ -2302,7 +2291,7 @@ impl<'db> FieldCollector<'db> {
                 .occurrences
                 .iter()
                 .skip(child_occurrence_start)
-                .any(|occurrence| self.root_descends_from(occurrence.root, direct_root))
+                .any(|occurrence| layout_root_descends_from(self.db, occurrence.root, direct_root))
             {
                 self.nonterminal_occurrences.insert(direct_id);
             }
@@ -2341,26 +2330,6 @@ fn ty_has_incomplete_adt_application<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'
 struct FamilyKey<'db> {
     root: LayoutRootId<'db>,
     dimensions: Vec<LayoutInstantiationId<'db>>,
-}
-
-fn root_lineage<'db>(
-    db: &'db dyn HirAnalysisDb,
-    mut root: LayoutRootId<'db>,
-) -> Vec<LayoutRootId<'db>> {
-    let mut lineage = vec![root];
-    while let LayoutRootIdentity::Landing { source, .. } = root.identity(db) {
-        root = source;
-        lineage.push(root);
-    }
-    lineage
-}
-
-fn root_descends_from<'db>(
-    db: &'db dyn HirAnalysisDb,
-    root: LayoutRootId<'db>,
-    ancestor: LayoutRootId<'db>,
-) -> bool {
-    root_lineage(db, root).contains(&ancestor)
 }
 
 fn row_major_family_geometry(
@@ -2853,7 +2822,7 @@ fn finish_field_plan<'db>(
                 && (occurrence.role == RootRole::Counted
                     || !counted_roots
                         .iter()
-                        .any(|root| root_descends_from(db, *root, occurrence.root)))
+                        .any(|root| layout_root_descends_from(db, *root, occurrence.root)))
         })
         .collect::<Vec<_>>();
     let mut occurrence_map = vec![None; occurrences.len()];
@@ -2997,7 +2966,7 @@ fn finish_field_plan<'db>(
             selector: occurrence.selector.clone(),
             target,
         };
-        for root in root_lineage(db, occurrence.root) {
+        for root in layout_root_lineage(db, occurrence.root) {
             let leaves = bound_leaves.entry(root).or_default();
             if let Some(previous) = leaves
                 .iter()
@@ -4349,7 +4318,7 @@ pub fn validate_allocated_contract_layout<'db>(
                 selector: occurrence.selector.clone(),
                 target,
             };
-            for root in root_lineage(db, occurrence.root) {
+            for root in layout_root_lineage(db, occurrence.root) {
                 let binding = expected_bindings
                     .entry(root)
                     .or_insert_with(|| LayoutBinding::Bound(Vec::new()));

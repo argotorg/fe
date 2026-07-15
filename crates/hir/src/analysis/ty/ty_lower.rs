@@ -33,9 +33,9 @@ use super::{
         callable_input_layout_bindings_by_origin, classify_layout_view_recurrence,
         collect_unique_app_bound_structural_holes_in_order,
         collect_unique_layout_placeholders_in_order, instantiate_layout_template,
-        layout_hole_fallback_ty, layout_root_id, reanchor_template_holes, rewrite_structural_holes,
-        structural_hole_id, substitute_layout_holes_by_placeholder,
-        substitute_layout_holes_by_placeholder_in,
+        layout_hole_fallback_ty, layout_root_descends_from, layout_root_id,
+        reanchor_template_holes, rewrite_structural_holes, structural_hole_id,
+        substitute_layout_holes_by_placeholder, substitute_layout_holes_by_placeholder_in,
     },
     provider::{EffectHandleTargetResolution, resolve_effect_handle_target},
     trait_def::{ImplementorId, TraitInstId},
@@ -694,22 +694,6 @@ struct CallableLayoutOccurrence<'db> {
     dimensions: Vec<usize>,
     structural_root: Option<LayoutRootId<'db>>,
     can_refine_to_descendant: bool,
-}
-
-fn layout_root_descends_from<'db>(
-    db: &'db dyn HirAnalysisDb,
-    mut root: LayoutRootId<'db>,
-    ancestor: LayoutRootId<'db>,
-) -> bool {
-    loop {
-        if root == ancestor {
-            return true;
-        }
-        match root.identity(db) {
-            LayoutRootIdentity::Source { .. } => return false,
-            LayoutRootIdentity::Landing { source, .. } => root = source,
-        }
-    }
 }
 
 fn callable_layout_occurrence_descends_from<'db>(

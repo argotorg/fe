@@ -142,54 +142,47 @@ fn expr_map_ty<'db>(
     }
 }
 
-fn expr_locals(expr: &LayoutEvidenceExpr<'_>, locals: &mut Vec<LayoutEvidenceLocalId>) {
-    match expr {
-        LayoutEvidenceExpr::Use(LayoutEvidenceOperand::Local(local))
-        | LayoutEvidenceExpr::Project {
-            source: LayoutEvidenceOperand::Local(local),
-            ..
-        } => locals.push(*local),
-        LayoutEvidenceExpr::Array { elements } => {
-            for element in elements {
-                expr_locals(element, locals);
-            }
+fn expr_inputs(
+    expr: &LayoutEvidenceExpr<'_>,
+    evidence_locals: &mut Vec<LayoutEvidenceLocalId>,
+    index_locals: &mut Vec<SLocalId>,
+) {
+    let push_operand = |locals: &mut Vec<LayoutEvidenceLocalId>,
+                        operand: &LayoutEvidenceOperand<'_>| {
+        if let LayoutEvidenceOperand::Local(local) = operand {
+            locals.push(*local);
         }
-        LayoutEvidenceExpr::Repeat { element, .. } => expr_locals(element, locals),
-        LayoutEvidenceExpr::Update { source, value, .. } => {
-            if let LayoutEvidenceOperand::Local(local) = source {
-                locals.push(*local);
-            }
-            expr_locals(value, locals);
-        }
-        LayoutEvidenceExpr::Use(LayoutEvidenceOperand::Constant(_))
-        | LayoutEvidenceExpr::Project {
-            source: LayoutEvidenceOperand::Constant(_),
-            ..
-        }
-        | LayoutEvidenceExpr::CallResult { .. } => {}
-    }
-}
-
-fn expr_index_locals(expr: &LayoutEvidenceExpr<'_>, locals: &mut Vec<SLocalId>) {
-    let mut push_indices = |indices: &[LayoutEvidenceIndex]| {
+    };
+    let push_indices = |locals: &mut Vec<SLocalId>, indices: &[LayoutEvidenceIndex]| {
         locals.extend(indices.iter().filter_map(|index| match index {
             LayoutEvidenceIndex::Dynamic(index) => Some(*index),
             LayoutEvidenceIndex::Constant(_) => None,
         }));
     };
     match expr {
-        LayoutEvidenceExpr::Project { indices, .. } => push_indices(indices),
+        LayoutEvidenceExpr::Use(operand) => push_operand(evidence_locals, operand),
+        LayoutEvidenceExpr::Project { source, indices } => {
+            push_operand(evidence_locals, source);
+            push_indices(index_locals, indices);
+        }
         LayoutEvidenceExpr::Array { elements } => {
             for element in elements {
-                expr_index_locals(element, locals);
+                expr_inputs(element, evidence_locals, index_locals);
             }
         }
-        LayoutEvidenceExpr::Repeat { element, .. } => expr_index_locals(element, locals),
-        LayoutEvidenceExpr::Update { indices, value, .. } => {
-            push_indices(indices);
-            expr_index_locals(value, locals);
+        LayoutEvidenceExpr::Repeat { element, .. } => {
+            expr_inputs(element, evidence_locals, index_locals)
         }
-        LayoutEvidenceExpr::Use(_) | LayoutEvidenceExpr::CallResult { .. } => {}
+        LayoutEvidenceExpr::Update {
+            source,
+            indices,
+            value,
+        } => {
+            push_operand(evidence_locals, source);
+            push_indices(index_locals, indices);
+            expr_inputs(value, evidence_locals, index_locals);
+        }
+        LayoutEvidenceExpr::CallResult { .. } => {}
     }
 }
 
@@ -399,7 +392,8 @@ fn verify_expr_definitions(
     statement: usize,
 ) -> Result<(), LayoutEvidenceVerifyError> {
     let mut index_locals = Vec::new();
-    expr_index_locals(expr, &mut index_locals);
+    let mut evidence_locals = Vec::new();
+    expr_inputs(expr, &mut evidence_locals, &mut index_locals);
     for local in index_locals {
         if !semantic.contains(&local) {
             return Err(LayoutEvidenceVerifyError::UndefinedIndexLocal {
@@ -409,8 +403,6 @@ fn verify_expr_definitions(
             });
         }
     }
-    let mut evidence_locals = Vec::new();
-    expr_locals(expr, &mut evidence_locals);
     for local in evidence_locals {
         if !evidence.contains(&local) {
             return Err(LayoutEvidenceVerifyError::UndefinedLocal {
