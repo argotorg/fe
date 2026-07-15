@@ -2519,9 +2519,22 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         &mut self,
         place: &RuntimePlace<'db>,
     ) -> Result<Lowered<PlaceTerminal<'db>>, LowerError> {
+        Ok(match self.resolve_place_full(place)? {
+            Lowered::Value((terminal, _)) => Lowered::Value(terminal),
+            Lowered::Terminated => Lowered::Terminated,
+        })
+    }
+
+    /// Resolve `place` once, yielding both its lowered terminal and the
+    /// projected result class.
+    fn resolve_place_full(
+        &mut self,
+        place: &RuntimePlace<'db>,
+    ) -> Result<Lowered<(PlaceTerminal<'db>, RuntimeClass<'db>)>, LowerError> {
         let program = self.module.db as &dyn mir::MirDb;
         let resolved = resolve_runtime_place(self.module.db, &program, &self.body, place)
             .map_err(|err| LowerError::Internal(format!("invalid runtime place: {err:?}")))?;
+        let result_class = resolved.result_class.clone();
         let mut terminal = match resolved.root_kind {
             ResolvedPlaceRootKind::Slot { local, class } => {
                 match self.slot_roots.get(&local).ok_or_else(|| {
@@ -2734,18 +2747,14 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 }
             };
         }
-        Ok(Lowered::Value(terminal))
+        Ok(Lowered::Value((terminal, result_class)))
     }
 
     fn load_from_place(
         &mut self,
         place: &RuntimePlace<'db>,
     ) -> Result<Lowered<ValueId>, LowerError> {
-        let program = self.module.db as &dyn mir::MirDb;
-        let class = resolve_runtime_place(self.module.db, &program, &self.body, place)
-            .map_err(|err| LowerError::Internal(format!("invalid runtime place: {err:?}")))?
-            .result_class;
-        let Lowered::Value(terminal) = self.resolve_place(place)? else {
+        let Lowered::Value((terminal, class)) = self.resolve_place_full(place)? else {
             return Ok(Lowered::Terminated);
         };
         Ok(Lowered::Value(match terminal {
@@ -3404,11 +3413,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         src: RLocalId,
     ) -> Result<Lowered<()>, LowerError> {
         let src_value = self.local_value(src)?;
-        let program = self.module.db as &dyn mir::MirDb;
-        let dst_class = resolve_runtime_place(self.module.db, &program, &self.body, place)
-            .map_err(|err| LowerError::Internal(format!("invalid runtime place: {err:?}")))?
-            .result_class;
-        let Lowered::Value(terminal) = self.resolve_place(place)? else {
+        let Lowered::Value((terminal, dst_class)) = self.resolve_place_full(place)? else {
             return Ok(Lowered::Terminated);
         };
         match terminal {
