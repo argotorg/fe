@@ -5,8 +5,8 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            FieldIndex, SBlockId, SConst, SExpr, SOperand, SPlace, SStmtKind, STerminatorKind,
-            SValueId, VariantIndex, bool_const, bytes_const, int_const,
+            FieldIndex, SBlockId, SConst, SExpr, SLocalId, SOperand, SPlace, SStmtKind,
+            STerminatorKind, SValueId, VariantIndex, bool_const, bytes_const, int_const,
         },
         ty::{
             decision_tree::{
@@ -187,6 +187,25 @@ impl<'db> DecisionTreeProjectionCache<'db> {
     }
 }
 
+/// What a decision-tree leaf does once a pattern row is known to match.
+#[derive(Clone, Copy)]
+enum DecisionTreeTarget<'a> {
+    /// `match` expression: lower the arm body, assign the result, jump to the
+    /// join block.
+    MatchArms {
+        result: SLocalId,
+        join_bb: SBlockId,
+        arms: &'a [MatchArm],
+    },
+    /// Refutable single-pattern test (`if let` / `while let`): row 0 is the
+    /// pattern (bind, then jump to `then_bb`), row 1 is the synthetic wildcard
+    /// fallback (jump to `else_bb`).
+    Branch {
+        then_bb: SBlockId,
+        else_bb: SBlockId,
+    },
+}
+
 impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     fn validated_pattern_is_irrefutable(&self, pat: ValidatedPatId) -> bool {
         self.typed_body.pattern_store().is_irrefutable(self.db, pat)
@@ -205,6 +224,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         }
     }
 
+    /// Test `pat` against `value`, jumping to `then_bb` with the pattern's
+    /// bindings assigned, or to `else_bb` if the pattern doesn't match.
     pub(super) fn lower_pattern_branch(
         &mut self,
         pat: PatId,
@@ -217,7 +238,17 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             return;
         };
         let value = self.owned_pattern_value(value, self.locals[value.index()].ty);
-        self.lower_validated_pattern_branch(root, value, then_bb, else_bb);
+        let pattern_store = self.typed_body.pattern_store();
+        let mut matrix = PatternMatrix::from_roots(pattern_store, &[root]);
+        matrix.push_wildcard_row(pattern_store.node(root).match_ty().raw());
+        let tree = build_decision_tree(self.db, &matrix);
+        let mut projections =
+            DecisionTreeProjectionCache::new(self.db, pattern_store, &[root], value);
+        self.lower_decision_tree(
+            &tree,
+            &mut projections,
+            DecisionTreeTarget::Branch { then_bb, else_bb },
+        );
     }
 
     fn owned_pattern_value(&self, value: SValueId, carrier_ty: TyId<'db>) -> PatternValue<'db> {
@@ -428,129 +459,57 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             &roots,
             value,
         );
-        if !self.lower_decision_tree(&tree, &mut projections, result, join_bb, arms) {
+        let target = DecisionTreeTarget::MatchArms {
+            result,
+            join_bb,
+            arms,
+        };
+        if !self.lower_decision_tree(&tree, &mut projections, target) {
             self.set_synthetic_terminator(join_bb, STerminatorKind::Goto(join_bb));
         }
         self.switch_to(join_bb);
         result
     }
 
-    fn lower_validated_pattern_branch(
-        &mut self,
-        pat: ValidatedPatId,
-        value: PatternValue<'db>,
-        then_bb: SBlockId,
-        else_bb: SBlockId,
-    ) {
-        let pattern_store = self.typed_body.pattern_store();
-        if pattern_store.wildcard_binding(pat).is_some() {
-            self.set_synthetic_terminator(self.current, STerminatorKind::Goto(then_bb));
-        } else if let Some(ctor) = pattern_store.constructor_kind(pat) {
-            match ctor {
-                ConstructorKind::Literal(lit, ty) => {
-                    let rhs = self.literal_pattern_value(ty, lit);
-                    let cond = self.emit_expr(
-                        TyId::bool(self.db),
-                        SExpr::Binary {
-                            op: BinOp::Comp(CompBinOp::Eq),
-                            lhs: SOperand::synthetic(value.value),
-                            rhs: SOperand::synthetic(rhs),
-                        },
-                    );
-                    self.set_synthetic_terminator(
-                        self.current,
-                        STerminatorKind::Branch {
-                            cond: SOperand::synthetic(cond),
-                            then_bb,
-                            else_bb,
-                        },
-                    );
-                }
-                ConstructorKind::Variant(variant, _) => {
-                    let success_bb = if pattern_store.child_count(pat) == 0 {
-                        then_bb
-                    } else {
-                        self.new_block()
-                    };
-                    let cond = self.emit_expr(
-                        TyId::bool(self.db),
-                        SExpr::IsEnumVariant {
-                            value: SOperand::synthetic(value.value),
-                            variant: VariantIndex(variant.idx),
-                        },
-                    );
-                    self.set_synthetic_terminator(
-                        self.current,
-                        STerminatorKind::Branch {
-                            cond: SOperand::synthetic(cond),
-                            then_bb: success_bb,
-                            else_bb,
-                        },
-                    );
-                    if pattern_store.child_count(pat) != 0 {
-                        self.switch_to(success_bb);
-                        self.lower_variant_field_branches(value, variant, pat, then_bb, else_bb);
-                    }
-                }
-                ConstructorKind::Type(_) => {
-                    self.lower_field_branches(value, pat, then_bb, else_bb);
-                }
-            }
-        } else {
-            let pat_count = pattern_store.child_count(pat);
-            if pat_count == 0 {
-                self.set_synthetic_terminator(self.current, STerminatorKind::Goto(else_bb));
-                return;
-            }
-            for idx in 0..pat_count - 1 {
-                let next_else = self.new_block();
-                self.lower_validated_pattern_branch(
-                    pattern_store
-                        .child(pat, idx)
-                        .expect("pattern alternative should exist"),
-                    value,
-                    then_bb,
-                    next_else,
-                );
-                self.switch_to(next_else);
-            }
-            self.lower_validated_pattern_branch(
-                pattern_store
-                    .child(pat, pat_count - 1)
-                    .expect("pattern alternative should exist"),
-                value,
-                then_bb,
-                else_bb,
-            );
-        }
-    }
-
     fn lower_decision_tree(
         &mut self,
         tree: &DecisionTree<'db>,
         projections: &mut DecisionTreeProjectionCache<'db>,
-        result: crate::analysis::semantic::SLocalId,
-        join_bb: SBlockId,
-        arms: &[MatchArm],
+        target: DecisionTreeTarget<'_>,
     ) -> bool {
         match tree {
-            DecisionTree::Leaf(leaf) => {
-                self.bind_decision_tree_leaf(leaf, projections);
-                let arm = &arms[leaf.arm_index];
-                let arm_value = self.lower_expr(arm.body);
-                if self.is_terminated(self.current) {
-                    false
-                } else {
-                    self.push_synthetic_stmt(SStmtKind::Assign {
-                        dst: result,
-                        expr: SExpr::Forward(SOperand::expr(arm_value, arm.body)),
-                    });
-                    self.set_synthetic_terminator(self.current, STerminatorKind::Goto(join_bb));
+            DecisionTree::Leaf(leaf) => match target {
+                DecisionTreeTarget::MatchArms {
+                    result,
+                    join_bb,
+                    arms,
+                } => {
+                    self.bind_decision_tree_leaf(leaf, projections);
+                    let arm = &arms[leaf.arm_index];
+                    let arm_value = self.lower_expr(arm.body);
+                    if self.is_terminated(self.current) {
+                        false
+                    } else {
+                        self.push_synthetic_stmt(SStmtKind::Assign {
+                            dst: result,
+                            expr: SExpr::Forward(SOperand::expr(arm_value, arm.body)),
+                        });
+                        self.set_synthetic_terminator(self.current, STerminatorKind::Goto(join_bb));
+                        true
+                    }
+                }
+                DecisionTreeTarget::Branch { then_bb, else_bb } => {
+                    if leaf.arm_index == 0 {
+                        self.bind_decision_tree_leaf(leaf, projections);
+                        self.set_synthetic_terminator(self.current, STerminatorKind::Goto(then_bb));
+                    } else {
+                        self.set_synthetic_terminator(self.current, STerminatorKind::Goto(else_bb));
+                    }
                     true
                 }
-            }
+            },
             DecisionTree::Switch(switch) => {
-                self.lower_decision_tree_switch(switch, projections, result, join_bb, arms)
+                self.lower_decision_tree_switch(switch, projections, target)
             }
         }
     }
@@ -559,9 +518,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         &mut self,
         switch: &SwitchNode<'db>,
         projections: &mut DecisionTreeProjectionCache<'db>,
-        result: crate::analysis::semantic::SLocalId,
-        join_bb: SBlockId,
-        arms: &[MatchArm],
+        target: DecisionTreeTarget<'_>,
     ) -> bool {
         let occurrence = self.project_decision_tree_path(projections, &switch.occurrence);
         let case_blocks = switch
@@ -661,8 +618,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         for (_, subtree, block) in case_blocks {
             self.switch_to(block);
             let mut subtree_projections = projections.clone();
-            join_reachable |=
-                self.lower_decision_tree(subtree, &mut subtree_projections, result, join_bb, arms);
+            join_reachable |= self.lower_decision_tree(subtree, &mut subtree_projections, target);
         }
         join_reachable
     }
@@ -743,92 +699,6 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             Projection::Index(_) => {
                 panic!("decision-tree lowering does not support index projections yet")
-            }
-        }
-    }
-
-    fn lower_field_branches(
-        &mut self,
-        value: PatternValue<'db>,
-        pat: ValidatedPatId,
-        then_bb: SBlockId,
-        else_bb: SBlockId,
-    ) {
-        let pattern_store = self.typed_body.pattern_store();
-        let refutable_fields = (0..pattern_store.child_count(pat))
-            .filter_map(|field_idx| {
-                let field_pat = pattern_store
-                    .child(pat, field_idx)
-                    .expect("pattern child should exist");
-                (!self.validated_pattern_is_irrefutable(field_pat))
-                    .then_some((field_idx, field_pat))
-            })
-            .collect::<Vec<_>>();
-        if refutable_fields.is_empty() {
-            self.set_synthetic_terminator(self.current, STerminatorKind::Goto(then_bb));
-            return;
-        }
-
-        let refutable_len = refutable_fields.len();
-        for (idx, (field_idx, field_pat)) in refutable_fields.into_iter().enumerate() {
-            let assigned_ty = self.validated_pattern_child_carrier_ty(
-                value,
-                field_pat,
-                PatternProjectionStep::Field(field_idx),
-            );
-            let field_value = self.project_pattern_field(value, field_idx, Some(assigned_ty));
-            let next_then = if idx + 1 == refutable_len {
-                then_bb
-            } else {
-                self.new_block()
-            };
-            self.lower_validated_pattern_branch(field_pat, field_value, next_then, else_bb);
-            if idx + 1 != refutable_len {
-                self.switch_to(next_then);
-            }
-        }
-    }
-
-    fn lower_variant_field_branches(
-        &mut self,
-        value: PatternValue<'db>,
-        variant: crate::hir_def::EnumVariant<'db>,
-        pat: ValidatedPatId,
-        then_bb: SBlockId,
-        else_bb: SBlockId,
-    ) {
-        let pattern_store = self.typed_body.pattern_store();
-        let refutable_fields = (0..pattern_store.child_count(pat))
-            .filter_map(|field_idx| {
-                let field_pat = pattern_store
-                    .child(pat, field_idx)
-                    .expect("pattern child should exist");
-                (!self.validated_pattern_is_irrefutable(field_pat))
-                    .then_some((field_idx, field_pat))
-            })
-            .collect::<Vec<_>>();
-        if refutable_fields.is_empty() {
-            self.set_synthetic_terminator(self.current, STerminatorKind::Goto(then_bb));
-            return;
-        }
-
-        let refutable_len = refutable_fields.len();
-        for (idx, (field_idx, field_pat)) in refutable_fields.into_iter().enumerate() {
-            let assigned_ty = self.validated_pattern_child_carrier_ty(
-                value,
-                field_pat,
-                PatternProjectionStep::VariantField { variant, field_idx },
-            );
-            let field_value =
-                self.project_pattern_variant_field(value, variant, field_idx, Some(assigned_ty));
-            let next_then = if idx + 1 == refutable_len {
-                then_bb
-            } else {
-                self.new_block()
-            };
-            self.lower_validated_pattern_branch(field_pat, field_value, next_then, else_bb);
-            if idx + 1 != refutable_len {
-                self.switch_to(next_then);
             }
         }
     }
