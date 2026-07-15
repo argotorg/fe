@@ -1,3 +1,4 @@
+pub mod class;
 pub(crate) mod code_region;
 pub mod ir;
 pub mod layout_utils;

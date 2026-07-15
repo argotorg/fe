@@ -1,7 +1,7 @@
 mod consts;
 mod layout;
 mod package;
-mod place;
+pub(crate) mod place;
 mod runtime;
 mod storage_layout;
 

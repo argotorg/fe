@@ -185,7 +185,7 @@ pub fn resolve_runtime_place_address_class<'db>(
     ))
 }
 
-pub(super) fn project_place<'db>(
+pub(crate) fn project_place<'db>(
     db: &'db dyn MirDb,
     program: &impl RuntimeProgramView<'db>,
     body: &RuntimeBody<'db>,
@@ -251,7 +251,7 @@ fn runtime_place_transport_root<'db>(
     })
 }
 
-pub(super) fn runtime_value_class<'a, 'db>(
+pub(crate) fn runtime_value_class<'a, 'db>(
     body: &'a RuntimeBody<'db>,
     value: crate::runtime::RValueId,
 ) -> Result<&'a RuntimeClass<'db>, VerifyError<'db>> {
@@ -259,7 +259,7 @@ pub(super) fn runtime_value_class<'a, 'db>(
         .ok_or(VerifyError::ErasedRuntimeValue(value))
 }
 
-pub(super) fn scalar_class_from_const(value: &ConstScalar) -> ScalarClass<'_> {
+pub(crate) fn scalar_class_from_const<'db>(value: &ConstScalar) -> ScalarClass<'db> {
     match value {
         ConstScalar::Bool(_) => ScalarClass {
             repr: ScalarRepr::Bool,
@@ -285,7 +285,7 @@ pub(super) fn scalar_class_from_const(value: &ConstScalar) -> ScalarClass<'_> {
     }
 }
 
-pub(super) fn enum_tag_class<'db>(
+pub(crate) fn enum_tag_class<'db>(
     enum_layout: LayoutId<'db>,
     program: &impl RuntimeProgramView<'db>,
 ) -> ScalarClass<'db> {
@@ -295,7 +295,7 @@ pub(super) fn enum_tag_class<'db>(
     layout.tag
 }
 
-pub(super) fn enum_tag_class_from_value<'db>(
+pub(crate) fn enum_tag_class_from_value<'db>(
     db: &'db dyn MirDb,
     body: &RuntimeBody<'db>,
     value: crate::runtime::RValueId,
@@ -315,7 +315,7 @@ pub(super) fn enum_tag_class_from_value<'db>(
     }))
 }
 
-pub(super) fn verify_enum_handle<'db>(
+pub(crate) fn verify_enum_handle<'db>(
     body: &RuntimeBody<'db>,
     root: crate::runtime::RValueId,
     variant: VariantId<'db>,
@@ -352,7 +352,7 @@ pub(super) fn verify_enum_handle<'db>(
     Ok(result)
 }
 
-pub(super) fn verify_enum_write_variant<'db>(
+pub(crate) fn verify_enum_write_variant<'db>(
     program: &impl RuntimeProgramView<'db>,
     body: &RuntimeBody<'db>,
     root: crate::runtime::RValueId,
@@ -383,7 +383,7 @@ pub(super) fn verify_enum_write_variant<'db>(
     Ok(())
 }
 
-pub(super) fn verify_value_enum_variant<'db>(
+pub(crate) fn verify_value_enum_variant<'db>(
     program: &impl RuntimeProgramView<'db>,
     body: &RuntimeBody<'db>,
     value_class: RuntimeClass<'db>,
@@ -408,7 +408,7 @@ pub(super) fn verify_value_enum_variant<'db>(
     Ok(())
 }
 
-pub(super) fn verify_value_enum_variant_ref<'db>(
+pub(crate) fn verify_value_enum_variant_ref<'db>(
     program: &impl RuntimeProgramView<'db>,
     value_class: RuntimeClass<'db>,
     variant: VariantId<'db>,
@@ -429,7 +429,7 @@ pub(super) fn verify_value_enum_variant_ref<'db>(
         .ok_or(VerifyError::InvalidVariant(layout, variant.index))
 }
 
-pub(super) fn enum_extract_class<'db>(
+pub(crate) fn enum_extract_class<'db>(
     db: &'db dyn MirDb,
     body: &RuntimeBody<'db>,
     value: crate::runtime::RValueId,
