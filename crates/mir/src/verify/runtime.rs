@@ -8,18 +8,15 @@ use crate::{
         RuntimeExitBehavior, RuntimeInterfaceSignature, RuntimeLocalRoot, RuntimeProgramView,
         ScalarClass, ScalarRepr, ScalarRole,
         class::{expr_result_class, verify_address_operand, verify_word_value},
+        place::{
+            runtime_value_class, scalar_class_from_const, verify_enum_handle,
+            verify_enum_write_variant, verify_value_enum_variant_ref,
+        },
     },
     verify::VerifyError,
 };
 
-use super::{
-    RuntimeVerifyFailure, RuntimeVerifySite,
-    layout::verify_class_layouts,
-    place::{
-        runtime_value_class, scalar_class_from_const, verify_enum_handle,
-        verify_enum_write_variant, verify_value_enum_variant_ref,
-    },
-};
+use super::{RuntimeVerifyFailure, RuntimeVerifySite, layout::verify_class_layouts};
 
 pub fn verify_runtime_body<'db>(
     db: &'db dyn MirDb,
@@ -289,7 +286,7 @@ fn verify_store<'db>(
     dst: &crate::runtime::RuntimePlace<'db>,
     src: crate::runtime::RValueId,
 ) -> Result<(), VerifyError<'db>> {
-    let target = super::place::project_place(db, program, body, dst)?;
+    let target = crate::runtime::place::project_place(db, program, body, dst)?;
     let source = runtime_value_class(body, src)?;
     if &target != source {
         return Err(VerifyError::InvalidStoreClass);
@@ -304,7 +301,7 @@ fn verify_copy_into<'db>(
     dst: &crate::runtime::RuntimePlace<'db>,
     src: crate::runtime::RValueId,
 ) -> Result<(), VerifyError<'db>> {
-    let target = super::place::project_place(db, program, body, dst)?;
+    let target = crate::runtime::place::project_place(db, program, body, dst)?;
     let source = runtime_value_class(body, src)?;
     if &target != source && !source.shares_runtime_rep_with(db, &target) {
         return Err(VerifyError::InvalidCopyClass);

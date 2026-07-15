@@ -31,10 +31,14 @@ use salsa::Update;
 use crate::{
     db::MirDb,
     instance::{RuntimeInstanceKey, RuntimeInstanceSource},
+    runtime::place::{
+        project_field_class, project_index_class, project_variant_field_class,
+        ref_class_for_place_result,
+    },
     runtime::{
-        AddressSpaceKind, BorrowAccess, Layout, LayoutId, RefKind, RefView, RuntimeBoundarySpec,
-        RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeCodeRegionKey, RuntimeParamPlan,
-        SaturatingBinOp, ScalarClass, ScalarRepr, ScalarRole, VariantId,
+        AddressSpaceKind, BorrowAccess, Layout, LayoutId, RuntimeBoundarySpec, RuntimeCarrier,
+        RuntimeClass, RuntimeCodeRegion, RuntimeCodeRegionKey, RuntimeParamPlan, SaturatingBinOp,
+        ScalarClass, ScalarRepr, ScalarRole, VariantId,
     },
 };
 
@@ -58,10 +62,7 @@ use super::{
         layout_for_aggregate_instance_in_env, layout_for_enum_variant_instance_in_env,
         layout_for_ty_in_env,
     },
-    place::{
-        address_space_from_provider, project_field_class, project_index_class,
-        project_variant_field_class,
-    },
+    provider_space::address_space_from_provider,
     realize::SelectedRuntimeArg,
     returns::{StaticRuntimeReturnDecision, static_runtime_return_decision},
     type_info::{
@@ -1283,37 +1284,6 @@ pub(super) fn provider_root_space<'db>(
                 panic!("invalid effect-handle provider reached MIR lowering")
             }
         })
-}
-
-pub(crate) fn ref_class_for_place_result<'db>(
-    root_class: &RuntimeClass<'db>,
-    value_class: &RuntimeClass<'db>,
-    root_space: AddressSpaceKind,
-    force_raw: bool,
-) -> RuntimeClass<'db> {
-    if !force_raw {
-        match root_class {
-            RuntimeClass::Ref { kind, .. } => {
-                return RuntimeClass::Ref {
-                    pointee: Box::new(value_class.clone()),
-                    kind: kind.clone(),
-                    view: RefView::Whole,
-                };
-            }
-            RuntimeClass::AggregateValue { .. } => {
-                return RuntimeClass::Ref {
-                    pointee: Box::new(value_class.clone()),
-                    kind: RefKind::Object,
-                    view: RefView::Whole,
-                };
-            }
-            RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => {}
-        }
-    }
-    RuntimeClass::RawAddr {
-        space: root_class.address_space().unwrap_or(root_space),
-        target: value_class.aggregate_layout(),
-    }
 }
 
 fn provider_root_place_class<'db>(
@@ -2887,7 +2857,7 @@ mod tests {
     use super::*;
     use crate::runtime::lower::boundary::BoundaryMatcher;
     use crate::runtime::{
-        RuntimeInterfaceSignature, RuntimeLocalRoot,
+        RefKind, RuntimeInterfaceSignature, RuntimeLocalRoot,
         lower::{
             infer::LocalStateInferer,
             interface::{runtime_param_locals, runtime_param_plans, runtime_visible_binding_plans},

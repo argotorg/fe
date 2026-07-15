@@ -1,14 +1,22 @@
+//! Canonical resolution of runtime places and value classes.
+//!
+//! `resolve_runtime_place` is the single walker from a [`RuntimePlace`] to
+//! the classes along its projection path; every consumer — body lowering,
+//! the verifier, and codegen — resolves places here. The projection
+//! arithmetic (`project_field` and friends) likewise has exactly one
+//! implementation, with panicking wrappers for lowering-internal callers
+//! whose places are already known well-formed.
+
 use cranelift_entity::EntityRef;
 use hir::analysis::semantic::FieldIndex;
 use hir::projection::IndexSource;
 
 use crate::{
     db::MirDb,
-    runtime::lower::classify::ref_class_for_place_result,
     runtime::{
-        ConstScalar, Layout, LayoutId, PlaceElem, PlaceRoot, RefView, ResolvedPlaceElem,
-        ResolvedPlaceRootKind, ResolvedRuntimePlace, RuntimeBody, RuntimeClass, RuntimeLocalRoot,
-        RuntimeProgramView, ScalarClass, ScalarRepr, ScalarRole, VariantId,
+        AddressSpaceKind, ConstScalar, Layout, LayoutId, PlaceElem, PlaceRoot, RefKind, RefView,
+        ResolvedPlaceElem, ResolvedPlaceRootKind, ResolvedRuntimePlace, RuntimeBody, RuntimeClass,
+        RuntimeLocalRoot, RuntimeProgramView, ScalarClass, ScalarRepr, ScalarRole, VariantId,
     },
     verify::VerifyError,
 };
@@ -192,6 +200,40 @@ pub(crate) fn project_place<'db>(
     place: &crate::runtime::RuntimePlace<'db>,
 ) -> Result<RuntimeClass<'db>, VerifyError<'db>> {
     Ok(resolve_runtime_place(db, program, body, place)?.result_class)
+}
+
+/// The reference (or raw-address) class produced by taking the address of a
+/// place whose transport root has class `root_class` and whose projected
+/// value has class `value_class`.
+pub(crate) fn ref_class_for_place_result<'db>(
+    root_class: &RuntimeClass<'db>,
+    value_class: &RuntimeClass<'db>,
+    root_space: AddressSpaceKind,
+    force_raw: bool,
+) -> RuntimeClass<'db> {
+    if !force_raw {
+        match root_class {
+            RuntimeClass::Ref { kind, .. } => {
+                return RuntimeClass::Ref {
+                    pointee: Box::new(value_class.clone()),
+                    kind: kind.clone(),
+                    view: RefView::Whole,
+                };
+            }
+            RuntimeClass::AggregateValue { .. } => {
+                return RuntimeClass::Ref {
+                    pointee: Box::new(value_class.clone()),
+                    kind: RefKind::Object,
+                    view: RefView::Whole,
+                };
+            }
+            RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => {}
+        }
+    }
+    RuntimeClass::RawAddr {
+        space: root_class.address_space().unwrap_or(root_space),
+        target: value_class.aggregate_layout(),
+    }
 }
 
 fn runtime_place_transport_root<'db>(
@@ -525,4 +567,43 @@ fn project_variant_field<'db>(
 
 fn layout_for_projection<'db>(class: RuntimeClass<'db>) -> Option<LayoutId<'db>> {
     class.aggregate_layout()
+}
+
+/// Panicking wrappers over the canonical projections, for lowering-internal
+/// callers whose places are already known well-formed.
+pub(crate) fn project_field_class<'db>(
+    db: &'db dyn MirDb,
+    class: RuntimeClass<'db>,
+    field: FieldIndex,
+) -> RuntimeClass<'db> {
+    let program: &dyn MirDb = db;
+    project_field(&program, class.clone(), field).unwrap_or_else(|_| {
+        match class.aggregate_layout().map(|layout| layout.data(db)) {
+            Some(crate::runtime::Layout::Struct(layout)) => panic!(
+                "invalid field projection: field={field:?} source_ty={} fields={:?} class={class:?}",
+                layout.source_ty.pretty_print(db),
+                layout.fields,
+            ),
+            _ => panic!("invalid field projection class"),
+        }
+    })
+}
+
+pub(crate) fn project_index_class<'db>(
+    db: &'db dyn MirDb,
+    class: RuntimeClass<'db>,
+) -> RuntimeClass<'db> {
+    let program: &dyn MirDb = db;
+    project_index(&program, class.clone())
+        .unwrap_or_else(|_| panic!("invalid index projection class: {class:?}"))
+}
+
+pub(crate) fn project_variant_field_class<'db>(
+    db: &'db dyn MirDb,
+    class: RuntimeClass<'db>,
+    variant: VariantId<'db>,
+    field: FieldIndex,
+) -> RuntimeClass<'db> {
+    project_variant_field(db, class.clone(), variant, field)
+        .unwrap_or_else(|_| panic!("invalid variant-field projection class: {class:?}"))
 }

@@ -12,26 +12,19 @@
 //! carrier, subject to representation compatibility. For those, this module
 //! validates the destination against the operands and echoes it back; the
 //! destination class is an input, not just a check target.
-//!
-//! TODO(P1c): place resolution (`project_place` and friends) still lives in
-//! `crate::verify::place`; relocate it under `runtime/` and drop the verify
-//! imports here.
 
 use crate::{
     db::MirDb,
     runtime::{
         AddressSpaceKind, Layout, RExpr, RLocalId, RValueId, RuntimeBody, RuntimeBuiltin,
         RuntimeClass, RuntimeLayoutMap, RuntimeProgramView, ScalarClass, ScalarRepr, ScalarRole,
-    },
-    verify::{
-        VerifyError,
         place::{
             enum_extract_class, enum_tag_class, enum_tag_class_from_value, project_place,
             resolve_runtime_place_address_class, runtime_value_class, scalar_class_from_const,
             verify_enum_handle, verify_value_enum_variant, verify_value_enum_variant_ref,
         },
-        verify_const_region,
     },
+    verify::{VerifyError, verify_const_region},
 };
 
 /// Derive the result class of `expr` when assigned to `dst` (whose declared

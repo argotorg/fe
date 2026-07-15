@@ -45,6 +45,7 @@ use crate::{
     db::MirDb,
     instance::{RuntimeInstance, RuntimeInstanceKey, get_or_build_runtime_instance},
     resolve_runtime_place_address_class,
+    runtime::place::{project_field_class, project_index_class, project_variant_field_class},
     runtime::{
         AddressSpaceKind, ConstRegionId, ConstScalar, IntrinsicArithBinOp, LayoutId, PlaceElem,
         PlaceRoot, RBlock, RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView,
@@ -83,7 +84,6 @@ use super::{
     layout_evidence::{
         runtime_layout_map_for_map_ty, runtime_layout_map_for_shape, runtime_layout_scalar_const,
     },
-    place::{project_field_class, project_index_class, project_variant_field_class},
     realize::{
         RuntimeArgSource, RuntimeValueUseEmitter, SelectedRuntimeArg, emit_runtime_value_use_plan,
     },

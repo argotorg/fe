@@ -20,8 +20,7 @@ use super::{
     },
     classify::{
         BodyEnv, InferClassCache, carrier_value_class, nonself_backing_value_place,
-        provider_root_space, ref_class_for_place_result,
-        runtime_class_for_direct_value_provider_in_env, snapshot_source_place,
+        provider_root_space, runtime_class_for_direct_value_provider_in_env, snapshot_source_place,
     },
     realize::SelectedRuntimeArg,
     source::{RuntimeSourceMode, RuntimeSourceQuery, SemanticPlaceValueSource},
@@ -522,7 +521,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
                         )
                     })
             {
-                let class = ref_class_for_place_result(
+                let class = crate::runtime::place::ref_class_for_place_result(
                     &root_class,
                     &value_class,
                     provider_root_space(provider, &root_class),
@@ -542,7 +541,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
                     self.carriers.get(local.index())?,
                 )
             {
-                let class = ref_class_for_place_result(
+                let class = crate::runtime::place::ref_class_for_place_result(
                     &root_class,
                     &value_class,
                     AddressSpaceKind::Memory,

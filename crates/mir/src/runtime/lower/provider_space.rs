@@ -1,68 +1,11 @@
 use hir::analysis::semantic::SLocalId;
 use hir::analysis::semantic::{
-    FieldIndex, NEffectArg, NEffectArgValue, NLocalOrigin, NSPlaceRoot, NormalizedSemanticBody,
+    NEffectArg, NEffectArgValue, NLocalOrigin, NSPlaceRoot, NormalizedSemanticBody,
     resolved_provider_binding_for_instance_effect,
 };
 use hir::analysis::ty::ProviderAddressSpace;
 
-use crate::{
-    db::MirDb,
-    runtime::{AddressSpaceKind, RuntimeClass, VariantId},
-};
-
-pub(super) fn project_field_class<'db>(
-    db: &'db dyn MirDb,
-    class: RuntimeClass<'db>,
-    field: FieldIndex,
-) -> RuntimeClass<'db> {
-    let layout = class
-        .aggregate_layout()
-        .unwrap_or_else(|| panic!("invalid field projection class {class:?}"));
-    match layout.data(db) {
-        crate::runtime::Layout::Struct(layout) => layout
-            .fields
-            .get(field.0 as usize)
-            .cloned()
-            .unwrap_or_else(|| {
-                panic!(
-                    "invalid field projection: field={field:?} source_ty={} fields={:?} class={class:?}",
-                    layout.source_ty.pretty_print(db),
-                    layout.fields,
-                )
-            }),
-        _ => panic!("invalid field projection layout"),
-    }
-}
-
-pub(super) fn project_index_class<'db>(
-    db: &'db dyn MirDb,
-    class: RuntimeClass<'db>,
-) -> RuntimeClass<'db> {
-    let layout = class
-        .aggregate_layout()
-        .unwrap_or_else(|| panic!("invalid index projection class"));
-    match layout.data(db) {
-        crate::runtime::Layout::Array(layout) => layout.elem,
-        _ => panic!("invalid index projection layout"),
-    }
-}
-
-pub(super) fn project_variant_field_class<'db>(
-    db: &'db dyn MirDb,
-    class: RuntimeClass<'db>,
-    variant: VariantId<'db>,
-    field: FieldIndex,
-) -> RuntimeClass<'db> {
-    let layout = class
-        .aggregate_layout()
-        .unwrap_or_else(|| panic!("invalid variant-field projection class"));
-    if layout != variant.enum_layout {
-        panic!("invalid variant-field projection class");
-    }
-    variant.layout(db).expect("variant layout").variants[variant.index as usize].fields
-        [field.0 as usize]
-        .clone()
-}
+use crate::{db::MirDb, runtime::AddressSpaceKind};
 
 pub(super) fn address_space_from_provider(provider: ProviderAddressSpace) -> AddressSpaceKind {
     match provider {
