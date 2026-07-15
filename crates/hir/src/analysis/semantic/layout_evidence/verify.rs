@@ -1,11 +1,14 @@
-use std::hash::Hash;
+use std::convert::Infallible;
 
-use cranelift_entity::EntityRef;
+use cranelift_entity::{EntityRef, SecondaryMap};
+use dataflow::{ForwardCfgAnalysis, JoinSemiLattice, solve_forward_cfg};
 use rustc_hash::FxHashSet;
 
 use crate::analysis::{
     HirAnalysisDb,
-    semantic::{NExpr, NSStmtKind, NSTerminatorKind, NormalizedSemanticBody, SConst, SLocalId},
+    semantic::{
+        NExpr, NSStmtKind, NSTerminatorKind, NormalizedSemanticBody, SBlockId, SConst, SLocalId,
+    },
     ty::{
         CallableLayoutParamPort, CallableLayoutPort, LayoutBundleComponent,
         LayoutBundleComponentKey, LayoutBundleInterface, LayoutMapTy,
@@ -328,59 +331,122 @@ fn verify_const_bindings<'db>(
     Ok(())
 }
 
-fn successors(kind: &NSTerminatorKind<'_>) -> Vec<usize> {
+fn block_successors(kind: &NSTerminatorKind<'_>) -> Vec<SBlockId> {
     match kind {
-        NSTerminatorKind::Goto(target) => vec![target.index()],
+        NSTerminatorKind::Goto(target) => vec![*target],
         NSTerminatorKind::Branch {
             then_bb, else_bb, ..
-        } => vec![then_bb.index(), else_bb.index()],
+        } => vec![*then_bb, *else_bb],
         NSTerminatorKind::MatchEnum { cases, default, .. } => cases
             .iter()
-            .map(|(_, target)| target.index())
-            .chain(default.iter().map(|target| target.index()))
+            .map(|(_, target)| *target)
+            .chain(*default)
             .collect(),
         NSTerminatorKind::Assert { .. } | NSTerminatorKind::Return(_) => Vec::new(),
     }
 }
 
-fn definition_inputs<T: Copy + Eq + Hash>(
-    all: FxHashSet<T>,
-    params: FxHashSet<T>,
-    defs: &[FxHashSet<T>],
-    predecessors: &[Vec<usize>],
-    reachable: &FxHashSet<usize>,
-) -> Vec<FxHashSet<T>> {
-    let mut inputs = vec![all; defs.len()];
-    inputs[0] = params;
-    loop {
-        let outputs = inputs
-            .iter()
-            .zip(defs)
-            .map(|(input, defs)| input.union(defs).copied().collect::<FxHashSet<_>>())
-            .collect::<Vec<_>>();
-        let mut changed = false;
-        for block in 1..defs.len() {
-            if !reachable.contains(&block) {
-                continue;
-            }
-            let mut preds = predecessors[block]
-                .iter()
-                .filter(|predecessor| reachable.contains(predecessor));
-            let Some(first) = preds.next() else {
-                continue;
-            };
-            let mut input = outputs[*first].clone();
-            for predecessor in preds {
-                input.retain(|local| outputs[*predecessor].contains(local));
-            }
-            if inputs[block] != input {
-                inputs[block] = input;
-                changed = true;
+#[derive(Clone, Default, PartialEq, Eq)]
+struct DefinedLocals {
+    reached: bool,
+    evidence: FxHashSet<LayoutEvidenceLocalId>,
+    semantic: FxHashSet<SLocalId>,
+}
+
+impl JoinSemiLattice for DefinedLocals {
+    fn join_into(&mut self, other: &Self) -> bool {
+        if !other.reached {
+            return false;
+        }
+        if !self.reached {
+            *self = other.clone();
+            return true;
+        }
+        let before = (self.evidence.len(), self.semantic.len());
+        self.evidence.retain(|local| other.evidence.contains(local));
+        self.semantic.retain(|local| other.semantic.contains(local));
+        before != (self.evidence.len(), self.semantic.len())
+    }
+}
+
+struct DefinitionAnalysis<'a, 'db> {
+    normalized: &'a NormalizedSemanticBody<'db>,
+    body: &'a LayoutEvidenceBody<'db>,
+    successors: SecondaryMap<SBlockId, Vec<SBlockId>>,
+}
+
+impl<'a, 'db> DefinitionAnalysis<'a, 'db> {
+    fn new(normalized: &'a NormalizedSemanticBody<'db>, body: &'a LayoutEvidenceBody<'db>) -> Self {
+        let mut successors = SecondaryMap::new();
+        successors.resize(normalized.blocks.len());
+        for (idx, block) in normalized.blocks.iter().enumerate() {
+            successors[SBlockId::new(idx)] = block_successors(&block.terminator.kind)
+                .into_iter()
+                .filter(|target| target.index() < normalized.blocks.len())
+                .collect();
+        }
+        Self {
+            normalized,
+            body,
+            successors,
+        }
+    }
+}
+
+impl ForwardCfgAnalysis for DefinitionAnalysis<'_, '_> {
+    type Block = SBlockId;
+    type State = DefinedLocals;
+    type Error = Infallible;
+
+    fn block_count(&self) -> usize {
+        self.normalized.blocks.len()
+    }
+
+    fn seed_blocks(&self) -> Vec<Self::Block> {
+        vec![SBlockId::new(0)]
+    }
+
+    fn bottom(&self) -> Self::State {
+        DefinedLocals::default()
+    }
+
+    fn initialize(
+        &mut self,
+        entry_states: &mut SecondaryMap<Self::Block, Self::State>,
+    ) -> Result<(), Self::Error> {
+        let entry = &mut entry_states[SBlockId::new(0)];
+        entry.reached = true;
+        entry.evidence.extend(self.body.params.iter().copied());
+        entry
+            .semantic
+            .extend(self.normalized.entry_locals.iter().copied());
+        Ok(())
+    }
+
+    fn transfer(
+        &mut self,
+        block: Self::Block,
+        in_state: &Self::State,
+    ) -> Result<Self::State, Self::Error> {
+        let mut state = in_state.clone();
+        for statement in &self.normalized.blocks[block.index()].stmts {
+            state.evidence.extend(
+                self.body
+                    .statement(statement.id)
+                    .expect("statement identity set was verified")
+                    .assignments
+                    .iter()
+                    .map(|assignment| assignment.dst),
+            );
+            if let NSStmtKind::Assign { dst, .. } = statement.kind {
+                state.semantic.insert(dst);
             }
         }
-        if !changed {
-            return inputs;
-        }
+        Ok(state)
+    }
+
+    fn successors(&self, block: Self::Block) -> &[Self::Block] {
+        &self.successors[block]
     }
 }
 
@@ -422,87 +488,17 @@ fn verify_definitions(
     if normalized.blocks.is_empty() {
         return Ok(());
     }
-    let evidence_all = (0..body.locals.len())
-        .map(|idx| LayoutEvidenceLocalId::from_u32(idx as u32))
-        .collect::<FxHashSet<_>>();
-    let evidence_defs = normalized
-        .blocks
-        .iter()
-        .map(|block| {
-            block
-                .stmts
-                .iter()
-                .flat_map(|statement| {
-                    body.statement(statement.id)
-                        .expect("statement identity set was verified")
-                        .assignments
-                        .iter()
-                        .map(|assignment| assignment.dst)
-                })
-                .collect::<FxHashSet<_>>()
-        })
-        .collect::<Vec<_>>();
-    let semantic_all = (0..normalized.locals.len())
-        .map(|idx| SLocalId::from_u32(idx as u32))
-        .collect::<FxHashSet<_>>();
-    let semantic_defs = normalized
-        .blocks
-        .iter()
-        .map(|block| {
-            block
-                .stmts
-                .iter()
-                .filter_map(|statement| match statement.kind {
-                    NSStmtKind::Assign { dst, .. } => Some(dst),
-                    NSStmtKind::Store { .. } => None,
-                })
-                .collect::<FxHashSet<_>>()
-        })
-        .collect::<Vec<_>>();
-    let mut predecessors = vec![Vec::new(); normalized.blocks.len()];
-    let mut reachable = FxHashSet::from_iter([0]);
-    let mut work = vec![0];
-    while let Some(block) = work.pop() {
-        for successor in successors(&normalized.blocks[block].terminator.kind) {
-            if let Some(preds) = predecessors.get_mut(successor) {
-                preds.push(block);
-                if reachable.insert(successor) {
-                    work.push(successor);
-                }
-            }
-        }
-    }
-    let evidence_params = body.params.iter().copied().collect::<FxHashSet<_>>();
-    let semantic_params = normalized
-        .entry_locals
-        .iter()
-        .copied()
-        .collect::<FxHashSet<_>>();
-    let evidence_inputs = definition_inputs(
-        evidence_all,
-        evidence_params.clone(),
-        &evidence_defs,
-        &predecessors,
-        &reachable,
-    );
-    let semantic_inputs = definition_inputs(
-        semantic_all,
-        semantic_params.clone(),
-        &semantic_defs,
-        &predecessors,
-        &reachable,
-    );
+    let entry_states = solve_forward_cfg(&mut DefinitionAnalysis::new(normalized, body));
+    let unreachable = DefinedLocals {
+        evidence: body.params.iter().copied().collect(),
+        semantic: normalized.entry_locals.iter().copied().collect(),
+        ..DefinedLocals::default()
+    };
     for (block_idx, block) in normalized.blocks.iter().enumerate() {
-        let mut defined_evidence = if reachable.contains(&block_idx) {
-            evidence_inputs[block_idx].clone()
-        } else {
-            evidence_params.clone()
-        };
-        let mut defined_semantic = if reachable.contains(&block_idx) {
-            semantic_inputs[block_idx].clone()
-        } else {
-            semantic_params.clone()
-        };
+        let entry = &entry_states[SBlockId::new(block_idx)];
+        let entry = if entry.reached { entry } else { &unreachable };
+        let mut defined_evidence = entry.evidence.clone();
+        let mut defined_semantic = entry.semantic.clone();
         for (statement_idx, normalized_statement) in block.stmts.iter().enumerate() {
             let statement = body
                 .statement(normalized_statement.id)

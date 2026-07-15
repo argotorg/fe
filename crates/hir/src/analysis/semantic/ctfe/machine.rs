@@ -329,7 +329,6 @@ struct CtfeMachine<'db> {
     config: CtfeConfig,
     steps: usize,
     instance_cache: FxHashMap<SemanticInstanceKey<'db>, SemanticInstance<'db>>,
-    body_cache: FxHashMap<SemanticInstanceKey<'db>, Rc<SemanticBody<'db>>>,
     frames: Vec<CtfeFrame<'db>>,
     /// Memoized results of const-item references evaluated by this machine.
     const_results: FxHashMap<SemanticInstanceKey<'db>, Result<SemConstId<'db>, CtfeError<'db>>>,
@@ -340,7 +339,7 @@ struct CtfeMachine<'db> {
 }
 
 struct CtfeFrame<'db> {
-    body: Rc<SemanticBody<'db>>,
+    body: &'db SemanticBody<'db>,
     locals: Vec<CtfeSlot<'db>>,
     current: usize,
 }
@@ -987,7 +986,6 @@ impl<'db> CtfeMachine<'db> {
             config,
             steps: 0,
             instance_cache: FxHashMap::default(),
-            body_cache: FxHashMap::default(),
             frames: Vec::new(),
             const_results: FxHashMap::default(),
             const_stack: Vec::new(),
@@ -1001,16 +999,6 @@ impl<'db> CtfeMachine<'db> {
         let instance = SemanticInstance::new(self.db, key);
         self.instance_cache.insert(key, instance);
         instance
-    }
-
-    fn body_for_instance(&mut self, instance: SemanticInstance<'db>) -> Rc<SemanticBody<'db>> {
-        let key = instance.key(self.db);
-        if let Some(body) = self.body_cache.get(&key) {
-            return body.clone();
-        }
-        let body = Rc::new(instance.body(self.db));
-        self.body_cache.insert(key, body.clone());
-        body
     }
 
     fn eval_root(
@@ -1034,7 +1022,7 @@ impl<'db> CtfeMachine<'db> {
         locals: &[Option<SemConstId<'db>>],
         origin: SemOrigin<'db>,
     ) -> Result<SemConstId<'db>, CtfeError<'db>> {
-        let body = self.body_for_instance(instance);
+        let body = instance.body(self.db);
         let mut frame_locals = vec![CtfeSlot::Uninit; body.locals.len()];
         for (idx, value) in locals.iter().copied().enumerate() {
             if let Some(value) = value
@@ -1103,7 +1091,7 @@ impl<'db> CtfeMachine<'db> {
             return Err(CtfeError::RecursionLimitExceeded { origin });
         }
 
-        let body = self.body_for_instance(instance);
+        let body = instance.body(self.db);
         let mut locals = vec![CtfeSlot::Uninit; body.locals.len()];
         let mut arg_locals = match instance.key(self.db).owner(self.db) {
             BodyOwner::Func(func) => body

@@ -157,9 +157,9 @@ fn f(ptr: u256) {
         identity_semantic_instance_key(&db, BodyOwner::Func(func)),
     );
     let sem_body = instance.body(&db);
-    let dst = local_for_binding(&sem_body, binding);
+    let dst = local_for_binding(sem_body, binding);
 
-    let SExpr::UseValue(temp) = assign_expr_for_dst(&sem_body, dst) else {
+    let SExpr::UseValue(temp) = assign_expr_for_dst(sem_body, dst) else {
         panic!("binding assignment should read from a temp");
     };
     assert!(
@@ -167,7 +167,7 @@ fn f(ptr: u256) {
         "materialized read should use a temp local"
     );
 
-    let SExpr::UseValue(param) = assign_expr_for_dst(&sem_body, temp.value) else {
+    let SExpr::UseValue(param) = assign_expr_for_dst(sem_body, temp.value) else {
         panic!("temp should read from the source param");
     };
     assert!(
@@ -215,9 +215,9 @@ fn f() {
         identity_semantic_instance_key(&db, BodyOwner::Func(func)),
     );
     let sem_body = instance.body(&db);
-    let dst = local_for_binding(&sem_body, dst_binding);
+    let dst = local_for_binding(sem_body, dst_binding);
 
-    let SExpr::UseValue(src) = assign_expr_for_dst(&sem_body, dst) else {
+    let SExpr::UseValue(src) = assign_expr_for_dst(sem_body, dst) else {
         panic!("binding assignment should read from the original local");
     };
     assert_eq!(

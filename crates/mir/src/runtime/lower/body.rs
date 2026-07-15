@@ -314,7 +314,7 @@ pub(super) struct RmirEmitter<'db> {
     pub(super) instance: RuntimeInstance<'db>,
     pub(super) key: RuntimeInstanceKey<'db>,
     pub(super) semantic_body: NormalizedSemanticBody<'db>,
-    pub(super) layout_evidence: LayoutEvidenceBody<'db>,
+    pub(super) layout_evidence: &'db LayoutEvidenceBody<'db>,
     pub(super) facts: BodyStaticFacts<'db>,
     pub(super) abi: RuntimeAbiPlan<'db>,
     pub(super) env: RuntimeTypeEnv<'db>,
@@ -458,7 +458,7 @@ impl<'db> RmirEmitter<'db> {
                 semantic.key(db)
             ))
         })?;
-        verify_layout_evidence_runtime_compatibility(db, &semantic_body, &layout_evidence)
+        verify_layout_evidence_runtime_compatibility(db, &semantic_body, layout_evidence)
             .map_err(|error| {
                 LowerError::Unsupported(format!(
                     "layout evidence is incompatible with runtime semantic body for {:?}: {error:?}",

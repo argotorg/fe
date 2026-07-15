@@ -2417,7 +2417,8 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
     }
 }
 
-pub fn layout_evidence_body<'db>(
+#[salsa::tracked(return_ref)]
+fn layout_evidence_body_query<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: SemanticInstance<'db>,
 ) -> Result<LayoutEvidenceBody<'db>, LayoutEvidenceError<'db>> {
@@ -2599,4 +2600,13 @@ pub fn layout_evidence_body<'db>(
     };
     verify_layout_evidence_body(db, &normalized, &evidence).map_err(LayoutEvidenceError::Verify)?;
     Ok(evidence)
+}
+
+pub fn layout_evidence_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: SemanticInstance<'db>,
+) -> Result<&'db LayoutEvidenceBody<'db>, LayoutEvidenceError<'db>> {
+    layout_evidence_body_query(db, owner)
+        .as_ref()
+        .map_err(Clone::clone)
 }

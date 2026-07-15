@@ -650,7 +650,7 @@ impl<'db> SemanticInstance<'db> {
         final_call_site_data(db, self).diagnostic
     }
 
-    #[salsa::tracked]
+    #[salsa::tracked(return_ref)]
     pub(crate) fn provisional_body(self, db: &'db dyn HirAnalysisDb) -> SemanticBody<'db> {
         let key = self.key(db);
         let typed_body = key.typed_body(db);
@@ -885,7 +885,7 @@ impl<'db> SemanticInstance<'db> {
         true
     }
 
-    #[salsa::tracked]
+    #[salsa::tracked(return_ref)]
     pub fn body(self, db: &'db dyn HirAnalysisDb) -> SemanticBody<'db> {
         lower_semantic_body(db, self)
     }

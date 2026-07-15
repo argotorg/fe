@@ -75,7 +75,7 @@ fn take(opt: Option<mut u256>) -> u256 {
     let body = instance.body(&db);
 
     assert_eq!(
-        first_assignment_ty(&db, &body, |expr| matches!(
+        first_assignment_ty(&db, body, |expr| matches!(
             expr,
             SExpr::ExtractEnumField { .. }
         )),
@@ -112,7 +112,7 @@ fn read(x: ref Pair) -> u256 {
     let body = instance.body(&db);
 
     assert_eq!(
-        first_assignment_ty(&db, &body, |expr| matches!(expr, SExpr::Field { .. })),
+        first_assignment_ty(&db, body, |expr| matches!(expr, SExpr::Field { .. })),
         "ref u256"
     );
 }
@@ -226,7 +226,7 @@ pub contract C {
     let body = instance.body(&db);
 
     assert_eq!(
-        first_assignment_ty(&db, &body, |expr| matches!(
+        first_assignment_ty(&db, body, |expr| matches!(
             expr,
             SExpr::ExtractEnumField { .. }
         )),
@@ -265,7 +265,7 @@ fn read(x: Maybe) -> u256 {
     let body = instance.body(&db);
 
     assert_eq!(
-        first_assignment_ty(&db, &body, |expr| matches!(
+        first_assignment_ty(&db, body, |expr| matches!(
             expr,
             SExpr::ExtractEnumField { .. }
         )),

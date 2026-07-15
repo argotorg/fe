@@ -157,7 +157,7 @@ fn normalized_semantic_body_query<'db>(
     if let Some(diag) = instance.call_site_finalization_diagnostic(db) {
         return SemanticNormalizeResult::Err(diag);
     }
-    let raw = canonicalize_semantic_consts(db, instance);
+    let raw = canonicalize_semantic_consts(db, instance).clone();
     normalize_semantic_body_result(db, instance, raw, instance.assumptions(db))
 }
 
@@ -169,7 +169,7 @@ fn layout_normalized_semantic_body_query<'db>(
     if let Some(diag) = instance.call_site_finalization_diagnostic(db) {
         return SemanticNormalizeResult::Err(diag);
     }
-    let raw = canonicalize_semantic_const_refs_from_body(db, instance, instance.body(db).clone());
+    let raw = canonicalize_semantic_const_refs_from_body(db, instance, instance.body(db));
     normalize_semantic_body_result(db, instance, raw, instance.assumptions(db))
 }
 

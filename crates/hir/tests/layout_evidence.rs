@@ -112,6 +112,10 @@ fn root<const ROOT: u256>(map: StorageMap<u256, u256, ROOT>) -> u256 {
     );
     let normalized = normalize_semantic_body(&db, instance).expect("normalization failed");
     let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
+    assert!(std::ptr::eq(
+        evidence,
+        layout_evidence_body(&db, instance).expect("cached layoutization failed")
+    ));
     let bindings = evidence
         .statements
         .iter()
@@ -128,8 +132,8 @@ fn root<const ROOT: u256>(map: StorageMap<u256, u256, ROOT>) -> u256 {
         })
     ));
     assert!(matches!(binding.value, LayoutEvidenceOperand::Local(_)));
-    verify_layout_evidence_body(&db, &normalized, &evidence).expect("evidence must verify");
-    verify_layout_evidence_runtime_compatibility(&db, &normalized, &evidence)
+    verify_layout_evidence_body(&db, &normalized, evidence).expect("evidence must verify");
+    verify_layout_evidence_runtime_compatibility(&db, &normalized, evidence)
         .expect("evidence must match the runtime body");
 }
 
@@ -1316,8 +1320,8 @@ fn read<const ROOT: u256>(
     );
 
     let normalized = normalize_semantic_body(&db, instance).expect("normalization failed");
-    verify_layout_evidence_body(&db, &normalized, &evidence).expect("evidence must verify");
-    let mut malformed = evidence.clone();
+    verify_layout_evidence_body(&db, &normalized, evidence).expect("evidence must verify");
+    let mut malformed = (*evidence).clone();
     let call = malformed
         .statements
         .iter_mut()
@@ -1402,7 +1406,7 @@ fn forward<const ROOT: u256>(value: Mixed<ROOT>) -> Mixed<ROOT> {
         CallableLayoutParamPort::Input(port)
             if port.component == input.schema.components[1].port
     ));
-    verify_layout_evidence_body(&db, &normalized, &evidence).expect("evidence must verify");
+    verify_layout_evidence_body(&db, &normalized, evidence).expect("evidence must verify");
 }
 
 #[test]
@@ -1497,8 +1501,8 @@ fn pass() -> Rooted<7> {
             .iter()
             .all(|terminator| terminator.returns.is_empty())
     );
-    verify_layout_evidence_body(&db, &normalized, &evidence).expect("evidence must verify");
-    verify_layout_evidence_runtime_compatibility(&db, &normalized, &evidence)
+    verify_layout_evidence_body(&db, &normalized, evidence).expect("evidence must verify");
+    verify_layout_evidence_runtime_compatibility(&db, &normalized, evidence)
         .expect("compile-time-only calls may disappear from the runtime body");
 }
 
@@ -1547,8 +1551,8 @@ fn pass<const ROOT: u256>(anchor: Rooted<ROOT>) -> Rooted<ROOT> {
             .iter()
             .any(|statement| statement.call.is_some())
     );
-    verify_layout_evidence_body(&db, &normalized, &evidence).expect("evidence must verify");
-    verify_layout_evidence_runtime_compatibility(&db, &normalized, &evidence)
+    verify_layout_evidence_body(&db, &normalized, evidence).expect("evidence must verify");
+    verify_layout_evidence_runtime_compatibility(&db, &normalized, evidence)
         .expect("evidence must match the runtime body");
 
     let mut reordered = normalized.clone();
@@ -1575,7 +1579,7 @@ fn pass<const ROOT: u256>(anchor: Rooted<ROOT>) -> Rooted<ROOT> {
     let second = reordered.blocks[*second_block].stmts[*second_statement].clone();
     reordered.blocks[*first_block].stmts[*first_statement] = second;
     reordered.blocks[*second_block].stmts[*second_statement] = first;
-    verify_layout_evidence_runtime_compatibility(&db, &reordered, &evidence)
+    verify_layout_evidence_runtime_compatibility(&db, &reordered, evidence)
         .expect("statement identity must make evidence independent of statement position");
 
     let mut duplicate = normalized.clone();
@@ -1594,7 +1598,7 @@ fn pass<const ROOT: u256>(anchor: Rooted<ROOT>) -> Rooted<ROOT> {
         .expect("fixture must contain another statement")
         .id = duplicate_id;
     assert_eq!(
-        verify_layout_evidence_runtime_compatibility(&db, &duplicate, &evidence),
+        verify_layout_evidence_runtime_compatibility(&db, &duplicate, evidence),
         Err(LayoutEvidenceVerifyError::DuplicateStatementId(
             duplicate_id
         ))
@@ -1610,11 +1614,11 @@ fn pass<const ROOT: u256>(anchor: Rooted<ROOT>) -> Rooted<ROOT> {
         .expect("fixture must contain a statement")
         .id = invalid_id;
     assert!(matches!(
-        verify_layout_evidence_runtime_compatibility(&db, &invalid, &evidence),
+        verify_layout_evidence_runtime_compatibility(&db, &invalid, evidence),
         Err(LayoutEvidenceVerifyError::InvalidStatementId { id, .. }) if id == invalid_id
     ));
 
-    let mut malformed = evidence.clone();
+    let mut malformed = (*evidence).clone();
     malformed
         .statements
         .iter_mut()
@@ -1643,7 +1647,7 @@ fn pass<const ROOT: u256>(anchor: Rooted<ROOT>) -> Rooted<ROOT> {
         .expect("missing runtime evidence call");
     callee.key = alternate;
     assert!(matches!(
-        verify_layout_evidence_runtime_compatibility(&db, &mismatched, &evidence),
+        verify_layout_evidence_runtime_compatibility(&db, &mismatched, evidence),
         Err(LayoutEvidenceVerifyError::CallCalleeMismatch { .. })
     ));
 }
@@ -1670,7 +1674,7 @@ fn recurse<const ROOT: u256>(value: Rooted<ROOT>, depth: u256) -> Rooted<ROOT> {
     );
     let normalized = normalize_semantic_body(&db, instance).expect("normalization failed");
     let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
-    verify_layout_evidence_runtime_compatibility(&db, &normalized, &evidence)
+    verify_layout_evidence_runtime_compatibility(&db, &normalized, evidence)
         .expect("recursive call evidence must match the runtime body");
 }
 
@@ -1711,7 +1715,7 @@ fn rebuild<const ROOT: u256>(seed: Rooted<ROOT>) -> Rooted<ROOT> {
             );
             assert_eq!(evidence.params.len(), 1);
         }
-        verify_layout_evidence_body(&db, &normalized, &evidence).expect("evidence must verify");
+        verify_layout_evidence_body(&db, &normalized, evidence).expect("evidence must verify");
     }
 }
 
@@ -2014,6 +2018,103 @@ fn consume<const ROOT: u256>(values: [Rooted<ROOT>; 2], lane: usize) -> u256 {
 }
 
 #[test]
+fn verifier_requires_branch_definitions_on_every_path() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+struct Rooted<const ROOT: u256 = _> {}
+
+fn consume<const ROOT: u256>(_ value: Rooted<ROOT>) {}
+
+fn branch<const ROOT: u256>(
+    values: [Rooted<ROOT>; 2],
+    left: bool,
+) {
+    let selected = if left { values[0] } else { values[1] }
+    consume(value: selected)
+}
+"#,
+    );
+    let instance = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "branch"))),
+    );
+    let normalized = normalize_semantic_body(&db, instance).expect("normalization failed");
+    let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
+    let (branch_local, branch_index) = evidence
+        .statements
+        .iter()
+        .flat_map(|statement| &statement.assignments)
+        .find_map(|assignment| match &assignment.expr {
+            LayoutEvidenceExpr::Project { indices, .. } => indices.iter().find_map(|index| {
+                if let LayoutEvidenceIndex::Dynamic(index) = index {
+                    Some((assignment.dst, *index))
+                } else {
+                    None
+                }
+            }),
+            LayoutEvidenceExpr::Use(_)
+            | LayoutEvidenceExpr::Array { .. }
+            | LayoutEvidenceExpr::Repeat { .. }
+            | LayoutEvidenceExpr::Update { .. }
+            | LayoutEvidenceExpr::CallResult { .. } => None,
+        })
+        .expect("missing branch-local projection evidence");
+    let (call_block, call_statement, call_id) = normalized
+        .blocks
+        .iter()
+        .enumerate()
+        .find_map(|(block, data)| {
+            data.stmts
+                .iter()
+                .enumerate()
+                .find(|(_, statement)| {
+                    evidence
+                        .statement(statement.id)
+                        .is_some_and(|statement| statement.call.is_some())
+                })
+                .map(|(statement, data)| (block, statement, data.id))
+        })
+        .expect("missing post-merge layout call");
+
+    let mut malformed = (*evidence).clone();
+    malformed.statements[call_id.index()]
+        .call
+        .as_mut()
+        .expect("missing post-merge layout call")
+        .args[0]
+        .value = LayoutEvidenceExpr::Use(LayoutEvidenceOperand::Local(branch_local));
+    assert_eq!(
+        verify_layout_evidence_body(&db, &normalized, &malformed),
+        Err(LayoutEvidenceVerifyError::UndefinedLocal {
+            block: call_block,
+            statement: Some(call_statement),
+            local: branch_local,
+        })
+    );
+
+    let mut malformed = (*evidence).clone();
+    malformed.statements[call_id.index()]
+        .call
+        .as_mut()
+        .expect("missing post-merge layout call")
+        .args[0]
+        .value = LayoutEvidenceExpr::Project {
+        source: LayoutEvidenceOperand::Local(evidence.params[0]),
+        indices: Box::new([LayoutEvidenceIndex::Dynamic(branch_index)]),
+    };
+    assert_eq!(
+        verify_layout_evidence_body(&db, &normalized, &malformed),
+        Err(LayoutEvidenceVerifyError::UndefinedIndexLocal {
+            block: call_block,
+            statement: call_statement,
+            local: branch_index,
+        })
+    );
+}
+
+#[test]
 fn indexed_assignment_prepares_destination_before_output_witness_call() {
     parse_ok!(
         db,
@@ -2106,7 +2207,7 @@ fn replace<const ROOT: usize>(
             NSStmtKind::Assign { .. } | NSStmtKind::Store { .. } => None,
         })
         .expect("fixture must define another usize call result after fresh");
-    let mut malformed = evidence.clone();
+    let mut malformed = (*evidence).clone();
     let statement_id = normalized.blocks[block_idx].stmts[statement_idx].id;
     let index = malformed.statements[statement_id.index()]
         .call
@@ -2170,7 +2271,7 @@ fn caller<const LEFT: u256, const RIGHT: u256>(
     let normalized = normalize_semantic_body(&db, instance).expect("normalization failed");
     let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
 
-    let mut malformed = evidence.clone();
+    let mut malformed = (*evidence).clone();
     let (local, value) = malformed
         .semantic_values
         .iter_mut()
@@ -2187,7 +2288,7 @@ fn caller<const LEFT: u256, const RIGHT: u256>(
         }) if actual.index() == local
     ));
 
-    let mut malformed = evidence.clone();
+    let mut malformed = (*evidence).clone();
     let assignments = malformed
         .statements
         .iter_mut()
@@ -2215,7 +2316,7 @@ fn caller<const LEFT: u256, const RIGHT: u256>(
         Err(LayoutEvidenceVerifyError::InvalidCallResult { .. })
     ));
 
-    let mut malformed = evidence.clone();
+    let mut malformed = (*evidence).clone();
     let returns = malformed
         .terminators
         .iter_mut()
@@ -2265,7 +2366,7 @@ fn first<const ROOT: u256>(values: [Rooted<ROOT>; 2]) -> Rooted<ROOT> {
         .find(|local| call_evidence.locals[local.index()].map_ty.dimensions == [3])
         .expect("missing length-three evidence parameter");
 
-    let mut malformed = call_evidence.clone();
+    let mut malformed = (*call_evidence).clone();
     let arg = malformed
         .statements
         .iter_mut()
@@ -2278,7 +2379,7 @@ fn first<const ROOT: u256>(values: [Rooted<ROOT>; 2]) -> Rooted<ROOT> {
         Err(LayoutEvidenceVerifyError::MapTypeMismatch)
     ));
 
-    let mut malformed = call_evidence.clone();
+    let mut malformed = (*call_evidence).clone();
     let arg = malformed
         .statements
         .iter_mut()
@@ -2304,7 +2405,7 @@ fn first<const ROOT: u256>(values: [Rooted<ROOT>; 2]) -> Rooted<ROOT> {
     let first_normalized =
         normalize_semantic_body(&db, first_instance).expect("normalization failed");
     let first_evidence = layout_evidence_body(&db, first_instance).expect("layoutization failed");
-    let mut malformed = first_evidence.clone();
+    let mut malformed = (*first_evidence).clone();
     let index = malformed
         .statements
         .iter_mut()

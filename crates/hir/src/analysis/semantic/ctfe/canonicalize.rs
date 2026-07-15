@@ -25,19 +25,18 @@ enum ConstCanonicalizationMode {
     ReferencesOnly,
 }
 
-#[salsa::tracked]
+#[salsa::tracked(return_ref)]
 pub fn canonicalize_semantic_consts<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> SemanticBody<'db> {
-    let original = instance.body(db).clone();
-    canonicalize_semantic_consts_from_body(db, instance, original)
+    canonicalize_semantic_consts_from_body(db, instance, instance.body(db))
 }
 
 pub(crate) fn canonicalize_semantic_consts_from_body<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-    original: SemanticBody<'db>,
+    original: &SemanticBody<'db>,
 ) -> SemanticBody<'db> {
     canonicalize_semantic_consts_from_body_with_mode(
         db,
@@ -50,7 +49,7 @@ pub(crate) fn canonicalize_semantic_consts_from_body<'db>(
 pub(crate) fn canonicalize_semantic_const_refs_from_body<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-    original: SemanticBody<'db>,
+    original: &SemanticBody<'db>,
 ) -> SemanticBody<'db> {
     canonicalize_semantic_consts_from_body_with_mode(
         db,
@@ -63,14 +62,14 @@ pub(crate) fn canonicalize_semantic_const_refs_from_body<'db>(
 fn canonicalize_semantic_consts_from_body_with_mode<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-    original: SemanticBody<'db>,
+    original: &SemanticBody<'db>,
     mode: ConstCanonicalizationMode,
 ) -> SemanticBody<'db> {
     let mut body = original.clone();
     if body.blocks.is_empty() {
         return body;
     }
-    let local_defs = collect_local_defs(&original);
+    let local_defs = collect_local_defs(original);
 
     let mut incoming = vec![None; body.blocks.len()];
     incoming[0] = Some(vec![None; body.locals.len()]);
@@ -85,7 +84,7 @@ fn canonicalize_semantic_consts_from_body_with_mode<'db>(
             instance,
             &original.blocks[bb.index()],
             &mut locals,
-            &original,
+            original,
             &local_defs,
             mode,
         );
@@ -104,7 +103,7 @@ fn canonicalize_semantic_consts_from_body_with_mode<'db>(
                 instance,
                 &original.blocks[idx],
                 &mut unknown_locals,
-                &original,
+                original,
                 &local_defs,
                 mode,
             );
