@@ -7,8 +7,8 @@ use hir::analysis::{
         LayoutEvidenceBody, LayoutEvidenceComponentValue, LayoutEvidenceConstBinding,
         LayoutEvidenceConstant, LayoutEvidenceExpr, LayoutEvidenceIndex, LayoutEvidenceOperand,
         SBlockId, SConst, SLocalId, SStmtId, SemConstId, SemConstScalar, SemConstValue,
-        SemanticCalleeRef, SemanticCodeRegionRef, SemanticCodeRegionTarget, SemanticConstRef,
-        SemanticInstance, SemanticInstanceKey, SemanticLocalKind, VariantIndex,
+        SemanticCalleeRef, SemanticCodeRegionRef, SemanticCodeRegionTarget, SemanticInstance,
+        SemanticInstanceKey, SemanticLocalKind, VariantIndex,
         borrowck::{
             NBorrowRoot, NEffectArg, NExpr, NLocalOrigin, NOperand, NSPlace, NSPlaceRoot, NSStmt,
             NSStmtKind, NSTerminator, NSTerminatorKind, NormalizedSemanticBody,
@@ -1070,7 +1070,6 @@ impl<'db> RmirEmitter<'db> {
                     return;
                 }
                 if self.semantic_local_is_direct(dst) {
-                    self.specialize_direct_assign_target_from_expr(dst, expr);
                     self.lower_expr_into(bb, stmt_id, self.runtime_value(dst), expr);
                     return;
                 }
@@ -1106,92 +1105,6 @@ impl<'db> RmirEmitter<'db> {
         )
     }
 
-    fn specialize_direct_assign_target_from_expr(&mut self, dst: SLocalId, expr: &NExpr<'db>) {
-        let dst_value = self.runtime_value(dst);
-        let Some(target) = self.value_class(dst_value).cloned() else {
-            return;
-        };
-        if matches!(
-            self.semantic_local_lowering(dst),
-            RuntimeLocalLowering::DirectValue
-        ) && !self.semantic_body.locals[dst.index()]
-            .facts
-            .root_demand
-            .disallows_const_ref_storage()
-            && let NExpr::Const(SConst::Ref(cref)) = expr
-            && let Some(actual) =
-                self.const_ref_runtime_class(*cref, self.locals[dst_value.index()].semantic_ty)
-        {
-            self.refine_local_runtime_class(dst_value, actual);
-            return;
-        }
-        if matches!(
-            self.semantic_local_lowering(dst),
-            RuntimeLocalLowering::PlaceCarrier { .. }
-        ) {
-            let actual = self.with_current_body_cx(|cx| match expr {
-                NExpr::Use(value) => cx
-                    .selected_materialized_value(value.local)
-                    .map(|selected| selected.class),
-                NExpr::Borrow { place, .. } => cx.normalized_place_address_class(place),
-                NExpr::ReadPlace { place, .. } => cx.normalized_place_class(place),
-                NExpr::ArrayRepeat { .. } => None,
-                NExpr::Const(_)
-                | NExpr::CodeRegionRef { .. }
-                | NExpr::Unary { .. }
-                | NExpr::Binary { .. }
-                | NExpr::Cast { .. }
-                | NExpr::AggregateMake { .. }
-                | NExpr::EnumMake { .. }
-                | NExpr::GetEnumTag { .. }
-                | NExpr::IsEnumVariant { .. }
-                | NExpr::ExtractEnumField { .. }
-                | NExpr::CodeRegionOffset { .. }
-                | NExpr::CodeRegionLen { .. }
-                | NExpr::Call { .. } => None,
-            });
-            if let Some(actual) = actual
-                && actual.is_transport()
-            {
-                self.refine_local_runtime_class(dst_value, actual);
-                return;
-            }
-        }
-        if !self.runtime_local_uses_source_transport(dst_value) {
-            return;
-        }
-        if !matches!(
-            target,
-            RuntimeClass::AggregateValue { .. }
-                | RuntimeClass::Ref {
-                    kind: RefKind::Object,
-                    ..
-                }
-        ) {
-            return;
-        }
-        let source = match expr {
-            NExpr::Use(value) => {
-                self.with_current_body_cx(|cx| cx.actual_aggregate_class_for_source(value.local))
-            }
-            _ => None,
-        };
-        let Some(actual) = source else {
-            return;
-        };
-        let target = match target {
-            RuntimeClass::AggregateValue { .. } => actual,
-            RuntimeClass::Ref {
-                kind: RefKind::Object,
-                ..
-            } => RuntimeClass::object_ref(actual.aggregate_layout().expect("aggregate ref layout")),
-            RuntimeClass::Ref { .. } | RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => {
-                unreachable!()
-            }
-        };
-        self.refine_local_runtime_class(dst_value, target);
-    }
-
     fn lower_expr_into(
         &mut self,
         bb: RBlockId,
@@ -1214,7 +1127,6 @@ impl<'db> RmirEmitter<'db> {
 
         match expr {
             NExpr::Use(src) => {
-                let dst_class = self.specialize_runtime_target_from_operand(dst, *src, &dst_class);
                 let value = self.lower_semantic_operand_for_class(bb, *src, &dst_class);
                 self.push_stmt(
                     bb,
@@ -1230,13 +1142,6 @@ impl<'db> RmirEmitter<'db> {
                 }
                 let place = self.lower_place(bb, place);
                 let projected = self.project_place_class(&place);
-                let dst_class =
-                    if self.runtime_local_uses_source_transport(dst) && projected.is_transport() {
-                        self.refine_local_runtime_class(dst, projected.clone());
-                        projected.clone()
-                    } else {
-                        dst_class
-                    };
                 if let (
                     RuntimeClass::AggregateValue { layout },
                     RuntimeClass::Ref {
@@ -1339,16 +1244,6 @@ impl<'db> RmirEmitter<'db> {
             } => self.lower_enum_make(bb, dst, *enum_ty, *variant, fields),
             NExpr::Borrow { place, .. } => {
                 let place = self.lower_place(bb, place);
-                let actual = self.place_addr_class(&place);
-                let dst_class =
-                    if self.runtime_local_uses_source_transport(dst) && actual.is_transport() {
-                        let target =
-                            merge_runtime_class(self.db, &dst_class, &actual).unwrap_or(actual);
-                        self.refine_local_runtime_class(dst, target.clone());
-                        target
-                    } else {
-                        dst_class
-                    };
                 let value = self.lower_place_addr_of_for_class(
                     self.locals[dst.index()].semantic_ty,
                     bb,
@@ -1414,20 +1309,7 @@ impl<'db> RmirEmitter<'db> {
                 if self.terminated_blocks[bb.index()] {
                     return;
                 }
-                let actual = self.value_class(value).cloned();
-                let value = if self.value_class(value) == Some(&dst_class) {
-                    value
-                } else if actual.as_ref().is_some_and(|actual| {
-                    self.should_preserve_const_source_class(actual, &dst_class)
-                }) {
-                    self.refine_local_runtime_class(
-                        dst,
-                        actual.expect("actual runtime class should be present"),
-                    );
-                    value
-                } else {
-                    self.coerce_value(bb, value, &dst_class)
-                };
+                let value = self.coerce_value_if_needed(bb, value, &dst_class);
                 self.push_stmt(
                     bb,
                     RStmt::Assign {
@@ -1535,21 +1417,7 @@ impl<'db> RmirEmitter<'db> {
         bindings: &[LayoutEvidenceConstBinding<'db>],
     ) {
         let src = self.lower_sem_const_as_class(bb, value, expected_ty, target, bindings);
-        let actual = self.value_class(src).cloned();
-        let value = if self.value_class(src) == Some(target) {
-            src
-        } else if actual
-            .as_ref()
-            .is_some_and(|actual| self.should_preserve_const_source_class(actual, target))
-        {
-            self.refine_local_runtime_class(
-                dst,
-                actual.expect("actual runtime class should be present"),
-            );
-            src
-        } else {
-            self.coerce_value(bb, src, target)
-        };
+        let value = self.coerce_value_if_needed(bb, src, target);
         self.push_stmt(
             bb,
             RStmt::Assign {
@@ -1649,6 +1517,14 @@ impl<'db> RmirEmitter<'db> {
                 self.lower_non_scalar_const_as_class(bb, value, ty, target, bindings)
             }
         }
+    }
+
+    fn should_preserve_const_source_class(
+        &self,
+        actual: &RuntimeClass<'db>,
+        target: &RuntimeClass<'db>,
+    ) -> bool {
+        merge_runtime_class(self.db, actual, target).is_some_and(|merged| &merged == actual)
     }
 
     fn target_accepts_const_ref_source(&self, target: &RuntimeClass<'db>) -> bool {
@@ -2002,16 +1878,6 @@ impl<'db> RmirEmitter<'db> {
         self.const_ref_regions.contains(&region).then_some(region)
     }
 
-    fn const_ref_runtime_class(
-        &self,
-        cref: SemanticConstRef<'db>,
-        expected_ty: TyId<'db>,
-    ) -> Option<RuntimeClass<'db>> {
-        let value =
-            reified_const_ref_value_for_ty(self.db, self.semantic_body.owner, cref, expected_ty);
-        aggregate_const_ref_class(self.db, self.env, value)
-    }
-
     fn lower_sem_const_scalar(
         &mut self,
         bb: RBlockId,
@@ -2237,7 +2103,6 @@ impl<'db> RmirEmitter<'db> {
             | RuntimeClass::RawAddr { .. }) => class,
             RuntimeClass::Scalar(_) => panic!("aggregate destination must not be scalar"),
         };
-        self.refine_local_runtime_class(dst, dst_class.clone());
         match dst_class {
             RuntimeClass::AggregateValue { .. } => {
                 let fields = field_values
@@ -5171,16 +5036,6 @@ impl<'db> RmirEmitter<'db> {
             .unwrap_or_else(|| panic!("missing runtime provider binding for {id:?}"))
     }
 
-    fn runtime_local_uses_source_transport(&self, local: RLocalId) -> bool {
-        local.index() < self.semantic_locals.len()
-            && (matches!(
-                self.semantic_locals[local.index()],
-                RuntimeLocalLowering::PlaceCarrier { .. }
-            ) || self
-                .facts
-                .boundary_source_transport_sensitive(SLocalId::from_u32(local.index() as u32)))
-    }
-
     fn provider_binding_value(&self, id: RuntimeProviderBindingId) -> RLocalId {
         self.provider_binding(id).value
     }
@@ -5604,35 +5459,9 @@ impl<'db> RmirEmitter<'db> {
             RuntimeLocalLowering::Erased => {}
             RuntimeLocalLowering::DirectValue | RuntimeLocalLowering::PlaceCarrier { .. } => {
                 let dst = self.runtime_value(local);
-                let Some(mut target) = self.value_class(dst).cloned() else {
+                let Some(target) = self.value_class(dst).cloned() else {
                     return;
                 };
-                if self.runtime_local_uses_source_transport(dst)
-                    && matches!(
-                        target,
-                        RuntimeClass::AggregateValue { .. }
-                            | RuntimeClass::Ref {
-                                kind: RefKind::Object,
-                                ..
-                            }
-                    )
-                    && let Some(actual) =
-                        self.with_current_body_cx(|cx| cx.actual_aggregate_class_for_source(local))
-                {
-                    target = match target {
-                        RuntimeClass::AggregateValue { .. } => actual,
-                        RuntimeClass::Ref {
-                            kind: RefKind::Object,
-                            ..
-                        } => RuntimeClass::object_ref(
-                            actual.aggregate_layout().expect("aggregate ref layout"),
-                        ),
-                        RuntimeClass::Ref { .. }
-                        | RuntimeClass::Scalar(_)
-                        | RuntimeClass::RawAddr { .. } => unreachable!(),
-                    };
-                    self.refine_local_runtime_class(dst, target.clone());
-                }
                 let src = self.coerce_value(bb, src, &target);
                 self.push_stmt(
                     bb,
@@ -5664,43 +5493,6 @@ impl<'db> RmirEmitter<'db> {
                 self.write_value_to_place(bb, place, src, &target);
             }
         }
-    }
-
-    fn specialize_runtime_target_from_operand(
-        &mut self,
-        dst: RLocalId,
-        src: NOperand,
-        target: &RuntimeClass<'db>,
-    ) -> RuntimeClass<'db> {
-        if !self.runtime_local_uses_source_transport(dst)
-            || !matches!(
-                target,
-                RuntimeClass::AggregateValue { .. }
-                    | RuntimeClass::Ref {
-                        kind: RefKind::Object,
-                        ..
-                    }
-            )
-        {
-            return target.clone();
-        }
-        let Some(actual) =
-            self.with_current_body_cx(|cx| cx.actual_aggregate_class_for_source(src.local))
-        else {
-            return target.clone();
-        };
-        let target = match target {
-            RuntimeClass::AggregateValue { .. } => actual,
-            RuntimeClass::Ref {
-                kind: RefKind::Object,
-                ..
-            } => RuntimeClass::object_ref(actual.aggregate_layout().expect("aggregate ref layout")),
-            RuntimeClass::Ref { .. } | RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => {
-                unreachable!()
-            }
-        };
-        self.refine_local_runtime_class(dst, target.clone());
-        target
     }
 
     fn lower_place(&mut self, bb: RBlockId, place: &NSPlace<'db>) -> RuntimePlace<'db> {
@@ -5925,22 +5717,6 @@ impl<'db> RmirEmitter<'db> {
         }
     }
 
-    fn refine_local_runtime_class(&mut self, local: RLocalId, class: RuntimeClass<'db>) {
-        let class = self
-            .value_class(local)
-            .and_then(|current| merge_runtime_class(self.db, current, &class))
-            .unwrap_or(class);
-        self.locals[local.index()].carrier = RuntimeCarrier::Value(class.clone());
-        if let Some(carrier) = self.semantic_carriers.get_mut(local.index()) {
-            *carrier = RuntimeCarrier::Value(class.clone());
-        }
-        match &mut self.locals[local.index()].root {
-            RuntimeLocalRoot::Slot(root) => *root = class,
-            RuntimeLocalRoot::Ref(root) => *root = class,
-            RuntimeLocalRoot::Ptr { .. } | RuntimeLocalRoot::None => {}
-        }
-    }
-
     fn reify_runtime_const(
         &self,
         expected_ty: TyId<'db>,
@@ -6027,14 +5803,6 @@ impl<'db> RmirEmitter<'db> {
                 crate::runtime::Layout::Array(layout) => layout.source_ty,
                 crate::runtime::Layout::Enum(layout) => layout.source_ty,
             })
-    }
-
-    fn should_preserve_const_source_class(
-        &self,
-        actual: &RuntimeClass<'db>,
-        target: &RuntimeClass<'db>,
-    ) -> bool {
-        merge_runtime_class(self.db, actual, target).is_some_and(|merged| &merged == actual)
     }
 }
 

@@ -332,11 +332,6 @@ impl<'db> BodyStaticFacts<'db> {
         self.normalized_facts.local_source_uses(local)
     }
 
-    pub(super) fn boundary_source_transport_sensitive(&self, local: SLocalId) -> bool {
-        self.local(local)
-            .is_some_and(|facts| facts.boundary_source_transport_sensitive)
-    }
-
     fn assignments_using_local(&self, local: SLocalId) -> &[AssignmentId] {
         self.normalized_facts.assignments_using_local(local)
     }
@@ -1246,35 +1241,6 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
 pub(crate) struct RuntimeBodyCx<'a, 'carriers, 'db> {
     pub(crate) env: BodyEnv<'a, 'db>,
     pub(crate) carriers: &'carriers [RuntimeCarrier<'db>],
-}
-
-impl<'a, 'carriers, 'db> RuntimeBodyCx<'a, 'carriers, 'db> {
-    pub(super) fn selected_materialized_value(
-        self,
-        local: SLocalId,
-    ) -> Option<SelectedRuntimeArg<'db>> {
-        RuntimeArgSelector::new(self.env, self.carriers, None).selected_materialized_value(local)
-    }
-
-    pub(crate) fn normalized_place_class(self, place: &NSPlace<'db>) -> Option<RuntimeClass<'db>> {
-        self.env.normalized_place_class(self.carriers, place)
-    }
-
-    pub(crate) fn normalized_place_address_class(
-        self,
-        place: &NSPlace<'db>,
-    ) -> Option<RuntimeClass<'db>> {
-        self.env
-            .normalized_place_address_class(self.carriers, place)
-    }
-
-    pub(crate) fn actual_aggregate_class_for_source(
-        self,
-        local: SLocalId,
-    ) -> Option<RuntimeClass<'db>> {
-        self.env
-            .actual_aggregate_class_for_source(self.carriers, local)
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
