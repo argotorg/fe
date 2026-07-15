@@ -452,10 +452,6 @@ fn layout_projection_path(
     Some(projections)
 }
 
-fn visible_layout_projection_path(selector: &[PlaceStep]) -> Option<Vec<LayoutProjection>> {
-    layout_projection_path(selector, false)
-}
-
 fn visible_layout_projection_matches(
     requested: LayoutProjection,
     candidate: LayoutProjection,
@@ -932,44 +928,7 @@ impl<'db> FieldStorageLayout<'db> {
         ty: TyId<'db>,
         projections: &[LayoutProjection],
     ) -> Result<AssignedRootValue<'db>, LayoutViewError<'db>> {
-        let binding = self
-            .root_bindings
-            .get(&root)
-            .ok_or(LayoutViewError::RootNotClassified { root })?;
-        let LayoutBinding::Bound(leaves) = binding else {
-            return Err(LayoutViewError::NonPhysicalRoot { root });
-        };
-        let view_selector = self.view_selector(kind);
-        let leaves = leaves
-            .iter()
-            .filter(|leaf| {
-                leaf.selector
-                    .strip_prefix(view_selector.as_slice())
-                    .and_then(visible_layout_projection_path)
-                    .is_some_and(|candidate| {
-                        visible_layout_projection_is_prefix(projections, &candidate)
-                    })
-            })
-            .collect::<Vec<_>>();
-        let mut indices = Vec::new();
-        let mut all_indices_static = true;
-        for projection in projections {
-            match projection {
-                LayoutProjection::Index(Some(index)) if all_indices_static => {
-                    indices.push(*index);
-                }
-                LayoutProjection::Index(None) => {
-                    all_indices_static = false;
-                    indices.clear();
-                }
-                LayoutProjection::Field(_)
-                | LayoutProjection::VariantField { .. }
-                | LayoutProjection::Index(Some(_))
-                | LayoutProjection::ConstParam(_)
-                | LayoutProjection::EffectTarget => {}
-            }
-        }
-        self.root_value_from_leaves(root, ty, &indices, &leaves)
+        self.root_value_for_projections(kind, root, ty, projections, false)
     }
 
     /// Resolves a root using the complete semantic layout-view path.
@@ -984,6 +943,17 @@ impl<'db> FieldStorageLayout<'db> {
         ty: TyId<'db>,
         projections: &[LayoutProjection],
     ) -> Result<AssignedRootValue<'db>, LayoutViewError<'db>> {
+        self.root_value_for_projections(kind, root, ty, projections, true)
+    }
+
+    fn root_value_for_projections(
+        &self,
+        kind: LayoutViewKind,
+        root: LayoutRootId<'db>,
+        ty: TyId<'db>,
+        projections: &[LayoutProjection],
+        include_effect_targets: bool,
+    ) -> Result<AssignedRootValue<'db>, LayoutViewError<'db>> {
         let binding = self
             .root_bindings
             .get(&root)
@@ -997,7 +967,7 @@ impl<'db> FieldStorageLayout<'db> {
             .filter(|leaf| {
                 leaf.selector
                     .strip_prefix(view_selector.as_slice())
-                    .and_then(|selector| layout_projection_path(selector, true))
+                    .and_then(|selector| layout_projection_path(selector, include_effect_targets))
                     .is_some_and(|candidate| {
                         visible_layout_projection_is_prefix(projections, &candidate)
                     })
@@ -1035,19 +1005,7 @@ impl<'db> FieldStorageLayout<'db> {
         ty: TyId<'db>,
         projections: &[LayoutProjection],
     ) -> Option<AssignedRootValue<'db>> {
-        let values = self
-            .root_bindings
-            .keys()
-            .filter_map(|root| {
-                self.root_value_for_visible_projections(kind, *root, ty, projections)
-                    .ok()
-            })
-            .collect::<FxHashSet<_>>();
-        let values = values.into_iter().collect::<Vec<_>>();
-        let [value] = values.as_slice() else {
-            return None;
-        };
-        Some(value.clone())
+        self.unique_root_value_for_projections(kind, ty, projections, false)
     }
 
     pub fn unique_root_value_for_evidence_projections(
@@ -1056,19 +1014,22 @@ impl<'db> FieldStorageLayout<'db> {
         ty: TyId<'db>,
         projections: &[LayoutProjection],
     ) -> Option<AssignedRootValue<'db>> {
-        let values = self
-            .root_bindings
-            .keys()
-            .filter_map(|root| {
-                self.root_value_for_evidence_projections(kind, *root, ty, projections)
-                    .ok()
-            })
-            .collect::<FxHashSet<_>>();
-        let values = values.into_iter().collect::<Vec<_>>();
-        let [value] = values.as_slice() else {
-            return None;
-        };
-        Some(value.clone())
+        self.unique_root_value_for_projections(kind, ty, projections, true)
+    }
+
+    fn unique_root_value_for_projections(
+        &self,
+        kind: LayoutViewKind,
+        ty: TyId<'db>,
+        projections: &[LayoutProjection],
+        include_effect_targets: bool,
+    ) -> Option<AssignedRootValue<'db>> {
+        let mut values = self.root_bindings.keys().filter_map(|root| {
+            self.root_value_for_projections(kind, *root, ty, projections, include_effect_targets)
+                .ok()
+        });
+        let value = values.next()?;
+        values.all(|candidate| candidate == value).then_some(value)
     }
 
     fn root_value_from_leaves(
