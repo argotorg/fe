@@ -14,24 +14,52 @@ use hir::projection::IndexSource;
 use crate::{
     db::MirDb,
     runtime::{
-        AddressSpaceKind, ConstScalar, Layout, LayoutId, PlaceElem, PlaceRoot, RefKind, RefView,
-        ResolvedPlaceElem, ResolvedPlaceRootKind, ResolvedRuntimePlace, RuntimeBody, RuntimeClass,
-        RuntimeLocalRoot, RuntimeProgramView, ScalarClass, ScalarRepr, ScalarRole, VariantId,
+        AddressSpaceKind, ConstScalar, Layout, LayoutId, PlaceElem, PlaceRoot, RLocalId, RefKind,
+        RefView, ResolvedPlaceElem, ResolvedPlaceRootKind, ResolvedRuntimePlace, RuntimeBody,
+        RuntimeClass, RuntimeLocalRoot, RuntimeProgramView, RuntimeProviderBinding,
+        RuntimeProviderBindingId, ScalarClass, ScalarRepr, ScalarRole, VariantId,
     },
     verify::VerifyError,
 };
 
+/// The class environment a place resolves against: the finished
+/// [`RuntimeBody`], or the in-flight lowering state before a body exists.
+pub trait PlaceClassEnv<'db> {
+    fn place_local_root(&self, local: RLocalId) -> Option<&RuntimeLocalRoot<'db>>;
+    fn place_value_class(&self, value: crate::runtime::RValueId) -> Option<&RuntimeClass<'db>>;
+    fn place_provider_binding(
+        &self,
+        binding: RuntimeProviderBindingId,
+    ) -> Option<&RuntimeProviderBinding<'db>>;
+}
+
+impl<'db> PlaceClassEnv<'db> for RuntimeBody<'db> {
+    fn place_local_root(&self, local: RLocalId) -> Option<&RuntimeLocalRoot<'db>> {
+        self.local(local).map(|local| &local.root)
+    }
+
+    fn place_value_class(&self, value: crate::runtime::RValueId) -> Option<&RuntimeClass<'db>> {
+        self.value_class(value)
+    }
+
+    fn place_provider_binding(
+        &self,
+        binding: RuntimeProviderBindingId,
+    ) -> Option<&RuntimeProviderBinding<'db>> {
+        self.provider_bindings.get(binding.index())
+    }
+}
+
 pub fn resolve_runtime_place<'db>(
     db: &'db dyn MirDb,
     program: &impl RuntimeProgramView<'db>,
-    body: &RuntimeBody<'db>,
+    body: &impl PlaceClassEnv<'db>,
     place: &crate::runtime::RuntimePlace<'db>,
 ) -> Result<ResolvedRuntimePlace<'db>, VerifyError<'db>> {
     let mut current = match &place.root {
-        PlaceRoot::Slot(local) => match &body
-            .local(*local)
+        PlaceRoot::Slot(local) => match body
+            .place_local_root(*local)
             .ok_or(VerifyError::MissingRuntimeLocal(*local))?
-            .root
         {
             RuntimeLocalRoot::None | RuntimeLocalRoot::Ref(_) | RuntimeLocalRoot::Ptr { .. } => {
                 return Err(VerifyError::InvalidPlace(RuntimeClass::RawAddr {
@@ -42,7 +70,7 @@ pub fn resolve_runtime_place<'db>(
             RuntimeLocalRoot::Slot(class) => class.clone(),
         },
         PlaceRoot::Ref(value) => match body
-            .value_class(*value)
+            .place_value_class(*value)
             .cloned()
             .ok_or(VerifyError::ErasedRuntimeValue(*value))?
         {
@@ -50,8 +78,7 @@ pub fn resolve_runtime_place<'db>(
             class => class,
         },
         PlaceRoot::Provider(binding) => body
-            .provider_bindings
-            .get(binding.index())
+            .place_provider_binding(*binding)
             .map(|binding| binding.place_class.clone())
             .ok_or(VerifyError::InvalidPlace(RuntimeClass::RawAddr {
                 space: crate::runtime::AddressSpaceKind::Memory,
@@ -59,7 +86,7 @@ pub fn resolve_runtime_place<'db>(
             }))?,
         PlaceRoot::Ptr { addr, space, class } => {
             match body
-                .value_class(*addr)
+                .place_value_class(*addr)
                 .ok_or(VerifyError::ErasedRuntimeValue(*addr))?
             {
                 RuntimeClass::RawAddr {
@@ -91,8 +118,7 @@ pub fn resolve_runtime_place<'db>(
         },
         PlaceRoot::Provider(binding) => {
             let provider =
-                body.provider_bindings
-                    .get(binding.index())
+                body.place_provider_binding(*binding)
                     .ok_or(VerifyError::InvalidPlace(RuntimeClass::RawAddr {
                         space: crate::runtime::AddressSpaceKind::Memory,
                         target: None,
@@ -124,7 +150,7 @@ pub fn resolve_runtime_place<'db>(
             PlaceElem::Index(index) => {
                 if let IndexSource::Dynamic(index) = index {
                     let _ = body
-                        .value_class(*index)
+                        .place_value_class(*index)
                         .ok_or(VerifyError::ErasedRuntimeValue(*index))?;
                 }
                 current = project_index(program, current)?;
@@ -172,7 +198,7 @@ pub fn resolve_runtime_place<'db>(
 pub fn resolve_runtime_place_address_class<'db>(
     db: &'db dyn MirDb,
     program: &impl RuntimeProgramView<'db>,
-    body: &RuntimeBody<'db>,
+    body: &impl PlaceClassEnv<'db>,
     place: &crate::runtime::RuntimePlace<'db>,
 ) -> Result<RuntimeClass<'db>, VerifyError<'db>> {
     let resolved = resolve_runtime_place(db, program, body, place)?;
@@ -196,7 +222,7 @@ pub fn resolve_runtime_place_address_class<'db>(
 pub(crate) fn project_place<'db>(
     db: &'db dyn MirDb,
     program: &impl RuntimeProgramView<'db>,
-    body: &RuntimeBody<'db>,
+    body: &impl PlaceClassEnv<'db>,
     place: &crate::runtime::RuntimePlace<'db>,
 ) -> Result<RuntimeClass<'db>, VerifyError<'db>> {
     Ok(resolve_runtime_place(db, program, body, place)?.result_class)
@@ -237,15 +263,14 @@ pub(crate) fn ref_class_for_place_result<'db>(
 }
 
 fn runtime_place_transport_root<'db>(
-    body: &RuntimeBody<'db>,
+    body: &impl PlaceClassEnv<'db>,
     place: &crate::runtime::RuntimePlace<'db>,
 ) -> Result<(RuntimeClass<'db>, crate::runtime::AddressSpaceKind, bool), VerifyError<'db>> {
     Ok(match &place.root {
         PlaceRoot::Slot(local) => (
-            match &body
-                .local(*local)
+            match body
+                .place_local_root(*local)
                 .ok_or(VerifyError::MissingRuntimeLocal(*local))?
-                .root
             {
                 RuntimeLocalRoot::Slot(class) => class.clone(),
                 RuntimeLocalRoot::None
@@ -261,14 +286,15 @@ fn runtime_place_transport_root<'db>(
             false,
         ),
         PlaceRoot::Ref(value) => (
-            runtime_value_class(body, *value)?.clone(),
+            body.place_value_class(*value)
+                .ok_or(VerifyError::ErasedRuntimeValue(*value))?
+                .clone(),
             crate::runtime::AddressSpaceKind::Memory,
             false,
         ),
         PlaceRoot::Provider(binding) => {
             let class = body
-                .provider_bindings
-                .get(binding.index())
+                .place_provider_binding(*binding)
                 .map(|binding| binding.provider_class.clone())
                 .ok_or(VerifyError::InvalidPlace(RuntimeClass::RawAddr {
                     space: crate::runtime::AddressSpaceKind::Memory,

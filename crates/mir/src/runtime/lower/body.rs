@@ -50,9 +50,8 @@ use crate::{
         AddressSpaceKind, ConstRegionId, ConstScalar, IntrinsicArithBinOp, LayoutId, PlaceElem,
         PlaceRoot, RBlock, RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView,
         RuntimeBody, RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeExitBehavior,
-        RuntimeInterfaceSignature, RuntimeLayoutMap, RuntimeLocalRoot, RuntimePlace,
-        RuntimeProviderBinding, RuntimeProviderBindingId, ScalarClass, ScalarRepr, ScalarRole,
-        VariantId,
+        RuntimeLayoutMap, RuntimeLocalRoot, RuntimePlace, RuntimeProviderBinding,
+        RuntimeProviderBindingId, ScalarClass, ScalarRepr, ScalarRole, VariantId,
         code_region::runtime_code_region_for_semantic_ref,
         package::{LowerError, runtime_instance_for_semantic},
     },
@@ -428,6 +427,23 @@ impl<'db> RuntimeTupleFieldEmitter<'db> for RmirEmitter<'db> {
 
     fn push_tuple_stmt(&mut self, bb: RBlockId, stmt: RStmt<'db>) {
         self.push_stmt(bb, stmt);
+    }
+}
+
+impl<'db> crate::runtime::place::PlaceClassEnv<'db> for RmirEmitter<'db> {
+    fn place_local_root(&self, local: RLocalId) -> Option<&RuntimeLocalRoot<'db>> {
+        self.locals.get(local.index()).map(|local| &local.root)
+    }
+
+    fn place_value_class(&self, value: RLocalId) -> Option<&RuntimeClass<'db>> {
+        self.value_class(value)
+    }
+
+    fn place_provider_binding(
+        &self,
+        binding: RuntimeProviderBindingId,
+    ) -> Option<&RuntimeProviderBinding<'db>> {
+        self.provider_bindings.get(binding.index())
     }
 }
 
@@ -5439,18 +5455,7 @@ impl<'db> RmirEmitter<'db> {
 
     fn place_addr_class(&self, place: &RuntimePlace<'db>) -> RuntimeClass<'db> {
         let program = self.db as &dyn MirDb;
-        let body = RuntimeBody {
-            owner: self.instance,
-            key: self.key,
-            signature: RuntimeInterfaceSignature {
-                params: Vec::new(),
-                ret: None,
-            },
-            provider_bindings: self.provider_bindings.clone(),
-            locals: self.locals.clone(),
-            blocks: Vec::new(),
-        };
-        resolve_runtime_place_address_class(self.db, &program, &body, place)
+        resolve_runtime_place_address_class(self.db, &program, self, place)
             .unwrap_or_else(|err| panic!("invalid runtime place address class: {err:?}"))
     }
 
@@ -5528,34 +5533,9 @@ impl<'db> RmirEmitter<'db> {
     }
 
     fn project_place_class(&self, place: &RuntimePlace<'db>) -> RuntimeClass<'db> {
-        let mut current = match &place.root {
-            PlaceRoot::Slot(local) => self
-                .local_root_class_r(*local)
-                .expect("projected places should have runtime root classes"),
-            PlaceRoot::Ref(local) => match self
-                .value_class(*local)
-                .cloned()
-                .expect("projected ref places should have runtime classes")
-            {
-                RuntimeClass::Ref { pointee, .. } => *pointee,
-                class => class,
-            },
-            PlaceRoot::Provider(binding) => self.provider_binding(*binding).place_class.clone(),
-            PlaceRoot::Ptr { class, .. } => class.clone(),
-        };
-        for elem in place.path.iter() {
-            current = match elem {
-                PlaceElem::Field(field) => project_field_class(self.db, current, *field),
-                PlaceElem::Index(_) => project_index_class(self.db, current),
-                PlaceElem::VariantField { variant, field } => {
-                    project_variant_field_class(self.db, current, *variant, *field)
-                }
-                PlaceElem::Deref => current
-                    .deref_target()
-                    .unwrap_or_else(|| panic!("invalid runtime place deref class: {current:?}")),
-            };
-        }
-        current
+        let program = self.db as &dyn MirDb;
+        crate::runtime::place::project_place(self.db, &program, self, place)
+            .unwrap_or_else(|err| panic!("invalid runtime place class: {err:?} place={place:?}"))
     }
 
     fn class_is_runtime_zst(&self, class: &RuntimeClass<'db>) -> bool {
@@ -5694,15 +5674,6 @@ impl<'db> RmirEmitter<'db> {
                 space,
                 class,
             }),
-        }
-    }
-
-    fn local_root_class_r(&self, local: RLocalId) -> Option<RuntimeClass<'db>> {
-        match &self.locals.get(local.index())?.root {
-            RuntimeLocalRoot::None => None,
-            RuntimeLocalRoot::Slot(class)
-            | RuntimeLocalRoot::Ref(class)
-            | RuntimeLocalRoot::Ptr { class, .. } => Some(class.clone()),
         }
     }
 
