@@ -660,9 +660,23 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
         carriers: &[RuntimeCarrier<'db>],
         place: &NSPlace<'db>,
     ) -> Option<RuntimeClass<'db>> {
-        let mut current =
-            normalized_place_root_class_in_context(self, place.root.clone(), carriers)?;
-        for projection in place.path.iter() {
+        let root = normalized_place_root_class_in_context(self, place.root.clone(), carriers)?;
+        Some(self.walk_place_path_classes(root, place).0)
+    }
+
+    /// Projects `root` through the place's path, returning the final class and
+    /// the carrier class crossed by the last `Deref` (if any).
+    fn walk_place_path_classes(
+        self,
+        root: RuntimeClass<'db>,
+        place: &NSPlace<'db>,
+    ) -> (RuntimeClass<'db>, Option<RuntimeClass<'db>>) {
+        let mut current = root;
+        let mut last_deref_carrier = None;
+        for (idx, projection) in place.path.iter().enumerate() {
+            if matches!(projection, Projection::Deref) {
+                last_deref_carrier = Some(current.clone());
+            }
             current = match projection {
                 Projection::Field(field) => project_field_class(
                     self.db,
@@ -706,8 +720,17 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                     }
                 },
             };
+            // Mirror `try_lower_place`: projecting onward through a
+            // handle-classed element continues in the pointee, which re-roots
+            // the place in that carrier's transport.
+            if idx + 1 < place.path.len()
+                && let Some(target) = current.deref_target()
+            {
+                last_deref_carrier = Some(current.clone());
+                current = target;
+            }
         }
-        Some(current)
+        (current, last_deref_carrier)
     }
 
     pub(crate) fn normalized_place_address_class(
@@ -716,9 +739,9 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
         place: &NSPlace<'db>,
     ) -> Option<RuntimeClass<'db>> {
         let value_class = self.normalized_place_class(carriers, place)?;
-        let root_class =
+        let mut root_class =
             normalized_place_root_transport_class_in_context(self, place.root.clone(), carriers)?;
-        let (root_space, force_raw) = match place.root {
+        let (mut root_space, mut force_raw) = match place.root {
             NSPlaceRoot::CarrierDerefLocal(_) => (AddressSpaceKind::Memory, false),
             NSPlaceRoot::Root(root) => match self.body.root(root)? {
                 NBorrowRoot::Param { .. } | NBorrowRoot::LocalSlot { .. } => {
@@ -729,6 +752,18 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                 }
             },
         };
+        // A deref along the path re-roots the address in the dereffed
+        // carrier's transport (mirroring `resolve_runtime_place_address_class`
+        // over lowered places), so a borrow through a handle-typed field keeps
+        // the handle's transport rather than the place root's.
+        if let Some(root) =
+            normalized_place_root_class_in_context(self, place.root.clone(), carriers)
+            && let (_, Some(carrier)) = self.walk_place_path_classes(root, place)
+        {
+            root_space = carrier.address_space().unwrap_or(root_space);
+            force_raw = matches!(carrier, RuntimeClass::RawAddr { .. });
+            root_class = carrier;
+        }
         Some(ref_class_for_place_result(
             &root_class,
             &value_class,
