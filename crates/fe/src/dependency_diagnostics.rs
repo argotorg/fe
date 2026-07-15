@@ -3,9 +3,11 @@ use std::{
     fmt::Write as _,
 };
 
-use common::{InputDb, diagnostics::CompleteDiagnostic, file::IngotFileKind};
+use common::{InputDb, diagnostics::CompleteDiagnostic};
 use driver::{DriverDataBase, db::DiagnosticsCollection};
 use url::Url;
+
+use crate::workspace_ingot::ingot_has_source_files;
 
 pub(crate) struct DependencyIssues<'db> {
     issues: Vec<DependencyIssue<'db>>,
@@ -127,13 +129,6 @@ impl<'db> DependencyIssues<'db> {
         }
         out
     }
-}
-
-fn ingot_has_source_files(db: &DriverDataBase, ingot: hir::Ingot<'_>) -> bool {
-    ingot
-        .files(db)
-        .iter()
-        .any(|(_, file)| matches!(file.kind(db), Some(IngotFileKind::Source)))
 }
 
 fn append_dependency_header(db: &DriverDataBase, dependency_url: &Url, out: &mut String) {

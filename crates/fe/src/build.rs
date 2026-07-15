@@ -32,7 +32,8 @@ use crate::{
         enable_panic_report, normalize_report_out_path, tar_gz_dir, write_report_meta,
     },
     workspace_ingot::{
-        INGOT_REQUIRES_WORKSPACE_ROOT, WorkspaceMemberRef, select_workspace_member_paths,
+        INGOT_REQUIRES_WORKSPACE_ROOT, WorkspaceMemberRef, ingot_has_source_files,
+        select_workspace_member_paths,
     },
 };
 
@@ -1830,13 +1831,6 @@ fn sanitize_name_with_default(name: &str, default_name: &str) -> String {
     } else {
         sanitized
     }
-}
-
-fn ingot_has_source_files(db: &DriverDataBase, ingot: hir::Ingot<'_>) -> bool {
-    ingot
-        .files(db)
-        .iter()
-        .any(|(_, file)| matches!(file.kind(db), Some(IngotFileKind::Source)))
 }
 
 #[cfg(test)]

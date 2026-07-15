@@ -4,7 +4,6 @@ use camino::Utf8PathBuf;
 use common::{
     InputDb,
     config::{Config, WorkspaceConfig},
-    file::IngotFileKind,
 };
 use driver::DriverDataBase;
 use driver::cli_target::{CliTarget, resolve_cli_target};
@@ -19,7 +18,8 @@ use crate::report::{
     normalize_report_out_path, tar_gz_dir, write_report_meta,
 };
 use crate::workspace_ingot::{
-    INGOT_REQUIRES_WORKSPACE_ROOT, WorkspaceMemberRef, select_workspace_member_paths,
+    INGOT_REQUIRES_WORKSPACE_ROOT, WorkspaceMemberRef, ingot_has_source_files,
+    select_workspace_member_paths,
 };
 
 #[derive(Debug, Clone)]
@@ -416,13 +416,6 @@ fn check_ingot_and_dependencies(
     }
 
     has_errors
-}
-
-fn ingot_has_source_files(db: &DriverDataBase, ingot: hir::Ingot<'_>) -> bool {
-    ingot
-        .files(db)
-        .iter()
-        .any(|(_, file)| matches!(file.kind(db), Some(IngotFileKind::Source)))
 }
 
 #[allow(clippy::too_many_arguments)]
