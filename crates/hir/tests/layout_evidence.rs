@@ -1,3 +1,6 @@
+#[path = "support/layout.rs"]
+mod layout_test_support;
+
 use cranelift_entity::EntityRef;
 use fe_hir::{
     analysis::{
@@ -18,53 +21,13 @@ use fe_hir::{
         },
     },
     core::semantic::ContractLayoutError,
-    hir_def::{CallableDef, Contract, Func, IdentId, ItemKind, TopLevelMod},
-    test_db::HirAnalysisTestDb,
+    hir_def::{CallableDef, IdentId, ItemKind},
+    test_db::{find_contract, find_func},
 };
-
-fn find_func<'db>(db: &'db HirAnalysisTestDb, top_mod: TopLevelMod<'db>, name: &str) -> Func<'db> {
-    top_mod
-        .children_non_nested(db)
-        .find_map(|item| match item {
-            ItemKind::Func(func)
-                if func
-                    .name(db)
-                    .to_opt()
-                    .is_some_and(|ident| ident.data(db) == name) =>
-            {
-                Some(func)
-            }
-            _ => None,
-        })
-        .unwrap_or_else(|| panic!("missing {name} function"))
-}
-
-fn find_contract<'db>(
-    db: &'db HirAnalysisTestDb,
-    top_mod: TopLevelMod<'db>,
-    name: &str,
-) -> Contract<'db> {
-    top_mod
-        .children_non_nested(db)
-        .find_map(|item| match item {
-            ItemKind::Contract(contract)
-                if contract
-                    .name(db)
-                    .to_opt()
-                    .is_some_and(|ident| ident.data(db) == name) =>
-            {
-                Some(contract)
-            }
-            _ => None,
-        })
-        .unwrap_or_else(|| panic!("missing {name} contract"))
-}
+use layout_test_support::{parse_module, parse_ok};
 
 fn assert_layoutizes(name: &str, src: &str) {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(name.into(), src);
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
+    parse_ok!(db, top_mod, src);
     for item in top_mod.all_items(&db) {
         match item {
             ItemKind::Func(func) if func.body(&db).is_some() => {
@@ -132,9 +95,9 @@ fn assert_layoutizes(name: &str, src: &str) {
 
 #[test]
 fn runtime_const_uses_bind_one_explicit_layout_input_port() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "runtime_const_uses_bind_one_explicit_layout_input_port.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 use std::evm::StorageMap
 
@@ -143,8 +106,6 @@ fn root<const ROOT: u256>(map: StorageMap<u256, u256, ROOT>) -> u256 {
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
     let instance = get_or_build_semantic_instance(
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "root"))),
@@ -174,9 +135,9 @@ fn root<const ROOT: u256>(map: StorageMap<u256, u256, ROOT>) -> u256 {
 
 #[test]
 fn derived_layout_values_do_not_reify_their_const_dependencies() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "derived_layout_values_do_not_reify_their_const_dependencies.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 struct Rooted<const ROOT: u256 = _> {}
 
@@ -185,8 +146,6 @@ fn original<const ROOT: u256>(value: Rooted<{ ROOT + 1 }>) -> u256 {
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
     let instance = get_or_build_semantic_instance(
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "original"))),
@@ -199,9 +158,9 @@ fn original<const ROOT: u256>(value: Rooted<{ ROOT + 1 }>) -> u256 {
 
 #[test]
 fn equal_specialized_args_preserve_formal_const_binding_identity() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "equal_specialized_args_preserve_formal_const_binding_identity.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 use std::evm::StorageMap
 
@@ -217,8 +176,6 @@ fn first<const FIRST: u256, const SECOND: u256>(
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
     let func = find_func(&db, top_mod, "first");
     let params = CallableDef::Func(func).params(&db);
     let key = SemanticInstanceKey::new(
@@ -246,9 +203,9 @@ fn first<const FIRST: u256, const SECOND: u256>(
 
 #[test]
 fn equal_specialized_args_preserve_output_witness_identity() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "equal_specialized_args_preserve_output_witness_identity.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 struct Rooted<const ROOT: u256 = _> {}
 
@@ -263,8 +220,6 @@ fn forward<const ROOT: u256>(value: Rooted<ROOT>) -> Rooted<ROOT> {
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
 
     let convert = find_func(&db, top_mod, "convert");
     let params = CallableDef::Func(convert).params(&db);
@@ -306,9 +261,9 @@ fn forward<const ROOT: u256>(value: Rooted<ROOT>) -> Rooted<ROOT> {
 
 #[test]
 fn equal_specialized_args_preserve_call_binding_identity_without_output_context() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "equal_specialized_args_preserve_call_binding_identity_without_output_context.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 struct Rooted<const ROOT: u256 = _> {}
 
@@ -326,8 +281,6 @@ fn discard<const FIRST: u256, const SECOND: u256>(
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
 
     let discard = find_func(&db, top_mod, "discard");
     let params = CallableDef::Func(discard).params(&db);
@@ -387,9 +340,9 @@ fn make<const ROOT: u256>(factory: Factory, anchor: Rooted<ROOT>) {
 
 #[test]
 fn abstract_layout_expressions_without_concrete_evidence_are_rejected() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "abstract_layout_expressions_without_concrete_evidence_are_rejected.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 struct Rooted<const ROOT: u256 = _> {}
 
@@ -402,8 +355,6 @@ fn make<const ROOT: u256>(value: Rooted<ROOT>) {
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
     let diagnostics = collect_layout_evidence_diagnostic_vouchers(&db, top_mod);
     let rendered = diagnostics
         .iter()
@@ -417,9 +368,9 @@ fn make<const ROOT: u256>(value: Rooted<ROOT>) {
 
 #[test]
 fn ambiguous_runtime_const_layout_sources_are_rejected() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "ambiguous_runtime_const_layout_sources_are_rejected.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 use std::evm::StorageMap
 
@@ -431,8 +382,6 @@ fn root<const ROOT: u256>(
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
     let instance = get_or_build_semantic_instance(
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "root"))),
@@ -457,9 +406,9 @@ fn root<const ROOT: u256>(
 
 #[test]
 fn fresh_call_arguments_do_not_borrow_layout_evidence_from_siblings() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "fresh_call_arguments_do_not_borrow_layout_evidence_from_siblings.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 struct Rooted<const ROOT: u256 = _> {}
 
@@ -477,8 +426,6 @@ fn forward<const ROOT: u256>(values: [Rooted<ROOT>; 2], lane: usize) {
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
     let diagnostics = collect_layout_evidence_diagnostic_vouchers(&db, top_mod);
     let rendered = diagnostics
         .iter()
@@ -522,9 +469,9 @@ fn write(value: u256) uses (cell: mut Cell) {
 
 #[test]
 fn effect_value_arguments_select_the_callee_layout_view() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "effect_value_arguments_select_the_callee_layout_view.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle, EffectRef}
 
@@ -566,8 +513,6 @@ fn forward<const ROOT: u256>(ptr: Ptr<Rooted<ROOT>>) -> Rooted<ROOT> {
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
     let mut pending = vec![get_or_build_semantic_instance(
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "forward"))),
@@ -604,9 +549,9 @@ fn forward<const ROOT: u256>(ptr: Ptr<Rooted<ROOT>>) -> Rooted<ROOT> {
 
 #[test]
 fn schema_view_rebasing_rejects_same_shaped_unrelated_roots() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "schema_view_rebasing_rejects_same_shaped_unrelated_roots.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 struct Left<const ROOT: u256 = _> {}
 struct Right<const ROOT: u256 = _> {}
@@ -615,8 +560,6 @@ fn take_left(value: Left) {}
 fn take_right(value: Right) {}
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
     let signature = |name| {
         get_or_build_semantic_instance(
             &db,
@@ -756,10 +699,7 @@ contract C {
 }
 "#;
     assert_layoutizes("self_recursive_effect_handle_view.fe", src);
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone("self_recursive_effect_handle_view_schema.fe".into(), src);
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
+    parse_ok!(db, top_mod, src,);
     let inspect = get_or_build_semantic_instance(
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "inspect"))),
@@ -994,13 +934,7 @@ contract C {
         "permuted_recursive_effect_handle_views_have_stable_evidence.fe",
         src,
     );
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "permuted_recursive_effect_handle_view_schema.fe".into(),
-        src,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
+    parse_ok!(db, top_mod, src,);
     let inspect = get_or_build_semantic_instance(
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "inspect"))),
@@ -1020,9 +954,9 @@ contract C {
 
 #[test]
 fn non_regular_recursive_effect_handle_views_are_rejected() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "non_regular_recursive_effect_handle_views_are_rejected.fe".into(),
+    parse_module!(
+        db,
+        top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
 
@@ -1047,7 +981,6 @@ contract C {
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
     let contract = find_contract(&db, top_mod, "C");
     let layout = contract.storage_layout(&db);
     let errors = layout.field_errors(&IdentId::new(&db, "value".to_string()));
@@ -1113,9 +1046,9 @@ contract C {
 
 #[test]
 fn sibling_runtime_const_layout_sources_are_rejected() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "sibling_runtime_const_layout_sources_are_rejected.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 struct Rooted<const ROOT: u256 = _> {}
 
@@ -1129,8 +1062,6 @@ fn root<const ROOT: u256>(pair: Pair<ROOT>) -> u256 {
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
     let instance = get_or_build_semantic_instance(
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "root"))),
@@ -1147,9 +1078,9 @@ fn root<const ROOT: u256>(pair: Pair<ROOT>) -> u256 {
 
 #[test]
 fn layout_evidence_uses_one_descriptor_local_per_component() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "layout_evidence_uses_separate_affine_locals.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 use std::evm::StorageMap
 
@@ -1162,8 +1093,6 @@ fn select<const ROOT: u256>(
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
     let func = find_func(&db, top_mod, "select");
     let instance = get_or_build_semantic_instance(
         &db,
@@ -1243,9 +1172,9 @@ fn select<const ROOT: u256>(
 
 #[test]
 fn contract_fields_materialize_allocator_strides() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "contract_fields_materialize_allocator_strides.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 use std::evm::StorageMap
 
@@ -1265,8 +1194,6 @@ pub contract C {
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let instance = get_or_build_semantic_instance(
         &db,
@@ -1308,9 +1235,9 @@ pub contract C {
 
 #[test]
 fn calls_pass_and_return_complete_affine_evidence() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "calls_pass_and_return_complete_affine_evidence.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 use std::evm::StorageMap
 
@@ -1332,8 +1259,6 @@ fn read<const ROOT: u256>(
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
     let read = find_func(&db, top_mod, "read");
     let instance = get_or_build_semantic_instance(
         &db,
@@ -1411,9 +1336,9 @@ fn read<const ROOT: u256>(
 
 #[test]
 fn mixed_compile_time_and_runtime_components_use_canonical_abi_order() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "mixed_compile_time_and_runtime_components_use_canonical_abi_order.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 use std::evm::StorageMap
 
@@ -1431,8 +1356,6 @@ fn forward<const ROOT: u256>(value: Mixed<ROOT>) -> Mixed<ROOT> {
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
 
     let pass = get_or_build_semantic_instance(
         &db,
@@ -1484,9 +1407,9 @@ fn forward<const ROOT: u256>(value: Mixed<ROOT>) -> Mixed<ROOT> {
 
 #[test]
 fn compile_time_call_outputs_materialize_without_runtime_call_evidence() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "calls_materialize_compile_time_outputs_into_local_evidence.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 struct Rooted<const ROOT: u256 = _> {}
 
@@ -1499,8 +1422,6 @@ fn pass() -> Rooted<7> {
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
     let instance = get_or_build_semantic_instance(
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "pass"))),
@@ -1583,9 +1504,9 @@ fn pass() -> Rooted<7> {
 
 #[test]
 fn runtime_layout_calls_survive_semantic_const_folding() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "runtime_layout_calls_survive_semantic_const_folding.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 struct Rooted<const ROOT: u256 = _> {}
 
@@ -1603,8 +1524,6 @@ fn pass<const ROOT: u256>(anchor: Rooted<ROOT>) -> Rooted<ROOT> {
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
     let instance = get_or_build_semantic_instance(
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "pass"))),
@@ -1731,9 +1650,9 @@ fn pass<const ROOT: u256>(anchor: Rooted<ROOT>) -> Rooted<ROOT> {
 
 #[test]
 fn recursive_runtime_layout_calls_do_not_form_a_signature_cycle() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "recursive_runtime_layout_calls_do_not_form_a_signature_cycle.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 struct Rooted<const ROOT: u256 = _> {}
 
@@ -1745,8 +1664,6 @@ fn recurse<const ROOT: u256>(value: Rooted<ROOT>, depth: u256) -> Rooted<ROOT> {
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
     let instance = get_or_build_semantic_instance(
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "recurse"))),
@@ -1759,9 +1676,9 @@ fn recurse<const ROOT: u256>(value: Rooted<ROOT>, depth: u256) -> Rooted<ROOT> {
 
 #[test]
 fn output_only_generic_layout_params_are_supplied_by_output_witness() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "output_only_generic_layout_params_are_supplied_by_output_witness.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 struct Rooted<const ROOT: u256 = _> {}
 
@@ -1774,8 +1691,6 @@ fn rebuild<const ROOT: u256>(seed: Rooted<ROOT>) -> Rooted<ROOT> {
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
     for name in ["fresh", "rebuild"] {
         let instance = get_or_build_semantic_instance(
             &db,
@@ -1802,9 +1717,9 @@ fn rebuild<const ROOT: u256>(seed: Rooted<ROOT>) -> Rooted<ROOT> {
 
 #[test]
 fn ambiguous_input_components_do_not_invent_an_output_witness() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "ambiguous_input_components_do_not_invent_an_output_witness.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 struct Rooted<const ROOT: u256 = _> {}
 
@@ -1816,8 +1731,6 @@ fn fresh_from<const ROOT: u256>(
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
     let instance = get_or_build_semantic_instance(
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "fresh_from"))),
@@ -1970,9 +1883,9 @@ fn choose<const ROOT: u256>(left: bool) -> Rooted<ROOT> {
 
 #[test]
 fn one_value_cannot_consume_two_distinct_output_witness_projections() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "one_value_cannot_consume_two_distinct_output_witness_projections.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 struct Rooted<const ROOT: u256 = _> {}
 
@@ -1988,8 +1901,6 @@ fn duplicate<const ROOT: u256>() -> [Rooted<ROOT>; 2] {
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
     let diagnostics = collect_layout_evidence_diagnostic_vouchers(&db, top_mod);
     let rendered = diagnostics
         .iter()
@@ -2023,9 +1934,9 @@ fn repeat_fresh<const ROOT: u256>() -> [Rooted<ROOT>; 1] {
 
 #[test]
 fn one_evaluation_cannot_satisfy_an_arbitrary_output_layout_family() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "one_evaluation_cannot_satisfy_an_arbitrary_output_layout_family.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 struct Rooted<const ROOT: u256 = _> {}
 
@@ -2040,8 +1951,6 @@ fn repeat_fresh<const ROOT: u256>() -> [Rooted<ROOT>; 2] {
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
     let diagnostics = collect_layout_evidence_diagnostic_vouchers(&db, top_mod);
     let rendered = diagnostics
         .iter()
@@ -2055,9 +1964,9 @@ fn repeat_fresh<const ROOT: u256>() -> [Rooted<ROOT>; 2] {
 
 #[test]
 fn zero_length_arrays_do_not_require_runtime_layout_evidence() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "zero_length_arrays_do_not_require_runtime_layout_evidence.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 struct Rooted<const ROOT: u256 = _> {}
 
@@ -2066,8 +1975,6 @@ fn empty<const ROOT: u256>() -> [Rooted<ROOT>; 0] {
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
     let instance = get_or_build_semantic_instance(
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "empty"))),
@@ -2108,9 +2015,9 @@ fn consume<const ROOT: u256>(values: [Rooted<ROOT>; 2], lane: usize) -> u256 {
 
 #[test]
 fn indexed_assignment_prepares_destination_before_output_witness_call() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "indexed_assignment_prepares_destination_before_output_witness_call.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 struct Rooted<const ROOT: usize = _> {}
 
@@ -2133,8 +2040,6 @@ fn replace<const ROOT: usize>(
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
     let instance = get_or_build_semantic_instance(
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "replace"))),
@@ -2234,9 +2139,9 @@ fn replace<const ROOT: usize>(
 
 #[test]
 fn verifier_rejects_component_identity_corruption() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "verifier_rejects_component_identity_corruption.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 struct Rooted<const ROOT: u256 = _> {}
 
@@ -2258,8 +2163,6 @@ fn caller<const LEFT: u256, const RIGHT: u256>(
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
     let instance = get_or_build_semantic_instance(
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "caller"))),
@@ -2327,9 +2230,9 @@ fn caller<const LEFT: u256, const RIGHT: u256>(
 
 #[test]
 fn verifier_rejects_wrong_map_shapes_ports_and_indices() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "verifier_rejects_wrong_map_shapes_ports_and_indices.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 struct Rooted<const ROOT: u256 = _> {}
 
@@ -2347,8 +2250,6 @@ fn first<const ROOT: u256>(values: [Rooted<ROOT>; 2]) -> Rooted<ROOT> {
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
 
     let call_instance = get_or_build_semantic_instance(
         &db,
@@ -2426,9 +2327,9 @@ fn first<const ROOT: u256>(values: [Rooted<ROOT>; 2]) -> Rooted<ROOT> {
 
 #[test]
 fn constructors_preserve_roots_and_array_repeat_uses_zero_stride() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "constructors_preserve_roots_and_array_repeat_uses_zero_stride.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 struct Rooted<const ROOT: u256 = _> {}
 
@@ -2443,8 +2344,6 @@ fn repeat<const ROOT: u256>(value: Rooted<ROOT>) -> [Rooted<ROOT>; 2] {
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
     let rebuild = get_or_build_semantic_instance(
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "rebuild"))),
@@ -2484,9 +2383,9 @@ fn repeat<const ROOT: u256>(value: Rooted<ROOT>) -> [Rooted<ROOT>; 2] {
 
 #[test]
 fn effect_handle_constructors_use_declared_target_evidence() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "effect_handle_constructors_use_declared_target_evidence.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
 
@@ -2599,8 +2498,6 @@ fn inspect_views<const PHYSICAL: u256, const LOGICAL: u256>(
 ) {}
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
     let instance = get_or_build_semantic_instance(
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "rebuild"))),
@@ -2729,9 +2626,9 @@ fn inspect_views<const PHYSICAL: u256, const LOGICAL: u256>(
 
 #[test]
 fn projections_use_the_selected_occurrence_rank() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "projections_use_the_selected_occurrence_rank.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 use std::evm::StorageMap
 
@@ -2749,8 +2646,6 @@ fn family<const ROOT: u256>(mixed: Mixed<ROOT>) -> [StorageMap<u256, u256, ROOT>
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
 
     for name in ["scalar", "family"] {
         let instance = get_or_build_semantic_instance(
@@ -2764,9 +2659,9 @@ fn family<const ROOT: u256>(mixed: Mixed<ROOT>) -> [StorageMap<u256, u256, ROOT>
 
 #[test]
 fn distinct_occurrence_families_never_coalesce_after_substitution() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "distinct_occurrence_families_never_coalesce_after_substitution.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 use std::evm::StorageMap
 
@@ -2799,8 +2694,6 @@ fn right_first<const ROOT: u256>(value: Split<ROOT>) -> StorageMap<u256, u256, R
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
 
     for (name, ranks) in [
         ("split", vec![1, 1]),
@@ -2839,9 +2732,9 @@ fn right_first<const ROOT: u256>(value: Split<ROOT>) -> StorageMap<u256, u256, R
 
 #[test]
 fn array_construction_supports_affine_and_dense_layout_maps() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "array_construction_supports_affine_and_dense_layout_maps.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 use std::evm::StorageMap
 
@@ -2858,8 +2751,6 @@ fn reorder<const ROOT: u256>(
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
     for name in ["rebuild", "reorder"] {
         let instance = get_or_build_semantic_instance(
             &db,
@@ -2882,9 +2773,9 @@ fn reorder<const ROOT: u256>(
 
 #[test]
 fn indexed_stores_produce_layout_map_updates() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "indexed_stores_produce_layout_map_updates.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         r#"
 use std::evm::StorageMap
 
@@ -2899,8 +2790,6 @@ fn replace<const ROOT: u256>(
 }
 "#,
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
     let instance = get_or_build_semantic_instance(
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "replace"))),
@@ -3062,13 +2951,11 @@ fn layout_evidence_covers_existing_forwarding_matrix() {
 
 #[test]
 fn specialized_array_enum_leaf_methods_bind_runtime_layout_consts() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "specialized_array_enum_leaf_methods_bind_runtime_layout_consts.fe".into(),
+    parse_ok!(
+        db,
+        top_mod,
         include_str!("../../fe/tests/fixtures/fe_test/layout_root_array_enum_overlay.fe"),
     );
-    let (top_mod, _) = db.top_mod(file);
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let mut pending = Vec::new();
     for (recv_idx, recv) in contract.recvs(&db).data(&db).iter().enumerate() {

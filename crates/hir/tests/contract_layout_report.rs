@@ -1,41 +1,15 @@
-use camino::Utf8PathBuf;
+#[path = "support/layout.rs"]
+mod layout_test_support;
+
 use fe_hir::{
     analysis::ty::ProviderAddressSpace,
     core::semantic::{
         ContractLayoutEntry, ContractLayoutEntryKind, ContractLayoutParameterOrigin,
         ContractLayoutValue,
     },
-    hir_def::{Contract, ItemKind, TopLevelMod},
-    test_db::HirAnalysisTestDb,
+    test_db::{HirAnalysisTestDb, find_contract},
 };
-
-fn find_contract<'db>(
-    db: &'db HirAnalysisTestDb,
-    top_mod: TopLevelMod<'db>,
-    name: &str,
-) -> Contract<'db> {
-    top_mod
-        .children_non_nested(db)
-        .find_map(|item| match item {
-            ItemKind::Contract(contract)
-                if contract
-                    .name(db)
-                    .to_opt()
-                    .is_some_and(|ident| ident.data(db) == name) =>
-            {
-                Some(contract)
-            }
-            _ => None,
-        })
-        .unwrap_or_else(|| panic!("missing contract `{name}`"))
-}
-
-macro_rules! parse {
-    ($db:ident, $name:literal, $source:expr $(,)?) => {{
-        let file = $db.new_stand_alone(Utf8PathBuf::from($name), $source);
-        $db.top_mod(file).0
-    }};
-}
+use layout_test_support::parse_ok;
 
 fn entry<'a, 'db>(
     db: &'db HirAnalysisTestDb,
@@ -57,10 +31,9 @@ fn scalar_value(db: &HirAnalysisTestDb, entry: &ContractLayoutEntry<'_>) -> Stri
 
 #[test]
 fn report_distinguishes_inline_fields_from_explicit_and_inferred_parameters() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "report_distinguishes_layout_entry_kinds.fe",
+        top_mod,
         r#"
 use std::evm::StorageMap
 
@@ -80,7 +53,6 @@ pub contract Counter {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "Counter");
     let report = contract.layout_report(&db).unwrap();
     let paths = report
@@ -147,10 +119,9 @@ pub contract Counter {
 
 #[test]
 fn report_preserves_array_geometry_and_enum_overlays() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "report_preserves_array_geometry_and_enum_overlays.fe",
+        top_mod,
         r#"
 struct Leaf { left: u256, right: u8 }
 struct Slot<const ROOT: u256 = _> {}
@@ -163,7 +134,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let report = contract.layout_report(&db).unwrap();
 
@@ -218,10 +188,9 @@ contract C {
 
 #[test]
 fn report_labels_shared_parameters_and_mutually_exclusive_variants() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "report_labels_shared_parameters_and_mutually_exclusive_variants.fe",
+        top_mod,
         r#"
 struct Slot<const ROOT: u256 = _> {}
 struct Shared<const ROOT: u256 = _> {
@@ -241,7 +210,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let report = contract.layout_report(&db).unwrap();
 
@@ -277,10 +245,9 @@ contract C {
 
 #[test]
 fn report_keeps_address_spaces_independent() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "report_keeps_address_spaces_independent.fe",
+        top_mod,
         r#"
 use std::evm::TStorPtr
 use core::effect_ref::{AddressSpace, StaticSlot}
@@ -306,7 +273,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let report = contract.layout_report(&db).unwrap();
     for (path, space, value) in [

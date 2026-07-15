@@ -15,7 +15,7 @@ use crate::analysis::{
 };
 use crate::{
     Ingot, SpannedHirDb,
-    hir_def::{ItemKind, TopLevelMod, scope_graph::ScopeGraph},
+    hir_def::{Contract, Func, ItemKind, TopLevelMod, scope_graph::ScopeGraph},
     lower::{self, map_file_to_mod, module_tree, scope_graph},
     span::{DynLazySpan, LazySpan},
 };
@@ -209,6 +209,48 @@ where
 }
 
 define_input_db!(HirAnalysisTestDb);
+
+pub fn find_contract<'db>(
+    db: &'db HirAnalysisTestDb,
+    top_mod: TopLevelMod<'db>,
+    name: &str,
+) -> Contract<'db> {
+    top_mod
+        .children_non_nested(db)
+        .find_map(|item| match item {
+            ItemKind::Contract(contract)
+                if contract
+                    .name(db)
+                    .to_opt()
+                    .is_some_and(|ident| ident.data(db) == name) =>
+            {
+                Some(contract)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("missing contract `{name}`"))
+}
+
+pub fn find_func<'db>(
+    db: &'db HirAnalysisTestDb,
+    top_mod: TopLevelMod<'db>,
+    name: &str,
+) -> Func<'db> {
+    top_mod
+        .children_non_nested(db)
+        .find_map(|item| match item {
+            ItemKind::Func(func)
+                if func
+                    .name(db)
+                    .to_opt()
+                    .is_some_and(|ident| ident.data(db) == name) =>
+            {
+                Some(func)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("missing function `{name}`"))
+}
 
 // https://github.com/rust-lang/rust/issues/46379
 #[allow(dead_code)]

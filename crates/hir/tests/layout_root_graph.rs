@@ -1,4 +1,6 @@
-use camino::Utf8PathBuf;
+#[path = "support/layout.rs"]
+mod layout_test_support;
+
 use fe_hir::{
     analysis::{
         initialize_analysis_pass,
@@ -25,35 +27,15 @@ use fe_hir::{
         },
     },
     core::semantic::{
-        AllocationUnitId, AssignedRootValue, ContractFieldId, ContractLayoutError,
-        EnumOverlayGroup, FieldStorageLayout, LayoutBinding, LayoutBindingTarget,
-        LayoutInvariantError, LayoutProjection, LayoutRootFamilyId, LayoutViewKind, PlaceStep,
-        RootRole, StoragePlace, validate_allocated_contract_layout,
+        AllocatedContractStorageLayout, AllocationUnitId, AssignedRootValue, ContractFieldId,
+        ContractLayoutError, EnumOverlayGroup, FieldStorageLayout, LayoutBinding,
+        LayoutBindingTarget, LayoutInvariantError, LayoutProjection, LayoutRootFamilyId,
+        LayoutViewKind, PlaceStep, RootRole, StoragePlace, validate_allocated_contract_layout,
     },
-    hir_def::{CallableDef, Contract, Expr, IdentId, ItemKind, Partial, TopLevelMod},
-    test_db::{HirAnalysisTestDb, format_diagnostics},
+    hir_def::{CallableDef, Contract, Expr, IdentId, ItemKind, Partial},
+    test_db::{HirAnalysisTestDb, find_contract, format_diagnostics},
 };
-
-fn find_contract<'db>(
-    db: &'db HirAnalysisTestDb,
-    top_mod: TopLevelMod<'db>,
-    name: &str,
-) -> Contract<'db> {
-    top_mod
-        .children_non_nested(db)
-        .find_map(|item| match item {
-            ItemKind::Contract(contract)
-                if contract
-                    .name(db)
-                    .to_opt()
-                    .is_some_and(|ident| ident.data(db) == name) =>
-            {
-                Some(contract)
-            }
-            _ => None,
-        })
-        .unwrap_or_else(|| panic!("missing contract `{name}`"))
-}
+use layout_test_support::{parse_module, parse_ok};
 
 fn field<'db>(
     db: &'db HirAnalysisTestDb,
@@ -66,19 +48,21 @@ fn field<'db>(
         .unwrap_or_else(|| panic!("missing allocated field `{name}`: {layout:#?}"))
 }
 
-macro_rules! parse {
-    ($db:ident, $name:literal, $source:expr $(,)?) => {{
-        let file = $db.new_stand_alone(Utf8PathBuf::from($name), $source);
-        $db.top_mod(file).0
-    }};
+fn mutated_layout_error<'db>(
+    db: &'db HirAnalysisTestDb,
+    layout: &AllocatedContractStorageLayout<'db>,
+    mutate: impl FnOnce(&mut AllocatedContractStorageLayout<'db>),
+) -> LayoutInvariantError<'db> {
+    let mut invalid = layout.clone();
+    mutate(&mut invalid);
+    validate_allocated_contract_layout(db, &invalid).expect_err("mutated layout should be invalid")
 }
 
 #[test]
 fn field_and_type_parameter_landings_are_distinct_and_shape_stable() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "field_and_type_parameter_landings_are_distinct_and_shape_stable.fe",
+        top_mod,
         r#"
 struct Slot<const ROOT: u256 = _> {}
 struct Pair<T> { left: T, right: T }
@@ -89,7 +73,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let first = field(&db, contract, "first");
     let second = field(&db, contract, "second");
@@ -135,10 +118,9 @@ contract C {
 
 #[test]
 fn inferred_roots_skip_explicit_contract_reservations() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "inferred_roots_skip_explicit_contract_reservations.fe",
+        top_mod,
         r#"
 use std::evm::StorageMap
 
@@ -149,7 +131,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let layout = contract.storage_layout(&db).allocated.as_ref().unwrap();
     let x = field(&db, contract, "x");
@@ -171,10 +152,9 @@ contract C {
 
 #[test]
 fn concrete_root_expressions_evaluate_after_generic_substitution() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "concrete_root_expressions_evaluate_after_generic_substitution.fe",
+        top_mod,
         r#"
 struct Slot<const ROOT: u256 = _> {}
 struct UsizeSlot<const ROOT: usize = _> {}
@@ -193,7 +173,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let result = contract.storage_layout(&db);
     let layout = result
@@ -236,10 +215,9 @@ contract C {
 
 #[test]
 fn provider_root_expressions_evaluate_after_impl_and_assoc_substitution() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "provider_root_expressions_evaluate_after_impl_and_assoc_substitution.fe",
+        top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
 
@@ -273,7 +251,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let layout = contract.storage_layout(&db).allocated.as_ref().unwrap();
 
@@ -303,10 +280,9 @@ contract C {
 
 #[test]
 fn nested_provider_targets_are_first_class_graph_edges() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "nested_provider_targets_are_first_class_graph_edges.fe",
+        top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
 
@@ -339,7 +315,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let layout = contract.storage_layout(&db).allocated.as_ref().unwrap();
 
@@ -474,10 +449,9 @@ contract C {
 
 #[test]
 fn nested_provider_targets_use_their_own_space_and_reservations() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "nested_provider_targets_use_their_own_space_and_reservations.fe",
+        top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
 
@@ -498,7 +472,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let layout = contract.storage_layout(&db).allocated.as_ref().unwrap();
     let explicit = field(&db, contract, "explicit");
@@ -560,10 +533,9 @@ contract C {
 
 #[test]
 fn unreachable_nested_provider_types_do_not_reserve_roots() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "unreachable_nested_provider_types_do_not_reserve_roots.fe",
+        top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
 
@@ -584,7 +556,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let layout = contract.storage_layout(&db).allocated.as_ref().unwrap();
 
@@ -602,10 +573,9 @@ contract C {
 
 #[test]
 fn recursive_provider_target_edges_reach_a_finite_fixed_point() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "recursive_provider_target_edges_reach_a_finite_fixed_point.fe",
+        top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
 
@@ -624,7 +594,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let layout = contract.storage_layout(&db).allocated.as_ref().unwrap();
     let holder = field(&db, contract, "holder");
@@ -646,10 +615,9 @@ contract C {
 
 #[test]
 fn explicit_alias_roots_survive_alias_erasure() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "explicit_alias_roots_survive_alias_erasure.fe",
+        top_mod,
         r#"
 struct Leaf<const ROOT: u256> {}
 type Rooted<const ROOT: u256 = _> = Leaf<ROOT>
@@ -661,7 +629,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let layout = contract.storage_layout(&db).allocated.as_ref().unwrap();
 
@@ -680,10 +647,9 @@ contract C {
 
 #[test]
 fn explicit_roots_survive_nested_fixed_aliases() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "explicit_roots_survive_nested_fixed_aliases.fe",
+        top_mod,
         r#"
 struct Leaf<const ROOT: u256> {}
 type Rooted<const ROOT: u256 = _> = Leaf<ROOT>
@@ -697,7 +663,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let layout = contract.storage_layout(&db).allocated.as_ref().unwrap();
 
@@ -721,10 +686,9 @@ contract C {
 
 #[test]
 fn explicit_alias_roots_preserve_every_concrete_owner_space() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "explicit_alias_roots_preserve_every_concrete_owner_space.fe",
+        top_mod,
         r#"
 use core::effect_ref::{AddressSpace, StaticSlot}
 
@@ -752,7 +716,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let layout = contract.storage_layout(&db).allocated.as_ref().unwrap();
 
@@ -790,10 +753,9 @@ contract C {
 
 #[test]
 fn provider_concrete_roots_retain_every_nested_owner_space() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "provider_concrete_roots_retain_every_nested_owner_space.fe",
+        top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle, StaticSlot}
 
@@ -826,7 +788,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let layout = contract.storage_layout(&db).allocated.as_ref().unwrap();
     let explicit = field(&db, contract, "explicit");
@@ -856,10 +817,9 @@ contract C {
 
 #[test]
 fn concrete_alias_roots_follow_physical_reachability() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "concrete_alias_roots_follow_physical_reachability.fe",
+        top_mod,
         r#"
 struct Leaf<const ROOT: u256> {}
 type Rooted<const ROOT: u256 = _> = Leaf<ROOT>
@@ -876,7 +836,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let layout = contract.storage_layout(&db).allocated.as_ref().unwrap();
 
@@ -903,10 +862,9 @@ contract C {
 
 #[test]
 fn explicit_alias_roots_survive_adt_field_instantiation() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "explicit_alias_roots_survive_adt_field_instantiation.fe",
+        top_mod,
         r#"
 struct Leaf<const ROOT: u256> {}
 type Rooted<const ROOT: u256 = _> = Leaf<ROOT>
@@ -919,7 +877,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let layout = contract.storage_layout(&db).allocated.as_ref().unwrap();
 
@@ -937,10 +894,9 @@ contract C {
 
 #[test]
 fn explicit_alias_roots_survive_provider_target_normalization() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "explicit_alias_roots_survive_provider_target_normalization.fe",
+        top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
 
@@ -962,7 +918,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let layout = contract.storage_layout(&db).allocated.as_ref().unwrap();
 
@@ -980,10 +935,9 @@ contract C {
 
 #[test]
 fn explicit_provider_roots_preserve_declared_and_target_uses() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "explicit_provider_roots_preserve_declared_and_target_uses.fe",
+        top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
 
@@ -1005,7 +959,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let layout = contract.storage_layout(&db).allocated.as_ref().unwrap();
 
@@ -1034,10 +987,9 @@ contract C {
 
 #[test]
 fn explicit_roots_survive_nested_associated_type_normalization() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "explicit_roots_survive_nested_associated_type_normalization.fe",
+        top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
 
@@ -1064,7 +1016,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let layout = contract.storage_layout(&db).allocated.as_ref().unwrap();
 
@@ -1082,10 +1033,9 @@ contract C {
 
 #[test]
 fn explicit_roots_survive_inherited_associated_type_defaults() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "explicit_roots_survive_inherited_associated_type_defaults.fe",
+        top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
 
@@ -1112,7 +1062,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let layout = contract.storage_layout(&db).allocated.as_ref().unwrap();
 
@@ -1139,10 +1088,9 @@ contract C {
 
 #[test]
 fn later_explicit_roots_reserve_before_earlier_inference() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "later_explicit_roots_reserve_before_earlier_inference.fe",
+        top_mod,
         r#"
 struct Slot<const ROOT: u256 = _> {}
 
@@ -1153,7 +1101,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
 
     assert_eq!(
@@ -1179,10 +1126,9 @@ contract C {
 
 #[test]
 fn explicit_roots_displace_inline_fields_and_whole_field_blocks() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "explicit_roots_displace_inline_fields_and_whole_field_blocks.fe",
+        top_mod,
         r#"
 struct Slot<const ROOT: u256 = _> {}
 struct Pair<T> { left: T, right: T }
@@ -1194,7 +1140,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let inline = field(&db, contract, "inline");
     let pair = field(&db, contract, "pair");
@@ -1214,10 +1159,9 @@ contract C {
 
 #[test]
 fn duplicate_explicit_roots_share_one_sparse_reservation() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "duplicate_explicit_roots_share_one_sparse_reservation.fe",
+        top_mod,
         r#"
 struct Slot<const ROOT: u256 = _> {}
 
@@ -1229,7 +1173,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let layout = contract.storage_layout(&db).allocated.as_ref().unwrap();
 
@@ -1254,10 +1197,9 @@ contract C {
 
 #[test]
 fn indexed_families_move_as_one_contiguous_region() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "indexed_families_move_as_one_contiguous_region.fe",
+        top_mod,
         r#"
 struct Slot<const ROOT: u256 = _> {}
 
@@ -1267,7 +1209,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let values = field(&db, contract, "values");
 
@@ -1284,10 +1225,9 @@ contract C {
 
 #[test]
 fn explicit_reservations_are_sparse_and_address_space_local() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "explicit_reservations_are_sparse_and_address_space_local.fe",
+        top_mod,
         r#"
 use core::effect_ref::{AddressSpace, StaticSlot}
 
@@ -1306,7 +1246,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let layout = contract.storage_layout(&db).allocated.as_ref().unwrap();
 
@@ -1344,10 +1283,9 @@ contract C {
 
 #[test]
 fn explicit_arrays_share_while_enum_variants_reserve_every_value() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "explicit_arrays_share_while_enum_variants_reserve_every_value.fe",
+        top_mod,
         r#"
 struct Slot<const ROOT: u256 = _> {}
 enum Choice { A(Slot<1>), B(Slot<4>) }
@@ -1359,7 +1297,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let layout = contract.storage_layout(&db).allocated.as_ref().unwrap();
     let repeated = field(&db, contract, "repeated");
@@ -1374,10 +1311,9 @@ contract C {
 
 #[test]
 fn layout_shape_keys_preserve_root_equality_partitions() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "layout_shape_keys_preserve_root_equality_partitions.fe",
+        top_mod,
         r#"
 struct Slot<const ROOT: u256 = _> {}
 struct At<const ROOT: u256> {}
@@ -1389,7 +1325,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let shared = field(&db, contract, "shared");
     let distinct = field(&db, contract, "distinct");
@@ -1401,10 +1336,9 @@ contract C {
 
 #[test]
 fn const_fanout_shares_while_type_fanout_replicates() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "const_fanout_shares_while_type_fanout_replicates.fe",
+        top_mod,
         r#"
 struct Slot<const ROOT: u256> {}
 struct DefaultSlot<const ROOT: u256 = _> {}
@@ -1417,7 +1351,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let shared = field(&db, contract, "shared");
     let split = field(&db, contract, "split");
@@ -1432,10 +1365,9 @@ contract C {
 
 #[test]
 fn aliases_use_the_same_landing_rules_as_adts() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "aliases_use_the_same_landing_rules_as_adts.fe",
+        top_mod,
         r#"
 struct Slot<const ROOT: u256 = _> {}
 struct At<const ROOT: u256> {}
@@ -1451,7 +1383,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
 
     assert_eq!(field(&db, contract, "shared").cells.len(), 1);
@@ -1464,10 +1395,9 @@ contract C {
 
 #[test]
 fn provider_target_fanout_is_an_explicit_multi_leaf_binding() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "provider_target_fanout_is_an_explicit_multi_leaf_binding.fe",
+        top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
 
@@ -1485,7 +1415,6 @@ impl<T> EffectHandle for Wrapper<T> {
 contract C { mut value: Wrapper<Slot> }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let layout = field(&db, find_contract(&db, top_mod, "C"), "value");
     assert!(layout.is_provider);
     assert_eq!(layout.cells.len(), 2);
@@ -1515,10 +1444,9 @@ contract C { mut value: Wrapper<Slot> }
 
 #[test]
 fn fixed_arrays_use_symbolic_families_and_checked_row_major_projection() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "fixed_arrays_use_symbolic_families_and_checked_row_major_projection.fe",
+        top_mod,
         r#"
 struct Slot<const ROOT: u256 = _> {}
 struct Pair<T> { left: T, right: T }
@@ -1534,7 +1462,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
 
     assert!(field(&db, contract, "zero").cells.is_empty());
@@ -1556,10 +1483,9 @@ contract C {
 
 #[test]
 fn nested_array_family_extent_overflow_rejects_the_contract() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_module!(
         db,
-        "nested_array_family_extent_overflow_rejects_the_contract.fe",
+        top_mod,
         r#"
 struct Slot<const ROOT: u256 = _> {}
 
@@ -1584,10 +1510,9 @@ contract C {
 
 #[test]
 fn cross_space_code_byte_extent_overflow_rejects_without_panicking() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_module!(
         db,
-        "cross_space_code_byte_extent_overflow_rejects_without_panicking.fe",
+        top_mod,
         r#"
 use core::effect_ref::{AddressSpace, StaticSlot}
 
@@ -1618,10 +1543,9 @@ contract C {
 
 #[test]
 fn concrete_param_dependent_static_slot_routes_the_concrete_occurrence() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "concrete_param_dependent_static_slot_routes_the_concrete_occurrence.fe",
+        top_mod,
         r#"
 use core::effect_ref::{AddressSpace, StaticSlot}
 
@@ -1636,7 +1560,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let lock = field(&db, contract, "lock");
     assert_eq!(lock.cells[0].space, ProviderAddressSpace::Transient);
@@ -1647,10 +1570,9 @@ contract C {
 
 #[test]
 fn invalid_field_prevents_every_provisional_allocation() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_module!(
         db,
-        "invalid_field_prevents_every_provisional_allocation.fe",
+        top_mod,
         r#"
 struct Good<const ROOT: u256 = _> {}
 struct Bad<const ROOT: u8 = _> {}
@@ -1685,10 +1607,9 @@ contract C {
 
 #[test]
 fn duplicate_contract_field_names_block_layout_without_panicking() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_module!(
         db,
-        "duplicate_contract_field_names_block_layout_without_panicking.fe",
+        top_mod,
         r#"
 contract DuplicateFields {
     mut value: u256,
@@ -1717,10 +1638,9 @@ contract DuplicateFields {
 
 #[test]
 fn explicit_non_slot_defaults_remain_ordinary_concrete_consts() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "explicit_non_slot_defaults_remain_ordinary_concrete_consts.fe",
+        top_mod,
         r#"
 struct Ordinary<const VALUE: u8 = _> {}
 struct Slot<const ROOT: u256 = _> {}
@@ -1731,7 +1651,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let layout = contract.storage_layout(&db).allocated.as_ref().unwrap();
 
@@ -1753,10 +1672,9 @@ contract C {
 
 #[test]
 fn non_slot_default_holes_do_not_enter_the_layout_evidence_abi() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "non_slot_default_holes_do_not_enter_the_layout_evidence_abi.fe",
+        top_mod,
         r#"
 struct Ordinary<const VALUE: u8 = _> {}
 
@@ -1765,7 +1683,6 @@ fn pass<const VALUE: u8>(value: Ordinary<VALUE>) -> Ordinary<VALUE> {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let func = top_mod
         .children_non_nested(&db)
         .find_map(|item| match item {
@@ -1788,10 +1705,9 @@ fn pass<const VALUE: u8>(value: Ordinary<VALUE>) -> Ordinary<VALUE> {
 
 #[test]
 fn root_bearing_arrays_require_a_known_length_before_allocation() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_module!(
         db,
-        "root_bearing_arrays_require_a_known_length_before_allocation.fe",
+        top_mod,
         r#"
 struct Slot<const ROOT: u256 = _> {}
 type Slots<const LEN: usize = _> = [Slot; LEN]
@@ -1814,10 +1730,9 @@ contract C { mut values: Slots }
 
 #[test]
 fn one_source_can_bind_scalar_and_multiple_indexed_landings() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "one_source_can_bind_scalar_and_multiple_indexed_landings.fe",
+        top_mod,
         r#"
 struct Slot<const ROOT: u256> {}
 struct Mixed<const ROOT: u256 = _> {
@@ -1829,7 +1744,6 @@ struct Mixed<const ROOT: u256 = _> {
 contract C { mut value: Mixed }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let layout = field(&db, find_contract(&db, top_mod, "C"), "value");
     assert_eq!(layout.cells.len(), 1);
     assert_eq!(layout.families.len(), 2);
@@ -1862,10 +1776,9 @@ contract C { mut value: Mixed }
 
 #[test]
 fn phantom_and_wrapper_only_roots_are_classified_honestly() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "phantom_and_wrapper_only_roots_are_classified_honestly.fe",
+        top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
 
@@ -1886,7 +1799,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let phantom = field(&db, contract, "phantom");
     assert!(phantom.cells.is_empty());
@@ -1909,10 +1821,9 @@ contract C {
 
 #[test]
 fn wrapper_only_array_roots_form_materialize_only_families() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "wrapper_only_array_roots_form_materialize_only_families.fe",
+        top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
 
@@ -1934,7 +1845,6 @@ impl<const ROOT: u256> EffectHandle for Wrapper<ROOT> {
 contract C { mut value: Wrapper }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let layout = field(&db, find_contract(&db, top_mod, "C"), "value");
 
     assert_eq!(layout.inline_span, 1);
@@ -1950,10 +1860,9 @@ contract C { mut value: Wrapper }
 
 #[test]
 fn wrapper_only_roots_advance_only_their_concrete_owner_space() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "wrapper_only_roots_advance_only_their_concrete_owner_space.fe",
+        top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle, StaticSlot}
 
@@ -1977,7 +1886,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let wrapper = field(&db, contract, "wrapper");
 
@@ -2004,10 +1912,9 @@ contract C {
 
 #[test]
 fn provider_normalization_lands_new_associated_type_roots_per_field() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "provider_normalization_lands_new_associated_type_roots_per_field.fe",
+        top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
 
@@ -2032,7 +1939,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let first = field(&db, contract, "first");
     let second = field(&db, contract, "second");
@@ -2044,10 +1950,9 @@ contract C {
 
 #[test]
 fn enum_overlay_groups_preserve_identity_and_reserve_max_family_extent() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "enum_overlay_groups_preserve_identity_and_reserve_max_family_extent.fe",
+        top_mod,
         r#"
 struct Slot<const ROOT: u256 = _> {}
 enum Choice {
@@ -2061,7 +1966,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let choice = field(&db, contract, "choice");
     assert_eq!(choice.inline_span, 1);
@@ -2079,10 +1983,9 @@ contract C {
 
 #[test]
 fn array_of_enums_overlays_root_families_per_element() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "array_of_enums_overlays_root_families_per_element.fe",
+        top_mod,
         r#"
 struct Slot<const ROOT: u256 = _> {}
 enum Choice {
@@ -2104,7 +2007,6 @@ contract D {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let values = field(&db, contract, "values");
 
@@ -2198,10 +2100,9 @@ contract D {
 
 #[test]
 fn nested_array_enum_overlays_compose_inner_and_outer_strides() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "nested_array_enum_overlays_compose_inner_and_outer_strides.fe",
+        top_mod,
         r#"
 struct Slot<const ROOT: u256 = _> {}
 enum Inner {
@@ -2219,7 +2120,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let values = field(&db, contract, "values");
     let family = |dimensions: &[usize]| {
@@ -2273,10 +2173,9 @@ contract C {
 
 #[test]
 fn nested_enum_overlays_retain_each_explicit_enum_relation() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "nested_enum_overlays_retain_each_explicit_enum_relation.fe",
+        top_mod,
         r#"
 struct Slot<const ROOT: u256 = _> {}
 enum Inner {
@@ -2291,7 +2190,6 @@ enum Outer {
 contract C { mut value: Outer }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let layout = field(&db, contract, "value");
 
@@ -2325,10 +2223,9 @@ contract C { mut value: Outer }
 
 #[test]
 fn enum_overlay_never_aliases_roots_that_coexist_in_any_variant() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "enum_overlay_never_aliases_roots_that_coexist_in_any_variant.fe",
+        top_mod,
         r#"
 struct Slot<const ROOT: u256 = _> {}
 enum Choice<const SHARED: u256 = _, const OTHER: u256 = _> {
@@ -2342,7 +2239,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let choice = field(&db, contract, "choice");
     let root = StoragePlace::root(choice.field);
@@ -2422,10 +2318,9 @@ contract C {
 
 #[test]
 fn completed_layout_validator_rejects_denormalized_graphs() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "completed_layout_validator_rejects_denormalized_graphs.fe",
+        top_mod,
         r#"
 use core::effect_ref::{AddressSpace, StaticSlot}
 
@@ -2447,7 +2342,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let layout = contract.storage_layout(&db).allocated.as_ref().unwrap();
     validate_allocated_contract_layout(&db, layout).unwrap();
@@ -2456,121 +2350,122 @@ contract C {
     let choice = IdentId::new(&db, "choice".to_string());
     let explicit = IdentId::new(&db, "explicit".to_string());
 
-    let mut invalid = layout.clone();
-    invalid.fields.get_mut(&scalar).unwrap().cells[0].space = ProviderAddressSpace::Transient;
     assert!(matches!(
-        validate_allocated_contract_layout(&db, &invalid),
-        Err(LayoutInvariantError::InvalidOccurrenceGraph { .. })
+        mutated_layout_error(&db, layout, |invalid| {
+            invalid.fields.get_mut(&scalar).unwrap().cells[0].space =
+                ProviderAddressSpace::Transient;
+        }),
+        LayoutInvariantError::InvalidOccurrenceGraph { .. }
     ));
 
-    let mut invalid = layout.clone();
-    invalid.fields.get_mut(&scalar).unwrap().cells[0]
-        .allocation
-        .as_mut()
-        .unwrap()
-        .space = ProviderAddressSpace::Transient;
     assert!(matches!(
-        validate_allocated_contract_layout(&db, &invalid),
-        Err(LayoutInvariantError::InvalidScalarCell { .. })
+        mutated_layout_error(&db, layout, |invalid| {
+            invalid.fields.get_mut(&scalar).unwrap().cells[0]
+                .allocation
+                .as_mut()
+                .unwrap()
+                .space = ProviderAddressSpace::Transient;
+        }),
+        LayoutInvariantError::InvalidScalarCell { .. }
     ));
 
-    let mut invalid = layout.clone();
-    invalid.fields.get_mut(&scalar).unwrap().cells[0].role = RootRole::MaterializeOnly;
     assert!(matches!(
-        validate_allocated_contract_layout(&db, &invalid),
-        Err(LayoutInvariantError::InvalidScalarCell { .. })
+        mutated_layout_error(&db, layout, |invalid| {
+            invalid.fields.get_mut(&scalar).unwrap().cells[0].role = RootRole::MaterializeOnly;
+        }),
+        LayoutInvariantError::InvalidScalarCell { .. }
     ));
 
-    let mut invalid = layout.clone();
-    invalid.fields.get_mut(&family).unwrap().families[0].space = ProviderAddressSpace::Transient;
     assert!(matches!(
-        validate_allocated_contract_layout(&db, &invalid),
-        Err(LayoutInvariantError::InvalidOccurrenceGraph { .. })
+        mutated_layout_error(&db, layout, |invalid| {
+            invalid.fields.get_mut(&family).unwrap().families[0].space =
+                ProviderAddressSpace::Transient;
+        }),
+        LayoutInvariantError::InvalidOccurrenceGraph { .. }
     ));
 
-    let mut invalid = layout.clone();
-    invalid.fields.get_mut(&family).unwrap().families[0].id = LayoutRootFamilyId(u32::MAX);
     assert!(matches!(
-        validate_allocated_contract_layout(&db, &invalid),
-        Err(LayoutInvariantError::InvalidFamilyRegion { .. })
+        mutated_layout_error(&db, layout, |invalid| {
+            invalid.fields.get_mut(&family).unwrap().families[0].id = LayoutRootFamilyId(u32::MAX);
+        }),
+        LayoutInvariantError::InvalidFamilyRegion { .. }
     ));
 
-    let mut invalid = layout.clone();
-    invalid
-        .fields
-        .get_mut(&explicit)
-        .unwrap()
-        .concrete_occurrences[0]
-        .space = ProviderAddressSpace::Storage;
     assert!(matches!(
-        validate_allocated_contract_layout(&db, &invalid),
-        Err(LayoutInvariantError::InvalidConcreteOccurrence { .. })
+        mutated_layout_error(&db, layout, |invalid| {
+            invalid
+                .fields
+                .get_mut(&explicit)
+                .unwrap()
+                .concrete_occurrences[0]
+                .space = ProviderAddressSpace::Storage;
+        }),
+        LayoutInvariantError::InvalidConcreteOccurrence { .. }
     ));
 
-    let mut invalid = layout.clone();
-    invalid
-        .fields
-        .get_mut(&scalar)
-        .unwrap()
-        .root_bindings
-        .clear();
     assert!(matches!(
-        validate_allocated_contract_layout(&db, &invalid),
-        Err(LayoutInvariantError::InvalidRootBinding { .. })
+        mutated_layout_error(&db, layout, |invalid| {
+            invalid
+                .fields
+                .get_mut(&scalar)
+                .unwrap()
+                .root_bindings
+                .clear();
+        }),
+        LayoutInvariantError::InvalidRootBinding { .. }
     ));
 
-    let mut invalid = layout.clone();
-    invalid
-        .fields
-        .get_mut(&scalar)
-        .unwrap()
-        .declared
-        .bindings
-        .clear();
     assert!(matches!(
-        validate_allocated_contract_layout(&db, &invalid),
-        Err(LayoutInvariantError::UnclassifiedViewRoot { .. })
+        mutated_layout_error(&db, layout, |invalid| {
+            invalid
+                .fields
+                .get_mut(&scalar)
+                .unwrap()
+                .declared
+                .bindings
+                .clear();
+        }),
+        LayoutInvariantError::UnclassifiedViewRoot { .. }
     ));
 
-    let mut invalid = layout.clone();
-    invalid.fields.get_mut(&scalar).unwrap().place_roots.clear();
     assert!(matches!(
-        validate_allocated_contract_layout(&db, &invalid),
-        Err(LayoutInvariantError::InvalidPlaceBinding { .. })
+        mutated_layout_error(&db, layout, |invalid| {
+            invalid.fields.get_mut(&scalar).unwrap().place_roots.clear();
+        }),
+        LayoutInvariantError::InvalidPlaceBinding { .. }
     ));
 
-    let mut invalid = layout.clone();
-    invalid.fields.get_mut(&choice).unwrap().overlay_groups[0].members[0] =
-        AllocationUnitId::Indexed(LayoutRootFamilyId(u32::MAX));
     assert!(matches!(
-        validate_allocated_contract_layout(&db, &invalid),
-        Err(LayoutInvariantError::InvalidOverlayGroup { .. })
+        mutated_layout_error(&db, layout, |invalid| {
+            invalid.fields.get_mut(&choice).unwrap().overlay_groups[0].members[0] =
+                AllocationUnitId::Indexed(LayoutRootFamilyId(u32::MAX));
+        }),
+        LayoutInvariantError::InvalidOverlayGroup { .. }
     ));
 
-    let mut invalid = layout.clone();
-    invalid.explicit_reservations[0].occurrences.clear();
     assert!(matches!(
-        validate_allocated_contract_layout(&db, &invalid),
-        Err(LayoutInvariantError::InvalidExplicitReservation { .. })
+        mutated_layout_error(&db, layout, |invalid| {
+            invalid.explicit_reservations[0].occurrences.clear();
+        }),
+        LayoutInvariantError::InvalidExplicitReservation { .. }
     ));
 
-    let mut invalid = layout.clone();
-    *invalid
-        .high_water_by_address_space
-        .get_mut(&ProviderAddressSpace::Storage)
-        .unwrap() += 1;
     assert!(matches!(
-        validate_allocated_contract_layout(&db, &invalid),
-        Err(LayoutInvariantError::InvalidAddressSpaceHighWater { .. })
+        mutated_layout_error(&db, layout, |invalid| {
+            *invalid
+                .high_water_by_address_space
+                .get_mut(&ProviderAddressSpace::Storage)
+                .unwrap() += 1;
+        }),
+        LayoutInvariantError::InvalidAddressSpaceHighWater { .. }
     ));
 }
 
 #[test]
 fn one_root_observed_in_conflicting_spaces_rejects_the_contract() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_module!(
         db,
-        "one_root_observed_in_conflicting_spaces_rejects_the_contract.fe",
+        top_mod,
         r#"
 use core::effect_ref::{AddressSpace, StaticSlot}
 
@@ -2604,10 +2499,9 @@ contract C { mut value: Mixed }
 
 #[test]
 fn contract_init_aggregate_constructor_inherits_the_assigned_field_view() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "contract_init_aggregate_constructor_inherits_the_assigned_field_view.fe",
+        top_mod,
         r#"
 struct Rooted<const ROOT: u256 = _> { value: u256 }
 
@@ -2620,7 +2514,6 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let contract = find_contract(&db, top_mod, "C");
     let body = contract.init(&db).unwrap().body(&db);
     let typed = &check_contract_init_body(&db, contract).1;
@@ -2642,10 +2535,9 @@ contract C {
 
 #[test]
 fn callable_projection_sources_retain_nested_array_dimensions() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "callable_projection_sources_retain_nested_array_dimensions.fe",
+        top_mod,
         r#"
 struct Slot<const ROOT: u256 = _> {}
 
@@ -2654,7 +2546,6 @@ fn get_slot<const ROOT: u256>(values: [[Slot<ROOT>; 3]; 2], row: usize, col: usi
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let func = top_mod
         .children_non_nested(&db)
         .find_map(|item| match item {
@@ -2706,10 +2597,9 @@ fn get_slot<const ROOT: u256>(values: [[Slot<ROOT>; 3]; 2], row: usize, col: usi
 
 #[test]
 fn callable_layout_bundle_signature_is_declared_for_inputs_and_outputs() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "callable_layout_bundle_signature_is_declared_for_inputs_and_outputs.fe",
+        top_mod,
         r#"
 use std::evm::StorageMap
 
@@ -2724,7 +2614,6 @@ fn concrete(map: StorageMap<u256, u256, 7>) {}
 fn concrete_array(maps: [StorageMap<u256, u256, 7>; 2]) {}
 "#,
     );
-    db.assert_no_diags(top_mod);
     let func = top_mod
         .children_non_nested(&db)
         .find_map(|item| match item {
@@ -2878,10 +2767,9 @@ fn concrete_array(maps: [StorageMap<u256, u256, 7>; 2]) {}
 
 #[test]
 fn specialized_layout_signatures_expand_opaque_type_parameters() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "specialized_layout_signatures_expand_opaque_type_parameters.fe",
+        top_mod,
         r#"
 struct Rooted<const ROOT: u256 = _> {}
 impl<const ROOT: u256> Copy for Rooted<ROOT> {}
@@ -2905,7 +2793,6 @@ fn call(value: Wrapper<Rooted<7>, 9>) -> Rooted<7> {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let call = top_mod
         .children_non_nested(&db)
         .find_map(|item| match item {
@@ -2972,10 +2859,9 @@ fn call(value: Wrapper<Rooted<7>, 9>) -> Rooted<7> {
 
 #[test]
 fn opaque_specialization_does_not_coalesce_equal_occurrence_ports() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "opaque_specialization_does_not_coalesce_equal_occurrence_ports.fe",
+        top_mod,
         r#"
 struct Leaf<const ROOT: u256 = _> {}
 
@@ -2990,7 +2876,6 @@ fn call<const ROOT: u256>(value: Outer<ROOT, ROOT>) {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let call = top_mod
         .children_non_nested(&db)
         .find_map(|item| match item {
@@ -3048,10 +2933,9 @@ fn call<const ROOT: u256>(value: Outer<ROOT, ROOT>) {
 
 #[test]
 fn layout_bundle_specialization_preserves_occurrence_ports() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "layout_bundle_specialization_only_coalesces_value_ports.fe",
+        top_mod,
         r#"
 use std::evm::StorageMap
 
@@ -3084,7 +2968,6 @@ fn consume_outer<const WRAPPER: u256, const TARGET: u256>(
 ) {}
 "#,
     );
-    db.assert_no_diags(top_mod);
 
     let consume = top_mod
         .children_non_nested(&db)
@@ -3194,10 +3077,9 @@ fn consume_outer<const WRAPPER: u256, const TARGET: u256>(
 
 #[test]
 fn callable_layout_bundle_groups_array_base_and_indexed_landing() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "callable_layout_root_groups_join_array_base_and_indexed_landing.fe",
+        top_mod,
         r#"
 use std::evm::StorageMap
 
@@ -3206,7 +3088,6 @@ fn read(maps: [StorageMap<u256, u256>; 2], lane: usize, key: u256) -> u256 {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let func = top_mod
         .children_non_nested(&db)
         .find_map(|item| match item {
@@ -3239,17 +3120,15 @@ fn read(maps: [StorageMap<u256, u256>; 2], lane: usize, key: u256) -> u256 {
 
 #[test]
 fn zero_length_callable_arrays_have_no_layout_evidence() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "zero_length_callable_arrays_have_no_layout_evidence.fe",
+        top_mod,
         r#"
 struct Slot<const ROOT: u256 = _> {}
 
 fn ignore(values: [Slot; 0]) {}
 "#,
     );
-    db.assert_no_diags(top_mod);
     let func = top_mod
         .children_non_nested(&db)
         .find_map(|item| match item {
@@ -3281,10 +3160,9 @@ fn ignore(values: [Slot; 0]) {}
 
 #[test]
 fn callable_layout_bundle_splits_sibling_field_landings() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "callable_layout_root_groups_split_sibling_field_landings.fe",
+        top_mod,
         r#"
 use std::evm::StorageMap
 
@@ -3300,7 +3178,6 @@ impl Pair<StorageMap<u256, u256>> {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let func = top_mod
         .children_non_nested(&db)
         .find_map(|item| match item {
@@ -3328,10 +3205,9 @@ impl Pair<StorageMap<u256, u256>> {
 
 #[test]
 fn return_provenance_retains_enum_variant_projection() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "return_provenance_retains_enum_variant_projection.fe",
+        top_mod,
         r#"
 use std::evm::StorageMap
 
@@ -3345,7 +3221,6 @@ fn unwrap<const ROOT: u256>(
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let func = top_mod
         .children_non_nested(&db)
         .find_map(|item| match item {
@@ -3377,10 +3252,9 @@ fn unwrap<const ROOT: u256>(
 
 #[test]
 fn forwarded_return_sources_retain_partial_enum_transport() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "forwarded_return_sources_retain_partial_enum_transport.fe",
+        top_mod,
         r#"
 use std::evm::StorageMap
 
@@ -3400,7 +3274,6 @@ fn maybe_map<const ROOT: u256>(
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let func = top_mod
         .children_non_nested(&db)
         .find_map(|item| match item {
@@ -3442,10 +3315,9 @@ fn maybe_map<const ROOT: u256>(
 
 #[test]
 fn forwarded_return_sources_trace_explicit_borrows() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "forwarded_return_sources_trace_explicit_borrows.fe",
+        top_mod,
         r#"
 struct Holder<T> {
     value: T,
@@ -3461,7 +3333,6 @@ impl<T> Holder<T> {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let func = top_mod
         .all_funcs(&db)
         .iter()
@@ -3490,10 +3361,9 @@ impl<T> Holder<T> {
 
 #[test]
 fn aggregate_effect_inputs_bind_each_projected_layout_root() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "aggregate_effect_inputs_bind_each_projected_layout_root.fe",
+        top_mod,
         r#"
 struct Slot<const ROOT: u256 = _> {}
 struct Store { primary: Slot, secondary: Slot }
@@ -3501,7 +3371,6 @@ struct Store { primary: Slot, secondary: Slot }
 fn use_store() uses (store: Store) {}
 "#,
     );
-    db.assert_no_diags(top_mod);
     let func = top_mod
         .children_non_nested(&db)
         .find_map(|item| match item {
@@ -3555,10 +3424,9 @@ fn use_store() uses (store: Store) {}
 
 #[test]
 fn terminal_callable_sources_ignore_shape_only_ancestors() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "terminal_callable_sources_ignore_shape_only_ancestors.fe",
+        top_mod,
         r#"
 use std::evm::StorageMap
 
@@ -3583,15 +3451,13 @@ fn get_lane(
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
 }
 
 #[test]
 fn control_flow_selected_local_layout_backing_sources_are_accepted() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "control_flow_selected_local_layout_backing_sources_are_accepted.fe",
+        top_mod,
         r#"
 use std::evm::StorageMap
 
@@ -3614,15 +3480,13 @@ fn read_same_landing<const ROOT: u256>(
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
 }
 
 #[test]
 fn control_flow_selected_return_layout_backing_sources_are_accepted() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "control_flow_selected_return_layout_backing_sources_are_accepted.fe",
+        top_mod,
         r#"
 use std::evm::StorageMap
 
@@ -3649,15 +3513,13 @@ pub contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
 }
 
 #[test]
 fn constructed_aggregate_layout_backing_sources_are_selected_by_result_field() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "constructed_aggregate_layout_backing_sources_are_selected_by_result_field.fe",
+        top_mod,
         r#"
 use std::evm::StorageMap
 
@@ -3690,16 +3552,13 @@ fn valid<const ROOT: u256>(
 }
 "#,
     );
-
-    db.assert_no_diags(top_mod);
 }
 
 #[test]
 fn control_flow_selected_aggregate_field_is_accepted() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "control_flow_selected_aggregate_field_is_accepted.fe",
+        top_mod,
         r#"
 use std::evm::StorageMap
 
@@ -3726,15 +3585,13 @@ fn ambiguous<const ROOT: u256>(
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
 }
 
 #[test]
 fn reassigned_layout_backing_sources_follow_the_current_value() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "reassigned_layout_backing_sources_follow_the_current_value.fe",
+        top_mod,
         r#"
 use std::evm::StorageMap
 
@@ -3771,15 +3628,13 @@ fn invalid_partial<const ROOT: u256>(
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
 }
 
 #[test]
 fn legacy_trailing_layout_args_are_rejected_at_declared_arity() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_module!(
         db,
-        "legacy_trailing_layout_args_are_rejected_at_declared_arity.fe",
+        top_mod,
         r#"
 struct Slot<const ROOT: u256 = _> {}
 struct Wrapper { slot: Slot }
@@ -3799,10 +3654,9 @@ impl Wrapper {
 
 #[test]
 fn trait_dispatch_transports_control_flow_selected_layout_evidence() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "trait_dispatch_transports_control_flow_selected_layout_evidence.fe",
+        top_mod,
         r#"
 use std::evm::StorageMap
 
@@ -3836,15 +3690,13 @@ fn invalid<const ROOT: u256>(
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
 }
 
 #[test]
 fn trait_dispatch_uses_the_selected_impl_return_provenance() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "trait_dispatch_uses_the_selected_impl_return_provenance.fe",
+        top_mod,
         r#"
 use std::evm::StorageMap
 
@@ -3874,16 +3726,13 @@ fn valid<const ROOT: u256>(
 }
 "#,
     );
-
-    db.assert_no_diags(top_mod);
 }
 
 #[test]
 fn overloaded_calls_transport_control_flow_selected_layout_evidence() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "overloaded_calls_transport_control_flow_selected_layout_evidence.fe",
+        top_mod,
         r#"
 use core::ops::{Add, AddAssign, Neg}
 use std::evm::StorageMap
@@ -3943,15 +3792,13 @@ fn invalid_aug_assign<const ROOT: u256>(
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
 }
 
 #[test]
 fn overloaded_index_return_provenance_uses_the_selected_impl() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "overloaded_index_return_provenance_uses_the_selected_impl.fe",
+        top_mod,
         r#"
 use core::ops::Index
 use std::evm::StorageMap
@@ -4003,15 +3850,13 @@ fn invalid_helper<const ROOT: u256>(
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
 }
 
 #[test]
 fn for_loop_calls_transport_control_flow_selected_layout_evidence() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "for_loop_calls_transport_control_flow_selected_layout_evidence.fe",
+        top_mod,
         r#"
 use core::Seq
 use std::evm::StorageMap
@@ -4047,15 +3892,13 @@ fn invalid<const ROOT: u256>(
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
 }
 
 #[test]
 fn fresh_returns_and_const_fanout_preserve_one_callable_root_source() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "fresh_returns_and_const_fanout_preserve_one_callable_root_source.fe",
+        top_mod,
         r#"
 struct Rooted<const ROOT: u256 = _> {}
 
@@ -4099,7 +3942,6 @@ fn consume_independent<const FIRST: u256, const SECOND: u256>(
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
     let rebuild = top_mod
         .children_non_nested(&db)
         .find_map(|item| match item {
@@ -4127,10 +3969,9 @@ fn consume_independent<const FIRST: u256, const SECOND: u256>(
 
 #[test]
 fn nested_enum_families_forward_each_callable_root() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_module!(
         db,
-        "nested_enum_families_forward_each_callable_root.fe",
+        top_mod,
         r#"
 struct Slot<const ROOT: u256 = _> {}
 
@@ -4174,10 +4015,9 @@ contract C {
 
 #[test]
 fn shared_roots_forward_through_every_enum_overlay_shape() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "shared_roots_forward_through_every_enum_overlay_shape.fe",
+        top_mod,
         r#"
 struct Slot<const ROOT: u256> {}
 
@@ -4289,16 +4129,13 @@ contract C {
 }
 "#,
     );
-
-    db.assert_no_diags(top_mod);
 }
 
 #[test]
 fn coexisting_scalar_and_family_landings_remain_distinct() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_ok!(
         db,
-        "coexisting_scalar_and_family_landings_remain_distinct.fe",
+        top_mod,
         r#"
 struct Slot<const ROOT: u256> {}
 
@@ -4337,15 +4174,13 @@ contract C {
 }
 "#,
     );
-    db.assert_no_diags(top_mod);
 }
 
 #[test]
 fn provider_target_callable_sources_exclude_declared_wrapper_roots() {
-    let mut db = HirAnalysisTestDb::default();
-    let top_mod = parse!(
+    parse_module!(
         db,
-        "provider_target_callable_sources_exclude_declared_wrapper_roots.fe",
+        top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
 

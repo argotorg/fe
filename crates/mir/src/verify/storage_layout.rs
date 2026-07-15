@@ -436,25 +436,25 @@ pub contract Other {
             .unwrap_or_else(|| panic!("missing binding for field {}", field.index))
     }
 
-    fn mutated_wrapper_package<'db>(
+    fn mutated_wrapper_error<'db>(
         db: &'db DriverDataBase,
         package: RuntimePackage<'db>,
         contract: Contract<'db>,
         kind: EntryKind,
         mutate: impl FnOnce(&mut EntrySemanticArgsPlan<'db>),
-    ) -> RuntimePackage<'db> {
-        mutated_wrapper_spec_package(db, package, contract, kind, |spec| {
+    ) -> VerifyError<'db> {
+        mutated_wrapper_spec_error(db, package, contract, kind, |spec| {
             mutate(entry_args_mut(spec, kind));
         })
     }
 
-    fn mutated_wrapper_spec_package<'db>(
+    fn mutated_wrapper_spec_error<'db>(
         db: &'db DriverDataBase,
         package: RuntimePackage<'db>,
         contract: Contract<'db>,
         kind: EntryKind,
         mutate: impl FnOnce(&mut RuntimeSyntheticSpec<'db>),
-    ) -> RuntimePackage<'db> {
+    ) -> VerifyError<'db> {
         let (function, mut spec) = wrapper_spec(db, package, contract, kind);
         mutate(&mut spec);
         let synthetic = RuntimeSyntheticInstance::new(db, spec.clone());
@@ -469,12 +469,13 @@ pub contract Other {
             RuntimeFunctionOwner::Synthetic(spec),
             vec![],
         );
-        RuntimePackage::new(
+        let package = RuntimePackage::new(
             db,
             package.top_mod(db),
             vec![function],
             RuntimePackagePlan::new(db, vec![], vec![], vec![], vec![], None),
-        )
+        );
+        verify_runtime_package(db, package).expect_err("mutated package should be invalid")
     }
 
     fn set_binding_space(binding: &mut ContractFieldBinding<'_>, space: AddressSpaceKind) {
@@ -559,28 +560,24 @@ pub contract Other {
             let maps = field_named(db, contract, "maps");
             let other = field_named(db, other_contract, "other");
 
-            let bad_package =
-                mutated_wrapper_package(db, package, contract, EntryKind::Recv, |args| {
-                    field_binding_mut(args, words).field = maps
-                });
             assert!(matches!(
-                verify_runtime_package(db, bad_package),
-                Err(VerifyError::ContractFieldIdentityMismatch {
+                mutated_wrapper_error(db, package, contract, EntryKind::Recv, |args| {
+                    field_binding_mut(args, words).field = maps
+                }),
+                VerifyError::ContractFieldIdentityMismatch {
                     expected: Some(expected),
                     actual: Some(actual),
-                }) if expected == words && actual == maps
+                } if expected == words && actual == maps
             ));
 
-            let bad_package =
-                mutated_wrapper_package(db, package, contract, EntryKind::Recv, |args| {
-                    field_binding_mut(args, words).field = other
-                });
             assert!(matches!(
-                verify_runtime_package(db, bad_package),
-                Err(VerifyError::ContractFieldIdentityMismatch {
+                mutated_wrapper_error(db, package, contract, EntryKind::Recv, |args| {
+                    field_binding_mut(args, words).field = other
+                }),
+                VerifyError::ContractFieldIdentityMismatch {
                     expected: Some(expected),
                     actual: Some(actual),
-                }) if expected == words && actual == other
+                } if expected == words && actual == other
             ));
         });
     }
@@ -593,69 +590,57 @@ pub contract Other {
             let temp = field_named(db, contract, "temp");
             let fixed = field_named(db, contract, "fixed");
 
-            let bad_package =
-                mutated_wrapper_package(db, package, contract, EntryKind::Recv, |args| {
+            assert!(matches!(
+                mutated_wrapper_error(db, package, contract, EntryKind::Recv, |args| {
                     let binding = field_binding_mut(args, words);
                     let ContractFieldSlot::Words(slot) = binding.slot else {
                         panic!("storage field should use a word slot")
                     };
                     binding.slot = ContractFieldSlot::Words(slot + 1);
-                });
-            assert!(matches!(
-                verify_runtime_package(db, bad_package),
-                Err(VerifyError::ContractFieldSlotMismatch { field, .. }) if field == words
+                }),
+                VerifyError::ContractFieldSlotMismatch { field, .. } if field == words
             ));
 
-            let bad_package =
-                mutated_wrapper_package(db, package, contract, EntryKind::Recv, |args| {
-                    set_binding_space(field_binding_mut(args, words), AddressSpaceKind::Transient)
-                });
             assert!(matches!(
-                verify_runtime_package(db, bad_package),
-                Err(VerifyError::ContractFieldAddressSpaceMismatch { field, .. })
+                mutated_wrapper_error(db, package, contract, EntryKind::Recv, |args| {
+                    set_binding_space(field_binding_mut(args, words), AddressSpaceKind::Transient)
+                }),
+                VerifyError::ContractFieldAddressSpaceMismatch { field, .. }
                     if field == words
             ));
 
-            let bad_package =
-                mutated_wrapper_package(db, package, contract, EntryKind::Recv, |args| {
-                    set_binding_space(field_binding_mut(args, temp), AddressSpaceKind::Storage)
-                });
             assert!(matches!(
-                verify_runtime_package(db, bad_package),
-                Err(VerifyError::ContractFieldAddressSpaceMismatch { field, .. })
+                mutated_wrapper_error(db, package, contract, EntryKind::Recv, |args| {
+                    set_binding_space(field_binding_mut(args, temp), AddressSpaceKind::Storage)
+                }),
+                VerifyError::ContractFieldAddressSpaceMismatch { field, .. }
                     if field == temp
             ));
 
-            let bad_package =
-                mutated_wrapper_package(db, package, contract, EntryKind::Recv, |args| {
-                    set_binding_space(field_binding_mut(args, fixed), AddressSpaceKind::Storage)
-                });
             assert!(matches!(
-                verify_runtime_package(db, bad_package),
-                Err(VerifyError::ContractFieldAddressSpaceMismatch { field, .. })
+                mutated_wrapper_error(db, package, contract, EntryKind::Recv, |args| {
+                    set_binding_space(field_binding_mut(args, fixed), AddressSpaceKind::Storage)
+                }),
+                VerifyError::ContractFieldAddressSpaceMismatch { field, .. }
                     if field == fixed
             ));
 
-            let bad_package =
-                mutated_wrapper_package(db, package, contract, EntryKind::Recv, |args| {
+            assert!(matches!(
+                mutated_wrapper_error(db, package, contract, EntryKind::Recv, |args| {
                     let binding = field_binding_mut(args, fixed);
                     let ContractFieldSlot::CodeTailBytes(offset) = binding.slot else {
                         panic!("immutable receive field should use a code-tail offset")
                     };
                     binding.slot = ContractFieldSlot::CodeTailBytes(offset + 32);
-                });
-            assert!(matches!(
-                verify_runtime_package(db, bad_package),
-                Err(VerifyError::ContractFieldSlotMismatch { field, .. }) if field == fixed
+                }),
+                VerifyError::ContractFieldSlotMismatch { field, .. } if field == fixed
             ));
 
-            let bad_package =
-                mutated_wrapper_package(db, package, contract, EntryKind::Init, |args| {
-                    field_binding_mut(args, fixed).init_immutable = false
-                });
             assert!(matches!(
-                verify_runtime_package(db, bad_package),
-                Err(VerifyError::ContractFieldInitModeMismatch { field, .. }) if field == fixed
+                mutated_wrapper_error(db, package, contract, EntryKind::Init, |args| {
+                    field_binding_mut(args, fixed).init_immutable = false
+                }),
+                VerifyError::ContractFieldInitModeMismatch { field, .. } if field == fixed
             ));
         });
     }
@@ -667,50 +652,42 @@ pub contract Other {
             let other_contract = contract_named(db, package, "Other");
             let words = field_named(db, contract, "words");
 
-            let bad_package =
-                mutated_wrapper_spec_package(db, package, contract, EntryKind::Recv, |spec| {
+            assert!(matches!(
+                mutated_wrapper_spec_error(db, package, contract, EntryKind::Recv, |spec| {
                     let RuntimeSyntheticSpec::ContractRecvAbi { plan } = spec else {
                         panic!("expected receive wrapper")
                     };
                     plan.contract = other_contract;
-                });
-            assert!(matches!(
-                verify_runtime_package(db, bad_package),
-                Err(VerifyError::ContractFieldOwnerMismatch {
+                }),
+                VerifyError::ContractFieldOwnerMismatch {
                     contract: owner,
                     field,
-                }) if owner == other_contract && field == words
+                } if owner == other_contract && field == words
             ));
 
-            let bad_package =
-                mutated_wrapper_package(db, package, contract, EntryKind::Recv, |args| {
-                    args.effects = args.effects[1..].into()
-                });
             assert!(matches!(
-                verify_runtime_package(db, bad_package),
-                Err(VerifyError::ContractFieldArgumentCountMismatch {
+                mutated_wrapper_error(db, package, contract, EntryKind::Recv, |args| {
+                    args.effects = args.effects[1..].into()
+                }),
+                VerifyError::ContractFieldArgumentCountMismatch {
                     contract: owner,
                     expected,
                     actual,
-                }) if owner == contract && expected == 4 && actual == 3
+                } if owner == contract && expected == 4 && actual == 3
             ));
 
-            let bad_package =
-                mutated_wrapper_package(db, package, contract, EntryKind::Recv, |args| {
+            assert!(matches!(
+                mutated_wrapper_error(db, package, contract, EntryKind::Recv, |args| {
                     field_binding_mut(args, words).declared_ty = TyId::bool(db)
-                });
-            assert!(matches!(
-                verify_runtime_package(db, bad_package),
-                Err(VerifyError::ContractFieldTypeMismatch { field, .. }) if field == words
+                }),
+                VerifyError::ContractFieldTypeMismatch { field, .. } if field == words
             ));
 
-            let bad_package =
-                mutated_wrapper_package(db, package, contract, EntryKind::Recv, |args| {
-                    field_binding_mut(args, words).kind = RefKind::Object
-                });
             assert!(matches!(
-                verify_runtime_package(db, bad_package),
-                Err(VerifyError::ContractFieldKindMismatch(field)) if field == words
+                mutated_wrapper_error(db, package, contract, EntryKind::Recv, |args| {
+                    field_binding_mut(args, words).kind = RefKind::Object
+                }),
+                VerifyError::ContractFieldKindMismatch(field) if field == words
             ));
         });
     }
@@ -726,30 +703,26 @@ pub contract Other {
             let words_pointee = field_binding(args, words).class.deref_target().unwrap();
             let maps_pointee = field_binding(args, maps).class.deref_target().unwrap();
 
-            let bad_package =
-                mutated_wrapper_package(db, package, contract, EntryKind::Recv, |args| {
-                    set_binding_pointee(field_binding_mut(args, words), maps_pointee.clone())
-                });
             assert!(matches!(
-                verify_runtime_package(db, bad_package),
-                Err(VerifyError::ContractFieldSpanMismatch {
+                mutated_wrapper_error(db, package, contract, EntryKind::Recv, |args| {
+                    set_binding_pointee(field_binding_mut(args, words), maps_pointee.clone())
+                }),
+                VerifyError::ContractFieldSpanMismatch {
                     field,
                     hir_span: 4,
                     mir_span: 0,
-                }) if field == words
+                } if field == words
             ));
 
-            let bad_package =
-                mutated_wrapper_package(db, package, contract, EntryKind::Recv, |args| {
-                    set_binding_pointee(field_binding_mut(args, maps), words_pointee.clone())
-                });
             assert!(matches!(
-                verify_runtime_package(db, bad_package),
-                Err(VerifyError::ContractFieldSpanMismatch {
+                mutated_wrapper_error(db, package, contract, EntryKind::Recv, |args| {
+                    set_binding_pointee(field_binding_mut(args, maps), words_pointee.clone())
+                }),
+                VerifyError::ContractFieldSpanMismatch {
                     field,
                     hir_span: 0,
                     mir_span: 4,
-                }) if field == maps
+                } if field == maps
             ));
         });
     }
