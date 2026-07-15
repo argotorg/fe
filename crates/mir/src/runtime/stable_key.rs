@@ -16,31 +16,43 @@ use hir::{
     semantic::{ProviderBinding, ProviderSource},
 };
 
+/// Selects how much detail an identity rendering includes.
+///
+/// `Sort` is the complete stable identity. `Symbol` deliberately omits detail
+/// already represented by generic suffixes or disambiguation hashes and
+/// filters incidental internal effect-provider constraints.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IdentityMode {
+    Sort,
+    Symbol,
+}
+
 pub fn semantic_instance_identity<'db>(
     db: &'db dyn HirAnalysisDb,
     semantic: SemanticInstance<'db>,
 ) -> String {
-    let key = semantic.key(db);
-    format!(
-        "{}$subst${}$effects${}$impl${}",
-        body_owner_identity(db, key.owner(db)),
-        generic_subst_identity(db, key.subst(db)),
-        effect_provider_subst_identity(db, key.effect_providers(db)),
-        impl_env_identity(db, key.impl_env(db))
-    )
+    semantic_instance_identity_in_mode(db, semantic, IdentityMode::Sort)
 }
 
 pub fn semantic_instance_symbol_identity<'db>(
     db: &'db dyn HirAnalysisDb,
     semantic: SemanticInstance<'db>,
 ) -> String {
+    semantic_instance_identity_in_mode(db, semantic, IdentityMode::Symbol)
+}
+
+pub fn semantic_instance_identity_in_mode<'db>(
+    db: &'db dyn HirAnalysisDb,
+    semantic: SemanticInstance<'db>,
+    mode: IdentityMode,
+) -> String {
     let key = semantic.key(db);
     format!(
         "{}$subst${}$effects${}$impl${}",
         body_owner_identity(db, key.owner(db)),
         generic_subst_identity(db, key.subst(db)),
-        effect_provider_symbol_subst_identity(db, key.effect_providers(db)),
-        impl_env_symbol_identity(db, key.impl_env(db))
+        effect_provider_subst_identity(db, key.effect_providers(db), mode),
+        impl_env_identity(db, key.impl_env(db), mode)
     )
 }
 
@@ -116,26 +128,15 @@ pub fn generic_args_identity<'db>(db: &'db dyn HirAnalysisDb, args: &[TyId<'db>]
         .join("$")
 }
 
-fn effect_provider_symbol_subst_identity<'db>(
-    db: &'db dyn HirAnalysisDb,
-    subst: EffectProviderSubst<'db>,
-) -> String {
-    subst
-        .providers(db)
-        .iter()
-        .map(|provider| effect_provider_symbol_specialization_identity(db, provider))
-        .collect::<Vec<_>>()
-        .join("$")
-}
-
 fn effect_provider_subst_identity<'db>(
     db: &'db dyn HirAnalysisDb,
     subst: EffectProviderSubst<'db>,
+    mode: IdentityMode,
 ) -> String {
     subst
         .providers(db)
         .iter()
-        .map(|provider| effect_provider_specialization_identity(db, provider))
+        .map(|provider| effect_provider_specialization_identity(db, provider, mode))
         .collect::<Vec<_>>()
         .join("$")
 }
@@ -143,51 +144,40 @@ fn effect_provider_subst_identity<'db>(
 fn effect_provider_specialization_identity<'db>(
     db: &'db dyn HirAnalysisDb,
     specialization: &EffectProviderSpecialization<'db>,
+    mode: IdentityMode,
 ) -> String {
-    format!(
-        "provider${}$provenance${}",
-        provider_binding_identity(db, &specialization.provider),
-        effect_provider_provenance_identity(db, specialization.provenance)
-    )
-}
-
-fn effect_provider_symbol_specialization_identity<'db>(
-    db: &'db dyn HirAnalysisDb,
-    specialization: &EffectProviderSpecialization<'db>,
-) -> String {
-    provider_binding_symbol_identity(db, &specialization.provider)
+    match mode {
+        IdentityMode::Sort => format!(
+            "provider${}$provenance${}",
+            provider_binding_identity(db, &specialization.provider, mode),
+            effect_provider_provenance_identity(db, specialization.provenance)
+        ),
+        IdentityMode::Symbol => provider_binding_identity(db, &specialization.provider, mode),
+    }
 }
 
 fn provider_binding_identity<'db>(
     db: &'db dyn HirAnalysisDb,
     binding: &ProviderBinding<'db>,
+    mode: IdentityMode,
 ) -> String {
+    let ty = match mode {
+        IdentityMode::Sort => format!("$ty${}", type_identity(db, binding.provider_ty)),
+        IdentityMode::Symbol => String::new(),
+    };
     format!(
-        "idx${}$ty${}$mut${}$source${}$semantics${}",
-        binding.provider_idx,
-        type_identity(db, binding.provider_ty),
-        binding.is_mut,
-        provider_source_identity(db, &binding.source),
-        provider_semantics_identity(db, &binding.semantics)
-    )
-}
-
-fn provider_binding_symbol_identity<'db>(
-    db: &'db dyn HirAnalysisDb,
-    binding: &ProviderBinding<'db>,
-) -> String {
-    format!(
-        "idx${}$mut${}$source${}$semantics${}",
+        "idx${}{ty}$mut${}$source${}$semantics${}",
         binding.provider_idx,
         binding.is_mut,
-        provider_source_symbol_identity(db, &binding.source),
-        provider_semantics_symbol_identity(db, &binding.semantics)
+        provider_source_identity(db, &binding.source, mode),
+        provider_semantics_identity(db, &binding.semantics, mode)
     )
 }
 
 fn provider_source_identity<'db>(
     db: &'db dyn HirAnalysisDb,
     source: &ProviderSource<'db>,
+    mode: IdentityMode,
 ) -> String {
     match source {
         ProviderSource::UsesParam {
@@ -202,69 +192,38 @@ fn provider_source_identity<'db>(
             item_identity(db, field.contract.into()),
             field.index
         ),
-        ProviderSource::RootProvider { site, registration } => format!(
-            "root_provider${}$idx${}$kind${:?}$ty${}",
-            effect_param_site_identity(db, *site),
-            registration.idx,
-            registration.site_kind,
-            type_identity(db, registration.provider_ty)
-        ),
-    }
-}
-
-fn provider_source_symbol_identity<'db>(
-    db: &'db dyn HirAnalysisDb,
-    source: &ProviderSource<'db>,
-) -> String {
-    match source {
-        ProviderSource::UsesParam {
-            site,
-            requirement_idx,
-        } => format!(
-            "uses_param${}${requirement_idx}",
-            effect_param_site_identity(db, *site)
-        ),
-        ProviderSource::ContractField { field } => format!(
-            "contract_field${}${}",
-            item_identity(db, field.contract.into()),
-            field.index
-        ),
-        ProviderSource::RootProvider { site, registration } => format!(
-            "root_provider${}$idx${}$kind${:?}",
-            effect_param_site_identity(db, *site),
-            registration.idx,
-            registration.site_kind
-        ),
+        ProviderSource::RootProvider { site, registration } => {
+            let ty = match mode {
+                IdentityMode::Sort => {
+                    format!("$ty${}", type_identity(db, registration.provider_ty))
+                }
+                IdentityMode::Symbol => String::new(),
+            };
+            format!(
+                "root_provider${}$idx${}$kind${:?}{ty}",
+                effect_param_site_identity(db, *site),
+                registration.idx,
+                registration.site_kind
+            )
+        }
     }
 }
 
 fn provider_semantics_identity<'db>(
     db: &'db dyn HirAnalysisDb,
     semantics: &hir::analysis::ty::ProviderSemantics<'db>,
+    mode: IdentityMode,
 ) -> String {
     let target = semantics
         .target_ty
         .map(|ty| type_identity(db, ty))
         .unwrap_or_default();
+    let ty = match mode {
+        IdentityMode::Sort => format!("ty${}$", type_identity(db, semantics.provider_ty)),
+        IdentityMode::Symbol => String::new(),
+    };
     format!(
-        "ty${}$kind${:?}$space${:?}$target${target}$transport${:?}",
-        type_identity(db, semantics.provider_ty),
-        semantics.kind,
-        semantics.address_space,
-        semantics.transport
-    )
-}
-
-fn provider_semantics_symbol_identity<'db>(
-    db: &'db dyn HirAnalysisDb,
-    semantics: &hir::analysis::ty::ProviderSemantics<'db>,
-) -> String {
-    let target = semantics
-        .target_ty
-        .map(|ty| type_identity(db, ty))
-        .unwrap_or_default();
-    format!(
-        "kind${:?}$space${:?}$target${target}$transport${:?}",
+        "{ty}kind${:?}$space${:?}$target${target}$transport${:?}",
         semantics.kind, semantics.address_space, semantics.transport
     )
 }
@@ -316,45 +275,38 @@ fn local_binding_identity<'db>(db: &'db dyn HirAnalysisDb, binding: LocalBinding
     }
 }
 
-fn impl_env_identity<'db>(db: &'db dyn HirAnalysisDb, env: ImplEnv<'db>) -> String {
-    let assumptions = env
-        .assumptions(db)
-        .list(db)
-        .iter()
-        .map(|inst| trait_identity(db, *inst))
-        .collect::<Vec<_>>()
-        .join("$");
-    let witnesses = env
-        .witnesses(db)
-        .iter()
-        .map(|inst| trait_identity(db, *inst))
-        .collect::<Vec<_>>()
-        .join("$");
+fn impl_env_identity<'db>(
+    db: &'db dyn HirAnalysisDb,
+    env: ImplEnv<'db>,
+    mode: IdentityMode,
+) -> String {
+    let assumptions = trait_list_identity(db, env.assumptions(db).list(db).iter().copied(), mode);
+    let witnesses = trait_list_identity(db, env.witnesses(db).iter().copied(), mode);
     format!(
         "scope${}$assumptions${assumptions}$witnesses${witnesses}",
         module_path_components_for_scope(db, env.normalization_scope(db)).join("$")
     )
 }
 
-fn impl_env_symbol_identity<'db>(db: &'db dyn HirAnalysisDb, env: ImplEnv<'db>) -> String {
-    let assumptions = trait_symbol_identities(db, env.assumptions(db).list(db).iter().copied());
-    let witnesses = trait_symbol_identities(db, env.witnesses(db).iter().copied());
-    format!(
-        "scope${}$assumptions${assumptions}$witnesses${witnesses}",
-        module_path_components_for_scope(db, env.normalization_scope(db)).join("$")
-    )
-}
-
-fn trait_symbol_identities<'db>(
+fn trait_list_identity<'db>(
     db: &'db dyn HirAnalysisDb,
     insts: impl Iterator<Item = TraitInstId<'db>>,
+    mode: IdentityMode,
 ) -> String {
-    let mut identities = insts
-        .filter(|inst| !trait_inst_is_internal_effect_provider_constraint(db, *inst))
-        .map(|inst| trait_identity(db, inst))
-        .collect::<Vec<_>>();
-    identities.sort();
-    identities.join("$")
+    match mode {
+        IdentityMode::Sort => insts
+            .map(|inst| trait_identity(db, inst))
+            .collect::<Vec<_>>()
+            .join("$"),
+        IdentityMode::Symbol => {
+            let mut identities = insts
+                .filter(|inst| !trait_inst_is_internal_effect_provider_constraint(db, *inst))
+                .map(|inst| trait_identity(db, inst))
+                .collect::<Vec<_>>();
+            identities.sort();
+            identities.join("$")
+        }
+    }
 }
 
 fn trait_inst_is_internal_effect_provider_constraint<'db>(
