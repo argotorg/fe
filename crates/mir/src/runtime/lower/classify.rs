@@ -1526,15 +1526,12 @@ pub(crate) fn provider_erases_runtime_root<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> bool {
-    if let ProviderSource::ContractField {
-        contract,
-        field_idx,
-    } = provider.source
-    {
-        return contract
+    if let ProviderSource::ContractField { field: field_id } = provider.source {
+        return field_id
+            .contract
             .storage_layout(db)
             .values()
-            .find(|field| field.field.index == field_idx)
+            .find(|field| field.field == field_id)
             .is_none_or(|field| {
                 field.inline_span == 0
                     && field.cells.iter().all(|cell| cell.allocation.is_none())

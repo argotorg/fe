@@ -1727,8 +1727,7 @@ pub enum ProviderSource<'db> {
         requirement_idx: u32,
     },
     ContractField {
-        contract: Contract<'db>,
-        field_idx: u32,
+        field: ContractFieldId<'db>,
     },
     RootProvider {
         site: EffectParamSite<'db>,
@@ -2313,10 +2312,7 @@ fn contract_provider_bindings_canonical<'db>(
                 is_mut: field.is_mut
                     || (is_init_site
                         && field.address_space == crate::analysis::ty::ProviderAddressSpace::Code),
-                source: ProviderSource::ContractField {
-                    contract,
-                    field_idx: field.field.index,
-                },
+                source: ProviderSource::ContractField { field: field.field },
                 semantics: ProviderSemantics {
                     provider_ty,
                     kind: if provider_ty.is_struct(db)
@@ -2403,9 +2399,7 @@ fn contract_effect_resolutions_canonical<'db>(
     let field_provider_idx = providers
         .iter()
         .filter_map(|provider| match provider.source {
-            ProviderSource::ContractField { field_idx, .. } => {
-                Some((field_idx, provider.provider_idx))
-            }
+            ProviderSource::ContractField { field } => Some((field.index, provider.provider_idx)),
             ProviderSource::UsesParam { .. } | ProviderSource::RootProvider { .. } => None,
         })
         .collect::<FxHashMap<_, _>>();

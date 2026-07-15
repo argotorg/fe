@@ -78,10 +78,7 @@ pub contract C {
 
     assert!(matches!(
         resolved.provider.source,
-        ProviderSource::ContractField {
-            contract: field_contract,
-            ..
-        } if field_contract == *contract
+        ProviderSource::ContractField { field } if field.contract == *contract
     ));
     assert_eq!(
         resolved.provider.semantics.address_space,

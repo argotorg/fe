@@ -8,7 +8,7 @@ use crate::{
         RuntimeSyntheticSpec,
         code_region::{code_region_runtime_entry, code_region_section_name, code_region_symbol},
     },
-    verify::{VerifyError, verify_runtime_body},
+    verify::{VerifyError, storage_layout::verify_contract_storage_seam, verify_runtime_body},
 };
 
 struct PackageView<'db> {
@@ -75,10 +75,12 @@ pub fn verify_runtime_package<'db>(
                 function.symbol(db).clone(),
             ));
         }
+        let owner = function.owner(db);
+        verify_contract_storage_seam(db, &owner)?;
         let body = function.instance(db).body(db);
         verify_runtime_body(db, &view, &body)?;
         verify_code_region_refs(&view, &body)?;
-        verify_synthetic_function(function.owner(db), &body)?;
+        verify_synthetic_function(owner, &body)?;
     }
     for region in package.code_regions(db) {
         if !seen_symbols.insert(region.symbol(db).clone()) {

@@ -12,7 +12,7 @@ use hir::{
         },
     },
     hir_def::{Contract, Func},
-    semantic::{FieldStorageLayout, ProviderBinding, ProviderSource},
+    semantic::{ContractFieldId, FieldStorageLayout, ProviderBinding, ProviderSource},
 };
 use rustc_hash::FxHashMap;
 
@@ -54,7 +54,7 @@ pub(crate) fn entry_semantic_args_plan<'db>(
                     .storage_layout(db)
                     .values()
                     .cloned()
-                    .map(|field| (field.field.index, field))
+                    .map(|field| (field.field, field))
                     .collect::<FxHashMap<_, _>>(),
             ),
             contract.code_address_space_slot_count(db),
@@ -178,11 +178,11 @@ fn entry_effect_arg_plan_for_binding<'db>(
     semantic: SemanticInstance<'db>,
     binding: LocalBinding<'db>,
     provider: ProviderBinding<'db>,
-    contract_fields: Option<&FxHashMap<u32, FieldStorageLayout<'db>>>,
+    contract_fields: Option<&FxHashMap<ContractFieldId<'db>, FieldStorageLayout<'db>>>,
     total_code_slots: usize,
 ) -> Result<Option<EntryEffectArgPlan<'db>>, LowerError> {
     match provider.source.clone() {
-        ProviderSource::ContractField { field_idx, .. } => {
+        ProviderSource::ContractField { field: field_id } => {
             let env = RuntimeTypeEnv::for_semantic(db, semantic);
             if runtime_effect_binding_plan(db, semantic, binding).is_none()
                 && provider_erases_runtime_root(db, &provider, env.scope, env.assumptions)
@@ -197,9 +197,10 @@ fn entry_effect_arg_plan_for_binding<'db>(
                     "contract field",
                 ));
             };
-            let field = fields.get(&field_idx).ok_or_else(|| {
+            let field = fields.get(&field_id).ok_or_else(|| {
                 LowerError::Unsupported(format!(
-                    "missing contract field layout for field {field_idx} in {}",
+                    "missing contract field layout for field {} in {}",
+                    field_id.index,
                     context.label(db)
                 ))
             })?;
@@ -332,6 +333,7 @@ fn contract_field_binding<'db>(
         })?),
     };
     Ok(ContractFieldBinding {
+        field: field.field,
         slot,
         declared_ty: binding_ty,
         class,

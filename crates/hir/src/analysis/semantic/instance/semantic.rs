@@ -1153,10 +1153,7 @@ fn provisional_provider_binding_for_effect<'db>(
                     provider_idx,
                     provider_ty,
                     is_mut: true,
-                    source: ProviderSource::ContractField {
-                        contract,
-                        field_idx: field.field.index,
-                    },
+                    source: ProviderSource::ContractField { field: field.field },
                     semantics: crate::analysis::ty::provider::ProviderSemantics {
                         provider_ty,
                         kind: if provider_ty.is_struct(db)

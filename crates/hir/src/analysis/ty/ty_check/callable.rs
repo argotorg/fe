@@ -112,13 +112,7 @@ impl<'db> TyFoldable<'db> for EffectProviderSpecialization<'db> {
                 site,
                 requirement_idx,
             },
-            ProviderSource::ContractField {
-                contract,
-                field_idx,
-            } => ProviderSource::ContractField {
-                contract,
-                field_idx,
-            },
+            ProviderSource::ContractField { field } => ProviderSource::ContractField { field },
             ProviderSource::RootProvider { site, registration } => ProviderSource::RootProvider {
                 site,
                 registration: crate::analysis::ty::provider::RootProviderRegistration {

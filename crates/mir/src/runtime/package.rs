@@ -2180,7 +2180,9 @@ fn entry_effect_args_sort_key<'db>(db: &'db dyn MirDb, args: &[EntryEffectArgPla
     args.iter()
         .map(|arg| match arg {
             EntryEffectArgPlan::ContractField(binding) => format!(
-                "field:{}:{}:{}:{}:{}",
+                "field:{}:{}:{}:{}:{}:{}:{}",
+                item_identity(db, binding.field.contract.into()),
+                binding.field.index,
                 binding.slot,
                 type_identity(db, binding.declared_ty),
                 runtime_class_sort_key(db, &binding.class),

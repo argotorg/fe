@@ -160,13 +160,12 @@ fn contract_field_id_from_local_binding<'db>(
                 })
         }
         LocalBinding::EffectParam { site, idx, .. } => {
-            let ProviderSource::ContractField { field_idx, .. } =
+            let ProviderSource::ContractField { field } =
                 effect_binding_provider_source_at_site(db, site, idx)?
             else {
                 return None;
             };
-            let contract = contract_from_effect_site(db, site)?;
-            contract_field_id_by_index(db, contract, field_idx)
+            Some(field)
         }
         _ => None,
     }

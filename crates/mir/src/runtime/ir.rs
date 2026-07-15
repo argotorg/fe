@@ -5,7 +5,7 @@ use hir::analysis::{
 };
 use hir::hir_def::{BinOp, Contract, Func, TopLevelMod, UnOp};
 use hir::projection::IndexSource;
-use hir::semantic::ProviderBinding;
+use hir::semantic::{ContractFieldId, ProviderBinding};
 use salsa::Update;
 
 use crate::{
@@ -979,6 +979,8 @@ impl std::fmt::Display for ContractFieldSlot {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct ContractFieldBinding<'db> {
+    /// Nominal source identity retained for package-level HIR/MIR seam checks.
+    pub field: ContractFieldId<'db>,
     pub slot: ContractFieldSlot,
     pub declared_ty: TyId<'db>,
     pub class: RuntimeClass<'db>,

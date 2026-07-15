@@ -835,16 +835,14 @@ impl<'db> TyChecker<'db> {
                     // site-specific mutability.
                     if binding.requirement.is_mut
                         && !binding.provider.is_mut
-                        && let crate::core::semantic::ProviderSource::ContractField {
-                            contract: field_contract,
-                            field_idx,
-                        } = binding.provider.source
+                        && let crate::core::semantic::ProviderSource::ContractField { field } =
+                            binding.provider.source
                     {
                         self.push_diag(BodyDiag::ImmutableContractFieldMutBinding {
                             primary: owner.effect_param_path_span(self.db, idx),
                             field: binding.requirement.binding_name,
-                            field_span: crate::hir_def::FieldParent::Contract(field_contract)
-                                .field_name_span(field_idx as usize),
+                            field_span: crate::hir_def::FieldParent::Contract(field.contract)
+                                .field_name_span(field.index as usize),
                         });
                     }
                 }
