@@ -12,7 +12,7 @@ use mir::build_runtime_package;
 use salsa::Setter;
 use url::Url;
 
-use crate::dependency_diagnostics::DependencyIssues;
+use crate::dependency_diagnostics::CompilationDiagnostics;
 use crate::report::{
     copy_input_into_report, create_dir_all_utf8, create_report_staging_dir, enable_panic_report,
     normalize_report_out_path, tar_gz_dir, write_report_meta,
@@ -371,33 +371,26 @@ fn check_ingot_and_dependencies(
         return true;
     }
 
-    let hir_diags = db.run_on_ingot(ingot);
+    let diagnostics = CompilationDiagnostics::for_ingot_with_seen(db, ingot, seen);
     let mut has_errors = false;
-    let hir_has_errors = hir_diags.has_errors(db);
 
-    if !hir_diags.is_empty() {
-        hir_diags.emit(db);
+    if !diagnostics.hir.is_empty() {
+        diagnostics.hir.emit(db);
         if let Some(report) = report {
-            let formatted = hir_diags.format_diags(db);
+            let formatted = diagnostics.hir.format_diags(db);
             write_report_file(report, "errors/diagnostics.txt", &formatted);
         }
         has_errors = true;
     }
 
-    let dependency_errors = DependencyIssues::collect(db, ingot_url, seen);
-    let mir_diags = if hir_has_errors || !dependency_errors.is_empty() {
-        Vec::new()
-    } else {
-        db.mir_diagnostics_for_ingot(ingot)
-    };
-    if !mir_diags.is_empty() {
-        db.emit_complete_diagnostics(&mir_diags);
+    if !diagnostics.mir.is_empty() {
+        db.emit_complete_diagnostics(&diagnostics.mir);
         has_errors = true;
     }
 
-    if !dependency_errors.is_empty() {
+    if !diagnostics.dependencies.is_empty() {
         has_errors = true;
-        let formatted = dependency_errors.format(db);
+        let formatted = diagnostics.dependencies.format(db);
         eprint!("{formatted}");
 
         if let Some(report) = report {
@@ -456,37 +449,30 @@ fn check_single_file(
     // Try to get the file and check it for errors
     if let Some(file) = db.workspace().get(db, &file_url) {
         let top_mod = db.top_mod(file);
-        let hir_diags = db.run_on_top_mod(top_mod);
+        let diagnostics = CompilationDiagnostics::for_top_mod(db, top_mod, &file_url);
         let mut has_errors = false;
-        let hir_has_errors = hir_diags.has_errors(db);
 
-        if !hir_diags.is_empty() {
+        if !diagnostics.hir.is_empty() {
             eprintln!("errors in {file_url}");
             eprintln!();
-            hir_diags.emit(db);
+            diagnostics.hir.emit(db);
             if let Some(report) = report {
-                let formatted = hir_diags.format_diags(db);
+                let formatted = diagnostics.hir.format_diags(db);
                 write_report_file(report, "errors/diagnostics.txt", &formatted);
             }
             has_errors = true;
         }
 
-        let dependency_errors = DependencyIssues::collect_all(db, &file_url);
-        let mir_diags = if hir_has_errors || !dependency_errors.is_empty() {
-            Vec::new()
-        } else {
-            db.mir_diagnostics_for_top_mod(top_mod)
-        };
-        if !mir_diags.is_empty() {
+        if !diagnostics.mir.is_empty() {
             if !has_errors {
                 eprintln!("errors in {file_url}");
                 eprintln!();
             }
-            db.emit_complete_diagnostics(&mir_diags);
+            db.emit_complete_diagnostics(&diagnostics.mir);
             has_errors = true;
         }
-        if !dependency_errors.is_empty() {
-            let formatted = dependency_errors.format(db);
+        if !diagnostics.dependencies.is_empty() {
+            let formatted = diagnostics.dependencies.format(db);
             eprint!("{formatted}");
             if let Some(report) = report {
                 write_report_file(report, "errors/dependency_diagnostics.txt", &formatted);

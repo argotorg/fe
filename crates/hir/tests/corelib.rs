@@ -2,6 +2,7 @@ use common::InputDb;
 use common::indexmap::IndexMap;
 use common::stdlib::{HasBuiltinCore, HasBuiltinStd};
 use driver::{DriverDataBase, db::DiagnosticsCollection};
+use fe_hir::Ingot;
 use fe_hir::analysis::ty::ty_check::ReturnProvenance;
 use fe_hir::analysis::ty::{
     corelib::{resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path},
@@ -26,7 +27,7 @@ fn analyze_corelib() {
     );
 
     let core_diags = db.run_on_ingot(core);
-    assert_builtin_clean(&db, core_diags, "core");
+    assert_builtin_clean(&db, core, core_diags, "core");
 }
 
 #[test]
@@ -39,19 +40,31 @@ fn analyze_stdlib() {
     );
 
     let std_diags = db.run_on_ingot(std_ingot);
-    assert_builtin_clean(&db, std_diags, "std");
+    assert_builtin_clean(&db, std_ingot, std_diags, "std");
 }
 
-fn assert_builtin_clean(db: &DriverDataBase, diags: DiagnosticsCollection<'_>, name: &str) {
-    if diags.is_empty() {
-        return;
+fn assert_builtin_clean(
+    db: &DriverDataBase,
+    ingot: Ingot<'_>,
+    diags: DiagnosticsCollection<'_>,
+    name: &str,
+) {
+    if !diags.is_empty() {
+        diags.emit(db);
+        panic!(
+            "expected no HIR diagnostics for builtin {name}, but got:\n{}",
+            diags.format_diags(db)
+        );
     }
 
-    diags.emit(db);
-    panic!(
-        "expected no diagnostics for builtin {name}, but got:\n{}",
-        diags.format_diags(db)
-    );
+    let mir_diags = db.mir_diagnostics_for_ingot(ingot);
+    if !mir_diags.is_empty() {
+        db.emit_complete_diagnostics(&mir_diags);
+        panic!(
+            "expected no MIR diagnostics for builtin {name}, but got:\n{}",
+            db.format_complete_diagnostics(&mir_diags)
+        );
+    }
 }
 
 fn release_profile_db() -> DriverDataBase {
@@ -67,7 +80,7 @@ fn analyze_corelib_under_release_profile() {
     let db = release_profile_db();
     let core = db.builtin_core();
     let core_diags = db.run_on_ingot(core);
-    assert_builtin_clean(&db, core_diags, "core (release profile)");
+    assert_builtin_clean(&db, core, core_diags, "core (release profile)");
 }
 
 #[test]
@@ -111,7 +124,7 @@ fn analyze_stdlib_under_release_profile() {
     let db = release_profile_db();
     let std_ingot = db.builtin_std();
     let std_diags = db.run_on_ingot(std_ingot);
-    assert_builtin_clean(&db, std_diags, "std (release profile)");
+    assert_builtin_clean(&db, std_ingot, std_diags, "std (release profile)");
 }
 
 #[test]

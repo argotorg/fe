@@ -4,7 +4,7 @@
 //! executes them using revm.
 
 use crate::TestEmit;
-use crate::dependency_diagnostics::DependencyIssues;
+use crate::dependency_diagnostics::CompilationDiagnostics;
 use crate::report::{
     PanicReportGuard, ReportStaging, copy_input_into_report, create_dir_all_utf8,
     create_report_staging_root, enable_panic_report, is_verifier_error_text,
@@ -1523,22 +1523,15 @@ fn prepare_tests_single_file(
     };
     let top_mod = db.top_mod(file);
 
-    let hir_diags = db.run_on_top_mod(top_mod);
+    let diagnostics = CompilationDiagnostics::for_top_mod(db, top_mod, &file_url);
     let mut has_errors = false;
-    let hir_has_errors = hir_diags.has_errors(db);
     let mut formatted = String::new();
-    if !hir_diags.is_empty() {
-        formatted.push_str(&hir_diags.format_diags(db));
+    if !diagnostics.hir.is_empty() {
+        formatted.push_str(&diagnostics.hir.format_diags(db));
         has_errors = true;
     }
-    let dependency_errors = DependencyIssues::collect_all(db, &file_url);
-    let mir_diags = if hir_has_errors || !dependency_errors.is_empty() {
-        Vec::new()
-    } else {
-        db.mir_diagnostics_for_top_mod(top_mod)
-    };
-    if !mir_diags.is_empty() {
-        formatted.push_str(&db.format_complete_diagnostics(&mir_diags));
+    if !diagnostics.mir.is_empty() {
+        formatted.push_str(&db.format_complete_diagnostics(&diagnostics.mir));
         has_errors = true;
     }
     if has_errors {
@@ -1558,14 +1551,18 @@ fn prepare_tests_single_file(
         };
     }
 
-    if !dependency_errors.is_empty() {
-        let formatted = dependency_errors.format(db);
+    if !diagnostics.dependencies.is_empty() {
+        let formatted = diagnostics.dependencies.format(db);
         let _ = write!(output, "{formatted}");
         if let Some(report) = report {
             write_report_error(report, "compilation_errors.txt", &formatted);
         }
         return SuitePreparation {
-            results: suite_error_result(suite, "compile", dependency_errors.message().to_string()),
+            results: suite_error_result(
+                suite,
+                "compile",
+                diagnostics.dependencies.message().to_string(),
+            ),
             single_jobs: Vec::new(),
         };
     }
@@ -1699,22 +1696,15 @@ fn prepare_tests_ingot(
         };
     };
 
-    let hir_diags = db.run_on_ingot(ingot);
+    let diagnostics = CompilationDiagnostics::for_ingot(db, ingot);
     let mut has_errors = false;
-    let hir_has_errors = hir_diags.has_errors(db);
     let mut formatted = String::new();
-    if !hir_diags.is_empty() {
-        formatted.push_str(&hir_diags.format_diags(db));
+    if !diagnostics.hir.is_empty() {
+        formatted.push_str(&diagnostics.hir.format_diags(db));
         has_errors = true;
     }
-    let dependency_errors = DependencyIssues::collect_all(db, &ingot_url);
-    let mir_diags = if hir_has_errors || !dependency_errors.is_empty() {
-        Vec::new()
-    } else {
-        db.mir_diagnostics_for_ingot(ingot)
-    };
-    if !mir_diags.is_empty() {
-        formatted.push_str(&db.format_complete_diagnostics(&mir_diags));
+    if !diagnostics.mir.is_empty() {
+        formatted.push_str(&db.format_complete_diagnostics(&diagnostics.mir));
         has_errors = true;
     }
     if has_errors {
@@ -1728,14 +1718,18 @@ fn prepare_tests_ingot(
         };
     }
 
-    if !dependency_errors.is_empty() {
-        let formatted = dependency_errors.format(db);
+    if !diagnostics.dependencies.is_empty() {
+        let formatted = diagnostics.dependencies.format(db);
         let _ = write!(output, "{formatted}");
         if let Some(report) = report {
             write_report_error(report, "compilation_errors.txt", &formatted);
         }
         return SuitePreparation {
-            results: suite_error_result(suite, "compile", dependency_errors.message().to_string()),
+            results: suite_error_result(
+                suite,
+                "compile",
+                diagnostics.dependencies.message().to_string(),
+            ),
             single_jobs: Vec::new(),
         };
     }

@@ -26,7 +26,7 @@ use url::Url;
 
 use crate::{
     BuildEmit,
-    dependency_diagnostics::DependencyIssues,
+    dependency_diagnostics::{CompilationDiagnostics, DependencyIssues},
     report::{
         ReportStaging, copy_input_into_report, create_dir_all_utf8, create_report_staging_root,
         enable_panic_report, normalize_report_out_path, tar_gz_dir, write_report_meta,
@@ -356,22 +356,16 @@ fn build_file(
     };
 
     let top_mod = db.top_mod(file);
-    let hir_diags = db.run_on_top_mod(top_mod);
+    let diagnostics = CompilationDiagnostics::for_top_mod(db, top_mod, &url);
     let mut has_errors = false;
-    let hir_has_errors = hir_diags.has_errors(db);
-    if !hir_diags.is_empty() {
-        hir_diags.emit(db);
+    if !diagnostics.hir.is_empty() {
+        diagnostics.hir.emit(db);
         has_errors = true;
     }
-    let dependency_has_errors = emit_dependency_diagnostics(db, &url);
+    let dependency_has_errors = emit_dependency_diagnostics(db, &diagnostics.dependencies);
     has_errors |= dependency_has_errors;
-    let mir_diags = if hir_has_errors || dependency_has_errors {
-        Vec::new()
-    } else {
-        db.mir_diagnostics_for_top_mod(top_mod)
-    };
-    if !mir_diags.is_empty() {
-        db.emit_complete_diagnostics(&mir_diags);
+    if !diagnostics.mir.is_empty() {
+        db.emit_complete_diagnostics(&diagnostics.mir);
         has_errors = true;
     }
     if has_errors {
@@ -692,22 +686,16 @@ fn analyze_ingot_build_artifacts(
         return Err(());
     }
 
-    let hir_diags = db.run_on_ingot(ingot);
+    let diagnostics = CompilationDiagnostics::for_ingot(db, ingot);
     let mut has_errors = false;
-    let hir_has_errors = hir_diags.has_errors(db);
-    if !hir_diags.is_empty() {
-        hir_diags.emit(db);
+    if !diagnostics.hir.is_empty() {
+        diagnostics.hir.emit(db);
         has_errors = true;
     }
-    let dependency_has_errors = emit_dependency_diagnostics(db, ingot_url);
+    let dependency_has_errors = emit_dependency_diagnostics(db, &diagnostics.dependencies);
     has_errors |= dependency_has_errors;
-    let mir_diags = if hir_has_errors || dependency_has_errors {
-        Vec::new()
-    } else {
-        db.mir_diagnostics_for_ingot(ingot)
-    };
-    if !mir_diags.is_empty() {
-        db.emit_complete_diagnostics(&mir_diags);
+    if !diagnostics.mir.is_empty() {
+        db.emit_complete_diagnostics(&diagnostics.mir);
         has_errors = true;
     }
     if has_errors {
@@ -730,8 +718,7 @@ fn analyze_ingot_build_artifacts(
     })
 }
 
-fn emit_dependency_diagnostics(db: &DriverDataBase, ingot_url: &Url) -> bool {
-    let issues = DependencyIssues::collect_all(db, ingot_url);
+fn emit_dependency_diagnostics(db: &DriverDataBase, issues: &DependencyIssues<'_>) -> bool {
     if issues.is_empty() {
         return false;
     }
@@ -886,22 +873,16 @@ fn build_ingot_url(
         return BuildSummary { had_errors: true };
     }
 
-    let hir_diags = db.run_on_ingot(ingot);
+    let diagnostics = CompilationDiagnostics::for_ingot(db, ingot);
     let mut has_errors = false;
-    let hir_has_errors = hir_diags.has_errors(db);
-    if !hir_diags.is_empty() {
-        hir_diags.emit(db);
+    if !diagnostics.hir.is_empty() {
+        diagnostics.hir.emit(db);
         has_errors = true;
     }
-    let dependency_has_errors = emit_dependency_diagnostics(db, ingot_url);
+    let dependency_has_errors = emit_dependency_diagnostics(db, &diagnostics.dependencies);
     has_errors |= dependency_has_errors;
-    let mir_diags = if hir_has_errors || dependency_has_errors {
-        Vec::new()
-    } else {
-        db.mir_diagnostics_for_ingot(ingot)
-    };
-    if !mir_diags.is_empty() {
-        db.emit_complete_diagnostics(&mir_diags);
+    if !diagnostics.mir.is_empty() {
+        db.emit_complete_diagnostics(&diagnostics.mir);
         has_errors = true;
     }
     if has_errors {
