@@ -301,3 +301,21 @@ contract InitBranchCondMutatedBothArmsAssign {
         }
     }
 }
+
+struct Empty {}
+
+contract ZeroMemorySpaceField {
+    ptr: std::evm::MemPtr<()>
+}
+
+contract ZeroCalldataSpaceField {
+    ptr: std::evm::CalldataPtr<()>
+}
+
+contract EmptyMemorySpaceField {
+    ptr: std::evm::MemPtr<Empty>
+}
+
+contract EmptyCalldataSpaceField {
+    ptr: std::evm::CalldataPtr<Empty>
+}

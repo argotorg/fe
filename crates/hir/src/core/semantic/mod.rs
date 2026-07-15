@@ -3533,6 +3533,7 @@ fn collect_direct_adts<'db>(
                 _ => false,
             };
             if !is_indirect {
+                walk_ty(self, abs);
                 walk_ty(self, arg)
             }
         }

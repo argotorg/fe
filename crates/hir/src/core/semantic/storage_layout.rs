@@ -2157,6 +2157,10 @@ impl<'db> FieldCollector<'db> {
         dimensions: &[LayoutIndexDimension<'db>],
         mode: WalkMode,
     ) -> WalkOutput<'db> {
+        if adt.recursive_cycle(self.db).is_some() {
+            self.push_error(ContractLayoutError::InvalidFieldType);
+            return WalkOutput::empty();
+        }
         let args = ty.generic_args(self.db);
         if args.len() != adt.params(self.db).len() {
             self.push_error(ContractLayoutError::IncompleteAdtLayoutProjection { ty });

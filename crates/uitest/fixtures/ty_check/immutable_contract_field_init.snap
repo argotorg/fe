@@ -19,6 +19,38 @@ error[8-0084]: calldata-backed contract fields are not supported
     │
     = calldata belongs to one call and has no stable contract-field location; access receive arguments or calldata handles locally instead
 
+error[8-0084]: memory-backed contract fields are not supported
+    ┌─ immutable_contract_field_init.fe:308:10
+    │
+308 │     ptr: std::evm::MemPtr<()>
+    │          ^^^^^^^^^^^^^^^^^^^^ `ptr` has a memory-backed contract field type
+    │
+    = memory handles cannot be persisted as contract fields; use a plain immutable field for code-backed data or a plain `mut` field for storage-backed state
+
+error[8-0084]: calldata-backed contract fields are not supported
+    ┌─ immutable_contract_field_init.fe:312:10
+    │
+312 │     ptr: std::evm::CalldataPtr<()>
+    │          ^^^^^^^^^^^^^^^^^^^^^^^^^ `ptr` has a calldata-backed contract field type
+    │
+    = calldata belongs to one call and has no stable contract-field location; access receive arguments or calldata handles locally instead
+
+error[8-0084]: memory-backed contract fields are not supported
+    ┌─ immutable_contract_field_init.fe:316:10
+    │
+316 │     ptr: std::evm::MemPtr<Empty>
+    │          ^^^^^^^^^^^^^^^^^^^^^^^ `ptr` has a memory-backed contract field type
+    │
+    = memory handles cannot be persisted as contract fields; use a plain immutable field for code-backed data or a plain `mut` field for storage-backed state
+
+error[8-0084]: calldata-backed contract fields are not supported
+    ┌─ immutable_contract_field_init.fe:320:10
+    │
+320 │     ptr: std::evm::CalldataPtr<Empty>
+    │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `ptr` has a calldata-backed contract field type
+    │
+    = calldata belongs to one call and has no stable contract-field location; access receive arguments or calldata handles locally instead
+
 error[8-0086]: immutable contract field is not initialized
   ┌─ immutable_contract_field_init.fe:2:5
   │
