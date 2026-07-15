@@ -91,12 +91,12 @@ struct ModuleLowerer<'db, 'a> {
     package: &'a RuntimePackage<'db>,
     func_map: FxHashMap<mir::RuntimeInstance<'db>, FuncRef>,
     func_symbols: FxHashMap<mir::RuntimeInstance<'db>, String>,
-    section_membership: FxHashMap<mir::RuntimeInstance<'db>, Vec<mir::RuntimeSectionRef<'db>>>,
+    section_membership: FxHashMap<mir::RuntimeInstance<'db>, Vec<mir::RuntimeSectionRef>>,
     type_cache: FxHashMap<LayoutId<'db>, Type>,
     layout_names: FxHashMap<LayoutId<'db>, String>,
     const_globals: FxHashMap<ConstRegionId<'db>, GlobalVariableRef>,
     const_names: FxHashMap<ConstRegionId<'db>, String>,
-    explicit_code_region_sections: FxHashSet<(mir::RuntimeObject<'db>, mir::RuntimeSectionName)>,
+    explicit_code_region_sections: FxHashSet<(String, mir::RuntimeSectionName)>,
 }
 
 impl<'db, 'a> ModuleLowerer<'db, 'a> {
@@ -144,10 +144,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             .unwrap_or_else(|| format!("{:?}", instance.key(self.db)))
     }
 
-    fn sections_for_function(
-        &self,
-        instance: RuntimeInstance<'db>,
-    ) -> &[mir::RuntimeSectionRef<'db>] {
+    fn sections_for_function(&self, instance: RuntimeInstance<'db>) -> &[mir::RuntimeSectionRef] {
         self.section_membership
             .get(&instance)
             .map(Vec::as_slice)
@@ -341,7 +338,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                         }
                         mir::RuntimeSectionRef::External { object, section } => {
                             section_builder.embed_external(
-                                object.name(self.db).clone(),
+                                object.clone(),
                                 super::section_name_for_runtime(section),
                                 EmbedSymbol::from(embed.as_symbol.clone()),
                             );
@@ -362,7 +359,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         section: &mir::RuntimeSectionName,
     ) -> bool {
         self.explicit_code_region_sections
-            .contains(&(object, section.clone()))
+            .contains(&(object.name(self.db).clone(), section.clone()))
     }
 
     fn mark_explicit_code_region(&mut self, region: mir::RuntimeCodeRegion<'db>) {
@@ -374,13 +371,9 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         else {
             return;
         };
-        match resolved.source(self.db) {
-            mir::RuntimeSectionRef::Local { object, section }
-            | mir::RuntimeSectionRef::External { object, section } => {
-                self.explicit_code_region_sections
-                    .insert((object, section.clone()));
-            }
-        }
+        let source = resolved.source(self.db);
+        self.explicit_code_region_sections
+            .insert((source.object().to_string(), source.section().clone()));
     }
 
     fn func_ref(&self, instance: mir::RuntimeInstance<'db>) -> Result<FuncRef, LowerError> {
@@ -805,7 +798,7 @@ enum CopySource<'db> {
 struct FunctionLowerer<'ctx, 'db, 'a> {
     module: &'ctx mut ModuleLowerer<'db, 'a>,
     body: RuntimeBody<'db>,
-    current_sections: Vec<mir::RuntimeSectionRef<'db>>,
+    current_sections: Vec<mir::RuntimeSectionRef>,
     fb: FunctionBuilder<InstInserter>,
     prologue_block: BlockId,
     block_map: Vec<Option<BlockId>>,
@@ -2301,7 +2294,6 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 .is_some_and(|resolved| {
                     self.current_sections.iter().all(|current_section| {
                         runtime_section_refs_match(
-                            self.module.db,
                             &resolved.source(self.module.db),
                             current_section,
                         )
@@ -5261,32 +5253,20 @@ fn stable_hash<T: Hash>(value: &T) -> u64 {
     hasher.finish()
 }
 
-fn runtime_section_refs_match<'db>(
-    db: &'db DriverDataBase,
-    lhs: &mir::RuntimeSectionRef<'db>,
-    rhs: &mir::RuntimeSectionRef<'db>,
-) -> bool {
-    let (lhs_object, lhs_section) = match lhs {
-        mir::RuntimeSectionRef::Local { object, section }
-        | mir::RuntimeSectionRef::External { object, section } => (object, section),
-    };
-    let (rhs_object, rhs_section) = match rhs {
-        mir::RuntimeSectionRef::Local { object, section }
-        | mir::RuntimeSectionRef::External { object, section } => (object, section),
-    };
-    lhs_object.name(db) == rhs_object.name(db) && lhs_section == rhs_section
+fn runtime_section_refs_match(lhs: &mir::RuntimeSectionRef, rhs: &mir::RuntimeSectionRef) -> bool {
+    lhs.object() == rhs.object() && lhs.section() == rhs.section()
 }
 
 fn compute_section_membership<'db>(
     db: &'db DriverDataBase,
     package: &RuntimePackage<'db>,
-) -> FxHashMap<mir::RuntimeInstance<'db>, Vec<mir::RuntimeSectionRef<'db>>> {
+) -> FxHashMap<mir::RuntimeInstance<'db>, Vec<mir::RuntimeSectionRef>> {
     let mut membership =
-        FxHashMap::<mir::RuntimeInstance<'db>, Vec<mir::RuntimeSectionRef<'db>>>::default();
+        FxHashMap::<mir::RuntimeInstance<'db>, Vec<mir::RuntimeSectionRef>>::default();
     for object in package.objects(db) {
         for section in object.sections(db) {
             let section_ref = mir::RuntimeSectionRef::Local {
-                object,
+                object: object.name(db).clone(),
                 section: section.name.clone(),
             };
             let mut stack = vec![section.entry.instance(db)];

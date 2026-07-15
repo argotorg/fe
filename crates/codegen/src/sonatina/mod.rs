@@ -359,7 +359,7 @@ fn filter_runtime_package_to_root_objects<'db>(
     let code_regions = package
         .code_regions(db)
         .into_iter()
-        .filter(|region| section_set.contains(&section_ref_key(db, region.source(db))))
+        .filter(|region| section_set.contains(&section_ref_key(region.source(db))))
         .collect::<Vec<_>>();
     let root_objects = package
         .objects(db)
@@ -430,7 +430,7 @@ fn reachable_sections<'db>(
             .map(|(_, section)| section)
         {
             for embed in section.embeds {
-                queue.push_back(section_ref_key(db, embed.source));
+                queue.push_back(section_ref_key(embed.source.clone()));
             }
         }
     }
@@ -445,15 +445,10 @@ fn runtime_section_key<'db>(
     (object.name(db).clone(), section.clone())
 }
 
-fn section_ref_key<'db>(
-    db: &'db dyn mir::MirDb,
-    section_ref: mir::RuntimeSectionRef<'db>,
-) -> (String, mir::RuntimeSectionName) {
+fn section_ref_key(section_ref: mir::RuntimeSectionRef) -> (String, mir::RuntimeSectionName) {
     match section_ref {
         mir::RuntimeSectionRef::Local { object, section }
-        | mir::RuntimeSectionRef::External { object, section } => {
-            runtime_section_key(db, object, &section)
-        }
+        | mir::RuntimeSectionRef::External { object, section } => (object, section),
     }
 }
 

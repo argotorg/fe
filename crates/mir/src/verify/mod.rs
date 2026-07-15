@@ -39,6 +39,7 @@ pub enum VerifyError<'db> {
     InvalidCodeRegion(crate::runtime::RuntimeCodeRegion<'db>),
     InvalidPackageFunction(crate::instance::RuntimeInstance<'db>),
     InvalidPackageObject(crate::runtime::RuntimeObject<'db>),
+    UnknownPackageObject(String),
     InvalidPackageSection(
         crate::runtime::RuntimeObject<'db>,
         crate::runtime::RuntimeSectionName,
@@ -116,6 +117,7 @@ impl<'db> VerifyError<'db> {
             | VerifyError::InvalidCodeRegion(_)
             | VerifyError::InvalidPackageFunction(_)
             | VerifyError::InvalidPackageObject(_)
+            | VerifyError::UnknownPackageObject(_)
             | VerifyError::InvalidPackageSection(_, _)
             | VerifyError::DuplicateRuntimeSymbol(_)
             | VerifyError::ContractFieldArgumentCountMismatch { .. }
