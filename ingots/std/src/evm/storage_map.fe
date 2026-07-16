@@ -2,7 +2,7 @@ use super::effects::{Address, RawStorage}
 use super::mem
 use ingot::evm::ops::{keccak256, mstore, sload, sstore}
 use ingot::evm::word::WordRepr
-use core::{AddressSpace, EffectHandle, EffectRef, StorPtr}
+use core::{AddressSpace, EffectHandle, EffectHandleMut, EffectRef, EffectRefMut}
 
 /// Keys that can be written into the mapping preimage for keccak hashing.
 pub trait StorageKey {
@@ -136,7 +136,13 @@ pub struct StoragePtr<T> {
     slot: u256,
 }
 
+/// Mutable pointer to a value stored in a `StorageMap`.
+pub struct StorageMutPtr<T> {
+    slot: u256,
+}
+
 impl<T> Copy for StoragePtr<T> {}
+impl<T> Copy for StorageMutPtr<T> {}
 
 impl<T> EffectHandle for StoragePtr<T> {
     type Target = T
@@ -162,6 +168,44 @@ impl<T> StoragePtr<T> {
         let ptr = self
         with (ptr) {
             core::effect_ref::read(ptr)
+        }
+    }
+}
+
+impl<T> EffectHandle for StorageMutPtr<T> {
+    type Target = T
+
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn from_raw(_ raw: u256) -> Self {
+        Self { slot: raw }
+    }
+
+    fn raw(self) -> u256 {
+        self.slot
+    }
+}
+
+impl<T> EffectHandleMut for StorageMutPtr<T> {}
+impl<T> EffectRef<T> for StorageMutPtr<T> {}
+impl<T> EffectRefMut<T> for StorageMutPtr<T> {}
+
+impl<T> StorageMutPtr<T> {
+    /// Reads the pointed-at value.
+    pub fn read(self) -> T
+        where T: Copy
+    {
+        let mut ptr = self
+        with (ptr) {
+            core::effect_ref::read(ptr)
+        }
+    }
+
+    /// Writes the pointed-at value.
+    pub fn write(self, _ value: T) {
+        let mut ptr = self
+        with (ptr) {
+            core::effect_ref::write(ptr, value)
         }
     }
 }
@@ -217,12 +261,12 @@ impl<K: StorageKey, V, const SALT: u256> StorageMap<K, V, SALT> {
     }
 
     #[inline(always)]
-    pub(ingot) fn mut_ptr_unchecked(self, key: K) -> StorPtr<V> {
-        StorPtr::from_raw(storagemap_storage_slot_with_salt(key, salt: SALT))
+    pub(ingot) fn mut_ptr_unchecked(self, key: K) -> StorageMutPtr<V> {
+        StorageMutPtr::from_raw(storagemap_storage_slot_with_salt(key, salt: SALT))
     }
 
     #[inline(always)]
-    pub fn mut_ptr(self, key: K) -> StorPtr<V>
+    pub fn mut_ptr(self, key: K) -> StorageMutPtr<V>
     uses (map: mut StorageMap<K, V, SALT>)
     {
         self.mut_ptr_unchecked(key)
