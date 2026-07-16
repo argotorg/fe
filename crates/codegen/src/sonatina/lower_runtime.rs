@@ -6,6 +6,7 @@ use hir::{
     analysis::{
         semantic::FieldIndex,
         ty::{
+            corelib::resolve_lib_type_path,
             ty_check::BodyOwner,
             ty_def::{PrimTy, TyBase, TyData, TyId},
         },
@@ -806,10 +807,17 @@ struct PackedLane {
     bit_width: u16,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PtrLayoutMode {
+    Word,
+    StorageMapEntry,
+}
+
 enum PlaceTerminal<'db> {
     Ptr {
         addr: ValueId,
         space: AddressSpaceKind,
+        layout: PtrLayoutMode,
         class: RuntimeClass<'db>,
     },
     PackedPtr {
@@ -850,6 +858,7 @@ enum CopySource<'db> {
     Ptr {
         addr: ValueId,
         space: AddressSpaceKind,
+        layout: PtrLayoutMode,
         class: RuntimeClass<'db>,
     },
     PackedPtr {
@@ -2418,11 +2427,12 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 class,
             }),
             RuntimeClass::Ref {
-                kind: RefKind::Provider { space, .. },
+                kind: RefKind::Provider { provider_ty, space },
                 ..
             } => Ok(PlaceTerminal::Ptr {
                 addr: self.local_value(value)?,
                 space,
+                layout: self.ptr_layout_mode_for_provider(provider_ty, space),
                 class,
             }),
             RuntimeClass::AggregateValue { .. } if allow_value_carrier => {
@@ -2434,6 +2444,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             RuntimeClass::RawAddr { space, .. } if allow_value_carrier => Ok(PlaceTerminal::Ptr {
                 addr: self.local_value(value)?,
                 space,
+                layout: PtrLayoutMode::Word,
                 class,
             }),
             RuntimeClass::Scalar(_)
@@ -2483,12 +2494,13 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 class: (**pointee).clone(),
             }),
             RuntimeClass::Ref {
-                kind: RefKind::Provider { space, .. },
+                kind: RefKind::Provider { provider_ty, space },
                 pointee,
                 ..
             } => Ok(PlaceTerminal::Ptr {
                 addr: value,
                 space: *space,
+                layout: self.ptr_layout_mode_for_provider(*provider_ty, *space),
                 class: (**pointee).clone(),
             }),
             RuntimeClass::RawAddr {
@@ -2497,6 +2509,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             } => Ok(PlaceTerminal::Ptr {
                 addr: value,
                 space: *space,
+                layout: PtrLayoutMode::Word,
                 class: RuntimeClass::AggregateValue { layout: *layout },
             }),
             RuntimeClass::RawAddr { target: None, .. } => Err(LowerError::Unsupported(
@@ -2510,27 +2523,58 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         }
     }
 
-    fn uses_storage_layout(space: AddressSpaceKind) -> bool {
-        matches!(
-            space,
-            AddressSpaceKind::Storage | AddressSpaceKind::Transient
-        )
+    fn ptr_layout_mode_for_provider(
+        &self,
+        provider_ty: TyId<'db>,
+        space: AddressSpaceKind,
+    ) -> PtrLayoutMode {
+        if space == AddressSpaceKind::Storage && self.is_storage_map_entry_provider(provider_ty) {
+            PtrLayoutMode::StorageMapEntry
+        } else {
+            PtrLayoutMode::Word
+        }
     }
 
-    fn index_stride_words_for_space(
+    fn is_storage_map_entry_provider(&self, provider_ty: TyId<'db>) -> bool {
+        let db = self.module.db;
+        let Some(adt_def) = provider_ty.adt_def(db) else {
+            return false;
+        };
+        let scope = adt_def.scope(db);
+        let (provider_base, _) = provider_ty.decompose_ty_app(db);
+
+        [
+            "std::evm::storage_map::StoragePtr",
+            "std::evm::storage_map::StorageMutPtr",
+            "std::evm::StoragePtr",
+            "std::evm::StorageMutPtr",
+        ]
+        .into_iter()
+        .filter_map(|path| resolve_lib_type_path(db, scope, path))
+        .any(|entry_ptr| {
+            let (entry_base, _) = entry_ptr.decompose_ty_app(db);
+            provider_base == entry_base
+        })
+    }
+
+    fn uses_storage_layout(layout: PtrLayoutMode) -> bool {
+        layout == PtrLayoutMode::StorageMapEntry
+    }
+
+    fn index_stride_words_for_layout(
         &self,
         class: &RuntimeClass<'db>,
-        space: AddressSpaceKind,
+        layout: PtrLayoutMode,
     ) -> Option<u64> {
-        if Self::uses_storage_layout(space) {
+        if Self::uses_storage_layout(layout) {
             class.storage_index_stride_words(self.module.db)
         } else {
             class.index_stride_words(self.module.db)
         }
     }
 
-    fn span_words_for_space(&self, class: &RuntimeClass<'db>, space: AddressSpaceKind) -> u64 {
-        if Self::uses_storage_layout(space) {
+    fn span_words_for_layout(&self, class: &RuntimeClass<'db>, layout: PtrLayoutMode) -> u64 {
+        if Self::uses_storage_layout(layout) {
             class.storage_span_words(self.module.db)
         } else {
             class.span_words(self.module.db)
@@ -2541,11 +2585,12 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         &mut self,
         addr: ValueId,
         space: AddressSpaceKind,
+        layout: PtrLayoutMode,
         base_class: &RuntimeClass<'db>,
         field: FieldIndex,
         class: RuntimeClass<'db>,
     ) -> Result<PlaceTerminal<'db>, LowerError> {
-        if Self::uses_storage_layout(space) {
+        if Self::uses_storage_layout(layout) {
             let placement = base_class
                 .storage_field_placement(self.module.db, field)
                 .ok_or_else(|| {
@@ -2568,7 +2613,12 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     },
                 });
             }
-            return Ok(PlaceTerminal::Ptr { addr, space, class });
+            return Ok(PlaceTerminal::Ptr {
+                addr,
+                space,
+                layout,
+                class,
+            });
         }
 
         let offset = base_class
@@ -2579,6 +2629,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         Ok(PlaceTerminal::Ptr {
             addr: self.offset_address(addr, offset, space)?,
             space,
+            layout,
             class,
         })
     }
@@ -2587,11 +2638,12 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         &mut self,
         addr: ValueId,
         space: AddressSpaceKind,
+        layout: PtrLayoutMode,
         data: &mir::StructLayout<'db>,
         idx: usize,
         field: &RuntimeClass<'db>,
     ) -> Result<(ValueId, Option<PackedLane>), LowerError> {
-        if Self::uses_storage_layout(space) {
+        if Self::uses_storage_layout(layout) {
             let placement = data
                 .storage_field_placement(self.module.db, idx)
                 .ok_or_else(|| {
@@ -2625,11 +2677,12 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         &mut self,
         addr: ValueId,
         space: AddressSpaceKind,
+        layout: PtrLayoutMode,
         data: &mir::StructLayout<'db>,
         idx: usize,
         field: &RuntimeClass<'db>,
     ) -> Result<CopySource<'db>, LowerError> {
-        let (addr, lane) = self.ptr_struct_field(addr, space, data, idx, field)?;
+        let (addr, lane) = self.ptr_struct_field(addr, space, layout, data, idx, field)?;
         Ok(match lane {
             Some(lane) => CopySource::PackedPtr {
                 addr,
@@ -2640,6 +2693,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             None => CopySource::Ptr {
                 addr,
                 space,
+                layout,
                 class: field.clone(),
             },
         })
@@ -2749,7 +2803,12 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 ConstLoad::new(self.module.inst_set(), *value),
                 self.module.ty_for_class(class)?,
             )),
-            PlaceTerminal::Ptr { addr, space, .. } => self.load_from_ptr(*addr, *space, class),
+            PlaceTerminal::Ptr {
+                addr,
+                space,
+                layout,
+                ..
+            } => self.load_from_ptr(*addr, *space, *layout, class),
             PlaceTerminal::PackedPtr {
                 addr, space, lane, ..
             } => {
@@ -2778,6 +2837,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     SlotRoot::Ptr(ptr, _) => PlaceTerminal::Ptr {
                         addr: *ptr,
                         space: AddressSpaceKind::Memory,
+                        layout: PtrLayoutMode::Word,
                         class,
                     },
                     SlotRoot::Object(value, _) => PlaceTerminal::Object {
@@ -2805,6 +2865,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             ResolvedPlaceRootKind::Ptr { addr, space, class } => PlaceTerminal::Ptr {
                 addr: self.local_value(addr)?,
                 space,
+                layout: PtrLayoutMode::Word,
                 class,
             },
         };
@@ -2898,20 +2959,29 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     PlaceTerminal::Ptr {
                         addr,
                         space,
+                        layout,
                         class: base_class,
                     },
                     ResolvedPlaceElem::Field { field, class },
-                ) => self.ptr_field_terminal(addr, space, &base_class, *field, class.clone())?,
+                ) => self.ptr_field_terminal(
+                    addr,
+                    space,
+                    layout,
+                    &base_class,
+                    *field,
+                    class.clone(),
+                )?,
                 (
                     PlaceTerminal::Ptr {
                         addr,
                         space,
+                        layout,
                         class: base_class,
                     },
                     ResolvedPlaceElem::Index { index, class },
                 ) => {
                     let span = self
-                        .index_stride_words_for_space(&base_class, space)
+                        .index_stride_words_for_layout(&base_class, layout)
                         .ok_or_else(|| {
                             LowerError::Internal("index projection on non-array class".to_string())
                         })?;
@@ -2932,11 +3002,17 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                             Type::I256,
                         ),
                         space,
+                        layout,
                         class: class.clone(),
                     }
                 }
                 (
-                    PlaceTerminal::Ptr { addr, space, .. },
+                    PlaceTerminal::Ptr {
+                        addr,
+                        space,
+                        layout,
+                        ..
+                    },
                     ResolvedPlaceElem::VariantField {
                         variant,
                         field,
@@ -2953,6 +3029,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                         space,
                     )?,
                     space,
+                    layout,
                     class: class.clone(),
                 },
                 (terminal, ResolvedPlaceElem::Deref { carrier_class, .. }) => {
@@ -3015,7 +3092,12 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 ConstLoad::new(self.module.inst_set(), value),
                 self.module.ty_for_class(&class)?,
             ),
-            PlaceTerminal::Ptr { addr, space, class } => self.load_from_ptr(addr, space, &class)?,
+            PlaceTerminal::Ptr {
+                addr,
+                space,
+                layout,
+                class,
+            } => self.load_from_ptr(addr, space, layout, &class)?,
             PlaceTerminal::PackedPtr {
                 addr,
                 space,
@@ -3101,6 +3183,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             RuntimeClass::RawAddr { space, .. } => CopySource::Ptr {
                 addr: value,
                 space,
+                layout: PtrLayoutMode::Word,
                 class,
             },
             _ => CopySource::Value { value, class },
@@ -3111,7 +3194,17 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         match terminal {
             PlaceTerminal::Object { value, class } => CopySource::Object { value, class },
             PlaceTerminal::Const { value, class } => CopySource::Const { value, class },
-            PlaceTerminal::Ptr { addr, space, class } => CopySource::Ptr { addr, space, class },
+            PlaceTerminal::Ptr {
+                addr,
+                space,
+                layout,
+                class,
+            } => CopySource::Ptr {
+                addr,
+                space,
+                layout,
+                class,
+            },
             PlaceTerminal::PackedPtr {
                 addr,
                 space,
@@ -3206,6 +3299,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             CopySource::Ptr {
                 addr,
                 space,
+                layout,
                 class: source_class,
             } => {
                 if matches!(source_class, RuntimeClass::AggregateValue { .. }) {
@@ -3213,7 +3307,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                         "leaf ptr copy source must not stay aggregate-valued: source={source_class:?} target={class:?}",
                     )));
                 }
-                self.load_from_ptr(*addr, *space, class)?
+                self.load_from_ptr(*addr, *space, *layout, class)?
             }
             CopySource::PackedPtr {
                 addr,
@@ -3287,9 +3381,14 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                             ),
                             class: field.clone(),
                         },
-                        CopySource::Ptr { addr, space, .. } => {
-                            self.copy_source_for_ptr_struct_field(*addr, *space, &data, idx, field)?
-                        }
+                        CopySource::Ptr {
+                            addr,
+                            space,
+                            layout,
+                            ..
+                        } => self.copy_source_for_ptr_struct_field(
+                            *addr, *space, *layout, &data, idx, field,
+                        )?,
                         CopySource::PackedPtr { .. } => {
                             return Err(LowerError::Internal(
                                 "packed ptr source cannot carry an aggregate struct".to_string(),
@@ -3326,13 +3425,19 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                             ),
                             class: data.elem.clone(),
                         },
-                        CopySource::Ptr { addr, space, .. } => CopySource::Ptr {
+                        CopySource::Ptr {
+                            addr,
+                            space,
+                            layout,
+                            ..
+                        } => CopySource::Ptr {
                             addr: self.offset_address(
                                 *addr,
-                                idx as u64 * self.span_words_for_space(&data.elem, *space),
+                                idx as u64 * self.span_words_for_layout(&data.elem, *layout),
                                 *space,
                             )?,
                             space: *space,
+                            layout: *layout,
                             class: data.elem.clone(),
                         },
                         CopySource::PackedPtr { .. } => {
@@ -3385,8 +3490,13 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 ),
                 class,
             },
-            CopySource::Ptr { addr, space, class } => CopySource::Value {
-                value: self.load_aggregate_from_ptr(addr, space, src_layout)?,
+            CopySource::Ptr {
+                addr,
+                space,
+                layout,
+                class,
+            } => CopySource::Value {
+                value: self.load_aggregate_from_ptr(addr, space, layout, src_layout)?,
                 class,
             },
             CopySource::PackedPtr { .. } => {
@@ -3643,7 +3753,9 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             return Ok(Lowered::Terminated);
         };
         match terminal {
-            PlaceTerminal::Ptr { addr, space, class } => {
+            PlaceTerminal::Ptr {
+                addr, space, class, ..
+            } => {
                 self.store_to_ptr(addr, space, &class, src)?;
                 Ok(Lowered::Value(()))
             }
@@ -3704,8 +3816,13 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             PlaceTerminal::Const { .. } => Err(LowerError::Unsupported(
                 "cannot copy into const-backed places".to_string(),
             )),
-            PlaceTerminal::Ptr { addr, space, .. } => {
-                self.copy_to_ptr(addr, space, &dst_class, src_value)?;
+            PlaceTerminal::Ptr {
+                addr,
+                space,
+                layout,
+                ..
+            } => {
+                self.copy_to_ptr(addr, space, layout, &dst_class, src_value)?;
                 Ok(Lowered::Value(()))
             }
             PlaceTerminal::PackedPtr {
@@ -3726,6 +3843,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         &mut self,
         addr: ValueId,
         space: AddressSpaceKind,
+        layout_mode: PtrLayoutMode,
         class: &RuntimeClass<'db>,
         src: ValueId,
     ) -> Result<(), LowerError> {
@@ -3746,7 +3864,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                             )));
                         }
                         let (field_addr, lane) =
-                            self.ptr_struct_field(addr, space, &data, idx, field)?;
+                            self.ptr_struct_field(addr, space, layout_mode, &data, idx, field)?;
                         if let Some(lane) = lane {
                             let RuntimeClass::Scalar(scalar) = field else {
                                 return Err(LowerError::Internal(
@@ -3756,7 +3874,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                             };
                             self.store_packed_lane(field_addr, space, scalar, lane, field_value)?;
                         } else {
-                            self.copy_to_ptr(field_addr, space, field, field_value)?;
+                            self.copy_to_ptr(field_addr, space, layout_mode, field, field_value)?;
                         }
                     }
                     Ok(())
@@ -3775,14 +3893,16 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                         }
                         let elem_addr = self.offset_address(
                             addr,
-                            idx as u64 * self.span_words_for_space(&data.elem, space),
+                            idx as u64 * self.span_words_for_layout(&data.elem, layout_mode),
                             space,
                         )?;
-                        self.copy_to_ptr(elem_addr, space, &data.elem, field_value)?;
+                        self.copy_to_ptr(elem_addr, space, layout_mode, &data.elem, field_value)?;
                     }
                     Ok(())
                 }
-                Layout::Enum(data) => self.copy_enum_to_ptr(addr, space, *layout, &data, src),
+                Layout::Enum(data) => {
+                    self.copy_enum_to_ptr(addr, space, layout_mode, *layout, &data, src)
+                }
             },
         }
     }
@@ -3791,6 +3911,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         &mut self,
         addr: ValueId,
         space: AddressSpaceKind,
+        layout_mode: PtrLayoutMode,
         layout: LayoutId<'db>,
         data: &mir::runtime::EnumLayout<'db>,
         src: ValueId,
@@ -3852,7 +3973,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                         })?,
                     space,
                 )?;
-                self.copy_to_ptr(field_addr, space, field, field_value)?;
+                self.copy_to_ptr(field_addr, space, layout_mode, field, field_value)?;
             }
             self.fb
                 .insert_inst_no_result(Jump::new(self.module.inst_set(), done));
@@ -3870,6 +3991,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         &mut self,
         addr: ValueId,
         space: AddressSpaceKind,
+        layout_mode: PtrLayoutMode,
         class: &RuntimeClass<'db>,
     ) -> Result<ValueId, LowerError> {
         match class {
@@ -3894,7 +4016,9 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 AddressSpaceKind::Storage
                 | AddressSpaceKind::Transient
                 | AddressSpaceKind::Calldata
-                | AddressSpaceKind::Code => self.load_aggregate_from_ptr(addr, space, *layout),
+                | AddressSpaceKind::Code => {
+                    self.load_aggregate_from_ptr(addr, space, layout_mode, *layout)
+                }
             },
             RuntimeClass::Ref { .. } => Err(LowerError::Unsupported(
                 "loading handle values from raw-address places is not supported".to_string(),
@@ -3906,6 +4030,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         &mut self,
         addr: ValueId,
         space: AddressSpaceKind,
+        layout_mode: PtrLayoutMode,
         layout: LayoutId<'db>,
     ) -> Result<ValueId, LowerError> {
         match layout.data(self.module.db) {
@@ -3914,7 +4039,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let mut value = self.fb.make_undef_value(ty);
                 for (idx, field) in data.fields.iter().enumerate() {
                     let (field_addr, lane) =
-                        self.ptr_struct_field(addr, space, &data, idx, field)?;
+                        self.ptr_struct_field(addr, space, layout_mode, &data, idx, field)?;
                     let field_value = if let Some(lane) = lane {
                         let RuntimeClass::Scalar(scalar) = field else {
                             return Err(LowerError::Internal(
@@ -3923,7 +4048,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                         };
                         self.load_packed_lane(field_addr, space, scalar, lane)?
                     } else {
-                        self.load_from_ptr(field_addr, space, field)?
+                        self.load_from_ptr(field_addr, space, layout_mode, field)?
                     };
                     let expected_ty = self.module.ty_for_class(field)?;
                     let actual_ty = self.fb.type_of(field_value);
@@ -3951,10 +4076,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 for idx in 0..data.len as usize {
                     let elem_addr = self.offset_address(
                         addr,
-                        idx as u64 * self.span_words_for_space(&data.elem, space),
+                        idx as u64 * self.span_words_for_layout(&data.elem, layout_mode),
                         space,
                     )?;
-                    let elem = self.load_from_ptr(elem_addr, space, &data.elem)?;
+                    let elem = self.load_from_ptr(elem_addr, space, layout_mode, &data.elem)?;
                     let expected_ty = self.module.ty_for_class(&data.elem)?;
                     let actual_ty = self.fb.type_of(elem);
                     if actual_ty != expected_ty {
@@ -3976,7 +4101,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 }
                 Ok(value)
             }
-            Layout::Enum(data) => self.load_enum_from_ptr(addr, space, layout, &data),
+            Layout::Enum(data) => self.load_enum_from_ptr(addr, space, layout_mode, layout, &data),
         }
     }
 
@@ -3984,6 +4109,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         &mut self,
         addr: ValueId,
         space: AddressSpaceKind,
+        layout_mode: PtrLayoutMode,
         layout: LayoutId<'db>,
         data: &mir::runtime::EnumLayout<'db>,
     ) -> Result<ValueId, LowerError> {
@@ -4029,7 +4155,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                             })?,
                         space,
                     )?;
-                    self.load_from_ptr(field_addr, space, field)
+                    self.load_from_ptr(field_addr, space, layout_mode, field)
                 })
                 .collect::<Result<SmallVec<[ValueId; 2]>, _>>()?;
             self.fb.insert_inst_no_result(EnumWriteVariant::new(
