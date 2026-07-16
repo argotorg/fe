@@ -71,13 +71,8 @@ enum RuntimeTypeShape<'db> {
 }
 
 impl<'db> RuntimeTypeModel<'db> {
-    fn new(
-        db: &'db dyn MirDb,
-        ty: TyId<'db>,
-        scope: Option<ScopeId<'db>>,
-        assumptions: PredicateListId<'db>,
-    ) -> Self {
-        let repr_ty = runtime_repr_ty_in_env(db, RuntimeTypeEnv::new(scope, assumptions), ty);
+    fn new(db: &'db dyn MirDb, ty: TyId<'db>, env: RuntimeTypeEnv<'db>) -> Self {
+        let repr_ty = runtime_repr_ty_in_env(db, env, ty);
         let shape = if let Some((kind, inner)) = repr_ty.as_borrow(db) {
             RuntimeTypeShape::Borrow { kind, inner }
         } else if let Some((_, inner)) = repr_ty.as_capability(db) {
@@ -100,44 +95,35 @@ impl<'db> RuntimeTypeModel<'db> {
         &self,
         db: &'db dyn MirDb,
         default_space: AddressSpaceKind,
-        scope: Option<ScopeId<'db>>,
-        assumptions: PredicateListId<'db>,
+        env: RuntimeTypeEnv<'db>,
     ) -> Option<RuntimeClass<'db>> {
         match &self.shape {
             RuntimeTypeShape::Borrow { inner, .. } => {
-                if runtime_zero_sized_ty(db, *inner, scope, assumptions) {
+                if runtime_zero_sized_ty(db, *inner, env.scope, env.assumptions) {
                     Some(provider_class_for_target_in_env(
                         db,
-                        RuntimeTypeEnv::new(scope, assumptions),
+                        env,
                         Some(*inner),
                         default_space,
                     ))
                 } else {
-                    Some(object_ref_class_for_target_in_env(
-                        db,
-                        RuntimeTypeEnv::new(scope, assumptions),
-                        *inner,
-                    ))
+                    Some(object_ref_class_for_target_in_env(db, env, *inner))
                 }
             }
             RuntimeTypeShape::Capability { inner } => Some(provider_class_for_target_in_env(
                 db,
-                RuntimeTypeEnv::new(scope, assumptions),
+                env,
                 Some(*inner),
                 default_space,
             )),
             RuntimeTypeShape::Scalar(scalar) => {
-                (!runtime_zero_sized_ty(db, self.repr_ty, scope, assumptions))
+                (!runtime_zero_sized_ty(db, self.repr_ty, env.scope, env.assumptions))
                     .then(|| RuntimeClass::Scalar(scalar.clone()))
             }
             RuntimeTypeShape::Aggregate => {
-                (!runtime_zero_sized_ty(db, self.repr_ty, scope, assumptions)).then(|| {
+                (!runtime_zero_sized_ty(db, self.repr_ty, env.scope, env.assumptions)).then(|| {
                     RuntimeClass::AggregateValue {
-                        layout: layout_for_ty_in_env(
-                            db,
-                            RuntimeTypeEnv::new(scope, assumptions),
-                            self.repr_ty,
-                        ),
+                        layout: layout_for_ty_in_env(db, env, self.repr_ty),
                     }
                 })
             }
@@ -145,38 +131,19 @@ impl<'db> RuntimeTypeModel<'db> {
         }
     }
 
-    fn stored_class(
-        &self,
-        db: &'db dyn MirDb,
-        scope: Option<ScopeId<'db>>,
-        assumptions: PredicateListId<'db>,
-    ) -> RuntimeClass<'db> {
+    fn stored_class(&self, db: &'db dyn MirDb, env: RuntimeTypeEnv<'db>) -> RuntimeClass<'db> {
         match &self.shape {
             RuntimeTypeShape::Borrow { inner, .. } | RuntimeTypeShape::Capability { inner } => {
-                provider_class_for_target_in_env(
-                    db,
-                    RuntimeTypeEnv::new(scope, assumptions),
-                    Some(*inner),
-                    AddressSpaceKind::Memory,
-                )
+                provider_class_for_target_in_env(db, env, Some(*inner), AddressSpaceKind::Memory)
             }
             RuntimeTypeShape::Scalar(scalar) => RuntimeClass::Scalar(scalar.clone()),
             RuntimeTypeShape::Aggregate | RuntimeTypeShape::Other => RuntimeClass::AggregateValue {
-                layout: layout_for_ty_in_env(
-                    db,
-                    RuntimeTypeEnv::new(scope, assumptions),
-                    self.repr_ty,
-                ),
+                layout: layout_for_ty_in_env(db, env, self.repr_ty),
             },
         }
     }
 
-    fn transport_sensitive_aggregate(
-        &self,
-        db: &'db dyn MirDb,
-        scope: Option<ScopeId<'db>>,
-        assumptions: PredicateListId<'db>,
-    ) -> bool {
+    fn transport_sensitive_aggregate(&self, db: &'db dyn MirDb, env: RuntimeTypeEnv<'db>) -> bool {
         match &self.shape {
             RuntimeTypeShape::Borrow { .. } => true,
             RuntimeTypeShape::Capability { .. } | RuntimeTypeShape::Scalar(_) => false,
@@ -184,12 +151,12 @@ impl<'db> RuntimeTypeModel<'db> {
                 if self.repr_ty.is_array(db) {
                     let (_, args) = self.repr_ty.decompose_ty_app(db);
                     return args.first().copied().is_some_and(|elem| {
-                        runtime_transport_sensitive_aggregate(db, elem, scope, assumptions)
+                        runtime_transport_sensitive_aggregate(db, elem, env.scope, env.assumptions)
                     });
                 }
                 if self.repr_ty.is_tuple(db) || self.repr_ty.is_struct(db) {
                     return self.repr_ty.field_types(db).into_iter().any(|field| {
-                        runtime_transport_sensitive_aggregate(db, field, scope, assumptions)
+                        runtime_transport_sensitive_aggregate(db, field, env.scope, env.assumptions)
                     });
                 }
                 if let Some(enum_) = self.repr_ty.as_enum(db) {
@@ -206,8 +173,8 @@ impl<'db> RuntimeTypeModel<'db> {
                                     adt.fields(db)[variant_idx]
                                         .ty(db, field_idx)
                                         .instantiate(db, args),
-                                    scope,
-                                    assumptions,
+                                    env.scope,
+                                    env.assumptions,
                                 )
                             })
                         });
@@ -546,8 +513,7 @@ fn runtime_top_level_class<'db>(
     runtime_type_model(db, ty, scope, assumptions).top_level_class(
         db,
         default_space,
-        scope,
-        assumptions,
+        RuntimeTypeEnv::new(scope, assumptions),
     )
 }
 
@@ -558,7 +524,7 @@ fn runtime_type_model<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> RuntimeTypeModel<'db> {
-    RuntimeTypeModel::new(db, ty, scope, assumptions)
+    RuntimeTypeModel::new(db, ty, RuntimeTypeEnv::new(scope, assumptions))
 }
 
 #[salsa::tracked]
@@ -568,7 +534,8 @@ fn runtime_stored_class<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> RuntimeClass<'db> {
-    runtime_type_model(db, ty, scope, assumptions).stored_class(db, scope, assumptions)
+    runtime_type_model(db, ty, scope, assumptions)
+        .stored_class(db, RuntimeTypeEnv::new(scope, assumptions))
 }
 
 #[salsa::tracked]
@@ -608,11 +575,8 @@ pub(super) fn runtime_transport_sensitive_aggregate<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> bool {
-    runtime_type_model(db, ty, scope, assumptions).transport_sensitive_aggregate(
-        db,
-        scope,
-        assumptions,
-    )
+    runtime_type_model(db, ty, scope, assumptions)
+        .transport_sensitive_aggregate(db, RuntimeTypeEnv::new(scope, assumptions))
 }
 
 fn runtime_zero_sized_ty_cycle_initial<'db>(
