@@ -1,11 +1,11 @@
 use crate::analysis::{
     HirAnalysisDb,
     diagnostics::DiagnosticVoucher,
-    ty::{adt_def::AdtRef, ty_lower::lower_hir_ty},
+    ty::{abi_ty::is_dynamic_event_ty, adt_def::AdtRef, ty_lower::lower_hir_ty},
 };
 use crate::{
     AbiFieldContext, AbiFieldDiagnostic, AttrMisuseError, ErrorDiagnostic, EventError,
-    FieldModifierError, MsgDiagnostic, ParserError,
+    EventErrorKind, FieldModifierError, MsgDiagnostic, ParserError,
     hir_def::{ModuleTree, TopLevelMod},
     lower::{parse_file_impl, scope_graph_impl, top_mod_ast},
     semantic::constraints_for,
@@ -127,8 +127,88 @@ impl ModuleAnalysisPass for EventLowerPass {
             semantic_tuple_field_type_errors(db, top_mod, AbiFieldContext::Event)
                 .map(|d| Box::new(d) as _),
         );
+        diags.extend(semantic_indexed_dynamic_field_errors(db, top_mod).map(|d| Box::new(d) as _));
         diags
     }
+}
+
+fn semantic_indexed_dynamic_field_errors<'db>(
+    db: &'db dyn HirAnalysisDb,
+    top_mod: TopLevelMod<'db>,
+) -> impl Iterator<Item = EventError> {
+    let mut diags = Vec::new();
+    let mut seen_structs = Vec::new();
+
+    for &impl_trait in top_mod.all_impl_traits(db) {
+        let HirOrigin::Desugared(DesugaredOrigin::Event(event_origin)) = impl_trait.origin(db)
+        else {
+            continue;
+        };
+        let Some(self_ty) = impl_trait.type_ref(db).to_opt() else {
+            continue;
+        };
+        let self_ty = lower_hir_ty(
+            db,
+            self_ty,
+            impl_trait.scope(),
+            constraints_for(db, impl_trait.into()),
+        );
+        let Some(AdtRef::Struct(event_struct)) = self_ty.adt_ref(db) else {
+            continue;
+        };
+        if seen_structs.contains(&event_struct) {
+            continue;
+        }
+        seen_structs.push(event_struct);
+
+        let root = top_mod_ast(db, top_mod).syntax().clone();
+        let ast_struct = event_origin
+            .event_struct
+            .syntax_node_ptr()
+            .try_to_node(&root)
+            .and_then(ast::Struct::cast);
+        let assumptions = constraints_for(db, event_struct.into());
+
+        for (field_idx, field) in event_struct.hir_fields(db).data(db).iter().enumerate() {
+            if !field.is_event_indexed {
+                continue;
+            }
+            let Some(field_ty) = field.type_ref().to_opt() else {
+                continue;
+            };
+            let resolved_ty = lower_hir_ty(db, field_ty, event_struct.scope(), assumptions);
+            if !is_dynamic_event_ty(db, resolved_ty) {
+                continue;
+            }
+
+            let ast_field = ast_struct
+                .as_ref()
+                .and_then(|ast_struct| ast_struct.fields())
+                .and_then(|fields| fields.into_iter().nth(field_idx));
+            let primary_range = ast_field.as_ref().map_or_else(
+                || parser::TextRange::empty(0.into()),
+                |field| {
+                    field
+                        .ty()
+                        .map_or(field.syntax().text_range(), |ty| ty.syntax().text_range())
+                },
+            );
+            diags.push(EventError {
+                kind: EventErrorKind::IndexedDynamicField {
+                    ty: resolved_ty.pretty_print(db).to_string(),
+                },
+                file: top_mod.file(db),
+                primary_range,
+                struct_name: event_struct
+                    .name(db)
+                    .to_opt()
+                    .map(|name| name.data(db).to_string()),
+                field_name: field.name.to_opt().map(|name| name.data(db).to_string()),
+            });
+        }
+    }
+
+    diags.into_iter()
 }
 
 // Syntactic non-path field types are rejected during event/error lowering so we

@@ -6,27 +6,14 @@ input_file: fixtures/ty_check/event_unsupported_field_type.fe
 error[6-0003]: trait bound is not satisfied
     ┌─ event_unsupported_field_type.fe:3:1
     │
-  3 │ ╭ #[event]
-  4 │ │ struct Bad {
-  5 │ │     value: StorageMap<Address, u256, 0>,
-  6 │ │ }
-    │ ╰─^ `StorageMap<Address, u256, 0>` doesn't implement `Encode<Sol>`
+  3 │ ╭ ╭ #[event]
+  4 │ │ │ struct Bad {
+  5 │ │ │     value: StorageMap<Address, u256, 0>,
+  6 │ │ │ }
+    │ ╰─│─^ `(StorageMap<Address, u256, 0>)` doesn't implement `EventAbiEncode<Sol>`
+    │   ╰─' trait bound `StorageMap<Address, u256, 0>: AbiSize` is not satisfied
     │
-    ┌─ src/evm/effects.fe:431:14
+    ┌─ src/evm/effects.fe:438:14
     │
-431 │     where T: Encode<Sol> + AbiSize
-    │              ----------- required by this bound on `encode_abi_payload`
-
-error[6-0003]: trait bound is not satisfied
-    ┌─ event_unsupported_field_type.fe:3:1
-    │
-  3 │ ╭ #[event]
-  4 │ │ struct Bad {
-  5 │ │     value: StorageMap<Address, u256, 0>,
-  6 │ │ }
-    │ ╰─^ `StorageMap<Address, u256, 0>` doesn't implement `AbiSize`
-    │
-    ┌─ src/evm/effects.fe:431:28
-    │
-431 │     where T: Encode<Sol> + AbiSize
-    │                            ------- required by this bound on `encode_abi_payload`
+438 │     where T: EventAbiEncode<Sol>
+    │              ------------------- required by this bound on `encode_event_payload`

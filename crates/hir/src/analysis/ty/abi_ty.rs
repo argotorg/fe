@@ -338,6 +338,14 @@ fn is_core_dyn_string_ty(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> bool {
     is_core_adt_named(db, ty, "DynString")
 }
 
+pub(crate) fn is_dynamic_event_ty(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> bool {
+    let ty = ty.as_capability(db).map(|(_, inner)| inner).unwrap_or(ty);
+    ty.is_string(db)
+        || ["Bytes", "DynString", "DynArray"]
+            .into_iter()
+            .any(|name| is_core_adt_named(db, ty, name))
+}
+
 /// Recognise `std::abi::sol` SolCompat wrapper types like `Uint160` / `Int24`
 /// and return their Solidity ABI type string (e.g. `"uint160"`, `"int24"`).
 fn std_sol_compat_abi_type(

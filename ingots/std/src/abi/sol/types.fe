@@ -9,6 +9,7 @@ use core::abi::{
     Bytes,
     Decode,
     DynString,
+    DynArray,
     Encode,
     EventAbiEncode,
 }
@@ -32,6 +33,48 @@ use ingot::evm::ops::revert
 pub trait SolCompat {
     type S: AsBytes
     const SOL_TYPE: Self::S
+}
+
+const fn decimal_digits(value: usize) -> usize {
+    let mut remaining = value
+    let mut digits: usize = 1
+    while remaining >= 10 {
+        remaining /= 10
+        digits += 1
+    }
+    digits
+}
+
+struct SolArraySuffix<const LEN: usize> {}
+
+impl<const LEN: usize> AsBytes for SolArraySuffix<LEN> {
+    const N: usize = decimal_digits(value: LEN) + 2
+
+    const fn as_bytes(self) -> [u8; Self::N] {
+        let mut out: [u8; Self::N] = [0; Self::N]
+        out[0] = 91
+        out[Self::N - 1] = 93
+
+        let mut value = LEN
+        let mut pos = Self::N - 2
+        while value >= 10 {
+            out[pos] = (48 + value % 10).downcast_unchecked()
+            value /= 10
+            pos -= 1
+        }
+        out[pos] = (48 + value).downcast_unchecked()
+        out
+    }
+}
+
+impl<T, const LEN: usize> SolCompat for [T; LEN] where T: SolCompat {
+    type S = (T::S, SolArraySuffix<LEN>)
+    const SOL_TYPE: Self::S = (T::SOL_TYPE, SolArraySuffix<LEN> {})
+}
+
+impl<T> SolCompat for DynArray<T> where T: SolCompat {
+    type S = (T::S, String<2>)
+    const SOL_TYPE: Self::S = (T::SOL_TYPE, "[]")
 }
 
 // Primitive unsigned integer implementations

@@ -1,0 +1,24 @@
+use std::abi::DynString
+use std::evm::{Log, RawMem, mem}
+
+#[event]
+struct StringEvent {
+    value: DynString,
+}
+
+#[test]
+fn test_dyn_string_event() uses (log: mut Log, raw: mut RawMem) {
+    assert!(
+        StringEvent::TOPIC0
+            == 0x617cf8a4400dd7963ed519ebe655a16e8da1282bb8fea36a21f634af912f54ab,
+    )
+    let ptr = mem::alloc(64)
+    raw.mstore(addr: ptr, value: 1)
+    raw.mstore(
+        addr: ptr + 32,
+        value: 0x6100000000000000000000000000000000000000000000000000000000000000,
+    )
+    log.emit(StringEvent {
+        value: DynString { data: ptr, len: 1, size: 64 },
+    })
+}

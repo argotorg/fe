@@ -7,15 +7,15 @@ use hir::analysis::{
         LayoutEvidenceBody, LayoutEvidenceComponentValue, LayoutEvidenceConstBinding,
         LayoutEvidenceConstant, LayoutEvidenceExpr, LayoutEvidenceIndex, LayoutEvidenceOperand,
         SBlockId, SConst, SLocalId, SStmtId, SemConstId, SemConstScalar, SemConstValue,
-        SemanticCalleeRef, SemanticCodeRegionRef, SemanticCodeRegionTarget, SemanticInstance,
-        SemanticInstanceKey, SemanticLocalKind, VariantIndex,
+        SemanticCalleeRef, SemanticCodeRegionRef, SemanticCodeRegionTarget, SemanticConstRef,
+        SemanticInstance, SemanticInstanceKey, SemanticLocalKind, VariantIndex,
         borrowck::{
             NBorrowRoot, NEffectArg, NExpr, NLocalOrigin, NOperand, NSPlace, NSPlaceRoot, NSStmt,
             NSStmtKind, NSTerminator, NSTerminatorKind, NormalizedSemanticBody,
             normalize_semantic_body,
         },
-        get_or_build_semantic_instance, layout_evidence_body, reify_runtime_const_for_ty,
-        sem_const_ty, verify_layout_evidence_runtime_compatibility,
+        eval_const_ref, get_or_build_semantic_instance, layout_evidence_body,
+        reify_runtime_const_for_ty, sem_const_ty, verify_layout_evidence_runtime_compatibility,
     },
     ty::{
         CallableLayoutParamPort,
@@ -35,8 +35,8 @@ use hir::analysis::{
     },
 };
 use hir::hir_def::{
-    ArithBinOp, BinOp, CompBinOp, EnumVariant, Func, IdentId, UnOp, attr::ArithmeticMode,
-    scope_graph::ScopeId,
+    ArithBinOp, BinOp, CompBinOp, EnumVariant, Expr, Func, IdentId, Partial, UnOp,
+    attr::ArithmeticMode, scope_graph::ScopeId,
 };
 use hir::projection::{IndexSource, Projection};
 use hir::semantic::ProviderBinding;
@@ -156,6 +156,28 @@ fn check_runtime_body_supported<'db>(
     for block in &body.blocks {
         for stmt in &block.stmts {
             if let NSStmtKind::Assign {
+                dst,
+                expr: NExpr::Const(SConst::Ref(cref)),
+            } = &stmt.kind
+            {
+                let const_name = semantic_const_ref_name(db, key, *cref);
+                let value = eval_const_ref(db, *cref).map_err(|err| {
+                    LowerError::Unsupported(format!(
+                        "semantic constant `{const_name}` referenced from {:?} failed CTFE: {err:?}",
+                        cref.origin(db)
+                    ))
+                })?;
+                let expected_ty = body.locals[dst.index()].ty;
+                if reify_runtime_const_for_ty(db, body.owner, expected_ty, value).is_none() {
+                    return Err(LowerError::Unsupported(format!(
+                        "semantic constant `{const_name}` referenced from {:?} failed to reify as `{}` for runtime lowering",
+                        cref.origin(db),
+                        expected_ty.pretty_print(db)
+                    )));
+                }
+            }
+
+            if let NSStmtKind::Assign {
                 expr: NExpr::Call { callee, args, .. },
                 ..
             } = &stmt.kind
@@ -172,6 +194,28 @@ fn check_runtime_body_supported<'db>(
         }
     }
     Ok(())
+}
+
+fn semantic_const_ref_name<'db>(
+    db: &'db dyn MirDb,
+    caller: SemanticInstanceKey<'db>,
+    cref: SemanticConstRef<'db>,
+) -> String {
+    if let BodyOwner::Const(const_) = cref.instance(db).owner(db)
+        && let Some(name) = const_.name(db).to_opt()
+    {
+        return name.data(db).clone();
+    }
+
+    if let hir::analysis::semantic::SemOrigin::Expr(expr) = cref.origin(db)
+        && let Some(caller_body) = caller.owner(db).body(db)
+        && let Partial::Present(Expr::Path(Partial::Present(path))) = expr.data(db, caller_body)
+        && let Some(name) = path.ident(db).to_opt()
+    {
+        return name.data(db).clone();
+    }
+
+    "<associated const>".to_string()
 }
 
 fn panic_payload_ty<'db>(

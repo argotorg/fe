@@ -1,0 +1,119 @@
+use core::abi::{Abi, AbiEncoder, AbiSize, Encode, EventAbiEncode}
+use std::abi::{DynArray as Values, SolCompat}
+use std::evm::{Log, RawMem, encode_event_payload, mem}
+
+struct DynArray<T> { value: T }
+
+impl AbiSize for DynArray<u256> {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+
+impl<A: Abi> Encode<A> for DynArray<u256> {
+    const DIRECT_ENCODE: bool = true
+
+    fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
+        e.write_word(self.value)
+    }
+    fn encode_to_ptr(own self, _ ptr: u256) {
+        A::store_word(ptr: ptr, value: self.value)
+    }
+}
+
+impl<A: Abi> EventAbiEncode<A> for DynArray<u256> {
+    const DIRECT_EVENT_ENCODE: bool = true
+}
+
+impl SolCompat for DynArray<u256> {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint256"
+}
+
+#[event]
+struct AddLiquidity {
+    #[indexed]
+    provider: Address,
+    token_amounts: Values<u256>,
+    invariant: u256,
+}
+
+#[event]
+struct SingleDynamic { values: Values<u256> }
+
+#[event]
+struct FixedArrayElements { values: Values<[u256; 2]> }
+
+#[event]
+struct ShadowedDynArray { value: DynArray<u256> }
+
+msg M {
+    #[selector = sol("f()")]
+    F,
+    #[selector = sol("single()")]
+    Single,
+    #[selector = sol("fixed_array()")]
+    FixedArray,
+    #[selector = sol("shadowed()")]
+    Shadowed,
+}
+
+pub contract Probe uses (log: mut Log, raw: mut RawMem) {
+    recv M {
+        F uses (mut log, mut raw) {
+            let ptr = mem::alloc(64)
+            raw.mstore(addr: ptr, value: 1)
+            raw.mstore(addr: ptr + 32, value: 7)
+            log.emit(
+                AddLiquidity {
+                    provider: Address::zero(),
+                    token_amounts: Values { data: ptr, len: 1, size: 64 },
+                    invariant: 3,
+                },
+            )
+        }
+        Single uses (mut log, mut raw) {
+            let ptr = mem::alloc(64)
+            raw.mstore(addr: ptr, value: 1)
+            raw.mstore(addr: ptr + 32, value: 7)
+            log.emit(
+                SingleDynamic { values: Values { data: ptr, len: 1, size: 64 } },
+            )
+        }
+        FixedArray uses (mut log, mut raw) {
+            let ptr = mem::alloc(96)
+            raw.mstore(addr: ptr, value: 1)
+            raw.mstore(addr: ptr + 32, value: 7)
+            raw.mstore(addr: ptr + 64, value: 9)
+            log.emit(
+                FixedArrayElements { values: Values { data: ptr, len: 1, size: 96 } },
+            )
+        }
+        Shadowed uses (mut log) {
+            log.emit(ShadowedDynArray { value: DynArray { value: 11 } })
+        }
+    }
+}
+
+#[test]
+fn test_dyn_array_u256_event() uses (log: mut Log, raw: mut RawMem) {
+    assert!(
+        AddLiquidity::TOPIC0 == 0xdf21883620cd435343a655a765cce604ee5e962b399aed0ebbbd63a9c7e570c4,
+    )
+
+    let ptr = mem::alloc(64)
+    raw.mstore(addr: ptr, value: 1)
+    raw.mstore(addr: ptr + 32, value: 7)
+    let values = Values { data: ptr, len: 1, size: 64 }
+    let (data, len) = encode_event_payload((values, 3 as u256))
+
+    // Solidity: abi.encode(uint256[](7), uint256(3)).
+    assert!(len == 128)
+    assert!(raw.mload(data) == 64)
+    assert!(raw.mload(data + 32) == 3)
+    assert!(raw.mload(data + 64) == 1)
+    assert!(raw.mload(data + 96) == 7)
+
+    log.emit(
+        AddLiquidity { provider: Address::zero(), token_amounts: values, invariant: 3 },
+    )
+}
