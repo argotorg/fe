@@ -1,0 +1,21 @@
+use std::abi::DynArray
+use std::evm::{Log, RawMem, mem}
+
+#[event]
+struct AddressList {
+    values: DynArray<Address>,
+}
+
+#[test]
+fn test_dyn_array_address_event() uses (log: mut Log, raw: mut RawMem) {
+    assert!(
+        AddressList::TOPIC0
+            == 0x561020ffe511e96c2b2544836b77735d4b65afe2bcc8ab164cbec96d16fa392c,
+    )
+    let ptr = mem::alloc(64)
+    raw.mstore(addr: ptr, value: 1)
+    raw.mstore(addr: ptr + 32, value: 0x1234)
+    log.emit(AddressList {
+        values: DynArray { data: ptr, len: 1, size: 64 },
+    })
+}

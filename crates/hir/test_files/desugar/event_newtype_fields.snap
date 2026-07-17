@@ -15,7 +15,7 @@ struct Swap {
 }
 
 impl std::evm::Event for Swap {
-    const TOPIC0: u256 = core::keccak(("Swap", "(", Uint160::SOL_TYPE, ",", Int24::SOL_TYPE, ",", u256::SOL_TYPE, ")"))
+    const TOPIC0: u256 = core::keccak(((((((("Swap", "("), Uint160::SOL_TYPE), ","), Int24::SOL_TYPE), ","), u256::SOL_TYPE), ")"))
 
     #[inline(always)]
     fn emit<L: std::evm::Log>(own self, _ log: mut L) {

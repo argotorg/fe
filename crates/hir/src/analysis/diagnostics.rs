@@ -597,6 +597,15 @@ impl DiagnosticVoucher for crate::EventError {
                 format!("EVM supports at most 3 indexed fields (found {indexed_count})"),
                 vec!["remove `#[indexed]` from fields until there are at most 3".to_string()],
             ),
+            EventErrorKind::IndexedDynamicField { ty } => (
+                8,
+                "indexed dynamic event fields are not supported".to_string(),
+                format!("`{ty}` requires Solidity's special indexed-value hashing"),
+                vec![
+                    "remove `#[indexed]` from this field; dynamic event data is supported"
+                        .to_string(),
+                ],
+            ),
         };
 
         let error_code = GlobalErrorCode::new(DiagnosticPass::EventLower, code);
@@ -3046,6 +3055,23 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 span.resolve(db),
                 error_code,
             ),
+
+            Self::ConstEvaluationFailed {
+                primary,
+                const_name,
+                origin,
+                reason,
+            } => {
+                let message = format!("failed to evaluate constant `{const_name}`");
+                let label = format!("`{const_name}` from {origin} {reason}");
+                primary_diag(
+                    severity,
+                    &message,
+                    &label,
+                    primary.resolve(db),
+                    error_code,
+                )
+            }
 
             Self::StaticAssertFailed {
                 primary,

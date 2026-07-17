@@ -12,9 +12,9 @@ use super::{
 use crate::{
     hir_def::{
         AssocConstDef, AttrListId, Body, BodyKind, Expr, FieldDef, FieldDefListId, FieldIndex,
-        FuncModifiers, FuncParam, FuncParamMode, FuncParamName, GenericParamListId, IdentId,
-        IntegerId, LitKind, Partial, Pat, PathId, Stmt, Struct, TrackedItemVariant, TraitRefId,
-        TupleTypeId, TypeId, TypeKind, TypeMode, Visibility,
+        FuncModifiers, FuncParam, FuncParamMode, FuncParamName, GenericArg, GenericParamListId,
+        IdentId, IntegerId, LitKind, Partial, Pat, PathId, Stmt, Struct, TrackedItemVariant,
+        TraitRefId, TupleTypeId, TypeId, TypeKind, TypeMode, Visibility,
     },
     span::{EventDesugared, HirOrigin},
 };
@@ -35,6 +35,7 @@ pub struct EventError {
 pub enum EventErrorKind {
     GenericEventStruct,
     TooManyIndexedFields { indexed_count: usize },
+    IndexedDynamicField { ty: String },
 }
 
 pub(super) fn is_event_struct(ast: &ast::Struct) -> bool {
@@ -124,7 +125,7 @@ pub(super) fn lower_event_struct<'db>(
 
     let indexed_fields = parsed_fields.indexed_fields.clone();
     let data_fields = parsed_fields.data_fields.clone();
-    let ordered_field_type_paths = parsed_fields.ordered_field_type_paths.clone();
+    let ordered_field_types = parsed_fields.ordered_field_types.clone();
 
     let impl_trait_idx = builder.ctxt().next_impl_trait_idx();
     let trait_ref = Partial::Present(trait_ref);
@@ -136,7 +137,7 @@ pub(super) fn lower_event_struct<'db>(
                 builder.ctxt(),
                 event_desugared.clone(),
                 &struct_name_str,
-                &ordered_field_type_paths,
+                &ordered_field_types,
             );
             let impl_trait = builder.new_impl_trait(
                 id,
@@ -156,9 +157,8 @@ pub(super) fn lower_event_struct<'db>(
 
 struct ParsedEventFields<'db> {
     hir_fields: Vec<FieldDef<'db>>,
-    /// The path of each field's type, used to generate `FieldType::SOL_TYPE`
-    /// expressions in the TOPIC0 keccak tuple.
-    ordered_field_type_paths: Vec<PathId<'db>>,
+    /// Each field's source type, used to generate Solidity signature fragments.
+    ordered_field_types: Vec<TypeId<'db>>,
     /// Indexed fields with their TypeId (for topic encoding).
     indexed_fields: Vec<(IdentId<'db>, TypeId<'db>)>,
     data_fields: Vec<(IdentId<'db>, TypeId<'db>)>,
@@ -174,7 +174,7 @@ fn parse_event_fields<'db>(
     let file = ctxt.top_mod().file(db);
 
     let mut hir_fields = Vec::new();
-    let mut ordered_field_type_paths = Vec::new();
+    let mut ordered_field_types = Vec::new();
     let mut indexed_fields = Vec::new();
     let mut data_fields = Vec::new();
     let mut indexed_ranges = Vec::new();
@@ -185,7 +185,7 @@ fn parse_event_fields<'db>(
     let Some(fields) = ast.fields() else {
         return ParsedEventFields {
             hir_fields,
-            ordered_field_type_paths,
+            ordered_field_types,
             indexed_fields,
             data_fields,
             is_valid,
@@ -257,7 +257,30 @@ fn parse_event_fields<'db>(
             continue;
         };
 
-        ordered_field_type_paths.push(*path);
+        let path_name = path.ident(db).to_opt().map(|ident| ident.data(db));
+        if is_indexed
+            && path_name.is_some_and(|name| {
+                matches!(name.as_str(), "DynArray" | "Bytes" | "DynString" | "String")
+            })
+        {
+            EventError {
+                kind: EventErrorKind::IndexedDynamicField {
+                    ty: ty.pretty_print(db),
+                },
+                file,
+                primary_range: field
+                    .ty()
+                    .map(|ty| ty.syntax().text_range())
+                    .unwrap_or_else(|| field.syntax().text_range()),
+                struct_name: struct_name.map(str::to_string),
+                field_name: name_tok.map(|name| name.text().to_string()),
+            }
+            .accumulate(db);
+            is_valid = false;
+            continue;
+        }
+
+        ordered_field_types.push(ty);
 
         if is_indexed {
             indexed_fields.push((name_ident, ty));
@@ -284,7 +307,7 @@ fn parse_event_fields<'db>(
 
     ParsedEventFields {
         hir_fields,
-        ordered_field_type_paths,
+        ordered_field_types,
         indexed_fields,
         data_fields,
         is_valid,
@@ -294,13 +317,19 @@ fn parse_event_fields<'db>(
 /// Build TOPIC0 as:
 ///
 /// ```text
-/// keccak(("StructName", "(", Field1Type::SOL_TYPE, ",", Field2Type::SOL_TYPE, ..., ")"))
+/// keccak((...("StructName", "("), Field1Type::SOL_TYPE), ..., ")"))
 /// ```
+///
+/// The pair nesting keeps the generated value within `AsBytes`' tuple-arity
+/// implementations regardless of field count. Dynamic-array names are emitted
+/// as the element type's `SOL_TYPE` followed by `"[]"`, which is the canonical
+/// Solidity spelling and does not require a generic `DynArray<T>::SOL_TYPE`
+/// associated constant.
 fn create_topic0_const<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
     desugared: EventDesugared,
     struct_name: &str,
-    field_type_paths: &[PathId<'db>],
+    field_types: &[TypeId<'db>],
 ) -> AssocConstDef<'db> {
     let db = ctxt.db();
     let roots = super::hir_builder::LibRoots::for_ctxt(ctxt);
@@ -324,7 +353,7 @@ fn create_topic0_const<'db>(
     let callee = Expr::Path(Partial::Present(keccak_path));
     let callee_id = body_ctxt.push_expr(callee, origin.clone());
 
-    // Build the tuple: ("StructName", "(", Field1::SOL_TYPE, ",", ..., ")")
+    // Build the signature fragments. They are folded into nested pairs below.
     let mut tuple_elems = Vec::new();
 
     // Struct name as string literal
@@ -342,7 +371,7 @@ fn create_topic0_const<'db>(
     tuple_elems.push(body_ctxt.push_expr(open_paren, origin.clone()));
 
     // Field types with comma separators
-    for (idx, field_path) in field_type_paths.iter().enumerate() {
+    for (idx, field_ty) in field_types.iter().copied().enumerate() {
         if idx > 0 {
             let comma = Expr::Lit(LitKind::String(crate::hir_def::StringId::new(
                 db,
@@ -351,10 +380,7 @@ fn create_topic0_const<'db>(
             tuple_elems.push(body_ctxt.push_expr(comma, origin.clone()));
         }
 
-        // FieldType::SOL_TYPE
-        let sol_type_path = field_path.push_str(db, "SOL_TYPE");
-        let sol_type_expr = Expr::Path(Partial::Present(sol_type_path));
-        tuple_elems.push(body_ctxt.push_expr(sol_type_expr, origin.clone()));
+        push_sol_type_fragments(&mut body_ctxt, field_ty, &origin, &mut tuple_elems);
     }
 
     // ")"
@@ -364,9 +390,15 @@ fn create_topic0_const<'db>(
     )));
     tuple_elems.push(body_ctxt.push_expr(close_paren, origin.clone()));
 
-    // Build the tuple expression and wrap in keccak call
-    let tuple_expr = Expr::Tuple(tuple_elems);
-    let tuple_id = body_ctxt.push_expr(tuple_expr, origin.clone());
+    // Fold into binary tuples. `AsBytes` recursively concatenates these values,
+    // so this hashes exactly the same bytes as one flat tuple.
+    let mut tuple_elems = tuple_elems.into_iter();
+    let mut tuple_id = tuple_elems
+        .next()
+        .expect("an event signature always has at least name and parentheses");
+    for elem in tuple_elems {
+        tuple_id = body_ctxt.push_expr(Expr::Tuple(vec![tuple_id, elem]), origin.clone());
+    }
 
     let call = Expr::Call(
         callee_id,
@@ -399,6 +431,38 @@ fn create_topic0_const<'db>(
         value: Partial::Present(body),
         vis: crate::hir_def::Visibility::Public,
     }
+}
+
+fn push_sol_type_fragments<'db>(
+    body: &mut super::body::BodyCtxt<'_, 'db>,
+    ty: TypeId<'db>,
+    origin: &HirOrigin<ast::Expr>,
+    out: &mut Vec<crate::hir_def::ExprId>,
+) {
+    let db = body.f_ctxt.db();
+    let TypeKind::Path(Partial::Present(path)) = ty.data(db) else {
+        return;
+    };
+
+    let is_dyn_array = path
+        .ident(db)
+        .to_opt()
+        .is_some_and(|ident| ident.data(db) == "DynArray");
+    if is_dyn_array
+        && let [GenericArg::Type(arg)] = path.generic_args(db).data(db).as_slice()
+        && let Some(elem_ty) = arg.ty.to_opt()
+    {
+        push_sol_type_fragments(body, elem_ty, origin, out);
+        let suffix = Expr::Lit(LitKind::String(crate::hir_def::StringId::new(
+            db,
+            "[]".to_string(),
+        )));
+        out.push(body.push_expr(suffix, origin.clone()));
+        return;
+    }
+
+    let sol_type_path = path.push_str(db, "SOL_TYPE");
+    out.push(body.push_expr(Expr::Path(Partial::Present(sol_type_path)), origin.clone()));
 }
 
 fn lower_emit_method<'db>(

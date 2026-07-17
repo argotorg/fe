@@ -1,0 +1,57 @@
+use std::abi::DynArray
+use std::evm::{Log, RawMem, encode_event_payload, mem}
+
+#[event]
+struct AddLiquidity {
+    #[indexed]
+    provider: Address,
+    token_amounts: DynArray<u256>,
+    invariant: u256,
+}
+
+msg M {
+    #[selector = sol("f()")]
+    F,
+}
+
+pub contract Probe uses (log: mut Log, raw: mut RawMem) {
+    recv M {
+        F uses (mut log, mut raw) {
+            let ptr = mem::alloc(64)
+            raw.mstore(addr: ptr, value: 1)
+            raw.mstore(addr: ptr + 32, value: 7)
+            log.emit(AddLiquidity {
+                provider: Address::zero(),
+                token_amounts: DynArray { data: ptr, len: 1, size: 64 },
+                invariant: 3,
+            })
+        }
+    }
+}
+
+#[test]
+fn test_dyn_array_u256_event() uses (log: mut Log, raw: mut RawMem) {
+    assert!(
+        AddLiquidity::TOPIC0
+            == 0xdf21883620cd435343a655a765cce604ee5e962b399aed0ebbbd63a9c7e570c4,
+    )
+
+    let ptr = mem::alloc(64)
+    raw.mstore(addr: ptr, value: 1)
+    raw.mstore(addr: ptr + 32, value: 7)
+    let values = DynArray { data: ptr, len: 1, size: 64 }
+    let (data, len) = encode_event_payload((values, 3 as u256))
+
+    // Solidity: abi.encode(uint256[](7), uint256(3)).
+    assert!(len == 128)
+    assert!(raw.mload(data) == 64)
+    assert!(raw.mload(data + 32) == 3)
+    assert!(raw.mload(data + 64) == 1)
+    assert!(raw.mload(data + 96) == 7)
+
+    log.emit(AddLiquidity {
+        provider: Address::zero(),
+        token_amounts: values,
+        invariant: 3,
+    })
+}
