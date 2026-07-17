@@ -1,0 +1,109 @@
+/// `DynArrayAccess::get`: element reads from decoded `DynArray` parameters,
+/// out-of-bounds panics, Solidity-style canonicalization of element words
+/// (dirty `Address` upper bits revert on read, matching parameter decoding),
+/// and dirty-word canonicalization for `Address` elements.
+
+use std::abi::{DynArray, MemVec}
+use std::evm::{Evm, RawMem, decode_returndata, encode_msg_calldata, last_returndata, mem}
+
+msg ArrMsg {
+    #[selector = 0x01]
+    GetAt { values: DynArray<u256>, index: u256 } -> u256,
+    #[selector = 0x02]
+    AddrAt { addrs: DynArray<Address>, index: u256 } -> u256,
+    #[selector = 0x03]
+    AddrLen { addrs: DynArray<Address> } -> u256,
+}
+
+pub contract Arr {
+    init() {}
+
+    recv ArrMsg {
+        GetAt { values, index } -> u256 {
+            values.get(index)
+        }
+
+        AddrAt { addrs, index } -> u256 {
+            addrs.get(index).inner
+        }
+
+        AddrLen { addrs } -> u256 {
+            addrs.len()
+        }
+    }
+}
+
+fn make_arr(a: u256, b: u256, c: u256) -> DynArray<u256>
+uses (mem: mut RawMem)
+{
+    let mut v: MemVec<u256> = MemVec::zeroed(3)
+    v.set(index: 0, value: a)
+    v.set(index: 1, value: b)
+    v.set(index: 2, value: c)
+    v.to_dyn_array()
+}
+
+#[test]
+fn test_get_from_decoded_param()
+uses (evm: mut Evm, mem: mut RawMem)
+{
+    let arr = evm.create2<Arr>(value: 0, args: (), salt: 0)
+    assert!(arr.inner != 0)
+
+    let v0: u256 = evm.call(addr: arr, gas: 1000000, value: 0, message: ArrMsg::GetAt { values: make_arr(a: 11, b: 22, c: 33), index: 0 })
+    let v1: u256 = evm.call(addr: arr, gas: 1000000, value: 0, message: ArrMsg::GetAt { values: make_arr(a: 11, b: 22, c: 33), index: 1 })
+    let v2: u256 = evm.call(addr: arr, gas: 1000000, value: 0, message: ArrMsg::GetAt { values: make_arr(a: 11, b: 22, c: 33), index: 2 })
+    assert!(v0 == 11)
+    assert!(v1 == 22)
+    assert!(v2 == 33)
+}
+
+#[test(should_revert, panic = 0x32)]
+fn test_get_out_of_bounds_panics()
+uses (mem: mut RawMem)
+{
+    let values = make_arr(a: 1, b: 2, c: 3)
+    let _ = values.get(values.len())
+}
+
+#[test(should_revert, panic = 0x32)]
+fn test_get_on_empty_panics() {
+    let values: DynArray<u256> = DynArray::empty()
+    let _ = values.get(0)
+}
+
+/// Decoding a `DynArray<Address>` copies the payload without inspecting the
+/// element words, so a dirty upper-bit word survives until it is read:
+/// `len()` succeeds, `get` reverts — the same outcome the word would have
+/// produced as a standalone `Address` parameter.
+#[test]
+fn test_dirty_address_element_reverts_on_get()
+uses (evm: mut Evm, call: mut Call, ctx: Ctx, mem: mut RawMem)
+{
+    let arr = evm.create2<Arr>(value: 0, args: (), salt: 0)
+    assert!(arr.inner != 0)
+
+    let mut v: MemVec<Address> = MemVec::zeroed(1)
+    v.set(index: 0, value: Address { inner: 0xabc })
+
+    // Canonical element decodes fine.
+    let got: u256 = evm.call(addr: arr, gas: 1000000, value: 0, message: ArrMsg::AddrAt { addrs: v.to_dyn_array(), index: 0 })
+    assert!(got == 0xabc)
+
+    let one: u256 = 1
+    let dirty = (one << 160) + 0xabc
+
+    // AddrAt calldata: selector | offset(0x40) | index | len | element.
+    let (ptr, len) = encode_msg_calldata(ArrMsg::AddrAt { addrs: v.to_dyn_array(), index: 0 })
+    mem.mstore(addr: ptr + 100, value: dirty)
+    let ok = call.raw_call(addr: arr, gas: ctx.gas(), value: 0, args_offset: ptr, args_len: len)
+    assert!(!ok)
+
+    // AddrLen calldata: selector | offset(0x20) | len | element.
+    let (ptr2, len2) = encode_msg_calldata(ArrMsg::AddrLen { addrs: v.to_dyn_array() })
+    mem.mstore(addr: ptr2 + 68, value: dirty)
+    let ok2 = call.raw_call(addr: arr, gas: ctx.gas(), value: 0, args_offset: ptr2, args_len: len2)
+    assert!(ok2)
+    let n: u256 = decode_returndata(last_returndata())
+    assert!(n == 1)
+}

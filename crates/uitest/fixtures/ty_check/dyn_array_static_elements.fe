@@ -1,0 +1,10 @@
+use std::abi::{DynArray, DynString, MemVec}
+use std::evm::RawMem
+
+fn dyn_array_dynamic_get(values: DynArray<DynString>) {
+    let _ = values.get(0)
+}
+
+fn mem_vec_dynamic_element() uses (mem: mut RawMem) {
+    let _values: MemVec<DynString> = MemVec::zeroed(1)
+}

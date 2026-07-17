@@ -1,0 +1,188 @@
+/// `MemVec`: zero-initialized construction, `set`/`get`, copy-on-read
+/// `from_dyn_array`, and `to_dyn_array` producing payloads that byte-match
+/// Solidity `abi.encode(uint256[])` both as msg returndata and through
+/// `encode_abi_payload` (the raw-log event payload path).
+
+use std::abi::{DynArray, MemVec}
+use std::evm::{
+    Evm,
+    Log,
+    RawMem,
+    encode_abi_payload,
+    encode_msg_calldata,
+    keccak256,
+    last_returndata,
+    mem,
+}
+
+msg VecMsg {
+    #[selector = 0x01]
+    BuildRange { n: u256 } -> DynArray<u256>,
+    #[selector = 0x02]
+    CopyProbe { values: DynArray<u256> } -> u256,
+    #[selector = 0x03]
+    PayloadHash { a: u256, b: u256 } -> u256,
+}
+
+pub contract VecContract uses (raw: mut RawMem, log: mut Log) {
+    init() {}
+
+    recv VecMsg {
+        BuildRange { n } -> DynArray<u256> uses (mut raw) {
+            let mut v: MemVec<u256> = MemVec::zeroed(n)
+            let mut i: u256 = 0
+            while i < n {
+                v.set(index: i, value: (i + 1) * 100)
+                i += 1
+            }
+            v.to_dyn_array()
+        }
+
+        CopyProbe { values } -> u256 uses (mut raw) {
+            let mut copy = MemVec::from_dyn_array(values)
+            copy.set(index: 0, value: 999)
+            // If the copy aliased the source payload, this would read 999.
+            values.get(0)
+        }
+
+        PayloadHash { a, b } -> u256 uses (mut raw, mut log) {
+            let mut v: MemVec<u256> = MemVec::zeroed(2)
+            v.set(index: 0, value: a)
+            v.set(index: 1, value: b)
+            let (ptr, len) = encode_abi_payload((v.to_dyn_array(),))
+            log.log1(offset: ptr, len: len, topic0: 1)
+            keccak256(ptr, len)
+        }
+    }
+}
+
+#[test]
+fn test_zeroed_set_get()
+uses (mem: mut RawMem)
+{
+    let mut v: MemVec<u256> = MemVec::zeroed(3)
+    assert!(v.len() == 3)
+    assert!(!v.is_empty())
+    assert!(v.get(0) == 0)
+    assert!(v.get(2) == 0)
+
+    v.set(index: 1, value: 42)
+    assert!(v.get(1) == 42)
+    assert!(v.get(0) == 0)
+    assert!(v.get(2) == 0)
+
+    let empty: MemVec<u256> = MemVec::zeroed(0)
+    assert!(empty.is_empty())
+}
+
+#[test]
+fn test_address_elements()
+uses (mem: mut RawMem)
+{
+    let mut v: MemVec<Address> = MemVec::zeroed(2)
+    v.set(index: 1, value: Address { inner: 0xbeef })
+    assert!(v.get(0).inner == 0)
+    assert!(v.get(1).inner == 0xbeef)
+
+    let arr = v.to_dyn_array()
+    assert!(arr.len() == 2)
+    assert!(arr.get(1).inner == 0xbeef)
+}
+
+#[test(should_revert, panic = 0x32)]
+fn test_get_out_of_bounds_panics()
+uses (mem: mut RawMem)
+{
+    let v: MemVec<u256> = MemVec::zeroed(2)
+    let _ = v.get(2)
+}
+
+#[test(should_revert, panic = 0x32)]
+fn test_set_out_of_bounds_panics()
+uses (mem: mut RawMem)
+{
+    let mut v: MemVec<u256> = MemVec::zeroed(2)
+    v.set(index: 2, value: 1)
+}
+
+#[test]
+fn test_from_dyn_array_copies_locally()
+uses (mem: mut RawMem)
+{
+    let mut v: MemVec<u256> = MemVec::zeroed(1)
+    v.set(index: 0, value: 5)
+    let arr = v.to_dyn_array()
+
+    let mut copy = MemVec::from_dyn_array(arr)
+    copy.set(index: 0, value: 6)
+    assert!(copy.get(0) == 6)
+    assert!(arr.get(0) == 5)
+    assert!(v.get(0) == 5)
+}
+
+#[test]
+fn test_from_dyn_array_copies_across_call()
+uses (evm: mut Evm, mem: mut RawMem)
+{
+    let c = evm.create2<VecContract>(value: 0, args: (), salt: 0)
+    assert!(c.inner != 0)
+
+    let mut v: MemVec<u256> = MemVec::zeroed(2)
+    v.set(index: 0, value: 7)
+    v.set(index: 1, value: 8)
+    let original: u256 = evm.call(addr: c, gas: 1000000, value: 0, message: VecMsg::CopyProbe { values: v.to_dyn_array() })
+    assert!(original == 7)
+}
+
+#[test]
+fn test_round_trip_returndata_matches_solidity_encoding()
+uses (evm: mut Evm, call: mut Call, ctx: Ctx, mem: mut RawMem)
+{
+    let c = evm.create2<VecContract>(value: 0, args: (), salt: 0)
+    assert!(c.inner != 0)
+
+    let (ptr, len) = encode_msg_calldata(VecMsg::BuildRange { n: 3 })
+    let ok = call.raw_call(addr: c, gas: ctx.gas(), value: 0, args_offset: ptr, args_len: len)
+    assert!(ok)
+    let ret = last_returndata()
+    assert!(ret.len == 160)
+
+    // Precomputed Solidity abi.encode(uint256[]): offset, length, elements.
+    let expected = mem::alloc(160)
+    mem.mstore(addr: expected, value: 0x20)
+    mem.mstore(addr: expected + 32, value: 3)
+    mem.mstore(addr: expected + 64, value: 100)
+    mem.mstore(addr: expected + 96, value: 200)
+    mem.mstore(addr: expected + 128, value: 300)
+    assert!(keccak256(ret.base, ret.len) == keccak256(expected, 160))
+}
+
+#[test]
+fn test_round_trip_typed_decode()
+uses (evm: mut Evm, mem: mut RawMem)
+{
+    let c = evm.create2<VecContract>(value: 0, args: (), salt: 0)
+    assert!(c.inner != 0)
+
+    let arr: DynArray<u256> = evm.call(addr: c, gas: 1000000, value: 0, message: VecMsg::BuildRange { n: 4 })
+    assert!(arr.len() == 4)
+    assert!(arr.get(0) == 100)
+    assert!(arr.get(3) == 400)
+}
+
+#[test]
+fn test_encode_abi_payload_matches_solidity_encoding()
+uses (evm: mut Evm, mem: mut RawMem)
+{
+    let c = evm.create2<VecContract>(value: 0, args: (), salt: 0)
+    assert!(c.inner != 0)
+
+    let hash: u256 = evm.call(addr: c, gas: 1000000, value: 0, message: VecMsg::PayloadHash { a: 0xaaaa, b: 0xbbbb })
+
+    let expected = mem::alloc(128)
+    mem.mstore(addr: expected, value: 0x20)
+    mem.mstore(addr: expected + 32, value: 2)
+    mem.mstore(addr: expected + 64, value: 0xaaaa)
+    mem.mstore(addr: expected + 96, value: 0xbbbb)
+    assert!(hash == keccak256(expected, 128))
+}
