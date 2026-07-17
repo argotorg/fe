@@ -3,10 +3,10 @@
 
 msg TokenMsg {
     #[selector = sol("transfer(address,uint256)")]
-    Transfer { to: u64, amount: u64 } -> bool,
+    Transfer { to: Address, amount: u256 } -> bool,
 
     #[selector = sol("many_msg_babbage(bytes1)")]
-    Approve { spender: u64, amount: u64 } -> bool,
+    Approve { input: std::abi::Bytes1 } -> bool,
 
     #[selector = 0xa9059cbb]
     Foo,

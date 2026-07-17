@@ -43,6 +43,20 @@ pub enum SelectorErrorKind {
         first_variant_name: String,
         selector: u32,
     },
+    /// A selector signature argument type doesn't match the field's semantic ABI type.
+    AbiTypeMismatch {
+        selector_ty: String,
+        field_name: String,
+        field_abi_ty: String,
+        /// Fe type with the selector-declared ABI type, if the stdlib has one.
+        suggestion: Option<String>,
+    },
+    /// The selector signature declares a different number of arguments than
+    /// the variant has fields.
+    ArityMismatch {
+        signature_arity: usize,
+        field_count: usize,
+    },
 }
 
 /// Field modifier errors accumulated during record-field lowering.

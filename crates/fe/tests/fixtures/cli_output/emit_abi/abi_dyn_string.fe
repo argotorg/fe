@@ -1,0 +1,14 @@
+use std::abi::DynString
+
+msg FooMsg {
+    #[selector = sol("set_name(string)")]
+    SetName { name: DynString },
+}
+
+pub contract Foo {
+    recv FooMsg {
+        SetName { name } {
+            let _ = name
+        }
+    }
+}

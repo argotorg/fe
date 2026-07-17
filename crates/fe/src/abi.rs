@@ -6,13 +6,13 @@ use hir::{
     analysis::{
         name_resolution::{PathRes, resolve_path},
         ty::{
+            abi_ty::{self, AbiComponent, AbiTypeDesc, ParsedFunctionSignature},
             adt_def::AdtRef,
             binder::Binder,
-            const_ty::{ConstTyData, EvaluatedConstTy},
             fold::{AssocTySubst, TyFoldable},
             trait_def::TraitInstId,
             trait_resolution::PredicateListId,
-            ty_def::{PrimTy, TyBase, TyData, TyId},
+            ty_def::{TyBase, TyData, TyId},
         },
     },
     hir_def::{
@@ -50,42 +50,20 @@ pub struct AbiParam {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct AbiTypeDesc {
-    abi_type: String,
-    canonical_type: String,
-    components: Option<Vec<AbiParam>>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 struct NamedAbiParamDesc {
     name: String,
     indexed: Option<bool>,
     desc: AbiTypeDesc,
 }
 
-impl AbiTypeDesc {
-    fn simple(ty: &str) -> Self {
-        Self {
-            abi_type: ty.to_string(),
-            canonical_type: ty.to_string(),
-            components: None,
-        }
-    }
-
-    fn tuple(components: Vec<AbiParam>, canonical_type: String) -> Self {
-        Self {
-            abi_type: "tuple".to_string(),
-            canonical_type,
-            components: Some(components),
-        }
-    }
-
-    fn array(self, len: &str) -> Self {
-        Self {
-            abi_type: format!("{}[{len}]", self.abi_type),
-            canonical_type: format!("{}[{len}]", self.canonical_type),
-            components: self.components,
-        }
+fn component_to_param(component: AbiComponent) -> AbiParam {
+    AbiParam {
+        name: component.name,
+        ty: component.ty,
+        indexed: None,
+        components: component
+            .components
+            .map(|components| components.into_iter().map(component_to_param).collect()),
     }
 }
 
@@ -95,7 +73,10 @@ impl NamedAbiParamDesc {
             name: self.name,
             ty: self.desc.abi_type,
             indexed: self.indexed,
-            components: self.desc.components,
+            components: self
+                .desc
+                .components
+                .map(|components| components.into_iter().map(component_to_param).collect()),
         }
     }
 }
@@ -624,137 +605,7 @@ fn named_field_param_descs(
 }
 
 fn semantic_ty_to_abi_desc(db: &DriverDataBase, ty: TyId<'_>) -> Result<AbiTypeDesc, String> {
-    if let Some((_, inner)) = ty.as_capability(db) {
-        return semantic_ty_to_abi_desc(db, inner);
-    }
-
-    if ty == TyId::unit(db) {
-        return Err("unit type is not a valid external ABI parameter".to_string());
-    }
-
-    if ty.is_tuple(db) {
-        let components = ty.field_types(db);
-        let component_descs: Vec<_> = components
-            .into_iter()
-            .map(|field_ty| semantic_ty_to_abi_desc(db, field_ty))
-            .collect::<Result<_, _>>()?;
-        return Ok(AbiTypeDesc::tuple(
-            component_descs
-                .iter()
-                .map(|desc| AbiParam {
-                    name: String::new(),
-                    ty: desc.abi_type.clone(),
-                    indexed: None,
-                    components: desc.components.clone(),
-                })
-                .collect(),
-            canonical_tuple_type(&component_descs),
-        ));
-    }
-
-    if ty.is_array(db) {
-        let (_, args) = ty.decompose_ty_app(db);
-        let elem_ty = args
-            .first()
-            .copied()
-            .ok_or_else(|| "array type is missing its element type".to_string())?;
-        let len_ty = args
-            .get(1)
-            .copied()
-            .ok_or_else(|| "array type is missing its length".to_string())?;
-        let elem_desc = semantic_ty_to_abi_desc(db, elem_ty)?;
-        let len = array_len_to_string(db, len_ty)?;
-        return Ok(elem_desc.array(&len));
-    }
-
-    if let Some(elem_ty) = core_dyn_array_elem_ty(db, ty) {
-        let elem_desc = semantic_ty_to_abi_desc(db, elem_ty)?;
-        return Ok(elem_desc.array(""));
-    }
-
-    if is_core_dyn_string_ty(db, ty) {
-        return Ok(AbiTypeDesc::simple("string"));
-    }
-
-    if is_core_bytes_ty(db, ty) {
-        return Ok(AbiTypeDesc::simple("bytes"));
-    }
-
-    if ty.is_string(db) {
-        return Ok(AbiTypeDesc::simple("string"));
-    }
-
-    match ty.base_ty(db).data(db) {
-        TyData::TyBase(TyBase::Prim(prim)) => match prim {
-            PrimTy::Bool => Ok(AbiTypeDesc::simple("bool")),
-            PrimTy::U8 => Ok(AbiTypeDesc::simple("uint8")),
-            PrimTy::U16 => Ok(AbiTypeDesc::simple("uint16")),
-            PrimTy::U32 => Ok(AbiTypeDesc::simple("uint32")),
-            PrimTy::U64 => Ok(AbiTypeDesc::simple("uint64")),
-            PrimTy::U128 => Ok(AbiTypeDesc::simple("uint128")),
-            PrimTy::U256 | PrimTy::Usize => Ok(AbiTypeDesc::simple("uint256")),
-            PrimTy::I8 => Ok(AbiTypeDesc::simple("int8")),
-            PrimTy::I16 => Ok(AbiTypeDesc::simple("int16")),
-            PrimTy::I32 => Ok(AbiTypeDesc::simple("int32")),
-            PrimTy::I64 => Ok(AbiTypeDesc::simple("int64")),
-            PrimTy::I128 => Ok(AbiTypeDesc::simple("int128")),
-            PrimTy::I256 | PrimTy::Isize => Ok(AbiTypeDesc::simple("int256")),
-            PrimTy::String | PrimTy::Array | PrimTy::Tuple(_) => unreachable!(),
-            PrimTy::Ptr | PrimTy::View | PrimTy::BorrowMut | PrimTy::BorrowRef => {
-                Err(format!("unsupported ABI type `{}`", ty.pretty_print(db)))
-            }
-        },
-        TyData::TyBase(TyBase::Adt(adt)) => {
-            let adt_ref = adt.adt_ref(db);
-            if is_std_address_ty(db, ty, adt_ref) {
-                return Ok(AbiTypeDesc::simple("address"));
-            }
-            if let Some(sol_type) = std_sol_compat_abi_type(db, ty, adt_ref) {
-                return Ok(AbiTypeDesc::simple(&sol_type));
-            }
-            match adt_ref {
-                AdtRef::Struct(struct_) => {
-                    let component_descs = struct_ty_to_abi_param_descs(db, struct_, ty, |_| None)?;
-                    let components: Vec<_> = component_descs
-                        .iter()
-                        .cloned()
-                        .map(NamedAbiParamDesc::into_param)
-                        .collect();
-                    let canonical = canonical_tuple_type(
-                        &component_descs
-                            .iter()
-                            .map(|param| param.desc.clone())
-                            .collect::<Vec<_>>(),
-                    );
-                    Ok(AbiTypeDesc::tuple(components, canonical))
-                }
-                AdtRef::Enum(_) => Err(format!(
-                    "unsupported ABI enum type `{}`",
-                    ty.pretty_print(db)
-                )),
-            }
-        }
-        TyData::Invalid(_) => Err(format!("unresolved ABI type `{}`", ty.pretty_print(db))),
-        _ => Err(format!("unsupported ABI type `{}`", ty.pretty_print(db))),
-    }
-}
-
-fn array_len_to_string(db: &DriverDataBase, ty: TyId<'_>) -> Result<String, String> {
-    match ty.data(db) {
-        TyData::ConstTy(const_ty) => match const_ty.data(db) {
-            ConstTyData::Evaluated(EvaluatedConstTy::LitInt(value), _) => {
-                Ok(value.data(db).to_string())
-            }
-            _ => Err(format!(
-                "array length `{}` is not a concrete integer",
-                ty.pretty_print(db)
-            )),
-        },
-        _ => Err(format!(
-            "array length `{}` is not represented as a const type",
-            ty.pretty_print(db)
-        )),
-    }
+    abi_ty::semantic_ty_to_abi_desc(db, ty)
 }
 
 fn struct_from_ty<'db>(db: &'db DriverDataBase, ty: TyId<'db>) -> Option<Struct<'db>> {
@@ -771,239 +622,9 @@ fn struct_from_ty<'db>(db: &'db DriverDataBase, ty: TyId<'db>) -> Option<Struct<
     }
 }
 
-fn is_std_address_ty(db: &DriverDataBase, ty: TyId<'_>, adt_ref: AdtRef<'_>) -> bool {
-    let Some(name) = adt_ref.name(db) else {
-        return false;
-    };
-    if name.data(db) != "Address" {
-        return false;
-    }
-    ty.ingot(db)
-        .is_some_and(|ingot| ingot.kind(db) == IngotKind::Std)
-}
-
-fn core_dyn_array_elem_ty<'db>(db: &'db DriverDataBase, ty: TyId<'db>) -> Option<TyId<'db>> {
-    if let Some((_, inner)) = ty.as_capability(db) {
-        return core_dyn_array_elem_ty(db, inner);
-    }
-
-    let (base, args) = ty.decompose_ty_app(db);
-    let TyData::TyBase(TyBase::Adt(adt)) = base.data(db) else {
-        return None;
-    };
-    let adt_ref = adt.adt_ref(db);
-    let name = adt_ref.name(db)?;
-    if name.data(db) != "DynArray" {
-        return None;
-    }
-    if !base
-        .ingot(db)
-        .is_some_and(|ingot| ingot.kind(db) == IngotKind::Core)
-    {
-        return None;
-    }
-
-    args.first().copied()
-}
-
-fn is_core_bytes_ty(db: &DriverDataBase, ty: TyId<'_>) -> bool {
-    if let Some((_, inner)) = ty.as_capability(db) {
-        return is_core_bytes_ty(db, inner);
-    }
-
-    let base = ty.base_ty(db);
-    let TyData::TyBase(TyBase::Adt(adt)) = base.data(db) else {
-        return false;
-    };
-    let adt_ref = adt.adt_ref(db);
-    let Some(name) = adt_ref.name(db) else {
-        return false;
-    };
-    if name.data(db) != "Bytes" {
-        return false;
-    }
-
-    base.ingot(db)
-        .is_some_and(|ingot| ingot.kind(db) == IngotKind::Core)
-}
-
-fn is_core_dyn_string_ty(db: &DriverDataBase, ty: TyId<'_>) -> bool {
-    if let Some((_, inner)) = ty.as_capability(db) {
-        return is_core_dyn_string_ty(db, inner);
-    }
-
-    let base = ty.base_ty(db);
-    let TyData::TyBase(TyBase::Adt(adt)) = base.data(db) else {
-        return false;
-    };
-    let adt_ref = adt.adt_ref(db);
-    let Some(name) = adt_ref.name(db) else {
-        return false;
-    };
-    if name.data(db) != "DynString" {
-        return false;
-    }
-
-    base.ingot(db)
-        .is_some_and(|ingot| ingot.kind(db) == IngotKind::Core)
-}
-
-/// Recognise `std::abi::sol` SolCompat wrapper types like `Uint160` / `Int24`
-/// and return their Solidity ABI type string (e.g. `"uint160"`, `"int24"`).
-fn std_sol_compat_abi_type(
-    db: &DriverDataBase,
-    ty: TyId<'_>,
-    adt_ref: AdtRef<'_>,
-) -> Option<String> {
-    if !ty
-        .ingot(db)
-        .is_some_and(|ingot| ingot.kind(db) == IngotKind::Std)
-    {
-        return None;
-    }
-    let name = adt_ref.name(db)?.data(db).to_string();
-
-    if name == "FixedBytes" {
-        let (_, args) = ty.decompose_ty_app(db);
-        let len_ty = args.first().copied().or_else(|| args.get(1).copied())?;
-        let len = fixed_bytes_len_to_string(db, len_ty)?;
-        return Some(format!("bytes{len}"));
-    }
-
-    if let Some(rest) = name.strip_prefix("Bytes") {
-        let len: u16 = rest.parse().ok()?;
-        if (1..=32).contains(&len) {
-            return Some(format!("bytes{len}"));
-        }
-        return None;
-    }
-
-    // Match Uint{N} or Int{N} where N is a valid Solidity bit width (8..=256, multiple of 8)
-    let (prefix, digits) = if let Some(rest) = name.strip_prefix("Uint") {
-        ("uint", rest)
-    } else {
-        let rest = name.strip_prefix("Int")?;
-        ("int", rest)
-    };
-
-    let bits: u16 = digits.parse().ok()?;
-    if (8..=256).contains(&bits) && bits.is_multiple_of(8) {
-        Some(format!("{prefix}{bits}"))
-    } else {
-        None
-    }
-}
-
-fn fixed_bytes_len_to_string(db: &DriverDataBase, ty: TyId<'_>) -> Option<String> {
-    match ty.data(db) {
-        TyData::ConstTy(const_ty) => match const_ty.data(db) {
-            ConstTyData::Evaluated(EvaluatedConstTy::LitInt(value), _) => {
-                let len = value.data(db).to_string().parse::<u16>().ok()?;
-                (1..=32).contains(&len).then(|| len.to_string())
-            }
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-fn canonical_tuple_type(component_descs: &[AbiTypeDesc]) -> String {
-    let mut out = String::from("(");
-    for (idx, desc) in component_descs.iter().enumerate() {
-        if idx > 0 {
-            out.push(',');
-        }
-        out.push_str(&desc.canonical_type);
-    }
-    out.push(')');
-    out
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ParsedFunctionSignature {
-    name: String,
-    arg_types: Vec<String>,
-}
-
 fn parse_function_signature(signature: &str) -> Result<ParsedFunctionSignature, String> {
-    let (name, args) = signature.split_once('(').ok_or_else(|| {
-        format!(
-            "cannot emit JSON ABI for `{signature}`: selector signature must be of the form `name(type,...)`"
-        )
-    })?;
-    let args = args.strip_suffix(')').ok_or_else(|| {
-        format!("cannot emit JSON ABI for `{signature}`: selector signature must end with `)`")
-    })?;
-    if name.is_empty() || name.trim() != name || name.chars().any(char::is_whitespace) {
-        return Err(format!(
-            "cannot emit JSON ABI for `{signature}`: selector function name must be a single identifier"
-        ));
-    }
-
-    Ok(ParsedFunctionSignature {
-        name: name.to_string(),
-        arg_types: split_signature_args(signature, args)?,
-    })
-}
-
-fn split_signature_args(signature: &str, args: &str) -> Result<Vec<String>, String> {
-    if args.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut arg_types = Vec::new();
-    let mut start = 0;
-    let mut tuple_depth = 0usize;
-    let mut array_depth = 0usize;
-
-    for (idx, ch) in args.char_indices() {
-        match ch {
-            '(' => tuple_depth += 1,
-            ')' => {
-                if tuple_depth == 0 {
-                    return Err(format!(
-                        "cannot emit JSON ABI for `{signature}`: unbalanced `)` in selector signature"
-                    ));
-                }
-                tuple_depth -= 1;
-            }
-            '[' => array_depth += 1,
-            ']' => {
-                if array_depth == 0 {
-                    return Err(format!(
-                        "cannot emit JSON ABI for `{signature}`: unbalanced `]` in selector signature"
-                    ));
-                }
-                array_depth -= 1;
-            }
-            ',' if tuple_depth == 0 && array_depth == 0 => {
-                let arg = args[start..idx].trim();
-                if arg.is_empty() {
-                    return Err(format!(
-                        "cannot emit JSON ABI for `{signature}`: empty selector argument type"
-                    ));
-                }
-                arg_types.push(arg.to_string());
-                start = idx + 1;
-            }
-            _ => {}
-        }
-    }
-
-    if tuple_depth != 0 || array_depth != 0 {
-        return Err(format!(
-            "cannot emit JSON ABI for `{signature}`: unbalanced selector argument list"
-        ));
-    }
-
-    let last = args[start..].trim();
-    if last.is_empty() {
-        return Err(format!(
-            "cannot emit JSON ABI for `{signature}`: empty selector argument type"
-        ));
-    }
-    arg_types.push(last.to_string());
-    Ok(arg_types)
+    abi_ty::parse_function_signature(signature)
+        .map_err(|err| format!("cannot emit JSON ABI for `{signature}`: {err}"))
 }
 
 fn ensure_selector_matches_signature(
@@ -1022,10 +643,16 @@ fn ensure_selector_matches_signature(
 
     for (selector_ty, input) in parsed_signature.arg_types.iter().zip(inputs) {
         if selector_ty != &input.desc.canonical_type {
-            return Err(format!(
+            let mut message = format!(
                 "cannot emit JSON ABI for `{source_signature}`: selector argument type `{selector_ty}` does not match semantic ABI type `{}`",
                 input.desc.canonical_type
-            ));
+            );
+            if let Some(suggestion) = abi_ty::suggested_fe_type_for_sol_type(selector_ty) {
+                message.push_str(&format!(
+                    "; `{suggestion}` decodes and encodes Solidity `{selector_ty}`"
+                ));
+            }
+            return Err(message);
         }
     }
 

@@ -5,13 +5,18 @@ use parser::{
     ast::{self, AttrListOwner as _, prelude::*},
 };
 
+use crate::analysis::ty::abi_ty::{
+    parse_function_signature, semantic_ty_to_abi_desc, suggested_fe_type_for_sol_type,
+};
 use crate::analysis::ty::diagnostics::FuncBodyDiag;
 use crate::analysis::ty::ty_check::eval_msg_variant_selector;
+use crate::analysis::ty::ty_def::TyId;
 use crate::analysis::{
     HirAnalysisDb, analysis_pass::ModuleAnalysisPass, diagnostics::DiagnosticVoucher,
 };
 use crate::hir_def::{ItemKind, Mod, Struct, TopLevelMod};
 use crate::lower::parse_file_impl;
+use crate::semantic::get_variant_selector_info;
 use crate::span::{DesugaredOrigin, HirOrigin, MsgDesugaredFocus};
 use crate::{SelectorError, SelectorErrorKind};
 
@@ -66,6 +71,9 @@ fn check_msg_mod<'db>(
             db,
             crate::analysis::ty::adt_def::AdtRef::from(struct_).as_adt(db),
         );
+
+        check_variant_signature_types(db, top_mod, struct_, variant_ty, &mut diags);
+
         let Some(selector) = eval_msg_variant_selector(db, variant_ty, struct_.scope(), ty_diags)
         else {
             continue;
@@ -90,6 +98,98 @@ fn check_msg_mod<'db>(
     }
 
     diags
+}
+
+/// Checks the argument types declared in a variant's `sol("...")` selector
+/// signature against the semantic ABI types of the variant's fields. Variants
+/// whose selector is not a recoverable signature string (e.g. a plain integer
+/// literal) are skipped; malformed signatures are reported at ABI emission.
+fn check_variant_signature_types<'db>(
+    db: &'db dyn HirAnalysisDb,
+    top_mod: TopLevelMod<'db>,
+    struct_: Struct<'db>,
+    variant_ty: TyId<'db>,
+    diags: &mut Vec<Box<dyn DiagnosticVoucher + 'db>>,
+) {
+    let Some(name) = struct_.name(db).to_opt() else {
+        return;
+    };
+    let variant_name = name.data(db).to_string();
+    let file = top_mod.file(db);
+
+    let Some(signature) = get_variant_selector_info(db, variant_ty, struct_.scope()).signature
+    else {
+        return;
+    };
+    let Ok(parsed) = parse_function_signature(&signature) else {
+        return;
+    };
+
+    let field_tys: Vec<_> = struct_
+        .field_tys(db)
+        .into_iter()
+        .map(|ty| ty.instantiate_identity())
+        .collect();
+
+    if parsed.arg_types.len() != field_tys.len() {
+        let range = msg_variant_focus_range(db, top_mod, struct_, MsgDesugaredFocus::Selector);
+        diags.push(Box::new(SelectorError {
+            kind: SelectorErrorKind::ArityMismatch {
+                signature_arity: parsed.arg_types.len(),
+                field_count: field_tys.len(),
+            },
+            file,
+            primary_range: range,
+            secondary_range: None,
+            variant_name,
+        }) as _);
+        return;
+    }
+
+    let hir_fields = struct_.hir_fields(db).data(db);
+    for (idx, (selector_ty, field_ty)) in parsed.arg_types.iter().zip(field_tys).enumerate() {
+        let Ok(desc) = semantic_ty_to_abi_desc(db, field_ty) else {
+            continue;
+        };
+        if &desc.canonical_type == selector_ty {
+            continue;
+        }
+
+        let field_name = hir_fields
+            .get(idx)
+            .and_then(|field| field.name.to_opt())
+            .map(|name| name.data(db).to_string())
+            .unwrap_or_default();
+        let range = msg_variant_field_range(db, top_mod, struct_, idx).unwrap_or_else(|| {
+            msg_variant_focus_range(db, top_mod, struct_, MsgDesugaredFocus::Selector)
+        });
+        diags.push(Box::new(SelectorError {
+            kind: SelectorErrorKind::AbiTypeMismatch {
+                selector_ty: selector_ty.clone(),
+                field_name,
+                field_abi_ty: desc.canonical_type,
+                suggestion: suggested_fe_type_for_sol_type(selector_ty),
+            },
+            file,
+            primary_range: range,
+            secondary_range: None,
+            variant_name: variant_name.clone(),
+        }) as _);
+    }
+}
+
+fn msg_variant_field_range<'db>(
+    db: &'db dyn HirAnalysisDb,
+    top_mod: TopLevelMod<'db>,
+    struct_: Struct<'db>,
+    field_idx: usize,
+) -> Option<parser::TextRange> {
+    let (msg_ptr, variant_idx) = msg_origin_for_variant_struct(db, struct_)?;
+    let root = SyntaxNode::new_root(parse_file_impl(db, top_mod));
+    let msg_node = msg_ptr.to_node(&root);
+    let variant = msg_node.variants()?.into_iter().nth(variant_idx)?;
+    let field = variant.params()?.into_iter().nth(field_idx)?;
+    Some(field.syntax().text_range())
 }
 
 fn msg_variant_structs<'db>(

@@ -25,6 +25,7 @@ use crate::analysis::{
 };
 use crate::semantic::diagnostics::Diagnosable;
 
+pub mod abi_ty;
 pub mod adt_def;
 pub mod assoc_const;
 pub mod binder;

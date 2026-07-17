@@ -557,6 +557,38 @@ impl DiagnosticVoucher for crate::SelectorError {
                     span: Some(Span::new(self.file, range, SpanKind::Original)),
                 }),
             ),
+            SelectorErrorKind::AbiTypeMismatch {
+                selector_ty,
+                field_name,
+                field_abi_ty,
+                suggestion,
+            } => (
+                6,
+                format!(
+                    "selector declares `{selector_ty}` but field `{field_name}` has ABI type `{field_abi_ty}`"
+                ),
+                format!("expected a `{selector_ty}`-typed value"),
+                suggestion
+                    .iter()
+                    .map(|suggestion| {
+                        format!("`{suggestion}` decodes and encodes Solidity `{selector_ty}`")
+                    })
+                    .collect(),
+                None,
+            ),
+            SelectorErrorKind::ArityMismatch {
+                signature_arity,
+                field_count,
+            } => (
+                7,
+                format!(
+                    "selector signature declares {signature_arity} argument(s) but msg variant `{}` has {field_count} field(s)",
+                    self.variant_name
+                ),
+                "selector signature arity does not match the variant's fields".to_string(),
+                vec![],
+                None,
+            ),
         };
 
         let error_code = GlobalErrorCode::new(DiagnosticPass::MsgLower, code);
