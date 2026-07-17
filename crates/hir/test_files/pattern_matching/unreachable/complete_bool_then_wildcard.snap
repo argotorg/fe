@@ -1,0 +1,14 @@
+---
+source: crates/hir/tests/pattern_matching.rs
+expression: diagnostic_output
+input_file: test_files/pattern_matching/unreachable/complete_bool_then_wildcard.fe
+---
+Unreachable test file complete_bool_then_wildcard.fe has 1 diagnostic(s):
+
+error[8-0035]: unreachable pattern
+  ┌─ complete_bool_then_wildcard.fe:5:9
+  │
+5 │         _ => 2
+  │         ^ this pattern is unreachable
+  │
+  = previous patterns already cover all possible values

@@ -1,7 +1,13 @@
 //! Pattern matching analysis for exhaustiveness and reachability checking
 //! Based on "Warnings for pattern matching" by Luc Maranget
 
+use std::convert::Infallible;
+
 use common::indexmap::IndexSet;
+use matchcov::{
+    Analysis, Arm, ConstructorFields, ConstructorOracle, ConstructorSpace, Exhaustiveness,
+    InconclusiveReason, InputError, Pattern, Reachability, Usefulness, Witness,
+};
 
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::ty::AdtRef;
@@ -35,123 +41,27 @@ impl<'db> PatternMatrix<'db> {
             .push(PatternRowVec::new(vec![MatrixPat::wildcard(None, ty)]));
     }
 
-    fn find_missing_patterns(&self, db: &'db dyn HirAnalysisDb) -> Option<Vec<MatrixPat<'db>>> {
-        if self.nrows() == 0 {
-            return Some(Vec::new());
-        }
-        if self.ncols() == 0 {
-            return None;
-        }
-
-        let ty = self.first_column_ty();
-        let sigma_set = self.sigma_set();
-
-        if sigma_set.is_complete(db) {
-            for ctor in sigma_set {
-                let specialized = self.phi_specialize(db, ctor);
-
-                match specialized.find_missing_patterns(db) {
-                    Some(vec) if vec.is_empty() => {
-                        let fields = ctor
-                            .field_types(db)
-                            .into_iter()
-                            .map(|field_ty| MatrixPat::wildcard(None, field_ty))
-                            .collect();
-                        return Some(vec![MatrixPat::constructor(ctor, fields, ty)]);
-                    }
-                    Some(mut vec) => {
-                        let field_num = ctor.arity(db);
-                        let remaining_patterns = if vec.len() >= field_num {
-                            vec.split_off(field_num)
-                        } else {
-                            let field_types = ctor.field_types(db);
-                            while vec.len() < field_num {
-                                let field_ty = field_types
-                                    .get(vec.len())
-                                    .copied()
-                                    .unwrap_or_else(|| field_types[0]);
-                                vec.push(MatrixPat::wildcard(None, field_ty));
-                            }
-                            Vec::new()
-                        };
-
-                        let pat = MatrixPat::constructor(ctor, vec, ty);
-                        let mut result = vec![pat];
-                        result.extend_from_slice(&remaining_patterns);
-                        return Some(result);
-                    }
-                    None => {}
-                }
-            }
-
-            None
-        } else {
-            self.d_specialize().find_missing_patterns(db).map(|vec| {
-                let sigma_set = self.sigma_set();
-                let kind = if sigma_set.is_empty() {
-                    MatrixPatKind::WildCard(None)
-                } else {
-                    let complete_sigma = SigmaSet::complete_sigma(db, ty);
-                    MatrixPatKind::Or(
-                        complete_sigma
-                            .difference(&sigma_set)
-                            .map(|ctor| MatrixPat::ctor_with_wild_card_fields(db, *ctor, ty))
-                            .collect(),
-                    )
-                };
-
-                let mut result = vec![MatrixPat::new(kind, ty)];
-                result.extend_from_slice(&vec);
-                result
-            })
-        }
+    pub(crate) fn row_usefulness(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        row: usize,
+    ) -> Result<Usefulness<ConstructorKind<'db>, Infallible>, matchcov::InputError> {
+        debug_assert!(self.nrows() > row);
+        let column_types: Vec<_> = self.rows[row].inner.iter().map(|pat| pat.ty).collect();
+        let previous: Vec<_> = self.rows[..row]
+            .iter()
+            .map(PatternRowVec::to_matchcov)
+            .collect();
+        matchcov::usefulness(
+            &mut FeConstructorOracle { db },
+            &column_types,
+            &previous,
+            &self.rows[row].to_matchcov(),
+        )
     }
 
     pub fn is_row_useful(&self, db: &'db dyn HirAnalysisDb, row: usize) -> bool {
-        debug_assert!(self.nrows() > row);
-        if row == 0 {
-            return true;
-        }
-
-        let previous = PatternMatrix {
-            rows: self.rows[0..row].to_vec(),
-        };
-        previous.is_pattern_useful(db, &self.rows[row])
-    }
-
-    fn is_pattern_useful(&self, db: &'db dyn HirAnalysisDb, pat_vec: &PatternRowVec<'db>) -> bool {
-        if self.nrows() == 0 {
-            return true;
-        }
-        if pat_vec.is_empty() || self.ncols() == 0 {
-            return false;
-        }
-
-        match &pat_vec.head().unwrap().kind {
-            MatrixPatKind::WildCard(_) => {
-                let d_specialized = pat_vec.d_specialize();
-                if d_specialized.is_empty() {
-                    false
-                } else {
-                    self.d_specialize().is_pattern_useful(db, &d_specialized[0])
-                }
-            }
-            MatrixPatKind::Constructor { kind, .. } => {
-                let phi_specialized = pat_vec.phi_specialize(db, *kind);
-                if phi_specialized.is_empty() {
-                    false
-                } else {
-                    self.phi_specialize(db, *kind)
-                        .is_pattern_useful(db, &phi_specialized[0])
-                }
-            }
-            MatrixPatKind::Or(pats) => pats.iter().any(|pat| {
-                let mut expanded = Vec::with_capacity(pat_vec.len());
-                expanded.push(pat.clone());
-                expanded.extend_from_slice(&pat_vec.inner[1..]);
-                self.is_pattern_useful(db, &PatternRowVec::new(expanded))
-            }),
-        }
+        !matches!(self.row_usefulness(db, row), Ok(Usefulness::Useless))
     }
 
     pub fn phi_specialize(&self, db: &'db dyn HirAnalysisDb, ctor: ConstructorKind<'db>) -> Self {
@@ -284,6 +194,10 @@ impl<'db> PatternRowVec<'db> {
         }
     }
 
+    fn to_matchcov(&self) -> Vec<Pattern<ConstructorKind<'db>>> {
+        self.inner.iter().map(MatrixPat::to_matchcov).collect()
+    }
+
     fn first_column_ty(&self) -> TyId<'db> {
         debug_assert!(!self.inner.is_empty());
         self.inner[0].ty
@@ -307,27 +221,6 @@ impl<'db> MatrixPat<'db> {
 
     pub(crate) fn wildcard(bind: Option<BindingRef<'db>>, ty: TyId<'db>) -> Self {
         Self::new(MatrixPatKind::WildCard(bind), ty)
-    }
-
-    pub(crate) fn constructor(
-        ctor: ConstructorKind<'db>,
-        fields: Vec<MatrixPat<'db>>,
-        ty: TyId<'db>,
-    ) -> Self {
-        Self::new(MatrixPatKind::Constructor { kind: ctor, fields }, ty)
-    }
-
-    pub(crate) fn ctor_with_wild_card_fields(
-        db: &'db dyn HirAnalysisDb,
-        ctor: ConstructorKind<'db>,
-        ty: TyId<'db>,
-    ) -> Self {
-        let fields = ctor
-            .field_types(db)
-            .into_iter()
-            .map(|field_ty| Self::wildcard(None, field_ty))
-            .collect();
-        Self::constructor(ctor, fields, ty)
     }
 
     pub(crate) fn is_wildcard(&self) -> bool {
@@ -354,6 +247,16 @@ impl<'db> MatrixPat<'db> {
             ),
         };
         Self::new(kind, node.match_ty().raw())
+    }
+
+    fn to_matchcov(&self) -> Pattern<ConstructorKind<'db>> {
+        match &self.kind {
+            MatrixPatKind::WildCard(_) => Pattern::Wildcard,
+            MatrixPatKind::Constructor { kind, fields } => {
+                Pattern::constructor(*kind, fields.iter().map(Self::to_matchcov))
+            }
+            MatrixPatKind::Or(pats) => Pattern::or(pats.iter().map(Self::to_matchcov)),
+        }
     }
 }
 
@@ -409,15 +312,18 @@ impl<'db> SigmaSet<'db> {
         } else if ty.is_tuple(db) {
             ctors.insert(ConstructorKind::Type(ty));
         } else if let Some(adt_def) = ty.adt_def(db) {
-            if let AdtRef::Enum(enum_def) = adt_def.adt_ref(db) {
-                for (idx, _) in enum_def.variants(db).enumerate() {
-                    ctors.insert(ConstructorKind::Variant(
-                        crate::core::hir_def::EnumVariant::new(enum_def, idx),
-                        ty,
-                    ));
+            match adt_def.adt_ref(db) {
+                AdtRef::Enum(enum_def) => {
+                    for (idx, _) in enum_def.variants(db).enumerate() {
+                        ctors.insert(ConstructorKind::Variant(
+                            crate::core::hir_def::EnumVariant::new(enum_def, idx),
+                            ty,
+                        ));
+                    }
                 }
-            } else if let AdtRef::Struct(_) = adt_def.adt_ref(db) {
-                ctors.insert(ConstructorKind::Type(ty));
+                AdtRef::Struct(_) => {
+                    ctors.insert(ConstructorKind::Type(ty));
+                }
             }
         }
 
@@ -464,16 +370,148 @@ impl<'db> IntoIterator for SigmaSet<'db> {
     }
 }
 
+struct FeConstructorOracle<'db> {
+    db: &'db dyn HirAnalysisDb,
+}
+
+impl<'db> ConstructorOracle<TyId<'db>, ConstructorKind<'db>> for FeConstructorOracle<'db> {
+    type Error = Infallible;
+
+    fn constructor_space(
+        &mut self,
+        ty: &TyId<'db>,
+        seen: &[ConstructorKind<'db>],
+    ) -> Result<ConstructorSpace<ConstructorKind<'db>>, Self::Error> {
+        let constructors = if ty.is_bool(self.db) {
+            Some(vec![
+                ConstructorKind::Literal(LitKind::Bool(false), *ty),
+                ConstructorKind::Literal(LitKind::Bool(true), *ty),
+            ])
+        } else if ty.is_tuple(self.db) {
+            Some(vec![ConstructorKind::Type(*ty)])
+        } else if let Some(adt_def) = ty.adt_def(self.db) {
+            match adt_def.adt_ref(self.db) {
+                AdtRef::Enum(enum_def) => Some(
+                    enum_def
+                        .variants(self.db)
+                        .enumerate()
+                        .map(|(idx, _)| {
+                            ConstructorKind::Variant(
+                                crate::core::hir_def::EnumVariant::new(enum_def, idx),
+                                *ty,
+                            )
+                        })
+                        .collect(),
+                ),
+                AdtRef::Struct(_) => Some(vec![ConstructorKind::Type(*ty)]),
+            }
+        } else {
+            seen.iter().find_map(|constructor| match constructor {
+                ConstructorKind::Type(_) => Some(vec![*constructor]),
+                ConstructorKind::Variant(..) | ConstructorKind::Literal(..) => None,
+            })
+        };
+
+        // Fe's decision-tree lowering cannot yet represent an exhaustive match
+        // with zero arms. Keep empty constructor families conservative so the
+        // existing non-exhaustive diagnostic prevents such a match from reaching
+        // lowering.
+        Ok(match constructors {
+            Some(constructors) if !constructors.is_empty() => {
+                ConstructorSpace::from_finite(seen, constructors)
+            }
+            Some(_) | None => ConstructorSpace::open(),
+        })
+    }
+
+    fn constructor_fields(
+        &mut self,
+        _ty: &TyId<'db>,
+        constructor: &ConstructorKind<'db>,
+    ) -> Result<ConstructorFields<TyId<'db>>, Self::Error> {
+        Ok(ConstructorFields::Fields(constructor.field_types(self.db)))
+    }
+}
+
+pub(crate) struct MatchAnalysis {
+    pub(crate) unreachable_arms: Vec<usize>,
+    pub(crate) exhaustiveness: MatchExhaustiveness,
+}
+
+pub(crate) enum MatchExhaustiveness {
+    Exhaustive,
+    NonExhaustive(Vec<String>),
+    Inconclusive(String),
+}
+
+pub(crate) fn analyze_match<'db>(
+    db: &'db dyn HirAnalysisDb,
+    store: &PatternStore<'db>,
+    roots: &[ValidatedPatId],
+    ty: TyId<'db>,
+) -> MatchAnalysis {
+    let analysis = match analyze_patterns(db, store, roots, ty) {
+        Ok(analysis) => analysis,
+        Err(error) => {
+            return MatchAnalysis {
+                unreachable_arms: Vec::new(),
+                exhaustiveness: MatchExhaustiveness::Inconclusive(format!(
+                    "invalid pattern matrix: {error}"
+                )),
+            };
+        }
+    };
+
+    let unreachable_arms = analysis
+        .arms
+        .iter()
+        .enumerate()
+        .filter_map(|(index, reachability)| {
+            matches!(reachability, Reachability::Unreachable(_)).then_some(index)
+        })
+        .collect();
+    let exhaustiveness = match analysis.exhaustiveness {
+        Exhaustiveness::Exhaustive => MatchExhaustiveness::Exhaustive,
+        Exhaustiveness::NonExhaustive(witness) => MatchExhaustiveness::NonExhaustive(
+            witness
+                .iter()
+                .map(|pattern| display_missing_pattern(db, pattern))
+                .collect(),
+        ),
+        Exhaustiveness::Inconclusive(reason) => {
+            MatchExhaustiveness::Inconclusive(display_inconclusive_reason(reason))
+        }
+    };
+
+    MatchAnalysis {
+        unreachable_arms,
+        exhaustiveness,
+    }
+}
+
 pub fn check_exhaustiveness<'db>(
     db: &'db dyn HirAnalysisDb,
     store: &PatternStore<'db>,
     roots: &[ValidatedPatId],
     ty: TyId<'db>,
 ) -> Result<(), Vec<String>> {
-    let matrix = PatternMatrix::from_roots(store, roots);
-    match matrix.find_missing_patterns(db) {
-        Some(missing) => Err(condense_missing_patterns(db, &missing, ty)),
-        None => Ok(()),
+    match analyze_patterns(db, store, roots, ty) {
+        Ok(Analysis {
+            exhaustiveness: Exhaustiveness::Exhaustive,
+            ..
+        }) => Ok(()),
+        Ok(Analysis {
+            exhaustiveness: Exhaustiveness::NonExhaustive(witness),
+            ..
+        }) => Err(witness
+            .iter()
+            .map(|pattern| display_missing_pattern(db, pattern))
+            .collect()),
+        Ok(Analysis {
+            exhaustiveness: Exhaustiveness::Inconclusive(_),
+            ..
+        })
+        | Err(_) => Err(Vec::new()),
     }
 }
 
@@ -482,38 +520,74 @@ pub fn check_reachability<'db>(
     store: &PatternStore<'db>,
     roots: &[ValidatedPatId],
 ) -> Vec<bool> {
-    let matrix = PatternMatrix::from_roots(store, roots);
-    (0..roots.len())
-        .map(|i| matrix.is_row_useful(db, i))
-        .collect()
-}
-
-fn condense_missing_patterns<'db>(
-    db: &'db dyn HirAnalysisDb,
-    missing: &[MatrixPat<'db>],
-    _ty: TyId<'db>,
-) -> Vec<String> {
-    if missing.is_empty() {
+    let Some(root) = roots.first() else {
         return Vec::new();
+    };
+    let ty = store.node(*root).match_ty().raw();
+    match analyze_patterns(db, store, roots, ty) {
+        Ok(analysis) => analysis
+            .arms
+            .into_iter()
+            .map(|reachability| !matches!(reachability, Reachability::Unreachable(_)))
+            .collect(),
+        Err(_) => vec![true; roots.len()],
     }
-
-    let mut result = Vec::new();
-    for pattern in missing.iter().take(3) {
-        result.push(display_missing_pattern(db, pattern));
-    }
-    if missing.len() > 3 {
-        result.push(format!("... and {} more patterns", missing.len() - 3));
-    }
-    result
 }
 
-pub(crate) fn display_missing_pattern<'db>(
+pub fn is_exhaustive<'db>(
     db: &'db dyn HirAnalysisDb,
-    pat: &MatrixPat<'db>,
+    store: &PatternStore<'db>,
+    roots: &[ValidatedPatId],
+    ty: TyId<'db>,
+) -> bool {
+    analyze_patterns(db, store, roots, ty)
+        .is_ok_and(|analysis| matches!(analysis.exhaustiveness, Exhaustiveness::Exhaustive))
+}
+
+fn analyze_patterns<'db>(
+    db: &'db dyn HirAnalysisDb,
+    store: &PatternStore<'db>,
+    roots: &[ValidatedPatId],
+    ty: TyId<'db>,
+) -> Result<Analysis<ConstructorKind<'db>, Infallible>, InputError> {
+    let arms = roots
+        .iter()
+        .map(|root| Arm::new([MatrixPat::from_root(store, *root).to_matchcov()]));
+    matchcov::analyze(
+        &mut FeConstructorOracle { db },
+        &[ty],
+        &arms.collect::<Vec<_>>(),
+    )
+}
+
+fn display_inconclusive_reason(reason: InconclusiveReason<Infallible>) -> String {
+    match reason {
+        InconclusiveReason::Oracle(error) => match error {},
+        InconclusiveReason::StepLimitExceeded { max_steps } => {
+            format!("pattern analysis exceeded its {max_steps}-step limit")
+        }
+        InconclusiveReason::DepthLimitExceeded { max_depth } => {
+            format!("pattern analysis exceeded its recursion-depth limit of {max_depth}")
+        }
+        InconclusiveReason::ArityMismatch { expected, actual } => format!(
+            "pattern constructor metadata expected {expected} fields but the pattern has {actual}"
+        ),
+        InconclusiveReason::InconsistentOracle => {
+            "pattern constructor metadata is inconsistent".to_string()
+        }
+    }
+}
+
+fn display_missing_pattern<'db>(
+    db: &'db dyn HirAnalysisDb,
+    pat: &Witness<ConstructorKind<'db>>,
 ) -> String {
-    match &pat.kind {
-        MatrixPatKind::WildCard(_) => "_".to_string(),
-        MatrixPatKind::Constructor { kind, fields } => match kind {
+    match pat {
+        Witness::Wildcard | Witness::OtherThan { .. } => "_".to_string(),
+        Witness::Constructor {
+            head: kind,
+            arguments: fields,
+        } => match kind {
             ConstructorKind::Variant(variant, _) => {
                 let variant_name = variant
                     .name(db)
@@ -562,27 +636,5 @@ pub(crate) fn display_missing_pattern<'db>(
                 LitKind::String(s) => format!("\"{}\"", s.data(db)),
             },
         },
-        MatrixPatKind::Or(patterns) => {
-            if patterns.is_empty() {
-                "_".to_string()
-            } else if patterns.len() == 1 {
-                display_missing_pattern(db, &patterns[0])
-            } else {
-                let examples: Vec<String> = patterns
-                    .iter()
-                    .take(3)
-                    .map(|p| display_missing_pattern(db, p))
-                    .collect();
-                if patterns.len() <= 3 {
-                    examples.join(" | ")
-                } else {
-                    format!(
-                        "{} | ... ({} more)",
-                        examples.join(" | "),
-                        patterns.len() - 3
-                    )
-                }
-            }
-        }
     }
 }

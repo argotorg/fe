@@ -4727,36 +4727,41 @@ impl<'db> TyChecker<'db> {
                 .iter()
                 .filter_map(|status| status.ready_root())
                 .collect();
-            let reachability = crate::analysis::ty::pattern_analysis::check_reachability(
+            let analysis = crate::analysis::ty::pattern_analysis::analyze_match(
                 self.db,
                 &pattern_store,
                 &roots,
+                scrutinee_pat_ty,
             );
 
-            for (i, is_reachable) in reachability.iter().enumerate() {
-                if *is_reachable {
-                    continue;
-                }
+            for i in analysis.unreachable_arms {
                 let diag = BodyDiag::UnreachablePattern {
                     primary: arms[i].pat.span(self.body()).into(),
                 };
                 self.push_diag(diag);
             }
 
-            if let Err(missing_patterns) =
-                crate::analysis::ty::pattern_analysis::check_exhaustiveness(
-                    self.db,
-                    &pattern_store,
-                    &roots,
-                    scrutinee_pat_ty,
-                )
-            {
-                let diag = BodyDiag::NonExhaustiveMatch {
-                    primary: expr.span(self.body()).into(),
-                    scrutinee_ty: scrutinee_pat_ty,
+            match analysis.exhaustiveness {
+                crate::analysis::ty::pattern_analysis::MatchExhaustiveness::Exhaustive => {}
+                crate::analysis::ty::pattern_analysis::MatchExhaustiveness::NonExhaustive(
                     missing_patterns,
-                };
-                self.push_diag(diag);
+                ) => {
+                    let diag = BodyDiag::NonExhaustiveMatch {
+                        primary: expr.span(self.body()).into(),
+                        scrutinee_ty: scrutinee_pat_ty,
+                        missing_patterns,
+                    };
+                    self.push_diag(diag);
+                }
+                crate::analysis::ty::pattern_analysis::MatchExhaustiveness::Inconclusive(
+                    reason,
+                ) => {
+                    let diag = BodyDiag::PatternAnalysisInconclusive {
+                        primary: expr.span(self.body()).into(),
+                        reason,
+                    };
+                    self.push_diag(diag);
+                }
             }
         }
 

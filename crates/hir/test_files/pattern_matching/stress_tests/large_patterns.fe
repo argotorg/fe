@@ -126,9 +126,9 @@ fn test_deeply_nested_tuple_patterns(data: ((((((u8, bool), u8), bool), u8), boo
         ((((((0, true), 1), false), 2), true), 3) => 255
         ((((((x, true), _), _), _), _), _) => x + 200
         ((((_, _), z), _), _) => z + 100
-        (((_, w), _), _) => w + 50
-        ((_, _), v) => v + 10
-        _ => 1
+        // The previous arm covers all remaining nested tuples.
+        //
+        // Keep this match exhaustive without redundant arms.
     }
 }
 
@@ -176,7 +176,7 @@ fn test_nested_large_tuples(data: ((u8, u8, u8, u8), (bool, bool, bool, bool), (
         ((0, _, _, 3), (true, _, _, false), _) => 200
         ((_, 1, 2, _), (_, true, false, _), (VeryLargeEnum::Variant3 | VeryLargeEnum::Variant4, _)) => 150
         ((a, b, c, d), _, _) => a + b + c + d + 100
-        _ => 1
+        // The binding pattern above covers every remaining value.
     }
 }
 

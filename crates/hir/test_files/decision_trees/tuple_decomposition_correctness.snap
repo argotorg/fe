@@ -255,19 +255,15 @@ note:
        │     └─ _ =>
        │        └─ Execute arm #2
        └─ false =>
-          └─ Switch on expr.0
+          └─ Switch on expr.1
              ├─ false =>
-             │  └─ Switch on expr.1
+             │  └─ Switch on expr.0
              │     ├─ false =>
              │     │  └─ Execute arm #1
-             │     └─ _ =>
-             │        └─ Execute arm #2
-             └─ true =>
-                └─ Switch on expr.1
-                   ├─ false =>
-                   │  └─ Execute arm #1
-                   └─ _ =>
-                      └─ Execute arm #2
+             │     └─ true =>
+             │        └─ Execute arm #1
+             └─ _ =>
+                └─ Execute arm #2
 
 
 note:

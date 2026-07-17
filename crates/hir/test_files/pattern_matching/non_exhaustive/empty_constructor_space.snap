@@ -1,0 +1,14 @@
+---
+source: crates/hir/tests/pattern_matching.rs
+expression: diagnostic_output
+input_file: test_files/pattern_matching/non_exhaustive/empty_constructor_space.fe
+---
+Non-exhaustive test file empty_constructor_space.fe has 1 diagnostic(s):
+
+error[8-0034]: non-exhaustive patterns: type `Empty` is not covered
+  ┌─ empty_constructor_space.fe:4:5
+  │
+4 │     match value {}
+  │     ^^^^^^^^^^^^^^ match expression does not cover all possible values
+  │
+  = Not covered: `_`

@@ -2210,6 +2210,7 @@ dependencies = [
  "fe-test-utils",
  "indexmap 2.13.0",
  "itertools 0.14.0",
+ "matchcov",
  "num-bigint",
  "num-traits",
  "paste",
@@ -4404,6 +4405,12 @@ dependencies = [
  "serde_repr",
  "url",
 ]
+
+[[package]]
+name = "matchcov"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "40459aafa8d5c25a61c1e176a86d8111b508927716c76f98e4f66a007eb6ee86"
 
 [[package]]
 name = "matchers"

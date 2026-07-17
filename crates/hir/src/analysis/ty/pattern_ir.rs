@@ -169,13 +169,12 @@ impl<'db> PatternStore<'db> {
             },
             ValidatedPatKind::Or(pats) => {
                 pats.iter().any(|pat| self.is_irrefutable(db, *pat))
-                    || crate::analysis::ty::pattern_analysis::check_exhaustiveness(
+                    || crate::analysis::ty::pattern_analysis::is_exhaustive(
                         db,
                         self,
                         pats,
                         self.node(id).match_ty().raw(),
                     )
-                    .is_ok()
             }
         }
     }

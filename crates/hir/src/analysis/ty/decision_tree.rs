@@ -9,6 +9,7 @@ use crate::analysis::HirAnalysisDb;
 use crate::core::hir_def::EnumVariant;
 use crate::projection::{Projection as GenericProjection, ProjectionPath as GenericProjectionPath};
 use indexmap::IndexMap;
+use matchcov::Usefulness;
 
 use core::convert::Infallible;
 
@@ -528,7 +529,10 @@ impl NecessityMatrix {
                     self.data[pos] = true;
                 } else {
                     let reduced_pat_mat = matrix.reduced_pat_mat(col);
-                    self.data[pos] = !reduced_pat_mat.is_row_useful(db, row);
+                    self.data[pos] = match reduced_pat_mat.row_usefulness(db, row) {
+                        Ok(Usefulness::Useful(_)) => false,
+                        Ok(Usefulness::Useless | Usefulness::Inconclusive(_)) | Err(_) => true,
+                    };
                 }
             }
         }
