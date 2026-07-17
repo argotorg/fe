@@ -244,7 +244,11 @@ pub(crate) fn normalize_trait_inst_preserving_validity<'db>(
     }
 }
 
-#[salsa::tracked(return_ref)]
+#[salsa::tracked(
+    return_ref,
+    cycle_fn=is_query_satisfiable_cycle_recover,
+    cycle_initial=is_query_satisfiable_cycle_initial
+)]
 fn is_query_satisfiable<'db>(
     db: &'db dyn HirAnalysisDb,
     origin_ingot: Ingot<'db>,
@@ -255,6 +259,28 @@ fn is_query_satisfiable<'db>(
     };
 
     ProofForest::new(db, origin_ingot, query).solve()
+}
+
+fn is_query_satisfiable_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _origin_ingot: Ingot<'db>,
+    _query: Canonical<TraitSolverQuery<'db>>,
+) -> GoalSatisfiability<'db> {
+    // A cycle can arise while collecting an impl whose constraints contain an associated-type
+    // projection: resolving the projection needs the trait environment that is currently being
+    // assembled for the outer goal. Treat the incomplete pass as ambiguous so callers keep the
+    // candidate alive; the next fixpoint iteration can decide it once impl collection converges.
+    GoalSatisfiability::NeedsConfirmation(IndexSet::default())
+}
+
+fn is_query_satisfiable_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &GoalSatisfiability<'db>,
+    _count: u32,
+    _origin_ingot: Ingot<'db>,
+    _query: Canonical<TraitSolverQuery<'db>>,
+) -> salsa::CycleRecoveryAction<GoalSatisfiability<'db>> {
+    salsa::CycleRecoveryAction::Iterate
 }
 
 pub fn is_goal_query_satisfiable<'db>(

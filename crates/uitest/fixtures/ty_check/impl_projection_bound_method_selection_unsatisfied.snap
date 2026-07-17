@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/impl_projection_bound_method_selection_unsatisfied.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ impl_projection_bound_method_selection_unsatisfied.fe:25:5
+   │
+25 │     h.consume()
+   │     ^^^^^^^^^^^
+   │     │
+   │     `Holder` doesn't implement `Consume`
+   │     trait bound `Holder::Out: Tagged` is not satisfied
