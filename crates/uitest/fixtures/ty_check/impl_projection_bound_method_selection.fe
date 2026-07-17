@@ -1,0 +1,28 @@
+trait Tagged {}
+
+struct Holder {}
+
+impl Tagged for Holder {}
+
+trait Assoc {
+    type Out
+}
+
+impl Assoc for Holder {
+    type Out = Holder
+}
+
+trait Consume {
+    fn consume(self)
+}
+
+impl Consume for Holder
+where <Holder as Assoc>::Out: Tagged
+{
+    fn consume(self) {}
+}
+
+fn caller() {
+    let h = Holder {}
+    h.consume()
+}
