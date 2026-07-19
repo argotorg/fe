@@ -4969,7 +4969,13 @@ impl<'db> RmirEmitter<'db> {
             .semantic(self.db)
             .expect("runtime const reification requires a semantic instance");
         reify_runtime_const_for_ty(self.db, semantic, expected_ty, value).unwrap_or_else(|| {
-            panic!("semantic const should reify for runtime lowering: {value:?}")
+            panic!(
+                "semantic const should reify for runtime lowering: `{}` (expected type `{}`). \
+                 This is a compiler bug: the const failed to evaluate but no diagnostic was \
+                 reported during type checking.",
+                value.pretty_print(self.db),
+                expected_ty.pretty_print(self.db),
+            )
         })
     }
 

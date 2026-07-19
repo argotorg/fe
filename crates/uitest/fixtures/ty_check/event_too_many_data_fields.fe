@@ -1,0 +1,25 @@
+// Events are encoded through the `EventAbiEncode` tuple impls, which stop at
+// arity 16. An event with 17 non-indexed fields must produce a trait-bound
+// diagnostic pointing at the event definition instead of an ICE.
+use std::evm::Log
+
+#[event]
+struct TooWide {
+    f0: u256,
+    f1: u256,
+    f2: u256,
+    f3: u256,
+    f4: u256,
+    f5: u256,
+    f6: u256,
+    f7: u256,
+    f8: u256,
+    f9: u256,
+    f10: u256,
+    f11: u256,
+    f12: u256,
+    f13: u256,
+    f14: u256,
+    f15: u256,
+    f16: u256,
+}

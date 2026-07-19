@@ -1,0 +1,18 @@
+// Unsatisfied trait bounds on goals that mention string literal types used to
+// be silently discharged: string literals carry a string-sorted inference
+// variable until the `String<N>` fallback is applied, and the final
+// obligation pass treated such goals as "not concrete" and skipped the
+// diagnostic. The error then surfaced as an ICE during MIR lowering.
+use core::AsBytes
+
+fn takes_asbytes<T: AsBytes>(_ x: T) -> u256 {
+    0
+}
+
+fn tuple_with_unsatisfied_elem() -> u256 {
+    takes_asbytes(("a", true))
+}
+
+fn tuple_arity_above_asbytes_impls() -> u256 {
+    core::keccak(("a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r"))
+}

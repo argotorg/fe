@@ -1193,6 +1193,18 @@ impl<'db> TyChecker<'db> {
             return TraitObligationOutcome::Discharged;
         }
 
+        if final_pass {
+            // Apply literal fallbacks (e.g. string type variables defaulting to
+            // `String<N>`) before the last solving attempt. The typed body will
+            // contain the fallback types anyway, and without this an
+            // unsatisfied goal that mentions a literal variable would be
+            // discharged as "not concrete" below, silently suppressing the
+            // diagnostic and letting the error surface as an ICE in later
+            // lowering stages.
+            let mut prober = env::Prober::new(&mut self.table, scope);
+            obligation.goal = obligation.goal.fold_with(db, &mut prober);
+        }
+
         obligation.goal = self.normalize_trait_goal(obligation.goal);
         let goal = obligation.goal;
         let flags = collect_flags(db, goal);
