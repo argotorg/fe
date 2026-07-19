@@ -14,7 +14,7 @@ pub struct Transfer {
 }
 
 impl std::evm::Event for Transfer {
-    const TOPIC0: u256 = core::keccak(("Transfer", "(", Address::SOL_TYPE, ",", Address::SOL_TYPE, ",", u256::SOL_TYPE, ")"))
+    const TOPIC0: u256 = core::keccak(((((((("Transfer", "("), Address::SOL_TYPE), ","), Address::SOL_TYPE), ","), u256::SOL_TYPE), ")"))
 
     #[inline(always)]
     fn emit<L: std::evm::Log>(own self, _ log: mut L) {

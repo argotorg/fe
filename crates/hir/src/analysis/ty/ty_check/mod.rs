@@ -79,7 +79,11 @@ use super::{
     unify::{InferenceKey, Snapshot, UnificationError, UnificationTable},
 };
 use crate::analysis::semantic::SemanticCodeRegionRef;
-use crate::analysis::semantic::{SemConstId, SemConstScalar, SemConstValue, eval_body_owner_const};
+use crate::analysis::semantic::{
+    EffectProviderSubst, GenericSubst, ImplEnv, SemConstId, SemConstScalar, SemConstValue,
+    SemanticInstanceKey, eval_body_owner_const, get_or_build_semantic_instance,
+    reify_runtime_const_for_ty,
+};
 use crate::analysis::ty::ty_def::{TyBase, TyData};
 use crate::analysis::ty::{
     const_ty::{ConstTyData, invalid_cause_from_ctfe_error},
@@ -139,12 +143,6 @@ pub fn check_impl_trait_const_bodies<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_trait: ImplTrait<'db>,
 ) -> Vec<FuncBodyDiag<'db>> {
-    // Only check impls the user wrote; attribute-expanded impls (e.g.
-    // `#[event]`) would re-report their cascade failures at the expansion
-    // site on already-diagnosed code.
-    if !matches!(impl_trait.origin(db), crate::span::HirOrigin::Raw(_)) {
-        return Vec::new();
-    }
     let Some(implementor) = lower_impl_trait(db, impl_trait) else {
         return Vec::new();
     };
@@ -169,12 +167,37 @@ pub fn check_impl_trait_const_bodies<'db>(
         if expected_ty.has_invalid(db) {
             continue;
         }
-        diags.extend(
-            check_anon_const_body(db, body, expected_ty)
-                .0
-                .iter()
-                .cloned(),
-        );
+        let body_diags = &check_anon_const_body(db, body, expected_ty).0;
+        let generated_origin = match impl_trait.origin(db) {
+            crate::span::HirOrigin::Desugared(crate::span::DesugaredOrigin::Event(_)) => {
+                Some("generated `#[event]` implementation")
+            }
+            crate::span::HirOrigin::Desugared(crate::span::DesugaredOrigin::Error(_)) => {
+                Some("generated `#[error]` implementation")
+            }
+            _ => None,
+        };
+        if generated_origin.is_none() {
+            diags.extend(body_diags.iter().cloned());
+        }
+        if body_diags.is_empty()
+            && let Some(origin) = generated_origin
+        {
+            let const_name = impl_const.name(db).map_or_else(
+                || "<associated const>".to_string(),
+                |name| name.data(db).clone(),
+            );
+            diags.extend(const_body_ctfe_diags_with_context(
+                db,
+                body,
+                expected_ty,
+                false,
+                Some(ConstDiagContext {
+                    const_name,
+                    origin: origin.to_string(),
+                }),
+            ));
+        }
     }
     diags
 }
@@ -449,25 +472,90 @@ pub(crate) fn const_body_ctfe_diags<'db>(
     expected: TyId<'db>,
     allow_type_level: bool,
 ) -> Vec<FuncBodyDiag<'db>> {
+    const_body_ctfe_diags_with_context(db, body, expected, allow_type_level, None)
+}
+
+struct ConstDiagContext {
+    const_name: String,
+    origin: String,
+}
+
+fn const_body_ctfe_diags_with_context<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    expected: TyId<'db>,
+    allow_type_level: bool,
+    context: Option<ConstDiagContext>,
+) -> Vec<FuncBodyDiag<'db>> {
     let owner = BodyOwner::AnonConstBody { body, expected };
     let mut diags = Vec::new();
     match eval_body_owner_const(db, owner, Vec::new()) {
         Ok(value) => {
             if !allow_type_level && matches!(value.value(db), SemConstValue::TypeLevel { .. }) {
-                diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into());
+                push_const_eval_diag(&mut diags, body, context, "could not be fully resolved");
+            } else if !allow_type_level {
+                let key = SemanticInstanceKey::new(
+                    db,
+                    owner,
+                    GenericSubst::empty(db),
+                    EffectProviderSubst::empty(db),
+                    ImplEnv::empty(db, owner.scope()),
+                );
+                let semantic = get_or_build_semantic_instance(db, key);
+                if reify_runtime_const_for_ty(db, semantic, expected, value).is_none() {
+                    push_const_eval_diag(
+                        &mut diags,
+                        body,
+                        context,
+                        "could not be reified for runtime lowering",
+                    );
+                }
             }
         }
         Err(crate::analysis::semantic::CtfeError::NotConstEvaluable { .. }) => {
-            diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into());
+            push_const_eval_diag(&mut diags, body, context, "is not const-evaluable");
         }
         Err(err) => {
-            let ty = TyId::invalid(db, invalid_cause_from_ctfe_error(db, owner, err));
-            if let Some(diag) = ty.emit_diag(db, body.span().into()) {
-                diags.push(diag.into());
+            if let Some(context) = context {
+                diags.push(
+                    BodyDiag::ConstEvaluationFailed {
+                        primary: body.span().into(),
+                        const_name: context.const_name,
+                        origin: context.origin,
+                        reason: "failed during compile-time evaluation".to_string(),
+                    }
+                    .into(),
+                );
+            } else {
+                let ty = TyId::invalid(db, invalid_cause_from_ctfe_error(db, owner, err));
+                if let Some(diag) = ty.emit_diag(db, body.span().into()) {
+                    diags.push(diag.into());
+                }
             }
         }
     }
     diags
+}
+
+fn push_const_eval_diag<'db>(
+    diags: &mut Vec<FuncBodyDiag<'db>>,
+    body: Body<'db>,
+    context: Option<ConstDiagContext>,
+    reason: &str,
+) {
+    if let Some(context) = context {
+        diags.push(
+            BodyDiag::ConstEvaluationFailed {
+                primary: body.span().into(),
+                const_name: context.const_name,
+                origin: context.origin,
+                reason: reason.to_string(),
+            }
+            .into(),
+        );
+    } else {
+        diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into());
+    }
 }
 
 fn typed_body_for_bodyless_func<'db>(

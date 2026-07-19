@@ -1,0 +1,48 @@
+use std::abi::{Bytes, DynArray, bytes_from_words_prefix}
+use std::evm::{Log, RawMem, encode_event_payload, mem}
+
+#[event]
+struct Mixed {
+    #[indexed]
+    provider: Address,
+    values: DynArray<u256>,
+    extra: Bytes,
+    invariant: u256,
+}
+
+#[test]
+fn test_mixed_dynamic_event() uses (log: mut Log, raw: mut RawMem) {
+    assert!(
+        Mixed::TOPIC0
+            == 0x97cd0165cf79835d3d0313bb5b69cd7cffaba79923a1a4d398385b5c9950a6a2,
+    )
+
+    let array_ptr = mem::alloc(64)
+    raw.mstore(addr: array_ptr, value: 1)
+    raw.mstore(addr: array_ptr + 32, value: 7)
+    let values = DynArray { data: array_ptr, len: 1, size: 64 }
+    let extra = bytes_from_words_prefix<1, 1>([
+        0xaa00000000000000000000000000000000000000000000000000000000000000,
+    ])
+    let (data, len) = encode_event_payload((values, extra, 3 as u256))
+
+    // Solidity: abi.encode(uint256[](7), bytes(hex"aa"), uint256(3)).
+    assert!(len == 224)
+    assert!(raw.mload(data) == 96)
+    assert!(raw.mload(data + 32) == 160)
+    assert!(raw.mload(data + 64) == 3)
+    assert!(raw.mload(data + 96) == 1)
+    assert!(raw.mload(data + 128) == 7)
+    assert!(raw.mload(data + 160) == 1)
+    assert!(
+        raw.mload(data + 192)
+            == 0xaa00000000000000000000000000000000000000000000000000000000000000,
+    )
+
+    log.emit(Mixed {
+        provider: Address::zero(),
+        values: values,
+        extra: extra,
+        invariant: 3,
+    })
+}
