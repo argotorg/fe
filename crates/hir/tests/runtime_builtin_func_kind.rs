@@ -22,6 +22,8 @@ fn classifies_core_and_std_runtime_builtins() {
         .expect("failed to resolve core::panic");
     let keccak = resolve_lib_func_path(&db, func.scope(), "core::intrinsic::__keccak256")
         .expect("failed to resolve core::intrinsic::__keccak256");
+    let signextend = resolve_lib_func_path(&db, func.scope(), "std::evm::ops::signextend")
+        .expect("failed to resolve std::evm::ops::signextend");
 
     assert_eq!(
         runtime_builtin_func_kind(&db, alloc),
@@ -38,5 +40,9 @@ fn classifies_core_and_std_runtime_builtins() {
     assert_eq!(
         runtime_builtin_func_kind(&db, keccak),
         Some(RuntimeBuiltinFuncKind::IntrinsicKeccak256)
+    );
+    assert_eq!(
+        runtime_builtin_func_kind(&db, signextend),
+        Some(RuntimeBuiltinFuncKind::SignExtend)
     );
 }

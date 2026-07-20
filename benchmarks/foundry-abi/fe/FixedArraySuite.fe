@@ -1,0 +1,87 @@
+use std::abi::{sol, Bytes, DynString}
+use std::evm::Address
+
+msg FixedArraySuiteMsg {
+    #[selector = sol("echoBoolArray5(bool[5])")]
+    EchoBoolArray5 { value: [bool; 5] } -> [bool; 5],
+    #[selector = sol("echoBoolArray17(bool[17])")]
+    EchoBoolArray17 { value: [bool; 17] } -> [bool; 17],
+    #[selector = sol("echoUintArray8(uint256[8])")]
+    EchoUintArray8 { value: [u256; 8] } -> [u256; 8],
+    #[selector = sol("echoUintArray16(uint256[16])")]
+    EchoUintArray16 { value: [u256; 16] } -> [u256; 16],
+    #[selector = sol("echoUintArray32(uint256[32])")]
+    EchoUintArray32 { value: [u256; 32] } -> [u256; 32],
+    #[selector = sol("echoStringArray5(string[5])")]
+    EchoStringArray5 { value: [DynString; 5] } -> [DynString; 5],
+    #[selector = sol("echoStringArray17(string[17])")]
+    EchoStringArray17 { value: [DynString; 17] } -> [DynString; 17],
+    #[selector = sol("echoBytesArray5(bytes[5])")]
+    EchoBytesArray5 { value: [Bytes; 5] } -> [Bytes; 5],
+    #[selector = sol("echoBytesArray17(bytes[17])")]
+    EchoBytesArray17 { value: [Bytes; 17] } -> [Bytes; 17],
+    #[selector = sol("echoBoolAddressPairArray8((bool,address)[8])")]
+    EchoBoolAddressPairArray8 { value: [(bool, Address); 8] } -> [(bool, Address); 8],
+    #[selector = sol("echoStringU64PairArray5((string,uint64)[5])")]
+    EchoStringU64PairArray5 { value: [(DynString, u64); 5] } -> [(DynString, u64); 5],
+    #[selector = sol("echoBytesU64PairArray5((bytes,uint64)[5])")]
+    EchoBytesU64PairArray5 { value: [(Bytes, u64); 5] } -> [(Bytes, u64); 5],
+    #[selector = sol("echoNestedUintArray2x5(uint256[5][2])")]
+    EchoNestedUintArray2x5 { value: [[u256; 5]; 2] } -> [[u256; 5]; 2],
+}
+
+pub contract FixedArraySuite {
+    recv FixedArraySuiteMsg {
+        EchoBoolArray5 { value } -> [bool; 5] {
+            value
+        }
+
+        EchoBoolArray17 { value } -> [bool; 17] {
+            value
+        }
+
+        EchoUintArray8 { value } -> [u256; 8] {
+            value
+        }
+
+        EchoUintArray16 { value } -> [u256; 16] {
+            value
+        }
+
+        EchoUintArray32 { value } -> [u256; 32] {
+            value
+        }
+
+        EchoStringArray5 { value } -> [DynString; 5] {
+            value
+        }
+
+        EchoStringArray17 { value } -> [DynString; 17] {
+            value
+        }
+
+        EchoBytesArray5 { value } -> [Bytes; 5] {
+            value
+        }
+
+        EchoBytesArray17 { value } -> [Bytes; 17] {
+            value
+        }
+
+        EchoBoolAddressPairArray8 { value } -> [(bool, Address); 8] {
+            value
+        }
+
+        EchoStringU64PairArray5 { value } -> [(DynString, u64); 5] {
+            value
+        }
+
+        EchoBytesU64PairArray5 { value } -> [(Bytes, u64); 5] {
+            value
+        }
+
+        EchoNestedUintArray2x5 { value } -> [[u256; 5]; 2] {
+            value
+        }
+    }
+}

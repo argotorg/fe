@@ -467,7 +467,9 @@ func private %contract_runtime_root_EffectHandleFieldDeref() {
         v4.i256 = evm_calldata_load 0.i256;
         v6.i256 = shr 224.i256 v4;
         v7.i32 = trunc v6 i32;
-        br_table v7 block3 (1.i32 block4) (2.i32 block5) (3.i32 block6);
+        v9.i1 = gt v7 2.i32;
+        v10.i1 = is_zero v9;
+        br v10 block7 block8;
 
     block3:
         evm_revert 0.i256 0.i256;
@@ -483,6 +485,23 @@ func private %contract_runtime_root_EffectHandleFieldDeref() {
     block6:
         call %contract_recv_abi_EffectHandleFieldDeref_3;
         unreachable;
+
+    block7:
+        v14.i1 = gt v7 1.i32;
+        v15.i1 = is_zero v14;
+        br v15 block9 block10;
+
+    block8:
+        v18.i1 = eq v7 3.i32;
+        br v18 block6 block3;
+
+    block9:
+        v20.i1 = eq v7 1.i32;
+        br v20 block4 block3;
+
+    block10:
+        v22.i1 = eq v7 2.i32;
+        br v22 block5 block3;
 }
 
 func private %std__lib__abi__sol__impl_trait_Sol_1f5f__decode_error_1efd() {

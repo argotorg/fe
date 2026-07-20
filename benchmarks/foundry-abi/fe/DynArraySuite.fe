@@ -1,0 +1,33 @@
+use std::abi::{DynArray, DynString, sol}
+use std::evm::Address
+
+msg DynArraySuiteMsg {
+    #[selector = sol("echoUintArray(uint256[])")]
+    EchoUintArray { value: DynArray<u256> } -> DynArray<u256>,
+    #[selector = sol("echoBoolAddressPairArray((bool,address)[])")]
+    EchoBoolAddressPairArray { value: DynArray<(bool, Address)> } -> DynArray<(bool, Address)>,
+    #[selector = sol("echoStringArray(string[])")]
+    EchoStringArray { value: DynArray<DynString> } -> DynArray<DynString>,
+    #[selector = sol("echoStringU64PairArray((string,uint64)[])")]
+    EchoStringU64PairArray { value: DynArray<(DynString, u64)> } -> DynArray<(DynString, u64)>,
+}
+
+pub contract DynArraySuite {
+    recv DynArraySuiteMsg {
+        EchoUintArray { value } -> DynArray<u256> {
+            value
+        }
+
+        EchoBoolAddressPairArray { value } -> DynArray<(bool, Address)> {
+            value
+        }
+
+        EchoStringArray { value } -> DynArray<DynString> {
+            value
+        }
+
+        EchoStringU64PairArray { value } -> DynArray<(DynString, u64)> {
+            value
+        }
+    }
+}
