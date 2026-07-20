@@ -6,7 +6,21 @@ use std::{
 fn main() {
     println!("cargo:rerun-if-changed=tests/fixtures");
     println!("cargo:rerun-if-changed=tests/doc_fixtures");
+    println!("cargo:rerun-if-env-changed=FE_GIT_COMMIT");
     println!("cargo:rerun-if-env-changed=FE_GIT_HASH");
+
+    let repo = git_repo();
+    if let Some(repo) = &repo {
+        emit_git_rerun_paths(repo);
+    }
+
+    let commit_override = env::var("FE_GIT_COMMIT")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if let Some(commit) = commit_override.or_else(|| repo_head_commit(repo.as_ref())) {
+        println!("cargo:rustc-env=FE_GIT_COMMIT={commit}");
+    }
 
     if let Ok(override_hash) = env::var("FE_GIT_HASH")
         && !override_hash.trim().is_empty()
@@ -15,7 +29,7 @@ fn main() {
         return;
     }
 
-    let Some(repo) = git_repo() else {
+    let Some(repo) = repo else {
         return;
     };
 
@@ -23,9 +37,12 @@ fn main() {
         return;
     };
 
-    emit_git_rerun_paths(&repo);
     let hash = head_id.shorten_or_id();
     println!("cargo:rustc-env=FE_GIT_HASH={hash}");
+}
+
+fn repo_head_commit(repo: Option<&gix::Repository>) -> Option<String> {
+    Some(repo?.head_id().ok()?.to_string())
 }
 
 fn git_repo() -> Option<gix::Repository> {
