@@ -1,0 +1,5 @@
+use std::evm::StorageMap
+
+contract C {
+    mut nested: StorageMap<u256, StorageMap<u256, u256>>,
+}

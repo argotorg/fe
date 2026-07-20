@@ -1,0 +1,10 @@
+use std::evm::StorageMap
+
+enum MapValue {
+    Inner(StorageMap<u256, u256>),
+    Empty,
+}
+
+contract C {
+    mut nested: StorageMap<u256, MapValue>
+}
