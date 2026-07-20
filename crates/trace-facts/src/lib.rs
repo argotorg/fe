@@ -3,6 +3,7 @@ pub mod fact;
 pub mod jsonl;
 pub mod relation;
 pub mod snapshot;
+pub mod trace_index;
 pub mod validate;
 
 extern crate self as trace_facts;

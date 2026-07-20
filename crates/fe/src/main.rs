@@ -3,6 +3,7 @@ mod abi;
 mod build;
 mod check;
 mod cli;
+mod debug_cli;
 mod dependency_diagnostics;
 mod doc;
 #[cfg(feature = "doc-server")]
@@ -444,11 +445,70 @@ pub enum LspMode {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum DevCommand {
+    /// Experimental debug export wrappers over validated trace bundles.
+    Debug {
+        #[command(subcommand)]
+        command: DevDebugCommand,
+    },
     /// Experimental trace emission and validation over compiler-derived JSONL.
     Trace {
         #[command(subcommand)]
         command: DevTraceCommand,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum DebugExportFormat {
+    Ethdebug,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum DevDebugCommand {
+    /// Emit an experimental debug artifact from a validated trace snapshot.
+    Emit(DevDebugEmitArgs),
+    /// Validate an experimental debug artifact.
+    Validate(DevDebugValidateArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DevDebugEmitArgs {
+    /// Debug export format.
+    #[arg(long, value_enum)]
+    pub format: DebugExportFormat,
+    /// Trace JSONL bundle to read.
+    #[arg(long = "from", value_name = "TRACE_JSONL")]
+    pub from: Utf8PathBuf,
+    /// Output artifact path.
+    #[arg(long)]
+    pub out: Utf8PathBuf,
+    /// ethdebug schema version; use `pinned` for the vendored schema.
+    #[arg(long, default_value = "pinned")]
+    pub schema_version: String,
+    /// ethdebug phase; only `instruction-source` is emitted.
+    #[arg(long)]
+    pub phase: Option<String>,
+    /// Optional Fe origin/confidence sidecar output path for ethdebug.
+    #[arg(long)]
+    pub sidecar: Option<Utf8PathBuf>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DevDebugValidateArgs {
+    /// Debug export format.
+    #[arg(long, value_enum)]
+    pub format: DebugExportFormat,
+    /// Input artifact path.
+    #[arg(long)]
+    pub input: Utf8PathBuf,
+    /// ethdebug schema version; use `pinned` for the vendored schema.
+    #[arg(long, default_value = "pinned")]
+    pub schema_version: String,
+    /// Optional Fe origin/confidence sidecar to validate alongside ethdebug.
+    #[arg(long)]
+    pub sidecar: Option<Utf8PathBuf>,
+    /// Optional validation JSON output path.
+    #[arg(long)]
+    pub verify_json: Option<Utf8PathBuf>,
 }
 
 #[derive(Debug, Clone, Subcommand)]

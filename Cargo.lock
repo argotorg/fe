@@ -2062,6 +2062,7 @@ name = "fe"
 version = "26.2.0"
 dependencies = [
  "axum",
+ "blake3",
  "camino",
  "clap",
  "clap_complete",
@@ -2073,6 +2074,7 @@ dependencies = [
  "fe-codegen",
  "fe-common",
  "fe-contract-harness",
+ "fe-debug-export",
  "fe-driver",
  "fe-fmt",
  "fe-hir",
@@ -2197,6 +2199,16 @@ name = "fe-dataflow"
 version = "26.2.0"
 dependencies = [
  "cranelift-entity 0.130.1",
+]
+
+[[package]]
+name = "fe-debug-export"
+version = "26.1.0"
+dependencies = [
+ "fe-common",
+ "fe-trace-facts",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
