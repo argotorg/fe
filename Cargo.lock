@@ -2227,6 +2227,7 @@ version = "26.2.0"
 dependencies = [
  "ascii_tree",
  "bitflags 2.11.0",
+ "blake3",
  "camino",
  "codespan-reporting",
  "cranelift-entity 0.130.1",
@@ -2239,7 +2240,9 @@ dependencies = [
  "fe-dataflow",
  "fe-driver",
  "fe-parser",
+ "fe-shape-address",
  "fe-test-utils",
+ "fe-trace-facts",
  "indexmap 2.13.0",
  "itertools 0.14.0",
  "num-bigint",
@@ -2253,6 +2256,7 @@ dependencies = [
  "thin-vec",
  "tiny-keccak",
  "tracing",
+ "trybuild",
  "url",
 ]
 
