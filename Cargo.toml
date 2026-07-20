@@ -19,6 +19,7 @@ fe-web = { path = "crates/fe-web" }
 semantic-indexing = { path = "crates/semantic-indexing", package = "fe-semantic-indexing" }
 language-server = { path = "crates/language-server", package = "fe-language-server" }
 mir = { path = "crates/mir", package = "fe-mir" }
+shape-address = { path = "crates/shape-address", package = "fe-shape-address" }
 cranelift-entity = "0.130"
 url = "2.5.4"
 camino = "1.1.9"
@@ -35,6 +36,7 @@ glob = "0.3.2"
 crossbeam-channel = "0.5.15"
 gix = { version = "0.83.0", default-features = false }
 rustc-hash = "2.1.0"
+blake3 = "1"
 num-bigint = "0.4"
 num-traits = "0.2"
 paste = "1.0.15"
