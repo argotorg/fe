@@ -19,6 +19,8 @@ fe-web = { path = "crates/fe-web" }
 semantic-indexing = { path = "crates/semantic-indexing", package = "fe-semantic-indexing" }
 language-server = { path = "crates/language-server", package = "fe-language-server" }
 mir = { path = "crates/mir", package = "fe-mir" }
+trace-facts = { path = "crates/trace-facts", package = "fe-trace-facts" }
+trace-facts-macros = { path = "crates/trace-facts-macros", package = "fe-trace-facts-macros" }
 shape-address = { path = "crates/shape-address", package = "fe-shape-address" }
 cranelift-entity = "0.130"
 url = "2.5.4"
