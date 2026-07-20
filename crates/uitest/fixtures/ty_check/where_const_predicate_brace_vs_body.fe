@@ -1,0 +1,48 @@
+// FCO-M5 S1, defect 1a: a `{` in where-clause position is disambiguated by
+// one dry-run + one-token lookahead. If the block is followed by `,`,
+// another predicate, or a `{`, it is a brace const predicate; otherwise it
+// is the item's own body. Bodyless trait fn decls take the block as a
+// predicate unconditionally.
+
+trait Sized {
+    const SIZE: u256
+}
+
+trait Named {
+    const NAME_LEN: u256
+}
+
+// Brace predicate then a real body on the next line: the predicate block is
+// followed by `{`, so both survive.
+fn brace_then_body<T>() -> u256 where T: Sized, { T::SIZE < 100 }
+{
+    7
+}
+
+// First-position brace predicate directly followed by the body on the same
+// line.
+fn brace_then_body_inline() -> u256 where { true } { 8 }
+
+// Brace predicate first, then a type-bound predicate, then a bare
+// predicate, then the body: predicate kinds mix in any order.
+fn brace_then_more<T>() -> u256 where { true }, T: Sized, T::SIZE > 0 {
+    9
+}
+
+// Nothing follows the block: it is the BODY, and the trailing comma keeps
+// the where clause valid with only the type-bound predicate.
+fn brace_is_body<T>() -> u256 where T: Sized, { 10 }
+
+// Bodyless trait fn decls: no body exists to claim the block.
+trait Bounded {
+    fn must_fit<T>() where T: Sized, { T::SIZE < 100 }
+    fn with_default() -> u256 where { true } {
+        11
+    }
+}
+
+// A parameter-free false brace predicate is still live at the declaration.
+fn brace_false() -> u256 where { false }
+{
+    12
+}

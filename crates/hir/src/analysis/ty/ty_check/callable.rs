@@ -793,5 +793,24 @@ impl<'db> Callable<'db> {
                     span: span.clone(),
                 });
         }
+
+        // Const predicates on the callee's `where` clause become first-class
+        // obligations on the same deferred queue, discharged by CTFE at the
+        // obligation level under this call's concrete type substitution (never
+        // inside the trait solver). Symbolic substitutions are reported as the
+        // concrete-only deferred failure; the assumption route is FCO-only.
+        if let CallableDef::Func(func) = self.callable_def {
+            let predicates = crate::hir_def::WhereClauseOwner::from(func)
+                .where_clause(db)
+                .const_predicates(db);
+            for &predicate in predicates.iter() {
+                tc.env
+                    .register_const_predicate_obligation(super::env::ConstPredicateObligation {
+                        predicate,
+                        generic_args: self.generic_args.clone(),
+                        span: span.clone(),
+                    });
+            }
+        }
     }
 }

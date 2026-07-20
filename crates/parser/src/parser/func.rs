@@ -1,7 +1,7 @@
 use super::{
     ErrProof, Parser, Recovery, define_scope,
     expr_atom::BlockExprScope,
-    param::{parse_generic_params_opt, parse_where_clause_opt},
+    param::{WhereBracePolicy, parse_generic_params_opt, parse_where_clause_opt},
     parse_list,
     path::PathScope,
     token_stream::TokenStream,
@@ -19,7 +19,8 @@ define_scope! {
 define_scope! {
     pub(crate) FuncSignatureScope {
         allow_self: bool,
-        allow_body: bool
+        allow_body: bool,
+        where_brace_policy: WhereBracePolicy
     },
     SyntaxKind::FuncSignature
 }
@@ -99,7 +100,7 @@ impl super::Parse for FuncSignatureScope {
         parse_uses_clause_opt(parser)?;
 
         parser.expect_and_pop_recovery_stack()?;
-        parse_where_clause_opt(parser)?;
+        parse_where_clause_opt(parser, self.where_brace_policy)?;
 
         Ok(())
     }
@@ -109,7 +110,11 @@ fn parse_normal_fn_def_impl<S: TokenStream>(
     parser: &mut Parser<S>,
     allow_self: bool,
 ) -> Result<(), Recovery<ErrProof>> {
-    parser.parse(FuncSignatureScope::new(allow_self, true))?;
+    parser.parse(FuncSignatureScope::new(
+        allow_self,
+        true,
+        WhereBracePolicy::Lookahead,
+    ))?;
 
     parser.set_scope_recovery_stack(&[SyntaxKind::LBrace]);
     if parser.find_and_pop(SyntaxKind::LBrace, ExpectedKind::Body(SyntaxKind::Func))? {
@@ -121,7 +126,14 @@ fn parse_normal_fn_def_impl<S: TokenStream>(
 fn parse_trait_fn_def_impl<S: TokenStream>(
     parser: &mut Parser<S>,
 ) -> Result<(), Recovery<ErrProof>> {
-    parser.parse(FuncSignatureScope::new(true, true))?;
+    // A trait fn's trailing block is optional, so a block in where-position
+    // is always a predicate: no mandatory body exists to claim it. A default
+    // body may still follow a brace predicate (`where { P } { body }`).
+    parser.parse(FuncSignatureScope::new(
+        true,
+        true,
+        WhereBracePolicy::AlwaysPredicate,
+    ))?;
 
     if parser.current_kind() == Some(SyntaxKind::LBrace) {
         parser.parse(BlockExprScope::default())?;
@@ -132,7 +144,13 @@ fn parse_trait_fn_def_impl<S: TokenStream>(
 fn parse_extern_fn_def_impl<S: TokenStream>(
     parser: &mut Parser<S>,
 ) -> Result<(), Recovery<ErrProof>> {
-    parser.parse(FuncSignatureScope::new(true, false))?;
+    // Extern fns never have bodies; a block in where-position can only be a
+    // predicate.
+    parser.parse(FuncSignatureScope::new(
+        true,
+        false,
+        WhereBracePolicy::AlwaysPredicate,
+    ))?;
 
     Ok(())
 }

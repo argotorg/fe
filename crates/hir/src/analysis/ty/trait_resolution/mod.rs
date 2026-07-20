@@ -9,13 +9,16 @@ use super::{
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
+        diagnostics::{TraitConstraintDiag, TyDiagCollection},
         trait_resolution::{constraint::ty_constraints, proof_forest::ProofForest},
+        ty_check::ty_const_predicate_violation,
         unify::UnificationTable,
     },
 };
 use crate::{
     Ingot,
-    hir_def::{HirIngot, scope_graph::ScopeId},
+    hir_def::{Body, HirIngot, scope_graph::ScopeId},
+    span::DynLazySpan,
 };
 use common::indexmap::IndexSet;
 use constraint::collect_constraints;
@@ -373,6 +376,13 @@ pub(crate) fn check_ty_wf<'db>(
         }
     }
 
+    // A concrete ADT application is also ill-formed if its own `where`-clause
+    // const predicates are refuted under its arguments. CTFE runs here, at the
+    // well-formedness layer, never inside the proof forest.
+    if let Some(predicate) = ty_const_predicate_violation(db, ty) {
+        return WellFormedness::IllFormedConstPredicate { predicate };
+    }
+
     WellFormedness::WellFormed
 }
 
@@ -516,11 +526,37 @@ pub(crate) enum WellFormedness<'db> {
         goal: TraitInstId<'db>,
         subgoal: Option<TraitInstId<'db>>,
     },
+    /// A concrete ADT application whose `where`-clause const predicate is
+    /// refuted under its arguments (e.g. `Bounded<4, 1>` where `MIN <= MAX`).
+    IllFormedConstPredicate {
+        predicate: Body<'db>,
+    },
 }
 
-impl WellFormedness<'_> {
+impl<'db> WellFormedness<'db> {
     fn is_wf(self) -> bool {
         matches!(self, WellFormedness::WellFormed)
+    }
+
+    /// Renders this well-formedness result as a diagnostic at `span`, or `None`
+    /// when well-formed. Every well-formedness consumer goes through this, so a
+    /// new kind of ill-formedness cannot be silently dropped at a use site.
+    pub(crate) fn into_diag(self, span: DynLazySpan<'db>) -> Option<TyDiagCollection<'db>> {
+        match self {
+            WellFormedness::WellFormed => None,
+            WellFormedness::IllFormed { goal, subgoal } => Some(
+                TraitConstraintDiag::TraitBoundNotSat {
+                    span,
+                    primary_goal: goal,
+                    unsat_subgoal: subgoal,
+                    required_by: None,
+                }
+                .into(),
+            ),
+            WellFormedness::IllFormedConstPredicate { predicate } => {
+                Some(TraitConstraintDiag::ConstPredicateNotSat { span, predicate }.into())
+            }
+        }
     }
 }
 

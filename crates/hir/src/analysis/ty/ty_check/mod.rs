@@ -30,7 +30,7 @@ use crate::hir_def::{CallableDef, ImplTrait, Trait};
 use crate::{
     hir_def::{
         BinOp, Body, Const, Contract, ContractRecvArm, Expr, ExprId, Func, GenericParamOwner,
-        LitKind, ManualContractRootAttr, Partial, Pat, PatId, PathId, StaticAssert,
+        ItemKind, LitKind, ManualContractRootAttr, Partial, Pat, PatId, PathId, StaticAssert,
         StaticAssertComparison, Stmt, StmtId, StringId, TypeId as HirTyId, WhereClauseOwner,
     },
     span::{
@@ -75,7 +75,7 @@ use super::{
         BorrowKind, CapabilityKind, InvalidCause, Kind, MAX_INLINE_STRING_BYTES, StringFallback,
         TyId, TyVarSort,
     },
-    ty_lower::{lower_hir_ty, resolve_callable_input_effect_key},
+    ty_lower::{collect_generic_params, lower_hir_ty, resolve_callable_input_effect_key},
     unify::{InferenceKey, Snapshot, UnificationError, UnificationTable},
 };
 use crate::analysis::semantic::SemanticCodeRegionRef;
@@ -373,6 +373,153 @@ fn eval_static_assert_comparison_operand<'db>(
     eval_body_owner_const(db, owner, Vec::new()).ok()
 }
 
+/// Type-checks (and, where possible, evaluates) the bare const-expression
+/// predicates of an item's `where` clause.
+///
+/// Every predicate body is type-checked as a `bool`-expected anonymous const
+/// body, and the underlying body diagnostics are reported at the declaration.
+/// Predicates whose value CTFE can already decide here (they do not depend
+/// on any generic parameter) are additionally *evaluated*, so `where false`
+/// errors at the declaration instead of at every use site. Predicates over
+/// generic parameters are left to obligation-level discharge at their use
+/// sites.
+pub fn check_where_const_predicates<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: WhereClauseOwner<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    let mut diags = Vec::new();
+    let expected = TyId::bool(db);
+    let params_in_scope = where_clause_owner_has_params_in_scope(db, owner);
+
+    for &body in owner.where_clause(db).const_predicates(db) {
+        let body_diags = &check_anon_const_body(db, body, expected).0;
+        if !body_diags.is_empty() && !const_predicate_ignorable_type_diags(body_diags) {
+            diags.extend(body_diags.iter().cloned());
+            continue;
+        }
+        // Ignorable diagnostics (unresolved integral inference vars, e.g.
+        // literal-only predicates) still evaluate, exactly like
+        // `check_static_assert` above.
+
+        // With generic parameters in scope the predicate's value depends on
+        // the instantiation; discharge happens at the use site. (CTFE of a
+        // body that references an unbound parameter is not attempted.)
+        if params_in_scope {
+            continue;
+        }
+
+        let body_owner = BodyOwner::AnonConstBody { body, expected };
+        match eval_body_owner_const(db, body_owner, Vec::new()) {
+            Ok(value) => match static_assert_bool_value(db, value) {
+                Some(true) => {}
+                Some(false) => diags.push(
+                    BodyDiag::WhereConstPredicateFailed {
+                        primary: body.span().into(),
+                    }
+                    .into(),
+                ),
+                // The body type-checked as `bool`, so a non-bool result can
+                // only be a not-yet-resolvable value.
+                None => {}
+            },
+            Err(err) => match err {
+                crate::analysis::semantic::CtfeError::NotConstEvaluable { .. } => {
+                    diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into())
+                }
+                err => {
+                    let ty = TyId::invalid(db, invalid_cause_from_ctfe_error(db, body_owner, err));
+                    if let Some(diag) = ty.emit_diag(db, body.span().into()) {
+                        diags.push(diag.into());
+                    }
+                }
+            },
+        }
+    }
+
+    diags
+}
+
+/// Whether any generic parameter (including a trait's implicit `Self` and a
+/// member function's inherited parameters) is in scope of `owner`'s `where`
+/// clause. Used as a conservative gate for declaration-site predicate
+/// evaluation: with no parameters in scope, every CTFE failure is a genuine
+/// fault rather than a not-yet-instantiated parameter.
+fn where_clause_owner_has_params_in_scope<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: WhereClauseOwner<'db>,
+) -> bool {
+    let mut item = Some(ItemKind::from(owner));
+    while let Some(cur) = item {
+        if let Some(param_owner) = GenericParamOwner::from_item_opt(cur)
+            && !collect_generic_params(db, param_owner)
+                .params(db)
+                .is_empty()
+        {
+            return true;
+        }
+        item = cur.scope().parent_item(db);
+    }
+    false
+}
+
+/// Type diagnostics that do not indicate a malformed predicate at the
+/// declaration: unresolved inference variables can be an artifact of
+/// checking a generic predicate without its instantiation.
+fn const_predicate_ignorable_type_diags(diags: &[FuncBodyDiag<'_>]) -> bool {
+    diags.iter().all(|diag| {
+        matches!(
+            diag,
+            FuncBodyDiag::Body(BodyDiag::TypeAnnotationNeeded { .. })
+        )
+    })
+}
+
+/// Returns the first `where`-clause const predicate of the ADT applied at the
+/// outermost level of `ty` that is *refuted* under its concrete type arguments,
+/// or `None` if every predicate holds, the application is still symbolic, or a
+/// predicate faults (faults are diagnosed where the value is evaluated, not at
+/// well-formedness time). Called from `check_ty_wf` so that a concrete ADT
+/// application violating its own bound is ill-formed wherever it appears:
+/// construction, signatures, locals, fields, never-called declarations. CTFE
+/// runs here, at the well-formedness/obligation layer, never inside the trait
+/// solver's proof forest. Nested applications are covered by `check_ty_wf`'s own
+/// recursion over type arguments.
+pub(crate) fn ty_const_predicate_violation<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+) -> Option<Body<'db>> {
+    let (base, args) = ty.decompose_ty_app(db);
+
+    // A symbolic application (an argument still mentioning a parameter or
+    // inference variable) is the enclosing item's own assumption; do not
+    // CTFE-evaluate it. Invalid arguments carry their own diagnostics.
+    if args
+        .iter()
+        .any(|arg| arg.has_var(db) || arg.has_param(db) || arg.has_invalid(db))
+    {
+        return None;
+    }
+
+    let TyData::TyBase(TyBase::Adt(adt)) = base.data(db) else {
+        return None;
+    };
+    let owner = WhereClauseOwner::from_item_opt(adt.adt_ref(db).as_item())?;
+
+    let expected = TyId::bool(db);
+    for &predicate in owner.where_clause(db).const_predicates(db) {
+        let pred_owner = BodyOwner::AnonConstBody {
+            body: predicate,
+            expected,
+        };
+        if let Ok(value) = eval_body_owner_const(db, pred_owner, args.to_vec())
+            && static_assert_bool_value(db, value) == Some(false)
+        {
+            return Some(predicate);
+        }
+    }
+    None
+}
+
 pub(super) fn check_body<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
@@ -559,6 +706,11 @@ enum TraitObligationOutcome<'db> {
     Discharged,
     Progressed,
     Requeue(env::TraitObligation<'db>),
+}
+
+enum ConstPredicateOutcome<'db> {
+    Discharged,
+    Requeue(env::ConstPredicateObligation<'db>),
 }
 
 impl<'db> TyChecker<'db> {
@@ -1298,6 +1450,97 @@ impl<'db> TyChecker<'db> {
         }
     }
 
+    /// Discharges a `where`-clause const predicate at the obligation level: the
+    /// predicate body is evaluated by CTFE under the call's resolved type
+    /// substitution (`B := Evm`), so a symbolic predicate becomes closed and
+    /// decidable. CTFE runs here, never inside the trait solver / proof forest
+    /// (hard rule: gate, do not select). A `false` predicate or an evaluation
+    /// fault is a hard error: the obligation is never silently dropped and no
+    /// impl candidate is ever removed (anti-SFINAE).
+    fn process_const_predicate_obligation(
+        &mut self,
+        obligation: env::ConstPredicateObligation<'db>,
+        final_pass: bool,
+    ) -> ConstPredicateOutcome<'db> {
+        let db = self.db;
+
+        // Resolve the callee's type arguments through the current inference
+        // table.
+        let args: Vec<TyId<'db>> = obligation
+            .generic_args
+            .iter()
+            .map(|&ty| {
+                let ty = ty.fold_with(db, &mut self.table);
+                self.normalize_ty(ty)
+            })
+            .collect();
+
+        // Not yet concrete: an unresolved inference variable means we cannot
+        // evaluate yet. Retry after more inference; on the final pass leave it
+        // (a genuinely unresolved type is reported elsewhere).
+        if args.iter().any(|ty| ty.has_var(db)) {
+            return if final_pass {
+                ConstPredicateOutcome::Discharged
+            } else {
+                ConstPredicateOutcome::Requeue(obligation)
+            };
+        }
+
+        // Invalid argument: it carries its own diagnostics; do not pile on.
+        if args.iter().any(|ty| ty.has_invalid(db)) {
+            return ConstPredicateOutcome::Discharged;
+        }
+
+        // Symbolic subject: the substitution still mentions a generic parameter
+        // (the caller forwards its own type). CTFE cannot decide it, and the
+        // assumption route (matching the caller's own `where`-clause
+        // assumptions by term identity) is FCO-coupled and dropped in this
+        // concrete-only lift. Requeue until the final pass, then report the
+        // predicate as unsatisfied (deferred-unresolved).
+        //
+        // FCO re-adds the assumption route here.
+        if args.iter().any(|ty| ty.has_param(db)) {
+            if final_pass {
+                self.push_diag(BodyDiag::WhereConstPredicateFailed {
+                    primary: obligation.span.clone(),
+                });
+                return ConstPredicateOutcome::Discharged;
+            }
+            return ConstPredicateOutcome::Requeue(obligation);
+        }
+
+        let expected = TyId::bool(db);
+        let owner = BodyOwner::AnonConstBody {
+            body: obligation.predicate,
+            expected,
+        };
+        match eval_body_owner_const(db, owner, args.clone()) {
+            Ok(value) => match static_assert_bool_value(db, value) {
+                // A closed CTFE discharge; the FCO discharge-receipt recording
+                // (`DischargeRoute::Ctfe` with empty premises) is dropped.
+                Some(true) => {}
+                Some(false) => self.push_diag(BodyDiag::WhereConstPredicateFailed {
+                    primary: obligation.span.clone(),
+                }),
+                // Type-checked as `bool` but not reducible to a concrete value.
+                None => self.push_diag(BodyDiag::ConstValueMustBeKnown(obligation.span.clone())),
+            },
+            Err(crate::analysis::semantic::CtfeError::NotConstEvaluable { .. }) => {
+                self.push_diag(BodyDiag::ConstValueMustBeKnown(obligation.span.clone()))
+            }
+            Err(err) => {
+                // A CTFE fault (overflow, divide-by-zero, ...) is a hard error
+                // on the chosen call, never a skipped candidate.
+                let ty = TyId::invalid(db, invalid_cause_from_ctfe_error(db, owner, err));
+                if let Some(diag) = ty.emit_diag(db, obligation.span.clone()) {
+                    self.push_diag(diag);
+                }
+            }
+        }
+
+        ConstPredicateOutcome::Discharged
+    }
+
     fn resolve_deferred(&mut self) {
         let db = self.db;
         let body = self.env.body();
@@ -1417,6 +1660,14 @@ impl<'db> TyChecker<'db> {
                             TraitObligationOutcome::Progressed => progressed = true,
                             TraitObligationOutcome::Requeue(obligation) => {
                                 self.env.register_trait_obligation(obligation);
+                            }
+                        }
+                    }
+                    env::DeferredTask::ConstPredicate(obligation) => {
+                        match self.process_const_predicate_obligation(obligation, false) {
+                            ConstPredicateOutcome::Discharged => {}
+                            ConstPredicateOutcome::Requeue(obligation) => {
+                                self.env.register_const_predicate_obligation(obligation);
                             }
                         }
                     }
@@ -1578,6 +1829,9 @@ impl<'db> TyChecker<'db> {
             match task {
                 env::DeferredTask::Obligation(obligation) => {
                     let _ = self.process_trait_obligation(obligation, true);
+                }
+                env::DeferredTask::ConstPredicate(obligation) => {
+                    let _ = self.process_const_predicate_obligation(obligation, true);
                 }
                 env::DeferredTask::Method(pending) => {
                     let Some(expr_prop) = self.env.typed_expr(pending.expr) else {

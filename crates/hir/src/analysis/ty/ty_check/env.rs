@@ -100,15 +100,25 @@ impl<'db> TyCheckEnv<'db> {
             scope: ScopeId<'db>,
         ) -> PredicateListId<'db> {
             match scope.parent_item(db) {
-                Some(ItemKind::Trait(trait_)) => PredicateListId::new(
-                    db,
-                    vec![crate::semantic::trait_self_predicate(db, trait_)],
-                ),
+                Some(ItemKind::Trait(trait_)) => {
+                    let mut preds = collect_constraints(db, trait_.into())
+                        .instantiate_identity()
+                        .list(db)
+                        .to_vec();
+                    preds.push(crate::semantic::trait_self_predicate(db, trait_));
+                    PredicateListId::new(db, preds)
+                }
                 Some(ItemKind::ImplTrait(impl_trait)) => {
                     collect_constraints(db, impl_trait.into()).instantiate_identity()
                 }
                 Some(ItemKind::Impl(impl_)) => {
                     collect_constraints(db, impl_.into()).instantiate_identity()
+                }
+                Some(ItemKind::Struct(struct_)) => {
+                    collect_constraints(db, struct_.into()).instantiate_identity()
+                }
+                Some(ItemKind::Enum(enum_)) => {
+                    collect_constraints(db, enum_.into()).instantiate_identity()
                 }
                 _ => PredicateListId::empty_list(db),
             }
@@ -808,6 +818,13 @@ impl<'db> TyCheckEnv<'db> {
 
     pub(super) fn register_trait_obligation(&mut self, obligation: TraitObligation<'db>) {
         self.deferred.push(DeferredTask::Obligation(obligation))
+    }
+
+    pub(super) fn register_const_predicate_obligation(
+        &mut self,
+        obligation: ConstPredicateObligation<'db>,
+    ) {
+        self.deferred.push(DeferredTask::ConstPredicate(obligation))
     }
 
     pub(super) fn deferred_len(&self) -> usize {
@@ -1522,6 +1539,7 @@ impl PendingPrimitiveOp {
 #[derive(Debug, Clone)]
 pub(super) enum DeferredTask<'db> {
     Obligation(TraitObligation<'db>),
+    ConstPredicate(ConstPredicateObligation<'db>),
     Method(PendingMethod<'db>),
     PrimitiveOp(PendingPrimitiveOp),
 }
@@ -1540,6 +1558,24 @@ pub(super) enum TraitObligationOrigin<'db> {
 pub(super) struct TraitObligation<'db> {
     pub goal: TraitInstId<'db>,
     pub origin: TraitObligationOrigin<'db>,
+    pub span: DynLazySpan<'db>,
+}
+
+/// A `where`-clause const predicate that must be discharged at the obligation
+/// level (by CTFE under a call's type substitution), never inside the trait
+/// solver. Const predicates ride the same deferred queue as trait obligations.
+///
+/// Concrete-only: the predicate carries just enough to run CTFE under the
+/// call's substitution and report at the call span. FCO re-adds an `origin`
+/// (call expr / callable / predicate index) alongside the assumption route.
+#[derive(Debug, Clone)]
+pub(super) struct ConstPredicateObligation<'db> {
+    /// The predicate body: an anonymous `bool` body on the callee's where
+    /// clause (e.g. `B::WORD_BITS == 256`).
+    pub predicate: Body<'db>,
+    /// The callee's type arguments at this call, against which the predicate
+    /// is evaluated (`B := Evm`).
+    pub generic_args: Vec<TyId<'db>>,
     pub span: DynLazySpan<'db>,
 }
 

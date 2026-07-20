@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/where_const_predicate_unavailable_assoc_const.fe
+---
+error[2-0002]: `SIZE` is not found
+   ┌─ where_const_predicate_unavailable_assoc_const.fe:27:22
+   │
+27 │ fn bad<T>() where T::SIZE >= 50 {
+   │                      ^^^^ `SIZE` is not found

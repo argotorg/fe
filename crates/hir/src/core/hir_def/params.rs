@@ -108,6 +108,11 @@ pub struct FuncParamListId<'db> {
 pub struct WhereClauseId<'db> {
     #[return_ref]
     pub data: Vec<WherePredicate<'db>>,
+    /// Bare const-expression predicates (e.g. `T::SIZE >= 50` in
+    /// `where T: Sized, T::SIZE >= 50`), each lowered as an anonymous
+    /// `bool`-expected const body.
+    #[return_ref]
+    pub const_predicates: Vec<Body<'db>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From)]
