@@ -179,6 +179,17 @@ impl<'db> RuntimeClass<'db> {
         }
     }
 
+    pub fn storage_index_stride_words(&self, db: &'db dyn MirDb) -> Option<u64> {
+        match self {
+            RuntimeClass::AggregateValue { layout } => match layout.data(db) {
+                Layout::Array(data) => Some(data.elem.storage_span_words(db)),
+                Layout::Struct(_) | Layout::Enum(_) => None,
+            },
+            RuntimeClass::Ref { pointee, .. } => pointee.storage_index_stride_words(db),
+            RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => None,
+        }
+    }
+
     pub fn field_offset_words(&self, db: &'db dyn MirDb, field: FieldIndex) -> Option<u64> {
         if matches!(self, RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. }) {
             return None;
@@ -190,12 +201,51 @@ impl<'db> RuntimeClass<'db> {
         Some(data.field_offset_words(db, field.0 as usize))
     }
 
+    pub fn storage_field_placement(
+        &self,
+        db: &'db dyn MirDb,
+        field: FieldIndex,
+    ) -> Option<FieldPlacement> {
+        if matches!(self, RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. }) {
+            return None;
+        }
+        let layout = self.aggregate_layout()?;
+        let Layout::Struct(data) = layout.data(db) else {
+            return None;
+        };
+        data.storage_field_placement(db, field.0 as usize)
+    }
+
     pub fn span_words(&self, db: &'db dyn MirDb) -> u64 {
         match self {
             RuntimeClass::Scalar(_) | RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => 1,
             RuntimeClass::AggregateValue { layout } => match layout.data(db) {
                 Layout::Struct(data) => data.fields.iter().map(|field| field.span_words(db)).sum(),
                 Layout::Array(data) => data.elem.span_words(db) * data.len,
+                Layout::Enum(data) => {
+                    1 + data
+                        .variants
+                        .iter()
+                        .map(|variant| {
+                            variant
+                                .fields
+                                .iter()
+                                .map(|field| field.span_words(db))
+                                .sum::<u64>()
+                        })
+                        .max()
+                        .unwrap_or(0)
+                }
+            },
+        }
+    }
+
+    pub fn storage_span_words(&self, db: &'db dyn MirDb) -> u64 {
+        match self {
+            RuntimeClass::Scalar(_) | RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => 1,
+            RuntimeClass::AggregateValue { layout } => match layout.data(db) {
+                Layout::Struct(data) => data.storage_span_words(db),
+                Layout::Array(data) => data.elem.storage_span_words(db) * data.len,
                 Layout::Enum(data) => {
                     1 + data
                         .variants
@@ -463,6 +513,20 @@ pub struct StructLayout<'db> {
     pub fields: Box<[RuntimeClass<'db>]>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub struct FieldPlacement {
+    pub word_offset: u64,
+    pub bit_offset: u16,
+    pub bit_width: u16,
+    pub packed: bool,
+}
+
+impl FieldPlacement {
+    pub fn is_packed(self) -> bool {
+        self.packed
+    }
+}
+
 impl<'db> StructLayout<'db> {
     pub fn field_offset_words(&self, db: &'db dyn MirDb, idx: usize) -> u64 {
         self.fields
@@ -471,6 +535,119 @@ impl<'db> StructLayout<'db> {
             .map(|field| field.span_words(db))
             .sum()
     }
+
+    pub fn storage_field_placement(
+        &self,
+        db: &'db dyn MirDb,
+        idx: usize,
+    ) -> Option<FieldPlacement> {
+        self.storage_field_placements(db).get(idx).copied()
+    }
+
+    fn storage_field_placements(&self, db: &'db dyn MirDb) -> Vec<FieldPlacement> {
+        let mut placements: Vec<FieldPlacement> = Vec::with_capacity(self.fields.len());
+        let mut word_offset = 0;
+        let mut used_bits = 0;
+        let mut current_word_start = None;
+
+        for field in self.fields.iter() {
+            if let Some(bit_width) = storage_scalar_bit_width(field)
+                && bit_width < 256
+            {
+                if used_bits + bit_width > 256 {
+                    word_offset += 1;
+                    used_bits = 0;
+                    current_word_start = None;
+                }
+
+                let placement_idx = placements.len();
+                if used_bits == 0 {
+                    current_word_start = Some(placement_idx);
+                } else if let Some(start) = current_word_start {
+                    for placement in &mut placements[start..] {
+                        placement.packed = true;
+                    }
+                }
+
+                placements.push(FieldPlacement {
+                    word_offset,
+                    bit_offset: used_bits,
+                    bit_width,
+                    packed: used_bits > 0,
+                });
+
+                used_bits += bit_width;
+                if used_bits == 256 {
+                    word_offset += 1;
+                    used_bits = 0;
+                    current_word_start = None;
+                }
+                continue;
+            }
+
+            if used_bits > 0 {
+                word_offset += 1;
+                used_bits = 0;
+                current_word_start = None;
+            }
+
+            placements.push(FieldPlacement {
+                word_offset,
+                bit_offset: 0,
+                bit_width: 256,
+                packed: false,
+            });
+            word_offset += field.storage_span_words(db);
+        }
+
+        placements
+    }
+
+    pub fn storage_span_words(&self, db: &'db dyn MirDb) -> u64 {
+        let mut word_offset = 0;
+        let mut used_bits = 0;
+
+        for field in self.fields.iter() {
+            if let Some(bit_width) = storage_scalar_bit_width(field)
+                && bit_width < 256
+            {
+                if used_bits + bit_width > 256 {
+                    word_offset += 1;
+                    used_bits = 0;
+                }
+                used_bits += bit_width;
+                if used_bits == 256 {
+                    word_offset += 1;
+                    used_bits = 0;
+                }
+                continue;
+            }
+
+            if used_bits > 0 {
+                word_offset += 1;
+                used_bits = 0;
+            }
+            word_offset += field.storage_span_words(db);
+        }
+
+        if used_bits > 0 {
+            word_offset + 1
+        } else {
+            word_offset
+        }
+    }
+}
+
+fn storage_scalar_bit_width(class: &RuntimeClass<'_>) -> Option<u16> {
+    let RuntimeClass::Scalar(scalar) = class else {
+        return None;
+    };
+    Some(match scalar.repr {
+        ScalarRepr::Bool => 1,
+        ScalarRepr::Int { bits, .. } => bits,
+        ScalarRepr::FixedBytes { len } => len.saturating_mul(8),
+        ScalarRepr::Address { bits } => bits,
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]

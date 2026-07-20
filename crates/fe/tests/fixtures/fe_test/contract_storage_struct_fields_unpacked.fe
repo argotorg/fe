@@ -1,0 +1,90 @@
+use std::evm::Evm
+
+msg ContractStructMsg {
+    #[selector = 1]
+    Put { a: u8, b: u8, c: u256 } -> u256,
+
+    #[selector = 2]
+    RawSlot { offset: u256 } -> u256,
+
+    #[selector = 3]
+    Read -> u256,
+}
+
+struct ContractStruct {
+    a: u8,
+    b: u8,
+    c: u256,
+}
+
+fn pack(value: ContractStruct) -> u256 {
+    ((value.a as u256) * 1000000) + ((value.b as u256) * 1000) + value.c
+}
+
+pub contract C {
+    mut value: ContractStruct
+
+    init() uses (mut value) {}
+
+    recv ContractStructMsg {
+        Put { a, b, c } -> u256 uses (mut value) {
+            value.a = a
+            value.b = b
+            value.c = c
+            pack(value: value)
+        }
+
+        RawSlot { offset } -> u256 uses (evm: Evm) {
+            evm.sload(offset)
+        }
+
+        Read -> u256 uses (value) {
+            pack(value: value)
+        }
+    }
+}
+
+#[test]
+fn test_contract_storage_struct_fields_unpacked() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 0)
+
+    let packed: u256 = evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: ContractStructMsg::Put { a: 0xaa, b: 0xbb, c: 0xcc },
+    )
+    assert!(packed == 170187204)
+
+    let raw0: u256 = evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: ContractStructMsg::RawSlot { offset: 0 },
+    )
+    assert!(raw0 == 0xaa)
+
+    let raw1: u256 = evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: ContractStructMsg::RawSlot { offset: 1 },
+    )
+    assert!(raw1 == 0xbb)
+
+    let raw2: u256 = evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: ContractStructMsg::RawSlot { offset: 2 },
+    )
+    assert!(raw2 == 0xcc)
+
+    let packed: u256 = evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: ContractStructMsg::Read {},
+    )
+    assert!(packed == 170187204)
+}
