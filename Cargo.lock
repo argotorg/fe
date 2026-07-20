@@ -2307,15 +2307,19 @@ dependencies = [
 name = "fe-mir"
 version = "26.2.0"
 dependencies = [
+ "blake3",
  "cranelift-entity 0.130.1",
  "fe-common",
  "fe-dataflow",
  "fe-driver",
  "fe-hir",
+ "fe-shape-address",
+ "fe-trace-facts",
  "num-bigint",
  "num-traits",
  "rustc-hash 2.1.1",
  "salsa",
+ "trybuild",
  "url",
 ]
 
