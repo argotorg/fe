@@ -2070,6 +2070,7 @@ name = "fe"
 version = "26.2.0"
 dependencies = [
  "axum",
+ "blake3",
  "camino",
  "clap",
  "clap_complete",
@@ -2081,6 +2082,7 @@ dependencies = [
  "fe-codegen",
  "fe-common",
  "fe-contract-harness",
+ "fe-debug-export",
  "fe-driver",
  "fe-fmt",
  "fe-hir",
@@ -2090,6 +2092,7 @@ dependencies = [
  "fe-semantic-indexing",
  "fe-solc-runner",
  "fe-test-utils",
+ "fe-trace-facts",
  "fe-web",
  "gix",
  "glob",
