@@ -1,6 +1,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
+use common::origin::OriginExportKey;
 use driver::DriverDataBase;
 use hir::{
     analysis::{
@@ -24,7 +25,8 @@ use mir::{
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::{SmallVec, smallvec};
 use sonatina_ir::{
-    BlockId, GlobalVariableData, GlobalVariableRef, I256, Immediate, Linkage, Module, Signature,
+    BlockId, DebugConfidence, DebugLoc, FrontendOriginKind, FrontendOriginRecord,
+    GlobalVariableData, GlobalVariableRef, I256, Immediate, InstId, Linkage, Module, Signature,
     Type, Value, ValueId,
     builder::{FunctionBuilder, ModuleBuilder, ObjectBuilder, Variable},
     func_cursor::InstInserter,
@@ -845,6 +847,7 @@ enum CopySource<'db> {
 struct FunctionLowerer<'ctx, 'db, 'a> {
     module: &'ctx mut ModuleLowerer<'db, 'a>,
     body: RuntimeBody<'db>,
+    origin_owner: mir::origin::RuntimeInstanceOwnerKey,
     current_sections: Vec<mir::RuntimeSectionRef<'db>>,
     fb: FunctionBuilder<InstInserter>,
     prologue_block: BlockId,
@@ -875,6 +878,8 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         func_ref: FuncRef,
     ) -> Result<Self, LowerError> {
         let current_sections = module.sections_for_function(body.owner).to_vec();
+        let origin_owner =
+            mir::origin::RuntimeInstanceOwnerKey::for_instance(module.db, body.owner);
         let mut fb = module.builder.func_builder::<InstInserter>(func_ref);
         let prologue_block = fb.append_block();
         let reachable_blocks = compute_reachable_blocks(&body);
@@ -903,6 +908,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         Ok(Self {
             module,
             body,
+            origin_owner,
             current_sections,
             fb,
             prologue_block,
@@ -942,20 +948,25 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 .switch_to_block(self.block_id(RBlockId::from_u32(idx as u32))?);
             let mut terminated = false;
             for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
-                if matches!(
-                    self.lower_stmt(stmt).map_err(|err| {
-                        self.with_body_context(
-                            format!(
-                                "while lowering `{}` at bb{idx}[{stmt_idx}]",
-                                self.module.function_symbol(self.body.owner)
-                            ),
-                            Some(RBlockId::from_u32(idx as u32)),
-                            Some(stmt_idx),
-                        )
-                        .wrap(err)
-                    })?,
-                    Lowered::Terminated
-                ) {
+                let block_id = RBlockId::from_u32(idx as u32);
+                let watermark = self.inst_watermark();
+                let lowered = self.lower_stmt(stmt).map_err(|err| {
+                    self.with_body_context(
+                        format!(
+                            "while lowering `{}` at bb{idx}[{stmt_idx}]",
+                            self.module.function_symbol(self.body.owner)
+                        ),
+                        Some(block_id),
+                        Some(stmt_idx),
+                    )
+                    .wrap(err)
+                })?;
+                self.attach_origin_to_new_insts(
+                    watermark,
+                    self.runtime_stmt_origin(block_id, stmt_idx),
+                    FrontendOriginKind::SourceStmt,
+                );
+                if matches!(lowered, Lowered::Terminated) {
                     self.pending_enum_proof = None;
                     terminated = true;
                     break;
@@ -965,21 +976,97 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 continue;
             }
             self.pending_enum_proof = None;
+            let block_id = RBlockId::from_u32(idx as u32);
+            let watermark = self.inst_watermark();
             self.lower_terminator(&block.terminator).map_err(|err| {
                 self.with_body_context(
                     format!(
                         "while lowering `{}` terminator at bb{idx}",
                         self.module.function_symbol(self.body.owner)
                     ),
-                    Some(RBlockId::from_u32(idx as u32)),
+                    Some(block_id),
                     None,
                 )
                 .wrap(err)
             })?;
+            self.attach_origin_to_new_insts(
+                watermark,
+                self.runtime_terminator_origin(block_id),
+                FrontendOriginKind::SourceStmt,
+            );
         }
         self.fb.seal_all();
         self.fb.finish();
         Ok(())
+    }
+
+    /// Instructions are arena-allocated with monotonically increasing ids and
+    /// never erased during lowering, so the arena length is a watermark: every
+    /// instruction created after it belongs to the statement being lowered.
+    /// This keeps per-statement origin attachment O(new instructions) instead
+    /// of snapshotting the full instruction set per statement.
+    fn inst_watermark(&self) -> usize {
+        self.fb.func.dfg.num_insts()
+    }
+
+    fn attach_origin_to_new_insts(
+        &mut self,
+        watermark: usize,
+        origin: OriginExportKey,
+        kind: FrontendOriginKind,
+    ) {
+        let new_insts = (watermark..self.fb.func.dfg.num_insts())
+            .map(|index| InstId(index as u32))
+            .collect::<Vec<_>>();
+        if new_insts.is_empty() {
+            return;
+        }
+
+        let frontend_origin = self
+            .fb
+            .func
+            .debug
+            .add_frontend_origin(FrontendOriginRecord {
+                external_key: Some(
+                    serde_json::to_string(&origin)
+                        .expect("OriginExportKey serialization cannot fail"),
+                ),
+                source_span: None,
+                display_label: Some(origin.display_label()),
+                kind,
+            });
+        // Every instruction created while lowering this statement IS that
+        // statement's lowering (the same relation a DWARF line table asserts),
+        // so the batch diff is exact attribution. Conservative is reserved for
+        // genuinely heuristic attachments; the trace adapter demotes it to a
+        // synthetic (non-exact) edge.
+        let loc = self.fb.func.debug.add_debug_loc(DebugLoc {
+            primary_origin: Some(frontend_origin),
+            source_span: None,
+            confidence: DebugConfidence::Exact,
+        });
+        for inst in new_insts {
+            self.fb.func.set_inst_debug_loc(inst, loc);
+        }
+    }
+
+    fn runtime_stmt_origin(&self, block: RBlockId, stmt_idx: usize) -> OriginExportKey {
+        mir::origin::RuntimeStmtOrigin::new(
+            self.body.owner,
+            mir::origin::RuntimeStmtSite::new(
+                block,
+                mir::origin::RuntimeStmtIndex::from_u32(stmt_idx as u32),
+            ),
+        )
+        .export_key(&self.origin_owner)
+    }
+
+    fn runtime_terminator_origin(&self, block: RBlockId) -> OriginExportKey {
+        mir::origin::RuntimeTerminatorOrigin::new(
+            self.body.owner,
+            mir::origin::RuntimeTerminatorSite::new(block),
+        )
+        .export_key(&self.origin_owner)
     }
 
     fn block_id(&self, block: RBlockId) -> Result<BlockId, LowerError> {

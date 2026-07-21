@@ -94,15 +94,61 @@ pub fn semantic_owner_context_identity<'db>(
         let impl_identity = format!("{trait_identity}${}", type_identity(db, impl_trait.ty(db)));
         return Some(format!(
             "impl_trait${}",
-            stable_identity_hash(&impl_identity)
+            stable_identity_fingerprint(&impl_identity)
         ));
     }
     func.containing_impl(db).map(|impl_| {
         format!(
             "impl${}",
-            stable_identity_hash(&type_identity(db, impl_.ty(db)))
+            stable_identity_fingerprint(&type_identity(db, impl_.ty(db)))
         )
     })
+}
+
+/// Trace-facing variant of [`semantic_owner_context_identity`]: spells the
+/// impl context out textually instead of compressing it to a 64-bit
+/// fingerprint. HIR body identity on the trace wire must not rest on a hash
+/// whose collision would merge two different bodies' facts.
+pub fn semantic_owner_context_trace_identity<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+) -> Option<String> {
+    let BodyOwner::Func(func) = owner else {
+        return None;
+    };
+    if let Some(trait_) = func.containing_trait(db) {
+        return Some(format!("trait${}", item_name_component(db, trait_.into())));
+    }
+    if let Some(impl_trait) = func.containing_impl_trait(db) {
+        let trait_identity = impl_trait
+            .trait_inst(db)
+            .map(|trait_inst| trait_identity(db, trait_inst))
+            .unwrap_or_else(|| {
+                impl_trait
+                    .hir_trait_ref(db)
+                    .to_opt()
+                    .map(|trait_ref| trait_ref.pretty_print(db))
+                    .unwrap_or_else(|| "trait".to_string())
+            });
+        return Some(format!(
+            "impl_trait${trait_identity}${}",
+            type_identity(db, impl_trait.ty(db))
+        ));
+    }
+    func.containing_impl(db)
+        .map(|impl_| format!("impl${}", type_identity(db, impl_.ty(db))))
+}
+
+/// Generics-free identity of the HIR body itself: no substitution, effect, or
+/// impl-environment components, and textual (fingerprint-free) impl context.
+/// Every instantiation of the same body maps to the same identity.
+pub fn body_owner_trace_identity<'db>(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -> String {
+    if let BodyOwner::Func(func) = owner {
+        let owner_context = semantic_owner_context_trace_identity(db, owner).unwrap_or_default();
+        format!("func${}${owner_context}", item_identity(db, func.into()))
+    } else {
+        body_owner_identity(db, owner)
+    }
 }
 
 fn generic_subst_identity<'db>(db: &'db dyn HirAnalysisDb, subst: GenericSubst<'db>) -> String {
@@ -497,13 +543,16 @@ pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
         TyData::ConstTy(const_ty) => {
             format!(
                 "const_ty${}",
-                stable_identity_hash(&const_ty.pretty_print_concrete(db))
+                stable_identity_fingerprint(&const_ty.pretty_print_concrete(db))
             )
         }
         TyData::Never => "never".to_string(),
-        TyData::TyVar(_) => format!("var${}", stable_identity_hash(ty.pretty_print(db))),
+        TyData::TyVar(_) => format!("var${}", stable_identity_fingerprint(ty.pretty_print(db))),
         TyData::Invalid(cause) => {
-            format!("invalid${}", stable_identity_hash(&cause.pretty_print(db)))
+            format!(
+                "invalid${}",
+                stable_identity_fingerprint(&cause.pretty_print(db))
+            )
         }
         TyData::TyApp(..) => unreachable!("TyApp handled before data match"),
     }
@@ -606,11 +655,11 @@ fn ingot_logical_name<'db>(
         })
 }
 
-pub fn stable_identity_hash(value: &str) -> String {
-    let mut hash = 0xcbf29ce484222325u64;
+pub fn stable_identity_fingerprint(value: &str) -> String {
+    let mut fingerprint = 0xcbf29ce484222325u64;
     for byte in value.bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x100000001b3);
+        fingerprint ^= u64::from(byte);
+        fingerprint = fingerprint.wrapping_mul(0x100000001b3);
     }
-    format!("{hash:016x}")
+    format!("{fingerprint:016x}")
 }

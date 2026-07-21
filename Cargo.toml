@@ -19,6 +19,10 @@ fe-web = { path = "crates/fe-web" }
 semantic-indexing = { path = "crates/semantic-indexing", package = "fe-semantic-indexing" }
 language-server = { path = "crates/language-server", package = "fe-language-server" }
 mir = { path = "crates/mir", package = "fe-mir" }
+trace-facts = { path = "crates/trace-facts", package = "fe-trace-facts" }
+debug-export = { path = "crates/debug-export", package = "fe-debug-export" }
+trace-facts-macros = { path = "crates/trace-facts-macros", package = "fe-trace-facts-macros" }
+shape-address = { path = "crates/shape-address", package = "fe-shape-address" }
 cranelift-entity = "0.130"
 url = "2.5.4"
 camino = "1.1.9"
@@ -35,6 +39,7 @@ glob = "0.3.2"
 crossbeam-channel = "0.5.15"
 gix = { version = "0.83.0", default-features = false }
 rustc-hash = "2.1.0"
+blake3 = "1"
 num-bigint = "0.4"
 num-traits = "0.2"
 paste = "1.0.15"
@@ -50,10 +55,10 @@ tracing-tree = "0.4.0"
 wasm-bindgen-test = "0.3"
 semver = "1.0.26"
 petgraph = "0.8"
-sonatina-ir = { git = "https://github.com/fe-lang/sonatina", rev = "039a9f5" }
-sonatina-triple = { git = "https://github.com/fe-lang/sonatina", rev = "039a9f5" }
-sonatina-codegen = { git = "https://github.com/fe-lang/sonatina", rev = "039a9f5" }
-sonatina-verifier = { git = "https://github.com/fe-lang/sonatina", rev = "039a9f5" }
+sonatina-ir = { git = "https://github.com/cburgdorf/sonatina", rev = "f31f5104737affae034e5840db24b102ff2cd44b" }
+sonatina-triple = { git = "https://github.com/cburgdorf/sonatina", rev = "f31f5104737affae034e5840db24b102ff2cd44b" }
+sonatina-codegen = { git = "https://github.com/cburgdorf/sonatina", rev = "f31f5104737affae034e5840db24b102ff2cd44b" }
+sonatina-verifier = { git = "https://github.com/cburgdorf/sonatina", rev = "f31f5104737affae034e5840db24b102ff2cd44b" }
 
 [profile.dev]
 # Set to 0 to make the build faster and debugging more difficult.

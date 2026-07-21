@@ -41,7 +41,7 @@ use crate::{
     },
     runtime::stable_key::{
         item_identity, semantic_instance_identity, semantic_instance_symbol_identity,
-        stable_identity_hash, type_identity,
+        stable_identity_fingerprint, type_identity,
     },
     runtime::{
         AddressSpaceKind, ConstRegionId, ContractInitAbiPlan, ContractRecvAbiPlan, DispatchArm,
@@ -1851,7 +1851,7 @@ fn make_resolved_code_region<'db>(
     ResolvedCodeRegion::new(db, region, symbol, source, root)
 }
 
-const RUNTIME_SYMBOL_DISAMBIG_HASH_LEN: usize = 4;
+const RUNTIME_SYMBOL_DISAMBIG_FINGERPRINT_LEN: usize = 4;
 
 fn collect_runtime_functions<'db>(
     db: &'db dyn MirDb,
@@ -1916,8 +1916,11 @@ fn runtime_instance_symbol(
     emitted_counts: &mut FxHashMap<String, usize>,
 ) -> String {
     let mut symbol = if needs_disambiguator {
-        let hash = stable_identity_hash(stable_key);
-        format!("{base}_{}", &hash[..RUNTIME_SYMBOL_DISAMBIG_HASH_LEN])
+        let fingerprint = stable_identity_fingerprint(stable_key);
+        format!(
+            "{base}_{}",
+            &fingerprint[..RUNTIME_SYMBOL_DISAMBIG_FINGERPRINT_LEN]
+        )
     } else {
         base
     };

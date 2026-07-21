@@ -9,6 +9,22 @@ It is not a stability guarantee.
 
 - `--color <auto|always|never>`: controls colored output (default: `auto`).
 
+### Unstable developer tracing
+
+`fe dev trace emit` produces compiler-derived trace JSONL with phase-owned MIR facts, source-local display names, MIR storage decisions, Sonatina trace-view CFG/loop facts through a Fe adapter, and actual EVM bytecode instruction/gas facts. It accepts a standalone `.fe` file, an ingot directory, or a workspace member name; one bundle covers every runtime module and contract of the target (workspace roots are rejected, pass a member). Backend storage allocation, target bytecode loop membership, and zext causality are still explicit gaps. Whole-file code-object source attribution is coarse and should be read as low confidence. `fe dev trace validate` re-checks an emitted bundle and reports the schema-validation summary.
+
+```
+fe dev trace emit fib_demo.fe --out target/fib.trace.jsonl
+fe dev trace validate --from target/fib.trace.jsonl
+```
+
+`fe dev debug emit --format ethdebug` derives an ethdebug instruction/source artifact from a validated trace bundle; `fe dev debug validate` re-checks an artifact (and its optional Fe origin/confidence sidecar).
+
+```
+fe dev debug emit --format ethdebug --from target/fib.trace.jsonl --out target/fib.ethdebug.json --sidecar target/fib.sidecar.json
+fe dev debug validate --format ethdebug --input target/fib.ethdebug.json --sidecar target/fib.sidecar.json
+```
+
 ### Output streams
 
 - **Stdout**: “normal” command output (e.g. artifact paths, formatted file paths, dependency trees).

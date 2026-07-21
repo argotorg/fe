@@ -3,12 +3,14 @@ mod abi;
 mod build;
 mod check;
 mod cli;
+mod debug_cli;
 mod dependency_diagnostics;
 mod doc;
 #[cfg(feature = "doc-server")]
 mod doc_serve;
 mod report;
 mod test;
+mod trace;
 #[cfg(not(target_arch = "wasm32"))]
 mod tree;
 mod workspace_ingot;
@@ -47,6 +49,12 @@ pub enum BuildEmit {
 pub enum TestEmit {
     Ir,
     Rmir,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum TraceReportFormat {
+    Text,
+    Json,
 }
 
 fn cli_version() -> &'static str {
@@ -182,6 +190,11 @@ pub enum Command {
         /// Use recovery mode when parsing.
         #[arg(long, default_value = "false")]
         recovery_mode: bool,
+    },
+    /// Run unstable developer tooling.
+    Dev {
+        #[command(subcommand)]
+        command: DevCommand,
     },
     /// Generate documentation for a Fe project
     Doc {
@@ -430,6 +443,111 @@ pub enum LspMode {
     },
 }
 
+#[derive(Debug, Clone, Subcommand)]
+pub enum DevCommand {
+    /// Experimental debug export wrappers over validated trace bundles.
+    Debug {
+        #[command(subcommand)]
+        command: DevDebugCommand,
+    },
+    /// Experimental trace emission and validation over compiler-derived JSONL.
+    Trace {
+        #[command(subcommand)]
+        command: DevTraceCommand,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum DebugExportFormat {
+    Ethdebug,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum DevDebugCommand {
+    /// Emit an experimental debug artifact from a validated trace snapshot.
+    Emit(DevDebugEmitArgs),
+    /// Validate an experimental debug artifact.
+    Validate(DevDebugValidateArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DevDebugEmitArgs {
+    /// Debug export format.
+    #[arg(long, value_enum)]
+    pub format: DebugExportFormat,
+    /// Trace JSONL bundle to read.
+    #[arg(long = "from", value_name = "TRACE_JSONL")]
+    pub from: Utf8PathBuf,
+    /// Output artifact path.
+    #[arg(long)]
+    pub out: Utf8PathBuf,
+    /// ethdebug schema version; use `pinned` for the vendored schema.
+    #[arg(long, default_value = "pinned")]
+    pub schema_version: String,
+    /// ethdebug phase; only `instruction-source` is emitted.
+    #[arg(long)]
+    pub phase: Option<String>,
+    /// Optional Fe origin/confidence sidecar output path for ethdebug.
+    #[arg(long)]
+    pub sidecar: Option<Utf8PathBuf>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DevDebugValidateArgs {
+    /// Debug export format.
+    #[arg(long, value_enum)]
+    pub format: DebugExportFormat,
+    /// Input artifact path.
+    #[arg(long)]
+    pub input: Utf8PathBuf,
+    /// ethdebug schema version; use `pinned` for the vendored schema.
+    #[arg(long, default_value = "pinned")]
+    pub schema_version: String,
+    /// Optional Fe origin/confidence sidecar to validate alongside ethdebug.
+    #[arg(long)]
+    pub sidecar: Option<Utf8PathBuf>,
+    /// Optional validation JSON output path.
+    #[arg(long)]
+    pub verify_json: Option<Utf8PathBuf>,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum DevTraceCommand {
+    /// Emit compiler-derived trace JSONL for a Fe target.
+    Emit(DevTraceEmitArgs),
+    /// Validate a trace JSONL bundle before running reports.
+    Validate(DevTraceInputArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DevTraceEmitArgs {
+    /// Path to an ingot/workspace directory, a workspace member name, or a .fe file.
+    #[arg(default_value_t = default_project_path())]
+    pub path: Utf8PathBuf,
+    /// Output trace JSONL bundle path.
+    #[arg(long)]
+    pub out: Utf8PathBuf,
+    /// Treat a `.fe` file target as standalone, even if it is inside an ingot.
+    #[arg(long)]
+    pub standalone: bool,
+    /// Compilation profile to use when resolving profile-aware config.
+    #[arg(long, default_value = "dev", value_name = "PROFILE")]
+    pub profile: String,
+    /// Optimization level for emitted bytecode facts.
+    #[arg(long = "optimize", short = 'O', default_value = "1", value_parser = ["0", "1", "2", "s"])]
+    pub optimize: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DevTraceInputArgs {
+    /// Trace JSONL bundle to read.
+    #[arg(long = "from", value_name = "TRACE_JSONL")]
+    pub from: Utf8PathBuf,
+    /// Output format.
+    #[arg(long, value_enum, default_value = "text")]
+    pub format: TraceReportFormat,
+}
+
 fn default_project_path() -> Utf8PathBuf {
     Utf8PathBuf::from(".")
 }
@@ -519,6 +637,13 @@ pub fn run(opts: &Options) {
                 }
             }
         }
+        Command::Dev { command } => match trace::run_dev_command(command) {
+            Ok(output) => print!("{output}"),
+            Err(err) => {
+                eprintln!("Error: {err}");
+                std::process::exit(1);
+            }
+        },
         Command::Doc {
             path,
             output,

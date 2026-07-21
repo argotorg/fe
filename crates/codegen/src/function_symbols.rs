@@ -10,15 +10,15 @@ use mir::{
     RuntimeFunctionOwner,
     runtime::stable_key::{
         generic_args_identity, ingot_component_for_scope, module_path_components_for_scope,
-        semantic_owner_context_identity, stable_identity_hash,
+        semantic_owner_context_identity, stable_identity_fingerprint,
     },
 };
 use rustc_hash::FxHashSet;
 use std::collections::BTreeMap;
 
-const GENERIC_SUFFIX_HASH_LEN: usize = 4;
-const OWNER_CONTEXT_HASH_LEN: usize = 4;
-const CONFLICT_SUFFIX_HASH_LEN: usize = 4;
+const GENERIC_SUFFIX_FINGERPRINT_LEN: usize = 4;
+const OWNER_CONTEXT_FINGERPRINT_LEN: usize = 4;
+const CONFLICT_SUFFIX_FINGERPRINT_LEN: usize = 4;
 
 struct OwnerContextCandidates {
     primary: Option<String>,
@@ -249,11 +249,11 @@ fn uniquify_function_symbols(
         });
         for idx in group {
             let base = symbols[idx].clone();
-            let hash = stable_identity_hash(&inputs[idx].disambiguator);
+            let fingerprint = stable_identity_fingerprint(&inputs[idx].disambiguator);
             let candidate = format!(
                 "{base}{}{}",
                 style.fallback_separator,
-                &hash[..CONFLICT_SUFFIX_HASH_LEN]
+                &fingerprint[..CONFLICT_SUFFIX_FINGERPRINT_LEN]
             );
             if used.insert((style.namespace_key)(&candidate)) {
                 symbols[idx] = candidate;
@@ -263,7 +263,7 @@ fn uniquify_function_symbols(
                 let candidate = format!(
                     "{base}{}{}{}{suffix}",
                     style.fallback_separator,
-                    &hash[..CONFLICT_SUFFIX_HASH_LEN],
+                    &fingerprint[..CONFLICT_SUFFIX_FINGERPRINT_LEN],
                     style.fallback_separator
                 );
                 if used.insert((style.namespace_key)(&candidate)) {
@@ -321,10 +321,10 @@ fn semantic_owner_context_candidates<'db>(
     let readable = readable_owner_context(db, owner);
     let primary = readable
         .clone()
-        .or_else(|| stable.clone().map(shorten_owner_context_hash));
+        .or_else(|| stable.clone().map(shorten_owner_context_fingerprint));
     let fallback = readable
-        .zip(stable.as_deref().and_then(short_owner_context_hash))
-        .map(|(readable, hash)| format!("{readable}${hash}"))
+        .zip(stable.as_deref().and_then(short_owner_context_fingerprint))
+        .map(|(readable, fingerprint)| format!("{readable}${fingerprint}"))
         .filter(|fallback| Some(fallback) != primary.as_ref());
 
     OwnerContextCandidates { primary, fallback }
@@ -372,28 +372,28 @@ fn readable_type_component<'db>(db: &'db DriverDataBase, ty: TyId<'db>) -> Optio
     }
 }
 
-fn shorten_owner_context_hash(context: String) -> String {
-    if let Some(hash) = short_owner_context_hash(&context)
+fn shorten_owner_context_fingerprint(context: String) -> String {
+    if let Some(fingerprint) = short_owner_context_fingerprint(&context)
         && let Some((kind, _)) = context.split_once('$')
     {
-        return format!("{kind}${hash}");
+        return format!("{kind}${fingerprint}");
     }
     context
 }
 
-fn short_owner_context_hash(context: &str) -> Option<&str> {
-    if let Some((kind, hash)) = context.split_once('$')
+fn short_owner_context_fingerprint(context: &str) -> Option<&str> {
+    if let Some((kind, fingerprint)) = context.split_once('$')
         && matches!(kind, "impl" | "impl_trait")
-        && hash.len() > OWNER_CONTEXT_HASH_LEN
+        && fingerprint.len() > OWNER_CONTEXT_FINGERPRINT_LEN
     {
-        return Some(&hash[..OWNER_CONTEXT_HASH_LEN]);
+        return Some(&fingerprint[..OWNER_CONTEXT_FINGERPRINT_LEN]);
     }
     None
 }
 
 fn generic_component<'db>(db: &'db DriverDataBase, args: &[TyId<'db>]) -> Option<String> {
     (!args.is_empty()).then(|| {
-        let hash = stable_identity_hash(&generic_args_identity(db, args));
-        format!("g{}", &hash[..GENERIC_SUFFIX_HASH_LEN])
+        let fingerprint = stable_identity_fingerprint(&generic_args_identity(db, args));
+        format!("g{}", &fingerprint[..GENERIC_SUFFIX_FINGERPRINT_LEN])
     })
 }

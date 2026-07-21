@@ -1697,7 +1697,10 @@ fn write_sonatina_bytecode_artifacts(
 ) -> bool {
     let mut had_errors = false;
     for name in names_to_build {
-        let Some(SonatinaContractBytecode { deploy, runtime }) = bytecode.get(name) else {
+        let Some(SonatinaContractBytecode {
+            deploy, runtime, ..
+        }) = bytecode.get(name)
+        else {
             eprintln!("Error: Sonatina did not emit bytecode for contract \"{name}\"");
             had_errors = true;
             continue;
