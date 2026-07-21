@@ -2135,15 +2135,19 @@ dependencies = [
 name = "fe-codegen"
 version = "26.2.0"
 dependencies = [
+ "blake3",
  "dir-test",
  "fe-common",
  "fe-driver",
  "fe-hir",
  "fe-mir",
  "fe-test-utils",
+ "fe-trace-facts",
  "hex",
  "num-bigint",
  "rustc-hash 2.1.1",
+ "serde",
+ "serde_json",
  "smallvec 1.15.1",
  "smallvec 2.0.0-alpha.12",
  "sonatina-codegen",
@@ -2246,6 +2250,7 @@ version = "26.2.0"
 dependencies = [
  "ascii_tree",
  "bitflags 2.11.0",
+ "blake3",
  "camino",
  "codespan-reporting",
  "cranelift-entity 0.130.1",
@@ -2259,6 +2264,7 @@ dependencies = [
  "fe-driver",
  "fe-parser",
  "fe-test-utils",
+ "fe-trace-facts",
  "indexmap 2.13.0",
  "itertools 0.14.0",
  "matchcov",
@@ -2274,6 +2280,7 @@ dependencies = [
  "thin-vec",
  "tiny-keccak",
  "tracing",
+ "trybuild",
  "url",
 ]
 
@@ -2324,15 +2331,18 @@ dependencies = [
 name = "fe-mir"
 version = "26.2.0"
 dependencies = [
+ "blake3",
  "cranelift-entity 0.130.1",
  "fe-common",
  "fe-dataflow",
  "fe-driver",
  "fe-hir",
+ "fe-trace-facts",
  "num-bigint",
  "num-traits",
  "rustc-hash 2.1.1",
  "salsa",
+ "trybuild",
  "url",
 ]
 

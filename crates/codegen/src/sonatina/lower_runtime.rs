@@ -1,6 +1,8 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
+use common::origin::OriginExportKey;
 use driver::DriverDataBase;
 use hir::{
     analysis::{semantic::FieldIndex, ty::ty_check::BodyOwner},
@@ -18,8 +20,8 @@ use mir::{
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::{SmallVec, smallvec};
 use sonatina_ir::{
-    BlockId, GlobalVariableData, GlobalVariableRef, I256, Immediate, Linkage, Module, Signature,
-    Type, Value, ValueId,
+    BlockId, GlobalVariableData, GlobalVariableRef, I256, Immediate, InstId, Linkage, Module,
+    Signature, Type, Value, ValueId,
     builder::{FunctionBuilder, ModuleBuilder, ObjectBuilder, Variable},
     func_cursor::InstInserter,
     inst::{
@@ -659,6 +661,7 @@ enum CopySource<'db> {
 struct FunctionLowerer<'ctx, 'db, 'a> {
     module: &'ctx mut ModuleLowerer<'db, 'a>,
     body: RuntimeBody<'db>,
+    origin_owner: mir::origin::RuntimeInstanceOwnerKey,
     current_sections: Vec<mir::RuntimeSectionRef>,
     fb: FunctionBuilder<InstInserter>,
     prologue_block: BlockId,
@@ -671,6 +674,20 @@ struct FunctionLowerer<'ctx, 'db, 'a> {
     empty_revert_block: Option<BlockId>,
     overflow_panic_block: Option<BlockId>,
     division_by_zero_panic_block: Option<BlockId>,
+    /// Instructions of shared helper blocks (see [`build_shared_helper`]).
+    shared_helper_insts: FxHashSet<InstId>,
+    shared_helpers: Vec<SharedHelperBlock>,
+    shared_helper_index_by_block: FxHashMap<BlockId, usize>,
+    /// Helpers requested while lowering the current statement.
+    pending_shared_helpers: Vec<usize>,
+}
+
+/// A block that several sites reuse by jumping to it (panic and revert
+/// helpers). Its instructions belong to every requesting statement, so they
+/// are attributed only when every request came from the same one.
+struct SharedHelperBlock {
+    insts: Vec<InstId>,
+    origins: Vec<OriginExportKey>,
 }
 
 #[derive(Clone, Copy)]
@@ -690,6 +707,8 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         func_ref: FuncRef,
     ) -> Result<Self, LowerError> {
         let current_sections = module.sections_for_function(body.owner).to_vec();
+        let origin_owner =
+            mir::origin::RuntimeInstanceOwnerKey::for_instance(module.db, body.owner);
         let mut fb = module.builder.func_builder::<InstInserter>(func_ref);
         let prologue_block = fb.append_block();
         let reachable_blocks = compute_reachable_blocks(&body);
@@ -718,6 +737,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         Ok(Self {
             module,
             body,
+            origin_owner,
             current_sections,
             fb,
             prologue_block,
@@ -730,6 +750,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             empty_revert_block: None,
             overflow_panic_block: None,
             division_by_zero_panic_block: None,
+            shared_helper_insts: FxHashSet::default(),
+            shared_helpers: Vec::new(),
+            shared_helper_index_by_block: FxHashMap::default(),
+            pending_shared_helpers: Vec::new(),
         })
     }
 
@@ -759,20 +783,24 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 .switch_to_block(self.block_id(RBlockId::from_u32(idx as u32))?);
             let mut terminated = false;
             for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
-                if matches!(
-                    self.lower_stmt(stmt).map_err(|err| {
-                        self.with_body_context(
-                            format!(
-                                "while lowering `{}` at bb{idx}[{stmt_idx}]",
-                                self.module.function_symbol(self.body.owner)
-                            ),
-                            Some(RBlockId::from_u32(idx as u32)),
-                            Some(stmt_idx),
-                        )
-                        .wrap(err)
-                    })?,
-                    Lowered::Terminated
-                ) {
+                let block_id = RBlockId::from_u32(idx as u32);
+                let watermark = self.inst_watermark();
+                let lowered = self.lower_stmt(stmt).map_err(|err| {
+                    self.with_body_context(
+                        format!(
+                            "while lowering `{}` at bb{idx}[{stmt_idx}]",
+                            self.module.function_symbol(self.body.owner)
+                        ),
+                        Some(block_id),
+                        Some(stmt_idx),
+                    )
+                    .wrap(err)
+                })?;
+                self.attach_origin_to_new_insts(
+                    watermark,
+                    self.runtime_stmt_origin(block_id, stmt_idx),
+                );
+                if matches!(lowered, Lowered::Terminated) {
                     self.pending_enum_proof = None;
                     terminated = true;
                     break;
@@ -782,21 +810,132 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 continue;
             }
             self.pending_enum_proof = None;
+            let block_id = RBlockId::from_u32(idx as u32);
+            let watermark = self.inst_watermark();
             self.lower_terminator(&block.terminator).map_err(|err| {
                 self.with_body_context(
                     format!(
                         "while lowering `{}` terminator at bb{idx}",
                         self.module.function_symbol(self.body.owner)
                     ),
-                    Some(RBlockId::from_u32(idx as u32)),
+                    Some(block_id),
                     None,
                 )
                 .wrap(err)
             })?;
+            self.attach_origin_to_new_insts(watermark, self.runtime_terminator_origin(block_id));
         }
+        self.attribute_single_user_shared_helpers();
         self.fb.seal_all();
         self.fb.finish();
         Ok(())
+    }
+
+    /// Instructions are arena-allocated with monotonically increasing ids and
+    /// never erased during lowering, so the arena length is a watermark: every
+    /// instruction created after it belongs to the statement being lowered.
+    /// This keeps per-statement origin attachment O(new instructions) instead
+    /// of snapshotting the full instruction set per statement.
+    fn inst_watermark(&self) -> usize {
+        self.fb.func.dfg.num_insts()
+    }
+
+    /// Build a block that every later site reuses by jumping to it. Its
+    /// instructions must not inherit the attribution of whichever statement
+    /// happened to create them first: that reports the first overflow site for
+    /// every later one, over an exact attribution chain. They are held back
+    /// here and attributed at the end of lowering only if every request came
+    /// from the same statement (see `attribute_single_user_shared_helpers`).
+    fn build_shared_helper(&mut self, build: impl FnOnce(&mut Self) -> BlockId) -> BlockId {
+        let watermark = self.inst_watermark();
+        let block = build(self);
+        let insts = (watermark..self.fb.func.dfg.num_insts())
+            .map(|index| InstId(index as u32))
+            .inspect(|inst| {
+                self.shared_helper_insts.insert(*inst);
+            })
+            .collect::<Vec<_>>();
+        self.shared_helper_index_by_block
+            .insert(block, self.shared_helpers.len());
+        self.shared_helpers.push(SharedHelperBlock {
+            insts,
+            origins: Vec::new(),
+        });
+        self.request_shared_helper(block);
+        block
+    }
+
+    /// Record that the statement currently being lowered jumps to `block`.
+    fn request_shared_helper(&mut self, block: BlockId) {
+        if let Some(&index) = self.shared_helper_index_by_block.get(&block)
+            && !self.pending_shared_helpers.contains(&index)
+        {
+            self.pending_shared_helpers.push(index);
+        }
+    }
+
+    /// Attribute shared helper blocks whose every request came from one
+    /// statement. A block with two or more requesting statements stays
+    /// unattributed rather than naming one of them.
+    fn attribute_single_user_shared_helpers(&mut self) {
+        for helper in std::mem::take(&mut self.shared_helpers) {
+            let [origin] = helper.origins.as_slice() else {
+                continue;
+            };
+            let frontend_origin: Arc<str> = Arc::from(
+                serde_json::to_string(origin).expect("OriginExportKey serialization cannot fail"),
+            );
+            for inst in helper.insts {
+                self.fb
+                    .func
+                    .set_inst_frontend_origin(inst, Arc::clone(&frontend_origin));
+            }
+        }
+    }
+
+    fn attach_origin_to_new_insts(&mut self, watermark: usize, origin: OriginExportKey) {
+        for index in std::mem::take(&mut self.pending_shared_helpers) {
+            let helper = &mut self.shared_helpers[index];
+            if !helper.origins.contains(&origin) {
+                helper.origins.push(origin.clone());
+            }
+        }
+
+        let new_insts = (watermark..self.fb.func.dfg.num_insts())
+            .map(|index| InstId(index as u32))
+            .filter(|inst| !self.shared_helper_insts.contains(inst))
+            .collect::<Vec<_>>();
+        if new_insts.is_empty() {
+            return;
+        }
+
+        let frontend_origin: Arc<str> = Arc::from(
+            serde_json::to_string(&origin).expect("OriginExportKey serialization cannot fail"),
+        );
+        for inst in new_insts {
+            self.fb
+                .func
+                .set_inst_frontend_origin(inst, Arc::clone(&frontend_origin));
+        }
+    }
+
+    fn runtime_stmt_origin(&self, block: RBlockId, stmt_idx: usize) -> OriginExportKey {
+        mir::origin::RuntimeStmtOrigin::new(
+            self.body.owner,
+            mir::origin::RuntimeStmtSite::new(
+                block,
+                mir::origin::RuntimeStmtIndex::from_u32(stmt_idx as u32),
+            ),
+        )
+        .export_key(&self.origin_owner)
+    }
+
+    fn runtime_terminator_origin(&self, block: RBlockId) -> OriginExportKey {
+        mir::origin::RuntimeTerminatorOrigin::new(
+            self.body.owner,
+            mir::origin::RuntimeTerminatorSite::new(block),
+        )
+        .export_key(&self.origin_owner)
     }
 
     fn block_id(&self, block: RBlockId) -> Result<BlockId, LowerError> {
@@ -4346,18 +4485,22 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
 
     fn ensure_empty_revert_block(&mut self) -> BlockId {
         if let Some(block) = self.empty_revert_block {
+            self.request_shared_helper(block);
             return block;
         }
-        let revert_block = self.fb.append_block();
-        let current = self
-            .fb
-            .current_block()
-            .expect("overflow block requires current block");
-        self.fb.switch_to_block(revert_block);
-        let zero = zero_for_type(&mut self.fb, Type::I256);
-        self.fb
-            .insert_inst_no_result(EvmRevert::new(self.module.inst_set(), zero, zero));
-        self.fb.switch_to_block(current);
+        let revert_block = self.build_shared_helper(|this| {
+            let revert_block = this.fb.append_block();
+            let current = this
+                .fb
+                .current_block()
+                .expect("overflow block requires current block");
+            this.fb.switch_to_block(revert_block);
+            let zero = zero_for_type(&mut this.fb, Type::I256);
+            this.fb
+                .insert_inst_no_result(EvmRevert::new(this.module.inst_set(), zero, zero));
+            this.fb.switch_to_block(current);
+            revert_block
+        });
         self.empty_revert_block = Some(revert_block);
         revert_block
     }
@@ -4366,21 +4509,26 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         if code == PANIC_OVERFLOW
             && let Some(block) = self.overflow_panic_block
         {
+            self.request_shared_helper(block);
             return block;
         }
         if code == PANIC_DIVISION_BY_ZERO
             && let Some(block) = self.division_by_zero_panic_block
         {
+            self.request_shared_helper(block);
             return block;
         }
-        let revert_block = self.fb.append_block();
-        let current = self
-            .fb
-            .current_block()
-            .expect("panic block requires current block");
-        self.fb.switch_to_block(revert_block);
-        self.emit_panic_revert_payload(code);
-        self.fb.switch_to_block(current);
+        let revert_block = self.build_shared_helper(|this| {
+            let revert_block = this.fb.append_block();
+            let current = this
+                .fb
+                .current_block()
+                .expect("panic block requires current block");
+            this.fb.switch_to_block(revert_block);
+            this.emit_panic_revert_payload(code);
+            this.fb.switch_to_block(current);
+            revert_block
+        });
         match code {
             PANIC_OVERFLOW => self.overflow_panic_block = Some(revert_block),
             PANIC_DIVISION_BY_ZERO => self.division_by_zero_panic_block = Some(revert_block),

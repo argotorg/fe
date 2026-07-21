@@ -1,0 +1,13 @@
+error[E0308]: mismatched types
+ --> tests/ui/runtime_origin_stmt_terminator_mismatch.rs:7:20
+  |
+7 |         takes_stmt(terminator);
+  |         ---------- ^^^^^^^^^^ expected `RuntimeStmtOrigin<'_>`, found `RuntimeTerminatorOrigin<'_>`
+  |         |
+  |         arguments to this function are incorrect
+  |
+note: function defined here
+ --> tests/ui/runtime_origin_stmt_terminator_mismatch.rs:3:4
+  |
+3 | fn takes_stmt(_: RuntimeStmtOrigin<'_>) {}
+  |    ^^^^^^^^^^ ------------------------

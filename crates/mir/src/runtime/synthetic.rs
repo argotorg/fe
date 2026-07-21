@@ -1,5 +1,6 @@
 use common::layout::EVM_LAYOUT;
 use cranelift_entity::EntityRef;
+use hir::analysis::semantic::SemOrigin;
 use hir::{
     analysis::{
         semantic::{
@@ -291,6 +292,12 @@ impl<'db> SyntheticBodyBuilder<'db> {
             signature,
             provider_bindings: Vec::new(),
             locals: self.locals,
+            stmt_origins: self
+                .blocks
+                .iter()
+                .map(|block| vec![SemOrigin::Synthetic; block.stmts.len()])
+                .collect(),
+            terminator_origins: vec![SemOrigin::Synthetic; self.blocks.len()],
             blocks: self.blocks,
         }
     }
