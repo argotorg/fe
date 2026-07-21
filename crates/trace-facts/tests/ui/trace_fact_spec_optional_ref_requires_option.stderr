@@ -1,0 +1,5 @@
+error: trace_ref(optional) fields must have type Option<OriginExportKey>
+ --> tests/ui/trace_fact_spec_optional_ref_requires_option.rs:8:10
+  |
+8 |     key: OriginExportKey,
+  |          ^^^^^^^^^^^^^^^

@@ -1,0 +1,5 @@
+error: TraceFactSpec cannot infer a relation column kind for this type; add #[trace_col(kind = "...")] or #[trace_skip]
+ --> tests/ui/trace_fact_spec_unsupported_column_type.rs:8:12
+  |
+8 |     value: (u8, u8),
+  |            ^^^^^^^^
