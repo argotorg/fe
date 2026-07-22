@@ -15,20 +15,22 @@ use super::{BodyOwner, ExprProp, LocalBinding, TyChecker};
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
-        const_ty::{HoleAnchor, HoleMinter, LayoutHoleArgSite},
+        const_ty::{CallableInputLayoutHoleOrigin, HoleAnchor, HoleMinter, LayoutHoleArgSite},
         corelib::resolve_lib_func_path,
         diagnostics::{BodyDiag, FuncBodyDiag},
         fold::{AssocTySubst, TyFoldable, TyFolder},
         normalize::normalize_ty,
         trait_def::TraitInstId,
-        trait_resolution::constraint::collect_func_decl_constraints,
+        trait_resolution::{
+            TraitSolveCx, check_trait_inst_wf, constraint::collect_func_decl_constraints,
+        },
         ty_def::{BorrowKind, CapabilityKind},
         ty_def::{InvalidCause, TyBase, TyData, TyFlags, TyId},
-        ty_lower::lower_generic_arg_list,
+        ty_lower::{lower_generic_arg_list, specialized_callable_layout_bundle_signature},
         visitor::{TyVisitable, TyVisitor, collect_flags},
     },
 };
-use crate::core::semantic::{ProviderBinding, ProviderSource};
+use crate::core::semantic::{ProviderBinding, ProviderSource, param_env};
 use crate::hir_def::Body;
 use crate::hir_def::CallableDef;
 use crate::hir_def::params::FuncParamMode;
@@ -84,6 +86,14 @@ impl<'db> TyFoldable<'db> for EffectProviderSpecialization<'db> {
         F: TyFolder<'db>,
     {
         let provider_ty = self.provider.provider_ty.fold_with(db, folder);
+        let evidence = match self.provider.semantics.evidence {
+            crate::analysis::ty::provider::ProviderLayoutEvidence::ResolvedHandle(instance) => {
+                crate::analysis::ty::provider::ProviderLayoutEvidence::ResolvedHandle(
+                    instance.fold_with(db, folder),
+                )
+            }
+            evidence => evidence,
+        };
         let semantics = crate::analysis::ty::provider::ProviderSemantics {
             provider_ty: self.provider.semantics.provider_ty.fold_with(db, folder),
             target_ty: self
@@ -91,6 +101,7 @@ impl<'db> TyFoldable<'db> for EffectProviderSpecialization<'db> {
                 .semantics
                 .target_ty
                 .map(|ty| ty.fold_with(db, folder)),
+            evidence,
             ..self.provider.semantics
         };
         let source = match self.provider.source {
@@ -101,13 +112,7 @@ impl<'db> TyFoldable<'db> for EffectProviderSpecialization<'db> {
                 site,
                 requirement_idx,
             },
-            ProviderSource::ContractField {
-                contract,
-                field_idx,
-            } => ProviderSource::ContractField {
-                contract,
-                field_idx,
-            },
+            ProviderSource::ContractField { field } => ProviderSource::ContractField { field },
             ProviderSource::RootProvider { site, registration } => ProviderSource::RootProvider {
                 site,
                 registration: crate::analysis::ty::provider::RootProviderRegistration {
@@ -143,6 +148,7 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
     callable: &mut Callable<'db>,
     tc: &mut TyChecker<'db>,
     args: GenericArgListId<'db>,
+    anchor: HoleAnchor<'db>,
     mut unify_arg: impl FnMut(&mut TyChecker<'db>, usize, TyId<'db>, &mut TyId<'db>) -> bool,
 ) -> Result<(), CallGenericArgUnifyError> {
     let db = tc.db;
@@ -150,10 +156,7 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
         return Ok(());
     }
 
-    let minter = HoleMinter::new(HoleAnchor::TemplateArgs {
-        args,
-        scope: tc.env.scope(),
-    });
+    let minter = HoleMinter::new(anchor);
     let given_args = lower_generic_arg_list(
         db,
         args,
@@ -266,6 +269,32 @@ impl<'db> Callable<'db> {
         &mut self.generic_args
     }
 
+    pub(super) fn specialize_arg_from_actual(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        arg_idx: usize,
+        actual: TyId<'db>,
+    ) {
+        let Some(expected) = self
+            .callable_def
+            .arg_tys(db)
+            .get(arg_idx)
+            .map(|ty| ty.instantiate_identity())
+        else {
+            return;
+        };
+        self.specialize_params_from_actual(db, expected, actual);
+    }
+
+    pub(super) fn specialize_params_from_actual(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        expected: TyId<'db>,
+        actual: TyId<'db>,
+    ) {
+        bind_callable_params_from_actual(db, expected, actual, &mut self.generic_args);
+    }
+
     pub fn effect_providers(&self) -> &[EffectProviderSpecialization<'db>] {
         &self.effect_providers
     }
@@ -318,9 +347,10 @@ impl<'db> Callable<'db> {
         &mut self,
         tc: &mut TyChecker<'db>,
         args: GenericArgListId<'db>,
+        anchor: HoleAnchor<'db>,
         span: LazyGenericArgListSpan<'db>,
     ) -> bool {
-        match unify_explicit_call_generic_args(self, tc, args, |tc, idx, given, current| {
+        match unify_explicit_call_generic_args(self, tc, args, anchor, |tc, idx, given, current| {
             *current = tc.equate_ty(given, *current, span.clone().arg(idx).into());
             true
         }) {
@@ -381,6 +411,16 @@ impl<'db> Callable<'db> {
             }
             CallableDef::VariantCtor(_) => None,
         };
+        let layout_input_origins = match self.callable_def {
+            CallableDef::Func(func) => {
+                specialized_callable_layout_bundle_signature(db, func, &self.generic_args)
+                    .inputs
+                    .into_iter()
+                    .map(|input| input.origin)
+                    .collect::<Vec<_>>()
+            }
+            CallableDef::VariantCtor(_) => Vec::new(),
+        };
 
         let mut args = if let Some((receiver_expr, receiver_prop)) = receiver {
             let mut args = Vec::with_capacity(call_args.len() + 1);
@@ -399,8 +439,28 @@ impl<'db> Callable<'db> {
 
         for (i, hir_arg) in call_args.iter().enumerate() {
             let arg_idx = if has_receiver { i + 1 } else { i };
-            let expected_hint =
-                self.compile_time_string_literal_arg_expected(tc, hir_arg.expr, arg_idx);
+            let layout_origin = match self.callable_def {
+                CallableDef::Func(_) => Some(CallableInputLayoutHoleOrigin::ValueParam(arg_idx)),
+                CallableDef::VariantCtor(_) => None,
+            };
+            // Constructors for layout-bearing inputs must see the callee's specialized type so
+            // their inferred roots are anchored to the value being passed. Keep this contextual
+            // typing selective: applying it to every call argument changes ordinary inference and
+            // compile-time evaluation. `view` is an interface capability, not the type of the value
+            // constructed at the call boundary, so use its inner type as the hint.
+            let expected_hint = self
+                .compile_time_string_literal_arg_expected(tc, hir_arg.expr, arg_idx)
+                .or_else(|| {
+                    (matches!(self.callable_def, CallableDef::VariantCtor(_))
+                        || layout_origin
+                            .is_some_and(|origin| layout_input_origins.contains(&origin)))
+                    .then(|| self.arg_ty(db, arg_idx))
+                    .flatten()
+                    .map(|ty| {
+                        let ty = tc.normalize_ty(ty);
+                        ty.as_view(db).unwrap_or(ty)
+                    })
+                });
             args.push(CallArg::from_hir_arg(
                 tc,
                 hir_arg,
@@ -644,6 +704,46 @@ impl<'db> Callable<'db> {
     }
 }
 
+fn bind_callable_params_from_actual<'db>(
+    db: &'db dyn HirAnalysisDb,
+    expected: TyId<'db>,
+    actual: TyId<'db>,
+    args: &mut [TyId<'db>],
+) {
+    match expected.data(db) {
+        TyData::TyParam(param) => {
+            if let Some(arg) = args.get_mut(param.idx) {
+                *arg = actual;
+            }
+            return;
+        }
+        TyData::ConstTy(const_ty) => {
+            if let crate::analysis::ty::const_ty::ConstTyData::TyParam(param, _) = const_ty.data(db)
+            {
+                if let Some(arg) = args.get_mut(param.idx) {
+                    *arg = actual;
+                }
+                return;
+            }
+        }
+        _ => {}
+    }
+    if let Some((expected_kind, expected_inner)) = expected.as_capability(db)
+        && let Some((actual_kind, actual_inner)) = actual.as_capability(db)
+        && expected_kind == actual_kind
+    {
+        bind_callable_params_from_actual(db, expected_inner, actual_inner, args);
+        return;
+    }
+    let (expected_base, expected_args) = expected.decompose_ty_app(db);
+    let (actual_base, actual_args) = actual.decompose_ty_app(db);
+    if expected_base == actual_base && expected_args.len() == actual_args.len() {
+        for (&expected, &actual) in expected_args.iter().zip(actual_args) {
+            bind_callable_params_from_actual(db, expected, actual, args);
+        }
+    }
+}
+
 impl<'db> CallableDef<'db> {
     fn accepts_compile_time_string_literal_bytes(
         self,
@@ -768,9 +868,28 @@ impl<'db> Callable<'db> {
     ) {
         let db = tc.db;
         let constraints = collect_func_decl_constraints(db, self.callable_def, true);
+        let declared = constraints.instantiate_identity();
         let instantiated = constraints.instantiate(db, &self.generic_args);
+        let definition_assumptions = match self.callable_def {
+            CallableDef::Func(func) => param_env(db, func.into()),
+            CallableDef::VariantCtor(_) => declared,
+        };
+        let definition_solve_cx = TraitSolveCx::new(db, self.callable_def.scope())
+            .with_assumptions(definition_assumptions);
 
-        for (constraint_idx, &constraint) in instantiated.list(db).iter().enumerate() {
+        for (constraint_idx, (&constraint, &declared_constraint)) in instantiated
+            .list(db)
+            .iter()
+            .zip(declared.list(db))
+            .enumerate()
+        {
+            // The declaration pass reports ill-formed bounds at their source.
+            // Do not turn the same malformed template into a downstream call
+            // error merely because candidate signatures are intentionally
+            // deferred during lookup.
+            if !check_trait_inst_wf(db, definition_solve_cx, declared_constraint).is_wf() {
+                continue;
+            }
             let constraint = if let Some(inst) = self.trait_inst {
                 let mut subst = AssocTySubst::new(inst);
                 constraint.fold_with(db, &mut subst)

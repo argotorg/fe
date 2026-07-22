@@ -1,0 +1,61 @@
+use std::evm::{Evm, StorageMap}
+
+fn pass_map<const SALT: u256>(
+    map: StorageMap<u256, u256, SALT>,
+) -> StorageMap<u256, u256, SALT> {
+    map
+}
+
+fn pass_map_nested<const SALT: u256>(
+    map: StorageMap<u256, u256, SALT>,
+) -> StorageMap<u256, u256, SALT> {
+    return pass_map(map: map)
+}
+
+fn read_lane(
+    maps: [StorageMap<u256, u256>; 2],
+    lane: usize,
+    key: u256,
+) -> u256 {
+    pass_map_nested(map: maps[lane]).get(key: key)
+}
+
+msg Msg {
+    #[selector = 1]
+    Set { lane: usize, key: u256, value: u256 },
+
+    #[selector = 2]
+    Get { lane: usize, key: u256 } -> u256,
+}
+
+pub contract C {
+    mut maps: [StorageMap<u256, u256>; 2],
+
+    recv Msg {
+        Set { lane, key, value } uses (mut maps) {
+            maps[lane].set(key: key, value: value)
+        }
+
+        Get { lane, key } -> u256 uses (maps) {
+            read_lane(maps: maps, lane: lane, key: key)
+        }
+    }
+}
+
+#[test]
+fn returned_values_preserve_direct_layout_sources() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 1)
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::Set { lane: 1, key: 7, value: 42 },
+    )
+    let value: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::Get { lane: 1, key: 7 },
+    )
+    assert!(value == 42)
+}

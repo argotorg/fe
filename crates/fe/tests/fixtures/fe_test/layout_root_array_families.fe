@@ -1,0 +1,125 @@
+use std::evm::{Evm, StorageMap}
+
+msg MapArrayMsg {
+    #[selector = 1]
+    SetStatic { key: u256, value: u256 },
+
+    #[selector = 2]
+    GetStatic { key: u256 } -> u256,
+
+    #[selector = 3]
+    SetDynamic { lane: usize, key: u256, value: u256 },
+
+    #[selector = 4]
+    GetDynamic { lane: usize, key: u256 } -> u256,
+
+    #[selector = 5]
+    SetFollowing { key: u256, value: u256 },
+
+    #[selector = 6]
+    GetFollowing { key: u256 } -> u256,
+}
+
+pub contract MapArray {
+    mut maps: [StorageMap<u256, u256>; 3],
+    mut following: StorageMap<u256, u256>,
+
+    recv MapArrayMsg {
+        SetStatic { key, value } uses (mut maps) {
+            maps[1].set(key: key, value: value)
+        }
+
+        GetStatic { key } -> u256 uses (maps) {
+            maps[1].get(key: key)
+        }
+
+        SetDynamic { lane, key, value } uses (mut maps) {
+            maps[lane].set(key: key, value: value)
+        }
+
+        GetDynamic { lane, key } -> u256 uses (maps) {
+            maps[lane].get(key: key)
+        }
+
+        SetFollowing { key, value } uses (mut following) {
+            following.set(key: key, value: value)
+        }
+
+        GetFollowing { key } -> u256 uses (following) {
+            following.get(key: key)
+        }
+    }
+}
+
+#[test]
+fn indexed_layout_roots_are_distinct_and_dynamic() uses (evm: mut Evm) {
+    let c = evm.create2<MapArray>(value: 0, args: (), salt: 1)
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: MapArrayMsg::SetStatic { key: 7, value: 11 },
+    )
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: MapArrayMsg::SetDynamic { lane: 2, key: 7, value: 22 },
+    )
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: MapArrayMsg::SetFollowing { key: 7, value: 33 },
+    )
+    let static_value: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: MapArrayMsg::GetStatic { key: 7 },
+    )
+    let dynamic_value: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: MapArrayMsg::GetDynamic { lane: 2, key: 7 },
+    )
+    let following_value: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: MapArrayMsg::GetFollowing { key: 7 },
+    )
+    assert!(static_value == 11)
+    assert!(dynamic_value == 22)
+    assert!(following_value == 33)
+}
+
+#[test(should_revert)]
+fn inferred_layout_root_array_rejects_oob_write() uses (evm: mut Evm) {
+    let c = evm.create2<MapArray>(value: 0, args: (), salt: 2)
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: MapArrayMsg::SetFollowing { key: 7, value: 44 },
+    )
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: MapArrayMsg::SetDynamic { lane: 3, key: 7, value: 33 },
+    )
+}
+
+#[test(should_revert)]
+fn inferred_layout_root_array_rejects_oob_read() uses (evm: mut Evm) {
+    let c = evm.create2<MapArray>(value: 0, args: (), salt: 3)
+    let value: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: MapArrayMsg::GetDynamic { lane: 3, key: 7 },
+    )
+    assert!(value == 0)
+}

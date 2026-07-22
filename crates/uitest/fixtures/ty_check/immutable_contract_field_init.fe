@@ -200,6 +200,10 @@ contract MemorySpaceField {
     ptr: std::evm::MemPtr<u256>
 }
 
+contract CalldataSpaceField {
+    ptr: std::evm::CalldataPtr<u256>
+}
+
 contract InitViaAugAssign {
     x: u256
 
@@ -296,4 +300,22 @@ contract InitBranchCondMutatedBothArmsAssign {
             x = v + 1
         }
     }
+}
+
+struct Empty {}
+
+contract ZeroMemorySpaceField {
+    ptr: std::evm::MemPtr<()>
+}
+
+contract ZeroCalldataSpaceField {
+    ptr: std::evm::CalldataPtr<()>
+}
+
+contract EmptyMemorySpaceField {
+    ptr: std::evm::MemPtr<Empty>
+}
+
+contract EmptyCalldataSpaceField {
+    ptr: std::evm::CalldataPtr<Empty>
 }

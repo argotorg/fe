@@ -57,7 +57,7 @@ pub(super) fn runtime_const_value_class<'db>(
         .or_else(|| top_level_class_for_ty_in_env(db, env, ty, AddressSpaceKind::Memory))
 }
 
-pub(super) fn const_scalar_from_value<'db>(
+pub(crate) fn const_scalar_from_value<'db>(
     db: &'db dyn MirDb,
     env: RuntimeTypeEnv<'db>,
     value: SemConstId<'db>,

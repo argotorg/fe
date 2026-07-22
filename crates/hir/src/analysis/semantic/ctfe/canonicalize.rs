@@ -21,56 +21,55 @@ type LocalDefs<'db> = Vec<Vec<SExpr<'db>>>;
 
 #[derive(Clone, Copy)]
 enum ConstCanonicalizationMode {
-    Final,
-    Provisional,
+    Full,
+    ReferencesOnly,
 }
 
-#[salsa::tracked]
+#[salsa::tracked(return_ref)]
 pub fn canonicalize_semantic_consts<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> SemanticBody<'db> {
-    let original = instance.body(db).clone();
-    canonicalize_semantic_consts_from_body(db, instance, original)
+    canonicalize_semantic_consts_from_body(db, instance, instance.body(db))
 }
 
 pub(crate) fn canonicalize_semantic_consts_from_body<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-    original: SemanticBody<'db>,
+    original: &SemanticBody<'db>,
 ) -> SemanticBody<'db> {
     canonicalize_semantic_consts_from_body_with_mode(
         db,
         instance,
         original,
-        ConstCanonicalizationMode::Final,
+        ConstCanonicalizationMode::Full,
     )
 }
 
-pub(crate) fn canonicalize_provisional_semantic_consts_from_body<'db>(
+pub(crate) fn canonicalize_semantic_const_refs_from_body<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-    original: SemanticBody<'db>,
+    original: &SemanticBody<'db>,
 ) -> SemanticBody<'db> {
     canonicalize_semantic_consts_from_body_with_mode(
         db,
         instance,
         original,
-        ConstCanonicalizationMode::Provisional,
+        ConstCanonicalizationMode::ReferencesOnly,
     )
 }
 
 fn canonicalize_semantic_consts_from_body_with_mode<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-    original: SemanticBody<'db>,
+    original: &SemanticBody<'db>,
     mode: ConstCanonicalizationMode,
 ) -> SemanticBody<'db> {
     let mut body = original.clone();
     if body.blocks.is_empty() {
         return body;
     }
-    let local_defs = collect_local_defs(&original);
+    let local_defs = collect_local_defs(original);
 
     let mut incoming = vec![None; body.blocks.len()];
     incoming[0] = Some(vec![None; body.locals.len()]);
@@ -85,7 +84,7 @@ fn canonicalize_semantic_consts_from_body_with_mode<'db>(
             instance,
             &original.blocks[bb.index()],
             &mut locals,
-            &original,
+            original,
             &local_defs,
             mode,
         );
@@ -104,7 +103,7 @@ fn canonicalize_semantic_consts_from_body_with_mode<'db>(
                 instance,
                 &original.blocks[idx],
                 &mut unknown_locals,
-                &original,
+                original,
                 &local_defs,
                 mode,
             );
@@ -173,6 +172,7 @@ fn canonicalize_stmt<'db>(
         }
     };
     SStmt {
+        id: stmt.id,
         origin: stmt.origin,
         kind,
     }
@@ -298,14 +298,23 @@ fn canonicalize_expr<'db>(
         );
     }
 
-    if matches!(mode, ConstCanonicalizationMode::Final)
-        && let Some(value) =
-            try_eval_expr_to_const(db, instance, result_ty, expr, locals, synthetic())
-        && !matches!(value.value(db), SemConstValue::TypeLevel { .. })
-    {
-        let value = canonicalize_const_value(db, instance, value);
-        if let Some(value) = reify_runtime_const_for_ty(db, instance, result_ty, value) {
-            return (SExpr::Const(SConst::Value(value)), Some(value));
+    if matches!(mode, ConstCanonicalizationMode::Full) {
+        let has_runtime_evidence = match expr {
+            SExpr::Call { callee, .. } => callee
+                .key
+                .layout_bundle_signature(db)
+                .has_runtime_evidence(),
+            _ => false,
+        };
+        if !has_runtime_evidence
+            && let Some(value) =
+                try_eval_expr_to_const(db, instance, result_ty, expr, locals, synthetic())
+            && !matches!(value.value(db), SemConstValue::TypeLevel { .. })
+        {
+            let value = canonicalize_const_value(db, instance, value);
+            if let Some(value) = reify_runtime_const_for_ty(db, instance, result_ty, value) {
+                return (SExpr::Const(SConst::Value(value)), Some(value));
+            }
         }
     }
 
@@ -380,7 +389,19 @@ fn canonicalize_const_value<'db>(
             ) else {
                 return value;
             };
-            sem_const_from_ty(db, TyId::const_ty(db, evaluated)).unwrap_or(value)
+            let Some(evaluated) = sem_const_from_ty(db, TyId::const_ty(db, evaluated)) else {
+                return value;
+            };
+            if matches!(evaluated.value(db), SemConstValue::TypeLevel { .. }) {
+                // Canonicalization did not produce a runtime value. Preserve
+                // the original symbolic reference so a formal const-parameter
+                // use keeps its exact parameter identity; replacing it with
+                // an instantiated hole would make runtime ABI selection rely
+                // on structural root matching.
+                value
+            } else {
+                evaluated
+            }
         }
         SemConstValue::Tuple { ty, elems } => tuple_const(
             db,

@@ -111,6 +111,20 @@ fn verify_stmt<'db>(
         RStmt::Assign { dst, expr } => {
             verify_assign(db, program, body, block, stmt_idx, *dst, expr)
         }
+        RStmt::AssertIndexInBounds { index, .. } => {
+            if let hir::projection::IndexSource::Dynamic(index) = index
+                && !matches!(
+                    runtime_value_class(body, *index)?,
+                    RuntimeClass::Scalar(crate::runtime::ScalarClass {
+                        repr: crate::runtime::ScalarRepr::Int { signed: false, .. },
+                        role: crate::runtime::ScalarRole::Plain,
+                    })
+                )
+            {
+                return Err(VerifyError::InvalidIndexClass(*index));
+            }
+            Ok(())
+        }
         RStmt::EnumAssertVariant { value, variant } => {
             verify_value_enum_variant_ref(
                 program,
@@ -384,6 +398,75 @@ fn verify_assign<'db>(
             }
             Some(RuntimeClass::AggregateValue { layout: *layout })
         }
+        RExpr::LayoutMapAffine { map, base, strides } => {
+            if !valid_ranked_layout_map(map)
+                || strides.len() != map.rank()
+                || runtime_value_class(body, *base)? != &RuntimeClass::Scalar(map.scalar().clone())
+                || strides.iter().any(|stride| {
+                    runtime_value_class(body, *stride).ok()
+                        != Some(&RuntimeClass::Scalar(map.scalar().clone()))
+                })
+            {
+                return Err(VerifyError::InvalidExprClass(dst));
+            }
+            Some(map.class())
+        }
+        RExpr::LayoutMapDense { map, elements } => {
+            let Some(child) = map.projected() else {
+                return Err(VerifyError::InvalidExprClass(dst));
+            };
+            if !valid_ranked_layout_map(map)
+                || map.dimensions().first().copied() != Some(elements.len())
+                || elements.is_empty()
+                || elements
+                    .iter()
+                    .any(|element| runtime_value_class(body, *element).ok() != Some(&child.class()))
+            {
+                return Err(VerifyError::InvalidExprClass(dst));
+            }
+            Some(map.class())
+        }
+        RExpr::LayoutMapRepeat { map, element } => {
+            let Some(child) = map.projected() else {
+                return Err(VerifyError::InvalidExprClass(dst));
+            };
+            if !valid_ranked_layout_map(map)
+                || runtime_value_class(body, *element)? != &child.class()
+            {
+                return Err(VerifyError::InvalidExprClass(dst));
+            }
+            Some(map.class())
+        }
+        RExpr::LayoutMapProject { map, source, index } => {
+            let Some(child) = map.projected() else {
+                return Err(VerifyError::InvalidExprClass(dst));
+            };
+            if !valid_ranked_layout_map(map)
+                || runtime_value_class(body, *source)? != &map.class()
+                || !valid_layout_map_index(body, *index)
+            {
+                return Err(VerifyError::InvalidExprClass(dst));
+            }
+            Some(child.class())
+        }
+        RExpr::LayoutMapPatch {
+            map,
+            source,
+            index,
+            replacement,
+        } => {
+            let Some(child) = map.projected() else {
+                return Err(VerifyError::InvalidExprClass(dst));
+            };
+            if !valid_ranked_layout_map(map)
+                || runtime_value_class(body, *source)? != &map.class()
+                || !valid_layout_map_index(body, *index)
+                || runtime_value_class(body, *replacement)? != &child.class()
+            {
+                return Err(VerifyError::InvalidExprClass(dst));
+            }
+            Some(map.class())
+        }
         RExpr::Call { callee, args } => {
             verify_call(db, program, body, *callee, args, RuntimeCallKind::Normal)?;
             program.interface_signature(*callee).ret.clone()
@@ -522,6 +605,31 @@ fn verify_assign<'db>(
     Ok(())
 }
 
+fn valid_ranked_layout_map(map: &crate::runtime::RuntimeLayoutMap<'_>) -> bool {
+    !map.dimensions().is_empty()
+        && map.dimensions().iter().all(|dimension| *dimension > 0)
+        && matches!(
+            map.scalar(),
+            ScalarClass {
+                repr: ScalarRepr::Int {
+                    bits: 256,
+                    signed: false,
+                },
+                role: ScalarRole::Plain,
+            }
+        )
+}
+
+fn valid_layout_map_index(body: &RuntimeBody<'_>, index: crate::runtime::RValueId) -> bool {
+    matches!(
+        runtime_value_class(body, index),
+        Ok(RuntimeClass::Scalar(ScalarClass {
+            repr: ScalarRepr::Int { signed: false, .. },
+            role: ScalarRole::Plain,
+        }))
+    )
+}
+
 fn same_block_dominating_enum_assert<'db>(
     block: &crate::runtime::RBlock<'db>,
     stmt_idx: usize,
@@ -548,6 +656,7 @@ fn same_block_dominating_enum_assert<'db>(
             }
             RStmt::EnumAssertVariant { .. }
             | RStmt::Assign { .. }
+            | RStmt::AssertIndexInBounds { .. }
             | RStmt::Store { .. }
             | RStmt::CopyInto { .. }
             | RStmt::EnumSetTag { .. }
@@ -877,7 +986,7 @@ fn verify_copy_into<'db>(
 ) -> Result<(), VerifyError<'db>> {
     let target = project_place(db, program, body, dst)?;
     let source = runtime_value_class(body, src)?;
-    if &target != source {
+    if &target != source && !source.shares_runtime_rep_with(db, &target) {
         return Err(VerifyError::InvalidCopyClass);
     }
     Ok(())

@@ -197,12 +197,10 @@ fn provider_source_identity<'db>(
             "uses_param${}${requirement_idx}",
             effect_param_site_identity(db, *site)
         ),
-        ProviderSource::ContractField {
-            contract,
-            field_idx,
-        } => format!(
-            "contract_field${}${field_idx}",
-            item_identity(db, (*contract).into())
+        ProviderSource::ContractField { field } => format!(
+            "contract_field${}${}",
+            item_identity(db, field.contract.into()),
+            field.index
         ),
         ProviderSource::RootProvider { site, registration } => format!(
             "root_provider${}$idx${}$kind${:?}$ty${}",
@@ -226,12 +224,10 @@ fn provider_source_symbol_identity<'db>(
             "uses_param${}${requirement_idx}",
             effect_param_site_identity(db, *site)
         ),
-        ProviderSource::ContractField {
-            contract,
-            field_idx,
-        } => format!(
-            "contract_field${}${field_idx}",
-            item_identity(db, (*contract).into())
+        ProviderSource::ContractField { field } => format!(
+            "contract_field${}${}",
+            item_identity(db, field.contract.into()),
+            field.index
         ),
         ProviderSource::RootProvider { site, registration } => format!(
             "root_provider${}$idx${}$kind${:?}",

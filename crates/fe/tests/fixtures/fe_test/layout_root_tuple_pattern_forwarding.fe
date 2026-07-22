@@ -1,0 +1,55 @@
+use std::evm::{Evm, StorageMap}
+
+type Maps = (StorageMap<u256, u256>, StorageMap<u256, u256>)
+
+fn get_left(maps: Maps, key: u256) -> u256 {
+    let (left, _) = maps
+    left.get(key: key)
+}
+
+fn get_right(maps: Maps, key: u256) -> u256 {
+    let (_, right) = maps
+    right.get(key: key)
+}
+
+msg Msg {
+    #[selector = 1]
+    Set { key: u256, left: u256, right: u256 },
+
+    #[selector = 2]
+    Get { key: u256 } -> (u256, u256),
+}
+
+pub contract C {
+    mut maps: Maps,
+
+    recv Msg {
+        Set { key, left, right } uses (mut maps) {
+            maps.0.set(key: key, value: left)
+            maps.1.set(key: key, value: right)
+        }
+
+        Get { key } -> (u256, u256) uses (maps) {
+            (get_left(maps: maps, key: key), get_right(maps: maps, key: key))
+        }
+    }
+}
+
+#[test]
+fn tuple_patterns_preserve_projected_layout_roots() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 1)
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::Set { key: 7, left: 42, right: 99 },
+    )
+    let values: (u256, u256) = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::Get { key: 7 },
+    )
+    assert!(values.0 == 42)
+    assert!(values.1 == 99)
+}

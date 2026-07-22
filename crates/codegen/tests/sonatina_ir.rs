@@ -43,6 +43,16 @@ fn sonatina_function_names(ir: &str) -> Vec<String> {
         .collect()
 }
 
+fn sonatina_function_body<'a>(ir: &'a str, symbol_segment: &str) -> Option<&'a str> {
+    let header = ir
+        .lines()
+        .find(|line| line.starts_with("func ") && line.contains(symbol_segment))?;
+    let start = ir.find(header)?;
+    let body = &ir[start..];
+    let end = body.find("\n}\n").map_or(body.len(), |end| end + 2);
+    Some(&body[..end])
+}
+
 #[test]
 fn zero_sized_const_aggregates_do_not_emit_const_regions() {
     let ir = with_top_mod_for_source(
@@ -199,9 +209,9 @@ pub fn main() -> u256
 }
 
 #[test]
-fn explicit_storage_map_root_reports_ordinary_uses_error() {
-    let err = with_top_mod_for_source(
-        "explicit_storage_map_root_reports_ordinary_uses_error.fe",
+fn explicit_storage_map_root_compiles_without_a_runtime_provider() {
+    let output = with_top_mod_for_source(
+        "explicit_storage_map_root_compiles_without_a_runtime_provider.fe",
         r#"
 use std::evm::StorageMap
 
@@ -211,19 +221,158 @@ pub fn main() -> u256
     balances.get(key: 1)
 }
 "#,
+        |db, top_mod| emit_module_sonatina_ir(db, top_mod).expect("explicit root should compile"),
+    );
+    assert!(
+        output.contains("call %storagemap_get_word_with_salt v0 0.i256"),
+        "explicit root was not lowered as the concrete StorageMap salt:\n{output}"
+    );
+}
+
+#[test]
+fn persistent_layout_maps_lower_with_checked_projection_control_flow() {
+    let output = with_top_mod_for_source(
+        "persistent_layout_maps_lower_with_checked_projection_control_flow.fe",
+        r#"
+struct Rooted<const ROOT: u256 = _> {}
+
+impl<const ROOT: u256> Copy for Rooted<ROOT> {}
+
+impl<const ROOT: u256> Rooted<ROOT> {
+    fn root(self) -> u256 {
+        ROOT
+    }
+}
+
+fn repeat<const ROOT: u256>(value: Rooted<ROOT>) -> [Rooted<ROOT>; 3] {
+    [value; 3]
+}
+
+fn reorder<const ROOT: u256>(values: [Rooted<ROOT>; 3]) -> [Rooted<ROOT>; 3] {
+    [values[2], values[0], values[1]]
+}
+
+fn fresh<const ROOT: u256>() -> Rooted<ROOT> {
+    Rooted {}
+}
+
+fn replace<const ROOT: u256>(
+    values: own [Rooted<ROOT>; 3],
+    lane: usize,
+) -> [Rooted<ROOT>; 3] {
+    let mut result = values
+    result[lane] = fresh()
+    result
+}
+
+fn patch<const ROOT: u256>(
+    values: own [Rooted<ROOT>; 3],
+    lane: usize,
+    replacement: Rooted<ROOT>,
+) -> [Rooted<ROOT>; 3] {
+    let mut result = values
+    result[lane] = replacement
+    result
+}
+
+fn select<const ROOT: u256>(values: [Rooted<ROOT>; 3], lane: usize) -> Rooted<ROOT> {
+    values[lane]
+}
+
+msg Msg {
+    #[selector = 1]
+    Get { lane: usize } -> u256,
+}
+
+pub contract C {
+    mut values: [Rooted; 3],
+
+    recv Msg {
+        Get { lane } -> u256 uses (values) {
+            let repeated = repeat(value: values[0])
+            let reordered = reorder(values: repeated)
+            let replaced = replace(
+                values: reordered,
+                lane: lane,
+            )
+            let patched = patch(
+                values: replaced,
+                lane: lane,
+                replacement: values[0],
+            )
+            select(values: patched, lane: lane).root()
+        }
+    }
+}
+"#,
+        |db, top_mod| emit_module_sonatina_ir(db, top_mod).expect("layout maps should lower"),
+    );
+
+    assert!(
+        output.contains("br_table") && output.contains("evm_revert") && output.contains("lt "),
+        "layout-map projection must dispatch safely after a bounds check:\n{output}"
+    );
+    assert!(
+        output.matches("evm_malloc").count() >= 4,
+        "persistent layout-map constructors must allocate their nodes:\n{output}"
+    );
+    let patch = sonatina_function_body(&output, "patch").unwrap_or_else(|| {
+        panic!(
+            "expected the layout-map patch regression function; functions={:?}",
+            sonatina_function_names(&output)
+        )
+    });
+    assert!(
+        patch.contains("lt ") && patch.contains("evm_revert"),
+        "layout-map patches must enforce their own index bounds:\n{patch}"
+    );
+    assert!(
+        !patch.contains("br_table"),
+        "a terminal layout-map patch should not project and dispatch through its source:\n{patch}"
+    );
+}
+
+#[test]
+fn inferred_storage_map_roots_skip_explicit_contract_salts() {
+    let output = with_top_mod_for_source(
+        "inferred_storage_map_roots_skip_explicit_contract_salts.fe",
+        r#"
+use std::evm::StorageMap
+
+msg M {
+    #[selector = 0x01]
+    X { key: u256 } -> u256,
+    #[selector = 0x02]
+    Y { key: u256 } -> u256,
+    #[selector = 0x03]
+    Z { key: u256 } -> u256,
+}
+
+pub contract C {
+    mut x: StorageMap<u256, u256, 1>,
+    mut y: StorageMap<u256, u256>,
+    mut z: StorageMap<u256, u256>,
+
+    recv M {
+        X { key } -> u256 uses x { x.get(key) }
+        Y { key } -> u256 uses y { y.get(key) }
+        Z { key } -> u256 uses z { z.get(key) }
+    }
+}
+"#,
         |db, top_mod| {
             emit_module_sonatina_ir(db, top_mod)
-                .expect_err("ordinary root StorageMap effects should be rejected")
+                .expect("mixed explicit and inferred roots should compile")
         },
     );
-    let message = err.to_string();
-    assert!(
-        message.contains("standalone root `main`")
-            && message.contains("ordinary uses parameter")
-            && message.contains("no caller to supply ordinary effect parameters")
-            && message.contains("with (...)"),
-        "unexpected error message:\n{message}"
-    );
+    for salt in ["0.i256", "1.i256", "2.i256"] {
+        assert!(
+            output.lines().any(|line| {
+                line.contains("call %storagemap_get_word_with_salt") && line.contains(salt)
+            }),
+            "missing StorageMap salt {salt}:\n{output}"
+        );
+    }
 }
 
 #[test]
@@ -460,4 +609,66 @@ fn sonatina_ir_snap(fixture: Fixture<&str>) {
     settings.bind(|| {
         _insta::assert_snapshot!(fixture_name, output);
     });
+}
+
+/// End-to-end guard for the generic-storage-field aliasing fix: a hole-bearing
+/// storage type passed as one generic argument and reused by two struct fields
+/// (`struct Pair<T> { left: T, right: T }` as `Pair<StorageMap<..>>`) must lower
+/// to *distinct* storage roots. Before the fix both fields shared one root,
+/// silently merging their storage in deployed bytecode.
+#[test]
+fn repeated_generic_storage_fields_lower_to_distinct_slots() {
+    let ir = with_top_mod_for_source(
+        "repeated_generic_storage_fields_lower_to_distinct_slots.fe",
+        r#"
+use std::evm::{Address, StorageMap, StorPtr}
+
+struct Pair<T> {
+    left: T,
+    right: T,
+}
+
+msg Msg {
+    #[selector = 1]
+    Swap { user: Address, amount: u256 } -> u256,
+}
+
+pub contract C {
+    mut pair: StorPtr<Pair<StorageMap<Address, u256>>>,
+
+    recv Msg {
+        Swap { user, amount } -> u256 uses (mut pair) {
+            pair.left.set(key: user, value: amount)
+            pair.right.get(key: user)
+        }
+    }
+}
+"#,
+        |db, top_mod| emit_module_sonatina_ir(db, top_mod).expect("Sonatina IR should emit"),
+    );
+
+    // `pair.left.set` and `pair.right.get` each lower to a storage-map access
+    // salted by the field's root slot. The two salts must differ. The salt is
+    // the literal `N.i256` operand on the `call %storagemap_*_with_salt` line.
+    let salt = |op: &str| -> String {
+        let needle = format!("call %storagemap_{op}_word_with_salt");
+        let line = ir
+            .lines()
+            .find(|l| l.contains(&needle))
+            .unwrap_or_else(|| panic!("missing {needle}:\n{ir}"));
+        line.split_whitespace()
+            .find_map(|tok| {
+                tok.trim_end_matches(';')
+                    .strip_suffix(".i256")
+                    .filter(|n| n.parse::<u64>().is_ok())
+            })
+            .unwrap_or_else(|| panic!("no salt literal on line `{line}`"))
+            .to_string()
+    };
+    let set_salt = salt("set");
+    let get_salt = salt("get");
+    assert_ne!(
+        set_salt, get_salt,
+        "left/right storage roots aliased (both salt {set_salt})"
+    );
 }

@@ -14,7 +14,9 @@ type @layout_5 = {i256, i256};
 type @layout_6 = {};
 type @layout_7 = {@layout_6};
 type @layout_8 = {i256, i256};
-type @layout_9 = {i256, i256};
+type @layout_9 = {i256};
+type @layout_10 = {@layout_9, i256};
+type @layout_11 = {i256};
 
 global private const @layout_2 $const_region_0 = {0};
 
@@ -32,9 +34,10 @@ func private %__EffectHandleFieldDeref_recv_0_0(v0.i256, v1.i256) -> i256 {
         jump block1;
 
     block1:
-        v3.i256 = call %stor_ptr v0;
-        v5.i256 = call %write_cell v1 v3;
-        return v5;
+        v3.@layout_9 = call %stor_ptr v0;
+        v4.i256 = call %raw v3;
+        v6.i256 = call %write_cell v1 v4;
+        return v6;
 }
 
 func private %__EffectHandleFieldDeref_recv_0_1(v0.i256) -> i256 {
@@ -42,12 +45,13 @@ func private %__EffectHandleFieldDeref_recv_0_1(v0.i256) -> i256 {
         jump block1;
 
     block1:
-        v2.i256 = call %stor_ptr v0;
-        v6.@layout_9 = insert_value undef.@layout_9 0.i256 v2;
-        v7.@layout_9 = insert_value v6 1.i256 1.i256;
-        v8.i256 = call %extract_ptr v7;
-        v9.i256 = call %read_cell v8;
-        return v9;
+        v2.@layout_9 = call %stor_ptr v0;
+        v6.@layout_10 = insert_value undef.@layout_10 0.i256 v2;
+        v7.@layout_10 = insert_value v6 1.i256 1.i256;
+        v8.@layout_9 = call %extract_ptr v7;
+        v9.i256 = call %raw v8;
+        v10.i256 = call %read_cell v9;
+        return v10;
 }
 
 func private %__EffectHandleFieldDeref_recv_0_2(v0.i256, v1.i256) -> i256 {
@@ -1094,29 +1098,22 @@ func private %encoder_new(v0.i256) -> @layout_0 {
         return v2;
 }
 
-func private %extract_ptr(v0.@layout_9) -> i256 {
+func private %extract_ptr(v0.@layout_10) -> @layout_9 {
     block0:
-        v1.objref<@layout_9> = obj.alloc @layout_9;
-        v3.objref<i256> = obj.proj v1 0.i256;
-        v4.i256 = extract_value v0 0.i256;
-        obj.store v3 v4;
-        v6.objref<i256> = obj.proj v1 1.i256;
-        v7.i256 = extract_value v0 1.i256;
-        obj.store v6 v7;
         jump block1;
 
     block1:
-        v8.objref<i256> = obj.proj v1 0.i256;
-        v9.i256 = obj.load v8;
-        return v9;
+        v3.@layout_9 = extract_value v0 0.i256;
+        return v3;
 }
 
-func private %from_raw(v0.i256) -> i256 {
+func private %from_raw(v0.i256) -> @layout_9 {
     block0:
         jump block1;
 
     block1:
-        return v0;
+        v4.@layout_9 = insert_value undef.@layout_9 0.i256 v0;
+        return v4;
 }
 
 func private %std__lib__evm__effects__impl_trait_Evm_c913__input_0e8a() -> @layout_2 {
@@ -1434,13 +1431,24 @@ func private %pos(v0.objref<@layout_0>) -> i256 {
         return v4;
 }
 
+func private %raw(v0.@layout_9) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i256 = extract_value v0 0.i256;
+        return v3;
+}
+
 func private %read_cell(v0.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = evm_sload v0;
-        return v2;
+        v3.i256 = evm_sload v0;
+        v5.@layout_11 = insert_value undef.@layout_11 0.i256 v3;
+        v6.i256 = extract_value v5 0.i256;
+        return v6;
 }
 
 func private %std__lib__evm__effects__impl_trait_Evm_0098__revert_27e9(v0.i256, v1.i256) {
@@ -1487,12 +1495,12 @@ func private %set_pos(v0.objref<@layout_0>, v1.i256) {
         return;
 }
 
-func private %stor_ptr(v0.i256) -> i256 {
+func private %stor_ptr(v0.i256) -> @layout_9 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = call %from_raw v0;
+        v2.@layout_9 = call %from_raw v0;
         return v2;
 }
 
@@ -1610,8 +1618,10 @@ func private %write_cell(v0.i256, v1.i256) -> i256 {
 
     block1:
         evm_sstore v1 v0;
-        v4.i256 = evm_sload v1;
-        return v4;
+        v5.i256 = evm_sload v1;
+        v7.@layout_11 = insert_value undef.@layout_11 0.i256 v5;
+        v8.i256 = extract_value v7 0.i256;
+        return v8;
 }
 
 func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_2aa5(v0.objref<@layout_0>, v1.i256) {

@@ -24,7 +24,7 @@ impl<T> HirAnalysisDb for T where T: HirDb {}
 pub mod name_resolution;
 pub mod ty;
 
-pub fn initialize_analysis_pass() -> AnalysisPassManager {
+pub(crate) fn initialize_pre_contract_analysis_pass() -> AnalysisPassManager {
     let mut pass_manager = AnalysisPassManager::new();
     pass_manager.add_module_pass("Parsing", Box::new(ParsingPass {}));
     pass_manager.add_module_pass("AttrMisuse", Box::new(AttrMisusePass {}));
@@ -41,6 +41,11 @@ pub fn initialize_analysis_pass() -> AnalysisPassManager {
     pass_manager.add_module_pass("ImplTrait", Box::new(ImplTraitAnalysisPass {}));
     pass_manager.add_module_pass("Func", Box::new(FuncAnalysisPass {}));
     pass_manager.add_module_pass("Body", Box::new(BodyAnalysisPass {}));
+    pass_manager
+}
+
+pub fn initialize_analysis_pass() -> AnalysisPassManager {
+    let mut pass_manager = initialize_pre_contract_analysis_pass();
     pass_manager.add_module_pass("Contract", Box::new(ContractAnalysisPass {}));
     pass_manager
 }

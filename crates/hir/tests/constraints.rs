@@ -4,7 +4,7 @@ use common::diagnostics::{CompleteDiagnostic, cmp_complete_diagnostics};
 use dir_test::{Fixture, dir_test};
 use fe_hir::{
     hir_def::TopLevelMod,
-    test_db::{HirAnalysisTestDb, initialize_analysis_pass},
+    test_db::{HirAnalysisTestDb, initialize_test_analysis_pass},
 };
 
 #[dir_test(
@@ -24,7 +24,7 @@ fn diagnostics_for<'db>(
     db: &'db HirAnalysisTestDb,
     top_mod: TopLevelMod<'db>,
 ) -> Vec<CompleteDiagnostic> {
-    let mut manager = initialize_analysis_pass();
+    let mut manager = initialize_test_analysis_pass();
     let mut diags: Vec<_> = manager
         .run_on_module(db, top_mod)
         .into_iter()

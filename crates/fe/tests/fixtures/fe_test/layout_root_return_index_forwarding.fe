@@ -1,0 +1,90 @@
+use std::evm::{Evm, StorageMap}
+
+fn lane_map<const SALT: u256>(
+    maps: [StorageMap<u256, u256, SALT>; 2],
+    lane: usize,
+) -> StorageMap<u256, u256, SALT> {
+    maps[lane]
+}
+
+fn lane_map_nested<const SALT: u256>(
+    maps: [StorageMap<u256, u256, SALT>; 2],
+    lane: usize,
+) -> StorageMap<u256, u256, SALT> {
+    lane_map(maps: maps, lane: lane)
+}
+
+fn fixed_lane_map<const SALT: u256>(
+    maps: [StorageMap<u256, u256, SALT>; 2],
+) -> StorageMap<u256, u256, SALT> {
+    maps[1]
+}
+
+fn read_lane<const SALT: u256>(
+    maps: [StorageMap<u256, u256, SALT>; 2],
+    lane: usize,
+    key: u256,
+) -> u256 {
+    lane_map_nested(maps: maps, lane: lane).get(key: key)
+}
+
+fn read_fixed_lane<const SALT: u256>(
+    maps: [StorageMap<u256, u256, SALT>; 2],
+    key: u256,
+) -> u256 {
+    fixed_lane_map(maps: maps).get(key: key)
+}
+
+msg Msg {
+    #[selector = 1]
+    Set { lane: usize, key: u256, value: u256 },
+
+    #[selector = 2]
+    Get { lane: usize, key: u256 } -> u256,
+
+    #[selector = 3]
+    GetFixed { key: u256 } -> u256,
+}
+
+pub contract C {
+    mut maps: [StorageMap<u256, u256>; 2],
+
+    recv Msg {
+        Set { lane, key, value } uses (mut maps) {
+            maps[lane].set(key: key, value: value)
+        }
+
+        Get { lane, key } -> u256 uses (maps) {
+            read_lane(maps: maps, lane: lane, key: key)
+        }
+
+        GetFixed { key } -> u256 uses (maps) {
+            read_fixed_lane(maps: maps, key: key)
+        }
+    }
+}
+
+#[test]
+fn returned_values_preserve_indexed_layout_sources() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 1)
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::Set { lane: 1, key: 7, value: 42 },
+    )
+    let value: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::Get { lane: 1, key: 7 },
+    )
+    assert!(value == 42)
+    let fixed: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::GetFixed { key: 7 },
+    )
+    assert!(fixed == 42)
+}

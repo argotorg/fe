@@ -10,11 +10,12 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            CallSiteId, FieldIndex, Mutability, SBlock, SBlockId, SConst, SExpr, SLocal, SLocalId,
-            SOperand, SPlace, SStmt, SStmtKind, STerminator, STerminatorKind, SValueId,
-            SemConstValue, SemOrigin, SemanticBody, SemanticCodeRegionTarget, SemanticLocalRole,
-            VariantIndex, bool_const, bytes_const, int_const, reify_runtime_const_for_ty,
-            runtime_size_bytes, sem_const_from_ty, unit_const,
+            CallSiteId, FieldIndex, LayoutBackingPlace, LayoutBackingSource, Mutability, SBlock,
+            SBlockId, SConst, SExpr, SLocal, SLocalId, SOperand, SPlace, SStmt, SStmtId, SStmtKind,
+            STerminator, STerminatorKind, SValueId, SemConstValue, SemOrigin, SemanticBody,
+            SemanticCodeRegionTarget, SemanticLocalRole, VariantIndex, bool_const, bytes_const,
+            int_const, reify_runtime_const_for_ty, runtime_size_bytes, sem_const_from_ty,
+            unit_const,
         },
         ty::{
             const_ty::{
@@ -78,17 +79,29 @@ pub(crate) fn lower_to_smir_with_call_sites<'a, 'db>(
 ) -> SemanticBody<'db> {
     let Some(body) = typed_body.body() else {
         let mut locals = Vec::new();
+        let mut entry_locals = Vec::new();
         let mut push_binding_local = |binding| {
+            let local = SLocalId::from_u32(locals.len() as u32);
+            let ty = match binding_role_mode {
+                BindingRoleMode::Final => instance.binding_ty(db, binding),
+                BindingRoleMode::Provisional => instance.provisional_binding_ty(db, binding),
+            };
             let role = match binding_role_mode {
                 BindingRoleMode::Final => instance.binding_role(db, binding),
                 BindingRoleMode::Provisional => instance.provisional_binding_role(db, binding),
             };
             let snapshot_source = initial_snapshot_source(&role);
+            let layout_ty = role.layout_ty(ty);
+            let layout_backing_sources = snapshot_source
+                .clone()
+                .map(|source| LayoutBackingSource {
+                    target: Vec::new(),
+                    source: source.into_layout_backing_place(layout_ty),
+                })
+                .into_iter()
+                .collect();
             locals.push(SLocal {
-                ty: match binding_role_mode {
-                    BindingRoleMode::Final => instance.binding_ty(db, binding),
-                    BindingRoleMode::Provisional => instance.provisional_binding_ty(db, binding),
-                },
+                ty,
                 mutability: if binding.is_mut() {
                     Mutability::Mutable
                 } else {
@@ -97,7 +110,9 @@ pub(crate) fn lower_to_smir_with_call_sites<'a, 'db>(
                 source: Some(binding),
                 role,
                 snapshot_source,
+                layout_backing_sources,
             });
+            entry_locals.push(local);
         };
         let mut idx = 0;
         while let Some(binding) = typed_body.param_binding(idx) {
@@ -110,6 +125,7 @@ pub(crate) fn lower_to_smir_with_call_sites<'a, 'db>(
         return SemanticBody {
             owner: instance,
             template_owner,
+            entry_locals,
             locals,
             blocks: vec![SBlock {
                 stmts: Vec::new(),
@@ -170,12 +186,15 @@ pub(super) struct SmirLowerCtxt<'a, 'db> {
     pub(super) for_loop_call_sites: &'a [Option<ForLoopCallSites<'db>>],
     pub(super) binding_role_mode: BindingRoleMode,
     pub(super) assumptions: crate::analysis::ty::trait_resolution::PredicateListId<'db>,
+    pub(super) entry_locals: Vec<SLocalId>,
     pub(super) locals: Vec<SLocal<'db>>,
     pub(super) assigned_snapshots: Vec<bool>,
+    pub(super) assigned_layout_backing_sources: Vec<bool>,
     pub(super) blocks: Vec<BlockState<'db>>,
     pub(super) binding_locals: FxHashMap<LocalBinding<'db>, SLocalId>,
     pub(super) with_binding_values: FxHashMap<ExprId, SValueId>,
     pub(super) current: SBlockId,
+    pub(super) next_stmt_id: u32,
     pub(super) loop_stack: Vec<LoopScope>,
 }
 
@@ -240,12 +259,15 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     )
                 }
             },
+            entry_locals: Vec::new(),
             locals: Vec::new(),
             assigned_snapshots: Vec::new(),
+            assigned_layout_backing_sources: Vec::new(),
             blocks: Vec::new(),
             binding_locals: FxHashMap::default(),
             with_binding_values: FxHashMap::default(),
             current: SBlockId::from_u32(0),
+            next_stmt_id: 0,
             loop_stack: Vec::new(),
         };
         cx.collect_binding_locals();
@@ -269,6 +291,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         SemanticBody {
             owner: self.instance,
             template_owner: self.template_owner,
+            entry_locals: self.entry_locals,
             locals: self.locals,
             blocks,
         }
@@ -277,7 +300,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     fn collect_binding_locals(&mut self) {
         let mut param_idx = 0;
         while let Some(binding) = self.typed_body.param_binding(param_idx) {
-            self.alloc_binding_local(binding);
+            self.alloc_entry_binding_local(binding);
             param_idx += 1;
         }
         if let BodyOwner::ContractRecvArm {
@@ -290,12 +313,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             let arm = crate::semantic::RecvArmView::new(self.db, recv, arm_idx);
             for binding in arm.arg_bindings(self.db) {
                 if let Some(binding) = self.typed_body.pat_binding(binding.pat) {
-                    self.alloc_binding_local(binding);
+                    self.alloc_entry_binding_local(binding);
                 }
             }
         }
         for binding in self.owner_effect_bindings() {
-            self.alloc_binding_local(binding);
+            self.alloc_entry_binding_local(binding);
         }
 
         for (pat, _) in self.body.pats(self.db).iter() {
@@ -322,6 +345,14 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         local
     }
 
+    fn alloc_entry_binding_local(&mut self, binding: LocalBinding<'db>) -> SLocalId {
+        let local = self.alloc_binding_local(binding);
+        if !self.entry_locals.contains(&local) {
+            self.entry_locals.push(local);
+        }
+        local
+    }
+
     fn alloc_local(
         &mut self,
         ty: TyId<'db>,
@@ -333,13 +364,25 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             self.binding_role(binding)
         });
         let snapshot_source = initial_snapshot_source(&role);
+        let layout_ty = role.layout_ty(ty);
+        let layout_backing_sources = snapshot_source
+            .clone()
+            .map(|source| LayoutBackingSource {
+                target: Vec::new(),
+                source: source.into_layout_backing_place(layout_ty),
+            })
+            .into_iter()
+            .collect::<Vec<_>>();
         self.assigned_snapshots.push(snapshot_source.is_some());
+        self.assigned_layout_backing_sources
+            .push(!layout_backing_sources.is_empty());
         self.locals.push(SLocal {
             ty,
             mutability,
             source,
             role,
             snapshot_source,
+            layout_backing_sources,
         });
         id
     }
@@ -388,9 +431,14 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     pub(super) fn push_stmt(&mut self, origin: SemOrigin<'db>, kind: SStmtKind<'db>) {
         if !self.is_terminated(self.current) {
             self.update_stmt_local_facts(&kind);
+            let id = SStmtId::from_u32(self.next_stmt_id);
+            self.next_stmt_id = self
+                .next_stmt_id
+                .checked_add(1)
+                .expect("semantic statement id overflow");
             self.blocks[self.current.index()]
                 .stmts
-                .push(SStmt { origin, kind });
+                .push(SStmt { id, origin, kind });
         }
     }
 
@@ -576,8 +624,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             Expr::Assert(args) => self.lower_assert(expr, args),
             Expr::MethodCall(receiver, _, _, args) => self.lower_call(expr, Some(*receiver), args),
             Expr::Assign(dst, src) => {
-                let src = self.lower_expr_operand(*src);
                 let dst_place = self.lower_place(*dst);
+                let src = self.lower_expr_operand(*src);
                 self.push_place_write(origin, dst_place, src);
                 self.unit_value()
             }
@@ -585,7 +633,21 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 if self.typed_body.semantic_expr_lowering(expr).is_some() {
                     return self.lower_call_like_expr(expr, ty, Some(*dst), &[*src]);
                 }
-                let lhs = self.lower_expr_operand(*dst);
+                let dst_place = self.lower_place(*dst);
+                let lhs = if dst_place.path.is_empty() {
+                    self.lower_expr_operand(*dst)
+                } else {
+                    SOperand::expr(
+                        self.emit_expr_with_origin(
+                            SemOrigin::Expr(*dst),
+                            self.expr_ty(*dst),
+                            SExpr::ReadPlace {
+                                place: dst_place.clone(),
+                            },
+                        ),
+                        *dst,
+                    )
+                };
                 let rhs = self.lower_expr_operand(*src);
                 let dst_ty = self.projectable_place_ty(self.expr_ty(*dst));
                 let sum = self.emit_expr_with_origin(
@@ -597,7 +659,6 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         rhs,
                     },
                 );
-                let dst_place = self.lower_place(*dst);
                 self.push_place_write(origin, dst_place, SOperand::inherited(sum));
                 self.unit_value()
             }
@@ -797,6 +858,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             ),
             Some(ValuePathRef::TypeConst(ty)) => {
                 if let Some(value) = sem_const_from_ty(self.db, ty) {
+                    let value = reify_runtime_const_for_ty(
+                        self.db,
+                        self.instance,
+                        self.expr_ty(expr),
+                        value,
+                    )
+                    .unwrap_or(value);
                     self.emit_expr_with_origin(
                         SemOrigin::Expr(expr),
                         self.expr_ty(expr),
@@ -1291,6 +1359,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 effect_args: get_effect_args,
             },
         );
+        if seq.element_layout_backing_source {
+            self.locals[elem.index()].layout_backing_sources = vec![LayoutBackingSource {
+                target: Vec::new(),
+                source: LayoutBackingPlace::Local(SPlace::dynamic_index(iter_value, idx_local)),
+            }];
+            self.assigned_layout_backing_sources[elem.index()] = true;
+        }
         self.bind_pattern(pat, elem);
         let _ = self.lower_expr(body_expr);
         if !self.is_terminated(self.current) {

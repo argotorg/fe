@@ -4,7 +4,8 @@ use hir::{
         ty::{
             ProviderAddressSpace, ProviderKind,
             normalize::normalize_ty,
-            provider::provider_semantics,
+            provider::{ProviderLayoutEvidence, provider_semantics},
+            trait_def::ResolvedImplInstance,
             trait_resolution::PredicateListId,
             ty_def::{
                 BorrowKind, MAX_INLINE_STRING_BYTES, PrimTy, TyBase, TyData, TyId, TyVarSort,
@@ -48,9 +49,10 @@ impl<'db> RuntimeTypeEnv<'db> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
-struct RuntimeEffectHandleInfo<'db> {
-    target_ty: TyId<'db>,
-    space: AddressSpaceKind,
+pub(crate) struct RuntimeEffectHandleInfo<'db> {
+    pub(crate) target_ty: TyId<'db>,
+    pub(crate) space: AddressSpaceKind,
+    pub(crate) impl_instance: ResolvedImplInstance<'db>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Update)]
@@ -61,17 +63,8 @@ struct RuntimeTypeModel<'db> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Update)]
 enum RuntimeTypeShape<'db> {
-    Borrow {
-        kind: BorrowKind,
-        inner: TyId<'db>,
-    },
-    Capability {
-        inner: TyId<'db>,
-    },
-    EffectHandle {
-        info: RuntimeEffectHandleInfo<'db>,
-        effect_scope: ScopeId<'db>,
-    },
+    Borrow { kind: BorrowKind, inner: TyId<'db> },
+    Capability { inner: TyId<'db> },
     Scalar(ScalarClass<'db>),
     Aggregate,
     Other,
@@ -85,16 +78,10 @@ impl<'db> RuntimeTypeModel<'db> {
         assumptions: PredicateListId<'db>,
     ) -> Self {
         let repr_ty = runtime_repr_ty_in_context(db, ty, scope, assumptions);
-        let effect_scope = scope.or_else(|| repr_ty.as_scope(db));
         let shape = if let Some((kind, inner)) = repr_ty.as_borrow(db) {
             RuntimeTypeShape::Borrow { kind, inner }
         } else if let Some((_, inner)) = repr_ty.as_capability(db) {
             RuntimeTypeShape::Capability { inner }
-        } else if let Some(effect_scope) = effect_scope
-            && let Some(info) =
-                runtime_effect_handle_info(db, repr_ty, Some(effect_scope), assumptions)
-        {
-            RuntimeTypeShape::EffectHandle { info, effect_scope }
         } else if let Some(scalar) = scalar_class_from_repr_ty(db, repr_ty) {
             RuntimeTypeShape::Scalar(scalar)
         } else if repr_ty.as_enum(db).is_some()
@@ -142,9 +129,6 @@ impl<'db> RuntimeTypeModel<'db> {
                 scope,
                 assumptions,
             )),
-            RuntimeTypeShape::EffectHandle { info, effect_scope } => Some(
-                effect_handle_class_for_info(db, *info, *effect_scope, assumptions),
-            ),
             RuntimeTypeShape::Scalar(scalar) => {
                 (!runtime_zero_sized_ty(db, self.repr_ty, scope, assumptions))
                     .then(|| RuntimeClass::Scalar(scalar.clone()))
@@ -176,9 +160,6 @@ impl<'db> RuntimeTypeModel<'db> {
                     assumptions,
                 )
             }
-            RuntimeTypeShape::EffectHandle { info, effect_scope } => {
-                effect_handle_class_for_info(db, *info, *effect_scope, assumptions)
-            }
             RuntimeTypeShape::Scalar(scalar) => RuntimeClass::Scalar(scalar.clone()),
             RuntimeTypeShape::Aggregate | RuntimeTypeShape::Other => RuntimeClass::AggregateValue {
                 layout: layout_for_ty_in_context(db, self.repr_ty, scope, assumptions),
@@ -194,9 +175,7 @@ impl<'db> RuntimeTypeModel<'db> {
     ) -> bool {
         match &self.shape {
             RuntimeTypeShape::Borrow { .. } => true,
-            RuntimeTypeShape::Capability { .. }
-            | RuntimeTypeShape::EffectHandle { .. }
-            | RuntimeTypeShape::Scalar(_) => false,
+            RuntimeTypeShape::Capability { .. } | RuntimeTypeShape::Scalar(_) => false,
             RuntimeTypeShape::Aggregate => {
                 if self.repr_ty.is_array(db) {
                     let (_, args) = self.repr_ty.decompose_ty_app(db);
@@ -334,7 +313,7 @@ pub(super) fn runtime_zero_sized_transport_ty<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> bool {
-    if effect_handle_class_for_ty_in_context(db, ty, scope, assumptions).is_some() {
+    if effect_handle_transport_class_for_ty_in_context(db, ty, scope, assumptions).is_some() {
         return false;
     }
     let interface_ty = runtime_interface_ty_in_context(db, ty, scope, assumptions);
@@ -540,7 +519,7 @@ fn scalar_class_from_repr_ty<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> Option<S
     })
 }
 
-fn effect_handle_class_for_info<'db>(
+fn effect_handle_transport_class_for_info<'db>(
     db: &'db dyn MirDb,
     info: RuntimeEffectHandleInfo<'db>,
     effect_scope: ScopeId<'db>,
@@ -566,7 +545,7 @@ fn effect_handle_class_for_info<'db>(
     )
 }
 
-pub(crate) fn effect_handle_class_for_ty_in_context<'db>(
+pub(crate) fn effect_handle_transport_class_for_ty_in_context<'db>(
     db: &'db dyn MirDb,
     ty: TyId<'db>,
     scope: Option<ScopeId<'db>>,
@@ -578,7 +557,7 @@ pub(crate) fn effect_handle_class_for_ty_in_context<'db>(
     }
     let effect_scope = scope.or_else(|| repr_ty.as_scope(db))?;
     let info = runtime_effect_handle_info(db, repr_ty, Some(effect_scope), assumptions)?;
-    Some(effect_handle_class_for_info(
+    Some(effect_handle_transport_class_for_info(
         db,
         info,
         effect_scope,
@@ -635,7 +614,7 @@ fn runtime_stored_class<'db>(
 }
 
 #[salsa::tracked]
-fn runtime_effect_handle_info<'db>(
+pub(crate) fn runtime_effect_handle_info<'db>(
     db: &'db dyn MirDb,
     ty: TyId<'db>,
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
@@ -650,10 +629,14 @@ fn runtime_effect_handle_info<'db>(
     if matches!(semantics.kind, ProviderKind::RootObject) {
         return None;
     }
+    let ProviderLayoutEvidence::ResolvedHandle(impl_instance) = semantics.evidence else {
+        return None;
+    };
     let target_ty = semantics.target_ty?;
     Some(RuntimeEffectHandleInfo {
         target_ty,
         space: provider_address_space_to_runtime(semantics.address_space?),
+        impl_instance,
     })
 }
 

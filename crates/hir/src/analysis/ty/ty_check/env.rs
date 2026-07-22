@@ -26,6 +26,7 @@ use crate::analysis::ty::pattern_ir::{
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
+        const_ty::CallableInputLayoutHoleOrigin,
         corelib::resolve_lib_type_path,
         effects::{
             EffectKeyKind,
@@ -477,6 +478,10 @@ impl<'db> TyCheckEnv<'db> {
 
     pub(super) fn callable_expr(&self, expr: ExprId) -> Option<&Callable<'db>> {
         self.callables[expr].as_ref()
+    }
+
+    pub(super) fn expr_const_ref(&self, expr: ExprId) -> Option<ConstRef<'db>> {
+        self.const_refs[expr]
     }
 
     pub(super) fn register_semantic_expr_lowering(
@@ -1346,6 +1351,34 @@ impl<'db> LocalBinding<'db> {
             LocalBinding::Local { is_mut, .. }
             | LocalBinding::Param { is_mut, .. }
             | LocalBinding::EffectParam { is_mut, .. } => *is_mut,
+        }
+    }
+
+    pub fn callable_input_origin(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Option<CallableInputLayoutHoleOrigin> {
+        match self {
+            Self::Param {
+                site: ParamSite::Func(func),
+                idx,
+                ..
+            } => Some(if func.is_method(db) && idx == 0 {
+                CallableInputLayoutHoleOrigin::Receiver
+            } else {
+                CallableInputLayoutHoleOrigin::ValueParam(idx)
+            }),
+            Self::Param {
+                site: ParamSite::EffectField(_),
+                idx,
+                ..
+            }
+            | Self::EffectParam { idx, .. } => Some(CallableInputLayoutHoleOrigin::Effect(idx)),
+            Self::Local { .. }
+            | Self::Param {
+                site: ParamSite::ContractInit(_),
+                ..
+            } => None,
         }
     }
 

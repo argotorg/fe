@@ -2,3 +2,32 @@ fn main() {
     let arr: [u8; 3] = [1, 2, 3]
     arr[5]
 }
+
+const OUT_OF_BOUNDS: usize = 5
+
+fn named_const() {
+    let arr: [u8; 3] = [1, 2, 3]
+    arr[OUT_OF_BOUNDS]
+}
+
+fn host_oversized_literal() {
+    let arr: [u8; 3] = [1, 2, 3]
+    arr[18446744073709551616]
+}
+
+const BASE: usize = 4
+
+fn compound_named_const() {
+    let arr: [u8; 3] = [1, 2, 3]
+    arr[BASE + 1]
+}
+
+fn compound_literals() {
+    let arr: [u8; 3] = [1, 2, 3]
+    arr[(2 * 2) - 1]
+}
+
+fn in_bounds_compound_expression() {
+    let arr: [u8; 3] = [1, 2, 3]
+    arr[(BASE - 3) * 2]
+}

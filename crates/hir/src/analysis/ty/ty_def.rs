@@ -23,17 +23,15 @@ use salsa::Update;
 use smallvec::SmallVec;
 
 use super::{
-    adt_def::{AdtDef, adt_layout_hole_plan_with_explicit_args, instantiated_adt_field_ty},
+    adt_def::{AdtDef, instantiate_adt_field_shape},
     const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy, TypePrintMode},
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
     effects::place_effect_provider_param_index_map,
-    fold::{TyFoldable, TyFolder},
-    layout_holes::{LayoutPlaceholderPolicy, substitute_layout_placeholders_in_order},
     trait_def::TraitInstId,
     trait_resolution::{PredicateListId, WellFormedness},
     ty_lower::collect_generic_params,
     unify::{InferenceKey, UnificationTable},
-    visitor::{TyVisitable, TyVisitor},
+    visitor::{TyVisitable, TyVisitor, walk_ty},
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -53,12 +51,6 @@ pub const MAX_INLINE_STRING_BYTES: usize = 31;
 pub struct TyId<'db> {
     #[return_ref]
     pub data: TyData<'db>,
-}
-
-#[derive(Clone, Copy)]
-enum ConstTyApplicationMode {
-    Evaluate,
-    MetadataOnly,
 }
 
 #[salsa::tracked]
@@ -196,6 +188,11 @@ impl<'db> TyId<'db> {
 
     pub fn has_var(self, db: &dyn HirAnalysisDb) -> bool {
         self.flags(db).contains(TyFlags::HAS_VAR)
+    }
+
+    /// Returns whether this type contains an unresolved trait projection.
+    pub fn has_projection(self, db: &dyn HirAnalysisDb) -> bool {
+        self.flags(db).contains(TyFlags::HAS_PROJECTION)
     }
 
     /// Returns `true` if the type has a `*` kind.
@@ -669,19 +666,6 @@ impl<'db> TyId<'db> {
 
     /// Perform type level application.
     pub fn app(db: &'db dyn HirAnalysisDb, lhs: Self, rhs: Self) -> TyId<'db> {
-        Self::app_in_mode(db, lhs, rhs, ConstTyApplicationMode::Evaluate)
-    }
-
-    pub(crate) fn app_metadata_only(db: &'db dyn HirAnalysisDb, lhs: Self, rhs: Self) -> TyId<'db> {
-        Self::app_in_mode(db, lhs, rhs, ConstTyApplicationMode::MetadataOnly)
-    }
-
-    fn app_in_mode(
-        db: &'db dyn HirAnalysisDb,
-        lhs: Self,
-        rhs: Self,
-        const_mode: ConstTyApplicationMode,
-    ) -> TyId<'db> {
         let Some(applicable_ty) = lhs.applicable_ty(db) else {
             return Self::invalid(
                 db,
@@ -692,18 +676,17 @@ impl<'db> TyId<'db> {
             );
         };
 
-        let rhs = if matches!(const_mode, ConstTyApplicationMode::MetadataOnly)
-            || matches!(
-                rhs.data(db),
-                TyData::ConstTy(const_ty)
-                    if matches!(
-                        const_ty.data(db),
-                        ConstTyData::UnEvaluated {
-                            preserve_unevaluated: true,
-                            ..
-                        }
-                    )
-            ) {
+        let rhs = if matches!(
+            rhs.data(db),
+            TyData::ConstTy(const_ty)
+                if matches!(
+                    const_ty.data(db),
+                    ConstTyData::UnEvaluated {
+                        preserve_unevaluated: true,
+                        ..
+                    }
+                )
+        ) {
             rhs.check_const_ty_without_eval(db, applicable_ty.const_ty)
         } else {
             rhs.evaluate_const_ty(db, applicable_ty.const_ty)
@@ -751,6 +734,15 @@ impl<'db> TyId<'db> {
                     super::const_ty::retype_hole_const_ty(db, *const_ty, expected_const_ty)
                 {
                     return Ok(TyId::const_ty(db, retyped));
+                }
+                if matches!(
+                    const_ty.data(db),
+                    ConstTyData::UnEvaluated {
+                        defer_validation: true,
+                        ..
+                    }
+                ) {
+                    return Ok(TyId::const_ty(db, const_ty.with_ty(db, expected_const_ty)));
                 }
                 if matches!(const_ty.data(db), ConstTyData::UnEvaluated { .. }) {
                     return super::const_ty::validate_unevaluated_const_ty(
@@ -901,15 +893,6 @@ impl<'db> TyId<'db> {
                 });
             }
 
-            let (explicit_args, layout_args) = args.split_at(params.len().min(args.len()));
-            let layout_plan = adt_layout_hole_plan_with_explicit_args(db, *adt_def, explicit_args);
-            if let Some(expected_const_ty) = layout_plan.hole_ty(layout_args.len()) {
-                return Some(ApplicableTyProp {
-                    kind: expected_const_ty.kind(db).clone(),
-                    const_ty: Some(expected_const_ty),
-                });
-            }
-
             return None;
         }
 
@@ -983,7 +966,7 @@ impl<'db> TyId<'db> {
                 AdtRef::Struct(_) => {
                     let args = self.generic_args(db);
                     (0..adt_def.fields(db)[0].num_types())
-                        .map(|idx| instantiate_adt_field_ty(db, adt_def, 0, idx, args))
+                        .map(|idx| instantiate_adt_field_shape(db, adt_def, 0, idx, args))
                         .collect()
                 }
                 _ => vec![],
@@ -992,71 +975,6 @@ impl<'db> TyId<'db> {
             vec![]
         }
     }
-}
-
-pub(crate) fn instantiate_adt_field_ty<'db>(
-    db: &'db dyn HirAnalysisDb,
-    adt_def: AdtDef<'db>,
-    variant_idx: usize,
-    field_idx: usize,
-    args: &[TyId<'db>],
-) -> TyId<'db> {
-    let explicit_len = adt_def.params(db).len();
-    let (explicit_args, layout_args) = args.split_at(explicit_len.min(args.len()));
-    let field_ty = instantiated_adt_field_ty(db, adt_def, variant_idx, field_idx, explicit_args);
-    let layout_plan = adt_layout_hole_plan_with_explicit_args(db, adt_def, explicit_args);
-    let range = layout_plan.field_range(variant_idx, field_idx);
-    let start = range.start.min(layout_args.len());
-    let end = range.end.min(layout_args.len());
-    substitute_layout_placeholders_in_order(
-        db,
-        field_ty,
-        &layout_args[start..end],
-        LayoutPlaceholderPolicy::HolesAndImplicitParams,
-    )
-}
-
-pub fn strip_derived_adt_layout_args<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-    struct StripDerivedAdtLayoutArgs;
-
-    impl<'db> TyFolder<'db> for StripDerivedAdtLayoutArgs {
-        fn fold_ty_app(
-            &mut self,
-            db: &'db dyn HirAnalysisDb,
-            abs: TyId<'db>,
-            arg: TyId<'db>,
-        ) -> TyId<'db> {
-            TyId::new(db, TyData::TyApp(abs, arg))
-        }
-
-        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-            let ty = ty.super_fold_with(db, self);
-            let (base, args) = ty.decompose_ty_app(db);
-            if args.is_empty() {
-                return ty;
-            }
-
-            let retained_args = match base.data(db) {
-                TyData::TyBase(TyBase::Adt(adt_def)) => {
-                    let explicit_len = adt_def.params(db).len();
-                    if args.len() <= explicit_len {
-                        args
-                    } else {
-                        let (explicit_args, layout_args) = args.split_at(explicit_len);
-                        let retained_layout_len =
-                            adt_layout_hole_plan_with_explicit_args(db, *adt_def, explicit_args)
-                                .len();
-                        &args[..explicit_len + layout_args.len().min(retained_layout_len)]
-                    }
-                }
-                _ => args,
-            };
-
-            TyId::foldl(db, base, retained_args)
-        }
-    }
-
-    ty.fold_with(db, &mut StripDerivedAdtLayoutArgs)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -2112,6 +2030,7 @@ bitflags! {
         const HAS_INVALID = 0b0000_0001;
         const HAS_VAR = 0b0000_0010;
         const HAS_PARAM = 0b0000_0100;
+        const HAS_PROJECTION = 0b0000_1000;
     }
 }
 
@@ -2125,6 +2044,16 @@ pub(crate) fn ty_flags<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyFlag
     impl<'db> TyVisitor<'db> for Collector<'db> {
         fn db(&self) -> &'db dyn HirAnalysisDb {
             self.db
+        }
+
+        fn visit_ty(&mut self, ty: TyId<'db>) {
+            if matches!(
+                ty.data(self.db),
+                TyData::AssocTy(_) | TyData::QualifiedTy(_)
+            ) {
+                self.flags.insert(TyFlags::HAS_PROJECTION);
+            }
+            walk_ty(self, ty);
         }
 
         fn visit_var(&mut self, _: &TyVar) {

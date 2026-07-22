@@ -198,7 +198,6 @@ fn section_name_for_runtime(name: &mir::RuntimeSectionName) -> sonatina_ir::Sect
         mir::RuntimeSectionName::Runtime => "runtime".into(),
         mir::RuntimeSectionName::Main => "main".into(),
         mir::RuntimeSectionName::Test(name) => format!("test_{name}").into(),
-        mir::RuntimeSectionName::CodeRegion(symbol) => format!("code_region_{symbol}").into(),
     }
 }
 

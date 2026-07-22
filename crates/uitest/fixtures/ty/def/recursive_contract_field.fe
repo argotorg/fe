@@ -1,0 +1,35 @@
+struct Direct {
+    next: Direct
+}
+
+struct MutualA {
+    next: MutualB
+}
+
+struct MutualB {
+    next: MutualA
+}
+
+enum RecursiveEnum {
+    Next(RecursiveEnum)
+}
+
+struct Grow<T> {
+    next: Grow<[T; 1]>
+}
+
+contract DirectField {
+    mut value: Direct
+}
+
+contract MutualField {
+    mut value: MutualA
+}
+
+contract RecursiveEnumField {
+    mut value: RecursiveEnum
+}
+
+contract GrowingGenericField {
+    mut value: Grow<u256>
+}

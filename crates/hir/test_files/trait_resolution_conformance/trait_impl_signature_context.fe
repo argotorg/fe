@@ -35,6 +35,31 @@ fn use_assoc_rhs(value: AssocRhsCtxStruct) {
     needs_assoc_rhs(value)
 }
 
+trait SharedAssocPathCtx {
+    type A
+    type B
+
+    fn keep(self, value: Self::A) -> Self::A
+}
+
+struct SharedAssocPathCtxStruct {}
+
+impl SharedAssocPathCtx for SharedAssocPathCtxStruct {
+    type A = u32
+    type B = Self::A
+
+    fn keep(self, value: Self::A) -> Self::A {
+        value
+    }
+}
+
+fn needs_shared_assoc_path<T: SharedAssocPathCtx<A = u32, B = u32>>(_ value: T) {}
+
+fn use_shared_assoc_path(value: SharedAssocPathCtxStruct) -> u32 {
+    needs_shared_assoc_path(value)
+    value.keep(value: 1)
+}
+
 struct Slot<const N: u32> {}
 
 trait ConstSigCtx {

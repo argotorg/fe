@@ -1,11 +1,11 @@
 use cranelift_entity::{EntityRef, entity_impl};
 use hir::analysis::{
-    semantic::{FieldIndex, SemanticInstance},
-    ty::ty_def::TyId,
+    semantic::{FieldIndex, LayoutEvidenceConstant, SemanticInstance},
+    ty::{CallableLayoutParamPort, ty_def::TyId},
 };
 use hir::hir_def::{BinOp, Contract, Func, TopLevelMod, UnOp};
 use hir::projection::IndexSource;
-use hir::semantic::ProviderBinding;
+use hir::semantic::{ContractFieldId, ProviderBinding};
 use salsa::Update;
 
 use crate::{
@@ -316,7 +316,7 @@ fn layouts_share_runtime_rep<'db>(
             actual.len == desired.len && actual.elem.shares_runtime_rep_with(db, &desired.elem)
         }
         (Layout::Enum(actual), Layout::Enum(desired)) => {
-            actual.tag == desired.tag
+            actual.tag.repr == desired.tag.repr
                 && actual.variants.len() == desired.variants.len()
                 && actual
                     .variants
@@ -417,7 +417,83 @@ pub enum ScalarRepr {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum ScalarRole<'db> {
     Plain,
-    EnumTag { enum_layout: LayoutId<'db> },
+    EnumTag {
+        enum_layout: LayoutId<'db>,
+    },
+    /// An opaque one-word handle to an immutable layout-map node.
+    ///
+    /// The role retains the exact semantic map type across rMIR interfaces;
+    /// codegen alone owns the node's in-memory representation.
+    LayoutMap {
+        scalar_ty: TyId<'db>,
+        dimensions: Vec<usize>,
+    },
+}
+
+/// The exact runtime type of one layout-evidence map.
+///
+/// Rank-zero maps are represented by the root scalar itself. Ranked maps are
+/// opaque one-word handles. Keeping their algebra in [`RExpr`] prevents MIR
+/// lowering and optimization from depending on a tagged aggregate's field
+/// positions or speculatively reading an inactive representation branch.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub struct RuntimeLayoutMap<'db> {
+    scalar_ty: TyId<'db>,
+    scalar: ScalarClass<'db>,
+    dimensions: Vec<usize>,
+}
+
+impl<'db> RuntimeLayoutMap<'db> {
+    pub(crate) fn new(
+        scalar_ty: TyId<'db>,
+        scalar: ScalarClass<'db>,
+        dimensions: Vec<usize>,
+    ) -> Self {
+        Self {
+            scalar_ty,
+            scalar,
+            dimensions,
+        }
+    }
+
+    pub fn scalar_ty(&self) -> TyId<'db> {
+        self.scalar_ty
+    }
+
+    pub fn scalar(&self) -> &ScalarClass<'db> {
+        &self.scalar
+    }
+
+    pub fn dimensions(&self) -> &[usize] {
+        &self.dimensions
+    }
+
+    pub fn rank(&self) -> usize {
+        self.dimensions.len()
+    }
+
+    pub fn class(&self) -> RuntimeClass<'db> {
+        if self.dimensions.is_empty() {
+            RuntimeClass::Scalar(self.scalar.clone())
+        } else {
+            RuntimeClass::Scalar(ScalarClass {
+                repr: ScalarRepr::Int {
+                    bits: 256,
+                    signed: false,
+                },
+                role: ScalarRole::LayoutMap {
+                    scalar_ty: self.scalar_ty,
+                    dimensions: self.dimensions.clone(),
+                },
+            })
+        }
+    }
+
+    pub fn projected(&self) -> Option<Self> {
+        self.dimensions.split_first().map(|(_, dimensions)| {
+            Self::new(self.scalar_ty, self.scalar.clone(), dimensions.to_vec())
+        })
+    }
 }
 
 #[salsa::interned]
@@ -720,19 +796,9 @@ pub struct RuntimeCodeRegion<'db> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum RuntimeCodeRegionKey<'db> {
-    ContractInit {
-        contract: Contract<'db>,
-    },
-    ContractRuntime {
-        contract: Contract<'db>,
-    },
-    ManualContractRoot {
-        func: Func<'db>,
-    },
-    FunctionRoot {
-        symbol: String,
-        callee: RuntimeInstance<'db>,
-    },
+    ContractInit { contract: Contract<'db> },
+    ContractRuntime { contract: Contract<'db> },
+    ManualContractRoot { func: Func<'db> },
 }
 
 #[salsa::interned]
@@ -819,17 +885,17 @@ pub enum RuntimeFunctionOwner<'db> {
 pub enum RuntimeSyntheticSpec<'db> {
     MainRoot {
         callee: RuntimeInstance<'db>,
-        entry_effect_args: Box<[EntryEffectArgPlan<'db>]>,
+        entry_args: EntrySemanticArgsPlan<'db>,
     },
     TestRoot {
         name: String,
         callee: RuntimeInstance<'db>,
-        entry_effect_args: Box<[EntryEffectArgPlan<'db>]>,
+        entry_args: EntrySemanticArgsPlan<'db>,
     },
     ManualContractRoot {
         func: Func<'db>,
         callee: RuntimeInstance<'db>,
-        entry_effect_args: Box<[EntryEffectArgPlan<'db>]>,
+        entry_args: EntrySemanticArgsPlan<'db>,
     },
     ContractInitAbi {
         plan: ContractInitAbiPlan<'db>,
@@ -847,10 +913,6 @@ pub enum RuntimeSyntheticSpec<'db> {
         dispatch: Box<[DispatchArm<'db>]>,
         default: DispatchDefault<'db>,
     },
-    CodeRegionRoot {
-        symbol: String,
-        callee: RuntimeInstance<'db>,
-    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -858,7 +920,7 @@ pub struct ContractInitAbiPlan<'db> {
     pub contract: Contract<'db>,
     pub payable: bool,
     pub user_init: Option<RuntimeInstance<'db>>,
-    pub entry_effect_args: Box<[EntryEffectArgPlan<'db>]>,
+    pub entry_args: EntrySemanticArgsPlan<'db>,
     pub init_args: InitArgsPlan<'db>,
 }
 
@@ -868,9 +930,24 @@ pub struct ContractRecvAbiPlan<'db> {
     pub selector: Option<u32>,
     pub payable: bool,
     pub user_recv: RuntimeInstance<'db>,
-    pub entry_effect_args: Box<[EntryEffectArgPlan<'db>]>,
+    pub entry_args: EntrySemanticArgsPlan<'db>,
     pub input: RuntimeInputPlan<'db>,
     pub ret: RuntimeReturnPlan<'db>,
+}
+
+/// Runtime arguments that a synthetic boundary supplies on behalf of a
+/// semantic owner. Physical effect carriers and layout evidence are separate
+/// ABI lanes and are deliberately planned independently.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub struct EntrySemanticArgsPlan<'db> {
+    pub effects: Box<[EntryEffectArgPlan<'db>]>,
+    pub layout_evidence: Box<[EntryLayoutEvidenceArgPlan<'db>]>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub struct EntryLayoutEvidenceArgPlan<'db> {
+    pub target: CallableLayoutParamPort,
+    pub value: LayoutEvidenceConstant<'db>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -902,6 +979,8 @@ impl std::fmt::Display for ContractFieldSlot {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct ContractFieldBinding<'db> {
+    /// Nominal source identity retained for package-level HIR/MIR seam checks.
+    pub field: ContractFieldId<'db>,
     pub slot: ContractFieldSlot,
     pub declared_ty: TyId<'db>,
     pub class: RuntimeClass<'db>,
@@ -1028,7 +1107,6 @@ pub enum RuntimeSectionName {
     Runtime,
     Main,
     Test(String),
-    CodeRegion(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -1413,6 +1491,32 @@ pub enum RExpr<'db> {
         layout: LayoutId<'db>,
         fields: Box<[RValueId]>,
     },
+    LayoutMapAffine {
+        map: RuntimeLayoutMap<'db>,
+        base: RValueId,
+        strides: Box<[RValueId]>,
+    },
+    LayoutMapDense {
+        map: RuntimeLayoutMap<'db>,
+        elements: Box<[RValueId]>,
+    },
+    LayoutMapRepeat {
+        map: RuntimeLayoutMap<'db>,
+        element: RValueId,
+    },
+    LayoutMapProject {
+        map: RuntimeLayoutMap<'db>,
+        source: RValueId,
+        index: RValueId,
+    },
+    /// Functionally replace one child map. The operation is checked: an index
+    /// outside the map's outer dimension reverts before constructing a node.
+    LayoutMapPatch {
+        map: RuntimeLayoutMap<'db>,
+        source: RValueId,
+        index: RValueId,
+        replacement: RValueId,
+    },
     Call {
         callee: RuntimeInstance<'db>,
         args: Box<[RValueId]>,
@@ -1448,6 +1552,10 @@ pub enum RStmt<'db> {
     Assign {
         dst: RLocalId,
         expr: RExpr<'db>,
+    },
+    AssertIndexInBounds {
+        index: IndexSource<RValueId>,
+        len: u64,
     },
     EnumAssertVariant {
         value: RValueId,

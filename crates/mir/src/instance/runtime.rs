@@ -1,22 +1,21 @@
-use cranelift_entity::EntityRef;
 use hir::analysis::semantic::{SemanticInstance, check_semantic_borrows, check_semantic_noesc};
 use salsa::Update;
 
 use crate::{
     db::MirDb,
     runtime::{
-        LowerError, LoweredRuntimeBody, RLocalId, RuntimeBody, RuntimeCallEdge, RuntimeClass,
-        RuntimeExitBehavior, RuntimeInterfaceSignature, RuntimeParam, RuntimeSyntheticSpec,
+        LowerError, LoweredRuntimeBody, RuntimeBody, RuntimeCallEdge, RuntimeClass,
+        RuntimeExitBehavior, RuntimeInterfaceSignature, RuntimeSyntheticSpec,
         lower::{
+            abi::runtime_abi_plan,
             body::lower_to_rmir,
             call::{
                 collect_referenced_code_regions, collect_referenced_const_regions,
                 collect_runtime_calls as collect_runtime_calls_lowered,
             },
-            interface::runtime_param_locals,
-            returns::{runtime_exit_behavior, runtime_return_class},
+            returns::runtime_exit_behavior,
         },
-        synthetic::{lower_synthetic_runtime_body, runtime_synthetic_interface_signature},
+        synthetic::lower_synthetic_runtime_body,
     },
 };
 
@@ -98,23 +97,7 @@ pub(crate) fn runtime_interface_signature_for_key<'db>(
     db: &'db dyn MirDb,
     key: RuntimeInstanceKey<'db>,
 ) -> RuntimeInterfaceSignature<'db> {
-    match key.source(db) {
-        RuntimeInstanceSource::Semantic(semantic) => RuntimeInterfaceSignature {
-            params: key
-                .params(db)
-                .iter()
-                .zip(runtime_param_locals(db, semantic, key.params(db)))
-                .map(|(class, local)| RuntimeParam {
-                    local: RLocalId::from_u32(local.index() as u32),
-                    class: class.clone(),
-                })
-                .collect(),
-            ret: runtime_return_class(db, key),
-        },
-        RuntimeInstanceSource::Synthetic(synthetic) => {
-            runtime_synthetic_interface_signature(synthetic.spec(db).clone())
-        }
-    }
+    runtime_abi_plan(db, key).signature()
 }
 
 #[salsa::tracked]

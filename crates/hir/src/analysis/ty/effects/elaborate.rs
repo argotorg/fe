@@ -15,17 +15,14 @@ use crate::{
                 instantiate_type_effect_key,
                 match_::{instantiate_trait_pattern_in, instantiate_type_pattern_in},
                 normalize_effect_identity_trait, normalize_effect_identity_ty, resolve_effect_key,
-                stored_trait_key_is_rigid, stored_type_key_is_rigid, stored_value_is_storage_rigid,
+                stored_trait_key_is_rigid, stored_type_key_is_rigid,
             },
             fold::{TyFoldable, TyFolder},
             layout_holes::{LayoutPlaceholderPolicy, layout_hole_fallback_ty},
             trait_def::TraitInstId,
             trait_resolution::PredicateListId,
             ty_check::{Callable, TyChecker},
-            ty_def::{
-                InvalidCause, TyBase, TyData, TyId, TyParam, inference_keys,
-                strip_derived_adt_layout_args,
-            },
+            ty_def::{InvalidCause, TyBase, TyData, TyId, TyParam, inference_keys},
             ty_lower::collect_generic_params,
             visitor::{TyVisitable, TyVisitor, walk_ty},
         },
@@ -555,8 +552,6 @@ pub fn finalize_stored_effect_key<'db>(
     match key {
         StoredEffectKey::Type(key) => {
             let carrier = normalize_effect_identity_ty(db, key.carrier, scope, assumptions, None);
-            let carrier = strip_derived_adt_layout_args(db, carrier);
-            let carrier = erase_unresolved_trailing_layout_hole_default_args(db, carrier);
             let carrier = rigidify_layout_holes_for_storage(db, scope, carrier);
             let key = StoredTypeKey {
                 carrier,
@@ -628,8 +623,6 @@ fn normalize_stored_trait_key<'db>(
         .into_iter()
         .map(|ty| {
             let ty = normalize_effect_identity_ty(db, ty, scope, assumptions, None);
-            let ty = strip_derived_adt_layout_args(db, ty);
-            let ty = erase_unresolved_trailing_layout_hole_default_args(db, ty);
             rigidify_layout_holes_for_storage(db, scope, ty)
         })
         .collect();
@@ -638,8 +631,6 @@ fn normalize_stored_trait_key<'db>(
         .into_iter()
         .map(|(name, ty)| {
             let ty = normalize_effect_identity_ty(db, ty, scope, assumptions, None);
-            let ty = strip_derived_adt_layout_args(db, ty);
-            let ty = erase_unresolved_trailing_layout_hole_default_args(db, ty);
             (name, rigidify_layout_holes_for_storage(db, scope, ty))
         })
         .collect();
@@ -650,45 +641,6 @@ fn normalize_stored_trait_key<'db>(
         assoc_bindings,
         family: effect_family_for_trait(key.def),
     }
-}
-
-pub(crate) fn erase_unresolved_trailing_layout_hole_default_args<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ty: TyId<'db>,
-) -> TyId<'db> {
-    let (base, args) = ty.decompose_ty_app(db);
-    let TyData::TyBase(TyBase::Adt(adt)) = base.data(db) else {
-        return ty;
-    };
-
-    let explicit_len = adt.params(db).len();
-    if args.len() < explicit_len {
-        return ty;
-    }
-
-    let mut retained_len = explicit_len;
-    while retained_len > 0 {
-        let explicit_idx = retained_len - 1;
-        let Some(_) = adt
-            .param_set(db)
-            .explicit_const_param_default_hole_ty(db, explicit_idx)
-        else {
-            break;
-        };
-        let Some(arg) = args.get(explicit_idx).copied() else {
-            break;
-        };
-        if stored_value_is_storage_rigid(db, arg) {
-            break;
-        }
-        retained_len -= 1;
-    }
-
-    if retained_len == explicit_len {
-        return ty;
-    }
-
-    TyId::foldl(db, base, &args[..retained_len])
 }
 
 fn rigidify_layout_holes_for_storage<'db, T>(

@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/array_index_recursive_const.fe
+---
+error[3-0037]: recursive constant definition
+  ┌─ array_index_recursive_const.fe:1:22
+  │
+1 │ const INDEX: usize = INDEX
+  │                      ^^^^^ this constant requires its own value

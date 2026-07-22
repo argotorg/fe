@@ -1,0 +1,77 @@
+use std::evm::{Create, Evm, StorageMap, StorPtr}
+
+struct Holder<T> {
+    ptr: StorPtr<T>,
+}
+
+impl<T> Copy for Holder<T> {}
+
+impl<T> Holder<T> {
+    fn attach(mut self, raw: u256) {
+        self.ptr = StorPtr::from_raw(raw)
+    }
+}
+
+msg M {
+    #[selector = 1]
+    Set { row: usize, col: usize, key: u256, value: u256 },
+
+    #[selector = 2]
+    Get { row: usize, col: usize, key: u256 } -> u256,
+}
+
+pub contract C {
+    mut matrix: [[Holder<StorageMap<u256, u256>>; 2]; 2],
+
+    init() uses (mut matrix) {
+        matrix[0][0].attach(raw: 0)
+        matrix[0][1].attach(raw: 0)
+        matrix[1][0].attach(raw: 0)
+        matrix[1][1].attach(raw: 0)
+    }
+
+    recv M {
+        Set { row, col, key, value } uses (matrix) {
+            let mut map = matrix[row][col].ptr.read()
+            map.set(key: key, value: value)
+        }
+
+        Get { row, col, key } -> u256 uses (matrix) {
+            matrix[row][col].ptr.read().get(key: key)
+        }
+    }
+}
+
+#[test]
+fn multidimensional_nested_provider_families_are_distinct()
+    uses (create: mut Create, evm: mut Evm)
+{
+    let c = create.create2<C>(value: 0, args: (), salt: 1)
+    let key = 7
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: M::Set { row: 0, col: 1, key, value: 11 },
+    )
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: M::Set { row: 1, col: 0, key, value: 22 },
+    )
+    let left = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: M::Get { row: 0, col: 1, key },
+    )
+    let right = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: M::Get { row: 1, col: 0, key },
+    )
+    assert!(left == 11)
+    assert!(right == 22)
+}

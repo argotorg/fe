@@ -1,0 +1,56 @@
+use std::evm::{Evm, StorageMap}
+
+struct Pair<T> {
+    left: T,
+    right: T,
+}
+
+impl Pair<StorageMap<u256, u256>> {
+    fn set_left(mut self, key: u256, value: u256) {
+        self.left.set(key: key, value: value)
+    }
+
+    fn get_left(self, key: u256) -> u256 {
+        self.left.get(key: key)
+    }
+}
+
+msg NestedHelperMsg {
+    #[selector = 1]
+    Set { lane: usize, key: u256, value: u256 },
+
+    #[selector = 2]
+    Get { lane: usize, key: u256 } -> u256,
+}
+
+pub contract NestedHelper {
+    mut pairs: [Pair<StorageMap<u256, u256>>; 2],
+
+    recv NestedHelperMsg {
+        Set { lane, key, value } uses (mut pairs) {
+            pairs[lane].set_left(key: key, value: value)
+        }
+
+        Get { lane, key } -> u256 uses (pairs) {
+            pairs[lane].get_left(key: key)
+        }
+    }
+}
+
+#[test]
+fn nested_dynamic_layout_roots_cross_helpers() uses (evm: mut Evm) {
+    let c = evm.create2<NestedHelper>(value: 0, args: (), salt: 1)
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: NestedHelperMsg::Set { lane: 1, key: 7, value: 42 },
+    )
+    let value: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: NestedHelperMsg::Get { lane: 1, key: 7 },
+    )
+    assert!(value == 42)
+}

@@ -1,0 +1,96 @@
+use std::evm::{Evm, StorageMap}
+
+enum Choice {
+    Family([StorageMap<u256, u256>; 3]),
+    Scalar(StorageMap<u256, u256>),
+}
+
+impl Choice {
+    fn collapse(mut self) {
+        match self {
+            Choice::Family(maps) => self = Choice::Scalar(maps[0]),
+            Choice::Scalar(_) => {}
+        }
+    }
+
+    fn set(mut self, lane: usize, key: u256, value: u256) {
+        match self {
+            Choice::Family(mut maps) => maps[lane].set(key: key, value: value),
+            Choice::Scalar(mut map) => map.set(key: key, value: value),
+        }
+    }
+
+    fn get(self, lane: usize, key: u256) -> u256 {
+        match self {
+            Choice::Family(maps) => maps[lane].get(key: key),
+            Choice::Scalar(map) => map.get(key: key),
+        }
+    }
+}
+
+msg M {
+    #[selector = 1]
+    Collapse { row: usize, col: usize },
+
+    #[selector = 2]
+    Set { row: usize, col: usize, lane: usize, key: u256, value: u256 },
+
+    #[selector = 3]
+    Get { row: usize, col: usize, lane: usize, key: u256 } -> u256,
+}
+
+pub contract C {
+    mut values: [[Choice; 2]; 2],
+
+    recv M {
+        Collapse { row, col } uses (mut values) {
+            values[row][col].collapse()
+        }
+
+        Set { row, col, lane, key, value } uses (mut values) {
+            values[row][col].set(lane: lane, key: key, value: value)
+        }
+
+        Get { row, col, lane, key } -> u256 uses (values) {
+            values[row][col].get(lane: lane, key: key)
+        }
+    }
+}
+
+#[test]
+fn nested_array_enum_families_do_not_cross_alias() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 1)
+    let key = 7
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: M::Collapse { row: 1, col: 0 },
+    )
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: M::Set { row: 0, col: 1, lane: 2, key, value: 11 },
+    )
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: M::Set { row: 1, col: 0, lane: 0, key, value: 22 },
+    )
+    let family = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: M::Get { row: 0, col: 1, lane: 2, key },
+    )
+    let scalar = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: M::Get { row: 1, col: 0, lane: 0, key },
+    )
+    assert!(family == 11)
+    assert!(scalar == 22)
+}

@@ -1,0 +1,39 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/recursive_contract_field.fe
+---
+error[3-0002]: recursive type definition
+  ┌─ recursive_contract_field.fe:1:8
+  │
+1 │ struct Direct {
+  │        ^^^^^^ recursive type definition here
+2 │     next: Direct
+  │           ------ recursion occurs here
+
+error[3-0002]: recursive type definition
+   ┌─ recursive_contract_field.fe:5:8
+   │
+ 5 │ struct MutualA {
+   │        ^^^^^^^ recursive type definition here
+ 6 │     next: MutualB
+   │           ------- recursion occurs here
+   ·
+10 │     next: MutualA
+   │           ------- recursion occurs here
+
+error[3-0002]: recursive type definition
+   ┌─ recursive_contract_field.fe:13:6
+   │
+13 │ enum RecursiveEnum {
+   │      ^^^^^^^^^^^^^ recursive type definition here
+14 │     Next(RecursiveEnum)
+   │          ------------- recursion occurs here
+
+error[3-0002]: recursive type definition
+   ┌─ recursive_contract_field.fe:17:8
+   │
+17 │ struct Grow<T> {
+   │        ^^^^ recursive type definition here
+18 │     next: Grow<[T; 1]>
+   │           ------------ recursion occurs here

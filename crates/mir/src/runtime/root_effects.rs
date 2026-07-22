@@ -1,24 +1,27 @@
 use hir::{
     analysis::{
         semantic::{
-            SemanticInstance, owner_effect_bindings, resolved_provider_binding_for_instance_effect,
+            SemanticInstance, assigned_provider_layout_evidence, owner_effect_bindings,
+            resolved_provider_binding_for_instance_effect,
         },
         ty::{
-            ProviderAddressSpace,
+            CallableLayoutParamPort, CallableLayoutPort, ProviderAddressSpace,
+            const_ty::CallableInputLayoutHoleOrigin,
             ty_check::{BodyOwner, LocalBinding},
             ty_def::TyId,
         },
     },
     hir_def::{Contract, Func},
-    semantic::{ContractFieldLayoutInfo, ProviderBinding, ProviderSource},
+    semantic::{ContractFieldId, FieldStorageLayout, ProviderBinding, ProviderSource},
 };
 use rustc_hash::FxHashMap;
 
 use crate::{
     db::MirDb,
     runtime::{
-        AddressSpaceKind, ContractFieldBinding, ContractFieldSlot, EntryEffectArgPlan, RefKind,
-        RefView, RuntimeClass, TargetRootProviderBinding, TargetRootProviderMaterialization,
+        AddressSpaceKind, ContractFieldBinding, ContractFieldSlot, EntryEffectArgPlan,
+        EntryLayoutEvidenceArgPlan, EntrySemanticArgsPlan, RefKind, RefView, RuntimeClass,
+        TargetRootProviderBinding, TargetRootProviderMaterialization,
         lower::{
             classify::{
                 provider_erases_runtime_root, provider_source_erases_zero_sized_effect_value,
@@ -38,20 +41,20 @@ pub(crate) enum EntryEffectContext<'db> {
     HighLevelContract { contract: Contract<'db> },
 }
 
-pub(crate) fn entry_effect_arg_plans<'db>(
+pub(crate) fn entry_semantic_args_plan<'db>(
     db: &'db dyn MirDb,
     context: EntryEffectContext<'db>,
     semantic: SemanticInstance<'db>,
-) -> Result<Vec<EntryEffectArgPlan<'db>>, LowerError> {
+) -> Result<EntrySemanticArgsPlan<'db>, LowerError> {
     let owner = semantic.key(db).owner(db);
     let (contract_fields, total_code_slots) = if let Some(contract) = context.contract() {
         (
             Some(
                 contract
-                    .field_layout(db)
+                    .storage_layout(db)
                     .values()
                     .cloned()
-                    .map(|field| (field.index, field))
+                    .map(|field| (field.field, field))
                     .collect::<FxHashMap<_, _>>(),
             ),
             contract.code_address_space_slot_count(db),
@@ -59,22 +62,88 @@ pub(crate) fn entry_effect_arg_plans<'db>(
     } else {
         (None, 0)
     };
-    owner_effect_bindings(db, owner)
+    let resolved = owner_effect_bindings(db, owner)
         .into_iter()
         .filter_map(|binding| {
             let provider = resolved_provider_binding_for_instance_effect(db, semantic, binding)?;
-            Some(entry_effect_arg_plan_for_binding(
+            Some((binding, provider))
+        })
+        .collect::<Vec<_>>();
+    let effects = resolved
+        .iter()
+        .filter_map(|(binding, provider)| {
+            entry_effect_arg_plan_for_binding(
                 db,
                 context,
                 semantic,
-                binding,
-                provider,
+                *binding,
+                provider.clone(),
                 contract_fields.as_ref(),
                 total_code_slots,
-            ))
+            )
+            .transpose()
         })
-        .filter_map(|result| result.transpose())
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    let signature = semantic.key(db).layout_bundle_signature(db);
+    let mut layout_evidence = Vec::new();
+    for input in &signature.inputs {
+        if input.interface.runtime_descriptor_count() == 0 {
+            continue;
+        }
+        let CallableInputLayoutHoleOrigin::Effect(_) = input.origin else {
+            return Err(LowerError::Unsupported(format!(
+                "{} cannot synthesize runtime layout evidence for non-effect input {:?}",
+                context.label(db),
+                input.origin,
+            )));
+        };
+        let providers = resolved
+            .iter()
+            .filter(|(binding, _)| binding.callable_input_origin(db) == Some(input.origin))
+            .map(|(_, provider)| provider)
+            .collect::<Vec<_>>();
+        let [provider] = providers.as_slice() else {
+            return Err(LowerError::Unsupported(format!(
+                "{} has no unique provider for runtime layout-evidence input {:?}",
+                context.label(db),
+                input.origin,
+            )));
+        };
+        let values = assigned_provider_layout_evidence(db, provider, &input.interface.schema)
+            .map_err(|error| {
+                LowerError::Unsupported(format!(
+                    "{} cannot resolve assigned layout evidence for input {:?}: {error:?}",
+                    context.label(db),
+                    input.origin,
+                ))
+            })?;
+        for (_, component) in input.interface.runtime_components() {
+            let Some(value) = values.component(&component.port) else {
+                return Err(LowerError::Unsupported(format!(
+                    "{} has no assigned value for layout-evidence component {:?}",
+                    context.label(db),
+                    component.port,
+                )));
+            };
+            layout_evidence.push(EntryLayoutEvidenceArgPlan {
+                target: CallableLayoutParamPort::Input(CallableLayoutPort {
+                    origin: input.origin,
+                    component: component.port.clone(),
+                }),
+                value: value.clone(),
+            });
+        }
+    }
+    if signature.output_witnesses.runtime_descriptor_count() != 0 {
+        return Err(LowerError::Unsupported(format!(
+            "{} requires caller-supplied output layout witnesses",
+            context.label(db),
+        )));
+    }
+    Ok(EntrySemanticArgsPlan {
+        effects: effects.into_boxed_slice(),
+        layout_evidence: layout_evidence.into_boxed_slice(),
+    })
 }
 
 impl<'db> EntryEffectContext<'db> {
@@ -109,11 +178,11 @@ fn entry_effect_arg_plan_for_binding<'db>(
     semantic: SemanticInstance<'db>,
     binding: LocalBinding<'db>,
     provider: ProviderBinding<'db>,
-    contract_fields: Option<&FxHashMap<u32, ContractFieldLayoutInfo<'db>>>,
+    contract_fields: Option<&FxHashMap<ContractFieldId<'db>, FieldStorageLayout<'db>>>,
     total_code_slots: usize,
 ) -> Result<Option<EntryEffectArgPlan<'db>>, LowerError> {
     match provider.source.clone() {
-        ProviderSource::ContractField { field_idx, .. } => {
+        ProviderSource::ContractField { field: field_id } => {
             let env = RuntimeTypeEnv::for_semantic(db, semantic);
             if runtime_effect_binding_plan(db, semantic, binding).is_none()
                 && provider_erases_runtime_root(db, &provider, env.scope, env.assumptions)
@@ -128,9 +197,10 @@ fn entry_effect_arg_plan_for_binding<'db>(
                     "contract field",
                 ));
             };
-            let field = fields.get(&field_idx).ok_or_else(|| {
+            let field = fields.get(&field_id).ok_or_else(|| {
                 LowerError::Unsupported(format!(
-                    "missing contract field layout for field {field_idx} in {}",
+                    "missing contract field layout for field {} in {}",
+                    field_id.index,
                     context.label(db)
                 ))
             })?;
@@ -187,7 +257,7 @@ fn entry_effect_arg_plan_for_binding<'db>(
 fn contract_field_binding<'db>(
     db: &'db dyn MirDb,
     context: EntryEffectContext<'db>,
-    field: &ContractFieldLayoutInfo<'db>,
+    field: &FieldStorageLayout<'db>,
     semantic: SemanticInstance<'db>,
     binding: LocalBinding<'db>,
     total_code_slots: usize,
@@ -224,17 +294,46 @@ fn contract_field_binding<'db>(
             space: AddressSpaceKind::Code,
             ..
         } => {
-            let total_bytes = (i128::try_from(total_code_slots)
-                .expect("code-backed slot count fits in i128"))
-            .saturating_mul(32);
-            let field_bytes = (i128::try_from(field.slot_offset)
-                .expect("code-backed slot offset fits in i128"))
-            .saturating_mul(32);
-            ContractFieldSlot::CodeTailBytes(field_bytes.saturating_sub(total_bytes))
+            let total_bytes = i128::try_from(total_code_slots)
+                .ok()
+                .and_then(|slots| slots.checked_mul(32))
+                .ok_or_else(|| {
+                    LowerError::Unsupported(format!(
+                        "code-backed layout extent overflow for field `{}` in {}",
+                        field.name.data(db),
+                        context.label(db),
+                    ))
+                })?;
+            let field_bytes = i128::try_from(field.slot_offset)
+                .ok()
+                .and_then(|slots| slots.checked_mul(32))
+                .ok_or_else(|| {
+                    LowerError::Unsupported(format!(
+                        "code-backed field offset overflow for `{}` in {}",
+                        field.name.data(db),
+                        context.label(db),
+                    ))
+                })?;
+            ContractFieldSlot::CodeTailBytes(field_bytes.checked_sub(total_bytes).ok_or_else(
+                || {
+                    LowerError::Unsupported(format!(
+                        "internal layout error: code-backed field `{}` begins past the validated code-space high-water mark in {}",
+                        field.name.data(db),
+                        context.label(db),
+                    ))
+                },
+            )?)
         }
-        _ => ContractFieldSlot::Words(field.slot_offset as u128),
+        _ => ContractFieldSlot::Words(u128::try_from(field.slot_offset).map_err(|_| {
+            LowerError::Unsupported(format!(
+                "contract field offset overflow for `{}` in {}",
+                field.name.data(db),
+                context.label(db),
+            ))
+        })?),
     };
     Ok(ContractFieldBinding {
+        field: field.field,
         slot,
         declared_ty: binding_ty,
         class,

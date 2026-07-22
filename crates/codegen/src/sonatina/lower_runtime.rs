@@ -68,6 +68,11 @@ use crate::{
 const PANIC_OVERFLOW: u64 = 0x11;
 const PANIC_DIVISION_BY_ZERO: u64 = 0x12;
 
+const LAYOUT_MAP_AFFINE: u64 = 0;
+const LAYOUT_MAP_DENSE: u64 = 1;
+const LAYOUT_MAP_REPEAT: u64 = 2;
+const LAYOUT_MAP_PATCH: u64 = 3;
+
 pub(super) fn compile_runtime_package_sonatina(
     db: &DriverDataBase,
     package: &RuntimePackage<'_>,
@@ -361,10 +366,8 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         object: mir::RuntimeObject<'db>,
         section: &mir::RuntimeSectionName,
     ) -> bool {
-        matches!(section, mir::RuntimeSectionName::CodeRegion(_))
-            || self
-                .explicit_code_region_sections
-                .contains(&(object, section.clone()))
+        self.explicit_code_region_sections
+            .contains(&(object, section.clone()))
     }
 
     fn mark_explicit_code_region(&mut self, region: mir::RuntimeCodeRegion<'db>) {
@@ -852,6 +855,7 @@ struct FunctionLowerer<'ctx, 'db, 'a> {
     reachable_blocks: Vec<bool>,
     vars: FxHashMap<RLocalId, Variable>,
     slot_roots: FxHashMap<RLocalId, SlotRoot>,
+    checked_indices: FxHashMap<(RLocalId, u64), ValueId>,
     pending_enum_proof: Option<PendingEnumProof<'db>>,
     empty_revert_block: Option<BlockId>,
     overflow_panic_block: Option<BlockId>,
@@ -910,6 +914,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             reachable_blocks,
             vars,
             slot_roots: FxHashMap::default(),
+            checked_indices: FxHashMap::default(),
             pending_enum_proof: None,
             empty_revert_block: None,
             overflow_panic_block: None,
@@ -938,6 +943,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             if !self.reachable_blocks[idx] {
                 continue;
             }
+            self.checked_indices.clear();
             self.fb
                 .switch_to_block(self.block_id(RBlockId::from_u32(idx as u32))?);
             let mut terminated = false;
@@ -1075,6 +1081,19 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     return Ok(Lowered::Terminated);
                 };
                 self.assign_local(*dst, value)?;
+                if matches!(expr, RExpr::Builtin(_) | RExpr::Call { .. }) {
+                    self.checked_indices.clear();
+                } else {
+                    self.checked_indices.retain(|(local, _), _| local != dst);
+                }
+                self.pending_enum_proof = None;
+            }
+            RStmt::AssertIndexInBounds { index, len } => {
+                let index = self.checked_index_source(*len, index)?;
+                if matches!(index, Lowered::Terminated) {
+                    self.pending_enum_proof = None;
+                    return Ok(Lowered::Terminated);
+                }
                 self.pending_enum_proof = None;
             }
             RStmt::EnumAssertVariant { value, variant } => {
@@ -1096,6 +1115,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     self.pending_enum_proof = None;
                     return Ok(Lowered::Terminated);
                 }
+                self.checked_indices.clear();
                 self.pending_enum_proof = None;
             }
             RStmt::CopyInto { dst, src } => {
@@ -1103,6 +1123,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     self.pending_enum_proof = None;
                     return Ok(Lowered::Terminated);
                 }
+                self.checked_indices.clear();
                 self.pending_enum_proof = None;
             }
             RStmt::EnumSetTag { root, variant } => {
@@ -1112,6 +1133,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     object,
                     self.variant_ref(*variant)?,
                 ));
+                self.checked_indices.clear();
                 self.pending_enum_proof = None;
             }
             RStmt::EnumWriteVariant {
@@ -1130,6 +1152,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     self.variant_ref(*variant)?,
                     values,
                 ));
+                self.checked_indices.clear();
                 self.pending_enum_proof = None;
             }
         }
@@ -1263,6 +1286,24 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             RExpr::AggregateMake { layout, fields } => {
                 self.make_aggregate_value(*layout, fields)?
             }
+            RExpr::LayoutMapAffine { map, base, strides } => {
+                self.lower_layout_map_affine(map, *base, strides)?
+            }
+            RExpr::LayoutMapDense { map, elements } => {
+                self.lower_layout_map_dense(map, elements)?
+            }
+            RExpr::LayoutMapRepeat { map, element } => {
+                self.lower_layout_map_repeat(map, *element)?
+            }
+            RExpr::LayoutMapProject { map, source, index } => {
+                self.lower_layout_map_project(map, *source, *index)?
+            }
+            RExpr::LayoutMapPatch {
+                map,
+                source,
+                index,
+                replacement,
+            } => self.lower_layout_map_patch(map, *source, *index, *replacement)?,
             RExpr::Call { callee, args } => {
                 if let Some(value) = self.lower_intrinsic_call(*callee, args, dst)? {
                     return Ok(Lowered::Value(value));
@@ -1375,6 +1416,370 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             }
         };
         Ok(Lowered::Value(value))
+    }
+
+    fn alloc_layout_map_words(&mut self, words: usize) -> Result<ValueId, LowerError> {
+        let bytes = words.checked_mul(32).ok_or_else(|| {
+            LowerError::Internal(format!("layout-map allocation overflow: {words} words"))
+        })?;
+        let bytes = u64::try_from(bytes).map_err(|_| {
+            LowerError::Internal(format!(
+                "layout-map allocation is not addressable: {bytes} bytes"
+            ))
+        })?;
+        let size = self.index_value(bytes);
+        let ptr_ty = self.fb.ptr_type(Type::I8);
+        let ptr = self
+            .fb
+            .insert_inst(EvmMalloc::new(self.module.inst_set(), size), ptr_ty);
+        self.coerce_value_to_ty(ptr, Type::I256)
+    }
+
+    fn layout_map_addr(&mut self, node: ValueId, word: usize) -> Result<ValueId, LowerError> {
+        let node = self.coerce_value_to_ty(node, Type::I256)?;
+        let word = u64::try_from(word).map_err(|_| {
+            LowerError::Internal(format!("layout-map word is not addressable: {word}"))
+        })?;
+        self.offset_address(node, word, AddressSpaceKind::Memory)
+    }
+
+    fn store_layout_map_word(
+        &mut self,
+        node: ValueId,
+        word: usize,
+        value: ValueId,
+    ) -> Result<(), LowerError> {
+        let addr = self.layout_map_addr(node, word)?;
+        let value = self.coerce_value_to_ty(value, Type::I256)?;
+        self.fb
+            .insert_inst_no_result(Mstore::new(self.module.inst_set(), addr, value, Type::I256));
+        Ok(())
+    }
+
+    fn load_layout_map_word(&mut self, node: ValueId, word: usize) -> Result<ValueId, LowerError> {
+        let addr = self.layout_map_addr(node, word)?;
+        Ok(self.fb.insert_inst(
+            Mload::new(self.module.inst_set(), addr, Type::I256),
+            Type::I256,
+        ))
+    }
+
+    fn lower_layout_map_affine(
+        &mut self,
+        map: &mir::RuntimeLayoutMap<'db>,
+        base: RLocalId,
+        strides: &[RLocalId],
+    ) -> Result<ValueId, LowerError> {
+        if map.rank() == 0 || strides.len() != map.rank() {
+            return Err(LowerError::Internal(format!(
+                "invalid affine layout map: map={map:?}, strides={}",
+                strides.len()
+            )));
+        }
+        let node = self.alloc_layout_map_words(map.rank() + 2)?;
+        let tag = self.index_value(LAYOUT_MAP_AFFINE);
+        self.store_layout_map_word(node, 0, tag)?;
+        let base = self.local_value(base)?;
+        self.store_layout_map_word(node, 1, base)?;
+        for (axis, stride) in strides.iter().enumerate() {
+            let stride = self.local_value(*stride)?;
+            self.store_layout_map_word(node, axis + 2, stride)?;
+        }
+        Ok(node)
+    }
+
+    fn lower_layout_map_dense(
+        &mut self,
+        map: &mir::RuntimeLayoutMap<'db>,
+        elements: &[RLocalId],
+    ) -> Result<ValueId, LowerError> {
+        if map.dimensions().first().copied() != Some(elements.len()) || elements.is_empty() {
+            return Err(LowerError::Internal(format!(
+                "invalid dense layout map: map={map:?}, elements={}",
+                elements.len()
+            )));
+        }
+        let data = self.alloc_layout_map_words(elements.len())?;
+        for (idx, element) in elements.iter().enumerate() {
+            let element = self.local_value(*element)?;
+            self.store_layout_map_word(data, idx, element)?;
+        }
+        let node = self.alloc_layout_map_words(2)?;
+        let tag = self.index_value(LAYOUT_MAP_DENSE);
+        self.store_layout_map_word(node, 0, tag)?;
+        self.store_layout_map_word(node, 1, data)?;
+        Ok(node)
+    }
+
+    fn lower_layout_map_repeat(
+        &mut self,
+        map: &mir::RuntimeLayoutMap<'db>,
+        element: RLocalId,
+    ) -> Result<ValueId, LowerError> {
+        if map.rank() == 0 {
+            return Err(LowerError::Internal(
+                "layout-map repeat requires a ranked map".to_string(),
+            ));
+        }
+        let node = self.alloc_layout_map_words(2)?;
+        let tag = self.index_value(LAYOUT_MAP_REPEAT);
+        let element = self.local_value(element)?;
+        self.store_layout_map_word(node, 0, tag)?;
+        self.store_layout_map_word(node, 1, element)?;
+        Ok(node)
+    }
+
+    fn lower_layout_map_patch(
+        &mut self,
+        map: &mir::RuntimeLayoutMap<'db>,
+        source: RLocalId,
+        index: RLocalId,
+        replacement: RLocalId,
+    ) -> Result<ValueId, LowerError> {
+        if map.rank() == 0 {
+            return Err(LowerError::Internal(
+                "layout-map patch requires a ranked map".to_string(),
+            ));
+        }
+        let source = self.local_value(source)?;
+        let index = self.local_value(index)?;
+        let index = self.check_layout_map_index(map, index)?;
+        let replacement = self.local_value(replacement)?;
+        let node = self.alloc_layout_map_words(4)?;
+        let tag = self.index_value(LAYOUT_MAP_PATCH);
+        self.store_layout_map_word(node, 0, tag)?;
+        self.store_layout_map_word(node, 1, source)?;
+        self.store_layout_map_word(node, 2, index)?;
+        self.store_layout_map_word(node, 3, replacement)?;
+        Ok(node)
+    }
+
+    fn check_layout_map_index(
+        &mut self,
+        map: &mir::RuntimeLayoutMap<'db>,
+        index: ValueId,
+    ) -> Result<ValueId, LowerError> {
+        let index = self.coerce_value_to_ty(index, Type::I256)?;
+        let len = map
+            .dimensions()
+            .first()
+            .copied()
+            .and_then(|len| u64::try_from(len).ok())
+            .ok_or_else(|| {
+                LowerError::Internal(format!(
+                    "layout-map operation has an invalid outer dimension: {map:?}"
+                ))
+            })?;
+        let len = self.index_value(len);
+        let in_bounds = self
+            .fb
+            .insert_inst(Lt::new(self.module.inst_set(), index, len), Type::I1);
+        let out_of_bounds = self
+            .fb
+            .insert_inst(IsZero::new(self.module.inst_set(), in_bounds), Type::I1);
+        self.emit_empty_revert(out_of_bounds)?;
+        Ok(index)
+    }
+
+    fn lower_layout_map_project(
+        &mut self,
+        map: &mir::RuntimeLayoutMap<'db>,
+        source: RLocalId,
+        index: RLocalId,
+    ) -> Result<ValueId, LowerError> {
+        let child = map.projected().ok_or_else(|| {
+            LowerError::Internal("layout-map projection requires a ranked map".to_string())
+        })?;
+        let result_ty = if child.rank() == 0 {
+            scalar_ty(child.scalar())
+        } else {
+            Type::I256
+        };
+        if result_ty != Type::I256 {
+            return Err(LowerError::Internal(format!(
+                "layout-map roots must be word-sized, found {result_ty:?}"
+            )));
+        }
+        let source = self.local_value(source)?;
+        let index = self.local_value(index)?;
+        let index = self.check_layout_map_index(map, index)?;
+        let entry = self
+            .fb
+            .current_block()
+            .expect("layout-map projection requires a current block");
+        let header = self.fb.append_block();
+        let affine = self.fb.append_block();
+        let dense = self.fb.append_block();
+        let repeat = self.fb.append_block();
+        let patch = self.fb.append_block();
+        let patch_match = self.fb.append_block();
+        let patch_miss = self.fb.append_block();
+        let invalid = self.fb.append_block();
+        let done = self.fb.append_block();
+
+        self.fb
+            .insert_inst_no_result(Jump::new(self.module.inst_set(), header));
+        self.fb.switch_to_block(header);
+        let current = self.fb.insert_inst(
+            Phi::new(self.module.inst_set(), vec![(source, entry)]),
+            Type::I256,
+        );
+        let tag = self.load_layout_map_word(current, 0)?;
+        let cases = vec![
+            (self.index_value(LAYOUT_MAP_AFFINE), affine),
+            (self.index_value(LAYOUT_MAP_DENSE), dense),
+            (self.index_value(LAYOUT_MAP_REPEAT), repeat),
+            (self.index_value(LAYOUT_MAP_PATCH), patch),
+        ];
+        self.fb.insert_inst_no_result(BrTable::new(
+            self.module.inst_set(),
+            tag,
+            Some(invalid),
+            cases,
+        ));
+
+        self.fb.switch_to_block(affine);
+        let base = self.load_layout_map_word(current, 1)?;
+        let stride = self.load_layout_map_word(current, 2)?;
+        let base = self.cast_scalar(base, scalar_ty(map.scalar()))?;
+        let stride = self.cast_scalar(stride, scalar_ty(map.scalar()))?;
+        let affine_index = self.cast_scalar(index, scalar_ty(map.scalar()))?;
+        let offset = self.lower_checked_layout_map_arith(
+            IntrinsicArithBinOp::Mul,
+            affine_index,
+            stride,
+            map.scalar(),
+        )?;
+        let affine_base = self.lower_checked_layout_map_arith(
+            IntrinsicArithBinOp::Add,
+            base,
+            offset,
+            map.scalar(),
+        )?;
+        let affine_result = if child.rank() == 0 {
+            affine_base
+        } else {
+            let node = self.alloc_layout_map_words(child.rank() + 2)?;
+            let tag = self.index_value(LAYOUT_MAP_AFFINE);
+            self.store_layout_map_word(node, 0, tag)?;
+            self.store_layout_map_word(node, 1, affine_base)?;
+            for axis in 0..child.rank() {
+                let stride = self.load_layout_map_word(current, axis + 3)?;
+                self.store_layout_map_word(node, axis + 2, stride)?;
+            }
+            node
+        };
+        let affine_exit = self
+            .fb
+            .current_block()
+            .expect("affine layout-map projection must remain in a block");
+        self.fb
+            .insert_inst_no_result(Jump::new(self.module.inst_set(), done));
+
+        self.fb.switch_to_block(dense);
+        let data = self.load_layout_map_word(current, 1)?;
+        let word_size = self.index_value(32);
+        let offset = self.fb.insert_inst(
+            Mul::new(self.module.inst_set(), index, word_size),
+            Type::I256,
+        );
+        let addr = self
+            .fb
+            .insert_inst(Add::new(self.module.inst_set(), data, offset), Type::I256);
+        let dense_result = self.fb.insert_inst(
+            Mload::new(self.module.inst_set(), addr, Type::I256),
+            Type::I256,
+        );
+        let dense_exit = self
+            .fb
+            .current_block()
+            .expect("dense layout-map projection must remain in a block");
+        self.fb
+            .insert_inst_no_result(Jump::new(self.module.inst_set(), done));
+
+        self.fb.switch_to_block(repeat);
+        let repeat_result = self.load_layout_map_word(current, 1)?;
+        let repeat_exit = self
+            .fb
+            .current_block()
+            .expect("repeat layout-map projection must remain in a block");
+        self.fb
+            .insert_inst_no_result(Jump::new(self.module.inst_set(), done));
+
+        self.fb.switch_to_block(patch);
+        let expected = self.load_layout_map_word(current, 2)?;
+        let matches = self
+            .fb
+            .insert_inst(Eq::new(self.module.inst_set(), index, expected), Type::I1);
+        self.fb.insert_inst_no_result(Br::new(
+            self.module.inst_set(),
+            matches,
+            patch_match,
+            patch_miss,
+        ));
+
+        self.fb.switch_to_block(patch_match);
+        let patch_result = self.load_layout_map_word(current, 3)?;
+        let patch_match_exit = self
+            .fb
+            .current_block()
+            .expect("matching layout-map patch must remain in a block");
+        self.fb
+            .insert_inst_no_result(Jump::new(self.module.inst_set(), done));
+
+        self.fb.switch_to_block(patch_miss);
+        let next = self.load_layout_map_word(current, 1)?;
+        let patch_miss_exit = self
+            .fb
+            .current_block()
+            .expect("non-matching layout-map patch must remain in a block");
+        self.fb.append_phi_arg(current, next, patch_miss_exit);
+        self.fb
+            .insert_inst_no_result(Jump::new(self.module.inst_set(), header));
+
+        self.fb.switch_to_block(invalid);
+        self.fb
+            .insert_inst_no_result(Unreachable::new(self.module.inst_set()));
+
+        self.fb.switch_to_block(done);
+        let incoming = vec![
+            (affine_result, affine_exit),
+            (dense_result, dense_exit),
+            (repeat_result, repeat_exit),
+            (patch_result, patch_match_exit),
+        ];
+        Ok(self
+            .fb
+            .insert_inst(Phi::new(self.module.inst_set(), incoming), result_ty))
+    }
+
+    fn lower_checked_layout_map_arith(
+        &mut self,
+        op: IntrinsicArithBinOp,
+        lhs: ValueId,
+        rhs: ValueId,
+        class: &ScalarClass<'db>,
+    ) -> Result<ValueId, LowerError> {
+        let ty = scalar_ty(class);
+        let signed = class.is_signed_int();
+        let [value, overflow] = match (op, signed) {
+            (IntrinsicArithBinOp::Add, true) => self.fb.insert_saddo(lhs, rhs),
+            (IntrinsicArithBinOp::Add, false) => self.fb.insert_uaddo(lhs, rhs),
+            (IntrinsicArithBinOp::Mul, true) => self.fb.insert_smulo(lhs, rhs),
+            (IntrinsicArithBinOp::Mul, false) => self.fb.insert_umulo(lhs, rhs),
+            _ => {
+                return Err(LowerError::Internal(format!(
+                    "unsupported checked layout-map arithmetic: {op:?}"
+                )));
+            }
+        };
+        if self.fb.type_of(value) != ty {
+            return Err(LowerError::Internal(
+                "layout-map arithmetic produced an unexpected type".to_string(),
+            ));
+        }
+        self.emit_panic_revert(overflow, PANIC_OVERFLOW)?;
+        Ok(value)
     }
 
     fn lower_builtin(&mut self, builtin: &RuntimeBuiltin<'db>) -> Result<ValueId, LowerError> {
@@ -2676,7 +3081,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     let Lowered::Value(idx) = self.checked_index_value(&base_class, index)? else {
                         return Ok(Lowered::Terminated);
                     };
-                    let scale = self.scale_for_space(space, span);
+                    let scale = self.scale_for_space(space, span)?;
                     let scaled = if scale == 1 {
                         idx
                     } else {
@@ -2966,30 +3371,50 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         class: &RuntimeClass<'db>,
         object: ValueId,
     ) -> Result<(), LowerError> {
-        let RuntimeClass::AggregateValue { layout } = class else {
+        let RuntimeClass::AggregateValue { layout: dst_layout } = class else {
             return Err(LowerError::Internal(
                 "aggregate source copy requires aggregate class".to_string(),
             ));
         };
-        match layout.data(self.module.db) {
-            Layout::Struct(data) => {
-                for (idx, field) in data.fields.iter().enumerate() {
+        let src_layout = self
+            .copy_source_class(&source)
+            .aggregate_layout()
+            .ok_or_else(|| {
+                LowerError::Internal(
+                    "aggregate copy source must retain its source layout".to_string(),
+                )
+            })?;
+        match (
+            src_layout.data(self.module.db),
+            dst_layout.data(self.module.db),
+        ) {
+            (Layout::Struct(src), Layout::Struct(dst)) => {
+                if src.fields.len() != dst.fields.len() {
+                    return Err(LowerError::Internal(format!(
+                        "struct copy field count mismatch: src={} dst={}",
+                        src.fields.len(),
+                        dst.fields.len(),
+                    )));
+                }
+                for (idx, (src_field, dst_field)) in
+                    src.fields.iter().zip(dst.fields.iter()).enumerate()
+                {
                     let field_idx = self.index_value(idx as u64);
                     let field_object = self.fb.insert_inst(
                         ObjProj::new(self.module.inst_set(), smallvec![object, field_idx]),
-                        self.module.ty_for_object_projection(field)?,
+                        self.module.ty_for_object_projection(dst_field)?,
                     );
                     let field_source = match &source {
                         CopySource::Value { value, .. } => CopySource::Value {
-                            value: self.extract_aggregate_field(*value, idx, field)?,
-                            class: field.clone(),
+                            value: self.extract_aggregate_field(*value, idx, src_field)?,
+                            class: src_field.clone(),
                         },
                         CopySource::Object { value, .. } => CopySource::Object {
                             value: self.fb.insert_inst(
                                 ObjProj::new(self.module.inst_set(), smallvec![*value, field_idx]),
-                                self.module.ty_for_object_projection(field)?,
+                                self.module.ty_for_object_projection(src_field)?,
                             ),
-                            class: field.clone(),
+                            class: src_field.clone(),
                         },
                         CopySource::Const { value, .. } => CopySource::Const {
                             value: self.fb.insert_inst(
@@ -2997,67 +3422,81 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                                     self.module.inst_set(),
                                     smallvec![*value, field_idx],
                                 ),
-                                self.module.ty_for_const_projection(field)?,
+                                self.module.ty_for_const_projection(src_field)?,
                             ),
-                            class: field.clone(),
+                            class: src_field.clone(),
                         },
                         CopySource::Ptr { addr, space, .. } => CopySource::Ptr {
                             addr: self.offset_address(
                                 *addr,
-                                data.field_offset_words(self.module.db, idx),
+                                src.field_offset_words(self.module.db, idx),
                                 *space,
                             )?,
                             space: *space,
-                            class: field.clone(),
+                            class: src_field.clone(),
                         },
                     };
-                    self.copy_source_into_object(field_source, field, field_object)?;
+                    self.copy_source_into_object(field_source, dst_field, field_object)?;
                 }
                 Ok(())
             }
-            Layout::Array(data) => {
-                for idx in 0..data.len as usize {
+            (Layout::Array(src), Layout::Array(dst)) => {
+                if src.len != dst.len {
+                    return Err(LowerError::Internal(format!(
+                        "array copy length mismatch: src={} dst={}",
+                        src.len, dst.len,
+                    )));
+                }
+                for idx in 0..src.len as usize {
                     let elem_idx = self.index_value(idx as u64);
                     let elem_object = self.fb.insert_inst(
                         ObjIndex::new(self.module.inst_set(), object, elem_idx),
-                        self.module.ty_for_object_projection(&data.elem)?,
+                        self.module.ty_for_object_projection(&dst.elem)?,
                     );
                     let elem_source = match &source {
                         CopySource::Value { value, .. } => CopySource::Value {
-                            value: self.extract_aggregate_field(*value, idx, &data.elem)?,
-                            class: data.elem.clone(),
+                            value: self.extract_aggregate_field(*value, idx, &src.elem)?,
+                            class: src.elem.clone(),
                         },
                         CopySource::Object { value, .. } => CopySource::Object {
                             value: self.fb.insert_inst(
                                 ObjIndex::new(self.module.inst_set(), *value, elem_idx),
-                                self.module.ty_for_object_projection(&data.elem)?,
+                                self.module.ty_for_object_projection(&src.elem)?,
                             ),
-                            class: data.elem.clone(),
+                            class: src.elem.clone(),
                         },
                         CopySource::Const { value, .. } => CopySource::Const {
                             value: self.fb.insert_inst(
                                 ConstIndex::new(self.module.inst_set(), *value, elem_idx),
-                                self.module.ty_for_const_projection(&data.elem)?,
+                                self.module.ty_for_const_projection(&src.elem)?,
                             ),
-                            class: data.elem.clone(),
+                            class: src.elem.clone(),
                         },
                         CopySource::Ptr { addr, space, .. } => CopySource::Ptr {
                             addr: self.offset_address(
                                 *addr,
-                                idx as u64 * data.elem.span_words(self.module.db),
+                                idx as u64 * src.elem.span_words(self.module.db),
                                 *space,
                             )?,
                             space: *space,
-                            class: data.elem.clone(),
+                            class: src.elem.clone(),
                         },
                     };
-                    self.copy_source_into_object(elem_source, &data.elem, elem_object)?;
+                    self.copy_source_into_object(elem_source, &dst.elem, elem_object)?;
                 }
                 Ok(())
             }
-            Layout::Enum(data) => {
-                self.copy_enum_source_into_object(source, *layout, data.variants.as_ref(), object)
-            }
+            (Layout::Enum(_), Layout::Enum(dst)) => self.copy_enum_source_into_object(
+                source,
+                *dst_layout,
+                dst.variants.as_ref(),
+                object,
+            ),
+            (Layout::Struct(_), Layout::Array(_) | Layout::Enum(_))
+            | (Layout::Array(_), Layout::Struct(_) | Layout::Enum(_))
+            | (Layout::Enum(_), Layout::Struct(_) | Layout::Array(_)) => Err(LowerError::Internal(
+                "aggregate copy layout kind mismatch".to_string(),
+            )),
         }
     }
 
@@ -3095,9 +3534,9 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 ),
                 class,
             },
-            CopySource::Ptr { addr, space, class } => CopySource::Value {
+            CopySource::Ptr { addr, space, .. } => CopySource::Value {
                 value: self.load_aggregate_from_ptr(addr, space, src_layout)?,
-                class,
+                class: RuntimeClass::AggregateValue { layout: src_layout },
             },
             source => source,
         };
@@ -3484,6 +3923,11 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 enum_layout: layout,
                 index: idx as u16,
             };
+            self.fb.insert_inst_no_result(EnumAssertVariant::new(
+                self.module.inst_set(),
+                src,
+                self.variant_ref(variant)?,
+            ));
             let tag_word = self.index_value(idx as u64);
             self.store_to_ptr(
                 addr,
@@ -4474,26 +4918,52 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         let len = base_class.array_len(self.module.db).ok_or_else(|| {
             LowerError::Internal("index projection on non-array class".to_string())
         })?;
+        self.checked_index_source(len, index)
+    }
+
+    fn checked_index_source(
+        &mut self,
+        len: u64,
+        index: &IndexSource<RLocalId>,
+    ) -> Result<Lowered<ValueId>, LowerError> {
         match index {
             IndexSource::Constant(index) => {
-                self.checked_constant_index_value(len, Some(*index as u64))
+                self.checked_constant_index_value(len, u64::try_from(*index).ok())
             }
             IndexSource::Dynamic(index) => {
-                let index = self.local_value(*index)?;
-                if let Value::Immediate { imm, .. } = self.fb.func.dfg.value(index) {
-                    return self.checked_constant_index_value(len, immediate_to_u64_index(*imm));
+                let local = *index;
+                if let Some(index) = self.checked_indices.get(&(local, len)) {
+                    return Ok(Lowered::Value(*index));
                 }
-                let len = self.index_value(len);
-                let in_bounds = self
-                    .fb
-                    .insert_inst(Lt::new(self.module.inst_set(), index, len), Type::I1);
-                let out_of_bounds = self
-                    .fb
-                    .insert_inst(IsZero::new(self.module.inst_set(), in_bounds), Type::I1);
-                self.emit_empty_revert(out_of_bounds)?;
-                Ok(Lowered::Value(index))
+                let index = self.local_value(local)?;
+                match self.checked_runtime_index_value(len, index)? {
+                    Lowered::Value(index) => {
+                        self.checked_indices.insert((local, len), index);
+                        Ok(Lowered::Value(index))
+                    }
+                    Lowered::Terminated => Ok(Lowered::Terminated),
+                }
             }
         }
+    }
+
+    fn checked_runtime_index_value(
+        &mut self,
+        len: u64,
+        index: ValueId,
+    ) -> Result<Lowered<ValueId>, LowerError> {
+        if let Value::Immediate { imm, .. } = self.fb.func.dfg.value(index) {
+            return self.checked_constant_index_value(len, immediate_to_u64_index(*imm));
+        }
+        let len = self.index_value(len);
+        let in_bounds = self
+            .fb
+            .insert_inst(Lt::new(self.module.inst_set(), index, len), Type::I1);
+        let out_of_bounds = self
+            .fb
+            .insert_inst(IsZero::new(self.module.inst_set(), in_bounds), Type::I1);
+        self.emit_empty_revert(out_of_bounds)?;
+        Ok(Lowered::Value(index))
     }
 
     fn checked_constant_index_value(
@@ -4543,18 +5013,22 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         if units == 0 {
             return Ok(base);
         }
-        let offset = self.index_value(self.scale_for_space(space, units));
+        let offset = self.index_value(self.scale_for_space(space, units)?);
         Ok(self
             .fb
             .insert_inst(Add::new(self.module.inst_set(), base, offset), Type::I256))
     }
 
-    fn scale_for_space(&self, space: AddressSpaceKind, units: u64) -> u64 {
+    fn scale_for_space(&self, space: AddressSpaceKind, units: u64) -> Result<u64, LowerError> {
         match space {
             AddressSpaceKind::Memory | AddressSpaceKind::Calldata | AddressSpaceKind::Code => {
-                units.saturating_mul(32)
+                units.checked_mul(32).ok_or_else(|| {
+                    LowerError::Internal(format!(
+                        "byte-addressed runtime place offset overflow: {units} words"
+                    ))
+                })
             }
-            AddressSpaceKind::Storage | AddressSpaceKind::Transient => units,
+            AddressSpaceKind::Storage | AddressSpaceKind::Transient => Ok(units),
         }
     }
 }

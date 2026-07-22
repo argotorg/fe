@@ -4,7 +4,7 @@ use fe_hir::{
         semantic::{
             SExpr, SStmtKind, get_or_build_semantic_instance, identity_semantic_instance_key,
         },
-        ty::ty_check::{BodyOwner, check_contract_recv_arm_body, check_func_body},
+        ty::ty_check::{BodyOwner, LocalBinding, check_contract_recv_arm_body, check_func_body},
     },
     hir_def::ItemKind,
     test_db::HirAnalysisTestDb,
@@ -75,7 +75,7 @@ fn take(opt: Option<mut u256>) -> u256 {
     let body = instance.body(&db);
 
     assert_eq!(
-        first_assignment_ty(&db, &body, |expr| matches!(
+        first_assignment_ty(&db, body, |expr| matches!(
             expr,
             SExpr::ExtractEnumField { .. }
         )),
@@ -112,9 +112,58 @@ fn read(x: ref Pair) -> u256 {
     let body = instance.body(&db);
 
     assert_eq!(
-        first_assignment_ty(&db, &body, |expr| matches!(expr, SExpr::Field { .. })),
+        first_assignment_ty(&db, body, |expr| matches!(expr, SExpr::Field { .. })),
         "ref u256"
     );
+}
+
+#[test]
+fn default_view_binding_reads_the_parameter_place() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "pattern_lowering.fe".into(),
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn read(boxed: Boxed) -> u256 {
+    let rebound = boxed
+    rebound.value
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let func = find_func(&db, top_mod, "read");
+    let (diags, _) = check_func_body(&db, func).clone();
+    assert!(diags.is_empty(), "{diags:?}");
+
+    let instance = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+    );
+    let body = instance.body(&db);
+    let (dst, place) = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.stmts)
+        .find_map(|stmt| match &stmt.kind {
+            SStmtKind::Assign {
+                dst,
+                expr: SExpr::ReadPlace { place },
+            } if place.path.is_empty() => Some((*dst, place)),
+            _ => None,
+        })
+        .expect("borrowed binding must read the parameter place");
+
+    assert_eq!(
+        body.locals[dst.index()].ty.pretty_print(&db).to_string(),
+        "ref Boxed"
+    );
+    assert!(matches!(
+        body.locals[place.local.index()].source,
+        Some(LocalBinding::Param { .. })
+    ));
 }
 
 #[test]
@@ -177,7 +226,7 @@ pub contract C {
     let body = instance.body(&db);
 
     assert_eq!(
-        first_assignment_ty(&db, &body, |expr| matches!(
+        first_assignment_ty(&db, body, |expr| matches!(
             expr,
             SExpr::ExtractEnumField { .. }
         )),
@@ -216,7 +265,7 @@ fn read(x: Maybe) -> u256 {
     let body = instance.body(&db);
 
     assert_eq!(
-        first_assignment_ty(&db, &body, |expr| matches!(
+        first_assignment_ty(&db, body, |expr| matches!(
             expr,
             SExpr::ExtractEnumField { .. }
         )),

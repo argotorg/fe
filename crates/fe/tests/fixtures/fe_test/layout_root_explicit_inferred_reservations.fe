@@ -1,0 +1,151 @@
+use std::evm::{Evm, StorageMap}
+
+msg MixedRootsMsg {
+    #[selector = 1]
+    SetExplicit { key: u256, value: u256 },
+
+    #[selector = 2]
+    SetSecondInferred { key: u256, value: u256 },
+
+    #[selector = 3]
+    GetExplicit { key: u256 } -> u256,
+
+    #[selector = 4]
+    GetSecondInferred { key: u256 } -> u256,
+}
+
+msg MixedFamilyRootsMsg {
+    #[selector = 11]
+    SetExplicit { key: u256, value: u256 },
+
+    #[selector = 12]
+    SetArray { lane: usize, key: u256, value: u256 },
+
+    #[selector = 13]
+    GetExplicit { key: u256 } -> u256,
+
+    #[selector = 14]
+    GetArray { lane: usize, key: u256 } -> u256,
+}
+
+pub contract MixedRoots {
+    mut explicit: StorageMap<u256, u256, 1>,
+    mut first_inferred: StorageMap<u256, u256>,
+    mut second_inferred: StorageMap<u256, u256>,
+
+    recv MixedRootsMsg {
+        SetExplicit { key, value } uses (mut explicit) {
+            explicit.set(key: key, value: value)
+        }
+
+        SetSecondInferred { key, value } uses (mut second_inferred) {
+            second_inferred.set(key: key, value: value)
+        }
+
+        GetExplicit { key } -> u256 uses (explicit) {
+            explicit.get(key: key)
+        }
+
+        GetSecondInferred { key } -> u256 uses (second_inferred) {
+            second_inferred.get(key: key)
+        }
+    }
+}
+
+pub contract MixedFamilyRoots {
+    mut explicit: StorageMap<u256, u256, 1>,
+    mut inferred: [StorageMap<u256, u256>; 2],
+
+    recv MixedFamilyRootsMsg {
+        SetExplicit { key, value } uses (mut explicit) {
+            explicit.set(key: key, value: value)
+        }
+
+        SetArray { lane, key, value } uses (mut inferred) {
+            inferred[lane].set(key: key, value: value)
+        }
+
+        GetExplicit { key } -> u256 uses (explicit) {
+            explicit.get(key: key)
+        }
+
+        GetArray { lane, key } -> u256 uses (inferred) {
+            inferred[lane].get(key: key)
+        }
+    }
+}
+
+#[test]
+fn explicit_and_inferred_storage_maps_do_not_alias() uses (evm: mut Evm) {
+    let c = evm.create2<MixedRoots>(value: 0, args: (), salt: 1)
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: MixedRootsMsg::SetExplicit { key: 7, value: 11 },
+    )
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: MixedRootsMsg::SetSecondInferred { key: 7, value: 22 },
+    )
+    let explicit: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: MixedRootsMsg::GetExplicit { key: 7 },
+    )
+    let inferred: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: MixedRootsMsg::GetSecondInferred { key: 7 },
+    )
+    assert!(explicit == 11)
+    assert!(inferred == 22)
+}
+
+#[test]
+fn inferred_root_families_skip_explicit_reservations_as_one_block() uses (evm: mut Evm) {
+    let c = evm.create2<MixedFamilyRoots>(value: 0, args: (), salt: 2)
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: MixedFamilyRootsMsg::SetExplicit { key: 7, value: 11 },
+    )
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: MixedFamilyRootsMsg::SetArray { lane: 0, key: 7, value: 22 },
+    )
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: MixedFamilyRootsMsg::SetArray { lane: 1, key: 7, value: 33 },
+    )
+    let explicit: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: MixedFamilyRootsMsg::GetExplicit { key: 7 },
+    )
+    let first: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: MixedFamilyRootsMsg::GetArray { lane: 0, key: 7 },
+    )
+    let second: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: MixedFamilyRootsMsg::GetArray { lane: 1, key: 7 },
+    )
+    assert!(explicit == 11)
+    assert!(first == 22)
+    assert!(second == 33)
+}

@@ -53,7 +53,6 @@ pub(crate) fn code_region_symbol<'db>(
                 .expect("manual contract root region should resolve manual contract metadata");
             manual_contract_section_symbol(&metadata.contract_name, metadata.section)
         }
-        RuntimeCodeRegionKey::FunctionRoot { symbol, .. } => symbol.clone(),
     }
 }
 
@@ -71,9 +70,6 @@ pub(crate) fn code_region_section_name<'db>(
                 ManualContractSection::Runtime => RuntimeSectionName::Runtime,
             })
         }
-        RuntimeCodeRegionKey::FunctionRoot { symbol, .. } => {
-            Some(RuntimeSectionName::CodeRegion(symbol.clone()))
-        }
     }
 }
 
@@ -85,7 +81,6 @@ pub(crate) fn code_region_runtime_entry<'db>(
         RuntimeCodeRegionKey::ManualContractRoot { func } => {
             Some(manual_contract_root_metadata(db, func)?.entry)
         }
-        RuntimeCodeRegionKey::FunctionRoot { callee, .. } => Some(callee),
         RuntimeCodeRegionKey::ContractInit { .. }
         | RuntimeCodeRegionKey::ContractRuntime { .. } => None,
     }

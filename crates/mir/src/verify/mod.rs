@@ -3,10 +3,16 @@ mod layout;
 mod package;
 mod place;
 mod runtime;
+mod storage_layout;
+
+use hir::{analysis::ty::ty_def::TyId, hir_def::Contract, semantic::ContractFieldId};
 
 use crate::{
     instance::RuntimeInstance,
-    runtime::{ConstRegionId, LayoutId, RBlockId, RLocalId, RuntimeClass},
+    runtime::{
+        AddressSpaceKind, ConstRegionId, ContractFieldSlot, LayoutId, RBlockId, RLocalId,
+        RuntimeClass,
+    },
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,6 +30,7 @@ pub enum VerifyError<'db> {
     MissingEnumVariantProof(RLocalId),
     InvalidReturnClass,
     InvalidExprClass(RLocalId),
+    InvalidIndexClass(crate::runtime::RValueId),
     InvalidStoreClass,
     InvalidCopyClass,
     InvalidTerminalCall(RuntimeInstance<'db>),
@@ -37,6 +44,51 @@ pub enum VerifyError<'db> {
         crate::runtime::RuntimeSectionName,
     ),
     DuplicateRuntimeSymbol(String),
+    ContractFieldArgumentCountMismatch {
+        contract: Contract<'db>,
+        expected: usize,
+        actual: usize,
+    },
+    ContractFieldIdentityMismatch {
+        expected: Option<ContractFieldId<'db>>,
+        actual: Option<ContractFieldId<'db>>,
+    },
+    ContractFieldOwnerMismatch {
+        contract: Contract<'db>,
+        field: ContractFieldId<'db>,
+    },
+    UnknownContractField(ContractFieldId<'db>),
+    InvalidContractFieldLayout(ContractFieldId<'db>),
+    ContractFieldTypeMismatch {
+        field: ContractFieldId<'db>,
+        expected: TyId<'db>,
+        actual: TyId<'db>,
+    },
+    ContractFieldInitModeMismatch {
+        field: ContractFieldId<'db>,
+        expected: bool,
+        actual: bool,
+    },
+    ContractFieldAddressSpaceMismatch {
+        field: ContractFieldId<'db>,
+        expected: AddressSpaceKind,
+        actual: Option<AddressSpaceKind>,
+    },
+    ContractFieldSlotMismatch {
+        field: ContractFieldId<'db>,
+        expected: ContractFieldSlot,
+        actual: ContractFieldSlot,
+    },
+    InvalidContractFieldClass {
+        field: ContractFieldId<'db>,
+        class: RuntimeClass<'db>,
+    },
+    ContractFieldKindMismatch(ContractFieldId<'db>),
+    ContractFieldSpanMismatch {
+        field: ContractFieldId<'db>,
+        hir_span: usize,
+        mir_span: u64,
+    },
 }
 
 impl<'db> VerifyError<'db> {
@@ -45,7 +97,8 @@ impl<'db> VerifyError<'db> {
             VerifyError::MissingRuntimeLocal(local)
             | VerifyError::SlotCarrierMismatch(local)
             | VerifyError::MissingEnumVariantProof(local)
-            | VerifyError::InvalidExprClass(local) => Some(*local),
+            | VerifyError::InvalidExprClass(local)
+            | VerifyError::InvalidIndexClass(local) => Some(*local),
             VerifyError::MissingRuntimeBlock(_)
             | VerifyError::ErasedRuntimeValue(_)
             | VerifyError::InvalidLayoutRefView(_)
@@ -64,7 +117,19 @@ impl<'db> VerifyError<'db> {
             | VerifyError::InvalidPackageFunction(_)
             | VerifyError::InvalidPackageObject(_)
             | VerifyError::InvalidPackageSection(_, _)
-            | VerifyError::DuplicateRuntimeSymbol(_) => None,
+            | VerifyError::DuplicateRuntimeSymbol(_)
+            | VerifyError::ContractFieldArgumentCountMismatch { .. }
+            | VerifyError::ContractFieldIdentityMismatch { .. }
+            | VerifyError::ContractFieldOwnerMismatch { .. }
+            | VerifyError::UnknownContractField(_)
+            | VerifyError::InvalidContractFieldLayout(_)
+            | VerifyError::ContractFieldTypeMismatch { .. }
+            | VerifyError::ContractFieldInitModeMismatch { .. }
+            | VerifyError::ContractFieldAddressSpaceMismatch { .. }
+            | VerifyError::ContractFieldSlotMismatch { .. }
+            | VerifyError::InvalidContractFieldClass { .. }
+            | VerifyError::ContractFieldKindMismatch(_)
+            | VerifyError::ContractFieldSpanMismatch { .. } => None,
         }
     }
 }

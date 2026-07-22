@@ -8,10 +8,20 @@ use crate::analysis::semantic::{
 pub enum SemanticVerifyError {
     MissingSemanticBlock(SBlockId),
     MissingSemanticLocal(SLocalId),
+    DuplicateSemanticEntryLocal(SLocalId),
     DuplicateSemanticVariantCase(VariantIndex),
 }
 
 pub fn verify_semantic_body<'db>(body: &SemanticBody<'db>) -> Result<(), SemanticVerifyError> {
+    let mut entry_locals = FxHashSet::default();
+    for local in &body.entry_locals {
+        if body.local(*local).is_none() {
+            return Err(SemanticVerifyError::MissingSemanticLocal(*local));
+        }
+        if !entry_locals.insert(*local) {
+            return Err(SemanticVerifyError::DuplicateSemanticEntryLocal(*local));
+        }
+    }
     for block in &body.blocks {
         for stmt in &block.stmts {
             match &stmt.kind {

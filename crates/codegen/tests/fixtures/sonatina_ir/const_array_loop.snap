@@ -33,8 +33,8 @@ func private %sum_loop(v0.i256) -> i256 {
         jump block2;
 
     block2:
-        v28.i256 = phi (0.i256 block1) (v19 block11);
-        v2.i256 = phi (0.i256 block1) (v24 block11);
+        v29.i256 = phi (0.i256 block1) (v20 block11);
+        v2.i256 = phi (0.i256 block1) (v25 block11);
         v4.i1 = lt v2 v0;
         br v4 block3 block4;
 
@@ -43,7 +43,7 @@ func private %sum_loop(v0.i256) -> i256 {
         br v7 block5 block6;
 
     block4:
-        return v28;
+        return v29;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -61,10 +61,10 @@ func private %sum_loop(v0.i256) -> i256 {
         evm_revert 0.i256 0.i256;
 
     block8:
-        v16.constref<i256> = const.index v13 v12;
-        v17.i256 = const.load v16;
-        (v19.i256, v20.i1) = uaddo v28 v17;
-        br v20 block9 block10;
+        v17.constref<i256> = const.index v13 v12;
+        v18.i256 = const.load v17;
+        (v20.i256, v21.i1) = uaddo v29 v18;
+        br v21 block9 block10;
 
     block9:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -72,8 +72,8 @@ func private %sum_loop(v0.i256) -> i256 {
         evm_revert 0.i256 36.i256;
 
     block10:
-        (v24.i256, v25.i1) = uaddo v2 1.i256;
-        br v25 block9 block11;
+        (v25.i256, v26.i1) = uaddo v2 1.i256;
+        br v26 block9 block11;
 
     block11:
         jump block2;

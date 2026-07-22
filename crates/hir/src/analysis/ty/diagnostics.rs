@@ -13,7 +13,7 @@ use crate::{analysis::ty::ty_check::EffectParamOwner, span::DynLazySpan};
 use crate::{
     core::hir_def::{
         CallableDef, CompBinOp, Enum, FieldIndex, FieldParent, Func, GenericParamOwner, IdentId,
-        ImplTrait,
+        ImplTrait, IntegerId,
     },
     hir_def::TypeAlias,
 };
@@ -215,6 +215,55 @@ pub enum TyLowerDiag<'db> {
         span: DynLazySpan<'db>,
         ty: TyId<'db>,
     },
+
+    /// A contract field contains a root-bearing array whose length did not
+    /// evaluate before layout. Symbolic families require a checked static
+    /// extent and cannot represent a runtime-dependent number of members.
+    ContractFieldUnknownLayoutArrayLength {
+        span: DynLazySpan<'db>,
+        ty: TyId<'db>,
+    },
+
+    /// A contract field explicitly supplies a slot-root expression that remains
+    /// symbolic after normal const evaluation. Explicit roots reserve their
+    /// exact slot, so layout cannot safely allocate around an unknown value.
+    ContractFieldConcreteLayoutRootUnresolved {
+        span: DynLazySpan<'db>,
+        ty: TyId<'db>,
+    },
+
+    ContractFieldProviderLayoutAmbiguous {
+        span: DynLazySpan<'db>,
+        ty: TyId<'db>,
+    },
+
+    ContractFieldProviderTargetUnresolved {
+        span: DynLazySpan<'db>,
+        ty: TyId<'db>,
+    },
+
+    ContractFieldProviderCycle {
+        span: DynLazySpan<'db>,
+        ty: TyId<'db>,
+    },
+
+    ContractFieldLayoutInvariant {
+        span: DynLazySpan<'db>,
+        ty: TyId<'db>,
+        issue: ContractFieldLayoutIssue,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum ContractFieldLayoutIssue {
+    ConflictingRootSpaces,
+    ExtentOverflow,
+    IncompleteProjection,
+    AmbiguousBindingSelector,
+    InconsistentRootType,
+    RootNeedsLanding,
+    RootNeedsIndex,
+    InternalGraph,
 }
 
 impl TyLowerDiag<'_> {
@@ -262,6 +311,12 @@ impl TyLowerDiag<'_> {
             Self::ContractFieldNonSlotConstHole { .. } => 40,
             Self::ContractFieldHandleSpaceUnresolved { .. } => 41,
             Self::ContractFieldExplicitConstHole { .. } => 42,
+            Self::ContractFieldUnknownLayoutArrayLength { .. } => 43,
+            Self::ContractFieldProviderLayoutAmbiguous { .. } => 44,
+            Self::ContractFieldProviderTargetUnresolved { .. } => 45,
+            Self::ContractFieldLayoutInvariant { .. } => 46,
+            Self::ContractFieldConcreteLayoutRootUnresolved { .. } => 47,
+            Self::ContractFieldProviderCycle { .. } => 48,
         }
     }
 }
@@ -538,7 +593,7 @@ pub enum BodyDiag<'db> {
 
     ArrayIndexOutOfBounds {
         primary: DynLazySpan<'db>,
-        index: usize,
+        index: IntegerId<'db>,
         len: usize,
     },
 
@@ -554,9 +609,10 @@ pub enum BodyDiag<'db> {
         field: IdentId<'db>,
         init: Option<DynLazySpan<'db>>,
     },
-    UnsupportedMemoryContractField {
+    UnsupportedContractFieldAddressSpace {
         primary: DynLazySpan<'db>,
         field: IdentId<'db>,
+        space: ProviderAddressSpace,
     },
     ImmutableContractFieldMutBinding {
         primary: DynLazySpan<'db>,
@@ -882,7 +938,7 @@ impl<'db> BodyDiag<'db> {
             Self::NonAssignableExpr(..) => 17,
             Self::ImmutableAssignment { .. } => 18,
             Self::ImmutableContractFieldNotInitialized { .. } => 86,
-            Self::UnsupportedMemoryContractField { .. } => 84,
+            Self::UnsupportedContractFieldAddressSpace { .. } => 84,
             Self::ImmutableContractFieldMutBinding { .. } => 85,
             Self::LoopControlOutsideOfLoop { .. } => 19,
             Self::TraitNotImplemented { .. } => 20,

@@ -31,6 +31,7 @@ use crate::{
             ty_def::{PrimTy, TyBase, TyData, TyId},
         },
     },
+    core::semantic::FieldStorageLayout,
     hir_def::{
         Contract, FieldParent, IdentId, ItemKind, Mod, PathId, Struct, scope_graph::ScopeId,
     },
@@ -788,51 +789,68 @@ pub fn check_contract_recv_arm_body<'db>(
 }
 
 #[salsa::tracked(return_ref)]
-pub fn check_contract_immutable_fields_initialized<'db>(
+pub fn check_contract_field_address_spaces<'db>(
     db: &'db dyn HirAnalysisDb,
     contract: Contract<'db>,
 ) -> Vec<FuncBodyDiag<'db>> {
-    let valid_fields = contract
-        .field_layout(db)
-        .values()
-        .filter(|field| field.slot_count != 0)
-        .filter(|field| !field.declared_ty.has_invalid(db) && !field.target_ty.has_invalid(db))
+    valid_contract_fields(db, contract)
         .filter(|field| {
+            matches!(
+                field.address_space,
+                ProviderAddressSpace::Memory | ProviderAddressSpace::Calldata
+            )
+        })
+        .map(|field| {
+            BodyDiag::UnsupportedContractFieldAddressSpace {
+                primary: FieldView {
+                    parent: FieldParent::Contract(contract),
+                    idx: field.field.index as usize,
+                }
+                .ty_span(),
+                field: field.name,
+                space: field.address_space,
+            }
+            .into()
+        })
+        .collect()
+}
+
+fn valid_contract_fields<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+) -> impl Iterator<Item = &'db FieldStorageLayout<'db>> + 'db {
+    contract
+        .storage_layout(db)
+        .values()
+        .filter(|field| {
+            !field.declared.template.has_invalid(db) && !field.target.template.has_invalid(db)
+        })
+        .filter(move |field| {
             FieldView {
                 parent: FieldParent::Contract(contract),
-                idx: field.index as usize,
+                idx: field.field.index as usize,
             }
             .ty_diags(db)
             .is_empty()
         })
+}
+
+#[salsa::tracked(return_ref)]
+pub fn check_contract_immutable_fields_initialized<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    let required_fields = valid_contract_fields(db, contract)
+        .filter(|field| field.slot_count != 0 && field.address_space == ProviderAddressSpace::Code)
         .cloned()
         .collect::<Vec<_>>();
-    let mut diags = valid_fields
-        .iter()
-        .filter(|field| field.address_space == ProviderAddressSpace::Memory)
-        .map(|field| {
-            BodyDiag::UnsupportedMemoryContractField {
-                primary: FieldView {
-                    parent: FieldParent::Contract(contract),
-                    idx: field.index as usize,
-                }
-                .ty_span(),
-                field: field.name,
-            }
-            .into()
-        })
-        .collect::<Vec<_>>();
-    let required_fields = valid_fields
-        .into_iter()
-        .filter(|field| field.address_space == ProviderAddressSpace::Code)
-        .collect::<Vec<_>>();
     if required_fields.is_empty() {
-        return diags;
+        return Vec::new();
     }
 
     let required = required_fields
         .iter()
-        .map(|field| field.index)
+        .map(|field| field.field.index)
         .collect::<FxHashSet<_>>();
     let init = contract.init(db);
     let missing = if init.is_some() {
@@ -860,17 +878,20 @@ pub fn check_contract_immutable_fields_initialized<'db>(
     };
 
     let init_span = init.map(|_| contract.span().init_block().body().into());
-    diags.extend(required_fields.into_iter().filter_map(|field| {
-        missing.contains(&field.index).then(|| {
-            BodyDiag::ImmutableContractFieldNotInitialized {
-                primary: FieldParent::Contract(contract).field_name_span(field.index as usize),
-                field: field.name,
-                init: init_span.clone(),
-            }
-            .into()
+    required_fields
+        .into_iter()
+        .filter_map(|field| {
+            missing.contains(&field.field.index).then(|| {
+                BodyDiag::ImmutableContractFieldNotInitialized {
+                    primary: FieldParent::Contract(contract)
+                        .field_name_span(field.field.index as usize),
+                    field: field.name,
+                    init: init_span.clone(),
+                }
+                .into()
+            })
         })
-    }));
-    diags
+        .collect()
 }
 
 #[salsa::tracked(return_ref)]

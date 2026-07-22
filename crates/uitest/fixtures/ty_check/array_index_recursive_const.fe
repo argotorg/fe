@@ -1,0 +1,6 @@
+const INDEX: usize = INDEX
+
+fn main() {
+    let values: [u8; 1] = [0]
+    values[INDEX]
+}

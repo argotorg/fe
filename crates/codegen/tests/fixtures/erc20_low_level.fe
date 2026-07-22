@@ -20,14 +20,16 @@ fn abi_encode_string(word: u256, len: u256) -> ! uses (ops: mut RawOps) {
 
 // ERC20 storage ---------------------------------------------------------
 
-struct Erc20 {
-    balances: StorageMap<Address, u256>,
-    allowances: StorageMap<(Address, Address), u256>,
+struct Erc20<const BALANCES_ROOT: u256, const ALLOWANCES_ROOT: u256> {
+    balances: StorageMap<Address, u256, BALANCES_ROOT>,
+    allowances: StorageMap<(Address, Address), u256, ALLOWANCES_ROOT>,
     supply: u256,
     owner: Address,
 }
 
-impl Erc20 {
+impl<const BALANCES_ROOT: u256, const ALLOWANCES_ROOT: u256>
+    Erc20<BALANCES_ROOT, ALLOWANCES_ROOT>
+{
 
     fn balance_of(self, addr: Address) -> u256 {
         self.balances.get(key: addr)
@@ -83,34 +85,34 @@ impl Erc20 {
     }
 }
 
-fn do_init() uses (erc20: mut Erc20, ctx: Ctx, ops: RawOps) {
+fn do_init() uses (erc20: mut Erc20<BALANCES_SALT, ALLOWANCES_SALT>, ctx: Ctx, ops: RawOps) {
     erc20.set_owner_once(owner: ctx.caller())
 }
 
-fn balance_of(addr: Address) -> u256 uses (erc20: Erc20) {
+fn balance_of(addr: Address) -> u256 uses (erc20: Erc20<BALANCES_SALT, ALLOWANCES_SALT>) {
     erc20.balances.get(key: addr)
 }
 
-fn allowance(owner: Address, spender: Address) -> u256 uses (erc20: Erc20) {
+fn allowance(owner: Address, spender: Address) -> u256 uses (erc20: Erc20<BALANCES_SALT, ALLOWANCES_SALT>) {
     erc20.allowances.get(key: (owner, spender))
 }
 
-fn transfer(to: Address, amount: u256) -> u256 uses (erc20: mut Erc20, ctx: Ctx, ops: RawOps) {
+fn transfer(to: Address, amount: u256) -> u256 uses (erc20: mut Erc20<BALANCES_SALT, ALLOWANCES_SALT>, ctx: Ctx, ops: RawOps) {
     erc20.transfer(from: ctx.caller(), to: to, amount: amount)
     1
 }
 
-fn approve(spender: Address, amount: u256) -> u256 uses (erc20: mut Erc20, ctx: Ctx) {
+fn approve(spender: Address, amount: u256) -> u256 uses (erc20: mut Erc20<BALANCES_SALT, ALLOWANCES_SALT>, ctx: Ctx) {
     erc20.approve(owner: ctx.caller(), spender: spender, value: amount)
     1
 }
 
-fn transfer_from(from: Address, to: Address, amount: u256) -> u256 uses (erc20: mut Erc20, ctx: Ctx, ops: RawOps) {
+fn transfer_from(from: Address, to: Address, amount: u256) -> u256 uses (erc20: mut Erc20<BALANCES_SALT, ALLOWANCES_SALT>, ctx: Ctx, ops: RawOps) {
     erc20.transfer_from(owner: from, to: to, amount: amount)
     1
 }
 
-fn mint(to: Address, amount: u256) -> u256 uses (erc20: mut Erc20, ctx: Ctx, ops: RawOps) {
+fn mint(to: Address, amount: u256) -> u256 uses (erc20: mut Erc20<BALANCES_SALT, ALLOWANCES_SALT>, ctx: Ctx, ops: RawOps) {
     erc20.mint(to: to, amount: amount)
     1
 }

@@ -17,7 +17,7 @@ pub(super) fn project_field_class<'db>(
 ) -> RuntimeClass<'db> {
     let layout = class
         .aggregate_layout()
-        .unwrap_or_else(|| panic!("invalid field projection class"));
+        .unwrap_or_else(|| panic!("invalid field projection class {class:?}"));
     match layout.data(db) {
         crate::runtime::Layout::Struct(layout) => layout
             .fields
@@ -104,7 +104,7 @@ pub(super) fn resolved_effect_arg_address_space<'db>(
                 | hir::analysis::semantic::borrowck::NBorrowRoot::LocalSlot { local } => {
                     local_provider_address_space(db, body, *local)
                 }
-                hir::analysis::semantic::borrowck::NBorrowRoot::Provider { binding } => {
+                hir::analysis::semantic::borrowck::NBorrowRoot::Provider { binding, .. } => {
                     binding.semantics.address_space
                 }
             },

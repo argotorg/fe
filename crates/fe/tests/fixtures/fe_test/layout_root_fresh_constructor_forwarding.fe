@@ -1,0 +1,126 @@
+use std::evm::Evm
+
+struct Rooted<const ROOT: u256 = _> {}
+
+impl<const ROOT: u256> Copy for Rooted<ROOT> {}
+
+impl<const ROOT: u256> Rooted<ROOT> {
+    fn root(self) -> u256 {
+        ROOT
+    }
+}
+
+struct Two<const ROOT: u256 = _> {
+    left: Rooted<ROOT>,
+    right: Rooted<ROOT>,
+}
+
+impl<const ROOT: u256> Copy for Two<ROOT> {}
+
+impl<const ROOT: u256> Two<ROOT> {
+    fn root(self) -> u256 {
+        self.left.root()
+    }
+}
+
+struct Independent<const FIRST: u256 = _, const SECOND: u256 = _> {}
+
+impl<const FIRST: u256, const SECOND: u256> Copy for Independent<FIRST, SECOND> {}
+
+impl<const FIRST: u256, const SECOND: u256> Independent<FIRST, SECOND> {
+    fn first(self) -> u256 {
+        FIRST
+    }
+
+    fn second(self) -> u256 {
+        SECOND
+    }
+}
+
+fn fresh<const ROOT: u256>() -> Rooted<ROOT> {
+    Rooted {}
+}
+
+fn rebuild<const ROOT: u256>(rooted: Rooted<ROOT>) -> Rooted<ROOT> {
+    fresh()
+}
+
+fn choose<const ROOT: u256>(roots: [Rooted<ROOT>; 2], lane: usize) -> Rooted<ROOT> {
+    if lane == 0 { roots[0] } else { roots[1] }
+}
+
+fn shared_root<const ROOT: u256>(two: Two<ROOT>) -> u256 {
+    two.root()
+}
+
+fn independent_roots<const FIRST: u256, const SECOND: u256>(
+    roots: Independent<FIRST, SECOND>,
+) -> (u256, u256) {
+    (roots.first(), roots.second())
+}
+
+fn duplicate_second<const FIRST: u256, const SECOND: u256>(
+    roots: Independent<FIRST, SECOND>,
+) -> Independent<SECOND, SECOND> {
+    Independent {}
+}
+
+msg Msg {
+    #[selector = 1]
+    GetIndexed { lane: usize } -> u256,
+
+    #[selector = 2]
+    GetShared {} -> u256,
+
+    #[selector = 3]
+    GetIndependent {} -> (u256, u256),
+}
+
+pub contract C {
+    mut roots: [Rooted; 2],
+    mut shared: Two,
+    mut independent: Independent,
+
+    recv Msg {
+        GetIndexed { lane } -> u256 uses (roots) {
+            rebuild(rooted: choose(roots: roots, lane: lane)).root()
+        }
+
+        GetShared {} -> u256 uses (shared) {
+            shared_root(two: shared)
+        }
+
+        GetIndependent {} -> (u256, u256) uses (independent) {
+            independent_roots(roots: duplicate_second(roots: independent))
+        }
+    }
+}
+
+#[test]
+fn fresh_constructors_and_const_fanout_preserve_layout_roots() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 1)
+    let indexed: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::GetIndexed { lane: 1 },
+    )
+    assert!(indexed == 1)
+
+    let shared: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::GetShared {},
+    )
+    assert!(shared == 2)
+
+    let independent: (u256, u256) = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::GetIndependent {},
+    )
+    assert!(independent.0 == 4)
+    assert!(independent.1 == 4)
+}

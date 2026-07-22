@@ -47,7 +47,12 @@ fn wrap() {
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
     );
+    assert!(std::ptr::eq(semantic.body(&db), semantic.body(&db)));
     let body = canonicalize_semantic_consts(&db, semantic);
+    assert!(std::ptr::eq(
+        body,
+        canonicalize_semantic_consts(&db, semantic)
+    ));
 
     let found = body
         .blocks

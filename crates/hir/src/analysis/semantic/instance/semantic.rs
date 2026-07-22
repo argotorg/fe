@@ -6,21 +6,24 @@ use crate::{
         HirAnalysisDb,
         semantic::{
             CallSiteId, PlaceProvenance, SBlockId, SExpr, SStmtKind, STerminatorKind, SemanticBody,
-            SemanticCalleeRef, SemanticLocalRole, ValueProvenance, VariantIndex, effect_param_site,
+            SemanticCalleeRef, SemanticLocalRole, ValueProvenance, VariantIndex,
+            borrowck::normalize_semantic_body,
+            effect_param_site,
             lower::{BindingRoleMode, lower_to_smir, lower_to_smir_with_call_sites},
             verify_semantic_body,
         },
         ty::{
-            adt_def::{AdtDef, AdtRef},
+            CallableLayoutBundleInput, CallableLayoutBundleSignature, LayoutBundleInterface,
+            adt_def::{AdtDef, AdtRef, instantiate_adt_field_shape},
             corelib::{RuntimeBuiltinFuncKind, runtime_builtin_func_kind},
-            effect_handle_metadata,
             effects::place_effect_provider_param_index_map,
             fold::TyFoldable,
             instantiate_trait_self,
             normalize::normalize_ty,
             provider::{
-                ProviderAddressSpace, ProviderKind, ProviderTransport, RootProviderRegistration,
-                RootProviderSiteKind, provider_semantics, provider_semantics_for_specialized_call,
+                ProviderAddressSpace, ProviderKind, ProviderLayoutEvidence, ProviderTransport,
+                RootProviderRegistration, RootProviderSiteKind, provider_semantics,
+                provider_semantics_for_specialized_call,
             },
             trait_resolution::{
                 GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
@@ -29,13 +32,17 @@ use crate::{
                 BodyOwner, EffectParamSite, EffectProviderProvenance, EffectProviderSpecialization,
                 LocalBinding, ParamSite, ResolvedEffectArg, SemanticExprLowering, TypedBody,
             },
-            ty_def::{BorrowKind, CapabilityKind, TyId, instantiate_adt_field_ty},
+            ty_def::{BorrowKind, CapabilityKind, TyId},
+            ty_lower::{
+                layout_bundle_schema_for_semantic_value,
+                specialized_callable_layout_bundle_signature_with_normalizer,
+            },
         },
     },
     hir_def::{CallableDef, Expr, ExprId, Partial, scope_graph::ScopeId},
     semantic::{
-        EffectEnvView, EffectRequirement, EffectRequirementKey, ProviderBinding, ProviderSource,
-        ResolvedEffectBinding,
+        AssignedLayoutBindingEnv, EffectEnvView, EffectRequirement, EffectRequirementKey,
+        LayoutViewKind, ProviderBinding, ProviderSource, ResolvedEffectBinding,
     },
 };
 use common::indexmap::IndexMap;
@@ -65,6 +72,61 @@ impl<'db> SemanticInstanceKey<'db> {
 
     pub fn instantiate_typed_body(self, db: &'db dyn HirAnalysisDb) -> TypedBody<'db> {
         self.typed_body(db).clone()
+    }
+
+    pub fn layout_bundle_signature(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> CallableLayoutBundleSignature<'db> {
+        semantic_layout_bundle_signature(db, self).clone()
+    }
+}
+
+#[salsa::tracked(return_ref)]
+pub fn semantic_layout_bundle_signature<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: SemanticInstanceKey<'db>,
+) -> CallableLayoutBundleSignature<'db> {
+    let instance = SemanticInstance::new(db, key);
+    match key.owner(db) {
+        BodyOwner::Func(func) => {
+            let args = key.subst(db).generic_args(db);
+            specialized_callable_layout_bundle_signature_with_normalizer(db, func, args, |ty| {
+                instance.normalized_ty(db, ty)
+            })
+        }
+        owner => {
+            let Ok(normalized) = normalize_semantic_body(db, instance) else {
+                return CallableLayoutBundleSignature::default();
+            };
+            let Some(body) = owner.body(db) else {
+                return CallableLayoutBundleSignature::default();
+            };
+            let inputs = normalized
+                .entry_locals
+                .iter()
+                .filter_map(|local| {
+                    let local_data = normalized.local(*local)?;
+                    let origin = local_data.source?.callable_input_origin(db)?;
+                    let ty = local_data.ty;
+                    let schema = layout_bundle_schema_for_semantic_value(
+                        db,
+                        body,
+                        local.index() as u32,
+                        ty,
+                        ty,
+                    );
+                    (!schema.components.is_empty()).then(|| CallableLayoutBundleInput {
+                        origin,
+                        interface: LayoutBundleInterface::inferred(schema),
+                    })
+                })
+                .collect();
+            CallableLayoutBundleSignature {
+                inputs,
+                ..CallableLayoutBundleSignature::default()
+            }
+        }
     }
 }
 
@@ -588,7 +650,7 @@ impl<'db> SemanticInstance<'db> {
         final_call_site_data(db, self).diagnostic
     }
 
-    #[salsa::tracked]
+    #[salsa::tracked(return_ref)]
     pub(crate) fn provisional_body(self, db: &'db dyn HirAnalysisDb) -> SemanticBody<'db> {
         let key = self.key(db);
         let typed_body = key.typed_body(db);
@@ -823,7 +885,7 @@ impl<'db> SemanticInstance<'db> {
         true
     }
 
-    #[salsa::tracked]
+    #[salsa::tracked(return_ref)]
     pub fn body(self, db: &'db dyn HirAnalysisDb) -> SemanticBody<'db> {
         lower_semantic_body(db, self)
     }
@@ -892,7 +954,7 @@ fn normalize_adt_field_types<'db>(
 ) -> ThinVec<TyId<'db>> {
     (0..field_count)
         .map(|field_idx| {
-            let field_ty = instantiate_adt_field_ty(db, adt_def, variant_idx, field_idx, args);
+            let field_ty = instantiate_adt_field_shape(db, adt_def, variant_idx, field_idx, args);
             instance.normalized_ty(db, field_ty)
         })
         .collect()
@@ -1022,10 +1084,10 @@ pub(crate) fn provisional_provider_idx_for_requirement<'db>(
         | EffectParamSite::ContractInit { contract }
         | EffectParamSite::ContractRecvArm { contract, .. } => {
             let field_provider_idx = contract
-                .field_layout(db)
+                .storage_layout(db)
                 .values()
                 .enumerate()
-                .map(|(provider_idx, field)| (field.index, provider_idx as u32))
+                .map(|(provider_idx, field)| (field.field.index, provider_idx as u32))
                 .collect::<IndexMap<_, _>>();
             let fields = contract.fields(db);
             let requirement = EffectEnvView::new(site)
@@ -1072,6 +1134,7 @@ fn provisional_provider_binding_for_effect<'db>(
                         requirement_idx,
                     },
                     semantics: provider_semantics(db, func.scope(), assumptions, provider_ty),
+                    layout_env: None,
                 });
             }
             provisional_root_provider_binding(db, key, site, requirement_idx, provider_idx, is_mut)
@@ -1080,35 +1143,37 @@ fn provisional_provider_binding_for_effect<'db>(
         | EffectParamSite::ContractInit { contract }
         | EffectParamSite::ContractRecvArm { contract, .. } => {
             if let Some((_, field)) = contract
-                .field_layout(db)
+                .storage_layout(db)
                 .values()
                 .enumerate()
                 .find(|(idx, _)| *idx as u32 == provider_idx)
             {
-                let provider_ty = field.target_ty;
+                let provider_ty = field.target_effect_binding_ty(db).ok()?;
                 return Some(ProviderBinding {
                     provider_idx,
                     provider_ty,
                     is_mut: true,
-                    source: ProviderSource::ContractField {
-                        contract,
-                        field_idx: field.index,
-                    },
+                    source: ProviderSource::ContractField { field: field.field },
                     semantics: crate::analysis::ty::provider::ProviderSemantics {
                         provider_ty,
-                        kind: if field.target_ty.is_struct(db)
-                            || field.target_ty.is_array(db)
-                            || field.target_ty.is_tuple(db)
-                            || field.target_ty.as_enum(db).is_some()
+                        kind: if provider_ty.is_struct(db)
+                            || provider_ty.is_array(db)
+                            || provider_ty.is_tuple(db)
+                            || provider_ty.as_enum(db).is_some()
                         {
                             ProviderKind::Handle
                         } else {
                             ProviderKind::RawAddress
                         },
                         address_space: Some(field.address_space),
-                        target_ty: Some(field.target_ty),
+                        target_ty: Some(provider_ty),
                         transport: ProviderTransport::ByValue,
+                        evidence: ProviderLayoutEvidence::ContractField,
                     },
+                    layout_env: Some(AssignedLayoutBindingEnv {
+                        field: field.field,
+                        view: LayoutViewKind::Target,
+                    }),
                 });
             }
             provisional_root_provider_binding(db, key, site, requirement_idx, provider_idx, is_mut)
@@ -1150,6 +1215,7 @@ fn provisional_root_provider_binding<'db>(
         is_mut,
         source: ProviderSource::RootProvider { site, registration },
         semantics: provider_semantics(db, key.owner(db).scope(), assumptions, provider_ty),
+        layout_env: None,
     })
 }
 
@@ -1223,10 +1289,14 @@ fn requirement_provider_target_ty<'db>(
     requirement: &EffectRequirement<'db>,
 ) -> Option<TyId<'db>> {
     let target_ty = requirement.key.binding_ty(db)?;
-    Some(
-        effect_handle_metadata(db, scope, assumptions, target_ty)
-            .map_or(target_ty, |metadata| metadata.target_ty),
-    )
+    let semantics = provider_semantics(db, scope, assumptions, target_ty);
+    match semantics.evidence {
+        ProviderLayoutEvidence::ResolvedHandle(_) => semantics.target_ty,
+        ProviderLayoutEvidence::InvalidHandle(_) => None,
+        ProviderLayoutEvidence::Capability
+        | ProviderLayoutEvidence::NotHandle
+        | ProviderLayoutEvidence::ContractField => Some(target_ty),
+    }
 }
 
 fn specialized_root_provider_target_ty<'db>(
@@ -1337,10 +1407,15 @@ fn classify_binding_role<'db>(
         let value_ty = normalize_ty(db, value_ty, scope, assumptions);
         return SemanticLocalRole::PlaceCarrier { provider, value_ty };
     }
-    if let Some(metadata) = effect_handle_metadata(db, scope, assumptions, ty) {
+    let type_semantics = provider_semantics(db, scope, assumptions, ty);
+    if matches!(
+        type_semantics.evidence,
+        ProviderLayoutEvidence::ResolvedHandle(_)
+    ) && let Some(target_ty) = type_semantics.target_ty
+    {
         return SemanticLocalRole::DirectCarrier {
             provider,
-            target_ty: metadata.target_ty,
+            target_ty,
         };
     }
     if let Some(provider) = provider {
@@ -1352,6 +1427,7 @@ fn classify_binding_role<'db>(
                 provenance: PlaceProvenance::RootProvider(provider),
                 value_ty: ty,
             },
+            ProviderKind::InvalidHandle => SemanticLocalRole::Erased,
         };
     }
     SemanticLocalRole::DirectValue {
@@ -1599,6 +1675,7 @@ fn root_owner_effect_providers<'db>(
                     Some(ProviderAddressSpace::Memory),
                     ProviderTransport::ByValue,
                 ),
+                layout_env: None,
             };
             Some(EffectProviderSpecialization {
                 provider,
@@ -1628,7 +1705,10 @@ fn root_provider_satisfies_effect_requirement<'db>(
     match requirement.key {
         EffectRequirementKey::Type(provider_ty) => {
             provider_ty == root_provider.provider_ty
-                || effect_handle_metadata(db, func.scope(), assumptions, provider_ty).is_some()
+                || matches!(
+                    provider_semantics(db, func.scope(), assumptions, provider_ty).evidence,
+                    ProviderLayoutEvidence::ResolvedHandle(_)
+                )
         }
         EffectRequirementKey::Trait(trait_inst) => {
             let goal = instantiate_trait_self(db, trait_inst, root_provider.provider_ty);
@@ -1774,14 +1854,38 @@ fn instantiate_provider_binding<'db>(
         .target_ty
         .map(|ty| instantiate_normalized_ty(db, key, ty))
         .transpose()?;
-    let semantics = if target_ty.is_some() {
+    let semantics = if matches!(
+        provider.semantics.evidence,
+        ProviderLayoutEvidence::ContractField
+    ) {
         crate::analysis::ty::provider::ProviderSemantics {
             provider_ty,
+            kind: target_ty.map_or(provider.semantics.kind, |target| {
+                if target.is_struct(db)
+                    || target.is_array(db)
+                    || target.is_tuple(db)
+                    || target.as_enum(db).is_some()
+                {
+                    ProviderKind::Handle
+                } else {
+                    ProviderKind::RawAddress
+                }
+            }),
+            address_space: provider.semantics.address_space,
             target_ty,
-            ..provider.semantics
+            transport: provider.semantics.transport,
+            evidence: ProviderLayoutEvidence::ContractField,
         }
     } else {
-        provider_semantics(db, scope, assumptions, provider_ty)
+        provider_semantics_for_specialized_call(
+            db,
+            scope,
+            assumptions,
+            provider_ty,
+            target_ty,
+            provider.semantics.address_space,
+            provider.semantics.transport,
+        )
     };
     Ok(ProviderBinding {
         provider_ty,

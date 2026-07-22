@@ -124,7 +124,7 @@ impl<T> MemPtr<T> {
     {
         let mut ptr = self
         with (ptr) {
-            read(ptr)
+            super::effect_ref::read(ptr)
         }
     }
 
@@ -132,7 +132,7 @@ impl<T> MemPtr<T> {
     pub fn write(self, _ value: T) {
         let mut ptr = self
         with (ptr) {
-            write(ptr, value)
+            super::effect_ref::write(ptr, value)
         }
     }
 }
@@ -162,7 +162,7 @@ impl<T> StorPtr<T> {
     {
         let mut ptr = self
         with (ptr) {
-            read(ptr)
+            super::effect_ref::read(ptr)
         }
     }
 
@@ -170,7 +170,7 @@ impl<T> StorPtr<T> {
     pub fn write(self, _ value: T) {
         let mut ptr = self
         with (ptr) {
-            write(ptr, value)
+            super::effect_ref::write(ptr, value)
         }
     }
 }

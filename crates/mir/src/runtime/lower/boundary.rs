@@ -23,8 +23,7 @@ use crate::{
 use super::{
     classify::{BodyEnv, InferClassCache, carrier_value_class_ref},
     type_info::{
-        RuntimeTypeEnv, effect_handle_class_for_ty_in_context,
-        provider_class_for_target_in_context, provider_class_for_target_in_env,
+        RuntimeTypeEnv, provider_class_for_target_in_context, provider_class_for_target_in_env,
         runtime_interface_ty_in_context, runtime_repr_ty_in_context,
         runtime_transport_sensitive_aggregate, runtime_zero_sized_ty,
         stored_class_for_ty_in_context, top_level_class_for_ty_in_context,
@@ -888,13 +887,6 @@ fn runtime_boundary_spec<'db>(
         ));
     }
     let repr_ty = runtime_repr_ty_in_context(db, interface_ty, scope, assumptions);
-    let effect_scope = scope.or_else(|| repr_ty.as_scope(db));
-    if let Some(effect_scope) = effect_scope
-        && let Some(class) =
-            effect_handle_class_for_ty_in_context(db, repr_ty, Some(effect_scope), assumptions)
-    {
-        return Some(RuntimeBoundarySpec::ExactShape(class));
-    }
     if runtime_zero_sized_ty(db, repr_ty, scope, assumptions) {
         return None;
     }

@@ -12,7 +12,8 @@ pub use semantic::{
     RootSemanticInstanceError, SemanticEffectEnvInstantiationError, SemanticInstance,
     SemanticInstanceKey, get_or_build_semantic_instance, identity_semantic_instance_key,
     instantiated_effect_env, resolved_provider_binding_for_instance_effect,
-    root_semantic_instance_key, validate_instantiated_effect_env_key,
+    root_semantic_instance_key, semantic_layout_bundle_signature,
+    validate_instantiated_effect_env_key,
 };
 pub(crate) use semantic::{
     provisional_provider_binding_for_instance_effect, provisional_provider_idx_for_requirement,

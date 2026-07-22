@@ -1,0 +1,46 @@
+use std::evm::{Evm, StorageMap}
+
+msg ExplicitArrayMsg {
+    #[selector = 1]
+    Set { lane: usize, key: u256, value: u256 },
+
+    #[selector = 2]
+    Get { lane: usize, key: u256 } -> u256,
+}
+
+pub contract ExplicitArray {
+    mut maps: [StorageMap<u256, u256, 1>; 3],
+
+    recv ExplicitArrayMsg {
+        Set { lane, key, value } uses (mut maps) {
+            maps[lane].set(key: key, value: value)
+        }
+
+        Get { lane, key } -> u256 uses (maps) {
+            maps[lane].get(key: key)
+        }
+    }
+}
+
+#[test(should_revert)]
+fn explicit_layout_root_array_rejects_oob_write() uses (evm: mut Evm) {
+    let c = evm.create2<ExplicitArray>(value: 0, args: (), salt: 1)
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: ExplicitArrayMsg::Set { lane: 3, key: 7, value: 11 },
+    )
+}
+
+#[test(should_revert)]
+fn explicit_layout_root_array_rejects_oob_read() uses (evm: mut Evm) {
+    let c = evm.create2<ExplicitArray>(value: 0, args: (), salt: 2)
+    let value: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: ExplicitArrayMsg::Get { lane: 3, key: 7 },
+    )
+    assert!(value == 0)
+}

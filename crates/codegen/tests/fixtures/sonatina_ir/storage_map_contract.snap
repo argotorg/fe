@@ -5,9 +5,8 @@ input_file: crates/codegen/tests/fixtures/storage_map_contract.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @layout_0 = {};
-type @layout_1 = {@layout_0};
-type @layout_2 = {@layout_0};
+type @layout_0 = {i256};
+type @layout_1 = {i256};
 
 func private %abi_encode(v0.i256) {
     block0:
@@ -61,79 +60,79 @@ func private %std__lib__evm__word__impl_trait_u256_1f9e__from_word_461b_1(v0.i25
         return v0;
 }
 
-func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__get__gcbe1_9b00(v0.i256) -> i256 {
+func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__get__gcbe1_9b00(v0.i256, v1.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get_unchecked__gcbe1_8bec v0;
-        return v2;
-}
-
-func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__get__gcbe1_9b00_0(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get_unchecked__gcbe1_8bec_0 v0;
-        return v2;
-}
-
-func private %get_allowance(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.i256 = call %get__g7fdf v0;
-        return v2;
-}
-
-func private %get_balance(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__gcbe1_9b00 v0;
-        return v2;
-}
-
-func inline(always) private %get__g7fdf(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.i256 = call %get_unchecked__g7fdf v0;
-        return v2;
-}
-
-func inline(always) private %get_unchecked__g7fdf(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.i256 = call %std__lib__evm__storage_map__storagemap_get_word_with_salt__ge513_a5dc v0 1.i256;
-        v4.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__from_word_461b v3;
+        v4.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get_unchecked__gcbe1_8bec v0 v1;
         return v4;
 }
 
-func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__get_unchecked__gcbe1_8bec(v0.i256) -> i256 {
+func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__get__gcbe1_9b00_0(v0.i256, v1.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v3.i256 = call %std__lib__evm__storage_map__storagemap_get_word_with_salt__ge513_a5dc_0 v0 0.i256;
-        v4.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__from_word_461b_0 v3;
+        v4.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get_unchecked__gcbe1_8bec_0 v0 v1;
         return v4;
 }
 
-func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__get_unchecked__gcbe1_8bec_0(v0.i256) -> i256 {
+func private %get_allowance(v0.i256, v1.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v3.i256 = call %std__lib__evm__storage_map__storagemap_get_word_with_salt__ge513_a5dc_1 v0 0.i256;
-        v4.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__from_word_461b_1 v3;
+        v4.i256 = call %get__g7fdf v0 v1;
         return v4;
+}
+
+func private %get_balance(v0.i256, v1.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__gcbe1_9b00 v0 v1;
+        return v4;
+}
+
+func inline(always) private %get__g7fdf(v0.i256, v1.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = call %get_unchecked__g7fdf v0 v1;
+        return v4;
+}
+
+func inline(always) private %get_unchecked__g7fdf(v0.i256, v1.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = call %std__lib__evm__storage_map__storagemap_get_word_with_salt__ge513_a5dc v0 1.i256;
+        v5.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__from_word_461b v4;
+        return v5;
+}
+
+func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__get_unchecked__gcbe1_8bec(v0.i256, v1.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = call %std__lib__evm__storage_map__storagemap_get_word_with_salt__ge513_a5dc_0 v0 0.i256;
+        v5.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__from_word_461b_0 v4;
+        return v5;
+}
+
+func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__get_unchecked__gcbe1_8bec_0(v0.i256, v1.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = call %std__lib__evm__storage_map__storagemap_get_word_with_salt__ge513_a5dc_1 v0 0.i256;
+        v5.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__from_word_461b_1 v4;
+        return v5;
 }
 
 func private %init() {
@@ -177,38 +176,44 @@ func private %mstore(v0.i256, v1.i256) {
         return;
 }
 
-func private %new__g219d() {
+func private %new__g219d(v0.i256) -> @layout_0 {
     block0:
         jump block1;
 
     block1:
-        call %new_unchecked__g7fdf;
-        return;
+        v2.@layout_0 = call %new_unchecked__g7fdf v0;
+        v4.i256 = extract_value v2 0.i256;
+        v6.@layout_0 = insert_value undef.@layout_0 0.i256 v4;
+        return v6;
 }
 
-func private %new__g10e6() {
+func private %new__g10e6(v0.i256) -> @layout_1 {
     block0:
         jump block1;
 
     block1:
-        call %new_unchecked__gcbe1;
-        return;
+        v2.@layout_1 = call %new_unchecked__gcbe1 v0;
+        v4.i256 = extract_value v2 0.i256;
+        v6.@layout_1 = insert_value undef.@layout_1 0.i256 v4;
+        return v6;
 }
 
-func private %new_unchecked__gcbe1() {
+func private %new_unchecked__gcbe1(v0.i256) -> @layout_1 {
     block0:
         jump block1;
 
     block1:
-        return;
+        v4.@layout_1 = insert_value undef.@layout_1 0.i256 v0;
+        return v4;
 }
 
-func private %new_unchecked__g7fdf() {
+func private %new_unchecked__g7fdf(v0.i256) -> @layout_0 {
     block0:
         jump block1;
 
     block1:
-        return;
+        v4.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
+        return v4;
 }
 
 func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_284c(v0.i256, v1.i256) {
@@ -242,42 +247,44 @@ func private %runtime() {
     block1:
         v1.i256 = call %calldataload 0.i256;
         v3.i256 = shr 224.i256 v1;
-        call %new__g10e6;
-        call %new__g219d;
-        v7.i1 = eq v3 2630350600.i256;
-        br v7 block2 block8;
+        v4.@layout_1 = call %new__g10e6 0.i256;
+        v5.i256 = extract_value v4 0.i256;
+        v7.@layout_0 = call %new__g219d 1.i256;
+        v8.i256 = extract_value v7 0.i256;
+        v10.i1 = eq v3 2630350600.i256;
+        br v10 block2 block8;
 
     block2:
-        v9.i256 = call %calldataload 4.i256;
-        v10.i256 = call %get_balance v9;
-        call %abi_encode v10;
+        v12.i256 = call %calldataload 4.i256;
+        v14.i256 = call %get_balance v12 v5;
+        call %abi_encode v14;
         unreachable;
 
     block3:
-        v11.i256 = call %calldataload 4.i256;
-        v13.i256 = call %calldataload 36.i256;
-        call %set_balance v11 v13;
+        v15.i256 = call %calldataload 4.i256;
+        v17.i256 = call %calldataload 36.i256;
+        call %set_balance v15 v17 v5;
         call %abi_encode 0.i256;
         unreachable;
 
     block4:
-        v15.i256 = call %calldataload 4.i256;
-        v16.i256 = call %calldataload 36.i256;
-        v18.i256 = call %calldataload 68.i256;
-        v19.i256 = call %transfer v15 v16 v18;
-        call %abi_encode v19;
+        v20.i256 = call %calldataload 4.i256;
+        v21.i256 = call %calldataload 36.i256;
+        v23.i256 = call %calldataload 68.i256;
+        v25.i256 = call %transfer v20 v21 v23 v5;
+        call %abi_encode v25;
         unreachable;
 
     block5:
-        v20.i256 = call %calldataload 4.i256;
-        v21.i256 = call %get_allowance v20;
-        call %abi_encode v21;
+        v26.i256 = call %calldataload 4.i256;
+        v28.i256 = call %get_allowance v26 v8;
+        call %abi_encode v28;
         unreachable;
 
     block6:
-        v22.i256 = call %calldataload 4.i256;
-        v23.i256 = call %calldataload 36.i256;
-        call %set_allowance v22 v23;
+        v29.i256 = call %calldataload 4.i256;
+        v30.i256 = call %calldataload 36.i256;
+        call %set_allowance v29 v30 v8;
         call %abi_encode 0.i256;
         unreachable;
 
@@ -286,35 +293,26 @@ func private %runtime() {
         unreachable;
 
     block8:
-        v27.i1 = eq v3 1246470123.i256;
-        br v27 block3 block9;
+        v35.i1 = eq v3 1246470123.i256;
+        br v35 block3 block9;
 
     block9:
-        v30.i1 = eq v3 2430412327.i256;
-        br v30 block4 block10;
+        v38.i1 = eq v3 2430412327.i256;
+        br v38 block4 block10;
 
     block10:
-        v33.i1 = eq v3 3378517838.i256;
-        br v33 block5 block11;
+        v41.i1 = eq v3 3378517838.i256;
+        br v41 block5 block11;
 
     block11:
-        v36.i1 = eq v3 197806145.i256;
-        br v36 block6 block12;
+        v44.i1 = eq v3 197806145.i256;
+        br v44 block6 block12;
 
     block12:
         jump block7;
 }
 
-func inline(always) private %set__gcbe1(v0.objref<@layout_1>, v1.i256, v2.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        call %set_unchecked__gcbe1 v0 v1 v2;
-        return;
-}
-
-func inline(always) private %set__g7fdf(v0.objref<@layout_2>, v1.i256, v2.i256) {
+func inline(always) private %set__g7fdf(v0.i256, v1.i256, v2.i256) {
     block0:
         jump block1;
 
@@ -323,41 +321,50 @@ func inline(always) private %set__g7fdf(v0.objref<@layout_2>, v1.i256, v2.i256) 
         return;
 }
 
-func private %set_allowance(v0.i256, v1.i256) {
+func inline(always) private %set__gcbe1(v0.i256, v1.i256, v2.i256) {
     block0:
         jump block1;
 
     block1:
-        call %set__g7fdf undef.objref<@layout_2> v0 v1;
+        call %set_unchecked__gcbe1 v0 v1 v2;
         return;
 }
 
-func private %set_balance(v0.i256, v1.i256) {
+func private %set_allowance(v0.i256, v1.i256, v2.i256) {
     block0:
         jump block1;
 
     block1:
-        call %set__gcbe1 undef.objref<@layout_1> v0 v1;
+        call %set__g7fdf v0 v1 v2;
         return;
 }
 
-func inline(always) private %set_unchecked__gcbe1(v0.objref<@layout_1>, v1.i256, v2.i256) {
+func private %set_balance(v0.i256, v1.i256, v2.i256) {
     block0:
         jump block1;
 
     block1:
-        v5.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__to_word_1ead_0 v2;
-        call %std__lib__evm__storage_map__storagemap_set_word_with_salt__ge513_d78d_0 v1 0.i256 v5;
+        call %set__gcbe1 v0 v1 v2;
         return;
 }
 
-func inline(always) private %set_unchecked__g7fdf(v0.objref<@layout_2>, v1.i256, v2.i256) {
+func inline(always) private %set_unchecked__gcbe1(v0.i256, v1.i256, v2.i256) {
     block0:
         jump block1;
 
     block1:
-        v5.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__to_word_1ead v2;
-        call %std__lib__evm__storage_map__storagemap_set_word_with_salt__ge513_d78d v1 1.i256 v5;
+        v5.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__to_word_1ead_0 v1;
+        call %std__lib__evm__storage_map__storagemap_set_word_with_salt__ge513_d78d_0 v0 0.i256 v5;
+        return;
+}
+
+func inline(always) private %set_unchecked__g7fdf(v0.i256, v1.i256, v2.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        v5.i256 = call %std__lib__evm__word__impl_trait_u256_1f9e__to_word_1ead v1;
+        call %std__lib__evm__storage_map__storagemap_set_word_with_salt__ge513_d78d v0 1.i256 v5;
         return;
 }
 
@@ -531,14 +538,14 @@ func private %std__lib__evm__word__impl_trait_u256_1f9e__to_word_1ead_0(v0.i256)
         return v0;
 }
 
-func private %transfer(v0.i256, v1.i256, v2.i256) -> i256 {
+func private %transfer(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v4.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__gcbe1_9b00_0 v0;
-        v6.i1 = lt v4 v2;
-        br v6 block2 block3;
+        v6.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__gcbe1_9b00_0 v0 v3;
+        v8.i1 = lt v6 v2;
+        br v8 block2 block3;
 
     block2:
         return 1.i256;
@@ -547,9 +554,9 @@ func private %transfer(v0.i256, v1.i256, v2.i256) -> i256 {
         jump block4;
 
     block4:
-        v9.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__gcbe1_9b00_0 v1;
-        (v13.i256, v14.i1) = usubo v4 v2;
-        br v14 block5 block6;
+        v12.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__gcbe1_9b00_0 v1 v3;
+        (v16.i256, v17.i1) = usubo v6 v2;
+        br v17 block5 block6;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -557,12 +564,12 @@ func private %transfer(v0.i256, v1.i256, v2.i256) -> i256 {
         evm_revert 0.i256 36.i256;
 
     block6:
-        call %set__gcbe1 undef.objref<@layout_1> v0 v13;
-        (v26.i256, v27.i1) = uaddo v9 v2;
-        br v27 block5 block7;
+        call %set__gcbe1 v0 v16 v3;
+        (v30.i256, v31.i1) = uaddo v12 v2;
+        br v31 block5 block7;
 
     block7:
-        call %set__gcbe1 undef.objref<@layout_1> v1 v26;
+        call %set__gcbe1 v1 v30 v3;
         return 0.i256;
 }
 

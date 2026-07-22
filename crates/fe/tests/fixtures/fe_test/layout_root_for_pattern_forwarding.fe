@@ -1,0 +1,55 @@
+use std::evm::{Evm, StorageMap}
+
+fn sum_maps(maps: [StorageMap<u256, u256>; 2], key: u256) -> u256 {
+    let mut total: u256 = 0
+    for map in maps {
+        total += map.get(key: key)
+    }
+    total
+}
+
+msg Msg {
+    #[selector = 1]
+    Set { lane: usize, key: u256, value: u256 },
+
+    #[selector = 2]
+    Sum { key: u256 } -> u256,
+}
+
+pub contract C {
+    mut maps: [StorageMap<u256, u256>; 2],
+
+    recv Msg {
+        Set { lane, key, value } uses (mut maps) {
+            maps[lane].set(key: key, value: value)
+        }
+
+        Sum { key } -> u256 uses (maps) {
+            sum_maps(maps: maps, key: key)
+        }
+    }
+}
+
+#[test]
+fn for_patterns_preserve_indexed_layout_roots() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 1)
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::Set { lane: 0, key: 7, value: 42 },
+    )
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::Set { lane: 1, key: 7, value: 99 },
+    )
+    let value: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::Sum { key: 7 },
+    )
+    assert!(value == 141)
+}

@@ -26,16 +26,19 @@ use crate::analysis::{
     HirAnalysisDb,
     name_resolution::QueryDirective,
     ty::{
-        adt_def::{AdtRef, adt_layout_hole_plan, adt_layout_hole_plan_with_explicit_args},
+        adt_def::AdtRef,
         binder::Binder,
         canonical::{Canonical, Canonicalized},
-        const_ty::{HoleAnchor, HoleId, HoleMinter, LayoutHoleArgSite, StructuralHoleOrigin},
+        const_ty::{ConstBodyLowering, HoleAnchor, HoleMinter, LayoutHoleArgSite},
         fold::TyFoldable as _,
-        layout_holes::layout_hole_with_fallback_ty,
         method_table::probe_method,
         normalize::normalize_ty,
         trait_def::{TraitInstId, impls_for_ty_with_satisfied_constraints},
-        trait_lower::{TraitArgError, TraitRefLowerError, lower_trait_ref, lower_trait_ref_impl},
+        trait_lower::{
+            TraitArgError, TraitRefLowerError, complete_candidate_impl_assoc_ty,
+            complete_impl_assoc_ty, lower_candidate_impl_assoc_ty, lower_checked_impl_assoc_ty,
+            lower_trait_ref, lower_trait_ref_deferred, lower_trait_ref_impl_with_minter,
+        },
         trait_resolution::{
             GoalSatisfiability, PredicateListId, TraitSolveCx, constraint::collect_constraints,
             is_goal_satisfiable,
@@ -43,7 +46,7 @@ use crate::analysis::{
         ty_def::{InvalidCause, Kind, TyBase, TyData, TyId},
         ty_lower::{
             ConstDefaultCompletion, TyAlias, collect_generic_params, lower_generic_arg_list,
-            lower_hir_ty_with_minter, lower_type_alias,
+            lower_hir_ty_with_minter, lower_type_alias, lower_type_alias_deferred,
         },
         unify::UnificationTable,
     },
@@ -474,6 +477,39 @@ pub fn resolve_ident_to_bucket<'db>(
     resolve_query(db, query)
 }
 
+/// Resolves only the definition named by a type-domain path, without lowering
+/// any generic arguments attached to its segments.
+///
+/// Raw trait-impl collection uses this to build candidate indexes before the
+/// trait environment exists. Full path resolution is intentionally unsuitable
+/// there because const generic expressions can type-check operators through
+/// that same environment.
+pub(crate) fn resolve_type_path_definition<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    scope: ScopeId<'db>,
+) -> Option<NameResKind<'db>> {
+    let mut parent_scope = None;
+    for segment_idx in 0..path.len(db) {
+        let segment = path.segment(db, segment_idx)?;
+        if !matches!(segment.kind(db), PathKind::Ident { .. }) {
+            return None;
+        }
+        let query_scope = parent_scope.unwrap_or(scope);
+        let directive = QueryDirective::for_scope(db, query_scope);
+        let query = make_query(db, segment, query_scope, directive);
+        let resolved = resolve_query(db, query)
+            .pick(NameDomain::TYPE)
+            .as_ref()
+            .ok()?;
+        if segment_idx + 1 == path.len(db) {
+            return Some(resolved.kind);
+        }
+        parent_scope = resolved.scope();
+    }
+    None
+}
+
 /// Panics if path.ident is `Absent`
 fn make_query<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -726,13 +762,17 @@ pub fn resolve_path<'db>(
     assumptions: PredicateListId<'db>,
     resolve_tail_as_value: bool,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
-    let minter = HoleMinter::new(HoleAnchor::TemplatePath { path, scope });
+    let minter = HoleMinter::new(HoleAnchor::TemplatePath {
+        path,
+        scope,
+        assumptions,
+    });
     resolve_path_with_minter(db, path, scope, assumptions, resolve_tail_as_value, &minter)
 }
 
 /// Like [`resolve_path`], but mints structural-hole identities through the
 /// caller's minter so holes created during resolution (generic-arg wildcards,
-/// `= _` default completions, derived layout args) are keyed to the enclosing
+/// `= _` default completions) are keyed to the enclosing
 /// lowering execution rather than to this path's content-interned identity.
 pub(crate) fn resolve_path_with_minter<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -767,8 +807,35 @@ pub fn resolve_path_with_observer<'db, F>(
 where
     F: FnMut(PathId<'db>, &PathRes<'db>),
 {
+    let minter = HoleMinter::new(HoleAnchor::TemplatePath {
+        path,
+        scope,
+        assumptions,
+    });
+    resolve_path_with_observer_and_minter(
+        db,
+        path,
+        scope,
+        assumptions,
+        resolve_tail_as_value,
+        observer,
+        &minter,
+    )
+}
+
+pub(crate) fn resolve_path_with_observer_and_minter<'db, F>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    resolve_tail_as_value: bool,
+    observer: &mut F,
+    minter: &HoleMinter<'db>,
+) -> PathResolutionResult<'db, PathRes<'db>>
+where
+    F: FnMut(PathId<'db>, &PathRes<'db>),
+{
     let directive = QueryDirective::for_scope(db, scope);
-    let minter = HoleMinter::new(HoleAnchor::TemplatePath { path, scope });
     resolve_path_impl(
         db,
         path,
@@ -778,7 +845,7 @@ where
         directive,
         true,
         observer,
-        &minter,
+        minter,
     )
 }
 
@@ -844,7 +911,12 @@ where
                 _ => {}
             }
         }
-        let trait_inst_result = lower_trait_ref(db, ty, trait_, scope, assumptions, None);
+        let trait_inst_result = match minter.const_bodies() {
+            ConstBodyLowering::Eager => lower_trait_ref(db, ty, trait_, scope, assumptions, None),
+            ConstBodyLowering::Deferred => {
+                lower_trait_ref_deferred(db, ty, trait_, scope, assumptions, None)
+            }
+        };
         let trait_inst = match trait_inst_result {
             Ok(inst) => inst,
             Err(err) => {
@@ -1004,13 +1076,84 @@ where
                 }
             }
 
+            // `Self::Assoc` inside an impl is always selected lexically from
+            // the owning trait. Signatures preserve that projection until
+            // comparison or instantiation. An associated-type definition is
+            // different: its unique anchor asks us to resolve the owning
+            // impl's sibling binding through the per-binding cycle query.
+            let impl_self_assoc = if path.parent(db).is_some_and(|path| path.is_self_ty(db)) {
+                let impl_trait = match scope {
+                    ScopeId::Item(ItemKind::ImplTrait(impl_trait)) => Some(impl_trait),
+                    _ => match scope.parent_item(db) {
+                        Some(ItemKind::ImplTrait(impl_trait)) => Some(impl_trait),
+                        _ => None,
+                    },
+                };
+                impl_trait.and_then(|impl_trait| {
+                    let trait_inst = match minter.const_bodies() {
+                        ConstBodyLowering::Eager => impl_trait.trait_inst_result(db).ok()?,
+                        ConstBodyLowering::Deferred => {
+                            impl_trait.candidate_trait_inst_result(db).ok()?
+                        }
+                    };
+                    if matches!(
+                        minter.anchor(),
+                        HoleAnchor::ImplAssocType {
+                            impl_trait: owner,
+                            ..
+                        } if owner == impl_trait
+                    ) {
+                        match minter.const_bodies() {
+                            ConstBodyLowering::Eager => {
+                                lower_checked_impl_assoc_ty(db, impl_trait, ident)
+                            }
+                            ConstBodyLowering::Deferred => {
+                                lower_candidate_impl_assoc_ty(db, impl_trait, ident)
+                            }
+                        }
+                        .or_else(|| trait_inst.assoc_ty(db, ident))
+                    } else {
+                        trait_inst.assoc_ty(db, ident)
+                    }
+                })
+            } else {
+                None
+            };
+
+            if let Some(assoc_ty) = impl_self_assoc {
+                let seg_args = lower_generic_arg_list(
+                    db,
+                    path.generic_args(db),
+                    scope,
+                    assumptions,
+                    LayoutHoleArgSite::Path(path),
+                    minter,
+                );
+                let assoc_ty = TyId::foldl(db, assoc_ty, &seg_args);
+                if let TyData::Invalid(InvalidCause::TooManyGenericArgs { expected, given }) =
+                    assoc_ty.data(db)
+                {
+                    return Err(PathResError::new(
+                        PathResErrorKind::ArgNumMismatch {
+                            expected: *expected,
+                            given: *given,
+                        },
+                        path,
+                    ));
+                }
+                let result = PathRes::Ty(assoc_ty);
+                observer(path, &result);
+                return Ok(result);
+            }
+
             // Find raw associated types, then dedup by normalized result here.
-            let assoc_tys = match find_associated_type(
+            let assoc_tys = match find_associated_type_in_mode(
                 db,
                 scope,
                 Canonicalized::new(db, ty),
                 ident,
                 assumptions,
+                minter.const_bodies(),
             ) {
                 Ok(assoc_tys) => assoc_tys,
                 Err(FindAssociatedTypeError::InfiniteBoundRecursion) => {
@@ -1523,6 +1666,17 @@ pub(crate) fn find_associated_type<'db>(
     name: IdentId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Result<SmallVec<(TraitInstId<'db>, TyId<'db>), 4>, FindAssociatedTypeError> {
+    find_associated_type_in_mode(db, scope, ty, name, assumptions, ConstBodyLowering::Eager)
+}
+
+fn find_associated_type_in_mode<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    ty: Canonicalized<'db, TyId<'db>>,
+    name: IdentId<'db>,
+    assumptions: PredicateListId<'db>,
+    const_bodies: ConstBodyLowering,
+) -> Result<SmallVec<(TraitInstId<'db>, TyId<'db>), 4>, FindAssociatedTypeError> {
     let canonical_ty = ty.canonical();
     let original_ty = ty.original();
 
@@ -1601,6 +1755,26 @@ pub(crate) fn find_associated_type<'db>(
                 for impl_ in
                     impls_for_ty_with_satisfied_constraints(db, ingot, canonical_ty, assumptions)
                 {
+                    let impl_ = match const_bodies {
+                        ConstBodyLowering::Eager => {
+                            let Some(impl_) =
+                                complete_impl_assoc_ty(db, *impl_.skip_binder(), name)
+                                    .map(Binder::bind)
+                            else {
+                                continue;
+                            };
+                            impl_
+                        }
+                        ConstBodyLowering::Deferred => {
+                            let Some(impl_) =
+                                complete_candidate_impl_assoc_ty(db, *impl_.skip_binder(), name)
+                                    .map(Binder::bind)
+                            else {
+                                continue;
+                            };
+                            impl_
+                        }
+                    };
                     if let Some(Some((inst, assoc_ty))) =
                         cx.with_impl_assoc_ty(impl_, lhs_ty, name, |cx, inst, assoc_ty| {
                             Some((
@@ -1689,7 +1863,11 @@ pub fn resolve_name_res<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
-    let minter = HoleMinter::new(HoleAnchor::TemplatePath { path, scope });
+    let minter = HoleMinter::new(HoleAnchor::TemplatePath {
+        path,
+        scope,
+        assumptions,
+    });
     resolve_name_res_with_minter(db, nameres, parent_ty, path, scope, assumptions, &minter)
 }
 
@@ -1771,7 +1949,10 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                 }
 
                 ItemKind::TypeAlias(type_alias) => {
-                    let alias = lower_type_alias(db, type_alias);
+                    let alias = match minter.const_bodies() {
+                        ConstBodyLowering::Eager => lower_type_alias(db, type_alias),
+                        ConstBodyLowering::Deferred => lower_type_alias_deferred(db, type_alias),
+                    };
                     let expected = alias.params(db).len();
                     if args.len() > expected {
                         return Err(PathResError::new(
@@ -1815,7 +1996,14 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                                     && let TypeKind::Path(p) = hir_ty.data(db)
                                     && let Some(arg_path) = p.to_opt()
                                 {
-                                    match resolve_path(db, arg_path, scope, assumptions, false) {
+                                    match resolve_path_with_minter(
+                                        db,
+                                        arg_path,
+                                        scope,
+                                        assumptions,
+                                        false,
+                                        minter,
+                                    ) {
                                         Ok(res)
                                             if !matches!(
                                                 res,
@@ -1842,7 +2030,14 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                                 }
                             }
                         }
-                        let lowered = lower_trait_ref_impl(db, path, scope, assumptions, t);
+                        let lowered = lower_trait_ref_impl_with_minter(
+                            db,
+                            path,
+                            scope,
+                            assumptions,
+                            t,
+                            minter,
+                        );
                         match lowered {
                             Ok(t) => PathRes::Trait(t),
                             Err(err) => {
@@ -1964,63 +2159,15 @@ fn ty_from_adtref<'db>(
 ) -> PathResolutionResult<'db, TyId<'db>> {
     let adt = adt_ref.as_adt(db);
     let ty = TyId::adt(db, adt);
-    let explicit_param_len = adt.param_set(db).params(db).len();
-    let explicit_provided_len = args.len().min(explicit_param_len);
-    let explicit_args = &args[..explicit_provided_len];
-    let layout_provided = &args[explicit_provided_len..];
-
-    // Fill trailing defaults (if any)
-    let mut completed_args = adt.param_set(db).complete_explicit_args(
+    let completed_args = adt.param_set(db).complete_explicit_args(
         db,
         None,
-        explicit_args,
+        args,
         assumptions,
         ConstDefaultCompletion::metadata(Some(path)),
         Some(minter),
     );
-    let layout_plan = if completed_args.len() == explicit_param_len {
-        adt_layout_hole_plan_with_explicit_args(db, adt, &completed_args)
-    } else {
-        adt_layout_hole_plan(db, adt)
-    };
-    completed_args.extend(layout_provided.iter().copied());
-
-    let provided_layout_len = layout_provided.len();
-    for (layout_idx, entry) in layout_plan
-        .entries()
-        .iter()
-        .copied()
-        .enumerate()
-        .skip(provided_layout_len)
-    {
-        completed_args.push(match entry.source {
-            // The plan occurrence was substituted in from an explicit arg:
-            // reuse that hole's identity so one logical hole stays one TyId
-            // across the arg position and the instantiated field types.
-            Some(placeholder) => placeholder,
-            None => layout_hole_with_fallback_ty(
-                db,
-                entry.hole_ty,
-                HoleId::structural(
-                    db,
-                    entry.hole_ty,
-                    // Keep the template hole's origin so the trailing arg
-                    // stays attributable to the generic param that declared
-                    // it; identity comes from the freshly minted anchor.
-                    entry
-                        .template_origin
-                        .unwrap_or(StructuralHoleOrigin::ExplicitWildcard {
-                            site: LayoutHoleArgSite::Path(path),
-                            arg_idx: explicit_param_len + layout_idx,
-                        }),
-                    minter.mint(),
-                ),
-            ),
-        });
-    }
-
-    let applied =
-        apply_ty_args_with_metadata_suffix(db, ty, &completed_args, explicit_provided_len);
+    let applied = TyId::foldl(db, ty, &completed_args);
     if let TyData::Invalid(InvalidCause::TooManyGenericArgs { expected, given }) = applied.data(db)
     {
         Err(PathResError::new(
@@ -2033,32 +2180,6 @@ fn ty_from_adtref<'db>(
     } else {
         Ok(applied)
     }
-}
-
-fn apply_ty_args_with_metadata_suffix<'db>(
-    db: &'db dyn HirAnalysisDb,
-    mut base: TyId<'db>,
-    args: &[TyId<'db>],
-    metadata_start: usize,
-) -> TyId<'db> {
-    for (idx, arg) in args.iter().enumerate() {
-        if base.applicable_ty(db).is_none() {
-            return TyId::invalid(
-                db,
-                InvalidCause::TooManyGenericArgs {
-                    expected: idx,
-                    given: args.len(),
-                },
-            );
-        }
-        base = if idx < metadata_start {
-            TyId::app(db, base, *arg)
-        } else {
-            TyId::app_metadata_only(db, base, *arg)
-        };
-    }
-
-    base
 }
 
 fn pick_type_domain_from_bucket<'db>(

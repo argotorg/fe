@@ -10,9 +10,11 @@ use crate::analysis::{
         is_scope_visible_from,
     },
     ty::{
+        ProviderAddressSpace,
         diagnostics::{
-            BodyDiag, CallConstraintDiagInfo, DefConflictError, FuncBodyDiag, ImplDiag,
-            MustUseSubject, TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag,
+            BodyDiag, CallConstraintDiagInfo, ContractFieldLayoutIssue, DefConflictError,
+            FuncBodyDiag, ImplDiag, MustUseSubject, TraitConstraintDiag, TraitLowerDiag,
+            TyDiagCollection, TyLowerDiag,
         },
         trait_def::TraitInstId,
         ty_check::{EffectParamOwner, RecordLike},
@@ -1965,6 +1967,208 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 }
             }
 
+            Self::ContractFieldUnknownLayoutArrayLength { span, ty } => {
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message:
+                        "this root-bearing array does not have a compile-time-known length"
+                            .to_string(),
+                    span: span.resolve(db),
+                }];
+                if let Some(name_span) = ty.name_span(db) {
+                    let type_name = ty.base_ty(db).pretty_print(db);
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{type_name}` is defined here"),
+                        span: name_span.resolve(db),
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "cannot allocate a layout-root array with an unknown length"
+                        .to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "indexed root families reserve one checked contiguous region, so every dimension must evaluate before contract layout".to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
+            Self::ContractFieldConcreteLayoutRootUnresolved { span, ty } => {
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "this explicit storage-slot root does not evaluate to a concrete integer"
+                        .to_string(),
+                    span: span.resolve(db),
+                }];
+                if let Some(name_span) = ty.name_span(db) {
+                    let type_name = ty.base_ty(db).pretty_print(db);
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{type_name}` is defined here"),
+                        span: name_span.resolve(db),
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "cannot reserve an unresolved explicit layout root".to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "explicit `u256` and `usize` layout roots must evaluate before contract allocation so inferred roots can avoid every reserved slot".to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
+            Self::ContractFieldProviderLayoutAmbiguous { span, ty } => {
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "more than one `EffectHandle` implementation matches this field"
+                        .to_string(),
+                    span: span.resolve(db),
+                }];
+                if let Some(name_span) = ty.name_span(db) {
+                    let type_name = ty.base_ty(db).pretty_print(db);
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{type_name}` is defined here"),
+                        span: name_span.resolve(db),
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "contract-field provider layout is ambiguous".to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "layout requires one concrete implementation so `Target` and `SPACE` come from the same selected impl instance".to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
+            Self::ContractFieldProviderTargetUnresolved { span, ty } => {
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "the selected provider's `Target` type is still unresolved"
+                        .to_string(),
+                    span: span.resolve(db),
+                }];
+                if let Some(name_span) = ty.name_span(db) {
+                    let type_name = ty.base_ty(db).pretty_print(db);
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{type_name}` is defined here"),
+                        span: name_span.resolve(db),
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "cannot determine the provider target layout".to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "the selected `EffectHandle` implementation must produce a concrete target shape before contract allocation".to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
+            Self::ContractFieldProviderCycle { span, ty } => {
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "this provider target cycle changes its layout arguments"
+                        .to_string(),
+                    span: span.resolve(db),
+                }];
+                if let Some(name_span) = ty.name_span(db) {
+                    let type_name = ty.base_ty(db).pretty_print(db);
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{type_name}` is defined here"),
+                        span: name_span.resolve(db),
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "provider target layout is not finitely recursive".to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "recursive `EffectHandle::Target` views must return to the same layout arguments or a finite permutation of them".to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
+            Self::ContractFieldLayoutInvariant { span, ty, issue } => {
+                let (message, label, note) = match issue {
+                    ContractFieldLayoutIssue::ConflictingRootSpaces => (
+                        "one layout root was routed to conflicting address spaces",
+                        "this field gives one semantic root incompatible storage spaces",
+                        "a scalar cell or indexed family has exactly one address space",
+                    ),
+                    ContractFieldLayoutIssue::ExtentOverflow => (
+                        "contract-field layout extent overflowed",
+                        "this field's inline span or indexed-family extent is too large",
+                        "all layout extents and row-major strides are computed with checked arithmetic",
+                    ),
+                    ContractFieldLayoutIssue::IncompleteProjection => (
+                        "contract-field layout is incomplete",
+                        "this field contains an ADT or array application that cannot be projected completely",
+                        "every layout-bearing application must have its full declared generic arity and every root-bearing array must have a known length",
+                    ),
+                    ContractFieldLayoutIssue::AmbiguousBindingSelector => (
+                        "layout-root selector is ambiguous",
+                        "one source root maps this selector to more than one allocation",
+                        "source-to-landing bindings never choose an arbitrary descendant",
+                    ),
+                    ContractFieldLayoutIssue::InconsistentRootType => (
+                        "layout-root const type is inconsistent",
+                        "one semantic root is used with incompatible const types",
+                        "all occurrences of one root must agree on its accepted slot-index type",
+                    ),
+                    ContractFieldLayoutIssue::RootNeedsLanding => (
+                        "layout root requires a concrete landing",
+                        "this field observes a source root with more than one structural landing",
+                        "select a concrete field or target place before requesting a scalar root value",
+                    ),
+                    ContractFieldLayoutIssue::RootNeedsIndex => (
+                        "layout root requires a concrete array index",
+                        "this field observes an indexed family without all required indices",
+                        "select every array dimension or use an operation that accepts a runtime affine root",
+                    ),
+                    ContractFieldLayoutIssue::InternalGraph => (
+                        "contract layout graph failed validation",
+                        "the compiler could not validate this field's root graph",
+                        "this is a compiler invariant failure; no provisional allocation was published",
+                    ),
+                };
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: label.to_string(),
+                    span: span.resolve(db),
+                }];
+                if let Some(name_span) = ty.name_span(db) {
+                    let type_name = ty.base_ty(db).pretty_print(db);
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{type_name}` is defined here"),
+                        span: name_span.resolve(db),
+                    });
+                }
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: message.to_string(),
+                    sub_diagnostics,
+                    notes: vec![note.to_string()],
+                    error_code,
+                }
+            }
+
             Self::ConstHoleInValuePosition { span, ty } => {
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
@@ -3130,7 +3334,8 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 sub_diagnostics: vec![SubDiagnostic {
                     style: LabelStyle::Primary,
                     message: format!(
-                        "index `{index}` is out of bounds for array of length `{len}`"
+                        "index `{}` is out of bounds for array of length `{len}`",
+                        index.data(db),
                     ),
                     span: primary.resolve(db),
                 }],
@@ -3456,21 +3661,29 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
-            Self::UnsupportedMemoryContractField { primary, field } => CompleteDiagnostic {
+            Self::UnsupportedContractFieldAddressSpace {
+                primary,
+                field,
+                space,
+            } => CompleteDiagnostic {
                 severity: Severity::Error,
-                message: "memory-backed contract fields are not supported".to_string(),
+                message: format!("{}-backed contract fields are not supported", space.pretty()),
                 sub_diagnostics: vec![SubDiagnostic {
                     style: LabelStyle::Primary,
                     message: format!(
-                        "`{}` has a memory-backed contract field type",
-                        field.data(db)
+                        "`{}` has a {}-backed contract field type",
+                        field.data(db),
+                        space.pretty(),
                     ),
                     span: primary.resolve(db),
                 }],
-                notes: vec![
-                    "memory handles cannot be persisted as contract fields; use a plain immutable field for code-backed data or a plain `mut` field for storage-backed state"
-                        .to_string(),
-                ],
+                notes: vec![match space {
+                    ProviderAddressSpace::Memory => "memory handles cannot be persisted as contract fields; use a plain immutable field for code-backed data or a plain `mut` field for storage-backed state".to_string(),
+                    ProviderAddressSpace::Calldata => "calldata belongs to one call and has no stable contract-field location; access receive arguments or calldata handles locally instead".to_string(),
+                    ProviderAddressSpace::Storage
+                    | ProviderAddressSpace::Transient
+                    | ProviderAddressSpace::Code => unreachable!("supported contract field address space"),
+                }],
                 error_code,
             },
 

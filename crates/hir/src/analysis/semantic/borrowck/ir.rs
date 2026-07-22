@@ -5,9 +5,9 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            FieldIndex, Mutability, SConst, SLocalId, SemOrigin, SemanticBody, SemanticCalleeRef,
-            SemanticCodeRegionRef, SemanticCodeRegionTarget, SemanticLocalKind,
-            SemanticProjectionPath, VariantIndex,
+            FieldIndex, LayoutBackingProjection, Mutability, SConst, SLocalId, SStmtId, SemOrigin,
+            SemanticBody, SemanticCalleeRef, SemanticCodeRegionRef, SemanticCodeRegionTarget,
+            SemanticLocalKind, SemanticProjectionPath, VariantIndex,
         },
         ty::{
             provider::ProviderAddressSpace,
@@ -30,6 +30,7 @@ pub type NSProjectionPath<'db> = SemanticProjectionPath<'db>;
 pub struct NormalizedSemanticBody<'db> {
     pub owner: crate::analysis::semantic::SemanticInstance<'db>,
     pub template_owner: BodyOwner<'db>,
+    pub entry_locals: Vec<SLocalId>,
     pub locals: Vec<NSLocal<'db>>,
     pub blocks: Vec<NSBlock<'db>>,
     pub borrow_roots: Vec<NBorrowRoot<'db>>,
@@ -46,6 +47,24 @@ impl<'db> NormalizedSemanticBody<'db> {
 
     pub fn root(&self, id: NBorrowRootId) -> Option<&NBorrowRoot<'db>> {
         self.borrow_roots.get(id.index())
+    }
+
+    /// Returns the semantic value type at the root of a normalized place.
+    ///
+    /// Provider identity describes where a value lives, but it does not
+    /// necessarily describe the value projected through the place. Keeping this
+    /// query on normalized IR prevents layout and runtime lowering from
+    /// independently reconstructing that type from provider metadata.
+    pub fn place_root_ty(&self, root: &NSPlaceRoot) -> Option<TyId<'db>> {
+        match root {
+            NSPlaceRoot::CarrierDerefLocal(local) => self.local(*local).map(NSLocal::layout_ty),
+            NSPlaceRoot::Root(root) => match self.root(*root)? {
+                NBorrowRoot::Param { local, .. } | NBorrowRoot::LocalSlot { local } => {
+                    self.local(*local).map(NSLocal::layout_ty)
+                }
+                NBorrowRoot::Provider { value_ty, .. } => Some(*value_ty),
+            },
+        }
     }
 }
 
@@ -138,14 +157,29 @@ pub struct NLocalFacts<'db> {
     pub interface: SemanticLocalKind,
     pub origin: NLocalOrigin<'db>,
     pub snapshot_source_place: Option<NSPlace<'db>>,
+    pub layout_backing_sources: Vec<NLayoutBackingSource<'db>>,
     pub root_demand: NLocalRootDemand,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct NLayoutBackingSource<'db> {
+    pub target: Vec<LayoutBackingProjection>,
+    pub source: NSPlace<'db>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NBorrowRoot<'db> {
-    Param { local: SLocalId, param_idx: u32 },
-    LocalSlot { local: SLocalId },
-    Provider { binding: ProviderBinding<'db> },
+    Param {
+        local: SLocalId,
+        param_idx: u32,
+    },
+    LocalSlot {
+        local: SLocalId,
+    },
+    Provider {
+        binding: ProviderBinding<'db>,
+        value_ty: TyId<'db>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -203,12 +237,42 @@ impl<'db> NormalizedBindingLowering<'db> {
 }
 
 impl<'db> NSLocal<'db> {
+    pub fn layout_ty(&self) -> TyId<'db> {
+        match (&self.facts.interface, &self.lowering) {
+            (
+                SemanticLocalKind::PlaceCarrier | SemanticLocalKind::DirectCarrier,
+                NormalizedBindingLowering::CarrierLocal { target_ty, .. },
+            ) => *target_ty,
+            (
+                SemanticLocalKind::PlaceBoundValue,
+                NormalizedBindingLowering::PlaceBoundValue { value_ty, .. },
+            ) => *value_ty,
+            (
+                SemanticLocalKind::Erased | SemanticLocalKind::DirectValue,
+                NormalizedBindingLowering::Erased
+                | NormalizedBindingLowering::ValueLocal { .. }
+                | NormalizedBindingLowering::PlaceBoundValue { .. }
+                | NormalizedBindingLowering::CarrierLocal { .. },
+            ) => self.ty,
+            (
+                SemanticLocalKind::PlaceCarrier
+                | SemanticLocalKind::PlaceBoundValue
+                | SemanticLocalKind::DirectCarrier,
+                _,
+            ) => panic!("normalized semantic local has inconsistent interface and lowering"),
+        }
+    }
+
     pub fn backing_place(&self) -> Option<&NSPlace<'db>> {
         self.lowering.place()
     }
 
     pub fn snapshot_source_place(&self) -> Option<&NSPlace<'db>> {
         self.facts.snapshot_source_place.as_ref()
+    }
+
+    pub fn layout_backing_sources(&self) -> &[NLayoutBackingSource<'db>] {
+        &self.facts.layout_backing_sources
     }
 }
 
@@ -447,6 +511,7 @@ impl<'db> NExpr<'db> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct NSStmt<'db> {
+    pub id: SStmtId,
     pub origin: SemOrigin<'db>,
     pub kind: NSStmtKind<'db>,
 }
@@ -496,10 +561,6 @@ pub enum SemanticNormalizeError<'db> {
         owner: crate::analysis::semantic::SemanticInstance<'db>,
         local: SLocalId,
         base: SLocalId,
-    },
-    IllegalCarrierPlace {
-        local: SLocalId,
-        origin: SemOrigin<'db>,
     },
 }
 
@@ -603,6 +664,7 @@ pub fn empty_normalized_body<'db>(
     NormalizedSemanticBody {
         owner: body.owner,
         template_owner: body.template_owner,
+        entry_locals: body.entry_locals.clone(),
         locals,
         blocks: Vec::new(),
         borrow_roots,

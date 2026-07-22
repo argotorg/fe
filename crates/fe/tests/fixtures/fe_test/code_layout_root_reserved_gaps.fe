@@ -1,0 +1,125 @@
+use std::evm::Evm
+
+struct Rooted<const ROOT: u256 = _> {
+    value: u256,
+}
+
+msg RootGapMsg {
+    #[selector = 1]
+    Values -> (u256, u256),
+}
+
+msg RootFamilyGapMsg {
+    #[selector = 2]
+    Values -> (u256, u256, u256, u256),
+}
+
+msg RootMatrixGapMsg {
+    #[selector = 3]
+    Values -> (u256, u256, u256, u256, u256),
+}
+
+pub contract RootGap {
+    first: Rooted,
+    after: u256,
+
+    init() uses (mut first, mut after) {
+        first = Rooted { value: 11 }
+        after = 22
+    }
+
+    recv RootGapMsg {
+        Values -> (u256, u256) uses (first, after) {
+            (first.value, after)
+        }
+    }
+}
+
+pub contract RootFamilyGap {
+    values: [Rooted; 3],
+    after: u256,
+
+    init() uses (mut values, mut after) {
+        values = [
+            Rooted { value: 11 },
+            Rooted { value: 22 },
+            Rooted { value: 33 },
+        ]
+        after = 44
+    }
+
+    recv RootFamilyGapMsg {
+        Values -> (u256, u256, u256, u256) uses (values, after) {
+            (values[0].value, values[1].value, values[2].value, after)
+        }
+    }
+}
+
+pub contract RootMatrixGap {
+    values: [[Rooted; 2]; 2],
+    after: u256,
+
+    init() uses (mut values, mut after) {
+        values = [
+            [Rooted { value: 11 }, Rooted { value: 22 }],
+            [Rooted { value: 33 }, Rooted { value: 44 }],
+        ]
+        after = 55
+    }
+
+    recv RootMatrixGapMsg {
+        Values -> (u256, u256, u256, u256, u256) uses (values, after) {
+            (
+                values[0][0].value,
+                values[0][1].value,
+                values[1][0].value,
+                values[1][1].value,
+                after,
+            )
+        }
+    }
+}
+
+#[test]
+fn code_layout_roots_reserve_real_immutable_buffer_gaps() uses (evm: mut Evm) {
+    let c = evm.create2<RootGap>(value: 0, args: (), salt: 0)
+    let values: (u256, u256) = evm.call(
+        addr: c,
+        gas: 100000,
+        value: 0,
+        message: RootGapMsg::Values {},
+    )
+    assert!(values.0 == 11)
+    assert!(values.1 == 22)
+}
+
+#[test]
+fn code_layout_root_families_reserve_real_immutable_buffer_gaps() uses (evm: mut Evm) {
+    let c = evm.create2<RootFamilyGap>(value: 0, args: (), salt: 1)
+    let values: (u256, u256, u256, u256) = evm.call(
+        addr: c,
+        gas: 100000,
+        value: 0,
+        message: RootFamilyGapMsg::Values {},
+    )
+    assert!(values.0 == 11)
+    assert!(values.1 == 22)
+    assert!(values.2 == 33)
+    assert!(values.3 == 44)
+}
+
+#[test]
+fn code_layout_root_matrices_reserve_real_immutable_buffer_gaps() uses (evm: mut Evm) {
+    let c = evm.create2<RootMatrixGap>(value: 0, args: (), salt: 2)
+    let values: (u256, u256, u256, u256, u256) = evm.call(
+        addr: c,
+        gas: 100000,
+        value: 0,
+        message: RootMatrixGapMsg::Values {},
+    )
+    assert!(values.0 == 11)
+    assert!(values.1 == 22)
+    assert!(values.2 == 33)
+    assert!(values.3 == 44)
+    assert!(values.4 == 55)
+}

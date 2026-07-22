@@ -3,7 +3,8 @@
 use crate::{
     core::hir_def::{
         AssocTypeGenericArg, ConstGenericArgValue, HirIngot, IdentId, ImplTrait, ItemKind, Partial,
-        PathId, Trait, TraitRefId, params::GenericArg, scope_graph::ScopeId,
+        PathId, Trait, TraitRefId, TypeId as HirTyId, TypeKind as HirTyKind, TypeMode,
+        params::GenericArg, scope_graph::ScopeId,
     },
     hir_def::Func,
 };
@@ -13,33 +14,95 @@ use salsa::Update;
 
 use super::{
     binder::Binder,
-    const_ty::{ConstTyId, HoleAnchor, HoleMinter},
+    const_ty::{ConstBodyLowering, ConstTyId, HoleAnchor, HoleMinter},
     fold::{TyFoldable, TyFolder},
     trait_def::{ImplementorId, ImplementorOrigin, TraitInstId},
     trait_resolution::PredicateListId,
-    ty_def::{InvalidCause, TyId},
+    ty_def::{InvalidCause, PrimTy, TyBase, TyId},
     ty_lower::{ConstDefaultCompletion, lower_hir_ty_with_minter, lower_opt_hir_ty_with_minter},
 };
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{
-        NameDomain, NameResKind, PathRes, PathResError, resolve_ident_to_bucket, resolve_name_res,
+        NameDomain, NameResKind, PathRes, PathResError, resolve_ident_to_bucket,
+        resolve_name_res_with_minter, resolve_path_with_minter, resolve_type_path_definition,
     },
     ty::ty_def::{Kind, TyData},
 };
 
-type TraitImplTable<'db> = FxHashMap<Trait<'db>, Vec<Binder<ImplementorId<'db>>>>;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub(crate) enum ImplSelfKey<'db> {
+    Prim(PrimTy),
+    Item(ScopeId<'db>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Update)]
+pub(crate) struct TraitImplTable<'db> {
+    pub(crate) by_trait: FxHashMap<Trait<'db>, Vec<ImplTrait<'db>>>,
+    pub(crate) by_self: FxHashMap<ImplSelfKey<'db>, Vec<ImplTrait<'db>>>,
+    pub(crate) unindexed_self: Vec<ImplTrait<'db>>,
+}
+
+fn raw_impl_trait_def<'db>(
+    db: &'db dyn HirAnalysisDb,
+    impl_trait: ImplTrait<'db>,
+) -> Option<Trait<'db>> {
+    let path = impl_trait.hir_trait_ref(db).to_opt()?.path(db).to_opt()?;
+    match resolve_type_path_definition(db, path, impl_trait.scope())? {
+        NameResKind::Scope(ScopeId::Item(ItemKind::Trait(trait_))) => Some(trait_),
+        NameResKind::Scope(_) | NameResKind::Prim(_) => None,
+    }
+}
+
+fn raw_impl_self_key<'db>(
+    db: &'db dyn HirAnalysisDb,
+    impl_trait: ImplTrait<'db>,
+) -> Option<ImplSelfKey<'db>> {
+    fn lower<'db>(
+        db: &'db dyn HirAnalysisDb,
+        ty: HirTyId<'db>,
+        scope: ScopeId<'db>,
+    ) -> Option<ImplSelfKey<'db>> {
+        match ty.data(db) {
+            HirTyKind::Ptr(_) => Some(ImplSelfKey::Prim(PrimTy::Ptr)),
+            HirTyKind::Mode(TypeMode::Mut, _) => Some(ImplSelfKey::Prim(PrimTy::BorrowMut)),
+            HirTyKind::Mode(TypeMode::Ref, _) => Some(ImplSelfKey::Prim(PrimTy::BorrowRef)),
+            HirTyKind::Mode(TypeMode::Own, inner) => lower(db, inner.to_opt()?, scope),
+            HirTyKind::Path(path) => match resolve_type_path_definition(db, path.to_opt()?, scope)?
+            {
+                NameResKind::Prim(prim) => match TyBase::from(prim) {
+                    TyBase::Prim(prim) => Some(ImplSelfKey::Prim(prim)),
+                    TyBase::Adt(_) | TyBase::Contract(_) | TyBase::Func(_) => unreachable!(),
+                },
+                NameResKind::Scope(
+                    scope @ ScopeId::Item(
+                        ItemKind::Struct(_) | ItemKind::Enum(_) | ItemKind::Contract(_),
+                    ),
+                ) => Some(ImplSelfKey::Item(scope)),
+                NameResKind::Scope(_) => None,
+            },
+            HirTyKind::Tuple(tuple) => Some(ImplSelfKey::Prim(PrimTy::Tuple(tuple.data(db).len()))),
+            HirTyKind::Array(..) => Some(ImplSelfKey::Prim(PrimTy::Array)),
+            HirTyKind::Never => None,
+        }
+    }
+
+    lower(db, impl_trait.type_ref(db).to_opt()?, impl_trait.scope())
+}
 
 /// Collect all local trait implementors in the ingot.
 ///
-/// This query is intentionally a raw lowering pass:
-/// - it only lowers impls defined in `ingot`
+/// This query is intentionally a syntax-only indexing pass:
+/// - it only records impls defined in `ingot`
 /// - it does not pull in external ingot impls
-/// - it does not perform overlap/conflict checking
+/// - it does not lower self types, trait arguments, associated types, or
+///   perform overlap/conflict checking
 ///
-/// Keeping impl collection free of trait solving avoids a query cycle between
-/// trait-environment construction and overlap checking. Visible trait
-/// environments are assembled later by [`TraitEnv`](super::trait_def::TraitEnv).
+/// Generic const expressions in any of those positions can type-check
+/// operators through the trait environment. Keeping collection entirely free
+/// of semantic type lowering is therefore the boundary that prevents query
+/// cycles. Visible candidates are semantically lowered only after this index
+/// has been assembled by [`TraitEnv`](super::trait_def::TraitEnv).
 #[salsa::tracked(return_ref)]
 pub(crate) fn collect_trait_impls<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -47,13 +110,18 @@ pub(crate) fn collect_trait_impls<'db>(
 ) -> TraitImplTable<'db> {
     let mut impl_table = TraitImplTable::default();
     for &impl_ in ingot.all_impl_traits(db).iter() {
-        let Some(implementor) = lower_impl_trait(db, impl_) else {
-            continue;
-        };
-        impl_table
-            .entry(implementor.instantiate_identity().trait_def(db))
-            .or_default()
-            .push(implementor);
+        if let Some(trait_def) = raw_impl_trait_def(db, impl_) {
+            impl_table
+                .by_trait
+                .entry(trait_def)
+                .or_default()
+                .push(impl_);
+        }
+        if let Some(self_key) = raw_impl_self_key(db, impl_) {
+            impl_table.by_self.entry(self_key).or_default().push(impl_);
+        } else {
+            impl_table.unindexed_self.push(impl_);
+        }
     }
 
     impl_table
@@ -66,23 +134,202 @@ pub(crate) fn lower_impl_trait<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_trait: ImplTrait<'db>,
 ) -> Option<Binder<ImplementorId<'db>>> {
+    let trait_inst = impl_trait.trait_inst_result(db).ok()?;
+    let params = impl_trait.impl_params(db);
+
+    // This is the checked item-signature path used after candidate lookup or by
+    // diagnostics. Raw candidate enumeration uses the deferred path below.
+    let types = impl_trait.assoc_type_bindings_for_trait_inst(db, trait_inst);
+
+    Some(Binder::bind(ImplementorId::new(
+        db,
+        trait_inst,
+        params,
+        types,
+        ImplementorOrigin::Hir(impl_trait),
+    )))
+}
+
+pub(crate) fn complete_selected_impl<'db>(
+    db: &'db dyn HirAnalysisDb,
+    selected: ImplementorId<'db>,
+) -> Option<ImplementorId<'db>> {
+    match selected.origin(db) {
+        ImplementorOrigin::Hir(impl_trait) => {
+            Some(lower_impl_trait(db, impl_trait)?.instantiate_identity())
+        }
+        ImplementorOrigin::VirtualContract(_) | ImplementorOrigin::Assumption => Some(selected),
+    }
+}
+
+/// Re-lowers one associated-type binding after candidate enumeration has
+/// finished. This is deliberately narrower than completing the whole impl:
+/// normalizing one projection must not validate unrelated impl headers or
+/// constraints while a trait-solver query is active.
+pub(crate) fn complete_impl_assoc_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    implementor: ImplementorId<'db>,
+    name: IdentId<'db>,
+) -> Option<ImplementorId<'db>> {
+    let ImplementorOrigin::Hir(impl_trait) = implementor.origin(db) else {
+        return implementor.assoc_ty(db, name).map(|_| implementor);
+    };
+    let ty = lower_checked_impl_assoc_ty(db, impl_trait, name)?;
+    Some(with_impl_assoc_ty(db, implementor, name, ty))
+}
+
+#[salsa::tracked(
+    cycle_fn=lower_impl_assoc_ty_cycle_recover,
+    cycle_initial=lower_impl_assoc_ty_cycle_initial
+)]
+pub(crate) fn lower_checked_impl_assoc_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    impl_trait: ImplTrait<'db>,
+    name: IdentId<'db>,
+) -> Option<TyId<'db>> {
+    if let Some(assoc) = impl_trait
+        .assoc_types(db)
+        .find(|assoc| assoc.name(db) == Some(name))
+    {
+        return assoc.ty(db);
+    }
+
+    let trait_inst = impl_trait.trait_inst_result(db).ok()?;
+    let default = trait_inst
+        .def(db)
+        .assoc_types(db)
+        .find(|assoc| assoc.name(db) == Some(name))?
+        .default_ty(db)?;
+    Some(Binder::bind(default).instantiate(db, trait_inst.args(db)))
+}
+
+pub(crate) fn complete_candidate_impl_assoc_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    implementor: ImplementorId<'db>,
+    name: IdentId<'db>,
+) -> Option<ImplementorId<'db>> {
+    let ImplementorOrigin::Hir(impl_trait) = implementor.origin(db) else {
+        return implementor.assoc_ty(db, name).map(|_| implementor);
+    };
+    let ty = lower_candidate_impl_assoc_ty(db, impl_trait, name)?;
+    Some(with_impl_assoc_ty(db, implementor, name, ty))
+}
+
+fn with_impl_assoc_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    implementor: ImplementorId<'db>,
+    name: IdentId<'db>,
+    ty: TyId<'db>,
+) -> ImplementorId<'db> {
+    let mut types = implementor.types(db).clone();
+    types.insert(name, ty);
+    ImplementorId::new(
+        db,
+        implementor.trait_(db),
+        implementor.params(db).to_vec(),
+        types,
+        implementor.origin(db),
+    )
+}
+
+fn lower_impl_assoc_ty_cycle_initial<'db>(
+    db: &'db dyn HirAnalysisDb,
+    _impl_trait: ImplTrait<'db>,
+    _name: IdentId<'db>,
+) -> Option<TyId<'db>> {
+    Some(TyId::invalid(db, InvalidCause::TypeLoweringCycle))
+}
+
+fn lower_impl_assoc_ty_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &Option<TyId<'db>>,
+    _count: u32,
+    _impl_trait: ImplTrait<'db>,
+    _name: IdentId<'db>,
+) -> salsa::CycleRecoveryAction<Option<TyId<'db>>> {
+    salsa::CycleRecoveryAction::Iterate
+}
+
+/// Lowers one associated-type definition for candidate use without checking
+/// anonymous const bodies. Keeping this query per binding lets sibling
+/// references such as `type B = Self::A` resolve locally without completing
+/// every associated type or recursively re-entering the trait environment.
+#[salsa::tracked(
+    cycle_fn=lower_impl_assoc_ty_cycle_recover,
+    cycle_initial=lower_impl_assoc_ty_cycle_initial
+)]
+pub(crate) fn lower_candidate_impl_assoc_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    impl_trait: ImplTrait<'db>,
+    name: IdentId<'db>,
+) -> Option<TyId<'db>> {
+    if let Some(assoc) = impl_trait
+        .assoc_types(db)
+        .find(|assoc| assoc.name(db) == Some(name))
+    {
+        return assoc.candidate_ty(db);
+    }
+
+    let trait_inst = impl_trait.candidate_trait_inst_result(db).ok()?;
+    let default = trait_inst
+        .def(db)
+        .assoc_types(db)
+        .find(|assoc| assoc.name(db) == Some(name))?
+        .candidate_default_ty(db)?;
+    Some(Binder::bind(default).instantiate(db, trait_inst.args(db)))
+}
+
+/// Complete a semantically lowered candidate header with its associated type
+/// definitions after the syntax-only impl index has been assembled.
+pub(crate) fn complete_impl_trait<'db>(
+    db: &'db dyn HirAnalysisDb,
+    implementor: Binder<ImplementorId<'db>>,
+) -> Binder<ImplementorId<'db>> {
+    match implementor.skip_binder().origin(db) {
+        ImplementorOrigin::Hir(impl_trait) => lower_impl_trait_candidate(db, impl_trait)
+            .expect("a collected impl header must remain lowerable"),
+        ImplementorOrigin::VirtualContract(_) | ImplementorOrigin::Assumption => implementor,
+    }
+}
+
+fn lower_impl_trait_candidate<'db>(
+    db: &'db dyn HirAnalysisDb,
+    impl_trait: ImplTrait<'db>,
+) -> Option<Binder<ImplementorId<'db>>> {
+    let implementor = lower_impl_trait_header(db, impl_trait)?.instantiate_identity();
+    let types = impl_trait.candidate_assoc_type_bindings_for_trait_inst(db, implementor.trait_(db));
+    Some(Binder::bind(ImplementorId::new(
+        db,
+        implementor.trait_(db),
+        implementor.params(db).to_vec(),
+        types,
+        implementor.origin(db),
+    )))
+}
+
+/// Lower only the part of an impl needed to index and select it.
+///
+/// This phase must stay independent of trait solving. In particular, associated
+/// type definitions are not lowered here: a definition such as
+/// `type Target = Slot<{ ROOT + 1 }>` type-checks `+` through `core::ops::Add`,
+/// which needs the completed trait environment.
+pub(crate) fn lower_impl_trait_header<'db>(
+    db: &'db dyn HirAnalysisDb,
+    impl_trait: ImplTrait<'db>,
+) -> Option<Binder<ImplementorId<'db>>> {
     // Delegate trait-ref lowering and ingot checks to the semantic helper on
     // `ImplTrait`. If lowering fails or the ingot rule is violated, this
     // returns `None`.
-    let trait_inst = impl_trait.trait_inst_result(db).ok()?;
+    let trait_inst = impl_trait.candidate_trait_inst_result(db).ok()?;
 
     // Semantic generic parameters for this impl-trait block.
     let params = impl_trait.impl_params(db);
-
-    // Semantic associated-type bindings for this impl-trait block, including
-    // merged trait defaults.
-    let types = impl_trait.assoc_type_bindings_for_trait_inst(db, trait_inst);
 
     let implementor = ImplementorId::new(
         db,
         trait_inst,
         params,
-        types,
+        IndexMap::new(),
         ImplementorOrigin::Hir(impl_trait),
     );
 
@@ -107,7 +354,34 @@ pub(crate) fn lower_trait_ref<'db>(
     assumptions: PredicateListId<'db>,
     owner_self: Option<TyId<'db>>,
 ) -> Result<TraitInstId<'db>, TraitRefLowerError<'db>> {
-    lower_trait_ref_inner(db, self_ty, trait_ref, scope, assumptions, owner_self)
+    lower_trait_ref_inner(
+        db,
+        self_ty,
+        trait_ref,
+        scope,
+        assumptions,
+        owner_self,
+        ConstBodyLowering::Eager,
+    )
+}
+
+pub(crate) fn lower_trait_ref_deferred<'db>(
+    db: &'db dyn HirAnalysisDb,
+    self_ty: TyId<'db>,
+    trait_ref: TraitRefId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    owner_self: Option<TyId<'db>>,
+) -> Result<TraitInstId<'db>, TraitRefLowerError<'db>> {
+    lower_trait_ref_inner(
+        db,
+        self_ty,
+        trait_ref,
+        scope,
+        assumptions,
+        owner_self,
+        ConstBodyLowering::Deferred,
+    )
 }
 
 fn lower_trait_ref_inner<'db>(
@@ -117,23 +391,35 @@ fn lower_trait_ref_inner<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     owner_self: Option<TyId<'db>>,
+    const_bodies: ConstBodyLowering,
 ) -> Result<TraitInstId<'db>, TraitRefLowerError<'db>> {
     let Partial::Present(path) = trait_ref.path(db) else {
         return Err(TraitRefLowerError::Ignored);
     };
 
     let self_subst = owner_self.unwrap_or(self_ty);
+    let minter = match const_bodies {
+        ConstBodyLowering::Eager => HoleMinter::new(HoleAnchor::TemplatePath {
+            path,
+            scope,
+            assumptions,
+        }),
+        ConstBodyLowering::Deferred => HoleMinter::deferred(HoleAnchor::TemplatePath {
+            path,
+            scope,
+            assumptions,
+        }),
+    };
 
-    let resolved =
-        match crate::analysis::name_resolution::resolve_path(db, path, scope, assumptions, false) {
-            Ok(res @ PathRes::Ty(_)) => {
-                match resolve_shadowed_trait_ref(db, &res, path, scope, assumptions) {
-                    Some(trait_res) => Ok(trait_res),
-                    None => Ok(res),
-                }
+    let resolved = match resolve_path_with_minter(db, path, scope, assumptions, false, &minter) {
+        Ok(res @ PathRes::Ty(_)) => {
+            match resolve_shadowed_trait_ref(db, &res, path, scope, assumptions, &minter) {
+                Some(trait_res) => Ok(trait_res),
+                None => Ok(res),
             }
-            other => other,
-        };
+        }
+        other => other,
+    };
 
     match resolved {
         Ok(PathRes::Trait(t)) => {
@@ -185,6 +471,7 @@ fn resolve_shadowed_trait_ref<'db>(
     path: PathId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
+    minter: &HoleMinter<'db>,
 ) -> Option<PathRes<'db>> {
     if path.parent(db).is_some() {
         return None;
@@ -221,7 +508,7 @@ fn resolve_shadowed_trait_ref<'db>(
         return None;
     }
 
-    resolve_name_res(db, nameres, None, path, scope, assumptions).ok()
+    resolve_name_res_with_minter(db, nameres, None, path, scope, assumptions, minter).ok()
 }
 
 fn lower_trait_ref_cycle_initial<'db>(
@@ -269,6 +556,7 @@ pub(crate) enum TraitArgError<'db> {
     Ignored,
 }
 
+#[cfg(test)]
 pub(crate) fn lower_trait_ref_impl<'db>(
     db: &'db (dyn HirAnalysisDb + 'static),
     path: PathId<'db>,
@@ -276,32 +564,42 @@ pub(crate) fn lower_trait_ref_impl<'db>(
     assumptions: PredicateListId<'db>,
     t: Trait<'db>,
 ) -> Result<TraitInstId<'db>, TraitArgError<'db>> {
-    lower_trait_ref_impl_inner(db, path, scope, assumptions, t)
+    let minter = HoleMinter::new(HoleAnchor::TemplatePath {
+        path,
+        scope,
+        assumptions,
+    });
+    lower_trait_ref_impl_with_minter(db, path, scope, assumptions, t, &minter)
 }
 
-fn lower_trait_ref_impl_inner<'db>(
+pub(crate) fn lower_trait_ref_impl_with_minter<'db>(
     db: &'db (dyn HirAnalysisDb + 'static),
     path: PathId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     t: Trait<'db>,
+    minter: &HoleMinter<'db>,
 ) -> Result<TraitInstId<'db>, TraitArgError<'db>> {
     let trait_params: &[TyId<'db>] = t.params(db);
     let args = path.generic_args(db).data(db);
-    let minter = HoleMinter::new(HoleAnchor::TemplatePath { path, scope });
-
     // Lower provided explicit args (excluding Self)
     let mut provided_explicit = Vec::new();
     let mut assoc_bindings = IndexMap::new();
     for (arg_idx, arg) in args.iter().enumerate() {
         match arg {
             GenericArg::Type(ty_arg) => {
-                let ty = lower_opt_hir_ty_with_minter(db, ty_arg.ty, scope, assumptions, &minter);
+                let ty = lower_opt_hir_ty_with_minter(db, ty_arg.ty, scope, assumptions, minter);
                 provided_explicit.push(ty);
             }
             GenericArg::Const(const_arg) => match const_arg.value {
                 ConstGenericArgValue::Expr(body) => {
-                    provided_explicit.push(TyId::const_ty(db, ConstTyId::from_opt_body(db, body)));
+                    let const_ty = match minter.const_bodies() {
+                        ConstBodyLowering::Eager => ConstTyId::from_opt_body(db, body),
+                        ConstBodyLowering::Deferred => {
+                            ConstTyId::from_opt_body_deferred(db, body, None, Vec::new())
+                        }
+                    };
+                    provided_explicit.push(TyId::const_ty(db, const_ty));
                 }
                 ConstGenericArgValue::Hole => {
                     return Err(TraitArgError::ConstHoleNotAllowed { arg_idx });
@@ -309,7 +607,7 @@ fn lower_trait_ref_impl_inner<'db>(
             },
             GenericArg::AssocType(AssocTypeGenericArg { name, ty }) => {
                 if let (Some(name), Some(ty)) = (name.to_opt(), ty.to_opt()) {
-                    let ty = lower_hir_ty_with_minter(db, ty, scope, assumptions, &minter);
+                    let ty = lower_hir_ty_with_minter(db, ty, scope, assumptions, minter);
                     assoc_bindings.insert(name, ty);
                 }
             }
@@ -322,8 +620,11 @@ fn lower_trait_ref_impl_inner<'db>(
         Some(t.self_param(db)),
         &provided_explicit,
         assumptions,
-        ConstDefaultCompletion::evaluate(Some(path)),
-        Some(&minter),
+        match minter.const_bodies() {
+            ConstBodyLowering::Eager => ConstDefaultCompletion::evaluate(Some(path)),
+            ConstBodyLowering::Deferred => ConstDefaultCompletion::metadata(Some(path)),
+        },
+        Some(minter),
     );
 
     if non_self_completed.len() != trait_params.len() - 1 {
@@ -350,7 +651,13 @@ fn lower_trait_ref_impl_inner<'db>(
             _ => None,
         };
 
-        match actual_ty.evaluate_const_ty(db, expected_const_ty) {
+        let checked = match minter.const_bodies() {
+            ConstBodyLowering::Eager => actual_ty.evaluate_const_ty(db, expected_const_ty),
+            ConstBodyLowering::Deferred => {
+                actual_ty.check_const_ty_without_eval(db, expected_const_ty)
+            }
+        };
+        match checked {
             Ok(evaluated_ty) => *actual_ty = evaluated_ty,
             Err(InvalidCause::ConstTyMismatch { expected, given }) => {
                 return Err(TraitArgError::ArgTypeMismatch {

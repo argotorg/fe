@@ -7,7 +7,7 @@ use super::{
     binder::Binder,
     canonical::{Canonical, Solution},
     fold::{TyFoldable, TyFolder},
-    ty_def::{TyBase, TyId, strip_derived_adt_layout_args},
+    ty_def::{TyBase, TyId},
     unify::UnificationTable,
     visitor::{TyVisitable, TyVisitor},
 };
@@ -185,7 +185,6 @@ impl<'db> MethodBucket<'db> {
     ) -> Vec<ProbedMethod<'db>> {
         let db = table.db;
         let mut methods = vec![];
-        let ty = strip_derived_adt_layout_args(db, ty);
         let ty = saturate_ty_for_method_probe(table, ty);
         for (&cand_key, funcs) in self.methods.iter() {
             let Some(&func) = funcs.get(&name) else {
@@ -204,7 +203,6 @@ impl<'db> MethodBucket<'db> {
                 func_ty = TyId::app(db, func_ty, arg);
             }
             let key_ty = cand_key.instantiate(db, func_ty.generic_args(db));
-            let key_ty = strip_derived_adt_layout_args(db, key_ty);
             let key_ty = table.instantiate_to_term(key_ty);
 
             if table.unify(key_ty, ty).is_ok() {

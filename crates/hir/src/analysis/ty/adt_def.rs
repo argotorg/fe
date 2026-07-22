@@ -4,20 +4,18 @@ use crate::hir_def::{
 };
 use crate::span::DynLazySpan;
 use common::ingot::Ingot;
-use rustc_hash::FxHashSet;
 use salsa::Update;
-use std::ops::Range;
 
 use super::{
     binder::Binder,
-    const_ty::{ConstTyData, StructuralHoleOrigin},
-    layout_holes::{
-        LayoutPlaceholderPolicy, collect_layout_placeholder_pairs_in_order_with_policy,
-        collect_layout_placeholders_in_order_with_policy, structural_hole_origin,
+    const_ty::{
+        ConstTyData, HoleAnchor, HoleMinter, LayoutBoundaryIdentity, LayoutInstantiationContext,
+        LayoutInstantiationId, LayoutOccurrencePath,
     },
-    trait_resolution::constraint::collect_constraints,
+    layout_holes::{LayoutInstantiation, LayoutRootUse, instantiate_layout_template},
+    trait_resolution::{PredicateListId, constraint::collect_constraints},
     ty_def::{InvalidCause, TyData, TyId},
-    ty_lower::{GenericParamTypeSet, lower_hir_ty},
+    ty_lower::{GenericParamTypeSet, lower_hir_ty, lower_layout_root_uses_in_hir_ty},
 };
 use crate::analysis::HirAnalysisDb;
 
@@ -110,19 +108,20 @@ pub struct AdtField<'db> {
     scope: ScopeId<'db>,
 }
 impl<'db> AdtField<'db> {
-    pub fn ty(&self, db: &'db dyn HirAnalysisDb, i: usize) -> Binder<TyId<'db>> {
-        use crate::analysis::ty::trait_resolution::PredicateListId;
-
-        let assumptions = match self.scope {
+    fn assumptions(&self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+        match self.scope {
             ScopeId::Item(ItemKind::Struct(struct_)) => {
                 collect_constraints(db, GenericParamOwner::Struct(struct_)).instantiate_identity()
             }
             ScopeId::Item(ItemKind::Enum(enum_)) => {
                 collect_constraints(db, GenericParamOwner::Enum(enum_)).instantiate_identity()
             }
-            ScopeId::Item(ItemKind::Contract(_)) => PredicateListId::empty_list(db),
             _ => PredicateListId::empty_list(db),
-        };
+        }
+    }
+
+    pub fn ty(&self, db: &'db dyn HirAnalysisDb, i: usize) -> Binder<TyId<'db>> {
+        let assumptions = self.assumptions(db);
 
         let ty = if let Some(hir_ty) = self.tys[i].to_opt() {
             lower_hir_ty(db, hir_ty, self.scope, assumptions)
@@ -131,6 +130,19 @@ impl<'db> AdtField<'db> {
         };
 
         Binder::bind(ty)
+    }
+
+    fn layout_root_uses(&self, db: &'db dyn HirAnalysisDb, i: usize) -> Vec<LayoutRootUse<'db>> {
+        let Some(hir_ty) = self.tys[i].to_opt() else {
+            return Vec::new();
+        };
+        let assumptions = self.assumptions(db);
+        let minter = HoleMinter::new(HoleAnchor::TemplateTy {
+            ty: hir_ty,
+            scope: self.scope,
+            assumptions,
+        });
+        lower_layout_root_uses_in_hir_ty(db, hir_ty, self.scope, assumptions, &minter)
     }
 
     /// Iterates all field types of this variant.
@@ -226,126 +238,10 @@ pub struct AdtCycleMember<'db> {
     pub ty_idx: u16,
 }
 
-/// One derived trailing layout arg of an ADT application.
-#[derive(Clone, Copy)]
-pub(crate) struct AdtLayoutHoleEntry<'db> {
-    /// The placeholder's (fallbacked) const value type.
-    pub(crate) hole_ty: TyId<'db>,
-    /// The placeholder itself, when the plan occurrence was substituted in
-    /// from an explicit generic arg. Reusing it as the trailing arg keeps one
-    /// logical hole as one `TyId` instead of minting a parallel identity.
-    pub(crate) source: Option<TyId<'db>>,
-    /// The template placeholder's origin, when it is a structural hole.
-    /// Freshly minted trailing args carry it forward so the hole stays
-    /// attributable to the generic param that declared it (e.g. a
-    /// `TSlot<bool>` field's slot param, which decides the slot's address
-    /// space at contract layout).
-    pub(crate) template_origin: Option<StructuralHoleOrigin<'db>>,
-}
-
-#[derive(Default)]
-pub(crate) struct AdtLayoutHolePlan<'db> {
-    entries: Vec<AdtLayoutHoleEntry<'db>>,
-    field_ranges: Vec<Vec<Range<usize>>>,
-}
-
-impl<'db> AdtLayoutHolePlan<'db> {
-    pub(crate) fn entries(&self) -> &[AdtLayoutHoleEntry<'db>] {
-        &self.entries
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    pub(crate) fn hole_ty(&self, idx: usize) -> Option<TyId<'db>> {
-        self.entries.get(idx).map(|entry| entry.hole_ty)
-    }
-
-    pub(crate) fn field_range(&self, variant_idx: usize, field_idx: usize) -> Range<usize> {
-        self.field_ranges
-            .get(variant_idx)
-            .and_then(|variant| variant.get(field_idx))
-            .cloned()
-            .unwrap_or(0..0)
-    }
-}
-
-pub(crate) fn adt_layout_hole_plan<'db>(
-    db: &'db dyn HirAnalysisDb,
-    adt: AdtDef<'db>,
-) -> AdtLayoutHolePlan<'db> {
-    adt_layout_hole_plan_with_explicit_args(db, adt, &[])
-}
-
-pub(crate) fn adt_layout_hole_plan_with_explicit_args<'db>(
-    db: &'db dyn HirAnalysisDb,
-    adt: AdtDef<'db>,
-    explicit_args: &[TyId<'db>],
-) -> AdtLayoutHolePlan<'db> {
-    // Placeholders occurring inside the explicit args themselves: a plan
-    // occurrence matching one of these was substituted into the field
-    // template by instantiation, so the trailing arg can reuse its identity.
-    // Template-resident placeholders (minted in the ADT's own field lowering)
-    // must NOT be reused: their identity belongs to the definition, and each
-    // application needs a fresh trailing hole.
-    let explicit_arg_placeholders = explicit_args
-        .iter()
-        .flat_map(|&arg| {
-            collect_layout_placeholders_in_order_with_policy(
-                db,
-                arg,
-                LayoutPlaceholderPolicy::HolesAndImplicitParams,
-            )
-        })
-        .collect::<FxHashSet<_>>();
-
-    let mut entries = Vec::new();
-    let field_ranges = adt
-        .fields(db)
-        .iter()
-        .enumerate()
-        .map(|(variant_idx, variant)| {
-            (0..variant.num_types())
-                .map(|field_idx| {
-                    let field_ty =
-                        instantiated_adt_field_ty(db, adt, variant_idx, field_idx, explicit_args);
-                    let start = entries.len();
-                    entries.extend(
-                        collect_layout_placeholder_pairs_in_order_with_policy(
-                            db,
-                            field_ty,
-                            LayoutPlaceholderPolicy::HolesAndImplicitParams,
-                        )
-                        .into_iter()
-                        .map(|(placeholder, hole_ty)| AdtLayoutHoleEntry {
-                            hole_ty,
-                            // Every occurrence of an explicit-arg placeholder
-                            // reuses it: the user wrote one hole, so all of
-                            // its template occurrences are that hole. This
-                            // also keeps nested applications stable — an
-                            // outer ADT's plan sees the inner application's
-                            // already-reused trailing occurrence and must not
-                            // re-split it.
-                            source: explicit_arg_placeholders
-                                .contains(&placeholder)
-                                .then_some(placeholder),
-                            template_origin: structural_hole_origin(db, placeholder),
-                        }),
-                    );
-                    start..entries.len()
-                })
-                .collect()
-        })
-        .collect();
-
-    AdtLayoutHolePlan {
-        entries,
-        field_ranges,
-    }
-}
-
-pub(crate) fn instantiated_adt_field_ty<'db>(
+/// Instantiates an ADT field as a source-level type shape. This deliberately
+/// does not mint layout landings; storage walking must use
+/// [`instantiate_adt_field_layout`] instead.
+pub fn instantiate_adt_field_shape<'db>(
     db: &'db dyn HirAnalysisDb,
     adt: AdtDef<'db>,
     variant_idx: usize,
@@ -378,4 +274,55 @@ pub(crate) fn instantiated_adt_field_ty<'db>(
             })
         })
         .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other))
+}
+
+pub(crate) fn instantiate_adt_field_layout<'db>(
+    db: &'db dyn HirAnalysisDb,
+    adt: AdtDef<'db>,
+    variant_idx: usize,
+    field_idx: usize,
+    args: &[TyId<'db>],
+    parent: LayoutInstantiationId<'db>,
+    occurrence: LayoutOccurrencePath,
+) -> LayoutInstantiation<'db> {
+    let field = adt
+        .fields(db)
+        .get(variant_idx)
+        .filter(|variant| field_idx < variant.num_types());
+    let template = field
+        .map(|field| field.ty(db, field_idx).instantiate_identity())
+        .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
+    let template_root_uses =
+        field.map_or_else(Vec::new, |field| field.layout_root_uses(db, field_idx));
+    let mut instantiated = instantiate_layout_template(
+        db,
+        template,
+        adt.params(db),
+        args,
+        LayoutInstantiationContext::Nested(parent),
+        LayoutBoundaryIdentity::AdtApplication(adt),
+        occurrence.clone(),
+    );
+    for root_use in template_root_uses {
+        let value = Binder::bind(root_use.value).instantiate(db, args);
+        if super::layout_holes::layout_root_id(db, value).is_some() {
+            continue;
+        }
+        let owner = root_use
+            .owner
+            .map(|owner| Binder::bind(owner).instantiate(db, args))
+            .or(Some(instantiated.ty));
+        let mut selector = occurrence.clone();
+        selector.extend(root_use.selector);
+        let root_use = LayoutRootUse {
+            value,
+            owner,
+            selector,
+            index_dimensions: root_use.index_dimensions,
+        };
+        if !instantiated.root_uses.contains(&root_use) {
+            instantiated.root_uses.push(root_use);
+        }
+    }
+    instantiated
 }

@@ -116,6 +116,7 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                         const_def,
                         generic_args,
                         preserve_unevaluated,
+                        defer_validation,
                     } => {
                         let ty = ty.map(|t| folder.fold_ty(db, t));
                         let generic_args = generic_args
@@ -129,6 +130,7 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                             const_def: *const_def,
                             generic_args,
                             preserve_unevaluated: *preserve_unevaluated,
+                            defer_validation: *defer_validation,
                         }
                     }
                 };

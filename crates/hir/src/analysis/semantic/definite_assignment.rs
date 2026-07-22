@@ -37,7 +37,7 @@ use crate::{
         },
     },
     hir_def::{Contract, Func, FuncParamMode},
-    semantic::ProviderSource,
+    semantic::{ContractFieldId, ProviderSource},
 };
 
 use super::borrowck::{
@@ -51,10 +51,7 @@ use super::borrowck::{
 enum AssignedTarget<'db> {
     /// A contract field bound as an effect provider (e.g. `uses (mut x)` in
     /// `init`).
-    ContractField {
-        contract: Contract<'db>,
-        field_idx: u32,
-    },
+    ContractField(ContractFieldId<'db>),
     /// A `uses` effect requirement of a function.
     FuncEffect {
         func: Func<'db>,
@@ -83,10 +80,9 @@ pub fn contract_init_assigned_fields<'db>(
             targets
                 .iter()
                 .filter_map(|target| match target {
-                    AssignedTarget::ContractField {
-                        contract: target_contract,
-                        field_idx,
-                    } if *target_contract == contract => Some(*field_idx),
+                    AssignedTarget::ContractField(field) if field.contract == contract => {
+                        Some(field.index)
+                    }
                     _ => None,
                 })
                 .collect()
@@ -297,14 +293,10 @@ impl<'a, 'db> DefiniteAssignment<'a, 'db> {
         }
         match &place.root {
             NSPlaceRoot::Root(root_id) => match self.body.root(*root_id)? {
-                NBorrowRoot::Provider { binding } => match binding.source {
-                    ProviderSource::ContractField {
-                        contract,
-                        field_idx,
-                    } => Some(AssignedTarget::ContractField {
-                        contract,
-                        field_idx,
-                    }),
+                NBorrowRoot::Provider { binding, .. } => match binding.source {
+                    ProviderSource::ContractField { field } => {
+                        Some(AssignedTarget::ContractField(field))
+                    }
                     ProviderSource::UsesParam {
                         site: EffectParamSite::Func(func),
                         requirement_idx,

@@ -15,9 +15,6 @@ pub(crate) struct RuntimeConversionPlan<'db> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum RuntimeConversionStep<'db> {
-    UseAs {
-        class: RuntimeClass<'db>,
-    },
     RetagRef {
         class: RuntimeClass<'db>,
     },
@@ -122,9 +119,6 @@ fn emit_runtime_conversion_step<'db>(
     semantic_ty: TyId<'db>,
 ) -> RLocalId {
     match step {
-        RuntimeConversionStep::UseAs { class } => {
-            assign_runtime_conversion_temp(emitter, bb, semantic_ty, class, RExpr::Use(src))
-        }
         RuntimeConversionStep::RetagRef { class } => assign_runtime_conversion_temp(
             emitter,
             bb,
@@ -317,10 +311,17 @@ impl<'db> RuntimeConversionPlanner<'db> {
         steps: &mut Vec<RuntimeConversionStep<'db>>,
     ) -> Result<(), RuntimeConversionError<'db>> {
         match (&source, &target) {
-            (RuntimeClass::AggregateValue { .. }, RuntimeClass::AggregateValue { .. })
-                if source.shares_runtime_rep_with(self.db, &target) =>
-            {
-                steps.push(RuntimeConversionStep::UseAs { class: target });
+            (
+                RuntimeClass::AggregateValue { .. },
+                RuntimeClass::AggregateValue {
+                    layout: target_layout,
+                },
+            ) if source.shares_runtime_rep_with(self.db, &target) => {
+                steps.push(RuntimeConversionStep::AllocObjectCopy {
+                    class: RuntimeClass::object_ref(*target_layout),
+                    layout: *target_layout,
+                });
+                steps.push(RuntimeConversionStep::LoadRef { class: target });
                 Ok(())
             }
             (
@@ -683,7 +684,7 @@ mod tests {
     use hir::analysis::ty::ty_def::TyId;
 
     use super::*;
-    use crate::runtime::{LayoutKey, StructLayout};
+    use crate::runtime::{EnumLayoutKey, EnumVariantLayout, LayoutKey, StructLayout};
 
     fn word_class<'db>() -> RuntimeClass<'db> {
         RuntimeClass::Scalar(ScalarClass {
@@ -701,6 +702,20 @@ mod tests {
             LayoutKey::Struct(StructLayout {
                 source_ty: TyId::unit(db),
                 fields: vec![word_class()].into(),
+            }),
+        )
+    }
+
+    fn test_enum_layout<'db>(db: &'db dyn MirDb, source_ty: TyId<'db>) -> LayoutId<'db> {
+        LayoutId::new(
+            db,
+            LayoutKey::Enum(EnumLayoutKey {
+                source_ty,
+                variants: vec![EnumVariantLayout {
+                    name: "Value".to_string(),
+                    fields: vec![word_class()].into(),
+                }]
+                .into(),
             }),
         )
     }
@@ -911,6 +926,32 @@ mod tests {
                 space: AddressSpaceKind::Storage,
                 layout,
             }]
+        );
+    }
+
+    #[test]
+    fn compatible_nominal_enum_values_rebuild_the_target_representation() {
+        let db = DriverDataBase::default();
+        let source_layout = test_enum_layout(&db, TyId::unit(&db));
+        let target_layout = test_enum_layout(&db, TyId::u256(&db));
+        let source = RuntimeClass::AggregateValue {
+            layout: source_layout,
+        };
+        let target = RuntimeClass::AggregateValue {
+            layout: target_layout,
+        };
+
+        assert!(source.shares_runtime_rep_with(&db, &target));
+        let plan = RuntimeConversionPlanner::plan(&db, source, target.clone()).unwrap();
+        assert_eq!(
+            plan.steps.as_ref(),
+            &[
+                RuntimeConversionStep::AllocObjectCopy {
+                    class: RuntimeClass::object_ref(target_layout),
+                    layout: target_layout,
+                },
+                RuntimeConversionStep::LoadRef { class: target },
+            ]
         );
     }
 }

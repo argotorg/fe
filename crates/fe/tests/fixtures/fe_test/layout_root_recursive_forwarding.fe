@@ -1,0 +1,224 @@
+use std::evm::{Evm, StorageMap}
+
+fn direct_dynamic(
+    maps: [StorageMap<u256, u256>; 2],
+    lane: usize,
+    depth: u256,
+    key: u256,
+) -> u256 {
+    if depth == 0 {
+        return maps[lane].get(key: key)
+    }
+    direct_dynamic(maps, lane, depth: depth - 1, key)
+}
+
+fn direct_static(
+    maps: [StorageMap<u256, u256>; 2],
+    depth: u256,
+    key: u256,
+) -> u256 {
+    if depth == 0 {
+        return maps[1].get(key: key)
+    }
+    direct_static(maps, depth: depth - 1, key)
+}
+
+fn mutual_a(
+    maps: [StorageMap<u256, u256>; 2],
+    lane: usize,
+    depth: u256,
+    key: u256,
+) -> u256 {
+    if depth == 0 {
+        return maps[lane].get(key: key)
+    }
+    mutual_b(maps, lane, depth: depth - 1, key)
+}
+
+fn mutual_b(
+    maps: [StorageMap<u256, u256>; 2],
+    lane: usize,
+    depth: u256,
+    key: u256,
+) -> u256 {
+    if depth == 0 {
+        return maps[lane].get(key: key)
+    }
+    mutual_a(maps, lane, depth: depth - 1, key)
+}
+
+struct Wrapped {
+    maps: [StorageMap<u256, u256>; 2],
+}
+
+fn recursive_wrapped(wrapped: Wrapped, depth: u256) -> Wrapped {
+    if depth == 0 {
+        return wrapped
+    }
+    recursive_wrapped(wrapped, depth: depth - 1)
+}
+
+fn effect_recursive(lane: usize, depth: u256, key: u256) -> u256
+    uses (wrapped: Wrapped)
+{
+    if depth == 0 {
+        return wrapped.maps[lane].get(key: key)
+    }
+    effect_recursive(lane, depth: depth - 1, key)
+}
+
+impl Wrapped {
+    fn receiver_recursive(self, lane: usize, depth: u256, key: u256) -> u256 {
+        if depth == 0 {
+            return self.maps[lane].get(key: key)
+        }
+        self.receiver_recursive(lane, depth: depth - 1, key)
+    }
+}
+
+trait RecursiveRead {
+    fn leaf(self, lane: usize, key: u256) -> u256
+
+    fn default_recursive(self, lane: usize, depth: u256, key: u256) -> u256 {
+        if depth == 0 {
+            return self.leaf(lane, key)
+        }
+        self.default_recursive(lane, depth: depth - 1, key)
+    }
+}
+
+impl RecursiveRead for Wrapped {
+    fn leaf(self, lane: usize, key: u256) -> u256 {
+        self.maps[lane].get(key: key)
+    }
+}
+
+msg M {
+    #[selector = 1]
+    Set { lane: usize, key: u256, value: u256 },
+
+    #[selector = 2]
+    GetDirectDynamic { lane: usize, depth: u256, key: u256 } -> u256,
+
+    #[selector = 3]
+    GetDirectStatic { depth: u256, key: u256 } -> u256,
+
+    #[selector = 4]
+    GetMutual { lane: usize, depth: u256, key: u256 } -> u256,
+
+    #[selector = 5]
+    GetReturned { lane: usize, depth: u256, key: u256 } -> u256,
+
+    #[selector = 6]
+    GetEffect { lane: usize, depth: u256, key: u256 } -> u256,
+
+    #[selector = 7]
+    GetReceiver { lane: usize, depth: u256, key: u256 } -> u256,
+
+    #[selector = 8]
+    GetDefault { lane: usize, depth: u256, key: u256 } -> u256,
+}
+
+pub contract C {
+    mut wrapped: Wrapped,
+
+    recv M {
+        Set { lane, key, value } uses (mut wrapped) {
+            wrapped.maps[lane].set(key: key, value: value)
+        }
+
+        GetDirectDynamic { lane, depth, key } -> u256 uses (wrapped) {
+            direct_dynamic(maps: wrapped.maps, lane, depth, key)
+        }
+
+        GetDirectStatic { depth, key } -> u256 uses (wrapped) {
+            direct_static(maps: wrapped.maps, depth, key)
+        }
+
+        GetMutual { lane, depth, key } -> u256 uses (wrapped) {
+            mutual_a(maps: wrapped.maps, lane, depth, key)
+        }
+
+        GetReturned { lane, depth, key } -> u256 uses (wrapped) {
+            recursive_wrapped(wrapped, depth).maps[lane].get(key: key)
+        }
+
+        GetEffect { lane, depth, key } -> u256 uses (wrapped) {
+            effect_recursive(lane, depth, key)
+        }
+
+        GetReceiver { lane, depth, key } -> u256 uses (wrapped) {
+            wrapped.receiver_recursive(lane, depth, key)
+        }
+
+        GetDefault { lane, depth, key } -> u256 uses (wrapped) {
+            wrapped.default_recursive(lane, depth, key)
+        }
+    }
+}
+
+#[test]
+fn recursive_layout_root_matrix() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 1)
+    evm.call(
+        addr: c,
+        gas: 300000,
+        value: 0,
+        message: M::Set { lane: 0, key: 7, value: 11 },
+    )
+    evm.call(
+        addr: c,
+        gas: 300000,
+        value: 0,
+        message: M::Set { lane: 1, key: 7, value: 22 },
+    )
+    let direct_dynamic = evm.call(
+        addr: c,
+        gas: 300000,
+        value: 0,
+        message: M::GetDirectDynamic { lane: 1, depth: 3, key: 7 },
+    )
+    let direct_static = evm.call(
+        addr: c,
+        gas: 300000,
+        value: 0,
+        message: M::GetDirectStatic { depth: 3, key: 7 },
+    )
+    let mutual = evm.call(
+        addr: c,
+        gas: 300000,
+        value: 0,
+        message: M::GetMutual { lane: 0, depth: 4, key: 7 },
+    )
+    let returned = evm.call(
+        addr: c,
+        gas: 300000,
+        value: 0,
+        message: M::GetReturned { lane: 1, depth: 3, key: 7 },
+    )
+    let effect = evm.call(
+        addr: c,
+        gas: 300000,
+        value: 0,
+        message: M::GetEffect { lane: 0, depth: 3, key: 7 },
+    )
+    let receiver = evm.call(
+        addr: c,
+        gas: 300000,
+        value: 0,
+        message: M::GetReceiver { lane: 1, depth: 3, key: 7 },
+    )
+    let default = evm.call(
+        addr: c,
+        gas: 300000,
+        value: 0,
+        message: M::GetDefault { lane: 0, depth: 3, key: 7 },
+    )
+    assert!(direct_dynamic == 22)
+    assert!(direct_static == 22)
+    assert!(mutual == 11)
+    assert!(returned == 22)
+    assert!(effect == 11)
+    assert!(receiver == 22)
+    assert!(default == 11)
+}

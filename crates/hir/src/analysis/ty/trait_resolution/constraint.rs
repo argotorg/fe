@@ -11,6 +11,7 @@ use crate::analysis::{
     ty::{
         adt_def::AdtDef,
         binder::Binder,
+        const_ty::ConstBodyLowering,
         corelib::resolve_core_trait,
         effects::{
             EffectKeyCanonMode, EffectKeyKind, canonical_effect_identity_for_binding,
@@ -18,10 +19,10 @@ use crate::analysis::{
         },
         layout_holes::{collect_layout_hole_tys_in_order, ty_contains_const_hole},
         trait_def::TraitInstId,
-        trait_lower::{lower_impl_trait, lower_trait_ref},
+        trait_lower::{lower_impl_trait, lower_trait_ref, lower_trait_ref_deferred},
         trait_resolution::PredicateListId,
         ty_def::{TyBase, TyData, TyId, TyVarSort},
-        ty_lower::{collect_generic_params, lower_hir_ty},
+        ty_lower::{collect_generic_params, lower_hir_ty, lower_hir_ty_deferred},
         unify::InferenceKey,
     },
 };
@@ -282,7 +283,7 @@ pub(crate) fn collect_func_decl_constraint_pairs<'db>(
         _ => return decl_constraint_pairs(db, hir_func.into()).clone(),
     };
 
-    collect_decl_constraint_pairs_impl(db, hir_func.into(), parent_pairs)
+    collect_decl_constraint_pairs_impl(db, hir_func.into(), parent_pairs, ConstBodyLowering::Eager)
 }
 
 #[salsa::tracked(
@@ -379,7 +380,19 @@ pub(crate) fn decl_constraint_pairs<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
 ) -> Vec<(TraitInstId<'db>, PredicateSource<'db>)> {
-    collect_decl_constraint_pairs_impl(db, owner, &[])
+    collect_decl_constraint_pairs_impl(db, owner, &[], ConstBodyLowering::Eager)
+}
+
+#[salsa::tracked(
+    return_ref,
+    cycle_fn=decl_constraint_pairs_cycle_recover,
+    cycle_initial=decl_constraint_pairs_cycle_initial
+)]
+fn candidate_decl_constraint_pairs<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: GenericParamOwner<'db>,
+) -> Vec<(TraitInstId<'db>, PredicateSource<'db>)> {
+    collect_decl_constraint_pairs_impl(db, owner, &[], ConstBodyLowering::Deferred)
 }
 
 fn decl_constraint_pairs_cycle_initial<'db>(
@@ -402,6 +415,7 @@ fn collect_decl_constraint_pairs_impl<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
     initial: &[(TraitInstId<'db>, PredicateSource<'db>)],
+    const_bodies: ConstBodyLowering,
 ) -> Vec<(TraitInstId<'db>, PredicateSource<'db>)> {
     let mut deferred: Vec<Deferred<'db>> = Vec::new();
     let owner_scope = owner.scope();
@@ -478,13 +492,15 @@ fn collect_decl_constraint_pairs_impl<'db>(
             PredicateListId::new(db, all_predicates.keys().copied().collect::<Vec<_>>());
 
         let before = deferred.len();
-        deferred.retain(|p| match try_resolve_type_bound(db, p, assumptions) {
-            Some(inst) => {
-                all_predicates.entry(inst).or_insert(p.source);
-                false
-            }
-            None => true,
-        });
+        deferred.retain(
+            |p| match try_resolve_type_bound(db, p, assumptions, const_bodies) {
+                Some(inst) => {
+                    all_predicates.entry(inst).or_insert(p.source);
+                    false
+                }
+                None => true,
+            },
+        );
         if deferred.len() == before {
             break;
         }
@@ -517,6 +533,23 @@ pub fn collect_constraints<'db>(
     match owner {
         GenericParamOwner::Func(func) => collect_func_def_constraints(db, func.into(), true),
         _ => collect_decl_constraints(db, owner),
+    }
+}
+
+#[salsa::tracked(cycle_fn=collect_constraints_cycle_recover, cycle_initial=collect_constraints_cycle_initial)]
+pub(crate) fn collect_candidate_constraints<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: GenericParamOwner<'db>,
+) -> Binder<PredicateListId<'db>> {
+    match owner {
+        GenericParamOwner::Func(func) => collect_func_def_constraints(db, func.into(), true),
+        _ => Binder::bind(PredicateListId::new(
+            db,
+            candidate_decl_constraint_pairs(db, owner)
+                .iter()
+                .map(|(inst, _)| *inst)
+                .collect::<Vec<_>>(),
+        )),
     }
 }
 
@@ -558,10 +591,16 @@ fn try_resolve_type_bound<'db>(
     db: &'db dyn HirAnalysisDb,
     deferred: &Deferred<'db>,
     assumptions: PredicateListId<'db>,
+    const_bodies: ConstBodyLowering,
 ) -> Option<TraitInstId<'db>> {
     let ty = match deferred.bound_ty {
         Either::Left(hir_ty) => {
-            let ty = lower_hir_ty(db, hir_ty, deferred.scope, assumptions);
+            let ty = match const_bodies {
+                ConstBodyLowering::Eager => lower_hir_ty(db, hir_ty, deferred.scope, assumptions),
+                ConstBodyLowering::Deferred => {
+                    lower_hir_ty_deferred(db, hir_ty, deferred.scope, assumptions)
+                }
+            };
             if ty.has_invalid(db) {
                 return None;
             }
@@ -570,14 +609,24 @@ fn try_resolve_type_bound<'db>(
         Either::Right(ty) => ty,
     };
 
-    lower_trait_ref(
-        db,
-        ty,
-        deferred.trait_ref,
-        deferred.scope,
-        assumptions,
-        enclosing_trait_self_ty(db, deferred.scope),
-    )
+    match const_bodies {
+        ConstBodyLowering::Eager => lower_trait_ref(
+            db,
+            ty,
+            deferred.trait_ref,
+            deferred.scope,
+            assumptions,
+            enclosing_trait_self_ty(db, deferred.scope),
+        ),
+        ConstBodyLowering::Deferred => lower_trait_ref_deferred(
+            db,
+            ty,
+            deferred.trait_ref,
+            deferred.scope,
+            assumptions,
+            enclosing_trait_self_ty(db, deferred.scope),
+        ),
+    }
     .ok()
 }
 

@@ -202,7 +202,7 @@ impl<'db> WherePredicateView<'db> {
             return Some(TraitConstraintDiag::ConstTyBound(span, subject).into());
         }
 
-        if !subject.has_invalid(db) && !subject.has_param(db) {
+        if !subject.has_invalid(db) && !subject.has_param(db) && !subject.has_projection(db) {
             return Some(TraitConstraintDiag::ConcreteTypeBound(span, subject).into());
         }
 

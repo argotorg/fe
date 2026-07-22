@@ -1,0 +1,259 @@
+use core::effect_ref::{AddressSpace, EffectHandle, EffectRef}
+use std::evm::{Evm, StorageMap, StorPtr}
+
+struct Holder<T> {
+    ptr: StorPtr<T>,
+}
+
+impl<T> Copy for Holder<T> {}
+
+impl<T> Holder<T> {
+    fn attach(mut self, raw: u256) {
+        self.ptr = StorPtr::from_raw(raw)
+    }
+}
+
+struct TaggedStorPtr<T> {
+    tag: u256,
+    encoded: u256,
+}
+
+impl<T> Copy for TaggedStorPtr<T> {}
+
+impl<T> EffectHandle for TaggedStorPtr<T> {
+    type Target = T
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn from_raw(_ raw: u256) -> Self {
+        Self { tag: 19, encoded: raw + 1 }
+    }
+
+    fn raw(self) -> u256 {
+        self.encoded - 1
+    }
+}
+
+impl<T> EffectRef<T> for TaggedStorPtr<T> {}
+
+impl<T> TaggedStorPtr<T> {
+    fn read(self) -> T
+        where T: Copy
+    {
+        let mut ptr = self
+        with (ptr) {
+            core::effect_ref::read(ptr)
+        }
+    }
+}
+
+struct TaggedHolder<T> {
+    ptr: TaggedStorPtr<T>,
+}
+
+impl<T> Copy for TaggedHolder<T> {}
+
+impl<T> TaggedHolder<T> {
+    fn attach(mut self, raw: u256) {
+        self.ptr = TaggedStorPtr::from_raw(raw)
+    }
+}
+
+fn tagged_handle_tag() -> u256 uses (ptr: TaggedStorPtr<StorageMap<u256, u256>>) {
+    ptr.tag
+}
+
+msg NestedProviderMsg {
+    #[selector = 1]
+    SetInferred { key: u256, value: u256 },
+
+    #[selector = 2]
+    SetExplicit { key: u256, value: u256 },
+
+    #[selector = 3]
+    SetDirect { key: u256, value: u256 },
+
+    #[selector = 4]
+    GetInferred { key: u256 } -> u256,
+
+    #[selector = 5]
+    GetExplicit { key: u256 } -> u256,
+
+    #[selector = 6]
+    GetDirect { key: u256 } -> u256,
+
+    #[selector = 7]
+    SetTagged { key: u256, value: u256 },
+
+    #[selector = 8]
+    GetTagged { key: u256 } -> u256,
+
+    #[selector = 9]
+    GetTaggedHandleTag -> u256,
+
+    #[selector = 10]
+    SetTaggedArray { lane: usize, key: u256, value: u256 },
+
+    #[selector = 11]
+    GetTaggedArray { lane: usize, key: u256 } -> u256,
+}
+
+pub contract NestedProviderMaps {
+    mut inferred: Holder<StorageMap<u256, u256>>,
+    mut explicit: Holder<StorageMap<u256, u256, 1>>,
+    mut direct: StorageMap<u256, u256>,
+    mut tagged: TaggedHolder<StorageMap<u256, u256>>,
+    mut tagged_array: [TaggedHolder<StorageMap<u256, u256>>; 2],
+
+    init() uses (mut inferred, mut explicit, mut tagged, mut tagged_array) {
+        inferred.attach(raw: 0)
+        explicit.attach(raw: 0)
+        tagged.attach(raw: 0)
+        tagged_array[0].attach(raw: 0)
+        tagged_array[1].attach(raw: 0)
+    }
+
+    recv NestedProviderMsg {
+        SetInferred { key, value } uses (inferred) {
+            let mut map = inferred.ptr.read()
+            map.set(key, value)
+        }
+
+        SetExplicit { key, value } uses (explicit) {
+            let mut map = explicit.ptr.read()
+            map.set(key, value)
+        }
+
+        SetDirect { key, value } uses (mut direct) {
+            direct.set(key, value)
+        }
+
+        GetInferred { key } -> u256 uses (inferred) {
+            inferred.ptr.read().get(key)
+        }
+
+        GetExplicit { key } -> u256 uses (explicit) {
+            explicit.ptr.read().get(key)
+        }
+
+        GetDirect { key } -> u256 uses (direct) {
+            direct.get(key)
+        }
+
+        SetTagged { key, value } uses (tagged) {
+            let mut map = tagged.ptr.read()
+            map.set(key, value)
+        }
+
+        GetTagged { key } -> u256 uses (tagged) {
+            tagged.ptr.read().get(key)
+        }
+
+        GetTaggedHandleTag -> u256 uses (tagged) {
+            let mut ptr = tagged.ptr
+            ptr.tag = 99
+            with (TaggedStorPtr<StorageMap<u256, u256>> = ptr) {
+                tagged_handle_tag()
+            }
+        }
+
+        SetTaggedArray { lane, key, value } uses (tagged_array) {
+            let mut map = tagged_array[lane].ptr.read()
+            map.set(key, value)
+        }
+
+        GetTaggedArray { lane, key } -> u256 uses (tagged_array) {
+            tagged_array[lane].ptr.read().get(key)
+        }
+    }
+}
+
+#[test]
+fn nested_provider_roots_are_distinct_and_reserve_explicit_values() uses (evm: mut Evm) {
+    let c = evm.create2<NestedProviderMaps>(value: 0, args: (), salt: 1)
+    let key = 7
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: NestedProviderMsg::SetInferred { key, value: 11 },
+    )
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: NestedProviderMsg::SetExplicit { key, value: 22 },
+    )
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: NestedProviderMsg::SetDirect { key, value: 33 },
+    )
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: NestedProviderMsg::SetTagged { key, value: 44 },
+    )
+    let inferred = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: NestedProviderMsg::GetInferred { key },
+    )
+    let explicit = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: NestedProviderMsg::GetExplicit { key },
+    )
+    let direct = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: NestedProviderMsg::GetDirect { key },
+    )
+    let tagged = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: NestedProviderMsg::GetTagged { key },
+    )
+    let tag = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: NestedProviderMsg::GetTaggedHandleTag {},
+    )
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: NestedProviderMsg::SetTaggedArray { lane: 0, key, value: 55 },
+    )
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: NestedProviderMsg::SetTaggedArray { lane: 1, key, value: 66 },
+    )
+    let tagged_array_0 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: NestedProviderMsg::GetTaggedArray { lane: 0, key },
+    )
+    let tagged_array_1 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: NestedProviderMsg::GetTaggedArray { lane: 1, key },
+    )
+    assert!(inferred == 11)
+    assert!(explicit == 22)
+    assert!(direct == 33)
+    assert!(tagged == 44)
+    assert!(tag == 19)
+    assert!(tagged_array_0 == 55)
+    assert!(tagged_array_1 == 66)
+}

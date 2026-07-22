@@ -1,0 +1,95 @@
+use std::evm::{Evm, StorageMap}
+
+struct Pair<const LEFT: u256, const RIGHT: u256> {
+    left: StorageMap<u256, u256, LEFT>,
+    right: StorageMap<u256, u256, RIGHT>,
+}
+
+fn read_left<const LEFT: u256, const RIGHT: u256>(
+    pair: Pair<LEFT, RIGHT>,
+    key: u256,
+) -> u256 {
+    pair.left.get(key: key)
+}
+
+fn make_pair<const LEFT: u256, const RIGHT: u256>(
+    left: StorageMap<u256, u256, LEFT>,
+    right: StorageMap<u256, u256, RIGHT>,
+) -> Pair<LEFT, RIGHT> {
+    Pair { left, right }
+}
+
+fn read_after_same_source_field_assignment<const LEFT: u256, const RIGHT: u256>(
+    left: StorageMap<u256, u256, LEFT>,
+    right: StorageMap<u256, u256, RIGHT>,
+    key: u256,
+) -> u256 {
+    let mut pair = Pair { left, right }
+    pair.left = left
+    pair.left.get(key: key)
+}
+
+msg Msg {
+    #[selector = 1]
+    Set { lane: usize, key: u256, value: u256 },
+
+    #[selector = 2]
+    Get { lane: usize, key: u256 } -> u256,
+
+    #[selector = 3]
+    GetReassigned { lane: usize, key: u256 } -> u256,
+}
+
+pub contract C {
+    mut maps: [StorageMap<u256, u256>; 2],
+
+    recv Msg {
+        Set { lane, key, value } uses (mut maps) {
+            maps[lane].set(key: key, value: value)
+        }
+
+        Get { lane, key } -> u256 uses (maps) {
+            let pair = make_pair(left: maps[lane], right: maps[0])
+            read_left(pair: pair, key: key)
+        }
+
+        GetReassigned { lane, key } -> u256 uses (maps) {
+            read_after_same_source_field_assignment(
+                left: maps[lane],
+                right: maps[0],
+                key: key,
+            )
+        }
+    }
+}
+
+#[test]
+fn constructed_aggregate_preserves_each_layout_source() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 1)
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::Set { lane: 0, key: 7, value: 42 },
+    )
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::Set { lane: 1, key: 7, value: 99 },
+    )
+    let value: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::Get { lane: 1, key: 7 },
+    )
+    assert!(value == 99)
+    let reassigned: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::GetReassigned { lane: 1, key: 7 },
+    )
+    assert!(reassigned == 99)
+}

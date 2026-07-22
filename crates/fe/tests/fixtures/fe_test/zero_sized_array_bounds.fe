@@ -1,0 +1,25 @@
+struct Empty {}
+
+impl Copy for Empty {}
+
+#[test]
+fn zero_sized_array_accepts_in_bounds_read_and_write() {
+    let mut values: [Empty; 2] = [Empty {}; 2]
+    let index: usize = 1
+    let value = values[index]
+    values[index] = value
+}
+
+#[test(should_revert)]
+fn zero_sized_array_rejects_oob_read() {
+    let values: [Empty; 2] = [Empty {}; 2]
+    let index: usize = 2
+    let value = values[index]
+}
+
+#[test(should_revert)]
+fn zero_sized_array_rejects_oob_write() {
+    let mut values: [Empty; 2] = [Empty {}; 2]
+    let index: usize = 2
+    values[index] = Empty {}
+}

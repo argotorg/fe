@@ -1,0 +1,4 @@
+pub contract MyContract {
+    mut value: u256,
+    mut value: u256,
+}

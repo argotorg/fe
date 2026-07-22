@@ -1,0 +1,106 @@
+use std::evm::{Evm, StorageMap}
+
+enum Choice<const SHARED: u256 = _, const OTHER: u256 = _> {
+    Two(
+        StorageMap<u256, u256, OTHER>,
+        StorageMap<u256, u256, SHARED>,
+    ),
+    One(StorageMap<u256, u256, SHARED>),
+}
+
+impl<const SHARED: u256, const OTHER: u256> Choice<SHARED, OTHER> {
+    fn set_other(mut self, key: u256, value: u256) {
+        match self {
+            Choice::Two(mut other, _) => other.set(key: key, value: value),
+            Choice::One(_) => {},
+        }
+    }
+
+    fn set_shared(mut self, key: u256, value: u256) {
+        match self {
+            Choice::Two(_, mut shared) => shared.set(key: key, value: value),
+            Choice::One(mut shared) => shared.set(key: key, value: value),
+        }
+    }
+
+    fn get_other(self, key: u256) -> u256 {
+        match self {
+            Choice::Two(other, _) => other.get(key: key),
+            Choice::One(_) => 0,
+        }
+    }
+
+    fn get_shared(self, key: u256) -> u256 {
+        match self {
+            Choice::Two(_, shared) => shared.get(key: key),
+            Choice::One(shared) => shared.get(key: key),
+        }
+    }
+}
+
+msg Msg {
+    #[selector = 1]
+    SetOther { key: u256, value: u256 },
+
+    #[selector = 2]
+    SetShared { key: u256, value: u256 },
+
+    #[selector = 3]
+    GetOther { key: u256 } -> u256,
+
+    #[selector = 4]
+    GetShared { key: u256 } -> u256,
+}
+
+pub contract C {
+    mut choice: Choice,
+
+    recv Msg {
+        SetOther { key, value } uses (mut choice) {
+            choice.set_other(key: key, value: value)
+        }
+
+        SetShared { key, value } uses (mut choice) {
+            choice.set_shared(key: key, value: value)
+        }
+
+        GetOther { key } -> u256 uses (choice) {
+            choice.get_other(key: key)
+        }
+
+        GetShared { key } -> u256 uses (choice) {
+            choice.get_shared(key: key)
+        }
+    }
+}
+
+#[test]
+fn roots_that_coexist_in_one_variant_never_share_an_overlay() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 1)
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::SetOther { key: 7, value: 11 },
+    )
+    evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::SetShared { key: 7, value: 22 },
+    )
+    let other: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::GetOther { key: 7 },
+    )
+    let shared: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::GetShared { key: 7 },
+    )
+    assert!(other == 11)
+    assert!(shared == 22)
+}

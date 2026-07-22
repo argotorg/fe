@@ -1,8 +1,16 @@
 use camino::{Utf8Path, Utf8PathBuf};
-use common::config::Config;
+use common::{config::Config, file::IngotFileKind};
+use driver::DriverDataBase;
 
 pub const INGOT_REQUIRES_WORKSPACE_ROOT: &str =
     "`--ingot` requires an input path that resolves to a workspace root";
+
+pub(crate) fn ingot_has_source_files(db: &DriverDataBase, ingot: hir::Ingot<'_>) -> bool {
+    ingot
+        .files(db)
+        .iter()
+        .any(|(_, file)| matches!(file.kind(db), Some(IngotFileKind::Source)))
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct WorkspaceMemberRef<'a> {
