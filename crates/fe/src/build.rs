@@ -267,6 +267,7 @@ pub fn build(
             &dir_path,
             ingot,
             contract,
+            None,
             opt_level,
             emit,
             out_dir,
@@ -301,6 +302,168 @@ pub fn build(
         }
     }
 
+    if had_errors {
+        std::process::exit(1);
+    }
+}
+
+/// `fe build --from-metadata`: rebuild from a `metadata.json` recompilation
+/// input instead of a source tree. Reads the metadata (from a file, or stdin
+/// for `-`), materializes the recorded project into a temporary directory,
+/// and runs the normal ingot build on it. Exits the process on failure.
+pub fn build_from_metadata(
+    input: &Utf8Path,
+    contract: Option<&str>,
+    optimize: Option<&str>,
+    emit: &[BuildEmit],
+    out_dir: Option<&Utf8PathBuf>,
+    profile: &str,
+    use_recovery_mode: bool,
+) {
+    let emit = EmitSelection::from_requested(emit);
+
+    let metadata = match crate::metadata_input::read_metadata(input) {
+        Ok(metadata) => metadata,
+        Err(err) => {
+            eprintln!("Error: {err}");
+            std::process::exit(1);
+        }
+    };
+    if let Err(err) = crate::metadata_input::validate_metadata(&metadata) {
+        eprintln!("Error: {err}");
+        std::process::exit(1);
+    }
+
+    // Exact reproduction is only guaranteed with the same compiler version.
+    if let Some(version) = metadata["compiler"]["version"].as_str() {
+        let running = env!("CARGO_PKG_VERSION");
+        if version != running {
+            eprintln!(
+                "Warning: metadata was produced by fe {version}, but this is fe {running}; \
+                 the rebuilt bytecode may differ from the original"
+            );
+        }
+    }
+    // Non-release builds share a package version; the recorded commit pins the
+    // exact source revision.
+    if let (Some(recorded), Some(running)) = (
+        metadata["compiler"]["commit"].as_str(),
+        option_env!("FE_GIT_HASH").filter(|hash| !hash.is_empty()),
+    ) && recorded != running
+    {
+        eprintln!(
+            "Warning: metadata was produced by fe commit {recorded}, but this is fe commit \
+             {running}; the rebuilt bytecode may differ from the original"
+        );
+    }
+
+    // The metadata's optimizer level is the default; an explicit `-O` wins.
+    let recorded_level = metadata["settings"]["optimizer"]["level"].as_str();
+    let level = match (optimize, recorded_level) {
+        (Some(flag), Some(recorded)) if flag != recorded => {
+            eprintln!(
+                "Warning: -O {flag} overrides optimizer level {recorded} recorded in the \
+                 metadata; the rebuilt bytecode will not match the verified artifact"
+            );
+            flag
+        }
+        (Some(flag), _) => flag,
+        (None, Some(recorded)) => recorded,
+        (None, None) => "1",
+    };
+    let opt_level: OptLevel = match level.parse() {
+        Ok(level) => level,
+        Err(err) => {
+            eprintln!("Error: {err}");
+            std::process::exit(1);
+        }
+    };
+
+    // Default target: the contract recorded in `compilationTarget`; an
+    // explicit `--contract` overrides it.
+    let compilation_target = &metadata["settings"]["compilationTarget"];
+    let recorded_target = if compilation_target.is_null() {
+        None
+    } else {
+        let target = compilation_target
+            .as_object()
+            .filter(|target| target.len() == 1)
+            .and_then(|target| {
+                let (path, name) = target.iter().next()?;
+                Some((path.clone(), name.as_str()?.to_string()))
+            });
+        if target.is_none() {
+            eprintln!(
+                "Error: `settings.compilationTarget` must contain exactly one \
+                 source-path/contract-name pair"
+            );
+            std::process::exit(1);
+        }
+        target
+    };
+    let contract = contract
+        .map(str::to_string)
+        .or_else(|| recorded_target.as_ref().map(|(_, name)| name.clone()));
+    // The recorded source path pins which module defines the target, in case
+    // another module defines a same-named contract; it only applies while
+    // building the recorded contract. Standalone-target metadata keys its
+    // source by bare file basename, which `reconstruct_project` materializes
+    // under `src/`; mirror that so the path resolves in the rebuilt ingot.
+    let target_source = recorded_target
+        .filter(|(_, name)| contract.as_deref() == Some(name))
+        .map(|(path, _)| {
+            if path.contains('/') {
+                path
+            } else {
+                format!("src/{path}")
+            }
+        });
+
+    let temp = match tempfile::Builder::new()
+        .prefix("fe-from-metadata")
+        .tempdir()
+    {
+        Ok(temp) => temp,
+        Err(err) => {
+            eprintln!("Error: Failed to create temporary project directory: {err}");
+            std::process::exit(1);
+        }
+    };
+    let Some(temp_root) = Utf8Path::from_path(temp.path()) else {
+        eprintln!("Error: temporary project directory path is not valid UTF-8");
+        std::process::exit(1);
+    };
+    let root_dir = match crate::metadata_input::reconstruct_project(&metadata, temp_root) {
+        Ok(dir) => dir,
+        Err(err) => {
+            eprintln!("Error: {err}");
+            std::process::exit(1);
+        }
+    };
+
+    let out_dir = out_dir.cloned().unwrap_or_else(|| Utf8PathBuf::from("out"));
+
+    let mut db = DriverDataBase::default();
+    db.compiler_options()
+        .set_recovery_mode(&mut db)
+        .to(use_recovery_mode);
+    db.compilation_settings()
+        .set_profile(&mut db)
+        .to(profile.into());
+
+    let had_errors = build_directory(
+        &mut db,
+        &root_dir,
+        None,
+        contract.as_deref(),
+        target_source.as_deref(),
+        opt_level,
+        emit,
+        Some(&out_dir),
+        None,
+    );
+
+    drop(temp);
     if had_errors {
         std::process::exit(1);
     }
@@ -414,6 +577,7 @@ fn build_directory(
     dir_path: &Utf8PathBuf,
     ingot: Option<&str>,
     contract: Option<&str>,
+    target_source: Option<&str>,
     opt_level: OptLevel,
     emit: EmitSelection,
     out_dir: Option<&Utf8PathBuf>,
@@ -487,6 +651,7 @@ fn build_directory(
                 db,
                 &url,
                 contract,
+                target_source,
                 opt_level,
                 emit,
                 &out_dir,
@@ -602,6 +767,7 @@ fn build_workspace(
                     db,
                     &matches[0].url,
                     Some(contract),
+                    None,
                     opt_level,
                     emit,
                     &out_dir,
@@ -653,6 +819,7 @@ fn build_workspace(
         let summary = build_ingot_url(
             db,
             &member.url,
+            None,
             None,
             opt_level,
             emit,
@@ -853,6 +1020,7 @@ fn build_ingot_url(
     db: &mut DriverDataBase,
     ingot_url: &Url,
     contract: Option<&str>,
+    target_source: Option<&str>,
     opt_level: OptLevel,
     emit: EmitSelection,
     out_dir: &Utf8Path,
@@ -899,6 +1067,7 @@ fn build_ingot_url(
         db,
         ingot,
         contract,
+        target_source,
         opt_level,
         emit,
         out_dir,
@@ -914,6 +1083,7 @@ fn build_ingot(
     db: &DriverDataBase,
     ingot: hir::Ingot<'_>,
     contract: Option<&str>,
+    target_source: Option<&str>,
     opt_level: OptLevel,
     emit: EmitSelection,
     out_dir: &Utf8Path,
@@ -928,6 +1098,34 @@ fn build_ingot(
             eprintln!("Error: Failed to analyze contracts: {err}");
             return BuildSummary { had_errors: true };
         }
+    };
+
+    // `--from-metadata` records the contract's defining source file in
+    // `settings.compilationTarget`; scope emission to that module so a
+    // same-named contract in another module cannot make the target ambiguous.
+    // A recorded target that doesn't resolve is an error, never a fallback to
+    // ingot-wide resolution: that could silently rebuild the wrong source.
+    let target_mod = match (target_source, contract) {
+        (Some(key), Some(name)) => {
+            let mut sources = BTreeMap::new();
+            collect_ingot_sources_prefixed(db, ingot, None, &mut sources);
+            let Some((top_mod, _)) = sources.get(key) else {
+                eprintln!(
+                    "Error: the source path `{key}` recorded in \
+                     `settings.compilationTarget` does not exist in the sources"
+                );
+                return BuildSummary { had_errors: true };
+            };
+            if !module_defines_contract(db, *top_mod, name) {
+                eprintln!(
+                    "Error: `{key}` does not define the contract `{name}` recorded in \
+                     `settings.compilationTarget`"
+                );
+                return BuildSummary { had_errors: true };
+            }
+            Some(*top_mod)
+        }
+        _ => None,
     };
 
     if contract_names.is_empty() {
@@ -949,8 +1147,13 @@ fn build_ingot(
     let mut had_errors = false;
     if emit.ir || emit.writes_any_bytecode() {
         if emit.ir {
-            let ir = match codegen::emit_ingot_sonatina_ir_optimized(db, ingot, opt_level, contract)
-            {
+            let ir = match target_mod {
+                Some(top_mod) => {
+                    codegen::emit_module_sonatina_ir_optimized(db, top_mod, opt_level, contract)
+                }
+                None => codegen::emit_ingot_sonatina_ir_optimized(db, ingot, opt_level, contract),
+            };
+            let ir = match ir {
                 Ok(ir) => ir,
                 Err(err) => {
                     eprintln!("Error: Failed to compile Sonatina IR: {err}");
@@ -965,14 +1168,19 @@ fn build_ingot(
             }
         }
         if emit.writes_any_bytecode() {
-            let bytecode =
-                match codegen::emit_ingot_sonatina_bytecode(db, ingot, opt_level, contract) {
-                    Ok(bytecode) => bytecode,
-                    Err(err) => {
-                        eprintln!("Error: Failed to compile Sonatina bytecode: {err}");
-                        return BuildSummary { had_errors: true };
-                    }
-                };
+            let bytecode = match target_mod {
+                Some(top_mod) => {
+                    codegen::emit_module_sonatina_bytecode(db, top_mod, opt_level, contract)
+                }
+                None => codegen::emit_ingot_sonatina_bytecode(db, ingot, opt_level, contract),
+            };
+            let bytecode = match bytecode {
+                Ok(bytecode) => bytecode,
+                Err(err) => {
+                    eprintln!("Error: Failed to compile Sonatina bytecode: {err}");
+                    return BuildSummary { had_errors: true };
+                }
+            };
             had_errors |= write_sonatina_bytecode_artifacts(
                 &names_to_build,
                 &bytecode,
@@ -987,6 +1195,9 @@ fn build_ingot(
         // For ingot builds, generate ABI from each top-level module
         use hir::hir_def::HirIngot;
         for top_mod in ingot.all_modules(db) {
+            if target_mod.is_some_and(|target| *top_mod != target) {
+                continue;
+            }
             had_errors |= write_abi_artifacts(db, *top_mod, &names_to_build, out_dir, report_dir);
         }
     }
@@ -1122,6 +1333,29 @@ fn collect_ingot_contract_names(
     let mut names: Vec<_> = names.into_iter().collect();
     names.sort();
     Ok(names)
+}
+
+/// Whether `top_mod` defines `name` as a contract or manual contract root — the
+/// same definitions `write_metadata_artifacts` records in `compilationTarget`.
+fn module_defines_contract(db: &DriverDataBase, top_mod: TopLevelMod<'_>, name: &str) -> bool {
+    if top_mod.all_contracts(db).iter().any(|contract| {
+        contract
+            .name(db)
+            .to_opt()
+            .is_some_and(|n| n.data(db) == name)
+    }) {
+        return true;
+    }
+    top_mod.all_funcs(db).iter().any(|&func| {
+        func.top_mod(db) == top_mod
+            && match func.manual_contract_root_attr(db) {
+                Some(ManualContractRootAttr::Init { contract_name })
+                | Some(ManualContractRootAttr::Runtime { contract_name }) => {
+                    contract_name.data(db) == name
+                }
+                Some(ManualContractRootAttr::Error(_)) | None => false,
+            }
+    })
 }
 
 fn collect_workspace_contract_names(db: &DriverDataBase, ingot: hir::Ingot<'_>) -> Vec<String> {
@@ -1381,8 +1615,9 @@ fn non_builtin_closure<'db>(
 /// Assign each non-builtin ingot in the closure a unique, deterministic namespace, used
 /// consistently for source-key prefixes, `settings.ingots[].namespace`, and the dependency map.
 /// The root ingot gets the empty namespace; others use their name, qualified by version (then an
-/// index) when two *distinct* ingots share a name (e.g. two versions of the same package). Without
-/// this, same-named-different-version dependencies would collide in the flat `sources` map.
+/// index) when two *distinct* ingots share a name (e.g. two versions of the same package).
+/// Dependency namespaces also avoid every root-source path prefix so a metadata reader can
+/// distinguish unprefixed root sources from namespace-prefixed dependency sources.
 fn assign_namespaces(
     db: &DriverDataBase,
     root: hir::Ingot<'_>,
@@ -1429,11 +1664,9 @@ fn assign_namespaces(
         let stem = candidate.clone();
         let mut n = 2;
         while used.contains(&candidate)
-            || ing.files(db).iter().any(|(_, file)| {
-                file.kind(db) == Some(IngotFileKind::Source)
-                    && file.path(db).as_ref().is_some_and(|path| {
-                        root_source_keys.contains(&format!("{candidate}/{path}"))
-                    })
+            || root_source_keys.iter().any(|key| {
+                key.strip_prefix(candidate.as_str())
+                    .is_some_and(|rest| rest.starts_with('/'))
             })
         {
             candidate = format!("{stem}-{n}");

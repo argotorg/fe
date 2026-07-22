@@ -75,7 +75,7 @@ impl Workspace {
 
     #[salsa::tracked]
     pub fn get_relative_path(self, db: &dyn InputDb, base: Url, file: File) -> Option<Utf8PathBuf> {
-        let file_url = self.paths(db).get(&file)?.clone();
+        let file_url = self.get_path(db, file)?;
         base.make_relative(&file_url).map(Utf8PathBuf::from)
     }
 

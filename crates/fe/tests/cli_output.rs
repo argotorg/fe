@@ -105,6 +105,33 @@ fn run_fe_main_in_dir(args: &[&str], cwd: &Path) -> (String, i32) {
     (out.combined(), out.exit_code)
 }
 
+fn run_fe_main_with_stdin(args: &[&str], stdin_data: &str) -> (String, i32) {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = Command::new(fe_binary())
+        .args(args)
+        .env("NO_COLOR", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|_| panic!("Failed to spawn fe {args:?}"));
+    child
+        .stdin
+        .take()
+        .expect("child stdin")
+        .write_all(stdin_data.as_bytes())
+        .expect("write stdin");
+    let output = child.wait_with_output().expect("wait for fe");
+    let out = FeOutput {
+        stdout: normalize_output(&String::from_utf8_lossy(&output.stdout)),
+        stderr: normalize_output(&String::from_utf8_lossy(&output.stderr)),
+        exit_code: output.status.code().unwrap_or(-1),
+    };
+    (out.combined(), out.exit_code)
+}
+
 #[test]
 fn test_cli_check_invalid_named_const_used_in_type_position_reports_error_instead_of_panicking() {
     let temp = tempdir().expect("tempdir");
@@ -909,22 +936,19 @@ fn test_cli_build_metadata_round_trip_reproduces_runtime_bytecode() {
     assert_eq!(exit_code, 0, "original build failed:\n{output}");
     let original_runtime =
         fs::read_to_string(out_dir.join("Foo.runtime.bin")).expect("read original runtime.bin");
-    let metadata: Value = serde_json::from_str(
-        &fs::read_to_string(out_dir.join("Foo.metadata.json")).expect("read metadata"),
-    )
-    .expect("parse metadata");
 
-    // Reconstruct a fresh project solely from the metadata, then rebuild.
+    // Rebuild solely from the metadata artifact via `--from-metadata`.
+    let metadata_path = out_dir.join("Foo.metadata.json");
     let recon = tempdir().expect("recon tempdir");
-    let root_dir = reconstruct_project_from_metadata(&metadata, recon.path());
     let recon_out = recon.path().join("out");
     let (output, exit_code) = run_fe_main(&[
         "build",
+        "--from-metadata",
+        metadata_path.to_str().expect("metadata utf8"),
         "--emit",
         "runtime-bytecode",
         "--out-dir",
         recon_out.to_str().expect("out utf8"),
-        root_dir.to_str().expect("root utf8"),
     ]);
     assert_eq!(exit_code, 0, "rebuild from metadata failed:\n{output}");
     let rebuilt_runtime =
@@ -1135,19 +1159,20 @@ fn test_cli_build_emit_metadata_disambiguates_same_named_dependencies() {
         .collect();
     assert!(all_content.contains("helper_one") && all_content.contains("helper_two"));
 
-    // Round-trip: reconstruct from metadata and rebuild to byte-identical runtime bytecode.
+    // Round-trip via `--from-metadata`: rebuild to byte-identical runtime bytecode.
     let original_runtime =
         fs::read_to_string(out_dir.join("Foo.runtime.bin")).expect("read original runtime.bin");
+    let metadata_path = out_dir.join("Foo.metadata.json");
     let recon = tempdir().expect("recon tempdir");
-    let root_dir = reconstruct_project_from_metadata(&value, recon.path());
     let recon_out = recon.path().join("out");
     let (output, exit_code) = run_fe_main(&[
         "build",
+        "--from-metadata",
+        metadata_path.to_str().expect("metadata utf8"),
         "--emit",
         "runtime-bytecode",
         "--out-dir",
         recon_out.to_str().expect("out utf8"),
-        root_dir.to_str().expect("root utf8"),
     ]);
     assert_eq!(exit_code, 0, "rebuild from metadata failed:\n{output}");
     let rebuilt_runtime =
@@ -1159,10 +1184,10 @@ fn test_cli_build_emit_metadata_disambiguates_same_named_dependencies() {
 }
 
 #[test]
-fn test_cli_build_emit_metadata_disambiguates_dependency_from_root_source_path() {
+fn test_cli_build_emit_metadata_disambiguates_dependency_namespace_from_root_source_prefix() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path();
-    fs::create_dir_all(root.join("app/src/src")).expect("create app sources");
+    fs::create_dir_all(root.join("app/src")).expect("create app sources");
     fs::create_dir_all(root.join("dep/src")).expect("create dependency sources");
     fs::write(
         root.join("app/fe.toml"),
@@ -1174,15 +1199,10 @@ fn test_cli_build_emit_metadata_disambiguates_dependency_from_root_source_path()
         "[ingot]\nname = \"src\"\nversion = \"1.0.0\"\n",
     )
     .expect("write dependency fe.toml");
-    let root_only_src = "pub fn root_only() -> u256 {\n    return 7\n}\n";
     let dependency_src = "pub fn helper() -> u256 {\n    return 42\n}\n";
-    fs::write(root.join("app/src/src/lib.fe"), root_only_src).expect("write root source");
     fs::write(root.join("dep/src/lib.fe"), dependency_src).expect("write dependency source");
-    fs::write(
-        root.join("app/src/main.fe"),
-        "use dep::helper\n\npub msg FooMsg {\n    #[selector = sol(\"run()\")]\n    Run -> u256,\n}\n\npub contract Foo {\n    recv FooMsg {\n        Run -> u256 {\n            helper()\n        }\n    }\n}\n",
-    )
-    .expect("write app main source");
+    let root_src = "use dep::helper\n\npub msg FooMsg {\n    #[selector = sol(\"run()\")]\n    Run -> u256,\n}\n\npub contract Foo {\n    recv FooMsg {\n        Run -> u256 {\n            helper()\n        }\n    }\n}\n";
+    fs::write(root.join("app/src/main.fe"), root_src).expect("write app main source");
 
     let out_dir = root.join("app/out");
     let (output, exit_code) = run_fe_main(&[
@@ -1200,32 +1220,35 @@ fn test_cli_build_emit_metadata_disambiguates_dependency_from_root_source_path()
     )
     .expect("parse metadata");
     let sources = metadata["sources"].as_object().expect("sources object");
-    assert_eq!(sources["src/src/lib.fe"]["content"], root_only_src);
+    assert_eq!(sources["src/main.fe"]["content"], root_src);
     assert_eq!(sources["src-2/src/lib.fe"]["content"], dependency_src);
-    let dep = metadata["settings"]["ingots"]
+    let ingots = metadata["settings"]["ingots"]
         .as_array()
-        .expect("ingots array")
+        .expect("ingots array");
+    let dep = ingots
         .iter()
         .find(|ingot| ingot["name"] == "src")
         .expect("dependency ingot");
     assert_eq!(dep["namespace"], "src-2");
-    assert_eq!(
-        metadata["settings"]["ingots"][0]["dependencies"]["dep"],
-        "src-2"
-    );
+    let root_ingot = ingots
+        .iter()
+        .find(|ingot| ingot["namespace"] == "")
+        .expect("root ingot");
+    assert_eq!(root_ingot["dependencies"]["dep"], "src-2");
 
     let original_runtime =
         fs::read_to_string(out_dir.join("Foo.runtime.bin")).expect("read original runtime.bin");
+    let metadata_path = out_dir.join("Foo.metadata.json");
     let recon = tempdir().expect("recon tempdir");
-    let root_dir = reconstruct_project_from_metadata(&metadata, recon.path());
     let recon_out = recon.path().join("out");
     let (output, exit_code) = run_fe_main(&[
         "build",
+        "--from-metadata",
+        metadata_path.to_str().expect("metadata utf8"),
         "--emit",
         "runtime-bytecode",
         "--out-dir",
         recon_out.to_str().expect("out utf8"),
-        root_dir.to_str().expect("root utf8"),
     ]);
     assert_eq!(exit_code, 0, "rebuild from metadata failed:\n{output}");
     let rebuilt_runtime =
@@ -1319,19 +1342,21 @@ fn test_cli_build_emit_metadata_preserves_dependency_arithmetic_across_edge_type
         "internal edge must not be forced"
     );
 
-    // Round-trip: the flattened reconstruction must still reproduce the exact bytecode.
+    // Round-trip via `--from-metadata`: the flattened reconstruction must still
+    // reproduce the exact bytecode.
     let original_runtime =
         fs::read_to_string(out_dir.join("App.runtime.bin")).expect("read original runtime.bin");
+    let metadata_path = out_dir.join("App.metadata.json");
     let recon = tempdir().expect("recon tempdir");
-    let root_dir = reconstruct_project_from_metadata(&value, recon.path());
     let recon_out = recon.path().join("out");
     let (output, exit_code) = run_fe_main(&[
         "build",
+        "--from-metadata",
+        metadata_path.to_str().expect("metadata utf8"),
         "--emit",
         "runtime-bytecode",
         "--out-dir",
         recon_out.to_str().expect("out utf8"),
-        root_dir.to_str().expect("root utf8"),
     ]);
     assert_eq!(exit_code, 0, "rebuild from metadata failed:\n{output}");
     let rebuilt_runtime =
@@ -1369,95 +1394,573 @@ fn write_app_with_path_dependency(root: &Path) {
     .expect("write mylib/src/lib.fe");
 }
 
-/// Reconstruct a buildable project under `dest` purely from a `metadata.json` value: one directory
-/// per `settings.ingots[]` entry (root at `dest/<name>`, deps at `dest/<namespace>`), regenerating
-/// each `fe.toml` and writing every `sources` entry into its namespaced layout. Returns the root
-/// ingot directory.
-fn reconstruct_project_from_metadata(metadata: &Value, dest: &Path) -> std::path::PathBuf {
-    let ingots = metadata["settings"]["ingots"]
-        .as_array()
-        .expect("ingots array");
+#[test]
+fn test_cli_build_from_metadata_reads_stdin() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path();
+    write_app_with_path_dependency(root);
 
-    let dir_for = |namespace: &str, name: &str| -> std::path::PathBuf {
-        if namespace.is_empty() {
-            dest.join(name)
-        } else {
-            dest.join(namespace)
-        }
+    let out_dir = root.join("app/out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "metadata,runtime-bytecode",
+        "--out-dir",
+        out_dir.to_str().expect("out utf8"),
+        root.join("app").to_str().expect("app utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "original build failed:\n{output}");
+    let original_runtime =
+        fs::read_to_string(out_dir.join("Foo.runtime.bin")).expect("read original runtime.bin");
+    let metadata = fs::read_to_string(out_dir.join("Foo.metadata.json")).expect("read metadata");
+
+    // `--from-metadata -` reads the JSON from stdin.
+    let recon = tempdir().expect("recon tempdir");
+    let recon_out = recon.path().join("out");
+    let (output, exit_code) = run_fe_main_with_stdin(
+        &[
+            "build",
+            "--from-metadata",
+            "-",
+            "--emit",
+            "runtime-bytecode",
+            "--out-dir",
+            recon_out.to_str().expect("out utf8"),
+        ],
+        &metadata,
+    );
+    assert_eq!(
+        exit_code, 0,
+        "rebuild from stdin metadata failed:\n{output}"
+    );
+    let rebuilt_runtime =
+        fs::read_to_string(recon_out.join("Foo.runtime.bin")).expect("read rebuilt runtime.bin");
+    assert_eq!(
+        original_runtime, rebuilt_runtime,
+        "runtime bytecode rebuilt from stdin metadata must be byte-identical"
+    );
+}
+
+#[test]
+fn test_cli_build_from_metadata_round_trips_standalone_file() {
+    // Standalone-target metadata keys its single source by file basename and
+    // records `version: null` for the pseudo-ingot; the reconstruction must
+    // still produce a loadable project (source under `src/`, valid fe.toml).
+    let temp = tempdir().expect("tempdir");
+    let file = temp.path().join("counter.fe");
+    fs::write(
+        &file,
+        "pub msg FooMsg {\n    #[selector = sol(\"run()\")]\n    Run -> u256,\n}\n\npub contract Foo {\n    recv FooMsg {\n        Run -> u256 {\n            42\n        }\n    }\n}\n",
+    )
+    .expect("write counter.fe");
+
+    let out_dir = temp.path().join("out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "metadata,runtime-bytecode",
+        "--out-dir",
+        out_dir.to_str().expect("out utf8"),
+        file.to_str().expect("file utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "original standalone build failed:\n{output}");
+    let original_runtime =
+        fs::read_to_string(out_dir.join("Foo.runtime.bin")).expect("read original runtime.bin");
+
+    let metadata_path = out_dir.join("Foo.metadata.json");
+    let recon = tempdir().expect("recon tempdir");
+    let recon_out = recon.path().join("out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--from-metadata",
+        metadata_path.to_str().expect("metadata utf8"),
+        "--emit",
+        "runtime-bytecode",
+        "--out-dir",
+        recon_out.to_str().expect("out utf8"),
+    ]);
+    assert_eq!(
+        exit_code, 0,
+        "rebuild from standalone metadata failed:\n{output}"
+    );
+    let rebuilt_runtime =
+        fs::read_to_string(recon_out.join("Foo.runtime.bin")).expect("read rebuilt runtime.bin");
+    assert_eq!(
+        original_runtime, rebuilt_runtime,
+        "runtime bytecode rebuilt from standalone metadata must be byte-identical"
+    );
+}
+
+#[test]
+fn test_cli_build_from_metadata_defaults_to_compilation_target_contract() {
+    let temp = tempdir().expect("tempdir");
+    let src_dir = temp.path().join("src");
+    fs::create_dir_all(&src_dir).expect("create src dir");
+    fs::write(
+        temp.path().join("fe.toml"),
+        "[ingot]\nname = \"two_contracts\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write fe.toml");
+    fs::write(
+        src_dir.join("lib.fe"),
+        "pub contract Foo {\n}\n\npub contract Bar {\n}\n",
+    )
+    .expect("write lib.fe");
+
+    let out_dir = temp.path().join("out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "metadata",
+        "--out-dir",
+        out_dir.to_str().expect("out utf8"),
+        temp.path().to_str().expect("project utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "original build failed:\n{output}");
+
+    // Foo's metadata records `compilationTarget: Foo`; the rebuild must only
+    // produce Foo's artifacts even though the sources define Bar as well.
+    let metadata_path = out_dir.join("Foo.metadata.json");
+    let recon = tempdir().expect("recon tempdir");
+    let recon_out = recon.path().join("out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--from-metadata",
+        metadata_path.to_str().expect("metadata utf8"),
+        "--emit",
+        "runtime-bytecode",
+        "--out-dir",
+        recon_out.to_str().expect("out utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "rebuild from metadata failed:\n{output}");
+    assert!(
+        recon_out.join("Foo.runtime.bin").is_file(),
+        "missing Foo artifact:\n{output}"
+    );
+    assert!(
+        !recon_out.join("Bar.runtime.bin").exists(),
+        "Bar must not be built by default:\n{output}"
+    );
+
+    // `--contract` overrides the recorded compilation target.
+    let recon_out_bar = recon.path().join("out-bar");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--from-metadata",
+        metadata_path.to_str().expect("metadata utf8"),
+        "--contract",
+        "Bar",
+        "--emit",
+        "runtime-bytecode",
+        "--out-dir",
+        recon_out_bar.to_str().expect("out utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "rebuild with --contract failed:\n{output}");
+    assert!(
+        recon_out_bar.join("Bar.runtime.bin").is_file(),
+        "missing Bar artifact:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_build_from_metadata_optimize_override_warns() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path();
+    write_app_with_path_dependency(root);
+
+    let out_dir = root.join("app/out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "metadata",
+        "--out-dir",
+        out_dir.to_str().expect("out utf8"),
+        root.join("app").to_str().expect("app utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "original build failed:\n{output}");
+    let metadata_path = out_dir.join("Foo.metadata.json");
+
+    // The metadata records level `1` (the default); an explicit `-O 0` wins,
+    // with a warning that the rebuilt bytecode deviates.
+    let recon = tempdir().expect("recon tempdir");
+    let recon_out = recon.path().join("out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--from-metadata",
+        metadata_path.to_str().expect("metadata utf8"),
+        "-O",
+        "0",
+        "--emit",
+        "runtime-bytecode",
+        "--out-dir",
+        recon_out.to_str().expect("out utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "rebuild with -O override failed:\n{output}");
+    assert!(
+        output.contains("Warning: -O 0 overrides optimizer level 1"),
+        "expected override warning:\n{output}"
+    );
+    assert!(
+        recon_out.join("Foo.runtime.bin").is_file(),
+        "missing rebuilt artifact:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_build_from_metadata_warns_on_compiler_version_mismatch() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path();
+    write_app_with_path_dependency(root);
+
+    let out_dir = root.join("app/out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "metadata",
+        "--out-dir",
+        out_dir.to_str().expect("out utf8"),
+        root.join("app").to_str().expect("app utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "original build failed:\n{output}");
+
+    let mut metadata: Value = serde_json::from_str(
+        &fs::read_to_string(out_dir.join("Foo.metadata.json")).expect("read metadata"),
+    )
+    .expect("parse metadata");
+    metadata["compiler"]["version"] = "0.0.1".into();
+    let edited_path = root.join("edited.metadata.json");
+    fs::write(&edited_path, metadata.to_string()).expect("write edited metadata");
+
+    let recon = tempdir().expect("recon tempdir");
+    let recon_out = recon.path().join("out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--from-metadata",
+        edited_path.to_str().expect("metadata utf8"),
+        "--emit",
+        "runtime-bytecode",
+        "--out-dir",
+        recon_out.to_str().expect("out utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "version mismatch must not abort:\n{output}");
+    assert!(
+        output.contains("Warning: metadata was produced by fe 0.0.1"),
+        "expected version mismatch warning:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_build_from_metadata_warns_on_compiler_commit_mismatch() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path();
+    write_app_with_path_dependency(root);
+
+    let out_dir = root.join("app/out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "metadata",
+        "--out-dir",
+        out_dir.to_str().expect("out utf8"),
+        root.join("app").to_str().expect("app utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "original build failed:\n{output}");
+
+    let mut metadata: Value = serde_json::from_str(
+        &fs::read_to_string(out_dir.join("Foo.metadata.json")).expect("read metadata"),
+    )
+    .expect("parse metadata");
+    if metadata["compiler"]["commit"].as_str().is_none() {
+        // The test binary was built without git information, so the rebuild
+        // has no commit to compare against.
+        return;
+    }
+    metadata["compiler"]["commit"] = "deadbee".into();
+    let edited_path = root.join("edited.metadata.json");
+    fs::write(&edited_path, metadata.to_string()).expect("write edited metadata");
+
+    let recon = tempdir().expect("recon tempdir");
+    let recon_out = recon.path().join("out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--from-metadata",
+        edited_path.to_str().expect("metadata utf8"),
+        "--emit",
+        "runtime-bytecode",
+        "--out-dir",
+        recon_out.to_str().expect("out utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "commit mismatch must not abort:\n{output}");
+    assert!(
+        output.contains("Warning: metadata was produced by fe commit deadbee"),
+        "expected commit mismatch warning:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_build_from_metadata_honors_compilation_target_source_path() {
+    // Two modules in the same ingot each define a contract named `Foo`;
+    // `settings.compilationTarget` records which source file the metadata is
+    // for. The rebuild must scope itself to that module instead of failing on
+    // the ambiguous name.
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path();
+    fs::create_dir_all(root.join("app/src")).expect("create app/src");
+    fs::write(
+        root.join("app/fe.toml"),
+        "[ingot]\nname = \"app\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write app/fe.toml");
+    let contract_source = |value: &str| {
+        format!(
+            "pub msg FooMsg {{\n    #[selector = sol(\"run()\")]\n    Run -> u256,\n}}\n\npub contract Foo {{\n    recv FooMsg {{\n        Run -> u256 {{\n            {value}\n        }}\n    }}\n}}\n"
+        )
+    };
+    fs::write(root.join("app/src/a.fe"), contract_source("1")).expect("write app/src/a.fe");
+    fs::write(root.join("app/src/b.fe"), contract_source("2")).expect("write app/src/b.fe");
+
+    let out_dir = root.join("app/out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "metadata",
+        "--out-dir",
+        out_dir.to_str().expect("out utf8"),
+        root.join("app").to_str().expect("app utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "original build failed:\n{output}");
+
+    let metadata: Value = serde_json::from_str(
+        &fs::read_to_string(out_dir.join("Foo.metadata.json")).expect("read metadata"),
+    )
+    .expect("parse metadata");
+    assert_eq!(
+        metadata["settings"]["compilationTarget"],
+        serde_json::json!({ "src/a.fe": "Foo" }),
+        "metadata must record the defining source file"
+    );
+
+    let recon = tempdir().expect("recon tempdir");
+    let recon_out = recon.path().join("out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--from-metadata",
+        out_dir
+            .join("Foo.metadata.json")
+            .to_str()
+            .expect("metadata utf8"),
+        "--emit",
+        "runtime-bytecode",
+        "--out-dir",
+        recon_out.to_str().expect("out utf8"),
+    ]);
+    assert_eq!(
+        exit_code, 0,
+        "rebuild must honor the recorded source path:\n{output}"
+    );
+    let rebuilt_runtime =
+        fs::read_to_string(recon_out.join("Foo.runtime.bin")).expect("read rebuilt runtime.bin");
+
+    // The rebuilt bytecode must be the `src/a.fe` contract: it must match a
+    // reference build of an identical ingot containing only that module.
+    let reference = tempdir().expect("reference tempdir");
+    fs::create_dir_all(reference.path().join("app/src")).expect("create reference app/src");
+    fs::write(
+        reference.path().join("app/fe.toml"),
+        "[ingot]\nname = \"app\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write reference fe.toml");
+    fs::write(reference.path().join("app/src/a.fe"), contract_source("1"))
+        .expect("write reference a.fe");
+    let reference_out = reference.path().join("out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "runtime-bytecode",
+        "--out-dir",
+        reference_out.to_str().expect("out utf8"),
+        reference.path().join("app").to_str().expect("app utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "reference build failed:\n{output}");
+    let reference_runtime = fs::read_to_string(reference_out.join("Foo.runtime.bin"))
+        .expect("read reference runtime.bin");
+    assert_eq!(
+        rebuilt_runtime, reference_runtime,
+        "rebuild must produce the contract recorded in compilationTarget"
+    );
+}
+
+#[test]
+fn test_cli_build_from_metadata_rejects_unresolvable_compilation_target() {
+    // The recorded `compilationTarget` must resolve exactly; a stale or edited
+    // path must fail the rebuild instead of silently falling back to building
+    // a same-named contract from a different source file.
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path();
+    fs::create_dir_all(root.join("app/src")).expect("create app/src");
+    fs::write(
+        root.join("app/fe.toml"),
+        "[ingot]\nname = \"app\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write app/fe.toml");
+    fs::write(root.join("app/src/a.fe"), "pub contract Foo {\n}\n").expect("write app/src/a.fe");
+    fs::write(root.join("app/src/b.fe"), "pub contract Bar {\n}\n").expect("write app/src/b.fe");
+
+    let out_dir = root.join("app/out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "metadata",
+        "--out-dir",
+        out_dir.to_str().expect("out utf8"),
+        root.join("app").to_str().expect("app utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "original build failed:\n{output}");
+    let metadata: Value = serde_json::from_str(
+        &fs::read_to_string(out_dir.join("Foo.metadata.json")).expect("read metadata"),
+    )
+    .expect("parse metadata");
+
+    let rebuild_with_target = |target: Value| {
+        let mut edited = metadata.clone();
+        edited["settings"]["compilationTarget"] = target;
+        let edited_path = root.join("edited.metadata.json");
+        fs::write(&edited_path, edited.to_string()).expect("write edited metadata");
+        let recon = tempdir().expect("recon tempdir");
+        let recon_out = recon.path().join("out");
+        let (output, exit_code) = run_fe_main(&[
+            "build",
+            "--from-metadata",
+            edited_path.to_str().expect("metadata utf8"),
+            "--emit",
+            "runtime-bytecode",
+            "--out-dir",
+            recon_out.to_str().expect("out utf8"),
+        ]);
+        let emitted = recon_out.join("Foo.runtime.bin").exists();
+        (output, exit_code, emitted)
     };
 
-    // Non-root namespaces, used to route each source key to its owning ingot.
-    let non_root_namespaces: Vec<String> = ingots
-        .iter()
-        .filter_map(|i| {
-            let ns = i["namespace"].as_str().unwrap_or("");
-            (!ns.is_empty()).then(|| ns.to_string())
-        })
-        .collect();
+    // The recorded source path does not exist in the metadata sources.
+    let (output, exit_code, emitted) =
+        rebuild_with_target(serde_json::json!({ "src/missing.fe": "Foo" }));
+    assert_eq!(exit_code, 1, "expected exit 1:\n{output}");
+    assert!(
+        output.contains("`src/missing.fe` recorded in `settings.compilationTarget` does not exist"),
+        "expected missing-path error:\n{output}"
+    );
+    assert!(!emitted, "no artifact must be emitted:\n{output}");
 
-    let mut root_dir = dest.to_path_buf();
+    // The recorded source path exists but its module defines a different contract.
+    let (output, exit_code, emitted) =
+        rebuild_with_target(serde_json::json!({ "src/b.fe": "Foo" }));
+    assert_eq!(exit_code, 1, "expected exit 1:\n{output}");
+    assert!(
+        output.contains("`src/b.fe` does not define the contract `Foo`"),
+        "expected wrong-module error:\n{output}"
+    );
+    assert!(!emitted, "no artifact must be emitted:\n{output}");
 
-    // 1. Regenerate each ingot's fe.toml.
-    for ingot in ingots {
-        let name = ingot["name"].as_str().expect("ingot name");
-        let namespace = ingot["namespace"].as_str().unwrap_or("");
-        let dir = dir_for(namespace, name);
-        fs::create_dir_all(dir.join("src")).expect("create ingot src");
-        if namespace.is_empty() {
-            root_dir = dir.clone();
-        }
+    // `compilationTarget` must hold exactly one source-path/contract-name pair.
+    let (output, exit_code, emitted) =
+        rebuild_with_target(serde_json::json!({ "src/a.fe": "Foo", "src/b.fe": "Bar" }));
+    assert_eq!(exit_code, 1, "expected exit 1:\n{output}");
+    assert!(
+        output.contains("must contain exactly one source-path/contract-name pair"),
+        "expected exactly-one-pair error:\n{output}"
+    );
+    assert!(!emitted, "no artifact must be emitted:\n{output}");
 
-        let mut toml = format!("[ingot]\nname = \"{name}\"\n");
-        if let Some(version) = ingot["version"].as_str() {
-            toml.push_str(&format!("version = \"{version}\"\n"));
-        }
-        if let Some(arith) = ingot["arithmetic"].as_str() {
-            toml.push_str(&format!("arithmetic = \"{arith}\"\n"));
-        }
-        let deps = ingot["dependencies"].as_object().expect("dependencies");
-        let path_deps: Vec<(&String, &str)> = deps
-            .iter()
-            .filter_map(|(alias, target)| {
-                let target = target.as_str()?;
-                // std/core are provided by the compiler; only scaffold real path deps.
-                (target != "std" && target != "core").then_some((alias, target))
-            })
-            .collect();
-        if !path_deps.is_empty() {
-            toml.push_str("\n[dependencies]\n");
-            for (alias, target) in path_deps {
-                toml.push_str(&format!("{alias} = {{ path = \"../{target}\" }}\n"));
-            }
-        }
-        fs::write(dir.join("fe.toml"), toml).expect("write fe.toml");
-    }
+    // A non-string contract name is rejected the same way.
+    let (output, exit_code, emitted) = rebuild_with_target(serde_json::json!({ "src/a.fe": 1 }));
+    assert_eq!(exit_code, 1, "expected exit 1:\n{output}");
+    assert!(
+        output.contains("must contain exactly one source-path/contract-name pair"),
+        "expected non-string-name error:\n{output}"
+    );
+    assert!(!emitted, "no artifact must be emitted:\n{output}");
+}
 
-    // 2. Write every source into its owning ingot's namespaced src/ layout.
-    let sources = metadata["sources"].as_object().expect("sources object");
-    for (key, source) in sources {
-        let content = source["content"].as_str().unwrap_or("");
-        let (namespace, rel) = non_root_namespaces
-            .iter()
-            .find_map(|ns| {
-                key.strip_prefix(&format!("{ns}/"))
-                    .map(|rel| (ns.as_str(), rel))
-            })
-            .unwrap_or(("", key.as_str()));
+#[test]
+fn test_cli_build_from_metadata_rejects_invalid_input() {
+    let temp = tempdir().expect("tempdir");
 
-        // Find the owning ingot's directory (by namespace) to resolve its name for the root case.
-        let dir = ingots
-            .iter()
-            .find(|i| i["namespace"].as_str().unwrap_or("") == namespace)
-            .map(|i| dir_for(namespace, i["name"].as_str().unwrap_or("dep")))
-            .expect("owning ingot for source");
-        let target = dir.join(rel);
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).expect("create source parent");
-        }
-        fs::write(target, content).expect("write source");
-    }
+    // Broken JSON.
+    let broken = temp.path().join("broken.metadata.json");
+    fs::write(&broken, "{ not json").expect("write broken metadata");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--from-metadata",
+        broken.to_str().expect("path utf8"),
+    ]);
+    assert_eq!(exit_code, 1, "expected exit 1:\n{output}");
+    assert!(
+        output.contains("Failed to parse metadata JSON"),
+        "expected JSON parse error:\n{output}"
+    );
 
-    root_dir
+    // Missing `sources`.
+    let no_sources = temp.path().join("no_sources.metadata.json");
+    fs::write(
+        &no_sources,
+        r#"{"version":1,"language":"Fe","settings":{"ingots":[]}}"#,
+    )
+    .expect("write metadata without sources");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--from-metadata",
+        no_sources.to_str().expect("path utf8"),
+    ]);
+    assert_eq!(exit_code, 1, "expected exit 1:\n{output}");
+    assert!(
+        output.contains("missing the `sources` object"),
+        "expected missing-sources error:\n{output}"
+    );
+
+    // Wrong language.
+    let wrong_language = temp.path().join("wrong_language.metadata.json");
+    fs::write(
+        &wrong_language,
+        r#"{"version":1,"language":"Solidity","sources":{"a.sol":{"content":""}},"settings":{"ingots":[]}}"#,
+    )
+    .expect("write non-Fe metadata");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--from-metadata",
+        wrong_language.to_str().expect("path utf8"),
+    ]);
+    assert_eq!(exit_code, 1, "expected exit 1:\n{output}");
+    assert!(
+        output.contains("`language` must be \"Fe\""),
+        "expected language error:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_build_from_metadata_conflicts_with_path_and_standalone() {
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--from-metadata",
+        "Foo.metadata.json",
+        "some/project/path",
+    ]);
+    assert_eq!(exit_code, 2, "expected clap error exit 2:\n{output}");
+    assert!(
+        output.contains("cannot be used with"),
+        "expected conflict error:\n{output}"
+    );
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--from-metadata",
+        "Foo.metadata.json",
+        "--standalone",
+    ]);
+    assert_eq!(exit_code, 2, "expected clap error exit 2:\n{output}");
+    assert!(
+        output.contains("cannot be used with"),
+        "expected conflict error:\n{output}"
+    );
 }
 
 #[test]
