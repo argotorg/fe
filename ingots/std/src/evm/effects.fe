@@ -498,6 +498,24 @@ pub trait Call: EvmCapabilitySeal {
     fn call<M>(mut self, addr: own Address, gas: u256, value: u256, message: own M) -> M::Return
     where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
 
+    /// Like `call<M>`, but if the call succeeds with EMPTY returndata, returns
+    /// `default` instead of reverting in the decoder. Reverts are still bubbled,
+    /// and non-empty returndata is still decoded strictly.
+    ///
+    /// Caveat (same as Vyper's `default_return_value`): a call to an address
+    /// with no code succeeds with empty returndata at the EVM level, so it
+    /// yields `default`, a silent no-op "success". For ERC20 interactions use
+    /// `std::evm::erc20`, which closes this hole with a code-existence check.
+    fn call_with_default<M>(
+        mut self,
+        addr: own Address,
+        gas: u256,
+        value: u256,
+        message: own M,
+        default: own M::Return,
+    ) -> M::Return
+    where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
+
     fn static<M>(mut self, addr: own Address, gas: u256, message: own M) -> M::Return
     where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
 
@@ -522,6 +540,18 @@ impl Address {
     uses (call: mut Call) where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
     {
         call.static(addr: self, gas: ops::gas(), message)
+    }
+
+    /// Call a contract at this address with a typed message, returning
+    /// `default` if the call succeeds with empty returndata.
+    ///
+    /// Forwards all available gas and sends no value. Reverts are bubbled and
+    /// non-empty returndata is decoded strictly; see `Call::call_with_default`
+    /// for the no-code-at-address caveat.
+    pub fn call_with_default<M>(self, _ message: own M, default: own M::Return) -> M::Return
+    uses (call: mut Call) where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
+    {
+        call.call_with_default(addr: self, gas: ops::gas(), value: 0, message, default)
     }
 }
 
@@ -821,6 +851,29 @@ impl Call for Evm {
 
         if !self.raw_call(addr, gas, value, args_offset: out.0, args_len: out.1) {
             bubble_last_revert()
+        }
+
+        decode_returndata(last_returndata())
+    }
+
+    fn call_with_default<M>(
+        mut self,
+        addr: own Address,
+        gas: u256,
+        value: u256,
+        message: own M,
+        default: own M::Return,
+    ) -> M::Return
+    where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
+    {
+        let out: (u256, u256) = encode_calldata(<M as MsgVariant<Sol>>::SELECTOR, message)
+
+        if !self.raw_call(addr, gas, value, args_offset: out.0, args_len: out.1) {
+            bubble_last_revert()
+        }
+
+        if ops::returndatasize() == 0 {
+            return default
         }
 
         decode_returndata(last_returndata())

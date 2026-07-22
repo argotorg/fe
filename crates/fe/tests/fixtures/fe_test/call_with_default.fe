@@ -1,0 +1,265 @@
+/// Tests for `call_with_default`: like `call<M>`/`Address::call`, but a call
+/// that succeeds with EMPTY returndata yields a caller-supplied default
+/// instead of a decode revert. Reverts still bubble and non-empty returndata
+/// is still decoded strictly.
+
+use std::evm::{RawMem, RawOps, last_returndata, mem}
+
+/// Strict caller-side view of an ERC20-style `transfer`.
+msg TokenMsg {
+    #[selector = sol("transfer(address,uint256)")]
+    Transfer { receiver: Address, amount: u256 } -> bool,
+}
+
+/// Same selector, but declared without a return type so the handler returns
+/// void (empty returndata), like USDT-style tokens.
+msg NoRetTokenMsg {
+    #[selector = sol("transfer(address,uint256)")]
+    Transfer { receiver: Address, amount: u256 },
+}
+
+pub contract CompliantToken {
+    recv TokenMsg {
+        Transfer { receiver, amount } -> bool {
+            true
+        }
+    }
+}
+
+/// Reverts with a distinctive 32-byte payload; the marker sits in the top
+/// bytes so `#[test(should_revert, selector = 0xdeadbeef)]` can match it.
+pub contract RevertingToken {
+    recv TokenMsg {
+        Transfer { receiver, amount } -> bool {
+            let marker: u256 = 0xdeadbeefcafebabe << 192
+            revert(marker)
+        }
+    }
+}
+
+pub contract NoReturnToken {
+    recv NoRetTokenMsg {
+        Transfer { receiver, amount } {}
+    }
+}
+
+pub contract FalseToken {
+    recv TokenMsg {
+        Transfer { receiver, amount } -> bool {
+            false
+        }
+    }
+}
+
+/// Returns fewer than 32 bytes of returndata.
+pub contract MalformedToken {
+    recv TokenMsg {
+        Transfer { receiver, amount } -> bool uses (raw: mut RawOps) {
+            let ptr = mem::alloc(32)
+            raw.mstore(addr: ptr, value: 0xaabbccdd << 224)
+            raw.return_data(offset: ptr, len: 4)
+        }
+    }
+}
+
+/// Non-bool returns: proves the API is generic, not bool-special-cased.
+msg ValueQueryMsg {
+    #[selector = 0x10]
+    GetValue -> u256,
+    #[selector = 0x11]
+    GetNothing -> u256,
+}
+
+msg ValueImplMsg {
+    #[selector = 0x10]
+    GetValue -> u256,
+}
+
+msg NoRetValueImplMsg {
+    #[selector = 0x11]
+    GetNothing,
+}
+
+pub contract ValueToken {
+    recv ValueImplMsg {
+        GetValue -> u256 {
+            42
+        }
+    }
+
+    recv NoRetValueImplMsg {
+        GetNothing {}
+    }
+}
+
+/// Wrapper contract so a test can observe the revert data that
+/// `call_with_default` bubbles out of a reverting callee.
+msg CallerMsg {
+    #[selector = 0x01]
+    DoTransfer { token: Address } -> bool,
+}
+
+pub contract Caller uses (call: mut Call) {
+    recv CallerMsg {
+        DoTransfer { token } -> bool uses (mut call) {
+            call.call_with_default(
+                addr: token,
+                gas: 100000,
+                value: 0,
+                message: TokenMsg::Transfer { receiver: Address { inner: 9 }, amount: 1 },
+                default: true,
+            )
+        }
+    }
+}
+
+fn receiver() -> Address {
+    Address { inner: 2 }
+}
+
+#[test]
+fn test_present_returndata_is_decoded_not_defaulted() uses (evm: mut Evm) {
+    let token = evm.create2<CompliantToken>(value: 0, args: (), salt: 0)
+
+    // default is false; the decoded `true` must win
+    let ok: bool = evm.call_with_default(
+        addr: token,
+        gas: 100000,
+        value: 0,
+        message: TokenMsg::Transfer { receiver: receiver(), amount: 1 },
+        default: false,
+    )
+    assert!(ok)
+}
+
+#[test]
+fn test_empty_returndata_yields_default() uses (evm: mut Evm) {
+    let token = evm.create2<NoReturnToken>(value: 0, args: (), salt: 0)
+
+    let ok: bool = evm.call_with_default(
+        addr: token,
+        gas: 100000,
+        value: 0,
+        message: TokenMsg::Transfer { receiver: receiver(), amount: 1 },
+        default: true,
+    )
+    assert!(ok)
+}
+
+#[test]
+fn test_default_never_masks_present_false() uses (evm: mut Evm) {
+    let token = evm.create2<FalseToken>(value: 0, args: (), salt: 0)
+
+    let ok: bool = evm.call_with_default(
+        addr: token,
+        gas: 100000,
+        value: 0,
+        message: TokenMsg::Transfer { receiver: receiver(), amount: 1 },
+        default: true,
+    )
+    assert!(!ok)
+}
+
+#[test(should_revert, selector = 0xdeadbeef)]
+fn test_reverting_token_still_bubbles() uses (evm: mut Evm) {
+    let token = evm.create2<RevertingToken>(value: 0, args: (), salt: 0)
+
+    let _: bool = evm.call_with_default(
+        addr: token,
+        gas: 100000,
+        value: 0,
+        message: TokenMsg::Transfer { receiver: receiver(), amount: 1 },
+        default: true,
+    )
+}
+
+#[test]
+fn test_bubbled_revert_data_survives_verbatim() uses (evm: mut Evm) {
+    let token = evm.create2<RevertingToken>(value: 0, args: (), salt: 0)
+    let caller = evm.create2<Caller>(value: 0, args: (), salt: 1)
+
+    // Hand-encode CallerMsg::DoTransfer { token } so we can observe the
+    // wrapped call's revert data instead of reverting the test itself.
+    let ptr = mem::alloc(36)
+    evm.mstore(addr: ptr, value: 1 << 224)
+    evm.mstore(addr: ptr + 4, value: token.inner)
+    assert!(!evm.raw_call(addr: caller, gas: 300000, value: 0, args_offset: ptr, args_len: 36))
+
+    // The token's revert data must arrive untouched: exactly one word
+    // holding the marker.
+    let ret = last_returndata()
+    assert!(ret.len == 32)
+    assert!(evm.mload(ret.base) == 0xdeadbeefcafebabe << 192)
+}
+
+#[test(should_revert)]
+fn test_malformed_returndata_still_reverts_in_decoder() uses (evm: mut Evm) {
+    let token = evm.create2<MalformedToken>(value: 0, args: (), salt: 0)
+
+    let _: bool = evm.call_with_default(
+        addr: token,
+        gas: 100000,
+        value: 0,
+        message: TokenMsg::Transfer { receiver: receiver(), amount: 1 },
+        default: true,
+    )
+}
+
+#[test]
+fn test_no_code_address_yields_default() uses (evm: mut Evm) {
+    // Documented trap: a call to an address with no code succeeds with empty
+    // returndata, so the default surfaces as a silent "success".
+    let eoa = Address { inner: 0xe0a }
+
+    let ok: bool = evm.call_with_default(
+        addr: eoa,
+        gas: 100000,
+        value: 0,
+        message: TokenMsg::Transfer { receiver: receiver(), amount: 1 },
+        default: true,
+    )
+    assert!(ok)
+}
+
+#[test]
+fn test_non_bool_return_type() uses (evm: mut Evm) {
+    let token = evm.create2<ValueToken>(value: 0, args: (), salt: 0)
+
+    // Non-empty path: the decoded value wins over a non-trivial default.
+    let value: u256 = evm.call_with_default(
+        addr: token,
+        gas: 100000,
+        value: 0,
+        message: ValueQueryMsg::GetValue {},
+        default: 777,
+    )
+    assert!(value == 42)
+
+    // Empty path: the default surfaces.
+    let value: u256 = evm.call_with_default(
+        addr: token,
+        gas: 100000,
+        value: 0,
+        message: ValueQueryMsg::GetNothing {},
+        default: 777,
+    )
+    assert!(value == 777)
+}
+
+#[test]
+fn test_address_call_with_default_convenience() uses (evm: mut Evm, call: mut Call) {
+    let compliant = evm.create2<CompliantToken>(value: 0, args: (), salt: 0)
+    let silent = evm.create2<NoReturnToken>(value: 0, args: (), salt: 1)
+
+    let ok: bool = compliant.call_with_default(
+        TokenMsg::Transfer { receiver: receiver(), amount: 1 },
+        default: false,
+    )
+    assert!(ok)
+
+    let ok: bool = silent.call_with_default(
+        TokenMsg::Transfer { receiver: receiver(), amount: 1 },
+        default: true,
+    )
+    assert!(ok)
+}
