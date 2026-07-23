@@ -1,29 +1,65 @@
+//! Canonical resolution of runtime places and value classes.
+//!
+//! `resolve_runtime_place` is the single walker from a [`RuntimePlace`] to
+//! the classes along its projection path; every consumer — body lowering,
+//! the verifier, and codegen — resolves places here. The projection
+//! arithmetic (`project_field` and friends) likewise has exactly one
+//! implementation, with panicking wrappers for lowering-internal callers
+//! whose places are already known well-formed.
+
 use cranelift_entity::EntityRef;
 use hir::analysis::semantic::FieldIndex;
 use hir::projection::IndexSource;
 
 use crate::{
     db::MirDb,
-    runtime::lower::classify::ref_class_for_place_result,
     runtime::{
-        ConstScalar, Layout, LayoutId, PlaceElem, PlaceRoot, RefView, ResolvedPlaceElem,
-        ResolvedPlaceRootKind, ResolvedRuntimePlace, RuntimeBody, RuntimeClass, RuntimeLocalRoot,
-        RuntimeProgramView, ScalarClass, ScalarRepr, ScalarRole, VariantId,
+        AddressSpaceKind, ConstScalar, Layout, LayoutId, PlaceElem, PlaceRoot, RLocalId, RefKind,
+        RefView, ResolvedPlaceElem, ResolvedPlaceRootKind, ResolvedRuntimePlace, RuntimeBody,
+        RuntimeClass, RuntimeLocalRoot, RuntimeProgramView, RuntimeProviderBinding,
+        RuntimeProviderBindingId, ScalarClass, ScalarRepr, ScalarRole, VariantId,
     },
     verify::VerifyError,
 };
 
+/// The class environment a place resolves against: the finished
+/// [`RuntimeBody`], or the in-flight lowering state before a body exists.
+pub trait PlaceClassEnv<'db> {
+    fn place_local_root(&self, local: RLocalId) -> Option<&RuntimeLocalRoot<'db>>;
+    fn place_value_class(&self, value: crate::runtime::RValueId) -> Option<&RuntimeClass<'db>>;
+    fn place_provider_binding(
+        &self,
+        binding: RuntimeProviderBindingId,
+    ) -> Option<&RuntimeProviderBinding<'db>>;
+}
+
+impl<'db> PlaceClassEnv<'db> for RuntimeBody<'db> {
+    fn place_local_root(&self, local: RLocalId) -> Option<&RuntimeLocalRoot<'db>> {
+        self.local(local).map(|local| &local.root)
+    }
+
+    fn place_value_class(&self, value: crate::runtime::RValueId) -> Option<&RuntimeClass<'db>> {
+        self.value_class(value)
+    }
+
+    fn place_provider_binding(
+        &self,
+        binding: RuntimeProviderBindingId,
+    ) -> Option<&RuntimeProviderBinding<'db>> {
+        self.provider_bindings.get(binding.index())
+    }
+}
+
 pub fn resolve_runtime_place<'db>(
     db: &'db dyn MirDb,
     program: &impl RuntimeProgramView<'db>,
-    body: &RuntimeBody<'db>,
+    body: &impl PlaceClassEnv<'db>,
     place: &crate::runtime::RuntimePlace<'db>,
 ) -> Result<ResolvedRuntimePlace<'db>, VerifyError<'db>> {
     let mut current = match &place.root {
-        PlaceRoot::Slot(local) => match &body
-            .local(*local)
+        PlaceRoot::Slot(local) => match body
+            .place_local_root(*local)
             .ok_or(VerifyError::MissingRuntimeLocal(*local))?
-            .root
         {
             RuntimeLocalRoot::None | RuntimeLocalRoot::Ref(_) | RuntimeLocalRoot::Ptr { .. } => {
                 return Err(VerifyError::InvalidPlace(RuntimeClass::RawAddr {
@@ -34,7 +70,7 @@ pub fn resolve_runtime_place<'db>(
             RuntimeLocalRoot::Slot(class) => class.clone(),
         },
         PlaceRoot::Ref(value) => match body
-            .value_class(*value)
+            .place_value_class(*value)
             .cloned()
             .ok_or(VerifyError::ErasedRuntimeValue(*value))?
         {
@@ -42,8 +78,7 @@ pub fn resolve_runtime_place<'db>(
             class => class,
         },
         PlaceRoot::Provider(binding) => body
-            .provider_bindings
-            .get(binding.index())
+            .place_provider_binding(*binding)
             .map(|binding| binding.place_class.clone())
             .ok_or(VerifyError::InvalidPlace(RuntimeClass::RawAddr {
                 space: crate::runtime::AddressSpaceKind::Memory,
@@ -51,7 +86,7 @@ pub fn resolve_runtime_place<'db>(
             }))?,
         PlaceRoot::Ptr { addr, space, class } => {
             match body
-                .value_class(*addr)
+                .place_value_class(*addr)
                 .ok_or(VerifyError::ErasedRuntimeValue(*addr))?
             {
                 RuntimeClass::RawAddr {
@@ -83,8 +118,7 @@ pub fn resolve_runtime_place<'db>(
         },
         PlaceRoot::Provider(binding) => {
             let provider =
-                body.provider_bindings
-                    .get(binding.index())
+                body.place_provider_binding(*binding)
                     .ok_or(VerifyError::InvalidPlace(RuntimeClass::RawAddr {
                         space: crate::runtime::AddressSpaceKind::Memory,
                         target: None,
@@ -116,7 +150,7 @@ pub fn resolve_runtime_place<'db>(
             PlaceElem::Index(index) => {
                 if let IndexSource::Dynamic(index) = index {
                     let _ = body
-                        .value_class(*index)
+                        .place_value_class(*index)
                         .ok_or(VerifyError::ErasedRuntimeValue(*index))?;
                 }
                 current = project_index(program, current)?;
@@ -164,7 +198,7 @@ pub fn resolve_runtime_place<'db>(
 pub fn resolve_runtime_place_address_class<'db>(
     db: &'db dyn MirDb,
     program: &impl RuntimeProgramView<'db>,
-    body: &RuntimeBody<'db>,
+    body: &impl PlaceClassEnv<'db>,
     place: &crate::runtime::RuntimePlace<'db>,
 ) -> Result<RuntimeClass<'db>, VerifyError<'db>> {
     let resolved = resolve_runtime_place(db, program, body, place)?;
@@ -185,25 +219,58 @@ pub fn resolve_runtime_place_address_class<'db>(
     ))
 }
 
-pub(super) fn project_place<'db>(
+pub(crate) fn project_place<'db>(
     db: &'db dyn MirDb,
     program: &impl RuntimeProgramView<'db>,
-    body: &RuntimeBody<'db>,
+    body: &impl PlaceClassEnv<'db>,
     place: &crate::runtime::RuntimePlace<'db>,
 ) -> Result<RuntimeClass<'db>, VerifyError<'db>> {
     Ok(resolve_runtime_place(db, program, body, place)?.result_class)
 }
 
+/// The reference (or raw-address) class produced by taking the address of a
+/// place whose transport root has class `root_class` and whose projected
+/// value has class `value_class`.
+pub(crate) fn ref_class_for_place_result<'db>(
+    root_class: &RuntimeClass<'db>,
+    value_class: &RuntimeClass<'db>,
+    root_space: AddressSpaceKind,
+    force_raw: bool,
+) -> RuntimeClass<'db> {
+    if !force_raw {
+        match root_class {
+            RuntimeClass::Ref { kind, .. } => {
+                return RuntimeClass::Ref {
+                    pointee: Box::new(value_class.clone()),
+                    kind: kind.clone(),
+                    view: RefView::Whole,
+                };
+            }
+            RuntimeClass::AggregateValue { .. } => {
+                return RuntimeClass::Ref {
+                    pointee: Box::new(value_class.clone()),
+                    kind: RefKind::Object,
+                    view: RefView::Whole,
+                };
+            }
+            RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => {}
+        }
+    }
+    RuntimeClass::RawAddr {
+        space: root_class.address_space().unwrap_or(root_space),
+        target: value_class.aggregate_layout(),
+    }
+}
+
 fn runtime_place_transport_root<'db>(
-    body: &RuntimeBody<'db>,
+    body: &impl PlaceClassEnv<'db>,
     place: &crate::runtime::RuntimePlace<'db>,
 ) -> Result<(RuntimeClass<'db>, crate::runtime::AddressSpaceKind, bool), VerifyError<'db>> {
     Ok(match &place.root {
         PlaceRoot::Slot(local) => (
-            match &body
-                .local(*local)
+            match body
+                .place_local_root(*local)
                 .ok_or(VerifyError::MissingRuntimeLocal(*local))?
-                .root
             {
                 RuntimeLocalRoot::Slot(class) => class.clone(),
                 RuntimeLocalRoot::None
@@ -219,14 +286,15 @@ fn runtime_place_transport_root<'db>(
             false,
         ),
         PlaceRoot::Ref(value) => (
-            runtime_value_class(body, *value)?.clone(),
+            body.place_value_class(*value)
+                .ok_or(VerifyError::ErasedRuntimeValue(*value))?
+                .clone(),
             crate::runtime::AddressSpaceKind::Memory,
             false,
         ),
         PlaceRoot::Provider(binding) => {
             let class = body
-                .provider_bindings
-                .get(binding.index())
+                .place_provider_binding(*binding)
                 .map(|binding| binding.provider_class.clone())
                 .ok_or(VerifyError::InvalidPlace(RuntimeClass::RawAddr {
                     space: crate::runtime::AddressSpaceKind::Memory,
@@ -251,7 +319,7 @@ fn runtime_place_transport_root<'db>(
     })
 }
 
-pub(super) fn runtime_value_class<'a, 'db>(
+pub(crate) fn runtime_value_class<'a, 'db>(
     body: &'a RuntimeBody<'db>,
     value: crate::runtime::RValueId,
 ) -> Result<&'a RuntimeClass<'db>, VerifyError<'db>> {
@@ -259,7 +327,7 @@ pub(super) fn runtime_value_class<'a, 'db>(
         .ok_or(VerifyError::ErasedRuntimeValue(value))
 }
 
-pub(super) fn scalar_class_from_const(value: &ConstScalar) -> ScalarClass<'_> {
+pub(crate) fn scalar_class_from_const<'db>(value: &ConstScalar) -> ScalarClass<'db> {
     match value {
         ConstScalar::Bool(_) => ScalarClass {
             repr: ScalarRepr::Bool,
@@ -285,7 +353,7 @@ pub(super) fn scalar_class_from_const(value: &ConstScalar) -> ScalarClass<'_> {
     }
 }
 
-pub(super) fn enum_tag_class<'db>(
+pub(crate) fn enum_tag_class<'db>(
     enum_layout: LayoutId<'db>,
     program: &impl RuntimeProgramView<'db>,
 ) -> ScalarClass<'db> {
@@ -295,7 +363,7 @@ pub(super) fn enum_tag_class<'db>(
     layout.tag
 }
 
-pub(super) fn enum_tag_class_from_value<'db>(
+pub(crate) fn enum_tag_class_from_value<'db>(
     db: &'db dyn MirDb,
     body: &RuntimeBody<'db>,
     value: crate::runtime::RValueId,
@@ -315,7 +383,7 @@ pub(super) fn enum_tag_class_from_value<'db>(
     }))
 }
 
-pub(super) fn verify_enum_handle<'db>(
+pub(crate) fn verify_enum_handle<'db>(
     body: &RuntimeBody<'db>,
     root: crate::runtime::RValueId,
     variant: VariantId<'db>,
@@ -352,7 +420,7 @@ pub(super) fn verify_enum_handle<'db>(
     Ok(result)
 }
 
-pub(super) fn verify_enum_write_variant<'db>(
+pub(crate) fn verify_enum_write_variant<'db>(
     program: &impl RuntimeProgramView<'db>,
     body: &RuntimeBody<'db>,
     root: crate::runtime::RValueId,
@@ -383,7 +451,7 @@ pub(super) fn verify_enum_write_variant<'db>(
     Ok(())
 }
 
-pub(super) fn verify_value_enum_variant<'db>(
+pub(crate) fn verify_value_enum_variant<'db>(
     program: &impl RuntimeProgramView<'db>,
     body: &RuntimeBody<'db>,
     value_class: RuntimeClass<'db>,
@@ -408,7 +476,7 @@ pub(super) fn verify_value_enum_variant<'db>(
     Ok(())
 }
 
-pub(super) fn verify_value_enum_variant_ref<'db>(
+pub(crate) fn verify_value_enum_variant_ref<'db>(
     program: &impl RuntimeProgramView<'db>,
     value_class: RuntimeClass<'db>,
     variant: VariantId<'db>,
@@ -429,7 +497,7 @@ pub(super) fn verify_value_enum_variant_ref<'db>(
         .ok_or(VerifyError::InvalidVariant(layout, variant.index))
 }
 
-pub(super) fn enum_extract_class<'db>(
+pub(crate) fn enum_extract_class<'db>(
     db: &'db dyn MirDb,
     body: &RuntimeBody<'db>,
     value: crate::runtime::RValueId,
@@ -525,4 +593,43 @@ fn project_variant_field<'db>(
 
 fn layout_for_projection<'db>(class: RuntimeClass<'db>) -> Option<LayoutId<'db>> {
     class.aggregate_layout()
+}
+
+/// Panicking wrappers over the canonical projections, for lowering-internal
+/// callers whose places are already known well-formed.
+pub(crate) fn project_field_class<'db>(
+    db: &'db dyn MirDb,
+    class: RuntimeClass<'db>,
+    field: FieldIndex,
+) -> RuntimeClass<'db> {
+    let program: &dyn MirDb = db;
+    project_field(&program, class.clone(), field).unwrap_or_else(|_| {
+        match class.aggregate_layout().map(|layout| layout.data(db)) {
+            Some(crate::runtime::Layout::Struct(layout)) => panic!(
+                "invalid field projection: field={field:?} source_ty={} fields={:?} class={class:?}",
+                layout.source_ty.pretty_print(db),
+                layout.fields,
+            ),
+            _ => panic!("invalid field projection class"),
+        }
+    })
+}
+
+pub(crate) fn project_index_class<'db>(
+    db: &'db dyn MirDb,
+    class: RuntimeClass<'db>,
+) -> RuntimeClass<'db> {
+    let program: &dyn MirDb = db;
+    project_index(&program, class.clone())
+        .unwrap_or_else(|_| panic!("invalid index projection class: {class:?}"))
+}
+
+pub(crate) fn project_variant_field_class<'db>(
+    db: &'db dyn MirDb,
+    class: RuntimeClass<'db>,
+    variant: VariantId<'db>,
+    field: FieldIndex,
+) -> RuntimeClass<'db> {
+    project_variant_field(db, class.clone(), variant, field)
+        .unwrap_or_else(|_| panic!("invalid variant-field projection class: {class:?}"))
 }

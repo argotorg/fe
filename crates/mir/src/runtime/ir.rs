@@ -680,7 +680,6 @@ pub struct RuntimeBody<'db> {
     pub owner: RuntimeInstance<'db>,
     pub key: RuntimeInstanceKey<'db>,
     pub signature: RuntimeInterfaceSignature<'db>,
-    pub semantic_locals: Vec<RuntimeLocalLowering<'db>>,
     pub provider_bindings: Vec<RuntimeProviderBinding<'db>>,
     pub locals: Vec<RLocal<'db>>,
     pub blocks: Vec<RBlock<'db>>,
@@ -727,23 +726,6 @@ pub enum RuntimeLocalRoot<'db> {
     Ptr {
         space: AddressSpaceKind,
         class: RuntimeClass<'db>,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
-pub enum RuntimeLocalLowering<'db> {
-    Erased,
-    DirectValue,
-    PlaceCarrier {
-        place_class: RuntimeClass<'db>,
-    },
-    PlaceBoundValue {
-        provider: Option<RuntimeProviderBindingId>,
-        place_class: RuntimeClass<'db>,
-    },
-    DirectCarrier {
-        provider: Option<RuntimeProviderBindingId>,
-        place_class: RuntimeClass<'db>,
     },
 }
 
@@ -806,7 +788,7 @@ pub enum RuntimeCodeRegionKey<'db> {
 pub struct ResolvedCodeRegion<'db> {
     pub region: RuntimeCodeRegion<'db>,
     pub symbol: String,
-    pub source: RuntimeSectionRef<'db>,
+    pub source: RuntimeSectionRef,
     pub root: RuntimeFunction<'db>,
 }
 
@@ -1097,7 +1079,7 @@ pub struct RuntimeObject<'db> {
 pub struct RuntimeSection<'db> {
     pub name: RuntimeSectionName,
     pub entry: RuntimeFunction<'db>,
-    pub embeds: Vec<RuntimeEmbed<'db>>,
+    pub embeds: Vec<RuntimeEmbed>,
     pub const_regions: Vec<ConstRegionId<'db>>,
 }
 
@@ -1110,21 +1092,39 @@ pub enum RuntimeSectionName {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
-pub struct RuntimeEmbed<'db> {
-    pub source: RuntimeSectionRef<'db>,
+pub struct RuntimeEmbed {
+    pub source: RuntimeSectionRef,
     pub as_symbol: String,
 }
 
+/// Refers to a section by the stable `(object name, section name)` pair so the
+/// reference stays valid when objects are rebuilt (re-interned).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
-pub enum RuntimeSectionRef<'db> {
+pub enum RuntimeSectionRef {
     Local {
-        object: RuntimeObject<'db>,
+        object: String,
         section: RuntimeSectionName,
     },
     External {
-        object: RuntimeObject<'db>,
+        object: String,
         section: RuntimeSectionName,
     },
+}
+
+impl RuntimeSectionRef {
+    pub fn object(&self) -> &str {
+        match self {
+            RuntimeSectionRef::Local { object, .. }
+            | RuntimeSectionRef::External { object, .. } => object,
+        }
+    }
+
+    pub fn section(&self) -> &RuntimeSectionName {
+        match self {
+            RuntimeSectionRef::Local { section, .. }
+            | RuntimeSectionRef::External { section, .. } => section,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]

@@ -235,42 +235,34 @@ fn verify_object<'db>(
             ));
         }
         for embed in &section.embeds {
-            match &embed.source {
-                crate::runtime::RuntimeSectionRef::Local {
-                    object: source_object,
-                    section: source_section,
-                }
-                | crate::runtime::RuntimeSectionRef::External {
-                    object: source_object,
-                    section: source_section,
-                } => {
-                    let Some(source_object) = resolve_package_object(db, objects, *source_object)
-                    else {
-                        return Err(VerifyError::InvalidPackageObject(*source_object));
-                    };
-                    if !source_object
-                        .sections(db)
-                        .iter()
-                        .any(|candidate| candidate.name == *source_section)
-                    {
-                        return Err(VerifyError::InvalidPackageSection(
-                            source_object,
-                            source_section.clone(),
-                        ));
-                    }
-                    if matches!(
-                        &embed.source,
-                        crate::runtime::RuntimeSectionRef::Local {
-                            object: source_object,
-                            section: source_section,
-                        } if source_object.name(db) == object.name(db) && *source_section == section.name
-                    ) {
-                        return Err(VerifyError::InvalidPackageSection(
-                            object,
-                            section.name.clone(),
-                        ));
-                    }
-                }
+            let source_object_name = embed.source.object();
+            let source_section = embed.source.section();
+            let Some(source_object) = resolve_package_object(db, objects, source_object_name)
+            else {
+                return Err(VerifyError::UnknownPackageObject(
+                    source_object_name.to_string(),
+                ));
+            };
+            if !source_object
+                .sections(db)
+                .iter()
+                .any(|candidate| candidate.name == *source_section)
+            {
+                return Err(VerifyError::InvalidPackageSection(
+                    source_object,
+                    source_section.clone(),
+                ));
+            }
+            if matches!(
+                &embed.source,
+                crate::runtime::RuntimeSectionRef::Local { .. }
+            ) && source_object_name == object.name(db)
+                && *source_section == section.name
+            {
+                return Err(VerifyError::InvalidPackageSection(
+                    object,
+                    section.name.clone(),
+                ));
             }
         }
     }
@@ -288,26 +280,21 @@ fn verify_resolved_code_region<'db>(
             region.root(db).instance(db),
         ));
     }
-    match region.source(db) {
-        crate::runtime::RuntimeSectionRef::Local {
+    let source = region.source(db);
+    let Some(object) = resolve_package_object(db, objects, source.object()) else {
+        return Err(VerifyError::UnknownPackageObject(
+            source.object().to_string(),
+        ));
+    };
+    if !object
+        .sections(db)
+        .iter()
+        .any(|candidate| candidate.name == *source.section())
+    {
+        return Err(VerifyError::InvalidPackageSection(
             object,
-            ref section,
-        }
-        | crate::runtime::RuntimeSectionRef::External {
-            object,
-            ref section,
-        } => {
-            let Some(object) = resolve_package_object(db, objects, object) else {
-                return Err(VerifyError::InvalidPackageObject(object));
-            };
-            if !object
-                .sections(db)
-                .iter()
-                .any(|candidate| candidate.name == *section)
-            {
-                return Err(VerifyError::InvalidPackageSection(object, section.clone()));
-            }
-        }
+            source.section().clone(),
+        ));
     }
     if matches!(
         region.region(db).key(db),
@@ -324,11 +311,7 @@ fn verify_resolved_code_region<'db>(
         }
         let expected_section = code_region_section_name(db, region.region(db))
             .ok_or_else(|| VerifyError::InvalidCodeRegion(region.region(db)))?;
-        let source_section = match region.source(db).clone() {
-            crate::runtime::RuntimeSectionRef::Local { section, .. }
-            | crate::runtime::RuntimeSectionRef::External { section, .. } => section,
-        };
-        if source_section != expected_section {
+        if *source.section() != expected_section {
             return Err(VerifyError::InvalidCodeRegion(region.region(db)));
         }
     }
@@ -338,10 +321,10 @@ fn verify_resolved_code_region<'db>(
 fn resolve_package_object<'db>(
     db: &'db dyn MirDb,
     objects: &[RuntimeObject<'db>],
-    object: RuntimeObject<'db>,
+    name: &str,
 ) -> Option<RuntimeObject<'db>> {
     objects
         .iter()
-        .find(|candidate| candidate.name(db) == object.name(db))
+        .find(|candidate| candidate.name(db) == name)
         .copied()
 }

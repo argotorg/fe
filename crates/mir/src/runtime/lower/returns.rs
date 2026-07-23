@@ -1,7 +1,6 @@
-use std::{collections::VecDeque, convert::Infallible};
+use std::collections::VecDeque;
 
 use cranelift_entity::{EntityRef, PrimaryMap, SecondaryMap, entity_impl};
-use dataflow::{SparseAnalysis, solve_sparse};
 use hir::analysis::{
     semantic::{
         SLocalId, SemanticInstance,
@@ -15,18 +14,15 @@ use salsa::Update;
 use crate::{
     db::MirDb,
     instance::{RuntimeInstanceKey, RuntimeInstanceSource},
-    runtime::{RuntimeCarrier, RuntimeClass, RuntimeExitBehavior},
+    runtime::{RuntimeClass, RuntimeExitBehavior},
 };
 
 use super::{
     classify::{
-        AssignmentId, BodyEnv, BodyStaticFacts, InferClassCache, RuntimeVisibleReturnPlan,
-        default_return_class, desired_runtime_return_plan, selected_visible_return_for_local,
+        AssignmentId, BodyEnv, BodyStaticFacts, RuntimeVisibleReturnPlan, default_return_class,
+        desired_runtime_return_plan, selected_visible_return_for_local,
     },
-    infer::{
-        desired_runtime_value_carrier, merge_runtime_carrier, merge_runtime_class,
-        seed_root_provider_carriers,
-    },
+    infer::{AssignmentSpace, CarrierInferer, ReturnClassLookup, merge_runtime_class},
     interface::runtime_visible_binding_plans,
 };
 use crate::runtime::synthetic::runtime_synthetic_exit_behavior;
@@ -274,8 +270,16 @@ pub(crate) fn evaluate_runtime_return_class<'db>(
     params: &[RuntimeClass<'db>],
     lookup: &mut impl FnMut(RuntimeInstanceKey<'db>) -> Option<RuntimeClass<'db>>,
 ) -> Option<RuntimeClass<'db>> {
-    let carriers = ReturnSliceInferer::new(db, summary, params, lookup).run();
     let env = summary.env(db);
+    let lookup: ReturnClassLookup<'_, 'db> = lookup;
+    let carriers = CarrierInferer::with_space(
+        env,
+        ReturnSliceSpace(summary),
+        params,
+        &summary.param_locals,
+        Some(lookup),
+    )
+    .solve_carriers();
     let mut returned = Vec::new();
     for local in summary.return_locals.iter().copied() {
         let Some(selected) =
@@ -302,159 +306,40 @@ fn merged_return_class<'db>(
     Some(merged)
 }
 
-struct ReturnSliceInferer<'summary, 'lookup, 'db> {
-    db: &'db dyn MirDb,
-    summary: &'summary RuntimeReturnSummary<'db>,
-    carriers: Vec<RuntimeCarrier<'db>>,
-    /// Locals whose carrier is fixed by the interface signature (the runtime-visible
-    /// parameters); mirrors [`LocalStateInferer`] so both solvers agree on param carriers
-    /// when a parameter is itself a returned value. See its `signature_pinned` field.
-    signature_pinned: Vec<bool>,
-    class_cache: InferClassCache<'db>,
-    pending_dependents: Vec<SliceAssignmentId>,
-    lookup: &'lookup mut dyn FnMut(RuntimeInstanceKey<'db>) -> Option<RuntimeClass<'db>>,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct SliceAssignmentId(u32);
 entity_impl!(SliceAssignmentId);
 
-impl<'summary, 'lookup, 'db> ReturnSliceInferer<'summary, 'lookup, 'db> {
-    fn new(
-        db: &'db dyn MirDb,
-        summary: &'summary RuntimeReturnSummary<'db>,
-        params: &[RuntimeClass<'db>],
-        lookup: &'lookup mut dyn FnMut(RuntimeInstanceKey<'db>) -> Option<RuntimeClass<'db>>,
-    ) -> Self {
-        let mut carriers = vec![RuntimeCarrier::Erased; summary.semantic_body.locals.len()];
-        let mut signature_pinned = vec![false; summary.semantic_body.locals.len()];
-        for (class, local) in params.iter().zip(summary.param_locals.iter().copied()) {
-            carriers[local.index()] = RuntimeCarrier::Value(class.clone());
-            signature_pinned[local.index()] = true;
-        }
-        Self {
-            db,
-            summary,
-            carriers,
-            signature_pinned,
-            class_cache: InferClassCache::new(summary.semantic_body.locals.len()),
-            pending_dependents: Vec::new(),
-            lookup,
-        }
-    }
+/// [`AssignmentSpace`] restricted to the backward slice of assignments feeding
+/// the return locals; the fixpoint itself is the shared [`CarrierInferer`].
+struct ReturnSliceSpace<'s, 'db>(&'s RuntimeReturnSummary<'db>);
 
-    fn run(mut self) -> Vec<RuntimeCarrier<'db>> {
-        seed_root_provider_carriers(self.summary.env(self.db), &mut self.carriers);
-        solve_sparse(&mut self, &mut ());
-        self.carriers
-    }
-
-    fn set_carrier(&mut self, local: SLocalId, desired: RuntimeCarrier<'db>) -> bool {
-        if self.signature_pinned[local.index()] {
-            return false;
-        }
-        let current = self
-            .carriers
-            .get(local.index())
-            .cloned()
-            .unwrap_or(RuntimeCarrier::Erased);
-        let desired = merge_runtime_carrier(
-            self.db,
-            &self.summary.semantic_body.locals[local.index()],
-            current,
-            desired,
-        );
-        if self.carriers[local.index()] == desired {
-            return false;
-        }
-        self.carriers[local.index()] = desired;
-        self.class_cache.note_carrier_changed(local);
-        true
-    }
-
-    fn collect_local_change_dependents(&mut self, changed_local: SLocalId) {
-        let mut pending = vec![changed_local];
-        let mut seen = vec![false; self.summary.semantic_body.locals.len()];
-        let mut queued = SecondaryMap::with_default(false);
-        queued.resize(self.summary.slice_assignment_ids.len());
-        self.pending_dependents.clear();
-        while let Some(local) = pending.pop() {
-            if std::mem::replace(&mut seen[local.index()], true) {
-                continue;
-            }
-            self.class_cache.invalidate_local_dynamic_facts(local);
-            for &assign_id in &self.summary.slice_assignments_by_local[local.index()] {
-                let Some(slice_id) = self.summary.slice_assignment_positions[assign_id] else {
-                    continue;
-                };
-                if !queued[slice_id] {
-                    queued[slice_id] = true;
-                    self.pending_dependents.push(slice_id);
-                }
-            }
-            for dependent in self.summary.slice_dynamic_dependents_by_local[local.index()]
-                .iter()
-                .copied()
-            {
-                pending.push(dependent);
-            }
-        }
-    }
-}
-
-impl<'summary, 'lookup, 'db> SparseAnalysis for ReturnSliceInferer<'summary, 'lookup, 'db> {
+impl<'db> AssignmentSpace<'db> for ReturnSliceSpace<'_, 'db> {
     type Node = SliceAssignmentId;
-    type State = ();
-    type Error = Infallible;
 
     fn node_count(&self) -> usize {
-        self.summary.slice_assignment_ids.len()
+        self.0.slice_assignment_ids.len()
     }
 
-    fn seed_nodes(&self) -> Vec<Self::Node> {
-        self.summary.slice_assignment_ids.keys().collect()
+    fn seed_nodes(&self) -> Vec<SliceAssignmentId> {
+        self.0.slice_assignment_ids.keys().collect()
     }
 
-    fn step(&mut self, node: Self::Node, _: &mut Self::State) -> Result<bool, Self::Error> {
-        self.pending_dependents.clear();
-        let assign_id = self.summary.slice_assignment_ids[node];
-        let assign = self.summary.facts.assignment(assign_id).unwrap_or_else(|| {
-            panic!("missing sliced assignment facts for statement {assign_id:?}")
-        });
-        let local = &self.summary.semantic_body.locals[assign.dst.index()];
-        let stmt = &self.summary.semantic_body.blocks[assign.block_idx].stmts[assign.stmt_idx];
-        let expr = match &stmt.kind {
-            hir::analysis::semantic::NSStmtKind::Assign { expr, .. } => expr,
-            hir::analysis::semantic::NSStmtKind::Store { .. } => {
-                panic!(
-                    "sliced assignment facts point to non-assignment statement: block={} stmt={}",
-                    assign.block_idx, assign.stmt_idx
-                )
-            }
-        };
-        let env = self.summary.env(self.db);
-        let class = env.expr_direct_class(
-            &self.carriers,
-            assign.block_idx,
-            assign.stmt_idx,
-            expr,
-            Some(&mut self.class_cache),
-            self.lookup,
-        );
-        let Some(class) = class else {
-            return Ok(false);
-        };
-        let desired =
-            desired_runtime_value_carrier(self.db, local, class, env.scope(), env.assumptions());
-        if !self.set_carrier(assign.dst, desired) {
-            return Ok(false);
+    fn assignment_id(&self, node: SliceAssignmentId) -> AssignmentId {
+        self.0.slice_assignment_ids[node]
+    }
+
+    fn for_each_node_using_local(&self, local: SLocalId, f: &mut dyn FnMut(SliceAssignmentId)) {
+        for &assign_id in &self.0.slice_assignments_by_local[local.index()] {
+            let Some(slice_id) = self.0.slice_assignment_positions[assign_id] else {
+                continue;
+            };
+            f(slice_id);
         }
-        self.collect_local_change_dependents(assign.dst);
-        Ok(true)
     }
 
-    fn dependents(&self, _node: Self::Node, out: &mut Vec<Self::Node>) {
-        out.extend(self.pending_dependents.iter().copied());
+    fn dynamic_dependents(&self, local: SLocalId) -> &[SLocalId] {
+        &self.0.slice_dynamic_dependents_by_local[local.index()]
     }
 }
 
@@ -1057,8 +942,15 @@ fn first(_ arr: [u8; 4]) -> u8 {
         )
         .run();
         let mut lookup_return_class = |key| runtime_return_class(&db, key);
-        let sliced =
-            ReturnSliceInferer::new(&db, &summary, key.params(&db), &mut lookup_return_class).run();
+        let lookup: ReturnClassLookup<'_, '_> = &mut lookup_return_class;
+        let sliced = CarrierInferer::with_space(
+            env,
+            ReturnSliceSpace(&summary),
+            key.params(&db),
+            &summary.param_locals,
+            Some(lookup),
+        )
+        .solve_carriers();
         let locals = summary
             .semantic_body
             .locals

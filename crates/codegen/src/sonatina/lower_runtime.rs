@@ -3,13 +3,7 @@ use std::hash::{Hash, Hasher};
 
 use driver::DriverDataBase;
 use hir::{
-    analysis::{
-        semantic::FieldIndex,
-        ty::{
-            ty_check::BodyOwner,
-            ty_def::{PrimTy, TyBase, TyData, TyId},
-        },
-    },
+    analysis::{semantic::FieldIndex, ty::ty_check::BodyOwner},
     hir_def::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
     projection::IndexSource,
 };
@@ -60,10 +54,7 @@ use sonatina_ir::{
 };
 
 use super::{LowerError, create_module_ctx};
-use crate::{
-    TargetDataLayout,
-    function_symbols::{FunctionSymbolInput, FunctionSymbolStyle, assign_function_symbols},
-};
+use crate::function_symbols::{FunctionSymbolInput, assign_function_symbols};
 
 const PANIC_OVERFLOW: u64 = 0x11;
 const PANIC_DIVISION_BY_ZERO: u64 = 0x12;
@@ -76,9 +67,7 @@ const LAYOUT_MAP_PATCH: u64 = 3;
 pub(super) fn compile_runtime_package_sonatina(
     db: &DriverDataBase,
     package: &RuntimePackage<'_>,
-    layout: TargetDataLayout,
 ) -> Result<Module, LowerError> {
-    let _ = layout;
     let builder = ModuleBuilder::new(create_module_ctx());
     let isa = super::create_evm_isa();
     let mut lowerer = ModuleLowerer::new(db, builder, &isa, package);
@@ -96,12 +85,12 @@ struct ModuleLowerer<'db, 'a> {
     package: &'a RuntimePackage<'db>,
     func_map: FxHashMap<mir::RuntimeInstance<'db>, FuncRef>,
     func_symbols: FxHashMap<mir::RuntimeInstance<'db>, String>,
-    section_membership: FxHashMap<mir::RuntimeInstance<'db>, Vec<mir::RuntimeSectionRef<'db>>>,
+    section_membership: FxHashMap<mir::RuntimeInstance<'db>, Vec<mir::RuntimeSectionRef>>,
     type_cache: FxHashMap<LayoutId<'db>, Type>,
     layout_names: FxHashMap<LayoutId<'db>, String>,
     const_globals: FxHashMap<ConstRegionId<'db>, GlobalVariableRef>,
     const_names: FxHashMap<ConstRegionId<'db>, String>,
-    explicit_code_region_sections: FxHashSet<(mir::RuntimeObject<'db>, mir::RuntimeSectionName)>,
+    explicit_code_region_sections: FxHashSet<(String, mir::RuntimeSectionName)>,
 }
 
 impl<'db, 'a> ModuleLowerer<'db, 'a> {
@@ -149,10 +138,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             .unwrap_or_else(|| format!("{:?}", instance.key(self.db)))
     }
 
-    fn sections_for_function(
-        &self,
-        instance: RuntimeInstance<'db>,
-    ) -> &[mir::RuntimeSectionRef<'db>] {
+    fn sections_for_function(&self, instance: RuntimeInstance<'db>) -> &[mir::RuntimeSectionRef] {
         self.section_membership
             .get(&instance)
             .map(Vec::as_slice)
@@ -161,9 +147,6 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
     fn declare_functions(&mut self) -> Result<(), LowerError> {
         for function in self.package.functions(self.db) {
-            if runtime_intrinsic(self.db, function.instance(self.db)).is_some() {
-                continue;
-            }
             let signature = self.lower_signature(function)?;
             let func_ref = self.builder.declare_function(signature).map_err(|err| {
                 LowerError::Internal(format!("failed to declare function: {err}"))
@@ -313,9 +296,6 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
     fn lower_bodies(&mut self) -> Result<(), LowerError> {
         for function in self.package.functions(self.db) {
-            if runtime_intrinsic(self.db, function.instance(self.db)).is_some() {
-                continue;
-            }
             let body = function.instance(self.db).body(self.db);
             let func_ref = self.func_ref(function.instance(self.db))?;
             let ctx = FunctionLowerer::new(self, body, func_ref)?;
@@ -346,7 +326,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                         }
                         mir::RuntimeSectionRef::External { object, section } => {
                             section_builder.embed_external(
-                                object.name(self.db).clone(),
+                                object.clone(),
                                 super::section_name_for_runtime(section),
                                 EmbedSymbol::from(embed.as_symbol.clone()),
                             );
@@ -367,7 +347,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         section: &mir::RuntimeSectionName,
     ) -> bool {
         self.explicit_code_region_sections
-            .contains(&(object, section.clone()))
+            .contains(&(object.name(self.db).clone(), section.clone()))
     }
 
     fn mark_explicit_code_region(&mut self, region: mir::RuntimeCodeRegion<'db>) {
@@ -379,13 +359,9 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         else {
             return;
         };
-        match resolved.source(self.db) {
-            mir::RuntimeSectionRef::Local { object, section }
-            | mir::RuntimeSectionRef::External { object, section } => {
-                self.explicit_code_region_sections
-                    .insert((object, section.clone()));
-            }
-        }
+        let source = resolved.source(self.db);
+        self.explicit_code_region_sections
+            .insert((source.object().to_string(), source.section().clone()));
     }
 
     fn func_ref(&self, instance: mir::RuntimeInstance<'db>) -> Result<FuncRef, LowerError> {
@@ -571,23 +547,11 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
     }
 }
 
-const SONATINA_FUNCTION_SYMBOL_STYLE: FunctionSymbolStyle = FunctionSymbolStyle {
-    segment_separator: "__",
-    variant_separator: "_",
-    fallback_separator: "_",
-    sanitize_segment: sanitize_sonatina_ident_segment,
-    namespace_key: sonatina_symbol_namespace_key,
-};
-
 fn assign_sonatina_function_symbols<'db>(
     db: &'db DriverDataBase,
     package: &RuntimePackage<'db>,
 ) -> FxHashMap<mir::RuntimeInstance<'db>, String> {
-    let functions = package
-        .functions(db)
-        .into_iter()
-        .filter(|function| runtime_intrinsic(db, function.instance(db)).is_none())
-        .collect::<Vec<_>>();
+    let functions = package.functions(db);
     let inputs = functions
         .iter()
         .map(|function| FunctionSymbolInput {
@@ -599,39 +563,9 @@ fn assign_sonatina_function_symbols<'db>(
         .collect::<Vec<_>>();
     functions
         .into_iter()
-        .zip(assign_function_symbols(
-            db,
-            &inputs,
-            &SONATINA_FUNCTION_SYMBOL_STYLE,
-        ))
+        .zip(assign_function_symbols(db, &inputs))
         .map(|(function, symbol)| (function.instance(db), symbol))
         .collect()
-}
-
-fn sanitize_sonatina_ident_segment(value: &str) -> String {
-    let sanitized = value
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '_' {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    if sanitized
-        .chars()
-        .next()
-        .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
-    {
-        sanitized
-    } else {
-        format!("_{sanitized}")
-    }
-}
-
-fn sonatina_symbol_namespace_key(symbol: &str) -> String {
-    symbol.to_string()
 }
 
 fn describe_runtime_instance<'db>(
@@ -671,130 +605,6 @@ fn describe_runtime_instance<'db>(
             )
         }
     }
-}
-
-#[derive(Clone, Copy)]
-enum RuntimeIntrinsic<'db> {
-    Alloc,
-    GenericSaturating {
-        op: GenericSaturatingOp,
-        ty: TyId<'db>,
-    },
-    Numeric {
-        op: NumericIntrinsicOp,
-        prim: PrimTy,
-    },
-}
-
-#[derive(Clone, Copy)]
-enum GenericSaturatingOp {
-    Add,
-    Sub,
-    Mul,
-}
-
-#[derive(Clone, Copy)]
-enum NumericIntrinsicOp {
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Rem,
-    Pow,
-    Shl,
-    Shr,
-    BitAnd,
-    BitOr,
-    BitXor,
-    Eq,
-    Ne,
-    Lt,
-    Le,
-    Gt,
-    Ge,
-    BitNot,
-    Not,
-    Neg,
-}
-
-const INTRINSIC_SUFFIX_TYPES: &[(&str, PrimTy)] = &[
-    ("_u8", PrimTy::U8),
-    ("_u16", PrimTy::U16),
-    ("_u32", PrimTy::U32),
-    ("_u64", PrimTy::U64),
-    ("_u128", PrimTy::U128),
-    ("_u256", PrimTy::U256),
-    ("_usize", PrimTy::Usize),
-    ("_i8", PrimTy::I8),
-    ("_i16", PrimTy::I16),
-    ("_i32", PrimTy::I32),
-    ("_i64", PrimTy::I64),
-    ("_i128", PrimTy::I128),
-    ("_i256", PrimTy::I256),
-    ("_isize", PrimTy::Isize),
-    ("_bool", PrimTy::Bool),
-];
-
-fn runtime_intrinsic<'db>(
-    db: &'db DriverDataBase,
-    instance: mir::RuntimeInstance<'db>,
-) -> Option<RuntimeIntrinsic<'db>> {
-    let semantic = instance.key(db).semantic(db)?;
-    let hir::analysis::ty::ty_check::BodyOwner::Func(func) = semantic.key(db).owner(db) else {
-        return None;
-    };
-    if func.body(db).is_some() {
-        return None;
-    }
-    let name = func.name(db).to_opt()?.data(db);
-    if name == "alloc" {
-        return Some(RuntimeIntrinsic::Alloc);
-    }
-    if let Some(op) = match name.as_str() {
-        "__saturating_add" => Some(GenericSaturatingOp::Add),
-        "__saturating_sub" => Some(GenericSaturatingOp::Sub),
-        "__saturating_mul" => Some(GenericSaturatingOp::Mul),
-        _ => None,
-    } {
-        let ty = *semantic.key(db).subst(db).generic_args(db).first()?;
-        return Some(RuntimeIntrinsic::GenericSaturating { op, ty });
-    }
-    let (op, prim) = intrinsic_name_parts(name.as_str())?;
-    Some(RuntimeIntrinsic::Numeric {
-        op: match op {
-            "add" => NumericIntrinsicOp::Add,
-            "sub" => NumericIntrinsicOp::Sub,
-            "mul" => NumericIntrinsicOp::Mul,
-            "div" => NumericIntrinsicOp::Div,
-            "rem" => NumericIntrinsicOp::Rem,
-            "pow" => NumericIntrinsicOp::Pow,
-            "shl" => NumericIntrinsicOp::Shl,
-            "shr" => NumericIntrinsicOp::Shr,
-            "bitand" => NumericIntrinsicOp::BitAnd,
-            "bitor" => NumericIntrinsicOp::BitOr,
-            "bitxor" => NumericIntrinsicOp::BitXor,
-            "eq" => NumericIntrinsicOp::Eq,
-            "ne" => NumericIntrinsicOp::Ne,
-            "lt" => NumericIntrinsicOp::Lt,
-            "le" => NumericIntrinsicOp::Le,
-            "gt" => NumericIntrinsicOp::Gt,
-            "ge" => NumericIntrinsicOp::Ge,
-            "bitnot" => NumericIntrinsicOp::BitNot,
-            "not" => NumericIntrinsicOp::Not,
-            "neg" => NumericIntrinsicOp::Neg,
-            _ => return None,
-        },
-        prim,
-    })
-}
-
-fn intrinsic_name_parts(callee_name: &str) -> Option<(&str, PrimTy)> {
-    INTRINSIC_SUFFIX_TYPES.iter().find_map(|(suffix, prim)| {
-        callee_name
-            .strip_suffix(suffix)
-            .and_then(|prefix| prefix.strip_prefix("__"))
-            .map(|op| (op, *prim))
-    })
 }
 
 #[derive(Clone, Copy)]
@@ -848,7 +658,7 @@ enum CopySource<'db> {
 struct FunctionLowerer<'ctx, 'db, 'a> {
     module: &'ctx mut ModuleLowerer<'db, 'a>,
     body: RuntimeBody<'db>,
-    current_sections: Vec<mir::RuntimeSectionRef<'db>>,
+    current_sections: Vec<mir::RuntimeSectionRef>,
     fb: FunctionBuilder<InstInserter>,
     prologue_block: BlockId,
     block_map: Vec<Option<BlockId>>,
@@ -1305,9 +1115,6 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 replacement,
             } => self.lower_layout_map_patch(map, *source, *index, *replacement)?,
             RExpr::Call { callee, args } => {
-                if let Some(value) = self.lower_intrinsic_call(*callee, args, dst)? {
-                    return Ok(Lowered::Value(value));
-                }
                 let callee_ref = self.module.func_ref(*callee)?;
                 let args = args
                     .iter()
@@ -1760,25 +1567,25 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         rhs: ValueId,
         class: &ScalarClass<'db>,
     ) -> Result<ValueId, LowerError> {
+        if !matches!(op, IntrinsicArithBinOp::Add | IntrinsicArithBinOp::Mul) {
+            return Err(LowerError::Internal(format!(
+                "unsupported checked layout-map arithmetic: {op:?}"
+            )));
+        }
         let ty = scalar_ty(class);
-        let signed = class.is_signed_int();
-        let [value, overflow] = match (op, signed) {
-            (IntrinsicArithBinOp::Add, true) => self.fb.insert_saddo(lhs, rhs),
-            (IntrinsicArithBinOp::Add, false) => self.fb.insert_uaddo(lhs, rhs),
-            (IntrinsicArithBinOp::Mul, true) => self.fb.insert_smulo(lhs, rhs),
-            (IntrinsicArithBinOp::Mul, false) => self.fb.insert_umulo(lhs, rhs),
-            _ => {
-                return Err(LowerError::Internal(format!(
-                    "unsupported checked layout-map arithmetic: {op:?}"
-                )));
-            }
-        };
+        let value = self.lower_arith(
+            intrinsic_arith_binop(op),
+            true,
+            lhs,
+            rhs,
+            ty,
+            class.is_signed_int(),
+        )?;
         if self.fb.type_of(value) != ty {
             return Err(LowerError::Internal(
                 "layout-map arithmetic produced an unexpected type".to_string(),
             ));
         }
-        self.emit_panic_revert(overflow, PANIC_OVERFLOW)?;
         Ok(value)
     }
 
@@ -1967,7 +1774,15 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 lhs,
                 rhs,
                 class,
-            } => self.lower_intrinsic_arith_builtin(*op, *checked, *lhs, *rhs, class)?,
+            } => {
+                let ty = scalar_ty(class);
+                let lhs = self.local_value(*lhs)?;
+                let rhs = self.local_value(*rhs)?;
+                let lhs = self.cast_scalar(lhs, ty)?;
+                let rhs = self.cast_scalar(rhs, ty)?;
+                let signed = matches!(class.repr, ScalarRepr::Int { signed: true, .. });
+                self.lower_arith(intrinsic_arith_binop(*op), *checked, lhs, rhs, ty, signed)?
+            }
             RuntimeBuiltin::Saturating {
                 op,
                 lhs,
@@ -2344,7 +2159,6 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 .is_some_and(|resolved| {
                     self.current_sections.iter().all(|current_section| {
                         runtime_section_refs_match(
-                            self.module.db,
                             &resolved.source(self.module.db),
                             current_section,
                         )
@@ -2359,220 +2173,6 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 region,
             )))
         }
-    }
-
-    fn lower_intrinsic_call(
-        &mut self,
-        callee: mir::RuntimeInstance<'db>,
-        args: &[RLocalId],
-        dst: Option<RLocalId>,
-    ) -> Result<Option<ValueId>, LowerError> {
-        let Some(intrinsic) = runtime_intrinsic(self.module.db, callee) else {
-            return Ok(None);
-        };
-        let value = match intrinsic {
-            RuntimeIntrinsic::Alloc => {
-                let [size] = args else {
-                    return Err(LowerError::Internal(
-                        "alloc requires 1 argument".to_string(),
-                    ));
-                };
-                let size = self.local_value(*size)?;
-                let ptr_ty = self.fb.ptr_type(Type::I8);
-                self.fb
-                    .insert_inst(EvmMalloc::new(self.module.inst_set(), size), ptr_ty)
-            }
-            RuntimeIntrinsic::GenericSaturating { op, ty } => {
-                let prim = intrinsic_prim_from_ty(self.module.db, ty)?;
-                let op_ty = intrinsic_value_type(prim);
-                let signed = prim.is_signed_int();
-                let (lhs, rhs) = intrinsic_binary_args(self, args)?;
-                let lhs =
-                    lower_intrinsic_operand(&mut self.fb, self.module.inst_set(), lhs, prim, op_ty);
-                let rhs =
-                    lower_intrinsic_operand(&mut self.fb, self.module.inst_set(), rhs, prim, op_ty);
-                match (op, signed) {
-                    (GenericSaturatingOp::Add, true) => self.fb.insert_saddsat(lhs, rhs),
-                    (GenericSaturatingOp::Add, false) => self.fb.insert_uaddsat(lhs, rhs),
-                    (GenericSaturatingOp::Sub, true) => self.fb.insert_ssubsat(lhs, rhs),
-                    (GenericSaturatingOp::Sub, false) => self.fb.insert_usubsat(lhs, rhs),
-                    (GenericSaturatingOp::Mul, true) => self.fb.insert_smulsat(lhs, rhs),
-                    (GenericSaturatingOp::Mul, false) => self.fb.insert_umulsat(lhs, rhs),
-                }
-            }
-            RuntimeIntrinsic::Numeric { op, prim } => {
-                self.lower_numeric_intrinsic_call(op, prim, args)?
-            }
-        };
-        Ok(Some(self.coerce_to_dst(value, dst)?))
-    }
-
-    fn lower_numeric_intrinsic_call(
-        &mut self,
-        op: NumericIntrinsicOp,
-        prim: PrimTy,
-        args: &[RLocalId],
-    ) -> Result<ValueId, LowerError> {
-        let op_ty = intrinsic_value_type(prim);
-        let signed = prim.is_signed_int();
-        Ok(match op {
-            NumericIntrinsicOp::Eq
-            | NumericIntrinsicOp::Ne
-            | NumericIntrinsicOp::Lt
-            | NumericIntrinsicOp::Le
-            | NumericIntrinsicOp::Gt
-            | NumericIntrinsicOp::Ge => {
-                let (lhs, rhs) = intrinsic_binary_args(self, args)?;
-                let lhs =
-                    lower_intrinsic_operand(&mut self.fb, self.module.inst_set(), lhs, prim, op_ty);
-                let rhs =
-                    lower_intrinsic_operand(&mut self.fb, self.module.inst_set(), rhs, prim, op_ty);
-                match op {
-                    NumericIntrinsicOp::Eq => self
-                        .fb
-                        .insert_inst(Eq::new(self.module.inst_set(), lhs, rhs), Type::I1),
-                    NumericIntrinsicOp::Ne => {
-                        let eq = self
-                            .fb
-                            .insert_inst(Eq::new(self.module.inst_set(), lhs, rhs), Type::I1);
-                        self.fb
-                            .insert_inst(IsZero::new(self.module.inst_set(), eq), Type::I1)
-                    }
-                    NumericIntrinsicOp::Lt => {
-                        if signed {
-                            self.fb
-                                .insert_inst(Slt::new(self.module.inst_set(), lhs, rhs), Type::I1)
-                        } else {
-                            self.fb
-                                .insert_inst(Lt::new(self.module.inst_set(), lhs, rhs), Type::I1)
-                        }
-                    }
-                    NumericIntrinsicOp::Le => {
-                        let gt = if signed {
-                            self.fb
-                                .insert_inst(Slt::new(self.module.inst_set(), rhs, lhs), Type::I1)
-                        } else {
-                            self.fb
-                                .insert_inst(Gt::new(self.module.inst_set(), lhs, rhs), Type::I1)
-                        };
-                        self.fb
-                            .insert_inst(IsZero::new(self.module.inst_set(), gt), Type::I1)
-                    }
-                    NumericIntrinsicOp::Gt => {
-                        if signed {
-                            self.fb
-                                .insert_inst(Slt::new(self.module.inst_set(), rhs, lhs), Type::I1)
-                        } else {
-                            self.fb
-                                .insert_inst(Gt::new(self.module.inst_set(), lhs, rhs), Type::I1)
-                        }
-                    }
-                    NumericIntrinsicOp::Ge => {
-                        let lt = if signed {
-                            self.fb
-                                .insert_inst(Slt::new(self.module.inst_set(), lhs, rhs), Type::I1)
-                        } else {
-                            self.fb
-                                .insert_inst(Lt::new(self.module.inst_set(), lhs, rhs), Type::I1)
-                        };
-                        self.fb
-                            .insert_inst(IsZero::new(self.module.inst_set(), lt), Type::I1)
-                    }
-                    _ => unreachable!(),
-                }
-            }
-            NumericIntrinsicOp::Add
-            | NumericIntrinsicOp::Sub
-            | NumericIntrinsicOp::Mul
-            | NumericIntrinsicOp::Pow
-            | NumericIntrinsicOp::Shl
-            | NumericIntrinsicOp::Shr
-            | NumericIntrinsicOp::BitAnd
-            | NumericIntrinsicOp::BitOr
-            | NumericIntrinsicOp::BitXor
-            | NumericIntrinsicOp::Div
-            | NumericIntrinsicOp::Rem => {
-                let (lhs, rhs) = intrinsic_binary_args(self, args)?;
-                let lhs =
-                    lower_intrinsic_operand(&mut self.fb, self.module.inst_set(), lhs, prim, op_ty);
-                let rhs =
-                    lower_intrinsic_operand(&mut self.fb, self.module.inst_set(), rhs, prim, op_ty);
-                match op {
-                    NumericIntrinsicOp::Add => self
-                        .fb
-                        .insert_inst(Add::new(self.module.inst_set(), lhs, rhs), op_ty),
-                    NumericIntrinsicOp::Sub => self
-                        .fb
-                        .insert_inst(Sub::new(self.module.inst_set(), lhs, rhs), op_ty),
-                    NumericIntrinsicOp::Mul => self
-                        .fb
-                        .insert_inst(Mul::new(self.module.inst_set(), lhs, rhs), op_ty),
-                    NumericIntrinsicOp::Pow => self
-                        .fb
-                        .insert_inst(EvmExp::new(self.module.inst_set(), lhs, rhs), op_ty),
-                    NumericIntrinsicOp::Shl => self
-                        .fb
-                        .insert_inst(Shl::new(self.module.inst_set(), rhs, lhs), op_ty),
-                    NumericIntrinsicOp::Shr => {
-                        if signed {
-                            self.fb
-                                .insert_inst(Sar::new(self.module.inst_set(), rhs, lhs), op_ty)
-                        } else {
-                            self.fb
-                                .insert_inst(Shr::new(self.module.inst_set(), rhs, lhs), op_ty)
-                        }
-                    }
-                    NumericIntrinsicOp::BitAnd => self
-                        .fb
-                        .insert_inst(And::new(self.module.inst_set(), lhs, rhs), op_ty),
-                    NumericIntrinsicOp::BitOr => self
-                        .fb
-                        .insert_inst(Or::new(self.module.inst_set(), lhs, rhs), op_ty),
-                    NumericIntrinsicOp::BitXor => self
-                        .fb
-                        .insert_inst(Xor::new(self.module.inst_set(), lhs, rhs), op_ty),
-                    NumericIntrinsicOp::Div => {
-                        let [raw, _overflow] = if signed {
-                            self.fb.insert_evm_sdivo(lhs, rhs)
-                        } else {
-                            self.fb.insert_evm_udivo(lhs, rhs)
-                        };
-                        raw
-                    }
-                    NumericIntrinsicOp::Rem => {
-                        let [raw, _overflow] = if signed {
-                            self.fb.insert_evm_smodo(lhs, rhs)
-                        } else {
-                            self.fb.insert_evm_umodo(lhs, rhs)
-                        };
-                        raw
-                    }
-                    _ => unreachable!(),
-                }
-            }
-            NumericIntrinsicOp::BitNot | NumericIntrinsicOp::Not | NumericIntrinsicOp::Neg => {
-                let value = intrinsic_unary_arg(self, args)?;
-                let value = lower_intrinsic_operand(
-                    &mut self.fb,
-                    self.module.inst_set(),
-                    value,
-                    prim,
-                    op_ty,
-                );
-                match op {
-                    NumericIntrinsicOp::BitNot => self
-                        .fb
-                        .insert_inst(Not::new(self.module.inst_set(), value), op_ty),
-                    NumericIntrinsicOp::Not => self
-                        .fb
-                        .insert_inst(IsZero::new(self.module.inst_set(), value), Type::I1),
-                    NumericIntrinsicOp::Neg => self
-                        .fb
-                        .insert_inst(Neg::new(self.module.inst_set(), value), op_ty),
-                    _ => unreachable!(),
-                }
-            }
-        })
     }
 
     fn lower_terminator(&mut self, terminator: &RTerminator<'db>) -> Result<(), LowerError> {
@@ -2919,9 +2519,22 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         &mut self,
         place: &RuntimePlace<'db>,
     ) -> Result<Lowered<PlaceTerminal<'db>>, LowerError> {
+        Ok(match self.resolve_place_full(place)? {
+            Lowered::Value((terminal, _)) => Lowered::Value(terminal),
+            Lowered::Terminated => Lowered::Terminated,
+        })
+    }
+
+    /// Resolve `place` once, yielding both its lowered terminal and the
+    /// projected result class.
+    fn resolve_place_full(
+        &mut self,
+        place: &RuntimePlace<'db>,
+    ) -> Result<Lowered<(PlaceTerminal<'db>, RuntimeClass<'db>)>, LowerError> {
         let program = self.module.db as &dyn mir::MirDb;
         let resolved = resolve_runtime_place(self.module.db, &program, &self.body, place)
             .map_err(|err| LowerError::Internal(format!("invalid runtime place: {err:?}")))?;
+        let result_class = resolved.result_class.clone();
         let mut terminal = match resolved.root_kind {
             ResolvedPlaceRootKind::Slot { local, class } => {
                 match self.slot_roots.get(&local).ok_or_else(|| {
@@ -3134,18 +2747,14 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 }
             };
         }
-        Ok(Lowered::Value(terminal))
+        Ok(Lowered::Value((terminal, result_class)))
     }
 
     fn load_from_place(
         &mut self,
         place: &RuntimePlace<'db>,
     ) -> Result<Lowered<ValueId>, LowerError> {
-        let program = self.module.db as &dyn mir::MirDb;
-        let class = resolve_runtime_place(self.module.db, &program, &self.body, place)
-            .map_err(|err| LowerError::Internal(format!("invalid runtime place: {err:?}")))?
-            .result_class;
-        let Lowered::Value(terminal) = self.resolve_place(place)? else {
+        let Lowered::Value((terminal, class)) = self.resolve_place_full(place)? else {
             return Ok(Lowered::Terminated);
         };
         Ok(Lowered::Value(match terminal {
@@ -3804,11 +3413,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         src: RLocalId,
     ) -> Result<Lowered<()>, LowerError> {
         let src_value = self.local_value(src)?;
-        let program = self.module.db as &dyn mir::MirDb;
-        let dst_class = resolve_runtime_place(self.module.db, &program, &self.body, place)
-            .map_err(|err| LowerError::Internal(format!("invalid runtime place: {err:?}")))?
-            .result_class;
-        let Lowered::Value(terminal) = self.resolve_place(place)? else {
+        let Lowered::Value((terminal, dst_class)) = self.resolve_place_full(place)? else {
             return Ok(Lowered::Terminated);
         };
         match terminal {
@@ -4462,7 +4067,20 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         operand: &RuntimeClass<'db>,
     ) -> Result<ValueId, LowerError> {
         Ok(match op {
-            BinOp::Arith(op) => self.lower_arith(op, lhs, rhs, operand)?,
+            BinOp::Arith(op) => {
+                let ty = self.module.ty_for_class(operand)?;
+                let lhs = self.cast_scalar(lhs, ty)?;
+                let rhs = self.cast_scalar(rhs, ty)?;
+                let checked = matches!(
+                    op,
+                    ArithBinOp::Add
+                        | ArithBinOp::Sub
+                        | ArithBinOp::Mul
+                        | ArithBinOp::Div
+                        | ArithBinOp::Rem
+                );
+                self.lower_arith(op, checked, lhs, rhs, ty, operand.is_signed_scalar())?
+            }
             BinOp::Comp(op) => self.lower_comp(op, lhs, rhs, operand)?,
             BinOp::Logical(op) => match op {
                 LogicalBinOp::And => {
@@ -4486,19 +4104,20 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         })
     }
 
+    /// The single arithmetic lowering. `checked` selects overflow/zero-divisor
+    /// reverts for Add/Sub/Mul/Div/Rem/Pow; shift and bitwise ops ignore it.
+    /// Operands must already be cast to `ty`.
     fn lower_arith(
         &mut self,
         op: ArithBinOp,
+        checked: bool,
         lhs: ValueId,
         rhs: ValueId,
-        operand: &RuntimeClass<'db>,
+        ty: Type,
+        signed: bool,
     ) -> Result<ValueId, LowerError> {
-        let ty = self.module.ty_for_class(operand)?;
-        let lhs = self.cast_scalar(lhs, ty)?;
-        let rhs = self.cast_scalar(rhs, ty)?;
-        let signed = operand.is_signed_scalar();
         Ok(match op {
-            ArithBinOp::Add => {
+            ArithBinOp::Add if checked => {
                 let [raw, overflow] = if signed {
                     self.fb.insert_saddo(lhs, rhs)
                 } else {
@@ -4507,7 +4126,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 self.emit_panic_revert(overflow, PANIC_OVERFLOW)?;
                 raw
             }
-            ArithBinOp::Sub => {
+            ArithBinOp::Add => self
+                .fb
+                .insert_inst(Add::new(self.module.inst_set(), lhs, rhs), ty),
+            ArithBinOp::Sub if checked => {
                 let [raw, overflow] = if signed {
                     self.fb.insert_ssubo(lhs, rhs)
                 } else {
@@ -4516,7 +4138,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 self.emit_panic_revert(overflow, PANIC_OVERFLOW)?;
                 raw
             }
-            ArithBinOp::Mul => {
+            ArithBinOp::Sub => self
+                .fb
+                .insert_inst(Sub::new(self.module.inst_set(), lhs, rhs), ty),
+            ArithBinOp::Mul if checked => {
                 let [raw, overflow] = if signed {
                     self.fb.insert_smulo(lhs, rhs)
                 } else {
@@ -4525,7 +4150,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 self.emit_panic_revert(overflow, PANIC_OVERFLOW)?;
                 raw
             }
-            ArithBinOp::Div => {
+            ArithBinOp::Mul => self
+                .fb
+                .insert_inst(Mul::new(self.module.inst_set(), lhs, rhs), ty),
+            ArithBinOp::Div if checked => {
                 self.emit_division_by_zero_revert(rhs, ty)?;
                 let [raw, overflow] = if signed {
                     self.fb.insert_evm_sdivo(lhs, rhs)
@@ -4535,8 +4163,19 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 self.emit_panic_revert(overflow, PANIC_OVERFLOW)?;
                 raw
             }
+            ArithBinOp::Div => {
+                if signed {
+                    self.fb
+                        .insert_inst(EvmSdiv::new(self.module.inst_set(), lhs, rhs), ty)
+                } else {
+                    self.fb
+                        .insert_inst(EvmUdiv::new(self.module.inst_set(), lhs, rhs), ty)
+                }
+            }
             ArithBinOp::Rem => {
-                self.emit_division_by_zero_revert(rhs, ty)?;
+                if checked {
+                    self.emit_division_by_zero_revert(rhs, ty)?;
+                }
                 if signed {
                     self.fb
                         .insert_inst(EvmSmod::new(self.module.inst_set(), lhs, rhs), ty)
@@ -4545,6 +4184,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                         .insert_inst(EvmUmod::new(self.module.inst_set(), lhs, rhs), ty)
                 }
             }
+            ArithBinOp::Pow if checked => self.lower_checked_pow_builtin(lhs, rhs, ty, signed)?,
             ArithBinOp::Pow => self
                 .fb
                 .insert_inst(EvmExp::new(self.module.inst_set(), lhs, rhs), ty),
@@ -4576,105 +4216,6 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             }
         })
     }
-
-    fn lower_intrinsic_arith_builtin(
-        &mut self,
-        op: IntrinsicArithBinOp,
-        checked: bool,
-        lhs: RLocalId,
-        rhs: RLocalId,
-        class: &ScalarClass<'db>,
-    ) -> Result<ValueId, LowerError> {
-        let ty = scalar_ty(class);
-        let lhs = self.local_value(lhs)?;
-        let rhs = self.local_value(rhs)?;
-        let lhs = self.cast_scalar(lhs, ty)?;
-        let rhs = self.cast_scalar(rhs, ty)?;
-        let signed = matches!(class.repr, ScalarRepr::Int { signed: true, .. });
-        Ok(match (op, checked) {
-            (IntrinsicArithBinOp::Add, false) => self
-                .fb
-                .insert_inst(Add::new(self.module.inst_set(), lhs, rhs), ty),
-            (IntrinsicArithBinOp::Sub, false) => self
-                .fb
-                .insert_inst(Sub::new(self.module.inst_set(), lhs, rhs), ty),
-            (IntrinsicArithBinOp::Mul, false) => self
-                .fb
-                .insert_inst(Mul::new(self.module.inst_set(), lhs, rhs), ty),
-            (IntrinsicArithBinOp::Div, false) => {
-                if signed {
-                    self.fb
-                        .insert_inst(EvmSdiv::new(self.module.inst_set(), lhs, rhs), ty)
-                } else {
-                    self.fb
-                        .insert_inst(EvmUdiv::new(self.module.inst_set(), lhs, rhs), ty)
-                }
-            }
-            (IntrinsicArithBinOp::Rem, false) => {
-                if signed {
-                    self.fb
-                        .insert_inst(EvmSmod::new(self.module.inst_set(), lhs, rhs), ty)
-                } else {
-                    self.fb
-                        .insert_inst(EvmUmod::new(self.module.inst_set(), lhs, rhs), ty)
-                }
-            }
-            (IntrinsicArithBinOp::Pow, false) => self
-                .fb
-                .insert_inst(EvmExp::new(self.module.inst_set(), lhs, rhs), ty),
-            (IntrinsicArithBinOp::Add, true) => {
-                let [raw, overflow] = if signed {
-                    self.fb.insert_saddo(lhs, rhs)
-                } else {
-                    self.fb.insert_uaddo(lhs, rhs)
-                };
-                self.emit_panic_revert(overflow, PANIC_OVERFLOW)?;
-                raw
-            }
-            (IntrinsicArithBinOp::Sub, true) => {
-                let [raw, overflow] = if signed {
-                    self.fb.insert_ssubo(lhs, rhs)
-                } else {
-                    self.fb.insert_usubo(lhs, rhs)
-                };
-                self.emit_panic_revert(overflow, PANIC_OVERFLOW)?;
-                raw
-            }
-            (IntrinsicArithBinOp::Mul, true) => {
-                let [raw, overflow] = if signed {
-                    self.fb.insert_smulo(lhs, rhs)
-                } else {
-                    self.fb.insert_umulo(lhs, rhs)
-                };
-                self.emit_panic_revert(overflow, PANIC_OVERFLOW)?;
-                raw
-            }
-            (IntrinsicArithBinOp::Div, true) => {
-                self.emit_division_by_zero_revert(rhs, ty)?;
-                let [raw, overflow] = if signed {
-                    self.fb.insert_evm_sdivo(lhs, rhs)
-                } else {
-                    self.fb.insert_evm_udivo(lhs, rhs)
-                };
-                self.emit_panic_revert(overflow, PANIC_OVERFLOW)?;
-                raw
-            }
-            (IntrinsicArithBinOp::Rem, true) => {
-                self.emit_division_by_zero_revert(rhs, ty)?;
-                if signed {
-                    self.fb
-                        .insert_inst(EvmSmod::new(self.module.inst_set(), lhs, rhs), ty)
-                } else {
-                    self.fb
-                        .insert_inst(EvmUmod::new(self.module.inst_set(), lhs, rhs), ty)
-                }
-            }
-            (IntrinsicArithBinOp::Pow, true) => {
-                self.lower_checked_pow_builtin(lhs, rhs, ty, signed)?
-            }
-        })
-    }
-
     fn lower_checked_pow_builtin(
         &mut self,
         base: ValueId,
@@ -5116,6 +4657,17 @@ fn linkage_for_runtime(linkage: RuntimeLinkage) -> Linkage {
     }
 }
 
+fn intrinsic_arith_binop(op: IntrinsicArithBinOp) -> ArithBinOp {
+    match op {
+        IntrinsicArithBinOp::Add => ArithBinOp::Add,
+        IntrinsicArithBinOp::Sub => ArithBinOp::Sub,
+        IntrinsicArithBinOp::Mul => ArithBinOp::Mul,
+        IntrinsicArithBinOp::Div => ArithBinOp::Div,
+        IntrinsicArithBinOp::Rem => ArithBinOp::Rem,
+        IntrinsicArithBinOp::Pow => ArithBinOp::Pow,
+    }
+}
+
 fn scalar_ty<'db>(scalar: &ScalarClass<'db>) -> Type {
     match scalar.repr {
         ScalarRepr::Bool => Type::I1,
@@ -5131,53 +4683,6 @@ fn scalar_word_ty<'db>(scalar: &ScalarClass<'db>) -> Type {
         | ScalarRepr::Int { .. }
         | ScalarRepr::FixedBytes { .. }
         | ScalarRepr::Address { .. } => Type::I256,
-    }
-}
-
-fn intrinsic_prim_from_ty<'db>(
-    db: &'db DriverDataBase,
-    ty: TyId<'db>,
-) -> Result<PrimTy, LowerError> {
-    let base_ty = ty.base_ty(db);
-    let TyData::TyBase(TyBase::Prim(prim)) = base_ty.data(db) else {
-        return Err(LowerError::Internal(format!(
-            "intrinsic type must be primitive, got `{}`",
-            ty.pretty_print(db)
-        )));
-    };
-    Ok(*prim)
-}
-
-fn intrinsic_value_type(prim: PrimTy) -> Type {
-    match prim {
-        PrimTy::Bool => Type::I1,
-        PrimTy::U8 | PrimTy::I8 => Type::I8,
-        PrimTy::U16 | PrimTy::I16 => Type::I16,
-        PrimTy::U32 | PrimTy::I32 => Type::I32,
-        PrimTy::U64 | PrimTy::I64 => Type::I64,
-        PrimTy::U128 | PrimTy::I128 => Type::I128,
-        PrimTy::U256 | PrimTy::I256 | PrimTy::Usize | PrimTy::Isize => Type::I256,
-        PrimTy::String
-        | PrimTy::Array
-        | PrimTy::Tuple(_)
-        | PrimTy::Ptr
-        | PrimTy::View
-        | PrimTy::BorrowMut
-        | PrimTy::BorrowRef => Type::I256,
-    }
-}
-
-fn lower_intrinsic_operand(
-    fb: &mut FunctionBuilder<InstInserter>,
-    is: &EvmInstSet,
-    value: ValueId,
-    prim: PrimTy,
-    op_ty: Type,
-) -> ValueId {
-    if prim == PrimTy::Bool {
-        condition_to_i1(fb, value, is)
-    } else {
-        cast_int_value(fb, is, value, op_ty, prim.is_signed_int())
     }
 }
 
@@ -5206,30 +4711,6 @@ fn cast_int_value(
     } else {
         value
     }
-}
-
-fn intrinsic_binary_args<'ctx, 'db, 'a>(
-    lowerer: &mut FunctionLowerer<'ctx, 'db, 'a>,
-    args: &[RLocalId],
-) -> Result<(ValueId, ValueId), LowerError> {
-    let [lhs, rhs] = args else {
-        return Err(LowerError::Internal(
-            "intrinsic requires 2 arguments".to_string(),
-        ));
-    };
-    Ok((lowerer.local_value(*lhs)?, lowerer.local_value(*rhs)?))
-}
-
-fn intrinsic_unary_arg<'ctx, 'db, 'a>(
-    lowerer: &mut FunctionLowerer<'ctx, 'db, 'a>,
-    args: &[RLocalId],
-) -> Result<ValueId, LowerError> {
-    let [value] = args else {
-        return Err(LowerError::Internal(
-            "intrinsic requires 1 argument".to_string(),
-        ));
-    };
-    lowerer.local_value(*value)
 }
 
 fn int_ty(bits: u16) -> Type {
@@ -5304,32 +4785,20 @@ fn stable_hash<T: Hash>(value: &T) -> u64 {
     hasher.finish()
 }
 
-fn runtime_section_refs_match<'db>(
-    db: &'db DriverDataBase,
-    lhs: &mir::RuntimeSectionRef<'db>,
-    rhs: &mir::RuntimeSectionRef<'db>,
-) -> bool {
-    let (lhs_object, lhs_section) = match lhs {
-        mir::RuntimeSectionRef::Local { object, section }
-        | mir::RuntimeSectionRef::External { object, section } => (object, section),
-    };
-    let (rhs_object, rhs_section) = match rhs {
-        mir::RuntimeSectionRef::Local { object, section }
-        | mir::RuntimeSectionRef::External { object, section } => (object, section),
-    };
-    lhs_object.name(db) == rhs_object.name(db) && lhs_section == rhs_section
+fn runtime_section_refs_match(lhs: &mir::RuntimeSectionRef, rhs: &mir::RuntimeSectionRef) -> bool {
+    lhs.object() == rhs.object() && lhs.section() == rhs.section()
 }
 
 fn compute_section_membership<'db>(
     db: &'db DriverDataBase,
     package: &RuntimePackage<'db>,
-) -> FxHashMap<mir::RuntimeInstance<'db>, Vec<mir::RuntimeSectionRef<'db>>> {
+) -> FxHashMap<mir::RuntimeInstance<'db>, Vec<mir::RuntimeSectionRef>> {
     let mut membership =
-        FxHashMap::<mir::RuntimeInstance<'db>, Vec<mir::RuntimeSectionRef<'db>>>::default();
+        FxHashMap::<mir::RuntimeInstance<'db>, Vec<mir::RuntimeSectionRef>>::default();
     for object in package.objects(db) {
         for section in object.sections(db) {
             let section_ref = mir::RuntimeSectionRef::Local {
-                object,
+                object: object.name(db).clone(),
                 section: section.name.clone(),
             };
             let mut stack = vec![section.entry.instance(db)];

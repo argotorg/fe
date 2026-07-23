@@ -20,12 +20,11 @@ use super::{
     },
     classify::{
         BodyEnv, InferClassCache, carrier_value_class, nonself_backing_value_place,
-        provider_root_space, ref_class_for_place_result,
-        runtime_class_for_direct_value_provider_in_context, snapshot_source_place,
+        provider_root_space, runtime_class_for_direct_value_provider_in_env, snapshot_source_place,
     },
     realize::SelectedRuntimeArg,
     source::{RuntimeSourceMode, RuntimeSourceQuery, SemanticPlaceValueSource},
-    type_info::{effect_handle_transport_class_for_ty_in_context, stored_class_for_ty_in_context},
+    type_info::{effect_handle_transport_class_for_ty_in_env, stored_class_for_ty_in_env},
 };
 
 pub(super) struct RuntimeArgSelector<'a, 'carriers, 'roots, 'cache, 'db> {
@@ -194,11 +193,10 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
             return Some(SelectedRuntimeArg::runtime_value(local, target.clone()));
         }
         if !target.is_transport()
-            && effect_handle_transport_class_for_ty_in_context(
+            && effect_handle_transport_class_for_ty_in_env(
                 self.env.db(),
+                self.env.type_env(),
                 self.env.body().locals.get(local.index())?.ty,
-                self.env.scope(),
-                self.env.assumptions(),
             )
             .is_some()
             && self
@@ -516,15 +514,14 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
                     .actual_runtime_visible_root_provider_class(self.carriers, provider)
                     .map(|(_, class)| class)
                     .or_else(|| {
-                        runtime_class_for_direct_value_provider_in_context(
+                        runtime_class_for_direct_value_provider_in_env(
                             self.env.db(),
+                            self.env.type_env(),
                             provider,
-                            self.env.scope(),
-                            self.env.assumptions(),
                         )
                     })
             {
-                let class = ref_class_for_place_result(
+                let class = crate::runtime::place::ref_class_for_place_result(
                     &root_class,
                     &value_class,
                     provider_root_space(provider, &root_class),
@@ -544,7 +541,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
                     self.carriers.get(local.index())?,
                 )
             {
-                let class = ref_class_for_place_result(
+                let class = crate::runtime::place::ref_class_for_place_result(
                     &root_class,
                     &value_class,
                     AddressSpaceKind::Memory,
@@ -637,22 +634,16 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         boundary: &StagedBoundary<'db>,
     ) -> Option<SelectedRuntimeArg<'db>> {
         let semantic_ty = self.env.body().locals.get(arg.local.index())?.ty;
-        let transport = effect_handle_transport_class_for_ty_in_context(
+        let transport = effect_handle_transport_class_for_ty_in_env(
             self.env.db(),
+            self.env.type_env(),
             semantic_ty,
-            self.env.scope(),
-            self.env.assumptions(),
         )?;
         let boundary = self.specialized_boundary(arg.local, boundary);
         if BoundaryMatcher::class_satisfies_boundary(&transport, &boundary) {
             return Some(SelectedRuntimeArg::semantic_operand(arg, transport));
         }
-        let ordinary = stored_class_for_ty_in_context(
-            self.env.db(),
-            semantic_ty,
-            self.env.scope(),
-            self.env.assumptions(),
-        );
+        let ordinary = stored_class_for_ty_in_env(self.env.db(), self.env.type_env(), semantic_ty);
         let materialization = RuntimeValueMaterialization::for_boundary(&boundary)?;
         let target = materialization.class();
         target
@@ -875,11 +866,10 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
             },
         };
         let semantic_ty = self.env.body().locals.get(local.index())?.ty;
-        let transport = effect_handle_transport_class_for_ty_in_context(
+        let transport = effect_handle_transport_class_for_ty_in_env(
             self.env.db(),
+            self.env.type_env(),
             semantic_ty,
-            self.env.scope(),
-            self.env.assumptions(),
         )?;
         if !BoundaryMatcher::class_satisfies_boundary(&transport, boundary)
             || !self.sources().semantic_operand_value_is_available(local)

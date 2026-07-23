@@ -12,6 +12,14 @@ fn sum_if_let(_ point: Option<Point>) -> u256 {
     }
 }
 
+fn sum_nested_if_let(_ value: Option<(Point, Option<u256>)>) -> u256 {
+    if let Option::Some((Point { x: 2, y }, Option::Some(value))) = value {
+        y + value
+    } else {
+        0
+    }
+}
+
 fn sum_compound_if_let(_ a: Option<Option<usize>>) -> usize {
     if let Option::Some(b) = a && let Option::Some(c) = b {
         c
@@ -45,10 +53,29 @@ fn sum_while_let(_ values: [Option<usize>; 4]) -> usize {
     sum
 }
 
+fn sum_descending_while_let(mut _ current: own Option<u256>) -> u256 {
+    let mut sum: u256 = 0
+
+    while let Option::Some(value) = current {
+        sum += value
+        if value == 0 {
+            current = Option::None
+        } else {
+            current = Option::Some(value - 1)
+        }
+    }
+
+    sum
+}
+
 #[test]
 fn test_if_let_while_let() {
     assert!(sum_if_let(Option::Some(Point { x: 2, y: 3 })) == 5)
     assert!(sum_if_let(Option::None) == 0)
+    assert!(sum_nested_if_let(Option::Some((Point { x: 2, y: 3 }, Option::Some(7)))) == 10)
+    assert!(sum_nested_if_let(Option::Some((Point { x: 3, y: 3 }, Option::Some(7)))) == 0)
+    assert!(sum_nested_if_let(Option::Some((Point { x: 2, y: 3 }, Option::None))) == 0)
+    assert!(sum_nested_if_let(Option::None) == 0)
     assert!(sum_compound_if_let(Option::Some(Option::Some(7))) == 7)
     assert!(sum_compound_if_let(Option::Some(Option::None)) == 0)
     assert!(sum_compound_if_let(Option::None) == 0)
@@ -56,4 +83,6 @@ fn test_if_let_while_let() {
     assert!(sum_compound_if_let_annotated(Option::Some(Option::None)) == 0)
     assert!(sum_compound_if_let_annotated(Option::None) == 0)
     assert!(sum_while_let([Option::Some(2), Option::Some(5), Option::None, Option::Some(9)]) == 7)
+    assert!(sum_descending_while_let(Option::Some(3)) == 6)
+    assert!(sum_descending_while_let(Option::None) == 0)
 }

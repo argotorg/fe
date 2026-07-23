@@ -31,10 +31,14 @@ use salsa::Update;
 use crate::{
     db::MirDb,
     instance::{RuntimeInstanceKey, RuntimeInstanceSource},
+    runtime::place::{
+        project_field_class, project_index_class, project_variant_field_class,
+        ref_class_for_place_result,
+    },
     runtime::{
-        AddressSpaceKind, BorrowAccess, Layout, LayoutId, RefKind, RefView, RuntimeBoundarySpec,
-        RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeCodeRegionKey, RuntimeParamPlan,
-        SaturatingBinOp, ScalarClass, ScalarRepr, ScalarRole, VariantId,
+        AddressSpaceKind, BorrowAccess, Layout, LayoutId, RuntimeBoundarySpec, RuntimeCarrier,
+        RuntimeClass, RuntimeCodeRegion, RuntimeCodeRegionKey, RuntimeParamPlan, SaturatingBinOp,
+        ScalarClass, ScalarRepr, ScalarRole, VariantId,
     },
 };
 
@@ -55,22 +59,18 @@ use super::{
     infer::{fallback_root_transport_class, local_place_root_class},
     interface::runtime_visible_binding_plans,
     layout::{
-        layout_for_aggregate_instance_in_context, layout_for_enum_variant_instance_in_context,
-        layout_for_ty_in_context,
+        layout_for_aggregate_instance_in_env, layout_for_enum_variant_instance_in_env,
+        layout_for_ty_in_env,
     },
-    place::{
-        address_space_from_provider, project_field_class, project_index_class,
-        project_variant_field_class,
-    },
+    provider_space::address_space_from_provider,
     realize::SelectedRuntimeArg,
     returns::{StaticRuntimeReturnDecision, static_runtime_return_decision},
     type_info::{
-        RuntimeTypeEnv, effect_handle_transport_class_for_ty_in_context,
-        provider_address_space_to_runtime, provider_class_for_target_in_context,
-        provider_class_for_target_in_env, runtime_interface_ty_in_context,
-        runtime_repr_ty_in_context, runtime_zero_sized_transport_ty, runtime_zero_sized_ty,
-        scalar_class_for_ty_in_env, stored_class_for_ty_in_context,
-        top_level_class_for_ty_in_context, top_level_class_for_ty_in_env,
+        RuntimeTypeEnv, effect_handle_transport_class_for_ty_in_env,
+        provider_address_space_to_runtime, provider_class_for_target_in_env,
+        runtime_interface_ty_in_env, runtime_repr_ty_in_env, runtime_zero_sized_transport_ty,
+        runtime_zero_sized_ty, scalar_class_for_ty_in_env, stored_class_for_ty_in_env,
+        top_level_class_for_ty_in_env,
     },
 };
 
@@ -333,11 +333,6 @@ impl<'db> BodyStaticFacts<'db> {
         self.normalized_facts.local_source_uses(local)
     }
 
-    pub(super) fn boundary_source_transport_sensitive(&self, local: SLocalId) -> bool {
-        self.local(local)
-            .is_some_and(|facts| facts.boundary_source_transport_sensitive)
-    }
-
     fn assignments_using_local(&self, local: SLocalId) -> &[AssignmentId] {
         self.normalized_facts.assignments_using_local(local)
     }
@@ -400,6 +395,10 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
 
     pub(super) fn body(self) -> &'a NormalizedSemanticBody<'db> {
         self.body
+    }
+
+    pub(super) fn type_env(self) -> RuntimeTypeEnv<'db> {
+        self.type_env
     }
 
     pub(super) fn scope(self) -> Option<hir::hir_def::scope_graph::ScopeId<'db>> {
@@ -657,9 +656,23 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
         carriers: &[RuntimeCarrier<'db>],
         place: &NSPlace<'db>,
     ) -> Option<RuntimeClass<'db>> {
-        let mut current =
-            normalized_place_root_class_in_context(self, place.root.clone(), carriers)?;
-        for projection in place.path.iter() {
+        let root = normalized_place_root_class_in_context(self, place.root.clone(), carriers)?;
+        Some(self.walk_place_path_classes(root, place).0)
+    }
+
+    /// Projects `root` through the place's path, returning the final class and
+    /// the carrier class crossed by the last `Deref` (if any).
+    fn walk_place_path_classes(
+        self,
+        root: RuntimeClass<'db>,
+        place: &NSPlace<'db>,
+    ) -> (RuntimeClass<'db>, Option<RuntimeClass<'db>>) {
+        let mut current = root;
+        let mut last_deref_carrier = None;
+        for (idx, projection) in place.path.iter().enumerate() {
+            if matches!(projection, Projection::Deref) {
+                last_deref_carrier = Some(current.clone());
+            }
             current = match projection {
                 Projection::Field(field) => project_field_class(
                     self.db,
@@ -703,8 +716,17 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                     }
                 },
             };
+            // Mirror `try_lower_place`: projecting onward through a
+            // handle-classed element continues in the pointee, which re-roots
+            // the place in that carrier's transport.
+            if idx + 1 < place.path.len()
+                && let Some(target) = current.deref_target()
+            {
+                last_deref_carrier = Some(current.clone());
+                current = target;
+            }
         }
-        Some(current)
+        (current, last_deref_carrier)
     }
 
     pub(crate) fn normalized_place_address_class(
@@ -713,9 +735,9 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
         place: &NSPlace<'db>,
     ) -> Option<RuntimeClass<'db>> {
         let value_class = self.normalized_place_class(carriers, place)?;
-        let root_class =
+        let mut root_class =
             normalized_place_root_transport_class_in_context(self, place.root.clone(), carriers)?;
-        let (root_space, force_raw) = match place.root {
+        let (mut root_space, mut force_raw) = match place.root {
             NSPlaceRoot::CarrierDerefLocal(_) => (AddressSpaceKind::Memory, false),
             NSPlaceRoot::Root(root) => match self.body.root(root)? {
                 NBorrowRoot::Param { .. } | NBorrowRoot::LocalSlot { .. } => {
@@ -726,6 +748,18 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                 }
             },
         };
+        // A deref along the path re-roots the address in the dereffed
+        // carrier's transport (mirroring `resolve_runtime_place_address_class`
+        // over lowered places), so a borrow through a handle-typed field keeps
+        // the handle's transport rather than the place root's.
+        if let Some(root) =
+            normalized_place_root_class_in_context(self, place.root.clone(), carriers)
+            && let (_, Some(carrier)) = self.walk_place_path_classes(root, place)
+        {
+            root_space = carrier.address_space().unwrap_or(root_space);
+            force_raw = matches!(carrier, RuntimeClass::RawAddr { .. });
+            root_class = carrier;
+        }
         Some(ref_class_for_place_result(
             &root_class,
             &value_class,
@@ -846,8 +880,7 @@ fn build_local_static_facts<'db>(
     let assumptions = type_env.assumptions;
     let lowered_ty = lowered_place_like_ty(local, local_data);
     let local_is_effect_handle =
-        effect_handle_transport_class_for_ty_in_context(db, local_data.ty, scope, assumptions)
-            .is_some();
+        effect_handle_transport_class_for_ty_in_env(db, type_env, local_data.ty).is_some();
     let zero_sized_transport = if local_is_effect_handle
         && !local_uses_effect_handle_transport(local_data)
     {
@@ -862,7 +895,7 @@ fn build_local_static_facts<'db>(
         SemanticLocalKind::PlaceCarrier | SemanticLocalKind::PlaceBoundValue
             if !zero_sized_transport =>
         {
-            lowered_ty.map(|ty| stored_class_for_ty_in_context(db, ty, scope, assumptions))
+            lowered_ty.map(|ty| stored_class_for_ty_in_env(db, type_env, ty))
         }
         SemanticLocalKind::Erased
         | SemanticLocalKind::DirectValue
@@ -872,15 +905,15 @@ fn build_local_static_facts<'db>(
     };
     let root_place_fallback_class = match local_data.facts.interface {
         SemanticLocalKind::Erased => None,
-        SemanticLocalKind::DirectValue if !zero_sized_transport => Some(
-            stored_class_for_ty_in_context(db, local_data.ty, scope, assumptions),
-        ),
+        SemanticLocalKind::DirectValue if !zero_sized_transport => {
+            Some(stored_class_for_ty_in_env(db, type_env, local_data.ty))
+        }
         SemanticLocalKind::PlaceCarrier
         | SemanticLocalKind::DirectCarrier
         | SemanticLocalKind::PlaceBoundValue
             if !zero_sized_transport =>
         {
-            lowered_ty.map(|ty| stored_class_for_ty_in_context(db, ty, scope, assumptions))
+            lowered_ty.map(|ty| stored_class_for_ty_in_env(db, type_env, ty))
         }
         SemanticLocalKind::DirectValue
         | SemanticLocalKind::PlaceCarrier
@@ -908,12 +941,11 @@ fn build_local_static_facts<'db>(
             CompiledMaterializationPlan::Erased
         } else {
             match local_data.facts.interface {
-                SemanticLocalKind::DirectValue => top_level_class_for_ty_in_context(
+                SemanticLocalKind::DirectValue => top_level_class_for_ty_in_env(
                     db,
+                    type_env,
                     local_data.ty,
                     AddressSpaceKind::Memory,
-                    scope,
-                    assumptions,
                 )
                 .map_or(
                     CompiledMaterializationPlan::AggregateFromSource,
@@ -1026,12 +1058,7 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
                         AddressSpaceKind::Memory,
                     )
                     .map(|boundary| boundary_sites.stage(boundary)),
-                    stored_class: stored_class_for_ty_in_context(
-                        db,
-                        elem_ty,
-                        type_env.scope,
-                        type_env.assumptions,
-                    ),
+                    stored_class: stored_class_for_ty_in_env(db, type_env, elem_ty),
                 };
                 ExprStaticFacts::AggregateMake(AggregateMakeStaticFacts {
                     direct_class: top_level_class_for_ty_in_env(
@@ -1070,12 +1097,7 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
                             AddressSpaceKind::Memory,
                         )
                         .map(|boundary| boundary_sites.stage(boundary)),
-                        stored_class: stored_class_for_ty_in_context(
-                            db,
-                            field_ty,
-                            type_env.scope,
-                            type_env.assumptions,
-                        ),
+                        stored_class: stored_class_for_ty_in_env(db, type_env, field_ty),
                     })
                     .collect();
                 ExprStaticFacts::AggregateMake(AggregateMakeStaticFacts {
@@ -1112,12 +1134,7 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
                             AddressSpaceKind::Memory,
                         )
                         .map(|boundary| boundary_sites.stage(boundary)),
-                        stored_class: stored_class_for_ty_in_context(
-                            db,
-                            field_ty,
-                            type_env.scope,
-                            type_env.assumptions,
-                        ),
+                        stored_class: stored_class_for_ty_in_env(db, type_env, field_ty),
                     })
                     .collect();
                 ExprStaticFacts::AggregateMake(AggregateMakeStaticFacts {
@@ -1227,35 +1244,6 @@ pub(crate) struct RuntimeBodyCx<'a, 'carriers, 'db> {
     pub(crate) carriers: &'carriers [RuntimeCarrier<'db>],
 }
 
-impl<'a, 'carriers, 'db> RuntimeBodyCx<'a, 'carriers, 'db> {
-    pub(super) fn selected_materialized_value(
-        self,
-        local: SLocalId,
-    ) -> Option<SelectedRuntimeArg<'db>> {
-        RuntimeArgSelector::new(self.env, self.carriers, None).selected_materialized_value(local)
-    }
-
-    pub(crate) fn normalized_place_class(self, place: &NSPlace<'db>) -> Option<RuntimeClass<'db>> {
-        self.env.normalized_place_class(self.carriers, place)
-    }
-
-    pub(crate) fn normalized_place_address_class(
-        self,
-        place: &NSPlace<'db>,
-    ) -> Option<RuntimeClass<'db>> {
-        self.env
-            .normalized_place_address_class(self.carriers, place)
-    }
-
-    pub(crate) fn actual_aggregate_class_for_source(
-        self,
-        local: SLocalId,
-    ) -> Option<RuntimeClass<'db>> {
-        self.env
-            .actual_aggregate_class_for_source(self.carriers, local)
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub(crate) struct RuntimeVisibleBindingPlan<'db> {
     pub(crate) binding: LocalBinding<'db>,
@@ -1298,37 +1286,6 @@ pub(super) fn provider_root_space<'db>(
         })
 }
 
-pub(crate) fn ref_class_for_place_result<'db>(
-    root_class: &RuntimeClass<'db>,
-    value_class: &RuntimeClass<'db>,
-    root_space: AddressSpaceKind,
-    force_raw: bool,
-) -> RuntimeClass<'db> {
-    if !force_raw {
-        match root_class {
-            RuntimeClass::Ref { kind, .. } => {
-                return RuntimeClass::Ref {
-                    pointee: Box::new(value_class.clone()),
-                    kind: kind.clone(),
-                    view: RefView::Whole,
-                };
-            }
-            RuntimeClass::AggregateValue { .. } => {
-                return RuntimeClass::Ref {
-                    pointee: Box::new(value_class.clone()),
-                    kind: RefKind::Object,
-                    view: RefView::Whole,
-                };
-            }
-            RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => {}
-        }
-    }
-    RuntimeClass::RawAddr {
-        space: root_class.address_space().unwrap_or(root_space),
-        target: value_class.aggregate_layout(),
-    }
-}
-
 fn provider_root_place_class<'db>(
     db: &'db dyn MirDb,
     value_ty: TyId<'db>,
@@ -1336,9 +1293,9 @@ fn provider_root_place_class<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> RuntimeClass<'db> {
-    provider_class
-        .deref_target()
-        .unwrap_or_else(|| stored_class_for_ty_in_context(db, value_ty, scope, assumptions))
+    provider_class.deref_target().unwrap_or_else(|| {
+        stored_class_for_ty_in_env(db, RuntimeTypeEnv::new(scope, assumptions), value_ty)
+    })
 }
 
 pub(crate) fn runtime_class_for_provider_binding<'db>(
@@ -1348,27 +1305,24 @@ pub(crate) fn runtime_class_for_provider_binding<'db>(
     assumptions: PredicateListId<'db>,
 ) -> Option<RuntimeClass<'db>> {
     match provider.semantics.kind {
-        ProviderKind::RootObject => top_level_class_for_ty_in_context(
+        ProviderKind::RootObject => top_level_class_for_ty_in_env(
             db,
+            RuntimeTypeEnv::new(scope, assumptions),
             provider.provider_ty,
             AddressSpaceKind::Memory,
-            scope,
-            assumptions,
         ),
         ProviderKind::Handle | ProviderKind::RawAddress => {
-            effect_handle_transport_class_for_ty_in_context(
+            effect_handle_transport_class_for_ty_in_env(
                 db,
+                RuntimeTypeEnv::new(scope, assumptions),
                 provider.provider_ty,
-                scope,
-                assumptions,
             )
             .or_else(|| {
-                Some(provider_class_for_target_in_context(
+                Some(provider_class_for_target_in_env(
                     db,
+                    RuntimeTypeEnv::new(scope, assumptions),
                     provider.semantics.target_ty,
                     provider_address_space_to_runtime(provider.semantics.address_space?),
-                    scope,
-                    assumptions,
                 ))
             })
         }
@@ -1376,45 +1330,41 @@ pub(crate) fn runtime_class_for_provider_binding<'db>(
     }
 }
 
-pub(crate) fn runtime_class_for_effect_binding_provider_in_context<'db>(
+pub(crate) fn runtime_class_for_effect_binding_provider_in_env<'db>(
     db: &'db dyn MirDb,
+    env: RuntimeTypeEnv<'db>,
     provider: &ProviderBinding<'db>,
-    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
-    assumptions: PredicateListId<'db>,
 ) -> Option<RuntimeClass<'db>> {
     match provider.semantics.kind {
-        ProviderKind::RootObject => Some(provider_class_for_target_in_context(
+        ProviderKind::RootObject => Some(provider_class_for_target_in_env(
             db,
+            env,
             Some(provider.semantics.target_ty.unwrap_or(provider.provider_ty)),
             provider
                 .semantics
                 .address_space
                 .map_or(AddressSpaceKind::Memory, provider_address_space_to_runtime),
-            scope,
-            assumptions,
         )),
         ProviderKind::Handle | ProviderKind::RawAddress => {
-            runtime_class_for_provider_binding(db, provider, scope, assumptions)
+            runtime_class_for_provider_binding(db, provider, env.scope, env.assumptions)
         }
         ProviderKind::InvalidHandle => None,
     }
 }
 
-pub(crate) fn runtime_class_for_direct_value_provider_in_context<'db>(
+pub(crate) fn runtime_class_for_direct_value_provider_in_env<'db>(
     db: &'db dyn MirDb,
+    env: RuntimeTypeEnv<'db>,
     provider: &ProviderBinding<'db>,
-    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
-    assumptions: PredicateListId<'db>,
 ) -> Option<RuntimeClass<'db>> {
-    runtime_class_for_effect_binding_provider_in_context(db, provider, scope, assumptions)
+    runtime_class_for_effect_binding_provider_in_env(db, env, provider)
 }
 
-fn runtime_class_for_provider_value_ty_in_context<'db>(
+fn runtime_class_for_provider_value_ty_in_env<'db>(
     db: &'db dyn MirDb,
+    env: RuntimeTypeEnv<'db>,
     provider: &ProviderBinding<'db>,
     value_ty: TyId<'db>,
-    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
-    assumptions: PredicateListId<'db>,
 ) -> Option<RuntimeClass<'db>> {
     if matches!(provider.semantics.kind, ProviderKind::InvalidHandle) {
         return None;
@@ -1429,16 +1379,14 @@ fn runtime_class_for_provider_value_ty_in_context<'db>(
         }
         ProviderKind::InvalidHandle => unreachable!(),
     };
-    effect_handle_transport_class_for_ty_in_context(db, provider.provider_ty, scope, assumptions)
-        .or_else(|| {
-            Some(provider_class_for_target_in_context(
-                db,
-                Some(value_ty),
-                space,
-                scope,
-                assumptions,
-            ))
-        })
+    effect_handle_transport_class_for_ty_in_env(db, env, provider.provider_ty).or_else(|| {
+        Some(provider_class_for_target_in_env(
+            db,
+            env,
+            Some(value_ty),
+            space,
+        ))
+    })
 }
 
 fn effect_binding_borrow_boundary<'db>(
@@ -1454,7 +1402,11 @@ fn effect_binding_borrow_boundary<'db>(
         BorrowAccess::ReadOnly
     };
     RuntimeBoundarySpec::BorrowLike {
-        pointee: stored_class_for_ty_in_context(db, pointee_ty, scope, assumptions),
+        pointee: stored_class_for_ty_in_env(
+            db,
+            RuntimeTypeEnv::new(scope, assumptions),
+            pointee_ty,
+        ),
         access,
         allow: default_borrow_transport_set(access, AddressSpaceKind::Memory),
     }
@@ -1482,7 +1434,7 @@ pub(crate) fn runtime_zero_sized_effect_value_is_inert<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> bool {
-    let ty = runtime_repr_ty_in_context(db, ty, scope, assumptions);
+    let ty = runtime_repr_ty_in_env(db, RuntimeTypeEnv::new(scope, assumptions), ty);
     if let Some((_, inner)) = ty.as_borrow(db) {
         return runtime_zero_sized_effect_value_is_inert(db, inner, scope, assumptions);
     }
@@ -1572,13 +1524,7 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
             if provider_erases_runtime_root(db, &provider, env.scope, env.assumptions) {
                 return None;
             }
-            let class = runtime_class_for_provider_value_ty_in_context(
-                db,
-                &provider,
-                value_ty,
-                env.scope,
-                env.assumptions,
-            )?;
+            let class = runtime_class_for_provider_value_ty_in_env(db, env, &provider, value_ty)?;
             if class.span_words(db) == 0 {
                 return None;
             }
@@ -1605,12 +1551,8 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
             provider: Some(provider),
             target_ty,
         } => {
-            let binding_handle_class = effect_handle_transport_class_for_ty_in_context(
-                db,
-                binding_ty,
-                env.scope,
-                env.assumptions,
-            );
+            let binding_handle_class =
+                effect_handle_transport_class_for_ty_in_env(db, env, binding_ty);
             if binding_handle_class.is_none()
                 && runtime_zero_sized_ty(db, target_ty, env.scope, env.assumptions)
             {
@@ -1631,12 +1573,8 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
             provider: None,
             target_ty,
         } => {
-            let binding_handle_class = effect_handle_transport_class_for_ty_in_context(
-                db,
-                binding_ty,
-                env.scope,
-                env.assumptions,
-            );
+            let binding_handle_class =
+                effect_handle_transport_class_for_ty_in_env(db, env, binding_ty);
             if binding_handle_class.is_none()
                 && runtime_zero_sized_ty(db, target_ty, env.scope, env.assumptions)
             {
@@ -1666,13 +1604,7 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
             if provider_erases_runtime_root(db, &provider, env.scope, env.assumptions) {
                 return None;
             }
-            let class = runtime_class_for_provider_value_ty_in_context(
-                db,
-                &provider,
-                value_ty,
-                env.scope,
-                env.assumptions,
-            )?;
+            let class = runtime_class_for_provider_value_ty_in_env(db, env, &provider, value_ty)?;
             if class.span_words(db) == 0 {
                 return None;
             }
@@ -1702,13 +1634,7 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
             if provider_erases_runtime_root(db, &provider, env.scope, env.assumptions) {
                 return None;
             }
-            let class = runtime_class_for_provider_value_ty_in_context(
-                db,
-                &provider,
-                value_ty,
-                env.scope,
-                env.assumptions,
-            )?;
+            let class = runtime_class_for_provider_value_ty_in_env(db, env, &provider, value_ty)?;
             if class.span_words(db) == 0 {
                 return None;
             }
@@ -1747,13 +1673,7 @@ fn runtime_exact_class_for_visible_binding_in_env<'db>(
     binding_ty: TyId<'db>,
 ) -> Option<RuntimeClass<'db>> {
     if !matches!(binding, LocalBinding::EffectParam { .. })
-        && effect_handle_transport_class_for_ty_in_context(
-            db,
-            binding_ty,
-            env.scope,
-            env.assumptions,
-        )
-        .is_some()
+        && effect_handle_transport_class_for_ty_in_env(db, env, binding_ty).is_some()
     {
         return top_level_class_for_ty_in_env(db, env, binding_ty, AddressSpaceKind::Memory);
     }
@@ -1761,13 +1681,7 @@ fn runtime_exact_class_for_visible_binding_in_env<'db>(
         SemanticLocalRole::Erased => None,
         SemanticLocalRole::DirectValue {
             provenance: ValueProvenance::RootProvider(provider),
-        } => runtime_class_for_provider_value_ty_in_context(
-            db,
-            &provider,
-            binding_ty,
-            env.scope,
-            env.assumptions,
-        ),
+        } => runtime_class_for_provider_value_ty_in_env(db, env, &provider, binding_ty),
         SemanticLocalRole::DirectValue { .. } => runtime_exact_class_for_ordinary_binding_in_env(
             db, env, binding, binding_ty,
         )
@@ -1776,12 +1690,8 @@ fn runtime_exact_class_for_visible_binding_in_env<'db>(
             provider: Some(provider),
             target_ty,
         } => {
-            let binding_handle_class = effect_handle_transport_class_for_ty_in_context(
-                db,
-                binding_ty,
-                env.scope,
-                env.assumptions,
-            );
+            let binding_handle_class =
+                effect_handle_transport_class_for_ty_in_env(db, env, binding_ty);
             if binding_handle_class.is_none()
                 && runtime_zero_sized_ty(db, target_ty, env.scope, env.assumptions)
             {
@@ -1795,12 +1705,8 @@ fn runtime_exact_class_for_visible_binding_in_env<'db>(
             provider: None,
             target_ty,
         } => {
-            let binding_handle_class = effect_handle_transport_class_for_ty_in_context(
-                db,
-                binding_ty,
-                env.scope,
-                env.assumptions,
-            );
+            let binding_handle_class =
+                effect_handle_transport_class_for_ty_in_env(db, env, binding_ty);
             if binding_handle_class.is_none()
                 && runtime_zero_sized_ty(db, target_ty, env.scope, env.assumptions)
             {
@@ -1822,13 +1728,7 @@ fn runtime_exact_class_for_visible_binding_in_env<'db>(
         SemanticLocalRole::PlaceCarrier {
             provider: Some(provider),
             value_ty,
-        } => runtime_class_for_provider_value_ty_in_context(
-            db,
-            &provider,
-            value_ty,
-            env.scope,
-            env.assumptions,
-        ),
+        } => runtime_class_for_provider_value_ty_in_env(db, env, &provider, value_ty),
         SemanticLocalRole::PlaceCarrier {
             provider: None,
             value_ty,
@@ -1841,13 +1741,7 @@ fn runtime_exact_class_for_visible_binding_in_env<'db>(
         SemanticLocalRole::PlaceBoundValue {
             provenance: hir::analysis::semantic::PlaceProvenance::RootProvider(provider),
             value_ty,
-        } => runtime_class_for_provider_value_ty_in_context(
-            db,
-            &provider,
-            value_ty,
-            env.scope,
-            env.assumptions,
-        ),
+        } => runtime_class_for_provider_value_ty_in_env(db, env, &provider, value_ty),
         SemanticLocalRole::PlaceBoundValue {
             provenance: hir::analysis::semantic::PlaceProvenance::Derived(_),
             ..
@@ -1909,9 +1803,7 @@ fn runtime_class_for_explicit_root_provider_param<'db>(
     binding: LocalBinding<'db>,
     binding_ty: TyId<'db>,
 ) -> Option<RuntimeClass<'db>> {
-    if effect_handle_transport_class_for_ty_in_context(db, binding_ty, env.scope, env.assumptions)
-        .is_some()
-    {
+    if effect_handle_transport_class_for_ty_in_env(db, env, binding_ty).is_some() {
         return None;
     }
     let (func, idx) = root_provider_func_param(binding)?;
@@ -1940,7 +1832,7 @@ fn runtime_class_for_root_provider_param<'db>(
     binding_ty: TyId<'db>,
 ) -> Option<RuntimeClass<'db>> {
     let (func, _) = root_provider_func_param(binding)?;
-    let canonical = |ty| runtime_repr_ty_in_context(db, ty, env.scope, env.assumptions);
+    let canonical = |ty| runtime_repr_ty_in_env(db, env, ty);
     let binding_ty = canonical(binding_ty);
     let binding_ty = binding_ty
         .as_capability(db)
@@ -2043,21 +1935,16 @@ fn aggregate_make_class_from_facts<'db>(
     }
     Some(RuntimeClass::AggregateValue {
         layout: match facts.ctor {
-            AggregateCtorKind::Aggregate(ty) => layout_for_aggregate_instance_in_context(
-                env.db,
-                ty,
-                &field_classes,
-                env.scope(),
-                env.assumptions(),
-            ),
+            AggregateCtorKind::Aggregate(ty) => {
+                layout_for_aggregate_instance_in_env(env.db, env.type_env(), ty, &field_classes)
+            }
             AggregateCtorKind::EnumVariant { enum_ty, variant } => {
-                layout_for_enum_variant_instance_in_context(
+                layout_for_enum_variant_instance_in_env(
                     env.db,
+                    env.type_env(),
                     enum_ty,
                     variant.0 as usize,
                     &field_classes,
-                    env.scope(),
-                    env.assumptions(),
                 )
             }
         },
@@ -2170,9 +2057,7 @@ pub(crate) fn desired_runtime_param_plan<'db>(
     let scope = env.scope;
     let assumptions = env.assumptions;
     let semantic_binding_ty = semantic.binding_ty(db, binding);
-    if effect_handle_transport_class_for_ty_in_context(db, semantic_binding_ty, scope, assumptions)
-        .is_some()
-    {
+    if effect_handle_transport_class_for_ty_in_env(db, env, semantic_binding_ty).is_some() {
         return boundary_spec_for_ty_in_env(db, env, semantic_binding_ty, AddressSpaceKind::Memory)
             .map(|boundary| match boundary {
                 RuntimeBoundarySpec::BorrowLike {
@@ -2213,8 +2098,8 @@ pub(crate) fn desired_runtime_param_plan<'db>(
     {
         return RuntimeParamPlan::Erased;
     }
-    let interface_ty = runtime_interface_ty_in_context(db, binding_ty, scope, assumptions);
-    let repr_ty = runtime_repr_ty_in_context(db, binding_ty, scope, assumptions);
+    let interface_ty = runtime_interface_ty_in_env(db, env, binding_ty);
+    let repr_ty = runtime_repr_ty_in_env(db, env, binding_ty);
     if runtime_abstract_param_ty(db, binding_ty, scope, assumptions)
         || matches!(
             repr_ty.base_ty(db).data(db),
@@ -2294,7 +2179,7 @@ fn desired_read_only_view_param_plan<'db>(
             db, typed_body, binding, env, boundary,
         ));
     }
-    let value = stored_class_for_ty_in_context(db, inner, env.scope, env.assumptions);
+    let value = stored_class_for_ty_in_env(db, env, inner);
     if value.aggregate_layout().is_none() {
         return RuntimeParamPlan::Boundary(runtime_param_boundary(
             db, typed_body, binding, env, boundary,
@@ -2509,7 +2394,7 @@ fn normalize_runtime_self_ty<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> TyId<'db> {
-    let ty = runtime_repr_ty_in_context(db, ty, scope, assumptions);
+    let ty = runtime_repr_ty_in_env(db, RuntimeTypeEnv::new(scope, assumptions), ty);
     if let Some((_, inner)) = ty.as_borrow(db) {
         return scope.map_or(inner, |scope| normalize_ty(db, inner, scope, assumptions));
     }
@@ -2558,18 +2443,16 @@ fn normalized_place_root_transport_class_in_context<'db>(
                 env.actual_runtime_visible_root_provider_class(carriers, binding)
                     .map(|(_, class)| class)
                     .or_else(|| {
-                        runtime_class_for_effect_binding_provider_in_context(
+                        runtime_class_for_effect_binding_provider_in_env(
                             env.db,
+                            env.type_env(),
                             binding,
-                            env.scope(),
-                            env.assumptions(),
                         )
                         .or_else(|| {
-                            runtime_class_for_direct_value_provider_in_context(
+                            runtime_class_for_direct_value_provider_in_env(
                                 env.db,
+                                env.type_env(),
                                 binding,
-                                env.scope(),
-                                env.assumptions(),
                             )
                         })
                     })
@@ -2606,37 +2489,25 @@ fn normalized_place_root_class_in_context<'db>(
                     env.actual_runtime_visible_root_provider_class(carriers, binding)
                     && let Some(local) = env.body.locals.get(local.index())
                     && local.ty == binding.provider_ty
-                    && effect_handle_transport_class_for_ty_in_context(
-                        env.db,
-                        local.ty,
-                        env.scope(),
-                        env.assumptions(),
-                    )
-                    .is_some()
+                    && effect_handle_transport_class_for_ty_in_env(env.db, env.type_env(), local.ty)
+                        .is_some()
                 {
-                    return Some(stored_class_for_ty_in_context(
-                        env.db,
-                        local.ty,
-                        env.scope(),
-                        env.assumptions(),
-                    ));
+                    return Some(stored_class_for_ty_in_env(env.db, env.type_env(), local.ty));
                 }
                 let provider_class = env
                     .actual_runtime_visible_root_provider_class(carriers, binding)
                     .map(|(_, class)| class)
                     .or_else(|| {
-                        runtime_class_for_effect_binding_provider_in_context(
+                        runtime_class_for_effect_binding_provider_in_env(
                             env.db,
+                            env.type_env(),
                             binding,
-                            env.scope(),
-                            env.assumptions(),
                         )
                         .or_else(|| {
-                            runtime_class_for_direct_value_provider_in_context(
+                            runtime_class_for_direct_value_provider_in_env(
                                 env.db,
+                                env.type_env(),
                                 binding,
-                                env.scope(),
-                                env.assumptions(),
                             )
                         })
                     })?;
@@ -2685,7 +2556,7 @@ pub(crate) fn desired_runtime_effect_arg_boundary<'db>(
     }
     Some(match arg.pass_mode {
         EffectPassMode::ByPlace | EffectPassMode::ByTempPlace => RuntimeBoundarySpec::BorrowLike {
-            pointee: stored_class_for_ty_in_context(db, target_ty, env.scope, env.assumptions),
+            pointee: stored_class_for_ty_in_env(db, env, target_ty),
             access: BorrowAccess::ReadWrite,
             allow: default_borrow_transport_set(BorrowAccess::ReadWrite, effect_space),
         },
@@ -2817,12 +2688,7 @@ pub(crate) fn runtime_param_class<'db>(
     env: RuntimeTypeEnv<'db>,
     actual: RuntimeClass<'db>,
 ) -> RuntimeClass<'db> {
-    let ty = runtime_repr_ty_in_context(
-        db,
-        typed_body.binding_ty(db, binding),
-        env.scope,
-        env.assumptions,
-    );
+    let ty = runtime_repr_ty_in_env(db, env, typed_body.binding_ty(db, binding));
     if runtime_abstract_param_ty(
         db,
         typed_body.binding_ty(db, binding),
@@ -2835,12 +2701,7 @@ pub(crate) fn runtime_param_class<'db>(
         return actual;
     }
     if binding.is_mut() && ty.as_enum(db).is_some() {
-        return RuntimeClass::object_ref(layout_for_ty_in_context(
-            db,
-            ty,
-            env.scope,
-            env.assumptions,
-        ));
+        return RuntimeClass::object_ref(layout_for_ty_in_env(db, env, ty));
     }
     actual
 }
@@ -2864,15 +2725,10 @@ pub(crate) fn runtime_param_boundary<'db>(
             access,
             allow,
         } => {
-            let ty = runtime_repr_ty_in_context(
-                db,
-                typed_body.binding_ty(db, binding),
-                env.scope,
-                env.assumptions,
-            );
+            let ty = runtime_repr_ty_in_env(db, env, typed_body.binding_ty(db, binding));
             if binding.is_mut() && ty.as_enum(db).is_some() {
                 return RuntimeBoundarySpec::ExactTransport(RuntimeClass::object_ref(
-                    layout_for_ty_in_context(db, ty, env.scope, env.assumptions),
+                    layout_for_ty_in_env(db, env, ty),
                 ));
             }
             RuntimeBoundarySpec::BorrowLike {
@@ -2930,7 +2786,7 @@ pub(crate) fn desired_runtime_return_plan<'db>(
     if return_borrow_provider.is_some() {
         return RuntimeVisibleReturnPlan::PassActual;
     }
-    let repr_ty = runtime_repr_ty_in_context(db, ty, env.scope, env.assumptions);
+    let repr_ty = runtime_repr_ty_in_env(db, env, ty);
     if runtime_abstract_param_ty(db, ty, env.scope, env.assumptions)
         || matches!(
             repr_ty.base_ty(db).data(db),
@@ -2970,7 +2826,7 @@ fn runtime_abstract_param_ty<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> bool {
-    let ty = runtime_repr_ty_in_context(db, ty, scope, assumptions);
+    let ty = runtime_repr_ty_in_env(db, RuntimeTypeEnv::new(scope, assumptions), ty);
     ty.has_param(db) || ty.contains_assoc_ty_of_param(db)
 }
 
@@ -3001,7 +2857,7 @@ mod tests {
     use super::*;
     use crate::runtime::lower::boundary::BoundaryMatcher;
     use crate::runtime::{
-        RuntimeInterfaceSignature, RuntimeLocalRoot,
+        RefKind, RuntimeInterfaceSignature, RuntimeLocalRoot,
         lower::{
             infer::LocalStateInferer,
             interface::{runtime_param_locals, runtime_param_plans, runtime_visible_binding_plans},
@@ -3204,6 +3060,72 @@ mod tests {
                 RuntimeLocalRoot::Slot(RuntimeClass::AggregateValue { .. })
             ),
             "projectable owned storage must come from an aggregate slot root, got:\n{root:#?}",
+        );
+    }
+
+    #[test]
+    fn runtime_handle_preservation_keeps_mut_owned_enum_param_as_object_ref() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse(
+            "file:///runtime_handle_preservation_keeps_mut_owned_enum_param_as_object_ref.fe",
+        )
+        .unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                include_str!("../../../../fe/tests/fixtures/fe_test/if_let_while_let.fe")
+                    .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        // Mutable enum parameters deliberately use an object-reference ABI class. The
+        // unrooted-read optimization must not rewrite that signature-pinned carrier to an
+        // aggregate value merely because the `while let` pattern reads it by place.
+        let semantic = semantic_instance_for_named_func(&db, top_mod, "sum_descending_while_let");
+        let instance = runtime_instance_for_semantic(&db, semantic);
+        let signature = instance.interface_signature(&db);
+        let body = instance.body(&db);
+        let param = signature
+            .params
+            .first()
+            .expect("sum_descending_while_let has one runtime-visible parameter");
+
+        assert!(
+            matches!(
+                param.class,
+                RuntimeClass::Ref {
+                    kind: RefKind::Object,
+                    ..
+                }
+            ),
+            "mutable enum parameter must keep its object-reference ABI class, got:\n{:#?}",
+            param.class,
+        );
+
+        let carrier = body
+            .value_class(param.local)
+            .unwrap_or_else(|| panic!("param local {:?} should keep a value carrier", param.local));
+        assert_eq!(
+            carrier, &param.class,
+            "param carrier must equal the signature param class, not be rewritten as an aggregate value",
+        );
+
+        let root = &body.local(param.local).expect("param local exists").root;
+        assert!(
+            matches!(
+                root,
+                RuntimeLocalRoot::Ref(RuntimeClass::Ref {
+                    kind: RefKind::Object,
+                    ..
+                })
+            ),
+            "mutable enum parameter must retain an object-reference root, got:\n{root:#?}",
         );
     }
 

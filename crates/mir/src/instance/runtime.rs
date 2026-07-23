@@ -135,6 +135,19 @@ fn lower_runtime_body<'db>(
             lower_synthetic_runtime_body(db, instance, synthetic.spec(db).clone())
         }
     };
+    // Anchor lowering to the canonical class discipline: in debug builds,
+    // verify each body as it is produced so a divergence is attributed to
+    // the instance being lowered instead of surfacing later at package
+    // assembly. Release builds rely on the unconditional package-level
+    // verification.
+    #[cfg(debug_assertions)]
+    if let Err(failure) = crate::verify::verify_runtime_body_detailed(db, &db, &body) {
+        panic!(
+            "lowering produced an invalid runtime body for {:?}:\n{}",
+            instance.key(db).source(db),
+            crate::runtime::format_runtime_verify_failure(db, &body, &failure),
+        );
+    }
     let direct_callees = collect_runtime_calls_lowered(&body);
     let referenced_const_regions = collect_referenced_const_regions(&body);
     let referenced_code_regions = collect_referenced_code_regions(&body);

@@ -1,12 +1,10 @@
 mod backend;
 mod function_symbols;
-mod layout;
 mod runtime_package;
 mod sonatina;
 mod test_output;
 
-pub use backend::{Backend, BackendError, BackendKind, BackendOutput, OptLevel, SonatinaBackend};
-pub use layout::{DISCRIMINANT_SIZE_BYTES, EVM_LAYOUT, TargetDataLayout, WORD_SIZE_BYTES};
+pub use backend::OptLevel;
 pub use sonatina::{
     LowerError, SonatinaContractBytecode, SonatinaTestOptions, emit_ingot_sonatina_bytecode,
     emit_ingot_sonatina_ir, emit_ingot_sonatina_ir_optimized, emit_module_sonatina_bytecode,

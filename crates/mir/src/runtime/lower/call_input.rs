@@ -11,7 +11,7 @@ use crate::{
 use super::{
     boundary::{BoundarySiteAllocator, StagedBoundary, default_by_place_boundary},
     classify::{desired_runtime_effect_arg_boundary, runtime_effect_binding_plan_for_binding_idx},
-    place::resolved_effect_arg_address_space,
+    provider_space::resolved_effect_arg_address_space,
     type_info::{
         RuntimeTypeEnv, provider_class_for_target_in_env, runtime_zero_sized_transport_ty,
         runtime_zero_sized_ty,

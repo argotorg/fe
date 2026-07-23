@@ -38,7 +38,7 @@ use crate::{
         lower::{
             abi::runtime_abi_plan,
             boundary::{RuntimeValueAddress, RuntimeValueSource},
-            classify::{ref_class_for_place_result, semantic_return_ty},
+            classify::semantic_return_ty,
             const_scalar_from_value,
             conversion::{RuntimeConversionEmitter, emit_runtime_coercion},
             interface::runtime_visible_binding_plans,
@@ -289,7 +289,6 @@ impl<'db> SyntheticBodyBuilder<'db> {
             owner: self.instance,
             key: self.instance.key(self.db),
             signature,
-            semantic_locals: Vec::new(),
             provider_bindings: Vec::new(),
             locals: self.locals,
             blocks: self.blocks,
@@ -1367,7 +1366,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 unreachable!("synthetic runtime locals do not use provider roots")
             }
         };
-        Some(ref_class_for_place_result(
+        Some(crate::runtime::place::ref_class_for_place_result(
             &root_class,
             &value_class,
             root_class.address_space().unwrap_or(root_space),

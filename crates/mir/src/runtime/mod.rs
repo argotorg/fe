@@ -1,8 +1,10 @@
+pub mod class;
 pub(crate) mod code_region;
 pub mod ir;
 pub mod layout_utils;
 pub mod lower;
 pub(crate) mod package;
+pub mod place;
 pub mod pretty;
 pub(crate) mod root_effects;
 pub mod stable_key;

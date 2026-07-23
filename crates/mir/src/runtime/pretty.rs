@@ -163,7 +163,7 @@ pub fn format_runtime_package<'db>(db: &'db dyn MirDb, package: &RuntimePackage<
                 "    {} -> {} @ {} root={}",
                 code_region.symbol(db),
                 format_code_region(db, code_region.region(db)),
-                format_section_ref(db, &code_region.source(db)),
+                format_section_ref(&code_region.source(db)),
                 code_region.root(db).symbol(db)
             );
         }
@@ -209,7 +209,7 @@ fn write_section_summary<'db>(db: &'db dyn MirDb, out: &mut String, section: &Ru
         let _ = writeln!(
             out,
             "        embed {} as {}",
-            format_section_ref(db, &embed.source),
+            format_section_ref(&embed.source),
             embed.as_symbol
         );
     }
@@ -337,21 +337,13 @@ fn format_section_name(name: &RuntimeSectionName) -> String {
     }
 }
 
-fn format_section_ref<'db>(db: &'db dyn MirDb, section: &RuntimeSectionRef<'db>) -> String {
+fn format_section_ref(section: &RuntimeSectionRef) -> String {
     match section {
         RuntimeSectionRef::Local { object, section } => {
-            format!(
-                "local {}::{}",
-                object.name(db),
-                format_section_name(section)
-            )
+            format!("local {}::{}", object, format_section_name(section))
         }
         RuntimeSectionRef::External { object, section } => {
-            format!(
-                "external {}::{}",
-                object.name(db),
-                format_section_name(section)
-            )
+            format!("external {}::{}", object, format_section_name(section))
         }
     }
 }

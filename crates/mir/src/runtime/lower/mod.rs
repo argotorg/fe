@@ -11,7 +11,7 @@ pub(crate) mod infer;
 pub(crate) mod interface;
 pub(crate) mod layout;
 pub(crate) mod layout_evidence;
-mod place;
+mod provider_space;
 pub(crate) mod realize;
 pub(crate) mod returns;
 pub(crate) mod source;

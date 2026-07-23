@@ -1581,8 +1581,6 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     self.set_synthetic_terminator(self.current, STerminatorKind::Goto(then_bb));
                 } else {
                     self.lower_pattern_branch(*pat, value, then_bb, else_bb);
-                    self.switch_to(then_bb);
-                    self.bind_pattern(*pat, value);
                 }
             }
         }

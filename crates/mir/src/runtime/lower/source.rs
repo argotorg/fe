@@ -15,8 +15,8 @@ use crate::runtime::{RuntimeCarrier, RuntimeClass, RuntimeLocalRoot};
 
 use super::classify::{
     BodyEnv, carrier_value_class, nonself_backing_value_place, provider_erases_runtime_root,
-    runtime_class_for_direct_value_provider_in_context,
-    runtime_class_for_effect_binding_provider_in_context, snapshot_source_place,
+    runtime_class_for_direct_value_provider_in_env,
+    runtime_class_for_effect_binding_provider_in_env, snapshot_source_place,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -123,18 +123,16 @@ impl<'a, 'carriers, 'roots, 'db> RuntimeSourceQuery<'a, 'carriers, 'roots, 'db> 
         self.env
             .actual_runtime_visible_root_provider_class(self.carriers, provider)
             .is_some()
-            || runtime_class_for_effect_binding_provider_in_context(
+            || runtime_class_for_effect_binding_provider_in_env(
                 self.env.db(),
+                self.env.type_env(),
                 provider,
-                self.env.scope(),
-                self.env.assumptions(),
             )
             .is_some()
-            || runtime_class_for_direct_value_provider_in_context(
+            || runtime_class_for_direct_value_provider_in_env(
                 self.env.db(),
+                self.env.type_env(),
                 provider,
-                self.env.scope(),
-                self.env.assumptions(),
             )
             .is_some()
     }

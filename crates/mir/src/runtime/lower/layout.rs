@@ -1,8 +1,5 @@
 use hir::{
-    analysis::{
-        semantic::FieldIndex,
-        ty::{trait_resolution::PredicateListId, ty_def::TyId},
-    },
+    analysis::{semantic::FieldIndex, ty::ty_def::TyId},
     projection::IndexSource,
 };
 
@@ -14,9 +11,7 @@ use crate::{
     },
 };
 
-use super::type_info::{
-    RuntimeTypeEnv, runtime_repr_ty_in_context, stored_class_for_ty_in_context,
-};
+use super::type_info::{RuntimeTypeEnv, runtime_repr_ty_in_env, stored_class_for_ty_in_env};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateCtorElem<'db> {
@@ -29,47 +24,9 @@ pub(crate) fn layout_for_ty_in_env<'db>(
     env: RuntimeTypeEnv<'db>,
     ty: TyId<'db>,
 ) -> LayoutId<'db> {
-    layout_for_ty_in_context(db, ty, env.scope, env.assumptions)
-}
-
-pub(crate) fn layout_for_aggregate_instance_in_env<'db>(
-    db: &'db dyn MirDb,
-    env: RuntimeTypeEnv<'db>,
-    ty: TyId<'db>,
-    field_classes: &[RuntimeClass<'db>],
-) -> LayoutId<'db> {
-    layout_for_aggregate_instance_in_context(db, ty, field_classes, env.scope, env.assumptions)
-}
-
-pub(crate) fn layout_for_enum_variant_instance_in_env<'db>(
-    db: &'db dyn MirDb,
-    env: RuntimeTypeEnv<'db>,
-    enum_ty: TyId<'db>,
-    variant: usize,
-    field_classes: &[RuntimeClass<'db>],
-) -> LayoutId<'db> {
-    layout_for_enum_variant_instance_in_context(
-        db,
-        enum_ty,
-        variant,
-        field_classes,
-        env.scope,
-        env.assumptions,
-    )
-}
-
-pub(crate) fn layout_for_ty_in_context<'db>(
-    db: &'db dyn MirDb,
-    ty: TyId<'db>,
-    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
-    assumptions: PredicateListId<'db>,
-) -> LayoutId<'db> {
-    let ty = runtime_repr_ty_in_context(db, ty, scope, assumptions);
+    let ty = runtime_repr_ty_in_env(db, env, ty);
     if ty.as_enum(db).is_some() {
-        return LayoutId::new(
-            db,
-            LayoutKey::Enum(enum_layout_key(db, ty, scope, assumptions)),
-        );
+        return LayoutId::new(db, LayoutKey::Enum(enum_layout_key(db, env, ty)));
     }
     if ty.is_array(db) {
         let (_, args) = ty.decompose_ty_app(db);
@@ -78,7 +35,7 @@ pub(crate) fn layout_for_ty_in_context<'db>(
             db,
             LayoutKey::Array(ArrayLayout {
                 source_ty: ty,
-                elem: stored_class_for_ty_in_context(db, elem, scope, assumptions),
+                elem: stored_class_for_ty_in_env(db, env, elem),
                 len: ty.array_len(db).expect("array length") as u64,
             }),
         );
@@ -90,20 +47,19 @@ pub(crate) fn layout_for_ty_in_context<'db>(
             fields: ty
                 .field_types(db)
                 .into_iter()
-                .map(|field| stored_class_for_ty_in_context(db, field, scope, assumptions))
+                .map(|field| stored_class_for_ty_in_env(db, env, field))
                 .collect(),
         }),
     )
 }
 
-pub(crate) fn layout_for_aggregate_instance_in_context<'db>(
+pub(crate) fn layout_for_aggregate_instance_in_env<'db>(
     db: &'db dyn MirDb,
+    env: RuntimeTypeEnv<'db>,
     ty: TyId<'db>,
     field_classes: &[RuntimeClass<'db>],
-    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
-    assumptions: PredicateListId<'db>,
 ) -> LayoutId<'db> {
-    let ty = runtime_repr_ty_in_context(db, ty, scope, assumptions);
+    let ty = runtime_repr_ty_in_env(db, env, ty);
     if ty.as_enum(db).is_some() {
         panic!("aggregate instance layout requested for enum type");
     }
@@ -120,7 +76,7 @@ pub(crate) fn layout_for_aggregate_instance_in_context<'db>(
         let elem = field_classes
             .first()
             .cloned()
-            .unwrap_or_else(|| stored_class_for_ty_in_context(db, elem_ty, scope, assumptions));
+            .unwrap_or_else(|| stored_class_for_ty_in_env(db, env, elem_ty));
         assert!(
             field_classes.iter().all(|class| class == &elem),
             "array aggregate instance requires homogeneous runtime element classes: ty={} field_classes={field_classes:?}",
@@ -150,15 +106,14 @@ pub(crate) fn layout_for_aggregate_instance_in_context<'db>(
     )
 }
 
-pub(crate) fn layout_for_enum_variant_instance_in_context<'db>(
+pub(crate) fn layout_for_enum_variant_instance_in_env<'db>(
     db: &'db dyn MirDb,
+    env: RuntimeTypeEnv<'db>,
     enum_ty: TyId<'db>,
     variant: usize,
     field_classes: &[RuntimeClass<'db>],
-    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
-    assumptions: PredicateListId<'db>,
 ) -> LayoutId<'db> {
-    let enum_ty = runtime_repr_ty_in_context(db, enum_ty, scope, assumptions);
+    let enum_ty = runtime_repr_ty_in_env(db, env, enum_ty);
     let enum_ = enum_ty
         .as_enum(db)
         .unwrap_or_else(|| panic!("enum instance layout requested for non-enum type"));
@@ -175,12 +130,7 @@ pub(crate) fn layout_for_enum_variant_instance_in_context<'db>(
                         .field_tys(db)
                         .into_iter()
                         .map(|field| {
-                            stored_class_for_ty_in_context(
-                                db,
-                                field.instantiate(db, args),
-                                scope,
-                                assumptions,
-                            )
+                            stored_class_for_ty_in_env(db, env, field.instantiate(db, args))
                         })
                         .collect::<Vec<_>>();
                     let fields = if idx == variant {
@@ -251,9 +201,8 @@ pub(crate) fn aggregate_ctor_elems_for_layout<'db>(
 
 fn enum_layout_key<'db>(
     db: &'db dyn MirDb,
+    env: RuntimeTypeEnv<'db>,
     ty: TyId<'db>,
-    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
-    assumptions: PredicateListId<'db>,
 ) -> EnumLayoutKey<'db> {
     let enum_ = ty.as_enum(db).expect("enum layout requested for non-enum");
     let args = ty.generic_args(db);
@@ -269,14 +218,7 @@ fn enum_layout_key<'db>(
                 fields: variant
                     .field_tys(db)
                     .into_iter()
-                    .map(|field| {
-                        stored_class_for_ty_in_context(
-                            db,
-                            field.instantiate(db, args),
-                            scope,
-                            assumptions,
-                        )
-                    })
+                    .map(|field| stored_class_for_ty_in_env(db, env, field.instantiate(db, args)))
                     .collect(),
             })
             .collect(),
