@@ -6,7 +6,7 @@ use fe_hir::analysis::ty::{
     ty_check::{check_contract_recv_arm_body, check_func_body},
     ty_def::{Kind, TyId},
 };
-use fe_hir::hir_def::TopLevelMod;
+use fe_hir::hir_def::{Expr, Partial, TopLevelMod};
 use fe_hir::span::LazySpan;
 use fe_hir::test_db::{HirAnalysisTestDb, initialize_test_analysis_pass};
 use test_utils::snap_test;
@@ -160,6 +160,227 @@ fn probe() -> u256 {
     let (top_mod, _) = db.top_mod(file);
 
     db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn trait_answer_cutoff_does_not_commit_a_deduplicated_partial_type() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "trait_answer_cutoff_does_not_commit_a_deduplicated_partial_type.fe".into(),
+        r#"
+trait Pick<T> {}
+
+struct Subject {}
+struct A {}
+struct B {}
+
+impl Pick<A> for Subject {}
+impl Pick<A> for Subject {}
+impl Pick<B> for Subject {}
+
+extern {
+    fn todo() -> !
+}
+
+fn pick<T, U: Pick<T>>(_value: U) -> T {
+    todo()
+}
+
+fn probe(subject: Subject) {
+    let _value = pick(subject)
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let probe = top_mod
+        .all_funcs(&db)
+        .iter()
+        .copied()
+        .find(|func| {
+            func.name(&db)
+                .to_opt()
+                .is_some_and(|name| name.data(&db) == "probe")
+        })
+        .expect("missing `probe` function");
+    let body = probe.body(&db).expect("missing `probe` body");
+    let call = body
+        .exprs(&db)
+        .keys()
+        .find(|expr| matches!(expr.data(&db, body), Partial::Present(Expr::Call(..))))
+        .expect("missing `pick` call");
+    let typed_body = &check_func_body(&db, probe).1;
+
+    assert!(
+        typed_body.expr_ty(&db, call).has_var(&db),
+        "a truncated answer set must not determine the call's return type"
+    );
+}
+
+#[test]
+fn trait_answer_cutoff_commits_after_fallback_proves_one_instance() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "trait_answer_cutoff_commits_after_fallback_proves_one_instance.fe".into(),
+        r#"
+trait Pick<T> {}
+
+struct Subject {}
+struct A {}
+
+impl Pick<A> for Subject {}
+impl Pick<A> for Subject {}
+impl Pick<A> for Subject {}
+
+extern {
+    fn todo() -> !
+}
+
+fn pick<T, U: Pick<T>>(_value: U) -> T {
+    todo()
+}
+
+fn probe(subject: Subject) {
+    let _value = pick(subject)
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let probe = top_mod
+        .all_funcs(&db)
+        .iter()
+        .copied()
+        .find(|func| {
+            func.name(&db)
+                .to_opt()
+                .is_some_and(|name| name.data(&db) == "probe")
+        })
+        .expect("missing `probe` function");
+    let body = probe.body(&db).expect("missing `probe` body");
+    let call = body
+        .exprs(&db)
+        .keys()
+        .find(|expr| matches!(expr.data(&db, body), Partial::Present(Expr::Call(..))))
+        .expect("missing `pick` call");
+    let call_ty = check_func_body(&db, probe).1.expr_ty(&db, call);
+
+    assert_eq!(
+        call_ty.pretty_print(&db).to_string(),
+        "A",
+        "a saturated fallback with one distinct instance should determine the return type",
+    );
+}
+
+#[test]
+fn incomplete_single_answer_does_not_commit_inference() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "incomplete_single_answer_does_not_commit_inference.fe".into(),
+        r#"
+trait Pick<T> {}
+
+struct Subject {}
+struct A {}
+struct Wrap<T> {}
+
+impl Pick<A> for Subject {}
+impl<SelfT, T> Pick<T> for SelfT
+where
+    Wrap<SelfT>: Pick<T>
+{}
+
+extern {
+    fn todo() -> !
+}
+
+fn pick<T, U: Pick<T>>(_value: U) -> T {
+    todo()
+}
+
+fn probe(subject: Subject) {
+    let _value = pick(subject)
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let probe = top_mod
+        .all_funcs(&db)
+        .iter()
+        .copied()
+        .find(|func| {
+            func.name(&db)
+                .to_opt()
+                .is_some_and(|name| name.data(&db) == "probe")
+        })
+        .expect("missing `probe` function");
+    let body = probe.body(&db).expect("missing `probe` body");
+    let call = body
+        .exprs(&db)
+        .keys()
+        .find(|expr| matches!(expr.data(&db, body), Partial::Present(Expr::Call(..))))
+        .expect("missing `pick` call");
+    let call_ty = check_func_body(&db, probe).1.expr_ty(&db, call);
+
+    assert!(
+        call_ty.has_var(&db),
+        "a partial answer from a depth-limited solve must not determine the return type",
+    );
+}
+
+#[test]
+fn incomplete_cutoff_fallback_does_not_commit_inference() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "incomplete_cutoff_fallback_does_not_commit_inference.fe".into(),
+        r#"
+trait Pick<T> {}
+
+struct Subject {}
+struct A {}
+struct Wrap<T> {}
+
+impl Pick<A> for Subject {}
+impl Pick<A> for Subject {}
+impl<SelfT, T> Pick<T> for SelfT
+where
+    Wrap<SelfT>: Pick<T>
+{}
+
+extern {
+    fn todo() -> !
+}
+
+fn pick<T, U: Pick<T>>(_value: U) -> T {
+    todo()
+}
+
+fn probe(subject: Subject) {
+    let _value = pick(subject)
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let probe = top_mod
+        .all_funcs(&db)
+        .iter()
+        .copied()
+        .find(|func| {
+            func.name(&db)
+                .to_opt()
+                .is_some_and(|name| name.data(&db) == "probe")
+        })
+        .expect("missing `probe` function");
+    let body = probe.body(&db).expect("missing `probe` body");
+    let call = body
+        .exprs(&db)
+        .keys()
+        .find(|expr| matches!(expr.data(&db, body), Partial::Present(Expr::Call(..))))
+        .expect("missing `pick` call");
+    let call_ty = check_func_body(&db, probe).1.expr_ty(&db, call);
+
+    assert!(
+        call_ty.has_var(&db),
+        "an incomplete distinct-instance fallback must not determine the return type",
+    );
 }
 
 #[test]

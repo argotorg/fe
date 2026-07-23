@@ -1,0 +1,6 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/method_selection/exact_target_beyond_answer_cutoff.fe
+---
