@@ -40,24 +40,20 @@ note:
    │ ╰─────^ Decision Tree for test_complex_tuple_decision_tree:
  Switch on expr
  └─ tuple() =>
-    └─ Switch on expr.1
+    └─ Switch on expr.0
        └─ tuple() =>
-          └─ Switch on expr.0
+          └─ Switch on expr.1
              └─ tuple() =>
-                └─ Switch on expr.1.0
-                   ├─ Red =>
-                   │  └─ Switch on expr.0.1
-                   │     ├─ true =>
-                   │     │  └─ Switch on expr.0.0
-                   │     │     ├─ 0 =>
+                └─ Switch on expr.0.0
+                   ├─ 0 =>
+                   │  └─ Switch on expr.1.0
+                   │     ├─ Red =>
+                   │     │  └─ Switch on expr.0.1
+                   │     │     ├─ true =>
                    │     │     │  └─ Execute arm #0
                    │     │     └─ _ =>
-                   │     │        └─ Execute arm #3
-                   │     └─ _ =>
-                   │        └─ Execute arm #4
-                   ├─ Green =>
-                   │  └─ Switch on expr.0.0
-                   │     ├─ 0 =>
+                   │     │        └─ Execute arm #4
+                   │     ├─ Green =>
                    │     │  └─ Switch on expr.0.1
                    │     │     ├─ false =>
                    │     │     │  └─ Execute arm #1
@@ -66,10 +62,26 @@ note:
                    │     │        └─ Execute arm #4
                    │     └─ _ =>
                    │        └─ Execute arm #4
-                   └─ Blue =>
-                      └─ Switch on expr.0.0
-                         ├─ 1 =>
-                         │  └─ Execute arm #2
+                   ├─ 1 =>
+                   │  └─ Switch on expr.1.0
+                   │     ├─ Blue =>
+                   │     │  └─ Execute arm #2
+                   │     ├─ Red =>
+                   │     │  └─ Switch on expr.0.1
+                   │     │     ├─ true =>
+                   │     │     │  └─ Execute arm #3
+                   │     │     └─ _ =>
+                   │     │        └─ Execute arm #4
+                   │     └─ _ =>
+                   │        └─ Execute arm #4
+                   └─ _ =>
+                      └─ Switch on expr.1.0
+                         ├─ Red =>
+                         │  └─ Switch on expr.0.1
+                         │     ├─ true =>
+                         │     │  └─ Execute arm #3
+                         │     └─ _ =>
+                         │        └─ Execute arm #4
                          └─ _ =>
                             └─ Execute arm #4
 
@@ -117,8 +129,8 @@ note:
                    │  └─ Execute arm #2
                    └─ _ =>
                       └─ Execute arm #3
-                           y ← expr.0.1
                            x ← expr.0.0
+                           y ← expr.0.1
 
 
 note:
@@ -143,8 +155,8 @@ note:
              │        └─ Switch on expr.1
              │           └─ record{} =>
              │              └─ Execute arm #2
-             │                   y ← expr.0.1
              │                   x ← expr.0.0
+             │                   y ← expr.0.1
              │                   bx ← expr.1.0
              │                   by ← expr.1.1
              ├─ 1 =>
@@ -159,30 +171,30 @@ note:
              │           │     │     │  └─ Execute arm #1
              │           │     │     └─ _ =>
              │           │     │        └─ Execute arm #2
-             │           │     │             y ← expr.0.1
              │           │     │             x ← expr.0.0
+             │           │     │             y ← expr.0.1
              │           │     │             bx ← expr.1.0
              │           │     │             by ← expr.1.1
              │           │     └─ _ =>
              │           │        └─ Execute arm #2
-             │           │             y ← expr.0.1
              │           │             x ← expr.0.0
+             │           │             y ← expr.0.1
              │           │             bx ← expr.1.0
              │           │             by ← expr.1.1
              │           └─ _ =>
              │              └─ Execute arm #2
-             │                   y ← expr.0.1
              │                   x ← expr.0.0
-             │                   by ← expr.1.1
+             │                   y ← expr.0.1
              │                   bx ← expr.1.0
+             │                   by ← expr.1.1
              └─ _ =>
                 └─ Switch on expr.1
                    └─ record{} =>
                       └─ Execute arm #2
+                           x ← expr.0.0
                            y ← expr.0.1
                            bx ← expr.1.0
                            by ← expr.1.1
-                           x ← expr.0.0
 
 
 note:
@@ -208,12 +220,12 @@ note:
  │           │     │       radius ← expr.Circle[1]
  │           │     └─ _ =>
  │           │        └─ Execute arm #1
- │           │             y ← expr.Circle[0].1
  │           │             x ← expr.Circle[0].0
+ │           │             y ← expr.Circle[0].1
  │           └─ _ =>
  │              └─ Execute arm #1
- │                   y ← expr.Circle[0].1
  │                   x ← expr.Circle[0].0
+ │                   y ← expr.Circle[0].1
  ├─ Rect =>
  │  └─ Switch on expr.Rect[0]
  │     └─ record{} =>
@@ -305,43 +317,55 @@ note:
     │ ╰─────^ Decision Tree for test_mixed_pattern_decision_tree:
  Switch on expr
  └─ tuple() =>
-    └─ Switch on expr.2
-       └─ tuple() =>
-          └─ Switch on expr.1
-             └─ record{} =>
-                └─ Switch on expr.0
-                   ├─ Variant1 =>
-                   │  └─ Switch on expr.1.0
-                   │     ├─ 0 =>
-                   │     │  └─ Switch on expr.1.1
-                   │     │     ├─ 0 =>
-                   │     │     │  └─ Switch on expr.2.0
-                   │     │     │     ├─ true =>
-                   │     │     │     │  └─ Execute arm #0
-                   │     │     │     └─ _ =>
-                   │     │     │        └─ Execute arm #3
-                   │     │     └─ _ =>
-                   │     │        └─ Execute arm #3
-                   │     └─ _ =>
-                   │        └─ Execute arm #3
-                   ├─ Variant2 =>
-                   │  └─ Switch on expr.1.0
-                   │     ├─ 1 =>
-                   │     │  └─ Switch on expr.2.0
-                   │     │     ├─ false =>
-                   │     │     │  └─ Execute arm #1
-                   │     │     │       val ← expr.2.1
-                   │     │     └─ _ =>
-                   │     │        └─ Execute arm #3
-                   │     └─ _ =>
-                   │        └─ Execute arm #3
-                   ├─ Variant3 =>
-                   │  └─ Execute arm #2
-                   │       y ← expr.1.1
-                   │       x ← expr.1.0
-                   ├─ Variant4 =>
-                   │  └─ Execute arm #2
-                   │       y ← expr.1.1
-                   │       x ← expr.1.0
-                   └─ _ =>
-                      └─ Execute arm #3
+    └─ Switch on expr.0
+       ├─ Variant1 =>
+       │  └─ Switch on expr.2
+       │     └─ tuple() =>
+       │        └─ Switch on expr.1
+       │           └─ record{} =>
+       │              └─ Switch on expr.2.0
+       │                 ├─ true =>
+       │                 │  └─ Switch on expr.1.0
+       │                 │     ├─ 0 =>
+       │                 │     │  └─ Switch on expr.1.1
+       │                 │     │     ├─ 0 =>
+       │                 │     │     │  └─ Execute arm #0
+       │                 │     │     └─ _ =>
+       │                 │     │        └─ Execute arm #3
+       │                 │     └─ _ =>
+       │                 │        └─ Execute arm #3
+       │                 └─ _ =>
+       │                    └─ Execute arm #3
+       ├─ Variant2 =>
+       │  └─ Switch on expr.2
+       │     └─ tuple() =>
+       │        └─ Switch on expr.1
+       │           └─ record{} =>
+       │              └─ Switch on expr.2.0
+       │                 ├─ false =>
+       │                 │  └─ Switch on expr.1.0
+       │                 │     ├─ 1 =>
+       │                 │     │  └─ Execute arm #1
+       │                 │     │       val ← expr.2.1
+       │                 │     └─ _ =>
+       │                 │        └─ Execute arm #3
+       │                 └─ _ =>
+       │                    └─ Execute arm #3
+       ├─ Variant3 =>
+       │  └─ Switch on expr.2
+       │     └─ tuple() =>
+       │        └─ Switch on expr.1
+       │           └─ record{} =>
+       │              └─ Execute arm #2
+       │                   x ← expr.1.0
+       │                   y ← expr.1.1
+       ├─ Variant4 =>
+       │  └─ Switch on expr.2
+       │     └─ tuple() =>
+       │        └─ Switch on expr.1
+       │           └─ record{} =>
+       │              └─ Execute arm #2
+       │                   x ← expr.1.0
+       │                   y ← expr.1.1
+       └─ _ =>
+          └─ Execute arm #3

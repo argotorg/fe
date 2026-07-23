@@ -1,0 +1,12 @@
+---
+source: crates/hir/tests/decision_tree.rs
+assertion_line: 157
+expression: res
+input_file: test_files/decision_trees/empty_enum.fe
+---
+note:
+  ┌─ empty_enum.fe:4:5
+  │
+4 │     match value {}
+  │     ^^^^^^^^^^^^^^ Decision Tree for empty_match:
+ Unreachable

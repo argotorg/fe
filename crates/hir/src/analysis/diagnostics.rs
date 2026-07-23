@@ -4290,6 +4290,17 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     error_code,
                 }
             }
+            BodyDiag::PatternAnalysisInconclusive { primary, reason } => CompleteDiagnostic {
+                severity,
+                message: "pattern analysis could not be completed".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "match exhaustiveness could not be determined".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![reason.clone()],
+                error_code,
+            },
             BodyDiag::RecvExpectedMsgType { primary, given } => {
                 let sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,

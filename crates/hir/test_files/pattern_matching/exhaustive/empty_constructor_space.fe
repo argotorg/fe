@@ -1,0 +1,5 @@
+enum Empty {}
+
+fn empty_match(value: Empty) -> u8 {
+    match value {}
+}

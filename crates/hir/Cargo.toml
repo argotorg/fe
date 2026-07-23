@@ -19,6 +19,7 @@ either = "1.13"
 ena = { version = "0.14", features = ["persistent"] }
 indexmap = "2.0"
 itertools = "0.14"
+matchcov.workspace = true
 num-bigint.workspace = true
 num-traits = "0.2.19"
 paste.workspace = true

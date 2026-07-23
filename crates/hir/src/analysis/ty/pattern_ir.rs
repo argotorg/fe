@@ -107,38 +107,6 @@ impl<'db> PatternStore<'db> {
         &self.nodes[id.index()]
     }
 
-    pub fn wildcard_binding(&self, id: ValidatedPatId) -> Option<Option<BindingRef<'db>>> {
-        match self.node(id).kind() {
-            ValidatedPatKind::Wildcard { binding } => Some(*binding),
-            ValidatedPatKind::Constructor { .. } | ValidatedPatKind::Or(..) => None,
-        }
-    }
-
-    pub fn constructor_kind(&self, id: ValidatedPatId) -> Option<ConstructorKind<'db>> {
-        match self.node(id).kind() {
-            ValidatedPatKind::Constructor { ctor, .. } => Some(*ctor),
-            ValidatedPatKind::Wildcard { .. } | ValidatedPatKind::Or(..) => None,
-        }
-    }
-
-    pub fn child_count(&self, id: ValidatedPatId) -> usize {
-        match self.node(id).kind() {
-            ValidatedPatKind::Wildcard { .. } => 0,
-            ValidatedPatKind::Constructor { fields, .. } | ValidatedPatKind::Or(fields) => {
-                fields.len()
-            }
-        }
-    }
-
-    pub fn child(&self, id: ValidatedPatId, idx: usize) -> Option<ValidatedPatId> {
-        match self.node(id).kind() {
-            ValidatedPatKind::Wildcard { .. } => None,
-            ValidatedPatKind::Constructor { fields, .. } | ValidatedPatKind::Or(fields) => {
-                fields.get(idx).copied()
-            }
-        }
-    }
-
     pub fn set_root(&mut self, pat: PatId, root: ValidatedPatId) {
         self.roots_by_pat.insert(pat, root);
     }
@@ -169,13 +137,12 @@ impl<'db> PatternStore<'db> {
             },
             ValidatedPatKind::Or(pats) => {
                 pats.iter().any(|pat| self.is_irrefutable(db, *pat))
-                    || crate::analysis::ty::pattern_analysis::check_exhaustiveness(
+                    || crate::analysis::ty::pattern_analysis::is_exhaustive(
                         db,
                         self,
                         pats,
                         self.node(id).match_ty().raw(),
                     )
-                    .is_ok()
             }
         }
     }
@@ -271,16 +238,6 @@ impl<'db> ConstructorKind<'db> {
             Self::Type(ty) => ty.field_count(db),
             Self::Literal(_, _) => 0,
         }
-    }
-}
-
-pub fn ctor_variant_num<'db>(db: &'db dyn HirAnalysisDb, ctor: &ConstructorKind<'db>) -> usize {
-    match ctor {
-        ConstructorKind::Variant(variant, _) => variant.enum_.len_variants(db),
-        ConstructorKind::Type(_) => 1,
-        ConstructorKind::Literal(LitKind::Bool(_), _) => 2,
-        ConstructorKind::Literal(LitKind::Int(_), _)
-        | ConstructorKind::Literal(LitKind::String(_), _) => usize::MAX,
     }
 }
 

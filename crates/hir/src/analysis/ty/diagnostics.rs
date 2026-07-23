@@ -715,6 +715,10 @@ pub enum BodyDiag<'db> {
     UnreachablePattern {
         primary: DynLazySpan<'db>,
     },
+    PatternAnalysisInconclusive {
+        primary: DynLazySpan<'db>,
+        reason: String,
+    },
 
     /// The root path of a recv block doesn't refer to a msg type
     RecvExpectedMsgType {
@@ -959,6 +963,7 @@ impl<'db> BodyDiag<'db> {
             Self::NotAMethod { .. } => 33,
             Self::NonExhaustiveMatch { .. } => 34,
             Self::UnreachablePattern { .. } => 35,
+            Self::PatternAnalysisInconclusive { .. } => 87,
             Self::RecvExpectedMsgType { .. } => 41,
             Self::RecvArmNotMsgVariant { .. } => 42,
             Self::RecvArmRetTypeMissing { .. } => 43,

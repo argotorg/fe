@@ -2,7 +2,8 @@ use cranelift_entity::EntityRef;
 use fe_hir::{
     analysis::{
         semantic::{
-            SExpr, SStmtKind, get_or_build_semantic_instance, identity_semantic_instance_key,
+            SExpr, SStmtKind, STerminatorKind, get_or_build_semantic_instance,
+            identity_semantic_instance_key,
         },
         ty::ty_check::{BodyOwner, LocalBinding, check_contract_recv_arm_body, check_func_body},
     },
@@ -271,4 +272,34 @@ fn read(x: Maybe) -> u256 {
         )),
         "ref u256"
     );
+}
+
+#[test]
+fn empty_enum_match_lowers_to_terminal_failure() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "pattern_lowering.fe".into(),
+        r#"
+enum Empty {}
+
+fn eliminate(value: Empty) -> u8 {
+    match value {}
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let func = find_func(&db, top_mod, "eliminate");
+    let (diags, _) = check_func_body(&db, func).clone();
+    assert!(diags.is_empty(), "{diags:?}");
+
+    let instance = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+    );
+    let body = instance.body(&db);
+
+    assert!(body.blocks.iter().any(|block| matches!(
+        block.terminator.kind,
+        STerminatorKind::Assert { message: None }
+    )));
 }

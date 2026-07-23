@@ -77,7 +77,7 @@ error[8-0034]: non-exhaustive patterns: type `((bool, Color), bool)` is not cove
 61 │ │     }
    │ ╰─────^ match expression does not cover all possible values
    │
-   = Not covered: `((false, Color::Green | Color::Blue), _)`
+   = Not covered: `((false, Color::Green), _)`
 
 error[8-0034]: non-exhaustive patterns: type `((u8, u8), bool)` is not covered
    ┌─ nested_tuple_non_exhaustive.fe:66:5

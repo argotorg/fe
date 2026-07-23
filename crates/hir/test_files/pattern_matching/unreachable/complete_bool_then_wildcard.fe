@@ -1,0 +1,7 @@
+fn complete_bool_then_wildcard(value: bool) -> u8 {
+    match value {
+        false => 0
+        true => 1
+        _ => 2
+    }
+}

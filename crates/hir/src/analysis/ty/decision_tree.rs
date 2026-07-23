@@ -1,14 +1,16 @@
 //! Decision tree generation for efficient pattern matching compilation
 //! Based on "Compiling pattern matching to good decision trees"
 
-use super::pattern_analysis::{MatrixPat, MatrixPatKind};
-use super::pattern_analysis::{PatternMatrix, PatternRowVec, SigmaSet};
-use super::pattern_ir::{BindingRef, ConstructorKind};
+use super::pattern_analysis::{FeConstructorOracle, to_matchcov_pattern};
+use super::pattern_ir::{
+    BindingRef, ConstructorKind, PatternStore, ValidatedPatId, ValidatedPatKind,
+};
 use super::ty_def::TyId;
 use crate::analysis::HirAnalysisDb;
 use crate::core::hir_def::EnumVariant;
 use crate::projection::{Projection as GenericProjection, ProjectionPath as GenericProjectionPath};
 use indexmap::IndexMap;
+use matchcov::{ConstructorSpace, Pattern, PatternMatrix, PatternRow, Usefulness};
 
 use core::convert::Infallible;
 
@@ -27,6 +29,8 @@ pub type ProjectionPath<'db> = GenericProjectionPath<TyId<'db>, EnumVariant<'db>
 /// A decision tree for pattern matching compilation
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DecisionTree<'db> {
+    /// No arm can be reached because the matched value space is empty.
+    Unreachable,
     /// Leaf node - execute this match arm
     Leaf(LeafNode<'db>),
     /// Switch node - test a value and branch
@@ -41,12 +45,10 @@ pub struct LeafNode<'db> {
 }
 
 impl<'db> LeafNode<'db> {
-    fn new(arm: SimplifiedArm<'db>, occurrences: &[ProjectionPath<'db>]) -> Self {
-        let arm_index = arm.body;
-        let bindings = arm.finalize_binds(occurrences);
+    fn new(arm: ArmData<'db>) -> Self {
         Self {
-            arm_index,
-            bindings,
+            arm_index: arm.arm_index,
+            bindings: arm.bindings,
         }
     }
 }
@@ -95,6 +97,43 @@ impl<'db> ProjectionPathExt<'db> for ProjectionPath<'db> {
     }
 }
 
+fn collect_pattern_bindings<'db>(
+    db: &'db dyn HirAnalysisDb,
+    store: &PatternStore<'db>,
+    pat: ValidatedPatId,
+    path: &ProjectionPath<'db>,
+    bindings: &mut IndexMap<BindingRef<'db>, ProjectionPath<'db>>,
+) {
+    match store.node(pat).kind() {
+        ValidatedPatKind::Wildcard {
+            binding: Some(binding),
+        } => {
+            if let Some(previous) = bindings.get(binding) {
+                debug_assert_eq!(
+                    previous, path,
+                    "pattern binding has inconsistent projections"
+                );
+            } else {
+                bindings.insert(*binding, path.clone());
+            }
+        }
+        ValidatedPatKind::Wildcard { binding: None } => {}
+        ValidatedPatKind::Constructor { ctor, fields } => {
+            let field_paths = path.phi_specialize(db, *ctor);
+            debug_assert_eq!(field_paths.len(), fields.len());
+            for (&field, field_path) in fields.iter().zip(field_paths) {
+                collect_pattern_bindings(db, store, field, &field_path, bindings);
+            }
+        }
+        ValidatedPatKind::Or(alternatives) => {
+            // Binding or-patterns are rejected while constructing PatternStore.
+            for &alternative in alternatives {
+                collect_pattern_bindings(db, store, alternative, path, bindings);
+            }
+        }
+    }
+}
+
 /// Column selection policy for decision tree optimization
 #[derive(Debug, Clone, Default)]
 pub struct ColumnSelectionPolicy(Vec<ColumnScoringFunction>);
@@ -132,7 +171,7 @@ impl ColumnSelectionPolicy {
     fn select_column<'db>(
         &self,
         db: &'db dyn HirAnalysisDb,
-        matrix: &SimplifiedArmMatrix<'db>,
+        matrix: &DecisionMatrix<'db>,
     ) -> usize {
         let mut candidates: Vec<_> = (0..matrix.ncols()).collect();
 
@@ -200,21 +239,24 @@ impl ColumnScoringFunction {
     fn score<'db>(
         &self,
         db: &'db dyn HirAnalysisDb,
-        matrix: &SimplifiedArmMatrix<'db>,
+        matrix: &DecisionMatrix<'db>,
         col: usize,
     ) -> i32 {
         match self {
             ColumnScoringFunction::Arity => matrix
-                .sigma_set(col)
-                .0
+                .column_signature(db, col)
+                .observed
                 .iter()
                 .map(|c| -(c.arity(db) as i32))
                 .sum(),
 
             ColumnScoringFunction::SmallBranching => {
-                let sigma_set = matrix.sigma_set(col);
-                let score = -(matrix.sigma_set(col).len() as i32);
-                if sigma_set.is_complete(db) {
+                let signature = matrix.column_signature(db, col);
+                let score = -(signature.observed.len() as i32);
+                if matches!(
+                    signature.space,
+                    ConstructorSpace::Empty | ConstructorSpace::Complete { .. }
+                ) {
                     score
                 } else {
                     score - 1
@@ -232,20 +274,22 @@ impl ColumnScoringFunction {
     }
 }
 
-/// Build a decision tree from a pattern matrix with a specific column selection policy
+/// Build a decision tree from validated pattern roots with a specific column selection policy.
 pub fn build_decision_tree_with_policy<'db>(
     db: &'db dyn HirAnalysisDb,
-    matrix: &PatternMatrix<'db>,
+    store: &PatternStore<'db>,
+    roots: &[ValidatedPatId],
     policy: ColumnSelectionPolicy,
 ) -> DecisionTree<'db> {
-    let simplified_matrix = SimplifiedArmMatrix::new(matrix);
-    DecisionTreeBuilder::new(policy).build(db, simplified_matrix)
+    let matrix = DecisionMatrix::new(db, store, roots);
+    DecisionTreeBuilder::new(policy).build(db, matrix)
 }
 
-/// Build a decision tree from a pattern matrix with optimized column selection
+/// Build a decision tree from validated pattern roots with optimized column selection.
 pub fn build_decision_tree<'db>(
     db: &'db dyn HirAnalysisDb,
-    matrix: &PatternMatrix<'db>,
+    store: &PatternStore<'db>,
+    roots: &[ValidatedPatId],
 ) -> DecisionTree<'db> {
     let policy = {
         let mut policy = ColumnSelectionPolicy::default();
@@ -253,7 +297,19 @@ pub fn build_decision_tree<'db>(
         policy.needed_prefix().small_branching().arity();
         policy
     };
-    build_decision_tree_with_policy(db, matrix, policy)
+    build_decision_tree_with_policy(db, store, roots, policy)
+}
+
+pub(crate) fn build_pattern_branch_decision_tree<'db>(
+    db: &'db dyn HirAnalysisDb,
+    store: &PatternStore<'db>,
+    root: ValidatedPatId,
+) -> DecisionTree<'db> {
+    let matrix = DecisionMatrix::for_pattern_branch(db, store, root);
+
+    let mut policy = ColumnSelectionPolicy::default();
+    policy.needed_prefix().small_branching().arity();
+    DecisionTreeBuilder::new(policy).build(db, matrix)
 }
 
 /// Decision tree builder with configurable policy
@@ -269,158 +325,155 @@ impl DecisionTreeBuilder {
     fn build<'db>(
         &self,
         db: &'db dyn HirAnalysisDb,
-        mut matrix: SimplifiedArmMatrix<'db>,
+        mut matrix: DecisionMatrix<'db>,
     ) -> DecisionTree<'db> {
-        debug_assert!(matrix.nrows() > 0, "unexhausted pattern matrix");
+        if matrix.nrows() == 0 {
+            return DecisionTree::Unreachable;
+        }
 
         if matrix.is_first_arm_satisfied() {
-            matrix.arms.truncate(1);
-            return DecisionTree::Leaf(LeafNode::new(
-                matrix.arms.pop().unwrap(),
-                &matrix.occurrences,
-            ));
+            return DecisionTree::Leaf(LeafNode::new(matrix.first_arm().unwrap().clone()));
         }
 
         let col = self.policy.select_column(db, &matrix);
         matrix.swap(col);
 
         let mut switch_arms = vec![];
-        let occurrence = &matrix.occurrences[0];
-        let sigma_set = matrix.sigma_set(0);
-        for &ctor in sigma_set.0.iter() {
-            let destructured_mat = matrix.phi_specialize(db, ctor, occurrence);
+        let occurrence = matrix.occurrences[0].clone();
+        let signature = matrix.column_signature(db, 0);
+        let needs_default = match signature.space {
+            ConstructorSpace::Empty => return DecisionTree::Unreachable,
+            ConstructorSpace::Complete { .. } => false,
+            ConstructorSpace::Incomplete { .. } => true,
+        };
+        for ctor in signature.observed {
+            let destructured_mat = matrix.phi_specialize(db, ctor);
             let subtree = self.build(db, destructured_mat);
             switch_arms.push((Case::Constructor(ctor), subtree));
         }
 
-        if !sigma_set.is_complete(db) {
-            let destructured_mat = matrix.d_specialize(occurrence);
+        if needs_default {
+            let destructured_mat = matrix.d_specialize();
             let subtree = self.build(db, destructured_mat);
             switch_arms.push((Case::Default, subtree));
         }
 
         DecisionTree::Switch(SwitchNode {
-            occurrence: occurrence.clone(),
+            occurrence,
             arms: switch_arms,
         })
     }
 }
 
-/// Simplified arm representation for efficient processing
-#[derive(Clone, Debug)]
-struct SimplifiedArm<'db> {
-    pat_vec: PatternRowVec<'db>,
-    body: usize,
-    binds: IndexMap<BindingRef<'db>, ProjectionPath<'db>>,
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ArmData<'db> {
+    arm_index: usize,
+    bindings: IndexMap<BindingRef<'db>, ProjectionPath<'db>>,
 }
 
-impl<'db> SimplifiedArm<'db> {
-    fn new(pat_vec: &PatternRowVec<'db>, body: usize) -> Self {
-        let generalized_patterns = pat_vec.inner.iter().map(generalize_pattern).collect();
-        let pat_vec = PatternRowVec::new(generalized_patterns);
-        Self {
-            pat_vec,
-            body,
-            binds: IndexMap::new(),
-        }
-    }
-
-    fn pat(&self, col: usize) -> &MatrixPat<'_> {
-        &self.pat_vec.inner[col]
-    }
-
-    fn new_binds(
-        &self,
-        path: &ProjectionPath<'db>,
-    ) -> IndexMap<BindingRef<'db>, ProjectionPath<'db>> {
-        let mut binds = self.binds.clone();
-        if let Some(MatrixPatKind::WildCard(Some(bind))) = self.pat_vec.head().map(|pat| &pat.kind)
-        {
-            binds.entry(*bind).or_insert(path.clone());
-        }
-        binds
-    }
-
-    fn finalize_binds(
-        &self,
-        paths: &[ProjectionPath<'db>],
-    ) -> IndexMap<BindingRef<'db>, ProjectionPath<'db>> {
-        let mut binds = self.binds.clone();
-
-        // Extract bindings from current patterns
-        for (pat, path) in self.pat_vec.inner.iter().zip(paths.iter()) {
-            if let MatrixPatKind::WildCard(Some(bind)) = &pat.kind {
-                binds.entry(*bind).or_insert_with(|| path.clone());
-            }
-        }
-
-        binds
-    }
-}
-
-/// Simplified arm matrix for efficient decision tree construction
+/// matchcov's typed matrix paired with the runtime projection of each column.
 #[derive(Clone, Debug)]
-struct SimplifiedArmMatrix<'db> {
-    arms: Vec<SimplifiedArm<'db>>,
+struct DecisionMatrix<'db> {
+    patterns: PatternMatrix<TyId<'db>, ConstructorKind<'db>, ArmData<'db>>,
     occurrences: Vec<ProjectionPath<'db>>,
 }
 
-impl<'db> SimplifiedArmMatrix<'db> {
-    fn new(matrix: &PatternMatrix<'db>) -> Self {
-        let cols = matrix.ncols();
-        let arms: Vec<_> = matrix
-            .rows
-            .iter()
-            .enumerate()
-            .map(|(body, pat)| SimplifiedArm::new(pat, body))
-            .collect();
-        let occurrences = vec![ProjectionPath::default(); cols];
+impl<'db> DecisionMatrix<'db> {
+    fn new(
+        db: &'db dyn HirAnalysisDb,
+        store: &PatternStore<'db>,
+        roots: &[ValidatedPatId],
+    ) -> Self {
+        let column_types = roots
+            .first()
+            .map(|root| store.node(*root).match_ty().raw())
+            .into_iter();
+        let rows = roots.iter().copied().enumerate().map(|(arm_index, root)| {
+            let mut bindings = IndexMap::new();
+            collect_pattern_bindings(db, store, root, &ProjectionPath::default(), &mut bindings);
+            PatternRow::new(
+                [simplify_pattern(to_matchcov_pattern(store, root))],
+                ArmData {
+                    arm_index,
+                    bindings,
+                },
+            )
+        });
+        let patterns = PatternMatrix::new(column_types, rows)
+            .expect("validated pattern roots should form a well-typed matrix");
+        let occurrences = vec![ProjectionPath::default(); patterns.width()];
 
-        SimplifiedArmMatrix { arms, occurrences }
+        Self {
+            patterns,
+            occurrences,
+        }
+    }
+
+    fn for_pattern_branch(
+        db: &'db dyn HirAnalysisDb,
+        store: &PatternStore<'db>,
+        root: ValidatedPatId,
+    ) -> Self {
+        let mut bindings = IndexMap::new();
+        collect_pattern_bindings(db, store, root, &ProjectionPath::default(), &mut bindings);
+        let rows = [
+            PatternRow::new(
+                [simplify_pattern(to_matchcov_pattern(store, root))],
+                ArmData {
+                    arm_index: 0,
+                    bindings,
+                },
+            ),
+            PatternRow::new(
+                [Pattern::Wildcard],
+                ArmData {
+                    arm_index: 1,
+                    bindings: IndexMap::new(),
+                },
+            ),
+        ];
+        let patterns = PatternMatrix::new([store.node(root).match_ty().raw()], rows)
+            .expect("validated branch pattern should form a well-typed matrix");
+
+        Self {
+            occurrences: vec![ProjectionPath::default(); patterns.width()],
+            patterns,
+        }
     }
 
     fn nrows(&self) -> usize {
-        self.arms.len()
+        self.patterns.len()
     }
 
     fn ncols(&self) -> usize {
-        self.arms[0].pat_vec.len()
+        self.patterns.width()
     }
 
-    fn pat(&self, row: usize, col: usize) -> &MatrixPat<'_> {
-        self.arms[row].pat(col)
+    fn pat(&self, row: usize, col: usize) -> &Pattern<ConstructorKind<'db>> {
+        &self.patterns.rows()[row].patterns()[col]
     }
 
-    fn reduced_pat_mat(&self, col: usize) -> PatternMatrix<'_> {
-        let mut rows = Vec::with_capacity(self.nrows());
-        for arm in self.arms.iter() {
-            let reduced_pat_vec = arm
-                .pat_vec
-                .inner
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| *i != col)
-                .map(|(_, pat)| pat.clone())
-                .collect();
-            rows.push(PatternRowVec::new(reduced_pat_vec));
-        }
-
-        PatternMatrix::new(rows)
+    fn first_arm(&self) -> Option<&ArmData<'db>> {
+        self.patterns.rows().first().map(PatternRow::payload)
     }
 
-    fn sigma_set(&self, col: usize) -> SigmaSet<'db> {
-        SigmaSet::from_rows(self.arms.iter().map(|arm| &arm.pat_vec), col)
+    fn column_signature(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        col: usize,
+    ) -> matchcov::ColumnSignature<ConstructorKind<'db>> {
+        self.patterns
+            .column_signature(&mut FeConstructorOracle::new(db), col)
+            .expect("decision matrix column should be valid")
     }
 
     fn is_first_arm_satisfied(&self) -> bool {
-        if self.arms.is_empty() {
-            return false;
-        }
-        self.arms[0]
-            .pat_vec
-            .inner
-            .iter()
-            .all(MatrixPat::is_wildcard)
+        self.patterns
+            .rows()
+            .first()
+            .into_iter()
+            .flat_map(|row| row.patterns())
+            .all(|pat| matches!(pat, Pattern::Wildcard))
     }
 
     fn swap(&mut self, col: usize) {
@@ -428,66 +481,33 @@ impl<'db> SimplifiedArmMatrix<'db> {
             return;
         }
 
-        // Swap column col with column 0 in all arms
-        for arm in &mut self.arms {
-            arm.pat_vec.inner.swap(0, col);
-        }
-
-        // Swap occurrences
+        self.patterns
+            .swap_columns(0, col)
+            .expect("selected decision matrix column should be valid");
         self.occurrences.swap(0, col);
     }
 
-    fn phi_specialize(
-        &self,
-        db: &'db dyn HirAnalysisDb,
-        ctor: ConstructorKind<'db>,
-        path: &ProjectionPath<'db>,
-    ) -> Self {
-        let mut new_arms = Vec::new();
-
-        for arm in &self.arms {
-            let binds = arm.new_binds(path);
-            new_arms.extend(
-                arm.pat_vec
-                    .phi_specialize(db, ctor)
-                    .into_iter()
-                    .map(|pat_vec| SimplifiedArm {
-                        pat_vec,
-                        body: arm.body,
-                        binds: binds.clone(),
-                    }),
-            );
-        }
-
+    fn phi_specialize(&self, db: &'db dyn HirAnalysisDb, ctor: ConstructorKind<'db>) -> Self {
+        let patterns = self
+            .patterns
+            .specialize(&mut FeConstructorOracle::new(db), 0, &ctor)
+            .expect("validated pattern constructor should specialize consistently");
         let mut new_occurrences = self.occurrences[0].phi_specialize(db, ctor);
         new_occurrences.extend_from_slice(&self.occurrences.as_slice()[1..]);
 
         Self {
-            arms: new_arms,
+            patterns,
             occurrences: new_occurrences,
         }
     }
 
-    pub fn d_specialize(&self, path: &ProjectionPath<'db>) -> Self {
-        let mut new_arms = Vec::new();
-
-        for arm in &self.arms {
-            let binds = arm.new_binds(path);
-
-            new_arms.extend(
-                arm.pat_vec
-                    .d_specialize()
-                    .into_iter()
-                    .map(|pat_vec| SimplifiedArm {
-                        pat_vec,
-                        body: arm.body,
-                        binds: binds.clone(),
-                    }),
-            );
-        }
-
-        SimplifiedArmMatrix {
-            arms: new_arms,
+    fn d_specialize(&self) -> Self {
+        let patterns = self
+            .patterns
+            .specialize_default(0)
+            .expect("decision matrix should have a first column");
+        Self {
+            patterns,
             occurrences: self.occurrences[1..].to_vec(),
         }
     }
@@ -510,7 +530,7 @@ impl NecessityMatrix {
         Self { data, ncol, nrow }
     }
 
-    fn from_matrix<'db>(db: &'db dyn HirAnalysisDb, matrix: &SimplifiedArmMatrix<'db>) -> Self {
+    fn from_matrix<'db>(db: &'db dyn HirAnalysisDb, matrix: &DecisionMatrix<'db>) -> Self {
         let ncol = matrix.ncols();
         let nrow = matrix.nrows();
         let mut necessity_mat = Self::new(ncol, nrow);
@@ -518,17 +538,24 @@ impl NecessityMatrix {
         necessity_mat
     }
 
-    fn compute<'db>(&mut self, db: &'db dyn HirAnalysisDb, matrix: &SimplifiedArmMatrix<'db>) {
+    fn compute<'db>(&mut self, db: &'db dyn HirAnalysisDb, matrix: &DecisionMatrix<'db>) {
         for row in 0..self.nrow {
             for col in 0..self.ncol {
                 let pat = matrix.pat(row, col);
                 let pos = self.pos(row, col);
 
-                if !pat.is_wildcard() {
+                if !matches!(pat, Pattern::Wildcard) {
                     self.data[pos] = true;
                 } else {
-                    let reduced_pat_mat = matrix.reduced_pat_mat(col);
-                    self.data[pos] = !reduced_pat_mat.is_row_useful(db, row);
+                    let reduced = matrix
+                        .patterns
+                        .without_column(col)
+                        .expect("necessity column should be valid");
+                    self.data[pos] =
+                        match reduced.row_usefulness(&mut FeConstructorOracle::new(db), row) {
+                            Ok(Usefulness::Useful(_)) => false,
+                            Ok(Usefulness::Useless | Usefulness::Inconclusive(_)) | Err(_) => true,
+                        };
                 }
             }
         }
@@ -561,36 +588,29 @@ impl NecessityMatrix {
     }
 }
 
-/// Generalize a pattern by removing bindings from constructors
-fn generalize_pattern<'db>(pat: &MatrixPat<'db>) -> MatrixPat<'db> {
-    match &pat.kind {
-        MatrixPatKind::WildCard(_) => pat.clone(),
-
-        MatrixPatKind::Constructor { kind, fields } => {
-            let fields = fields.iter().map(generalize_pattern).collect();
-            let kind = MatrixPatKind::Constructor {
-                kind: *kind,
-                fields,
-            };
-            MatrixPat::new(kind, pat.ty)
+/// Removes alternatives made redundant by a preceding wildcard.
+fn simplify_pattern<'db>(pat: Pattern<ConstructorKind<'db>>) -> Pattern<ConstructorKind<'db>> {
+    match pat {
+        Pattern::Wildcard => Pattern::Wildcard,
+        Pattern::Constructor { head, arguments } => {
+            Pattern::constructor(head, arguments.into_iter().map(simplify_pattern))
         }
-
-        MatrixPatKind::Or(pats) => {
-            let mut gen_pats = vec![];
-            for pat in pats {
-                let gen_pat = generalize_pattern(pat);
-                if gen_pat.is_wildcard() {
-                    gen_pats.push(gen_pat);
+        Pattern::Or(alternatives) => {
+            let mut simplified = Vec::new();
+            for alternative in alternatives {
+                let alternative = simplify_pattern(alternative);
+                if matches!(alternative, Pattern::Wildcard) {
+                    simplified.push(alternative);
                     break;
                 } else {
-                    gen_pats.push(gen_pat);
+                    simplified.push(alternative);
                 }
             }
 
-            if gen_pats.len() == 1 {
-                gen_pats.pop().unwrap()
+            if simplified.len() == 1 {
+                simplified.pop().unwrap()
             } else {
-                MatrixPat::new(MatrixPatKind::Or(gen_pats), pat.ty)
+                Pattern::Or(simplified)
             }
         }
     }

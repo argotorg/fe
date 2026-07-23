@@ -11,10 +11,9 @@ use crate::{
         ty::{
             decision_tree::{
                 Case, DecisionTree, LeafNode, Projection, ProjectionPath, SwitchNode,
-                build_decision_tree,
+                build_decision_tree, build_pattern_branch_decision_tree,
             },
             normalize::normalize_ty,
-            pattern_analysis::PatternMatrix,
             pattern_ir::{ConstructorKind, PatternStore, ValidatedPatId, ValidatedPatKind},
             pattern_types::{
                 PatternProjectionStep, apply_pattern_borrow_mode, destructure_pattern_source,
@@ -239,9 +238,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         };
         let value = self.owned_pattern_value(value, self.locals[value.index()].ty);
         let pattern_store = self.typed_body.pattern_store();
-        let mut matrix = PatternMatrix::from_roots(pattern_store, &[root]);
-        matrix.push_wildcard_row(pattern_store.node(root).match_ty().raw());
-        let tree = build_decision_tree(self.db, &matrix);
+        let tree = build_pattern_branch_decision_tree(self.db, pattern_store, root);
         let mut projections =
             DecisionTreeProjectionCache::new(self.db, pattern_store, &[root], value);
         self.lower_decision_tree(
@@ -358,46 +355,48 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     fn bind_validated_pattern(&mut self, pat: ValidatedPatId, value: PatternValue<'db>) {
-        let pattern_store = self.typed_body.pattern_store();
-        if let Some(binding) = pattern_store.wildcard_binding(pat).flatten() {
-            if let Some(local_binding) = self.typed_body.pat_binding(binding.representative_pat) {
-                let dst = self.alloc_binding_local(local_binding);
-                let dst_ty = self.locals[dst.index()].ty;
-                let by_borrow = self.typed_body.pat_binding_mode(binding.representative_pat)
-                    == Some(PatBindingMode::ByBorrow);
-                let source_matches_dst = {
-                    let scope = self.body.scope();
-                    normalize_ty(self.db, value.carrier_ty.0, scope, self.assumptions)
-                        == normalize_ty(self.db, dst_ty, scope, self.assumptions)
-                };
-                let needs_borrow_read = by_borrow && !source_matches_dst;
-                let binding_value = if needs_borrow_read {
-                    PatternValue {
-                        value: value.value,
-                        carrier_ty: PatternCarrierTy(dst_ty),
-                    }
-                } else {
-                    value
-                };
-                self.debug_assert_pattern_binding_ty_matches(dst, binding_value);
-                self.push_synthetic_stmt(SStmtKind::Assign {
-                    dst,
-                    expr: if needs_borrow_read {
-                        SExpr::ReadPlace {
-                            place: SPlace::new(value.value),
+        let kind = self.typed_body.pattern_store().node(pat).kind().clone();
+        match kind {
+            ValidatedPatKind::Wildcard {
+                binding: Some(binding),
+            } => {
+                if let Some(local_binding) = self.typed_body.pat_binding(binding.representative_pat)
+                {
+                    let dst = self.alloc_binding_local(local_binding);
+                    let dst_ty = self.locals[dst.index()].ty;
+                    let by_borrow = self.typed_body.pat_binding_mode(binding.representative_pat)
+                        == Some(PatBindingMode::ByBorrow);
+                    let source_matches_dst = {
+                        let scope = self.body.scope();
+                        normalize_ty(self.db, value.carrier_ty.0, scope, self.assumptions)
+                            == normalize_ty(self.db, dst_ty, scope, self.assumptions)
+                    };
+                    let needs_borrow_read = by_borrow && !source_matches_dst;
+                    let binding_value = if needs_borrow_read {
+                        PatternValue {
+                            value: value.value,
+                            carrier_ty: PatternCarrierTy(dst_ty),
                         }
                     } else {
-                        SExpr::UseValue(SOperand::synthetic(value.value))
-                    },
-                });
+                        value
+                    };
+                    self.debug_assert_pattern_binding_ty_matches(dst, binding_value);
+                    self.push_synthetic_stmt(SStmtKind::Assign {
+                        dst,
+                        expr: if needs_borrow_read {
+                            SExpr::ReadPlace {
+                                place: SPlace::new(value.value),
+                            }
+                        } else {
+                            SExpr::UseValue(SOperand::synthetic(value.value))
+                        },
+                    });
+                }
             }
-        } else if let Some(ctor) = pattern_store.constructor_kind(pat) {
-            match ctor {
+            ValidatedPatKind::Wildcard { binding: None } => {}
+            ValidatedPatKind::Constructor { ctor, fields } => match ctor {
                 ConstructorKind::Variant(variant, _) => {
-                    for idx in 0..pattern_store.child_count(pat) {
-                        let field_pat = pattern_store
-                            .child(pat, idx)
-                            .expect("pattern child should exist");
+                    for (idx, field_pat) in fields.into_iter().enumerate() {
                         let assigned_ty = self.validated_pattern_child_carrier_ty(
                             value,
                             field_pat,
@@ -416,10 +415,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     }
                 }
                 ConstructorKind::Type(_) => {
-                    for idx in 0..pattern_store.child_count(pat) {
-                        let field_pat = pattern_store
-                            .child(pat, idx)
-                            .expect("pattern child should exist");
+                    for (idx, field_pat) in fields.into_iter().enumerate() {
                         let assigned_ty = self.validated_pattern_child_carrier_ty(
                             value,
                             field_pat,
@@ -430,9 +426,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     }
                 }
                 ConstructorKind::Literal(..) => {}
+            },
+            ValidatedPatKind::Or(pats) => {
+                if let Some(first) = pats.first() {
+                    self.bind_validated_pattern(*first, value);
+                }
             }
-        } else if let Some(first) = pattern_store.child(pat, 0) {
-            self.bind_validated_pattern(first, value);
         }
     }
 
@@ -449,10 +448,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             .map(|arm| self.typed_body.pattern_root(arm.pat))
             .collect::<Option<Vec<_>>>()
             .unwrap_or_else(|| panic!("decision-tree match lowering requires validated patterns"));
-        let tree = build_decision_tree(
-            self.db,
-            &PatternMatrix::from_roots(self.typed_body.pattern_store(), &roots),
-        );
+        let tree = build_decision_tree(self.db, self.typed_body.pattern_store(), &roots);
         let mut projections = DecisionTreeProjectionCache::new(
             self.db,
             self.typed_body.pattern_store(),
@@ -478,6 +474,22 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         target: DecisionTreeTarget<'_>,
     ) -> bool {
         match tree {
+            DecisionTree::Unreachable => match target {
+                DecisionTreeTarget::MatchArms { .. } => {
+                    // Semantic IR has no dedicated unreachable terminator. Keep the
+                    // impossible path terminal and fail safely if malformed runtime
+                    // input ever reaches it.
+                    self.set_synthetic_terminator(
+                        self.current,
+                        STerminatorKind::Assert { message: None },
+                    );
+                    false
+                }
+                DecisionTreeTarget::Branch { else_bb, .. } => {
+                    self.set_synthetic_terminator(self.current, STerminatorKind::Goto(else_bb));
+                    true
+                }
+            },
             DecisionTree::Leaf(leaf) => match target {
                 DecisionTreeTarget::MatchArms {
                     result,
