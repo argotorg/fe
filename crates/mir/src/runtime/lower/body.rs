@@ -2385,19 +2385,16 @@ impl<'db> RmirEmitter<'db> {
         }
     }
 
-    fn lower_field_like(
+    fn lower_ref_field(
         &mut self,
         bb: RBlockId,
         dst: RLocalId,
-        base: SLocalId,
+        base: RLocalId,
         elem: PlaceElem<'db>,
     ) {
-        if let PlaceElem::Field(FieldIndex(field_idx)) = &elem
-            && self.lower_single_field_value_extract_local_read(bb, dst, base, *field_idx as usize)
-        {
-            return;
-        }
-        let mut place = self.semantic_place(bb, base);
+        let mut place = self
+            .runtime_place_from_addr_value(base)
+            .expect("enum variant field base must be a runtime reference");
         place.path = vec![elem].into_boxed_slice();
         let projected = self.project_place_class(&place);
         let target = self
@@ -2457,16 +2454,6 @@ impl<'db> RmirEmitter<'db> {
         };
         let path = place.path.iter().cloned().collect::<Vec<_>>();
         self.lower_value_extract_path_read(bb, dst, base, &path)
-    }
-
-    fn lower_single_field_value_extract_local_read(
-        &mut self,
-        bb: RBlockId,
-        dst: RLocalId,
-        base: SLocalId,
-        field_idx: usize,
-    ) -> bool {
-        self.lower_value_extract_path_read(bb, dst, base, &[Projection::Field(field_idx)])
     }
 
     fn lower_value_extract_path_read(
@@ -2797,7 +2784,7 @@ impl<'db> RmirEmitter<'db> {
         match self.local_class(value.local) {
             Some(RuntimeClass::Ref { .. }) => {
                 let refined = self.enum_variant_ref(bb, value.local, variant);
-                self.lower_field_like(
+                self.lower_ref_field(
                     bb,
                     dst,
                     refined,
@@ -5589,7 +5576,7 @@ impl<'db> RmirEmitter<'db> {
         bb: RBlockId,
         value: SLocalId,
         variant: VariantIndex,
-    ) -> SLocalId {
+    ) -> RLocalId {
         let class = self
             .local_class(value)
             .cloned()
@@ -5625,7 +5612,7 @@ impl<'db> RmirEmitter<'db> {
                 },
             },
         );
-        SLocalId::from_u32(temp.as_u32())
+        temp
     }
 
     fn alloc_runtime_temp(

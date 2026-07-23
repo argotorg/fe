@@ -3064,6 +3064,72 @@ mod tests {
     }
 
     #[test]
+    fn runtime_handle_preservation_keeps_mut_owned_enum_param_as_object_ref() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse(
+            "file:///runtime_handle_preservation_keeps_mut_owned_enum_param_as_object_ref.fe",
+        )
+        .unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                include_str!("../../../../fe/tests/fixtures/fe_test/if_let_while_let.fe")
+                    .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        // Mutable enum parameters deliberately use an object-reference ABI class. The
+        // unrooted-read optimization must not rewrite that signature-pinned carrier to an
+        // aggregate value merely because the `while let` pattern reads it by place.
+        let semantic = semantic_instance_for_named_func(&db, top_mod, "sum_descending_while_let");
+        let instance = runtime_instance_for_semantic(&db, semantic);
+        let signature = instance.interface_signature(&db);
+        let body = instance.body(&db);
+        let param = signature
+            .params
+            .first()
+            .expect("sum_descending_while_let has one runtime-visible parameter");
+
+        assert!(
+            matches!(
+                param.class,
+                RuntimeClass::Ref {
+                    kind: RefKind::Object,
+                    ..
+                }
+            ),
+            "mutable enum parameter must keep its object-reference ABI class, got:\n{:#?}",
+            param.class,
+        );
+
+        let carrier = body
+            .value_class(param.local)
+            .unwrap_or_else(|| panic!("param local {:?} should keep a value carrier", param.local));
+        assert_eq!(
+            carrier, &param.class,
+            "param carrier must equal the signature param class, not be rewritten as an aggregate value",
+        );
+
+        let root = &body.local(param.local).expect("param local exists").root;
+        assert!(
+            matches!(
+                root,
+                RuntimeLocalRoot::Ref(RuntimeClass::Ref {
+                    kind: RefKind::Object,
+                    ..
+                })
+            ),
+            "mutable enum parameter must retain an object-reference root, got:\n{root:#?}",
+        );
+    }
+
+    #[test]
     fn transport_shaped_returns_remain_visible_transport_returns() {
         let mut db = DriverDataBase::default();
         let file_url =

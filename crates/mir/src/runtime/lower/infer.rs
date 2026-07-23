@@ -199,7 +199,8 @@ impl<'a, 'lookup, 'db> CarrierInferer<'a, 'lookup, 'db, FullBodySpace<'a, 'db>> 
                 &carrier,
                 cx.env.scope(),
                 cx.env.assumptions(),
-            ) {
+            ) && (!self.signature_pinned[idx] || unrooted_carrier == carrier)
+            {
                 carrier = unrooted_carrier;
                 RuntimeLocalRoot::None
             } else {
