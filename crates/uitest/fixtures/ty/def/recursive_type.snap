@@ -35,3 +35,19 @@ error[3-0002]: recursive type definition
    ·
 23 │     s: S5<S6>
    │        ------ recursion occurs here
+
+error[3-0002]: recursive type definition
+   ┌─ recursive_type.fe:26:12
+   │
+26 │ pub struct S7 {
+   │            ^^ recursive type definition here
+27 │     s: [S7; 1],
+   │        ------- recursion occurs here
+
+error[3-0002]: recursive type definition
+   ┌─ recursive_type.fe:30:12
+   │
+30 │ pub struct S8<T> {
+   │            ^^ recursive type definition here
+31 │     s: S8<[T; 1]>,
+   │        ---------- recursion occurs here

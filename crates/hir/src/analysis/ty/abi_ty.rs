@@ -164,6 +164,9 @@ pub fn semantic_ty_to_abi_desc<'db>(
             }
             match adt_ref {
                 AdtRef::Struct(struct_) => {
+                    if adt_ref.as_adt(db).recursive_cycle(db).is_some() {
+                        return Err(format!("recursive ABI type `{}`", ty.pretty_print(db)));
+                    }
                     let field_tys = ty.field_types(db);
                     let hir_fields = struct_.hir_fields(db).data(db);
                     if hir_fields.len() != field_tys.len() {
