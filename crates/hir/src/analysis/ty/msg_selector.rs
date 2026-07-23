@@ -6,9 +6,15 @@ use parser::{
 };
 
 use crate::analysis::ty::abi_ty::{
-    parse_function_signature, semantic_ty_to_abi_desc, suggested_fe_type_for_sol_type,
+    AbiTypeError, parse_function_signature, semantic_ty_to_abi_desc, suggested_fe_type_for_sol_type,
 };
+use crate::analysis::ty::adt_def::AdtRef;
+use crate::analysis::ty::corelib::{resolve_core_trait, resolve_lib_type_path};
 use crate::analysis::ty::diagnostics::FuncBodyDiag;
+use crate::analysis::ty::trait_def::TraitInstId;
+use crate::analysis::ty::trait_resolution::{
+    GoalSatisfiability, TraitSolveCx, is_goal_satisfiable,
+};
 use crate::analysis::ty::ty_check::eval_msg_variant_selector;
 use crate::analysis::ty::ty_def::TyId;
 use crate::analysis::{
@@ -18,11 +24,11 @@ use crate::hir_def::{ItemKind, Mod, Struct, TopLevelMod};
 use crate::lower::parse_file_impl;
 use crate::semantic::get_variant_selector_info;
 use crate::span::{DesugaredOrigin, HirOrigin, MsgDesugaredFocus};
-use crate::{SelectorError, SelectorErrorKind};
+use crate::{MsgDiagnostic, MsgDiagnosticKind};
 
-pub struct MsgSelectorAnalysisPass;
+pub struct MsgAnalysisPass;
 
-impl ModuleAnalysisPass for MsgSelectorAnalysisPass {
+impl ModuleAnalysisPass for MsgAnalysisPass {
     fn run_on_module<'db>(
         &mut self,
         db: &'db dyn HirAnalysisDb,
@@ -66,13 +72,12 @@ fn check_msg_mod<'db>(
         let Some(name) = struct_.name(db).to_opt() else {
             continue;
         };
+        let variant_name = name.data(db).to_string();
 
-        let variant_ty = crate::analysis::ty::ty_def::TyId::adt(
-            db,
-            crate::analysis::ty::adt_def::AdtRef::from(struct_).as_adt(db),
-        );
+        let variant_ty = TyId::adt(db, AdtRef::from(struct_).as_adt(db));
 
-        check_variant_signature_types(db, top_mod, struct_, variant_ty, &mut diags);
+        check_variant_field_abi_requirements(db, top_mod, struct_, &variant_name, &mut diags);
+        check_variant_signature_types(db, top_mod, struct_, variant_ty, &variant_name, &mut diags);
 
         let Some(selector) = eval_msg_variant_selector(db, variant_ty, struct_.scope(), ty_diags)
         else {
@@ -82,22 +87,99 @@ fn check_msg_mod<'db>(
         let range = msg_variant_focus_range(db, top_mod, struct_, MsgDesugaredFocus::Selector);
 
         if let Some((first_range, first_name)) = seen.get(&selector) {
-            diags.push(Box::new(SelectorError {
-                kind: SelectorErrorKind::Duplicate {
+            diags.push(Box::new(MsgDiagnostic {
+                kind: MsgDiagnosticKind::Duplicate {
                     first_variant_name: first_name.clone(),
                     selector,
                 },
                 file,
                 primary_range: range,
                 secondary_range: Some(*first_range),
-                variant_name: name.data(db).to_string(),
+                variant_name: variant_name.clone(),
             }) as _);
         } else {
-            seen.insert(selector, (range, name.data(db).to_string()));
+            seen.insert(selector, (range, variant_name));
         }
     }
 
     diags
+}
+
+fn check_variant_field_abi_requirements<'db>(
+    db: &'db dyn HirAnalysisDb,
+    top_mod: TopLevelMod<'db>,
+    struct_: Struct<'db>,
+    variant_name: &str,
+    diags: &mut Vec<Box<dyn DiagnosticVoucher + 'db>>,
+) {
+    let (Some(sol_ty), Some(abi_size_trait), Some(encode_trait), Some(decode_trait)) = (
+        resolve_lib_type_path(db, struct_.scope(), "std::abi::Sol"),
+        resolve_core_trait(db, struct_.scope(), &["abi", "AbiSize"]),
+        resolve_core_trait(db, struct_.scope(), &["abi", "Encode"]),
+        resolve_core_trait(db, struct_.scope(), &["abi", "Decode"]),
+    ) else {
+        return;
+    };
+
+    let solve_cx = TraitSolveCx::new(db, struct_.scope());
+    for (idx, field_ty) in struct_
+        .field_tys(db)
+        .into_iter()
+        .map(|ty| ty.instantiate_identity())
+        .enumerate()
+    {
+        if field_ty.has_invalid(db) {
+            continue;
+        }
+
+        let kind = match semantic_ty_to_abi_desc(db, field_ty) {
+            Err(AbiTypeError::Recursive(_)) => continue,
+            Err(AbiTypeError::Unsupported(reason)) => MsgDiagnosticKind::UnsupportedAbiField {
+                ty: field_ty.pretty_print(db).to_string(),
+                reason,
+            },
+            Ok(_) => {
+                let mut traits = Vec::new();
+                for (name, trait_, args) in [
+                    ("AbiSize", abi_size_trait, vec![field_ty]),
+                    ("Encode<Sol>", encode_trait, vec![field_ty, sol_ty]),
+                    ("Decode<Sol>", decode_trait, vec![field_ty, sol_ty]),
+                ] {
+                    let goal = TraitInstId::new_simple(db, trait_, args);
+                    if matches!(
+                        is_goal_satisfiable(db, solve_cx, goal),
+                        GoalSatisfiability::UnSat(_) | GoalSatisfiability::NeedsConfirmation(_)
+                    ) {
+                        traits.push(name);
+                    }
+                }
+                if traits.is_empty() {
+                    continue;
+                }
+                MsgDiagnosticKind::MissingAbiTraits {
+                    ty: field_ty.pretty_print(db).to_string(),
+                    traits,
+                }
+            }
+        };
+
+        let primary_range = msg_variant_field(db, top_mod, struct_, idx)
+            .map(|field| {
+                field
+                    .ty()
+                    .map_or(field.syntax().text_range(), |ty| ty.syntax().text_range())
+            })
+            .unwrap_or_else(|| {
+                msg_variant_focus_range(db, top_mod, struct_, MsgDesugaredFocus::Selector)
+            });
+        diags.push(Box::new(MsgDiagnostic {
+            kind,
+            file: top_mod.file(db),
+            primary_range,
+            secondary_range: None,
+            variant_name: variant_name.to_string(),
+        }));
+    }
 }
 
 /// Checks the argument types declared in a variant's `sol("...")` selector
@@ -109,12 +191,9 @@ fn check_variant_signature_types<'db>(
     top_mod: TopLevelMod<'db>,
     struct_: Struct<'db>,
     variant_ty: TyId<'db>,
+    variant_name: &str,
     diags: &mut Vec<Box<dyn DiagnosticVoucher + 'db>>,
 ) {
-    let Some(name) = struct_.name(db).to_opt() else {
-        return;
-    };
-    let variant_name = name.data(db).to_string();
     let file = top_mod.file(db);
 
     let Some(signature) = get_variant_selector_info(db, variant_ty, struct_.scope()).signature
@@ -133,15 +212,15 @@ fn check_variant_signature_types<'db>(
 
     if parsed.arg_types.len() != field_tys.len() {
         let range = msg_variant_focus_range(db, top_mod, struct_, MsgDesugaredFocus::Selector);
-        diags.push(Box::new(SelectorError {
-            kind: SelectorErrorKind::ArityMismatch {
+        diags.push(Box::new(MsgDiagnostic {
+            kind: MsgDiagnosticKind::ArityMismatch {
                 signature_arity: parsed.arg_types.len(),
                 field_count: field_tys.len(),
             },
             file,
             primary_range: range,
             secondary_range: None,
-            variant_name,
+            variant_name: variant_name.to_string(),
         }) as _);
         return;
     }
@@ -160,11 +239,13 @@ fn check_variant_signature_types<'db>(
             .and_then(|field| field.name.to_opt())
             .map(|name| name.data(db).to_string())
             .unwrap_or_default();
-        let range = msg_variant_field_range(db, top_mod, struct_, idx).unwrap_or_else(|| {
-            msg_variant_focus_range(db, top_mod, struct_, MsgDesugaredFocus::Selector)
-        });
-        diags.push(Box::new(SelectorError {
-            kind: SelectorErrorKind::AbiTypeMismatch {
+        let range = msg_variant_field(db, top_mod, struct_, idx)
+            .map(|field| field.syntax().text_range())
+            .unwrap_or_else(|| {
+                msg_variant_focus_range(db, top_mod, struct_, MsgDesugaredFocus::Selector)
+            });
+        diags.push(Box::new(MsgDiagnostic {
+            kind: MsgDiagnosticKind::AbiTypeMismatch {
                 selector_ty: selector_ty.clone(),
                 field_name,
                 field_abi_ty: desc.canonical_type,
@@ -173,23 +254,22 @@ fn check_variant_signature_types<'db>(
             file,
             primary_range: range,
             secondary_range: None,
-            variant_name: variant_name.clone(),
+            variant_name: variant_name.to_string(),
         }) as _);
     }
 }
 
-fn msg_variant_field_range<'db>(
+fn msg_variant_field<'db>(
     db: &'db dyn HirAnalysisDb,
     top_mod: TopLevelMod<'db>,
     struct_: Struct<'db>,
     field_idx: usize,
-) -> Option<parser::TextRange> {
+) -> Option<ast::RecordFieldDef> {
     let (msg_ptr, variant_idx) = msg_origin_for_variant_struct(db, struct_)?;
     let root = SyntaxNode::new_root(parse_file_impl(db, top_mod));
     let msg_node = msg_ptr.to_node(&root);
     let variant = msg_node.variants()?.into_iter().nth(variant_idx)?;
-    let field = variant.params()?.into_iter().nth(field_idx)?;
-    Some(field.syntax().text_range())
+    variant.params()?.into_iter().nth(field_idx)
 }
 
 fn msg_variant_structs<'db>(

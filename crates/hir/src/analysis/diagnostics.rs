@@ -494,14 +494,14 @@ impl DiagnosticVoucher for crate::FieldModifierError {
     }
 }
 
-impl DiagnosticVoucher for crate::SelectorError {
+impl DiagnosticVoucher for crate::MsgDiagnostic {
     fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
-        use crate::SelectorErrorKind;
+        use crate::MsgDiagnosticKind;
 
         let primary_span = Span::new(self.file, self.primary_range, SpanKind::Original);
 
         let (code, message, label, notes, secondary) = match &self.kind {
-            SelectorErrorKind::Overflow => (
+            MsgDiagnosticKind::Overflow => (
                 1,
                 format!(
                     "selector value overflows u32 for msg variant `{}`",
@@ -511,7 +511,7 @@ impl DiagnosticVoucher for crate::SelectorError {
                 vec!["selector must be a u32 integer".to_string()],
                 None,
             ),
-            SelectorErrorKind::InvalidType => (
+            MsgDiagnosticKind::InvalidType => (
                 2,
                 format!(
                     "selector must be an integer for msg variant `{}`",
@@ -521,14 +521,14 @@ impl DiagnosticVoucher for crate::SelectorError {
                 vec!["use an integer literal like `#[selector = 0x01]`".to_string()],
                 None,
             ),
-            SelectorErrorKind::Missing => (
+            MsgDiagnosticKind::Missing => (
                 3,
                 format!("missing selector for msg variant `{}`", self.variant_name),
                 "no #[selector] attribute found".to_string(),
                 vec!["add a #[selector = <value>] attribute to the variant".to_string()],
                 None,
             ),
-            SelectorErrorKind::InvalidForm => (
+            MsgDiagnosticKind::InvalidForm => (
                 5,
                 format!(
                     "invalid selector attribute form for msg variant `{}`",
@@ -538,7 +538,7 @@ impl DiagnosticVoucher for crate::SelectorError {
                 vec!["use `#[selector = 0x01]` instead of `#[selector(0x01)]`".to_string()],
                 None,
             ),
-            SelectorErrorKind::Duplicate {
+            MsgDiagnosticKind::Duplicate {
                 first_variant_name,
                 selector,
             } => (
@@ -557,7 +557,7 @@ impl DiagnosticVoucher for crate::SelectorError {
                     span: Some(Span::new(self.file, range, SpanKind::Original)),
                 }),
             ),
-            SelectorErrorKind::AbiTypeMismatch {
+            MsgDiagnosticKind::AbiTypeMismatch {
                 selector_ty,
                 field_name,
                 field_abi_ty,
@@ -576,7 +576,7 @@ impl DiagnosticVoucher for crate::SelectorError {
                     .collect(),
                 None,
             ),
-            SelectorErrorKind::ArityMismatch {
+            MsgDiagnosticKind::ArityMismatch {
                 signature_arity,
                 field_count,
             } => (
@@ -587,6 +587,29 @@ impl DiagnosticVoucher for crate::SelectorError {
                 ),
                 "selector signature arity does not match the variant's fields".to_string(),
                 vec![],
+                None,
+            ),
+            MsgDiagnosticKind::UnsupportedAbiField { ty, reason } => (
+                8,
+                format!(
+                    "unsupported ABI field type in msg variant `{}`",
+                    self.variant_name
+                ),
+                format!("`{ty}` cannot be represented in the Solidity ABI"),
+                vec![reason.clone()],
+                None,
+            ),
+            MsgDiagnosticKind::MissingAbiTraits { ty, traits } => (
+                8,
+                format!(
+                    "message field does not satisfy ABI requirements in msg variant `{}`",
+                    self.variant_name
+                ),
+                format!("`{ty}` does not satisfy `{}`", traits.iter().format("`, `")),
+                vec![
+                    "message fields must implement `AbiSize`, `Encode<Sol>`, and `Decode<Sol>`"
+                        .to_string(),
+                ],
                 None,
             ),
         };

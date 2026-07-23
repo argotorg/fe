@@ -1,0 +1,20 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/msg_abi_field_requirements.fe
+---
+error[9-0008]: message field does not satisfy ABI requirements in msg variant `MissingTraits`
+   ┌─ msg_abi_field_requirements.fe:12:28
+   │
+12 │     MissingTraits { value: Plain },
+   │                            ^^^^^ `Plain` does not satisfy `AbiSize`, `Encode<Sol>`, `Decode<Sol>`
+   │
+   = message fields must implement `AbiSize`, `Encode<Sol>`, and `Decode<Sol>`
+
+error[9-0008]: unsupported ABI field type in msg variant `UnsupportedType`
+   ┌─ msg_abi_field_requirements.fe:15:30
+   │
+15 │     UnsupportedType { value: Choice },
+   │                              ^^^^^^ `Choice` cannot be represented in the Solidity ABI
+   │
+   = unsupported ABI enum type `Choice`

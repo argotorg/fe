@@ -3482,12 +3482,13 @@ impl<'db> AdtDef<'db> {
     pub fn recursive_cycle(self, db: &'db dyn HirAnalysisDb) -> Option<Vec<AdtCycleMember<'db>>> {
         fn impl_check<'db>(
             db: &'db dyn HirAnalysisDb,
+            root: AdtDef<'db>,
             adt: AdtDef<'db>,
             chain: &[AdtCycleMember<'db>],
         ) -> Option<Vec<AdtCycleMember<'db>>> {
-            if chain.iter().any(|m| m.adt == adt) {
+            if adt == root && !chain.is_empty() {
                 return Some(chain.to_vec());
-            } else if adt.fields(db).is_empty() {
+            } else if chain.iter().any(|member| member.adt == adt) || adt.fields(db).is_empty() {
                 return None;
             }
 
@@ -3501,8 +3502,8 @@ impl<'db> AdtDef<'db> {
                             ty_idx: ty_idx as u16,
                         });
 
-                        if let Some(cycle) = impl_check(db, lower_adt(db, field_adt_ref), &chain)
-                            && cycle.iter().any(|m| m.adt == adt)
+                        if let Some(cycle) =
+                            impl_check(db, root, lower_adt(db, field_adt_ref), &chain)
                         {
                             return Some(cycle);
                         }
@@ -3513,7 +3514,7 @@ impl<'db> AdtDef<'db> {
             None
         }
 
-        impl_check(db, self, &[])
+        impl_check(db, self, self, &[])
     }
 }
 

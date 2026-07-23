@@ -3,6 +3,8 @@
 //! Shared by the declaration-time `msg` selector signature check
 //! (`analysis::ty::msg_selector`) and JSON ABI emission in the `fe` crate.
 
+use std::fmt;
+
 use common::ingot::IngotKind;
 
 use crate::analysis::HirAnalysisDb;
@@ -30,6 +32,29 @@ pub struct AbiComponent {
     pub name: String,
     pub ty: String,
     pub components: Option<Vec<AbiComponent>>,
+}
+
+/// Why a semantic Fe type cannot be represented as a Solidity ABI type.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AbiTypeError {
+    /// The type contains an invalid nominal recursion cycle.
+    Recursive(String),
+    /// The type has no supported Solidity ABI representation.
+    Unsupported(String),
+}
+
+impl AbiTypeError {
+    fn unsupported(message: impl Into<String>) -> Self {
+        Self::Unsupported(message.into())
+    }
+}
+
+impl fmt::Display for AbiTypeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Recursive(message) | Self::Unsupported(message) => message.fmt(f),
+        }
+    }
 }
 
 impl AbiTypeDesc {
@@ -74,13 +99,15 @@ fn canonical_tuple_type(component_descs: &[AbiTypeDesc]) -> String {
 pub fn semantic_ty_to_abi_desc<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
-) -> Result<AbiTypeDesc, String> {
+) -> Result<AbiTypeDesc, AbiTypeError> {
     if let Some((_, inner)) = ty.as_capability(db) {
         return semantic_ty_to_abi_desc(db, inner);
     }
 
     if ty == TyId::unit(db) {
-        return Err("unit type is not a valid external ABI parameter".to_string());
+        return Err(AbiTypeError::unsupported(
+            "unit type is not a valid external ABI parameter",
+        ));
     }
 
     if ty.is_tuple(db) {
@@ -107,11 +134,11 @@ pub fn semantic_ty_to_abi_desc<'db>(
         let elem_ty = args
             .first()
             .copied()
-            .ok_or_else(|| "array type is missing its element type".to_string())?;
+            .ok_or_else(|| AbiTypeError::unsupported("array type is missing its element type"))?;
         let len_ty = args
             .get(1)
             .copied()
-            .ok_or_else(|| "array type is missing its length".to_string())?;
+            .ok_or_else(|| AbiTypeError::unsupported("array type is missing its length"))?;
         let elem_desc = semantic_ty_to_abi_desc(db, elem_ty)?;
         let len = array_len_to_string(db, len_ty)?;
         return Ok(elem_desc.array(&len));
@@ -151,7 +178,10 @@ pub fn semantic_ty_to_abi_desc<'db>(
             PrimTy::I256 | PrimTy::Isize => Ok(AbiTypeDesc::simple("int256")),
             PrimTy::String | PrimTy::Array | PrimTy::Tuple(_) => unreachable!(),
             PrimTy::Ptr | PrimTy::View | PrimTy::BorrowMut | PrimTy::BorrowRef => {
-                Err(format!("unsupported ABI type `{}`", ty.pretty_print(db)))
+                Err(AbiTypeError::unsupported(format!(
+                    "unsupported ABI type `{}`",
+                    ty.pretty_print(db)
+                )))
             }
         },
         TyData::TyBase(TyBase::Adt(adt)) => {
@@ -165,16 +195,19 @@ pub fn semantic_ty_to_abi_desc<'db>(
             match adt_ref {
                 AdtRef::Struct(struct_) => {
                     if adt_ref.as_adt(db).recursive_cycle(db).is_some() {
-                        return Err(format!("recursive ABI type `{}`", ty.pretty_print(db)));
+                        return Err(AbiTypeError::Recursive(format!(
+                            "recursive ABI type `{}`",
+                            ty.pretty_print(db)
+                        )));
                     }
                     let field_tys = ty.field_types(db);
                     let hir_fields = struct_.hir_fields(db).data(db);
                     if hir_fields.len() != field_tys.len() {
-                        return Err(format!(
+                        return Err(AbiTypeError::unsupported(format!(
                             "field count mismatch: {} HIR fields vs {} semantic fields",
                             hir_fields.len(),
                             field_tys.len()
-                        ));
+                        )));
                     }
                     let component_descs: Vec<(String, AbiTypeDesc)> = hir_fields
                         .iter()
@@ -187,7 +220,7 @@ pub fn semantic_ty_to_abi_desc<'db>(
                                 .unwrap_or_default();
                             Ok((name, semantic_ty_to_abi_desc(db, field_ty)?))
                         })
-                        .collect::<Result<_, String>>()?;
+                        .collect::<Result<_, AbiTypeError>>()?;
                     let canonical = canonical_tuple_type(
                         &component_descs
                             .iter()
@@ -206,32 +239,38 @@ pub fn semantic_ty_to_abi_desc<'db>(
                         canonical,
                     ))
                 }
-                AdtRef::Enum(_) => Err(format!(
+                AdtRef::Enum(_) => Err(AbiTypeError::unsupported(format!(
                     "unsupported ABI enum type `{}`",
                     ty.pretty_print(db)
-                )),
+                ))),
             }
         }
-        TyData::Invalid(_) => Err(format!("unresolved ABI type `{}`", ty.pretty_print(db))),
-        _ => Err(format!("unsupported ABI type `{}`", ty.pretty_print(db))),
+        TyData::Invalid(_) => Err(AbiTypeError::unsupported(format!(
+            "unresolved ABI type `{}`",
+            ty.pretty_print(db)
+        ))),
+        _ => Err(AbiTypeError::unsupported(format!(
+            "unsupported ABI type `{}`",
+            ty.pretty_print(db)
+        ))),
     }
 }
 
-fn array_len_to_string(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Result<String, String> {
+fn array_len_to_string(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Result<String, AbiTypeError> {
     match ty.data(db) {
         TyData::ConstTy(const_ty) => match const_ty.data(db) {
             ConstTyData::Evaluated(EvaluatedConstTy::LitInt(value), _) => {
                 Ok(value.data(db).to_string())
             }
-            _ => Err(format!(
+            _ => Err(AbiTypeError::unsupported(format!(
                 "array length `{}` is not a concrete integer",
                 ty.pretty_print(db)
-            )),
+            ))),
         },
-        _ => Err(format!(
+        _ => Err(AbiTypeError::unsupported(format!(
             "array length `{}` is not represented as a const type",
             ty.pretty_print(db)
-        )),
+        ))),
     }
 }
 

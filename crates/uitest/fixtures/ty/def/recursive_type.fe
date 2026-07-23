@@ -30,3 +30,8 @@ pub struct S7 {
 pub struct S8<T> {
     s: S8<[T; 1]>,
 }
+
+// A type that contains a recursive type is not itself part of that type's cycle.
+pub struct S9 {
+    s: S1,
+}

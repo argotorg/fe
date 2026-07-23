@@ -11,8 +11,8 @@ use self::analysis_pass::{
 use self::name_resolution::ImportAnalysisPass;
 use self::ty::{
     AdtDefAnalysisPass, BodyAnalysisPass, ContractAnalysisPass, DefConflictAnalysisPass,
-    FuncAnalysisPass, ImplAnalysisPass, ImplTraitAnalysisPass, MsgSelectorAnalysisPass,
-    TraitAnalysisPass, TypeAliasAnalysisPass,
+    FuncAnalysisPass, ImplAnalysisPass, ImplTraitAnalysisPass, MsgAnalysisPass, TraitAnalysisPass,
+    TypeAliasAnalysisPass,
 };
 
 #[salsa::db]
@@ -31,7 +31,7 @@ pub(crate) fn initialize_pre_contract_analysis_pass() -> AnalysisPassManager {
     pass_manager.add_module_pass("MsgLower", Box::new(MsgLowerPass {}));
     pass_manager.add_module_pass("EventLower", Box::new(EventLowerPass {}));
     pass_manager.add_module_pass("ErrorLower", Box::new(ErrorLowerPass {}));
-    pass_manager.add_module_pass("MsgSelector", Box::new(MsgSelectorAnalysisPass {}));
+    pass_manager.add_module_pass("MsgAnalysis", Box::new(MsgAnalysisPass {}));
     pass_manager.add_module_pass("DefConflict", Box::new(DefConflictAnalysisPass {}));
     pass_manager.add_module_pass("Import", Box::new(ImportAnalysisPass {}));
     pass_manager.add_module_pass("AdtDef", Box::new(AdtDefAnalysisPass {}));

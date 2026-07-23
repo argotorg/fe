@@ -605,7 +605,7 @@ fn named_field_param_descs(
 }
 
 fn semantic_ty_to_abi_desc(db: &DriverDataBase, ty: TyId<'_>) -> Result<AbiTypeDesc, String> {
-    abi_ty::semantic_ty_to_abi_desc(db, ty)
+    abi_ty::semantic_ty_to_abi_desc(db, ty).map_err(|err| err.to_string())
 }
 
 fn struct_from_ty<'db>(db: &'db DriverDataBase, ty: TyId<'db>) -> Option<Struct<'db>> {
