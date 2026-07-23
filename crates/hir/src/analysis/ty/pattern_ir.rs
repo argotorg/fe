@@ -241,16 +241,6 @@ impl<'db> ConstructorKind<'db> {
     }
 }
 
-pub fn ctor_variant_num<'db>(db: &'db dyn HirAnalysisDb, ctor: &ConstructorKind<'db>) -> usize {
-    match ctor {
-        ConstructorKind::Variant(variant, _) => variant.enum_.len_variants(db),
-        ConstructorKind::Type(_) => 1,
-        ConstructorKind::Literal(LitKind::Bool(_), _) => 2,
-        ConstructorKind::Literal(LitKind::Int(_), _)
-        | ConstructorKind::Literal(LitKind::String(_), _) => usize::MAX,
-    }
-}
-
 impl<'db> TyVisitable<'db> for BindingRef<'db> {
     fn visit_with<V>(&self, _visitor: &mut V)
     where

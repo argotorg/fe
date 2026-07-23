@@ -129,8 +129,8 @@ note:
                    │  └─ Execute arm #2
                    └─ _ =>
                       └─ Execute arm #3
-                           y ← expr.0.1
                            x ← expr.0.0
+                           y ← expr.0.1
 
 
 note:
@@ -155,8 +155,8 @@ note:
              │        └─ Switch on expr.1
              │           └─ record{} =>
              │              └─ Execute arm #2
-             │                   y ← expr.0.1
              │                   x ← expr.0.0
+             │                   y ← expr.0.1
              │                   bx ← expr.1.0
              │                   by ← expr.1.1
              ├─ 1 =>
@@ -171,30 +171,30 @@ note:
              │           │     │     │  └─ Execute arm #1
              │           │     │     └─ _ =>
              │           │     │        └─ Execute arm #2
-             │           │     │             y ← expr.0.1
              │           │     │             x ← expr.0.0
+             │           │     │             y ← expr.0.1
              │           │     │             bx ← expr.1.0
              │           │     │             by ← expr.1.1
              │           │     └─ _ =>
              │           │        └─ Execute arm #2
-             │           │             y ← expr.0.1
              │           │             x ← expr.0.0
+             │           │             y ← expr.0.1
              │           │             bx ← expr.1.0
              │           │             by ← expr.1.1
              │           └─ _ =>
              │              └─ Execute arm #2
-             │                   y ← expr.0.1
              │                   x ← expr.0.0
-             │                   by ← expr.1.1
+             │                   y ← expr.0.1
              │                   bx ← expr.1.0
+             │                   by ← expr.1.1
              └─ _ =>
                 └─ Switch on expr.1
                    └─ record{} =>
                       └─ Execute arm #2
+                           x ← expr.0.0
                            y ← expr.0.1
                            bx ← expr.1.0
                            by ← expr.1.1
-                           x ← expr.0.0
 
 
 note:
@@ -220,12 +220,12 @@ note:
  │           │     │       radius ← expr.Circle[1]
  │           │     └─ _ =>
  │           │        └─ Execute arm #1
- │           │             y ← expr.Circle[0].1
  │           │             x ← expr.Circle[0].0
+ │           │             y ← expr.Circle[0].1
  │           └─ _ =>
  │              └─ Execute arm #1
- │                   y ← expr.Circle[0].1
  │                   x ← expr.Circle[0].0
+ │                   y ← expr.Circle[0].1
  ├─ Rect =>
  │  └─ Switch on expr.Rect[0]
  │     └─ record{} =>

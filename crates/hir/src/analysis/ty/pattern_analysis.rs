@@ -3,296 +3,28 @@
 
 use std::convert::Infallible;
 
-use common::indexmap::IndexSet;
 use matchcov::{
     Analysis, Arm, ConstructorFields, ConstructorOracle, ConstructorSpace, Exhaustiveness,
-    InconclusiveReason, InputError, Pattern, Reachability, Usefulness, Witness,
+    InconclusiveReason, InputError, Pattern, Reachability, Witness,
 };
 
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::ty::AdtRef;
 use crate::analysis::ty::pattern_ir::{
-    BindingRef, ConstructorKind, PatternStore, ValidatedPatId, ValidatedPatKind, ctor_variant_num,
+    ConstructorKind, PatternStore, ValidatedPatId, ValidatedPatKind,
 };
+use crate::analysis::ty::pattern_types::pattern_match_expected_ty;
 use crate::analysis::ty::ty_def::TyId;
 use crate::core::hir_def::LitKind;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PatternMatrix<'db> {
-    pub(crate) rows: Vec<PatternRowVec<'db>>,
-}
-
-impl<'db> PatternMatrix<'db> {
-    pub(crate) fn new(rows: Vec<PatternRowVec<'db>>) -> Self {
-        Self { rows }
-    }
-
-    pub(crate) fn from_roots(store: &PatternStore<'db>, roots: &[ValidatedPatId]) -> Self {
-        let rows = roots
-            .iter()
-            .copied()
-            .map(|root| PatternRowVec::new(vec![MatrixPat::from_root(store, root)]))
-            .collect();
-        Self { rows }
-    }
-
-    pub(crate) fn push_wildcard_row(&mut self, ty: TyId<'db>) {
-        self.rows
-            .push(PatternRowVec::new(vec![MatrixPat::wildcard(None, ty)]));
-    }
-
-    pub(crate) fn row_usefulness(
-        &self,
-        db: &'db dyn HirAnalysisDb,
-        row: usize,
-    ) -> Result<Usefulness<ConstructorKind<'db>, Infallible>, matchcov::InputError> {
-        debug_assert!(self.nrows() > row);
-        let column_types: Vec<_> = self.rows[row].inner.iter().map(|pat| pat.ty).collect();
-        let previous: Vec<_> = self.rows[..row]
-            .iter()
-            .map(PatternRowVec::to_matchcov)
-            .collect();
-        matchcov::usefulness(
-            &mut FeConstructorOracle { db },
-            &column_types,
-            &previous,
-            &self.rows[row].to_matchcov(),
-        )
-    }
-
-    fn nrows(&self) -> usize {
-        self.rows.len()
-    }
-
-    pub(crate) fn ncols(&self) -> usize {
-        if self.nrows() == 0 {
-            0
-        } else {
-            let ncols = self.rows[0].len();
-            debug_assert!(self.rows.iter().all(|row| row.len() == ncols));
-            ncols
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PatternRowVec<'db> {
-    pub(crate) inner: Vec<MatrixPat<'db>>,
-}
-
-impl<'db> PatternRowVec<'db> {
-    pub(crate) fn new(inner: Vec<MatrixPat<'db>>) -> Self {
-        Self { inner }
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.inner.len()
-    }
-
-    pub(crate) fn head(&self) -> Option<&MatrixPat<'db>> {
-        self.inner.first()
-    }
-
-    pub(crate) fn phi_specialize(
-        &self,
-        db: &'db dyn HirAnalysisDb,
-        ctor: ConstructorKind<'db>,
-    ) -> Vec<Self> {
-        debug_assert!(!self.inner.is_empty());
-
-        let first_pat = &self.inner[0];
-        let ctor_fields = ctor.field_types(db);
-
-        match &first_pat.kind {
-            MatrixPatKind::WildCard(bind) => {
-                let mut inner = Vec::with_capacity(self.inner.len() + ctor_fields.len() - 1);
-                for field_ty in ctor_fields {
-                    inner.push(MatrixPat::wildcard(*bind, field_ty));
-                }
-                inner.extend_from_slice(&self.inner[1..]);
-                vec![Self::new(inner)]
-            }
-            MatrixPatKind::Constructor { kind, fields } => {
-                if *kind == ctor {
-                    let mut inner = Vec::with_capacity(self.inner.len() + ctor_fields.len() - 1);
-                    for (idx, field_ty) in ctor_fields.iter().copied().enumerate() {
-                        if let Some(field) = fields.get(idx) {
-                            inner.push(field.clone());
-                        } else {
-                            inner.push(MatrixPat::wildcard(None, field_ty));
-                        }
-                    }
-                    inner.extend_from_slice(&self.inner[1..]);
-                    vec![Self::new(inner)]
-                } else {
-                    Vec::new()
-                }
-            }
-            MatrixPatKind::Or(pats) => {
-                let mut result = Vec::new();
-                for pat in pats {
-                    let mut tmp_inner = Vec::with_capacity(self.inner.len());
-                    tmp_inner.push(pat.clone());
-                    tmp_inner.extend_from_slice(&self.inner[1..]);
-                    result.extend(PatternRowVec::new(tmp_inner).phi_specialize(db, ctor));
-                }
-                result
-            }
-        }
-    }
-
-    pub(crate) fn d_specialize(&self) -> Vec<Self> {
-        debug_assert!(!self.inner.is_empty());
-
-        match &self.inner[0].kind {
-            MatrixPatKind::WildCard(_) => vec![Self::new(self.inner[1..].to_vec())],
-            MatrixPatKind::Constructor { .. } => Vec::new(),
-            MatrixPatKind::Or(pats) => {
-                let mut result = Vec::new();
-                for pat in pats {
-                    let mut tmp_inner = Vec::with_capacity(self.inner.len());
-                    tmp_inner.push(pat.clone());
-                    tmp_inner.extend_from_slice(&self.inner[1..]);
-                    result.extend(PatternRowVec::new(tmp_inner).d_specialize());
-                }
-                result
-            }
-        }
-    }
-
-    fn to_matchcov(&self) -> Vec<Pattern<ConstructorKind<'db>>> {
-        self.inner.iter().map(MatrixPat::to_matchcov).collect()
-    }
-
-    fn collect_column_ctors(&self, column: usize) -> Vec<ConstructorKind<'db>> {
-        self.inner[column].kind.collect_ctors()
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct MatrixPat<'db> {
-    pub(crate) kind: MatrixPatKind<'db>,
-    pub(crate) ty: TyId<'db>,
-}
-
-impl<'db> MatrixPat<'db> {
-    pub(crate) fn new(kind: MatrixPatKind<'db>, ty: TyId<'db>) -> Self {
-        Self { kind, ty }
-    }
-
-    pub(crate) fn wildcard(bind: Option<BindingRef<'db>>, ty: TyId<'db>) -> Self {
-        Self::new(MatrixPatKind::WildCard(bind), ty)
-    }
-
-    pub(crate) fn is_wildcard(&self) -> bool {
-        matches!(self.kind, MatrixPatKind::WildCard(_))
-    }
-
-    pub(crate) fn from_root(store: &PatternStore<'db>, root: ValidatedPatId) -> Self {
-        let node = store.node(root);
-        let kind = match node.kind() {
-            ValidatedPatKind::Wildcard { binding } => MatrixPatKind::WildCard(*binding),
-            ValidatedPatKind::Constructor { ctor, fields } => MatrixPatKind::Constructor {
-                kind: *ctor,
-                fields: fields
-                    .iter()
-                    .copied()
-                    .map(|field| Self::from_root(store, field))
-                    .collect(),
-            },
-            ValidatedPatKind::Or(pats) => MatrixPatKind::Or(
-                pats.iter()
-                    .copied()
-                    .map(|pat| Self::from_root(store, pat))
-                    .collect(),
-            ),
-        };
-        Self::new(kind, node.match_ty().raw())
-    }
-
-    fn to_matchcov(&self) -> Pattern<ConstructorKind<'db>> {
-        match &self.kind {
-            MatrixPatKind::WildCard(_) => Pattern::Wildcard,
-            MatrixPatKind::Constructor { kind, fields } => {
-                Pattern::constructor(*kind, fields.iter().map(Self::to_matchcov))
-            }
-            MatrixPatKind::Or(pats) => Pattern::or(pats.iter().map(Self::to_matchcov)),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum MatrixPatKind<'db> {
-    WildCard(Option<BindingRef<'db>>),
-    Constructor {
-        kind: ConstructorKind<'db>,
-        fields: Vec<MatrixPat<'db>>,
-    },
-    Or(Vec<MatrixPat<'db>>),
-}
-
-impl<'db> MatrixPatKind<'db> {
-    fn collect_ctors(&self) -> Vec<ConstructorKind<'db>> {
-        match self {
-            Self::WildCard(_) => Vec::new(),
-            Self::Constructor { kind, .. } => vec![*kind],
-            Self::Or(pats) => {
-                let mut ctors = Vec::new();
-                for pat in pats {
-                    ctors.extend_from_slice(&pat.kind.collect_ctors());
-                }
-                ctors
-            }
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SigmaSet<'db>(IndexSet<ConstructorKind<'db>>);
-
-impl<'db> SigmaSet<'db> {
-    pub(crate) fn from_rows<'a>(
-        rows: impl Iterator<Item = &'a PatternRowVec<'db>>,
-        column: usize,
-    ) -> Self
-    where
-        'db: 'a,
-    {
-        let mut ctor_set = IndexSet::new();
-        for row in rows {
-            for ctor in row.collect_column_ctors(column) {
-                ctor_set.insert(ctor);
-            }
-        }
-        Self(ctor_set)
-    }
-
-    pub(crate) fn is_complete(&self, db: &'db dyn HirAnalysisDb) -> bool {
-        match self.0.first() {
-            Some(ctor) => {
-                let expected = ctor_variant_num(db, ctor);
-                debug_assert!(
-                    self.0.len() <= expected,
-                    "sigma set {self:?} has {} ctors, expected at most {expected}",
-                    self.0.len(),
-                );
-                self.0.len() == expected
-            }
-            None => false,
-        }
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &ConstructorKind<'db>> {
-        self.0.iter()
-    }
-}
-
-struct FeConstructorOracle<'db> {
+pub(crate) struct FeConstructorOracle<'db> {
     db: &'db dyn HirAnalysisDb,
+}
+
+impl<'db> FeConstructorOracle<'db> {
+    pub(crate) fn new(db: &'db dyn HirAnalysisDb) -> Self {
+        Self { db }
+    }
 }
 
 impl<'db> ConstructorOracle<TyId<'db>, ConstructorKind<'db>> for FeConstructorOracle<'db> {
@@ -344,7 +76,13 @@ impl<'db> ConstructorOracle<TyId<'db>, ConstructorKind<'db>> for FeConstructorOr
         _ty: &TyId<'db>,
         constructor: &ConstructorKind<'db>,
     ) -> Result<ConstructorFields<TyId<'db>>, Self::Error> {
-        Ok(ConstructorFields::Fields(constructor.field_types(self.db)))
+        Ok(ConstructorFields::Fields(
+            constructor
+                .field_types(self.db)
+                .into_iter()
+                .map(|ty| pattern_match_expected_ty(self.db, ty))
+                .collect(),
+        ))
     }
 }
 
@@ -469,13 +207,13 @@ fn analyze_patterns<'db>(
         .iter()
         .map(|root| Arm::new([to_matchcov_pattern(store, *root)]));
     matchcov::analyze(
-        &mut FeConstructorOracle { db },
+        &mut FeConstructorOracle::new(db),
         &[ty],
         &arms.collect::<Vec<_>>(),
     )
 }
 
-fn to_matchcov_pattern<'db>(
+pub(crate) fn to_matchcov_pattern<'db>(
     store: &PatternStore<'db>,
     pat: ValidatedPatId,
 ) -> Pattern<ConstructorKind<'db>> {
