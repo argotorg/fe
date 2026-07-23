@@ -14,7 +14,7 @@ use crate::analysis::{
         trait_def::{ImplementorId, TraitInstId, impls_for_trait_and_ty, impls_for_ty},
         trait_resolution::{
             CanonicalGoalQuery, GoalSatisfiability, PredicateListId, TraitSolveCx,
-            is_goal_query_satisfiable,
+            goal_query_has_solution, is_goal_query_satisfiable,
         },
         ty_def::{TyData, TyId},
         unify::UnificationTable,
@@ -563,11 +563,18 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                 Canonical::new(self.db, query.extract_solution(&mut table, solution).inst)
                     == confirmed
             }
-            GoalSatisfiability::NeedsConfirmation(solutions) => {
-                solutions.into_iter().any(|solution| {
+            GoalSatisfiability::NeedsConfirmation {
+                solutions,
+                completion,
+            } => {
+                let reached_answer_cutoff = completion.hit_root_answer_limit();
+                let contains_confirmed = solutions.into_iter().any(|solution| {
                     Canonical::new(self.db, query.extract_solution(&mut table, solution).inst)
                         == confirmed
-                })
+                });
+                contains_confirmed
+                    || (reached_answer_cutoff
+                        && goal_query_has_solution(self.db, solve_cx, &query, confirmed))
             }
             GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => false,
         }
@@ -622,7 +629,8 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                     let solved = query.extract_solution(&mut table, solution).inst;
                     let _ = table.unify(constraint, solved);
                 }
-                GoalSatisfiability::NeedsConfirmation(_) | GoalSatisfiability::ContainsInvalid => {
+                GoalSatisfiability::NeedsConfirmation { .. }
+                | GoalSatisfiability::ContainsInvalid => {
                     needs_confirmation = true;
                 }
                 GoalSatisfiability::UnSat(_) => {
@@ -701,7 +709,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                 ))
             }
 
-            GoalSatisfiability::NeedsConfirmation(_)
+            GoalSatisfiability::NeedsConfirmation { .. }
             | GoalSatisfiability::ContainsInvalid
             | GoalSatisfiability::UnSat(_) => {
                 MethodCandidate::NeedsConfirmation(TraitMethodCand::new(

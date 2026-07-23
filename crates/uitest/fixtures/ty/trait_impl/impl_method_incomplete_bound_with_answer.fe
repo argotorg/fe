@@ -1,0 +1,28 @@
+trait Seed {}
+trait Grow {}
+
+struct Wrap<T> {}
+
+impl<T> Grow for T
+where
+    T: Seed
+{}
+
+impl<T> Grow for T
+where
+    Wrap<T>: Grow
+{}
+
+trait Trait {
+    fn method<T>()
+    where
+        T: Seed
+}
+
+impl Trait for u8 {
+    fn method<T>()
+    where
+        T: Seed,
+        T: Grow
+    {}
+}

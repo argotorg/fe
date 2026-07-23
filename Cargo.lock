@@ -2219,6 +2219,7 @@ dependencies = [
  "salsa",
  "smallvec 1.15.1",
  "smallvec 2.0.0-alpha.12",
+ "tablesolve",
  "thin-vec",
  "tiny-keccak",
  "tracing",
@@ -6646,6 +6647,12 @@ dependencies = [
  "quote",
  "syn 2.0.116",
 ]
+
+[[package]]
+name = "tablesolve"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49838cdd952e69beb44e8ecf05aa29c5e80a7d4a15f12252daecb24998bce43c"
 
 [[package]]
 name = "tap"

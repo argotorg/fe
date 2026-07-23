@@ -561,7 +561,7 @@ fn impls_for_ty_with_constraint_mode<'db>(
                             || (allow_needs_confirmation
                                 && matches!(
                                     satisfiability,
-                                    GoalSatisfiability::NeedsConfirmation(_)
+                                    GoalSatisfiability::NeedsConfirmation { .. }
                                 ));
                     if !constraint_holds {
                         table.rollback_to(snapshot);

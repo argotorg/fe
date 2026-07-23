@@ -1,0 +1,11 @@
+---
+source: crates/uitest/tests/ty.rs
+assertion_line: 84
+expression: diags
+input_file: fixtures/ty/trait_impl/impl_method_incomplete_bound.fe
+---
+error[6-0009]: method has stricter bounds than trait
+   ┌─ impl_method_incomplete_bound.fe:15:8
+   │
+15 │     fn method<T>()
+   │        ^^^^^^ method has stricter bounds than the declared method in the trait: `T: Grow`

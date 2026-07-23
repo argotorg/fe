@@ -1,0 +1,36 @@
+trait Marker<T> {}
+
+trait Select<T> {
+    fn select(self) -> T
+}
+
+struct Subject {}
+struct First {}
+struct Second {}
+struct Confirmed {}
+
+impl Marker<First> for Subject {}
+impl Marker<Second> for Subject {}
+
+impl<T> Select<T> for Subject
+where
+    Subject: Marker<T>
+{
+    fn select(self) -> T {
+        todo()
+    }
+}
+
+impl Select<Confirmed> for Subject {
+    fn select(self) -> Confirmed {
+        Confirmed {}
+    }
+}
+
+extern {
+    fn todo() -> !
+}
+
+fn select_confirmed(subject: Subject) -> Confirmed {
+    subject.select()
+}

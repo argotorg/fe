@@ -9,7 +9,10 @@ use super::{
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
-        trait_resolution::{constraint::ty_constraints, proof_forest::ProofForest},
+        trait_resolution::{
+            constraint::ty_constraints,
+            table_solver::{TargetSolutionMatch, TargetSolutionStatus, has_solution, solve},
+        },
         unify::UnificationTable,
     },
 };
@@ -23,7 +26,9 @@ use rustc_hash::FxHashSet;
 use salsa::Update;
 
 pub(crate) mod constraint;
-mod proof_forest;
+mod table_solver;
+
+pub(crate) const TRAIT_SOLVER_ROOT_ANSWER_LIMIT: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub struct TraitSolverQuery<'db> {
@@ -145,8 +150,8 @@ impl<'db> TraitSolveCx<'db> {
             GoalSatisfiability::Satisfied(solution) => {
                 Selection::Unique(solution.value.implementor)
             }
-            GoalSatisfiability::NeedsConfirmation(ambiguous) => {
-                Selection::Ambiguous(ambiguous.iter().map(|s| s.value.implementor).collect())
+            GoalSatisfiability::NeedsConfirmation { solutions, .. } => {
+                Selection::Ambiguous(solutions.iter().map(|s| s.value.implementor).collect())
             }
             GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => {
                 Selection::NotFound
@@ -258,7 +263,7 @@ fn is_query_satisfiable<'db>(
         return GoalSatisfiability::ContainsInvalid;
     };
 
-    ProofForest::new(db, origin_ingot, query).solve()
+    solve(db, origin_ingot, query)
 }
 
 fn is_query_satisfiable_cycle_initial<'db>(
@@ -270,7 +275,10 @@ fn is_query_satisfiable_cycle_initial<'db>(
     // projection: resolving the projection needs the trait environment that is currently being
     // assembled for the outer goal. Treat the incomplete pass as ambiguous so callers keep the
     // candidate alive; the next fixpoint iteration can decide it once impl collection converges.
-    GoalSatisfiability::NeedsConfirmation(IndexSet::default())
+    GoalSatisfiability::NeedsConfirmation {
+        solutions: IndexSet::default(),
+        completion: TraitSolveCompletion::Cycle,
+    }
 }
 
 fn is_query_satisfiable_cycle_recover<'db>(
@@ -281,6 +289,81 @@ fn is_query_satisfiable_cycle_recover<'db>(
     _query: Canonical<TraitSolverQuery<'db>>,
 ) -> salsa::CycleRecoveryAction<GoalSatisfiability<'db>> {
     salsa::CycleRecoveryAction::Iterate
+}
+
+#[salsa::tracked(
+    cycle_fn=query_has_solution_cycle_recover,
+    cycle_initial=query_has_solution_cycle_initial
+)]
+fn query_has_solution<'db>(
+    db: &'db dyn HirAnalysisDb,
+    origin_ingot: Ingot<'db>,
+    query: Canonical<TraitSolverQuery<'db>>,
+    target: Canonical<TraitInstId<'db>>,
+    relation: TargetSolutionMatch,
+) -> TargetSolutionStatus {
+    if query.flags(db).contains(TyFlags::HAS_INVALID) {
+        return TargetSolutionStatus::NotFound;
+    }
+    has_solution(db, origin_ingot, query, target, relation)
+}
+
+fn query_has_solution_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _origin_ingot: Ingot<'db>,
+    _query: Canonical<TraitSolverQuery<'db>>,
+    _target: Canonical<TraitInstId<'db>>,
+    _relation: TargetSolutionMatch,
+) -> TargetSolutionStatus {
+    TargetSolutionStatus::Incomplete
+}
+
+fn query_has_solution_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &TargetSolutionStatus,
+    _count: u32,
+    _origin_ingot: Ingot<'db>,
+    _query: Canonical<TraitSolverQuery<'db>>,
+    _target: Canonical<TraitInstId<'db>>,
+    _relation: TargetSolutionMatch,
+) -> salsa::CycleRecoveryAction<TargetSolutionStatus> {
+    salsa::CycleRecoveryAction::Iterate
+}
+
+pub(crate) fn goal_query_has_solution<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    query: &CanonicalGoalQuery<'db>,
+    target: Canonical<TraitInstId<'db>>,
+) -> bool {
+    matches!(
+        query_has_solution(
+            db,
+            solve_cx.origin_ingot(),
+            query.canonical(),
+            target,
+            TargetSolutionMatch::Equal,
+        ),
+        TargetSolutionStatus::Found
+    )
+}
+
+pub(crate) fn goal_query_has_no_distinct_solution<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    query: &CanonicalGoalQuery<'db>,
+    target: Canonical<TraitInstId<'db>>,
+) -> bool {
+    matches!(
+        query_has_solution(
+            db,
+            solve_cx.origin_ingot(),
+            query.canonical(),
+            target,
+            TargetSolutionMatch::NotEqual,
+        ),
+        TargetSolutionStatus::NotFound
+    )
 }
 
 pub fn is_goal_query_satisfiable<'db>(
@@ -579,17 +662,50 @@ pub struct TraitGoalSolution<'db> {
     pub(crate) implementor: ImplementorId<'db>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum TraitSolveCompletion {
+    /// The complete least-fixpoint answer set was computed.
+    Saturated,
+    /// The configured number of root proof identities was reached.
+    RootAnswerLimit { limit: usize },
+    /// The engine's work-item budget was exhausted.
+    StepLimit { limit: usize },
+    /// The engine's canonical-table budget was exhausted.
+    TableLimit { limit: usize },
+    /// The engine's pending-work budget was exhausted.
+    PendingWorkLimit { limit: usize },
+    /// Fe's bounded-type-growth guard stopped the search.
+    MaximumTypeDepth,
+    /// Salsa is iterating a recursive query to a fixpoint.
+    Cycle,
+}
+
+impl TraitSolveCompletion {
+    pub fn is_saturated(self) -> bool {
+        matches!(self, Self::Saturated)
+    }
+
+    pub fn hit_root_answer_limit(self) -> bool {
+        matches!(self, Self::RootAnswerLimit { .. })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Update)]
 pub enum GoalSatisfiability<'db> {
     /// Goal is satisfied with the unique solution.
     Satisfied(Solution<TraitGoalSolution<'db>>),
-    /// Goal might be satisfied, but needs more type information to determine
-    /// satisfiability and uniqueness.
-    NeedsConfirmation(IndexSet<Solution<TraitGoalSolution<'db>>>),
+    /// The goal has multiple complete answers or resolution stopped before
+    /// satisfiability and uniqueness could be decided.
+    NeedsConfirmation {
+        /// Complete or partial answers proved before resolution stopped.
+        solutions: IndexSet<Solution<TraitGoalSolution<'db>>>,
+        /// Whether the answer set is complete, or why resolution stopped.
+        completion: TraitSolveCompletion,
+    },
 
     /// Goal contains invalid.
     ContainsInvalid,
-    /// The gaol is not satisfied.
+    /// The goal is not satisfied.
     /// It contains an unsatisfied subgoal if we can know the exact subgoal
     /// that makes the proof step stuck.
     UnSat(Option<Solution<TraitInstId<'db>>>),
@@ -599,7 +715,7 @@ impl GoalSatisfiability<'_> {
     pub fn is_satisfied(&self) -> bool {
         matches!(
             self,
-            Self::Satisfied(_) | Self::NeedsConfirmation(_) | Self::ContainsInvalid
+            Self::Satisfied(_) | Self::NeedsConfirmation { .. } | Self::ContainsInvalid
         )
     }
 }
@@ -764,20 +880,73 @@ fn ty_has_recursive_assoc_projection<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'
 
 #[cfg(test)]
 mod tests {
-    use common::indexmap::IndexMap;
+    use common::indexmap::{IndexMap, IndexSet};
 
     use super::{
-        CanonicalGoalQuery, GoalSatisfiability, TraitInstId, TraitSolveCx,
-        is_goal_query_satisfiable,
+        CanonicalGoalQuery, GoalSatisfiability, TraitInstId, TraitSolveCompletion, TraitSolveCx,
+        goal_query_has_solution, is_goal_query_satisfiable, is_goal_satisfiable,
     };
     use crate::{
         analysis::ty::{
-            trait_resolution::constraint::collect_func_def_constraints, ty_def::TyId,
+            adt_def::AdtRef,
+            canonical::Canonical,
+            trait_resolution::{PredicateListId, constraint::collect_func_def_constraints},
+            ty_def::{Kind, TyId, TyVarSort},
             ty_lower::collect_generic_params,
+            unify::UnificationTable,
         },
-        hir_def::{Func, Trait},
+        hir_def::{Func, TopLevelMod, Trait},
         test_db::HirAnalysisTestDb,
     };
+
+    fn named_trait<'db>(
+        db: &'db HirAnalysisTestDb,
+        top_mod: TopLevelMod<'db>,
+        name: &str,
+    ) -> Trait<'db> {
+        top_mod
+            .all_traits(db)
+            .iter()
+            .copied()
+            .find(|trait_| {
+                trait_
+                    .name(db)
+                    .to_opt()
+                    .is_some_and(|ident| ident.data(db) == name)
+            })
+            .unwrap_or_else(|| panic!("missing `{name}` trait"))
+    }
+
+    fn named_struct_ty<'db>(
+        db: &'db HirAnalysisTestDb,
+        top_mod: TopLevelMod<'db>,
+        name: &str,
+    ) -> TyId<'db> {
+        let struct_ = top_mod
+            .all_structs(db)
+            .iter()
+            .copied()
+            .find(|struct_| {
+                struct_
+                    .name(db)
+                    .to_opt()
+                    .is_some_and(|ident| ident.data(db) == name)
+            })
+            .unwrap_or_else(|| panic!("missing `{name}` struct"));
+        TyId::adt(db, AdtRef::from(struct_).as_adt(db))
+    }
+
+    fn nested_ty<'db>(
+        db: &'db HirAnalysisTestDb,
+        constructor: TyId<'db>,
+        mut inner: TyId<'db>,
+        depth: usize,
+    ) -> TyId<'db> {
+        for _ in 0..depth {
+            inner = TyId::app(db, constructor, inner);
+        }
+        inner
+    }
 
     #[test]
     fn solver_query_includes_assumptions() {
@@ -865,5 +1034,273 @@ fn without_a<T>() -> bool {
             is_goal_query_satisfiable(&db, without_cx, &without_query),
             GoalSatisfiability::UnSat(_)
         ));
+    }
+
+    #[test]
+    fn tablesolve_classifies_cycles_and_distinct_implementors() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "tablesolve_classifies_cycles_and_distinct_implementors.fe".into(),
+            r#"
+trait Foo {}
+
+struct Seed {}
+struct SeedPeer {}
+impl Foo for Seed {}
+impl Foo for Seed where SeedPeer: Foo {}
+impl Foo for SeedPeer where Seed: Foo {}
+
+struct Dead {}
+struct DeadPeer {}
+impl Foo for Dead where DeadPeer: Foo {}
+impl Foo for DeadPeer where Dead: Foo {}
+
+struct Ambiguous {}
+impl Foo for Ambiguous {}
+impl Foo for Ambiguous {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let foo = named_trait(&db, top_mod, "Foo");
+        let solve = |name| {
+            let self_ty = named_struct_ty(&db, top_mod, name);
+            let goal = TraitInstId::new(&db, foo, vec![self_ty], IndexMap::new());
+            is_goal_satisfiable(&db, TraitSolveCx::new(&db, top_mod.scope()), goal)
+        };
+
+        assert!(matches!(
+            solve("SeedPeer"),
+            GoalSatisfiability::Satisfied(_)
+        ));
+        assert!(matches!(solve("Dead"), GoalSatisfiability::UnSat(Some(_))));
+        assert!(matches!(
+            solve("Ambiguous"),
+            GoalSatisfiability::NeedsConfirmation {
+                solutions,
+                completion: TraitSolveCompletion::Saturated,
+            } if solutions.len() == 2
+        ));
+    }
+
+    #[test]
+    fn tablesolve_bounds_growing_seedless_cycles() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "tablesolve_bounds_growing_seedless_cycles.fe".into(),
+            r#"
+trait Foo {}
+struct Dead {}
+struct Wrap<T> {}
+impl<T> Foo for T where Wrap<T>: Foo {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let foo = named_trait(&db, top_mod, "Foo");
+        let dead = named_struct_ty(&db, top_mod, "Dead");
+        let wrap = named_struct_ty(&db, top_mod, "Wrap");
+        let deep_root = nested_ty(&db, wrap, dead, 300);
+
+        for self_ty in [dead, deep_root] {
+            let goal = TraitInstId::new(&db, foo, vec![self_ty], IndexMap::new());
+            assert!(matches!(
+                is_goal_satisfiable(&db, TraitSolveCx::new(&db, top_mod.scope()), goal),
+                GoalSatisfiability::NeedsConfirmation {
+                    solutions,
+                    completion: TraitSolveCompletion::MaximumTypeDepth,
+                } if solutions.is_empty()
+            ));
+        }
+    }
+
+    #[test]
+    fn tablesolve_allows_initially_deep_finite_queries() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "tablesolve_allows_initially_deep_finite_queries.fe".into(),
+            r#"
+trait Foo {}
+trait Noise<T> {}
+
+struct Leaf {}
+struct Subject {}
+struct Wrap<T> {}
+
+impl<T> Foo for Wrap<T> {}
+impl Foo for Subject {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let foo = named_trait(&db, top_mod, "Foo");
+        let noise = named_trait(&db, top_mod, "Noise");
+        let leaf = named_struct_ty(&db, top_mod, "Leaf");
+        let subject = named_struct_ty(&db, top_mod, "Subject");
+        let wrap = named_struct_ty(&db, top_mod, "Wrap");
+        let deep = nested_ty(&db, wrap, leaf, 300);
+
+        let deep_goal = TraitInstId::new(&db, foo, vec![deep], IndexMap::new());
+        assert!(matches!(
+            is_goal_satisfiable(&db, TraitSolveCx::new(&db, top_mod.scope()), deep_goal,),
+            GoalSatisfiability::Satisfied(_)
+        ));
+
+        let unrelated_deep_assumption =
+            TraitInstId::new(&db, noise, vec![subject, deep], IndexMap::new());
+        let assumptions = PredicateListId::new(&db, vec![unrelated_deep_assumption]);
+        let shallow_goal = TraitInstId::new(&db, foo, vec![subject], IndexMap::new());
+        assert!(matches!(
+            is_goal_satisfiable(
+                &db,
+                TraitSolveCx::new(&db, top_mod.scope()).with_assumptions(assumptions),
+                shallow_goal,
+            ),
+            GoalSatisfiability::Satisfied(_)
+        ));
+    }
+
+    #[test]
+    fn tablesolve_preserves_answers_when_growth_limit_stops_search() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "tablesolve_preserves_answers_when_growth_limit_stops_search.fe".into(),
+            r#"
+trait Seed {}
+trait Grow {}
+
+struct Wrap<T> {}
+
+impl<T> Grow for T where T: Seed {}
+impl<T> Grow for T where Wrap<T>: Grow {}
+
+fn probe<T: Seed>() {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let grow = named_trait(&db, top_mod, "Grow");
+        let probe = top_mod
+            .all_funcs(&db)
+            .iter()
+            .copied()
+            .find(|func| {
+                func.name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "probe")
+            })
+            .expect("missing `probe` function");
+        let ty_param = collect_generic_params(&db, probe.into()).explicit_params(&db)[0];
+        let assumptions =
+            collect_func_def_constraints(&db, probe.into(), true).instantiate_identity();
+        let goal = TraitInstId::new(&db, grow, vec![ty_param], IndexMap::new());
+
+        assert!(matches!(
+            is_goal_satisfiable(
+                &db,
+                TraitSolveCx::new(&db, top_mod.scope()).with_assumptions(assumptions),
+                goal,
+            ),
+            GoalSatisfiability::NeedsConfirmation {
+                solutions,
+                completion: TraitSolveCompletion::MaximumTypeDepth,
+            } if solutions.len() == 1
+        ));
+    }
+
+    #[test]
+    fn tablesolve_propagates_bindings_between_impl_constraints() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "tablesolve_propagates_bindings_between_impl_constraints.fe".into(),
+            r#"
+trait Goal<T> {}
+trait Choose<T> {}
+trait Accept<T> {}
+
+struct Subject {}
+struct A {}
+struct B {}
+
+impl Choose<A> for Subject {}
+impl Accept<A> for Subject {}
+impl Accept<B> for Subject {}
+impl<SelfT, T> Goal<T> for SelfT where SelfT: Accept<T>, SelfT: Choose<T> {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let goal_trait = named_trait(&db, top_mod, "Goal");
+        let subject = named_struct_ty(&db, top_mod, "Subject");
+        let a = named_struct_ty(&db, top_mod, "A");
+        let assumptions = PredicateListId::empty_list(&db);
+        let solve_cx = TraitSolveCx::new(&db, top_mod.scope()).with_assumptions(assumptions);
+        let mut table = UnificationTable::new(&db);
+        let selected = table.new_var(TyVarSort::General, &Kind::Star);
+        let goal = TraitInstId::new(&db, goal_trait, vec![subject, selected], IndexMap::new());
+        let query = CanonicalGoalQuery::new(&db, goal, assumptions);
+        let GoalSatisfiability::Satisfied(solution) =
+            is_goal_query_satisfiable(&db, solve_cx, &query)
+        else {
+            panic!("the second constraint must observe the first constraint's binding");
+        };
+        let actual = query.extract_solution(&mut table, solution).inst;
+        let expected = TraitInstId::new(&db, goal_trait, vec![subject, a], IndexMap::new());
+
+        assert_eq!(Canonical::new(&db, actual), Canonical::new(&db, expected));
+    }
+
+    #[test]
+    fn target_search_finds_an_answer_beyond_the_ambiguity_cutoff() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "target_search_finds_an_answer_beyond_the_ambiguity_cutoff.fe".into(),
+            r#"
+trait Foo {}
+struct First {}
+struct Second {}
+struct Third {}
+struct Wrap<T> {}
+impl Foo for First {}
+impl Foo for First {}
+impl<T> Foo for T where Wrap<T>: Foo {}
+impl Foo for Second {}
+impl Foo for Third {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let foo = named_trait(&db, top_mod, "Foo");
+        let assumptions = PredicateListId::empty_list(&db);
+        let solve_cx = TraitSolveCx::new(&db, top_mod.scope()).with_assumptions(assumptions);
+        let mut table = UnificationTable::new(&db);
+        let self_ty = table.new_var(TyVarSort::General, &Kind::Star);
+        let goal = TraitInstId::new(&db, foo, vec![self_ty], IndexMap::new());
+        let query = CanonicalGoalQuery::new(&db, goal, assumptions);
+        let GoalSatisfiability::NeedsConfirmation {
+            solutions,
+            completion: TraitSolveCompletion::RootAnswerLimit { limit: 2 },
+        } = is_goal_query_satisfiable(&db, solve_cx, &query)
+        else {
+            panic!("the unconstrained goal must reach the configured answer cutoff");
+        };
+        assert_eq!(solutions.len(), 2);
+
+        let returned: IndexSet<_> = solutions
+            .iter()
+            .map(|solution| Canonical::new(&db, solution.value.inst))
+            .collect();
+        assert_eq!(
+            returned.len(),
+            1,
+            "the cutoff can contain two implementors of the same instance"
+        );
+        let target = ["First", "Second", "Third"]
+            .into_iter()
+            .map(|name| {
+                let self_ty = named_struct_ty(&db, top_mod, name);
+                Canonical::new(
+                    &db,
+                    TraitInstId::new(&db, foo, vec![self_ty], IndexMap::new()),
+                )
+            })
+            .find(|candidate| !returned.contains(candidate))
+            .expect("the two-answer cutoff must omit one implementation");
+
+        assert!(goal_query_has_solution(&db, solve_cx, &query, target));
     }
 }

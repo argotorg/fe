@@ -148,7 +148,7 @@ fn check_variant_field_abi_requirements<'db>(
                     let goal = TraitInstId::new_simple(db, trait_, args);
                     if matches!(
                         is_goal_satisfiable(db, solve_cx, goal),
-                        GoalSatisfiability::UnSat(_) | GoalSatisfiability::NeedsConfirmation(_)
+                        GoalSatisfiability::UnSat(_) | GoalSatisfiability::NeedsConfirmation { .. }
                     ) {
                         traits.push(name);
                     }
