@@ -4408,9 +4408,9 @@ dependencies = [
 
 [[package]]
 name = "matchcov"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "40459aafa8d5c25a61c1e176a86d8111b508927716c76f98e4f66a007eb6ee86"
+checksum = "9ed153c5420e881c370bc693a77faea65de45f01672dc9c5b6df033f1c1060ec"
 
 [[package]]
 name = "matchers"
