@@ -98,13 +98,13 @@ func private %match_nested_extract(v0.@layout_1) -> i8 {
         jump block12;
 
     block14:
-        v35.i8 = extract_value v4 0.i256;
-        (v36.i8, v37.i1) = uaddo v35 v7;
+        v34.i8 = extract_value v4 0.i256;
+        (v36.i8, v37.i1) = uaddo v34 v7;
         br v37 block17 block20;
 
     block15:
-        v40.i8 = extract_value v4 0.i256;
-        (v41.i8, v42.i1) = uaddo v40 v14;
+        v39.i8 = extract_value v4 0.i256;
+        (v41.i8, v42.i1) = uaddo v39 v14;
         br v42 block17 block21;
 
     block16:
