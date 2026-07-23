@@ -3,7 +3,7 @@
 
 use super::pattern_analysis::{MatrixPat, MatrixPatKind};
 use super::pattern_analysis::{PatternMatrix, PatternRowVec, SigmaSet};
-use super::pattern_ir::{BindingRef, ConstructorKind};
+use super::pattern_ir::{BindingRef, ConstructorKind, PatternStore, ValidatedPatId};
 use super::ty_def::TyId;
 use crate::analysis::HirAnalysisDb;
 use crate::core::hir_def::EnumVariant;
@@ -28,6 +28,8 @@ pub type ProjectionPath<'db> = GenericProjectionPath<TyId<'db>, EnumVariant<'db>
 /// A decision tree for pattern matching compilation
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DecisionTree<'db> {
+    /// No arm can be reached because the matched value space is empty.
+    Unreachable,
     /// Leaf node - execute this match arm
     Leaf(LeafNode<'db>),
     /// Switch node - test a value and branch
@@ -207,7 +209,6 @@ impl ColumnScoringFunction {
         match self {
             ColumnScoringFunction::Arity => matrix
                 .sigma_set(col)
-                .0
                 .iter()
                 .map(|c| -(c.arity(db) as i32))
                 .sum(),
@@ -233,20 +234,23 @@ impl ColumnScoringFunction {
     }
 }
 
-/// Build a decision tree from a pattern matrix with a specific column selection policy
+/// Build a decision tree from validated pattern roots with a specific column selection policy.
 pub fn build_decision_tree_with_policy<'db>(
     db: &'db dyn HirAnalysisDb,
-    matrix: &PatternMatrix<'db>,
+    store: &PatternStore<'db>,
+    roots: &[ValidatedPatId],
     policy: ColumnSelectionPolicy,
 ) -> DecisionTree<'db> {
-    let simplified_matrix = SimplifiedArmMatrix::new(matrix);
+    let matrix = PatternMatrix::from_roots(store, roots);
+    let simplified_matrix = SimplifiedArmMatrix::new(&matrix);
     DecisionTreeBuilder::new(policy).build(db, simplified_matrix)
 }
 
-/// Build a decision tree from a pattern matrix with optimized column selection
+/// Build a decision tree from validated pattern roots with optimized column selection.
 pub fn build_decision_tree<'db>(
     db: &'db dyn HirAnalysisDb,
-    matrix: &PatternMatrix<'db>,
+    store: &PatternStore<'db>,
+    roots: &[ValidatedPatId],
 ) -> DecisionTree<'db> {
     let policy = {
         let mut policy = ColumnSelectionPolicy::default();
@@ -254,7 +258,20 @@ pub fn build_decision_tree<'db>(
         policy.needed_prefix().small_branching().arity();
         policy
     };
-    build_decision_tree_with_policy(db, matrix, policy)
+    build_decision_tree_with_policy(db, store, roots, policy)
+}
+
+pub(crate) fn build_pattern_branch_decision_tree<'db>(
+    db: &'db dyn HirAnalysisDb,
+    store: &PatternStore<'db>,
+    root: ValidatedPatId,
+) -> DecisionTree<'db> {
+    let mut matrix = PatternMatrix::from_roots(store, &[root]);
+    matrix.push_wildcard_row(store.node(root).match_ty().raw());
+
+    let mut policy = ColumnSelectionPolicy::default();
+    policy.needed_prefix().small_branching().arity();
+    DecisionTreeBuilder::new(policy).build(db, SimplifiedArmMatrix::new(&matrix))
 }
 
 /// Decision tree builder with configurable policy
@@ -272,7 +289,9 @@ impl DecisionTreeBuilder {
         db: &'db dyn HirAnalysisDb,
         mut matrix: SimplifiedArmMatrix<'db>,
     ) -> DecisionTree<'db> {
-        debug_assert!(matrix.nrows() > 0, "unexhausted pattern matrix");
+        if matrix.nrows() == 0 {
+            return DecisionTree::Unreachable;
+        }
 
         if matrix.is_first_arm_satisfied() {
             matrix.arms.truncate(1);
@@ -288,7 +307,7 @@ impl DecisionTreeBuilder {
         let mut switch_arms = vec![];
         let occurrence = &matrix.occurrences[0];
         let sigma_set = matrix.sigma_set(0);
-        for &ctor in sigma_set.0.iter() {
+        for &ctor in sigma_set.iter() {
             let destructured_mat = matrix.phi_specialize(db, ctor, occurrence);
             let subtree = self.build(db, destructured_mat);
             switch_arms.push((Case::Constructor(ctor), subtree));

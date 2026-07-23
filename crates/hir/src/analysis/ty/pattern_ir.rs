@@ -107,38 +107,6 @@ impl<'db> PatternStore<'db> {
         &self.nodes[id.index()]
     }
 
-    pub fn wildcard_binding(&self, id: ValidatedPatId) -> Option<Option<BindingRef<'db>>> {
-        match self.node(id).kind() {
-            ValidatedPatKind::Wildcard { binding } => Some(*binding),
-            ValidatedPatKind::Constructor { .. } | ValidatedPatKind::Or(..) => None,
-        }
-    }
-
-    pub fn constructor_kind(&self, id: ValidatedPatId) -> Option<ConstructorKind<'db>> {
-        match self.node(id).kind() {
-            ValidatedPatKind::Constructor { ctor, .. } => Some(*ctor),
-            ValidatedPatKind::Wildcard { .. } | ValidatedPatKind::Or(..) => None,
-        }
-    }
-
-    pub fn child_count(&self, id: ValidatedPatId) -> usize {
-        match self.node(id).kind() {
-            ValidatedPatKind::Wildcard { .. } => 0,
-            ValidatedPatKind::Constructor { fields, .. } | ValidatedPatKind::Or(fields) => {
-                fields.len()
-            }
-        }
-    }
-
-    pub fn child(&self, id: ValidatedPatId, idx: usize) -> Option<ValidatedPatId> {
-        match self.node(id).kind() {
-            ValidatedPatKind::Wildcard { .. } => None,
-            ValidatedPatKind::Constructor { fields, .. } | ValidatedPatKind::Or(fields) => {
-                fields.get(idx).copied()
-            }
-        }
-    }
-
     pub fn set_root(&mut self, pat: PatId, root: ValidatedPatId) {
         self.roots_by_pat.insert(pat, root);
     }

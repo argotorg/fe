@@ -18,8 +18,8 @@ use crate::analysis::ty::ty_def::TyId;
 use crate::core::hir_def::LitKind;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PatternMatrix<'db> {
-    pub rows: Vec<PatternRowVec<'db>>,
+pub(crate) struct PatternMatrix<'db> {
+    pub(crate) rows: Vec<PatternRowVec<'db>>,
 }
 
 impl<'db> PatternMatrix<'db> {
@@ -27,7 +27,7 @@ impl<'db> PatternMatrix<'db> {
         Self { rows }
     }
 
-    pub fn from_roots(store: &PatternStore<'db>, roots: &[ValidatedPatId]) -> Self {
+    pub(crate) fn from_roots(store: &PatternStore<'db>, roots: &[ValidatedPatId]) -> Self {
         let rows = roots
             .iter()
             .copied()
@@ -36,7 +36,7 @@ impl<'db> PatternMatrix<'db> {
         Self { rows }
     }
 
-    pub fn push_wildcard_row(&mut self, ty: TyId<'db>) {
+    pub(crate) fn push_wildcard_row(&mut self, ty: TyId<'db>) {
         self.rows
             .push(PatternRowVec::new(vec![MatrixPat::wildcard(None, ty)]));
     }
@@ -60,41 +60,11 @@ impl<'db> PatternMatrix<'db> {
         )
     }
 
-    pub fn is_row_useful(&self, db: &'db dyn HirAnalysisDb, row: usize) -> bool {
-        !matches!(self.row_usefulness(db, row), Ok(Usefulness::Useless))
-    }
-
-    pub fn phi_specialize(&self, db: &'db dyn HirAnalysisDb, ctor: ConstructorKind<'db>) -> Self {
-        let rows = self
-            .rows
-            .iter()
-            .flat_map(|row| row.phi_specialize(db, ctor))
-            .collect();
-        Self::new(rows)
-    }
-
-    pub fn d_specialize(&self) -> Self {
-        let rows = self
-            .rows
-            .iter()
-            .flat_map(PatternRowVec::d_specialize)
-            .collect();
-        Self::new(rows)
-    }
-
-    pub fn sigma_set(&self) -> SigmaSet<'db> {
-        SigmaSet::from_rows(self.rows.iter(), 0)
-    }
-
-    pub fn first_column_ty(&self) -> TyId<'db> {
-        self.rows[0].first_column_ty()
-    }
-
-    pub fn nrows(&self) -> usize {
+    fn nrows(&self) -> usize {
         self.rows.len()
     }
 
-    pub fn ncols(&self) -> usize {
+    pub(crate) fn ncols(&self) -> usize {
         if self.nrows() == 0 {
             0
         } else {
@@ -106,7 +76,7 @@ impl<'db> PatternMatrix<'db> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PatternRowVec<'db> {
+pub(crate) struct PatternRowVec<'db> {
     pub(crate) inner: Vec<MatrixPat<'db>>,
 }
 
@@ -115,19 +85,15 @@ impl<'db> PatternRowVec<'db> {
         Self { inner }
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.inner.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
     }
 
     pub(crate) fn head(&self) -> Option<&MatrixPat<'db>> {
         self.inner.first()
     }
 
-    pub fn phi_specialize(
+    pub(crate) fn phi_specialize(
         &self,
         db: &'db dyn HirAnalysisDb,
         ctor: ConstructorKind<'db>,
@@ -175,7 +141,7 @@ impl<'db> PatternRowVec<'db> {
         }
     }
 
-    pub fn d_specialize(&self) -> Vec<Self> {
+    pub(crate) fn d_specialize(&self) -> Vec<Self> {
         debug_assert!(!self.inner.is_empty());
 
         match &self.inner[0].kind {
@@ -196,11 +162,6 @@ impl<'db> PatternRowVec<'db> {
 
     fn to_matchcov(&self) -> Vec<Pattern<ConstructorKind<'db>>> {
         self.inner.iter().map(MatrixPat::to_matchcov).collect()
-    }
-
-    fn first_column_ty(&self) -> TyId<'db> {
-        debug_assert!(!self.inner.is_empty());
-        self.inner[0].ty
     }
 
     fn collect_column_ctors(&self, column: usize) -> Vec<ConstructorKind<'db>> {
@@ -287,10 +248,13 @@ impl<'db> MatrixPatKind<'db> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SigmaSet<'db>(pub IndexSet<ConstructorKind<'db>>);
+pub(crate) struct SigmaSet<'db>(IndexSet<ConstructorKind<'db>>);
 
 impl<'db> SigmaSet<'db> {
-    pub fn from_rows<'a>(rows: impl Iterator<Item = &'a PatternRowVec<'db>>, column: usize) -> Self
+    pub(crate) fn from_rows<'a>(
+        rows: impl Iterator<Item = &'a PatternRowVec<'db>>,
+        column: usize,
+    ) -> Self
     where
         'db: 'a,
     {
@@ -303,34 +267,7 @@ impl<'db> SigmaSet<'db> {
         Self(ctor_set)
     }
 
-    pub fn complete_sigma(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Self {
-        let mut ctors = IndexSet::new();
-
-        if ty.is_bool(db) {
-            ctors.insert(ConstructorKind::Literal(LitKind::Bool(true), ty));
-            ctors.insert(ConstructorKind::Literal(LitKind::Bool(false), ty));
-        } else if ty.is_tuple(db) {
-            ctors.insert(ConstructorKind::Type(ty));
-        } else if let Some(adt_def) = ty.adt_def(db) {
-            match adt_def.adt_ref(db) {
-                AdtRef::Enum(enum_def) => {
-                    for (idx, _) in enum_def.variants(db).enumerate() {
-                        ctors.insert(ConstructorKind::Variant(
-                            crate::core::hir_def::EnumVariant::new(enum_def, idx),
-                            ty,
-                        ));
-                    }
-                }
-                AdtRef::Struct(_) => {
-                    ctors.insert(ConstructorKind::Type(ty));
-                }
-            }
-        }
-
-        Self(ctors)
-    }
-
-    pub fn is_complete(&self, db: &'db dyn HirAnalysisDb) -> bool {
+    pub(crate) fn is_complete(&self, db: &'db dyn HirAnalysisDb) -> bool {
         match self.0.first() {
             Some(ctor) => {
                 let expected = ctor_variant_num(db, ctor);
@@ -345,28 +282,12 @@ impl<'db> SigmaSet<'db> {
         }
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.0.len()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    pub fn difference<'a>(
-        &'a self,
-        other: &'a Self,
-    ) -> impl Iterator<Item = &'a ConstructorKind<'db>> + 'a {
-        self.0.difference(&other.0)
-    }
-}
-
-impl<'db> IntoIterator for SigmaSet<'db> {
-    type Item = ConstructorKind<'db>;
-    type IntoIter = <IndexSet<ConstructorKind<'db>> as IntoIterator>::IntoIter;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &ConstructorKind<'db>> {
+        self.0.iter()
     }
 }
 
@@ -412,15 +333,9 @@ impl<'db> ConstructorOracle<TyId<'db>, ConstructorKind<'db>> for FeConstructorOr
             })
         };
 
-        // Fe's decision-tree lowering cannot yet represent an exhaustive match
-        // with zero arms. Keep empty constructor families conservative so the
-        // existing non-exhaustive diagnostic prevents such a match from reaching
-        // lowering.
         Ok(match constructors {
-            Some(constructors) if !constructors.is_empty() => {
-                ConstructorSpace::from_finite(seen, constructors)
-            }
-            Some(_) | None => ConstructorSpace::open(),
+            Some(constructors) => ConstructorSpace::from_finite(seen, constructors),
+            None => ConstructorSpace::open(),
         })
     }
 
@@ -552,12 +467,33 @@ fn analyze_patterns<'db>(
 ) -> Result<Analysis<ConstructorKind<'db>, Infallible>, InputError> {
     let arms = roots
         .iter()
-        .map(|root| Arm::new([MatrixPat::from_root(store, *root).to_matchcov()]));
+        .map(|root| Arm::new([to_matchcov_pattern(store, *root)]));
     matchcov::analyze(
         &mut FeConstructorOracle { db },
         &[ty],
         &arms.collect::<Vec<_>>(),
     )
+}
+
+fn to_matchcov_pattern<'db>(
+    store: &PatternStore<'db>,
+    pat: ValidatedPatId,
+) -> Pattern<ConstructorKind<'db>> {
+    match store.node(pat).kind() {
+        ValidatedPatKind::Wildcard { .. } => Pattern::Wildcard,
+        ValidatedPatKind::Constructor { ctor, fields } => Pattern::constructor(
+            *ctor,
+            fields
+                .iter()
+                .copied()
+                .map(|field| to_matchcov_pattern(store, field)),
+        ),
+        ValidatedPatKind::Or(pats) => Pattern::or(
+            pats.iter()
+                .copied()
+                .map(|pat| to_matchcov_pattern(store, pat)),
+        ),
+    }
 }
 
 fn display_inconclusive_reason(reason: InconclusiveReason<Infallible>) -> String {

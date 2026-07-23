@@ -4,7 +4,6 @@ use ascii_tree::{Tree, write_tree};
 use dir_test::{Fixture, dir_test};
 use fe_hir::analysis::ty::{
     decision_tree::{DecisionTree, Projection, ProjectionPath, build_decision_tree},
-    pattern_analysis::PatternMatrix,
     pattern_ir::ConstructorKind,
     ty_check::{TypedBody, check_func_body},
 };
@@ -31,6 +30,7 @@ fn convert_to_ascii_tree<'db>(
     tree: &DecisionTree<'db>,
 ) -> Tree {
     match tree {
+        DecisionTree::Unreachable => Tree::Leaf(vec!["Unreachable".to_string()]),
         DecisionTree::Leaf(leaf_node) => {
             let mut lines = vec![];
 
@@ -201,19 +201,15 @@ impl<'db> Visitor<'db> for DecisionTreeVisitor<'db, '_> {
                 .filter_map(|arm| typed_body.pattern_root(arm.pat))
                 .collect();
 
-            if !roots.is_empty() {
-                let matrix = PatternMatrix::from_roots(typed_body.pattern_store(), &roots);
+            let tree = build_decision_tree(self.db, typed_body.pattern_store(), &roots);
+            let visualization = render_decision_tree(self.db, &tree);
 
-                let tree = build_decision_tree(self.db, &matrix);
-                let visualization = render_decision_tree(self.db, &tree);
+            let func_name = self.current_func.as_deref().unwrap_or("unknown");
+            let prop = format!("Decision Tree for {func_name}:\n{visualization}");
 
-                let func_name = self.current_func.as_deref().unwrap_or("unknown");
-                let prop = format!("Decision Tree for {func_name}:\n{visualization}");
-
-                if let Some(span) = ctxt.span() {
-                    self.prop_formatter
-                        .push_prop(self.top_mod, span.into(), prop);
-                }
+            if let Some(span) = ctxt.span() {
+                self.prop_formatter
+                    .push_prop(self.top_mod, span.into(), prop);
             }
         }
 
