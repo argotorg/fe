@@ -1,0 +1,8 @@
+struct Recursive {
+    next: Recursive,
+}
+
+msg RecursiveAbiMsg {
+    #[selector = sol("direct(uint256)")]
+    Direct { value: Recursive },
+}

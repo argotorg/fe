@@ -1,0 +1,49 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/msg_selector_abi_type_mismatch.fe
+---
+error[9-0006]: selector declares `string` but field `name_override` has ABI type `bytes`
+   ┌─ msg_selector_abi_type_mismatch.fe:10:39
+   │
+10 │     Initialize { governance: Address, name_override: Bytes },
+   │                                       ^^^^^^^^^^^^^^^^^^^^ expected a `string`-typed value
+   │
+   = `std::abi::DynString` decodes and encodes Solidity `string`
+
+error[9-0006]: selector declares `bytes` but field `payload` has ABI type `string`
+   ┌─ msg_selector_abi_type_mismatch.fe:14:18
+   │
+14 │     SetPayload { payload: DynString },
+   │                  ^^^^^^^^^^^^^^^^^^ expected a `bytes`-typed value
+   │
+   = `std::abi::Bytes` decodes and encodes Solidity `bytes`
+
+error[9-0006]: selector declares `uint112` but field `limit` has ABI type `uint128`
+   ┌─ msg_selector_abi_type_mismatch.fe:18:16
+   │
+18 │     SetLimit { limit: u128 },
+   │                ^^^^^^^^^^^ expected a `uint112`-typed value
+   │
+   = `std::abi::Uint112` decodes and encodes Solidity `uint112`
+
+error[9-0006]: selector declares `bytes32` but field `root` has ABI type `uint256`
+   ┌─ msg_selector_abi_type_mismatch.fe:22:15
+   │
+22 │     SetRoot { root: u256 },
+   │               ^^^^^^^^^^ expected a `bytes32`-typed value
+   │
+   = `std::abi::Bytes32` decodes and encodes Solidity `bytes32`
+
+error[9-0006]: selector declares `bool` but field `flag` has ABI type `uint256`
+   ┌─ msg_selector_abi_type_mismatch.fe:26:15
+   │
+26 │     SetFlag { flag: u256 },
+   │               ^^^^^^^^^^ expected a `bool`-typed value
+
+error[9-0007]: selector signature declares 2 argument(s) but msg variant `SetOwner` has 1 field(s)
+   ┌─ msg_selector_abi_type_mismatch.fe:29:5
+   │
+29 │     #[selector = sol("set_owner(address,uint256)")]
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ selector signature arity does not match the variant's fields

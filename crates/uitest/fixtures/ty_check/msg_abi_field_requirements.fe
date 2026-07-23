@@ -1,0 +1,16 @@
+struct Plain {
+    value: u256,
+}
+
+enum Choice {
+    First,
+    Second,
+}
+
+msg InvalidAbiFields {
+    #[selector = 1]
+    MissingTraits { value: Plain },
+
+    #[selector = 2]
+    UnsupportedType { value: Choice },
+}

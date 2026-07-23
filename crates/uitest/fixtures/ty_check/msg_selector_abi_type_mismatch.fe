@@ -1,0 +1,41 @@
+// Selector signature argument types must match the semantic ABI types of the
+// variant's fields. Where the stdlib has a purpose-built type for the
+// selector-declared ABI type, the diagnostic suggests it.
+
+use std::abi::{Bytes, DynString}
+
+msg VaultMsg {
+    // Error: selector says `string` but `Bytes` is ABI `bytes`; suggests std::abi::DynString
+    #[selector = sol("initialize(address,string)")]
+    Initialize { governance: Address, name_override: Bytes },
+
+    // Error: selector says `bytes` but `DynString` is ABI `string`; suggests std::abi::Bytes
+    #[selector = sol("set_payload(bytes)")]
+    SetPayload { payload: DynString },
+
+    // Error: selector says `uint112` but `u128` is ABI `uint128`; suggests std::abi::Uint112
+    #[selector = sol("set_limit(uint112)")]
+    SetLimit { limit: u128 },
+
+    // Error: selector says `bytes32` but `u256` is ABI `uint256`; suggests std::abi::Bytes32
+    #[selector = sol("set_root(bytes32)")]
+    SetRoot { root: u256 },
+
+    // Error: selector says `bool`; no stdlib suggestion, plain error
+    #[selector = sol("set_flag(bool)")]
+    SetFlag { flag: u256 },
+
+    // Error: selector declares two arguments but the variant has one field
+    #[selector = sol("set_owner(address,uint256)")]
+    SetOwner { owner: Address },
+
+    // OK: matching types
+    #[selector = sol("transfer(address,uint256)")]
+    Transfer { to: Address, amount: u256 } -> bool,
+
+    // OK: DynString is ABI `string`
+    #[selector = sol("set_name(string)")]
+    SetName { name: DynString },
+}
+
+// No contract needed - the check is at the msg block level

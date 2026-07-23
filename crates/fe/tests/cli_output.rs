@@ -413,6 +413,45 @@ fn test_cli_build_emit_abi_writes_json_artifact() {
 }
 
 #[test]
+fn test_cli_build_emit_abi_dyn_string_matches_string_selector() {
+    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_output/emit_abi/abi_dyn_string.fe");
+    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
+
+    let temp = tempdir().expect("tempdir");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "abi",
+        "--contract",
+        "Foo",
+        "--out-dir",
+        out_dir_str.as_str(),
+        fixture_path_str,
+    ]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+
+    let abi_path = out_dir.join("Foo.abi.json");
+    let abi: Value = serde_json::from_str(&fs::read_to_string(&abi_path).expect("read ABI"))
+        .expect("parse ABI JSON");
+
+    // A `DynString` field under a `string` selector argument is the matching
+    // pairing and must emit ABI type `string`.
+    let function = abi
+        .as_array()
+        .expect("abi array")
+        .iter()
+        .find(|entry| entry["type"] == "function")
+        .expect("function entry");
+    assert_eq!(function["name"], "set_name");
+    assert_eq!(function["inputs"][0]["name"], "name");
+    assert_eq!(function["inputs"][0]["type"], "string");
+}
+
+#[test]
 fn test_cli_build_emit_abi_follows_inherent_const_selector() {
     let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/cli_output/emit_abi/abi_inherent_const_selector.fe");

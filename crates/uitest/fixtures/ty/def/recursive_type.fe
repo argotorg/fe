@@ -22,3 +22,16 @@ pub struct S5<T> {
 pub struct S6 {
     s: S5<S6>
 }
+
+pub struct S7 {
+    s: [S7; 1],
+}
+
+pub struct S8<T> {
+    s: S8<[T; 1]>,
+}
+
+// A type that contains a recursive type is not itself part of that type's cycle.
+pub struct S9 {
+    s: S1,
+}

@@ -24,7 +24,9 @@ use crate::analysis::{
     HirAnalysisDb, analysis_pass::ModuleAnalysisPass, diagnostics::DiagnosticVoucher,
 };
 use crate::semantic::diagnostics::Diagnosable;
+use crate::span::{DesugaredOrigin, HirOrigin};
 
+pub mod abi_ty;
 pub mod adt_def;
 pub mod assoc_const;
 pub mod binder;
@@ -72,7 +74,7 @@ pub use layout_holes::{
     LayoutShapeKey, layout_root_descends_from, layout_root_id, layout_root_placeholder,
     layout_shape_key, layout_shape_ty, ty_contains_const_hole,
 };
-pub use msg_selector::MsgSelectorAnalysisPass;
+pub use msg_selector::MsgAnalysisPass;
 pub use provider::{
     ProviderAddressSpace, ProviderKind, ProviderSemantics, ProviderTransport,
     RootProviderRegistration, RootProviderSiteKind, provider_semantics, registered_root_providers,
@@ -374,7 +376,17 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
         // Check function and const bodies; contract-specific analysis is handled separately.
         let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = Vec::new();
-        for func in top_mod.all_funcs(db) {
+        for func in top_mod
+            .all_funcs(db)
+            .iter()
+            // Message field ABI requirements are diagnosed once at their source declarations.
+            .filter(|func| {
+                !matches!(
+                    func.origin(db),
+                    HirOrigin::Desugared(DesugaredOrigin::Msg(_))
+                )
+            })
+        {
             let (body_diags, _) = ty_check::check_func_body(db, *func);
             diags.extend(body_diags.iter().map(|diag| diag.to_voucher()));
         }

@@ -1,0 +1,12 @@
+// Declaration-time selector ABI validation must not recursively expand an
+// invalid ADT and exhaust the process stack. The ordinary recursive-type
+// analysis remains responsible for the diagnostic.
+
+struct Recursive {
+    next: Recursive,
+}
+
+msg RecursiveAbiMsg {
+    #[selector = sol("direct(uint256)")]
+    Direct { value: Recursive },
+}

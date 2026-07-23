@@ -15,21 +15,21 @@ use crate::{
     span::HirOrigin,
 };
 
-/// Selector-related errors accumulated during msg block lowering.
+/// Diagnostics produced while lowering or analyzing a `msg` block.
 #[salsa::accumulator]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SelectorError {
-    pub kind: SelectorErrorKind,
+pub struct MsgDiagnostic {
+    pub kind: MsgDiagnosticKind,
     pub file: common::file::File,
-    /// Range of the primary span (selector attribute or variant name)
+    /// Range of the primary span.
     pub primary_range: parser::TextRange,
-    /// Range of the secondary span (for duplicates - the first occurrence)
+    /// Range of the secondary span, when the diagnostic relates two declarations.
     pub secondary_range: Option<parser::TextRange>,
     pub variant_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum SelectorErrorKind {
+pub enum MsgDiagnosticKind {
     /// Selector value overflows u32.
     Overflow,
     /// Selector has invalid type (string or bool).
@@ -42,6 +42,27 @@ pub enum SelectorErrorKind {
     Duplicate {
         first_variant_name: String,
         selector: u32,
+    },
+    /// A selector signature argument type doesn't match the field's semantic ABI type.
+    AbiTypeMismatch {
+        selector_ty: String,
+        field_name: String,
+        field_abi_ty: String,
+        /// Fe type with the selector-declared ABI type, if the stdlib has one.
+        suggestion: Option<String>,
+    },
+    /// The selector signature declares a different number of arguments than
+    /// the variant has fields.
+    ArityMismatch {
+        signature_arity: usize,
+        field_count: usize,
+    },
+    /// A field type has no supported Solidity ABI representation.
+    UnsupportedAbiField { ty: String, reason: String },
+    /// A field type does not satisfy the traits required by generated ABI helpers.
+    MissingAbiTraits {
+        ty: String,
+        traits: Vec<&'static str>,
     },
 }
 

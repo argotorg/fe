@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/msg_selector_recursive_abi_type.fe
+---
+error[3-0002]: recursive type definition
+  ┌─ msg_selector_recursive_abi_type.fe:5:8
+  │
+5 │ struct Recursive {
+  │        ^^^^^^^^^ recursive type definition here
+6 │     next: Recursive,
+  │           --------- recursion occurs here

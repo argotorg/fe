@@ -5,7 +5,7 @@ use crate::analysis::{
 };
 use crate::{
     AbiFieldContext, AbiFieldDiagnostic, AttrMisuseError, ErrorDiagnostic, EventError,
-    FieldModifierError, ParserError, SelectorError,
+    FieldModifierError, MsgDiagnostic, ParserError,
     hir_def::{ModuleTree, TopLevelMod},
     lower::{parse_file_impl, scope_graph_impl, top_mod_ast},
     semantic::constraints_for,
@@ -90,7 +90,7 @@ impl ModuleAnalysisPass for ParsingPass {
     }
 }
 
-/// Analysis pass that collects selector errors from msg block lowering.
+/// Analysis pass that collects message diagnostics accumulated during lowering.
 pub struct MsgLowerPass {}
 
 impl ModuleAnalysisPass for MsgLowerPass {
@@ -99,7 +99,7 @@ impl ModuleAnalysisPass for MsgLowerPass {
         db: &'db dyn HirAnalysisDb,
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher>> {
-        scope_graph_impl::accumulated::<SelectorError>(db, top_mod)
+        scope_graph_impl::accumulated::<MsgDiagnostic>(db, top_mod)
             .into_iter()
             .map(|d| Box::new(d.clone()) as _)
             .collect::<Vec<_>>()

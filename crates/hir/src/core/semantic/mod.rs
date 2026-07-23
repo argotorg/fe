@@ -1874,9 +1874,9 @@ pub struct RecvArmAbiInfo<'db> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
-struct VariantSelectorInfo {
-    value: Option<u32>,
-    signature: Option<String>,
+pub(crate) struct VariantSelectorInfo {
+    pub(crate) value: Option<u32>,
+    pub(crate) signature: Option<String>,
 }
 
 fn variant_struct_from_ty<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<Struct<'db>> {
@@ -2576,7 +2576,7 @@ fn resolve_sol_abi_ty<'db>(
     }
 }
 
-fn get_variant_selector_info<'db>(
+pub(crate) fn get_variant_selector_info<'db>(
     db: &'db dyn HirAnalysisDb,
     variant_ty: TyId<'db>,
     scope: ScopeId<'db>,
@@ -2635,6 +2635,15 @@ fn get_variant_selector_info<'db>(
             signature: None,
         };
     };
+    if matches!(
+        body.expr(db).data(db, body),
+        crate::hir_def::Partial::Absent
+    ) {
+        return VariantSelectorInfo {
+            value: None,
+            signature: None,
+        };
+    }
     let signature = selector_signature_from_body(db, body, hir_impl.scope());
     let expected_ty = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U32)));
     let value = match eval_body_owner_const(
@@ -3473,12 +3482,13 @@ impl<'db> AdtDef<'db> {
     pub fn recursive_cycle(self, db: &'db dyn HirAnalysisDb) -> Option<Vec<AdtCycleMember<'db>>> {
         fn impl_check<'db>(
             db: &'db dyn HirAnalysisDb,
+            root: AdtDef<'db>,
             adt: AdtDef<'db>,
             chain: &[AdtCycleMember<'db>],
         ) -> Option<Vec<AdtCycleMember<'db>>> {
-            if chain.iter().any(|m| m.adt == adt) {
+            if adt == root && !chain.is_empty() {
                 return Some(chain.to_vec());
-            } else if adt.fields(db).is_empty() {
+            } else if chain.iter().any(|member| member.adt == adt) || adt.fields(db).is_empty() {
                 return None;
             }
 
@@ -3492,8 +3502,8 @@ impl<'db> AdtDef<'db> {
                             ty_idx: ty_idx as u16,
                         });
 
-                        if let Some(cycle) = impl_check(db, lower_adt(db, field_adt_ref), &chain)
-                            && cycle.iter().any(|m| m.adt == adt)
+                        if let Some(cycle) =
+                            impl_check(db, root, lower_adt(db, field_adt_ref), &chain)
                         {
                             return Some(cycle);
                         }
@@ -3504,7 +3514,7 @@ impl<'db> AdtDef<'db> {
             None
         }
 
-        impl_check(db, self, &[])
+        impl_check(db, self, self, &[])
     }
 }
 

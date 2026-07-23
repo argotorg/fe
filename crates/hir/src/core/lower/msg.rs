@@ -8,7 +8,7 @@ use super::{
 };
 
 use crate::{
-    HirDb, SelectorError, SelectorErrorKind,
+    HirDb, MsgDiagnostic, MsgDiagnosticKind,
     hir_def::{
         ArithBinOp, AssocConstDef, AttrListId, BinOp, Body, BodyKind, Expr, ExprId, FieldDef,
         FieldDefListId, FieldIndex, FuncModifiers, FuncParam, FuncParamMode, FuncParamName,
@@ -821,7 +821,7 @@ struct ParsedSelector {
     /// The text range of the selector attribute for diagnostics.
     range: parser::TextRange,
     /// The error kind, if validation failed.
-    error: Option<SelectorErrorKind>,
+    error: Option<MsgDiagnosticKind>,
 }
 
 /// Creates the `SELECTOR` associated const from the variant's `#[selector = ...]` attribute.
@@ -852,7 +852,7 @@ fn create_selector_const<'db>(
     let body = match parsed {
         Some(parsed) => {
             if let Some(error_kind) = parsed.error {
-                SelectorError {
+                MsgDiagnostic {
                     kind: error_kind,
                     file,
                     primary_range: parsed.range,
@@ -882,8 +882,8 @@ fn create_selector_const<'db>(
                 .name()
                 .map(|n| n.text_range())
                 .unwrap_or_else(|| variant.syntax().text_range());
-            SelectorError {
-                kind: SelectorErrorKind::Missing,
+            MsgDiagnostic {
+                kind: MsgDiagnosticKind::Missing,
                 file,
                 primary_range: variant_range,
                 secondary_range: None,
@@ -935,14 +935,14 @@ fn parse_selector_attr<'db>(
                                 LitKind::Int(int_id) => {
                                     let u32_max = BigUint::from(u32::MAX);
                                     let v = int_id.data(ctxt.db());
-                                    (v > &u32_max).then_some(SelectorErrorKind::Overflow)
+                                    (v > &u32_max).then_some(MsgDiagnosticKind::Overflow)
                                 }
                                 LitKind::String(_) | LitKind::Bool(_) => {
-                                    Some(SelectorErrorKind::InvalidType)
+                                    Some(MsgDiagnosticKind::InvalidType)
                                 }
                             }
                         }
-                        None => Some(SelectorErrorKind::InvalidType),
+                        None => Some(MsgDiagnosticKind::InvalidType),
                     },
                     _ => None,
                 },
@@ -957,7 +957,7 @@ fn parse_selector_attr<'db>(
             return Some(ParsedSelector {
                 expr: None,
                 range: attr.range,
-                error: Some(SelectorErrorKind::InvalidForm),
+                error: Some(MsgDiagnosticKind::InvalidForm),
             });
         }
     }

@@ -3,7 +3,7 @@
 
 msg BankMsg {
     #[selector = std::abi::sol("transfer(address,uint256)")]
-    Deposit { amount: u64 } -> u64,
+    Deposit { to: Address, amount: u256 } -> u64,
 }
 
 msg TokenMsg {
@@ -13,7 +13,7 @@ msg TokenMsg {
 
 pub contract MultiRecv {
     recv BankMsg {
-        Deposit { amount } -> u64 uses () {
+        Deposit { to, amount } -> u64 uses () {
             0
         }
     }
