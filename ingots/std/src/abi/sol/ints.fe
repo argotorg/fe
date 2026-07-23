@@ -3,7 +3,7 @@ use core::num::IntDowncast
 use core::ops::{WrappingAdd, WrappingMul, WrappingSub}
 use ingot::evm::{TopicValue, ops::{revert, signextend}}
 
-use super::types::SolCompat
+use super::types::{SolCompat, StaticAbiElement, StaticAbiElementSeal}
 
 const FULL_WORD_MASK: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
 
@@ -1513,6 +1513,9 @@ impl<T: SolInt> AbiSize for T {
     const HEAD_SIZE: u256 = 32
     const IS_DYNAMIC: bool = false
 }
+
+impl<T: SolInt> StaticAbiElement for T {}
+impl<T: SolInt> StaticAbiElementSeal for T {}
 
 impl<T: SolInt, A: Abi> AbiSpan<A> for T {
     fn payload_end<I: core::abi::ByteInput>(_: I, base: u256, pos: u256) -> u256 { pos + 32 }
