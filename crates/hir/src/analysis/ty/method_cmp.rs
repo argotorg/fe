@@ -955,6 +955,28 @@ fn normalize_compare_assoc_consts<'db>(
 /// satisfied under the assumptions that is obtained from the `expected_method`
 /// constraints.
 /// Returns `false` if the comparison fails.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConstraintEntailment {
+    Proven,
+    Disproven,
+    Incomplete,
+}
+
+fn classify_constraint_entailment(result: GoalSatisfiability<'_>) -> ConstraintEntailment {
+    match result {
+        GoalSatisfiability::Satisfied(_) | GoalSatisfiability::ContainsInvalid => {
+            ConstraintEntailment::Proven
+        }
+        // Method comparison asks only whether a proof exists, so one admitted
+        // answer is sufficient even if uniqueness or saturation is unknown.
+        GoalSatisfiability::NeedsConfirmation { solutions, .. } if !solutions.is_empty() => {
+            ConstraintEntailment::Proven
+        }
+        GoalSatisfiability::NeedsConfirmation { .. } => ConstraintEntailment::Incomplete,
+        GoalSatisfiability::UnSat(_) => ConstraintEntailment::Disproven,
+    }
+}
+
 fn compare_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_m: CallableDef<'db>,
@@ -998,14 +1020,17 @@ fn compare_constraints<'db>(
         if trait_m_constraints.list(db).contains(&goal) {
             continue;
         }
-        match is_goal_satisfiable(
+        let entailment = classify_constraint_entailment(is_goal_satisfiable(
             db,
             TraitSolveCx::new(db, trait_m.scope()).with_assumptions(trait_m_constraints),
             goal,
-        ) {
-            GoalSatisfiability::Satisfied(_) | GoalSatisfiability::ContainsInvalid => {}
-            GoalSatisfiability::NeedsConfirmation(_) => unreachable!(),
-            GoalSatisfiability::UnSat(_) => {
+        ));
+        match entailment {
+            ConstraintEntailment::Proven => {}
+            // An incomplete search cannot establish that the trait method
+            // entails the impl method's bound. Diagnose it conservatively
+            // instead of accepting a potentially stricter implementation.
+            ConstraintEntailment::Disproven | ConstraintEntailment::Incomplete => {
                 unsatisfied_goals.push(goal);
             }
         }

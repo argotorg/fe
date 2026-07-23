@@ -1718,7 +1718,7 @@ fn root_provider_satisfies_effect_requirement<'db>(
                     TraitSolveCx::new(db, func.scope()).with_assumptions(assumptions),
                     goal,
                 ),
-                GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation(_)
+                GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation { .. }
             )
         }
         EffectRequirementKey::Other => false,

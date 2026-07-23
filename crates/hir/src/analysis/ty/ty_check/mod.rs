@@ -72,7 +72,7 @@ use super::{
     trait_def::{TraitInstId, resolve_trait_method_instance},
     trait_resolution::{
         CanonicalGoalQuery, GoalSatisfiability, PredicateListId, TraitSolveCx,
-        is_goal_query_satisfiable, is_goal_satisfiable,
+        goal_query_has_no_distinct_solution, is_goal_query_satisfiable, is_goal_satisfiable,
     },
     ty_contains_const_hole,
     ty_def::{
@@ -1251,7 +1251,34 @@ impl<'db> TyChecker<'db> {
                     TraitObligationOutcome::Discharged
                 }
             }
-            GoalSatisfiability::NeedsConfirmation(ambiguous) => {
+            GoalSatisfiability::NeedsConfirmation {
+                solutions: ambiguous,
+                completion,
+            } => {
+                // Answer identity includes the selected implementor, whereas
+                // inference below deduplicates by the resulting trait instance.
+                // If that proof-identity cutoff is reached with only one
+                // distinct inferred instance, ask a fair fallback search
+                // whether any different instance exists. `NotFound` is only
+                // returned after saturation; resource/depth stops remain
+                // incomplete and cannot justify committing inference.
+                let first_projected = ambiguous
+                    .first()
+                    .map(|solution| Canonical::new(db, solution.value.inst));
+                let fallback_proved_complete = completion.hit_root_answer_limit()
+                    && first_projected.is_some_and(|first_projected| {
+                        ambiguous.iter().all(|solution| {
+                            Canonical::new(db, solution.value.inst) == first_projected
+                        }) && goal_query_has_no_distinct_solution(
+                            db,
+                            solve_cx,
+                            &query,
+                            first_projected,
+                        )
+                    });
+                let answers_complete_for_inference =
+                    completion.is_saturated() || fallback_proved_complete;
+
                 let mut candidates: Vec<_> = ambiguous
                     .iter()
                     .map(|solution| query.extract_solution(&mut self.table, *solution).inst)
@@ -1259,7 +1286,9 @@ impl<'db> TyChecker<'db> {
                 candidates.retain(|candidate| !self.has_dead_inference_keys(candidate));
                 let candidates = self.dedup_equivalent_trait_insts(candidates);
 
-                if let [solution] = candidates.as_slice() {
+                if let [solution] = candidates.as_slice()
+                    && answers_complete_for_inference
+                {
                     if self.table.unify(goal, *solution).is_ok()
                         && self.normalize_trait_goal(goal) != goal
                     {
