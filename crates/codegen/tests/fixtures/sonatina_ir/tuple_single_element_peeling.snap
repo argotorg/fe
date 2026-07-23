@@ -9,8 +9,6 @@ type @layout_0 = {i256, i256, i256, i8};
 type @layout_1 = {i1};
 type @layout_2 = {i256};
 type @layout_3 = {@layout_2};
-type @layout_4 = {i256};
-type @layout_5 = {@layout_4};
 
 global private const @layout_1 $const_region_0 = {1};
 
@@ -94,9 +92,9 @@ func private %tuple_single_struct_newtype_nested(v0.i256) -> i256 {
         jump block1;
 
     block1:
-        v4.@layout_4 = insert_value undef.@layout_4 0.i256 v0;
-        v6.@layout_5 = insert_value undef.@layout_5 0.i256 v4;
-        v7.@layout_4 = extract_value v6 0.i256;
+        v4.@layout_2 = insert_value undef.@layout_2 0.i256 v0;
+        v6.@layout_3 = insert_value undef.@layout_3 0.i256 v4;
+        v7.@layout_2 = extract_value v6 0.i256;
         v8.i256 = extract_value v7 0.i256;
         return v8;
 }

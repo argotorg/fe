@@ -681,7 +681,6 @@ fn is_plain_word_scalar(scalar: &ScalarClass<'_>) -> bool {
 #[cfg(test)]
 mod tests {
     use driver::DriverDataBase;
-    use hir::analysis::ty::ty_def::TyId;
 
     use super::*;
     use crate::runtime::{EnumLayoutKey, EnumVariantLayout, LayoutKey, StructLayout};
@@ -700,19 +699,16 @@ mod tests {
         LayoutId::new(
             db,
             LayoutKey::Struct(StructLayout {
-                source_ty: TyId::unit(db),
                 fields: vec![word_class()].into(),
             }),
         )
     }
 
-    fn test_enum_layout<'db>(db: &'db dyn MirDb, source_ty: TyId<'db>) -> LayoutId<'db> {
+    fn test_enum_layout<'db>(db: &'db dyn MirDb) -> LayoutId<'db> {
         LayoutId::new(
             db,
             LayoutKey::Enum(EnumLayoutKey {
-                source_ty,
                 variants: vec![EnumVariantLayout {
-                    name: "Value".to_string(),
                     fields: vec![word_class()].into(),
                 }]
                 .into(),
@@ -930,10 +926,10 @@ mod tests {
     }
 
     #[test]
-    fn compatible_nominal_enum_values_rebuild_the_target_representation() {
+    fn structurally_identical_enum_values_need_no_conversion() {
         let db = DriverDataBase::default();
-        let source_layout = test_enum_layout(&db, TyId::unit(&db));
-        let target_layout = test_enum_layout(&db, TyId::u256(&db));
+        let source_layout = test_enum_layout(&db);
+        let target_layout = test_enum_layout(&db);
         let source = RuntimeClass::AggregateValue {
             layout: source_layout,
         };
@@ -941,17 +937,8 @@ mod tests {
             layout: target_layout,
         };
 
-        assert!(source.shares_runtime_rep_with(&db, &target));
-        let plan = RuntimeConversionPlanner::plan(&db, source, target.clone()).unwrap();
-        assert_eq!(
-            plan.steps.as_ref(),
-            &[
-                RuntimeConversionStep::AllocObjectCopy {
-                    class: RuntimeClass::object_ref(target_layout),
-                    layout: target_layout,
-                },
-                RuntimeConversionStep::LoadRef { class: target },
-            ]
-        );
+        assert_eq!(source_layout, target_layout);
+        let plan = RuntimeConversionPlanner::plan(&db, source, target).unwrap();
+        assert!(plan.steps.is_empty());
     }
 }

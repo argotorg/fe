@@ -12,7 +12,7 @@ func private %balance() {
         jump block1;
 
     block1:
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_e62a 0.i256 0.i256;
+        call %return_data 0.i256 0.i256;
         unreachable;
 }
 
@@ -43,8 +43,8 @@ func private %child_init() {
         v1.i256 = sym_addr &__Child_runtime;
         v2.*i8 = evm_malloc v0;
         v3.i256 = ptr_to_int v2 i256;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__codecopy_7791_0 v3 v1 v0;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25_2 v3 v0;
+        call %codecopy v3 v1 v0;
+        call %return_data v3 v0;
         unreachable;
 }
 
@@ -54,20 +54,11 @@ func private %child_runtime() {
 
     block1:
         call %calldatacopy 0.i256 0.i256 4.i256;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25_1 0.i256 4.i256;
+        call %return_data 0.i256 4.i256;
         unreachable;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__codecopy_7791(v0.i256, v1.i256, v2.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        evm_code_copy v0 v1 v2;
-        return;
-}
-
-func private %std__lib__evm__effects__impl_trait_Evm_0098__codecopy_7791_0(v0.i256, v1.i256, v2.i256) {
+func private %codecopy(v0.i256, v1.i256, v2.i256) {
     block0:
         jump block1;
 
@@ -95,14 +86,14 @@ func private %init() {
         v1.i256 = sym_addr &__Child_init;
         v2.*i8 = evm_malloc v0;
         v3.i256 = ptr_to_int v2 i256;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__codecopy_7791 v3 v1 v0;
+        call %codecopy v3 v1 v0;
         v7.@layout_0 = call %create2_raw 0.i256 v3 v0 4660.i256;
         v8.i256 = sym_size &__Foo_runtime;
         v9.i256 = sym_addr &__Foo_runtime;
         v10.*i8 = evm_malloc v8;
         v11.i256 = ptr_to_int v10 i256;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__codecopy_7791 v11 v9 v8;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25_0 v11 v8;
+        call %codecopy v11 v9 v8;
+        call %return_data v11 v8;
         unreachable;
 }
 
@@ -152,39 +143,7 @@ func private %read_selector() -> i256 {
         return v3;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25(v0.i256, v1.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        evm_return v0 v1;
-}
-
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25_0(v0.i256, v1.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        evm_return v0 v1;
-}
-
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25_1(v0.i256, v1.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        evm_return v0 v1;
-}
-
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25_2(v0.i256, v1.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        evm_return v0 v1;
-}
-
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_e62a(v0.i256, v1.i256) {
+func private %return_data(v0.i256, v1.i256) {
     block0:
         jump block1;
 
@@ -202,7 +161,7 @@ func private %runtime() {
         br v2 block3 block6;
 
     block2:
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25 0.i256 0.i256;
+        call %return_data 0.i256 0.i256;
         unreachable;
 
     block3:
@@ -229,7 +188,7 @@ func private %transfer() {
         jump block1;
 
     block1:
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_e62a 0.i256 0.i256;
+        call %return_data 0.i256 0.i256;
         unreachable;
 }
 

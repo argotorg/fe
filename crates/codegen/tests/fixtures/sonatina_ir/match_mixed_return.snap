@@ -6,8 +6,8 @@ input_file: crates/codegen/tests/fixtures/match_mixed_return.fe
 target = "evm-ethereum-osaka"
 
 type @layout_0 = enum {
-    #A,
-    #B,
+    #variant_0,
+    #variant_1,
 };
 
 func private %f(v0.@layout_0) -> i256 {
@@ -33,7 +33,7 @@ func private %main() -> i256 {
         jump block1;
 
     block1:
-        v0.@layout_0 = enum.make @layout_0 #B;
+        v0.@layout_0 = enum.make @layout_0 #variant_1;
         v1.i256 = call %f v0;
         return v1;
 }

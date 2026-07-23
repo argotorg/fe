@@ -8,7 +8,6 @@ target = "evm-ethereum-osaka"
 type @layout_0 = {i256};
 type @layout_1 = {i256, i256};
 type @layout_2 = {@layout_0, @layout_0, i256};
-type @layout_3 = {i256, i256};
 
 global private const @layout_0 $const_region_0 = {1};
 global private const @layout_0 $const_region_1 = {2};
@@ -51,22 +50,13 @@ func private %base(v0.objref<@layout_1>) -> i256 {
         return v4;
 }
 
-func private %emit__g4f95(v0.@layout_2) {
-    block0:
-        jump block1;
-
-    block1:
-        call %emit__gcd5c v0;
-        return;
-}
-
 func inline(always) private %emit__gcd5c(v0.@layout_2) {
     block0:
         jump block1;
 
     block1:
         v3.i256 = extract_value v0 2.i256;
-        v4.@layout_3 = call %encode_abi_payload v3;
+        v4.@layout_1 = call %encode_abi_payload v3;
         v6.i256 = extract_value v4 0.i256;
         v8.i256 = extract_value v4 1.i256;
         v10.@layout_0 = extract_value v0 0.i256;
@@ -74,6 +64,15 @@ func inline(always) private %emit__gcd5c(v0.@layout_2) {
         v12.@layout_0 = extract_value v0 1.i256;
         v13.i256 = call %as_topic v12;
         call %log3 v6 v8 -15402802100530019096323380498944738953123845089667699673314898783681816316945.i256 v11 v13;
+        return;
+}
+
+func private %emit__g4f95(v0.@layout_2) {
+    block0:
+        jump block1;
+
+    block1:
+        call %emit__gcd5c v0;
         return;
 }
 
@@ -104,16 +103,16 @@ func private %encode(v0.i256, v1.objref<@layout_1>) {
         return;
 }
 
-func private %encode_abi_payload(v0.i256) -> @layout_3 {
+func private %encode_abi_payload(v0.i256) -> @layout_1 {
     block0:
         jump block1;
 
     block1:
-        v2.@layout_3 = call %encode_alloc v0;
+        v2.@layout_1 = call %encode_alloc v0;
         return v2;
 }
 
-func inline(always) private %encode_alloc(v0.i256) -> @layout_3 {
+func inline(always) private %encode_alloc(v0.i256) -> @layout_1 {
     block0:
         jump block1;
 
@@ -129,8 +128,8 @@ func inline(always) private %encode_alloc(v0.i256) -> @layout_3 {
         obj.store v9 v10;
         v11.i256 = call %base v4;
         call %encode v0 v4;
-        v14.@layout_3 = insert_value undef.@layout_3 0.i256 v11;
-        v15.@layout_3 = insert_value v14 1.i256 v2;
+        v14.@layout_1 = insert_value undef.@layout_1 0.i256 v11;
+        v15.@layout_1 = insert_value v14 1.i256 v2;
         return v15;
 }
 

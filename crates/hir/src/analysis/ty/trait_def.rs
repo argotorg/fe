@@ -30,6 +30,7 @@ use super::{
         normalize_trait_inst_preserving_validity,
     },
     ty_def::{TyBase, TyData, TyId},
+    ty_lower::collect_generic_params,
     ty_lower::layout_param_root_uses,
     unify::UnificationTable,
     visitor::{TyVisitable, TyVisitor},
@@ -485,6 +486,22 @@ pub fn resolve_trait_method_instance<'db>(
         Selection::NotFound => return None,
     };
     resolved.method_instance(db, method)
+}
+
+pub fn complete_resolved_trait_method_args<'db>(
+    db: &'db dyn HirAnalysisDb,
+    impl_func: Func<'db>,
+    mut impl_args: Vec<TyId<'db>>,
+    caller_args: &[TyId<'db>],
+    trait_arg_len: usize,
+) -> Vec<TyId<'db>> {
+    let expected_len = collect_generic_params(db, impl_func.into())
+        .params(db)
+        .len();
+    let missing_len = expected_len.saturating_sub(impl_args.len());
+    let tail = caller_args.get(trait_arg_len..).unwrap_or(caller_args);
+    impl_args.extend(tail.iter().copied().take(missing_len));
+    impl_args
 }
 
 /// Returns all implementors for the given `ty` whose constraints are fully proven.

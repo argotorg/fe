@@ -1354,26 +1354,21 @@ fn merge_layouts<'db>(
         return Some(current);
     }
     match (current.data(db), desired.data(db)) {
-        (Layout::Array(current), Layout::Array(desired))
-            if current.source_ty == desired.source_ty && current.len == desired.len =>
-        {
+        (Layout::Array(current), Layout::Array(desired)) if current.len == desired.len => {
             Some(LayoutId::new(
                 db,
                 LayoutKey::Array(ArrayLayout {
-                    source_ty: current.source_ty,
                     elem: merge_runtime_class(db, &current.elem, &desired.elem)?,
                     len: current.len,
                 }),
             ))
         }
         (Layout::Struct(current), Layout::Struct(desired))
-            if current.source_ty == desired.source_ty
-                && current.fields.len() == desired.fields.len() =>
+            if current.fields.len() == desired.fields.len() =>
         {
             Some(LayoutId::new(
                 db,
                 LayoutKey::Struct(StructLayout {
-                    source_ty: current.source_ty,
                     fields: current
                         .fields
                         .iter()
@@ -1385,13 +1380,11 @@ fn merge_layouts<'db>(
             ))
         }
         (Layout::Enum(current), Layout::Enum(desired))
-            if current.source_ty == desired.source_ty
-                && current.variants.len() == desired.variants.len() =>
+            if current.variants.len() == desired.variants.len() =>
         {
             Some(LayoutId::new(
                 db,
                 LayoutKey::Enum(EnumLayoutKey {
-                    source_ty: current.source_ty,
                     variants: current
                         .variants
                         .iter()
@@ -1399,7 +1392,6 @@ fn merge_layouts<'db>(
                         .map(|(current, desired)| {
                             (current.fields.len() == desired.fields.len()).then_some(
                                 EnumVariantLayout {
-                                    name: current.name.clone(),
                                     fields: current
                                         .fields
                                         .iter()
@@ -1508,22 +1500,15 @@ mod tests {
     use super::*;
     use crate::runtime::{ScalarClass, ScalarRepr, ScalarRole};
 
-    fn test_enum_layout<'db>(
-        db: &'db dyn MirDb,
-        source_ty: TyId<'db>,
-        payload: RuntimeClass<'db>,
-    ) -> LayoutId<'db> {
+    fn test_enum_layout<'db>(db: &'db dyn MirDb, payload: RuntimeClass<'db>) -> LayoutId<'db> {
         LayoutId::new(
             db,
             LayoutKey::Enum(EnumLayoutKey {
-                source_ty,
                 variants: vec![
                     EnumVariantLayout {
-                        name: "Some".to_string(),
                         fields: vec![payload].into(),
                     },
                     EnumVariantLayout {
-                        name: "None".to_string(),
                         fields: vec![].into(),
                     },
                 ]
@@ -1543,7 +1528,6 @@ mod tests {
         LayoutId::new(
             db,
             LayoutKey::Struct(StructLayout {
-                source_ty: TyId::unit(db),
                 fields: vec![word.clone(), word].into(),
             }),
         )
@@ -1566,7 +1550,6 @@ mod tests {
     fn provider_enum_classes<'db>(
         db: &'db DriverDataBase,
     ) -> (RuntimeClass<'db>, RuntimeClass<'db>) {
-        let source_ty = TyId::unit(db);
         let pointee = RuntimeClass::Scalar(ScalarClass {
             repr: ScalarRepr::Int {
                 bits: 256,
@@ -1577,7 +1560,6 @@ mod tests {
         let provider = |provider_ty, space, pointee| RuntimeClass::AggregateValue {
             layout: test_enum_layout(
                 db,
-                source_ty,
                 RuntimeClass::Ref {
                     pointee: Box::new(pointee),
                     kind: RefKind::Provider { provider_ty, space },

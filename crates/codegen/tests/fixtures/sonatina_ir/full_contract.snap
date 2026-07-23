@@ -5,8 +5,8 @@ input_file: crates/codegen/tests/fixtures/full_contract.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @layout_0 = {i256};
-type @layout_1 = {i256, i256};
+type @layout_0 = {i256, i256};
+type @layout_1 = {i256};
 
 func private %abi_encode(v0.i256) {
     block0:
@@ -14,30 +14,11 @@ func private %abi_encode(v0.i256) {
 
     block1:
         call %mstore 0.i256 v0;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_b74b 0.i256 32.i256;
+        call %return_data 0.i256 32.i256;
         unreachable;
 }
 
-func private %impl_Square__area(v0.objref<@layout_0>) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.objref<i256> = obj.proj v0 0.i256;
-        v4.i256 = obj.load v3;
-        (v5.i256, v6.i1) = umulo v4 v4;
-        br v6 block2 block3;
-
-    block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block3:
-        return v5;
-}
-
-func private %impl_Point__area(v0.objref<@layout_1>) -> i256 {
+func private %impl_Point__area(v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -56,6 +37,25 @@ func private %impl_Point__area(v0.objref<@layout_1>) -> i256 {
 
     block3:
         return v8;
+}
+
+func private %impl_Square__area(v0.objref<@layout_1>) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.objref<i256> = obj.proj v0 0.i256;
+        v4.i256 = obj.load v3;
+        (v5.i256, v6.i1) = umulo v4 v4;
+        br v6 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        return v5;
 }
 
 func private %calldataload(v0.i256) -> i256 {
@@ -89,9 +89,9 @@ func private %dispatch() {
     block2:
         v7.i256 = call %calldataload 4.i256;
         v9.i256 = call %calldataload 36.i256;
-        v11.@layout_1 = insert_value undef.@layout_1 0.i256 v7;
-        v13.@layout_1 = insert_value v11 1.i256 v9;
-        v14.objref<@layout_1> = obj.alloc @layout_1;
+        v11.@layout_0 = insert_value undef.@layout_0 0.i256 v7;
+        v13.@layout_0 = insert_value v11 1.i256 v9;
+        v14.objref<@layout_0> = obj.alloc @layout_0;
         v15.objref<i256> = obj.proj v14 0.i256;
         v16.i256 = extract_value v13 0.i256;
         obj.store v15 v16;
@@ -112,8 +112,8 @@ func private %dispatch() {
 
     block5:
         v38.i256 = call %calldataload 4.i256;
-        v40.@layout_0 = insert_value undef.@layout_0 0.i256 v38;
-        v41.objref<@layout_0> = obj.alloc @layout_0;
+        v40.@layout_1 = insert_value undef.@layout_1 0.i256 v38;
+        v41.objref<@layout_1> = obj.alloc @layout_1;
         v42.objref<i256> = obj.proj v41 0.i256;
         v43.i256 = extract_value v40 0.i256;
         obj.store v42 v43;
@@ -126,7 +126,7 @@ func private %dispatch() {
         jump block7;
 
     block7:
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_b16a 0.i256 0.i256;
+        call %return_data 0.i256 0.i256;
         unreachable;
 
     block8:
@@ -167,7 +167,7 @@ func private %init() {
         v2.*i8 = evm_malloc v0;
         v3.i256 = ptr_to_int v2 i256;
         call %codecopy v3 v1 v0;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_b16a_0 v3 v0;
+        call %return_data v3 v0;
         unreachable;
 }
 
@@ -198,23 +198,7 @@ func private %mstore(v0.i256, v1.i256) {
         return;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_b16a(v0.i256, v1.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        evm_return v0 v1;
-}
-
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_b16a_0(v0.i256, v1.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        evm_return v0 v1;
-}
-
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_b74b(v0.i256, v1.i256) {
+func private %return_data(v0.i256, v1.i256) {
     block0:
         jump block1;
 
