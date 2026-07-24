@@ -922,7 +922,7 @@ impl<'db> ImplementorId<'db> {
                 db,
                 impl_m.as_callable(db).unwrap(),
                 trait_m.as_callable(db).unwrap(),
-                self.trait_(db),
+                self.trait_inst(db),
                 &mut diags,
             );
             required_methods.remove(name);

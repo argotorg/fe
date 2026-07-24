@@ -382,6 +382,7 @@ impl UnOp {
             ast::UnOp::BitNot(_) => Self::BitNot,
             ast::UnOp::Mut(_) => Self::Mut,
             ast::UnOp::Ref(_) => Self::Ref,
+            ast::UnOp::Deref(_) => Self::Deref,
         }
     }
 }

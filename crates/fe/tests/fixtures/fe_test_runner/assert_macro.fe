@@ -1,5 +1,5 @@
+use core::ptr
 use std::evm::{Address, Call, Create, Evm, RawMem, last_returndata}
-use std::evm::mem
 
 #[test(should_revert, selector = 0x08c379a0)]
 fn test_assert_macro_reverts() uses (evm: mut Evm) {
@@ -35,10 +35,15 @@ fn test_assert_macro_payload_layout() uses (evm: mut Evm) {
 
     // Build calldata containing only the ReverterMsg::Trigger selector.
     let selector_word = (0xaabbccdd as u256) << 224
-    let ptr = mem::alloc(4)
+    let ptr = ptr::alloc_bytes(4)
     evm.mstore(addr: ptr, value: selector_word)
 
-    let ok = evm.raw_call(addr: addr, gas: 100000, value: 0, args_offset: ptr, args_len: 4)
+    let ok = evm.raw_call(
+        addr: addr,
+        gas: 100000,
+        value: 0,
+        args: ptr::MemBuffer::from_raw_parts(ptr: ptr, len: 4),
+    )
     assert!(!ok)
 
     // Solidity `Error(string)` for "boom":
@@ -49,10 +54,10 @@ fn test_assert_macro_payload_layout() uses (evm: mut Evm) {
     let ret = last_returndata()
     assert!(ret.len == 100)
     assert!(evm.mload(ret.base) >> 224 == 0x08c379a0)
-    assert!(evm.mload(ret.base + 4) == 0x20)
-    assert!(evm.mload(ret.base + 36) == 4)
+    assert!(evm.mload(ptr::offset_bytes(ret.base, 4)) == 0x20)
+    assert!(evm.mload(ptr::offset_bytes(ret.base, 36)) == 4)
     assert!(
-        evm.mload(ret.base + 68)
+        evm.mload(ptr::offset_bytes(ret.base, 68))
             == 0x626f6f6d00000000000000000000000000000000000000000000000000000000,
     )
 }

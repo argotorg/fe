@@ -1,13 +1,16 @@
-use core::EffectHandle
-use std::evm::{Evm, Log, MemPtr, RawMem}
+use core::ptr
+use std::evm::{Evm, Log}
 
 struct Data {
     a: u256,
 }
 
 fn raw_emit(evm: mut Evm) {
-    let data: MemPtr<Data> = evm.mem_ptr(0x100)
-    evm.log0(offset: data.raw(), len: core::size_of<Data>())
+    let data = ptr::alloc<Data>()
+    evm.log0(data: ptr::MemBuffer::from_raw_parts(
+        ptr: ptr::as_bytes(data),
+        len: core::size_of<Data>(),
+    ))
 }
 
 pub fn main() uses (evm: mut Evm) {

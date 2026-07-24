@@ -309,6 +309,7 @@ fn provider_borrow_root<'db>(
                 NBorrowRoot::Provider {
                     binding,
                     value_ty: root_value_ty,
+                    ..
                 } if binding == provider && *root_value_ty == value_ty
             )
         })
@@ -327,6 +328,78 @@ pub(super) fn local_read_places_extractable_from_value<'db>(
             NSStmtKind::Store { .. } => true,
         })
     })
+}
+
+pub(super) fn local_pointer_uses_lowerable_from_value<'db>(
+    body: &NormalizedSemanticBody<'db>,
+    local: SLocalId,
+) -> bool {
+    let local_sources_lowerable =
+        body.locals.iter().all(|candidate| {
+            let backing_lowerable = match &candidate.lowering {
+                NormalizedBindingLowering::ValueLocal { place } => {
+                    pointer_place_lowers_from_value(body, local, place, true)
+                }
+                NormalizedBindingLowering::PlaceBoundValue { place, .. } => {
+                    pointer_place_lowers_from_value(body, local, place, false)
+                }
+                NormalizedBindingLowering::Erased
+                | NormalizedBindingLowering::CarrierLocal { .. } => true,
+            };
+            backing_lowerable
+                && candidate
+                    .snapshot_source_place()
+                    .is_none_or(|place| pointer_place_lowers_from_value(body, local, place, true))
+                && candidate.layout_backing_sources().iter().all(|source| {
+                    pointer_place_lowers_from_value(body, local, &source.source, true)
+                })
+        });
+    if !local_sources_lowerable {
+        return false;
+    }
+    body.blocks.iter().all(|block| {
+        block.stmts.iter().all(|stmt| match &stmt.kind {
+            NSStmtKind::Store { dst, .. } => {
+                pointer_place_lowers_from_value(body, local, dst, false)
+            }
+            NSStmtKind::Assign { expr, .. } => {
+                let mut lowerable = true;
+                let allow_direct_value = matches!(expr, NExpr::ReadPlace { .. });
+                expr.for_each_place_operand(|place| {
+                    lowerable &=
+                        pointer_place_lowers_from_value(body, local, place, allow_direct_value);
+                });
+                lowerable
+            }
+        })
+    })
+}
+
+fn pointer_place_lowers_from_value<'db>(
+    body: &NormalizedSemanticBody<'db>,
+    local: SLocalId,
+    place: &NSPlace<'db>,
+    allow_direct_value: bool,
+) -> bool {
+    if place_root_local(body, place) != Some(local) {
+        return true;
+    }
+    (allow_direct_value && place.path.is_empty())
+        || place_path_starts_with_pointee_projection(&place.path)
+}
+
+pub(super) fn place_path_starts_with_pointee_projection<'db>(
+    path: &hir::analysis::semantic::borrowck::NSProjectionPath<'db>,
+) -> bool {
+    matches!(
+        path.iter().next(),
+        Some(
+            Projection::Deref
+                | Projection::Field(_)
+                | Projection::VariantField { .. }
+                | Projection::Index(IndexSource::Constant(_) | IndexSource::Dynamic(_))
+        )
+    )
 }
 
 fn place_root_local<'db>(

@@ -1,5 +1,6 @@
 use std::abi::Bytes
-use std::evm::{Call, Evm, mem}
+use core::ptr
+use std::evm::{Call, Evm, encode_abi_payload}
 
 msg InnerMsg {
     #[selector = 0x01020304]
@@ -22,6 +23,19 @@ pub contract NestedMsgReceiver {
 }
 
 #[test]
+fn test_nested_msg_encoding_uses_single_dynamic_head_slot() uses (evm: Evm) {
+    let data = encode_abi_payload(OuterMsg::Outer {
+        inner: InnerMsg::Inner { marker: 0, data: Bytes::empty() },
+    })
+
+    assert!(data.len == 128)
+    assert!(evm.mload(data.ptr) == 32)
+    assert!(evm.mload(ptr::offset_bytes(data.ptr, 32)) == 0)
+    assert!(evm.mload(ptr::offset_bytes(data.ptr, 64)) == 64)
+    assert!(evm.mload(ptr::offset_bytes(data.ptr, 96)) == 0)
+}
+
+#[test]
 fn test_nested_msg_decode_valid() uses (evm: mut Evm) {
     let receiver = evm.create2<NestedMsgReceiver>(value: 0, args: (), salt: 0)
 
@@ -41,11 +55,16 @@ fn test_nested_msg_decode_valid() uses (evm: mut Evm) {
 fn test_nested_msg_decode_truncated_inner_head_reverts() uses (evm: mut Evm) {
     let receiver = evm.create2<NestedMsgReceiver>(value: 0, args: (), salt: 1)
 
-    let ptr = mem::alloc(96)
+    let ptr = ptr::alloc_bytes(96)
     evm.mstore(addr: ptr, value: (0xaabbccdd as u256) << 224)
-    evm.mstore(addr: ptr + 4, value: 32)
-    evm.mstore(addr: ptr + 36, value: 0)
+    evm.mstore(addr: ptr::offset_bytes(ptr, 4), value: 32)
+    evm.mstore(addr: ptr::offset_bytes(ptr, 36), value: 0)
 
-    let ok = evm.raw_call(addr: receiver, gas: 1000000, value: 0, args_offset: ptr, args_len: 68)
+    let ok = evm.raw_call(
+        addr: receiver,
+        gas: 1000000,
+        value: 0,
+        args: ptr::MemBuffer::from_raw_parts(ptr: ptr, len: 68),
+    )
     assert!(!ok)
 }

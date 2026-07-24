@@ -49,207 +49,186 @@ note:
    │                                                           ^^^^^^^^^^ T
 
 note:
-   ┌─ contract_recv_generic_variant.fe:23:78
+   ┌─ contract_recv_generic_variant.fe:21:37
    │
-23 │       fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {
-   │ ╭──────────────────────────────────────────────────────────────────────────────^
-24 │ │         let Self { value } = self
-25 │ │         value.encode(e)
-26 │ │     }
+21 │       fn encode(own self, _ ptr: *u8) {
+   │ ╭─────────────────────────────────────^
+22 │ │         let Self { value } = self
+23 │ │         value.encode(ptr)
+24 │ │     }
    │ ╰─────^ ()
 
 note:
-   ┌─ contract_recv_generic_variant.fe:24:13
+   ┌─ contract_recv_generic_variant.fe:22:13
    │
-24 │         let Self { value } = self
+22 │         let Self { value } = self
    │             ^^^^^^^^^^^^^^ GenericMsg<T>
 
 note:
-   ┌─ contract_recv_generic_variant.fe:24:20
+   ┌─ contract_recv_generic_variant.fe:22:20
    │
-24 │         let Self { value } = self
+22 │         let Self { value } = self
    │                    ^^^^^ T
 
 note:
-   ┌─ contract_recv_generic_variant.fe:24:30
+   ┌─ contract_recv_generic_variant.fe:22:30
    │
-24 │         let Self { value } = self
+22 │         let Self { value } = self
    │                              ^^^^ GenericMsg<T>
 
 note:
-   ┌─ contract_recv_generic_variant.fe:25:9
+   ┌─ contract_recv_generic_variant.fe:23:9
    │
-25 │         value.encode(e)
+23 │         value.encode(ptr)
    │         ^^^^^ T
 
 note:
-   ┌─ contract_recv_generic_variant.fe:25:9
+   ┌─ contract_recv_generic_variant.fe:23:9
    │
-25 │         value.encode(e)
-   │         ^^^^^^^^^^^^^^^ ()
+23 │         value.encode(ptr)
+   │         ^^^^^^^^^^^^^^^^^ ()
 
 note:
-   ┌─ contract_recv_generic_variant.fe:25:22
+   ┌─ contract_recv_generic_variant.fe:23:22
    │
-25 │         value.encode(e)
-   │                      ^ mut E
+23 │         value.encode(ptr)
+   │                      ^^^ *<u8>
 
 note:
-   ┌─ contract_recv_generic_variant.fe:28:45
+   ┌─ contract_recv_generic_variant.fe:30:84
    │
-28 │       fn encode_to_ptr(own self, _ ptr: u256) {
-   │ ╭─────────────────────────────────────────────^
-29 │ │         core::panic()
-30 │ │     }
-   │ ╰─────^ ()
-
-note:
-   ┌─ contract_recv_generic_variant.fe:29:9
-   │
-29 │         core::panic()
-   │         ^^^^^^^^^^^ fn panic
-
-note:
-   ┌─ contract_recv_generic_variant.fe:29:9
-   │
-29 │         core::panic()
-   │         ^^^^^^^^^^^^^ !
-
-note:
-   ┌─ contract_recv_generic_variant.fe:36:84
-   │
-36 │       fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
+30 │       fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
    │ ╭────────────────────────────────────────────────────────────────────────────────────^
-37 │ │         let value = T::decode_payload(d)
-38 │ │         Self { value }
-39 │ │     }
+31 │ │         let value = T::decode_payload(d)
+32 │ │         Self { value }
+33 │ │     }
    │ ╰─────^ GenericMsg<T>
 
 note:
-   ┌─ contract_recv_generic_variant.fe:37:13
+   ┌─ contract_recv_generic_variant.fe:31:13
    │
-37 │         let value = T::decode_payload(d)
+31 │         let value = T::decode_payload(d)
    │             ^^^^^ T
 
 note:
-   ┌─ contract_recv_generic_variant.fe:37:21
+   ┌─ contract_recv_generic_variant.fe:31:21
    │
-37 │         let value = T::decode_payload(d)
+31 │         let value = T::decode_payload(d)
    │                     ^^^^^^^^^^^^^^^^^ fn decode_payload<T, Sol, D>
 
 note:
-   ┌─ contract_recv_generic_variant.fe:37:21
+   ┌─ contract_recv_generic_variant.fe:31:21
    │
-37 │         let value = T::decode_payload(d)
+31 │         let value = T::decode_payload(d)
    │                     ^^^^^^^^^^^^^^^^^^^^ T
 
 note:
-   ┌─ contract_recv_generic_variant.fe:37:39
+   ┌─ contract_recv_generic_variant.fe:31:39
    │
-37 │         let value = T::decode_payload(d)
+31 │         let value = T::decode_payload(d)
    │                                       ^ mut D
 
 note:
-   ┌─ contract_recv_generic_variant.fe:38:9
+   ┌─ contract_recv_generic_variant.fe:32:9
    │
-38 │         Self { value }
+32 │         Self { value }
    │         ^^^^^^^^^^^^^^ GenericMsg<T>
 
 note:
-   ┌─ contract_recv_generic_variant.fe:38:16
+   ┌─ contract_recv_generic_variant.fe:32:16
    │
-38 │         Self { value }
+32 │         Self { value }
    │                ^^^^^ T
+
+note:
+   ┌─ contract_recv_generic_variant.fe:55:9
+   │
+55 │         GenericMsg<u8> { value } -> u8 uses () {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^ GenericMsg<u8>
+
+note:
+   ┌─ contract_recv_generic_variant.fe:55:26
+   │
+55 │         GenericMsg<u8> { value } -> u8 uses () {
+   │                          ^^^^^ u8
+
+note:
+   ┌─ contract_recv_generic_variant.fe:55:48
+   │
+55 │           GenericMsg<u8> { value } -> u8 uses () {
+   │ ╭────────────────────────────────────────────────^
+56 │ │             value
+57 │ │         }
+   │ ╰─────────^ u8
+
+note:
+   ┌─ contract_recv_generic_variant.fe:56:13
+   │
+56 │             value
+   │             ^^^^^ u8
+
+note:
+   ┌─ contract_recv_generic_variant.fe:58:9
+   │
+58 │         GenericMsg<u16> { value } -> u16 uses () {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^ GenericMsg<u16>
+
+note:
+   ┌─ contract_recv_generic_variant.fe:58:27
+   │
+58 │         GenericMsg<u16> { value } -> u16 uses () {
+   │                           ^^^^^ u16
+
+note:
+   ┌─ contract_recv_generic_variant.fe:58:50
+   │
+58 │           GenericMsg<u16> { value } -> u16 uses () {
+   │ ╭──────────────────────────────────────────────────^
+59 │ │             value
+60 │ │         }
+   │ ╰─────────^ u16
+
+note:
+   ┌─ contract_recv_generic_variant.fe:59:13
+   │
+59 │             value
+   │             ^^^^^ u16
 
 note:
    ┌─ contract_recv_generic_variant.fe:61:9
    │
-61 │         GenericMsg<u8> { value } -> u8 uses () {
-   │         ^^^^^^^^^^^^^^^^^^^^^^^^ GenericMsg<u8>
+61 │         GenericMsg<u64> { value } -> u64 uses (data) {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^ GenericMsg<u64>
 
 note:
-   ┌─ contract_recv_generic_variant.fe:61:26
+   ┌─ contract_recv_generic_variant.fe:61:27
    │
-61 │         GenericMsg<u8> { value } -> u8 uses () {
-   │                          ^^^^^ u8
+61 │         GenericMsg<u64> { value } -> u64 uses (data) {
+   │                           ^^^^^ u64
 
 note:
-   ┌─ contract_recv_generic_variant.fe:61:48
+   ┌─ contract_recv_generic_variant.fe:61:54
    │
-61 │           GenericMsg<u8> { value } -> u8 uses () {
-   │ ╭────────────────────────────────────────────────^
-62 │ │             value
+61 │           GenericMsg<u64> { value } -> u64 uses (data) {
+   │ ╭──────────────────────────────────────────────────────^
+62 │ │             data + value
 63 │ │         }
-   │ ╰─────────^ u8
+   │ ╰─────────^ u64
 
 note:
    ┌─ contract_recv_generic_variant.fe:62:13
    │
-62 │             value
-   │             ^^^^^ u8
-
-note:
-   ┌─ contract_recv_generic_variant.fe:64:9
-   │
-64 │         GenericMsg<u16> { value } -> u16 uses () {
-   │         ^^^^^^^^^^^^^^^^^^^^^^^^^ GenericMsg<u16>
-
-note:
-   ┌─ contract_recv_generic_variant.fe:64:27
-   │
-64 │         GenericMsg<u16> { value } -> u16 uses () {
-   │                           ^^^^^ u16
-
-note:
-   ┌─ contract_recv_generic_variant.fe:64:50
-   │
-64 │           GenericMsg<u16> { value } -> u16 uses () {
-   │ ╭──────────────────────────────────────────────────^
-65 │ │             value
-66 │ │         }
-   │ ╰─────────^ u16
-
-note:
-   ┌─ contract_recv_generic_variant.fe:65:13
-   │
-65 │             value
-   │             ^^^^^ u16
-
-note:
-   ┌─ contract_recv_generic_variant.fe:67:9
-   │
-67 │         GenericMsg<u64> { value } -> u64 uses (data) {
-   │         ^^^^^^^^^^^^^^^^^^^^^^^^^ GenericMsg<u64>
-
-note:
-   ┌─ contract_recv_generic_variant.fe:67:27
-   │
-67 │         GenericMsg<u64> { value } -> u64 uses (data) {
-   │                           ^^^^^ u64
-
-note:
-   ┌─ contract_recv_generic_variant.fe:67:54
-   │
-67 │           GenericMsg<u64> { value } -> u64 uses (data) {
-   │ ╭──────────────────────────────────────────────────────^
-68 │ │             data + value
-69 │ │         }
-   │ ╰─────────^ u64
-
-note:
-   ┌─ contract_recv_generic_variant.fe:68:13
-   │
-68 │             data + value
+62 │             data + value
    │             ^^^^ u64
 
 note:
-   ┌─ contract_recv_generic_variant.fe:68:13
+   ┌─ contract_recv_generic_variant.fe:62:13
    │
-68 │             data + value
+62 │             data + value
    │             ^^^^^^^^^^^^ u64
 
 note:
-   ┌─ contract_recv_generic_variant.fe:68:20
+   ┌─ contract_recv_generic_variant.fe:62:20
    │
-68 │             data + value
+62 │             data + value
    │                    ^^^^^ u64

@@ -1,3 +1,4 @@
+use common::layout::enum_tag_bits;
 use num_bigint::{BigInt, Sign};
 use num_traits::ToPrimitive;
 use rustc_hash::FxHashSet;
@@ -761,30 +762,63 @@ pub fn int_ty_shape<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<(u
     })
 }
 
-pub fn runtime_size_bytes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<usize> {
-    const WORD_SIZE_BYTES: usize = 32;
-    const ENUM_TAG_SIZE_BYTES: usize = 1;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuntimeSizeError {
+    Overflow,
+}
 
-    fn array_len<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<usize> {
+pub fn runtime_size_bytes<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+) -> Result<Option<u64>, RuntimeSizeError> {
+    const WORD_SIZE_BYTES: u64 = 32;
+
+    fn array_len<'db>(
+        db: &'db dyn HirAnalysisDb,
+        ty: TyId<'db>,
+    ) -> Result<Option<u64>, RuntimeSizeError> {
         let (_, args) = ty.decompose_ty_app(db);
-        let TyData::ConstTy(const_ty) = args.get(1)?.data(db) else {
-            return None;
+        let Some(arg) = args.get(1) else {
+            return Ok(None);
+        };
+        let TyData::ConstTy(const_ty) = arg.data(db) else {
+            return Ok(None);
         };
         match const_ty.data(db) {
-            ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int_id), _) => {
-                int_id.data(db).to_usize()
-            }
-            _ => None,
+            ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int_id), _) => int_id
+                .data(db)
+                .to_u64()
+                .map(Some)
+                .ok_or(RuntimeSizeError::Overflow),
+            _ => Ok(None),
         }
+    }
+
+    fn sum_fields<'db>(
+        db: &'db dyn HirAnalysisDb,
+        fields: impl IntoIterator<Item = TyId<'db>>,
+        visiting: &mut FxHashSet<TyId<'db>>,
+    ) -> Result<Option<u64>, RuntimeSizeError> {
+        fields.into_iter().try_fold(Some(0u64), |size, field| {
+            let Some(size) = size else {
+                return Ok(None);
+            };
+            let Some(field_size) = inner(db, field, visiting)? else {
+                return Ok(None);
+            };
+            size.checked_add(field_size)
+                .map(Some)
+                .ok_or(RuntimeSizeError::Overflow)
+        })
     }
 
     fn inner<'db>(
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
         visiting: &mut FxHashSet<TyId<'db>>,
-    ) -> Option<usize> {
+    ) -> Result<Option<u64>, RuntimeSizeError> {
         if !visiting.insert(ty) {
-            return None;
+            return Ok(None);
         }
 
         let result = if ty.has_invalid(db) || ty.has_var(db) {
@@ -796,16 +830,21 @@ pub fn runtime_size_bytes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Opt
         } else if ty.has_param(db) {
             None
         } else if ty.is_tuple(db) {
-            ty.field_types(db)
-                .into_iter()
-                .try_fold(0usize, |size, field| {
-                    Some(size + inner(db, field, visiting)?)
-                })
+            sum_fields(db, ty.field_types(db), visiting)?
         } else if matches!(
             ty.base_ty(db).data(db),
             TyData::TyBase(TyBase::Func(_) | TyBase::Contract(_))
         ) {
             Some(0)
+        } else if ty.is_array(db) {
+            let (_, args) = ty.decompose_ty_app(db);
+            match (args.first().copied(), array_len(db, ty)?) {
+                (Some(elem), Some(len)) => {
+                    let stride = inner(db, elem, visiting)?.unwrap_or(WORD_SIZE_BYTES);
+                    Some(len.checked_mul(stride).ok_or(RuntimeSizeError::Overflow)?)
+                }
+                _ => None,
+            }
         } else if let TyData::TyBase(TyBase::Prim(prim)) = ty.base_ty(db).data(db) {
             match prim {
                 PrimTy::Bool => Some(1),
@@ -815,42 +854,43 @@ pub fn runtime_size_bytes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Opt
                 | PrimTy::BorrowMut
                 | PrimTy::BorrowRef => Some(WORD_SIZE_BYTES),
                 PrimTy::Array | PrimTy::Tuple(_) => None,
-                _ => prim_int_bits(*prim).map(|bits| bits / 8),
+                _ => prim_int_bits(*prim).map(|bits| bits as u64 / 8),
             }
-        } else if ty.is_array(db) {
-            let (_, args) = ty.decompose_ty_app(db);
-            let elem = args.first().copied()?;
-            let stride = inner(db, elem, visiting).unwrap_or(WORD_SIZE_BYTES);
-            Some(array_len(db, ty)? * stride)
         } else if ty.is_struct(db) {
-            ty.field_types(db)
-                .into_iter()
-                .try_fold(0usize, |size, field| {
-                    Some(size + inner(db, field, visiting)?)
-                })
+            sum_fields(db, ty.field_types(db), visiting)?
         } else if let Some(enum_) = ty.as_enum(db) {
             let args = ty.generic_args(db);
+            let tag_size = u64::from(enum_tag_bits(enum_.len_variants(db)).div_ceil(8));
             let max_payload = enum_
                 .variants(db)
-                .map(|variant| {
-                    variant
-                        .field_tys(db)
-                        .into_iter()
-                        .try_fold(0usize, |size, field| {
-                            Some(size + inner(db, field.instantiate(db, args), visiting)?)
-                        })
-                })
-                .collect::<Option<Vec<_>>>()?
-                .into_iter()
-                .max()
-                .unwrap_or(0);
-            Some(ENUM_TAG_SIZE_BYTES + max_payload)
+                .try_fold(Some(0u64), |max_payload, variant| {
+                    let Some(max_payload) = max_payload else {
+                        return Ok(None);
+                    };
+                    Ok(sum_fields(
+                        db,
+                        variant
+                            .field_tys(db)
+                            .into_iter()
+                            .map(|field| field.instantiate(db, args)),
+                        visiting,
+                    )?
+                    .map(|payload| max_payload.max(payload)))
+                })?;
+            match max_payload {
+                Some(max_payload) => Some(
+                    tag_size
+                        .checked_add(max_payload)
+                        .ok_or(RuntimeSizeError::Overflow)?,
+                ),
+                None => None,
+            }
         } else {
             None
         };
 
         visiting.remove(&ty);
-        result
+        Ok(result)
     }
 
     inner(db, ty, &mut FxHashSet::default())

@@ -348,8 +348,15 @@ pub(crate) fn target_root_provider_materialization<'db>(
     match class {
         RuntimeClass::RawAddr {
             space: AddressSpaceKind::Memory,
-            target: Some(layout),
-        } => Some(TargetRootProviderMaterialization::MemoryRawAddr { layout: *layout }),
+            pointee: Some(pointee),
+        } => match pointee.as_ref() {
+            RuntimeClass::AggregateValue { layout } => {
+                Some(TargetRootProviderMaterialization::MemoryRawAddr { layout: *layout })
+            }
+            RuntimeClass::Scalar(_) | RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => {
+                None
+            }
+        },
         RuntimeClass::Ref {
             pointee,
             kind:

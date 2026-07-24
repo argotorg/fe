@@ -14,7 +14,7 @@ use crate::{
                 effect_family_for_trait, effect_family_for_type, instantiate_trait_effect_key,
                 instantiate_type_effect_key,
                 match_::{instantiate_trait_pattern_in, instantiate_type_pattern_in},
-                normalize_effect_identity_trait, normalize_effect_identity_ty, resolve_effect_key,
+                normalize_effect_identity_trait, normalize_effect_identity_ty, resolve_effect_path,
                 stored_trait_key_is_rigid, stored_type_key_is_rigid,
             },
             fold::{TyFoldable, TyFolder},
@@ -159,7 +159,7 @@ fn build_conservative_invalid_type_key_barrier_pattern_in_scope<'db>(
     assumptions: PredicateListId<'db>,
     key_path: PathId<'db>,
 ) -> Option<EffectPatternKey<'db>> {
-    let ty = match resolve_effect_key(db, key_path, scope, assumptions) {
+    let ty = match resolve_effect_path(db, key_path, scope, assumptions) {
         super::ResolvedEffectKey::Type(schema) => Some(schema.carrier),
         super::ResolvedEffectKey::Trait(_) => None,
         super::ResolvedEffectKey::Invalid | super::ResolvedEffectKey::Other => {
@@ -323,7 +323,7 @@ pub fn build_barrier_pattern_for_key_in_scope<'db>(
     assumptions: PredicateListId<'db>,
     key_path: PathId<'db>,
 ) -> Option<EffectPatternKey<'db>> {
-    match resolve_effect_key(db, key_path, scope, assumptions) {
+    match resolve_effect_path(db, key_path, scope, assumptions) {
         super::ResolvedEffectKey::Type(schema) => Some(EffectPatternKey::Type(
             build_type_barrier_pattern_key(db, scope, assumptions, schema.carrier),
         )),

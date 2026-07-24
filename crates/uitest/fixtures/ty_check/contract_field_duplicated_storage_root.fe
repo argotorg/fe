@@ -1,4 +1,4 @@
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Slot<T, const ROOT: u256 = _> {}
 

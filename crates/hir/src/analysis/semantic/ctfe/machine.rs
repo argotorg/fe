@@ -1154,25 +1154,19 @@ impl<'db> CtfeMachine<'db> {
             BodyOwner::Func(func) if !func.is_const(self.db) => {
                 Err(CtfeError::NonConstCall { origin })
             }
-            BodyOwner::Func(func) => {
-                let (diags, typed_body) = check_func_body(self.db, func);
-                if !diags.is_empty() && typed_body.has_smir_lowering_blocker(self.db) {
-                    Err(CtfeError::InvalidBody { origin })
-                } else {
-                    Ok(())
-                }
-            }
-            BodyOwner::Const(const_) => {
-                let (diags, typed_body) = check_const_body(self.db, const_);
-                if !diags.is_empty() && typed_body.has_smir_lowering_blocker(self.db) {
-                    Err(CtfeError::InvalidBody { origin })
-                } else {
-                    Ok(())
-                }
-            }
-            BodyOwner::AnonConstBody { body, expected } => {
-                let (diags, typed_body) = check_anon_const_body(self.db, body, expected);
-                if !diags.is_empty() && typed_body.has_smir_lowering_blocker(self.db) {
+            owner
+            @ (BodyOwner::Func(_) | BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. }) => {
+                let typed_body = match owner {
+                    BodyOwner::Func(func) => &check_func_body(self.db, func).1,
+                    BodyOwner::Const(const_) => &check_const_body(self.db, const_).1,
+                    BodyOwner::AnonConstBody { body, expected } => {
+                        &check_anon_const_body(self.db, body, expected).1
+                    }
+                    BodyOwner::ContractInit { .. } | BodyOwner::ContractRecvArm { .. } => {
+                        unreachable!("contract bodies are not const-evaluable")
+                    }
+                };
+                if typed_body.has_smir_lowering_blocking_diagnostics(self.db) {
                     Err(CtfeError::InvalidBody { origin })
                 } else {
                     Ok(())
@@ -2127,8 +2121,9 @@ impl<'db> CtfeMachine<'db> {
                 .instantiate_typed_body(self.db)
                 .assumptions(),
         );
-        let size =
-            runtime_size_bytes(self.db, ty).ok_or(CtfeError::NotConstEvaluable { origin })?;
+        let size = runtime_size_bytes(self.db, ty)
+            .map_err(|_| CtfeError::ArithmeticOverflow { origin })?
+            .ok_or(CtfeError::NotConstEvaluable { origin })?;
         Ok(CtfeConstValue::int(self.db, result_ty, BigInt::from(size)))
     }
 
@@ -2322,6 +2317,12 @@ impl<'db> CtfeMachine<'db> {
                     CtfePathElem::Index(self.index_from_value(frame_idx, index, origin)?)
                 }
                 Projection::Index(IndexSource::Constant(index)) => CtfePathElem::Index(*index),
+                Projection::Index(IndexSource::Any) => {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "analysis wildcard index is not valid in CTFE".into(),
+                    });
+                }
                 Projection::Deref | Projection::Discriminant => {
                     return Err(CtfeError::InvalidOperation {
                         origin,
@@ -2703,9 +2704,9 @@ impl<'db> CtfeMachine<'db> {
                     -int - BigInt::one(),
                 )))
             }
-            UnOp::Mut | UnOp::Ref => Err(CtfeError::InvalidOperation {
+            UnOp::Mut | UnOp::Ref | UnOp::Deref => Err(CtfeError::InvalidOperation {
                 origin,
-                message: "unexpected borrow operator in CTFE unary evaluation".into(),
+                message: "unexpected place operator in CTFE unary evaluation".into(),
             }),
         }
     }

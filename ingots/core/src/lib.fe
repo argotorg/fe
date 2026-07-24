@@ -3,15 +3,17 @@ pub use result::Result
 pub use default::Default
 pub use clone::Clone
 pub use marker::Copy
+pub use convert::Into
 pub use abi::{self, *}
 pub use message::MsgVariant
 pub use error::ErrorVariant
 pub use ops::{self, *}
+pub use ptr::{self, *}
 pub use bytes::{AsBytes, keccak}
 pub use string::{self, concat}
 pub use intrinsic::{contract_field_slot, size_of}
 pub use functional::{Fn, Functor, Applicative, Monad}
-pub use effect_ref::{AddressSpace, EffectHandle, EffectHandleMut, EffectRef, EffectRefMut, MemPtr, StaticSlot, StorPtr}
+pub use effect_ref::{AddressSpace, EffectHandle, EffectHandleMut, EffectRef, EffectRefMut, StaticSlot}
 pub use contracts::{self, *}
 pub use range::{Bound, Known, Unknown, Range}
 pub use seq::Seq

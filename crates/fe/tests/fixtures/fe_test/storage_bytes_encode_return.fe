@@ -1,4 +1,5 @@
-use std::evm::{Address, Call, Create, Evm, RawMem, StorageBytes, decode_returndata, last_returndata, mem}
+use core::ptr
+use std::evm::{Address, Call, Create, Evm, RawMem, StorageBytes, decode_returndata, last_returndata}
 
 type Blobs = StorageBytes<u256, 0, 1>
 
@@ -28,19 +29,19 @@ uses (evm: mut Evm)
 {
     let payload_len: u256 = 65
     let payload_size: u256 = 128
-    let data_ptr = mem::alloc(payload_size)
+    let data_ptr = ptr::alloc_bytes(payload_size)
 
     evm.mstore(addr: data_ptr, value: payload_len)
     evm.mstore(
-        addr: data_ptr + 32,
+        addr: ptr::offset_bytes(data_ptr, 32),
         value: 0x1111111111111111111111111111111111111111111111111111111111111111,
     )
     evm.mstore(
-        addr: data_ptr + 64,
+        addr: ptr::offset_bytes(data_ptr, 64),
         value: 0x2222222222222222222222222222222222222222222222222222222222222222,
     )
     evm.mstore(
-        addr: data_ptr + 96,
+        addr: ptr::offset_bytes(data_ptr, 96),
         value: 0x3300000000000000000000000000000000000000000000000000000000000000,
     )
 
@@ -50,9 +51,14 @@ uses (evm: mut Evm)
 fn raw_get(addr: Address) -> Bytes
 uses (evm: mut Evm)
 {
-    let ptr = mem::alloc(4)
+    let ptr = ptr::alloc_bytes(4)
     evm.mstore(addr: ptr, value: (0x02 as u256) << 224)
-    assert!(evm.raw_call(addr: addr, gas: 1000000, value: 0, args_offset: ptr, args_len: 4))
+    assert!(evm.raw_call(
+        addr: addr,
+        gas: 1000000,
+        value: 0,
+        args: ptr::MemBuffer::from_raw_parts(ptr: ptr, len: 4),
+    ))
 
     let returned: Bytes = decode_returndata(last_returndata())
     returned

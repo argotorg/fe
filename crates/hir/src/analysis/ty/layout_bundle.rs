@@ -640,8 +640,9 @@ impl<'db> LayoutBundleInterface<'db> {
     pub fn runtime_call_mapping(
         &self,
         source: &LayoutBundleSchema<'db>,
+        view: &[LayoutEvidencePathStep],
     ) -> Option<LayoutBundleViewMapping> {
-        self.runtime_mapping(source, &[], |target, candidate| {
+        self.runtime_mapping(source, view, |target, candidate| {
             target.map_ty() == candidate.map_ty()
         })
     }

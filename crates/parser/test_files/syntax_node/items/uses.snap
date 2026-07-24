@@ -1,11 +1,10 @@
 ---
 source: crates/parser/tests/syntax_node.rs
-assertion_line: 15
 expression: node
 input_file: test_files/syntax_node/items/uses.fe
 ---
-Root@0..98
-  ItemList@0..97
+Root@0..161
+  ItemList@0..160
     Item@0..18
       Func@0..18
         FnKw@0..2 "fn"
@@ -20,9 +19,10 @@ Root@0..98
             UsesKw@7..11 "uses"
             WhiteSpace@11..12 " "
             UsesParam@12..15
-              Path@12..15
-                PathSegment@12..15
-                  Ident@12..15 "Ctx"
+              PathType@12..15
+                Path@12..15
+                  PathSegment@12..15
+                    Ident@12..15 "Ctx"
         WhiteSpace@15..16 " "
         BlockExpr@16..18
           LBrace@16..17 "{"
@@ -44,9 +44,10 @@ Root@0..98
             UsesParam@32..39
               MutKw@32..35 "mut"
               WhiteSpace@35..36 " "
-              Path@36..39
-                PathSegment@36..39
-                  Ident@36..39 "Ctx"
+              PathType@36..39
+                Path@36..39
+                  PathSegment@36..39
+                    Ident@36..39 "Ctx"
         WhiteSpace@39..40 " "
         BlockExpr@40..42
           LBrace@40..41 "{"
@@ -68,26 +69,29 @@ Root@0..98
             UsesParamList@56..94
               LParen@56..57 "("
               UsesParam@57..60
-                Path@57..60
-                  PathSegment@57..60
-                    Ident@57..60 "Ctx"
+                PathType@57..60
+                  Path@57..60
+                    PathSegment@57..60
+                      Ident@57..60 "Ctx"
               Comma@60..61 ","
               WhiteSpace@61..62 " "
               UsesParam@62..73
                 MutKw@62..65 "mut"
                 WhiteSpace@65..66 " "
-                Path@66..73
-                  PathSegment@66..73
-                    Ident@66..73 "Storage"
+                PathType@66..73
+                  Path@66..73
+                    PathSegment@66..73
+                      Ident@66..73 "Storage"
               Comma@73..74 ","
               WhiteSpace@74..75 " "
               UsesParam@75..81
                 Ident@75..76 "c"
                 Colon@76..77 ":"
                 WhiteSpace@77..78 " "
-                Path@78..81
-                  PathSegment@78..81
-                    Ident@78..81 "Ctx"
+                PathType@78..81
+                  Path@78..81
+                    PathSegment@78..81
+                      Ident@78..81 "Ctx"
               Comma@81..82 ","
               WhiteSpace@82..83 " "
               UsesParam@83..93
@@ -96,12 +100,58 @@ Root@0..98
                 WhiteSpace@85..86 " "
                 MutKw@86..89 "mut"
                 WhiteSpace@89..90 " "
-                Path@90..93
-                  PathSegment@90..93
-                    Ident@90..93 "Foo"
+                PathType@90..93
+                  Path@90..93
+                    PathSegment@90..93
+                      Ident@90..93 "Foo"
               RParen@93..94 ")"
         WhiteSpace@94..95 " "
         BlockExpr@95..97
           LBrace@95..96 "{"
           RBrace@96..97 "}"
-  Newline@97..98 "\n"
+    Newline@97..99 "\n\n"
+    Item@99..160
+      Func@99..160
+        FnKw@99..101 "fn"
+        WhiteSpace@101..102 " "
+        FuncSignature@102..157
+          Ident@102..117 "pointer_effects"
+          FuncParamList@117..119
+            LParen@117..118 "("
+            RParen@118..119 ")"
+          WhiteSpace@119..120 " "
+          UsesClause@120..157
+            UsesKw@120..124 "uses"
+            WhiteSpace@124..125 " "
+            UsesParamList@125..157
+              LParen@125..126 "("
+              UsesParam@126..137
+                Ident@126..130 "data"
+                Colon@130..131 ":"
+                WhiteSpace@131..132 " "
+                PtrType@132..137
+                  Star@132..133 "*"
+                  PathType@133..137
+                    Path@133..137
+                      PathSegment@133..137
+                        Ident@133..137 "Data"
+              Comma@137..138 ","
+              WhiteSpace@138..139 " "
+              UsesParam@139..156
+                Ident@139..144 "words"
+                Colon@144..145 ":"
+                WhiteSpace@145..146 " "
+                MutKw@146..149 "mut"
+                WhiteSpace@149..150 " "
+                PtrType@150..156
+                  Star2@150..152 "**"
+                  PathType@152..156
+                    Path@152..156
+                      PathSegment@152..156
+                        Ident@152..156 "Word"
+              RParen@156..157 ")"
+        WhiteSpace@157..158 " "
+        BlockExpr@158..160
+          LBrace@158..159 "{"
+          RBrace@159..160 "}"
+  Newline@160..161 "\n"

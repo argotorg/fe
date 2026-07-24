@@ -11,12 +11,50 @@ func private %aug_assign(v0.i64, v1.i64) -> i64 {
         jump block1;
 
     block1:
-        mstore v2 v0 i64;
-        v4.i256 = ptr_to_int v2 i256;
-        v6.i256 = mload v4 i256;
-        v7.i64 = trunc v6 i64;
-        (v8.i64, v9.i1) = uaddo v7 v1;
-        br v9 block2 block3;
+        v4.i256 = zext v0 i256;
+        v6.i256 = shr 56.i256 v4;
+        v7.i8 = trunc v6 i8;
+        evm_mstore8 v2 v7;
+        v9.i256 = shr 48.i256 v4;
+        v10.i8 = trunc v9 i8;
+        v11.i256 = ptr_to_int v2 i256;
+        v13.i256 = add v11 1.i256;
+        evm_mstore8 v13 v10;
+        v15.i256 = shr 40.i256 v4;
+        v16.i8 = trunc v15 i8;
+        v17.i256 = ptr_to_int v2 i256;
+        v19.i256 = add v17 2.i256;
+        evm_mstore8 v19 v16;
+        v21.i256 = shr 32.i256 v4;
+        v22.i8 = trunc v21 i8;
+        v23.i256 = ptr_to_int v2 i256;
+        v25.i256 = add v23 3.i256;
+        evm_mstore8 v25 v22;
+        v27.i256 = shr 24.i256 v4;
+        v28.i8 = trunc v27 i8;
+        v29.i256 = ptr_to_int v2 i256;
+        v31.i256 = add v29 4.i256;
+        evm_mstore8 v31 v28;
+        v33.i256 = shr 16.i256 v4;
+        v34.i8 = trunc v33 i8;
+        v35.i256 = ptr_to_int v2 i256;
+        v37.i256 = add v35 5.i256;
+        evm_mstore8 v37 v34;
+        v39.i256 = shr 8.i256 v4;
+        v40.i8 = trunc v39 i8;
+        v41.i256 = ptr_to_int v2 i256;
+        v43.i256 = add v41 6.i256;
+        evm_mstore8 v43 v40;
+        v44.i8 = trunc v4 i8;
+        v45.i256 = ptr_to_int v2 i256;
+        v47.i256 = add v45 7.i256;
+        evm_mstore8 v47 v44;
+        v48.i256 = ptr_to_int v2 i256;
+        v50.i256 = mload v48 i256;
+        v52.i256 = shr 192.i256 v50;
+        v53.i64 = trunc v52 i64;
+        (v54.i64, v55.i1) = uaddo v53 v1;
+        br v55 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -24,20 +62,81 @@ func private %aug_assign(v0.i64, v1.i64) -> i64 {
         evm_revert 0.i256 36.i256;
 
     block3:
-        v16.i256 = zext v8 i256;
-        mstore v4 v16 i256;
-        v17.i256 = ptr_to_int v2 i256;
-        v19.i256 = mload v17 i256;
-        v20.i64 = trunc v19 i64;
-        (v21.i64, v22.i1) = umulo v20 2.i64;
-        br v22 block2 block4;
+        v61.i256 = zext v54 i256;
+        v62.i256 = shr 56.i256 v61;
+        v63.i8 = trunc v62 i8;
+        evm_mstore8 v48 v63;
+        v64.i256 = shr 48.i256 v61;
+        v65.i8 = trunc v64 i8;
+        v66.i256 = add v48 1.i256;
+        evm_mstore8 v66 v65;
+        v67.i256 = shr 40.i256 v61;
+        v68.i8 = trunc v67 i8;
+        v69.i256 = add v48 2.i256;
+        evm_mstore8 v69 v68;
+        v70.i256 = shr 32.i256 v61;
+        v71.i8 = trunc v70 i8;
+        v72.i256 = add v48 3.i256;
+        evm_mstore8 v72 v71;
+        v73.i256 = shr 24.i256 v61;
+        v74.i8 = trunc v73 i8;
+        v75.i256 = add v48 4.i256;
+        evm_mstore8 v75 v74;
+        v76.i256 = shr 16.i256 v61;
+        v77.i8 = trunc v76 i8;
+        v78.i256 = add v48 5.i256;
+        evm_mstore8 v78 v77;
+        v79.i256 = shr 8.i256 v61;
+        v80.i8 = trunc v79 i8;
+        v81.i256 = add v48 6.i256;
+        evm_mstore8 v81 v80;
+        v82.i8 = trunc v61 i8;
+        v83.i256 = add v48 7.i256;
+        evm_mstore8 v83 v82;
+        v84.i256 = ptr_to_int v2 i256;
+        v86.i256 = mload v84 i256;
+        v87.i256 = shr 192.i256 v86;
+        v88.i64 = trunc v87 i64;
+        (v89.i64, v90.i1) = umulo v88 2.i64;
+        br v90 block2 block4;
 
     block4:
-        v24.i256 = zext v21 i256;
-        mstore v17 v24 i256;
-        v25.i64 = mload v2 i64;
-        v27.i1 = eq 2.i64 0.i64;
-        br v27 block5 block6;
+        v92.i256 = zext v89 i256;
+        v93.i256 = shr 56.i256 v92;
+        v94.i8 = trunc v93 i8;
+        evm_mstore8 v84 v94;
+        v95.i256 = shr 48.i256 v92;
+        v96.i8 = trunc v95 i8;
+        v97.i256 = add v84 1.i256;
+        evm_mstore8 v97 v96;
+        v98.i256 = shr 40.i256 v92;
+        v99.i8 = trunc v98 i8;
+        v100.i256 = add v84 2.i256;
+        evm_mstore8 v100 v99;
+        v101.i256 = shr 32.i256 v92;
+        v102.i8 = trunc v101 i8;
+        v103.i256 = add v84 3.i256;
+        evm_mstore8 v103 v102;
+        v104.i256 = shr 24.i256 v92;
+        v105.i8 = trunc v104 i8;
+        v106.i256 = add v84 4.i256;
+        evm_mstore8 v106 v105;
+        v107.i256 = shr 16.i256 v92;
+        v108.i8 = trunc v107 i8;
+        v109.i256 = add v84 5.i256;
+        evm_mstore8 v109 v108;
+        v110.i256 = shr 8.i256 v92;
+        v111.i8 = trunc v110 i8;
+        v112.i256 = add v84 6.i256;
+        evm_mstore8 v112 v111;
+        v113.i8 = trunc v92 i8;
+        v114.i256 = add v84 7.i256;
+        evm_mstore8 v114 v113;
+        v115.i256 = mload v2 i256;
+        v116.i256 = shr 192.i256 v115;
+        v117.i64 = trunc v116 i64;
+        v119.i1 = eq 2.i64 0.i64;
+        br v119 block5 block6;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -45,11 +144,11 @@ func private %aug_assign(v0.i64, v1.i64) -> i64 {
         evm_revert 0.i256 36.i256;
 
     block6:
-        (v29.i64, v30.i1) = evm_udivo v25 2.i64;
-        br v30 block2 block7;
+        (v121.i64, v122.i1) = evm_udivo v117 2.i64;
+        br v122 block2 block7;
 
     block7:
-        return v29;
+        return v121;
 }
 
 func private %main() -> i64 {

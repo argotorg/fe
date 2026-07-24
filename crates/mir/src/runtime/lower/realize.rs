@@ -478,10 +478,7 @@ mod tests {
     }
 
     fn raw_addr_class<'db>(space: AddressSpaceKind) -> RuntimeClass<'db> {
-        RuntimeClass::RawAddr {
-            space,
-            target: None,
-        }
+        RuntimeClass::raw_addr(space, word_class())
     }
 
     #[derive(Debug, PartialEq, Eq)]

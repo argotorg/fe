@@ -51,6 +51,22 @@ impl From<mir::LowerError> for LowerError {
     }
 }
 
+impl From<mir::RuntimeMemoryLayoutError> for LowerError {
+    fn from(error: mir::RuntimeMemoryLayoutError) -> Self {
+        match error {
+            mir::RuntimeMemoryLayoutError::Overflow => LowerError::Unsupported(
+                "runtime memory layout exceeds the supported 64-bit size".to_string(),
+            ),
+            mir::RuntimeMemoryLayoutError::Recursive => {
+                LowerError::Unsupported("recursive runtime memory layout".to_string())
+            }
+            mir::RuntimeMemoryLayoutError::InvalidProjection(projection) => LowerError::Internal(
+                format!("invalid {projection} projection for runtime memory layout"),
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SonatinaContractBytecode {
     pub deploy: Vec<u8>,

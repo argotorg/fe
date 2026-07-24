@@ -29,6 +29,9 @@ pub enum PlaceBase<'db> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub enum PlaceProjection<'db> {
+    Deref {
+        result_ty: TyId<'db>,
+    },
     Field {
         index: u16,
         result_ty: TyId<'db>,
@@ -39,10 +42,19 @@ pub enum PlaceProjection<'db> {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub struct ResolvedPlaceField<'db> {
+    pub base_ty: TyId<'db>,
+    pub implicit_deref_ty: Option<TyId<'db>>,
+    pub index: u16,
+}
+
 impl<'db> PlaceProjection<'db> {
     pub fn result_ty(self) -> TyId<'db> {
         match self {
-            Self::Field { result_ty, .. } | Self::Index { result_ty, .. } => result_ty,
+            Self::Deref { result_ty }
+            | Self::Field { result_ty, .. }
+            | Self::Index { result_ty, .. } => result_ty,
         }
     }
 }
@@ -100,13 +112,30 @@ impl<'db> Place<'db> {
             Expr::Un(base, UnOp::Mut | UnOp::Ref) => {
                 Place::from_expr_in_body_with(db, body, *base, expr_binding, expr_ty)
             }
+            Expr::Un(base, UnOp::Deref) => {
+                let base_ty = expr_ty(*base);
+                let ptr_ty = base_ty
+                    .as_capability(db)
+                    .map(|(_, inner)| inner)
+                    .unwrap_or(base_ty);
+                ptr_ty.as_ptr(db)?;
+                let mut place =
+                    Place::from_expr_in_body_with(db, body, *base, expr_binding, expr_ty)?;
+                place.push_projection(PlaceProjection::Deref {
+                    result_ty: expr_ty(expr),
+                });
+                Some(place)
+            }
             Expr::Field(base, field) => {
                 let field = field.to_opt()?;
                 let mut place =
                     Place::from_expr_in_body_with(db, body, *base, expr_binding, expr_ty)?;
-                let index = resolve_place_field_index(db, expr_ty(*base), field)?;
+                let resolved = resolve_place_field(db, expr_ty(*base), field)?;
+                if let Some(result_ty) = resolved.implicit_deref_ty {
+                    place.push_projection(PlaceProjection::Deref { result_ty });
+                }
                 place.push_projection(PlaceProjection::Field {
-                    index,
+                    index: resolved.index,
                     result_ty: expr_ty(expr),
                 });
                 Some(place)
@@ -135,14 +164,42 @@ pub fn projectable_place_ty<'db>(db: &'db dyn HirAnalysisDb, mut ty: TyId<'db>) 
     ty
 }
 
-pub fn resolve_place_field_index<'db>(
+pub fn resolve_place_field<'db>(
+    db: &'db dyn HirAnalysisDb,
+    base_ty: TyId<'db>,
+    field: FieldIndex<'db>,
+) -> Option<ResolvedPlaceField<'db>> {
+    let base_ty = projectable_place_ty(db, base_ty);
+    if let Some(index) = field_index(db, base_ty, field) {
+        return Some(ResolvedPlaceField {
+            base_ty,
+            implicit_deref_ty: None,
+            index,
+        });
+    }
+
+    let pointee = projectable_place_ty(db, base_ty.as_ptr(db)?);
+    Some(ResolvedPlaceField {
+        base_ty: pointee,
+        implicit_deref_ty: Some(pointee),
+        index: field_index(db, pointee, field)?,
+    })
+}
+
+fn field_index<'db>(
     db: &'db dyn HirAnalysisDb,
     base_ty: TyId<'db>,
     field: FieldIndex<'db>,
 ) -> Option<u16> {
-    let base_ty = projectable_place_ty(db, base_ty);
     let idx = match field {
-        FieldIndex::Index(index) => index.data(db).to_usize()?,
+        FieldIndex::Index(index) => {
+            let idx = index.data(db).to_usize()?;
+            let (base_ty, ty_args) = base_ty.decompose_ty_app(db);
+            if !base_ty.is_tuple(db) || idx >= ty_args.len() {
+                return None;
+            }
+            idx
+        }
         FieldIndex::Ident(ident) => RecordLike::Type(base_ty).record_field_idx(db, ident)?,
     };
     u16::try_from(idx).ok()

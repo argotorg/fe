@@ -10,11 +10,11 @@ error[6-0003]: trait bound is not satisfied
   4 │ │ struct Bad {
   5 │ │     value: StorageMap<Address, u256, 0>,
   6 │ │ }
-    │ ╰─^ `StorageMap<Address, u256, 0>` doesn't implement `Encode<Sol>`
+    │ ╰─^ `(StorageMap<Address, u256, 0>)` doesn't implement `Encode<Sol>`
     │
-    ┌─ src/evm/effects.fe:431:14
+    ┌─ src/evm/effects.fe:464:14
     │
-431 │     where T: Encode<Sol> + AbiSize
+464 │     where T: Encode<Sol> + AbiSize
     │              ----------- required by this bound on `encode_abi_payload`
 
 error[6-0003]: trait bound is not satisfied
@@ -24,9 +24,9 @@ error[6-0003]: trait bound is not satisfied
   4 │ │ struct Bad {
   5 │ │     value: StorageMap<Address, u256, 0>,
   6 │ │ }
-    │ ╰─^ `StorageMap<Address, u256, 0>` doesn't implement `AbiSize`
+    │ ╰─^ `(StorageMap<Address, u256, 0>)` doesn't implement `AbiSize`
     │
-    ┌─ src/evm/effects.fe:431:28
+    ┌─ src/evm/effects.fe:464:28
     │
-431 │     where T: Encode<Sol> + AbiSize
+464 │     where T: Encode<Sol> + AbiSize
     │                            ------- required by this bound on `encode_abi_payload`

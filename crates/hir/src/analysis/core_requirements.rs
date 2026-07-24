@@ -93,7 +93,6 @@ const CORE_TRAIT_REQUIREMENTS: &[&str] = &[
 ];
 
 const STD_TYPE_REQUIREMENTS: &[&str] = &[
-    "std::evm::effects::MemPtr",
     "std::evm::effects::StorPtr",
     "std::evm::effects::CalldataPtr",
 ];

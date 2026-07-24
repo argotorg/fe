@@ -28,7 +28,6 @@ impl std::evm::Event for ManyFields {
 
     #[inline(always)]
     fn emit<L: std::evm::Log>(own self, _ log: mut L) {
-        let (data_ptr, data_len) = std::evm::encode_event_payload((self.f0, self.f1, self.f2, self.f3, self.f4, self.f5, self.f6, self.f7, self.f8, self.f9, self.f10, self.f11))
-        log.log2(offset: data_ptr, len: data_len, topic0: Self::TOPIC0, topic1: self.who.as_topic())
+        log.log2(data: std::evm::encode_abi_payload((self.f0, self.f1, self.f2, self.f3, self.f4, self.f5, self.f6, self.f7, self.f8, self.f9, self.f10, self.f11)), topic0: Self::TOPIC0, topic1: self.who.as_topic())
     }
 }

@@ -183,10 +183,10 @@ uses (mem: mut RawMem)
 {
     assert!(withdrawal_credentials.len == 32)
     (
-        ssz::hash_tree_root<ssz::ByteVector<48>>(pubkey),
+        ssz::hash_tree_root<ssz::ByteVector<48>>(pubkey.view()),
         withdrawal_credentials.word_at(0),
         ssz::u64_chunk(amount_gwei),
-        ssz::hash_tree_root<ssz::ByteVector<96>>(signature),
+        ssz::hash_tree_root<ssz::ByteVector<96>>(signature.view()),
     )
         .merkleize()
 }

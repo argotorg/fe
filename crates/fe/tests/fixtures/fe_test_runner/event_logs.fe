@@ -23,6 +23,11 @@ struct AllIndexed {
     c: u256,
 }
 
+#[event]
+struct DynamicEvent {
+    value: String<8>,
+}
+
 #[test]
 fn test_transfer_event() uses (evm: mut Evm) {
     let from = Address { inner: 0x1111111111111111111111111111111111111111 }
@@ -38,4 +43,9 @@ fn test_simple_event() uses (evm: mut Evm) {
 #[test]
 fn test_all_indexed() uses (evm: mut Evm) {
     evm.emit(AllIndexed { a: 1, b: 2, c: 3 })
+}
+
+#[test]
+fn test_dynamic_event() uses (evm: mut Evm) {
+    evm.emit(DynamicEvent { value: "hi" })
 }

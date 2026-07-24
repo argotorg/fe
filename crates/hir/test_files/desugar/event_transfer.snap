@@ -18,7 +18,6 @@ impl std::evm::Event for Transfer {
 
     #[inline(always)]
     fn emit<L: std::evm::Log>(own self, _ log: mut L) {
-        let (data_ptr, data_len) = std::evm::encode_abi_payload(self.amount)
-        log.log3(offset: data_ptr, len: data_len, topic0: Self::TOPIC0, topic1: self.from.as_topic(), topic2: self.to.as_topic())
+        log.log3(data: std::evm::encode_abi_payload((self.amount)), topic0: Self::TOPIC0, topic1: self.from.as_topic(), topic2: self.to.as_topic())
     }
 }

@@ -132,11 +132,11 @@ fn solver_proves_encode_for_fixed_bool_arrays() {
     let mut db = DriverDataBase::default();
     let url = Url::parse("file:///encode_fixed_bool_array_goal.fe").unwrap();
     let src = r#"
-use core::abi::Encode
+use core::{abi::Encode, ptr}
 use std::abi::Sol
 
 pub fn root(values: [bool; 5]) {
-    values.encode_to_ptr(0)
+    values.encode(ptr::alloc_bytes(160))
 }
 "#;
 
@@ -158,12 +158,12 @@ pub fn root(values: [bool; 5]) {
         .find_map(|expr| {
             let callable = typed_body.callable_expr(expr)?;
             let name = callable.callable_def.name(&db)?;
-            (name.data(&db) == "encode_to_ptr").then_some(callable)
+            (name.data(&db) == "encode").then_some(callable)
         })
-        .expect("encode_to_ptr callable should resolve during type checking");
+        .expect("encode callable should resolve during type checking");
     let inst = callable
         .trait_inst()
-        .expect("encode_to_ptr should be a trait method");
+        .expect("encode should be a trait method");
     let solve_cx = TraitSolveCx::new(&db, func.scope());
 
     match is_goal_satisfiable(&db, solve_cx, inst) {

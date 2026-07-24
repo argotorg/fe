@@ -1,5 +1,6 @@
+use core::ptr
 use std::evm::crypto::sha256
 
 fn bad() {
-    sha256(offset: 0, len: 0)
+    sha256(ptr::MemBuffer::empty())
 }

@@ -101,6 +101,8 @@ pub fn ty_is_copy<'db>(
     ty: TyId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> bool {
+    let ty = normalize::normalize_ty(db, ty, scope, assumptions);
+
     // Borrow/view handles (`mut`/`ref`/`view`) are always copyable, even without an explicit
     // `Copy` impl.
     if ty.as_capability(db).is_some() {
@@ -108,7 +110,7 @@ pub fn ty_is_copy<'db>(
     }
 
     // Built-in primitives are always `Copy`, independent of trait solving.
-    if ty == TyId::unit(db) || ty.is_bool(db) || ty.is_integral(db) {
+    if ty == TyId::unit(db) || ty.is_bool(db) || ty.is_integral(db) || ty.as_ptr(db).is_some() {
         return true;
     }
 
@@ -494,15 +496,11 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
             .first()
             .map(|registration| registration.provider_ty);
             for (idx, effect) in contract.effects(db).data(db).iter().enumerate() {
-                let Some(key_path) = effect
-                    .key_path
-                    .to_opt()
-                    .filter(|path| path.ident(db).is_present())
-                else {
+                let Some(key_ty) = effect.key_ty.to_opt() else {
                     continue;
                 };
 
-                match resolve_effect_key(db, key_path, contract.scope(), assumptions) {
+                match resolve_effect_key(db, key_ty, contract.scope(), assumptions) {
                     ResolvedEffectKey::Trait(schema) => {
                         let Some(root_effect_ty) = root_effect_ty else {
                             continue;
@@ -538,7 +536,7 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
                         if !given.is_zero_sized(db) {
                             diags.push(Box::new(BodyDiag::ContractRootEffectTypeNotZeroSized {
                                 owner: EffectParamOwner::Contract(contract),
-                                key: key_path,
+                                key: key_ty,
                                 idx,
                                 given,
                             }) as _);
@@ -547,7 +545,7 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
                     ResolvedEffectKey::Invalid | ResolvedEffectKey::Other => {
                         diags.push(Box::new(BodyDiag::InvalidEffectKey {
                             owner: EffectParamOwner::Contract(contract),
-                            key: key_path,
+                            key: key_ty,
                             idx,
                         }) as _);
                     }

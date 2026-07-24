@@ -11,9 +11,9 @@ use crate::{
 use super::{
     diagnostics::{normalized_body_internal_diag, operand_origin},
     ir::{
-        NBorrowRoot, NExpr, NSPlace, NSPlaceRoot, NSStmtKind, NSTerminator, NSTerminatorKind,
-        NormalizedBindingLowering, NormalizedSemanticBody, ReadMode, SemanticBorrowDiagnostic,
-        local_has_runtime_move_semantics,
+        NBorrowRoot, NExpr, NSPlace, NSPlaceRoot, NSProjectionPath, NSStmtKind, NSTerminator,
+        NSTerminatorKind, NormalizedBindingLowering, NormalizedSemanticBody, ReadMode,
+        SemanticBorrowDiagnostic, local_has_runtime_move_semantics,
     },
 };
 
@@ -44,6 +44,13 @@ pub fn verify_normalized_semantic_body<'db>(
                     format!("{label} {} has missing borrow root", local_id.index()),
                 ));
             }
+            verify_projection_path(
+                db,
+                instance,
+                body,
+                SemOrigin::Body(body.template_owner),
+                &place.path,
+            )?;
             Ok(())
         };
         match (&local.facts.interface, &local.lowering) {
@@ -284,9 +291,33 @@ fn verify_place<'db>(
             }
         }
     }
-    for proj in place.path.iter() {
-        if let Projection::Index(IndexSource::Dynamic(index)) = proj {
-            verify_local_exists(db, instance, body, origin, *index)?;
+    verify_projection_path(db, instance, body, origin, &place.path)
+}
+
+fn verify_projection_path<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    body: &NormalizedSemanticBody<'db>,
+    origin: SemOrigin<'db>,
+    path: &NSProjectionPath<'db>,
+) -> Result<(), SemanticBorrowDiagnostic<'db>> {
+    for projection in path.iter() {
+        if let Projection::Index(index) = projection {
+            match index {
+                IndexSource::Dynamic(index) => {
+                    verify_local_exists(db, instance, body, origin, *index)?;
+                }
+                IndexSource::Any => {
+                    return Err(normalized_body_internal_diag(
+                        db,
+                        instance,
+                        body,
+                        origin,
+                        "analysis-only wildcard index in normalized runtime place".to_string(),
+                    ));
+                }
+                IndexSource::Constant(_) => {}
+            }
         }
     }
     Ok(())

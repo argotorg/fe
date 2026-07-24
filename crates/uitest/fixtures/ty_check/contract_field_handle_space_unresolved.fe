@@ -4,18 +4,15 @@
 // into the mutable-field default (Storage).
 use core::effect_ref::{AddressSpace, EffectHandle}
 
-struct Ptr<T, const SP: AddressSpace = _> { raw: u256 }
+struct Ptr<T, const SP: AddressSpace = _> { raw: *T }
 
 impl<T, const SP: AddressSpace> EffectHandle for Ptr<T, SP> {
     type Target = T
+    type Raw = *T
 
     const SPACE: AddressSpace = SP
 
-    fn from_raw(_ raw: u256) -> Self {
-        Ptr { raw }
-    }
-
-    fn raw(self) -> u256 {
+    fn raw(self) -> *T {
         self.raw
     }
 }

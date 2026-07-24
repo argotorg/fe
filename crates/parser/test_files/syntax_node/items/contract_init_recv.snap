@@ -48,17 +48,19 @@ Root@0..362
               UsesParam@59..66
                 MutKw@59..62 "mut"
                 WhiteSpace@62..63 " "
-                Path@63..66
-                  PathSegment@63..66
-                    Ident@63..66 "ctx"
+                PathType@63..66
+                  Path@63..66
+                    PathSegment@63..66
+                      Ident@63..66 "ctx"
               Comma@66..67 ","
               WhiteSpace@67..68 " "
               UsesParam@68..76
                 MutKw@68..71 "mut"
                 WhiteSpace@71..72 " "
-                Path@72..76
-                  PathSegment@72..76
-                    Ident@72..76 "auth"
+                PathType@72..76
+                  Path@72..76
+                    PathSegment@72..76
+                      Ident@72..76 "auth"
               RParen@76..77 ")"
           WhiteSpace@77..78 " "
           BlockExpr@78..80
@@ -115,17 +117,19 @@ Root@0..362
                 UsesParamList@154..170
                   LParen@154..155 "("
                   UsesParam@155..158
-                    Path@155..158
-                      PathSegment@155..158
-                        Ident@155..158 "ctx"
+                    PathType@155..158
+                      Path@155..158
+                        PathSegment@155..158
+                          Ident@155..158 "ctx"
                   Comma@158..159 ","
                   WhiteSpace@159..160 " "
                   UsesParam@160..169
                     MutKw@160..163 "mut"
                     WhiteSpace@163..164 " "
-                    Path@164..169
-                      PathSegment@164..169
-                        Ident@164..169 "store"
+                    PathType@164..169
+                      Path@164..169
+                        PathSegment@164..169
+                          Ident@164..169 "store"
                   RParen@169..170 ")"
               WhiteSpace@170..171 " "
               BlockExpr@171..199
@@ -213,9 +217,10 @@ Root@0..362
                   UsesParam@308..315
                     MutKw@308..311 "mut"
                     WhiteSpace@311..312 " "
-                    Path@312..315
-                      PathSegment@312..315
-                        Ident@312..315 "ctx"
+                    PathType@312..315
+                      Path@312..315
+                        PathSegment@312..315
+                          Ident@312..315 "ctx"
                   RParen@315..316 ")"
               WhiteSpace@316..317 " "
               BlockExpr@317..353

@@ -1,5 +1,3 @@
-use std::convert::Infallible;
-
 use cranelift_entity::{EntityRef, SecondaryMap};
 use dataflow::{BackwardCfgAnalysis, ForwardCfgAnalysis, JoinSemiLattice, SparseAnalysis};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -7,15 +5,20 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::{
     HirAnalysisDb,
     semantic::{
-        SBlockId, SLocalId, SemanticInstance,
+        SBlockId, SLocalId, SemOrigin, SemanticInstance,
         borrowck::ir::{NExpr, NSStmtKind},
         get_or_build_semantic_instance,
     },
 };
 
 use super::{
-    canon::{BorrowCanonCx, CanonPlace, CfgAdjacency, Loan, LoanId, MovedPlaces, State},
+    canon::{
+        BorrowCanonCx, BorrowStateTransferCx, CanonPlace, CfgAdjacency, Loan, LoanId, MovedPlaces,
+        State,
+    },
     check::{Borrowck, provisional_borrow_summary_voucher, semantic_borrow_summary_voucher},
+    diagnostics::normalized_body_internal_diag,
+    facts::NormalizedBodyFacts,
     ir::{BorrowInputRef, NormalizedSemanticBody, SemanticBorrowDiagnostic},
 };
 
@@ -29,11 +32,123 @@ pub(super) struct BorrowLoanTargetState<'a, 'db> {
     pub(super) loans: &'a mut [Loan<'db>],
 }
 
+pub(super) struct BorrowLoanEffect<'db> {
+    pub(super) targets: FxHashSet<CanonPlace<'db>>,
+    pub(super) parents: FxHashSet<LoanId>,
+}
+
+pub(super) struct BorrowLoanEffectCx<'a, 'db> {
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    body: &'a NormalizedSemanticBody<'db>,
+    facts: &'a NormalizedBodyFacts,
+    loans: &'a [Loan<'db>],
+    summary_mode: BorrowSummaryMode,
+}
+
+impl<'a, 'db> BorrowLoanEffectCx<'a, 'db> {
+    pub(super) fn new(
+        db: &'db dyn HirAnalysisDb,
+        instance: SemanticInstance<'db>,
+        body: &'a NormalizedSemanticBody<'db>,
+        facts: &'a NormalizedBodyFacts,
+        loans: &'a [Loan<'db>],
+        summary_mode: BorrowSummaryMode,
+    ) -> Self {
+        Self {
+            db,
+            instance,
+            body,
+            facts,
+            loans,
+            summary_mode,
+        }
+    }
+
+    pub(super) fn for_expr(
+        &self,
+        state: &State<'db>,
+        expr: &NExpr<'db>,
+        origin: SemOrigin<'db>,
+    ) -> Result<Option<BorrowLoanEffect<'db>>, SemanticBorrowDiagnostic<'db>> {
+        let canon = BorrowCanonCx::new(self.db, self.instance, self.body, self.facts, self.loans);
+        let effect = match expr {
+            NExpr::Borrow { place, .. } => BorrowLoanEffect {
+                targets: canon.canonicalize_place(state, place, origin)?,
+                parents: canon.mut_loans_for_place(state, place),
+            },
+            NExpr::Call { callee, args, .. } => {
+                let callee_instance = get_or_build_semantic_instance(self.db, callee.key);
+                let summary = match self.summary_mode.for_callee(self.db, callee_instance) {
+                    BorrowSummaryMode::Final => {
+                        semantic_borrow_summary_voucher(self.db, callee_instance)
+                    }
+                    BorrowSummaryMode::Provisional => {
+                        provisional_borrow_summary_voucher(self.db, callee_instance)
+                    }
+                }?;
+                let Some(summary) = summary else {
+                    return Err(normalized_body_internal_diag(
+                        self.db,
+                        self.instance,
+                        self.body,
+                        origin,
+                        "borrow-returning call has no semantic borrow summary".to_string(),
+                    ));
+                };
+                let mut targets = FxHashSet::default();
+                let mut parents = FxHashSet::default();
+                for transform in &summary {
+                    let BorrowInputRef::Param(idx) = transform.input;
+                    if let Some(arg) = args.get(idx as usize) {
+                        targets.extend(canon.canonicalize_value_path(
+                            state,
+                            arg.local,
+                            &transform.proj,
+                            origin,
+                        )?);
+                        parents.extend(canon.mut_loans_for_value(state, arg.local));
+                    }
+                }
+                BorrowLoanEffect { targets, parents }
+            }
+            NExpr::Use(value) => BorrowLoanEffect {
+                targets: canon.canonicalize_value_base(state, value.local),
+                parents: canon.mut_loans_for_value(state, value.local),
+            },
+            _ => return Ok(None),
+        };
+        Ok(Some(effect))
+    }
+}
+
+impl BorrowSummaryMode {
+    pub(super) fn for_callee<'db>(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        callee: SemanticInstance<'db>,
+    ) -> Self {
+        if self == Self::Provisional
+            || callee
+                .key(db)
+                .subst(db)
+                .generic_args(db)
+                .iter()
+                .any(|ty| ty.has_param(db) || ty.has_var(db))
+        {
+            Self::Provisional
+        } else {
+            Self::Final
+        }
+    }
+}
+
 pub(super) struct BorrowLoanTargetAnalysis<'a, 'db> {
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
     body: &'a NormalizedSemanticBody<'db>,
-    entry_state: &'a SecondaryMap<SBlockId, State>,
+    facts: &'a NormalizedBodyFacts,
+    entry_state: &'a SecondaryMap<SBlockId, State<'db>>,
     loan_for_local: &'a FxHashMap<SLocalId, LoanId>,
     summary_mode: BorrowSummaryMode,
 }
@@ -43,7 +158,8 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
         db: &'db dyn HirAnalysisDb,
         instance: SemanticInstance<'db>,
         body: &'a NormalizedSemanticBody<'db>,
-        entry_state: &'a SecondaryMap<SBlockId, State>,
+        facts: &'a NormalizedBodyFacts,
+        entry_state: &'a SecondaryMap<SBlockId, State<'db>>,
         loan_for_local: &'a FxHashMap<SLocalId, LoanId>,
         summary_mode: BorrowSummaryMode,
     ) -> Self {
@@ -51,6 +167,7 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
             db,
             instance,
             body,
+            facts,
             entry_state,
             loan_for_local,
             summary_mode,
@@ -58,13 +175,11 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
     }
 
     fn canon<'b>(&'b self, loans: &'b [Loan<'db>]) -> BorrowCanonCx<'b, 'db> {
-        BorrowCanonCx::new(
-            self.db,
-            self.instance,
-            self.body,
-            loans,
-            self.loan_for_local,
-        )
+        BorrowCanonCx::new(self.db, self.instance, self.body, self.facts, loans)
+    }
+
+    fn state_transfer<'b>(&'b self, loans: &'b [Loan<'db>]) -> BorrowStateTransferCx<'b, 'db> {
+        BorrowStateTransferCx::new(self.canon(loans), self.loan_for_local, self.summary_mode)
     }
 
     fn extend_loan(
@@ -85,7 +200,7 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
     fn update_loan_from_stmt(
         &self,
         loans: &mut [Loan<'db>],
-        state: &State,
+        state: &State<'db>,
         stmt: &super::ir::NSStmt<'db>,
     ) -> Result<bool, SemanticBorrowDiagnostic<'db>> {
         let NSStmtKind::Assign { dst, expr } = &stmt.kind else {
@@ -94,61 +209,19 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
         let Some(&loan_id) = self.loan_for_local.get(dst) else {
             return Ok(false);
         };
-        match expr {
-            NExpr::Borrow { place, .. } => {
-                let (targets, parents) = {
-                    let canon = self.canon(loans);
-                    (
-                        canon.canonicalize_place(state, place, stmt.origin)?,
-                        canon.mut_loans_for_place(state, place),
-                    )
-                };
-                Ok(self.extend_loan(loans, loan_id, targets, parents))
-            }
-            NExpr::Call { callee, args, .. } => {
-                let callee_instance = get_or_build_semantic_instance(self.db, callee.key);
-                let summary = match self.summary_mode {
-                    BorrowSummaryMode::Final => {
-                        semantic_borrow_summary_voucher(self.db, callee_instance)
-                    }
-                    BorrowSummaryMode::Provisional => {
-                        provisional_borrow_summary_voucher(self.db, callee_instance)
-                    }
-                }?;
-                let Some(summary) = summary else {
-                    return Ok(false);
-                };
-                let (targets, parents) = {
-                    let canon = self.canon(loans);
-                    let mut targets = FxHashSet::default();
-                    let mut parents = FxHashSet::default();
-                    for transform in &summary {
-                        let BorrowInputRef::Param(idx) = transform.input;
-                        if let Some(arg) = args.get(idx as usize) {
-                            for base in canon.canonicalize_value_base(state, arg.local) {
-                                targets.insert(CanonPlace {
-                                    root: base.root,
-                                    proj: base.proj.concat(&transform.proj),
-                                });
-                            }
-                            parents.extend(canon.mut_loans_for_value(state, arg.local));
-                        }
-                    }
-                    (targets, parents)
-                };
-                Ok(self.extend_loan(loans, loan_id, targets, parents))
-            }
-            NExpr::Use(value) => {
-                let canon = self.canon(loans);
-                Ok(self.extend_loan(
-                    loans,
-                    loan_id,
-                    canon.canonicalize_value_base(state, value.local),
-                    canon.mut_loans_for_value(state, value.local),
-                ))
-            }
-            _ => Ok(false),
-        }
+        let Some(effect) = BorrowLoanEffectCx::new(
+            self.db,
+            self.instance,
+            self.body,
+            self.facts,
+            loans,
+            self.summary_mode,
+        )
+        .for_expr(state, expr, stmt.origin)?
+        else {
+            return Ok(false);
+        };
+        Ok(self.extend_loan(loans, loan_id, effect.targets, effect.parents))
     }
 }
 
@@ -170,8 +243,11 @@ impl<'a, 'db> SparseAnalysis for BorrowLoanTargetAnalysis<'a, 'db> {
         let mut changed = false;
         for stmt in &self.body.blocks[node.index()].stmts {
             changed |= self.update_loan_from_stmt(&mut *state.loans, &local_state, stmt)?;
-            self.canon(state.loans)
-                .apply_stmt_state(&mut local_state, stmt);
+            self.state_transfer(state.loans)
+                .apply_stmt(&mut local_state, stmt)?;
+            if !local_state.is_reachable() {
+                break;
+            }
         }
         Ok(changed)
     }
@@ -195,10 +271,10 @@ impl<'a, 'db> BorrowEntryStateAnalysis<'a, 'db> {
     }
 }
 
-impl ForwardCfgAnalysis for BorrowEntryStateAnalysis<'_, '_> {
+impl<'db> ForwardCfgAnalysis for BorrowEntryStateAnalysis<'_, 'db> {
     type Block = SBlockId;
-    type State = State;
-    type Error = Infallible;
+    type State = State<'db>;
+    type Error = SemanticBorrowDiagnostic<'db>;
 
     fn block_count(&self) -> usize {
         self.borrowck.body.blocks.len()
@@ -221,8 +297,16 @@ impl ForwardCfgAnalysis for BorrowEntryStateAnalysis<'_, '_> {
     ) -> Result<(), Self::Error> {
         if !self.borrowck.body.blocks.is_empty() {
             let entry = &mut entry_states[SBlockId::new(0)];
+            entry.mark_reachable();
             for (&local, &loan) in &self.borrowck.param_loan_for_local {
                 entry.assign_loans(local, FxHashSet::from_iter([loan]));
+            }
+            for root in &self.borrowck.body.borrow_roots {
+                if let super::ir::NBorrowRoot::Param { local, param_idx } = root {
+                    self.borrowck
+                        .state_transfer()
+                        .seed_param_pointer_targets(entry, *local, *param_idx);
+                }
             }
         }
         Ok(())
@@ -235,7 +319,12 @@ impl ForwardCfgAnalysis for BorrowEntryStateAnalysis<'_, '_> {
     ) -> Result<Self::State, Self::Error> {
         let mut state = in_state.clone();
         for stmt in &self.borrowck.body.blocks[block.index()].stmts {
-            self.borrowck.canon().apply_stmt_state(&mut state, stmt);
+            self.borrowck
+                .state_transfer()
+                .apply_stmt(&mut state, stmt)?;
+            if !state.is_reachable() {
+                break;
+            }
         }
         Ok(state)
     }
@@ -302,7 +391,12 @@ impl<'db> ForwardCfgAnalysis for BorrowMovedStateAnalysis<'_, 'db> {
         for stmt in &self.borrowck.body.blocks[block.index()].stmts {
             self.borrowck
                 .update_moved_for_stmt(&state, &mut moved, stmt)?;
-            self.borrowck.canon().apply_stmt_state(&mut state, stmt);
+            self.borrowck
+                .state_transfer()
+                .apply_stmt(&mut state, stmt)?;
+            if !state.is_reachable() {
+                break;
+            }
         }
         Ok(MovedState(moved))
     }

@@ -7,12 +7,13 @@ use crate::{
             FieldIndex, LayoutBackingPlace, LayoutBackingProjection, LayoutBackingSource,
             PlaceProvenance, SEffectArgValue, SExpr, SLocalId, SPlace, SStmtKind,
             SemanticLocalRole, SemanticProjectionPath, ValueProvenance, VariantIndex,
+            layout_backing_query,
         },
         ty::{
             adt_def::instantiate_adt_field_shape,
             const_ty::CallableInputLayoutHoleOrigin,
             normalize::normalize_ty,
-            provider::{ProviderLayoutEvidence, provider_semantics},
+            provider::provider_semantics,
             ty_check::{LocalBinding, ParamSite, ReturnProjectionStep, ReturnProvenance},
             ty_def::TyId,
         },
@@ -71,15 +72,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             };
         }
         let semantics = provider_semantics(self.db, self.body.scope(), self.assumptions, ty);
-        match (semantics.evidence, semantics.target_ty) {
-            (ProviderLayoutEvidence::ResolvedHandle(_), Some(target_ty)) => {
-                SemanticLocalRole::DirectCarrier {
-                    provider: None,
-                    target_ty,
-                }
-            }
-            _ => ordinary_direct_value_role(),
-        }
+        semantics.binding_target_ty(self.db, false).map_or_else(
+            ordinary_direct_value_role,
+            |target_ty| SemanticLocalRole::DirectCarrier {
+                provider: None,
+                target_ty,
+            },
+        )
     }
 
     fn classify_expr_local_role(
@@ -308,14 +307,16 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     match &effect_arg.arg {
                         SEffectArgValue::Place(place) => (
                             effect_arg
-                                .target_ty
+                                .provider_target_ty
                                 .unwrap_or(self.locals[place.local.index()].ty),
                             self.layout_backing_sources_for_place(place),
                         ),
                         SEffectArgValue::Value(value) => {
                             let base = value.value;
                             (
-                                effect_arg.target_ty.unwrap_or(self.locals[base.index()].ty),
+                                effect_arg
+                                    .provider_target_ty
+                                    .unwrap_or(self.locals[base.index()].ty),
                                 self.local_layout_backing_sources(base),
                             )
                         }
@@ -428,10 +429,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         place: &SPlace<'db>,
     ) -> Vec<LayoutBackingSource<'db>> {
         let base_sources = self.local_layout_backing_sources(place.local);
-        let target = layout_backing_source_target_for_path(&place.path);
-        let projected = target.map_or_else(Vec::new, |target| {
-            project_layout_backing_sources(base_sources, &target, &place.path)
-        });
+        let projected = layout_backing_query(&place.path)
+            .map_or_else(Vec::new, |(target, path)| {
+                project_layout_backing_sources(base_sources, &target, &path)
+            });
         if projected.is_empty() {
             whole_layout_backing_source(LayoutBackingPlace::Local(place.clone()))
         } else {
@@ -685,38 +686,6 @@ fn project_layout_backing_sources<'db>(
         }
     }
     dedup_layout_backing_sources(projected)
-}
-
-fn layout_backing_source_target_for_path<'db>(
-    path: &SemanticProjectionPath<'db>,
-) -> Option<Vec<LayoutBackingProjection>> {
-    path.iter()
-        .filter_map(|projection| match projection {
-            Projection::Field(field) => u16::try_from(*field)
-                .ok()
-                .map(FieldIndex)
-                .map(LayoutBackingProjection::Field)
-                .map(Some),
-            Projection::VariantField {
-                variant, field_idx, ..
-            } => u16::try_from(*field_idx)
-                .ok()
-                .map(FieldIndex)
-                .map(|field| LayoutBackingProjection::VariantField {
-                    variant: *variant,
-                    field,
-                })
-                .map(Some),
-            Projection::Index(IndexSource::Constant(index)) => {
-                Some(Some(LayoutBackingProjection::Index(Some(*index))))
-            }
-            Projection::Index(IndexSource::Dynamic(_)) => {
-                Some(Some(LayoutBackingProjection::Index(None)))
-            }
-            Projection::Deref => None,
-            Projection::Discriminant => Some(None),
-        })
-        .collect()
 }
 
 pub(super) fn ordinary_direct_value_role<'db>() -> SemanticLocalRole<'db> {

@@ -612,6 +612,8 @@ pub enum UnOp {
     Mut(SyntaxToken),
     /// `ref`
     Ref(SyntaxToken),
+    /// `*`
+    Deref(SyntaxToken),
 }
 impl UnOp {
     pub fn syntax(&self) -> SyntaxToken {
@@ -622,6 +624,7 @@ impl UnOp {
             UnOp::BitNot(token) => token.clone(),
             UnOp::Mut(token) => token.clone(),
             UnOp::Ref(token) => token.clone(),
+            UnOp::Deref(token) => token.clone(),
         }
     }
 
@@ -633,6 +636,7 @@ impl UnOp {
             SK::Tilde => Some(Self::BitNot(token)),
             SK::MutKw => Some(Self::Mut(token)),
             SK::RefKw => Some(Self::Ref(token)),
+            SK::Star => Some(Self::Deref(token)),
             _ => None,
         }
     }

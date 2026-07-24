@@ -2132,6 +2132,39 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 }
             }
 
+            Self::ContractFieldProviderRawInvalid { span, ty, failure } => {
+                let reason = match failure {
+                    crate::analysis::ty::provider::ProviderLayoutFailure::UnresolvedRaw => {
+                        "the selected provider's `Raw` type is unresolved"
+                    }
+                    crate::analysis::ty::provider::ProviderLayoutFailure::UnsupportedRaw => {
+                        "the selected provider's `Raw` type is not a pointer or `u256`"
+                    }
+                    crate::analysis::ty::provider::ProviderLayoutFailure::UntrustedRaw => {
+                        "user-defined handles may only use `*Target` in memory"
+                    }
+                    crate::analysis::ty::provider::ProviderLayoutFailure::Ambiguous
+                    | crate::analysis::ty::provider::ProviderLayoutFailure::UnresolvedTarget
+                    | crate::analysis::ty::provider::ProviderLayoutFailure::UnresolvedSpace => {
+                        unreachable!("non-raw provider failure reached raw diagnostic")
+                    }
+                };
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "contract field has an invalid effect-handle transport".to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: reason.to_string(),
+                        span: span.resolve(db),
+                    }],
+                    notes: vec![format!(
+                        "`{}` cannot carry address-space authority through this `EffectHandle` implementation",
+                        ty.pretty_print(db)
+                    )],
+                    error_code,
+                }
+            }
+
             Self::ContractFieldProviderCycle { span, ty } => {
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
@@ -2813,7 +2846,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             Self::InvalidEffectKey { owner, key, idx } => {
                 let idx = *idx;
                 let key_str = key.pretty_print(db);
-                let span = owner.effect_param_path_span(db, idx).resolve(db);
+                let span = owner.effect_param_ty_span(db, idx).resolve(db);
                 let effect = owner.effects(db).data(db).get(idx);
                 let is_labeled = effect.and_then(|e| e.name).is_some();
                 let is_contract_scoped_uses = match owner {
@@ -2867,7 +2900,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 root_ty,
                 trait_req,
             } => {
-                let span = owner.effect_param_path_span(db, *idx).resolve(db);
+                let span = owner.effect_param_ty_span(db, *idx).resolve(db);
                 let root = root_ty.pretty_print(db);
 
                 CompleteDiagnostic {
@@ -2895,7 +2928,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 given,
             } => {
                 let idx = *idx;
-                let span = owner.effect_param_path_span(db, idx).resolve(db);
+                let span = owner.effect_param_ty_span(db, idx).resolve(db);
                 let key_str = key.pretty_print(db);
                 let given_str = given.pretty_print(db);
 
@@ -3297,6 +3330,17 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 notes: vec![],
                 error_code,
             },
+
+            Self::TypeSizeOverflow { primary, ty } => primary_diag(
+                severity,
+                "type is too large",
+                &format!(
+                    "`{}` exceeds the supported 64-bit raw-memory layout size",
+                    ty.pretty_print(db)
+                ),
+                primary.resolve(db),
+                error_code,
+            ),
 
             Self::ConstValueMustBeKnown(span) => primary_diag(
                 severity,
@@ -5454,6 +5498,45 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                 notes: vec![],
                 error_code,
             },
+
+            Self::InvalidEffectHandleRaw {
+                primary,
+                raw_ty,
+                failure,
+            } => {
+                let message = match failure {
+                    crate::analysis::ty::provider::ProviderLayoutFailure::UnsupportedRaw => {
+                        format!(
+                            "`{}` cannot represent an effect-handle address",
+                            raw_ty.pretty_print(db)
+                        )
+                    }
+                    crate::analysis::ty::provider::ProviderLayoutFailure::UntrustedRaw => {
+                        "integer-backed handles are reserved for compiler-provided libraries"
+                            .to_string()
+                    }
+                    crate::analysis::ty::provider::ProviderLayoutFailure::Ambiguous
+                    | crate::analysis::ty::provider::ProviderLayoutFailure::UnresolvedTarget
+                    | crate::analysis::ty::provider::ProviderLayoutFailure::UnresolvedRaw
+                    | crate::analysis::ty::provider::ProviderLayoutFailure::UnresolvedSpace => {
+                        unreachable!("non-concrete raw failure reached impl diagnostic")
+                    }
+                };
+                CompleteDiagnostic {
+                    severity,
+                    message: "invalid `EffectHandle::Raw` type".to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message,
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![
+                        "user-defined effect handles must use `*Target` and can only provide memory effects"
+                            .to_string(),
+                    ],
+                    error_code,
+                }
+            }
         }
     }
 }

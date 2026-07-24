@@ -1,6 +1,8 @@
 use cranelift_entity::{EntityRef, entity_impl};
 use salsa::Update;
 
+pub use crate::analysis::ty::corelib::MemoryAccessKind;
+
 use crate::{
     analysis::{
         HirAnalysisDb,
@@ -11,7 +13,7 @@ use crate::{
         },
         ty::{
             provider::ProviderAddressSpace,
-            ty_check::{BodyOwner, EffectPassMode, LocalBinding},
+            ty_check::{BodyOwner, EffectArgLayoutView, EffectPassMode, LocalBinding},
             ty_def::{BorrowKind, TyId},
         },
     },
@@ -177,9 +179,27 @@ pub enum NBorrowRoot<'db> {
         local: SLocalId,
     },
     Provider {
+        local: SLocalId,
         binding: ProviderBinding<'db>,
         value_ty: TyId<'db>,
     },
+}
+
+impl NBorrowRoot<'_> {
+    pub(super) fn authorization_local(&self) -> SLocalId {
+        match self {
+            Self::Param { local, .. }
+            | Self::LocalSlot { local }
+            | Self::Provider { local, .. } => *local,
+        }
+    }
+
+    pub(super) fn materialized_local(&self) -> Option<SLocalId> {
+        match self {
+            Self::Param { local, .. } | Self::LocalSlot { local } => Some(*local),
+            Self::Provider { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -285,6 +305,7 @@ pub(crate) fn local_has_runtime_move_semantics<'db>(
         local.lowering,
         NormalizedBindingLowering::Erased | NormalizedBindingLowering::CarrierLocal { .. }
     ) && local.ty.as_capability(db).is_none()
+        && local.ty.as_ptr(db).is_none()
         && match &local.lowering {
             NormalizedBindingLowering::ValueLocal { place } => !matches!(
                 place
@@ -318,8 +339,9 @@ pub struct NEffectArg<'db> {
     pub binding_idx: u32,
     pub arg: NEffectArgValue<'db>,
     pub pass_mode: EffectPassMode,
+    pub layout_view: EffectArgLayoutView,
     pub required_mut: bool,
-    pub target_ty: Option<TyId<'db>>,
+    pub provider_target_ty: Option<TyId<'db>>,
     pub provider: Option<ProviderAddressSpace>,
 }
 
@@ -577,11 +599,111 @@ pub struct BorrowTransform<'db> {
 
 pub type BorrowSummary<'db> = Vec<BorrowTransform<'db>>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum PointerAddressSpaces {
+    One(ProviderAddressSpace),
+    Any,
+}
+
+impl PointerAddressSpaces {
+    pub fn one(address_space: ProviderAddressSpace) -> Self {
+        Self::One(address_space)
+    }
+
+    pub fn spaces(self) -> Vec<ProviderAddressSpace> {
+        match self {
+            Self::One(space) => vec![space],
+            Self::Any => vec![
+                ProviderAddressSpace::Memory,
+                ProviderAddressSpace::Storage,
+                ProviderAddressSpace::Transient,
+                ProviderAddressSpace::Calldata,
+                ProviderAddressSpace::Code,
+            ],
+        }
+    }
+
+    pub fn join(&mut self, other: Self) -> bool {
+        match (*self, other) {
+            (Self::Any, _) | (_, Self::Any) => {
+                let changed = *self != Self::Any;
+                *self = Self::Any;
+                changed
+            }
+            (Self::One(lhs), Self::One(rhs)) if lhs == rhs => false,
+            (Self::One(_), Self::One(_)) => {
+                *self = Self::Any;
+                true
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum FreshAllocSite<'db> {
+    Direct(SemOrigin<'db>),
+    Call {
+        call: SemOrigin<'db>,
+        callee: SemOrigin<'db>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum MemorySummaryTarget<'db> {
+    Input {
+        input: BorrowInputRef,
+        proj: NSProjectionPath<'db>,
+    },
+    Effect {
+        binding_idx: u32,
+        proj: NSProjectionPath<'db>,
+    },
+    FreshAllocation {
+        site: FreshAllocSite<'db>,
+        address_space: ProviderAddressSpace,
+    },
+    Unknown {
+        address_spaces: PointerAddressSpaces,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum MemorySummaryItem<'db> {
+    ReturnPointer {
+        output: NSProjectionPath<'db>,
+        targets: Vec<MemorySummaryTarget<'db>>,
+    },
+    Access {
+        target: MemorySummaryTarget<'db>,
+        kind: MemoryAccessKind,
+        authorizers: Vec<MemorySummaryTarget<'db>>,
+    },
+    StorePointer {
+        target: MemorySummaryTarget<'db>,
+        targets: Vec<MemorySummaryTarget<'db>>,
+        weak: bool,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct MemorySummary<'db> {
+    pub items: Vec<MemorySummaryItem<'db>>,
+    pub may_return: bool,
+}
+
 #[salsa::interned]
 #[derive(Debug)]
 pub struct BorrowSummaryId<'db> {
     #[return_ref]
     pub items: Vec<BorrowTransform<'db>>,
+}
+
+#[salsa::interned]
+#[derive(Debug)]
+pub struct MemorySummaryId<'db> {
+    #[return_ref]
+    pub items: Vec<MemorySummaryItem<'db>>,
+    pub may_return: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -631,6 +753,12 @@ pub struct NormalizedSemanticBodyId<'db> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
 pub enum SemanticBorrowSummaryResult<'db> {
     Ok(Option<BorrowSummaryId<'db>>),
+    Err(BorrowDiagnosticId<'db>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum SemanticMemorySummaryResult<'db> {
+    Ok(MemorySummaryId<'db>),
     Err(BorrowDiagnosticId<'db>),
 }
 

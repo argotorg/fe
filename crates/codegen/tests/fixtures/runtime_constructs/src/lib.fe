@@ -1,21 +1,23 @@
-use std::evm::{Create, Evm, mem}
+use core::ptr
+use std::evm::{Create, Evm}
 
 #[contract_init(Parent)]
 fn init() uses (evm: mut Evm) {
     let len = evm.code_region_len(runtime)
     let offset = evm.code_region_offset(runtime)
-    let dest = mem::alloc(len)
-    evm.codecopy(dest: dest, offset: offset, len: len)
-    evm.return_data(offset: dest, len: len)
+    let mut dest = ptr::MemBuffer::alloc(len)
+    evm.codecopy(dest: mut dest, offset: offset)
+    evm.return_data(data: dest)
 }
 
 #[contract_runtime(Parent)]
 fn runtime() uses (evm: mut Evm) {
     let len = evm.code_region_len(child::child_init)
     let offset = evm.code_region_offset(child::child_init)
-    let dest = mem::alloc(len)
-    evm.codecopy(dest: dest, offset: offset, len: len)
-    let addr = evm.create2_raw(value: 0, offset: dest, len: len, salt: 0x1234)
-    evm.mstore(addr: 0, value: addr.inner)
-    evm.return_data(offset: 0, len: 32)
+    let mut dest = ptr::MemBuffer::alloc(len)
+    evm.codecopy(dest: mut dest, offset: offset)
+    let addr = evm.create2_raw(value: 0, init_code: dest, salt: 0x1234)
+    let data = ptr::MemBuffer::alloc(32)
+    evm.mstore(addr: data.ptr, value: addr.inner)
+    evm.return_data(data: data)
 }

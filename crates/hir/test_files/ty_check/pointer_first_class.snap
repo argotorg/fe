@@ -1,0 +1,705 @@
+---
+source: crates/hir/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/pointer_first_class.fe
+---
+note:
+   ┌─ pointer_first_class.fe:10:63
+   │
+10 │   fn pointer_casts_and_offsets(data: *Data, bytes: *u8) -> u256 {
+   │ ╭───────────────────────────────────────────────────────────────^
+11 │ │     let bytes_from_typed: *u8 = core::ptr::as_bytes(data)
+12 │ │     let typed_again: *Data = core::ptr::cast<u8, Data>(bytes_from_typed)
+13 │ │     let next: *Data = core::ptr::offset_bytes(typed_again, 32)
+   · │
+16 │ │     typed_again.value + next.other + input_data.value
+17 │ │ }
+   │ ╰─^ u256
+
+note:
+   ┌─ pointer_first_class.fe:11:9
+   │
+11 │     let bytes_from_typed: *u8 = core::ptr::as_bytes(data)
+   │         ^^^^^^^^^^^^^^^^ *<u8>
+
+note:
+   ┌─ pointer_first_class.fe:11:33
+   │
+11 │     let bytes_from_typed: *u8 = core::ptr::as_bytes(data)
+   │                                 ^^^^^^^^^^^^^^^^^^^ fn as_bytes<Data>
+
+note:
+   ┌─ pointer_first_class.fe:11:33
+   │
+11 │     let bytes_from_typed: *u8 = core::ptr::as_bytes(data)
+   │                                 ^^^^^^^^^^^^^^^^^^^^^^^^^ *<u8>
+
+note:
+   ┌─ pointer_first_class.fe:11:53
+   │
+11 │     let bytes_from_typed: *u8 = core::ptr::as_bytes(data)
+   │                                                     ^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:12:9
+   │
+12 │     let typed_again: *Data = core::ptr::cast<u8, Data>(bytes_from_typed)
+   │         ^^^^^^^^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:12:30
+   │
+12 │     let typed_again: *Data = core::ptr::cast<u8, Data>(bytes_from_typed)
+   │                              ^^^^^^^^^^^^^^^^^^^^^^^^^ fn cast<u8, Data>
+
+note:
+   ┌─ pointer_first_class.fe:12:30
+   │
+12 │     let typed_again: *Data = core::ptr::cast<u8, Data>(bytes_from_typed)
+   │                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:12:56
+   │
+12 │     let typed_again: *Data = core::ptr::cast<u8, Data>(bytes_from_typed)
+   │                                                        ^^^^^^^^^^^^^^^^ *<u8>
+
+note:
+   ┌─ pointer_first_class.fe:13:9
+   │
+13 │     let next: *Data = core::ptr::offset_bytes(typed_again, 32)
+   │         ^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:13:23
+   │
+13 │     let next: *Data = core::ptr::offset_bytes(typed_again, 32)
+   │                       ^^^^^^^^^^^^^^^^^^^^^^^ fn offset_bytes<Data>
+
+note:
+   ┌─ pointer_first_class.fe:13:23
+   │
+13 │     let next: *Data = core::ptr::offset_bytes(typed_again, 32)
+   │                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:13:47
+   │
+13 │     let next: *Data = core::ptr::offset_bytes(typed_again, 32)
+   │                                               ^^^^^^^^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:13:60
+   │
+13 │     let next: *Data = core::ptr::offset_bytes(typed_again, 32)
+   │                                                            ^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:14:9
+   │
+14 │     let input_data: *Data = core::ptr::cast<u8, Data>(bytes)
+   │         ^^^^^^^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:14:29
+   │
+14 │     let input_data: *Data = core::ptr::cast<u8, Data>(bytes)
+   │                             ^^^^^^^^^^^^^^^^^^^^^^^^^ fn cast<u8, Data>
+
+note:
+   ┌─ pointer_first_class.fe:14:29
+   │
+14 │     let input_data: *Data = core::ptr::cast<u8, Data>(bytes)
+   │                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:14:55
+   │
+14 │     let input_data: *Data = core::ptr::cast<u8, Data>(bytes)
+   │                                                       ^^^^^ *<u8>
+
+note:
+   ┌─ pointer_first_class.fe:16:5
+   │
+16 │     typed_again.value + next.other + input_data.value
+   │     ^^^^^^^^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:16:5
+   │
+16 │     typed_again.value + next.other + input_data.value
+   │     ^^^^^^^^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:16:5
+   │
+16 │     typed_again.value + next.other + input_data.value
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:16:5
+   │
+16 │     typed_again.value + next.other + input_data.value
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:16:25
+   │
+16 │     typed_again.value + next.other + input_data.value
+   │                         ^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:16:25
+   │
+16 │     typed_again.value + next.other + input_data.value
+   │                         ^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:16:38
+   │
+16 │     typed_again.value + next.other + input_data.value
+   │                                      ^^^^^^^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:16:38
+   │
+16 │     typed_again.value + next.other + input_data.value
+   │                                      ^^^^^^^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:19:46
+   │
+19 │   fn pointer_field_access(data: *Data) -> u256 {
+   │ ╭──────────────────────────────────────────────^
+20 │ │     data.value = 10
+21 │ │     data.other = data.value + 3
+22 │ │     data.value + data.other
+23 │ │ }
+   │ ╰─^ u256
+
+note:
+   ┌─ pointer_first_class.fe:20:5
+   │
+20 │     data.value = 10
+   │     ^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:20:5
+   │
+20 │     data.value = 10
+   │     ^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:20:5
+   │
+20 │     data.value = 10
+   │     ^^^^^^^^^^^^^^^ ()
+
+note:
+   ┌─ pointer_first_class.fe:20:18
+   │
+20 │     data.value = 10
+   │                  ^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:21:5
+   │
+21 │     data.other = data.value + 3
+   │     ^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:21:5
+   │
+21 │     data.other = data.value + 3
+   │     ^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:21:5
+   │
+21 │     data.other = data.value + 3
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note:
+   ┌─ pointer_first_class.fe:21:18
+   │
+21 │     data.other = data.value + 3
+   │                  ^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:21:18
+   │
+21 │     data.other = data.value + 3
+   │                  ^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:21:18
+   │
+21 │     data.other = data.value + 3
+   │                  ^^^^^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:21:31
+   │
+21 │     data.other = data.value + 3
+   │                               ^ u256
+
+note:
+   ┌─ pointer_first_class.fe:22:5
+   │
+22 │     data.value + data.other
+   │     ^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:22:5
+   │
+22 │     data.value + data.other
+   │     ^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:22:5
+   │
+22 │     data.value + data.other
+   │     ^^^^^^^^^^^^^^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:22:18
+   │
+22 │     data.value + data.other
+   │                  ^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:22:18
+   │
+22 │     data.value + data.other
+   │                  ^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:25:60
+   │
+25 │   fn pointer_tuple_field_access(pair: *(u256, u256)) -> u256 {
+   │ ╭────────────────────────────────────────────────────────────^
+26 │ │     pair.0 = 4
+27 │ │     pair.1 = pair.0 + 5
+28 │ │     pair.0 + pair.1
+29 │ │ }
+   │ ╰─^ u256
+
+note:
+   ┌─ pointer_first_class.fe:26:5
+   │
+26 │     pair.0 = 4
+   │     ^^^^ *<(u256, u256)>
+
+note:
+   ┌─ pointer_first_class.fe:26:5
+   │
+26 │     pair.0 = 4
+   │     ^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:26:5
+   │
+26 │     pair.0 = 4
+   │     ^^^^^^^^^^ ()
+
+note:
+   ┌─ pointer_first_class.fe:26:14
+   │
+26 │     pair.0 = 4
+   │              ^ u256
+
+note:
+   ┌─ pointer_first_class.fe:27:5
+   │
+27 │     pair.1 = pair.0 + 5
+   │     ^^^^ *<(u256, u256)>
+
+note:
+   ┌─ pointer_first_class.fe:27:5
+   │
+27 │     pair.1 = pair.0 + 5
+   │     ^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:27:5
+   │
+27 │     pair.1 = pair.0 + 5
+   │     ^^^^^^^^^^^^^^^^^^^ ()
+
+note:
+   ┌─ pointer_first_class.fe:27:14
+   │
+27 │     pair.1 = pair.0 + 5
+   │              ^^^^ *<(u256, u256)>
+
+note:
+   ┌─ pointer_first_class.fe:27:14
+   │
+27 │     pair.1 = pair.0 + 5
+   │              ^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:27:14
+   │
+27 │     pair.1 = pair.0 + 5
+   │              ^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:27:23
+   │
+27 │     pair.1 = pair.0 + 5
+   │                       ^ u256
+
+note:
+   ┌─ pointer_first_class.fe:28:5
+   │
+28 │     pair.0 + pair.1
+   │     ^^^^ *<(u256, u256)>
+
+note:
+   ┌─ pointer_first_class.fe:28:5
+   │
+28 │     pair.0 + pair.1
+   │     ^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:28:5
+   │
+28 │     pair.0 + pair.1
+   │     ^^^^^^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:28:14
+   │
+28 │     pair.0 + pair.1
+   │              ^^^^ *<(u256, u256)>
+
+note:
+   ┌─ pointer_first_class.fe:28:14
+   │
+28 │     pair.0 + pair.1
+   │              ^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:31:56
+   │
+31 │   fn nested_pointer_field_access(holder: Holder) -> u256 {
+   │ ╭────────────────────────────────────────────────────────^
+32 │ │     holder.data.value = 17
+33 │ │     holder.data.other = holder.data.value + 2
+34 │ │     holder.data.value + holder.data.other
+35 │ │ }
+   │ ╰─^ u256
+
+note:
+   ┌─ pointer_first_class.fe:32:5
+   │
+32 │     holder.data.value = 17
+   │     ^^^^^^ Holder
+
+note:
+   ┌─ pointer_first_class.fe:32:5
+   │
+32 │     holder.data.value = 17
+   │     ^^^^^^^^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:32:5
+   │
+32 │     holder.data.value = 17
+   │     ^^^^^^^^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:32:5
+   │
+32 │     holder.data.value = 17
+   │     ^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note:
+   ┌─ pointer_first_class.fe:32:25
+   │
+32 │     holder.data.value = 17
+   │                         ^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:33:5
+   │
+33 │     holder.data.other = holder.data.value + 2
+   │     ^^^^^^ Holder
+
+note:
+   ┌─ pointer_first_class.fe:33:5
+   │
+33 │     holder.data.other = holder.data.value + 2
+   │     ^^^^^^^^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:33:5
+   │
+33 │     holder.data.other = holder.data.value + 2
+   │     ^^^^^^^^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:33:5
+   │
+33 │     holder.data.other = holder.data.value + 2
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note:
+   ┌─ pointer_first_class.fe:33:25
+   │
+33 │     holder.data.other = holder.data.value + 2
+   │                         ^^^^^^ Holder
+
+note:
+   ┌─ pointer_first_class.fe:33:25
+   │
+33 │     holder.data.other = holder.data.value + 2
+   │                         ^^^^^^^^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:33:25
+   │
+33 │     holder.data.other = holder.data.value + 2
+   │                         ^^^^^^^^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:33:25
+   │
+33 │     holder.data.other = holder.data.value + 2
+   │                         ^^^^^^^^^^^^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:33:45
+   │
+33 │     holder.data.other = holder.data.value + 2
+   │                                             ^ u256
+
+note:
+   ┌─ pointer_first_class.fe:34:5
+   │
+34 │     holder.data.value + holder.data.other
+   │     ^^^^^^ Holder
+
+note:
+   ┌─ pointer_first_class.fe:34:5
+   │
+34 │     holder.data.value + holder.data.other
+   │     ^^^^^^^^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:34:5
+   │
+34 │     holder.data.value + holder.data.other
+   │     ^^^^^^^^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:34:5
+   │
+34 │     holder.data.value + holder.data.other
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:34:25
+   │
+34 │     holder.data.value + holder.data.other
+   │                         ^^^^^^ Holder
+
+note:
+   ┌─ pointer_first_class.fe:34:25
+   │
+34 │     holder.data.value + holder.data.other
+   │                         ^^^^^^^^^^^ *<Data>
+
+note:
+   ┌─ pointer_first_class.fe:34:25
+   │
+34 │     holder.data.value + holder.data.other
+   │                         ^^^^^^^^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:37:35
+   │
+37 │   fn mem_array_allocation() -> u256 {
+   │ ╭───────────────────────────────────^
+38 │ │     let array = core::ptr::alloc_array<u256>(2)
+39 │ │     array[0] = 3
+40 │ │     array[1] = 5
+   · │
+43 │ │     zeroed[0] + array[0] + array[1]
+44 │ │ }
+   │ ╰─^ u256
+
+note:
+   ┌─ pointer_first_class.fe:38:9
+   │
+38 │     let array = core::ptr::alloc_array<u256>(2)
+   │         ^^^^^ MemArray<u256>
+
+note:
+   ┌─ pointer_first_class.fe:38:17
+   │
+38 │     let array = core::ptr::alloc_array<u256>(2)
+   │                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ fn alloc_array<u256>
+
+note:
+   ┌─ pointer_first_class.fe:38:17
+   │
+38 │     let array = core::ptr::alloc_array<u256>(2)
+   │                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ MemArray<u256>
+
+note:
+   ┌─ pointer_first_class.fe:38:46
+   │
+38 │     let array = core::ptr::alloc_array<u256>(2)
+   │                                              ^ u256
+
+note:
+   ┌─ pointer_first_class.fe:39:5
+   │
+39 │     array[0] = 3
+   │     ^^^^^ MemArray<u256>
+
+note:
+   ┌─ pointer_first_class.fe:39:5
+   │
+39 │     array[0] = 3
+   │     ^^^^^^^^ mut u256
+
+note:
+   ┌─ pointer_first_class.fe:39:5
+   │
+39 │     array[0] = 3
+   │     ^^^^^^^^^^^^ ()
+
+note:
+   ┌─ pointer_first_class.fe:39:11
+   │
+39 │     array[0] = 3
+   │           ^ usize
+
+note:
+   ┌─ pointer_first_class.fe:39:16
+   │
+39 │     array[0] = 3
+   │                ^ u256
+
+note:
+   ┌─ pointer_first_class.fe:40:5
+   │
+40 │     array[1] = 5
+   │     ^^^^^ MemArray<u256>
+
+note:
+   ┌─ pointer_first_class.fe:40:5
+   │
+40 │     array[1] = 5
+   │     ^^^^^^^^ mut u256
+
+note:
+   ┌─ pointer_first_class.fe:40:5
+   │
+40 │     array[1] = 5
+   │     ^^^^^^^^^^^^ ()
+
+note:
+   ┌─ pointer_first_class.fe:40:11
+   │
+40 │     array[1] = 5
+   │           ^ usize
+
+note:
+   ┌─ pointer_first_class.fe:40:16
+   │
+40 │     array[1] = 5
+   │                ^ u256
+
+note:
+   ┌─ pointer_first_class.fe:42:9
+   │
+42 │     let zeroed = core::ptr::MemArray<u256>::new_zeroed(1)
+   │         ^^^^^^ MemArray<u256>
+
+note:
+   ┌─ pointer_first_class.fe:42:18
+   │
+42 │     let zeroed = core::ptr::MemArray<u256>::new_zeroed(1)
+   │                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ fn new_zeroed<u256>
+
+note:
+   ┌─ pointer_first_class.fe:42:18
+   │
+42 │     let zeroed = core::ptr::MemArray<u256>::new_zeroed(1)
+   │                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ MemArray<u256>
+
+note:
+   ┌─ pointer_first_class.fe:42:56
+   │
+42 │     let zeroed = core::ptr::MemArray<u256>::new_zeroed(1)
+   │                                                        ^ u256
+
+note:
+   ┌─ pointer_first_class.fe:43:5
+   │
+43 │     zeroed[0] + array[0] + array[1]
+   │     ^^^^^^ MemArray<u256>
+
+note:
+   ┌─ pointer_first_class.fe:43:5
+   │
+43 │     zeroed[0] + array[0] + array[1]
+   │     ^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:43:5
+   │
+43 │     zeroed[0] + array[0] + array[1]
+   │     ^^^^^^^^^^^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:43:5
+   │
+43 │     zeroed[0] + array[0] + array[1]
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:43:12
+   │
+43 │     zeroed[0] + array[0] + array[1]
+   │            ^ usize
+
+note:
+   ┌─ pointer_first_class.fe:43:17
+   │
+43 │     zeroed[0] + array[0] + array[1]
+   │                 ^^^^^ MemArray<u256>
+
+note:
+   ┌─ pointer_first_class.fe:43:17
+   │
+43 │     zeroed[0] + array[0] + array[1]
+   │                 ^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:43:23
+   │
+43 │     zeroed[0] + array[0] + array[1]
+   │                       ^ usize
+
+note:
+   ┌─ pointer_first_class.fe:43:28
+   │
+43 │     zeroed[0] + array[0] + array[1]
+   │                            ^^^^^ MemArray<u256>
+
+note:
+   ┌─ pointer_first_class.fe:43:28
+   │
+43 │     zeroed[0] + array[0] + array[1]
+   │                            ^^^^^^^^ u256
+
+note:
+   ┌─ pointer_first_class.fe:43:34
+   │
+43 │     zeroed[0] + array[0] + array[1]
+   │                                  ^ usize

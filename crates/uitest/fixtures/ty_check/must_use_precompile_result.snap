@@ -4,9 +4,9 @@ expression: diags
 input_file: fixtures/ty_check/must_use_precompile_result.fe
 ---
 error[8-0082]: unused value of type `Result<PrecompileError, u256>`
-  ┌─ must_use_precompile_result.fe:4:5
+  ┌─ must_use_precompile_result.fe:5:5
   │
-4 │     sha256(offset: 0, len: 0)
-  │     ^^^^^^^^^^^^^^^^^^^^^^^^^ use this value or explicitly discard it with `let _ = ...`
+5 │     sha256(ptr::MemBuffer::empty())
+  │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ use this value or explicitly discard it with `let _ = ...`
   │
   = this type is marked `#[must_use]`

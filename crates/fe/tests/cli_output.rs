@@ -186,6 +186,66 @@ fn trigger() {
     );
 }
 
+#[test]
+fn test_cli_build_generic_oversized_size_reports_error_instead_of_panicking() {
+    let temp = tempdir().expect("tempdir");
+    let file = temp.path().join("generic_oversized_size.fe");
+    fs::write(
+        &file,
+        r#"
+fn type_size<T>() -> u256 {
+    core::size_of<T>()
+}
+
+fn trigger() -> u256 {
+    type_size<[u256; 0x8000000000000000]>()
+}
+"#,
+    )
+    .expect("write fixture");
+
+    let (output, exit_code) = run_fe_command("build", file.to_str().expect("fixture path utf8"));
+    assert_eq!(exit_code, 1, "expected build failure:\n{output}");
+    assert!(
+        output.contains("exceeds the supported 64-bit raw-memory layout size"),
+        "expected oversized type error instead of panic:\n{output}"
+    );
+    assert!(
+        !output.contains("panicked at"),
+        "unexpected panic:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_wide_enum_size_uses_widened_tag() {
+    let temp = tempdir().expect("tempdir");
+    let file = temp.path().join("wide_enum_size.fe");
+    let variants = (0..257)
+        .map(|index| format!("    V{index},\n"))
+        .collect::<String>();
+    fs::write(
+        &file,
+        format!(
+            r#"
+enum Wide {{
+{variants}}}
+
+#[test]
+fn test_wide_enum_size() {{
+    assert(core::size_of<Wide>() == 2)
+}}
+"#
+        ),
+    )
+    .expect("write fixture");
+
+    let (output, exit_code) = run_fe_command("test", file.to_str().expect("fixture path utf8"));
+    assert_eq!(
+        exit_code, 0,
+        "expected wide enum size test to pass:\n{output}"
+    );
+}
+
 struct FeOutput {
     stdout: String,
     stderr: String,
@@ -2242,16 +2302,9 @@ impl core::abi::AbiSize for Weird {
 }
 
 impl core::abi::Encode<std::abi::Sol> for Weird {
-    const DIRECT_ENCODE: bool = false
-
-    fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {
-        self.flag.encode(e)
-        self.amount.encode(e)
-    }
-
-    fn encode_to_ptr(own self, _ ptr: u256) {
-        std::abi::Sol::store_word(ptr: ptr, value: if self.flag { 1 } else { 0 })
-        std::abi::Sol::store_word(ptr: ptr + 32, value: self.amount as u256)
+    fn encode(own self, _ ptr: *u8) {
+        core::abi::store_word(ptr: ptr, value: if self.flag { 1 } else { 0 })
+        core::abi::store_word(ptr: core::ptr::offset_bytes(ptr, 32), value: self.amount as u256)
     }
 }
 

@@ -2,7 +2,6 @@ use core::AsBytes
 use core::abi::{
     Abi,
     AbiDecoder,
-    AbiEncoder,
     AbiSize,
     AbiSpan,
     ByteInput,
@@ -10,12 +9,12 @@ use core::abi::{
     Decode,
     DynString,
     Encode,
-    EventAbiEncode,
+    store_word,
 }
 use core::num::IntDowncast
 use ingot::evm::Address
 use ingot::evm::TopicValue
-use ingot::evm::ops::revert
+use ingot::evm::ops::revert_empty
 
 /// Maps a Fe type to its Solidity ABI type name.
 ///
@@ -115,7 +114,7 @@ impl SolCompat for Bytes {
 #[inline(always)]
 fn encode_fixed_bytes_word(value: u256, len: u256) -> u256 {
     if len == 0 || len > 32 {
-        revert(offset: 0, len: 0)
+        revert_empty()
     }
 
     if len == 32 {
@@ -126,14 +125,14 @@ fn encode_fixed_bytes_word(value: u256, len: u256) -> u256 {
         return value << ((32 - len) * 8)
     }
 
-    revert(offset: 0, len: 0)
+    revert_empty()
 }
 
 #[arithmetic(unchecked)]
 #[inline(always)]
 fn decode_fixed_bytes_word(word: u256, len: u256) -> u256 {
     if len == 0 || len > 32 {
-        revert(offset: 0, len: 0)
+        revert_empty()
     }
 
     if len == 32 {
@@ -144,7 +143,7 @@ fn decode_fixed_bytes_word(word: u256, len: u256) -> u256 {
         return word >> ((32 - len) * 8)
     }
 
-    revert(offset: 0, len: 0)
+    revert_empty()
 }
 
 /// Solidity `bytesN` for `1 <= N <= 32`.
@@ -194,15 +193,9 @@ impl<A: Abi, const N: usize> Decode<A> for FixedBytes<N> {
 }
 
 impl<A: Abi, const N: usize> Encode<A> for FixedBytes<N> {
-    const DIRECT_ENCODE: bool = true
-
-    fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.word()) }
-
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.word()) }
-}
-
-impl<A: Abi, const N: usize> EventAbiEncode<A> for FixedBytes<N> {
-    const DIRECT_EVENT_ENCODE: bool = true
+    fn encode(own self, _ ptr: *u8) {
+        store_word(ptr: ptr, value: self.word())
+    }
 }
 
 /// Solidity ABI `bytes1`.

@@ -371,8 +371,8 @@ impl UsesParam {
         }
     }
 
-    /// The path key of the uses parameter.
-    pub fn path(&self) -> Option<super::Path> {
+    /// The type key of the uses parameter.
+    pub fn ty(&self) -> Option<super::Type> {
         support::child(self.syntax())
     }
 }
@@ -772,6 +772,13 @@ mod tests {
         parser.finish_to_node().1
     }
 
+    fn uses_param_path(param: &UsesParam) -> super::super::Path {
+        let TypeKind::Path(ty) = param.ty().expect("missing type key").kind() else {
+            panic!("expected path type key");
+        };
+        ty.path().expect("missing path key")
+    }
+
     #[test]
     #[wasm_bindgen_test]
     fn uses_clause_single_type() {
@@ -780,7 +787,7 @@ mod tests {
         assert!(uc.param_list().is_none());
         let p = uc.param().expect("expected single uses param");
         assert!(p.mut_token().is_none());
-        let path = p.path().expect("missing path key");
+        let path = uses_param_path(&p);
         let seg = path.segments().next().unwrap();
         assert_eq!(seg.ident().unwrap().text(), "Ctx");
     }
@@ -792,7 +799,7 @@ mod tests {
         let uc = f.sig().uses_clause().expect("missing uses clause");
         let p = uc.param().expect("expected single uses param");
         assert!(p.mut_token().is_some());
-        let path = p.path().expect("missing path key");
+        let path = uses_param_path(&p);
         let seg = path.segments().next().unwrap();
         assert_eq!(seg.ident().unwrap().text(), "Ctx");
     }
@@ -808,20 +815,20 @@ mod tests {
 
         // 0: Ctx
         assert!(params[0].mut_token().is_none());
-        let path0 = params[0].path().expect("missing path");
+        let path0 = uses_param_path(&params[0]);
         let seg0 = path0.segments().next().unwrap();
         assert_eq!(seg0.ident().unwrap().text(), "Ctx");
 
         // 1: mut Storage
         assert!(params[1].mut_token().is_some());
-        let path1 = params[1].path().expect("missing path");
+        let path1 = uses_param_path(&params[1]);
         let seg1 = path1.segments().next().unwrap();
         assert_eq!(seg1.ident().unwrap().text(), "Storage");
 
         // 2: c: Ctx
         let n = params[2].name().expect("missing name");
         assert_eq!(n.syntax().text(), "c");
-        let path2 = params[2].path().expect("missing path");
+        let path2 = uses_param_path(&params[2]);
         let seg2 = path2.segments().next().unwrap();
         assert_eq!(seg2.ident().unwrap().text(), "Ctx");
 
@@ -829,7 +836,7 @@ mod tests {
         assert!(params[3].mut_token().is_some());
         let n = params[3].name().expect("missing name");
         assert_eq!(n.syntax().text(), "f");
-        let path3 = params[3].path().expect("missing path");
+        let path3 = uses_param_path(&params[3]);
         let seg3 = path3.segments().next().unwrap();
         assert_eq!(seg3.ident().unwrap().text(), "Foo");
     }
@@ -843,6 +850,27 @@ mod tests {
             err.msg()
                 .contains("`uses` typed parameters use `name: mut Type`, not `mut name: Type`")
         }));
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn uses_clause_accepts_pointer_type_keys() {
+        let f = parse_func("fn f() uses (data: *Data, words: mut **Word) {}");
+        let params = f
+            .sig()
+            .uses_clause()
+            .unwrap()
+            .param_list()
+            .unwrap()
+            .iter()
+            .collect::<Vec<_>>();
+
+        assert!(matches!(params[0].ty().unwrap().kind(), TypeKind::Ptr(_)));
+        assert!(params[1].mut_token().is_some());
+        let TypeKind::Ptr(outer) = params[1].ty().unwrap().kind() else {
+            panic!("expected outer pointer type");
+        };
+        assert!(outer.star2().is_some());
     }
 
     #[test]

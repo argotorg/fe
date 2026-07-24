@@ -5,7 +5,8 @@ input_file: crates/codegen/tests/fixtures/enum_variant_contract.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @layout_0 = enum {
+type @layout_0 = {i256, i256};
+type @layout_1 = enum {
     #variant_0,
     #variant_1(i256),
 };
@@ -15,9 +16,53 @@ func private %abi_encode_u256(v0.i256) {
         jump block1;
 
     block1:
-        call %mstore 0.i256 v0;
-        call %return_data 0.i256 32.i256;
+        v2.@layout_0 = call %core__lib__ptr__impl_MemBuffer_2cdf__alloc_32c3 32.i256;
+        v3.objref<@layout_0> = obj.alloc @layout_0;
+        v5.objref<i256> = obj.proj v3 0.i256;
+        v6.i256 = extract_value v2 0.i256;
+        obj.store v5 v6;
+        v8.objref<i256> = obj.proj v3 1.i256;
+        v9.i256 = extract_value v2 1.i256;
+        obj.store v8 v9;
+        v10.objref<i256> = obj.proj v3 0.i256;
+        v11.i256 = obj.load v10;
+        call %mstore v11 v0;
+        v14.@layout_0 = obj.load v3;
+        call %return_data v14;
         unreachable;
+}
+
+func private %core__lib__ptr__impl_MemBuffer_2cdf__alloc_32c3(v0.i256) -> @layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.*i8 = evm_malloc v0;
+        v3.i256 = ptr_to_int v2 i256;
+        v4.@layout_0 = call %core__lib__ptr__impl_MemBuffer_2cdf__from_raw_parts_0a83 v3 v0;
+        return v4;
+}
+
+func private %core__lib__ptr__impl_MemBuffer_2cdf__alloc_7bc1(v0.i256) -> @layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.*i8 = evm_malloc v0;
+        v3.i256 = ptr_to_int v2 i256;
+        v4.@layout_0 = call %core__lib__ptr__impl_MemBuffer_2cdf__from_raw_parts_d43d v3 v0;
+        return v4;
+}
+
+func private %core__lib__ptr__impl_MemBuffer_2cdf__alloc_7bc1_0(v0.i256) -> @layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.*i8 = evm_malloc v0;
+        v3.i256 = ptr_to_int v2 i256;
+        v4.@layout_0 = call %core__lib__ptr__impl_MemBuffer_2cdf__from_raw_parts_d43d_0 v3 v0;
+        return v4;
 }
 
 func private %calldataload(v0.i256) -> i256 {
@@ -29,13 +74,56 @@ func private %calldataload(v0.i256) -> i256 {
         return v2;
 }
 
-func private %codecopy(v0.i256, v1.i256, v2.i256) {
+func private %codecopy(v0.objref<@layout_0>, v1.i256) {
     block0:
         jump block1;
 
     block1:
-        evm_code_copy v0 v1 v2;
+        v4.objref<i256> = obj.proj v0 0.i256;
+        v5.i256 = obj.load v4;
+        v8.objref<i256> = obj.proj v0 1.i256;
+        v9.i256 = obj.load v8;
+        evm_code_copy v5 v1 v9;
         return;
+}
+
+func private %empty() -> @layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.@layout_0 = call %core__lib__ptr__impl_MemBuffer_2cdf__alloc_7bc1 0.i256;
+        return v1;
+}
+
+func private %core__lib__ptr__impl_MemBuffer_2cdf__from_raw_parts_0a83(v0.i256, v1.i256) -> @layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v6.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
+        v8.@layout_0 = insert_value v6 1.i256 v1;
+        return v8;
+}
+
+func private %core__lib__ptr__impl_MemBuffer_2cdf__from_raw_parts_d43d(v0.i256, v1.i256) -> @layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v6.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
+        v8.@layout_0 = insert_value v6 1.i256 v1;
+        return v8;
+}
+
+func private %core__lib__ptr__impl_MemBuffer_2cdf__from_raw_parts_d43d_0(v0.i256, v1.i256) -> @layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v6.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
+        v8.@layout_0 = insert_value v6 1.i256 v1;
+        return v8;
 }
 
 func private %init() {
@@ -45,11 +133,26 @@ func private %init() {
     block1:
         v0.i256 = sym_size &__EnumContract_runtime;
         v1.i256 = sym_addr &__EnumContract_runtime;
-        v2.*i8 = evm_malloc v0;
-        v3.i256 = ptr_to_int v2 i256;
-        call %codecopy v3 v1 v0;
-        call %return_data v3 v0;
+        v2.@layout_0 = call %core__lib__ptr__impl_MemBuffer_2cdf__alloc_7bc1_0 v0;
+        v3.objref<@layout_0> = obj.alloc @layout_0;
+        v5.objref<i256> = obj.proj v3 0.i256;
+        v6.i256 = extract_value v2 0.i256;
+        obj.store v5 v6;
+        v8.objref<i256> = obj.proj v3 1.i256;
+        v9.i256 = extract_value v2 1.i256;
+        obj.store v8 v9;
+        call %codecopy v3 v1;
+        v11.@layout_0 = obj.load v3;
+        call %return_data v11;
         unreachable;
+}
+
+func private %into(v0.@layout_0) -> @layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
 }
 
 func private %manual_contract_init_root_EnumContract() {
@@ -79,12 +182,32 @@ func private %mstore(v0.i256, v1.i256) {
         return;
 }
 
-func private %return_data(v0.i256, v1.i256) {
+func private %return_data(v0.@layout_0) {
     block0:
+        v1.objref<@layout_0> = obj.alloc @layout_0;
+        v3.objref<i256> = obj.proj v1 0.i256;
+        v4.i256 = extract_value v0 0.i256;
+        obj.store v3 v4;
+        v6.objref<i256> = obj.proj v1 1.i256;
+        v7.i256 = extract_value v0 1.i256;
+        obj.store v6 v7;
         jump block1;
 
     block1:
-        evm_return v0 v1;
+        v8.@layout_0 = obj.load v1;
+        v9.@layout_0 = call %into v8;
+        v10.objref<@layout_0> = obj.alloc @layout_0;
+        v11.objref<i256> = obj.proj v10 0.i256;
+        v12.i256 = extract_value v9 0.i256;
+        obj.store v11 v12;
+        v13.objref<i256> = obj.proj v10 1.i256;
+        v14.i256 = extract_value v9 1.i256;
+        obj.store v13 v14;
+        v15.objref<i256> = obj.proj v10 0.i256;
+        v16.i256 = obj.load v15;
+        v17.objref<i256> = obj.proj v10 1.i256;
+        v18.i256 = obj.load v17;
+        evm_return v16 v18;
 }
 
 func private %runtime() {
@@ -99,9 +222,9 @@ func private %runtime() {
 
     block2:
         v7.i256 = call %calldataload 4.i256;
-        v8.@layout_0 = enum.make @layout_0 #variant_1 v7;
-        v9.enumtag(@layout_0) = enum.tag v8;
-        br_table v9 (1.enumtag(@layout_0) block6) (0.enumtag(@layout_0) block7);
+        v8.@layout_1 = enum.make @layout_1 #variant_1 v7;
+        v9.enumtag(@layout_1) = enum.tag v8;
+        br_table v9 (1.enumtag(@layout_1) block6) (0.enumtag(@layout_1) block7);
 
     block3:
         jump block4;
@@ -124,10 +247,10 @@ func private %runtime() {
         jump block5;
 
     block8:
-        v18.@layout_0 = enum.make @layout_0 #variant_0;
-        v19.@layout_0 = enum.make @layout_0 #variant_0;
-        v20.enumtag(@layout_0) = enum.tag v19;
-        br_table v20 (1.enumtag(@layout_0) block12) (0.enumtag(@layout_0) block13);
+        v18.@layout_1 = enum.make @layout_1 #variant_0;
+        v19.@layout_1 = enum.make @layout_1 #variant_0;
+        v20.enumtag(@layout_1) = enum.tag v19;
+        br_table v20 (1.enumtag(@layout_1) block12) (0.enumtag(@layout_1) block13);
 
     block9:
         jump block10;
@@ -151,20 +274,21 @@ func private %runtime() {
 
     block14:
         v27.i256 = call %calldataload 4.i256;
-        v28.@layout_0 = enum.make @layout_0 #variant_1 v27;
-        v29.enumtag(@layout_0) = enum.tag v28;
-        br_table v29 (1.enumtag(@layout_0) block18) (0.enumtag(@layout_0) block19);
+        v28.@layout_1 = enum.make @layout_1 #variant_1 v27;
+        v29.enumtag(@layout_1) = enum.tag v28;
+        br_table v29 (1.enumtag(@layout_1) block18) (0.enumtag(@layout_1) block19);
 
     block15:
         jump block16;
 
     block16:
-        call %return_data 0.i256 0.i256;
+        v30.@layout_0 = call %empty;
+        call %return_data v30;
         unreachable;
 
     block17:
-        v30.i256 = phi (1.i256 block18) (0.i256 block19);
-        call %abi_encode_u256 v30;
+        v31.i256 = phi (1.i256 block18) (0.i256 block19);
+        call %abi_encode_u256 v31;
         unreachable;
 
     block18:

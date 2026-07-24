@@ -5,13 +5,48 @@ input_file: crates/codegen/tests/fixtures/revert.fe
 ---
 target = "evm-ethereum-osaka"
 
+type @layout_0 = {i256, i256};
+
+func private %core__lib__ptr__impl_MemBuffer_2cdf__alloc_5593(v0.i256) -> @layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.*i8 = evm_malloc v0;
+        v3.i256 = ptr_to_int v2 i256;
+        v4.@layout_0 = call %core__lib__ptr__impl_MemBuffer_2cdf__from_raw_parts_d12a v3 v0;
+        return v4;
+}
+
+func private %core__lib__ptr__impl_MemBuffer_2cdf__alloc_5593_0(v0.i256) -> @layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.*i8 = evm_malloc v0;
+        v3.i256 = ptr_to_int v2 i256;
+        v4.@layout_0 = call %core__lib__ptr__impl_MemBuffer_2cdf__from_raw_parts_d12a_0 v3 v0;
+        return v4;
+}
+
 func private %standalone_revert__revert__fail__gcd5c_35c3() {
     block0:
         jump block1;
 
     block1:
-        call %mstore 0.i256 42.i256;
-        call %revert 0.i256 32.i256;
+        v1.@layout_0 = call %core__lib__ptr__impl_MemBuffer_2cdf__alloc_5593 32.i256;
+        v2.objref<@layout_0> = obj.alloc @layout_0;
+        v4.objref<i256> = obj.proj v2 0.i256;
+        v5.i256 = extract_value v1 0.i256;
+        obj.store v4 v5;
+        v7.objref<i256> = obj.proj v2 1.i256;
+        v8.i256 = extract_value v1 1.i256;
+        obj.store v7 v8;
+        v9.objref<i256> = obj.proj v2 0.i256;
+        v10.i256 = obj.load v9;
+        call %mstore v10 42.i256;
+        v13.@layout_0 = obj.load v2;
+        call %revert v13;
         unreachable;
 }
 
@@ -20,9 +55,48 @@ func private %standalone_revert__revert__fail__gcd5c_cdbf() {
         jump block1;
 
     block1:
-        call %mstore 0.i256 42.i256;
-        call %revert 0.i256 32.i256;
+        v1.@layout_0 = call %core__lib__ptr__impl_MemBuffer_2cdf__alloc_5593_0 32.i256;
+        v2.objref<@layout_0> = obj.alloc @layout_0;
+        v4.objref<i256> = obj.proj v2 0.i256;
+        v5.i256 = extract_value v1 0.i256;
+        obj.store v4 v5;
+        v7.objref<i256> = obj.proj v2 1.i256;
+        v8.i256 = extract_value v1 1.i256;
+        obj.store v7 v8;
+        v9.objref<i256> = obj.proj v2 0.i256;
+        v10.i256 = obj.load v9;
+        call %mstore v10 42.i256;
+        v13.@layout_0 = obj.load v2;
+        call %revert v13;
         unreachable;
+}
+
+func private %core__lib__ptr__impl_MemBuffer_2cdf__from_raw_parts_d12a(v0.i256, v1.i256) -> @layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v6.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
+        v8.@layout_0 = insert_value v6 1.i256 v1;
+        return v8;
+}
+
+func private %core__lib__ptr__impl_MemBuffer_2cdf__from_raw_parts_d12a_0(v0.i256, v1.i256) -> @layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v6.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
+        v8.@layout_0 = insert_value v6 1.i256 v1;
+        return v8;
+}
+
+func private %into(v0.@layout_0) -> @layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
 }
 
 func private %main() {
@@ -52,12 +126,32 @@ func private %mstore(v0.i256, v1.i256) {
         return;
 }
 
-func private %revert(v0.i256, v1.i256) {
+func private %revert(v0.@layout_0) {
     block0:
+        v1.objref<@layout_0> = obj.alloc @layout_0;
+        v3.objref<i256> = obj.proj v1 0.i256;
+        v4.i256 = extract_value v0 0.i256;
+        obj.store v3 v4;
+        v6.objref<i256> = obj.proj v1 1.i256;
+        v7.i256 = extract_value v0 1.i256;
+        obj.store v6 v7;
         jump block1;
 
     block1:
-        evm_revert v0 v1;
+        v8.@layout_0 = obj.load v1;
+        v9.@layout_0 = call %into v8;
+        v10.objref<@layout_0> = obj.alloc @layout_0;
+        v11.objref<i256> = obj.proj v10 0.i256;
+        v12.i256 = extract_value v9 0.i256;
+        obj.store v11 v12;
+        v13.objref<i256> = obj.proj v10 1.i256;
+        v14.i256 = extract_value v9 1.i256;
+        obj.store v13 v14;
+        v15.objref<i256> = obj.proj v10 0.i256;
+        v16.i256 = obj.load v15;
+        v17.objref<i256> = obj.proj v10 1.i256;
+        v18.i256 = obj.load v17;
+        evm_revert v16 v18;
 }
 
 

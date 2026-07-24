@@ -1,9 +1,9 @@
-use std::evm::alloc
+use core::ptr
 
-pub fn bump(size: u256) -> u256 {
-    alloc(size)
+pub fn bump(size: u256) -> *u8 {
+    ptr::alloc_bytes(size)
 }
 
-pub fn bump_const() -> u256 {
-    alloc(64)
+pub fn bump_const() -> *u8 {
+    ptr::alloc_bytes(64)
 }

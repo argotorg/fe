@@ -5,7 +5,45 @@ input_file: crates/codegen/tests/fixtures/explicit_raw_boundaries.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @layout_0 = {i256};
+func private %alloc__g4a95() -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.*i8 = evm_malloc 32.i256;
+        v2.i256 = ptr_to_int v1 i256;
+        v3.i256 = call %cast__gf772 v2;
+        return v3;
+}
+
+func private %alloc__ge513() -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.*i8 = evm_malloc 32.i256;
+        v2.i256 = ptr_to_int v1 i256;
+        v3.i256 = call %cast__g5f1e v2;
+        return v3;
+}
+
+func private %core__lib__ptr__as_bytes__g4a95_0ae1(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %core__lib__ptr__cast__gc266_3a73 v0;
+        return v2;
+}
+
+func private %core__lib__ptr__as_bytes__g4a95_0ae1_0(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %core__lib__ptr__cast__gc266_3a73_0 v0;
+        return v2;
+}
 
 func private %bump(v0.i256) {
     block0:
@@ -26,54 +64,48 @@ func private %bump(v0.i256) {
         return;
 }
 
+func private %cast__gf772(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
+func private %core__lib__ptr__cast__gc266_3a73(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
+func private %core__lib__ptr__cast__gc266_3a73_0(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
+func private %cast__g5f1e(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
 func private %explicit_raw_boundaries() {
     block0:
         jump block1;
 
     block1:
-        v1.@layout_0 = call %mem_ptr__g8840 256.i256;
-        v2.i256 = call %raw__ge513 v1;
-        call %bump v2;
-        v5.@layout_0 = call %mem_ptr__g9700 288.i256;
-        v6.i256 = call %core__lib__effect_ref__impl_trait_MemPtr_ec03__raw__g4a95_0cf6 v5;
-        call %raw_store__gc18b v6;
+        v0.i256 = call %alloc__ge513;
+        call %bump v0;
+        v2.i256 = call %alloc__g4a95;
+        call %raw_store__g6e74 v2;
         return;
-}
-
-func private %from_raw__ge513(v0.i256) -> @layout_0 {
-    block0:
-        jump block1;
-
-    block1:
-        v4.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
-        return v4;
-}
-
-func private %core__lib__effect_ref__impl_trait_MemPtr_ec03__from_raw__g4a95_bb43(v0.i256) -> @layout_0 {
-    block0:
-        jump block1;
-
-    block1:
-        v4.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
-        return v4;
-}
-
-func private %core__lib__effect_ref__impl_trait_MemPtr_ec03__from_raw__g4a95_bb43_0(v0.i256) -> @layout_0 {
-    block0:
-        jump block1;
-
-    block1:
-        v4.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
-        return v4;
-}
-
-func private %core__lib__effect_ref__impl_trait_MemPtr_ec03__from_raw__g4a95_f72c(v0.i256) -> @layout_0 {
-    block0:
-        jump block1;
-
-    block1:
-        v4.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
-        return v4;
 }
 
 func private %main_root() {
@@ -85,24 +117,6 @@ func private %main_root() {
         evm_stop;
 }
 
-func private %mem_ptr__g8840(v0.i256) -> @layout_0 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.@layout_0 = call %from_raw__ge513 v0;
-        return v2;
-}
-
-func private %mem_ptr__g9700(v0.i256) -> @layout_0 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.@layout_0 = call %core__lib__effect_ref__impl_trait_MemPtr_ec03__from_raw__g4a95_f72c v0;
-        return v2;
-}
-
 func private %mstore(v0.i256, v1.i256) {
     block0:
         jump block1;
@@ -112,61 +126,23 @@ func private %mstore(v0.i256, v1.i256) {
         return;
 }
 
-func private %core__lib__effect_ref__impl_trait_MemPtr_ec03__raw__g4a95_0cf6(v0.@layout_0) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.i256 = extract_value v0 0.i256;
-        return v3;
-}
-
-func private %raw__ge513(v0.@layout_0) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.i256 = extract_value v0 0.i256;
-        return v3;
-}
-
-func private %core__lib__effect_ref__impl_trait_MemPtr_ec03__raw__g4a95_a0e3(v0.objref<@layout_0>) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.objref<i256> = obj.proj v0 0.i256;
-        v4.i256 = obj.load v3;
-        return v4;
-}
-
-func private %raw_store__gc18b(v0.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        v2.@layout_0 = call %core__lib__effect_ref__impl_trait_MemPtr_ec03__from_raw__g4a95_bb43_0 v0;
-        v3.objref<@layout_0> = obj.alloc @layout_0;
-        v5.objref<i256> = obj.proj v3 0.i256;
-        v6.i256 = extract_value v2 0.i256;
-        obj.store v5 v6;
-        v7.i256 = call %core__lib__effect_ref__impl_trait_MemPtr_ec03__raw__g4a95_a0e3 v3;
-        call %mstore v7 8.i256;
-        return;
-}
-
 func private %raw_store__g64c6(v0.i256) {
     block0:
         jump block1;
 
     block1:
-        v2.@layout_0 = call %core__lib__effect_ref__impl_trait_MemPtr_ec03__from_raw__g4a95_bb43 v0;
-        v3.objref<@layout_0> = obj.alloc @layout_0;
-        v5.objref<i256> = obj.proj v3 0.i256;
-        v6.i256 = extract_value v2 0.i256;
-        obj.store v5 v6;
-        v7.i256 = call %core__lib__effect_ref__impl_trait_MemPtr_ec03__raw__g4a95_a0e3 v3;
-        call %mstore v7 8.i256;
+        v2.i256 = call %core__lib__ptr__as_bytes__g4a95_0ae1 v0;
+        call %mstore v2 8.i256;
+        return;
+}
+
+func private %raw_store__g6e74(v0.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %core__lib__ptr__as_bytes__g4a95_0ae1_0 v0;
+        call %mstore v2 8.i256;
         return;
 }
 

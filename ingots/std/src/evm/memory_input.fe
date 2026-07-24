@@ -1,20 +1,21 @@
 use core::abi::{AbiSize, ByteInput, Decode}
 use core::Copy
 use core::num::IntDowncast
+use core::ptr
 use ingot::abi::Sol
 use ingot::abi::sol::decode_input
 use ingot::evm::ops::{mload, mstore}
 
 /// A view over an in-memory byte buffer.
 pub struct MemoryBytes {
-    pub base: u256,
+    pub base: *u8,
     pub len: u256,
 }
 
 impl Copy for MemoryBytes {}
 
 impl MemoryBytes {
-    pub fn new(base: u256, len: u256) -> Self {
+    pub fn new(base: *u8, len: u256) -> Self {
         MemoryBytes { base, len }
     }
 
@@ -33,19 +34,19 @@ impl ByteInput for MemoryBytes {
 
     #[arithmetic(unchecked)]
     fn word_at(self, _ byte_offset: u256) -> u256 {
-        mload(self.base + byte_offset)
+        mload(ptr::offset_bytes(self.base, byte_offset))
     }
 
     #[arithmetic(unchecked)]
     fn byte_at(self, _ byte_offset: u256) -> u8 {
         let word_offset = byte_offset - (byte_offset % 32)
-        let word = mload(self.base + word_offset)
+        let word = mload(ptr::offset_bytes(self.base, word_offset))
         let idx = byte_offset - word_offset
         let shift = (31 - idx) * 8
         (word >> shift).downcast_truncate()
     }
 
-    fn copy_to_memory(self, dest: u256, src_offset: u256, len: u256) {
+    fn copy_to_memory(self, dest: *u8, src_offset: u256, len: u256) {
         if len % 32 != 0 {
             core::panic()
         }
@@ -57,16 +58,22 @@ impl ByteInput for MemoryBytes {
 
         let mut offset: u256 = 0
         while offset < len {
-            mstore(addr: dest + offset, value: mload(self.base + src_offset + offset))
+            mstore(
+                addr: ptr::offset_bytes(dest, offset),
+                value: mload(ptr::offset_bytes(self.base, src_offset + offset)),
+            )
             offset += 32
         }
     }
 
     #[arithmetic(unchecked)]
-    fn copy_to_memory_unchecked_aligned(self, dest: u256, src_offset: u256, len: u256) {
+    fn copy_to_memory_unchecked_aligned(self, dest: *u8, src_offset: u256, len: u256) {
         let mut offset: u256 = 0
         while offset < len {
-            mstore(addr: dest + offset, value: mload(self.base + src_offset + offset))
+            mstore(
+                addr: ptr::offset_bytes(dest, offset),
+                value: mload(ptr::offset_bytes(self.base, src_offset + offset)),
+            )
             offset += 32
         }
     }

@@ -12,8 +12,9 @@ use crate::{
     hir_def::{
         ArithBinOp, AssocConstDef, AttrListId, BinOp, Body, BodyKind, Expr, ExprId, FieldDef,
         FieldDefListId, FieldIndex, FuncModifiers, FuncParam, FuncParamMode, FuncParamName,
-        IdentId, ImplTrait, IntegerId, LitKind, LogicalBinOp, Mod, Partial, Pat, PathId, PathKind,
-        Stmt, Struct, TrackedItemVariant, TraitRefId, TupleTypeId, TypeId, TypeKind, Visibility,
+        GenericArgListId, IdentId, ImplTrait, IntegerId, LitKind, LogicalBinOp, Mod, Partial,
+        PathId, PathKind, Struct, TrackedItemVariant, TraitRefId, TupleTypeId, TypeId, TypeKind,
+        Visibility,
     },
     lower::FileLowerCtxt,
     span::{MsgDesugared, MsgDesugaredFocus},
@@ -217,176 +218,31 @@ fn lower_msg_variant_encode_impl<'db>(
     builder.with_item_scope(
         TrackedItemVariant::ImplTrait(impl_trait_idx),
         |builder, id| {
-            let direct_encode_const = create_direct_encode_assoc_const(builder, &field_specs);
-            let impl_trait = builder.new_impl_trait(
-                id,
-                trait_ref,
-                ty,
-                vec![],
-                vec![direct_encode_const],
-                builder.origin(),
-            );
-
-            let abi_encoder_trait_ref = builder.core_abi_trait_ref_sol("AbiEncoder");
-            let (e_generic_params, e_ty) =
-                builder.type_param_with_trait_bound("E", abi_encoder_trait_ref);
-
-            let encoder_ident = builder.ident("e");
-            let params = builder.params([
-                builder.param_own_self(),
-                builder.param_mut_underscore_named(encoder_ident, e_ty),
-            ]);
-
-            builder.func_generic_inline_always(
-                "encode",
-                e_generic_params,
-                params,
-                None,
-                FuncModifiers::new(Visibility::Private, false, false, false),
-                |body| {
-                    body.encode_fields(&field_specs, encoder_ident, e_ty);
-                },
-            );
+            let impl_trait =
+                builder.new_impl_trait(id, trait_ref, ty, vec![], vec![], builder.origin());
 
             let ptr_ident = builder.ident("ptr");
-            let ptr_ty = builder.ty_ident(builder.ident("u256"));
-            let ptr_param = builder.param_underscore_named(ptr_ident, ptr_ty);
-            let params = builder.params([builder.param_own_self(), ptr_param]);
-            let encode_to_ptr_ident = builder.ident("encode_to_ptr");
+            let u8_ty = builder.ty_ident(builder.ident("u8"));
+            let ptr_ty = builder.ty_ptr(u8_ty);
+            let params = builder.params([
+                builder.param_own_self(),
+                builder.param_underscore_named(ptr_ident, ptr_ty),
+            ]);
 
             builder.func_with_body_inline_always(
-                encode_to_ptr_ident,
+                builder.ident("encode"),
                 builder.empty_generic_params(),
                 params,
                 None,
                 FuncModifiers::new(Visibility::Private, false, false, false),
                 |body| {
-                    let db = body.db();
-                    let self_expr = body.path_expr(PathId::from_ident(db, IdentId::make_self(db)));
-                    let mut field_ptr_ident = ptr_ident;
-
-                    for (index, (field_name, field_ty)) in field_specs.iter().copied().enumerate() {
-                        let receiver = body.push_expr(Expr::Field(
-                            self_expr,
-                            Partial::Present(FieldIndex::Ident(field_name)),
-                        ));
-                        let field_ptr = body.ident_expr(field_ptr_ident);
-                        let call =
-                            body.method_call_expr(receiver, encode_to_ptr_ident, vec![field_ptr]);
-                        body.emit_expr_stmt(call);
-
-                        if index + 1 != field_specs.len() {
-                            let next_ptr_ident = IdentId::new(db, format!("__field_ptr{index}"));
-                            let current_ptr = body.ident_expr(field_ptr_ident);
-                            let field_size = build_head_size_body_expr(body, field_ty);
-                            let next_ptr = body.push_expr(Expr::Bin(
-                                current_ptr,
-                                field_size,
-                                BinOp::Arith(ArithBinOp::Add),
-                            ));
-                            let next_ptr_pat = body.push_pat(Pat::Path(
-                                Partial::Present(PathId::from_ident(db, next_ptr_ident)),
-                                false,
-                            ));
-                            body.emit_stmt(Stmt::Let(next_ptr_pat, None, Some(next_ptr)));
-                            field_ptr_ident = next_ptr_ident;
-                        }
-                    }
+                    body.encode_fields(&field_specs, ptr_ident);
                 },
             );
+
             impl_trait
         },
     )
-}
-
-pub(super) fn create_direct_encode_assoc_const<
-    'db,
-    O: Clone + Into<crate::span::DesugaredOrigin>,
->(
-    builder: &mut HirBuilder<'_, 'db, O>,
-    fields: &[(IdentId<'db>, TypeId<'db>)],
-) -> AssocConstDef<'db> {
-    let db = builder.db();
-    let name = builder.ident("DIRECT_ENCODE");
-    let ty = builder.ty_ident(builder.ident("bool"));
-    let encode_trait = builder.core_abi_trait_ref_sol("Encode");
-    let id = builder.ctxt().joined_id(TrackedItemVariant::NamelessBody);
-    let origin = builder.origin();
-    let mut body_ctxt = BodyCtxt::new(builder.ctxt(), id);
-    let mut expr = push_bool_expr(&mut body_ctxt, origin.clone(), true);
-    for (_, field_ty) in fields.iter().copied() {
-        let field_expr =
-            build_direct_encode_expr(&mut body_ctxt, origin.clone(), encode_trait, field_ty);
-        expr = body_ctxt.push_expr(
-            Expr::Bin(expr, field_expr, BinOp::Logical(LogicalBinOp::And)),
-            origin.clone(),
-        );
-    }
-    let body = body_ctxt.build(None, expr, BodyKind::Anonymous);
-
-    AssocConstDef {
-        attributes: AttrListId::new(db, vec![]),
-        name: Partial::Present(name),
-        ty: Partial::Present(ty),
-        value: Partial::Present(body),
-        vis: crate::hir_def::Visibility::Public,
-    }
-}
-
-fn build_direct_encode_expr<'db>(
-    body_ctxt: &mut BodyCtxt<'_, 'db>,
-    origin: crate::span::HirOrigin<ast::Expr>,
-    encode_trait: TraitRefId<'db>,
-    ty: TypeId<'db>,
-) -> crate::hir_def::ExprId {
-    let db = body_ctxt.f_ctxt.db();
-
-    match ty.data(db) {
-        TypeKind::Path(path) => path
-            .to_opt()
-            .map(|_| {
-                let qualified = PathId::new(
-                    db,
-                    PathKind::QualifiedType {
-                        type_: ty,
-                        trait_: encode_trait,
-                    },
-                    None,
-                );
-                body_ctxt.push_expr(
-                    Expr::Path(Partial::Present(qualified.push_str(db, "DIRECT_ENCODE"))),
-                    origin.clone(),
-                )
-            })
-            .unwrap_or_else(|| push_bool_expr(body_ctxt, origin.clone(), false)),
-        TypeKind::Tuple(tuple) => {
-            let mut expr = push_bool_expr(body_ctxt, origin.clone(), true);
-            for elem_ty in tuple.data(db).iter().copied() {
-                let elem_expr = elem_ty
-                    .to_opt()
-                    .map(|elem_ty| {
-                        build_direct_encode_expr(body_ctxt, origin.clone(), encode_trait, elem_ty)
-                    })
-                    .unwrap_or_else(|| push_bool_expr(body_ctxt, origin.clone(), false));
-                expr = body_ctxt.push_expr(
-                    Expr::Bin(expr, elem_expr, BinOp::Logical(LogicalBinOp::And)),
-                    origin.clone(),
-                );
-            }
-            expr
-        }
-        TypeKind::Mode(_, inner) => inner
-            .to_opt()
-            .map(|inner| build_direct_encode_expr(body_ctxt, origin.clone(), encode_trait, inner))
-            .unwrap_or_else(|| push_bool_expr(body_ctxt, origin.clone(), false)),
-        TypeKind::Array(elem_ty, _) => elem_ty
-            .to_opt()
-            .map(|elem_ty| {
-                build_direct_encode_expr(body_ctxt, origin.clone(), encode_trait, elem_ty)
-            })
-            .unwrap_or_else(|| push_bool_expr(body_ctxt, origin.clone(), false)),
-        TypeKind::Ptr(_) | TypeKind::Never => push_bool_expr(body_ctxt, origin, false),
-    }
 }
 
 fn push_bool_expr<'db>(
@@ -458,7 +314,8 @@ fn create_bool_assoc_const<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
     let mut expr = push_bool_expr(&mut body_ctxt, origin.clone(), false);
 
     for (_, field_ty) in fields.iter().copied() {
-        let field_is_dynamic = build_is_dynamic_expr(&mut body_ctxt, origin.clone(), field_ty);
+        let field_is_dynamic =
+            abi_size_assoc_expr(&mut body_ctxt, origin.clone(), field_ty, "IS_DYNAMIC");
         expr = body_ctxt.push_expr(
             Expr::Bin(expr, field_is_dynamic, BinOp::Logical(LogicalBinOp::Or)),
             origin.clone(),
@@ -475,54 +332,12 @@ fn create_bool_assoc_const<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
     }
 }
 
-fn build_is_dynamic_expr<'db>(
-    body_ctxt: &mut BodyCtxt<'_, 'db>,
-    origin: crate::span::HirOrigin<ast::Expr>,
-    ty: TypeId<'db>,
-) -> crate::hir_def::ExprId {
-    let db = body_ctxt.f_ctxt.db();
-
-    match ty.data(db) {
-        TypeKind::Path(path) => path
-            .to_opt()
-            .map(|path| {
-                body_ctxt.push_expr(
-                    Expr::Path(Partial::Present(path.push_str(db, "IS_DYNAMIC"))),
-                    origin.clone(),
-                )
-            })
-            .unwrap_or_else(|| push_bool_expr(body_ctxt, origin.clone(), false)),
-        TypeKind::Tuple(tuple) => {
-            let mut expr = push_bool_expr(body_ctxt, origin.clone(), false);
-            for elem_ty in tuple.data(db).iter().copied() {
-                let elem_expr = elem_ty
-                    .to_opt()
-                    .map(|elem_ty| build_is_dynamic_expr(body_ctxt, origin.clone(), elem_ty))
-                    .unwrap_or_else(|| push_bool_expr(body_ctxt, origin.clone(), false));
-                expr = body_ctxt.push_expr(
-                    Expr::Bin(expr, elem_expr, BinOp::Logical(LogicalBinOp::Or)),
-                    origin.clone(),
-                );
-            }
-            expr
-        }
-        TypeKind::Mode(_, inner) => inner
-            .to_opt()
-            .map(|inner| build_is_dynamic_expr(body_ctxt, origin.clone(), inner))
-            .unwrap_or_else(|| push_bool_expr(body_ctxt, origin.clone(), false)),
-        TypeKind::Array(elem_ty, _) => elem_ty
-            .to_opt()
-            .map(|elem_ty| build_is_dynamic_expr(body_ctxt, origin.clone(), elem_ty))
-            .unwrap_or_else(|| push_bool_expr(body_ctxt, origin.clone(), false)),
-        TypeKind::Ptr(_) | TypeKind::Never => push_bool_expr(body_ctxt, origin, false),
-    }
-}
-
 pub(super) fn create_head_size_assoc_const<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
     builder: &mut HirBuilder<'_, 'db, O>,
     fields: &[(IdentId<'db>, TypeId<'db>)],
 ) -> AssocConstDef<'db> {
     let db = builder.db();
+    let core = builder.roots().core;
     let name = builder.ident("HEAD_SIZE");
     let ty = builder.ty_ident(builder.ident("u256"));
     let id = builder.ctxt().joined_id(TrackedItemVariant::NamelessBody);
@@ -531,7 +346,12 @@ pub(super) fn create_head_size_assoc_const<'db, O: Clone + Into<crate::span::Des
     let mut expr = push_int_expr(&mut body_ctxt, origin.clone(), 0);
 
     for (_, field_ty) in fields.iter().copied() {
-        let field_size = build_head_size_expr(&mut body_ctxt, origin.clone(), field_ty);
+        let args = GenericArgListId::given1_type(db, field_ty);
+        let path = PathId::from_ident(db, core)
+            .push_str(db, "abi")
+            .push_str_args(db, "abi_field_head_size", args);
+        let callee = body_ctxt.push_expr(Expr::Path(Partial::Present(path)), origin.clone());
+        let field_size = body_ctxt.push_expr(Expr::Call(callee, vec![]), origin.clone());
         expr = body_ctxt.push_expr(
             Expr::Bin(expr, field_size, BinOp::Arith(ArithBinOp::Add)),
             origin.clone(),
@@ -545,85 +365,6 @@ pub(super) fn create_head_size_assoc_const<'db, O: Clone + Into<crate::span::Des
         ty: Partial::Present(ty),
         value: Partial::Present(body),
         vis: crate::hir_def::Visibility::Public,
-    }
-}
-
-fn build_head_size_expr<'db>(
-    body_ctxt: &mut BodyCtxt<'_, 'db>,
-    origin: crate::span::HirOrigin<ast::Expr>,
-    ty: TypeId<'db>,
-) -> crate::hir_def::ExprId {
-    let db = body_ctxt.f_ctxt.db();
-
-    match ty.data(db) {
-        TypeKind::Path(path) => path
-            .to_opt()
-            .map(|path| {
-                body_ctxt.push_expr(
-                    Expr::Path(Partial::Present(path.push_str(db, "HEAD_SIZE"))),
-                    origin.clone(),
-                )
-            })
-            .unwrap_or_else(|| push_int_expr(body_ctxt, origin.clone(), 0)),
-        TypeKind::Tuple(tuple) => {
-            let mut expr = push_int_expr(body_ctxt, origin.clone(), 0);
-            for elem_ty in tuple.data(db).iter().copied() {
-                let elem_expr = elem_ty
-                    .to_opt()
-                    .map(|elem_ty| build_head_size_expr(body_ctxt, origin.clone(), elem_ty))
-                    .unwrap_or_else(|| push_int_expr(body_ctxt, origin.clone(), 0));
-                expr = body_ctxt.push_expr(
-                    Expr::Bin(expr, elem_expr, BinOp::Arith(ArithBinOp::Add)),
-                    origin.clone(),
-                );
-            }
-            expr
-        }
-        TypeKind::Mode(_, inner) => inner
-            .to_opt()
-            .map(|inner| build_head_size_expr(body_ctxt, origin.clone(), inner))
-            .unwrap_or_else(|| push_int_expr(body_ctxt, origin.clone(), 0)),
-        TypeKind::Array(_, _) => abi_size_assoc_expr(body_ctxt, origin, ty, "HEAD_SIZE"),
-        TypeKind::Ptr(_) | TypeKind::Never => push_int_expr(body_ctxt, origin, 0),
-    }
-}
-
-pub(super) fn build_head_size_body_expr<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
-    body: &mut super::hir_builder::BodyBuilder<'_, 'db, O>,
-    ty: TypeId<'db>,
-) -> crate::hir_def::ExprId {
-    let db = body.db();
-
-    match ty.data(db) {
-        TypeKind::Path(path) => path
-            .to_opt()
-            .map(|path| body.path_expr(path.push_str(db, "HEAD_SIZE")))
-            .unwrap_or_else(|| {
-                body.push_expr(Expr::Lit(LitKind::Int(IntegerId::from_usize(db, 0))))
-            }),
-        TypeKind::Tuple(tuple) => {
-            let mut expr = body.push_expr(Expr::Lit(LitKind::Int(IntegerId::from_usize(db, 0))));
-            for elem_ty in tuple.data(db).iter().copied() {
-                let elem_expr = elem_ty
-                    .to_opt()
-                    .map(|elem_ty| build_head_size_body_expr(body, elem_ty))
-                    .unwrap_or_else(|| {
-                        body.push_expr(Expr::Lit(LitKind::Int(IntegerId::from_usize(db, 0))))
-                    });
-                expr = body.push_expr(Expr::Bin(expr, elem_expr, BinOp::Arith(ArithBinOp::Add)));
-            }
-            expr
-        }
-        TypeKind::Mode(_, inner) => inner
-            .to_opt()
-            .map(|inner| build_head_size_body_expr(body, inner))
-            .unwrap_or_else(|| {
-                body.push_expr(Expr::Lit(LitKind::Int(IntegerId::from_usize(db, 0))))
-            }),
-        TypeKind::Array(_, _) => body.abi_size_assoc_expr(ty, "HEAD_SIZE"),
-        TypeKind::Ptr(_) | TypeKind::Never => {
-            body.push_expr(Expr::Lit(LitKind::Int(IntegerId::from_usize(db, 0))))
-        }
     }
 }
 

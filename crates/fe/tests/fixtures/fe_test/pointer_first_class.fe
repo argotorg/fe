@@ -1,0 +1,159 @@
+struct Data {
+    a: u256,
+    b: u256,
+}
+
+struct Holder {
+    data: *Data,
+}
+
+fn read_data(_ data: *Data) -> u256 {
+    data.a
+}
+
+fn write_data(_ data: *Data, value: u256) {
+    data.a = value
+}
+
+fn replace_holder_data(_ holder: *Holder, _ data: *Data) {
+    holder.data = data
+}
+
+fn pointers_equal<T>(_ lhs: T, _ rhs: T) -> bool where T: core::ops::Eq {
+    lhs == rhs
+}
+
+#[test]
+fn test_first_class_memory_pointers() {
+    let data = core::ptr::alloc<Data>()
+    data.a = 5
+    data.b = 8
+
+    let words = core::ptr::cast<Data, u256>(data)
+    let second = core::ptr::offset(words, 1)
+    *second = *second + 3
+    assert(data.a == 5)
+    assert(data.b == 11)
+
+    let holder = Holder { data: data }
+    holder.data.b = holder.data.a + holder.data.b
+    assert(holder.data.b == 16)
+    assert(data.b == 16)
+
+    let byte_ptr = core::ptr::as_bytes(data)
+    let roundtrip = core::ptr::cast<u8, Data>(byte_ptr)
+    let first = *roundtrip
+    assert(first.a == 5)
+    assert(first.b == 16)
+
+    let raw_array = core::ptr::alloc_array<u256>(1)
+    raw_array[0] = 19
+    assert(raw_array[0] == 19)
+
+    let byte_alloc = core::ptr::alloc_bytes(1)
+    *byte_alloc = 37
+    assert(*byte_alloc == 37)
+
+    let mut array = core::ptr::alloc_array<u256>(2)
+    array[0] = first.a
+    array[1] = first.b
+    let array_sum = array[0] + array[1]
+
+    let bytes = array.as_bytes()
+    assert(bytes.len == 64)
+    assert(array_sum == 21)
+
+    let mut zeroed = core::ptr::MemArray<u256>::new_zeroed(2)
+    assert(!zeroed.is_empty())
+    assert(zeroed[0] == 0)
+    assert(zeroed[1] == 0)
+    zeroed[0] = 99
+    zeroed.zero()
+    assert(zeroed[0] == 0)
+
+    let pair = core::ptr::alloc<[u256; 2]>()
+    pair[0] = 13
+    pair[1] = 21
+    let pair_bytes = core::ptr::as_bytes(pair)
+    let pair_words = core::ptr::cast<u8, u256>(pair_bytes)
+    assert(pair[0] == 13)
+    assert(pair[1] == 21)
+    assert(*pair_words + *core::ptr::offset(pair_words, 1) == 34)
+}
+
+#[test]
+fn test_pointer_parameter_field_access() {
+    let data = core::ptr::alloc<Data>()
+    write_data(data, value: 42)
+    assert(read_data(data) == 42)
+
+    let replacement = core::ptr::alloc<Data>()
+    replacement.a = 99
+    let holder = core::ptr::alloc<Holder>()
+    replace_holder_data(holder, replacement)
+    assert(holder.data.a == 99)
+}
+
+#[test]
+fn test_pointer_equality() {
+    let p = core::ptr::alloc<u256>()
+    let q = core::ptr::alloc<u256>()
+    assert(p == p)
+    assert(p != q)
+    assert(core::ptr::offset(p, 0) == p)
+    assert(pointers_equal(p, p))
+
+    let p_bytes = core::ptr::cast<u256, u8>(p)
+    let q_bytes = core::ptr::cast<u256, u8>(q)
+    assert(p_bytes != q_bytes)
+    assert(core::ptr::cast<u8, u256>(p_bytes) == p)
+}
+
+#[test]
+fn test_subword_memory_pointer_roundtrip() {
+    let mut bytes = core::ptr::MemArray<u8>::new_zeroed(4)
+    bytes[0] = 1
+    bytes[1] = 2
+    bytes[2] = 3
+    bytes[3] = 4
+    assert(bytes[0] == 1)
+    assert(bytes[1] == 2)
+    assert(bytes[2] == 3)
+    assert(bytes[3] == 4)
+
+    let mut words = core::ptr::MemArray<u16>::new_zeroed(2)
+    words[0] = 0x1234
+    words[1] = 0xabcd
+    assert(words[0] == 0x1234)
+    assert(words[1] == 0xabcd)
+}
+
+#[test]
+fn test_subword_static_array_pointer_roundtrip() {
+    let pair = core::ptr::alloc<[u8; 4]>()
+    pair[0] = 9
+    pair[1] = 8
+    pair[2] = 7
+    pair[3] = 6
+    assert(pair[0] == 9)
+    assert(pair[1] == 8)
+    assert(pair[2] == 7)
+    assert(pair[3] == 6)
+}
+
+#[test]
+fn test_pointer_to_pointer_deref() {
+    let p = core::ptr::alloc<u256>()
+    *p = 5
+    let pp = core::ptr::alloc<*u256>()
+    *pp = p
+    assert(*(*pp) == 5)
+}
+
+#[test]
+fn test_borrowed_pointer_deref() {
+    let mut p = core::ptr::alloc<u256>()
+    let borrowed = mut p
+    *borrowed = 3
+    assert(*p == 3)
+}

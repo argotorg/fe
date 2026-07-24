@@ -3,6 +3,7 @@
 /// the digest from a typed call must match the digest from a `raw_call` fed
 /// by `encode_msg_calldata`.
 
+use core::ptr
 use std::evm::{Ctx, Evm, RawOps, encode_msg_calldata, decode_returndata, last_returndata}
 
 msg EchoMsg {
@@ -14,9 +15,9 @@ msg EchoMsg {
 
 fn hash_calldata() -> u256 uses (raw: mut RawOps) {
     let len = raw.calldatasize()
-    let ptr = std::evm::mem::alloc(len)
-    raw.calldatacopy(dest: ptr, offset: 0, len: len)
-    raw.keccak256(offset: ptr, len: len)
+    let mut data = ptr::MemBuffer::alloc(len)
+    raw.calldatacopy(dest: mut data, offset: 0)
+    raw.keccak256(data)
 }
 
 pub contract Echo uses (raw: mut RawOps) {
@@ -38,10 +39,10 @@ pub contract Echo uses (raw: mut RawOps) {
 fn build_bytes() -> Bytes
 uses (mem: mut std::evm::RawMem)
 {
-    let data = std::evm::mem::alloc(96)
+    let data = ptr::alloc_bytes(96)
     mem.mstore(addr: data, value: 64)
-    mem.mstore(addr: data + 32, value: 0x1234)
-    mem.mstore(addr: data + 64, value: 0x5678)
+    mem.mstore(addr: ptr::offset_bytes(data, 32), value: 0x1234)
+    mem.mstore(addr: ptr::offset_bytes(data, 64), value: 0x5678)
     Bytes { data: data, len: 64, size: 96 }
 }
 
@@ -53,8 +54,8 @@ fn test_encode_msg_calldata_static_args() uses (evm: mut Evm, call: mut Call, ct
     let addr_arg = Address { inner: 0xabcdef }
     let typed_digest: u256 = echo.call(EchoMsg::DigestStatic { a: 42, b: addr_arg })
 
-    let (ptr, len) = encode_msg_calldata(EchoMsg::DigestStatic { a: 42, b: addr_arg })
-    let ok = call.raw_call(addr: echo, gas: ctx.gas(), value: 0, args_offset: ptr, args_len: len)
+    let data = encode_msg_calldata(EchoMsg::DigestStatic { a: 42, b: addr_arg })
+    let ok = call.raw_call(addr: echo, gas: ctx.gas(), value: 0, args: data)
     assert!(ok)
     let raw_digest: u256 = decode_returndata(last_returndata())
 
@@ -68,8 +69,8 @@ fn test_encode_msg_calldata_dynamic_bytes() uses (evm: mut Evm, call: mut Call, 
 
     let typed_digest: u256 = echo.call(EchoMsg::DigestDynamic { data: build_bytes() })
 
-    let (ptr, len) = encode_msg_calldata(EchoMsg::DigestDynamic { data: build_bytes() })
-    let ok = call.raw_call(addr: echo, gas: ctx.gas(), value: 0, args_offset: ptr, args_len: len)
+    let data = encode_msg_calldata(EchoMsg::DigestDynamic { data: build_bytes() })
+    let ok = call.raw_call(addr: echo, gas: ctx.gas(), value: 0, args: data)
     assert!(ok)
     let raw_digest: u256 = decode_returndata(last_returndata())
 
