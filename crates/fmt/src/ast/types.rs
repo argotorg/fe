@@ -105,6 +105,26 @@ macro_rules! block_list_auto_impl {
 block_list_auto_impl!(block_list_auto, block_list);
 block_list_auto_impl!(block_list_spaced_auto, block_list_spaced);
 
+/// Returns true if the first non-trivia token of the node is `<` (a qualified
+/// type such as `<T as Trait>::Item`). Such a node must not be emitted
+/// directly after another `<`, or the two would lex as a single `<<` shift
+/// token on reparse; callers insert a space between them.
+pub(crate) fn starts_with_lt(syntax: &parser::SyntaxNode) -> bool {
+    syntax
+        .descendants_with_tokens()
+        .filter_map(|child| child.into_token())
+        .find(|token| {
+            !matches!(
+                token.kind(),
+                SyntaxKind::WhiteSpace
+                    | SyntaxKind::Newline
+                    | SyntaxKind::Comment
+                    | SyntaxKind::DocComment
+            )
+        })
+        .is_some_and(|token| token.kind() == SyntaxKind::Lt)
+}
+
 pub fn has_comment_tokens(syntax: &parser::SyntaxNode) -> bool {
     syntax.children_with_tokens().any(|child| {
         matches!(
@@ -197,6 +217,13 @@ impl<'a> TokenDocBuilder<'a> {
 
     fn push_piece(&mut self, piece: TokenPiece<'a>) {
         let alloc = &self.ctx.alloc;
+
+        // Leading newlines inside a node are the enclosing container's
+        // concern (it emits the separation between entries); rendering them
+        // here too would add another blank line on every format pass.
+        if self.is_start {
+            self.pending_newlines = 0;
+        }
 
         if self.pending_newlines > 0 {
             let doc = hardlines(alloc, self.pending_newlines).append(piece.doc);
@@ -980,8 +1007,16 @@ impl ToDoc for ast::QualifiedType {
                 None => return alloc.nil(),
             };
 
+            // A qualified type nested directly inside another (`< <A as B>::C
+            // as D>`) needs a space after the opening `<` so it doesn't lex
+            // as `<<`.
+            let open = if self.ty().is_some_and(|t| starts_with_lt(t.syntax())) {
+                "< "
+            } else {
+                "<"
+            };
             return alloc
-                .text("<")
+                .text(open)
                 .append(ty)
                 .append(alloc.text(" as "))
                 .append(trait_path)
@@ -1012,10 +1047,21 @@ impl ToDoc for ast::QualifiedType {
 impl ToDoc for ast::GenericArgList {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         let indent = ctx.config.indent_width as isize;
+        // A first argument that is itself a qualified type starts with `<`;
+        // keep a space after the opening `<` so it doesn't lex as `<<`.
+        let open = if self
+            .into_iter()
+            .next()
+            .is_some_and(|arg| starts_with_lt(arg.syntax()))
+        {
+            "< "
+        } else {
+            "<"
+        };
         block_list_auto(
             ctx,
             self.syntax(),
-            "<",
+            open,
             ">",
             ast::GenericArg::cast,
             indent,

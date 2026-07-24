@@ -1,0 +1,139 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+expression: output
+input_file: tests/fixtures/line_start_ambiguous_ops_stress.fe
+---
+// Stress cases for operators the parser rejects at line-start (`-`, `<`, `<<`)
+// mixed with higher-precedence chains and labeled call arguments at several
+// nesting depths. Every formatted output must reparse.
+
+fn sub_chain(
+    first_operand_value: u256,
+    second_operand_value: u256,
+    third_operand_value: u256,
+) -> u256 {
+    first_operand_value -
+        second_operand_value -
+        third_operand_value -
+        lookup_some_stored_quantity(slot: first_operand_value) -
+        lookup_some_stored_quantity(slot: second_operand_value)
+}
+
+fn mixed_add_sub(alpha_quantity: u256, beta_quantity: u256, gamma_quantity: u256) -> u256 {
+    alpha_quantity
+        + compute_weighted_contribution(weight: beta_quantity, scale: gamma_quantity) -
+        compute_weighted_contribution(weight: gamma_quantity, scale: beta_quantity)
+        + alpha_quantity
+}
+
+fn sub_with_mul_div_rhs(
+    total_supply_amount: u256,
+    fee_numerator: u256,
+    fee_denominator: u256,
+) -> u256 {
+    total_supply_amount -
+        compute_accumulated_fee_share(numerator: fee_numerator, denominator: fee_denominator)
+            * total_supply_amount
+            / 1000000000000000000
+}
+
+fn comparison_wrap(observed_balance_amount: u256, expected_balance_amount: u256) -> bool {
+    compute_normalized_balance(raw: observed_balance_amount, scale: 18) <
+        compute_normalized_balance(raw: expected_balance_amount, scale: 18)
+}
+
+fn shift_chain_wrap(
+    packed_word_value: u256,
+    first_shift_amount: u256,
+    second_shift_amount: u256,
+) -> u256 {
+    extract_slot_payload_bits(word: packed_word_value, offset: 32) <<
+        first_shift_amount <<
+        second_shift_amount <<
+        compute_dynamic_shift(base: first_shift_amount)
+}
+
+fn nested_labeled_args(pool_balance_first: u256, pool_balance_second: u256, invariant_value: u256) {
+    store_computed_result(
+        storage_index: 0,
+        computed_value: outer_combinator(
+            first_component: pool_balance_first -
+                compute_dynamic_fee_for_balances(
+                        xpi_value: pool_balance_first,
+                        xpj_value: pool_balance_second,
+                        base_fee: invariant_value,
+                    )
+                    * invariant_value
+                    / 10000000000,
+            second_component: pool_balance_second - invariant_value,
+        ),
+    )
+}
+
+fn sub_inside_if_arm(condition_flag: bool, lookup_key_value: u256) -> u256 {
+    let computed = if condition_flag {
+        some_call_with_a_rather_long_name(
+                first_argument: lookup_key_value,
+                second_argument: lookup_key_value,
+            ) -
+            another_lookup_with_long_name(key: lookup_key_value) -
+            yet_another_adjustment_term(key: lookup_key_value)
+    } else {
+        lookup_some_stored_quantity(slot: lookup_key_value) - 1
+    }
+    computed
+}
+
+fn unary_minus_operand(signed_accumulator_value: i256, signed_adjustment_value: i256) -> i256 {
+    -compute_signed_contribution(
+            base: signed_accumulator_value,
+            scale: signed_adjustment_value,
+        ) -
+        compute_signed_contribution(
+            base: signed_adjustment_value,
+            scale: signed_accumulator_value,
+        )
+}
+
+fn comparison_of_sub_chains(
+    left_side_quantity: u256,
+    right_side_quantity: u256,
+    offset_quantity: u256,
+) -> bool {
+    left_side_quantity -
+            compute_weighted_contribution(weight: offset_quantity, scale: right_side_quantity) <
+        right_side_quantity -
+            compute_weighted_contribution(weight: offset_quantity, scale: left_side_quantity)
+}
+
+fn shift_of_sub_result(
+    base_word_value: u256,
+    subtrahend_value: u256,
+    shift_bit_count: u256,
+) -> u256 {
+    combine_packed_fields(
+            high: base_word_value - subtrahend_value,
+            low: base_word_value,
+        ) <<
+        compute_dynamic_shift(base: shift_bit_count)
+}
+
+fn deeply_nested_mixed(
+    depth_one_value: u256,
+    depth_two_value: u256,
+    depth_three_value: u256,
+) -> u256 {
+    outer_combinator(
+        first_component: middle_combinator(
+            inner_component: depth_one_value -
+                inner_lookup_with_long_name(key: depth_two_value)
+                    * depth_three_value
+                    / 10000000000 -
+                trailing_adjustment_term(key: depth_three_value),
+            other_component: depth_two_value <<
+                compute_dynamic_shift(base: depth_one_value) <<
+                compute_dynamic_shift(base: depth_three_value),
+        ),
+        second_component: depth_one_value - depth_two_value - depth_three_value,
+    )
+}
