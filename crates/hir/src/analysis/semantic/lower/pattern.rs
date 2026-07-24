@@ -1,3 +1,4 @@
+use common::layout::enum_tag_bits;
 use cranelift_entity::EntityRef;
 use num_bigint::BigInt;
 
@@ -742,15 +743,12 @@ fn enum_tag_ty<'db>(db: &'db dyn HirAnalysisDb, enum_ty: TyId<'db>) -> TyId<'db>
         .as_enum(db)
         .map(|enum_| enum_.len_variants(db))
         .unwrap_or(0);
-    if variant_count <= u8::MAX as usize + 1 {
-        TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U8)))
-    } else if variant_count <= u16::MAX as usize + 1 {
-        TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U16)))
-    } else if variant_count <= u32::MAX as usize + 1 {
-        TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U32)))
-    } else if variant_count <= u64::MAX as usize {
-        TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U64)))
-    } else {
-        TyId::u256(db)
-    }
+    let prim = match enum_tag_bits(variant_count) {
+        8 => PrimTy::U8,
+        16 => PrimTy::U16,
+        32 => PrimTy::U32,
+        64 => PrimTy::U64,
+        _ => unreachable!("enum tag width must be a primitive integer width"),
+    };
+    TyId::new(db, TyData::TyBase(TyBase::Prim(prim)))
 }

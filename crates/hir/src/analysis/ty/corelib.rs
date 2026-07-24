@@ -6,7 +6,7 @@ use crate::{
         name_resolution::{NameDomain, PathRes, resolve_ident_to_bucket, resolve_path},
         ty::{
             trait_resolution::PredicateListId,
-            ty_def::{TyBase, TyData, TyId},
+            ty_def::{BorrowKind, TyBase, TyData, TyId},
         },
     },
     hir_def::{
@@ -71,6 +71,16 @@ pub fn resolve_lib_func_path<'db>(
     resolve_lib_func(db, scope, path_id)
 }
 
+/// Resolve a trait by a fully-qualified `core::...` or `std::...` path string.
+pub fn resolve_lib_trait_path<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    path: &str,
+) -> Option<Trait<'db>> {
+    let path_id = LibPath::new(db, path.to_string());
+    resolve_lib_trait(db, scope, path_id)
+}
+
 /// Returns `true` if `func` is the library function at the fully-qualified
 /// `core::...` or `std::...` path.
 ///
@@ -78,164 +88,271 @@ pub fn resolve_lib_func_path<'db>(
 /// nested module scope, so backend consumers can classify already-resolved
 /// library callees without reintroducing lookup drift.
 pub fn lib_func_matches<'db>(db: &'db dyn HirAnalysisDb, func: Func<'db>, path: &str) -> bool {
-    let Some((root, target_suffix)) = path.split_once("::") else {
-        return false;
-    };
-    let expected_kind = match root {
-        "core" => IngotKind::Core,
-        "std" => IngotKind::Std,
-        _ => return false,
-    };
-    if func.top_mod(db).ingot(db).kind(db) != expected_kind {
-        return false;
+    let func = func.trait_method_def(db).unwrap_or(func);
+    resolve_lib_func_path(db, func.scope(), path) == Some(func)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IntrinsicPointerReturn {
+    FreshMemory,
+    InputPointee,
+    InputArrayElem,
+    InputMemArrayElem,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IntrinsicMemoryProjection {
+    Value,
+    Pointee,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MemoryAccessKind {
+    Read,
+    MutAccess,
+    Write,
+    Move,
+}
+
+impl MemoryAccessKind {
+    pub fn borrow_kind(self) -> BorrowKind {
+        match self {
+            Self::Read => BorrowKind::Ref,
+            Self::MutAccess | Self::Write | Self::Move => BorrowKind::Mut,
+        }
     }
-    let Some(actual_path) = func.scope().pretty_path(db) else {
-        return false;
-    };
-    let Some((_, actual_suffix)) = actual_path.split_once("::") else {
-        return false;
-    };
-    actual_suffix == target_suffix
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
-pub enum RuntimeBuiltinFuncKind {
-    Malloc,
-    Mload,
-    Mstore,
-    Mstore8,
-    Mcopy,
-    Msize,
-    Sload,
-    Sstore,
-    CallDataLoad,
-    CallDataCopy,
-    CallDataSize,
-    ReturnDataCopy,
-    ReturnDataSize,
-    CodeCopy,
-    CodeSize,
-    ExtCodeCopy,
-    ExtCodeSize,
-    ExtCodeHash,
-    Keccak256,
-    AddMod,
-    MulMod,
-    Byte,
-    SignExtend,
-    Address,
-    Caller,
-    CallValue,
-    Origin,
-    GasPrice,
-    CoinBase,
-    Balance,
-    Timestamp,
-    Number,
-    PrevRandao,
-    GasLimit,
-    ChainId,
-    BaseFee,
-    SelfBalance,
-    BlockHash,
-    BlobHash,
-    BlobBaseFee,
-    Gas,
-    Call,
-    StaticCall,
-    DelegateCall,
-    Create,
-    Create2,
-    Log0,
-    Log1,
-    Log2,
-    Log3,
-    Log4,
-    Revert,
-    ReturnData,
-    SelfDestruct,
-    Stop,
-    Panic,
-    PanicWithValue,
-    Todo,
-    IntrinsicKeccak256,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct IntrinsicMemoryAccess {
+    pub input: u32,
+    pub projection: IntrinsicMemoryProjection,
+    pub kind: MemoryAccessKind,
 }
 
-#[salsa::tracked]
-pub fn runtime_builtin_func_kind<'db>(
+impl IntrinsicMemoryAccess {
+    const fn value(input: u32, kind: MemoryAccessKind) -> Self {
+        Self {
+            input,
+            projection: IntrinsicMemoryProjection::Value,
+            kind,
+        }
+    }
+
+    const fn pointee(input: u32, kind: MemoryAccessKind) -> Self {
+        Self {
+            input,
+            projection: IntrinsicMemoryProjection::Pointee,
+            kind,
+        }
+    }
+}
+
+pub type IntrinsicMemoryContract = &'static [IntrinsicMemoryAccess];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct IntrinsicContract {
+    pub pointer_return: Option<IntrinsicPointerReturn>,
+    pub memory: Option<IntrinsicMemoryContract>,
+}
+
+const RAW_MEM_READS: &[IntrinsicMemoryAccess] = &[
+    IntrinsicMemoryAccess::value(0, MemoryAccessKind::Read),
+    IntrinsicMemoryAccess::pointee(1, MemoryAccessKind::Read),
+];
+const RAW_MEM_WRITES: &[IntrinsicMemoryAccess] = &[
+    IntrinsicMemoryAccess::value(0, MemoryAccessKind::MutAccess),
+    IntrinsicMemoryAccess::pointee(1, MemoryAccessKind::Write),
+];
+const READ_POINTEE_0: &[IntrinsicMemoryAccess] =
+    &[IntrinsicMemoryAccess::pointee(0, MemoryAccessKind::Read)];
+const WRITE_POINTEE_0: &[IntrinsicMemoryAccess] =
+    &[IntrinsicMemoryAccess::pointee(0, MemoryAccessKind::Write)];
+const COPY_MEMORY: &[IntrinsicMemoryAccess] = &[
+    IntrinsicMemoryAccess::pointee(1, MemoryAccessKind::Read),
+    IntrinsicMemoryAccess::pointee(0, MemoryAccessKind::Write),
+];
+const WRITE_POINTEE_1: &[IntrinsicMemoryAccess] =
+    &[IntrinsicMemoryAccess::pointee(1, MemoryAccessKind::Write)];
+const CALL_MEMORY: &[IntrinsicMemoryAccess] = &[
+    IntrinsicMemoryAccess::pointee(3, MemoryAccessKind::Read),
+    IntrinsicMemoryAccess::pointee(5, MemoryAccessKind::Write),
+];
+const STATIC_CALL_MEMORY: &[IntrinsicMemoryAccess] = &[
+    IntrinsicMemoryAccess::pointee(2, MemoryAccessKind::Read),
+    IntrinsicMemoryAccess::pointee(4, MemoryAccessKind::Write),
+];
+const READ_POINTEE_1: &[IntrinsicMemoryAccess] =
+    &[IntrinsicMemoryAccess::pointee(1, MemoryAccessKind::Read)];
+const NO_MEMORY_ACCESSES: IntrinsicMemoryContract = &[];
+
+macro_rules! define_runtime_intrinsics {
+    ($($variant:ident => ($ingot:ident, [$($segment:literal),+], $memory:expr, $pointer:expr)),+ $(,)?) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+        pub enum RuntimeBuiltinFuncKind {
+            $($variant),+
+        }
+
+        #[salsa::tracked]
+        pub fn runtime_builtin_func_kind<'db>(
+            db: &'db dyn HirAnalysisDb,
+            func: Func<'db>,
+        ) -> Option<RuntimeBuiltinFuncKind> {
+            let ingot = func.top_mod(db).ingot(db).kind(db);
+            let path = runtime_builtin_func_path(db, func)?;
+            let builtin = match (ingot, path.as_slice()) {
+                $((IngotKind::$ingot, [$($segment),+]) => RuntimeBuiltinFuncKind::$variant),+,
+                _ => return None,
+            };
+            let root = match ingot {
+                IngotKind::Core => "core",
+                IngotKind::Std => "std",
+                _ => return None,
+            };
+            let mut stable_path = root.to_string();
+            for segment in path {
+                stable_path.push_str("::");
+                stable_path.push_str(segment);
+            }
+            (resolve_lib_func_path(db, func.scope(), &stable_path) == Some(func))
+                .then_some(builtin)
+        }
+
+        fn runtime_intrinsic_contract(kind: RuntimeBuiltinFuncKind) -> IntrinsicContract {
+            match kind {
+                $(RuntimeBuiltinFuncKind::$variant => IntrinsicContract {
+                    pointer_return: $pointer,
+                    memory: Some($memory),
+                }),+
+            }
+        }
+    };
+}
+
+define_runtime_intrinsics! {
+    Malloc => (Core, ["ptr", "alloc_raw"], NO_MEMORY_ACCESSES, Some(IntrinsicPointerReturn::FreshMemory)),
+    PtrOffsetBytes => (Core, ["ptr", "offset_bytes"], NO_MEMORY_ACCESSES, Some(IntrinsicPointerReturn::InputPointee)),
+    PtrEq => (Core, ["ptr", "addr_eq"], NO_MEMORY_ACCESSES, None),
+    Mload => (Std, ["evm", "ops", "mload"], READ_POINTEE_0, None),
+    Mstore => (Std, ["evm", "ops", "mstore"], WRITE_POINTEE_0, None),
+    Mstore8 => (Std, ["evm", "ops", "mstore8"], WRITE_POINTEE_0, None),
+    Mcopy => (Core, ["abi", "mcopy"], COPY_MEMORY, None),
+    ZeroMem => (Core, ["ptr", "zero_mem"], WRITE_POINTEE_0, None),
+    Msize => (Std, ["evm", "ops", "msize"], NO_MEMORY_ACCESSES, None),
+    Sload => (Std, ["evm", "ops", "sload"], NO_MEMORY_ACCESSES, None),
+    Sstore => (Std, ["evm", "ops", "sstore"], NO_MEMORY_ACCESSES, None),
+    CallDataLoad => (Std, ["evm", "ops", "calldataload"], NO_MEMORY_ACCESSES, None),
+    CallDataCopy => (Std, ["evm", "ops", "calldatacopy"], WRITE_POINTEE_0, None),
+    CallDataSize => (Std, ["evm", "ops", "calldatasize"], NO_MEMORY_ACCESSES, None),
+    ReturnDataCopy => (Std, ["evm", "ops", "returndatacopy"], WRITE_POINTEE_0, None),
+    ReturnDataSize => (Std, ["evm", "ops", "returndatasize"], NO_MEMORY_ACCESSES, None),
+    CodeCopy => (Std, ["evm", "ops", "codecopy"], WRITE_POINTEE_0, None),
+    CodeSize => (Std, ["evm", "ops", "codesize"], NO_MEMORY_ACCESSES, None),
+    ExtCodeCopy => (Std, ["evm", "ops", "extcodecopy"], WRITE_POINTEE_1, None),
+    ExtCodeSize => (Std, ["evm", "ops", "extcodesize"], NO_MEMORY_ACCESSES, None),
+    ExtCodeHash => (Std, ["evm", "ops", "extcodehash"], NO_MEMORY_ACCESSES, None),
+    Keccak256 => (Std, ["evm", "ops", "keccak256"], READ_POINTEE_0, None),
+    AddMod => (Std, ["evm", "ops", "addmod"], NO_MEMORY_ACCESSES, None),
+    MulMod => (Std, ["evm", "ops", "mulmod"], NO_MEMORY_ACCESSES, None),
+    Byte => (Std, ["evm", "ops", "byte"], NO_MEMORY_ACCESSES, None),
+    SignExtend => (Std, ["evm", "ops", "signextend"], NO_MEMORY_ACCESSES, None),
+    Address => (Std, ["evm", "ops", "address"], NO_MEMORY_ACCESSES, None),
+    Caller => (Std, ["evm", "ops", "caller"], NO_MEMORY_ACCESSES, None),
+    CallValue => (Std, ["evm", "ops", "callvalue"], NO_MEMORY_ACCESSES, None),
+    Origin => (Std, ["evm", "ops", "origin"], NO_MEMORY_ACCESSES, None),
+    GasPrice => (Std, ["evm", "ops", "gasprice"], NO_MEMORY_ACCESSES, None),
+    CoinBase => (Std, ["evm", "ops", "coinbase"], NO_MEMORY_ACCESSES, None),
+    Balance => (Std, ["evm", "ops", "balance"], NO_MEMORY_ACCESSES, None),
+    Timestamp => (Std, ["evm", "ops", "timestamp"], NO_MEMORY_ACCESSES, None),
+    Number => (Std, ["evm", "ops", "number"], NO_MEMORY_ACCESSES, None),
+    PrevRandao => (Std, ["evm", "ops", "prevrandao"], NO_MEMORY_ACCESSES, None),
+    GasLimit => (Std, ["evm", "ops", "gaslimit"], NO_MEMORY_ACCESSES, None),
+    ChainId => (Std, ["evm", "ops", "chainid"], NO_MEMORY_ACCESSES, None),
+    BaseFee => (Std, ["evm", "ops", "basefee"], NO_MEMORY_ACCESSES, None),
+    SelfBalance => (Std, ["evm", "ops", "selfbalance"], NO_MEMORY_ACCESSES, None),
+    BlockHash => (Std, ["evm", "ops", "blockhash"], NO_MEMORY_ACCESSES, None),
+    BlobHash => (Std, ["evm", "ops", "blobhash"], NO_MEMORY_ACCESSES, None),
+    BlobBaseFee => (Std, ["evm", "ops", "blobbasefee"], NO_MEMORY_ACCESSES, None),
+    Gas => (Std, ["evm", "ops", "gas"], NO_MEMORY_ACCESSES, None),
+    Call => (Std, ["evm", "ops", "call"], CALL_MEMORY, None),
+    StaticCall => (Std, ["evm", "ops", "staticcall"], STATIC_CALL_MEMORY, None),
+    DelegateCall => (Std, ["evm", "ops", "delegatecall"], STATIC_CALL_MEMORY, None),
+    Create => (Std, ["evm", "ops", "create"], READ_POINTEE_1, None),
+    Create2 => (Std, ["evm", "ops", "create2"], READ_POINTEE_1, None),
+    Log0 => (Std, ["evm", "ops", "log0"], READ_POINTEE_0, None),
+    Log1 => (Std, ["evm", "ops", "log1"], READ_POINTEE_0, None),
+    Log2 => (Std, ["evm", "ops", "log2"], READ_POINTEE_0, None),
+    Log3 => (Std, ["evm", "ops", "log3"], READ_POINTEE_0, None),
+    Log4 => (Std, ["evm", "ops", "log4"], READ_POINTEE_0, None),
+    Revert => (Std, ["evm", "ops", "revert"], READ_POINTEE_0, None),
+    RevertEmpty => (Std, ["evm", "ops", "revert_empty"], NO_MEMORY_ACCESSES, None),
+    ReturnData => (Std, ["evm", "ops", "return_data"], READ_POINTEE_0, None),
+    SelfDestruct => (Std, ["evm", "ops", "selfdestruct"], NO_MEMORY_ACCESSES, None),
+    Stop => (Std, ["evm", "ops", "stop"], NO_MEMORY_ACCESSES, None),
+    Panic => (Core, ["panic"], NO_MEMORY_ACCESSES, None),
+    PanicWithValue => (Core, ["panic_with_value"], NO_MEMORY_ACCESSES, None),
+    Todo => (Core, ["todo"], NO_MEMORY_ACCESSES, None),
+    IntrinsicKeccak256 => (Core, ["intrinsic", "__keccak256"], NO_MEMORY_ACCESSES, None),
+}
+
+pub fn intrinsic_contract<'db>(
     db: &'db dyn HirAnalysisDb,
     func: Func<'db>,
-) -> Option<RuntimeBuiltinFuncKind> {
-    let kind = func.top_mod(db).ingot(db).kind(db);
-    let path = runtime_builtin_func_path(db, func)?;
-    Some(match (kind, path.as_slice()) {
-        (IngotKind::Std, ["evm", "mem", "alloc"]) => RuntimeBuiltinFuncKind::Malloc,
-        (IngotKind::Std, ["evm", "ops", "mload"]) => RuntimeBuiltinFuncKind::Mload,
-        (IngotKind::Std, ["evm", "ops", "mstore"]) => RuntimeBuiltinFuncKind::Mstore,
-        (IngotKind::Std, ["evm", "ops", "mstore8"]) => RuntimeBuiltinFuncKind::Mstore8,
-        (IngotKind::Core, ["abi", "mcopy"]) => RuntimeBuiltinFuncKind::Mcopy,
-        (IngotKind::Std, ["evm", "ops", "msize"]) => RuntimeBuiltinFuncKind::Msize,
-        (IngotKind::Std, ["evm", "ops", "sload"]) => RuntimeBuiltinFuncKind::Sload,
-        (IngotKind::Std, ["evm", "ops", "sstore"]) => RuntimeBuiltinFuncKind::Sstore,
-        (IngotKind::Std, ["evm", "ops", "calldataload"]) => RuntimeBuiltinFuncKind::CallDataLoad,
-        (IngotKind::Std, ["evm", "ops", "calldatacopy"]) => RuntimeBuiltinFuncKind::CallDataCopy,
-        (IngotKind::Std, ["evm", "ops", "calldatasize"]) => RuntimeBuiltinFuncKind::CallDataSize,
-        (IngotKind::Std, ["evm", "ops", "returndatacopy"]) => {
-            RuntimeBuiltinFuncKind::ReturnDataCopy
-        }
-        (IngotKind::Std, ["evm", "ops", "returndatasize"]) => {
-            RuntimeBuiltinFuncKind::ReturnDataSize
-        }
-        (IngotKind::Std, ["evm", "ops", "codecopy"]) => RuntimeBuiltinFuncKind::CodeCopy,
-        (IngotKind::Std, ["evm", "ops", "codesize"]) => RuntimeBuiltinFuncKind::CodeSize,
-        (IngotKind::Std, ["evm", "ops", "extcodecopy"]) => RuntimeBuiltinFuncKind::ExtCodeCopy,
-        (IngotKind::Std, ["evm", "ops", "extcodesize"]) => RuntimeBuiltinFuncKind::ExtCodeSize,
-        (IngotKind::Std, ["evm", "ops", "extcodehash"]) => RuntimeBuiltinFuncKind::ExtCodeHash,
-        (IngotKind::Std, ["evm", "ops", "keccak256"]) => RuntimeBuiltinFuncKind::Keccak256,
-        (IngotKind::Std, ["evm", "ops", "addmod"]) => RuntimeBuiltinFuncKind::AddMod,
-        (IngotKind::Std, ["evm", "ops", "mulmod"]) => RuntimeBuiltinFuncKind::MulMod,
-        (IngotKind::Std, ["evm", "ops", "byte"]) => RuntimeBuiltinFuncKind::Byte,
-        (IngotKind::Std, ["evm", "ops", "signextend"]) => RuntimeBuiltinFuncKind::SignExtend,
-        (IngotKind::Std, ["evm", "ops", "address"]) => RuntimeBuiltinFuncKind::Address,
-        (IngotKind::Std, ["evm", "ops", "caller"]) => RuntimeBuiltinFuncKind::Caller,
-        (IngotKind::Std, ["evm", "ops", "callvalue"]) => RuntimeBuiltinFuncKind::CallValue,
-        (IngotKind::Std, ["evm", "ops", "origin"]) => RuntimeBuiltinFuncKind::Origin,
-        (IngotKind::Std, ["evm", "ops", "gasprice"]) => RuntimeBuiltinFuncKind::GasPrice,
-        (IngotKind::Std, ["evm", "ops", "coinbase"]) => RuntimeBuiltinFuncKind::CoinBase,
-        (IngotKind::Std, ["evm", "ops", "balance"]) => RuntimeBuiltinFuncKind::Balance,
-        (IngotKind::Std, ["evm", "ops", "timestamp"]) => RuntimeBuiltinFuncKind::Timestamp,
-        (IngotKind::Std, ["evm", "ops", "number"]) => RuntimeBuiltinFuncKind::Number,
-        (IngotKind::Std, ["evm", "ops", "prevrandao"]) => RuntimeBuiltinFuncKind::PrevRandao,
-        (IngotKind::Std, ["evm", "ops", "gaslimit"]) => RuntimeBuiltinFuncKind::GasLimit,
-        (IngotKind::Std, ["evm", "ops", "chainid"]) => RuntimeBuiltinFuncKind::ChainId,
-        (IngotKind::Std, ["evm", "ops", "basefee"]) => RuntimeBuiltinFuncKind::BaseFee,
-        (IngotKind::Std, ["evm", "ops", "selfbalance"]) => RuntimeBuiltinFuncKind::SelfBalance,
-        (IngotKind::Std, ["evm", "ops", "blockhash"]) => RuntimeBuiltinFuncKind::BlockHash,
-        (IngotKind::Std, ["evm", "ops", "blobhash"]) => RuntimeBuiltinFuncKind::BlobHash,
-        (IngotKind::Std, ["evm", "ops", "blobbasefee"]) => RuntimeBuiltinFuncKind::BlobBaseFee,
-        (IngotKind::Std, ["evm", "ops", "gas"]) => RuntimeBuiltinFuncKind::Gas,
-        (IngotKind::Std, ["evm", "ops", "call"]) => RuntimeBuiltinFuncKind::Call,
-        (IngotKind::Std, ["evm", "ops", "staticcall"]) => RuntimeBuiltinFuncKind::StaticCall,
-        (IngotKind::Std, ["evm", "ops", "delegatecall"]) => RuntimeBuiltinFuncKind::DelegateCall,
-        (IngotKind::Std, ["evm", "ops", "create"]) => RuntimeBuiltinFuncKind::Create,
-        (IngotKind::Std, ["evm", "ops", "create2"]) => RuntimeBuiltinFuncKind::Create2,
-        (IngotKind::Std, ["evm", "ops", "log0"]) => RuntimeBuiltinFuncKind::Log0,
-        (IngotKind::Std, ["evm", "ops", "log1"]) => RuntimeBuiltinFuncKind::Log1,
-        (IngotKind::Std, ["evm", "ops", "log2"]) => RuntimeBuiltinFuncKind::Log2,
-        (IngotKind::Std, ["evm", "ops", "log3"]) => RuntimeBuiltinFuncKind::Log3,
-        (IngotKind::Std, ["evm", "ops", "log4"]) => RuntimeBuiltinFuncKind::Log4,
-        (IngotKind::Std, ["evm", "ops", "revert"]) => RuntimeBuiltinFuncKind::Revert,
-        (IngotKind::Std, ["evm", "ops", "return_data"]) => RuntimeBuiltinFuncKind::ReturnData,
-        (IngotKind::Std, ["evm", "ops", "selfdestruct"]) => RuntimeBuiltinFuncKind::SelfDestruct,
-        (IngotKind::Std, ["evm", "ops", "stop"]) => RuntimeBuiltinFuncKind::Stop,
-        (IngotKind::Core, ["panic"]) => RuntimeBuiltinFuncKind::Panic,
-        (IngotKind::Core, ["panic_with_value"]) => RuntimeBuiltinFuncKind::PanicWithValue,
-        (IngotKind::Core, ["todo"]) => RuntimeBuiltinFuncKind::Todo,
-        (IngotKind::Core, ["intrinsic", "__keccak256"]) => {
-            RuntimeBuiltinFuncKind::IntrinsicKeccak256
-        }
-        _ => return None,
+) -> Option<IntrinsicContract> {
+    let func = func.trait_method_def(db).unwrap_or(func);
+    if let Some(runtime) = runtime_builtin_func_kind(db, func) {
+        return Some(runtime_intrinsic_contract(runtime));
+    }
+    let pointer_return = if lib_func_matches(db, func, "core::ptr::array_elem") {
+        Some(IntrinsicPointerReturn::InputArrayElem)
+    } else if lib_func_matches(db, func, "core::ptr::mem_array_elem") {
+        Some(IntrinsicPointerReturn::InputMemArrayElem)
+    } else {
+        None
+    };
+    let memory = raw_mem_contract(db, func);
+    (pointer_return.is_some() || memory.is_some()).then_some(IntrinsicContract {
+        pointer_return,
+        memory,
     })
+}
+
+fn raw_mem_contract<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: Func<'db>,
+) -> Option<IntrinsicMemoryContract> {
+    if lib_func_matches(db, func, "std::evm::effects::RawMem::mload") {
+        Some(RAW_MEM_READS)
+    } else if lib_func_matches(db, func, "std::evm::effects::RawMem::mstore")
+        || lib_func_matches(db, func, "std::evm::effects::RawMem::mstore8")
+    {
+        Some(RAW_MEM_WRITES)
+    } else {
+        None
+    }
+}
+
+/// Returns whether `func` declares or implements a sealed EVM capability trait method.
+///
+/// These receivers are implemented by the zero-sized `std::evm::Evm` token, so
+/// memory reachable through another argument cannot alias receiver storage.
+pub fn is_std_evm_effect_method<'db>(db: &'db dyn HirAnalysisDb, func: Func<'db>) -> bool {
+    let func = func.trait_method_def(db).unwrap_or(func);
+    let Some(containing_trait) = func.containing_trait(db) else {
+        return false;
+    };
+    [
+        "std::evm::effects::Ctx",
+        "std::evm::effects::RawMem",
+        "std::evm::effects::RawStorage",
+        "std::evm::effects::RawOps",
+        "std::evm::effects::Log",
+        "std::evm::effects::Create",
+        "std::evm::effects::Call",
+        "std::evm::effects::Super",
+    ]
+    .into_iter()
+    .any(|path| resolve_lib_trait_path(db, func.scope(), path) == Some(containing_trait))
 }
 
 fn runtime_builtin_func_path<'db>(
@@ -411,6 +528,27 @@ fn resolve_lib_func<'db>(
             };
             Some(*func)
         }
+        PathRes::TraitMethod(_, func) => Some(func),
+        _ => None,
+    }
+}
+
+#[salsa::tracked]
+fn resolve_lib_trait<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    path: LibPath<'db>,
+) -> Option<Trait<'db>> {
+    let mut segments = path.string(db).split("::");
+    let mut path = lib_root_path(db, scope, segments.next()?);
+
+    for segment in segments {
+        path = path.push_str(db, segment);
+    }
+
+    let assumptions = PredicateListId::empty_list(db);
+    match resolve_path(db, path, scope, assumptions, true).ok()? {
+        PathRes::Trait(trait_) => Some(trait_.def(db)),
         _ => None,
     }
 }

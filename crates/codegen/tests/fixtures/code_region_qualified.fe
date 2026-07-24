@@ -1,15 +1,16 @@
-use std::evm::{Evm, mem}
+use core::ptr
+use std::evm::Evm
 
 #[contract_init(Foo)]
 fn init() uses (evm: mut Evm) {
     let len = evm.code_region_len(self::runtime)
     let offset = evm.code_region_offset(self::runtime)
-    let dest = mem::alloc(len)
-    evm.codecopy(dest: dest, offset: offset, len: len)
-    evm.return_data(offset: dest, len: len)
+    let mut dest = ptr::MemBuffer::alloc(len)
+    evm.codecopy(dest: mut dest, offset: offset)
+    evm.return_data(data: dest)
 }
 
 #[contract_runtime(Foo)]
 fn runtime() uses (evm: mut Evm) {
-    evm.return_data(offset: 0, len: 0)
+    evm.return_data(data: ptr::MemBuffer::empty())
 }

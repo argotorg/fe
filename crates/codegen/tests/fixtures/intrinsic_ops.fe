@@ -1,14 +1,15 @@
+use core::ptr
 use std::evm::{RawMem, RawOps, RawStorage}
 
-pub fn load_word(ptr: u256) -> u256 uses (mem: RawMem) {
+pub fn load_word(ptr: *u8) -> u256 uses (mem: RawMem) {
     mem.mload(ptr)
 }
 
-pub fn store_word(ptr: u256, value: u256) uses (mem: mut RawMem) {
+pub fn store_word(ptr: *u8, value: u256) uses (mem: mut RawMem) {
     mem.mstore(addr: ptr, value: value)
 }
 
-pub fn store_byte(ptr: u256, value: u8) uses (mem: mut RawMem) {
+pub fn store_byte(ptr: *u8, value: u8) uses (mem: mut RawMem) {
     mem.mstore8(addr: ptr, value: value)
 }
 
@@ -24,15 +25,16 @@ pub fn load_calldata(offset: u256) -> u256 uses (ops: RawOps) {
     ops.calldataload(offset)
 }
 
-pub fn finish(ptr: u256, len: u256) uses (ops: RawOps) {
-    ops.return_data(offset: ptr, len: len)
+pub fn finish(data: *u8, len: u256) uses (ops: RawOps) {
+    ops.return_data(data: ptr::MemBuffer::from_raw_parts(ptr: data, len: len))
 }
 
 pub fn main() -> u256
     uses (mem: mut RawMem, sto: mut RawStorage, ops: RawOps)
 {
-    store_word(0x80, 1)
-    store_byte(0x81, 2)
-    store_slot(3, 4)
-    load_word(0x80) + load_slot(3) + load_calldata(0)
+    let data = ptr::alloc_bytes(32)
+    store_word(ptr: data, value: 1)
+    store_byte(ptr: ptr::offset_bytes(data, 1), value: 2)
+    store_slot(slot: 3, value: 4)
+    load_word(ptr: data) + load_slot(slot: 3) + load_calldata(offset: 0)
 }

@@ -120,6 +120,179 @@ fn trigger() {
 }
 
 #[test]
+fn int_literal_to_pointer_cast_is_rejected() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "int_literal_to_pointer_cast_is_rejected.fe".into(),
+        r#"
+fn trigger() -> *u256 {
+    0x40 as *u256
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+
+    assert!(
+        diagnostics_contain(&diags, "cannot cast `{integer}` to `*<u256>` with `as`"),
+        "{diags:#?}"
+    );
+}
+
+#[test]
+fn nested_pointer_syntax_lowers_both_pointer_layers() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "nested_pointer_syntax_lowers_both_pointer_layers.fe".into(),
+        r#"
+fn deref_once(value: **u256) -> *u256 {
+    *value
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn pointer_equality_uses_the_eq_trait() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "pointer_equality_uses_the_eq_trait.fe".into(),
+        r#"
+fn equal<T>(_ lhs: T, _ rhs: T) -> bool where T: core::ops::Eq {
+    lhs == rhs
+}
+
+fn trigger(lhs: *u256, rhs: *u256) -> bool {
+    equal(lhs, rhs) && lhs != rhs
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn pointer_impl_methods_preserve_view_mode_after_trait_substitution() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "pointer_impl_methods_preserve_view_mode_after_trait_substitution.fe".into(),
+        r#"
+trait Same<T = Self> {
+    fn same(self, _ other: T) -> bool
+}
+
+impl<T> Same for *T {
+    fn same(self, _ other: *T) -> bool {
+        false
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn pointer_equality_requires_matching_pointee_types() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "pointer_equality_requires_matching_pointee_types.fe".into(),
+        r#"
+fn trigger(lhs: *u8, rhs: *u256) -> bool {
+    lhs == rhs
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+
+    assert!(
+        diagnostics_contain(&diags, "expected `*<u8>`, but `*<u256>` is given"),
+        "{diags:#?}"
+    );
+}
+
+#[test]
+fn effect_handle_storage_is_not_public() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "raw_effect_handle_construction_is_not_public.fe".into(),
+        r#"
+use std::evm::{CalldataPtr, StorPtr, TStorPtr}
+
+fn construct_storage(raw: u256) -> StorPtr<u256> {
+    StorPtr { handle: raw }
+}
+
+fn construct_transient_storage(raw: u256) -> TStorPtr<u256> {
+    TStorPtr { slot: raw }
+}
+
+fn construct_calldata(raw: u256) -> CalldataPtr<u256> {
+    CalldataPtr { offset: raw }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+
+    for field in ["handle", "slot", "offset"] {
+        assert!(
+            diags
+                .iter()
+                .any(|diag| diag.message == format!("`{field}` is not visible")),
+            "{diags:#?}"
+        );
+    }
+}
+
+#[test]
+fn oversized_type_size_is_rejected() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "oversized_type_size_is_rejected.fe".into(),
+        r#"
+fn trigger() -> u256 {
+    core::size_of<[u256; 0x8000000000000000]>()
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+
+    assert!(
+        diagnostics_contain(&diags, "type is too large"),
+        "{diags:#?}"
+    );
+}
+
+#[test]
+fn const_array_oob_write_is_rejected() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "const_array_oob_write_is_rejected.fe".into(),
+        r#"
+fn trigger() {
+    let mut x: [u256; 3] = [10; 3]
+    x[5] = 1
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+
+    assert!(
+        diagnostics_contain(&diags, "index `5` is out of bounds for array of length `3`"),
+        "{diags:#?}"
+    );
+}
+
+#[test]
 fn generic_operator_ambiguity_preserves_checked_candidates() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
@@ -154,6 +327,45 @@ impl<T: Copy> Add<T> for Box<T> {
 fn probe() -> u256 {
     let box: Box<u256> = Box::new(value: 1)
     (box + 2).value
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn operator_selection_prunes_unsatisfied_blanket_impls() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "operator_selection_prunes_unsatisfied_blanket_impls.fe".into(),
+        r#"
+use core::ops::Add
+
+trait Marker {}
+
+struct S {
+    value: u256,
+}
+
+impl Copy for S {}
+
+impl Add for S {
+    fn add(own self, _ other: own S) -> S {
+        self
+    }
+}
+
+impl<T: Marker> Add for T {
+    fn add(own self, _ other: own T) -> T {
+        self
+    }
+}
+
+fn probe() -> u256 {
+    let s = S { value: 1 }
+    (s + s).value
 }
 "#,
     );

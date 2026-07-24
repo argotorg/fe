@@ -45,11 +45,11 @@
 ///   and Solidity has none either.
 use core::abi::{Bytes, BytesView, MemoryInput}
 use core::num::IntDowncast
+use core::ptr
 use core::result::Result
 use ingot::abi::FixedBytes
 use super::crypto
 use super::effects::{Address, RawMem}
-use super::mem
 use super::ops
 
 /// Default initial capacity (in bytes) for `Packed::new`.
@@ -64,8 +64,11 @@ pub trait EncodePacked {
     /// Exact number of bytes this value contributes.
     fn packed_width(self) -> u256
 
-    /// Append this value to a builder.
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem)
+    /// Consume a builder, append this value, and return the builder.
+    ///
+    /// Passing ownership keeps generic implementations from retaining
+    /// or aliasing an exclusive borrow of the builder.
+    fn pack_into(own self, _ p: own Packed) -> Packed uses (mem: mut RawMem)
 }
 
 /// Pack a value (typically a tuple) into an exactly-sized fresh buffer.
@@ -73,9 +76,8 @@ pub trait EncodePacked {
 /// The returned builder holds exactly the packed encoding; call
 /// `keccak256`, `sha256`, or `as_bytes` on it, or keep appending.
 pub fn encode_packed<T: EncodePacked>(_ value: own T) -> Packed uses (mem: mut RawMem) {
-    let mut p = Packed::with_capacity(bytes: value.packed_width())
-    value.pack_into(mut p)
-    p
+    let width = value.packed_width()
+    value.pack_into(Packed::with_capacity(bytes: width))
 }
 
 /// keccak256 of the packed encoding — the dominant consumer.
@@ -96,9 +98,8 @@ pub fn keccak_packed<T: EncodePacked>(_ value: own T) -> u256 uses (mem: mut Raw
 /// buffer (the source may be stale or overlapping if the append
 /// triggers growth).
 pub struct Packed {
-    base: u256,
-    cursor: u256,
-    limit: u256,
+    buffer: ptr::MemBuffer,
+    len: u256,
 }
 
 impl Packed {
@@ -111,8 +112,10 @@ impl Packed {
     /// a copy-avoidance hint, never a contract — writes past it grow
     /// the buffer.
     pub fn with_capacity(bytes: u256) -> Self uses (mem: mut RawMem) {
-        let base = mem::alloc(bytes)
-        Packed { base, cursor: base, limit: base + bytes }
+        Packed {
+            buffer: ptr::MemBuffer::alloc(bytes),
+            len: 0,
+        }
     }
 
     /// Append a `u256` as 32 big-endian bytes.
@@ -157,7 +160,7 @@ impl Packed {
         // like `fixed_bytes` does rather than silently truncating
         // distinct values into colliding encodings.
         if value.inner >> 160 != 0 {
-            ops::revert(offset: 0, len: 0)
+            ops::revert_empty()
         }
         self.append_word(value: value.inner, width: 20)
     }
@@ -180,7 +183,7 @@ impl Packed {
         // widths; do the same rather than silently appending nothing
         // for `N == 0` or tripping `append_word`'s assert for `N > 32`.
         if N == 0 || N > 32 {
-            ops::revert(offset: 0, len: 0)
+            ops::revert_empty()
         }
         // `val` is a public field, so a caller can hand us a
         // non-canonical value with bytes above the low N set. The ABI
@@ -188,7 +191,7 @@ impl Packed {
         // rather than silently truncating distinct values into
         // colliding encodings.
         if N < 32 && value.val >> ((N as u256) * 8) != 0 {
-            ops::revert(offset: 0, len: 0)
+            ops::revert_empty()
         }
         self.append_word(value: value.val, width: N as u256)
     }
@@ -198,10 +201,10 @@ impl Packed {
         self.reserve(N as u256)
         let mut i: usize = 0
         while i < N {
-            mem.mstore8(addr: self.cursor + (i as u256), value: value[i])
+            mem.mstore8(addr: ptr::offset_bytes(self.buffer.ptr, self.len + (i as u256)), value: value[i])
             i += 1
         }
-        self.cursor += N as u256
+        self.len += N as u256
     }
 
     /// Append `len` raw bytes copied from memory at `ptr`.
@@ -209,28 +212,29 @@ impl Packed {
     /// Unsupported edge: `ptr` must not point into this builder's own
     /// buffer — an append that triggers growth would leave `ptr`
     /// pointing at the stale allocation.
-    pub fn append_mem(mut self, ptr: u256, len: u256) uses (mem: mut RawMem) {
+    pub fn append_mem(mut self, source: *u8, len: u256) uses (mem: mut RawMem) {
         self.reserve(len)
-        copy_bytes(dest: self.cursor, src: ptr, len: len)
-        self.cursor += len
+        copy_bytes(dest: ptr::offset_bytes(self.buffer.ptr, self.len), src: source, len: len)
+        self.len += len
     }
 
     /// Bytes written so far.
     pub fn len(self) -> u256 {
-        self.cursor - self.base
+        self.len
     }
 
     /// keccak256 of the bytes written so far.
     pub fn keccak256(self) -> u256 {
-        ops::keccak256(offset: self.base, len: self.len())
+        ops::keccak256(offset: self.buffer.ptr, len: self.len)
     }
 
     /// SHA-256 of the bytes written so far (precompile 0x02). Reverts
     /// if the precompile call fails.
     pub fn sha256(self) -> u256 {
-        match crypto::sha256(offset: self.base, len: self.len()) {
+        let data = ptr::MemBuffer::from_raw_parts(ptr: self.buffer.ptr, len: self.len)
+        match crypto::sha256(data) {
             Result::Ok(digest) => digest,
-            Result::Err(_) => ops::revert(offset: 0, len: 0),
+            Result::Err(_) => ops::revert_empty(),
         }
     }
 
@@ -239,14 +243,14 @@ impl Packed {
     pub fn as_bytes(self) -> Bytes uses (mem: mut RawMem) {
         let len = self.len()
         let padded = (len + 31) / 32 * 32
-        let data = mem::alloc(32 + padded)
+        let data = ptr::alloc_bytes(32 + padded)
         mem.mstore(addr: data, value: len)
         if padded != 0 {
             // Zero the last payload word so the padding bytes are
             // canonical regardless of what the copy leaves behind.
-            mem.mstore(addr: data + padded, value: 0)
+            mem.mstore(addr: ptr::offset_bytes(data, padded), value: 0)
         }
-        copy_bytes(dest: data + 32, src: self.base, len: len)
+        copy_bytes(dest: ptr::offset_bytes(data, 32), src: self.buffer.ptr, len: len)
         Bytes { data, len, size: 32 + padded }
     }
 
@@ -264,54 +268,55 @@ impl Packed {
             return
         }
         self.reserve(width)
-        if self.cursor + 32 <= self.limit {
-            mem.mstore(addr: self.cursor, value: value << ((32 - width) * 8))
+        let cursor = ptr::offset_bytes(self.buffer.ptr, self.len)
+        if self.len + 32 <= self.buffer.len {
+            mem.mstore(addr: cursor, value: value << ((32 - width) * 8))
         } else {
             let mut i: u256 = 0
             while i < width {
                 let b: u8 = (value >> ((width - 1 - i) * 8)).downcast_truncate()
-                mem.mstore8(addr: self.cursor + i, value: b)
+                mem.mstore8(addr: ptr::offset_bytes(cursor, i), value: b)
                 i += 1
             }
         }
-        self.cursor += width
+        self.len += width
     }
 
     /// Ensure `additional` bytes fit below `limit`, growing
     /// (copy-on-grow, doubling until it fits) if they don't.
     fn reserve(mut self, _ additional: u256) uses (mem: mut RawMem) {
-        if self.cursor + additional <= self.limit {
+        if self.len + additional <= self.buffer.len {
             return
         }
-        let len = self.len()
-        let needed = len + additional
-        let mut cap = self.limit - self.base
+        let needed = self.len + additional
+        let mut cap = self.buffer.len
         if cap == 0 {
             cap = 32
         }
         while cap < needed {
             cap *= 2
         }
-        let base = mem::alloc(cap)
-        copy_bytes(dest: base, src: self.base, len: len)
-        self.base = base
-        self.cursor = base + len
-        self.limit = base + cap
+        let buffer = ptr::MemBuffer::alloc(cap)
+        copy_bytes(dest: buffer.ptr, src: self.buffer.ptr, len: self.len)
+        self.buffer = buffer
     }
 }
 
 // Byte-precise memory copy: whole words first, then the sub-word tail
 // one byte at a time, so exactly `len` destination bytes are written.
-fn copy_bytes(dest: u256, src: u256, len: u256) uses (mem: mut RawMem) {
+fn copy_bytes(dest: *u8, src: *u8, len: u256) uses (mem: mut RawMem) {
     let words_end = len / 32 * 32
     let mut off: u256 = 0
     while off < words_end {
-        mem.mstore(addr: dest + off, value: mem.mload(src + off))
+        mem.mstore(
+            addr: ptr::offset_bytes(dest, off),
+            value: mem.mload(ptr::offset_bytes(src, off)),
+        )
         off += 32
     }
     while off < len {
-        let b: u8 = (mem.mload(src + off) >> 248).downcast_truncate()
-        mem.mstore8(addr: dest + off, value: b)
+        let b: u8 = (mem.mload(ptr::offset_bytes(src, off)) >> 248).downcast_truncate()
+        mem.mstore8(addr: ptr::offset_bytes(dest, off), value: b)
         off += 1
     }
 }
@@ -323,43 +328,49 @@ fn copy_bytes(dest: u256, src: u256, len: u256) uses (mem: mut RawMem) {
 
 impl EncodePacked for u8 {
     fn packed_width(self) -> u256 { 1 }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
+    fn pack_into(own self, mut _ p: own Packed) -> Packed uses (mem: mut RawMem) {
         p.u8(self)
+        p
     }
 }
 
 impl EncodePacked for u16 {
     fn packed_width(self) -> u256 { 2 }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
+    fn pack_into(own self, mut _ p: own Packed) -> Packed uses (mem: mut RawMem) {
         p.u16(self)
+        p
     }
 }
 
 impl EncodePacked for u32 {
     fn packed_width(self) -> u256 { 4 }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
+    fn pack_into(own self, mut _ p: own Packed) -> Packed uses (mem: mut RawMem) {
         p.u32(self)
+        p
     }
 }
 
 impl EncodePacked for u64 {
     fn packed_width(self) -> u256 { 8 }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
+    fn pack_into(own self, mut _ p: own Packed) -> Packed uses (mem: mut RawMem) {
         p.u64(self)
+        p
     }
 }
 
 impl EncodePacked for u128 {
     fn packed_width(self) -> u256 { 16 }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
+    fn pack_into(own self, mut _ p: own Packed) -> Packed uses (mem: mut RawMem) {
         p.u128(self)
+        p
     }
 }
 
 impl EncodePacked for u256 {
     fn packed_width(self) -> u256 { 32 }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
+    fn pack_into(own self, mut _ p: own Packed) -> Packed uses (mem: mut RawMem) {
         p.u256(self)
+        p
     }
 }
 
@@ -369,78 +380,88 @@ impl EncodePacked for u256 {
 
 impl EncodePacked for i8 {
     fn packed_width(self) -> u256 { 1 }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
+    fn pack_into(own self, mut _ p: own Packed) -> Packed uses (mem: mut RawMem) {
         let bits: u8 = self.downcast_truncate()
         p.u8(bits)
+        p
     }
 }
 
 impl EncodePacked for i16 {
     fn packed_width(self) -> u256 { 2 }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
+    fn pack_into(own self, mut _ p: own Packed) -> Packed uses (mem: mut RawMem) {
         let bits: u16 = self.downcast_truncate()
         p.u16(bits)
+        p
     }
 }
 
 impl EncodePacked for i32 {
     fn packed_width(self) -> u256 { 4 }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
+    fn pack_into(own self, mut _ p: own Packed) -> Packed uses (mem: mut RawMem) {
         let bits: u32 = self.downcast_truncate()
         p.u32(bits)
+        p
     }
 }
 
 impl EncodePacked for i64 {
     fn packed_width(self) -> u256 { 8 }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
+    fn pack_into(own self, mut _ p: own Packed) -> Packed uses (mem: mut RawMem) {
         let bits: u64 = self.downcast_truncate()
         p.u64(bits)
+        p
     }
 }
 
 impl EncodePacked for i128 {
     fn packed_width(self) -> u256 { 16 }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
+    fn pack_into(own self, mut _ p: own Packed) -> Packed uses (mem: mut RawMem) {
         let bits: u128 = self.downcast_truncate()
         p.u128(bits)
+        p
     }
 }
 
 impl EncodePacked for i256 {
     fn packed_width(self) -> u256 { 32 }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
+    fn pack_into(own self, mut _ p: own Packed) -> Packed uses (mem: mut RawMem) {
         let bits: u256 = self.downcast_truncate()
         p.u256(bits)
+        p
     }
 }
 
 impl EncodePacked for bool {
     fn packed_width(self) -> u256 { 1 }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
+    fn pack_into(own self, mut _ p: own Packed) -> Packed uses (mem: mut RawMem) {
         p.bool_(self)
+        p
     }
 }
 
 impl EncodePacked for Address {
     fn packed_width(self) -> u256 { 20 }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
+    fn pack_into(own self, mut _ p: own Packed) -> Packed uses (mem: mut RawMem) {
         p.address(self)
+        p
     }
 }
 
 // The effective string bytes (`len()`), not the capacity `N`.
 impl<const N: usize> EncodePacked for String<N> {
     fn packed_width(self) -> u256 { self.len() as u256 }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
+    fn pack_into(own self, mut _ p: own Packed) -> Packed uses (mem: mut RawMem) {
         p.string(self)
+        p
     }
 }
 
 impl<const N: usize> EncodePacked for [u8; N] {
     fn packed_width(self) -> u256 { N as u256 }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
+    fn pack_into(own self, mut _ p: own Packed) -> Packed uses (mem: mut RawMem) {
         p.bytes(self)
+        p
     }
 }
 
@@ -448,23 +469,26 @@ impl<const N: usize> EncodePacked for [u8; N] {
 // footgun.
 impl<const N: usize> EncodePacked for FixedBytes<N> {
     fn packed_width(self) -> u256 { N as u256 }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
+    fn pack_into(own self, mut _ p: own Packed) -> Packed uses (mem: mut RawMem) {
         p.fixed_bytes(self)
+        p
     }
 }
 
 // `len()` raw payload bytes, no length word.
 impl EncodePacked for Bytes {
     fn packed_width(self) -> u256 { self.len }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
-        p.append_mem(ptr: self.payload_ptr(), len: self.len)
+    fn pack_into(own self, mut _ p: own Packed) -> Packed uses (mem: mut RawMem) {
+        p.append_mem(source: self.payload_ptr(), len: self.len)
+        p
     }
 }
 
 impl EncodePacked for BytesView<MemoryInput> {
     fn packed_width(self) -> u256 { self.len }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
-        p.append_mem(ptr: self.input.base + self.start, len: self.len)
+    fn pack_into(own self, mut _ p: own Packed) -> Packed uses (mem: mut RawMem) {
+        p.append_mem(source: ptr::offset_bytes(self.input.base, self.start), len: self.len)
+        p
     }
 }
 
@@ -482,8 +506,8 @@ impl<T0> EncodePacked for (T0,)
     fn packed_width(self) -> u256 {
         self.0.packed_width()
     }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
-        self.0.pack_into(mut p)
+    fn pack_into(own self, _ p: own Packed) -> Packed uses (mem: mut RawMem) {
+        self.0.pack_into(p)
     }
 }
 
@@ -493,9 +517,9 @@ impl<T0, T1> EncodePacked for (T0, T1)
     fn packed_width(self) -> u256 {
         self.0.packed_width() + self.1.packed_width()
     }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
-        self.0.pack_into(mut p)
-        self.1.pack_into(mut p)
+    fn pack_into(own self, _ p: own Packed) -> Packed uses (mem: mut RawMem) {
+        let p = self.0.pack_into(p)
+        self.1.pack_into(p)
     }
 }
 
@@ -505,10 +529,10 @@ impl<T0, T1, T2> EncodePacked for (T0, T1, T2)
     fn packed_width(self) -> u256 {
         self.0.packed_width() + self.1.packed_width() + self.2.packed_width()
     }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
-        self.0.pack_into(mut p)
-        self.1.pack_into(mut p)
-        self.2.pack_into(mut p)
+    fn pack_into(own self, _ p: own Packed) -> Packed uses (mem: mut RawMem) {
+        let p = self.0.pack_into(p)
+        let p = self.1.pack_into(p)
+        self.2.pack_into(p)
     }
 }
 
@@ -519,11 +543,11 @@ impl<T0, T1, T2, T3> EncodePacked for (T0, T1, T2, T3)
         self.0.packed_width() + self.1.packed_width() + self.2.packed_width()
             + self.3.packed_width()
     }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
-        self.0.pack_into(mut p)
-        self.1.pack_into(mut p)
-        self.2.pack_into(mut p)
-        self.3.pack_into(mut p)
+    fn pack_into(own self, _ p: own Packed) -> Packed uses (mem: mut RawMem) {
+        let p = self.0.pack_into(p)
+        let p = self.1.pack_into(p)
+        let p = self.2.pack_into(p)
+        self.3.pack_into(p)
     }
 }
 
@@ -535,12 +559,12 @@ impl<T0, T1, T2, T3, T4> EncodePacked for (T0, T1, T2, T3, T4)
         self.0.packed_width() + self.1.packed_width() + self.2.packed_width()
             + self.3.packed_width() + self.4.packed_width()
     }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
-        self.0.pack_into(mut p)
-        self.1.pack_into(mut p)
-        self.2.pack_into(mut p)
-        self.3.pack_into(mut p)
-        self.4.pack_into(mut p)
+    fn pack_into(own self, _ p: own Packed) -> Packed uses (mem: mut RawMem) {
+        let p = self.0.pack_into(p)
+        let p = self.1.pack_into(p)
+        let p = self.2.pack_into(p)
+        let p = self.3.pack_into(p)
+        self.4.pack_into(p)
     }
 }
 
@@ -552,13 +576,13 @@ impl<T0, T1, T2, T3, T4, T5> EncodePacked for (T0, T1, T2, T3, T4, T5)
         self.0.packed_width() + self.1.packed_width() + self.2.packed_width()
             + self.3.packed_width() + self.4.packed_width() + self.5.packed_width()
     }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
-        self.0.pack_into(mut p)
-        self.1.pack_into(mut p)
-        self.2.pack_into(mut p)
-        self.3.pack_into(mut p)
-        self.4.pack_into(mut p)
-        self.5.pack_into(mut p)
+    fn pack_into(own self, _ p: own Packed) -> Packed uses (mem: mut RawMem) {
+        let p = self.0.pack_into(p)
+        let p = self.1.pack_into(p)
+        let p = self.2.pack_into(p)
+        let p = self.3.pack_into(p)
+        let p = self.4.pack_into(p)
+        self.5.pack_into(p)
     }
 }
 
@@ -571,14 +595,14 @@ impl<T0, T1, T2, T3, T4, T5, T6> EncodePacked for (T0, T1, T2, T3, T4, T5, T6)
             + self.3.packed_width() + self.4.packed_width() + self.5.packed_width()
             + self.6.packed_width()
     }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
-        self.0.pack_into(mut p)
-        self.1.pack_into(mut p)
-        self.2.pack_into(mut p)
-        self.3.pack_into(mut p)
-        self.4.pack_into(mut p)
-        self.5.pack_into(mut p)
-        self.6.pack_into(mut p)
+    fn pack_into(own self, _ p: own Packed) -> Packed uses (mem: mut RawMem) {
+        let p = self.0.pack_into(p)
+        let p = self.1.pack_into(p)
+        let p = self.2.pack_into(p)
+        let p = self.3.pack_into(p)
+        let p = self.4.pack_into(p)
+        let p = self.5.pack_into(p)
+        self.6.pack_into(p)
     }
 }
 
@@ -591,15 +615,15 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7> EncodePacked for (T0, T1, T2, T3, T4, T5, T
             + self.3.packed_width() + self.4.packed_width() + self.5.packed_width()
             + self.6.packed_width() + self.7.packed_width()
     }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
-        self.0.pack_into(mut p)
-        self.1.pack_into(mut p)
-        self.2.pack_into(mut p)
-        self.3.pack_into(mut p)
-        self.4.pack_into(mut p)
-        self.5.pack_into(mut p)
-        self.6.pack_into(mut p)
-        self.7.pack_into(mut p)
+    fn pack_into(own self, _ p: own Packed) -> Packed uses (mem: mut RawMem) {
+        let p = self.0.pack_into(p)
+        let p = self.1.pack_into(p)
+        let p = self.2.pack_into(p)
+        let p = self.3.pack_into(p)
+        let p = self.4.pack_into(p)
+        let p = self.5.pack_into(p)
+        let p = self.6.pack_into(p)
+        self.7.pack_into(p)
     }
 }
 
@@ -614,16 +638,16 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8> EncodePacked
             + self.3.packed_width() + self.4.packed_width() + self.5.packed_width()
             + self.6.packed_width() + self.7.packed_width() + self.8.packed_width()
     }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
-        self.0.pack_into(mut p)
-        self.1.pack_into(mut p)
-        self.2.pack_into(mut p)
-        self.3.pack_into(mut p)
-        self.4.pack_into(mut p)
-        self.5.pack_into(mut p)
-        self.6.pack_into(mut p)
-        self.7.pack_into(mut p)
-        self.8.pack_into(mut p)
+    fn pack_into(own self, _ p: own Packed) -> Packed uses (mem: mut RawMem) {
+        let p = self.0.pack_into(p)
+        let p = self.1.pack_into(p)
+        let p = self.2.pack_into(p)
+        let p = self.3.pack_into(p)
+        let p = self.4.pack_into(p)
+        let p = self.5.pack_into(p)
+        let p = self.6.pack_into(p)
+        let p = self.7.pack_into(p)
+        self.8.pack_into(p)
     }
 }
 
@@ -639,17 +663,17 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> EncodePacked
             + self.6.packed_width() + self.7.packed_width() + self.8.packed_width()
             + self.9.packed_width()
     }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
-        self.0.pack_into(mut p)
-        self.1.pack_into(mut p)
-        self.2.pack_into(mut p)
-        self.3.pack_into(mut p)
-        self.4.pack_into(mut p)
-        self.5.pack_into(mut p)
-        self.6.pack_into(mut p)
-        self.7.pack_into(mut p)
-        self.8.pack_into(mut p)
-        self.9.pack_into(mut p)
+    fn pack_into(own self, _ p: own Packed) -> Packed uses (mem: mut RawMem) {
+        let p = self.0.pack_into(p)
+        let p = self.1.pack_into(p)
+        let p = self.2.pack_into(p)
+        let p = self.3.pack_into(p)
+        let p = self.4.pack_into(p)
+        let p = self.5.pack_into(p)
+        let p = self.6.pack_into(p)
+        let p = self.7.pack_into(p)
+        let p = self.8.pack_into(p)
+        self.9.pack_into(p)
     }
 }
 
@@ -665,18 +689,18 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> EncodePacked
             + self.6.packed_width() + self.7.packed_width() + self.8.packed_width()
             + self.9.packed_width() + self.10.packed_width()
     }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
-        self.0.pack_into(mut p)
-        self.1.pack_into(mut p)
-        self.2.pack_into(mut p)
-        self.3.pack_into(mut p)
-        self.4.pack_into(mut p)
-        self.5.pack_into(mut p)
-        self.6.pack_into(mut p)
-        self.7.pack_into(mut p)
-        self.8.pack_into(mut p)
-        self.9.pack_into(mut p)
-        self.10.pack_into(mut p)
+    fn pack_into(own self, _ p: own Packed) -> Packed uses (mem: mut RawMem) {
+        let p = self.0.pack_into(p)
+        let p = self.1.pack_into(p)
+        let p = self.2.pack_into(p)
+        let p = self.3.pack_into(p)
+        let p = self.4.pack_into(p)
+        let p = self.5.pack_into(p)
+        let p = self.6.pack_into(p)
+        let p = self.7.pack_into(p)
+        let p = self.8.pack_into(p)
+        let p = self.9.pack_into(p)
+        self.10.pack_into(p)
     }
 }
 
@@ -692,19 +716,19 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> EncodePacked
             + self.6.packed_width() + self.7.packed_width() + self.8.packed_width()
             + self.9.packed_width() + self.10.packed_width() + self.11.packed_width()
     }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
-        self.0.pack_into(mut p)
-        self.1.pack_into(mut p)
-        self.2.pack_into(mut p)
-        self.3.pack_into(mut p)
-        self.4.pack_into(mut p)
-        self.5.pack_into(mut p)
-        self.6.pack_into(mut p)
-        self.7.pack_into(mut p)
-        self.8.pack_into(mut p)
-        self.9.pack_into(mut p)
-        self.10.pack_into(mut p)
-        self.11.pack_into(mut p)
+    fn pack_into(own self, _ p: own Packed) -> Packed uses (mem: mut RawMem) {
+        let p = self.0.pack_into(p)
+        let p = self.1.pack_into(p)
+        let p = self.2.pack_into(p)
+        let p = self.3.pack_into(p)
+        let p = self.4.pack_into(p)
+        let p = self.5.pack_into(p)
+        let p = self.6.pack_into(p)
+        let p = self.7.pack_into(p)
+        let p = self.8.pack_into(p)
+        let p = self.9.pack_into(p)
+        let p = self.10.pack_into(p)
+        self.11.pack_into(p)
     }
 }
 
@@ -722,20 +746,20 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12> EncodePacked
             + self.9.packed_width() + self.10.packed_width() + self.11.packed_width()
             + self.12.packed_width()
     }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
-        self.0.pack_into(mut p)
-        self.1.pack_into(mut p)
-        self.2.pack_into(mut p)
-        self.3.pack_into(mut p)
-        self.4.pack_into(mut p)
-        self.5.pack_into(mut p)
-        self.6.pack_into(mut p)
-        self.7.pack_into(mut p)
-        self.8.pack_into(mut p)
-        self.9.pack_into(mut p)
-        self.10.pack_into(mut p)
-        self.11.pack_into(mut p)
-        self.12.pack_into(mut p)
+    fn pack_into(own self, _ p: own Packed) -> Packed uses (mem: mut RawMem) {
+        let p = self.0.pack_into(p)
+        let p = self.1.pack_into(p)
+        let p = self.2.pack_into(p)
+        let p = self.3.pack_into(p)
+        let p = self.4.pack_into(p)
+        let p = self.5.pack_into(p)
+        let p = self.6.pack_into(p)
+        let p = self.7.pack_into(p)
+        let p = self.8.pack_into(p)
+        let p = self.9.pack_into(p)
+        let p = self.10.pack_into(p)
+        let p = self.11.pack_into(p)
+        self.12.pack_into(p)
     }
 }
 
@@ -753,21 +777,21 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13> EncodePacked
             + self.9.packed_width() + self.10.packed_width() + self.11.packed_width()
             + self.12.packed_width() + self.13.packed_width()
     }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
-        self.0.pack_into(mut p)
-        self.1.pack_into(mut p)
-        self.2.pack_into(mut p)
-        self.3.pack_into(mut p)
-        self.4.pack_into(mut p)
-        self.5.pack_into(mut p)
-        self.6.pack_into(mut p)
-        self.7.pack_into(mut p)
-        self.8.pack_into(mut p)
-        self.9.pack_into(mut p)
-        self.10.pack_into(mut p)
-        self.11.pack_into(mut p)
-        self.12.pack_into(mut p)
-        self.13.pack_into(mut p)
+    fn pack_into(own self, _ p: own Packed) -> Packed uses (mem: mut RawMem) {
+        let p = self.0.pack_into(p)
+        let p = self.1.pack_into(p)
+        let p = self.2.pack_into(p)
+        let p = self.3.pack_into(p)
+        let p = self.4.pack_into(p)
+        let p = self.5.pack_into(p)
+        let p = self.6.pack_into(p)
+        let p = self.7.pack_into(p)
+        let p = self.8.pack_into(p)
+        let p = self.9.pack_into(p)
+        let p = self.10.pack_into(p)
+        let p = self.11.pack_into(p)
+        let p = self.12.pack_into(p)
+        self.13.pack_into(p)
     }
 }
 
@@ -785,22 +809,22 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14> EncodePack
             + self.9.packed_width() + self.10.packed_width() + self.11.packed_width()
             + self.12.packed_width() + self.13.packed_width() + self.14.packed_width()
     }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
-        self.0.pack_into(mut p)
-        self.1.pack_into(mut p)
-        self.2.pack_into(mut p)
-        self.3.pack_into(mut p)
-        self.4.pack_into(mut p)
-        self.5.pack_into(mut p)
-        self.6.pack_into(mut p)
-        self.7.pack_into(mut p)
-        self.8.pack_into(mut p)
-        self.9.pack_into(mut p)
-        self.10.pack_into(mut p)
-        self.11.pack_into(mut p)
-        self.12.pack_into(mut p)
-        self.13.pack_into(mut p)
-        self.14.pack_into(mut p)
+    fn pack_into(own self, _ p: own Packed) -> Packed uses (mem: mut RawMem) {
+        let p = self.0.pack_into(p)
+        let p = self.1.pack_into(p)
+        let p = self.2.pack_into(p)
+        let p = self.3.pack_into(p)
+        let p = self.4.pack_into(p)
+        let p = self.5.pack_into(p)
+        let p = self.6.pack_into(p)
+        let p = self.7.pack_into(p)
+        let p = self.8.pack_into(p)
+        let p = self.9.pack_into(p)
+        let p = self.10.pack_into(p)
+        let p = self.11.pack_into(p)
+        let p = self.12.pack_into(p)
+        let p = self.13.pack_into(p)
+        self.14.pack_into(p)
     }
 }
 
@@ -819,22 +843,22 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15> Encod
             + self.12.packed_width() + self.13.packed_width() + self.14.packed_width()
             + self.15.packed_width()
     }
-    fn pack_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
-        self.0.pack_into(mut p)
-        self.1.pack_into(mut p)
-        self.2.pack_into(mut p)
-        self.3.pack_into(mut p)
-        self.4.pack_into(mut p)
-        self.5.pack_into(mut p)
-        self.6.pack_into(mut p)
-        self.7.pack_into(mut p)
-        self.8.pack_into(mut p)
-        self.9.pack_into(mut p)
-        self.10.pack_into(mut p)
-        self.11.pack_into(mut p)
-        self.12.pack_into(mut p)
-        self.13.pack_into(mut p)
-        self.14.pack_into(mut p)
-        self.15.pack_into(mut p)
+    fn pack_into(own self, _ p: own Packed) -> Packed uses (mem: mut RawMem) {
+        let p = self.0.pack_into(p)
+        let p = self.1.pack_into(p)
+        let p = self.2.pack_into(p)
+        let p = self.3.pack_into(p)
+        let p = self.4.pack_into(p)
+        let p = self.5.pack_into(p)
+        let p = self.6.pack_into(p)
+        let p = self.7.pack_into(p)
+        let p = self.8.pack_into(p)
+        let p = self.9.pack_into(p)
+        let p = self.10.pack_into(p)
+        let p = self.11.pack_into(p)
+        let p = self.12.pack_into(p)
+        let p = self.13.pack_into(p)
+        let p = self.14.pack_into(p)
+        self.15.pack_into(p)
     }
 }

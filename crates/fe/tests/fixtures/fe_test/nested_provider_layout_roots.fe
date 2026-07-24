@@ -1,5 +1,4 @@
-use core::effect_ref::{AddressSpace, EffectHandle, EffectRef}
-use std::evm::{Evm, StorageMap, StorPtr}
+use std::evm::{Evm, RawStorage, StorageMap, StorPtr}
 
 struct Holder<T> {
     ptr: StorPtr<T>,
@@ -8,41 +7,23 @@ struct Holder<T> {
 impl<T> Copy for Holder<T> {}
 
 impl<T> Holder<T> {
-    fn attach(mut self, raw: u256) {
-        self.ptr = StorPtr::from_raw(raw)
+    fn attach(mut self, slot: u256) uses (evm: Evm) {
+        self.ptr = evm.stor_ptr(slot)
     }
 }
 
 struct TaggedStorPtr<T> {
     tag: u256,
-    encoded: u256,
+    ptr: StorPtr<T>,
 }
 
 impl<T> Copy for TaggedStorPtr<T> {}
-
-impl<T> EffectHandle for TaggedStorPtr<T> {
-    type Target = T
-    const SPACE: AddressSpace = AddressSpace::Storage
-
-    fn from_raw(_ raw: u256) -> Self {
-        Self { tag: 19, encoded: raw + 1 }
-    }
-
-    fn raw(self) -> u256 {
-        self.encoded - 1
-    }
-}
-
-impl<T> EffectRef<T> for TaggedStorPtr<T> {}
 
 impl<T> TaggedStorPtr<T> {
     fn read(self) -> T
         where T: Copy
     {
-        let mut ptr = self
-        with (ptr) {
-            core::effect_ref::read(ptr)
-        }
+        self.ptr.read()
     }
 }
 
@@ -53,12 +34,12 @@ struct TaggedHolder<T> {
 impl<T> Copy for TaggedHolder<T> {}
 
 impl<T> TaggedHolder<T> {
-    fn attach(mut self, raw: u256) {
-        self.ptr = TaggedStorPtr::from_raw(raw)
+    fn attach(mut self, slot: u256) uses (evm: Evm) {
+        self.ptr = TaggedStorPtr { tag: 19, ptr: evm.stor_ptr(slot) }
     }
 }
 
-fn tagged_handle_tag() -> u256 uses (ptr: TaggedStorPtr<StorageMap<u256, u256>>) {
+fn tagged_handle_tag(ptr: TaggedStorPtr<StorageMap<u256, u256>>) -> u256 {
     ptr.tag
 }
 
@@ -104,12 +85,12 @@ pub contract NestedProviderMaps {
     mut tagged: TaggedHolder<StorageMap<u256, u256>>,
     mut tagged_array: [TaggedHolder<StorageMap<u256, u256>>; 2],
 
-    init() uses (mut inferred, mut explicit, mut tagged, mut tagged_array) {
-        inferred.attach(raw: 0)
-        explicit.attach(raw: 0)
-        tagged.attach(raw: 0)
-        tagged_array[0].attach(raw: 0)
-        tagged_array[1].attach(raw: 0)
+    init() uses (mut inferred, mut explicit, mut tagged, mut tagged_array, evm: Evm) {
+        inferred.attach(slot: 0)
+        explicit.attach(slot: 0)
+        tagged.attach(slot: 0)
+        tagged_array[0].attach(slot: 0)
+        tagged_array[1].attach(slot: 0)
     }
 
     recv NestedProviderMsg {
@@ -151,9 +132,7 @@ pub contract NestedProviderMaps {
         GetTaggedHandleTag -> u256 uses (tagged) {
             let mut ptr = tagged.ptr
             ptr.tag = 99
-            with (TaggedStorPtr<StorageMap<u256, u256>> = ptr) {
-                tagged_handle_tag()
-            }
+            tagged_handle_tag(ptr)
         }
 
         SetTaggedArray { lane, key, value } uses (tagged_array) {
@@ -253,7 +232,7 @@ fn nested_provider_roots_are_distinct_and_reserve_explicit_values() uses (evm: m
     assert!(explicit == 22)
     assert!(direct == 33)
     assert!(tagged == 44)
-    assert!(tag == 19)
+    assert!(tag == 99)
     assert!(tagged_array_0 == 55)
     assert!(tagged_array_1 == 66)
 }

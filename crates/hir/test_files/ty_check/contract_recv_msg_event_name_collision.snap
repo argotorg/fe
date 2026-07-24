@@ -7,7 +7,7 @@ note:
   ┌─ contract_recv_msg_event_name_collision.fe:3:5
   │
 3 │     Transfer { to: u256, amount: u256 } -> bool,
-  │     ^^^^^^^^ () | I | Transfer | fn abi_field_head_size<u256> | fn decode_field<Sol, u256, D> | fn decode_msg_field_from<Sol, u256, I> | fn dynamic_payload_size<u256> | fn encode_field<Sol, u256, E> | mut D | mut E | mut u256 | u256
+  │     ^^^^^^^^ () | *<u8> | I | Transfer | fn abi_field_head_size<u256> | fn decode_field<Sol, u256, D> | fn decode_msg_field_from<Sol, u256, I> | fn dynamic_payload_size<u256> | fn encode_field_at<Sol, u256> | mut D | u256
 
 note:
    ┌─ contract_recv_msg_event_name_collision.fe:6:1
@@ -19,7 +19,7 @@ note:
    · │
 12 │ │     value: u256,
 13 │ │ }
-   │ ╰─^ () | (u256, u256) | Transfer | fn encode_abi_payload<u256> | mut L | u256
+   │ ╰─^ () | (u256) | MemBuffer | Transfer | fn encode_abi_payload<(u256)> | mut L | u256
 
 note:
    ┌─ contract_recv_msg_event_name_collision.fe:17:9

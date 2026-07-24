@@ -1641,7 +1641,7 @@ fn overlay_occurrences(
     //
     // Attribute-internal occurrences — e.g. inside `#[selector = sol(...)]`,
     // where the type checker may attribute the `sol(...)` call to an
-    // `Encode::encode_to_ptr` resolution — produce phantom rich-signature
+    // `Encode::encode` resolution — produce phantom rich-signature
     // links that anchor to nothing on the target page. Exclude them so the
     // attribute renders as plain text.
     let attr_ranges: Vec<(usize, usize)> = find_attr_ranges(sig_text);
@@ -1664,7 +1664,7 @@ fn overlay_occurrences(
             // Simple `contained_in` isn't enough: the type checker sometimes
             // attributes the `sol(...)` call to a range that extends past
             // the closing `]` onto the following variant, producing a
-            // phantom `encode_to_ptr` link.
+            // phantom `encode` link.
             !attr_ranges
                 .iter()
                 .any(|&(s, e)| rel_start >= s && rel_start < e)

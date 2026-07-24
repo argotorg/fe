@@ -96,26 +96,26 @@ note:
 note: 
    ┌─ goto_hover_bugs.fe:58:9
    │
-58 │     let init_ptr = mem::alloc(total_len)
-   │         ^^^^^^^^ -> local: u256
+58 │     let init_ptr = ptr::alloc_bytes(total_len)
+   │         ^^^^^^^^ -> local: *<u8>
 
 note: 
    ┌─ goto_hover_bugs.fe:58:20
    │
-58 │     let init_ptr = mem::alloc(total_len)
-   │                    ^^^ -> goto_hover_bugs::mem
+58 │     let init_ptr = ptr::alloc_bytes(total_len)
+   │                    ^^^ -> goto_hover_bugs::ptr
 
 note: 
    ┌─ goto_hover_bugs.fe:58:25
    │
-58 │     let init_ptr = mem::alloc(total_len)
-   │                         ^^^^^ -> goto_hover_bugs::mem::alloc
+58 │     let init_ptr = ptr::alloc_bytes(total_len)
+   │                         ^^^^^^^^^^^ -> goto_hover_bugs::ptr::alloc_bytes
 
 note: 
-   ┌─ goto_hover_bugs.fe:58:31
+   ┌─ goto_hover_bugs.fe:58:37
    │
-58 │     let init_ptr = mem::alloc(total_len)
-   │                               ^^^^^^^^^ -> local: u256
+58 │     let init_ptr = ptr::alloc_bytes(total_len)
+   │                                     ^^^^^^^^^ -> local: u256
 
 note: 
    ┌─ goto_hover_bugs.fe:61:9
@@ -138,26 +138,26 @@ note:
 note: 
    ┌─ goto_hover_bugs.fe:62:9
    │
-62 │     let ret_ptr = mem::alloc(ret_len)
-   │         ^^^^^^^ -> local: u256
+62 │     let ret_ptr = ptr::alloc_bytes(ret_len)
+   │         ^^^^^^^ -> local: *<u8>
 
 note: 
    ┌─ goto_hover_bugs.fe:62:19
    │
-62 │     let ret_ptr = mem::alloc(ret_len)
-   │                   ^^^ -> goto_hover_bugs::mem
+62 │     let ret_ptr = ptr::alloc_bytes(ret_len)
+   │                   ^^^ -> goto_hover_bugs::ptr
 
 note: 
    ┌─ goto_hover_bugs.fe:62:24
    │
-62 │     let ret_ptr = mem::alloc(ret_len)
-   │                        ^^^^^ -> goto_hover_bugs::mem::alloc
+62 │     let ret_ptr = ptr::alloc_bytes(ret_len)
+   │                        ^^^^^^^^^^^ -> goto_hover_bugs::ptr::alloc_bytes
 
 note: 
-   ┌─ goto_hover_bugs.fe:62:30
+   ┌─ goto_hover_bugs.fe:62:36
    │
-62 │     let ret_ptr = mem::alloc(ret_len)
-   │                              ^^^^^^^ -> local: u256
+62 │     let ret_ptr = ptr::alloc_bytes(ret_len)
+   │                                    ^^^^^^^ -> local: u256
 
 note: 
    ┌─ goto_hover_bugs.fe:63:5
@@ -175,7 +175,7 @@ note:
    ┌─ goto_hover_bugs.fe:63:25
    │
 63 │     ops::revert(offset: ret_ptr, len: ret_len)
-   │                         ^^^^^^^ -> local: u256
+   │                         ^^^^^^^ -> local: *<u8>
 
 note: 
    ┌─ goto_hover_bugs.fe:63:39

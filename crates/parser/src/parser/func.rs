@@ -3,7 +3,6 @@ use super::{
     expr_atom::BlockExprScope,
     param::{parse_generic_params_opt, parse_where_clause_opt},
     parse_list,
-    path::PathScope,
     token_stream::TokenStream,
     type_::parse_type,
 };
@@ -247,23 +246,20 @@ impl super::Parse for UsesParamScope {
             return Ok(());
         }
 
-        // Unlabeled form: optional `mut` followed by a Path key
-        parser.bump_if(SyntaxKind::MutKw);
-        parser.or_recover(|p| p.parse(PathScope::default()))?;
-        Ok(())
+        parse_typed_uses_key(parser)
     }
 }
 
 fn parse_typed_uses_key<S: TokenStream>(parser: &mut Parser<S>) -> Result<(), Recovery<ErrProof>> {
     if parser.bump_if(SyntaxKind::MutKw) {
-        parser.or_recover(|p| p.parse(PathScope::default()))?;
+        parse_type(parser, None)?;
         return Ok(());
     }
 
     if let Some(kind @ (SyntaxKind::RefKw | SyntaxKind::OwnKw)) = parser.current_kind() {
         let pos = parser.current_pos;
         parser.bump();
-        parser.or_recover(|p| p.parse(PathScope::default()))?;
+        parse_type(parser, None)?;
         let mode = match kind {
             SyntaxKind::RefKw => "ref",
             SyntaxKind::OwnKw => "own",
@@ -276,6 +272,6 @@ fn parse_typed_uses_key<S: TokenStream>(parser: &mut Parser<S>) -> Result<(), Re
         return Ok(());
     }
 
-    parser.or_recover(|p| p.parse(PathScope::default()))?;
+    parse_type(parser, None)?;
     Ok(())
 }

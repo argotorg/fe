@@ -1107,8 +1107,8 @@ impl ToDoc for ast::UsesParam {
             doc = doc.append(alloc.text("mut "));
         }
 
-        if let Some(path) = self.path() {
-            doc = doc.append(path.to_doc(ctx));
+        if let Some(ty) = self.ty() {
+            doc = doc.append(ty.to_doc(ctx));
         }
 
         doc

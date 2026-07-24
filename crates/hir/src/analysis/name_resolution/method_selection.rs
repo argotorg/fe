@@ -135,6 +135,33 @@ pub(crate) fn select_method_candidate<'db>(
     selector.select()
 }
 
+pub(crate) fn select_trait_method_candidates<'db>(
+    db: &'db dyn HirAnalysisDb,
+    receiver: &Canonicalized<'db, TyId<'db>>,
+    method_name: IdentId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    trait_: Trait<'db>,
+) -> Result<AmbiguousTraitMethods<'db>, MethodSelectionError<'db>> {
+    let receiver_ty = receiver.original();
+    if receiver_ty.is_ty_var(db) {
+        return Err(MethodSelectionError::ReceiverTypeMustBeKnown);
+    }
+
+    let candidates =
+        assemble_method_candidates(db, receiver, method_name, scope, assumptions, Some(trait_));
+
+    let selector = MethodSelector {
+        db,
+        receiver,
+        scope,
+        candidates,
+        assumptions,
+    };
+
+    selector.select_visible_trait_method_candidates()
+}
+
 fn assemble_method_candidates<'db>(
     db: &'db dyn HirAnalysisDb,
     receiver: &Canonicalized<'db, TyId<'db>>,
@@ -378,26 +405,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
             .copied()
             .map(|cand| (cand, self.check_trait_cand(cand)))
             .collect();
-        let checked: Vec<(AssembledTraitMethodCand<'db>, TraitCandidateCheck<'db>)> =
-            if checked.len() > 1 && !self.receiver.original().has_var(self.db) {
-                let applicable: Vec<_> = checked
-                    .iter()
-                    .copied()
-                    .filter(|(_, check)| {
-                        !matches!(
-                            check,
-                            TraitCandidateCheck::Rejected | TraitCandidateCheck::Unsatisfied(_)
-                        )
-                    })
-                    .collect();
-                if applicable.is_empty() {
-                    checked
-                } else {
-                    applicable
-                }
-            } else {
-                checked
-            };
+        let checked = self.prune_inapplicable_trait_checks(checked);
 
         if checked.len() == 1 {
             return Self::finalize_sole_check(checked[0].1);
@@ -537,6 +545,99 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                 Ok(MethodCandidate::NeedsConfirmation(cand))
             }
             TraitCandidateCheck::Rejected => Err(MethodSelectionError::NotFound),
+        }
+    }
+
+    fn select_visible_trait_method_candidates(
+        &self,
+    ) -> Result<AmbiguousTraitMethods<'db>, MethodSelectionError<'db>> {
+        let traits = &self.candidates.traits;
+
+        if traits.len() == 1 {
+            return Ok(self.trait_method_candidates(traits.iter().copied()));
+        }
+
+        let available_traits = self.available_traits();
+        let visible_traits: Vec<_> = traits
+            .iter()
+            .copied()
+            .filter(|cand| available_traits.contains(&cand.trait_def(self.db)))
+            .collect();
+
+        match visible_traits.len() {
+            0 => {
+                if traits.is_empty() {
+                    Err(MethodSelectionError::NotFound)
+                } else {
+                    let traits = traits.iter().map(|cand| cand.trait_def(self.db)).collect();
+                    Err(MethodSelectionError::InvisibleTraitMethod(traits))
+                }
+            }
+            _ => Ok(self.trait_method_candidates(visible_traits)),
+        }
+    }
+
+    fn trait_method_candidates(
+        &self,
+        traits: impl IntoIterator<Item = AssembledTraitMethodCand<'db>>,
+    ) -> AmbiguousTraitMethods<'db> {
+        let checked = self.prune_inapplicable_trait_checks(
+            traits
+                .into_iter()
+                .map(|cand| (cand, self.check_trait_cand(cand)))
+                .collect(),
+        );
+        let mut selected = IndexMap::default();
+        let mut diagnostic_traits = ThinVec::new();
+        for (cand, check) in checked {
+            diagnostic_traits.push(cand.diagnostic_inst(self.db));
+            match check {
+                TraitCandidateCheck::Confirmed(cand) => {
+                    selected.insert(cand, true);
+                }
+                TraitCandidateCheck::NeedsConfirmation(cand)
+                | TraitCandidateCheck::Unsatisfied(cand) => {
+                    selected.entry(cand).or_insert(false);
+                }
+                TraitCandidateCheck::Rejected => {}
+            }
+        }
+
+        let candidates = selected
+            .into_iter()
+            .map(|(cand, confirmed)| AmbiguousTraitMethodCand {
+                cand,
+                needs_confirmation: !confirmed,
+            })
+            .collect();
+        AmbiguousTraitMethods {
+            candidates,
+            diagnostic_traits,
+        }
+    }
+
+    fn prune_inapplicable_trait_checks(
+        &self,
+        checked: Vec<(AssembledTraitMethodCand<'db>, TraitCandidateCheck<'db>)>,
+    ) -> Vec<(AssembledTraitMethodCand<'db>, TraitCandidateCheck<'db>)> {
+        if checked.len() <= 1 || self.receiver.original().has_var(self.db) {
+            return checked;
+        }
+
+        let applicable: Vec<_> = checked
+            .iter()
+            .copied()
+            .filter(|(_, check)| {
+                !matches!(
+                    check,
+                    TraitCandidateCheck::Rejected | TraitCandidateCheck::Unsatisfied(_)
+                )
+            })
+            .collect();
+        if applicable.is_empty() {
+            checked
+        } else {
+            applicable
         }
     }
 

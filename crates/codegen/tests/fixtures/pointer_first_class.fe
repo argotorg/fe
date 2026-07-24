@@ -1,0 +1,59 @@
+struct Data {
+    a: u256,
+    b: u256,
+}
+
+struct Holder {
+    data: *Data,
+}
+
+pub fn sum_first_class_pointers() -> u256 {
+    let data = core::ptr::alloc<Data>()
+    data.a = 5
+    data.b = 8
+
+    let words = core::ptr::cast<Data, u256>(data)
+    let second = core::ptr::offset(words, 1)
+    *second = *second + 3
+    let field_sum = data.a + data.b
+
+    let holder = Holder { data: data }
+    holder.data.b = holder.data.a + holder.data.b
+    let nested_sum = holder.data.a + holder.data.b
+
+    let byte_ptr = core::ptr::as_bytes(data)
+    let roundtrip = core::ptr::cast<u8, Data>(byte_ptr)
+    let first = *roundtrip
+
+    let raw_array = core::ptr::alloc_array<u256>(1)
+    raw_array[0] = 3
+
+    let byte_alloc = core::ptr::alloc_bytes(1)
+    let byte_distance = 0
+
+    let mut array = core::ptr::alloc_array<u256>(2)
+    array[0] = first.a
+    array[1] = first.b
+    let array_sum = array[0] + array[1]
+
+    let bytes = array.as_bytes()
+    let ptr_distance = 32
+    let mut zeroed = core::ptr::MemArray<u256>::new_zeroed(1)
+    zeroed[0] = 7
+    zeroed.zero()
+    let pair = core::ptr::alloc<[u256; 2]>()
+    pair[0] = 13
+    pair[1] = 21
+    let pair_words = core::ptr::cast<u8, u256>(core::ptr::as_bytes(pair))
+    array_sum
+        + raw_array[0]
+        + zeroed[0]
+        + bytes.len
+        + ptr_distance
+        + byte_distance
+        + field_sum
+        + nested_sum
+        + pair[0]
+        + pair[1]
+        + *pair_words
+}

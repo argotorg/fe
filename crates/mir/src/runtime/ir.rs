@@ -1,3 +1,4 @@
+use common::layout::enum_tag_bits;
 use cranelift_entity::{EntityRef, entity_impl};
 use hir::analysis::{
     semantic::{FieldIndex, LayoutEvidenceConstant, SemanticInstance},
@@ -22,6 +23,12 @@ pub enum AddressSpaceKind {
     Code,
 }
 
+impl AddressSpaceKind {
+    pub fn is_byte_addressed(self) -> bool {
+        matches!(self, Self::Memory | Self::Calldata | Self::Code)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum RuntimeClass<'db> {
     Scalar(ScalarClass<'db>),
@@ -35,7 +42,7 @@ pub enum RuntimeClass<'db> {
     },
     RawAddr {
         space: AddressSpaceKind,
-        target: Option<LayoutId<'db>>,
+        pointee: Option<Box<RuntimeClass<'db>>>,
     },
 }
 
@@ -92,12 +99,26 @@ impl<'db> RuntimeClass<'db> {
         }
     }
 
+    pub fn raw_addr(space: AddressSpaceKind, pointee: Self) -> Self {
+        Self::RawAddr {
+            space,
+            pointee: Some(Box::new(pointee)),
+        }
+    }
+
+    pub fn opaque_raw_addr(space: AddressSpaceKind) -> Self {
+        Self::RawAddr {
+            space,
+            pointee: None,
+        }
+    }
+
     pub fn aggregate_layout(&self) -> Option<LayoutId<'db>> {
         match self {
             RuntimeClass::Scalar(_) => None,
             RuntimeClass::AggregateValue { layout } => Some(*layout),
             RuntimeClass::Ref { pointee, .. } => pointee.aggregate_layout(),
-            RuntimeClass::RawAddr { target, .. } => *target,
+            RuntimeClass::RawAddr { .. } => None,
         }
     }
 
@@ -109,9 +130,8 @@ impl<'db> RuntimeClass<'db> {
     pub fn pointee(&self) -> Option<&RuntimeClass<'db>> {
         match self {
             RuntimeClass::Ref { pointee, .. } => Some(pointee),
-            RuntimeClass::Scalar(_)
-            | RuntimeClass::AggregateValue { .. }
-            | RuntimeClass::RawAddr { .. } => None,
+            RuntimeClass::RawAddr { pointee, .. } => pointee.as_deref(),
+            RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. } => None,
         }
     }
 
@@ -119,12 +139,12 @@ impl<'db> RuntimeClass<'db> {
         match self {
             RuntimeClass::Ref { pointee, .. } => Some((**pointee).clone()),
             RuntimeClass::RawAddr {
-                target: Some(layout),
+                pointee: Some(pointee),
                 ..
-            } => Some(RuntimeClass::AggregateValue { layout: *layout }),
+            } => Some((**pointee).clone()),
             RuntimeClass::Scalar(_)
             | RuntimeClass::AggregateValue { .. }
-            | RuntimeClass::RawAddr { target: None, .. } => None,
+            | RuntimeClass::RawAddr { pointee: None, .. } => None,
         }
     }
 
@@ -168,48 +188,15 @@ impl<'db> RuntimeClass<'db> {
         }
     }
 
-    pub fn index_stride_words(&self, db: &'db dyn MirDb) -> Option<u64> {
+    pub fn is_zero_sized(&self, db: &'db dyn MirDb) -> bool {
         match self {
+            RuntimeClass::Scalar(_) | RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => {
+                false
+            }
             RuntimeClass::AggregateValue { layout } => match layout.data(db) {
-                Layout::Array(data) => Some(data.elem.span_words(db)),
-                Layout::Struct(_) | Layout::Enum(_) => None,
-            },
-            RuntimeClass::Ref { pointee, .. } => pointee.index_stride_words(db),
-            RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => None,
-        }
-    }
-
-    pub fn field_offset_words(&self, db: &'db dyn MirDb, field: FieldIndex) -> Option<u64> {
-        if matches!(self, RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. }) {
-            return None;
-        }
-        let layout = self.aggregate_layout()?;
-        let Layout::Struct(data) = layout.data(db) else {
-            return None;
-        };
-        Some(data.field_offset_words(db, field.0 as usize))
-    }
-
-    pub fn span_words(&self, db: &'db dyn MirDb) -> u64 {
-        match self {
-            RuntimeClass::Scalar(_) | RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => 1,
-            RuntimeClass::AggregateValue { layout } => match layout.data(db) {
-                Layout::Struct(data) => data.fields.iter().map(|field| field.span_words(db)).sum(),
-                Layout::Array(data) => data.elem.span_words(db) * data.len,
-                Layout::Enum(data) => {
-                    1 + data
-                        .variants
-                        .iter()
-                        .map(|variant| {
-                            variant
-                                .fields
-                                .iter()
-                                .map(|field| field.span_words(db))
-                                .sum::<u64>()
-                        })
-                        .max()
-                        .unwrap_or(0)
-                }
+                Layout::Struct(data) => data.fields.iter().all(|field| field.is_zero_sized(db)),
+                Layout::Array(data) => data.len == 0 || data.elem.is_zero_sized(db),
+                Layout::Enum(_) => false,
             },
         }
     }
@@ -240,22 +227,13 @@ impl<'db> RuntimeClass<'db> {
             (
                 RuntimeClass::RawAddr {
                     space: actual_space,
-                    target: actual_target,
+                    ..
                 },
                 RuntimeClass::RawAddr {
                     space: desired_space,
-                    target: desired_target,
+                    ..
                 },
-            ) => {
-                actual_space == desired_space
-                    && match (actual_target, desired_target) {
-                        (Some(actual), Some(desired)) => {
-                            layouts_share_runtime_rep(db, *actual, *desired)
-                        }
-                        (None, None) => true,
-                        (Some(_), None) | (None, Some(_)) => false,
-                    }
-            }
+            ) => actual_space == desired_space,
             (
                 RuntimeClass::Scalar(_),
                 RuntimeClass::AggregateValue { .. }
@@ -537,16 +515,6 @@ pub struct StructLayout<'db> {
     pub fields: Box<[RuntimeClass<'db>]>,
 }
 
-impl<'db> StructLayout<'db> {
-    pub fn field_offset_words(&self, db: &'db dyn MirDb, idx: usize) -> u64 {
-        self.fields
-            .iter()
-            .take(idx)
-            .map(|field| field.span_words(db))
-            .sum()
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct ArrayLayout<'db> {
     pub elem: RuntimeClass<'db>,
@@ -569,16 +537,6 @@ pub struct EnumVariantLayout<'db> {
     pub fields: Box<[RuntimeClass<'db>]>,
 }
 
-impl<'db> EnumVariantLayout<'db> {
-    pub fn payload_field_offset_words(&self, db: &'db dyn MirDb, field: FieldIndex) -> u64 {
-        self.fields
-            .iter()
-            .take(field.0 as usize)
-            .map(|field| field.span_words(db))
-            .sum()
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
 pub struct VariantId<'db> {
     pub enum_layout: LayoutId<'db>,
@@ -592,23 +550,11 @@ impl<'db> VariantId<'db> {
             Layout::Struct(_) | Layout::Array(_) => None,
         }
     }
-
-    pub fn field_offset_words(self, db: &'db dyn MirDb, field: FieldIndex) -> Option<u64> {
-        let layout = self.layout(db)?;
-        Some(1 + layout.variants[self.index as usize].payload_field_offset_words(db, field))
-    }
 }
 
 fn enum_tag_repr(variant_count: usize) -> ScalarRepr {
-    let bits = if variant_count <= u8::MAX as usize + 1 {
-        8
-    } else if variant_count <= u16::MAX as usize + 1 {
-        16
-    } else {
-        32
-    };
     ScalarRepr::Int {
-        bits,
+        bits: enum_tag_bits(variant_count),
         signed: false,
     }
 }
@@ -657,6 +603,37 @@ pub enum ConstScalar {
         bits: u16,
         bytes: Vec<u8>,
     },
+}
+
+impl ConstScalar {
+    pub fn fits_repr(&self, repr: ScalarRepr) -> bool {
+        match (self, repr) {
+            (Self::Bool(_), ScalarRepr::Bool) => true,
+            (
+                Self::Int { bits, signed, .. },
+                ScalarRepr::Int {
+                    bits: expected_bits,
+                    signed: expected_signed,
+                },
+            ) => *bits == expected_bits && *signed == expected_signed,
+            (Self::FixedBytes(bytes), ScalarRepr::FixedBytes { len }) => {
+                bytes.len() <= usize::from(len)
+            }
+            (
+                Self::Address { bits, .. },
+                ScalarRepr::Address {
+                    bits: expected_bits,
+                },
+            ) => *bits == expected_bits,
+            (
+                Self::Bool(_) | Self::Int { .. } | Self::FixedBytes(_) | Self::Address { .. },
+                ScalarRepr::Bool
+                | ScalarRepr::Int { .. }
+                | ScalarRepr::FixedBytes { .. }
+                | ScalarRepr::Address { .. },
+            ) => false,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
@@ -1219,6 +1196,10 @@ pub enum RuntimeBuiltin<'db> {
         src: RValueId,
         len: RValueId,
     },
+    ZeroMem {
+        dst: RValueId,
+        len: RValueId,
+    },
     Msize,
     Sload {
         slot: RValueId,
@@ -1328,6 +1309,10 @@ pub enum RuntimeBuiltin<'db> {
     },
     Malloc {
         size: RValueId,
+    },
+    PtrOffsetBytes {
+        ptr: RValueId,
+        offset: RValueId,
     },
     Call {
         gas: RValueId,
@@ -1454,18 +1439,16 @@ pub enum RExpr<'db> {
     MaterializePlaceToObject {
         place: RuntimePlace<'db>,
     },
-    ProviderFromRaw {
+    ProviderRefFromRaw {
         raw: RValueId,
         provider_ty: TyId<'db>,
         space: AddressSpaceKind,
-        target: Option<LayoutId<'db>>,
     },
     WordToRawAddr {
         value: RValueId,
         space: AddressSpaceKind,
-        target: Option<LayoutId<'db>>,
     },
-    ProviderToRaw {
+    ProviderRefToRaw {
         value: RValueId,
     },
     RetagRef {
@@ -1605,6 +1588,7 @@ pub enum RTerminator<'db> {
         offset: RValueId,
         len: RValueId,
     },
+    RevertEmpty,
     SelfDestruct {
         beneficiary: RValueId,
     },

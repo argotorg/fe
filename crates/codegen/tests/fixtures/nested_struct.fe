@@ -1,4 +1,5 @@
-use std::evm::{Evm, RawMem, RawOps, RawStorage, StorPtr, mem}
+use core::ptr
+use std::evm::{Evm, RawMem, RawOps, RawStorage, StorPtr}
 
 struct Inner {
     value: u256,
@@ -13,8 +14,9 @@ struct MemOuter {
 }
 
 fn abi_encode(value: u256) -> ! uses (ops: mut RawOps) {
-    ops.mstore(addr: 0, value: value)
-    ops.return_data(offset: 0, len: 32)
+    let data = ptr::MemBuffer::alloc(32)
+    ops.mstore(addr: data.ptr, value: value)
+    ops.return_data(data: data)
 }
 
 fn read_inner() -> u256
@@ -39,9 +41,9 @@ fn mem_read(value: u256) -> u256 {
 fn init() uses (evm: mut Evm) {
     let len = evm.code_region_len(runtime)
     let offset = evm.code_region_offset(runtime)
-    let dest = mem::alloc(len)
-    evm.codecopy(dest: dest, offset: offset, len: len)
-    evm.return_data(offset: dest, len: len)
+    let mut dest = ptr::MemBuffer::alloc(len)
+    evm.codecopy(dest: mut dest, offset: offset)
+    evm.return_data(data: dest)
 }
 
 #[contract_runtime(NestedStruct)]
@@ -62,7 +64,7 @@ fn runtime() uses (evm: mut Evm) {
                 let value = evm.calldataload(4)
                 abi_encode(value: mem_read(value))
             }
-            _ => evm.return_data(offset: 0, len: 0)
+            _ => evm.return_data(data: ptr::MemBuffer::empty())
         }
     }
 }

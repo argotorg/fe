@@ -3,7 +3,8 @@
 /// Tolerates tokens that return no data, reverts on a `false` return, and
 /// closes the no-code-at-address hole with a codesize check.
 
-use std::evm::{RawOps, erc20, mem}
+use core::ptr
+use std::evm::{RawOps, erc20}
 
 msg TokenMsg {
     #[selector = sol("transfer(address,uint256)")]
@@ -117,9 +118,10 @@ msg MalformedTokenMsg {
 pub contract MalformedToken {
     recv MalformedTokenMsg {
         Transfer { receiver, amount } -> bool uses (raw: mut RawOps) {
-            let ptr = mem::alloc(32)
-            raw.mstore(addr: ptr, value: 0xaabbccdd << 224)
-            raw.return_data(offset: ptr, len: 4)
+            let mut data = ptr::MemBuffer::alloc(32)
+            raw.mstore(addr: data.ptr, value: 0xaabbccdd << 224)
+            data.len = 4
+            raw.return_data(data)
         }
     }
 }

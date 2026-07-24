@@ -6,7 +6,7 @@
 // runtime-handle composition itself.
 use core::effect_ref::EffectHandle
 use std::evm::effects::TStorPtr
-use std::evm::{Create, Evm}
+use std::evm::{Create, Evm, RawOps}
 
 struct Flagged {
     count: u256,
@@ -14,8 +14,8 @@ struct Flagged {
 }
 
 impl Flagged {
-    fn attach(mut self, slot: u256) {
-        self.flag = TStorPtr::from_raw(slot)
+    fn attach(mut self, slot: u256) uses (evm: Evm) {
+        self.flag = evm.tstor_ptr<bool>(slot)
     }
 }
 
@@ -29,7 +29,7 @@ msg CMsg {
 pub contract C {
     mut state: Flagged,
 
-    init() uses (mut state) {
+    init() uses (mut state, evm: Evm) {
         state.attach(slot: 0xfe)
     }
 

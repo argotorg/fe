@@ -7,7 +7,7 @@
 
 use std::convert::Infallible;
 
-use common::indexmap::IndexSet;
+use common::indexmap::{IndexMap, IndexSet};
 use rustc_hash::FxHashMap;
 use tablesolve::{
     AnswerlessMode, CallbackOutcome, Canonical as TabledCanonical, CanonicalizeOutcome, Completion,
@@ -28,7 +28,7 @@ use crate::analysis::{
         fold::TyFoldable,
         trait_def::{ImplementorId, TraitInstId, impls_for_trait_in_ingots},
         ty_def::{TyData, TyId},
-        unify::PersistentUnificationTable,
+        unify::{PersistentUnificationTable, UnificationError, UnificationResult},
         visitor::{TyVisitable, TyVisitor},
     },
 };
@@ -42,6 +42,52 @@ const MAXIMUM_TYPE_GROWTH: usize = 256;
 type Query<'db> = Canonical<TraitSolverQuery<'db>>;
 type GoalSolution<'db> = Solution<TraitGoalSolution<'db>>;
 type UnsatSubgoal<'db> = Solution<TraitInstId<'db>>;
+
+fn trait_inst_head<'db>(db: &'db dyn HirAnalysisDb, inst: TraitInstId<'db>) -> TraitInstId<'db> {
+    TraitInstId::new(db, inst.def(db), inst.args(db).to_vec(), IndexMap::new())
+}
+
+fn normalize_assoc_binding<'db>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut PersistentUnificationTable<'db>,
+    ty: TyId<'db>,
+    scope: crate::hir_def::scope_graph::ScopeId<'db>,
+    assumptions: super::PredicateListId<'db>,
+) -> TyId<'db> {
+    let ty = ty.fold_with(db, table);
+    crate::analysis::ty::normalize::normalize_ty(db, ty, scope, assumptions)
+}
+
+fn unify_trait_inst_with_normalized_assoc_bindings<'db>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut PersistentUnificationTable<'db>,
+    candidate: TraitInstId<'db>,
+    goal: TraitInstId<'db>,
+    scope: crate::hir_def::scope_graph::ScopeId<'db>,
+    assumptions: super::PredicateListId<'db>,
+) -> UnificationResult {
+    table.unify(trait_inst_head(db, candidate), trait_inst_head(db, goal))?;
+
+    for (name, &candidate_assoc_ty) in candidate.assoc_type_bindings(db) {
+        if let Some(&goal_assoc_ty) = goal.assoc_type_bindings(db).get(name) {
+            let candidate_assoc_ty =
+                normalize_assoc_binding(db, table, candidate_assoc_ty, scope, assumptions);
+            let goal_assoc_ty =
+                normalize_assoc_binding(db, table, goal_assoc_ty, scope, assumptions);
+            table.unify(candidate_assoc_ty, goal_assoc_ty)?;
+        }
+    }
+
+    if goal
+        .assoc_type_bindings(db)
+        .keys()
+        .any(|name| !candidate.assoc_type_bindings(db).contains_key(name))
+    {
+        return Err(UnificationError::TypeMismatch);
+    }
+
+    Ok(())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StopReason {
@@ -328,7 +374,16 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                     scope,
                     query.assumptions,
                 );
-                if table.unify(normalized_candidate, normalized_goal).is_err() {
+                if unify_trait_inst_with_normalized_assoc_bindings(
+                    self.db,
+                    &mut table,
+                    normalized_candidate,
+                    normalized_goal,
+                    scope,
+                    query.assumptions,
+                )
+                .is_err()
+                {
                     return Ok(Transition::Reject);
                 }
 
@@ -350,7 +405,21 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                 let Some(&assumption) = query.assumptions.list(self.db).get(index) else {
                     return Ok(Transition::Reject);
                 };
-                if table.unify(assumption, normalized_goal).is_err() {
+                let scope = TraitSolveCx::normalization_scope_for_trait_inst_with_origin(
+                    self.db,
+                    self.origin_ingot,
+                    query.goal,
+                );
+                if unify_trait_inst_with_normalized_assoc_bindings(
+                    self.db,
+                    &mut table,
+                    assumption,
+                    normalized_goal,
+                    scope,
+                    query.assumptions,
+                )
+                .is_err()
+                {
                     return Ok(Transition::Reject);
                 }
                 ImplementorId::assumption(self.db, query.goal.fold_with(self.db, &mut table))

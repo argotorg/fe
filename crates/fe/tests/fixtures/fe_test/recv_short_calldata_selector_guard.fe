@@ -1,5 +1,5 @@
+use core::ptr
 use std::evm::{Address, Call, Create, Evm, RawMem}
-use std::evm::mem
 
 msg CountMsg {
     #[selector = 0x01020304]
@@ -46,16 +46,21 @@ pub contract NoFallback {
     }
 }
 
-fn raw_call(addr: Address, gas: u256, value: u256, args_offset: u256, args_len: u256) -> bool
+fn raw_call(addr: Address, gas: u256, value: u256, args_offset: *u8, args_len: u256) -> bool
 uses (evm: mut Evm)
 {
-    evm.raw_call(addr: addr, gas: gas, value: value, args_offset: args_offset, args_len: args_len)
+    evm.raw_call(
+        addr: addr,
+        gas: gas,
+        value: value,
+        args: ptr::MemBuffer::from_raw_parts(ptr: args_offset, len: args_len),
+    )
 }
 
 #[test]
 fn test_empty_calldata_uses_fallback_not_zero_selector() uses (evm: mut Evm) {
     let addr = evm.create2<GuardedFallback>(value: 0, args: (), salt: 0)
-    assert!(raw_call(addr: addr, gas: 100000, value: 0, args_offset: 0, args_len: 0))
+    assert!(raw_call(addr: addr, gas: 100000, value: 0, args_offset: ptr::alloc_bytes(0), args_len: 0))
 
     let count: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: CountMsg::Count {})
     assert!(count == 1)
@@ -64,7 +69,7 @@ fn test_empty_calldata_uses_fallback_not_zero_selector() uses (evm: mut Evm) {
 #[test]
 fn test_short_prefix_calldata_uses_fallback_not_padded_selector() uses (evm: mut Evm) {
     let addr = evm.create2<GuardedFallback>(value: 0, args: (), salt: 0)
-    let ptr = mem::alloc(1)
+    let ptr = ptr::alloc_bytes(1)
     evm.mstore8(addr: ptr, value: 0xaa)
     assert!(raw_call(addr: addr, gas: 100000, value: 0, args_offset: ptr, args_len: 1))
 
@@ -85,5 +90,5 @@ fn test_full_zero_selector_still_dispatches() uses (evm: mut Evm) {
 #[test]
 fn test_empty_calldata_without_fallback_reverts() uses (evm: mut Evm) {
     let addr = evm.create2<NoFallback>(value: 0, args: (), salt: 0)
-    assert!(!raw_call(addr: addr, gas: 100000, value: 0, args_offset: 0, args_len: 0))
+    assert!(!raw_call(addr: addr, gas: 100000, value: 0, args_offset: ptr::alloc_bytes(0), args_len: 0))
 }

@@ -13,8 +13,8 @@ use crate::{
     hir_def::{
         AssocConstDef, AttrListId, Body, BodyKind, Expr, FieldDef, FieldDefListId, FieldIndex,
         FuncModifiers, FuncParam, FuncParamMode, FuncParamName, GenericParamListId, IdentId,
-        IntegerId, LitKind, Partial, Pat, PathId, Stmt, Struct, TrackedItemVariant, TraitRefId,
-        TupleTypeId, TypeId, TypeKind, TypeMode, Visibility,
+        LitKind, Partial, PathId, Struct, TrackedItemVariant, TraitRefId, TypeId, TypeKind,
+        TypeMode, Visibility,
     },
     span::{EventDesugared, HirOrigin},
 };
@@ -428,10 +428,7 @@ fn lower_emit_method<'db>(
 
     let emit_ident = builder.ident("emit");
     let log_provider_ident = builder.ident("log");
-    let offset_ident = builder.ident("offset");
-    let len_ident = builder.ident("len");
-    let data_ptr_ident = builder.ident("data_ptr");
-    let data_len_ident = builder.ident("data_len");
+    let data_ident = builder.ident("data");
     let as_topic_ident = builder.ident("as_topic");
     let log_method_ident = builder.ident(&format!("log{}", indexed_fields.len() + 1));
 
@@ -480,62 +477,34 @@ fn lower_emit_method<'db>(
         move |body| {
             let self_expr = body.path_expr(PathId::from_ident(db, IdentId::make_self(db)));
 
-            let (data_ptr, data_len) = if data_fields.is_empty() {
-                (int_lit(body, 0), int_lit(body, 0))
+            let data = if data_fields.is_empty() {
+                let empty_buffer = PathId::from_ident(db, roots.core)
+                    .push_str(db, "ptr")
+                    .push_str(db, "MemBuffer")
+                    .push_str(db, "empty");
+                let empty_expr = body.path_expr(empty_buffer);
+                body.call_expr(empty_expr, vec![])
             } else {
-                let payload_expr = if data_fields.len() == 1 {
-                    self_field_expr(body, self_expr, data_fields[0].0)
-                } else {
-                    let tuple_elems: Vec<Partial<TypeId<'db>>> = data_fields
-                        .iter()
-                        .map(|(_, ty)| Partial::Present(*ty))
-                        .collect();
-                    let _ = TypeId::new(db, TypeKind::Tuple(TupleTypeId::new(db, tuple_elems)));
-                    let mut elems = Vec::with_capacity(data_fields.len());
-                    for (name, _) in data_fields.iter().copied() {
-                        elems.push(self_field_expr(body, self_expr, name));
-                    }
-                    body.push_expr(Expr::Tuple(elems))
-                };
-                let encode_fn = if data_fields.len() == 1 {
-                    "encode_abi_payload"
-                } else {
-                    "encode_event_payload"
-                };
+                let mut elems = Vec::with_capacity(data_fields.len());
+                for (name, _) in data_fields.iter().copied() {
+                    elems.push(self_field_expr(body, self_expr, name));
+                }
+                let payload_expr = body.push_expr(Expr::Tuple(elems));
                 let encode_path = PathId::from_ident(db, roots.std)
                     .push_str(db, "evm")
-                    .push_str(db, encode_fn);
+                    .push_str(db, "encode_abi_payload");
                 let encode_expr = body.path_expr(encode_path);
-                let finish_call = body.call_expr(encode_expr, vec![payload_expr]);
-                let data_ptr_pat = body.push_pat(Pat::Path(
-                    Partial::Present(PathId::from_ident(db, data_ptr_ident)),
-                    false,
-                ));
-                let data_len_pat = body.push_pat(Pat::Path(
-                    Partial::Present(PathId::from_ident(db, data_len_ident)),
-                    false,
-                ));
-                let tuple_pat = body.push_pat(Pat::Tuple(vec![data_ptr_pat, data_len_pat]));
-                body.emit_stmt(Stmt::Let(tuple_pat, None, Some(finish_call)));
-
-                (
-                    body.ident_expr(data_ptr_ident),
-                    body.ident_expr(data_len_ident),
-                )
+                body.call_expr(encode_expr, vec![payload_expr])
             };
 
             let topic0 = {
                 let path = PathId::from_ident(db, IdentId::make_self_ty(db)).push_str(db, "TOPIC0");
                 body.path_expr(path)
             };
-            let mut args = Vec::with_capacity(3 + indexed_fields.len());
+            let mut args = Vec::with_capacity(2 + indexed_fields.len());
             args.push(crate::hir_def::expr::CallArg {
-                label: Some(offset_ident),
-                expr: data_ptr,
-            });
-            args.push(crate::hir_def::expr::CallArg {
-                label: Some(len_ident),
-                expr: data_len,
+                label: Some(data_ident),
+                expr: data,
             });
             args.push(crate::hir_def::expr::CallArg {
                 label: Some(IdentId::new(db, "topic0".to_string())),
@@ -546,7 +515,7 @@ fn lower_emit_method<'db>(
                 let value = self_field_expr(body, self_expr, name);
                 let topic = body.method_call_expr(value, as_topic_ident, vec![]);
                 args.push(crate::hir_def::expr::CallArg {
-                    label: Some(IdentId::new(db, format!("topic{}", args.len() - 2))),
+                    label: Some(IdentId::new(db, format!("topic{}", args.len() - 1))),
                     expr: topic,
                 });
             }
@@ -567,12 +536,4 @@ fn self_field_expr<'db>(
         receiver,
         Partial::Present(FieldIndex::Ident(field)),
     ))
-}
-
-fn int_lit<'db>(
-    body: &mut super::hir_builder::BodyBuilder<'_, 'db, EventDesugared>,
-    v: usize,
-) -> crate::hir_def::ExprId {
-    let db = body.db();
-    body.push_expr(Expr::Lit(LitKind::Int(IntegerId::from_usize(db, v))))
 }

@@ -3,7 +3,7 @@ use core::Copy
 use core::num::IntDowncast
 use ingot::abi::Sol
 use ingot::abi::sol::{decode_input}
-use ingot::evm::ops::{calldataload, calldatacopy, calldatasize, revert}
+use ingot::evm::ops::{calldataload, calldatacopy, calldatasize, revert_empty}
 
 /// A view over the current EVM calldata.
 ///
@@ -59,15 +59,15 @@ impl ByteInput for CallData {
         (word >> shift).downcast_truncate()
     }
 
-    fn copy_to_memory(self, dest: u256, src_offset: u256, len: u256) {
+    fn copy_to_memory(self, dest: *u8, src_offset: u256, len: u256) {
         if len % 32 != 0 {
-            revert(offset: 0, len: 0)
+            revert_empty()
         }
 
         let input_len = self.len()
         let end = src_offset + len
         if end < src_offset || end > input_len {
-            revert(offset: 0, len: 0)
+            revert_empty()
         }
 
         calldatacopy(dest: dest, offset: self.base + src_offset, len: len)
@@ -75,7 +75,7 @@ impl ByteInput for CallData {
 
     #[arithmetic(unchecked)]
     #[inline(always)]
-    fn copy_to_memory_unchecked_aligned(self, dest: u256, src_offset: u256, len: u256) {
+    fn copy_to_memory_unchecked_aligned(self, dest: *u8, src_offset: u256, len: u256) {
         calldatacopy(dest: dest, offset: self.base + src_offset, len: len)
     }
 }

@@ -1119,14 +1119,14 @@ fn f(b: Builder, tag: u8) {
 }
 
 #[test]
-fn callable_effect_keys_keep_distinct_explicit_hole_args() {
+fn callable_pointer_effect_keys_keep_distinct_explicit_hole_args() {
     parse_ok!(
         db,
         top_mod,
         r#"
 struct Pair<const LEFT: u256, const RIGHT: u256> {}
 
-fn f() uses (slot: Pair<_, _>) {}
+fn f() uses (slot: *Pair<_, _>) {}
 "#,
     );
 
@@ -1160,7 +1160,8 @@ fn f() uses (slot: Pair<_, _>) {}
         .key
         .key_ty()
         .expect("missing type effect key");
-    let args = key_ty.generic_args(&db);
+    let pointee = key_ty.as_ptr(&db).expect("effect key should be a pointer");
+    let args = pointee.generic_args(&db);
     assert_eq!(args.len(), 2);
     assert_ne!(args[0], args[1]);
     assert!(
@@ -1331,7 +1332,7 @@ fn f(x: (Wrap, Wrap)) {
 }
 
 #[test]
-fn callable_effect_keys_keep_distinct_omitted_default_alias_occurrences() {
+fn callable_pointer_effect_keys_keep_distinct_omitted_default_alias_occurrences() {
     parse_ok!(
         db,
         top_mod,
@@ -1339,7 +1340,7 @@ fn callable_effect_keys_keep_distinct_omitted_default_alias_occurrences() {
 struct Slot<const ROOT: u256 = _> {}
 type TwoSlots = (Slot, Slot)
 
-fn f() uses (slots: TwoSlots) {}
+fn f() uses (slots: *TwoSlots) {}
 "#,
     );
 
@@ -1373,7 +1374,8 @@ fn f() uses (slots: TwoSlots) {}
         .key
         .key_ty()
         .expect("missing type effect key");
-    let fields = key_ty.field_types(&db);
+    let pointee = key_ty.as_ptr(&db).expect("effect key should be a pointer");
+    let fields = pointee.field_types(&db);
     assert_eq!(fields.len(), 2);
     let left_root = fields[0]
         .generic_args(&db)
@@ -1822,7 +1824,7 @@ fn contract_field_layout_uses_consistent_effect_handle_metadata() {
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Slot<T, const ROOT: u256 = _> {}
 
@@ -1884,13 +1886,13 @@ fn contract_field_layout_partitions_slots_by_address_space() {
         db,
         top_mod,
         r#"
-use core::effect_ref::{MemPtr, StorPtr}
+use std::evm::StorPtr
 
 struct Slot<const ROOT: u256 = _> {}
 
 contract C {
     storage0: StorPtr<Slot>
-    memory0: MemPtr<Slot>
+    memory0: *Slot
     storage1: StorPtr<Slot>
 }
 "#,
@@ -1940,7 +1942,7 @@ fn contract_field_layout_shares_alias_formal_repeated_placeholder_identity() {
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Leaf<const ROOT: u256> {}
 type Repeated<const ROOT: u256 = _> = (Leaf<ROOT>, Leaf<ROOT>)
@@ -1994,7 +1996,7 @@ fn contract_field_sibling_identical_hole_types_get_distinct_slots() {
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Slot<T, const ROOT: u256 = _> {}
 
@@ -2045,7 +2047,7 @@ fn contract_field_repeated_generic_arg_hole_type_gets_distinct_slots() {
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Slot<T, const ROOT: u256 = _> {}
 
@@ -2088,7 +2090,7 @@ fn contract_field_triple_generic_arg_hole_type_gets_distinct_slots() {
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Slot<T, const ROOT: u256 = _> {}
 
@@ -2135,7 +2137,7 @@ fn contract_field_tuple_repeated_generic_arg_hole_gets_distinct_slots() {
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Slot<T, const ROOT: u256 = _> {}
 
@@ -2178,7 +2180,7 @@ fn contract_field_nested_pair_generic_arg_hole_gets_distinct_slots() {
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Slot<T, const ROOT: u256 = _> {}
 
@@ -2229,7 +2231,7 @@ fn contract_field_twice_alias_generic_arg_hole_gets_distinct_slots() {
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Slot<T, const ROOT: u256 = _> {}
 
@@ -2265,7 +2267,7 @@ fn contract_field_array_repeated_element_hole_uses_an_indexed_family() {
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Slot<T, const ROOT: u256 = _> {}
 
@@ -2299,7 +2301,7 @@ fn contract_field_repeated_alias_occurrences_get_distinct_slots() {
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Slot<T, const ROOT: u256 = _> {}
 
@@ -2342,7 +2344,7 @@ fn contract_field_layout_offsets_nested_holes_after_preceding_aggregate_fields()
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Slot<const ROOT: u256 = _> {}
 
@@ -2513,7 +2515,7 @@ fn shadow_storage_layout_splits_nested_repeated_generic_arg_roots() {
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Slot<T, const ROOT: u256 = _> {}
 
@@ -2569,7 +2571,7 @@ fn shadow_storage_layout_lands_alias_argument_per_pair_field() {
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Slot<const ROOT: u256 = _> {}
 
@@ -2615,7 +2617,7 @@ fn shadow_storage_layout_lands_pair_at_argument_per_pair_field() {
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Slot<T, const ROOT: u256 = _> {}
 
@@ -2660,7 +2662,7 @@ fn shadow_storage_layout_mixed_alias_order_roots_follow_walk_order() {
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Slot<T, const ROOT: u256 = _> {}
 
@@ -2714,7 +2716,7 @@ fn shadow_storage_layout_allows_explicit_concrete_duplicate_roots() {
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Slot<T, const ROOT: u256 = _> {}
 
@@ -2745,7 +2747,7 @@ fn shadow_storage_layout_splits_alias_formal_root_in_repeated_generic_arg() {
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Slot<const ROOT: u256 = _> {}
 
@@ -2790,7 +2792,7 @@ fn shadow_storage_layout_splits_alias_formal_root_in_nested_repeated_generic_arg
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Slot<const ROOT: u256 = _> {}
 
@@ -2847,7 +2849,7 @@ fn shadow_storage_layout_splits_alias_formal_root_in_repeated_tuple_alias_arg() 
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Slot<const ROOT: u256 = _> {}
 
@@ -2888,7 +2890,7 @@ fn shadow_storage_layout_splits_alias_formal_root_through_pair_alias_arg() {
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Slot<const ROOT: u256 = _> {}
 
@@ -2934,7 +2936,7 @@ fn shadow_storage_layout_groups_alias_formal_root_by_repeated_adt_landing_site()
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Leaf<const ROOT: u256 = _> {}
 
@@ -2989,7 +2991,7 @@ fn shadow_storage_layout_pair_alias_of_twice_at_has_two_landings() {
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Leaf<const ROOT: u256 = _> {}
 
@@ -3049,7 +3051,7 @@ fn shadow_storage_layout_renamed_storptr_keeps_root_alias_formal_shared() {
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr as SP
+use std::evm::StorPtr as SP
 
 struct Leaf<const ROOT: u256 = _> {}
 
@@ -3084,7 +3086,7 @@ fn shadow_storage_layout_shares_tuple_alias_formal_root_outside_generic_arg() {
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Leaf<const ROOT: u256 = _> {}
 
@@ -3132,7 +3134,7 @@ fn shadow_storage_layout_splits_associated_type_in_repeated_generic_arg() {
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Slot<T, const ROOT: u256 = _> {}
 
@@ -3185,7 +3187,7 @@ fn shadow_storage_layout_shares_definition_const_within_application() {
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Slot<const ROOT: u256> {}
 
@@ -3226,7 +3228,7 @@ contract C {
 #[test]
 fn contract_field_layout_counts_target_only_holes() {
     parse_ok!(
-        db,
+        trusted db,
         top_mod,
         r#"
 use core::effect_ref::EffectHandle
@@ -3241,10 +3243,7 @@ impl<T> EffectHandle for Ptr<T> {
     type Target = Payload<T>
 
     const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Storage
-
-    fn from_raw(_ raw: u256) -> Self {
-        Self { raw }
-    }
+    type Raw = u256
 
     fn raw(self) -> u256 {
         self.raw
@@ -3295,7 +3294,7 @@ contract C {
 #[test]
 fn contract_field_layout_preserves_reordered_shared_target_holes() {
     parse_ok!(
-        db,
+        trusted db,
         top_mod,
         r#"
 use core::effect_ref::EffectHandle
@@ -3310,10 +3309,7 @@ impl<const LEFT: u256, const RIGHT: u256> EffectHandle for Wrapper<LEFT, RIGHT> 
     type Target = Pair<RIGHT, LEFT>
 
     const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Storage
-
-    fn from_raw(_ raw: u256) -> Self {
-        Self { raw }
-    }
+    type Raw = u256
 
     fn raw(self) -> u256 {
         self.raw
@@ -3372,7 +3368,7 @@ contract C {
 #[test]
 fn contract_field_layout_materializes_wrapper_only_holes() {
     parse_ok!(
-        db,
+        trusted db,
         top_mod,
         r#"
 use core::effect_ref::EffectHandle
@@ -3385,10 +3381,7 @@ impl<const ROOT: u256> EffectHandle for Wrapper<ROOT> {
     type Target = u256
 
     const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Storage
-
-    fn from_raw(_ raw: u256) -> Self {
-        Self { raw }
-    }
+    type Raw = u256
 
     fn raw(self) -> u256 {
         self.raw
@@ -3451,7 +3444,7 @@ fn contract_field_enum_variant_overlay_hole_past_inline_payload() {
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Slot<T, const ROOT: u256 = _> {}
 
@@ -3503,7 +3496,7 @@ fn contract_field_enum_variant_overlay_holes_are_order_independent() {
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Slot<T, const ROOT: u256 = _> {}
 
@@ -3555,7 +3548,7 @@ fn contract_field_enum_variant_hole_before_trailing_inline_data() {
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Slot<T, const ROOT: u256 = _> {}
 
@@ -3604,7 +3597,7 @@ fn contract_field_enum_same_variant_duplicate_root_gets_distinct_slots() {
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Slot<T, const ROOT: u256 = _> {}
 
@@ -3650,7 +3643,7 @@ fn contract_field_array_of_slot_wrappers_uses_a_symbolic_family() {
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Slot<T, const ROOT: u256 = _> {}
 
@@ -3684,7 +3677,7 @@ fn contract_field_transient_array_of_slot_wrappers_uses_transient_family() {
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 use std::evm::TStorPtr
 
 struct Slot<T, const ROOT: u256 = _> {}
@@ -3836,7 +3829,7 @@ fn contract_field_u256_slot_hole_is_not_rejected() {
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Slot<const ROOT: u256 = _> {}
 
@@ -3867,7 +3860,7 @@ fn contract_field_usize_slot_hole_is_not_rejected() {
         db,
         top_mod,
         r#"
-use core::effect_ref::StorPtr
+use std::evm::StorPtr
 
 struct Slot<const ROOT: usize = _> {}
 
@@ -3956,7 +3949,7 @@ contract C {
 #[test]
 fn contract_field_handle_space_hole_is_flagged() {
     parse_module!(
-        db,
+        trusted db,
         top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
@@ -3965,12 +3958,9 @@ struct Ptr<T, const SP: AddressSpace = _> { raw: u256 }
 
 impl<T, const SP: AddressSpace> EffectHandle for Ptr<T, SP> {
     type Target = T
+    type Raw = u256
 
     const SPACE: AddressSpace = SP
-
-    fn from_raw(_ raw: u256) -> Self {
-        Ptr { raw }
-    }
 
     fn raw(self) -> u256 {
         self.raw
@@ -3992,6 +3982,123 @@ contract C {
         Some(fe_hir::core::semantic::ContractLayoutError::UnresolvedProviderSpace)
     ));
     assert!(contract.storage_layout(&db).allocated.is_none());
+}
+
+/// If more than one `EffectHandle` impl matches a contract field, field layout
+/// must report an error instead of treating the field as a plain storage value.
+#[test]
+fn contract_field_handle_ambiguous_impl_is_flagged() {
+    parse_module!(
+        db,
+        top_mod,
+        r#"
+use core::effect_ref::{AddressSpace, EffectHandle}
+
+trait MarkerA {}
+trait MarkerB {}
+
+struct Value {}
+
+impl MarkerA for Value {}
+impl MarkerB for Value {}
+
+struct Ptr<T> { raw: u256 }
+
+impl<T: MarkerA> EffectHandle for Ptr<T> {
+    type Target = T
+
+    const SPACE: AddressSpace = AddressSpace::Storage
+    type Raw = u256
+
+    fn raw(self) -> u256 {
+        self.raw
+    }
+}
+
+impl<T: MarkerB> EffectHandle for Ptr<T> {
+    type Target = T
+
+    const SPACE: AddressSpace = AddressSpace::Storage
+    type Raw = u256
+
+    fn raw(self) -> u256 {
+        self.raw
+    }
+}
+
+contract C {
+    mut value: Ptr<Value>,
+}
+"#,
+    );
+    let contract = find_contract(&db, top_mod, "C");
+    let errors = contract
+        .storage_layout(&db)
+        .field_errors(&IdentId::new(&db, "value".to_string()))
+        .expect("field should be rejected");
+    assert!(matches!(
+        errors.first(),
+        Some(fe_hir::core::semantic::ContractLayoutError::AmbiguousProviderLayout)
+    ));
+    assert!(contract.storage_layout(&db).allocated.is_none());
+}
+
+/// Provider target layout instantiation preserves distinct holes when the
+/// target repeats the same ADT shape.
+#[test]
+fn contract_field_handle_repeated_target_holes_stay_distinct() {
+    parse_ok!(
+        trusted db,
+        top_mod,
+        r#"
+use core::effect_ref::{AddressSpace, EffectHandle}
+
+struct Slot<T, const ROOT: u256 = _> {}
+struct Pair<L, R> {
+    left: L,
+    right: R,
+}
+struct Ptr<T> { raw: u256 }
+
+impl<T, const LEFT: u256, const RIGHT: u256> EffectHandle for Ptr<Pair<Slot<T, LEFT>, Slot<T, RIGHT>>> {
+    type Target = Pair<Slot<T, LEFT>, Slot<T, RIGHT>>
+
+    const SPACE: AddressSpace = AddressSpace::Storage
+    type Raw = u256
+
+    fn raw(self) -> u256 {
+        self.raw
+    }
+}
+
+contract C {
+    value: Ptr<Pair<Slot<u256>, Slot<u256>>>,
+}
+"#,
+    );
+
+    let contract = find_contract(&db, top_mod, "C");
+    let field = contract
+        .storage_layout(&db)
+        .get(&IdentId::new(&db, "value".to_string()))
+        .expect("missing `value` field");
+    assert!(field.is_provider);
+
+    let target_args = concrete_target_ty(&db, field).generic_args(&db);
+    assert_eq!(target_args.len(), 2);
+    let left_slot_args = target_args[0].generic_args(&db);
+    let right_slot_args = target_args[1].generic_args(&db);
+    let left_root = left_slot_args
+        .get(1)
+        .copied()
+        .expect("left Slot missing root argument");
+    let right_root = right_slot_args
+        .get(1)
+        .copied()
+        .expect("right Slot missing root argument");
+    assert_eq!(const_lit_usize(&db, left_root), 0);
+    assert_eq!(const_lit_usize(&db, right_root), 1);
+    assert_ne!(left_root, right_root);
 }
 
 /// An explicit `_` const argument (here `String<_>`, whose `usize` length is a

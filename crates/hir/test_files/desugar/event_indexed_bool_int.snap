@@ -17,7 +17,6 @@ impl std::evm::Event for Flags {
 
     #[inline(always)]
     fn emit<L: std::evm::Log>(own self, _ log: mut L) {
-        let (data_ptr, data_len) = std::evm::encode_abi_payload(self.value)
-        log.log3(offset: data_ptr, len: data_len, topic0: Self::TOPIC0, topic1: self.ok.as_topic(), topic2: self.delta.as_topic())
+        log.log3(data: std::evm::encode_abi_payload((self.value)), topic0: Self::TOPIC0, topic1: self.ok.as_topic(), topic2: self.delta.as_topic())
     }
 }

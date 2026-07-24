@@ -25,7 +25,7 @@ fn test_string_as_bytes_runtime() {
 
 #[test]
 fn test_string_as_bytes_param_runtime() {
-    let encoded: (u256, u256) = encode_alloc<Sol, String<8>>("COOL")
+    let encoded: (*u8, u256) = encode_alloc<Sol, String<8>>("COOL")
     let input = MemoryInput {
         base: encoded.0,
         len: encoded.1,
@@ -89,7 +89,7 @@ fn test_string_concat_overflow_truncates() {
 #[test]
 fn test_string_abi_encoding_ignores_hidden_high_bytes() {
     let s: String<4> = 0x01000000434f4f4c as String<4>
-    let encoded: (u256, u256) = encode_alloc<Sol, String<4>>(s)
+    let encoded: (*u8, u256) = encode_alloc<Sol, String<4>>(s)
     let input = MemoryInput {
         base: encoded.0,
         len: encoded.1,

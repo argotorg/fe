@@ -18,7 +18,7 @@ use crate::{
     instance::RuntimeInstance,
     runtime::{
         AddressSpaceKind, ContractFieldBinding, ContractFieldSlot, EntryEffectArgPlan, RefKind,
-        RefView, RuntimeClass, RuntimeFunctionOwner, RuntimeSyntheticSpec,
+        RefView, RuntimeClass, RuntimeFunctionOwner, RuntimeMemoryLayout, RuntimeSyntheticSpec,
         lower::{
             classify::runtime_effect_binding_plan, type_info::provider_address_space_to_runtime,
         },
@@ -190,7 +190,9 @@ fn verify_contract_field_binding<'db>(
                 field: binding.field,
                 class: binding.class.clone(),
             })?;
-    let mir_span = pointee.span_words(db);
+    let mir_span = RuntimeMemoryLayout::for_space(db, AddressSpaceKind::Storage)
+        .class_size(&pointee)
+        .map_err(|_| VerifyError::InvalidContractFieldLayout(binding.field))?;
     if u64::try_from(field.inline_span).ok() != Some(mir_span) {
         return Err(VerifyError::ContractFieldSpanMismatch {
             field: binding.field,
@@ -533,7 +535,9 @@ pub contract Other {
                 assert_eq!(hir.address_space, space);
                 assert_eq!(hir.inline_span, span);
                 assert_eq!(
-                    binding.class.deref_target().unwrap().span_words(db),
+                    RuntimeMemoryLayout::for_space(db, AddressSpaceKind::Storage)
+                        .class_size(&binding.class.deref_target().unwrap())
+                        .unwrap(),
                     span as u64
                 );
             }

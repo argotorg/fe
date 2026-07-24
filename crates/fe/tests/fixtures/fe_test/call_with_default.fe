@@ -3,7 +3,8 @@
 /// instead of a decode revert. Reverts still bubble and non-empty returndata
 /// is still decoded strictly.
 
-use std::evm::{RawMem, RawOps, last_returndata, mem}
+use core::ptr
+use std::evm::{RawMem, RawOps, last_returndata}
 
 /// Strict caller-side view of an ERC20-style `transfer`.
 msg TokenMsg {
@@ -55,9 +56,10 @@ pub contract FalseToken {
 pub contract MalformedToken {
     recv TokenMsg {
         Transfer { receiver, amount } -> bool uses (raw: mut RawOps) {
-            let ptr = mem::alloc(32)
-            raw.mstore(addr: ptr, value: 0xaabbccdd << 224)
-            raw.return_data(offset: ptr, len: 4)
+            let mut data = ptr::MemBuffer::alloc(32)
+            raw.mstore(addr: data.ptr, value: 0xaabbccdd << 224)
+            data.len = 4
+            raw.return_data(data)
         }
     }
 }
@@ -180,10 +182,10 @@ fn test_bubbled_revert_data_survives_verbatim() uses (evm: mut Evm) {
 
     // Hand-encode CallerMsg::DoTransfer { token } so we can observe the
     // wrapped call's revert data instead of reverting the test itself.
-    let ptr = mem::alloc(36)
-    evm.mstore(addr: ptr, value: 1 << 224)
-    evm.mstore(addr: ptr + 4, value: token.inner)
-    assert!(!evm.raw_call(addr: caller, gas: 300000, value: 0, args_offset: ptr, args_len: 36))
+    let data = ptr::MemBuffer::alloc(36)
+    evm.mstore(addr: data.ptr, value: 1 << 224)
+    evm.mstore(addr: ptr::offset_bytes(data.ptr, 4), value: token.inner)
+    assert!(!evm.raw_call(addr: caller, gas: 300000, value: 0, args: data))
 
     // The token's revert data must arrive untouched: exactly one word
     // holding the marker.

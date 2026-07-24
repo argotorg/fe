@@ -1,6 +1,7 @@
 use core::option::Option
+use core::ptr
 use core::result::Result
-use std::evm::{Address, Call, Evm, RawMem, assert, mem}
+use std::evm::{Address, Call, Evm, RawMem, assert}
 use std::evm::crypto::{
     PrecompileError,
     blake2f,
@@ -29,6 +30,12 @@ const ECRECOVER_R: u256 = 0x51135217d5885b74d5ae8cd048417c9c166fa4caf45b3b5c9552
 const ECRECOVER_LOW_S: u256 = 0x0878b2f0cafb98fc3d0fbc7349118150d6972483bd2a4599df4313c251efbdf5
 const ECRECOVER_HIGH_S: u256 = 0xf7874d0f35046703c2f0438cb6ee7eade417b862f21e5aa1e08f4aca7e46834c
 
+type MemBuffer = ptr::MemBuffer
+
+fn buffer(_ ptr: *u8, _ len: u256) -> MemBuffer {
+    MemBuffer::from_raw_parts(ptr: ptr, len: len)
+}
+
 fn expect_word(_ result: Result<PrecompileError, u256>) -> u256 {
     match result {
         Result::Ok(value) => value,
@@ -54,7 +61,7 @@ fn expect_bytes(_ result: Result<PrecompileError, std::evm::MemoryBytes>) -> std
         Result::Ok(value) => value,
         Result::Err(_) => {
             assert(false)
-            std::evm::MemoryBytes::new(base: 0, len: 0)
+            std::evm::MemoryBytes::new(base: ptr::alloc_bytes(0), len: 0)
         }
     }
 }
@@ -69,12 +76,12 @@ fn expect_pair(_ result: Result<PrecompileError, (u256, u256)>) -> (u256, u256) 
     }
 }
 
-fn zero_memory(ptr: u256, len: u256)
+fn zero_memory(_ base: *u8, len: u256)
 uses (evm: mut Evm)
 {
     let mut offset: u256 = 0
     while offset < len {
-        evm.mstore(addr: ptr + offset, value: 0)
+        evm.mstore(addr: ptr::offset_bytes(base, offset), value: 0)
         offset += 32
     }
 }
@@ -105,40 +112,48 @@ fn expect_no_recovery(_ result: Result<PrecompileError, Option<u256>>) {
     }
 }
 
-fn compile_all_precompile_wrappers(_ ptr: u256) {
-    let _ = bls12_g1_add(offset: ptr)
-    let _ = bls12_g1_msm(offset: ptr, len: 160)
-    let _ = bls12_g2_add(offset: ptr)
-    let _ = bls12_g2_msm(offset: ptr, len: 288)
-    let _ = bls12_pairing(offset: ptr, len: 384)
-    let _ = bls12_map_fp_to_g1(offset: ptr)
-    let _ = bls12_map_fp2_to_g2(offset: ptr)
+fn expect_invalid_input<T>(_ result: own Result<PrecompileError, T>) {
+    match result {
+        Result::Err(PrecompileError::InvalidInputLength) => (),
+        Result::Err(PrecompileError::CallFailed) => assert(false),
+        Result::Ok(_) => assert(false),
+    }
+}
+
+fn compile_all_precompile_wrappers(base: *u8) {
+    let _ = bls12_g1_add(buffer(base, 256))
+    let _ = bls12_g1_msm(buffer(base, 160))
+    let _ = bls12_g2_add(buffer(base, 512))
+    let _ = bls12_g2_msm(buffer(base, 288))
+    let _ = bls12_pairing(buffer(base, 384))
+    let _ = bls12_map_fp_to_g1(buffer(base, 64))
+    let _ = bls12_map_fp2_to_g2(buffer(base, 128))
 }
 
 #[test]
 fn test_hash_and_copy_precompiles_return_results()
 uses (evm: mut Evm)
 {
-    let ptr = mem::alloc(64)
+    let ptr = ptr::alloc_bytes(64)
     evm.mstore(
         addr: ptr,
         value: 0x1111111111111111111111111111111111111111111111111111111111111111,
     )
     evm.mstore(
-        addr: ptr + 32,
+        addr: ptr::offset_bytes(ptr, 32),
         value: 0x2222222222222222222222222222222222222222222222222222222222222222,
     )
 
-    let sha = expect_word(sha256(offset: ptr, len: 0))
+    let sha = expect_word(sha256(buffer(ptr, 0)))
     assert(sha == 0xe3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855)
 
-    let ripemd = expect_word(ripemd160(offset: ptr, len: 0))
+    let ripemd = expect_word(ripemd160(buffer(ptr, 0)))
     assert(ripemd == 0x9c1185a5c5e9fc54612808977ee8f548b2258d31)
 
-    let copied = expect_bytes(identity(offset: ptr, len: 64))
+    let copied = expect_bytes(identity(buffer(ptr, 64)))
     assert(copied.len == 64)
     assert(evm.mload(copied.base) == evm.mload(ptr))
-    assert(evm.mload(copied.base + 32) == evm.mload(ptr + 32))
+    assert(evm.mload(ptr::offset_bytes(copied.base, 32)) == evm.mload(ptr::offset_bytes(ptr, 32)))
 }
 
 #[test]
@@ -169,9 +184,9 @@ uses (evm: mut Evm)
     )
     expect_no_recovery(ecrecover(hash: 0, v: 0, r: 0, s: 0))
 
-    let p256_input = mem::alloc(160)
-    zero_memory(ptr: p256_input, len: 160)
-    assert(!expect_bool(p256_verify(offset: p256_input)))
+    let p256_input = ptr::alloc_bytes(160)
+    zero_memory(p256_input, len: 160)
+    assert(!expect_bool(p256_verify(buffer(p256_input, 160))))
 }
 
 #[test]
@@ -180,14 +195,14 @@ uses (evm: mut Evm)
 {
     assert(expect_word(modexp(base: 2, exp: 5, modulus: 13)) == 6)
 
-    let raw = mem::alloc(192)
+    let raw = ptr::alloc_bytes(192)
     evm.mstore(addr: raw, value: 32)
-    evm.mstore(addr: raw + 32, value: 32)
-    evm.mstore(addr: raw + 64, value: 32)
-    evm.mstore(addr: raw + 96, value: 2)
-    evm.mstore(addr: raw + 128, value: 5)
-    evm.mstore(addr: raw + 160, value: 13)
-    let raw_out = expect_bytes(modexp_raw(offset: raw, len: 192, ret_len: 32))
+    evm.mstore(addr: ptr::offset_bytes(raw, 32), value: 32)
+    evm.mstore(addr: ptr::offset_bytes(raw, 64), value: 32)
+    evm.mstore(addr: ptr::offset_bytes(raw, 96), value: 2)
+    evm.mstore(addr: ptr::offset_bytes(raw, 128), value: 5)
+    evm.mstore(addr: ptr::offset_bytes(raw, 160), value: 13)
+    let raw_out = expect_bytes(modexp_raw(buffer(raw, 192), ret_len: 32))
     assert(evm.mload(raw_out.base) == 6)
 
     let sum = expect_pair(ec_add(ax: 0, ay: 0, bx: 0, by: 0))
@@ -204,34 +219,47 @@ uses (evm: mut Evm)
 fn test_raw_staticcall_copies_to_output_buffer()
 uses (evm: mut Evm)
 {
-    let ptr = mem::alloc(64)
-    zero_memory(ptr: ptr, len: 64)
-    let out = mem::alloc(64)
+    let ptr = ptr::alloc_bytes(64)
+    zero_memory(ptr, len: 64)
+    let out = ptr::alloc_bytes(64)
+    let mut ret = buffer(out, 64)
     assert(evm.raw_staticcall(
         addr: Address { inner: 4 },
         gas: 1000000,
-        args_offset: ptr,
-        args_len: 64,
-        ret_offset: out,
-        ret_len: 64,
+        args: buffer(ptr, 64),
+        ret: mut ret,
     ))
     assert(evm.mload(out) == 0)
-    assert(evm.mload(out + 32) == 0)
+    assert(evm.mload(ptr::offset_bytes(out, 32)) == 0)
 }
 
 #[test]
 fn test_new_fixed_buffer_wrappers_do_not_bubble_failure()
 uses (evm: mut Evm)
 {
-    let ptr = mem::alloc(224)
-    zero_memory(ptr: ptr, len: 224)
+    let ptr = ptr::alloc_bytes(224)
+    zero_memory(ptr, len: 224)
 
-    match blake2f(offset: ptr) {
+    match blake2f(buffer(ptr, 213)) {
         Result::Ok(_) => (),
         Result::Err(_) => (),
     }
 
-    let _ = kzg_point_evaluation(offset: ptr)
+    let _ = kzg_point_evaluation(buffer(ptr, 192))
 
     let _ = ptr
+}
+
+#[test]
+fn test_fixed_precompile_wrappers_reject_mismatched_buffer_lengths() {
+    let ptr = ptr::alloc_bytes(512)
+
+    expect_invalid_input(blake2f(buffer(ptr, 212)))
+    expect_invalid_input(blake2f(buffer(ptr, 214)))
+    expect_invalid_input(kzg_point_evaluation(buffer(ptr, 191)))
+    expect_invalid_input(bls12_g1_add(buffer(ptr, 255)))
+    expect_invalid_input(bls12_g2_add(buffer(ptr, 511)))
+    expect_invalid_input(bls12_map_fp_to_g1(buffer(ptr, 63)))
+    expect_invalid_input(bls12_map_fp2_to_g2(buffer(ptr, 127)))
+    expect_invalid_input(p256_verify(buffer(ptr, 159)))
 }

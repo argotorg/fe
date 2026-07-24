@@ -2135,11 +2135,12 @@ fn runtime_class_sort_key<'db>(db: &'db dyn MirDb, class: &RuntimeClass<'db>) ->
             ref_view_sort_key(db, view),
             runtime_class_sort_key(db, pointee)
         ),
-        RuntimeClass::RawAddr { space, target } => format!(
+        RuntimeClass::RawAddr { space, pointee } => format!(
             "raw:{}:{}",
             address_space_sort_key(*space),
-            target
-                .map(|layout| layout_sort_key(db, layout))
+            pointee
+                .as_deref()
+                .map(|pointee| runtime_class_sort_key(db, pointee))
                 .unwrap_or_default()
         ),
     }

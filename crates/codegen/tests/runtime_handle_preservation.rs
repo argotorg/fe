@@ -5,8 +5,9 @@ use hir::hir_def::TopLevelMod;
 use mir::runtime::{AddressSpaceKind, RefKind};
 use mir::{
     IntrinsicArithBinOp, Layout, LayoutId, PlaceElem, PlaceRoot, RExpr, RLocalId, RStmt,
-    RuntimeBody, RuntimeBuiltin, RuntimeCarrier, RuntimeClass, RuntimeInstance, RuntimeLocalRoot,
-    RuntimePackage, build_runtime_package, build_test_runtime_package,
+    RTerminator, RuntimeBody, RuntimeBuiltin, RuntimeCarrier, RuntimeClass, RuntimeInstance,
+    RuntimeLocalRoot, RuntimePackage, RuntimePlace, build_runtime_package,
+    build_test_runtime_package,
 };
 use url::Url;
 
@@ -430,112 +431,224 @@ fn view_receiver_with_storage_aggregate_keeps_receiver_runtime_visible() {
 }
 
 #[test]
-fn effect_handle_from_raw_helpers_build_ordinary_values_in_rmir() {
+fn pointer_helpers_use_native_raw_addr_transport_in_rmir() {
     with_runtime_package!(
-        "effect_handle_from_raw_helpers_build_ordinary_values_in_rmir.fe",
-        include_str!("fixtures/effect_handle_field_deref.fe").to_string(),
+        "pointer_helpers_use_native_raw_addr_transport_in_rmir.fe",
+        r#"
+pub fn pointer_roundtrip() -> u256 {
+    let ptr = core::ptr::alloc<u256>()
+    *ptr = 7
+    *ptr
+}
+"#
+        .to_string(),
         |db, package| {
-            let from_raw_helpers = package
+            let test_fn = package
                 .functions(&db)
                 .iter()
                 .copied()
-                .filter(|function| function.symbol(&db).contains("from_raw"))
-                .collect::<Vec<_>>();
+                .find(|function| function.symbol(&db).contains("pointer_roundtrip"))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "generated pointer_roundtrip runtime function; symbols={:?}",
+                        package
+                            .functions(&db)
+                            .iter()
+                            .map(|function| function.symbol(&db))
+                            .collect::<Vec<_>>()
+                    )
+                });
+            let body = test_fn.instance(&db).body(&db);
             assert!(
-                !from_raw_helpers.is_empty(),
-                "expected generated from_raw helpers in runtime package"
+                body.blocks
+                    .iter()
+                    .flat_map(|block| block.stmts.iter())
+                    .any(|stmt| {
+                        matches!(
+                            stmt,
+                            RStmt::Store {
+                                dst: RuntimePlace {
+                                    root: PlaceRoot::Ptr {
+                                        space: AddressSpaceKind::Memory,
+                                        ..
+                                    },
+                                    ..
+                                },
+                                ..
+                            }
+                        )
+                    }),
+                "native pointer writes should lower to memory pointer stores:\n{body:#?}"
             );
-
-            for function in from_raw_helpers {
-                let body = function.instance(&db).body(&db);
-                assert!(
-                    body.blocks
-                        .iter()
-                        .flat_map(|block| block.stmts.iter())
-                        .any(|stmt| {
-                            matches!(
-                                stmt,
-                                RStmt::Assign {
-                                    expr: RExpr::AggregateMake { .. },
-                                    ..
-                                }
-                            )
-                        }),
-                    "from_raw helper should build the ordinary handle value:\n{body:#?}"
-                );
-                assert!(
-                    !body
-                        .blocks
-                        .iter()
-                        .flat_map(|block| block.stmts.iter())
-                        .any(|stmt| {
-                            matches!(
-                                stmt,
-                                RStmt::Assign {
-                                    expr: RExpr::AddrOf { .. } | RExpr::MaterializeToObject { .. },
-                                    ..
-                                } | RStmt::CopyInto { .. }
-                            )
-                        }),
-                    "from_raw helper should build its value directly without temporary object storage:\n{body:#?}"
-                );
-            }
+            assert!(
+                body.blocks
+                    .iter()
+                    .flat_map(|block| block.stmts.iter())
+                    .any(|stmt| {
+                        matches!(
+                            stmt,
+                            RStmt::Assign {
+                                expr: RExpr::Load {
+                                    place: RuntimePlace {
+                                        root: PlaceRoot::Ptr {
+                                            space: AddressSpaceKind::Memory,
+                                            ..
+                                        },
+                                        ..
+                                    },
+                                },
+                                ..
+                            }
+                        )
+                    }),
+                "native pointer reads should lower to memory pointer loads:\n{body:#?}"
+            );
         }
     );
 }
 
 #[test]
-fn mem_ptr_from_raw_helpers_build_ordinary_values_in_rmir() {
+fn default_view_pointer_params_use_direct_pointer_transport() {
     with_runtime_package!(
-        "mem_ptr_from_raw_helpers_build_ordinary_values_in_rmir.fe",
-        include_str!("fixtures/raw_log_emit.fe").to_string(),
+        "default_view_pointer_params_use_direct_pointer_transport.fe",
+        r#"
+struct Data {
+    value: u256,
+}
+
+fn read(data: *Data) -> u256 {
+    data.value
+}
+
+fn write(data: *Data, value: u256) {
+    data.value = value
+}
+
+fn identity(data: *Data) -> *Data {
+    data
+}
+
+fn replace(mut _ data: *Data, other: *Data) -> u256 {
+    data = other
+    data.value
+}
+
+pub fn entry() -> u256 {
+    let data = core::ptr::alloc<Data>()
+    let other = core::ptr::alloc<Data>()
+    data.value = 7
+    other.value = 9
+    write(data, 8)
+    read(identity(data)) + replace(data, other)
+}
+"#
+        .to_string(),
         |db, package| {
-            let from_raw_helpers = package
-                .functions(&db)
-                .iter()
-                .copied()
-                .filter(|function| function.symbol(&db).contains("from_raw"))
-                .collect::<Vec<_>>();
+            let read = runtime_body_for_symbol(&db, package, "read");
+            let param = read.signature.params[0].local;
             assert!(
-                !from_raw_helpers.is_empty(),
-                "expected generated MemPtr::from_raw helper in runtime package"
+                matches!(
+                    (
+                        &read.local(param).unwrap().carrier,
+                        &read.local(param).unwrap().root
+                    ),
+                    (
+                        RuntimeCarrier::Value(RuntimeClass::RawAddr {
+                            space: AddressSpaceKind::Memory,
+                            ..
+                        }),
+                        RuntimeLocalRoot::None,
+                    )
+                ),
+                "default-view pointer params should use their pointer value directly:\n{read:#?}"
+            );
+            assert!(
+                runtime_body_stmts(&read).any(|stmt| {
+                    matches!(
+                        stmt,
+                        RStmt::Assign {
+                            expr: RExpr::Load {
+                                place: RuntimePlace {
+                                    root: PlaceRoot::Ptr { addr, .. },
+                                    path,
+                                },
+                            },
+                            ..
+                        } if *addr == param
+                            && matches!(path.as_ref(), [PlaceElem::Field(_)])
+                    )
+                }),
+                "pointer field reads should project from the direct pointer value:\n{read:#?}"
             );
 
-            for function in from_raw_helpers {
-                let body = function.instance(&db).body(&db);
-                assert!(
-                    body.blocks
-                        .iter()
-                        .flat_map(|block| block.stmts.iter())
-                        .any(|stmt| {
-                            matches!(
-                                stmt,
-                                RStmt::Assign {
-                                    expr: RExpr::AggregateMake { .. },
-                                    ..
-                                }
-                            )
+            let write = runtime_body_for_symbol(&db, package, "write");
+            let param = write.signature.params[0].local;
+            assert!(
+                matches!(
+                    (
+                        &write.local(param).unwrap().carrier,
+                        &write.local(param).unwrap().root
+                    ),
+                    (
+                        RuntimeCarrier::Value(RuntimeClass::RawAddr {
+                            space: AddressSpaceKind::Memory,
+                            ..
                         }),
-                    "MemPtr::from_raw should build the ordinary pointer value:\n{body:#?}"
-                );
-                assert!(
-                    !body
-                        .blocks
-                        .iter()
-                        .flat_map(|block| block.stmts.iter())
-                        .any(|stmt| {
-                            matches!(
-                                stmt,
-                                RStmt::Assign {
-                                    expr: RExpr::ProviderFromRaw { .. }
-                                        | RExpr::WordToRawAddr { .. },
-                                    ..
-                                }
-                            )
+                        RuntimeLocalRoot::None,
+                    )
+                ) && runtime_body_stmts(&write).any(|stmt| {
+                    matches!(
+                        stmt,
+                        RStmt::Store {
+                            dst: RuntimePlace {
+                                root: PlaceRoot::Ptr { addr, .. },
+                                path,
+                            },
+                            ..
+                        } if *addr == param
+                            && matches!(path.as_ref(), [PlaceElem::Field(_)])
+                    )
+                }),
+                "pointee writes should not materialize a slot for the pointer value:\n{write:#?}"
+            );
+
+            let identity = runtime_body_for_symbol(&db, package, "identity");
+            let param = identity.signature.params[0].local;
+            assert!(
+                matches!(
+                    (
+                        &identity.local(param).unwrap().carrier,
+                        &identity.local(param).unwrap().root,
+                    ),
+                    (
+                        RuntimeCarrier::Value(RuntimeClass::RawAddr {
+                            space: AddressSpaceKind::Memory,
+                            ..
                         }),
-                    "MemPtr::from_raw must not use backend transport inside its ordinary method body:\n{body:#?}"
-                );
-            }
+                        RuntimeLocalRoot::None,
+                    )
+                ),
+                "pointer value reads should not load the pointee:\n{identity:#?}"
+            );
+
+            let replace = runtime_body_for_symbol(&db, package, "replace");
+            let param = replace.signature.params[0].local;
+            assert!(
+                matches!(
+                    (
+                        &replace.local(param).unwrap().carrier,
+                        &replace.local(param).unwrap().root,
+                    ),
+                    (
+                        RuntimeCarrier::Value(RuntimeClass::RawAddr {
+                            space: AddressSpaceKind::Memory,
+                            ..
+                        }),
+                        RuntimeLocalRoot::Slot(_),
+                    )
+                ),
+                "reassigned pointer values still require addressable local storage:\n{replace:#?}"
+            );
         }
     );
 }
@@ -1344,7 +1457,7 @@ fn entry() -> u8 {
                 .filter_map(|(idx, local)| {
                     matches!(
                         local.carrier,
-                        mir::RuntimeCarrier::Value(RuntimeClass::RawAddr { target: None, .. })
+                        mir::RuntimeCarrier::Value(RuntimeClass::RawAddr { pointee: None, .. })
                     )
                     .then_some(RLocalId::from_u32(idx as u32))
                 })
@@ -1427,6 +1540,45 @@ fn entry_neg() -> i256 {
                     .all(|function| !function.symbol(&db).contains("__checked_")),
                 "checked extern intrinsics should lower directly through rMIR expressions, not as runtime functions:\n{:#?}",
                 package.functions(&db)
+            );
+        }
+    );
+}
+
+#[test]
+fn empty_revert_intrinsic_has_no_synthetic_pointer_operand() {
+    with_runtime_package!(
+        "empty_revert_intrinsic_has_no_synthetic_pointer_operand.fe",
+        r#"
+use std::abi::bytes_from_words_prefix
+use std::evm::RawMem
+
+fn trigger() uses (mem: mut RawMem) {
+    let _ = bytes_from_words_prefix<33, 1>([0])
+}
+"#,
+        |db, package| {
+            let body = runtime_body_for_symbol(&db, package, "bytes_from_words_prefix");
+            assert!(
+                body.blocks
+                    .iter()
+                    .any(|block| matches!(block.terminator, RTerminator::RevertEmpty)),
+                "empty stdlib reverts should remain operand-free through rMIR:\n{body:#?}"
+            );
+
+            let functions = package.functions(&db);
+            let function = functions
+                .iter()
+                .find(|function| function.symbol(&db).contains("bytes_from_words_prefix"))
+                .expect("instantiated bytes_from_words_prefix function");
+            let symbol = function.symbol(&db);
+            let output = emit_runtime_package_sonatina_ir_optimized(&db, &package, OptLevel::O0)
+                .expect("Sonatina IR");
+            let function_ir = sonatina_function_body(&output, &symbol);
+            assert!(
+                function_ir.contains("evm_revert 0.i256 0.i256")
+                    && !function_ir.contains("evm_malloc 0.i256"),
+                "empty revert lowering must not manufacture a pointer:\n{function_ir}"
             );
         }
     );
@@ -2202,6 +2354,70 @@ fn exercise() {
                 output.contains("enum.set_tag"),
                 "fieldless enum object copies should set the destination enum tag explicitly:\n{output}"
             );
+        }
+    );
+}
+
+#[test]
+fn capability_gated_provider_ref_conversion_preserves_transport_in_rmir() {
+    with_runtime_package!(
+        "capability_gated_provider_ref_conversion_preserves_transport_in_rmir.fe",
+        include_str!("fixtures/effect_handle_field_deref.fe").to_string(),
+        |db, package| {
+            assert!(
+                package
+                    .functions(&db)
+                    .iter()
+                    .all(|function| !function.symbol(&db).ends_with("from_raw")),
+                "raw effect-handle constructors must not be emitted as callable helpers"
+            );
+
+            let provider_ref_conversions = package
+                .functions(&db)
+                .iter()
+                .copied()
+                .filter(|function| {
+                    function
+                        .instance(&db)
+                        .body(&db)
+                        .blocks
+                        .iter()
+                        .flat_map(|block| block.stmts.iter())
+                        .any(|stmt| {
+                            matches!(
+                                stmt,
+                                RStmt::Assign {
+                                    expr: RExpr::ProviderRefFromRaw { .. },
+                                    ..
+                                }
+                            )
+                        })
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                !provider_ref_conversions.is_empty(),
+                "expected capability-backed raw-to-provider conversion in runtime package"
+            );
+
+            for function in provider_ref_conversions {
+                let body = function.instance(&db).body(&db);
+                assert!(
+                    !body
+                        .blocks
+                        .iter()
+                        .flat_map(|block| block.stmts.iter())
+                        .any(|stmt| {
+                            matches!(
+                                stmt,
+                                RStmt::Assign {
+                                    expr: RExpr::AddrOf { .. } | RExpr::MaterializeToObject { .. },
+                                    ..
+                                } | RStmt::CopyInto { .. }
+                            )
+                        }),
+                    "raw-to-provider conversion should not materialize or take the address of the raw slot:\n{body:#?}"
+                );
+            }
         }
     );
 }

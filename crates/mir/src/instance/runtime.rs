@@ -132,7 +132,7 @@ fn lower_runtime_body<'db>(
             lower_to_rmir(db, instance)?
         }
         RuntimeInstanceSource::Synthetic(synthetic) => {
-            lower_synthetic_runtime_body(db, instance, synthetic.spec(db).clone())
+            lower_synthetic_runtime_body(db, instance, synthetic.spec(db).clone())?
         }
     };
     // Anchor lowering to the canonical class discipline: in debug builds,

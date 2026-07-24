@@ -1,11 +1,12 @@
+use core::ptr
 use std::evm::RawOps
 
 enum E { A, B }
 
 fn f(e: E) uses (ops: RawOps) {
     match e {
-        E::A => { ops.return_data(offset: 0, len: 0) }
-        E::B => { ops.return_data(offset: 0, len: 0) }
+        E::A => { ops.return_data(data: ptr::MemBuffer::empty()) }
+        E::B => { ops.return_data(data: ptr::MemBuffer::empty()) }
     }
 }
 

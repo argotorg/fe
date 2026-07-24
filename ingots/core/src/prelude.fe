@@ -1,5 +1,6 @@
 pub use super::{
     clone::Clone,
+    convert::Into,
     default::Default,
     marker::Copy,
     error::ErrorVariant,
@@ -9,6 +10,7 @@ pub use super::{
     num::IntDowncast,
     num::UnsignedAbs,
     option::Option::{self, *},
+    ptr::{MemArray, MemBuffer, as_bytes, cast, offset, offset_bytes},
     result::Result::{self, *},
     todo, panic,
 }

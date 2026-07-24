@@ -1,0 +1,20 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/effect_handle_untrusted_raw.fe
+---
+error[6-0022]: invalid `EffectHandle::Raw` type
+  ┌─ effect_handle_untrusted_raw.fe:7:16
+  │
+7 │     type Raw = u256
+  │                ^^^^ integer-backed handles are reserved for compiler-provided libraries
+  │
+  = user-defined effect handles must use `*Target` and can only provide memory effects
+
+error[6-0022]: invalid `EffectHandle::Raw` type
+   ┌─ effect_handle_untrusted_raw.fe:19:16
+   │
+19 │     type Raw = u256
+   │                ^^^^ integer-backed handles are reserved for compiler-provided libraries
+   │
+   = user-defined effect handles must use `*Target` and can only provide memory effects

@@ -15,6 +15,51 @@ use crate::{
 pub static BUILTIN_CORE_BASE_URL: &str = "builtin-core:/";
 pub static BUILTIN_STD_BASE_URL: &str = "builtin-std:/";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuiltinLibrary {
+    Core,
+    Std,
+}
+
+impl BuiltinLibrary {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Core => "core",
+            Self::Std => "std",
+        }
+    }
+
+    fn scheme(self) -> &'static str {
+        match self {
+            Self::Core => "builtin-core",
+            Self::Std => "builtin-std",
+        }
+    }
+}
+
+/// Returns whether `ingot` is authorized to act as compiler-provided library
+/// source.
+///
+/// Embedded libraries carry authority in their URL scheme. A source workspace
+/// may explicitly replace one by registering a unique member under the
+/// reserved `core` or `std` name; config metadata alone is not authoritative.
+pub fn is_authorized_builtin_library(
+    db: &dyn InputDb,
+    ingot: Ingot<'_>,
+    library: BuiltinLibrary,
+) -> bool {
+    let base = ingot.base(db);
+    if base.scheme() == library.scheme() {
+        return true;
+    }
+    let graph = db.dependency_graph();
+    let Some(workspace_root) = graph.workspace_root_for_member(db, &base) else {
+        return false;
+    };
+    let members = graph.workspace_members_by_name(db, &workspace_root, &library.name().into());
+    matches!(members.as_slice(), [member] if member.url == base)
+}
+
 fn is_library_file(path: &Utf8Path) -> bool {
     matches!(path.file_name(), Some("fe.toml")) || matches!(path.extension(), Some("fe"))
 }
@@ -161,10 +206,16 @@ impl<T: InputDb> HasBuiltinStd for T {
 
 #[cfg(test)]
 mod tests {
-    use camino::Utf8Path;
+    use camino::{Utf8Path, Utf8PathBuf};
+    use url::Url;
 
-    use super::{HasBuiltinCore, HasBuiltinStd, is_library_file};
-    use crate::define_input_db;
+    use super::{
+        BuiltinLibrary, HasBuiltinCore, HasBuiltinStd, is_authorized_builtin_library,
+        is_library_file,
+    };
+    use crate::{
+        InputDb, define_input_db, dependencies::WorkspaceMemberRecord, ingot::IngotBaseUrl,
+    };
 
     define_input_db!(TestDb);
 
@@ -183,6 +234,12 @@ mod tests {
         let core = db.builtin_core();
         let std = db.builtin_std();
 
+        assert!(is_authorized_builtin_library(
+            &db,
+            core,
+            BuiltinLibrary::Core
+        ));
+        assert!(is_authorized_builtin_library(&db, std, BuiltinLibrary::Std));
         assert!(
             core.files(&db).iter().next().is_some(),
             "builtin core ingot should contain indexed files"
@@ -191,5 +248,44 @@ mod tests {
             std.files(&db).iter().next().is_some(),
             "builtin std ingot should contain indexed files"
         );
+    }
+
+    #[test]
+    fn only_resolved_workspace_members_can_replace_builtin_library_authority() {
+        let mut db = TestDb::default();
+        let workspace_root = Url::parse("file:///workspace/").unwrap();
+        let std_base = workspace_root.join("std/").unwrap();
+        std_base.touch(
+            &mut db,
+            Utf8PathBuf::from("fe.toml"),
+            Some("[ingot]\nname = \"std\"\nversion = \"0.1.0\"\n".to_string()),
+        );
+        std_base.touch(
+            &mut db,
+            Utf8PathBuf::from("src/lib.fe"),
+            Some(String::new()),
+        );
+        {
+            let std = std_base.ingot(&db).unwrap();
+            assert!(!is_authorized_builtin_library(
+                &db,
+                std,
+                BuiltinLibrary::Std
+            ));
+        }
+
+        let graph = db.dependency_graph();
+        graph.register_workspace_member(
+            &mut db,
+            &workspace_root,
+            WorkspaceMemberRecord {
+                name: "std".into(),
+                version: None,
+                path: Utf8PathBuf::from("std"),
+                url: std_base,
+            },
+        );
+        let std = workspace_root.join("std/").unwrap().ingot(&db).unwrap();
+        assert!(is_authorized_builtin_library(&db, std, BuiltinLibrary::Std));
     }
 }

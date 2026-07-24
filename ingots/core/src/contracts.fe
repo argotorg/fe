@@ -1,5 +1,6 @@
 use super::abi::{Abi, AbiDecoder, AbiSize, ByteInput, Decode, Encode, encode_single_root_alloc}
-use super::effect_ref::StorPtr
+use super::convert::Into
+use super::ptr::MemBuffer
 
 /// Host interface required by compiler-generated contract entrypoints.
 ///
@@ -14,17 +15,13 @@ pub trait ContractHost {
     fn input(self) -> Self::Input
     fn init_input<F>(mut self, _: F) -> Self::InitInput
 
-    fn field<T>(mut self, _: u256) -> StorPtr<T>
-    fn init_field<T>(mut self, _ slot: u256) -> StorPtr<T> {
-        self.field(slot)
-    }
-
     fn create_contract<F>(mut self, _: F) -> !
     fn abort(self) -> !
 
-    fn return_bytes(self, ptr: u256, len: u256) -> !
+    fn return_bytes<B>(self, data: own B) -> !
+        where B: Into<MemBuffer>
     fn return_unit(self) -> ! {
-        self.return_bytes(ptr: 0, len: 0)
+        self.return_bytes(data: MemBuffer::empty())
     }
 
     fn runtime_selector<A: Abi>(self) -> A::Selector {
@@ -43,8 +40,8 @@ pub trait ContractHost {
     fn return_value<A: Abi, T>(mut self, _ value: own T) -> !
         where T: Encode<A> + AbiSize
     {
-        let out: (u256, u256) = encode_single_root_alloc<A, T>(value)
-        self.return_bytes(ptr: out.0, len: out.1)
+        let out: (*u8, u256) = encode_single_root_alloc<A, T>(value)
+        self.return_bytes(data: MemBuffer::from_raw_parts(ptr: out.0, len: out.1))
     }
 }
 

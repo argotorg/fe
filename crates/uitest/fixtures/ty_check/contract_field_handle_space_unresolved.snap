@@ -4,12 +4,12 @@ expression: diags
 input_file: fixtures/ty_check/contract_field_handle_space_unresolved.fe
 ---
 error[3-0041]: cannot determine the address space of a contract field
-   ┌─ contract_field_handle_space_unresolved.fe:24:16
+   ┌─ contract_field_handle_space_unresolved.fe:21:16
    │
- 7 │ struct Ptr<T, const SP: AddressSpace = _> { raw: u256 }
+ 7 │ struct Ptr<T, const SP: AddressSpace = _> { raw: *T }
    │        --- `Ptr` is defined here
    ·
-24 │     mut value: Ptr<u256>,
+21 │     mut value: Ptr<u256>,
    │                ^^^^^^^^^ the address space of this contract field's handle could not be determined
    │
    = the `EffectHandle` implementation's `const SPACE: AddressSpace` must resolve to a concrete address space; it cannot be left inferred (`_`) or depend on an unresolved generic parameter

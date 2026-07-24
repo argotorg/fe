@@ -1,8 +1,12 @@
-use core::EffectHandle
+use core::{EffectHandle, ptr}
 use core::contracts::ContractHost
-use std::evm::{Evm, MemPtr, RawMem, RawStorage, StorPtr}
+use std::evm::{Evm, RawStorage, StorPtr}
 
 struct Empty {}
+
+struct Word {
+    value: u256,
+}
 
 fn empty_effect() -> u256
 uses (e: Empty)
@@ -10,10 +14,10 @@ uses (e: Empty)
     1
 }
 
-fn mem_handle_raw() -> u256
-uses (p: MemPtr<Empty>)
+fn mem_value() -> u256
+uses (p: *Word)
 {
-    p.raw()
+    p.value
 }
 
 fn stor_handle_raw() -> u256
@@ -30,7 +34,7 @@ fn host_input_len<H>(_ host: mut H) -> u256
 
 fn require_msg(_ evm: mut Evm, condition: bool) {
     if !condition {
-        evm.revert(offset: 0, len: 0)
+        evm.revert(data: ptr::MemBuffer::empty())
     }
 }
 
@@ -41,24 +45,25 @@ fn check_runtime_value(_ evm: mut Evm, value: u256) -> u256 {
 
 #[test]
 fn test_zst_target_effect_handles_keep_runtime_carriers() uses (evm: Evm) {
-    let mp: MemPtr<Empty> = evm.mem_ptr(0x120)
+    let raw = ptr::alloc<Word>()
+    *raw = Word { value: 120 }
     let sp: StorPtr<Empty> = evm.stor_ptr(7)
-    let mem = with (mp) {
-        empty_effect() + mem_handle_raw()
+    let mem = with (raw) {
+        mem_value()
     }
     let storage = with (sp) {
         stor_handle_raw()
     }
 
-    assert!(mem == 0x121)
+    assert!(mem == 120)
     assert!(storage == 7)
 }
 
 #[test]
-fn effect_handle_read_write_helpers_delegate_to_the_free_functions() uses (evm: Evm) {
-    let mp: MemPtr<u256> = evm.mem_ptr(0x160)
-    mp.write(41)
-    assert!(mp.read() == 41)
+fn pointers_and_effect_handles_support_read_write() uses (evm: Evm) {
+    let mp = ptr::alloc<u256>()
+    *mp = 41
+    assert!(*mp == 41)
 
     let sp: StorPtr<u256> = evm.stor_ptr(0xabc)
     sp.write(42)

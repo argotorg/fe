@@ -2,7 +2,7 @@
 pub use core::prelude::*
 
 // ABI encoding traits and the Solidity ABI provider.
-pub use core::abi::{Abi, AbiDecoder, AbiEncoder, AbiSize, Decode, Encode}
+pub use core::abi::{Abi, AbiDecoder, AbiSize, Decode, Encode}
 pub use super::abi::{Bytes, Sol, Text, Vec}
 pub use super::abi::sol::sol
 

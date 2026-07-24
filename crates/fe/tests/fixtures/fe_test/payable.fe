@@ -1,3 +1,4 @@
+use core::ptr
 use std::evm::{Evm, Ctx, Address}
 
 pub contract PayableBox uses (ctx: Ctx) {
@@ -149,7 +150,8 @@ fn test_balance() uses (evm: mut Evm) {
     assert!(evm.gasprice() == 0)
     assert!(evm.extcodesize(addr) > 0)
     assert!(evm.extcodehash(addr) != 0)
-    evm.extcodecopy(addr: addr, dest: 0, offset: 0, len: 0)
+    let mut empty = ptr::MemBuffer::empty()
+    evm.extcodecopy(addr: addr, dest: mut empty, offset: 0)
     assert!(evm.blobhash(0) == 0)
     let blob_base_fee = evm.blobbasefee()
     assert!(blob_base_fee == blob_base_fee)

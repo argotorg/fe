@@ -1,9 +1,10 @@
+use core::ptr
 use std::evm::RawOps
 
-pub fn hash(ptr: u256, len: u256) -> u256 uses (ops: RawOps) {
-    ops.keccak256(offset: ptr, len: len)
+pub fn hash(data: *u8, len: u256) -> u256 uses (ops: RawOps) {
+    ops.keccak256(data: ptr::MemBuffer::from_raw_parts(ptr: data, len: len))
 }
 
 pub fn main() -> u256 uses (ops: RawOps) {
-    hash(0, 32)
+    hash(ptr::alloc_bytes(32), 32)
 }

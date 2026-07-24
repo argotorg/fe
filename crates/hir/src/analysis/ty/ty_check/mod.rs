@@ -21,7 +21,7 @@ pub use crate::analysis::ty::ProviderAddressSpace;
 use crate::analysis::ty::corelib::resolve_lib_type_path;
 use crate::analysis::ty::fold::TyFoldable;
 use crate::analysis::ty::method_table::ProbedMethod;
-use crate::analysis::ty::provider::{ProviderKind, ProviderLayoutEvidence, provider_semantics};
+use crate::analysis::ty::provider::{ProviderKind, provider_semantics};
 use crate::analysis::ty::trait_lower::lower_impl_trait;
 use crate::analysis::ty::trait_resolution::constraint::{
     PredicateSource, collect_func_decl_constraint_pairs,
@@ -403,7 +403,7 @@ pub(super) fn check_body<'db>(
     };
 
     checker.run();
-    let (mut diags, typed_body) = checker.finish();
+    let (mut diags, mut typed_body) = checker.finish();
     if let BodyOwner::Func(func) = owner
         && func.is_const(db)
         && !func.is_extern(db)
@@ -414,6 +414,7 @@ pub(super) fn check_body<'db>(
             &typed_body,
         ));
     }
+    typed_body.has_diagnostics = !diags.is_empty();
 
     (diags, typed_body)
 }
@@ -514,6 +515,7 @@ fn typed_body_for_bodyless_func<'db>(
         .collect();
     TypedBody {
         body: None,
+        has_diagnostics: false,
         result_ty,
         assumptions,
         pat_ty: SecondaryMap::new(),
@@ -695,11 +697,7 @@ impl<'db> TyChecker<'db> {
         effects: crate::hir_def::EffectParamListId<'db>,
     ) {
         for (idx, effect) in effects.data(self.db).iter().enumerate() {
-            let Some(key_path) = effect
-                .key_path
-                .to_opt()
-                .filter(|path| path.ident(self.db).is_present())
-            else {
+            let Some(key_ty) = effect.key_ty.to_opt() else {
                 continue;
             };
 
@@ -708,14 +706,14 @@ impl<'db> TyChecker<'db> {
                     self.db,
                     func,
                     idx,
-                    key_path,
+                    key_ty,
                     self.env.assumptions(),
                 ),
                 ResolvedEffectKey::Type(_) | ResolvedEffectKey::Trait(_)
             ) {
                 self.push_diag(BodyDiag::InvalidEffectKey {
                     owner: EffectParamOwner::Func(func),
-                    key: key_path,
+                    key: key_ty,
                     idx,
                 });
             }
@@ -763,17 +761,13 @@ impl<'db> TyChecker<'db> {
         .map(|registration| registration.provider_ty);
 
         for (idx, effect) in effects.data(self.db).iter().enumerate() {
-            let Some(key_path) = effect
-                .key_path
-                .to_opt()
-                .filter(|path| path.ident(self.db).is_present())
-            else {
+            let Some(key_ty) = effect.key_ty.to_opt() else {
                 continue;
             };
 
             // Labeled effects are always type/trait keyed: `name: Type`.
             if effect.name.is_some() {
-                match resolve_effect_key(self.db, key_path, contract.scope(), assumptions) {
+                match resolve_effect_key(self.db, key_ty, contract.scope(), assumptions) {
                     ResolvedEffectKey::Trait(schema) => {
                         let Some(root_effect_ty) = root_effect_ty else {
                             continue;
@@ -805,7 +799,7 @@ impl<'db> TyChecker<'db> {
                         if !given.is_zero_sized(self.db) {
                             self.push_diag(BodyDiag::ContractRootEffectTypeNotZeroSized {
                                 owner,
-                                key: key_path,
+                                key: key_ty,
                                 idx,
                                 given,
                             });
@@ -814,7 +808,7 @@ impl<'db> TyChecker<'db> {
                     ResolvedEffectKey::Invalid | ResolvedEffectKey::Other => {
                         self.push_diag(BodyDiag::InvalidEffectKey {
                             owner,
-                            key: key_path,
+                            key: key_ty,
                             idx,
                         });
                     }
@@ -840,7 +834,7 @@ impl<'db> TyChecker<'db> {
                             binding.provider.source
                     {
                         self.push_diag(BodyDiag::ImmutableContractFieldMutBinding {
-                            primary: owner.effect_param_path_span(self.db, idx),
+                            primary: owner.effect_param_ty_span(self.db, idx),
                             field: binding.requirement.binding_name,
                             field_span: crate::hir_def::FieldParent::Contract(field.contract)
                                 .field_name_span(field.index as usize),
@@ -850,7 +844,7 @@ impl<'db> TyChecker<'db> {
                 _ => {
                     self.push_diag(BodyDiag::InvalidEffectKey {
                         owner,
-                        key: key_path,
+                        key: key_ty,
                         idx,
                     });
                 }
@@ -1829,17 +1823,6 @@ impl<'db> TyChecker<'db> {
                 value_ty: self.normalize_ty(value_ty),
             };
         }
-        let semantics = provider_semantics(self.db, self.env.scope(), self.env.assumptions(), ty);
-        if matches!(
-            semantics.evidence,
-            ProviderLayoutEvidence::ResolvedHandle(_)
-        ) && let Some(target_ty) = semantics.target_ty
-        {
-            return BindingInterfaceShape::DirectCarrier {
-                target_ty: self.normalize_ty(target_ty),
-            };
-        }
-
         let provider = match binding {
             LocalBinding::EffectParam {
                 site, provider_idx, ..
@@ -1851,6 +1834,12 @@ impl<'db> TyChecker<'db> {
             } => self.env.resolved_provider_binding(site, idx),
             LocalBinding::Local { .. } | LocalBinding::Param { .. } => None,
         };
+        let semantics = provider_semantics(self.db, self.env.scope(), self.env.assumptions(), ty);
+        if let Some(target_ty) = semantics.binding_target_ty(self.db, provider.is_some()) {
+            return BindingInterfaceShape::DirectCarrier {
+                target_ty: self.normalize_ty(target_ty),
+            };
+        }
         provider.map_or(BindingInterfaceShape::OrdinaryValue, |provider| {
             BindingInterfaceShape::ProviderValue {
                 kind: provider.semantics.kind,
@@ -2577,13 +2566,20 @@ pub enum EffectPassMode {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum EffectArgLayoutView {
+    Direct,
+    ProviderTarget,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct ResolvedEffectArg<'db> {
     pub param_idx: usize,
     pub binding_idx: u32,
-    pub key: PathId<'db>,
+    pub key: HirTyId<'db>,
     pub arg: EffectArg<'db>,
     pub pass_mode: EffectPassMode,
+    pub layout_view: EffectArgLayoutView,
     pub required_mut: bool,
     pub key_kind: EffectKeyKind,
     pub instantiated_key_ty: Option<TyId<'db>>,
@@ -2632,6 +2628,7 @@ entity_impl!(ExprPlaceId);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypedBody<'db> {
     body: Option<Body<'db>>,
+    has_diagnostics: bool,
     result_ty: TyId<'db>,
     assumptions: PredicateListId<'db>,
     pat_ty: SecondaryMap<PatId, Option<TyId<'db>>>,
@@ -3071,7 +3068,14 @@ impl<'db> TypedBody<'db> {
         self.result_ty
     }
 
-    pub(crate) fn has_smir_lowering_blocker(&self, db: &'db dyn HirAnalysisDb) -> bool {
+    pub(crate) fn has_smir_lowering_blocking_diagnostics(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> bool {
+        self.has_diagnostics && self.has_smir_lowering_blocker(db)
+    }
+
+    fn has_smir_lowering_blocker(&self, db: &'db dyn HirAnalysisDb) -> bool {
         let Some(body) = self.body else {
             return false;
         };
@@ -3098,7 +3102,16 @@ impl<'db> TypedBody<'db> {
         let Partial::Present(expr_data) = expr_data else {
             return true;
         };
+        let body = self
+            .body
+            .expect("SMIR lowering blocker check requires a typed HIR body");
         let expr_ty = self.expr_ty(db, expr);
+        let is_pointer_deref = |expr: ExprId| {
+            matches!(
+                expr.data(db, body),
+                Partial::Present(Expr::Un(_, crate::hir_def::expr::UnOp::Deref))
+            )
+        };
 
         match expr_data {
             Expr::Path(_) => {
@@ -3112,11 +3125,19 @@ impl<'db> TypedBody<'db> {
             Expr::Assert(_) => expr_ty.has_invalid(db),
             Expr::RecordInit(..) => self.record_init_lowering(expr).is_none(),
             Expr::Un(inner, crate::hir_def::expr::UnOp::Mut | crate::hir_def::expr::UnOp::Ref) => {
-                expr_ty.has_invalid(db) && self.expr_place(*inner).is_none()
+                expr_ty.has_invalid(db)
+                    && self.expr_place(*inner).is_none()
+                    && !is_pointer_deref(*inner)
             }
-            Expr::Assign(dst, _) => self.expr_place(*dst).is_none(),
+            Expr::Assign(dst, _) => {
+                self.expr_place(*dst).is_none()
+                    && self.semantic_expr_lowering(*dst).is_none()
+                    && !is_pointer_deref(*dst)
+            }
             Expr::AugAssign(dst, _, _) => {
-                self.semantic_expr_lowering(expr).is_none() && self.expr_place(*dst).is_none()
+                self.semantic_expr_lowering(expr).is_none()
+                    && self.expr_place(*dst).is_none()
+                    && !is_pointer_deref(*dst)
             }
             Expr::Match(_, Partial::Absent) => true,
             Expr::Match(_, Partial::Present(arms)) => arms
@@ -3808,10 +3829,13 @@ impl<'db> TypedBody<'db> {
         let projection = place
             .projections
             .iter()
-            .map(|projection| match projection {
-                PlaceProjection::Field { index, .. } => Some(ReturnProjectionStep::Field(*index)),
+            .filter_map(|projection| match projection {
+                PlaceProjection::Deref { .. } => None,
+                PlaceProjection::Field { index, .. } => {
+                    Some(Some(ReturnProjectionStep::Field(*index)))
+                }
                 PlaceProjection::Index { index_expr, .. } => {
-                    self.return_index_projection(db, body, *index_expr)
+                    Some(self.return_index_projection(db, body, *index_expr))
                 }
             })
             .collect::<Option<Vec<_>>>()?;
@@ -4461,6 +4485,7 @@ impl<'db> TypedBody<'db> {
     fn empty(db: &'db dyn HirAnalysisDb) -> Self {
         Self {
             body: None,
+            has_diagnostics: false,
             result_ty: TyId::unit(db),
             assumptions: PredicateListId::empty_list(db),
             pat_ty: SecondaryMap::new(),

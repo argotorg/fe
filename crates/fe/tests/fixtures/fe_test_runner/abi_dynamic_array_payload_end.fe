@@ -1,5 +1,5 @@
+use core::ptr
 use std::evm::{MemoryBytes, RawMem}
-use std::evm::mem
 
 #[test]
 fn test_dynamic_array_payload_end_uses_max_element_end() uses (raw: mut RawMem) {
@@ -9,14 +9,14 @@ fn test_dynamic_array_payload_end_uses_max_element_end() uses (raw: mut RawMem) 
     //   element0 len = 96, element1 len = 0
     //
     // The offsets are monotonic, but element0 extends past element1.
-    let ptr = mem::alloc(224)
+    let ptr = ptr::alloc_bytes(224)
     raw.mstore(addr: ptr, value: 2)
-    raw.mstore(addr: ptr + 32, value: 64)
-    raw.mstore(addr: ptr + 64, value: 96)
-    raw.mstore(addr: ptr + 96, value: 96)
-    raw.mstore(addr: ptr + 128, value: 0)
-    raw.mstore(addr: ptr + 160, value: 0)
-    raw.mstore(addr: ptr + 192, value: 0)
+    raw.mstore(addr: ptr::offset_bytes(ptr, 32), value: 64)
+    raw.mstore(addr: ptr::offset_bytes(ptr, 64), value: 96)
+    raw.mstore(addr: ptr::offset_bytes(ptr, 96), value: 96)
+    raw.mstore(addr: ptr::offset_bytes(ptr, 128), value: 0)
+    raw.mstore(addr: ptr::offset_bytes(ptr, 160), value: 0)
+    raw.mstore(addr: ptr::offset_bytes(ptr, 192), value: 0)
 
     let input = MemoryBytes::new(base: ptr, len: 224)
     let decoded: Vec<Bytes> = input.decode()

@@ -1,4 +1,4 @@
-use std::evm::{Create, Evm, StorageMap, StorPtr}
+use std::evm::{Create, Evm, RawStorage, StorageMap, StorPtr}
 
 struct Holder<T> {
     ptr: StorPtr<T>,
@@ -7,8 +7,8 @@ struct Holder<T> {
 impl<T> Copy for Holder<T> {}
 
 impl<T> Holder<T> {
-    fn attach(mut self, raw: u256) {
-        self.ptr = StorPtr::from_raw(raw)
+    fn attach(mut self, slot: u256) uses (evm: Evm) {
+        self.ptr = evm.stor_ptr(slot)
     }
 }
 
@@ -23,11 +23,11 @@ msg M {
 pub contract C {
     mut matrix: [[Holder<StorageMap<u256, u256>>; 2]; 2],
 
-    init() uses (mut matrix) {
-        matrix[0][0].attach(raw: 0)
-        matrix[0][1].attach(raw: 0)
-        matrix[1][0].attach(raw: 0)
-        matrix[1][1].attach(raw: 0)
+    init() uses (mut matrix, evm: Evm) {
+        matrix[0][0].attach(slot: 0)
+        matrix[0][1].attach(slot: 0)
+        matrix[1][0].attach(slot: 0)
+        matrix[1][1].attach(slot: 0)
     }
 
     recv M {

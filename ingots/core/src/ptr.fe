@@ -1,0 +1,193 @@
+use super::convert::Into
+use super::intrinsic::size_of
+use super::marker::Copy
+use super::ops::{Eq, Index, IndexMut}
+use super::panic
+
+/// Dynamic allocation in linear memory.
+///
+/// This is a compiler intrinsic: backend-specific lowering is handled in codegen.
+extern {
+    /// Allocates `size` bytes and returns a pointer to the first byte.
+    pub fn alloc_raw(_ size: u256) -> *u8
+
+    pub fn offset_bytes<T>(_ ptr: *T, _ offset: u256) -> *T
+
+    fn addr_eq<T>(_ lhs: *T, _ rhs: *T) -> bool
+
+    fn zero_mem(_ ptr: *u8, _ len: u256)
+}
+
+/// A dynamically sized array in linear memory.
+pub struct MemArray<T> {
+    pub ptr: *T,
+    pub len: u256,
+}
+
+/// An owning byte buffer in linear memory.
+pub struct MemBuffer {
+    pub ptr: *u8,
+    pub len: u256,
+}
+
+impl<T> Copy for *T {}
+
+impl<T> Eq for *T {
+    fn eq(self, _ other: *T) -> bool {
+        addr_eq(self, other)
+    }
+}
+
+impl<T> MemArray<T> {
+    pub fn new_uninit(_ len: u256) -> Self {
+        Self::from_raw_parts(ptr: cast<u8, T>(alloc_raw(len * size_of<T>())), len: len)
+    }
+
+    pub fn new_zeroed(_ len: u256) -> Self {
+        let mut array = Self::new_uninit(len)
+        array.zero()
+        array
+    }
+
+    pub fn from_raw_parts(ptr: *T, len: u256) -> Self {
+        Self { ptr, len }
+    }
+
+    pub fn byte_len(self) -> u256 {
+        self.len * size_of<T>()
+    }
+
+    pub fn as_bytes(own self) -> MemArray<u8> {
+        MemArray {
+            ptr: cast<T, u8>(self.ptr),
+            len: self.byte_len(),
+        }
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.len == 0
+    }
+
+    pub fn ptr_at(self, _ index: usize) -> *T {
+        elem(self.ptr, index)
+    }
+
+    pub fn zero(mut self) {
+        zero_bytes(cast<T, u8>(self.ptr), self.byte_len())
+    }
+}
+
+impl MemBuffer {
+    pub fn alloc(_ len: u256) -> Self {
+        Self::from_raw_parts(ptr: alloc_raw(len), len: len)
+    }
+
+    pub fn empty() -> Self {
+        Self::alloc(0)
+    }
+
+    pub fn from_raw_parts(ptr: *u8, len: u256) -> Self {
+        Self { ptr, len }
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.len == 0
+    }
+}
+
+impl Into<MemBuffer> for MemBuffer {
+    fn into(own self) -> MemBuffer {
+        self
+    }
+}
+
+impl<T> Into<MemBuffer> for MemArray<T> {
+    fn into(own self) -> MemBuffer {
+        MemBuffer::from_raw_parts(ptr: cast<T, u8>(self.ptr), len: self.byte_len())
+    }
+}
+
+pub fn cast<T, U>(_ ptr: *T) -> *U {
+    ptr as *U
+}
+
+pub fn offset<T>(_ ptr: *T, _ count: u256) -> *T {
+    offset_bytes(ptr, count * size_of<T>())
+}
+
+pub fn as_bytes<T>(_ ptr: *T) -> *u8 {
+    cast<T, u8>(ptr)
+}
+
+pub fn alloc<T>() -> *T {
+    cast<u8, T>(alloc_raw(size_of<T>()))
+}
+
+pub fn alloc_bytes(_ len: u256) -> *u8 {
+    alloc_raw(len)
+}
+
+pub fn alloc_array<T>(_ len: u256) -> MemArray<T> {
+    MemArray::new_uninit(len)
+}
+
+pub fn zero_bytes(_ ptr: *u8, _ len: u256) {
+    zero_mem(ptr, len)
+}
+
+#[inline(always)]
+fn array_elem<T, const N: usize>(_ ptr: *[T; N], _ index: usize) -> *T {
+    if index >= N {
+        panic()
+    }
+    elem(cast<[T; N], T>(ptr), index)
+}
+
+#[inline(always)]
+fn mem_array_elem<T>(_ array: MemArray<T>, _ index: usize) -> *T {
+    if index as u256 >= array.len {
+        panic()
+    }
+    elem(array.ptr, index)
+}
+
+#[inline(always)]
+fn elem<T>(_ ptr: *T, _ index: usize) -> *T {
+    offset(ptr, index as u256)
+}
+
+impl<T, const N: usize> Index<usize> for *[T; N] {
+    type Output = T
+
+    #[inline(always)]
+    fn index(self, _ index: usize) -> T {
+        *array_elem(self, index)
+    }
+}
+
+impl<T, const N: usize> IndexMut<usize> for *[T; N] {
+    type Output = T
+
+    #[inline(always)]
+    fn index_mut(self, _ index: usize) -> mut T {
+        mut *array_elem(self, index)
+    }
+}
+
+impl<T> Index<usize> for MemArray<T> {
+    type Output = T
+
+    #[inline(always)]
+    fn index(self, _ index: usize) -> T {
+        *mem_array_elem(self, index)
+    }
+}
+
+impl<T> IndexMut<usize> for MemArray<T> {
+    type Output = T
+
+    #[inline(always)]
+    fn index_mut(self, _ index: usize) -> mut T {
+        mut *mem_array_elem(self, index)
+    }
+}

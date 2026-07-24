@@ -13,9 +13,26 @@ error[6-0003]: trait bound is not satisfied
     · │
  24 │ │     f16: u256,
  25 │ │ }
-    │ ╰─^ `(u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256)` doesn't implement `EventAbiEncode<Sol>`
+    │ ╰─^ `(u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256)` doesn't implement `Encode<Sol>`
     │
-    ┌─ src/evm/effects.fe:438:14
+    ┌─ src/evm/effects.fe:464:14
     │
-438 │     where T: EventAbiEncode<Sol>
-    │              ------------------- required by this bound on `encode_event_payload`
+464 │     where T: Encode<Sol> + AbiSize
+    │              ----------- required by this bound on `encode_abi_payload`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ event_too_many_data_fields.fe:6:1
+    │
+  6 │ ╭ #[event]
+  7 │ │ struct TooWide {
+  8 │ │     f0: u256,
+  9 │ │     f1: u256,
+    · │
+ 24 │ │     f16: u256,
+ 25 │ │ }
+    │ ╰─^ `(u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256, u256)` doesn't implement `AbiSize`
+    │
+    ┌─ src/evm/effects.fe:464:28
+    │
+464 │     where T: Encode<Sol> + AbiSize
+    │                            ------- required by this bound on `encode_abi_payload`

@@ -17,7 +17,7 @@ pub contract C uses (ctx: Ctx, mem: mut RawMem) {
 fn build_bytes() -> Bytes
 uses (mem: mut RawMem)
 {
-    let data = std::evm::mem::alloc(64)
+    let data = core::ptr::alloc_bytes(64)
     mem.mstore(addr: data, value: 32)
     Bytes { data: data, len: 32, size: 64 }
 }

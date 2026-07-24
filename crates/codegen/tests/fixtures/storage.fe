@@ -1,4 +1,5 @@
-use std::evm::{Evm, RawMem, RawOps, RawStorage, StorPtr, mem}
+use core::ptr
+use std::evm::{Evm, RawMem, RawOps, RawStorage, StorPtr}
 
 enum User {
     Alice,
@@ -27,9 +28,9 @@ fn transfer_result_code(res: TransferResult) -> u256 {
 }
 
 fn abi_encode(value: u256) -> ! uses (ops: mut RawOps) {
-    let ptr: u256 = 0
-    ops.mstore(addr: ptr, value: value)
-    ops.return_data(offset: ptr, len: 32)
+    let data = ptr::MemBuffer::alloc(32)
+    ops.mstore(addr: data.ptr, value: value)
+    ops.return_data(data: data)
 }
 
 fn credit(user: User, amount: u256) -> u256
@@ -117,9 +118,9 @@ fn transfer_from_bob(amount: u256) -> TransferResult
 fn init() uses (evm: mut Evm) {
     let len = evm.code_region_len(runtime)
     let offset = evm.code_region_offset(runtime)
-    let dest = mem::alloc(len)
-    evm.codecopy(dest: dest, offset: offset, len: len)
-    evm.return_data(offset: dest, len: len)
+    let mut dest = ptr::MemBuffer::alloc(len)
+    evm.codecopy(dest: mut dest, offset: offset)
+    evm.return_data(data: dest)
 }
 
 #[contract_runtime(Coin)]
@@ -161,7 +162,7 @@ fn runtime() uses (evm: mut Evm) {
                 let supply = total_supply()
                 abi_encode(value: supply)
             }
-            _ => evm.return_data(offset: 0, len: 0)
+            _ => evm.return_data(data: ptr::MemBuffer::empty())
         }
     }
 }

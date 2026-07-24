@@ -1,18 +1,18 @@
 use super::effects::{Address, RawStorage}
-use super::mem
-use ingot::evm::ops::{keccak256, mstore, sload, sstore}
+use super::crypto::keccak256
+use ingot::evm::ops::{mstore, sload, sstore}
 use ingot::evm::word::WordRepr
-use core::{EffectRef, EffectRefMut}
+use core::{EffectRef, EffectRefMut, ptr}
 
 /// Keys that can be written into the mapping preimage for keccak hashing.
 pub trait StorageKey {
     /// Writes the key bytes at `ptr` and returns the length written.
-    fn write_key(ptr: u256, self) -> u256
+    fn write_key(ptr: *u8, self) -> u256
 }
 
 impl StorageKey for u256 {
     #[inline(always)]
-    fn write_key(ptr: u256, self) -> u256 {
+    fn write_key(ptr: *u8, self) -> u256 {
         mstore(addr: ptr, value: self)
         32
     }
@@ -20,7 +20,7 @@ impl StorageKey for u256 {
 
 impl StorageKey for Address {
     #[inline(always)]
-    fn write_key(ptr: u256, self) -> u256 {
+    fn write_key(ptr: *u8, self) -> u256 {
         u256::write_key(ptr: ptr, self.inner)
     }
 }
@@ -30,37 +30,37 @@ impl StorageKey for Address {
 // with the key left-padded to 32 bytes).
 
 impl StorageKey for u8 {
-    fn write_key(ptr: u256, self) -> u256 {
+    fn write_key(ptr: *u8, self) -> u256 {
         u256::write_key(ptr: ptr, self.to_word())
     }
 }
 
 impl StorageKey for u16 {
-    fn write_key(ptr: u256, self) -> u256 {
+    fn write_key(ptr: *u8, self) -> u256 {
         u256::write_key(ptr: ptr, self.to_word())
     }
 }
 
 impl StorageKey for u32 {
-    fn write_key(ptr: u256, self) -> u256 {
+    fn write_key(ptr: *u8, self) -> u256 {
         u256::write_key(ptr: ptr, self.to_word())
     }
 }
 
 impl StorageKey for u64 {
-    fn write_key(ptr: u256, self) -> u256 {
+    fn write_key(ptr: *u8, self) -> u256 {
         u256::write_key(ptr: ptr, self.to_word())
     }
 }
 
 impl StorageKey for u128 {
-    fn write_key(ptr: u256, self) -> u256 {
+    fn write_key(ptr: *u8, self) -> u256 {
         u256::write_key(ptr: ptr, self.to_word())
     }
 }
 
 impl StorageKey for usize {
-    fn write_key(ptr: u256, self) -> u256 {
+    fn write_key(ptr: *u8, self) -> u256 {
         u256::write_key(ptr: ptr, self.to_word())
     }
 }
@@ -69,43 +69,43 @@ impl StorageKey for usize {
 // `mapping(intN => V)` convention.
 
 impl StorageKey for i8 {
-    fn write_key(ptr: u256, self) -> u256 {
+    fn write_key(ptr: *u8, self) -> u256 {
         u256::write_key(ptr: ptr, self.to_word())
     }
 }
 
 impl StorageKey for i16 {
-    fn write_key(ptr: u256, self) -> u256 {
+    fn write_key(ptr: *u8, self) -> u256 {
         u256::write_key(ptr: ptr, self.to_word())
     }
 }
 
 impl StorageKey for i32 {
-    fn write_key(ptr: u256, self) -> u256 {
+    fn write_key(ptr: *u8, self) -> u256 {
         u256::write_key(ptr: ptr, self.to_word())
     }
 }
 
 impl StorageKey for i64 {
-    fn write_key(ptr: u256, self) -> u256 {
+    fn write_key(ptr: *u8, self) -> u256 {
         u256::write_key(ptr: ptr, self.to_word())
     }
 }
 
 impl StorageKey for i128 {
-    fn write_key(ptr: u256, self) -> u256 {
+    fn write_key(ptr: *u8, self) -> u256 {
         u256::write_key(ptr: ptr, self.to_word())
     }
 }
 
 impl StorageKey for i256 {
-    fn write_key(ptr: u256, self) -> u256 {
+    fn write_key(ptr: *u8, self) -> u256 {
         u256::write_key(ptr: ptr, self.to_word())
     }
 }
 
 impl StorageKey for isize {
-    fn write_key(ptr: u256, self) -> u256 {
+    fn write_key(ptr: *u8, self) -> u256 {
         u256::write_key(ptr: ptr, self.to_word())
     }
 }
@@ -113,7 +113,7 @@ impl StorageKey for isize {
 // `bool` — encoded as 1 (true) or 0 (false) in a 32-byte word.
 
 impl StorageKey for bool {
-    fn write_key(ptr: u256, self) -> u256 {
+    fn write_key(ptr: *u8, self) -> u256 {
         u256::write_key(ptr: ptr, self.to_word())
     }
 }
@@ -137,11 +137,11 @@ fn storagemap_storage_slot_with_salt<K>(key: K, salt: u256) -> u256
 {
     // keccak256(key ++ slot) - standard Solidity mapping layout
     // Use the current heap pointer as scratch to avoid clobbering live heap data.
-    // `mem::alloc(0)` also ensures we stay above any backend-reserved zones.
-    let ptr = mem::alloc(0)
-    let key_len = K::write_key(ptr: ptr, key)
-    mstore(addr: ptr + key_len, value: salt)
-    keccak256(offset: ptr, len: key_len + 32)
+    // `ptr::alloc_bytes(0)` also ensures we stay above any backend-reserved zones.
+    let scratch = ptr::alloc_bytes(0)
+    let key_len = K::write_key(ptr: scratch, key)
+    mstore(addr: ptr::offset_bytes(scratch, key_len), value: salt)
+    keccak256(ptr::MemBuffer::from_raw_parts(ptr: scratch, len: key_len + 32))
 }
 
 #[inline(always)]
@@ -198,9 +198,9 @@ impl<A, B> StorageKey for (A, B)
 where A: StorageKey,
       B: StorageKey {
     #[inline(always)]
-    fn write_key(ptr: u256, self) -> u256 {
+    fn write_key(ptr: *u8, self) -> u256 {
         let a_len = A::write_key(ptr: ptr, self.0)
-        let b_len = B::write_key(ptr: ptr + a_len, self.1)
+        let b_len = B::write_key(ptr: ptr::offset_bytes(ptr, a_len), self.1)
         a_len + b_len
     }
 }
@@ -210,10 +210,10 @@ where A: StorageKey,
       B: StorageKey,
       C: StorageKey {
     #[inline(always)]
-    fn write_key(ptr: u256, self) -> u256 {
+    fn write_key(ptr: *u8, self) -> u256 {
         let a_len = A::write_key(ptr: ptr, self.0)
-        let b_len = B::write_key(ptr: ptr + a_len, self.1)
-        let c_len = C::write_key(ptr: ptr + a_len + b_len, self.2)
+        let b_len = B::write_key(ptr: ptr::offset_bytes(ptr, a_len), self.1)
+        let c_len = C::write_key(ptr: ptr::offset_bytes(ptr, a_len + b_len), self.2)
         a_len + b_len + c_len
     }
 }
@@ -224,11 +224,11 @@ where A: StorageKey,
       C: StorageKey,
       D: StorageKey {
     #[inline(always)]
-    fn write_key(ptr: u256, self) -> u256 {
+    fn write_key(ptr: *u8, self) -> u256 {
         let a_len = A::write_key(ptr: ptr, self.0)
-        let b_len = B::write_key(ptr: ptr + a_len, self.1)
-        let c_len = C::write_key(ptr: ptr + a_len + b_len, self.2)
-        let d_len = D::write_key(ptr: ptr + a_len + b_len + c_len, self.3)
+        let b_len = B::write_key(ptr: ptr::offset_bytes(ptr, a_len), self.1)
+        let c_len = C::write_key(ptr: ptr::offset_bytes(ptr, a_len + b_len), self.2)
+        let d_len = D::write_key(ptr: ptr::offset_bytes(ptr, a_len + b_len + c_len), self.3)
         a_len + b_len + c_len + d_len
     }
 }
@@ -240,12 +240,12 @@ where A: StorageKey,
       D: StorageKey,
       E: StorageKey {
     #[inline(always)]
-    fn write_key(ptr: u256, self) -> u256 {
+    fn write_key(ptr: *u8, self) -> u256 {
         let a_len = A::write_key(ptr: ptr, self.0)
-        let b_len = B::write_key(ptr: ptr + a_len, self.1)
-        let c_len = C::write_key(ptr: ptr + a_len + b_len, self.2)
-        let d_len = D::write_key(ptr: ptr + a_len + b_len + c_len, self.3)
-        let e_len = E::write_key(ptr: ptr + a_len + b_len + c_len + d_len, self.4)
+        let b_len = B::write_key(ptr: ptr::offset_bytes(ptr, a_len), self.1)
+        let c_len = C::write_key(ptr: ptr::offset_bytes(ptr, a_len + b_len), self.2)
+        let d_len = D::write_key(ptr: ptr::offset_bytes(ptr, a_len + b_len + c_len), self.3)
+        let e_len = E::write_key(ptr: ptr::offset_bytes(ptr, a_len + b_len + c_len + d_len), self.4)
         a_len + b_len + c_len + d_len + e_len
     }
 }
@@ -258,13 +258,13 @@ where A: StorageKey,
       E: StorageKey,
       F: StorageKey {
     #[inline(always)]
-    fn write_key(ptr: u256, self) -> u256 {
+    fn write_key(ptr: *u8, self) -> u256 {
         let a_len = A::write_key(ptr: ptr, self.0)
-        let b_len = B::write_key(ptr: ptr + a_len, self.1)
-        let c_len = C::write_key(ptr: ptr + a_len + b_len, self.2)
-        let d_len = D::write_key(ptr: ptr + a_len + b_len + c_len, self.3)
-        let e_len = E::write_key(ptr: ptr + a_len + b_len + c_len + d_len, self.4)
-        let f_len = F::write_key(ptr: ptr + a_len + b_len + c_len + d_len + e_len, self.5)
+        let b_len = B::write_key(ptr: ptr::offset_bytes(ptr, a_len), self.1)
+        let c_len = C::write_key(ptr: ptr::offset_bytes(ptr, a_len + b_len), self.2)
+        let d_len = D::write_key(ptr: ptr::offset_bytes(ptr, a_len + b_len + c_len), self.3)
+        let e_len = E::write_key(ptr: ptr::offset_bytes(ptr, a_len + b_len + c_len + d_len), self.4)
+        let f_len = F::write_key(ptr: ptr::offset_bytes(ptr, a_len + b_len + c_len + d_len + e_len), self.5)
         a_len + b_len + c_len + d_len + e_len + f_len
     }
 }

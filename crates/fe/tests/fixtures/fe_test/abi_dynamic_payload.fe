@@ -1,5 +1,6 @@
 use std::abi::{Bytes, DynString, bytes_from_words_prefix}
-use std::evm::{Evm, RawMem, encode_abi_payload, mem}
+use core::ptr
+use std::evm::{Evm, RawMem, encode_abi_payload}
 
 msg DynamicPayloadMsg {
     #[selector = 0x01]
@@ -33,15 +34,15 @@ uses (evm: mut Evm)
 {
     let payload_len: u256 = 33
     let payload_size: u256 = 96
-    let data_ptr = mem::alloc(payload_size)
+    let data_ptr = ptr::alloc_bytes(payload_size)
 
     evm.mstore(addr: data_ptr, value: payload_len)
     evm.mstore(
-        addr: data_ptr + 32,
+        addr: ptr::offset_bytes(data_ptr, 32),
         value: 0x1111111111111111111111111111111111111111111111111111111111111111,
     )
     evm.mstore(
-        addr: data_ptr + 64,
+        addr: ptr::offset_bytes(data_ptr, 64),
         value: 0x2200000000000000000000000000000000000000000000000000000000000000,
     )
 
@@ -53,11 +54,11 @@ uses (evm: mut Evm)
 {
     let payload_len: u256 = 1
     let payload_size: u256 = 64
-    let data_ptr = mem::alloc(payload_size)
+    let data_ptr = ptr::alloc_bytes(payload_size)
 
     evm.mstore(addr: data_ptr, value: payload_len)
     evm.mstore(
-        addr: data_ptr + 32,
+        addr: ptr::offset_bytes(data_ptr, 32),
         value: 0x3300000000000000000000000000000000000000000000000000000000000000,
     )
 
@@ -79,12 +80,12 @@ fn one_byte_two_word_prefix() -> Bytes uses (mem: mut RawMem) {
 #[test]
 fn test_abi_dynamic_payload_tuple_encoding() uses (evm: Evm) {
     let payload: (u256, Bytes) = (0xdeadbeef, Bytes::empty())
-    let (ptr, len) = encode_abi_payload(payload)
+    let data = encode_abi_payload(payload)
 
-    assert!(len == 96)
-    assert!(evm.mload(ptr) == 0xdeadbeef)
-    assert!(evm.mload(ptr + 32) == 64)
-    assert!(evm.mload(ptr + 64) == 0)
+    assert!(data.len == 96)
+    assert!(evm.mload(data.ptr) == 0xdeadbeef)
+    assert!(evm.mload(ptr::offset_bytes(data.ptr, 32)) == 64)
+    assert!(evm.mload(ptr::offset_bytes(data.ptr, 64)) == 0)
 }
 
 #[test]
@@ -94,16 +95,16 @@ fn test_bytes_from_words_prefix_uses_canonical_tail_size() uses (evm: mut Evm, m
         0xabcdef,
         one_byte_bytes(),
     )
-    let (ptr, len) = encode_abi_payload(payload)
+    let data = encode_abi_payload(payload)
 
-    assert!(len == 224)
-    assert!(evm.mload(ptr) == 96)
-    assert!(evm.mload(ptr + 32) == 0xabcdef)
-    assert!(evm.mload(ptr + 64) == 160)
-    assert!(evm.mload(ptr + 96) == 1)
-    assert!(evm.mload(ptr + 128) == 0x3300000000000000000000000000000000000000000000000000000000000000)
-    assert!(evm.mload(ptr + 160) == 1)
-    assert!(evm.mload(ptr + 192) == 0x3300000000000000000000000000000000000000000000000000000000000000)
+    assert!(data.len == 224)
+    assert!(evm.mload(data.ptr) == 96)
+    assert!(evm.mload(ptr::offset_bytes(data.ptr, 32)) == 0xabcdef)
+    assert!(evm.mload(ptr::offset_bytes(data.ptr, 64)) == 160)
+    assert!(evm.mload(ptr::offset_bytes(data.ptr, 96)) == 1)
+    assert!(evm.mload(ptr::offset_bytes(data.ptr, 128)) == 0x3300000000000000000000000000000000000000000000000000000000000000)
+    assert!(evm.mload(ptr::offset_bytes(data.ptr, 160)) == 1)
+    assert!(evm.mload(ptr::offset_bytes(data.ptr, 192)) == 0x3300000000000000000000000000000000000000000000000000000000000000)
 }
 
 #[test]
@@ -127,18 +128,18 @@ fn test_msg_dynamic_payload_tail_encoding() uses (evm: mut Evm) {
 
 #[test]
 fn test_error_dynamic_payload_tail_encoding() uses (evm: mut Evm) {
-    let (ptr, len) = encode_abi_payload(DynamicPayloadError {
+    let data = encode_abi_payload(DynamicPayloadError {
         first: DynString::empty(),
         marker: 0xabcdef,
         second: DynString::empty(),
     })
 
-    assert!(len == 160)
-    assert!(evm.mload(ptr) == 96)
-    assert!(evm.mload(ptr + 32) == 0xabcdef)
-    assert!(evm.mload(ptr + 64) == 128)
-    assert!(evm.mload(ptr + 96) == 0)
-    assert!(evm.mload(ptr + 128) == 0)
+    assert!(data.len == 160)
+    assert!(evm.mload(data.ptr) == 96)
+    assert!(evm.mload(ptr::offset_bytes(data.ptr, 32)) == 0xabcdef)
+    assert!(evm.mload(ptr::offset_bytes(data.ptr, 64)) == 128)
+    assert!(evm.mload(ptr::offset_bytes(data.ptr, 96)) == 0)
+    assert!(evm.mload(ptr::offset_bytes(data.ptr, 128)) == 0)
 }
 
 #[test(should_revert)]

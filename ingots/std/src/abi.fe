@@ -8,8 +8,9 @@ pub type Text = DynString
 pub type Vec<T> = DynArray<T>
 pub use sol::{self, *}
 
+use core::ptr
 use super::evm::effects::RawMem
-use super::evm::{mem, ops}
+use super::evm::ops
 
 /// Allocate a 32-byte Solidity ABI `bytes` value from a single word.
 ///
@@ -18,9 +19,9 @@ use super::evm::{mem, ops}
 /// full 32-byte chunk, for example a `bytes`-typed wrapper around a `bytes32`.
 #[inline(always)]
 pub fn bytes_from_word(_ w: u256) -> Bytes uses (mem: mut RawMem) {
-    let data = mem::alloc(64)
+    let data = ptr::alloc_bytes(64)
     mem.mstore(addr: data, value: 32)
-    mem.mstore(addr: data + 32, value: w)
+    mem.mstore(addr: ptr::offset_bytes(data, 32), value: w)
     Bytes::from_abi_tail(data: data, len: 32, size: 64)
 }
 
@@ -34,11 +35,11 @@ uses (mem: mut RawMem)
 {
     let len: u256 = (N as u256) * 32
     let size: u256 = 32 + len
-    let data = mem::alloc(size)
+    let data = ptr::alloc_bytes(size)
     mem.mstore(addr: data, value: len)
     let mut i: usize = 0
     while i < N {
-        mem.mstore(addr: data + 32 + (i as u256) * 32, value: words[i])
+        mem.mstore(addr: ptr::offset_bytes(data, 32 + (i as u256) * 32), value: words[i])
         i += 1
     }
     Bytes::from_abi_tail(data: data, len: len, size: size)
@@ -60,16 +61,16 @@ uses (mem: mut RawMem)
     let len: u256 = LEN as u256
     let capacity: u256 = (N as u256) * 32
     if len > capacity {
-        ops::revert(offset: 0, len: 0)
+        ops::revert_empty()
     }
     let payload_words: usize = (LEN + 31) / 32
     let payload: u256 = (payload_words as u256) * 32
     let size: u256 = 32 + payload
-    let data = mem::alloc(size)
+    let data = ptr::alloc_bytes(size)
     mem.mstore(addr: data, value: len)
     let mut i: usize = 0
     while i < payload_words {
-        mem.mstore(addr: data + 32 + (i as u256) * 32, value: words[i])
+        mem.mstore(addr: ptr::offset_bytes(data, 32 + (i as u256) * 32), value: words[i])
         i += 1
     }
     Bytes::from_abi_tail(data: data, len: len, size: size)

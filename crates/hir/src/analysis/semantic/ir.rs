@@ -6,7 +6,7 @@ use crate::{
         semantic::instance::{SemanticInstance, SemanticInstanceKey},
         ty::{
             provider::ProviderAddressSpace,
-            ty_check::{BodyOwner, EffectPassMode, LocalBinding},
+            ty_check::{BodyOwner, EffectArgLayoutView, EffectPassMode, LocalBinding},
             ty_def::{BorrowKind, TyId},
         },
     },
@@ -127,6 +127,37 @@ pub enum LayoutBackingProjection {
         field: FieldIndex,
     },
     Index(Option<usize>),
+}
+
+pub(crate) fn layout_backing_query<'db>(
+    path: &SemanticProjectionPath<'db>,
+) -> Option<(Vec<LayoutBackingProjection>, SemanticProjectionPath<'db>)> {
+    let mut target = Vec::new();
+    let mut structural_path = SemanticProjectionPath::new();
+    for projection in path.iter() {
+        let step = match projection {
+            Projection::Field(field) => {
+                LayoutBackingProjection::Field(FieldIndex(u16::try_from(*field).ok()?))
+            }
+            Projection::VariantField {
+                variant, field_idx, ..
+            } => LayoutBackingProjection::VariantField {
+                variant: *variant,
+                field: FieldIndex(u16::try_from(*field_idx).ok()?),
+            },
+            Projection::Index(IndexSource::Constant(index)) => {
+                LayoutBackingProjection::Index(Some(*index))
+            }
+            Projection::Index(IndexSource::Dynamic(_) | IndexSource::Any) => {
+                LayoutBackingProjection::Index(None)
+            }
+            Projection::Deref => continue,
+            Projection::Discriminant => return None,
+        };
+        target.push(step);
+        structural_path.push(projection.clone());
+    }
+    Some((target, structural_path))
 }
 
 /// Physical place provenance for layout-bearing value projections.
@@ -335,6 +366,10 @@ impl<'db> SPlace<'db> {
         Self::with_projection(local, Projection::Index(IndexSource::Dynamic(index)))
     }
 
+    pub fn deref(local: SLocalId) -> Self {
+        Self::with_projection(local, Projection::Deref)
+    }
+
     pub fn variant_field(
         local: SLocalId,
         variant: VariantIndex,
@@ -359,6 +394,10 @@ impl<'db> SPlace<'db> {
         self.path
             .push(Projection::Index(IndexSource::Dynamic(index)));
     }
+
+    pub fn push_deref(&mut self) {
+        self.path.push(Projection::Deref);
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -366,8 +405,9 @@ pub struct SEffectArg<'db> {
     pub binding_idx: u32,
     pub arg: SEffectArgValue<'db>,
     pub pass_mode: EffectPassMode,
+    pub layout_view: EffectArgLayoutView,
     pub required_mut: bool,
-    pub target_ty: Option<TyId<'db>>,
+    pub provider_target_ty: Option<TyId<'db>>,
     pub provider: Option<ProviderAddressSpace>,
 }
 
