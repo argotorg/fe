@@ -70,7 +70,9 @@ impl<'db> NoEsc<'db> {
             }
             for stmt in &block.stmts {
                 self.check_stmt(&state, stmt)?;
-                self.borrowck.canon().apply_stmt_state(&mut state, stmt)?;
+                self.borrowck
+                    .state_transfer()
+                    .apply_stmt(&mut state, stmt)?;
                 if !state.is_reachable() {
                     break;
                 }

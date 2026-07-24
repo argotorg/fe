@@ -35,9 +35,9 @@ use super::{
         BorrowSummaryMode,
     },
     canon::{
-        BlockAdjacency, BorrowCanonCx, BorrowRoot, CanonPlace, CfgAdjacency, Loan, LoanId,
-        MoveSite, MovedPlaces, State, WritePrecision, address_spaces_for_borrow_root,
-        places_overlap as canonical_places_overlap,
+        BlockAdjacency, BorrowCanonCx, BorrowRoot, BorrowStateTransferCx, BorrowSummaryResolver,
+        CanonPlace, CfgAdjacency, Loan, LoanId, MoveSite, MovedPlaces, State, WritePrecision,
+        address_spaces_for_borrow_root, places_overlap as canonical_places_overlap,
     },
     diagnostics::operand_origin,
     facts::NormalizedBodyFacts,
@@ -478,15 +478,15 @@ impl<'db> Borrowck<'db> {
     }
 
     pub(super) fn canon(&self) -> BorrowCanonCx<'_, 'db> {
-        BorrowCanonCx::new(
-            self.db,
-            self.instance,
-            &self.body,
-            &self.facts,
-            &self.loans,
-            &self.loan_for_local,
-            self.summary_mode,
-        )
+        BorrowCanonCx::new(self.db, self.instance, &self.body, &self.facts, &self.loans)
+    }
+
+    pub(super) fn state_transfer(&self) -> BorrowStateTransferCx<'_, 'db> {
+        BorrowStateTransferCx::new(self.canon(), &self.loan_for_local, self.summary_mode)
+    }
+
+    fn summaries(&self) -> BorrowSummaryResolver<'_, 'db> {
+        BorrowSummaryResolver::new(self.canon(), self.summary_mode)
     }
 
     fn borrow_summary(
@@ -776,7 +776,7 @@ impl<'db> Borrowck<'db> {
                     stmt,
                 )?;
                 self.update_moved_for_stmt(&state, &mut moved, stmt)?;
-                self.canon().apply_stmt_state(&mut state, stmt)?;
+                self.state_transfer().apply_stmt(&mut state, stmt)?;
                 if !state.is_reachable() {
                     break;
                 }
@@ -903,10 +903,13 @@ impl<'db> Borrowck<'db> {
         else {
             unreachable!("call memory accesses require a call expression")
         };
-        for access in
-            self.canon()
-                .resolve_call_memory_accesses(state, callee, args, effect_args, origin)?
-        {
+        for access in self.summaries().resolve_call_memory_accesses(
+            state,
+            callee,
+            args,
+            effect_args,
+            origin,
+        )? {
             let active = active
                 .iter()
                 .copied()
@@ -1059,7 +1062,6 @@ impl<'db> Borrowck<'db> {
             &self.body,
             &self.facts,
             &self.loans,
-            &self.loan_for_local,
             self.summary_mode,
         )
         .for_expr(state, expr, origin)?
@@ -1137,7 +1139,7 @@ impl<'db> Borrowck<'db> {
                 continue;
             }
             for stmt in &block.stmts {
-                self.canon().apply_stmt_state(&mut state, stmt)?;
+                self.state_transfer().apply_stmt(&mut state, stmt)?;
                 if !state.is_reachable() {
                     break;
                 }
@@ -1258,7 +1260,7 @@ impl<'db> Borrowck<'db> {
                             effect_args,
                             ..
                         } => {
-                            for access in self.canon().resolve_call_memory_accesses(
+                            for access in self.summaries().resolve_call_memory_accesses(
                                 &state,
                                 callee,
                                 args,
@@ -1289,7 +1291,7 @@ impl<'db> Borrowck<'db> {
                         )?;
                     }
                 }
-                self.canon().apply_stmt_state(&mut state, stmt)?;
+                self.state_transfer().apply_stmt(&mut state, stmt)?;
                 if !state.is_reachable() {
                     break;
                 }
@@ -1416,7 +1418,7 @@ impl<'db> Borrowck<'db> {
         let mut state = State::default();
         for root in &self.body.borrow_roots {
             if let NBorrowRoot::Param { local, param_idx } = root {
-                self.canon()
+                self.state_transfer()
                     .seed_param_pointer_targets(&mut state, *local, *param_idx);
             }
         }
@@ -2009,7 +2011,7 @@ impl<'db> Borrowck<'db> {
                             origin: stmt.origin,
                             note: "value is moved by this call".to_string(),
                         };
-                        for access in self.canon().resolve_call_memory_accesses(
+                        for access in self.summaries().resolve_call_memory_accesses(
                             state,
                             callee,
                             args,

@@ -12,7 +12,10 @@ use crate::analysis::{
 };
 
 use super::{
-    canon::{BorrowCanonCx, CanonPlace, CfgAdjacency, Loan, LoanId, MovedPlaces, State},
+    canon::{
+        BorrowCanonCx, BorrowStateTransferCx, CanonPlace, CfgAdjacency, Loan, LoanId, MovedPlaces,
+        State,
+    },
     check::{Borrowck, provisional_borrow_summary_voucher, semantic_borrow_summary_voucher},
     diagnostics::normalized_body_internal_diag,
     facts::NormalizedBodyFacts,
@@ -40,7 +43,6 @@ pub(super) struct BorrowLoanEffectCx<'a, 'db> {
     body: &'a NormalizedSemanticBody<'db>,
     facts: &'a NormalizedBodyFacts,
     loans: &'a [Loan<'db>],
-    loan_for_local: &'a FxHashMap<SLocalId, LoanId>,
     summary_mode: BorrowSummaryMode,
 }
 
@@ -51,7 +53,6 @@ impl<'a, 'db> BorrowLoanEffectCx<'a, 'db> {
         body: &'a NormalizedSemanticBody<'db>,
         facts: &'a NormalizedBodyFacts,
         loans: &'a [Loan<'db>],
-        loan_for_local: &'a FxHashMap<SLocalId, LoanId>,
         summary_mode: BorrowSummaryMode,
     ) -> Self {
         Self {
@@ -60,7 +61,6 @@ impl<'a, 'db> BorrowLoanEffectCx<'a, 'db> {
             body,
             facts,
             loans,
-            loan_for_local,
             summary_mode,
         }
     }
@@ -71,15 +71,7 @@ impl<'a, 'db> BorrowLoanEffectCx<'a, 'db> {
         expr: &NExpr<'db>,
         origin: SemOrigin<'db>,
     ) -> Result<Option<BorrowLoanEffect<'db>>, SemanticBorrowDiagnostic<'db>> {
-        let canon = BorrowCanonCx::new(
-            self.db,
-            self.instance,
-            self.body,
-            self.facts,
-            self.loans,
-            self.loan_for_local,
-            self.summary_mode,
-        );
+        let canon = BorrowCanonCx::new(self.db, self.instance, self.body, self.facts, self.loans);
         let effect = match expr {
             NExpr::Borrow { place, .. } => BorrowLoanEffect {
                 targets: canon.canonicalize_place(state, place, origin)?,
@@ -183,15 +175,11 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
     }
 
     fn canon<'b>(&'b self, loans: &'b [Loan<'db>]) -> BorrowCanonCx<'b, 'db> {
-        BorrowCanonCx::new(
-            self.db,
-            self.instance,
-            self.body,
-            self.facts,
-            loans,
-            self.loan_for_local,
-            self.summary_mode,
-        )
+        BorrowCanonCx::new(self.db, self.instance, self.body, self.facts, loans)
+    }
+
+    fn state_transfer<'b>(&'b self, loans: &'b [Loan<'db>]) -> BorrowStateTransferCx<'b, 'db> {
+        BorrowStateTransferCx::new(self.canon(loans), self.loan_for_local, self.summary_mode)
     }
 
     fn extend_loan(
@@ -227,7 +215,6 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
             self.body,
             self.facts,
             loans,
-            self.loan_for_local,
             self.summary_mode,
         )
         .for_expr(state, expr, stmt.origin)?
@@ -256,8 +243,8 @@ impl<'a, 'db> SparseAnalysis for BorrowLoanTargetAnalysis<'a, 'db> {
         let mut changed = false;
         for stmt in &self.body.blocks[node.index()].stmts {
             changed |= self.update_loan_from_stmt(&mut *state.loans, &local_state, stmt)?;
-            self.canon(state.loans)
-                .apply_stmt_state(&mut local_state, stmt)?;
+            self.state_transfer(state.loans)
+                .apply_stmt(&mut local_state, stmt)?;
             if !local_state.is_reachable() {
                 break;
             }
@@ -317,7 +304,7 @@ impl<'db> ForwardCfgAnalysis for BorrowEntryStateAnalysis<'_, 'db> {
             for root in &self.borrowck.body.borrow_roots {
                 if let super::ir::NBorrowRoot::Param { local, param_idx } = root {
                     self.borrowck
-                        .canon()
+                        .state_transfer()
                         .seed_param_pointer_targets(entry, *local, *param_idx);
                 }
             }
@@ -332,7 +319,9 @@ impl<'db> ForwardCfgAnalysis for BorrowEntryStateAnalysis<'_, 'db> {
     ) -> Result<Self::State, Self::Error> {
         let mut state = in_state.clone();
         for stmt in &self.borrowck.body.blocks[block.index()].stmts {
-            self.borrowck.canon().apply_stmt_state(&mut state, stmt)?;
+            self.borrowck
+                .state_transfer()
+                .apply_stmt(&mut state, stmt)?;
             if !state.is_reachable() {
                 break;
             }
@@ -402,7 +391,9 @@ impl<'db> ForwardCfgAnalysis for BorrowMovedStateAnalysis<'_, 'db> {
         for stmt in &self.borrowck.body.blocks[block.index()].stmts {
             self.borrowck
                 .update_moved_for_stmt(&state, &mut moved, stmt)?;
-            self.borrowck.canon().apply_stmt_state(&mut state, stmt)?;
+            self.borrowck
+                .state_transfer()
+                .apply_stmt(&mut state, stmt)?;
             if !state.is_reachable() {
                 break;
             }

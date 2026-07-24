@@ -53,7 +53,9 @@ impl<'db> CallSiteProviderRefiner<'db> {
             }
             for stmt in &block.stmts {
                 self.refine_stmt(&state, stmt, &mut out)?;
-                self.borrowck.canon().apply_stmt_state(&mut state, stmt)?;
+                self.borrowck
+                    .state_transfer()
+                    .apply_stmt(&mut state, stmt)?;
                 if !state.is_reachable() {
                     break;
                 }
