@@ -29,6 +29,10 @@ fn scalar_value(db: &HirAnalysisTestDb, entry: &ContractLayoutEntry<'_>) -> Stri
     value.data(db).to_string()
 }
 
+fn lane(entry: &ContractLayoutEntry<'_>) -> Option<(u16, u16)> {
+    entry.lane.map(|lane| (lane.bit_offset, lane.bit_width))
+}
+
 #[test]
 fn report_distinguishes_inline_fields_from_explicit_and_inferred_parameters() {
     parse_ok!(
@@ -118,6 +122,42 @@ pub contract Counter {
 }
 
 #[test]
+fn report_includes_packed_inline_field_lanes() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+struct Packed {
+    a: u8,
+    b: u16,
+    c: bool,
+    d: u256,
+    e: u8,
+}
+
+contract C {
+    mut packed: Packed,
+}
+"#,
+    );
+    let contract = find_contract(&db, top_mod, "C");
+    let report = contract.layout_report(&db).unwrap();
+
+    for (path, value, expected_lane) in [
+        ("packed.a", "0", Some((0, 8))),
+        ("packed.b", "0", Some((8, 16))),
+        ("packed.c", "0", Some((24, 1))),
+        ("packed.d", "1", None),
+        ("packed.e", "2", Some((0, 8))),
+    ] {
+        let entry = entry(&db, &report.entries, path);
+        assert_eq!(scalar_value(&db, entry), value, "{path}");
+        assert_eq!(lane(entry), expected_lane, "{path}");
+        assert_eq!(entry.kind, ContractLayoutEntryKind::InlineField, "{path}");
+    }
+}
+
+#[test]
 fn report_preserves_array_geometry_and_enum_overlays() {
     parse_ok!(
         db,
@@ -153,6 +193,11 @@ contract C {
         assert_eq!(strides, &[2]);
         assert_eq!(*extent, 3);
     }
+    assert_eq!(lane(entry(&db, &report.entries, "values[i0].left")), None);
+    assert_eq!(
+        lane(entry(&db, &report.entries, "values[i0].right")),
+        Some((0, 8))
+    );
 
     let roots = entry(&db, &report.entries, "roots[i0][i1].ROOT");
     let ContractLayoutValue::Indexed {

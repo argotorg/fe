@@ -190,7 +190,14 @@ fn verify_contract_field_binding<'db>(
                 field: binding.field,
                 class: binding.class.clone(),
             })?;
-    let mir_span = pointee.span_words(db);
+    let mir_span = if matches!(
+        field.address_space,
+        ProviderAddressSpace::Storage | ProviderAddressSpace::Transient
+    ) {
+        pointee.storage_span_words(db)
+    } else {
+        pointee.span_words(db)
+    };
     if u64::try_from(field.inline_span).ok() != Some(mir_span) {
         return Err(VerifyError::ContractFieldSpanMismatch {
             field: binding.field,

@@ -45,7 +45,7 @@ pub contract C {
 }
 
 #[test]
-fn test_contract_storage_struct_fields_unpacked() uses (evm: mut Evm) {
+fn test_contract_storage_struct_fields_packed() uses (evm: mut Evm) {
     let c = evm.create2<C>(value: 0, args: (), salt: 0)
 
     let packed: u256 = evm.call(
@@ -62,7 +62,7 @@ fn test_contract_storage_struct_fields_unpacked() uses (evm: mut Evm) {
         value: 0,
         message: ContractStructMsg::RawSlot { offset: 0 },
     )
-    assert!(raw0 == 0xaa)
+    assert!(raw0 == 0xbbaa)
 
     let raw1: u256 = evm.call(
         addr: c,
@@ -70,7 +70,7 @@ fn test_contract_storage_struct_fields_unpacked() uses (evm: mut Evm) {
         value: 0,
         message: ContractStructMsg::RawSlot { offset: 1 },
     )
-    assert!(raw1 == 0xbb)
+    assert!(raw1 == 0xcc)
 
     let raw2: u256 = evm.call(
         addr: c,
@@ -78,7 +78,7 @@ fn test_contract_storage_struct_fields_unpacked() uses (evm: mut Evm) {
         value: 0,
         message: ContractStructMsg::RawSlot { offset: 2 },
     )
-    assert!(raw2 == 0xcc)
+    assert!(raw2 == 0)
 
     let packed: u256 = evm.call(
         addr: c,

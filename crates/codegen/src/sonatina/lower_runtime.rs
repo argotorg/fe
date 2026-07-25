@@ -5,7 +5,7 @@ use driver::DriverDataBase;
 use hir::{
     analysis::{
         semantic::FieldIndex,
-        ty::{corelib::resolve_lib_type_path, ty_check::BodyOwner, ty_def::TyId},
+        ty::{ty_check::BodyOwner, ty_def::TyId},
     },
     hir_def::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
     projection::IndexSource,
@@ -626,7 +626,7 @@ struct PackedLane {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PtrLayoutMode {
     Word,
-    StorageMapEntry,
+    Storage,
 }
 
 enum PlaceTerminal<'db> {
@@ -2533,40 +2533,21 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
 
     fn ptr_layout_mode_for_provider(
         &self,
-        provider_ty: TyId<'db>,
+        _provider_ty: TyId<'db>,
         space: AddressSpaceKind,
     ) -> PtrLayoutMode {
-        if space == AddressSpaceKind::Storage && self.is_storage_map_entry_provider(provider_ty) {
-            PtrLayoutMode::StorageMapEntry
+        if matches!(
+            space,
+            AddressSpaceKind::Storage | AddressSpaceKind::Transient
+        ) {
+            PtrLayoutMode::Storage
         } else {
             PtrLayoutMode::Word
         }
     }
 
-    fn is_storage_map_entry_provider(&self, provider_ty: TyId<'db>) -> bool {
-        let db = self.module.db;
-        let Some(adt_def) = provider_ty.adt_def(db) else {
-            return false;
-        };
-        let scope = adt_def.scope(db);
-        let (provider_base, _) = provider_ty.decompose_ty_app(db);
-
-        [
-            "std::evm::storage_map::StoragePtr",
-            "std::evm::storage_map::StorageMutPtr",
-            "std::evm::StoragePtr",
-            "std::evm::StorageMutPtr",
-        ]
-        .into_iter()
-        .filter_map(|path| resolve_lib_type_path(db, scope, path))
-        .any(|entry_ptr| {
-            let (entry_base, _) = entry_ptr.decompose_ty_app(db);
-            provider_base == entry_base
-        })
-    }
-
     fn uses_storage_layout(layout: PtrLayoutMode) -> bool {
-        layout == PtrLayoutMode::StorageMapEntry
+        layout == PtrLayoutMode::Storage
     }
 
     fn index_stride_words_for_layout(
