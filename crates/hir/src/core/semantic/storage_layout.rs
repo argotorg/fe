@@ -1,4 +1,7 @@
-use common::indexmap::IndexMap;
+use common::{
+    indexmap::IndexMap,
+    layout::{StorageFieldShape, storage_fields_layout},
+};
 use num_bigint::BigUint;
 use num_traits::ToPrimitive;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -2080,93 +2083,70 @@ impl<'db> FieldCollector<'db> {
         }
     }
 
-    fn packable_storage_scalar_leaf(&self, output: &WalkOutput<'db>) -> Option<u16> {
-        if output.inline_span != 1 || output.inline_leaves.len() != 1 {
-            return None;
-        }
-        let leaf = &output.inline_leaves[0];
-        if leaf.offset != 0 || leaf.lane.is_some() || leaf.kind != InlineLayoutLeafKind::Field {
-            return None;
-        }
-        let bit_width = storage_scalar_bit_width(self.db, leaf.ty)?;
-        (bit_width < 256).then_some(bit_width)
-    }
-
     fn walk_storage_struct_sequence(
         &mut self,
         items: impl IntoIterator<Item = (LayoutInstantiation<'db>, StoragePlace<'db>)>,
         dimensions: &[LayoutIndexDimension<'db>],
         mode: WalkMode,
     ) -> WalkOutput<'db> {
-        let mut inline_span = 0usize;
-        let mut used_bits = 0u16;
-        let mut inline_leaves = Vec::new();
-        let mut events = Vec::new();
+        let mut outputs = Vec::new();
+        let mut shapes = Vec::new();
 
         for (instantiation, place) in items {
-            let mut output = self.walk_instantiation(&instantiation, place, dimensions, mode);
-            if let Some(bit_width) = self.packable_storage_scalar_leaf(&output) {
-                if used_bits + bit_width > 256 {
-                    let Some(next) = inline_span.checked_add(1) else {
-                        self.push_error(ContractLayoutError::LayoutExtentOverflow);
-                        continue;
-                    };
-                    inline_span = next;
-                    used_bits = 0;
-                }
-
-                for leaf in &mut output.inline_leaves {
-                    leaf.offset = inline_span;
-                    leaf.lane = Some(ContractLayoutLane {
-                        bit_offset: used_bits,
-                        bit_width,
-                    });
-                }
-                used_bits += bit_width;
-                if used_bits == 256 {
-                    let Some(next) = inline_span.checked_add(1) else {
-                        self.push_error(ContractLayoutError::LayoutExtentOverflow);
-                        continue;
-                    };
-                    inline_span = next;
-                    used_bits = 0;
-                }
-                inline_leaves.extend(output.inline_leaves);
-                events.extend(output.events);
+            let direct_bit_width = storage_scalar_bit_width(self.db, instantiation.ty)
+                .filter(|bit_width| *bit_width < 256);
+            let output = self.walk_instantiation(&instantiation, place, dimensions, mode);
+            let Ok(span_words) = u64::try_from(output.inline_span) else {
+                self.push_error(ContractLayoutError::LayoutExtentOverflow);
                 continue;
-            }
+            };
+            let shape = if let Some(bit_width) = direct_bit_width {
+                debug_assert_eq!(output.inline_span, 1);
+                debug_assert_eq!(output.inline_leaves.len(), 1);
+                debug_assert_eq!(output.inline_leaves[0].offset, 0);
+                debug_assert!(output.inline_leaves[0].lane.is_none());
+                debug_assert_eq!(output.inline_leaves[0].kind, InlineLayoutLeafKind::Field);
+                StorageFieldShape::scalar(bit_width)
+            } else {
+                StorageFieldShape::aggregate(span_words)
+            };
+            shapes.push(shape);
+            outputs.push(output);
+        }
 
-            if used_bits > 0 {
-                let Some(next) = inline_span.checked_add(1) else {
-                    self.push_error(ContractLayoutError::LayoutExtentOverflow);
-                    continue;
-                };
-                inline_span = next;
-                used_bits = 0;
-            }
+        let Ok(layout) = storage_fields_layout(shapes) else {
+            self.push_error(ContractLayoutError::LayoutExtentOverflow);
+            return WalkOutput::empty();
+        };
+        let Ok(inline_span) = usize::try_from(layout.span_words) else {
+            self.push_error(ContractLayoutError::LayoutExtentOverflow);
+            return WalkOutput::empty();
+        };
 
-            let Some(next) = inline_span.checked_add(output.inline_span) else {
+        let mut inline_leaves = Vec::new();
+        let mut events = Vec::new();
+        for (mut output, placement) in outputs.into_iter().zip(layout.placements) {
+            let Ok(word_offset) = usize::try_from(placement.word_offset) else {
                 self.push_error(ContractLayoutError::LayoutExtentOverflow);
                 continue;
             };
             for leaf in &mut output.inline_leaves {
-                let Some(offset) = leaf.offset.checked_add(inline_span) else {
+                let Some(offset) = leaf.offset.checked_add(word_offset) else {
                     self.push_error(ContractLayoutError::LayoutExtentOverflow);
                     continue;
                 };
                 leaf.offset = offset;
+                if placement.requires_read_modify_write
+                    && let Some(lane) = placement.lane
+                {
+                    leaf.lane = Some(ContractLayoutLane {
+                        bit_offset: lane.bit_offset,
+                        bit_width: lane.bit_width,
+                    });
+                }
             }
-            inline_span = next;
             inline_leaves.extend(output.inline_leaves);
             events.extend(output.events);
-        }
-
-        if used_bits > 0 {
-            if let Some(next) = inline_span.checked_add(1) {
-                inline_span = next;
-            } else {
-                self.push_error(ContractLayoutError::LayoutExtentOverflow);
-            }
         }
 
         WalkOutput {

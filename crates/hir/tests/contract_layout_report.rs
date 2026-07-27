@@ -148,13 +148,80 @@ contract C {
         ("packed.b", "0", Some((8, 16))),
         ("packed.c", "0", Some((24, 1))),
         ("packed.d", "1", None),
-        ("packed.e", "2", Some((0, 8))),
+        ("packed.e", "2", None),
     ] {
         let entry = entry(&db, &report.entries, path);
         assert_eq!(scalar_value(&db, entry), value, "{path}");
         assert_eq!(lane(entry), expected_lane, "{path}");
         assert_eq!(entry.kind, ContractLayoutEntryKind::InlineField, "{path}");
     }
+}
+
+#[test]
+fn report_preserves_aggregate_boundaries_around_packed_structs() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+struct Inner {
+    first: u8,
+    second: u8,
+}
+
+struct Outer {
+    inner: Inner,
+    tail: u8,
+    pair: (u8, u16),
+    one: [u8; 1],
+    after: u8,
+}
+
+enum Choice {
+    Nested(Inner, u8),
+    Unit,
+}
+
+contract C {
+    mut outer: Outer,
+    mut choice: Choice,
+}
+"#,
+    );
+    let contract = find_contract(&db, top_mod, "C");
+    let report = contract.layout_report(&db).unwrap();
+
+    for (path, value, expected_lane) in [
+        ("outer.inner.first", "0", Some((0, 8))),
+        ("outer.inner.second", "0", Some((8, 8))),
+        ("outer.tail", "1", None),
+        ("outer.pair.0", "2", None),
+        ("outer.pair.1", "3", None),
+        ("outer.after", "5", None),
+        ("choice.<tag>", "6", None),
+        ("choice::Nested.0.first", "7", Some((0, 8))),
+        ("choice::Nested.0.second", "7", Some((8, 8))),
+        ("choice::Nested.1", "8", None),
+    ] {
+        let entry = entry(&db, &report.entries, path);
+        assert_eq!(scalar_value(&db, entry), value, "{path}");
+        assert_eq!(lane(entry), expected_lane, "{path}");
+    }
+
+    let one = entry(&db, &report.entries, "outer.one[i0]");
+    let ContractLayoutValue::Indexed {
+        base,
+        dimensions,
+        strides,
+        extent,
+    } = &one.value
+    else {
+        panic!("expected indexed inline entry: {one:#?}");
+    };
+    assert_eq!(base.data(&db).to_string(), "4");
+    assert_eq!(dimensions, &[1]);
+    assert_eq!(strides, &[1]);
+    assert_eq!(*extent, 1);
+    assert_eq!(lane(one), None);
 }
 
 #[test]
@@ -194,10 +261,7 @@ contract C {
         assert_eq!(*extent, 3);
     }
     assert_eq!(lane(entry(&db, &report.entries, "values[i0].left")), None);
-    assert_eq!(
-        lane(entry(&db, &report.entries, "values[i0].right")),
-        Some((0, 8))
-    );
+    assert_eq!(lane(entry(&db, &report.entries, "values[i0].right")), None);
 
     let roots = entry(&db, &report.entries, "roots[i0][i1].ROOT");
     let ContractLayoutValue::Indexed {

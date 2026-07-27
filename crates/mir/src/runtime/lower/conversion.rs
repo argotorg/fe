@@ -700,6 +700,7 @@ mod tests {
             db,
             LayoutKey::Struct(StructLayout {
                 fields: vec![word_class()].into(),
+                storage_field_packing: crate::runtime::StorageFieldPacking::WordAligned,
             }),
         )
     }
