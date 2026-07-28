@@ -11,7 +11,7 @@ use crate::{
 };
 use salsa::Update;
 
-use super::{BodyOwner, ExprProp, LocalBinding, TyChecker};
+use super::{BodyOwner, ExprProp, LocalBinding, TraitObligationOutcome, TyChecker};
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
@@ -901,16 +901,22 @@ impl<'db> Callable<'db> {
                 continue;
             }
 
-            tc.env
-                .register_trait_obligation(super::env::TraitObligation {
-                    goal: constraint,
-                    origin: super::env::TraitObligationOrigin::CallConstraint {
-                        call_expr,
-                        callable_def: self.callable_def,
-                        constraint_idx,
-                    },
-                    span: span.clone(),
-                });
+            let obligation = super::env::TraitObligation {
+                goal: constraint,
+                origin: super::env::TraitObligationOrigin::CallConstraint {
+                    call_expr,
+                    callable_def: self.callable_def,
+                    constraint_idx,
+                },
+                span: span.clone(),
+            };
+
+            match tc.process_trait_obligation(obligation, false) {
+                TraitObligationOutcome::Discharged | TraitObligationOutcome::Progressed => {}
+                TraitObligationOutcome::Requeue(obligation) => {
+                    tc.env.register_trait_obligation(obligation);
+                }
+            };
         }
     }
 }

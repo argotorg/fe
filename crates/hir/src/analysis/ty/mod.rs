@@ -702,7 +702,7 @@ impl ModuleAnalysisPass for ImplTraitAnalysisPass {
     }
 }
 
-/// An analysis pass for `ImplTrait'.
+/// An analysis pass for function definitions.
 pub struct FuncAnalysisPass {}
 
 impl ModuleAnalysisPass for FuncAnalysisPass {

@@ -408,6 +408,29 @@ fn probe(e: E) -> u256 {
     db.assert_no_diags(top_mod);
 }
 
+#[test]
+fn option_map_should_infer_the_inner_type_from_closure() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "option_map_should_infer_the_inner_type_from_closure.fe".into(),
+        r#"
+use core::option
+use core::functional::Fn
+struct Doubler {}
+impl Fn<u256, u256> for Doubler { fn call(self, _ x: own u256) -> u256 { x * 2 } }
+
+fn map_no_annotation() {
+    let n: Option<u256> = Option::Some(42)
+    let m = n.map(Doubler {})
+    assert!(m.unwrap() == 84)
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+
+    db.assert_no_diags(top_mod);
+}
+
 fn diagnostics_for<'db>(
     db: &'db HirAnalysisTestDb,
     top_mod: TopLevelMod<'db>,
