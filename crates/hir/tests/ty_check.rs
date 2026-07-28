@@ -420,9 +420,50 @@ struct Doubler {}
 impl Fn<u256, u256> for Doubler { fn call(self, _ x: own u256) -> u256 { x * 2 } }
 
 fn map_no_annotation() {
-    let n: Option<u256> = Option::Some(42)
+    let n = Option::Some(42)
     let m = n.map(Doubler {})
     assert!(m.unwrap() == 84)
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn bound_inferred_call_result_is_usable_without_a_binding() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "bound_inferred_call_result_is_usable_without_a_binding.fe".into(),
+        r#"
+trait Pick<T> {}
+
+struct Subject {}
+struct Picker {}
+
+impl Pick<u256> for Subject {}
+
+extern {
+    fn todo() -> !
+}
+
+fn pick<T, U: Pick<T>>(_ value: U) -> T {
+    todo()
+}
+
+impl Picker {
+    fn pick<T, U: Pick<T>>(self, _ value: U) -> T {
+        todo()
+    }
+}
+
+fn probe() {
+    let _value = pick(Subject {}) + 1
+    assert!(_value == 1)
+    let picker = Picker {}
+    let _value = picker.pick(Subject {}) + 1
+    assert!(_value == 1)
 }
 "#,
     );

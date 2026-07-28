@@ -373,7 +373,9 @@ impl<'db> TyChecker<'db> {
             Expr::Call(..) => {
                 if let Some(callable) = self.env.callable_expr(expr).cloned() {
                     let span = expr.span(self.body()).into_call_expr().callee().into();
-                    callable.enqueue_constraints(self, expr, span);
+                    if callable.enqueue_constraints(self, expr, span) {
+                        actual.ty = self.normalize_ty(actual.ty);
+                    }
                 }
             }
             Expr::MethodCall(..) => {
@@ -383,7 +385,9 @@ impl<'db> TyChecker<'db> {
                         .into_method_call_expr()
                         .method_name()
                         .into();
-                    callable.enqueue_constraints(self, expr, span);
+                    if callable.enqueue_constraints(self, expr, span) {
+                        actual.ty = self.normalize_ty(actual.ty);
+                    }
                 }
             }
             _ => {}

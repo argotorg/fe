@@ -865,7 +865,8 @@ impl<'db> Callable<'db> {
         tc: &mut TyChecker<'db>,
         call_expr: ExprId,
         span: DynLazySpan<'db>,
-    ) {
+    ) -> bool {
+        let mut progressed = false;
         let db = tc.db;
         let constraints = collect_func_decl_constraints(db, self.callable_def, true);
         let declared = constraints.instantiate_identity();
@@ -912,11 +913,13 @@ impl<'db> Callable<'db> {
             };
 
             match tc.process_trait_obligation(obligation, false) {
-                TraitObligationOutcome::Discharged | TraitObligationOutcome::Progressed => {}
+                TraitObligationOutcome::Discharged => {}
+                TraitObligationOutcome::Progressed => progressed = true,
                 TraitObligationOutcome::Requeue(obligation) => {
                     tc.env.register_trait_obligation(obligation);
                 }
             };
         }
+        progressed
     }
 }
