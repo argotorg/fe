@@ -539,6 +539,64 @@ fn probe() {
     );
 }
 
+#[test]
+fn call_bounds_are_solved_to_a_fixed_point() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "call_bounds_are_solved_to_a_fixed_point.fe".into(),
+        r#"
+trait Link<T> {}
+
+struct Leaf {}
+struct Mid {}
+
+impl Link<Mid> for Leaf {}
+impl Link<u256> for Mid {}
+
+extern {
+    fn todo() -> !
+}
+
+// `U: Link<T>` is declared before `V: Link<U>` but is ambiguous until the
+// latter binds `U`, so a single pass over the bounds leaves `T` unresolved.
+fn chain<T, U: Link<T>, V: Link<U>>(_ value: V) -> T {
+    todo()
+}
+
+fn probe() -> u256 {
+    chain(Leaf {}) + 1
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let probe = top_mod
+        .all_funcs(&db)
+        .iter()
+        .copied()
+        .find(|func| {
+            func.name(&db)
+                .to_opt()
+                .is_some_and(|name| name.data(&db) == "probe")
+        })
+        .expect("missing `probe` function");
+    let body = probe.body(&db).expect("missing `probe` body");
+    let call = body
+        .exprs(&db)
+        .keys()
+        .find(|expr| matches!(expr.data(&db, body), Partial::Present(Expr::Call(..))))
+        .expect("missing `chain` call");
+    let call_ty = check_func_body(&db, probe).1.expr_ty(&db, call);
+
+    assert_eq!(
+        call_ty.pretty_print(&db).to_string(),
+        "u256",
+        "a bound that only becomes solvable after a later bound binds an intermediate \
+         parameter must still be solved at the call site",
+    );
+}
+
 fn diagnostics_for<'db>(
     db: &'db HirAnalysisTestDb,
     top_mod: TopLevelMod<'db>,

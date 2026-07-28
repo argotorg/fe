@@ -878,6 +878,7 @@ impl<'db> Callable<'db> {
         let definition_solve_cx = TraitSolveCx::new(db, self.callable_def.scope())
             .with_assumptions(definition_assumptions);
 
+        let mut pending_obligations = Vec::new();
         for (constraint_idx, (&constraint, &declared_constraint)) in instantiated
             .list(db)
             .iter()
@@ -916,9 +917,30 @@ impl<'db> Callable<'db> {
                 TraitObligationOutcome::Discharged => {}
                 TraitObligationOutcome::Progressed => progressed = true,
                 TraitObligationOutcome::Requeue(obligation) => {
-                    tc.env.register_trait_obligation(obligation);
+                    pending_obligations.push(obligation);
                 }
             };
+        }
+
+        let mut round_progressed = true;
+        while round_progressed && !pending_obligations.is_empty() {
+            round_progressed = false;
+            for obligation in std::mem::take(&mut pending_obligations) {
+                match tc.process_trait_obligation(obligation, false) {
+                    TraitObligationOutcome::Discharged => {}
+                    TraitObligationOutcome::Progressed => {
+                        progressed = true;
+                        round_progressed = true;
+                    }
+                    TraitObligationOutcome::Requeue(obligation) => {
+                        pending_obligations.push(obligation);
+                    }
+                };
+            }
+        }
+
+        for obligation in pending_obligations {
+            tc.env.register_trait_obligation(obligation);
         }
         progressed
     }
