@@ -458,12 +458,11 @@ impl Picker {
     }
 }
 
-fn probe() {
-    let _value = pick(Subject {}) + 1
-    assert!(_value == 1)
+fn probe() -> u256 {
+    let value = pick(Subject {}) + 1
+    assert!(value == 1)
     let picker = Picker {}
-    let _value = picker.pick(Subject {}) + 1
-    assert!(_value == 1)
+    picker.pick(Subject {}) + 1
 }
 "#,
     );
