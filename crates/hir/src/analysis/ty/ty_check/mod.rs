@@ -1596,7 +1596,7 @@ impl<'db> TyChecker<'db> {
                                 ) {
                                     let normalized = self.normalize_ty(callable.ret_ty(db));
                                     if normalized != ret_ty {
-                                        self.retype_expr(
+                                        self.retype_expr_or_pat(
                                             Typeable::Expr(pending.expr, expr_prop),
                                             normalized,
                                         );
@@ -2334,28 +2334,25 @@ impl<'db> TyChecker<'db> {
         let span = t.clone().span(self.env.body());
         let actual = self.equate_ty(actual, expected, span);
 
-        match t {
-            typeable_expr @ Typeable::Expr(..) => self.retype_expr(typeable_expr, actual),
-            Typeable::Pat(pat) => {
-                self.env.type_pat(pat, actual);
-                actual
-            }
-        }
+        self.retype_expr_or_pat(t, actual);
+        actual
     }
 
-    fn retype_expr(&mut self, typeable: Typeable<'db>, ty: TyId<'db>) -> TyId<'db> {
-        let Typeable::Expr(expr, mut typed_expr) = typeable else {
-            unreachable!("Expected Typeable::Expr");
-        };
-        typed_expr.ty = ty;
-        if typed_expr.borrow_provider.is_none() {
-            typed_expr.borrow_provider = self.concrete_borrow_provider_for_effect_handle_ty(ty);
+    fn retype_expr_or_pat(&mut self, typeable: Typeable<'db>, ty: TyId<'db>) {
+        match typeable {
+            Typeable::Expr(expr, mut typed_expr) => {
+                typed_expr.ty = ty;
+                if typed_expr.borrow_provider.is_none() {
+                    typed_expr.borrow_provider =
+                        self.concrete_borrow_provider_for_effect_handle_ty(ty);
+                }
+                typed_expr.path_read_semantics = typed_expr
+                    .binding
+                    .map(|binding| self.binding_path_read_semantics(binding, ty));
+                self.env.type_expr(expr, typed_expr);
+            }
+            Typeable::Pat(pat) => self.env.type_pat(pat, ty),
         }
-        typed_expr.path_read_semantics = typed_expr
-            .binding
-            .map(|binding| self.binding_path_read_semantics(binding, ty));
-        self.env.type_expr(expr, typed_expr);
-        ty
     }
 
     fn equate_ty(
