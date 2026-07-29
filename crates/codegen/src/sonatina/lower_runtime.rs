@@ -10,7 +10,7 @@ use hir::{
     hir_def::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
     projection::IndexSource,
 };
-use mir::runtime::RefKind;
+use mir::runtime::{RefKind, RefView, StorageBitLane};
 use mir::{
     AddressSpaceKind, ConstNode, ConstRegionId, ConstScalar, IntrinsicArithBinOp, Layout, LayoutId,
     RBlockId, RExpr, RLocalId, RStmt, RTerminator, ResolvedPlaceElem, ResolvedPlaceRootKind,
@@ -625,11 +625,7 @@ enum SlotRoot {
     Object(ValueId, Type),
 }
 
-#[derive(Clone, Copy)]
-struct PackedLane {
-    bit_offset: u16,
-    bit_width: u16,
-}
+type PackedLane = StorageBitLane;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PtrLayoutMode {
@@ -2421,6 +2417,27 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
     ) -> Result<PlaceTerminal<'db>, LowerError> {
         match carrier_class {
             RuntimeClass::Ref {
+                kind: RefKind::Provider { space, .. },
+                view: RefView::StorageLane(lane),
+                ..
+            } => {
+                if !matches!(
+                    space,
+                    AddressSpaceKind::Storage | AddressSpaceKind::Transient
+                ) || !matches!(&class, RuntimeClass::Scalar(_))
+                {
+                    return Err(LowerError::Internal(
+                        "storage-lane view requires a scalar storage provider".to_string(),
+                    ));
+                }
+                Ok(PlaceTerminal::PackedPtr {
+                    addr: self.local_value(value)?,
+                    space,
+                    class,
+                    lane,
+                })
+            }
+            RuntimeClass::Ref {
                 kind: RefKind::Const,
                 ..
             } => Ok(PlaceTerminal::Const {
@@ -2477,6 +2494,27 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         carrier_class: &RuntimeClass<'db>,
     ) -> Result<PlaceTerminal<'db>, LowerError> {
         match carrier_class {
+            RuntimeClass::Ref {
+                kind: RefKind::Provider { space, .. },
+                pointee,
+                view: RefView::StorageLane(lane),
+            } => {
+                if !matches!(
+                    space,
+                    AddressSpaceKind::Storage | AddressSpaceKind::Transient
+                ) || !matches!(pointee.as_ref(), RuntimeClass::Scalar(_))
+                {
+                    return Err(LowerError::Internal(
+                        "storage-lane view requires a scalar storage provider".to_string(),
+                    ));
+                }
+                Ok(PlaceTerminal::PackedPtr {
+                    addr: value,
+                    space: *space,
+                    class: (**pointee).clone(),
+                    lane: *lane,
+                })
+            }
             RuntimeClass::Ref {
                 kind: RefKind::Const,
                 pointee,
@@ -3800,9 +3838,33 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 }
                 Ok(Lowered::Value(addr))
             }
-            PlaceTerminal::PackedPtr { .. } => Err(LowerError::Unsupported(
-                "cannot borrow packed storage fields as raw pointers".to_string(),
-            )),
+            PlaceTerminal::PackedPtr {
+                addr,
+                space,
+                class,
+                lane,
+            } => {
+                if let Some(dst) = dst
+                    && let Some(RuntimeClass::Ref {
+                        pointee,
+                        kind:
+                            RefKind::Provider {
+                                space: target_space,
+                                ..
+                            },
+                        view: RefView::StorageLane(target_lane),
+                    }) = self.body.value_class(dst)
+                    && pointee.as_ref() == &class
+                    && *target_space == space
+                    && *target_lane == lane
+                {
+                    return Ok(Lowered::Value(addr));
+                }
+                Err(LowerError::Unsupported(
+                    "packed storage field address requires a matching lane-aware provider"
+                        .to_string(),
+                ))
+            }
         }
     }
 

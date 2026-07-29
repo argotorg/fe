@@ -342,6 +342,15 @@ pub enum RefKind<'db> {
 pub enum RefView<'db> {
     Whole,
     EnumVariant(VariantId<'db>),
+    /// The reference carries the containing storage word at runtime; this
+    /// compile-time view identifies the scalar lane within that word.
+    StorageLane(StorageBitLane),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub struct StorageBitLane {
+    pub bit_offset: u16,
+    pub bit_width: u16,
 }
 
 fn layouts_share_runtime_rep<'db>(

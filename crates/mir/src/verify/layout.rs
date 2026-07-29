@@ -2,7 +2,10 @@ use rustc_hash::FxHashSet;
 
 use crate::{
     db::MirDb,
-    runtime::{Layout, LayoutId, RefView, RuntimeClass, RuntimeProgramView, ScalarRole},
+    runtime::{
+        AddressSpaceKind, Layout, LayoutId, RefKind, RefView, RuntimeClass, RuntimeProgramView,
+        ScalarRole,
+    },
     verify::VerifyError,
 };
 
@@ -15,13 +18,31 @@ pub(super) fn verify_class_layouts<'db>(
     match class {
         RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => Ok(()),
         RuntimeClass::AggregateValue { layout } => verify_layout(db, program, *layout, visited),
-        RuntimeClass::Ref { pointee, view, .. } => {
-            if !matches!(view, RefView::Whole | RefView::EnumVariant(_)) {
-                return Err(VerifyError::InvalidLayoutRefView(
-                    pointee.aggregate_layout().unwrap_or_else(|| {
-                        panic!("ref view should only appear on aggregate pointees: {pointee:?}")
-                    }),
-                ));
+        RuntimeClass::Ref {
+            pointee,
+            kind,
+            view,
+        } => {
+            match view {
+                RefView::Whole => {}
+                RefView::EnumVariant(_) if pointee.aggregate_layout().is_some() => {}
+                RefView::StorageLane(lane)
+                    if matches!(
+                        kind,
+                        RefKind::Provider {
+                            space: AddressSpaceKind::Storage | AddressSpaceKind::Transient,
+                            ..
+                        }
+                    ) && matches!(
+                        pointee.as_ref(),
+                        RuntimeClass::Scalar(scalar)
+                            if scalar.storage_bit_width() == lane.bit_width
+                    ) && lane.bit_width > 0
+                        && u32::from(lane.bit_offset) + u32::from(lane.bit_width)
+                            <= u32::from(common::layout::WORD_SIZE_BITS) => {}
+                RefView::EnumVariant(_) | RefView::StorageLane(_) => {
+                    return Err(VerifyError::InvalidPlace(class.clone()));
+                }
             }
             if let Some(layout) = pointee.aggregate_layout() {
                 verify_layout(db, program, layout, visited)?;
@@ -87,6 +108,10 @@ fn verify_stored_class<'db>(
                 }),
             ));
         }
+        RuntimeClass::Ref {
+            view: RefView::StorageLane(_),
+            ..
+        } => return Err(VerifyError::InvalidPlace(class.clone())),
         RuntimeClass::Scalar(_)
         | RuntimeClass::AggregateValue { .. }
         | RuntimeClass::Ref { .. }

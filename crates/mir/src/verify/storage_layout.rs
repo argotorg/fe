@@ -245,7 +245,7 @@ fn contract_field_ref_kind<'db>(
         RuntimeClass::Scalar(_)
         | RuntimeClass::AggregateValue { .. }
         | RuntimeClass::Ref {
-            view: RefView::EnumVariant(_),
+            view: RefView::EnumVariant(_) | RefView::StorageLane(_),
             ..
         } => None,
     }
