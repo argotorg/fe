@@ -377,7 +377,7 @@ impl<'db> TyChecker<'db> {
                         let normalized = self.normalize_ty(actual.ty);
                         if normalized != actual.ty {
                             let typeable = Typeable::Expr(expr, actual.clone());
-                            actual.ty = self.retype_expr(typeable, normalized);
+                            actual.ty = self.unify_ty(typeable, actual.ty, normalized);
                         }
                     }
                 }
@@ -393,7 +393,7 @@ impl<'db> TyChecker<'db> {
                         let normalized = self.normalize_ty(actual.ty);
                         if normalized != actual.ty {
                             let typeable = Typeable::Expr(expr, actual.clone());
-                            actual.ty = self.retype_expr(typeable, normalized);
+                            actual.ty = self.unify_ty(typeable, actual.ty, normalized);
                         }
                     }
                 }
