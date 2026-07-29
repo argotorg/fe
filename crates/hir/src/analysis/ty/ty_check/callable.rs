@@ -922,7 +922,7 @@ impl<'db> Callable<'db> {
             };
         }
 
-        let mut round_progressed = true;
+        let mut round_progressed = progressed;
         while round_progressed && !pending_obligations.is_empty() {
             round_progressed = false;
             for obligation in std::mem::take(&mut pending_obligations) {
