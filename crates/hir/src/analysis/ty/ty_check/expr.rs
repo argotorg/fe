@@ -369,34 +369,6 @@ impl<'db> TyChecker<'db> {
         }
         let typeable = Typeable::Expr(expr, actual.clone());
         actual.ty = self.unify_ty(typeable, actual.ty, expected);
-        let mut progressed = false;
-        match expr_data {
-            Expr::Call(..) => {
-                if let Some(callable) = self.env.callable_expr(expr).cloned() {
-                    let span = expr.span(self.body()).into_call_expr().callee().into();
-                    progressed = callable.process_constraints(self, expr, span);
-                }
-            }
-            Expr::MethodCall(..) => {
-                if let Some(callable) = self.env.callable_expr(expr).cloned() {
-                    let span = expr
-                        .span(self.body())
-                        .into_method_call_expr()
-                        .method_name()
-                        .into();
-                    progressed = callable.process_constraints(self, expr, span);
-                }
-            }
-            _ => {}
-        }
-        if progressed {
-            let normalized = self.normalize_ty(actual.ty);
-            if normalized != actual.ty {
-                let typeable = Typeable::Expr(expr, actual.clone());
-                self.retype_expr_or_pat(typeable.clone(), normalized);
-                actual.ty = self.unify_ty(typeable, actual.ty, expected);
-            }
-        }
         actual
     }
 
@@ -1366,6 +1338,8 @@ impl<'db> TyChecker<'db> {
         self.specialize_callable_layout_args(&mut callable, None, args);
 
         self.check_callable_effects(expr, &mut callable);
+
+        callable.process_constraints(self, expr, call_span.callee().into());
 
         let ret_ty = callable.ret_ty(self.db);
         let normalized_ret_ty = self.normalize_ty(ret_ty);
@@ -3366,6 +3340,8 @@ impl<'db> TyChecker<'db> {
 
         // Check required effects for the method call
         self.check_callable_effects(expr, &mut callable);
+
+        callable.process_constraints(self, expr, call_span.method_name().into());
 
         let ret_ty = callable.ret_ty(self.db);
         let normalized_ret_ty = self.normalize_ty(ret_ty);

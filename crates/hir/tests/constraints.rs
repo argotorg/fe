@@ -231,6 +231,39 @@ fn caller() {
 }
 
 #[test]
+fn free_function_call_constraints_processed_to_a_fixed_point() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "free_function_call_constraints_processed_to_a_fixed_point.fe".into(),
+        r#"
+extern {
+    fn todo() -> !
+}
+
+trait Link<T> {}
+
+struct Leaf {}
+struct Mid {}
+
+impl Link<Mid> for Leaf {}
+impl Link<u256> for Mid {}
+
+// `U: Link<T>` is declared before `V: Link<U>` but is ambiguous until the
+// latter binds `U`, so a single pass over the bounds leaves `T` unresolved.
+fn chain<T, U: Link<T>, V: Link<U>>(_ value: V) -> T {
+    todo()
+}
+
+fn caller() -> u256 {
+    chain(Leaf {}) + 1
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
 fn method_call_constraints_defer_through_if_join() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
