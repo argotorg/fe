@@ -369,18 +369,12 @@ impl<'db> TyChecker<'db> {
         }
         let typeable = Typeable::Expr(expr, actual.clone());
         actual.ty = self.unify_ty(typeable, actual.ty, expected);
+        let mut progressed = false;
         match expr_data {
             Expr::Call(..) => {
                 if let Some(callable) = self.env.callable_expr(expr).cloned() {
                     let span = expr.span(self.body()).into_call_expr().callee().into();
-                    if callable.process_constraints(self, expr, span) {
-                        let normalized = self.normalize_ty(actual.ty);
-                        if normalized != actual.ty {
-                            let typeable = Typeable::Expr(expr, actual.clone());
-                            self.retype_expr_or_pat(typeable.clone(), normalized);
-                            actual.ty = self.unify_ty(typeable, actual.ty, expected);
-                        }
-                    }
+                    progressed = callable.process_constraints(self, expr, span);
                 }
             }
             Expr::MethodCall(..) => {
@@ -390,17 +384,18 @@ impl<'db> TyChecker<'db> {
                         .into_method_call_expr()
                         .method_name()
                         .into();
-                    if callable.process_constraints(self, expr, span) {
-                        let normalized = self.normalize_ty(actual.ty);
-                        if normalized != actual.ty {
-                            let typeable = Typeable::Expr(expr, actual.clone());
-                            self.retype_expr_or_pat(typeable.clone(), normalized);
-                            actual.ty = self.unify_ty(typeable, actual.ty, expected);
-                        }
-                    }
+                    progressed = callable.process_constraints(self, expr, span);
                 }
             }
             _ => {}
+        }
+        if progressed {
+            let normalized = self.normalize_ty(actual.ty);
+            if normalized != actual.ty {
+                let typeable = Typeable::Expr(expr, actual.clone());
+                self.retype_expr_or_pat(typeable.clone(), normalized);
+                actual.ty = self.unify_ty(typeable, actual.ty, expected);
+            }
         }
         actual
     }
