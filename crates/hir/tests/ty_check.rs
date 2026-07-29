@@ -485,6 +485,7 @@ trait HasOutput {
 struct Subject {}
 struct A {}
 struct B {}
+struct Picker {}
 
 // Two implementors keep `T: HasOutput` from determining `T` on its own, so
 // `T::Output` is still an unresolved projection when the call is recorded.
@@ -505,8 +506,16 @@ fn pick<T: HasOutput, U: Pick<T>>(_ value: U) -> T::Output {
     todo()
 }
 
+impl Picker {
+    fn pick<T: HasOutput, U: Pick<T>>(self, _ value: U) -> T::Output {
+        todo()
+    }
+}
+
 fn probe() {
     let _value = pick(Subject {})
+    let picker = Picker {}
+    let _method_value = picker.pick(Subject {})
 }
 "#,
     );
@@ -529,13 +538,27 @@ fn probe() {
         .keys()
         .find(|expr| matches!(expr.data(&db, body), Partial::Present(Expr::Call(..))))
         .expect("missing `pick` call");
-    let call_ty = check_func_body(&db, probe).1.expr_ty(&db, call);
+    let method_call = body
+        .exprs(&db)
+        .keys()
+        .find(|expr| matches!(expr.data(&db, body), Partial::Present(Expr::MethodCall(..))))
+        .expect("missing `picker.pick` call");
+    let typed_body = &check_func_body(&db, probe).1;
 
     assert_eq!(
-        call_ty.pretty_print(&db).to_string(),
+        typed_body.expr_ty(&db, call).pretty_print(&db).to_string(),
         "u256",
         "solving `Subject: Pick<T>` at the call site must also resolve the recorded \
          `T::Output`, which folding the unification table alone cannot do",
+    );
+    assert_eq!(
+        typed_body
+            .expr_ty(&db, method_call)
+            .pretty_print(&db)
+            .to_string(),
+        "u256",
+        "a method call resolved without deferral must resolve its recorded \
+         `T::Output` the same way a free function call does",
     );
 }
 
@@ -594,6 +617,93 @@ fn probe() -> u256 {
         "u256",
         "a bound that only becomes solvable after a later bound binds an intermediate \
          parameter must still be solved at the call site",
+    );
+}
+
+#[test]
+fn deferred_method_projection_is_retyped_after_bounds_are_solved() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "deferred_method_projection_is_retyped_after_bounds_are_solved.fe".into(),
+        r#"
+extern {
+    fn todo() -> !
+}
+
+trait Pick<T> {}
+trait HasOutput {
+    type Output
+}
+
+struct A {}
+struct B {}
+struct Subject {}
+
+// Two implementors keep `P: HasOutput` from determining `P` on its own, so
+// `P::Output` is still an unresolved projection when the method resolves.
+impl HasOutput for A {
+    type Output = u256
+}
+impl HasOutput for B {
+    type Output = bool
+}
+
+impl Pick<A> for Subject {}
+
+struct S {}
+
+// Two implementors of `Foo` make `s.foo(..)` ambiguous during the body pass,
+// so the call is deferred until `resolve_deferred`. The marker argument, not
+// the return type, is what picks the candidate: a concrete expected type
+// cannot unify against `P::Output` while `P` is still open.
+trait Foo<M> {
+    fn foo<P: HasOutput, Q: Pick<P>>(self, _ marker: M, _ value: Q) -> P::Output
+}
+
+impl Foo<u8> for S {
+    fn foo<P: HasOutput, Q: Pick<P>>(self, _ marker: u8, _ value: Q) -> P::Output {
+        todo()
+    }
+}
+
+impl Foo<bool> for S {
+    fn foo<P: HasOutput, Q: Pick<P>>(self, _ marker: bool, _ value: Q) -> P::Output {
+        todo()
+    }
+}
+
+fn probe() {
+    let s = S {}
+    let _value = s.foo(true, Subject {})
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let probe = top_mod
+        .all_funcs(&db)
+        .iter()
+        .copied()
+        .find(|func| {
+            func.name(&db)
+                .to_opt()
+                .is_some_and(|name| name.data(&db) == "probe")
+        })
+        .expect("missing `probe` function");
+    let body = probe.body(&db).expect("missing `probe` body");
+    let call = body
+        .exprs(&db)
+        .keys()
+        .find(|expr| matches!(expr.data(&db, body), Partial::Present(Expr::MethodCall(..))))
+        .expect("missing `foo` call");
+    let call_ty = check_func_body(&db, probe).1.expr_ty(&db, call);
+
+    assert_eq!(
+        call_ty.pretty_print(&db).to_string(),
+        "u256",
+        "bounds solved while resolving a deferred method must also retype the \
+         recorded method call, which folding the unification table alone cannot do",
     );
 }
 

@@ -373,11 +373,11 @@ impl<'db> TyChecker<'db> {
             Expr::Call(..) => {
                 if let Some(callable) = self.env.callable_expr(expr).cloned() {
                     let span = expr.span(self.body()).into_call_expr().callee().into();
-                    if callable.enqueue_constraints(self, expr, span) {
+                    if callable.process_constraints(self, expr, span) {
                         let normalized = self.normalize_ty(actual.ty);
                         if normalized != actual.ty {
-                            actual.ty =
-                                self.retype_expr(Typeable::Expr(expr, actual.clone()), normalized);
+                            let typeable = Typeable::Expr(expr, actual.clone());
+                            actual.ty = self.retype_expr(typeable, normalized);
                         }
                     }
                 }
@@ -389,11 +389,11 @@ impl<'db> TyChecker<'db> {
                         .into_method_call_expr()
                         .method_name()
                         .into();
-                    if callable.enqueue_constraints(self, expr, span) {
+                    if callable.process_constraints(self, expr, span) {
                         let normalized = self.normalize_ty(actual.ty);
                         if normalized != actual.ty {
-                            actual.ty =
-                                self.retype_expr(Typeable::Expr(expr, actual.clone()), normalized);
+                            let typeable = Typeable::Expr(expr, actual.clone());
+                            actual.ty = self.retype_expr(typeable, normalized);
                         }
                     }
                 }

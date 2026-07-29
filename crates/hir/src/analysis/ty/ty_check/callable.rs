@@ -860,7 +860,7 @@ impl<'db> CallArg<'db> {
 }
 
 impl<'db> Callable<'db> {
-    pub(super) fn enqueue_constraints(
+    pub(super) fn process_constraints(
         &self,
         tc: &mut TyChecker<'db>,
         call_expr: ExprId,

@@ -1589,11 +1589,19 @@ impl<'db> TyChecker<'db> {
                                 let ret_ty = self.normalize_ty(callable.ret_ty(db));
                                 self.table.unify(expr_prop.ty, ret_ty).unwrap();
 
-                                callable.enqueue_constraints(
+                                if callable.process_constraints(
                                     self,
                                     pending.expr,
                                     call_span.method_name().into(),
-                                );
+                                ) {
+                                    let normalized = self.normalize_ty(callable.ret_ty(db));
+                                    if normalized != ret_ty {
+                                        self.retype_expr(
+                                            Typeable::Expr(pending.expr, expr_prop),
+                                            normalized,
+                                        );
+                                    }
+                                }
                                 if let Some(kind) =
                                     self.code_region_method_kind(recv_ty, pending.method_name)
                                     && call_args.len() == 1
