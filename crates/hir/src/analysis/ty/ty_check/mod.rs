@@ -1446,6 +1446,14 @@ impl<'db> TyChecker<'db> {
                     this.table.unify(given, expected).ok()?;
                 }
 
+                let method_name_span = pending
+                    .expr
+                    .span(body)
+                    .into_method_call_expr()
+                    .method_name()
+                    .into();
+                callable.process_constraints(this, pending.expr, method_name_span);
+
                 let ret_ty = normalize_ty(
                     db,
                     callable.ret_ty(db).fold_with(db, &mut this.table),
