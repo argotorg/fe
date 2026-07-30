@@ -1586,13 +1586,6 @@ impl<'db> TyChecker<'db> {
                                     Some((receiver, receiver_prop)),
                                     true,
                                 );
-                                self.specialize_callable_layout_args(
-                                    &mut callable,
-                                    Some(receiver),
-                                    call_args,
-                                );
-
-                                self.check_callable_effects(pending.expr, &mut callable);
 
                                 callable.process_constraints(
                                     self,
@@ -1601,7 +1594,30 @@ impl<'db> TyChecker<'db> {
                                 );
 
                                 let ret_ty = self.normalize_ty(callable.ret_ty(db));
-                                self.table.unify(expr_prop.ty, ret_ty).unwrap();
+                                match self.table.unify(expr_prop.ty, ret_ty) {
+                                    Ok(()) => {}
+                                    Err(UnificationError::TypeMismatch) => {
+                                        self.push_diag(BodyDiag::TypeMismatch {
+                                            span: pending.expr.span(body).into(),
+                                            expected: ret_ty,
+                                            given: expr_prop.ty,
+                                        });
+                                        continue;
+                                    }
+                                    Err(UnificationError::OccursCheckFailed) => {
+                                        let span = pending.expr.span(body).into();
+                                        self.push_diag(BodyDiag::InfiniteOccurrence(span));
+                                        continue;
+                                    }
+                                }
+
+                                self.specialize_callable_layout_args(
+                                    &mut callable,
+                                    Some(receiver),
+                                    call_args,
+                                );
+
+                                self.check_callable_effects(pending.expr, &mut callable);
 
                                 if let Some(kind) =
                                     self.code_region_method_kind(recv_ty, pending.method_name)
