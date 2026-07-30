@@ -1752,7 +1752,7 @@ impl<'db> TyChecker<'db> {
                                 call_args,
                                 candidate,
                             );
-                            matches!(viability, Viability::Viable)
+                            !matches!(viability, Viability::Incompatible)
                         })
                         .collect();
                     let viable = self.dedup_equivalent_pending_method_candidates(viable);
