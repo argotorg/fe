@@ -1609,8 +1609,8 @@ impl<'db> TyChecker<'db> {
                                     Err(UnificationError::TypeMismatch) => {
                                         self.push_diag(BodyDiag::TypeMismatch {
                                             span: pending.expr.span(body).into(),
-                                            expected: ret_ty,
-                                            given: expr_prop.ty,
+                                            expected: expr_prop.ty,
+                                            given: ret_ty,
                                         });
                                         continue;
                                     }
