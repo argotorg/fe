@@ -1462,7 +1462,7 @@ impl<'db> TyChecker<'db> {
                     .into_method_call_expr()
                     .method_name()
                     .into();
-                callable.process_constraints(this, pending.expr, method_name_span);
+                let progressed = callable.process_constraints(this, pending.expr, method_name_span);
 
                 let ret_ty = normalize_ty(
                     db,
@@ -1470,7 +1470,12 @@ impl<'db> TyChecker<'db> {
                     scope,
                     assumptions,
                 );
-                this.table.unify(expr_ty, ret_ty).ok()?;
+
+                // We made some progress in resolving trait obligations, let the later passes
+                // determine whether or not the return type unifies with the expected type
+                if !progressed && this.table.unify(expr_ty, ret_ty).is_err() {
+                    return None;
+                }
 
                 Some(())
             })()

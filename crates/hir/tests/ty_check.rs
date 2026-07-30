@@ -762,6 +762,80 @@ fn probe() {
     db.assert_no_diags(top_mod);
 }
 
+#[test]
+fn deferred_method_return_mismatch_after_bounds_are_solved_is_diagnosed() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "deferred_method_return_mismatch_after_bounds_are_solved_is_diagnosed.fe".into(),
+        r#"
+trait Pick<T> {}
+
+trait HasOutput {
+    type Output
+}
+
+struct A {}
+struct B {}
+struct Subject {}
+struct S {}
+
+impl HasOutput for A {
+    type Output = u256
+}
+
+impl HasOutput for B {
+    type Output = bool
+}
+
+impl Pick<B> for Subject {}
+
+extern {
+    fn todo() -> !
+}
+
+trait Foo<M> {
+    fn foo<P: HasOutput, Q: Pick<P>>(
+        self,
+        _ marker: M,
+        _ value: Q,
+    ) -> P::Output
+}
+
+impl Foo<u8> for S {
+    fn foo<P: HasOutput, Q: Pick<P>>(
+        self,
+        _ marker: u8,
+        _ value: Q,
+    ) -> P::Output {
+        todo()
+    }
+}
+
+impl Foo<bool> for S {
+    fn foo<P: HasOutput, Q: Pick<P>>(
+        self,
+        _ marker: bool,
+        _ value: Q,
+    ) -> P::Output {
+        todo()
+    }
+}
+
+fn probe() -> u256 {
+    let s = S {}
+    s.foo(true, Subject {})
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+
+    assert!(
+        diagnostics_contain(&diags, "expected `u256`, but `bool` is given"),
+        "{diags:#?}",
+    );
+}
+
 fn diagnostics_for<'db>(
     db: &'db HirAnalysisTestDb,
     top_mod: TopLevelMod<'db>,
