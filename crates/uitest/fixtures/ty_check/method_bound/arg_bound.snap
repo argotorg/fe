@@ -1,22 +1,9 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/method_bound/arg_bound.fe
 ---
-error[2-0004]: `Some` is ambiguous
-   ┌─ arg_bound.fe:58:15
-   │
-18 │     Some(T),
-   │     ---- candidate 2
-   ·
-58 │     let opt = Some(1)
-   │               ^^^^ `Some` is ambiguous
-   │
-   ┌─ src/option.fe:10:5
-   │
-10 │     Some(T),
-   │     ---- candidate 1 (from implicit import)
-
 error[6-0003]: trait bound is not satisfied
    ┌─ arg_bound.fe:56:5
    │

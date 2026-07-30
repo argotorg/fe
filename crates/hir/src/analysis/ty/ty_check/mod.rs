@@ -1240,6 +1240,15 @@ impl<'db> TyChecker<'db> {
         let query = CanonicalGoalQuery::new(db, goal, assumptions);
         match is_goal_query_satisfiable(db, solve_cx, &query) {
             GoalSatisfiability::Satisfied(solution) => {
+                if goal.self_ty(db).has_var(db) {
+                    let outcome = if final_pass {
+                        // Don't invent the self type at the end either; leave it alone
+                        TraitObligationOutcome::Discharged
+                    } else {
+                        TraitObligationOutcome::Requeue(obligation)
+                    };
+                    return outcome;
+                }
                 let solved = query.extract_solution(&mut self.table, solution).inst;
                 if self.has_dead_inference_keys(&solved) {
                     return TraitObligationOutcome::Discharged;
@@ -1288,6 +1297,7 @@ impl<'db> TyChecker<'db> {
 
                 if let [solution] = candidates.as_slice()
                     && answers_complete_for_inference
+                    && !goal.self_ty(db).has_var(db)
                 {
                     if self.table.unify(goal, *solution).is_ok()
                         && self.normalize_trait_goal(goal) != goal

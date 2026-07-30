@@ -1,4 +1,4 @@
-use Option::*
+use Maybe::*
 
 extern {
     fn todo() -> !
@@ -7,22 +7,22 @@ extern {
 trait Extract
 where Self: * -> *
 {
-    fn extract<T>(self: Self<T>) -> T
+    fn extract<T>(self: own Self<T>) -> T
 }
 
 trait Clone {
     fn clone(self) -> Self
 }
 
-enum Option<T> {
-    Some(T),
-    None
+enum Maybe<T> {
+    Just(T),
+    Nothing
 }
-impl Extract for Option {
-    fn extract<T>(self: Self<T>) -> T {
+impl Extract for Maybe {
+    fn extract<T>(self: own Self<T>) -> T {
         match self {
-            Some(t) => t
-            None => todo()
+            Just(t) => t
+            Nothing => todo()
         }
     }
 }
@@ -38,7 +38,7 @@ impl<T> S<T> {
     }
 }
 
-pub fn extract<T, U>(_ t: T<U>) -> U
+pub fn extract<T, U>(_ t: own T<U>) -> U
 where T: * -> * + Extract,
       U: Clone,
 {
@@ -55,6 +55,6 @@ fn foo() -> i32 {
     let s = S::new(false)
     extract(s)
 
-    let opt = Some(1)
+    let opt = Just(1)
     extract(opt)
 }
