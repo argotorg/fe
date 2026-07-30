@@ -4407,11 +4407,13 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     scalar.is_signed_int(),
                 )?;
                 let storage_bits = scalar.storage_bit_width();
+                // Same-width signed scalars keep their whole-word sign extension.
+                // Packed fields are masked separately by `store_packed_lane`.
                 if matches!(
                     space,
                     AddressSpaceKind::Storage | AddressSpaceKind::Transient
                 ) && storage_bits < 256
-                    && (scalar.is_signed_int() || src_bits > storage_bits)
+                    && src_bits > storage_bits
                 {
                     self.mask_word_bits(value, storage_bits)?
                 } else {

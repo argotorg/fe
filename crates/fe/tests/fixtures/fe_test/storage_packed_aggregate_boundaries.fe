@@ -105,7 +105,7 @@ fn test_storage_packed_aggregate_boundaries() uses (evm: mut Evm) {
         (1, 0xcc),
         (2, 0x11),
         (3, 0x2233),
-        (4, 0xff),
+        (4, u256::max()),
         (5, 0x44),
         (6, 0),
         (7, 0x6655),
