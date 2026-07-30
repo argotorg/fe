@@ -1367,122 +1367,146 @@ impl<'db> TyChecker<'db> {
         let scope = self.env.scope();
         let assumptions = self.env.assumptions();
 
-        let is_viable = |this: &mut Self,
-                         pending: &env::PendingMethod<'db>,
-                         expr_ty: TyId<'db>,
-                         receiver: ExprId,
-                         generic_args: crate::hir_def::GenericArgListId<'db>,
-                         call_args: &[crate::hir_def::CallArg<'db>],
-                         candidate: env::PendingMethodCandidate<'db>| {
-            let snap = this.snapshot_state();
+        enum Viability {
+            Viable,
+            Incompatible,
+            ReturnTypeMismatch,
+        }
 
-            let result = (|| {
-                let inst = candidate.inst;
-                let recv_ty = {
-                    let mut prober = env::Prober::new(&mut this.table, scope);
-                    pending.recv_ty.fold_with(db, &mut prober)
-                };
+        let check_viability =
+            |this: &mut Self,
+             pending: &env::PendingMethod<'db>,
+             expr_ty: TyId<'db>,
+             receiver: ExprId,
+             generic_args: crate::hir_def::GenericArgListId<'db>,
+             call_args: &[crate::hir_def::CallArg<'db>],
+             candidate: env::PendingMethodCandidate<'db>| {
+                let snap = this.snapshot_state();
 
-                let inst_self = this.table.instantiate_to_term(inst.self_ty(db));
-                let recv_ty = if this.table.unify(inst_self, recv_ty).is_ok() {
-                    recv_ty
-                } else {
-                    let recv_inner = recv_ty.as_capability(db).map(|(_, inner)| inner)?;
-                    this.table.unify(inst_self, recv_inner).ok()?;
-                    recv_inner
-                };
+                let viability = (|| {
+                    let inst = candidate.inst;
+                    let recv_ty = {
+                        let mut prober = env::Prober::new(&mut this.table, scope);
+                        pending.recv_ty.fold_with(db, &mut prober)
+                    };
 
-                let func_ty = try_instantiate_trait_method(
-                    db,
-                    candidate.method,
-                    &mut this.table,
-                    recv_ty,
-                    inst,
-                )
-                .ok()?;
-                let func_ty = this.table.instantiate_to_term(func_ty);
-                let mut callable =
-                    Callable::new(db, func_ty, receiver.span(body).into(), Some(inst)).ok()?;
+                    let inst_self = this.table.instantiate_to_term(inst.self_ty(db));
+                    let recv_ty = if this.table.unify(inst_self, recv_ty).is_ok() {
+                        recv_ty
+                    } else {
+                        let Some((_, recv_inner)) = recv_ty.as_capability(db) else {
+                            return Viability::Incompatible;
+                        };
+                        if this.table.unify(inst_self, recv_inner).is_err() {
+                            return Viability::Incompatible;
+                        }
+                        recv_inner
+                    };
 
-                let expected_arity = callable.callable_def.arg_tys(db).len();
-                let given_arity = call_args.len() + 1;
-                if expected_arity != given_arity {
-                    return None;
-                }
-
-                match unify_explicit_call_generic_args(
-                    &mut callable,
-                    this,
-                    generic_args,
-                    HoleAnchor::BodySyntax {
-                        body,
-                        site: BodyHoleSite::Expr(pending.expr),
-                    },
-                    |this, _, given, current| this.table.unify(given, *current).is_ok(),
-                ) {
-                    Ok(()) => {}
-                    Err(CallGenericArgUnifyError::ArityMismatch { .. })
-                    | Err(CallGenericArgUnifyError::UnificationFailed) => return None,
-                }
-
-                let receiver_prop = this.env.typed_expr(receiver)?;
-                let mut all_arg_tys = Vec::with_capacity(call_args.len() + 1);
-                all_arg_tys.push(receiver_prop.ty);
-                for arg in call_args.iter() {
-                    let prop = this.env.typed_expr(arg.expr)?;
-                    all_arg_tys.push(prop.ty);
-                }
-
-                for (&given, expected) in all_arg_tys
-                    .iter()
-                    .zip(callable.callable_def.arg_tys(db).iter())
-                {
-                    let mut expected = expected.instantiate(db, callable.generic_args());
-                    if let Some(inst) = callable.trait_inst() {
-                        let mut subst = AssocTySubst::new(inst);
-                        expected = expected.fold_with(db, &mut subst);
-                    }
-                    let expected = normalize_ty(
+                    let Ok(func_ty) = try_instantiate_trait_method(
                         db,
-                        expected.fold_with(db, &mut this.table),
+                        candidate.method,
+                        &mut this.table,
+                        recv_ty,
+                        inst,
+                    ) else {
+                        return Viability::Incompatible;
+                    };
+                    let func_ty = this.table.instantiate_to_term(func_ty);
+                    let Ok(mut callable) =
+                        Callable::new(db, func_ty, receiver.span(body).into(), Some(inst))
+                    else {
+                        return Viability::Incompatible;
+                    };
+
+                    let expected_arity = callable.callable_def.arg_tys(db).len();
+                    let given_arity = call_args.len() + 1;
+                    if expected_arity != given_arity {
+                        return Viability::Incompatible;
+                    }
+
+                    match unify_explicit_call_generic_args(
+                        &mut callable,
+                        this,
+                        generic_args,
+                        HoleAnchor::BodySyntax {
+                            body,
+                            site: BodyHoleSite::Expr(pending.expr),
+                        },
+                        |this, _, given, current| this.table.unify(given, *current).is_ok(),
+                    ) {
+                        Ok(()) => {}
+                        Err(CallGenericArgUnifyError::ArityMismatch { .. })
+                        | Err(CallGenericArgUnifyError::UnificationFailed) => {
+                            return Viability::Incompatible;
+                        }
+                    }
+
+                    let Some(receiver_prop) = this.env.typed_expr(receiver) else {
+                        return Viability::Incompatible;
+                    };
+                    let mut all_arg_tys = Vec::with_capacity(call_args.len() + 1);
+                    all_arg_tys.push(receiver_prop.ty);
+                    for arg in call_args.iter() {
+                        let Some(prop) = this.env.typed_expr(arg.expr) else {
+                            return Viability::Incompatible;
+                        };
+                        all_arg_tys.push(prop.ty);
+                    }
+
+                    for (&given, expected) in all_arg_tys
+                        .iter()
+                        .zip(callable.callable_def.arg_tys(db).iter())
+                    {
+                        let mut expected = expected.instantiate(db, callable.generic_args());
+                        if let Some(inst) = callable.trait_inst() {
+                            let mut subst = AssocTySubst::new(inst);
+                            expected = expected.fold_with(db, &mut subst);
+                        }
+                        let expected = normalize_ty(
+                            db,
+                            expected.fold_with(db, &mut this.table),
+                            scope,
+                            assumptions,
+                        );
+                        let given = normalize_ty(
+                            db,
+                            given.fold_with(db, &mut this.table),
+                            scope,
+                            assumptions,
+                        );
+                        let given = this
+                            .try_coerce_capability_to_expected(given, expected)
+                            .unwrap_or(given);
+                        if this.table.unify(given, expected).is_err() {
+                            return Viability::Incompatible;
+                        }
+                    }
+
+                    let method_name_span = pending
+                        .expr
+                        .span(body)
+                        .into_method_call_expr()
+                        .method_name()
+                        .into();
+                    callable.process_constraints(this, pending.expr, method_name_span);
+
+                    let ret_ty = normalize_ty(
+                        db,
+                        callable.ret_ty(db).fold_with(db, &mut this.table),
                         scope,
                         assumptions,
                     );
-                    let given =
-                        normalize_ty(db, given.fold_with(db, &mut this.table), scope, assumptions);
-                    let given = this
-                        .try_coerce_capability_to_expected(given, expected)
-                        .unwrap_or(given);
-                    this.table.unify(given, expected).ok()?;
-                }
 
-                let method_name_span = pending
-                    .expr
-                    .span(body)
-                    .into_method_call_expr()
-                    .method_name()
-                    .into();
-                let progressed = callable.process_constraints(this, pending.expr, method_name_span);
-
-                let ret_ty = normalize_ty(
-                    db,
-                    callable.ret_ty(db).fold_with(db, &mut this.table),
-                    scope,
-                    assumptions,
-                );
-
-                // We made some progress in resolving trait obligations, let the later passes
-                // determine whether or not the return type unifies with the expected type
-                if !progressed && this.table.unify(expr_ty, ret_ty).is_err() {
-                    return None;
-                }
-
-                Some(())
-            })()
-            .is_some();
-            this.rollback_state(snap);
-            result
-        };
+                    if this.table.unify(expr_ty, ret_ty).is_ok() {
+                        Viability::Viable
+                    } else {
+                        Viability::ReturnTypeMismatch
+                    }
+                })();
+                this.rollback_state(snap);
+                viability
+            };
 
         // Fixed-point pass over deferred tasks.
         let mut progressed = true;
@@ -1521,12 +1545,12 @@ impl<'db> TyChecker<'db> {
                             continue;
                         }
 
-                        let viable: Vec<_> = pending
+                        let (strict, soft): (Vec<_>, Vec<_>) = pending
                             .candidates
                             .iter()
                             .copied()
-                            .filter(|&candidate| {
-                                is_viable(
+                            .filter_map(|candidate| {
+                                let viability = check_viability(
                                     self,
                                     &pending,
                                     expr_ty,
@@ -1534,9 +1558,19 @@ impl<'db> TyChecker<'db> {
                                     generic_args,
                                     call_args,
                                     candidate,
-                                )
+                                );
+                                if matches!(viability, Viability::Incompatible) {
+                                    None
+                                } else {
+                                    Some((candidate, viability))
+                                }
                             })
-                            .collect();
+                            .partition(|(_, viability)| matches!(viability, Viability::Viable));
+                        let viable = if strict.is_empty() {
+                            soft.into_iter().map(|(candidate, _)| candidate).collect()
+                        } else {
+                            strict.into_iter().map(|(candidate, _)| candidate).collect()
+                        };
                         let viable = self.dedup_equivalent_pending_method_candidates(viable);
 
                         if let [candidate] = viable.as_slice() {
@@ -1709,7 +1743,7 @@ impl<'db> TyChecker<'db> {
                         .iter()
                         .copied()
                         .filter(|&candidate| {
-                            is_viable(
+                            let viability = check_viability(
                                 self,
                                 &pending,
                                 expr_ty,
@@ -1717,7 +1751,8 @@ impl<'db> TyChecker<'db> {
                                 generic_args,
                                 call_args,
                                 candidate,
-                            )
+                            );
+                            matches!(viability, Viability::Viable)
                         })
                         .collect();
                     let viable = self.dedup_equivalent_pending_method_candidates(viable);

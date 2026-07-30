@@ -429,3 +429,66 @@ fn caller(tag: u8) {
     assert_unsatisfied_bound(&diags, "`u8` doesn't implement `Other`");
     assert_required_by_bound(&diags, "make");
 }
+
+#[test]
+fn deferred_method_call_constraint_solution_disambiguates_return_type() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "deferred_method_call_constraint_solution_disambiguates_return_type.fe".into(),
+        r#"
+trait PickA<T> {}
+trait PickB<T> {}
+
+trait HasOutput {
+    type Output
+}
+
+struct A {}
+struct B {}
+struct Subject {}
+struct S {}
+
+impl HasOutput for A {
+    type Output = u256
+}
+
+impl HasOutput for B {
+    type Output = bool
+}
+
+impl PickA<A> for Subject {}
+impl PickB<B> for Subject {}
+
+extern {
+    fn todo() -> !
+}
+
+trait FooA {
+    fn foo<P: HasOutput, Q: PickA<P>>(self, _ value: Q) -> P::Output
+}
+
+trait FooB {
+    fn foo<P: HasOutput, Q: PickB<P>>(self, _ value: Q) -> P::Output
+}
+
+impl FooA for S {
+    fn foo<P: HasOutput, Q: PickA<P>>(self, _ value: Q) -> P::Output {
+        todo()
+    }
+}
+
+impl FooB for S {
+    fn foo<P: HasOutput, Q: PickB<P>>(self, _ value: Q) -> P::Output {
+        todo()
+    }
+}
+
+fn probe() {
+    let s = S {}
+    let value: u256 = s.foo(Subject {})
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+}
