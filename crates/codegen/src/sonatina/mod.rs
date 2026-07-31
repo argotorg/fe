@@ -6,9 +6,13 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use common::ingot::Ingot;
 use driver::DriverDataBase;
 use hir::hir_def::{HirIngot, TopLevelMod};
+#[cfg(feature = "cranelift")]
+use mir::build_library_package;
 use mir::runtime::ir::RuntimePackagePlan;
 use mir::{RuntimePackage, build_runtime_package, build_test_runtime_package};
 use rustc_hash::FxHashSet;
+#[cfg(feature = "cranelift")]
+use sonatina_codegen::{Compile, isa::cranelift::CraneliftObjectBackend};
 use sonatina_codegen::{
     EvmCompile, OptLevel as SonatinaOptLevel,
     machinst::vcode::{SectionCodeUnitId, VCodeInst},
@@ -22,9 +26,11 @@ use sonatina_ir::{
     BlockId, Module,
     ir_writer::{FuncWriter, ModuleWriter},
     isa::evm::Evm,
-    module::{FuncRef, ModuleCtx},
+    module::FuncRef,
     object::EmbedSymbol,
 };
+#[cfg(feature = "cranelift")]
+use sonatina_ir::{Linkage, Type, ir_writer::IrWrite, isa::native::Native};
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 use sonatina_verifier::{
     Location, VerificationLevel, VerificationReport, VerifierConfig, verify_module,
@@ -96,10 +102,6 @@ pub(crate) fn create_evm_isa() -> Evm {
         Vendor::Ethereum,
         OperatingSystem::Evm(EvmVersion::Osaka),
     ))
-}
-
-fn create_module_ctx() -> ModuleCtx {
-    ModuleCtx::new(&create_evm_isa())
 }
 
 fn ensure_module_sonatina_ir_valid(module: &Module) -> Result<(), LowerError> {
@@ -205,6 +207,15 @@ fn format_object_compile_errors(errors: &[sonatina_codegen::object::ObjectCompil
     errors
         .iter()
         .map(|error| format!("{error:?}"))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+#[cfg(feature = "cranelift")]
+fn format_cranelift_errors(errors: &[sonatina_codegen::isa::cranelift::CraneliftError]) -> String {
+    errors
+        .iter()
+        .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join("; ")
 }
@@ -654,6 +665,122 @@ pub fn compile_runtime_package_sonatina(
     package: &RuntimePackage<'_>,
 ) -> Result<Module, LowerError> {
     lower_runtime::compile_runtime_package_sonatina(db, package)
+}
+
+#[cfg(feature = "cranelift")]
+pub fn compile_library_sonatina_native(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+) -> Result<Module, LowerError> {
+    let package = build_library_package(db, top_mod)?;
+    let isa = create_native_isa()?;
+    lower_runtime::compile_runtime_package_sonatina_for_isa(db, &package, &isa, false)
+}
+
+#[cfg(feature = "cranelift")]
+fn create_native_isa() -> Result<Native, LowerError> {
+    #[cfg(target_arch = "x86_64")]
+    let architecture = Architecture::X86_64;
+    #[cfg(target_arch = "aarch64")]
+    let architecture = Architecture::Aarch64;
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    return Err(LowerError::Unsupported(
+        "native code generation requires an x86_64 or aarch64 host".to_string(),
+    ));
+
+    Ok(Native::new(TargetTriple::new(
+        architecture,
+        Vendor::Unknown,
+        OperatingSystem::Native,
+    )))
+}
+
+#[cfg(feature = "cranelift")]
+pub fn emit_module_native_object(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    opt_level: OptLevel,
+) -> Result<Vec<u8>, LowerError> {
+    let module = compile_library_sonatina_native(db, top_mod)?;
+    let main = ensure_native_main_signature(&module)?;
+    module.ctx.update_func_linkage(main, Linkage::Public);
+
+    let mut compile = Compile::new(module, CraneliftObjectBackend::new())
+        .with_opt_level(to_sonatina_opt_level(opt_level));
+    ensure_module_sonatina_ir_valid(compile.optimize())?;
+    compile
+        .compile()
+        .map(|artifact| artifact.into_bytes())
+        .map_err(|errors| LowerError::Internal(format_cranelift_errors(&errors)))
+}
+
+#[cfg(feature = "cranelift")]
+pub fn emit_module_native_ir(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    opt_level: OptLevel,
+) -> Result<String, LowerError> {
+    let module = compile_library_sonatina_native(db, top_mod)?;
+    let main = ensure_native_main_signature(&module)?;
+    module.ctx.update_func_linkage(main, Linkage::Public);
+
+    let mut compile = Compile::new(module, CraneliftObjectBackend::new())
+        .with_opt_level(to_sonatina_opt_level(opt_level));
+    let module = compile.optimize();
+    ensure_module_sonatina_ir_valid(module)?;
+    Ok(ModuleWriter::new(module).dump_string())
+}
+
+#[cfg(feature = "cranelift")]
+fn ensure_native_main_signature(module: &Module) -> Result<FuncRef, LowerError> {
+    let signatures = module
+        .funcs()
+        .into_iter()
+        .filter_map(|func_ref| {
+            module.ctx.func_sig(func_ref, |signature| {
+                Some((
+                    func_ref,
+                    signature.name().to_string(),
+                    signature.args().to_vec(),
+                    signature.ret_tys().to_vec(),
+                ))
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut main_signatures = signatures.iter().filter(|(_, name, _, _)| name == "main");
+    let Some((func_ref, _, args, ret_tys)) = main_signatures.next() else {
+        return Err(LowerError::Unsupported(
+            "native executable output requires `pub fn main() -> i32`".to_string(),
+        ));
+    };
+    if main_signatures.next().is_some() {
+        return Err(LowerError::Unsupported(
+            "native executable output requires exactly one exported `main` function".to_string(),
+        ));
+    }
+    if args.is_empty() && ret_tys.as_slice() == [Type::I32] {
+        Ok(*func_ref)
+    } else {
+        Err(LowerError::Unsupported(format!(
+            "native executable `main` must have signature `pub fn main() -> i32`, found `main({}) -> {}`",
+            format_native_types(args, module),
+            format_native_types(ret_tys, module)
+        )))
+    }
+}
+
+#[cfg(feature = "cranelift")]
+fn format_native_types(types: &[Type], module: &Module) -> String {
+    types
+        .iter()
+        .map(|ty| {
+            let mut bytes = Vec::new();
+            ty.write(&mut bytes, &module.ctx)
+                .expect("writing a Sonatina type to Vec cannot fail");
+            String::from_utf8(bytes).expect("Sonatina type output should be UTF-8")
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 pub(crate) fn select_runtime_package_contract<'db>(

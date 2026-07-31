@@ -6,15 +6,13 @@ use mir::{
     RefView, RuntimeCarrier, RuntimeClass, RuntimeLocalRoot, RuntimePlace, build_runtime_package,
     verify_runtime_body,
 };
-use sonatina_ir::builder::ModuleBuilder;
+use sonatina_ir::{builder::ModuleBuilder, isa::Isa, module::ModuleCtx};
 use url::Url;
 
 use super::{FunctionLowerer, ModuleLowerer};
 use crate::{
     OptLevel,
-    sonatina::{
-        create_evm_isa, create_module_ctx, emit_runtime_module_sonatina_bytecode_with_options,
-    },
+    sonatina::{create_evm_isa, emit_runtime_module_sonatina_bytecode_with_options},
 };
 
 #[test]
@@ -173,8 +171,12 @@ pub contract SlotContract {
         verify_runtime_body(&db, &program, &body).expect("valid native slot borrow");
 
         let isa = create_evm_isa();
-        let mut lowerer =
-            ModuleLowerer::new(&db, ModuleBuilder::new(create_module_ctx()), &isa, &package);
+        let mut lowerer = ModuleLowerer::new(
+            &db,
+            ModuleBuilder::new(ModuleCtx::new(&isa)),
+            isa.inst_set(),
+            &package,
+        );
         lowerer.declare_functions().unwrap();
         lowerer.lower_const_regions().unwrap();
         for function in package.functions(&db) {

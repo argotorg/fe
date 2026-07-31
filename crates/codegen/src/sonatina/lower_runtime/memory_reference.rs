@@ -10,11 +10,10 @@ use sonatina_ir::{
         evm::EvmMalloc,
         logic::Or,
     },
-    isa::Isa,
     types::CompoundType,
 };
 
-use super::{CopySource, FunctionLowerer, LowerError, Lowered, scalar_ty};
+use super::{CopySource, FunctionLowerer, LowerError, Lowered, LoweringInstSet, scalar_ty};
 
 // The descriptor's layout also records the referent's address space. Provider
 // kinds may be erased when a reference is stored inside an ordinary typed slot.
@@ -36,16 +35,17 @@ pub(super) struct MemoryReference {
     pub(super) layout: ValueId,
 }
 
-impl<'db> FunctionLowerer<'_, 'db, '_> {
+impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
     pub(super) fn store_memory_reference(
         &mut self,
         reference: MemoryReference,
     ) -> Result<ValueId, LowerError> {
         let size = self.index_value(64);
         let ptr_ty = self.fb.ptr_type(Type::I256);
-        let descriptor = self
-            .fb
-            .insert_inst(EvmMalloc::new(self.module.inst_set(), size), ptr_ty);
+        let descriptor = self.fb.insert_inst(
+            EvmMalloc::new(self.module.required_inst::<EvmMalloc>()?, size),
+            ptr_ty,
+        );
         let descriptor = self.coerce_value_to_ty(descriptor, Type::I256)?;
         let addr = self.coerce_value_to_ty(reference.addr, Type::I256)?;
         self.fb.insert_inst_no_result(Mstore::new(
@@ -244,8 +244,9 @@ impl<'db> FunctionLowerer<'_, 'db, '_> {
         let ty = self.module.ty_for_class(class)?;
         let size = self
             .module
-            .isa
-            .type_layout()
+            .builder
+            .ctx
+            .type_layout
             .size_of(ty, &self.fb.module_builder.ctx)
             .map_err(|err| {
                 LowerError::Unsupported(format!("unrepresentable native memory layout: {err:?}"))

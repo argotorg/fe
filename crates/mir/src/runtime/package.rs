@@ -518,6 +518,46 @@ fn build_contract_package<'db>(
     Ok(package)
 }
 
+/// Build a target-neutral package rooted at every public function in a module.
+///
+/// Unlike the EVM package builder, this preserves ordinary function signatures
+/// and does not synthesize calldata dispatchers or contract object sections.
+pub fn build_library_package<'db>(
+    db: &'db dyn MirDb,
+    top_mod: TopLevelMod<'db>,
+) -> Result<RuntimePackage<'db>, LowerError> {
+    let funcs = top_mod
+        .all_funcs(db)
+        .iter()
+        .copied()
+        .filter(|func| func.top_mod(db) == top_mod)
+        .filter(|func| !func.is_extern(db) && !is_test_func(db, *func))
+        .filter(|func| func.vis(db).is_pub())
+        .collect::<Vec<Func<'db>>>();
+    let mut roots = Vec::with_capacity(funcs.len());
+    let mut objects = Vec::with_capacity(funcs.len());
+    for func in funcs {
+        let name = func
+            .name(db)
+            .to_opt()
+            .map(|name| name.data(db).to_string())
+            .unwrap_or_else(|| "<anonymous>".to_string());
+        let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(func))?;
+        let instance = runtime_instance_for_semantic(db, semantic);
+        roots.push(instance);
+        objects.push((
+            sanitize_object_name(&name),
+            vec![(RuntimeSectionName::Main, instance)],
+        ));
+    }
+
+    let primary = (objects.len() == 1).then(|| objects[0].0.clone());
+    let package = build_sectioned_package(db, top_mod, roots, objects, primary.as_deref())?;
+    verify_runtime_package(db, package)
+        .map_err(|err| LowerError::Unsupported(format!("invalid library package: {err:?}")))?;
+    Ok(package)
+}
+
 fn manual_contract_objects<'db>(
     db: &'db dyn MirDb,
     top_mod: TopLevelMod<'db>,

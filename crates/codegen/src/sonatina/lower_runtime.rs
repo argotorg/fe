@@ -28,12 +28,12 @@ use mir::{
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::{SmallVec, smallvec};
 use sonatina_ir::{
-    BlockId, GlobalVariableData, GlobalVariableRef, I256, Immediate, InstId, Linkage, Module,
-    Signature, Type, Value, ValueId,
+    BlockId, GlobalVariableData, GlobalVariableRef, HasInst, I256, Immediate, InstExt, InstId,
+    InstSetBase, Linkage, Module, Signature, Type, Value, ValueId,
     builder::{FunctionBuilder, ModuleBuilder, ObjectBuilder, Variable},
     func_cursor::InstInserter,
     inst::{
-        arith::{Add, Mul, Neg, Sar, Shl, Shr, Sub},
+        arith::{Add, Mul, Neg, Sar, Sdiv, Shl, Shr, Smod, Sub, Udiv, Umod},
         cast::{Bitcast, IntToPtr, PtrToInt, Sext, Trunc, Zext},
         cmp::{Eq, Gt, IsZero, Lt, Ne, Slt},
         control_flow::{Br, BrTable, Call, Jump, Phi, Return, Unreachable},
@@ -41,8 +41,8 @@ use sonatina_ir::{
             Alloca, ConstIndex, ConstLoad, ConstProj, ConstRef, EnumAssertVariant,
             EnumAssertVariantRef, EnumExtract, EnumGetTag, EnumIsVariant, EnumMake, EnumProj,
             EnumSetTag, EnumTag, EnumWriteVariant, ExtractValue, InsertValue, Memzero, Mload,
-            Mstore, ObjAlloc, ObjIndex, ObjInitConst, ObjLoad, ObjProj, ObjStore, SymAddr, SymSize,
-            SymbolRef,
+            Mstore, ObjAlloc, ObjIndex, ObjInitConst, ObjLoad, ObjMaterializeHeap, ObjProj,
+            ObjStore, SymAddr, SymSize, SymbolRef,
         },
         evm::{
             EvmAddMod, EvmAddress, EvmBalance, EvmBaseFee, EvmBlobBaseFee, EvmBlobHash,
@@ -54,17 +54,17 @@ use sonatina_ir::{
             EvmMulMod, EvmNumber, EvmOrigin, EvmPrevRandao, EvmReturn, EvmReturnDataCopy,
             EvmReturnDataSize, EvmRevert, EvmSdiv, EvmSelfBalance, EvmSelfDestruct, EvmSignExtend,
             EvmSload, EvmSmod, EvmSstore, EvmStaticCall, EvmStop, EvmTimestamp, EvmTload,
-            EvmTstore, EvmUdiv, EvmUmod, inst_set::EvmInstSet,
+            EvmTstore, EvmUdiv, EvmUmod,
         },
         logic::{And, Not, Or, Xor},
     },
     isa::Isa,
-    module::FuncRef,
+    module::{FuncRef, ModuleCtx},
     object::EmbedSymbol,
     types::{CompoundType, EnumReprHint, EnumVariantRef, VariantData},
 };
 
-use super::{LowerError, create_module_ctx};
+use super::LowerError;
 use crate::function_symbols::{FunctionSymbolInput, assign_function_symbols};
 
 // Sonatina's EVM calling convention can carry at most 16 arguments.
@@ -78,24 +78,113 @@ const LAYOUT_MAP_DENSE: u64 = 1;
 const LAYOUT_MAP_REPEAT: u64 = 2;
 const LAYOUT_MAP_PATCH: u64 = 3;
 
+macro_rules! define_lowering_inst_set {
+    ($($inst:ty),+ $(,)?) => {
+        pub(super) trait LoweringInstSet: InstSetBase $(+ HasInst<$inst>)+ {}
+
+        impl<T> LoweringInstSet for T where T: InstSetBase $(+ HasInst<$inst>)+ {}
+    };
+}
+
+define_lowering_inst_set!(
+    Add,
+    Mul,
+    Neg,
+    Sar,
+    Sdiv,
+    Shl,
+    Shr,
+    Smod,
+    Sub,
+    Udiv,
+    Umod,
+    Bitcast,
+    IntToPtr,
+    PtrToInt,
+    Sext,
+    Trunc,
+    Zext,
+    Eq,
+    Gt,
+    IsZero,
+    Lt,
+    Ne,
+    Slt,
+    Br,
+    BrTable,
+    Call,
+    Jump,
+    Phi,
+    Return,
+    Unreachable,
+    Alloca,
+    ConstIndex,
+    ConstLoad,
+    ConstProj,
+    ConstRef,
+    EnumAssertVariant,
+    EnumAssertVariantRef,
+    EnumExtract,
+    EnumGetTag,
+    EnumIsVariant,
+    EnumMake,
+    EnumProj,
+    EnumSetTag,
+    EnumTag,
+    EnumWriteVariant,
+    ExtractValue,
+    InsertValue,
+    Memzero,
+    Mload,
+    Mstore,
+    ObjAlloc,
+    ObjIndex,
+    ObjInitConst,
+    ObjLoad,
+    ObjMaterializeHeap,
+    ObjProj,
+    ObjStore,
+    SymAddr,
+    SymSize,
+    And,
+    Not,
+    Or,
+    Xor,
+);
+
 pub(super) fn compile_runtime_package_sonatina(
     db: &DriverDataBase,
     package: &RuntimePackage<'_>,
 ) -> Result<Module, LowerError> {
-    let builder = ModuleBuilder::new(create_module_ctx());
     let isa = super::create_evm_isa();
-    let mut lowerer = ModuleLowerer::new(db, builder, &isa, package);
+    compile_runtime_package_sonatina_for_isa(db, package, &isa, true)
+}
+
+pub(super) fn compile_runtime_package_sonatina_for_isa<I>(
+    db: &DriverDataBase,
+    package: &RuntimePackage<'_>,
+    isa: &I,
+    declare_objects: bool,
+) -> Result<Module, LowerError>
+where
+    I: Isa,
+    I::InstSet: LoweringInstSet,
+{
+    let builder = ModuleBuilder::new(ModuleCtx::new(isa));
+    let mut lowerer = ModuleLowerer::new(db, builder, isa.inst_set(), package);
     lowerer.declare_functions()?;
     lowerer.lower_const_regions()?;
     lowerer.lower_bodies()?;
-    lowerer.declare_objects()?;
+    if declare_objects {
+        lowerer.declare_objects()?;
+    }
     Ok(lowerer.finish())
 }
 
-struct ModuleLowerer<'db, 'a> {
+struct ModuleLowerer<'db, 'a, I: 'static> {
     db: &'db DriverDataBase,
     builder: ModuleBuilder,
-    isa: &'a sonatina_ir::isa::evm::Evm,
+    inst_set: &'static I,
     package: &'a RuntimePackage<'db>,
     func_map: FxHashMap<mir::RuntimeInstance<'db>, FuncRef>,
     func_symbols: FxHashMap<mir::RuntimeInstance<'db>, String>,
@@ -108,17 +197,17 @@ struct ModuleLowerer<'db, 'a> {
     explicit_code_region_sections: FxHashSet<(String, mir::RuntimeSectionName)>,
 }
 
-impl<'db, 'a> ModuleLowerer<'db, 'a> {
+impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
     fn new(
         db: &'db DriverDataBase,
         builder: ModuleBuilder,
-        isa: &'a sonatina_ir::isa::evm::Evm,
+        inst_set: &'static I,
         package: &'a RuntimePackage<'db>,
     ) -> Self {
         Self {
             db,
             builder,
-            isa,
+            inst_set,
             package,
             func_map: FxHashMap::default(),
             argument_packs: FxHashMap::default(),
@@ -136,8 +225,25 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         self.builder.build()
     }
 
-    fn inst_set(&self) -> &'static EvmInstSet {
-        self.isa.inst_set()
+    fn inst_set(&self) -> &'static I {
+        self.inst_set
+    }
+
+    fn required_inst<T: InstExt>(&self) -> Result<&'static dyn HasInst<T>, LowerError> {
+        T::belongs_to(self.inst_set).ok_or_else(|| {
+            LowerError::Unsupported(format!(
+                "target `{}` does not support instruction `{}`",
+                self.builder.ctx.triple,
+                std::any::type_name::<T>()
+            ))
+        })
+    }
+
+    fn is_native_target(&self) -> bool {
+        !matches!(
+            self.builder.ctx.triple.architecture,
+            sonatina_triple::Architecture::Evm
+        )
     }
 
     fn function_symbol(&self, instance: RuntimeInstance<'db>) -> String {
@@ -725,8 +831,8 @@ enum CopySource<'db> {
     },
 }
 
-struct FunctionLowerer<'ctx, 'db, 'a> {
-    module: &'ctx mut ModuleLowerer<'db, 'a>,
+struct FunctionLowerer<'ctx, 'db, 'a, I: 'static> {
+    module: &'ctx mut ModuleLowerer<'db, 'a, I>,
     body: RuntimeBody<'db>,
     origin_owner: mir::origin::RuntimeInstanceOwnerKey,
     current_sections: Vec<mir::RuntimeSectionRef>,
@@ -771,9 +877,9 @@ struct PendingEnumProof<'db> {
     value: ValueId,
 }
 
-impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
+impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a, I> {
     fn new(
-        module: &'ctx mut ModuleLowerer<'db, 'a>,
+        module: &'ctx mut ModuleLowerer<'db, 'a, I>,
         body: RuntimeBody<'db>,
         func_ref: FuncRef,
     ) -> Result<Self, LowerError> {
@@ -1666,9 +1772,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         })?;
         let size = self.index_value(bytes);
         let ptr_ty = self.fb.ptr_type(Type::I8);
-        let ptr = self
-            .fb
-            .insert_inst(EvmMalloc::new(self.module.inst_set(), size), ptr_ty);
+        let ptr = self.fb.insert_inst(
+            EvmMalloc::new(self.module.required_inst::<EvmMalloc>()?, size),
+            ptr_ty,
+        );
         self.coerce_value_to_ty(ptr, Type::I256)
     }
 
@@ -2046,16 +2153,23 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let addr = self.local_value(*addr)?;
                 let value = self.local_value(*value)?;
                 let value = self.cast_scalar(value, Type::I8)?;
-                self.fb
-                    .insert_inst_no_result(EvmMstore8::new(self.module.inst_set(), addr, value));
+                self.fb.insert_inst_no_result(EvmMstore8::new(
+                    self.module.required_inst::<EvmMstore8>()?,
+                    addr,
+                    value,
+                ));
                 zero_for_type(&mut self.fb, Type::Unit)
             }
             RuntimeBuiltin::Mcopy { dst, src, len } => {
                 let dst = self.local_value(*dst)?;
                 let src = self.local_value(*src)?;
                 let len = self.local_value(*len)?;
-                self.fb
-                    .insert_inst_no_result(EvmMcopy::new(self.module.inst_set(), dst, src, len));
+                self.fb.insert_inst_no_result(EvmMcopy::new(
+                    self.module.required_inst::<EvmMcopy>()?,
+                    dst,
+                    src,
+                    len,
+                ));
                 zero_for_type(&mut self.fb, Type::Unit)
             }
             RuntimeBuiltin::ZeroMem { dst, len } => {
@@ -2065,34 +2179,43 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     .insert_inst_no_result(Memzero::new(self.module.inst_set(), dst, len));
                 zero_for_type(&mut self.fb, Type::Unit)
             }
-            RuntimeBuiltin::Msize => self
-                .fb
-                .insert_inst(EvmMsize::new(self.module.inst_set()), Type::I256),
+            RuntimeBuiltin::Msize => self.fb.insert_inst(
+                EvmMsize::new(self.module.required_inst::<EvmMsize>()?),
+                Type::I256,
+            ),
             RuntimeBuiltin::Sload { slot } => {
                 let slot = self.local_value(*slot)?;
-                self.fb
-                    .insert_inst(EvmSload::new(self.module.inst_set(), slot), Type::I256)
+                self.fb.insert_inst(
+                    EvmSload::new(self.module.required_inst::<EvmSload>()?, slot),
+                    Type::I256,
+                )
             }
             RuntimeBuiltin::Sstore { slot, value } => {
                 let slot = self.local_value(*slot)?;
                 let value = self.local_value(*value)?;
-                self.fb
-                    .insert_inst_no_result(EvmSstore::new(self.module.inst_set(), slot, value));
+                self.fb.insert_inst_no_result(EvmSstore::new(
+                    self.module.required_inst::<EvmSstore>()?,
+                    slot,
+                    value,
+                ));
                 zero_for_type(&mut self.fb, Type::Unit)
             }
-            RuntimeBuiltin::CallValue => self
-                .fb
-                .insert_inst(EvmCallValue::new(self.module.inst_set()), Type::I256),
-            RuntimeBuiltin::ReturnDataSize => self
-                .fb
-                .insert_inst(EvmReturnDataSize::new(self.module.inst_set()), Type::I256),
-            RuntimeBuiltin::CallDataSize => self
-                .fb
-                .insert_inst(EvmCalldataSize::new(self.module.inst_set()), Type::I256),
+            RuntimeBuiltin::CallValue => self.fb.insert_inst(
+                EvmCallValue::new(self.module.required_inst::<EvmCallValue>()?),
+                Type::I256,
+            ),
+            RuntimeBuiltin::ReturnDataSize => self.fb.insert_inst(
+                EvmReturnDataSize::new(self.module.required_inst::<EvmReturnDataSize>()?),
+                Type::I256,
+            ),
+            RuntimeBuiltin::CallDataSize => self.fb.insert_inst(
+                EvmCalldataSize::new(self.module.required_inst::<EvmCalldataSize>()?),
+                Type::I256,
+            ),
             RuntimeBuiltin::CallDataLoad { offset } => {
                 let offset = self.local_value(*offset)?;
                 self.fb.insert_inst(
-                    EvmCalldataLoad::new(self.module.inst_set(), offset),
+                    EvmCalldataLoad::new(self.module.required_inst::<EvmCalldataLoad>()?, offset),
                     Type::I256,
                 )
             }
@@ -2101,7 +2224,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let offset = self.local_value(*offset)?;
                 let len = self.local_value(*len)?;
                 self.fb.insert_inst_no_result(EvmReturnDataCopy::new(
-                    self.module.inst_set(),
+                    self.module.required_inst::<EvmReturnDataCopy>()?,
                     dst,
                     offset,
                     len,
@@ -2113,22 +2236,23 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let offset = self.local_value(*offset)?;
                 let len = self.local_value(*len)?;
                 self.fb.insert_inst_no_result(EvmCalldataCopy::new(
-                    self.module.inst_set(),
+                    self.module.required_inst::<EvmCalldataCopy>()?,
                     dst,
                     offset,
                     len,
                 ));
                 zero_for_type(&mut self.fb, Type::Unit)
             }
-            RuntimeBuiltin::CodeSize => self
-                .fb
-                .insert_inst(EvmCodeSize::new(self.module.inst_set()), Type::I256),
+            RuntimeBuiltin::CodeSize => self.fb.insert_inst(
+                EvmCodeSize::new(self.module.required_inst::<EvmCodeSize>()?),
+                Type::I256,
+            ),
             RuntimeBuiltin::CodeCopy { dst, offset, len } => {
                 let dst = self.local_value(*dst)?;
                 let offset = self.local_value(*offset)?;
                 let len = self.local_value(*len)?;
                 self.fb.insert_inst_no_result(EvmCodeCopy::new(
-                    self.module.inst_set(),
+                    self.module.required_inst::<EvmCodeCopy>()?,
                     dst,
                     offset,
                     len,
@@ -2138,7 +2262,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             RuntimeBuiltin::ExtCodeSize { addr } => {
                 let addr = self.local_value(*addr)?;
                 self.fb.insert_inst(
-                    EvmExtCodeSize::new(self.module.inst_set(), addr),
+                    EvmExtCodeSize::new(self.module.required_inst::<EvmExtCodeSize>()?, addr),
                     Type::I256,
                 )
             }
@@ -2153,7 +2277,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let offset = self.local_value(*offset)?;
                 let len = self.local_value(*len)?;
                 self.fb.insert_inst_no_result(EvmExtCodeCopy::new(
-                    self.module.inst_set(),
+                    self.module.required_inst::<EvmExtCodeCopy>()?,
                     addr,
                     dst,
                     offset,
@@ -2164,7 +2288,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             RuntimeBuiltin::ExtCodeHash { addr } => {
                 let addr = self.local_value(*addr)?;
                 self.fb.insert_inst(
-                    EvmExtCodeHash::new(self.module.inst_set(), addr),
+                    EvmExtCodeHash::new(self.module.required_inst::<EvmExtCodeHash>()?, addr),
                     Type::I256,
                 )
             }
@@ -2172,7 +2296,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let offset = self.local_value(*offset)?;
                 let len = self.local_value(*len)?;
                 self.fb.insert_inst(
-                    EvmKeccak256::new(self.module.inst_set(), offset, len),
+                    EvmKeccak256::new(self.module.required_inst::<EvmKeccak256>()?, offset, len),
                     Type::I256,
                 )
             }
@@ -2181,7 +2305,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let rhs = self.local_value(*rhs)?;
                 let modulus = self.local_value(*modulus)?;
                 self.fb.insert_inst(
-                    EvmAddMod::new(self.module.inst_set(), lhs, rhs, modulus),
+                    EvmAddMod::new(self.module.required_inst::<EvmAddMod>()?, lhs, rhs, modulus),
                     Type::I256,
                 )
             }
@@ -2190,21 +2314,23 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let rhs = self.local_value(*rhs)?;
                 let modulus = self.local_value(*modulus)?;
                 self.fb.insert_inst(
-                    EvmMulMod::new(self.module.inst_set(), lhs, rhs, modulus),
+                    EvmMulMod::new(self.module.required_inst::<EvmMulMod>()?, lhs, rhs, modulus),
                     Type::I256,
                 )
             }
             RuntimeBuiltin::Byte { pos, value } => {
                 let pos = self.local_value(*pos)?;
                 let value = self.local_value(*value)?;
-                self.fb
-                    .insert_inst(EvmByte::new(self.module.inst_set(), pos, value), Type::I256)
+                self.fb.insert_inst(
+                    EvmByte::new(self.module.required_inst::<EvmByte>()?, pos, value),
+                    Type::I256,
+                )
             }
             RuntimeBuiltin::SignExtend { byte, value } => {
                 let byte = self.local_value(*byte)?;
                 let value = self.local_value(*value)?;
                 self.fb.insert_inst(
-                    EvmSignExtend::new(self.module.inst_set(), byte, value),
+                    EvmSignExtend::new(self.module.required_inst::<EvmSignExtend>()?, byte, value),
                     Type::I256,
                 )
             }
@@ -2243,63 +2369,83 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     (SaturatingBinOp::Mul, false) => self.fb.insert_umulsat(lhs, rhs),
                 }
             }
-            RuntimeBuiltin::Address => self
-                .fb
-                .insert_inst(EvmAddress::new(self.module.inst_set()), Type::I256),
-            RuntimeBuiltin::Caller => self
-                .fb
-                .insert_inst(EvmCaller::new(self.module.inst_set()), Type::I256),
-            RuntimeBuiltin::Origin => self
-                .fb
-                .insert_inst(EvmOrigin::new(self.module.inst_set()), Type::I256),
-            RuntimeBuiltin::GasPrice => self
-                .fb
-                .insert_inst(EvmGasPrice::new(self.module.inst_set()), Type::I256),
-            RuntimeBuiltin::CoinBase => self
-                .fb
-                .insert_inst(EvmCoinBase::new(self.module.inst_set()), Type::I256),
+            RuntimeBuiltin::Address => self.fb.insert_inst(
+                EvmAddress::new(self.module.required_inst::<EvmAddress>()?),
+                Type::I256,
+            ),
+            RuntimeBuiltin::Caller => self.fb.insert_inst(
+                EvmCaller::new(self.module.required_inst::<EvmCaller>()?),
+                Type::I256,
+            ),
+            RuntimeBuiltin::Origin => self.fb.insert_inst(
+                EvmOrigin::new(self.module.required_inst::<EvmOrigin>()?),
+                Type::I256,
+            ),
+            RuntimeBuiltin::GasPrice => self.fb.insert_inst(
+                EvmGasPrice::new(self.module.required_inst::<EvmGasPrice>()?),
+                Type::I256,
+            ),
+            RuntimeBuiltin::CoinBase => self.fb.insert_inst(
+                EvmCoinBase::new(self.module.required_inst::<EvmCoinBase>()?),
+                Type::I256,
+            ),
             RuntimeBuiltin::Balance { addr } => {
                 let addr = self.local_value(*addr)?;
-                self.fb
-                    .insert_inst(EvmBalance::new(self.module.inst_set(), addr), Type::I256)
+                self.fb.insert_inst(
+                    EvmBalance::new(self.module.required_inst::<EvmBalance>()?, addr),
+                    Type::I256,
+                )
             }
-            RuntimeBuiltin::Timestamp => self
-                .fb
-                .insert_inst(EvmTimestamp::new(self.module.inst_set()), Type::I256),
-            RuntimeBuiltin::Number => self
-                .fb
-                .insert_inst(EvmNumber::new(self.module.inst_set()), Type::I256),
-            RuntimeBuiltin::PrevRandao => self
-                .fb
-                .insert_inst(EvmPrevRandao::new(self.module.inst_set()), Type::I256),
-            RuntimeBuiltin::GasLimit => self
-                .fb
-                .insert_inst(EvmGasLimit::new(self.module.inst_set()), Type::I256),
-            RuntimeBuiltin::ChainId => self
-                .fb
-                .insert_inst(EvmChainId::new(self.module.inst_set()), Type::I256),
-            RuntimeBuiltin::BaseFee => self
-                .fb
-                .insert_inst(EvmBaseFee::new(self.module.inst_set()), Type::I256),
-            RuntimeBuiltin::SelfBalance => self
-                .fb
-                .insert_inst(EvmSelfBalance::new(self.module.inst_set()), Type::I256),
+            RuntimeBuiltin::Timestamp => self.fb.insert_inst(
+                EvmTimestamp::new(self.module.required_inst::<EvmTimestamp>()?),
+                Type::I256,
+            ),
+            RuntimeBuiltin::Number => self.fb.insert_inst(
+                EvmNumber::new(self.module.required_inst::<EvmNumber>()?),
+                Type::I256,
+            ),
+            RuntimeBuiltin::PrevRandao => self.fb.insert_inst(
+                EvmPrevRandao::new(self.module.required_inst::<EvmPrevRandao>()?),
+                Type::I256,
+            ),
+            RuntimeBuiltin::GasLimit => self.fb.insert_inst(
+                EvmGasLimit::new(self.module.required_inst::<EvmGasLimit>()?),
+                Type::I256,
+            ),
+            RuntimeBuiltin::ChainId => self.fb.insert_inst(
+                EvmChainId::new(self.module.required_inst::<EvmChainId>()?),
+                Type::I256,
+            ),
+            RuntimeBuiltin::BaseFee => self.fb.insert_inst(
+                EvmBaseFee::new(self.module.required_inst::<EvmBaseFee>()?),
+                Type::I256,
+            ),
+            RuntimeBuiltin::SelfBalance => self.fb.insert_inst(
+                EvmSelfBalance::new(self.module.required_inst::<EvmSelfBalance>()?),
+                Type::I256,
+            ),
             RuntimeBuiltin::BlockHash { block } => {
                 let block = self.local_value(*block)?;
-                self.fb
-                    .insert_inst(EvmBlockHash::new(self.module.inst_set(), block), Type::I256)
+                self.fb.insert_inst(
+                    EvmBlockHash::new(self.module.required_inst::<EvmBlockHash>()?, block),
+                    Type::I256,
+                )
             }
             RuntimeBuiltin::BlobHash { index } => {
                 let index = self.local_value(*index)?;
-                self.fb
-                    .insert_inst(EvmBlobHash::new(self.module.inst_set(), index), Type::I256)
+                self.fb.insert_inst(
+                    EvmBlobHash::new(self.module.required_inst::<EvmBlobHash>()?, index),
+                    Type::I256,
+                )
             }
-            RuntimeBuiltin::BlobBaseFee => self
-                .fb
-                .insert_inst(EvmBlobBaseFee::new(self.module.inst_set()), Type::I256),
-            RuntimeBuiltin::Gas => self
-                .fb
-                .insert_inst(EvmGas::new(self.module.inst_set()), Type::I256),
+            RuntimeBuiltin::BlobBaseFee => self.fb.insert_inst(
+                EvmBlobBaseFee::new(self.module.required_inst::<EvmBlobBaseFee>()?),
+                Type::I256,
+            ),
+            RuntimeBuiltin::Gas => self.fb.insert_inst(
+                EvmGas::new(self.module.required_inst::<EvmGas>()?),
+                Type::I256,
+            ),
             RuntimeBuiltin::CurrentCodeRegionLen => self.fb.insert_inst(
                 SymSize::new(self.module.inst_set(), SymbolRef::CurrentSection),
                 Type::I256,
@@ -2317,8 +2463,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             RuntimeBuiltin::Malloc { size } => {
                 let size = self.local_value(*size)?;
                 let ptr_ty = self.fb.ptr_type(Type::I8);
-                self.fb
-                    .insert_inst(EvmMalloc::new(self.module.inst_set(), size), ptr_ty)
+                self.fb.insert_inst(
+                    EvmMalloc::new(self.module.required_inst::<EvmMalloc>()?, size),
+                    ptr_ty,
+                )
             }
             RuntimeBuiltin::PtrOffsetBytes { ptr, offset } => {
                 let ptr = self.local_value(*ptr)?;
@@ -2346,7 +2494,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let ret_len = self.local_value(*ret_len)?;
                 self.fb.insert_inst(
                     EvmCall::new(
-                        self.module.inst_set(),
+                        self.module.required_inst::<EvmCall>()?,
                         gas,
                         addr,
                         value,
@@ -2374,7 +2522,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let ret_len = self.local_value(*ret_len)?;
                 self.fb.insert_inst(
                     EvmStaticCall::new(
-                        self.module.inst_set(),
+                        self.module.required_inst::<EvmStaticCall>()?,
                         gas,
                         addr,
                         args_offset,
@@ -2401,7 +2549,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let ret_len = self.local_value(*ret_len)?;
                 self.fb.insert_inst(
                     EvmDelegateCall::new(
-                        self.module.inst_set(),
+                        self.module.required_inst::<EvmDelegateCall>()?,
                         gas,
                         addr,
                         args_offset,
@@ -2417,7 +2565,12 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let offset = self.local_value(*offset)?;
                 let len = self.local_value(*len)?;
                 self.fb.insert_inst(
-                    EvmCreate::new(self.module.inst_set(), value, offset, len),
+                    EvmCreate::new(
+                        self.module.required_inst::<EvmCreate>()?,
+                        value,
+                        offset,
+                        len,
+                    ),
                     Type::I256,
                 )
             }
@@ -2432,15 +2585,24 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let len = self.local_value(*len)?;
                 let salt = self.local_value(*salt)?;
                 self.fb.insert_inst(
-                    EvmCreate2::new(self.module.inst_set(), value, offset, len, salt),
+                    EvmCreate2::new(
+                        self.module.required_inst::<EvmCreate2>()?,
+                        value,
+                        offset,
+                        len,
+                        salt,
+                    ),
                     Type::I256,
                 )
             }
             RuntimeBuiltin::Log0 { offset, len } => {
                 let offset = self.local_value(*offset)?;
                 let len = self.local_value(*len)?;
-                self.fb
-                    .insert_inst_no_result(EvmLog0::new(self.module.inst_set(), offset, len));
+                self.fb.insert_inst_no_result(EvmLog0::new(
+                    self.module.required_inst::<EvmLog0>()?,
+                    offset,
+                    len,
+                ));
                 zero_for_type(&mut self.fb, Type::Unit)
             }
             RuntimeBuiltin::Log1 {
@@ -2452,7 +2614,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let len = self.local_value(*len)?;
                 let topic0 = self.local_value(*topic0)?;
                 self.fb.insert_inst_no_result(EvmLog1::new(
-                    self.module.inst_set(),
+                    self.module.required_inst::<EvmLog1>()?,
                     offset,
                     len,
                     topic0,
@@ -2470,7 +2632,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let topic0 = self.local_value(*topic0)?;
                 let topic1 = self.local_value(*topic1)?;
                 self.fb.insert_inst_no_result(EvmLog2::new(
-                    self.module.inst_set(),
+                    self.module.required_inst::<EvmLog2>()?,
                     offset,
                     len,
                     topic0,
@@ -2491,7 +2653,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let topic1 = self.local_value(*topic1)?;
                 let topic2 = self.local_value(*topic2)?;
                 self.fb.insert_inst_no_result(EvmLog3::new(
-                    self.module.inst_set(),
+                    self.module.required_inst::<EvmLog3>()?,
                     offset,
                     len,
                     topic0,
@@ -2515,7 +2677,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let topic2 = self.local_value(*topic2)?;
                 let topic3 = self.local_value(*topic3)?;
                 self.fb.insert_inst_no_result(EvmLog4::new(
-                    self.module.inst_set(),
+                    self.module.required_inst::<EvmLog4>()?,
                     offset,
                     len,
                     topic0,
@@ -2528,7 +2690,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             RuntimeBuiltin::CallDataSelector => {
                 let zero = self.fb.make_imm_value(I256::zero());
                 let word = self.fb.insert_inst(
-                    EvmCalldataLoad::new(self.module.inst_set(), zero),
+                    EvmCalldataLoad::new(self.module.required_inst::<EvmCalldataLoad>()?, zero),
                     Type::I256,
                 );
                 let shift = self.fb.make_imm_value(I256::from(224u64));
@@ -2573,9 +2735,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                                 "code-backed contract field ref should carry a code-tail slot, got {slot}"
                             )));
                         };
-                        let code_size = self
-                            .fb
-                            .insert_inst(EvmCodeSize::new(self.module.inst_set()), Type::I256);
+                        let code_size = self.fb.insert_inst(
+                            EvmCodeSize::new(self.module.required_inst::<EvmCodeSize>()?),
+                            Type::I256,
+                        );
                         let offset = self.fb.make_imm_value(I256::from(*tail_offset));
                         self.fb.insert_inst(
                             Add::new(self.module.inst_set(), code_size, offset),
@@ -2701,35 +2864,50 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     args,
                 ));
                 self.fb
-                    .insert_inst_no_result(Unreachable::new_unchecked(self.module.inst_set()));
+                    .insert_inst_no_result(Unreachable::new(self.module.inst_set()));
             }
             RTerminator::ReturnData { offset, len } => {
                 let offset = self.local_value(*offset)?;
                 let len = self.local_value(*len)?;
-                self.fb
-                    .insert_inst_no_result(EvmReturn::new(self.module.inst_set(), offset, len));
+                self.fb.insert_inst_no_result(EvmReturn::new(
+                    self.module.required_inst::<EvmReturn>()?,
+                    offset,
+                    len,
+                ));
             }
             RTerminator::Revert { offset, len } => {
                 let offset = self.local_value(*offset)?;
                 let len = self.local_value(*len)?;
-                self.fb
-                    .insert_inst_no_result(EvmRevert::new(self.module.inst_set(), offset, len));
+                self.fb.insert_inst_no_result(EvmRevert::new(
+                    self.module.required_inst::<EvmRevert>()?,
+                    offset,
+                    len,
+                ));
             }
             RTerminator::RevertEmpty => {
                 let zero = self.fb.make_imm_value(I256::zero());
-                self.fb
-                    .insert_inst_no_result(EvmRevert::new(self.module.inst_set(), zero, zero));
+                self.fb.insert_inst_no_result(EvmRevert::new(
+                    self.module.required_inst::<EvmRevert>()?,
+                    zero,
+                    zero,
+                ));
             }
             RTerminator::SelfDestruct { beneficiary } => {
                 let beneficiary = self.local_value(*beneficiary)?;
                 self.fb.insert_inst_no_result(EvmSelfDestruct::new(
-                    self.module.inst_set(),
+                    self.module.required_inst::<EvmSelfDestruct>()?,
                     beneficiary,
                 ));
             }
             RTerminator::Trap => {
-                self.fb
-                    .insert_inst_no_result(EvmInvalid::new(self.module.inst_set()));
+                if self.module.is_native_target() {
+                    self.fb
+                        .insert_inst_no_result(Unreachable::new(self.module.inst_set()));
+                } else {
+                    self.fb.insert_inst_no_result(EvmInvalid::new(
+                        self.module.required_inst::<EvmInvalid>()?,
+                    ));
+                }
             }
             RTerminator::Return(value) => match value {
                 Some(value) => {
@@ -2743,7 +2921,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             },
             RTerminator::Stop => {
                 self.fb
-                    .insert_inst_no_result(EvmStop::new(self.module.inst_set()));
+                    .insert_inst_no_result(EvmStop::new(self.module.required_inst::<EvmStop>()?));
             }
         }
         Ok(())
@@ -4314,25 +4492,28 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 Mload::new(self.module.inst_set(), addr, Type::I256),
                 Type::I256,
             )),
-            AddressSpaceKind::Storage => Ok(self
-                .fb
-                .insert_inst(EvmSload::new(self.module.inst_set(), addr), Type::I256)),
-            AddressSpaceKind::Transient => Ok(self
-                .fb
-                .insert_inst(EvmTload::new(self.module.inst_set(), addr), Type::I256)),
+            AddressSpaceKind::Storage => Ok(self.fb.insert_inst(
+                EvmSload::new(self.module.required_inst::<EvmSload>()?, addr),
+                Type::I256,
+            )),
+            AddressSpaceKind::Transient => Ok(self.fb.insert_inst(
+                EvmTload::new(self.module.required_inst::<EvmTload>()?, addr),
+                Type::I256,
+            )),
             AddressSpaceKind::Calldata => Ok(self.fb.insert_inst(
-                EvmCalldataLoad::new(self.module.inst_set(), addr),
+                EvmCalldataLoad::new(self.module.required_inst::<EvmCalldataLoad>()?, addr),
                 Type::I256,
             )),
             AddressSpaceKind::Code => {
                 let len = self.fb.make_imm_value(I256::from(32u64));
                 let ptr_ty = self.fb.ptr_type(Type::I8);
-                let ptr = self
-                    .fb
-                    .insert_inst(EvmMalloc::new(self.module.inst_set(), len), ptr_ty);
+                let ptr = self.fb.insert_inst(
+                    EvmMalloc::new(self.module.required_inst::<EvmMalloc>()?, len),
+                    ptr_ty,
+                );
                 let ptr = self.coerce_value_to_ty(ptr, Type::I256)?;
                 self.fb.insert_inst_no_result(EvmCodeCopy::new(
-                    self.module.inst_set(),
+                    self.module.required_inst::<EvmCodeCopy>()?,
                     ptr,
                     addr,
                     len,
@@ -4351,6 +4532,12 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         space: AddressSpaceKind,
         scalar: &ScalarClass<'db>,
     ) -> Result<ValueId, LowerError> {
+        if self.module.is_native_target() && matches!(space, AddressSpaceKind::Memory) {
+            let ty = self.module.scalar_ty(scalar)?;
+            return Ok(self
+                .fb
+                .insert_inst(Mload::new(self.module.inst_set(), addr, ty), ty));
+        }
         let word = self.load_word(addr, space)?;
         let value = if space.is_byte_addressed() {
             let width = scalar_raw_memory_size_bytes(scalar);
@@ -4374,12 +4561,17 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         class: &RuntimeClass<'db>,
         src: ValueId,
     ) -> Result<(), LowerError> {
+        let native_memory =
+            self.module.is_native_target() && matches!(space, AddressSpaceKind::Memory);
         let value = match class {
-            RuntimeClass::Scalar(scalar) => self.cast_scalar_with_signedness(
-                src,
-                scalar_word_ty(scalar),
-                scalar.is_signed_int(),
-            ),
+            RuntimeClass::Scalar(scalar) => {
+                let ty = if native_memory {
+                    self.module.scalar_ty(scalar)?
+                } else {
+                    scalar_word_ty(scalar)
+                };
+                self.cast_scalar_with_signedness(src, ty, scalar.is_signed_int())
+            }
             RuntimeClass::Ref {
                 kind:
                     RefKind::Provider {
@@ -4403,6 +4595,14 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         }?;
         match space {
             AddressSpaceKind::Memory => match class {
+                RuntimeClass::Scalar(_) if native_memory => {
+                    self.fb.insert_inst_no_result(Mstore::new(
+                        self.module.inst_set(),
+                        addr,
+                        value,
+                        self.fb.type_of(value),
+                    ));
+                }
                 RuntimeClass::Scalar(scalar) if scalar_raw_memory_size_bytes(scalar) < 32 => {
                     self.store_memory_scalar_bytes(addr, scalar, value)?
                 }
@@ -4440,14 +4640,16 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 }
                 RuntimeClass::AggregateValue { .. } | RuntimeClass::Ref { .. } => unreachable!(),
             },
-            AddressSpaceKind::Storage => {
-                self.fb
-                    .insert_inst_no_result(EvmSstore::new(self.module.inst_set(), addr, value))
-            }
-            AddressSpaceKind::Transient => {
-                self.fb
-                    .insert_inst_no_result(EvmTstore::new(self.module.inst_set(), addr, value))
-            }
+            AddressSpaceKind::Storage => self.fb.insert_inst_no_result(EvmSstore::new(
+                self.module.required_inst::<EvmSstore>()?,
+                addr,
+                value,
+            )),
+            AddressSpaceKind::Transient => self.fb.insert_inst_no_result(EvmTstore::new(
+                self.module.required_inst::<EvmTstore>()?,
+                addr,
+                value,
+            )),
             AddressSpaceKind::Calldata => {
                 return Err(LowerError::Unsupported(
                     "storing into calldata-backed providers is not supported".to_string(),
@@ -4480,8 +4682,11 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             };
             let byte = self.cast_scalar(shifted, Type::I8)?;
             let byte_addr = self.offset_address_unscaled(addr, byte_idx)?;
-            self.fb
-                .insert_inst_no_result(EvmMstore8::new(self.module.inst_set(), byte_addr, byte));
+            self.fb.insert_inst_no_result(EvmMstore8::new(
+                self.module.required_inst::<EvmMstore8>()?,
+                byte_addr,
+                byte,
+            ));
         }
         Ok(())
     }
@@ -5001,39 +5206,33 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 .insert_inst(Mul::new(self.module.inst_set(), lhs, rhs), ty),
             ArithBinOp::Div if checked => {
                 self.emit_division_by_zero_revert(rhs, ty)?;
-                let [raw, overflow] = if signed {
-                    self.fb.insert_evm_sdivo(lhs, rhs)
+                if self.module.is_native_target() {
+                    if signed {
+                        self.emit_signed_div_overflow_revert(lhs, rhs, ty)?;
+                    }
+                    self.lower_unchecked_div(lhs, rhs, ty, signed)?
                 } else {
-                    self.fb.insert_evm_udivo(lhs, rhs)
-                };
-                self.emit_panic_revert(overflow, PANIC_OVERFLOW)?;
-                raw
-            }
-            ArithBinOp::Div => {
-                if signed {
-                    self.fb
-                        .insert_inst(EvmSdiv::new(self.module.inst_set(), lhs, rhs), ty)
-                } else {
-                    self.fb
-                        .insert_inst(EvmUdiv::new(self.module.inst_set(), lhs, rhs), ty)
+                    let [raw, overflow] = if signed {
+                        self.fb.insert_evm_sdivo(lhs, rhs)
+                    } else {
+                        self.fb.insert_evm_udivo(lhs, rhs)
+                    };
+                    self.emit_panic_revert(overflow, PANIC_OVERFLOW)?;
+                    raw
                 }
             }
+            ArithBinOp::Div => self.lower_unchecked_div(lhs, rhs, ty, signed)?,
             ArithBinOp::Rem => {
                 if checked {
                     self.emit_division_by_zero_revert(rhs, ty)?;
                 }
-                if signed {
-                    self.fb
-                        .insert_inst(EvmSmod::new(self.module.inst_set(), lhs, rhs), ty)
-                } else {
-                    self.fb
-                        .insert_inst(EvmUmod::new(self.module.inst_set(), lhs, rhs), ty)
-                }
+                self.lower_unchecked_rem(lhs, rhs, ty, signed)?
             }
             ArithBinOp::Pow if checked => self.lower_checked_pow_builtin(lhs, rhs, ty, signed)?,
-            ArithBinOp::Pow => self
-                .fb
-                .insert_inst(EvmExp::new(self.module.inst_set(), lhs, rhs), ty),
+            ArithBinOp::Pow => self.fb.insert_inst(
+                EvmExp::new(self.module.required_inst::<EvmExp>()?, lhs, rhs),
+                ty,
+            ),
             ArithBinOp::LShift => self
                 .fb
                 .insert_inst(Shl::new(self.module.inst_set(), rhs, lhs), ty),
@@ -5203,12 +5402,14 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             this.fb.switch_to_block(block);
             match kind {
                 SharedHelperKind::EmptyRevert => {
-                    let zero = zero_for_type(&mut this.fb, Type::I256);
-                    this.fb.insert_inst_no_result(EvmRevert::new(
-                        this.module.inst_set(),
-                        zero,
-                        zero,
-                    ));
+                    if let Some(has_revert) = EvmRevert::belongs_to(this.module.inst_set()) {
+                        let zero = zero_for_type(&mut this.fb, Type::I256);
+                        this.fb
+                            .insert_inst_no_result(EvmRevert::new(has_revert, zero, zero));
+                    } else {
+                        this.fb
+                            .insert_inst_no_result(Unreachable::new(this.module.inst_set()));
+                    }
                 }
                 SharedHelperKind::Panic(code) => this.emit_panic_revert_payload(code),
             }
@@ -5221,6 +5422,11 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
     }
 
     fn emit_panic_revert_payload(&mut self, code: u64) {
+        let Some(has_revert) = EvmRevert::belongs_to(self.module.inst_set()) else {
+            self.fb
+                .insert_inst_no_result(Unreachable::new(self.module.inst_set()));
+            return;
+        };
         let zero = self.fb.make_imm_value(I256::zero());
         let selector = self.fb.make_imm_value(panic_selector_immediate());
         let code_offset = self.fb.make_imm_value(I256::from(4u64));
@@ -5239,7 +5445,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             Type::I256,
         ));
         self.fb
-            .insert_inst_no_result(EvmRevert::new(self.module.inst_set(), zero, len));
+            .insert_inst_no_result(EvmRevert::new(has_revert, zero, len));
     }
 
     fn emit_empty_revert(&mut self, overflow_flag: ValueId) -> Result<(), LowerError> {
@@ -5274,6 +5480,79 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             .fb
             .insert_inst(Eq::new(self.module.inst_set(), rhs, zero), Type::I1);
         self.emit_panic_revert(divisor_is_zero, PANIC_DIVISION_BY_ZERO)
+    }
+
+    fn lower_unchecked_div(
+        &mut self,
+        lhs: ValueId,
+        rhs: ValueId,
+        ty: Type,
+        signed: bool,
+    ) -> Result<ValueId, LowerError> {
+        Ok(if self.module.is_native_target() && signed {
+            self.fb
+                .insert_inst(Sdiv::new(self.module.inst_set(), lhs, rhs), ty)
+        } else if self.module.is_native_target() {
+            self.fb
+                .insert_inst(Udiv::new(self.module.inst_set(), lhs, rhs), ty)
+        } else if signed {
+            self.fb.insert_inst(
+                EvmSdiv::new(self.module.required_inst::<EvmSdiv>()?, lhs, rhs),
+                ty,
+            )
+        } else {
+            self.fb.insert_inst(
+                EvmUdiv::new(self.module.required_inst::<EvmUdiv>()?, lhs, rhs),
+                ty,
+            )
+        })
+    }
+
+    fn lower_unchecked_rem(
+        &mut self,
+        lhs: ValueId,
+        rhs: ValueId,
+        ty: Type,
+        signed: bool,
+    ) -> Result<ValueId, LowerError> {
+        Ok(if self.module.is_native_target() && signed {
+            self.fb
+                .insert_inst(Smod::new(self.module.inst_set(), lhs, rhs), ty)
+        } else if self.module.is_native_target() {
+            self.fb
+                .insert_inst(Umod::new(self.module.inst_set(), lhs, rhs), ty)
+        } else if signed {
+            self.fb.insert_inst(
+                EvmSmod::new(self.module.required_inst::<EvmSmod>()?, lhs, rhs),
+                ty,
+            )
+        } else {
+            self.fb.insert_inst(
+                EvmUmod::new(self.module.required_inst::<EvmUmod>()?, lhs, rhs),
+                ty,
+            )
+        })
+    }
+
+    fn emit_signed_div_overflow_revert(
+        &mut self,
+        lhs: ValueId,
+        rhs: ValueId,
+        ty: Type,
+    ) -> Result<(), LowerError> {
+        let min = self.fb.make_imm_value(Immediate::signed_min(ty));
+        let neg_one = self.fb.make_imm_value(Immediate::all_one(ty));
+        let lhs_is_min = self
+            .fb
+            .insert_inst(Eq::new(self.module.inst_set(), lhs, min), Type::I1);
+        let rhs_is_neg_one = self
+            .fb
+            .insert_inst(Eq::new(self.module.inst_set(), rhs, neg_one), Type::I1);
+        let overflow = self.fb.insert_inst(
+            And::new(self.module.inst_set(), lhs_is_min, rhs_is_neg_one),
+            Type::I1,
+        );
+        self.emit_panic_revert(overflow, PANIC_OVERFLOW)
     }
 
     fn emit_unconditional_empty_revert<T>(&mut self) -> Lowered<T> {
@@ -5565,9 +5844,9 @@ fn scalar_word_ty<'db>(scalar: &ScalarClass<'db>) -> Type {
     }
 }
 
-fn cast_int_value(
+fn cast_int_value<I: LoweringInstSet>(
     fb: &mut FunctionBuilder<InstInserter>,
-    is: &EvmInstSet,
+    is: &I,
     value: ValueId,
     target_ty: Type,
     signed: bool,
@@ -5645,10 +5924,10 @@ fn zero_for_type(fb: &mut FunctionBuilder<InstInserter>, ty: Type) -> ValueId {
     }
 }
 
-fn condition_to_i1(
+fn condition_to_i1<I: LoweringInstSet>(
     fb: &mut FunctionBuilder<InstInserter>,
     cond: ValueId,
-    is: &EvmInstSet,
+    is: &I,
 ) -> ValueId {
     if fb.type_of(cond) == Type::I1 {
         cond
@@ -5725,7 +6004,7 @@ trait ProjectionType<'db> {
     fn ty_for_const_projection(&mut self, class: &RuntimeClass<'db>) -> Result<Type, LowerError>;
 }
 
-impl<'db, 'a> ProjectionType<'db> for ModuleLowerer<'db, 'a> {
+impl<'db, 'a, I: LoweringInstSet + 'static> ProjectionType<'db> for ModuleLowerer<'db, 'a, I> {
     fn ty_for_object_projection(&mut self, class: &RuntimeClass<'db>) -> Result<Type, LowerError> {
         let field_ty = self.ty_for_class(class)?;
         Ok(self.builder.objref_type(field_ty))
