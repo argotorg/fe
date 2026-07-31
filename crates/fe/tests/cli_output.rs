@@ -472,6 +472,80 @@ fn test_cli_build_emit_abi_writes_json_artifact() {
     assert_eq!(function["outputs"][0]["type"], "uint256");
 }
 
+#[cfg(all(
+    feature = "cranelift",
+    any(target_os = "linux", target_os = "macos"),
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[test]
+fn test_cli_build_native_executable_uses_main_return_as_exit_code() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("native_exit.fe");
+    fs::write(&source, "pub fn main() -> i32 { 42 }\n").expect("write native source");
+    let out_dir = temp.path().join("out");
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--backend",
+        "native",
+        "--out-dir",
+        out_dir.to_str().expect("UTF-8 output path"),
+        source.to_str().expect("UTF-8 source path"),
+    ]);
+    assert_eq!(exit_code, 0, "fe native build failed:\n{output}");
+
+    let executable = out_dir.join("native_exit");
+    assert!(executable.is_file(), "missing native executable:\n{output}");
+    let status = Command::new(&executable)
+        .status()
+        .expect("run native executable");
+    assert_eq!(status.code(), Some(42));
+}
+
+#[cfg(feature = "cranelift")]
+#[test]
+fn test_cli_build_native_rejects_evm_artifacts() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("native_exit.fe");
+    fs::write(&source, "pub fn main() -> i32 { 0 }\n").expect("write native source");
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--backend",
+        "native",
+        "--emit",
+        "bytecode",
+        source.to_str().expect("UTF-8 source path"),
+    ]);
+    assert_eq!(exit_code, 1, "expected native build rejection:\n{output}");
+    assert!(
+        output.contains("native backend only supports `--emit executable` and `--emit ir`"),
+        "unexpected output:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_build_sonatina_rejects_executable_emit() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("main.fe");
+    fs::write(&source, "pub fn main() -> i32 { 0 }\n").expect("write source");
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "executable",
+        source.to_str().expect("UTF-8 source path"),
+    ]);
+    assert_eq!(
+        exit_code, 1,
+        "expected executable emit rejection:\n{output}"
+    );
+    assert!(
+        output.contains("`--emit executable` requires `--backend native`"),
+        "unexpected output:\n{output}"
+    );
+}
+
 #[test]
 fn test_cli_build_emit_abi_dyn_string_matches_string_selector() {
     let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

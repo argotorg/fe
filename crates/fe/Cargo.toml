@@ -7,6 +7,7 @@ edition.workspace = true
 default = ["doc-server", "lsp"]
 doc-server = ["dep:tokio", "dep:axum"]
 lsp = ["dep:language-server", "dep:tokio"]
+cranelift = ["codegen/cranelift"]
 
 [dependencies]
 clap.workspace = true
