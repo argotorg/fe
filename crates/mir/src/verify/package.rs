@@ -185,7 +185,7 @@ fn verify_synthetic_function<'db>(
                     return Err(VerifyError::MissingRuntimeBlock(*default_bb));
                 };
                 match (default, &default_target.terminator) {
-                    (DispatchDefault::RevertEmpty, RTerminator::Revert { .. }) => {}
+                    (DispatchDefault::RevertEmpty, RTerminator::RevertEmpty) => {}
                     (
                         DispatchDefault::Call { wrapper },
                         RTerminator::TerminalCall { callee, args },
@@ -200,7 +200,9 @@ fn verify_synthetic_function<'db>(
             RuntimeSyntheticSpec::ContractRecvAbi { .. } => verify_has_terminator(body, |term| {
                 matches!(
                     term,
-                    RTerminator::ReturnData { .. } | RTerminator::Revert { .. }
+                    RTerminator::ReturnData { .. }
+                        | RTerminator::Revert { .. }
+                        | RTerminator::RevertEmpty
                 )
             }),
             RuntimeSyntheticSpec::MainRoot { .. }

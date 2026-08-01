@@ -1,7 +1,8 @@
 /// Test the `Address::static` convenience method: typed STATICCALLs that
 /// forward all gas, plus revert-data bubbling on failure.
 
-use std::evm::{Ctx, Evm, encode_msg_calldata, decode_returndata, last_returndata}
+use core::ptr
+use std::evm::{Ctx, Evm, copy_returndata, decode_returndata, encode_msg_calldata}
 
 msg ViewMsg {
     #[selector = sol("getValue()")]
@@ -60,6 +61,26 @@ fn test_address_static_happy_path() uses (evm: mut Evm, call: mut Call) {
     assert!(owner.inner == 0xbeef)
 }
 
+#[test]
+fn test_typed_inspectable_static_and_delegate_calls() uses (evm: mut Evm, call: mut Call) {
+    let viewer = evm.create2<Viewer>(value: 0, args: (), salt: 0)
+
+    let success = viewer.try_static(ViewMsg::GetValue {})
+    assert!(success.success())
+    let value: u256 = decode_returndata(success.returndata())
+    assert!(value == 1234)
+
+    let failure = viewer.try_static(ViewMsg::Boom {})
+    assert!(!failure.success())
+    let marker: u256 = decode_returndata(failure.returndata())
+    assert!(marker == 0xdeadbeef)
+
+    let delegated = evm.try_delegate(addr: viewer, gas: 100000, message: ViewMsg::GetValue {})
+    assert!(delegated.success())
+    let delegated_value: u256 = decode_returndata(delegated.returndata())
+    assert!(delegated_value == 1234)
+}
+
 #[test(should_revert)]
 fn test_address_static_bubbles_revert() uses (evm: mut Evm, call: mut Call) {
     let viewer = evm.create2<Viewer>(value: 0, args: (), salt: 0)
@@ -71,10 +92,11 @@ fn test_address_static_bubbles_revert_data() uses (evm: mut Evm, call: mut Call,
     let viewer = evm.create2<Viewer>(value: 0, args: (), salt: 0)
     let relay = evm.create2<Relay>(value: 0, args: (), salt: 0)
 
-    let (ptr, len) = encode_msg_calldata(RelayMsg::RelayBoom { target: viewer })
-    let ok = call.raw_call(addr: relay, gas: ctx.gas(), value: 0, args_offset: ptr, args_len: len)
-    assert!(!ok)
+    let data = encode_msg_calldata(RelayMsg::RelayBoom { target: viewer })
+    let mut ret = ptr::MemBuffer::empty()
+    let outcome = call.raw_call(addr: relay, gas: ctx.gas(), value: 0, args: data.span(), ret: mut ret)
+    assert!(!outcome.success())
 
-    let bubbled: u256 = decode_returndata(last_returndata())
+    let bubbled: u256 = decode_returndata(copy_returndata().span())
     assert!(bubbled == 0xdeadbeef)
 }

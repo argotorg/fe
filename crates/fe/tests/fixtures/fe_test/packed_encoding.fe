@@ -255,8 +255,8 @@ fn test_as_bytes_roundtrip() uses (mem: mut RawMem) {
     p.address(Address { inner: 0x1111111111111111111111111111111111111111 })
     p.address(Address { inner: 0x2222222222222222222222222222222222222222 })
     let b = p.as_bytes()
-    assert!(b.len == 40)
-    assert!(b.size == 96)
+    assert!(b.len() == 40)
+    assert!(b.encoded_size() == 96)
     // Re-packing the copied Bytes hashes identically to the builder.
     assert!(keccak_packed((b,)) == SALT_DIGEST)
 }

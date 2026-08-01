@@ -92,6 +92,11 @@ impl<'db> TyFoldable<'db> for EffectProviderSpecialization<'db> {
                     instance.fold_with(db, folder),
                 )
             }
+            crate::analysis::ty::provider::ProviderLayoutEvidence::TraitBoundHandle(instance) => {
+                crate::analysis::ty::provider::ProviderLayoutEvidence::TraitBoundHandle(
+                    instance.fold_with(db, folder),
+                )
+            }
             evidence => evidence,
         };
         let semantics = crate::analysis::ty::provider::ProviderSemantics {

@@ -32,7 +32,6 @@ static bool is_continuation_after_newline(int32_t c) {
   switch (c) {
     case '.':
     case '+':
-    case '*':
     case '/':
     case '%':
     case '|':
@@ -151,6 +150,13 @@ static bool scan_automatic_semicolon(TSLexer *lexer) {
       // `-=` is a continuation; unary/binary `-` starts a new expression.
       advance(lexer);
       return lexer->lookahead != '=';
+    }
+
+    if (c == '*') {
+      // Bare `*` starts a dereference statement. `*=` and `**` are
+      // unambiguously infix continuations.
+      advance(lexer);
+      return lexer->lookahead != '=' && lexer->lookahead != '*';
     }
 
     if (c == '<') {

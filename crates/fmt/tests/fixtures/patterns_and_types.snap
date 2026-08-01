@@ -18,12 +18,13 @@ fn pattern_tests() {
     let ((a, b), (c, d)) = ((1, 2), (3, 4))
 }
 
-fn type_tests(x: i32, y: *i32, z: (i32, bool)) -> i32 {
+fn type_tests(x: i32, y: *i32, argv: **u8, z: (i32, bool)) -> i32 {
     // Various type annotations
     let a: i32 = 1
     let b: (i32, bool) = (1, true)
     let arr: [i32; 10] = [0; 10]
     let ptr: *i32 = y
+    let ptr2: **u8 = argv
 
     x
 }

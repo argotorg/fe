@@ -8,10 +8,10 @@ use crate::{
         ArithBinOp, AssocConstDef, AssocTyDef, Attr, AttrArg, AttrListId, BinOp, Body, BodyKind,
         EffectParamListId, Expr, ExprId, FieldDefListId, FieldIndex, Func, FuncModifiers,
         FuncParam, FuncParamListId, FuncParamMode, FuncParamName, GenericArg, GenericArgListId,
-        GenericParam, GenericParamListId, IdentId, ImplTrait, ItemKind, Mod, NormalAttr, Partial,
-        Pat, PatId, PathId, PathKind, Stmt, StmtId, Struct, TopLevelMod, TrackedItemId,
-        TrackedItemVariant, TraitRefId, TypeBound, TypeGenericArg, TypeGenericParam, TypeId,
-        TypeKind, TypeMode, UnOp, Visibility, WhereClauseId, expr::CallArg,
+        GenericParam, GenericParamListId, IdentId, ImplTrait, IntegerId, ItemKind, LitKind, Mod,
+        NormalAttr, Partial, Pat, PatId, PathId, PathKind, Stmt, StmtId, Struct, TopLevelMod,
+        TrackedItemId, TrackedItemVariant, TraitRefId, TypeBound, TypeGenericArg, TypeGenericParam,
+        TypeId, TypeKind, TypeMode, Visibility, WhereClauseId, expr::CallArg,
     },
     span::{DesugaredOrigin, HirOrigin},
 };
@@ -170,6 +170,10 @@ where
 
     pub(super) fn ty_ident(&self, ident: IdentId<'db>) -> TypeId<'db> {
         self.ty_path(PathId::from_ident(self.db(), ident))
+    }
+
+    pub(super) fn ty_ptr(&self, pointee: TypeId<'db>) -> TypeId<'db> {
+        TypeId::new(self.db(), TypeKind::Ptr(Partial::Present(pointee)))
     }
 
     pub(super) fn sol_ty(&self) -> TypeId<'db> {
@@ -714,8 +718,7 @@ where
     pub(super) fn encode_fields(
         &mut self,
         fields: &[(IdentId<'db>, TypeId<'db>)],
-        encoder_ident: IdentId<'db>,
-        encoder_ty: TypeId<'db>,
+        ptr_ident: IdentId<'db>,
     ) {
         if fields.is_empty() {
             return;
@@ -724,20 +727,20 @@ where
         let db = self.db();
         let self_expr = self.path_expr(PathId::from_ident(db, IdentId::make_self(db)));
         let tail_ident = IdentId::new(db, "__tail".to_string());
-        let base_ident = IdentId::new(db, "base".to_string());
+        let head_pos_ident = IdentId::new(db, "__head_pos".to_string());
         let head_size = self.abi_size_assoc_expr(TypeId::fallback_self_ty(db), "HEAD_SIZE");
-        let encoder_expr = self.ident_expr(encoder_ident);
-        let base_expr = self.method_call_expr(encoder_expr, base_ident, vec![]);
-        let tail_init = self.push_expr(Expr::Bin(
-            base_expr,
-            head_size,
-            BinOp::Arith(ArithBinOp::Add),
-        ));
         let tail_pat = self.push_pat(Pat::Path(
             Partial::Present(PathId::from_ident(db, tail_ident)),
             true,
         ));
-        self.emit_stmt(Stmt::Let(tail_pat, None, Some(tail_init)));
+        self.emit_stmt(Stmt::Let(tail_pat, None, Some(head_size)));
+        let head_pos_pat = self.push_pat(Pat::Path(
+            Partial::Present(PathId::from_ident(db, head_pos_ident)),
+            true,
+        ));
+        let zero = self.push_expr(Expr::Lit(LitKind::Int(IntegerId::from_usize(db, 0))));
+        self.emit_stmt(Stmt::Let(head_pos_pat, None, Some(zero)));
+
         for (index, (field, field_ty)) in fields.iter().copied().enumerate() {
             let field_ident = IdentId::new(db, format!("__field_{index}"));
             let field_pat = self.push_pat(Pat::Path(
@@ -758,24 +761,66 @@ where
                     GenericArg::Type(TypeGenericArg {
                         ty: Partial::Present(field_ty),
                     }),
-                    GenericArg::Type(TypeGenericArg {
-                        ty: Partial::Present(encoder_ty),
-                    }),
                 ],
             );
             let encode_field_path = PathId::from_ident(db, self.roots.core)
                 .push_str(db, "abi")
-                .push_str_args(db, "encode_field", encode_field_args);
+                .push_str_args(db, "encode_field_at", encode_field_args);
             let encode_field_callee = self.path_expr(encode_field_path);
             let field_value = self.ident_expr(field_ident);
-            let encoder_arg = self.ident_expr(encoder_ident);
-            let tail_value = self.ident_expr(tail_ident);
-            let tail_arg = self.push_expr(Expr::Un(tail_value, UnOp::Mut));
-            let call = self.call_expr(
+            let ptr_arg = self.ident_expr(ptr_ident);
+            let head_pos_arg = self.ident_expr(head_pos_ident);
+            let tail_arg = self.ident_expr(tail_ident);
+            let call = self.call_expr_with_args(
                 encode_field_callee,
-                vec![field_value, encoder_arg, tail_arg],
+                vec![
+                    CallArg {
+                        label: None,
+                        expr: field_value,
+                    },
+                    CallArg {
+                        label: None,
+                        expr: ptr_arg,
+                    },
+                    CallArg {
+                        label: Some(IdentId::new(db, "head_pos".to_string())),
+                        expr: head_pos_arg,
+                    },
+                    CallArg {
+                        label: Some(IdentId::new(db, "tail".to_string())),
+                        expr: tail_arg,
+                    },
+                ],
             );
-            self.emit_expr_stmt(call);
+            if index + 1 == fields.len() {
+                self.emit_expr_stmt(call);
+                continue;
+            }
+
+            let tail_place = self.ident_expr(tail_ident);
+            let assign_tail = self.push_expr(Expr::Assign(tail_place, call));
+            self.emit_expr_stmt(assign_tail);
+
+            let abi_head_size_args = GenericArgListId::given(
+                db,
+                vec![GenericArg::Type(TypeGenericArg {
+                    ty: Partial::Present(field_ty),
+                })],
+            );
+            let abi_head_size_path = PathId::from_ident(db, self.roots.core)
+                .push_str(db, "abi")
+                .push_str_args(db, "abi_field_head_size", abi_head_size_args);
+            let abi_head_size_callee = self.path_expr(abi_head_size_path);
+            let field_head_size = self.call_expr(abi_head_size_callee, vec![]);
+            let head_pos = self.ident_expr(head_pos_ident);
+            let next_head_pos = self.push_expr(Expr::Bin(
+                head_pos,
+                field_head_size,
+                BinOp::Arith(ArithBinOp::Add),
+            ));
+            let head_pos_place = self.ident_expr(head_pos_ident);
+            let assign_head_pos = self.push_expr(Expr::Assign(head_pos_place, next_head_pos));
+            self.emit_expr_stmt(assign_head_pos);
         }
     }
 

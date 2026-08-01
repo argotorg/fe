@@ -8,9 +8,5 @@ impl AbiSize for Error {
 }
 
 impl<A: Abi> Encode<A> for Error {
-    const DIRECT_ENCODE: bool = true
-
-    fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {}
-
-    fn encode_to_ptr(own self, _ ptr: u256) {}
+    fn encode(own self, _ ptr: *u8) {}
 }

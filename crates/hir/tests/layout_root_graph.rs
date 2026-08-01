@@ -216,7 +216,7 @@ contract C {
 #[test]
 fn provider_root_expressions_evaluate_after_impl_and_assoc_substitution() {
     parse_ok!(
-        db,
+        trusted db,
         top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
@@ -225,8 +225,9 @@ struct Slot<const ROOT: u256 = _> {}
 struct Direct<const ROOT: u256> { raw: u256 }
 impl<const ROOT: u256> EffectHandle for Direct<ROOT> {
     type Target = Slot<{ ROOT + 1 }>
+    type Raw = u256
     const SPACE: AddressSpace = AddressSpace::Storage
-    fn from_raw(_ raw: u256) -> Self { Self { raw } }
+
     fn raw(self) -> u256 { self.raw }
 }
 
@@ -238,8 +239,9 @@ impl<const ROOT: u256> HasTarget for Source<ROOT> {
 struct Indirect<T> { raw: u256 }
 impl<T> EffectHandle for Indirect<T> where T: HasTarget {
     type Target = T::Target
+    type Raw = u256
     const SPACE: AddressSpace = AddressSpace::Storage
-    fn from_raw(_ raw: u256) -> Self { Self { raw } }
+
     fn raw(self) -> u256 { self.raw }
 }
 
@@ -281,7 +283,7 @@ contract C {
 #[test]
 fn nested_provider_targets_are_first_class_graph_edges() {
     parse_ok!(
-        db,
+        trusted db,
         top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
@@ -290,8 +292,9 @@ struct Root<const ROOT: u256 = _> {}
 struct Handle<T> { raw: u256 }
 impl<T> EffectHandle for Handle<T> {
     type Target = T
+    type Raw = u256
     const SPACE: AddressSpace = AddressSpace::Storage
-    fn from_raw(_ raw: u256) -> Self { Self { raw } }
+
     fn raw(self) -> u256 { self.raw }
 }
 
@@ -450,7 +453,7 @@ contract C {
 #[test]
 fn nested_provider_targets_use_their_own_space_and_reservations() {
     parse_ok!(
-        db,
+        trusted db,
         top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
@@ -459,8 +462,9 @@ struct Root<const ROOT: u256 = _> {}
 struct TransientHandle<T> { raw: u256 }
 impl<T> EffectHandle for TransientHandle<T> {
     type Target = T
+    type Raw = u256
     const SPACE: AddressSpace = AddressSpace::TransientStorage
-    fn from_raw(_ raw: u256) -> Self { Self { raw } }
+
     fn raw(self) -> u256 { self.raw }
 }
 struct Holder<T> { value: T }
@@ -534,7 +538,7 @@ contract C {
 #[test]
 fn unreachable_nested_provider_types_do_not_reserve_roots() {
     parse_ok!(
-        db,
+        trusted db,
         top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
@@ -543,8 +547,9 @@ struct Root<const ROOT: u256 = _> {}
 struct Handle<T> { raw: u256 }
 impl<T> EffectHandle for Handle<T> {
     type Target = T
+    type Raw = u256
     const SPACE: AddressSpace = AddressSpace::Storage
-    fn from_raw(_ raw: u256) -> Self { Self { raw } }
+
     fn raw(self) -> u256 { self.raw }
 }
 struct Phantom<T> { value: u256 }
@@ -574,7 +579,7 @@ contract C {
 #[test]
 fn recursive_provider_target_edges_reach_a_finite_fixed_point() {
     parse_ok!(
-        db,
+        trusted db,
         top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
@@ -583,8 +588,9 @@ struct Root<const ROOT: u256 = _> {}
 struct Recursive { raw: u256 }
 impl EffectHandle for Recursive {
     type Target = (Recursive, Root)
+    type Raw = u256
     const SPACE: AddressSpace = AddressSpace::Storage
-    fn from_raw(_ raw: u256) -> Self { Self { raw } }
+
     fn raw(self) -> u256 { self.raw }
 }
 struct Holder { value: Recursive }
@@ -754,7 +760,7 @@ contract C {
 #[test]
 fn provider_concrete_roots_retain_every_nested_owner_space() {
     parse_ok!(
-        db,
+        trusted db,
         top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle, StaticSlot}
@@ -768,8 +774,9 @@ impl<const ROOT: u256> StaticSlot for Routed<ROOT> {
 struct Wrapper<const ROOT: u256 = _> { raw: u256 }
 impl<const ROOT: u256> EffectHandle for Wrapper<ROOT> {
     type Target = (Plain<ROOT>, Routed<ROOT>)
+    type Raw = u256
     const SPACE: AddressSpace = AddressSpace::Storage
-    fn from_raw(_ raw: u256) -> Self { Self { raw } }
+
     fn raw(self) -> u256 { self.raw }
 }
 
@@ -895,7 +902,7 @@ contract C {
 #[test]
 fn explicit_alias_roots_survive_provider_target_normalization() {
     parse_ok!(
-        db,
+        trusted db,
         top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
@@ -906,8 +913,9 @@ struct Wrapper<const ROOT: u256> {}
 
 impl<const ROOT: u256> EffectHandle for Wrapper<ROOT> {
     type Target = Rooted<ROOT>
+    type Raw = u256
     const SPACE: AddressSpace = AddressSpace::Storage
-    fn from_raw(_ raw: u256) -> Self { Self {} }
+
     fn raw(self) -> u256 { 0 }
 }
 
@@ -936,7 +944,7 @@ contract C {
 #[test]
 fn explicit_provider_roots_preserve_declared_and_target_uses() {
     parse_ok!(
-        db,
+        trusted db,
         top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
@@ -947,8 +955,9 @@ struct Slot<const ROOT: u256 = _> {}
 
 impl<const ROOT: u256> EffectHandle for Wrapper<ROOT> {
     type Target = Leaf<ROOT>
+    type Raw = u256
     const SPACE: AddressSpace = AddressSpace::Storage
-    fn from_raw(_ raw: u256) -> Self { Self {} }
+
     fn raw(self) -> u256 { 0 }
 }
 
@@ -988,7 +997,7 @@ contract C {
 #[test]
 fn explicit_roots_survive_nested_associated_type_normalization() {
     parse_ok!(
-        db,
+        trusted db,
         top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
@@ -1004,8 +1013,9 @@ impl<T> EffectHandle for Wrapper<T>
     where T: HasTarget
 {
     type Target = T::Target
+    type Raw = u256
     const SPACE: AddressSpace = AddressSpace::Storage
-    fn from_raw(_ raw: u256) -> Self { Self {} }
+
     fn raw(self) -> u256 { 0 }
 }
 
@@ -1034,7 +1044,7 @@ contract C {
 #[test]
 fn explicit_roots_survive_inherited_associated_type_defaults() {
     parse_ok!(
-        db,
+        trusted db,
         top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
@@ -1050,8 +1060,9 @@ impl<T> EffectHandle for Wrapper<T>
     where T: HasTarget
 {
     type Target = T::Target
+    type Raw = u256
     const SPACE: AddressSpace = AddressSpace::Storage
-    fn from_raw(_ raw: u256) -> Self { Self {} }
+
     fn raw(self) -> u256 { 0 }
 }
 
@@ -1396,7 +1407,7 @@ contract C {
 #[test]
 fn provider_target_fanout_is_an_explicit_multi_leaf_binding() {
     parse_ok!(
-        db,
+        trusted db,
         top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
@@ -1406,9 +1417,9 @@ struct Wrapper<T> { raw: u256 }
 
 impl<T> EffectHandle for Wrapper<T> {
     type Target = (T, T)
+    type Raw = u256
     const SPACE: AddressSpace = AddressSpace::Storage
 
-    fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
 }
 
@@ -1777,7 +1788,7 @@ contract C { mut value: Mixed }
 #[test]
 fn phantom_and_wrapper_only_roots_are_classified_honestly() {
     parse_ok!(
-        db,
+        trusted db,
         top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
@@ -1788,8 +1799,9 @@ struct Wrapper<const ROOT: u256 = _> { raw: u256 }
 
 impl<const ROOT: u256> EffectHandle for Wrapper<ROOT> {
     type Target = u256
+    type Raw = u256
     const SPACE: AddressSpace = AddressSpace::Storage
-    fn from_raw(_ raw: u256) -> Self { Self { raw } }
+
     fn raw(self) -> u256 { self.raw }
 }
 
@@ -1822,7 +1834,7 @@ contract C {
 #[test]
 fn wrapper_only_array_roots_form_materialize_only_families() {
     parse_ok!(
-        db,
+        trusted db,
         top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
@@ -1835,10 +1847,9 @@ struct Wrapper<const ROOT: u256 = _> {
 
 impl<const ROOT: u256> EffectHandle for Wrapper<ROOT> {
     type Target = u256
+    type Raw = u256
     const SPACE: AddressSpace = AddressSpace::Storage
-    fn from_raw(_ raw: u256) -> Self {
-        Self { slots: [Slot {}, Slot {}, Slot {}], raw }
-    }
+
     fn raw(self) -> u256 { self.raw }
 }
 
@@ -1861,7 +1872,7 @@ contract C { mut value: Wrapper }
 #[test]
 fn wrapper_only_roots_advance_only_their_concrete_owner_space() {
     parse_ok!(
-        db,
+        trusted db,
         top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle, StaticSlot}
@@ -1870,8 +1881,9 @@ struct Wrapper<const ROOT: u256 = _> { raw: u256 }
 
 impl<const ROOT: u256> EffectHandle for Wrapper<ROOT> {
     type Target = u256
+    type Raw = u256
     const SPACE: AddressSpace = AddressSpace::Storage
-    fn from_raw(_ raw: u256) -> Self { Self { raw } }
+
     fn raw(self) -> u256 { self.raw }
 }
 
@@ -1913,7 +1925,7 @@ contract C {
 #[test]
 fn provider_normalization_lands_new_associated_type_roots_per_field() {
     parse_ok!(
-        db,
+        trusted db,
         top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
@@ -1928,8 +1940,9 @@ impl<T> EffectHandle for Wrapper<T>
     where T: HasTarget
 {
     type Target = T::Target
+    type Raw = u256
     const SPACE: AddressSpace = AddressSpace::Storage
-    fn from_raw(_ raw: u256) -> Self { Self { raw } }
+
     fn raw(self) -> u256 { self.raw }
 }
 
@@ -4179,7 +4192,7 @@ contract C {
 #[test]
 fn provider_target_callable_sources_exclude_declared_wrapper_roots() {
     parse_module!(
-        db,
+        trusted db,
         top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
@@ -4206,9 +4219,9 @@ struct Wrapper<const WRAPPER_ROOT: u256 = _> {
 
 impl<const WRAPPER_ROOT: u256> EffectHandle for Wrapper<WRAPPER_ROOT> {
     type Target = Payload
+    type Raw = u256
     const SPACE: AddressSpace = AddressSpace::Storage
 
-    fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
 }
 

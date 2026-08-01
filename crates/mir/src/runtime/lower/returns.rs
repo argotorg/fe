@@ -995,14 +995,8 @@ fn first(_ arr: [u8; 4]) -> u8 {
     #[test]
     fn merged_return_class_is_order_independent_for_irreconcilable_sites() {
         let db = DriverDataBase::default();
-        let storage = RuntimeClass::RawAddr {
-            space: AddressSpaceKind::Storage,
-            target: None,
-        };
-        let transient = RuntimeClass::RawAddr {
-            space: AddressSpaceKind::Transient,
-            target: None,
-        };
+        let storage = RuntimeClass::opaque_raw_addr(AddressSpaceKind::Storage);
+        let transient = RuntimeClass::opaque_raw_addr(AddressSpaceKind::Transient);
 
         // Return sites that disagree on a non-Memory space cannot be merged, so the
         // fold reports failure (caller falls back to the default class) regardless of
@@ -1017,18 +1011,9 @@ fn first(_ arr: [u8; 4]) -> u8 {
     #[test]
     fn merged_return_class_folds_memory_into_non_memory_regardless_of_order() {
         let db = DriverDataBase::default();
-        let memory = RuntimeClass::RawAddr {
-            space: AddressSpaceKind::Memory,
-            target: None,
-        };
-        let storage = RuntimeClass::RawAddr {
-            space: AddressSpaceKind::Storage,
-            target: None,
-        };
-        let merged = RuntimeClass::RawAddr {
-            space: AddressSpaceKind::Storage,
-            target: None,
-        };
+        let memory = RuntimeClass::opaque_raw_addr(AddressSpaceKind::Memory);
+        let storage = RuntimeClass::opaque_raw_addr(AddressSpaceKind::Storage);
+        let merged = RuntimeClass::opaque_raw_addr(AddressSpaceKind::Storage);
 
         assert_eq!(
             merged_return_class(&db, vec![memory.clone(), storage.clone()]),

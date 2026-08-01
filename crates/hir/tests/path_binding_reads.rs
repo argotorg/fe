@@ -129,6 +129,56 @@ fn read(t: Big) -> u256 {
 }
 
 #[test]
+fn default_pointer_param_preserves_view_capability() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "path_binding_reads.fe".into(),
+        r#"
+struct Data {
+    value: u256,
+}
+
+fn read(ptr: *Data) -> u256 {
+    ptr.value
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let func = find_func(&db, top_mod, "read");
+    let (diags, typed_body) = check_func_body(&db, func).clone();
+    assert!(diags.is_empty(), "{diags:?}");
+
+    let binding = typed_body
+        .param_binding(0)
+        .expect("read should have a first param");
+    let LocalBinding::Param { ty, .. } = binding else {
+        panic!("expected param binding");
+    };
+    let value_ty = ty
+        .as_view(&db)
+        .unwrap_or_else(|| panic!("default pointer params should retain their view mode"));
+    assert!(
+        value_ty.as_ptr(&db).is_some(),
+        "default pointer params should view pointer values, got {}",
+        ty.pretty_print(&db),
+    );
+
+    let instance = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+    );
+    assert!(
+        matches!(
+            instance.binding_role(&db, binding),
+            SemanticLocalRole::PlaceCarrier { provider: None, value_ty: role_ty }
+                if role_ty == value_ty
+        ),
+        "default pointer params should be view carriers, got {:#?}",
+        instance.binding_role(&db, binding),
+    );
+}
+
+#[test]
 fn default_view_param_path_reads_materialize_values() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(

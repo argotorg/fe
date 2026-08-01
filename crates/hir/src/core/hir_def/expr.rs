@@ -193,6 +193,8 @@ pub enum UnOp {
     Mut,
     /// `ref`
     Ref,
+    /// `*`
+    Deref,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]

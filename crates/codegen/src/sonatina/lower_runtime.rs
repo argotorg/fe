@@ -9,11 +9,13 @@ use hir::{
 };
 use mir::runtime::RefKind;
 use mir::{
-    AddressSpaceKind, ConstNode, ConstRegionId, ConstScalar, IntrinsicArithBinOp, Layout, LayoutId,
-    RBlockId, RExpr, RLocalId, RStmt, RTerminator, ResolvedPlaceElem, ResolvedPlaceRootKind,
-    RuntimeBody, RuntimeBuiltin, RuntimeClass, RuntimeFunction, RuntimeInlineHint, RuntimeInstance,
-    RuntimeLinkage, RuntimeLocalRoot, RuntimePackage, RuntimePlace, SaturatingBinOp, ScalarClass,
-    ScalarRepr, VariantId, instance::RuntimeInstanceSource, resolve_runtime_place,
+    AddressSpaceKind, ArrayLayout, ConstNode, ConstRegionId, ConstScalar, IntrinsicArithBinOp,
+    Layout, LayoutId, RBlockId, RExpr, RLocalId, RStmt, RTerminator, ResolvedPlaceElem,
+    ResolvedPlaceRootKind, RuntimeBody, RuntimeBuiltin, RuntimeClass, RuntimeFunction,
+    RuntimeInlineHint, RuntimeInstance, RuntimeLinkage, RuntimeLocalRoot, RuntimeMemoryLayout,
+    RuntimePackage, RuntimePlace, SaturatingBinOp, ScalarClass, ScalarRepr, StructLayout,
+    VariantId, instance::RuntimeInstanceSource, resolve_runtime_place,
+    scalar_raw_memory_size_bytes,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::{SmallVec, smallvec};
@@ -30,8 +32,9 @@ use sonatina_ir::{
         data::{
             Alloca, ConstIndex, ConstLoad, ConstProj, ConstRef, EnumAssertVariant,
             EnumAssertVariantRef, EnumExtract, EnumGetTag, EnumIsVariant, EnumMake, EnumProj,
-            EnumSetTag, EnumTag, EnumWriteVariant, InsertValue, Mload, Mstore, ObjAlloc, ObjIndex,
-            ObjInitConst, ObjLoad, ObjProj, ObjStore, SymAddr, SymSize, SymbolRef,
+            EnumSetTag, EnumTag, EnumWriteVariant, ExtractValue, InsertValue, Memzero, Mload,
+            Mstore, ObjAlloc, ObjIndex, ObjInitConst, ObjLoad, ObjProj, ObjStore, SymAddr, SymSize,
+            SymbolRef,
         },
         evm::{
             EvmAddMod, EvmAddress, EvmBalance, EvmBaseFee, EvmBlobBaseFee, EvmBlobHash,
@@ -212,8 +215,12 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             return Ok(existing);
         }
 
-        let ty = self.ty_for_layout(region.layout(self.db))?;
-        let init = self.gv_initializer_for_const(region.value(self.db).clone(), None)?;
+        let layout = region.layout(self.db);
+        let ty = self.ty_for_layout(layout)?;
+        let init = self.gv_initializer_for_const(
+            region.value(self.db).clone(),
+            &RuntimeClass::AggregateValue { layout },
+        )?;
         let name = self.const_name(region);
         let gv = self.builder.declare_gv(GlobalVariableData::constant(
             name,
@@ -228,68 +235,75 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
     fn gv_initializer_for_const(
         &mut self,
         node: ConstNode<'db>,
-        class: Option<&RuntimeClass<'db>>,
+        expected: &RuntimeClass<'db>,
     ) -> Result<sonatina_ir::global_variable::GvInitializer, LowerError> {
-        Ok(match node {
-            ConstNode::Scalar(scalar) => sonatina_ir::global_variable::GvInitializer::make_imm(
-                self.immediate_for_const(&scalar, class)?,
-            ),
-            ConstNode::Aggregate { layout, fields } => {
-                let ty = self.ty_for_layout(layout)?;
-                let compound = ty.resolve_compound(&self.builder.ctx).ok_or_else(|| {
-                    LowerError::Internal(format!("const aggregate type `{ty:?}` is not compound"))
-                })?;
-                match compound {
-                    CompoundType::Array { .. } => {
-                        let Layout::Array(data) = layout.data(self.db) else {
+        Ok(match (node, expected) {
+            (ConstNode::Scalar(scalar), RuntimeClass::Scalar(_)) => {
+                sonatina_ir::global_variable::GvInitializer::make_imm(
+                    self.immediate_for_const(&scalar, Some(expected))?,
+                )
+            }
+            (ConstNode::Aggregate { layout, fields }, expected) => {
+                let RuntimeClass::AggregateValue {
+                    layout: expected_layout,
+                } = expected
+                else {
+                    return Err(LowerError::Internal(format!(
+                        "const aggregate `{layout:?}` has non-aggregate runtime class `{expected:?}`"
+                    )));
+                };
+                if layout != *expected_layout {
+                    return Err(LowerError::Internal(format!(
+                        "const aggregate layout `{layout:?}` does not match expected layout \
+                         `{expected_layout:?}`"
+                    )));
+                }
+                match layout.data(self.db) {
+                    Layout::Array(data) => {
+                        if fields.len() != data.len as usize {
                             return Err(LowerError::Internal(format!(
-                                "array const global should have an array layout, got `{layout:?}`"
+                                "const array `{layout:?}` has {} fields but its layout requires {}",
+                                fields.len(),
+                                data.len
                             )));
-                        };
-                        let elem_class = data.elem.clone();
+                        }
                         sonatina_ir::global_variable::GvInitializer::make_array(
                             fields
-                                .iter()
-                                .cloned()
-                                .map(|field| {
-                                    self.gv_initializer_for_const(field, Some(&elem_class))
-                                })
+                                .into_vec()
+                                .into_iter()
+                                .map(|field| self.gv_initializer_for_const(field, &data.elem))
                                 .collect::<Result<Vec<_>, _>>()?,
                         )
                     }
-                    CompoundType::Struct(_) => {
-                        let Layout::Struct(data) = layout.data(self.db) else {
+                    Layout::Struct(data) => {
+                        if fields.len() != data.fields.len() {
                             return Err(LowerError::Internal(format!(
-                                "struct const global should have a struct layout, got `{layout:?}`"
+                                "const struct `{layout:?}` has {} fields but its layout requires {}",
+                                fields.len(),
+                                data.fields.len()
                             )));
-                        };
-                        let field_classes = data.fields.clone();
+                        }
                         sonatina_ir::global_variable::GvInitializer::make_struct(
                             fields
-                                .iter()
-                                .cloned()
-                                .enumerate()
-                                .map(|(idx, field)| {
-                                    self.gv_initializer_for_const(field, field_classes.get(idx))
-                                })
+                                .into_vec()
+                                .into_iter()
+                                .zip(data.fields)
+                                .map(|(field, class)| self.gv_initializer_for_const(field, &class))
                                 .collect::<Result<Vec<_>, _>>()?,
                         )
                     }
-                    CompoundType::Enum(_) => {
+                    Layout::Enum(_) => {
                         return Err(LowerError::Unsupported(
                             "enum const globals are not yet supported by Sonatina object data encoding"
                                 .to_string(),
                         ));
                     }
-                    CompoundType::Ptr(_)
-                    | CompoundType::ObjRef(_)
-                    | CompoundType::ConstRef(_)
-                    | CompoundType::Func { .. } => {
-                        return Err(LowerError::Unsupported(
-                            "reference/function const globals are not supported".to_string(),
-                        ));
-                    }
                 }
+            }
+            (ConstNode::Scalar(scalar), expected) => {
+                return Err(LowerError::Internal(format!(
+                    "const scalar `{scalar:?}` has non-scalar runtime class `{expected:?}`"
+                )));
             }
         })
     }
@@ -505,6 +519,26 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             return Ok(Immediate::EnumTag {
                 enum_ty,
                 value: bytes_to_i256(words, false),
+            });
+        }
+        if let Some(RuntimeClass::Scalar(class)) = class {
+            if !scalar.fits_repr(class.repr) {
+                return Err(LowerError::Internal(format!(
+                    "const scalar `{scalar:?}` does not fit runtime class `{class:?}`"
+                )));
+            }
+            let ty = self.scalar_ty(class)?;
+            return Ok(match scalar {
+                ConstScalar::Bool(value) => Immediate::from(*value),
+                ConstScalar::Int { signed, words, .. } => {
+                    Immediate::from_i256(bytes_to_i256(words, *signed), ty)
+                }
+                ConstScalar::FixedBytes(bytes) => {
+                    Immediate::from_i256(bytes_to_i256(bytes, false), ty)
+                }
+                ConstScalar::Address { bytes, .. } => {
+                    Immediate::from_i256(bytes_to_i256(bytes, false), ty)
+                }
             });
         }
         Ok(match scalar {
@@ -976,7 +1010,21 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         dst: Option<RLocalId>,
     ) -> Result<Lowered<ValueId>, LowerError> {
         let value = match expr {
-            RExpr::Use(value) => self.local_value(*value)?,
+            RExpr::Use(value) => {
+                let lowered = self.local_value(*value)?;
+                if let Some(dst) = dst
+                    && let (Some(source), Some(target)) = (
+                        self.body.value_class(*value).cloned(),
+                        self.body.value_class(dst).cloned(),
+                    )
+                    && source != target
+                    && source.shares_runtime_rep_with(self.module.db, &target)
+                {
+                    self.retype_value_for_class(lowered, &source, &target)?
+                } else {
+                    lowered
+                }
+            }
             RExpr::ConstScalar(value) => self.fb.make_imm_value(
                 self.module
                     .immediate_for_const(value, dst.and_then(|dst| self.body.value_class(dst)))?,
@@ -1069,7 +1117,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             RExpr::MaterializePlaceToObject { place } => {
                 return self.materialize_place_to_object(place, dst);
             }
-            RExpr::ProviderFromRaw { raw, space, .. } => {
+            RExpr::ProviderRefFromRaw { raw, space, .. } => {
                 let value = self.local_value(*raw)?;
                 if *space == AddressSpaceKind::Memory {
                     return Err(LowerError::Unsupported(
@@ -1080,7 +1128,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 value
             }
             RExpr::WordToRawAddr { value, .. } => self.local_value(*value)?,
-            RExpr::ProviderToRaw { value } => self.local_value(*value)?,
+            RExpr::ProviderRefToRaw { value } => self.local_value(*value)?,
             RExpr::RetagRef { value } => self.local_value(*value)?,
             RExpr::AddrOf { place } => return self.addr_of_place(place, dst),
             RExpr::Load { place } => return self.load_from_place(place),
@@ -1248,7 +1296,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         let word = u64::try_from(word).map_err(|_| {
             LowerError::Internal(format!("layout-map word is not addressable: {word}"))
         })?;
-        self.offset_address(node, word, AddressSpaceKind::Memory)
+        let offset = word.checked_mul(32).ok_or_else(|| {
+            LowerError::Internal(format!("layout-map byte offset overflow: {word} words"))
+        })?;
+        self.offset_address_unscaled(node, offset)
     }
 
     fn store_layout_map_word(
@@ -1626,6 +1677,13 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     .insert_inst_no_result(EvmMcopy::new(self.module.inst_set(), dst, src, len));
                 zero_for_type(&mut self.fb, Type::Unit)
             }
+            RuntimeBuiltin::ZeroMem { dst, len } => {
+                let dst = self.local_value(*dst)?;
+                let len = self.local_value(*len)?;
+                self.fb
+                    .insert_inst_no_result(Memzero::new(self.module.inst_set(), dst, len));
+                zero_for_type(&mut self.fb, Type::Unit)
+            }
             RuntimeBuiltin::Msize => self
                 .fb
                 .insert_inst(EvmMsize::new(self.module.inst_set()), Type::I256),
@@ -1880,6 +1938,14 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let ptr_ty = self.fb.ptr_type(Type::I8);
                 self.fb
                     .insert_inst(EvmMalloc::new(self.module.inst_set(), size), ptr_ty)
+            }
+            RuntimeBuiltin::PtrOffsetBytes { ptr, offset } => {
+                let ptr = self.local_value(*ptr)?;
+                let ptr = self.coerce_value_to_ty(ptr, Type::I256)?;
+                let offset = self.local_value(*offset)?;
+                let offset = self.cast_scalar(offset, Type::I256)?;
+                self.fb
+                    .insert_inst(Add::new(self.module.inst_set(), ptr, offset), Type::I256)
             }
             RuntimeBuiltin::Call {
                 gas,
@@ -2271,6 +2337,11 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 self.fb
                     .insert_inst_no_result(EvmRevert::new(self.module.inst_set(), offset, len));
             }
+            RTerminator::RevertEmpty => {
+                let zero = self.fb.make_imm_value(I256::zero());
+                self.fb
+                    .insert_inst_no_result(EvmRevert::new(self.module.inst_set(), zero, zero));
+            }
             RTerminator::SelfDestruct { beneficiary } => {
                 let beneficiary = self.local_value(*beneficiary)?;
                 self.fb.insert_inst_no_result(EvmSelfDestruct::new(
@@ -2323,9 +2394,35 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
     fn store_whole_local(&mut self, local: RLocalId, value: ValueId) -> Result<(), LowerError> {
         match self.slot_roots.get(&local).copied() {
             Some(SlotRoot::Ptr(ptr, ty)) => {
-                let value = self.coerce_value_to_ty(value, ty)?;
-                self.fb
-                    .insert_inst_no_result(Mstore::new(self.module.inst_set(), ptr, value, ty));
+                let class = self.body.value_class(local).cloned().ok_or_else(|| {
+                    LowerError::Internal(format!("missing runtime class for {local:?}"))
+                })?;
+                match &class {
+                    RuntimeClass::Scalar(_)
+                    | RuntimeClass::RawAddr { .. }
+                    | RuntimeClass::Ref {
+                        kind:
+                            RefKind::Provider {
+                                space:
+                                    AddressSpaceKind::Storage
+                                    | AddressSpaceKind::Transient
+                                    | AddressSpaceKind::Calldata
+                                    | AddressSpaceKind::Code,
+                                ..
+                            },
+                        ..
+                    } => self.store_to_ptr(ptr, AddressSpaceKind::Memory, &class, value)?,
+                    RuntimeClass::Ref { .. } => {
+                        let value = self.coerce_value_to_ty(value, ty)?;
+                        self.fb.insert_inst_no_result(Mstore::new(
+                            self.module.inst_set(),
+                            ptr,
+                            value,
+                            ty,
+                        ));
+                    }
+                    RuntimeClass::AggregateValue { .. } => unreachable!(),
+                }
                 Ok(())
             }
             Some(SlotRoot::Object(object, _)) => {
@@ -2349,10 +2446,30 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
 
     fn local_value(&mut self, local: RLocalId) -> Result<ValueId, LowerError> {
         if let Some(root) = self.slot_roots.get(&local) {
+            let class = self.body.value_class(local).cloned().ok_or_else(|| {
+                LowerError::Internal(format!("missing runtime class for {local:?}"))
+            })?;
             return match root {
-                SlotRoot::Ptr(ptr, ty) => Ok(self
-                    .fb
-                    .insert_inst(Mload::new(self.module.inst_set(), *ptr, *ty), *ty)),
+                SlotRoot::Ptr(ptr, ty) => match &class {
+                    RuntimeClass::Scalar(_)
+                    | RuntimeClass::RawAddr { .. }
+                    | RuntimeClass::Ref {
+                        kind:
+                            RefKind::Provider {
+                                space:
+                                    AddressSpaceKind::Storage
+                                    | AddressSpaceKind::Transient
+                                    | AddressSpaceKind::Calldata
+                                    | AddressSpaceKind::Code,
+                                ..
+                            },
+                        ..
+                    } => self.load_from_ptr(*ptr, AddressSpaceKind::Memory, &class),
+                    RuntimeClass::Ref { .. } => Ok(self
+                        .fb
+                        .insert_inst(Mload::new(self.module.inst_set(), *ptr, *ty), *ty)),
+                    RuntimeClass::AggregateValue { .. } => unreachable!(),
+                },
                 SlotRoot::Object(object, ty) => Ok(self
                     .fb
                     .insert_inst(ObjLoad::new(self.module.inst_set(), *object), *ty)),
@@ -2481,13 +2598,13 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             }),
             RuntimeClass::RawAddr {
                 space,
-                target: Some(layout),
+                pointee: Some(pointee),
             } => Ok(PlaceTerminal::Ptr {
                 addr: value,
                 space: *space,
-                class: RuntimeClass::AggregateValue { layout: *layout },
+                class: pointee.as_ref().clone(),
             }),
-            RuntimeClass::RawAddr { target: None, .. } => Err(LowerError::Unsupported(
+            RuntimeClass::RawAddr { pointee: None, .. } => Err(LowerError::Unsupported(
                 "cannot continue projection through an opaque raw-address carrier".to_string(),
             )),
             RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. } => {
@@ -2667,18 +2784,11 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                         class: base_class,
                     },
                     ResolvedPlaceElem::Field { field, class },
-                ) => {
-                    let offset = base_class
-                        .field_offset_words(self.module.db, *field)
-                        .ok_or_else(|| {
-                            LowerError::Internal("field projection on non-struct class".to_string())
-                        })?;
-                    PlaceTerminal::Ptr {
-                        addr: self.offset_address(addr, offset, space)?,
-                        space,
-                        class: class.clone(),
-                    }
-                }
+                ) => PlaceTerminal::Ptr {
+                    addr: self.offset_ptr_field_address(addr, &base_class, *field, space)?,
+                    space,
+                    class: class.clone(),
+                },
                 (
                     PlaceTerminal::Ptr {
                         addr,
@@ -2687,15 +2797,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     },
                     ResolvedPlaceElem::Index { index, class },
                 ) => {
-                    let span = base_class
-                        .index_stride_words(self.module.db)
-                        .ok_or_else(|| {
-                            LowerError::Internal("index projection on non-array class".to_string())
-                        })?;
                     let Lowered::Value(idx) = self.checked_index_value(&base_class, index)? else {
                         return Ok(Lowered::Terminated);
                     };
-                    let scale = self.scale_for_space(space, span)?;
+                    let scale = self.ptr_index_stride_for_space(&base_class, space)?;
                     let scaled = if scale == 1 {
                         idx
                     } else {
@@ -2720,15 +2825,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                         class,
                     },
                 ) => PlaceTerminal::Ptr {
-                    addr: self.offset_address(
-                        addr,
-                        variant
-                            .field_offset_words(self.module.db, *field)
-                            .ok_or_else(|| {
-                                LowerError::Internal("variant field layout missing".to_string())
-                            })?,
-                        space,
-                    )?,
+                    addr: self.offset_ptr_variant_field_address(addr, *variant, *field, space)?,
                     space,
                     class: class.clone(),
                 },
@@ -3037,11 +3134,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                             class: src_field.clone(),
                         },
                         CopySource::Ptr { addr, space, .. } => CopySource::Ptr {
-                            addr: self.offset_address(
-                                *addr,
-                                src.field_offset_words(self.module.db, idx),
-                                *space,
-                            )?,
+                            addr: self.offset_ptr_struct_field_address(*addr, &src, idx, *space)?,
                             space: *space,
                             class: src_field.clone(),
                         },
@@ -3083,11 +3176,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                             class: src.elem.clone(),
                         },
                         CopySource::Ptr { addr, space, .. } => CopySource::Ptr {
-                            addr: self.offset_address(
-                                *addr,
-                                idx as u64 * src.elem.span_words(self.module.db),
-                                *space,
-                            )?,
+                            addr: self.offset_ptr_array_elem_address(*addr, &src, idx, *space)?,
                             space: *space,
                             class: src.elem.clone(),
                         },
@@ -3456,11 +3545,8 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                                 self.fb.type_of(src)
                             )));
                         }
-                        let field_addr = self.offset_address(
-                            addr,
-                            data.field_offset_words(self.module.db, idx),
-                            space,
-                        )?;
+                        let field_addr =
+                            self.offset_ptr_struct_field_address(addr, &data, idx, space)?;
                         self.copy_to_ptr(field_addr, space, field, field_value)?;
                     }
                     Ok(())
@@ -3477,11 +3563,8 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                                 self.fb.type_of(src)
                             )));
                         }
-                        let elem_addr = self.offset_address(
-                            addr,
-                            idx as u64 * data.elem.span_words(self.module.db),
-                            space,
-                        )?;
+                        let elem_addr =
+                            self.offset_ptr_array_elem_address(addr, &data, idx, space)?;
                         self.copy_to_ptr(elem_addr, space, &data.elem, field_value)?;
                     }
                     Ok(())
@@ -3552,13 +3635,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     ),
                     self.module.ty_for_class(field)?,
                 );
-                let field_addr = self.offset_address(
+                let field_addr = self.offset_ptr_variant_field_address(
                     addr,
-                    variant
-                        .field_offset_words(self.module.db, FieldIndex(field_idx as u16))
-                        .ok_or_else(|| {
-                            LowerError::Internal("variant field layout missing".to_string())
-                        })?,
+                    variant,
+                    FieldIndex(field_idx as u16),
                     space,
                 )?;
                 self.copy_to_ptr(field_addr, space, field, field_value)?;
@@ -3596,15 +3676,9 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 ..
             } => self.load_word(addr, space),
             RuntimeClass::RawAddr { .. } => self.load_word(addr, space),
-            RuntimeClass::AggregateValue { layout } => match space {
-                AddressSpaceKind::Memory => Err(LowerError::Unsupported(
-                    "memory aggregate values should be addressed through object refs".to_string(),
-                )),
-                AddressSpaceKind::Storage
-                | AddressSpaceKind::Transient
-                | AddressSpaceKind::Calldata
-                | AddressSpaceKind::Code => self.load_aggregate_from_ptr(addr, space, *layout),
-            },
+            RuntimeClass::AggregateValue { layout } => {
+                self.load_aggregate_from_ptr(addr, space, *layout)
+            }
             RuntimeClass::Ref { .. } => Err(LowerError::Unsupported(
                 "loading handle values from raw-address places is not supported".to_string(),
             )),
@@ -3622,11 +3696,8 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let ty = self.module.ty_for_layout(layout)?;
                 let mut value = self.fb.make_undef_value(ty);
                 for (idx, field) in data.fields.iter().enumerate() {
-                    let field_addr = self.offset_address(
-                        addr,
-                        data.field_offset_words(self.module.db, idx),
-                        space,
-                    )?;
+                    let field_addr =
+                        self.offset_ptr_struct_field_address(addr, &data, idx, space)?;
                     let field_value = self.load_from_ptr(field_addr, space, field)?;
                     let expected_ty = self.module.ty_for_class(field)?;
                     let actual_ty = self.fb.type_of(field_value);
@@ -3637,12 +3708,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     }
                     let idx = self.index_value(idx as u64);
                     value = self.fb.insert_inst(
-                        sonatina_ir::inst::data::InsertValue::new(
-                            self.module.inst_set(),
-                            value,
-                            idx,
-                            field_value,
-                        ),
+                        InsertValue::new(self.module.inst_set(), value, idx, field_value),
                         ty,
                     );
                 }
@@ -3652,11 +3718,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let ty = self.module.ty_for_layout(layout)?;
                 let mut value = self.fb.make_undef_value(ty);
                 for idx in 0..data.len as usize {
-                    let elem_addr = self.offset_address(
-                        addr,
-                        idx as u64 * data.elem.span_words(self.module.db),
-                        space,
-                    )?;
+                    let elem_addr = self.offset_ptr_array_elem_address(addr, &data, idx, space)?;
                     let elem = self.load_from_ptr(elem_addr, space, &data.elem)?;
                     let expected_ty = self.module.ty_for_class(&data.elem)?;
                     let actual_ty = self.fb.type_of(elem);
@@ -3668,12 +3730,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     }
                     let idx = self.index_value(idx as u64);
                     value = self.fb.insert_inst(
-                        sonatina_ir::inst::data::InsertValue::new(
-                            self.module.inst_set(),
-                            value,
-                            idx,
-                            elem,
-                        ),
+                        InsertValue::new(self.module.inst_set(), value, idx, elem),
                         ty,
                     );
                 }
@@ -3691,18 +3748,21 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         data: &mir::runtime::EnumLayout<'db>,
     ) -> Result<ValueId, LowerError> {
         let layout_ty = self.module.ty_for_layout(layout)?;
-        let object = self.fb.insert_inst(
-            ObjAlloc::new(self.module.inst_set(), layout_ty),
-            self.fb.module_builder.objref_type(layout_ty),
-        );
-        let tag = self.load_word(addr, space)?;
+        let tag = self.load_scalar(addr, space, &data.tag)?;
         let done = self.fb.append_block();
         let invalid = self.fb.append_block();
         let mut cases = Vec::with_capacity(data.variants.len());
         let mut blocks = Vec::with_capacity(data.variants.len());
+        let mut phi_args = Vec::with_capacity(data.variants.len());
+        let tag_ty = self.fb.type_of(tag);
         for (idx, _) in data.variants.iter().enumerate() {
             let block = self.fb.append_block();
-            cases.push((self.index_value(idx as u64), block));
+            let key = match tag_ty {
+                Type::EnumTag(_) => self.module.enum_tag_immediate(layout, idx as u16)?,
+                _ => Immediate::from_i256(I256::from(idx as u64), tag_ty),
+            };
+            let key = self.fb.make_imm_value(key);
+            cases.push((key, block));
             blocks.push(block);
         }
         self.fb.insert_inst_no_result(BrTable::new(
@@ -3723,26 +3783,31 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 .iter()
                 .enumerate()
                 .map(|(field_idx, field)| {
-                    let field_addr = self.offset_address(
+                    let field_addr = self.offset_ptr_variant_field_address(
                         addr,
-                        variant
-                            .field_offset_words(self.module.db, FieldIndex(field_idx as u16))
-                            .ok_or_else(|| {
-                                LowerError::Internal("variant field layout missing".to_string())
-                            })?,
+                        variant,
+                        FieldIndex(field_idx as u16),
                         space,
                     )?;
                     self.load_from_ptr(field_addr, space, field)
                 })
                 .collect::<Result<SmallVec<[ValueId; 2]>, _>>()?;
-            self.fb.insert_inst_no_result(EnumWriteVariant::new(
-                self.module.inst_set(),
-                object,
-                self.variant_ref(variant)?,
-                values,
-            ));
+            let value = self.fb.insert_inst(
+                EnumMake::new(
+                    self.module.inst_set(),
+                    layout_ty,
+                    self.variant_ref(variant)?,
+                    values,
+                ),
+                layout_ty,
+            );
+            let pred = self
+                .fb
+                .current_block()
+                .expect("enum load variant block should remain current");
             self.fb
                 .insert_inst_no_result(Jump::new(self.module.inst_set(), done));
+            phi_args.push((value, pred));
         }
 
         self.fb.switch_to_block(invalid);
@@ -3752,7 +3817,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         self.fb.switch_to_block(done);
         Ok(self
             .fb
-            .insert_inst(ObjLoad::new(self.module.inst_set(), object), layout_ty))
+            .insert_inst(Phi::new(self.module.inst_set(), phi_args), layout_ty))
     }
 
     fn load_word(&mut self, addr: ValueId, space: AddressSpaceKind) -> Result<ValueId, LowerError> {
@@ -3799,7 +3864,19 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         scalar: &ScalarClass<'db>,
     ) -> Result<ValueId, LowerError> {
         let word = self.load_word(addr, space)?;
-        self.cast_scalar(word, scalar_ty(scalar))
+        let value = if space.is_byte_addressed() {
+            let width = scalar_raw_memory_size_bytes(scalar);
+            if width < 32 {
+                let shift = self.index_value((32 - width) * 8);
+                self.fb
+                    .insert_inst(Shr::new(self.module.inst_set(), shift, word), Type::I256)
+            } else {
+                word
+            }
+        } else {
+            word
+        };
+        self.cast_scalar_with_signedness(value, scalar_ty(scalar), scalar.is_signed_int())
     }
 
     fn store_to_ptr(
@@ -3833,12 +3910,39 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             ),
         }?;
         match space {
-            AddressSpaceKind::Memory => self.fb.insert_inst_no_result(Mstore::new(
-                self.module.inst_set(),
-                addr,
-                value,
-                Type::I256,
-            )),
+            AddressSpaceKind::Memory => match class {
+                RuntimeClass::Scalar(scalar) if scalar_raw_memory_size_bytes(scalar) < 32 => {
+                    self.store_memory_scalar_bytes(addr, scalar, value)?
+                }
+                RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => {
+                    self.fb.insert_inst_no_result(Mstore::new(
+                        self.module.inst_set(),
+                        addr,
+                        value,
+                        Type::I256,
+                    ));
+                }
+                RuntimeClass::Ref {
+                    kind:
+                        RefKind::Provider {
+                            space:
+                                AddressSpaceKind::Storage
+                                | AddressSpaceKind::Transient
+                                | AddressSpaceKind::Calldata
+                                | AddressSpaceKind::Code,
+                            ..
+                        },
+                    ..
+                } => {
+                    self.fb.insert_inst_no_result(Mstore::new(
+                        self.module.inst_set(),
+                        addr,
+                        value,
+                        Type::I256,
+                    ));
+                }
+                RuntimeClass::AggregateValue { .. } | RuntimeClass::Ref { .. } => unreachable!(),
+            },
             AddressSpaceKind::Storage => {
                 self.fb
                     .insert_inst_no_result(EvmSstore::new(self.module.inst_set(), addr, value))
@@ -3861,6 +3965,30 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         Ok(())
     }
 
+    fn store_memory_scalar_bytes(
+        &mut self,
+        addr: ValueId,
+        scalar: &ScalarClass<'db>,
+        value: ValueId,
+    ) -> Result<(), LowerError> {
+        let width = scalar_raw_memory_size_bytes(scalar);
+        for byte_idx in 0..width {
+            let shift = (width - 1 - byte_idx) * 8;
+            let shifted = if shift == 0 {
+                value
+            } else {
+                let shift = self.index_value(shift);
+                self.fb
+                    .insert_inst(Shr::new(self.module.inst_set(), shift, value), Type::I256)
+            };
+            let byte = self.cast_scalar(shifted, Type::I8)?;
+            let byte_addr = self.offset_address_unscaled(addr, byte_idx)?;
+            self.fb
+                .insert_inst_no_result(EvmMstore8::new(self.module.inst_set(), byte_addr, byte));
+        }
+        Ok(())
+    }
+
     fn extract_aggregate_field(
         &mut self,
         value: ValueId,
@@ -3870,7 +3998,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         let idx = self.index_value(idx as u64);
         self.fb
             .insert_inst(
-                sonatina_ir::inst::data::ExtractValue::new(self.module.inst_set(), value, idx),
+                ExtractValue::new(self.module.inst_set(), value, idx),
                 self.module.ty_for_class(class)?,
             )
             .pipe(Ok)
@@ -3945,6 +4073,226 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             InsertValue::new(self.module.inst_set(), value, idx, field),
             ty,
         )
+    }
+
+    fn retype_value_for_class(
+        &mut self,
+        value: ValueId,
+        source: &RuntimeClass<'db>,
+        target: &RuntimeClass<'db>,
+    ) -> Result<ValueId, LowerError> {
+        if source == target {
+            return Ok(value);
+        }
+        if !source.shares_runtime_rep_with(self.module.db, target) {
+            return Err(LowerError::Internal(format!(
+                "cannot retype value between different runtime representations: source={source:?} target={target:?}"
+            )));
+        }
+        match (source, target) {
+            (
+                RuntimeClass::AggregateValue {
+                    layout: source_layout,
+                },
+                RuntimeClass::AggregateValue {
+                    layout: target_layout,
+                },
+            ) => self.retype_aggregate_value(value, *source_layout, *target_layout),
+            (
+                RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. },
+                RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. },
+            ) => {
+                let ty = self.module.ty_for_class(target)?;
+                self.coerce_value_to_ty(value, ty)
+            }
+            (RuntimeClass::Ref { .. }, RuntimeClass::Ref { .. }) => {
+                let target_ty = self.module.ty_for_class(target)?;
+                if self.fb.type_of(value) == target_ty {
+                    Ok(value)
+                } else {
+                    Err(LowerError::Internal(format!(
+                        "reference retyping is not representable in Sonatina IR: source={source:?} target={target:?}"
+                    )))
+                }
+            }
+            _ => Err(LowerError::Internal(format!(
+                "unsupported runtime class retype: source={source:?} target={target:?}"
+            ))),
+        }
+    }
+
+    fn retype_aggregate_value(
+        &mut self,
+        value: ValueId,
+        source_layout: LayoutId<'db>,
+        target_layout: LayoutId<'db>,
+    ) -> Result<ValueId, LowerError> {
+        let target_ty = self.module.ty_for_layout(target_layout)?;
+        if source_layout == target_layout || self.fb.type_of(value) == target_ty {
+            return Ok(value);
+        }
+        match (
+            source_layout.data(self.module.db),
+            target_layout.data(self.module.db),
+        ) {
+            (Layout::Struct(source), Layout::Struct(target)) => {
+                if source.fields.len() != target.fields.len() {
+                    return Err(LowerError::Internal(format!(
+                        "struct retype field count mismatch: source={source_layout:?} target={target_layout:?}"
+                    )));
+                }
+                let mut retyped = self.fb.make_undef_value(target_ty);
+                for (idx, (source_field, target_field)) in
+                    source.fields.iter().zip(target.fields.iter()).enumerate()
+                {
+                    let field = self.extract_aggregate_field(value, idx, source_field)?;
+                    let field = self.retype_value_for_class(field, source_field, target_field)?;
+                    let idx = self.index_value(idx as u64);
+                    retyped = self.fb.insert_inst(
+                        InsertValue::new(self.module.inst_set(), retyped, idx, field),
+                        target_ty,
+                    );
+                }
+                Ok(retyped)
+            }
+            (Layout::Array(source), Layout::Array(target)) => {
+                if source.len != target.len {
+                    return Err(LowerError::Internal(format!(
+                        "array retype length mismatch: source={source_layout:?} target={target_layout:?}"
+                    )));
+                }
+                let mut retyped = self.fb.make_undef_value(target_ty);
+                for idx in 0..source.len as usize {
+                    let elem = self.extract_aggregate_field(value, idx, &source.elem)?;
+                    let elem = self.retype_value_for_class(elem, &source.elem, &target.elem)?;
+                    let idx = self.index_value(idx as u64);
+                    retyped = self.fb.insert_inst(
+                        InsertValue::new(self.module.inst_set(), retyped, idx, elem),
+                        target_ty,
+                    );
+                }
+                Ok(retyped)
+            }
+            (Layout::Enum(source), Layout::Enum(target)) => {
+                self.retype_enum_value(value, source_layout, &source, target_layout, &target)
+            }
+            _ => Err(LowerError::Internal(format!(
+                "aggregate retype shape mismatch: source={source_layout:?} target={target_layout:?}"
+            ))),
+        }
+    }
+
+    fn retype_enum_value(
+        &mut self,
+        value: ValueId,
+        source_layout: LayoutId<'db>,
+        source: &mir::runtime::EnumLayout<'db>,
+        target_layout: LayoutId<'db>,
+        target: &mir::runtime::EnumLayout<'db>,
+    ) -> Result<ValueId, LowerError> {
+        if source.variants.len() != target.variants.len() {
+            return Err(LowerError::Internal(format!(
+                "enum retype variant count mismatch: source={source_layout:?} target={target_layout:?}"
+            )));
+        }
+        let target_ty = self.module.ty_for_layout(target_layout)?;
+        let source_ty = self.module.ty_for_layout(source_layout)?;
+        if source_ty == target_ty {
+            return Ok(value);
+        }
+
+        self.fb
+            .current_block()
+            .expect("enum retype requires a current block");
+        let tag = self.fb.insert_inst(
+            EnumTag::new(self.module.inst_set(), value),
+            self.module.enum_tag_ty(source_layout)?,
+        );
+        let done = self.fb.append_block();
+        let invalid = self.fb.append_block();
+        let mut cases = Vec::with_capacity(source.variants.len());
+        let mut blocks = Vec::with_capacity(source.variants.len());
+        for (idx, _) in source.variants.iter().enumerate() {
+            let block = self.fb.append_block();
+            cases.push((
+                self.fb
+                    .make_imm_value(self.module.enum_tag_immediate(source_layout, idx as u16)?),
+                block,
+            ));
+            blocks.push(block);
+        }
+        self.fb.insert_inst_no_result(BrTable::new(
+            self.module.inst_set(),
+            tag,
+            Some(invalid),
+            cases,
+        ));
+
+        let mut phi_args = Vec::with_capacity(blocks.len());
+        for (idx, block) in blocks.into_iter().enumerate() {
+            let source_fields = source.variants[idx].fields.as_ref();
+            let target_fields = target.variants[idx].fields.as_ref();
+            if source_fields.len() != target_fields.len() {
+                return Err(LowerError::Internal(format!(
+                    "enum retype field count mismatch: source={source_layout:?} target={target_layout:?} variant={idx}"
+                )));
+            }
+            self.fb.switch_to_block(block);
+            let source_variant = VariantId {
+                enum_layout: source_layout,
+                index: idx as u16,
+            };
+            let target_variant = VariantId {
+                enum_layout: target_layout,
+                index: idx as u16,
+            };
+            self.fb.insert_inst_no_result(EnumAssertVariant::new(
+                self.module.inst_set(),
+                value,
+                self.variant_ref(source_variant)?,
+            ));
+            let mut fields = SmallVec::<[ValueId; 2]>::new();
+            for (field_idx, (source_field, target_field)) in
+                source_fields.iter().zip(target_fields.iter()).enumerate()
+            {
+                let field_idx = self.index_value(field_idx as u64);
+                let field = self.fb.insert_inst(
+                    EnumExtract::new(
+                        self.module.inst_set(),
+                        value,
+                        self.variant_ref(source_variant)?,
+                        field_idx,
+                    ),
+                    self.module.ty_for_class(source_field)?,
+                );
+                fields.push(self.retype_value_for_class(field, source_field, target_field)?);
+            }
+            let retyped = self.fb.insert_inst(
+                EnumMake::new(
+                    self.module.inst_set(),
+                    target_ty,
+                    self.variant_ref(target_variant)?,
+                    fields,
+                ),
+                target_ty,
+            );
+            let pred = self
+                .fb
+                .current_block()
+                .expect("enum retype variant block should remain current");
+            self.fb
+                .insert_inst_no_result(Jump::new(self.module.inst_set(), done));
+            phi_args.push((retyped, pred));
+        }
+
+        self.fb.switch_to_block(invalid);
+        self.fb
+            .insert_inst_no_result(Unreachable::new(self.module.inst_set()));
+
+        self.fb.switch_to_block(done);
+        Ok(self
+            .fb
+            .insert_inst(Phi::new(self.module.inst_set(), phi_args), target_ty))
     }
 
     fn cast_scalar(&mut self, value: ValueId, ty: Type) -> Result<ValueId, LowerError> {
@@ -4056,7 +4404,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 self.fb
                     .insert_inst(Not::new(self.module.inst_set(), value), ty)
             }
-            UnOp::Plus | UnOp::Mut | UnOp::Ref => value,
+            UnOp::Plus | UnOp::Mut | UnOp::Ref | UnOp::Deref => value,
         })
     }
 
@@ -4486,6 +4834,9 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     Lowered::Terminated => Ok(Lowered::Terminated),
                 }
             }
+            IndexSource::Any => Err(LowerError::Internal(
+                "analysis wildcard index reached Sonatina lowering".to_string(),
+            )),
         }
     }
 
@@ -4546,32 +4897,75 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         self.fb.make_imm_value(I256::from(value))
     }
 
-    fn offset_address(
+    fn offset_address_unscaled(
         &mut self,
         base: ValueId,
         units: u64,
-        space: AddressSpaceKind,
     ) -> Result<ValueId, LowerError> {
         if units == 0 {
             return Ok(base);
         }
-        let offset = self.index_value(self.scale_for_space(space, units)?);
+        let base = self.coerce_value_to_ty(base, Type::I256)?;
+        let offset = self.index_value(units);
         Ok(self
             .fb
             .insert_inst(Add::new(self.module.inst_set(), base, offset), Type::I256))
     }
 
-    fn scale_for_space(&self, space: AddressSpaceKind, units: u64) -> Result<u64, LowerError> {
-        match space {
-            AddressSpaceKind::Memory | AddressSpaceKind::Calldata | AddressSpaceKind::Code => {
-                units.checked_mul(32).ok_or_else(|| {
-                    LowerError::Internal(format!(
-                        "byte-addressed runtime place offset overflow: {units} words"
-                    ))
-                })
-            }
-            AddressSpaceKind::Storage | AddressSpaceKind::Transient => Ok(units),
-        }
+    fn offset_ptr_field_address(
+        &mut self,
+        base: ValueId,
+        class: &RuntimeClass<'db>,
+        field: FieldIndex,
+        space: AddressSpaceKind,
+    ) -> Result<ValueId, LowerError> {
+        let offset =
+            RuntimeMemoryLayout::for_space(self.module.db, space).field_offset(class, field)?;
+        self.offset_address_unscaled(base, offset)
+    }
+
+    fn offset_ptr_struct_field_address(
+        &mut self,
+        base: ValueId,
+        layout: &StructLayout<'db>,
+        field: usize,
+        space: AddressSpaceKind,
+    ) -> Result<ValueId, LowerError> {
+        let offset = RuntimeMemoryLayout::for_space(self.module.db, space)
+            .struct_field_offset(layout, field)?;
+        self.offset_address_unscaled(base, offset)
+    }
+
+    fn offset_ptr_array_elem_address(
+        &mut self,
+        base: ValueId,
+        layout: &ArrayLayout<'db>,
+        index: usize,
+        space: AddressSpaceKind,
+    ) -> Result<ValueId, LowerError> {
+        let offset = RuntimeMemoryLayout::for_space(self.module.db, space)
+            .array_element_offset(layout, index as u64)?;
+        self.offset_address_unscaled(base, offset)
+    }
+
+    fn offset_ptr_variant_field_address(
+        &mut self,
+        base: ValueId,
+        variant: VariantId<'db>,
+        field: FieldIndex,
+        space: AddressSpaceKind,
+    ) -> Result<ValueId, LowerError> {
+        let offset = RuntimeMemoryLayout::for_space(self.module.db, space)
+            .variant_field_offset(variant, field)?;
+        self.offset_address_unscaled(base, offset)
+    }
+
+    fn ptr_index_stride_for_space(
+        &self,
+        class: &RuntimeClass<'db>,
+        space: AddressSpaceKind,
+    ) -> Result<u64, LowerError> {
+        Ok(RuntimeMemoryLayout::for_space(self.module.db, space).index_stride(class)?)
     }
 }
 
@@ -4622,6 +5016,7 @@ fn block_successors<'db>(terminator: &RTerminator<'db>) -> SmallVec<[RBlockId; 2
         RTerminator::TerminalCall { .. }
         | RTerminator::ReturnData { .. }
         | RTerminator::Revert { .. }
+        | RTerminator::RevertEmpty
         | RTerminator::SelfDestruct { .. }
         | RTerminator::Trap
         | RTerminator::Return(_)

@@ -6,8 +6,8 @@ input_file: fixtures/ty_check/immutable_contract_field_init.fe
 error[8-0084]: memory-backed contract fields are not supported
     ┌─ immutable_contract_field_init.fe:200:10
     │
-200 │     ptr: std::evm::MemPtr<u256>
-    │          ^^^^^^^^^^^^^^^^^^^^^^ `ptr` has a memory-backed contract field type
+200 │     ptr: *u256
+    │          ^^^^^ `ptr` has a memory-backed contract field type
     │
     = memory handles cannot be persisted as contract fields; use a plain immutable field for code-backed data or a plain `mut` field for storage-backed state
 
@@ -22,8 +22,8 @@ error[8-0084]: calldata-backed contract fields are not supported
 error[8-0084]: memory-backed contract fields are not supported
     ┌─ immutable_contract_field_init.fe:308:10
     │
-308 │     ptr: std::evm::MemPtr<()>
-    │          ^^^^^^^^^^^^^^^^^^^^ `ptr` has a memory-backed contract field type
+308 │     ptr: *()
+    │          ^^^ `ptr` has a memory-backed contract field type
     │
     = memory handles cannot be persisted as contract fields; use a plain immutable field for code-backed data or a plain `mut` field for storage-backed state
 
@@ -38,8 +38,8 @@ error[8-0084]: calldata-backed contract fields are not supported
 error[8-0084]: memory-backed contract fields are not supported
     ┌─ immutable_contract_field_init.fe:316:10
     │
-316 │     ptr: std::evm::MemPtr<Empty>
-    │          ^^^^^^^^^^^^^^^^^^^^^^^ `ptr` has a memory-backed contract field type
+316 │     ptr: *Empty
+    │          ^^^^^^ `ptr` has a memory-backed contract field type
     │
     = memory handles cannot be persisted as contract fields; use a plain immutable field for code-backed data or a plain `mut` field for storage-backed state
 

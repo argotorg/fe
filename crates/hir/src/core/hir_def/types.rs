@@ -9,6 +9,13 @@ pub struct TypeId<'db> {
 }
 
 impl<'db> TypeId<'db> {
+    pub fn as_path(self, db: &'db dyn HirDb) -> Option<PathId<'db>> {
+        match self.data(db) {
+            TypeKind::Path(path) => path.to_opt(),
+            _ => None,
+        }
+    }
+
     pub fn is_self_ty(self, db: &dyn HirDb) -> bool {
         match self.data(db) {
             TypeKind::Path(path) => {

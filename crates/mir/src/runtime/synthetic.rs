@@ -1,4 +1,3 @@
-use common::layout::EVM_LAYOUT;
 use cranelift_entity::EntityRef;
 use hir::{
     analysis::{
@@ -25,16 +24,15 @@ use crate::{
     instance::{
         RuntimeInstance, RuntimeInstanceKey, RuntimeInstanceSource, get_or_build_runtime_instance,
     },
-    layout_size_bytes,
     runtime::{
         AddressSpaceKind, BorrowAccess, ConstScalar, ContractFieldSlot, ContractInitAbiPlan,
         ContractRecvAbiPlan, DispatchDefault, EntryEffectArgPlan, EntrySemanticArgsPlan,
-        InitArgsPlan, PlaceElem, PlaceRoot, RBlock, RBlockId, RExpr, RLocal, RLocalId, RStmt,
-        RTerminator, RuntimeBody, RuntimeBoundarySpec, RuntimeBuiltin, RuntimeCarrier,
+        InitArgsPlan, LowerError, PlaceElem, PlaceRoot, RBlock, RBlockId, RExpr, RLocal, RLocalId,
+        RStmt, RTerminator, RuntimeBody, RuntimeBoundarySpec, RuntimeBuiltin, RuntimeCarrier,
         RuntimeClass, RuntimeExitBehavior, RuntimeInputPlan, RuntimeInterfaceSignature,
-        RuntimeLayoutMap, RuntimeLocalRoot, RuntimeParamPlan, RuntimePlace, RuntimeReturnPlan,
-        RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole, TargetRootProviderBinding,
-        TargetRootProviderMaterialization,
+        RuntimeLayoutMap, RuntimeLocalRoot, RuntimeMemoryLayout, RuntimeParamPlan, RuntimePlace,
+        RuntimeReturnPlan, RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole,
+        TargetRootProviderBinding, TargetRootProviderMaterialization,
         lower::{
             abi::runtime_abi_plan,
             boundary::{RuntimeValueAddress, RuntimeValueSource},
@@ -83,7 +81,7 @@ pub(crate) fn lower_synthetic_runtime_body<'db>(
     db: &'db dyn MirDb,
     instance: RuntimeInstance<'db>,
     spec: RuntimeSyntheticSpec<'db>,
-) -> RuntimeBody<'db> {
+) -> Result<RuntimeBody<'db>, LowerError> {
     let mut builder = SyntheticBodyBuilder::new(db, instance);
     match spec {
         RuntimeSyntheticSpec::MainRoot { callee, entry_args }
@@ -92,9 +90,9 @@ pub(crate) fn lower_synthetic_runtime_body<'db>(
         }
         | RuntimeSyntheticSpec::ManualContractRoot {
             callee, entry_args, ..
-        } => builder.build_entry_root(callee, &entry_args),
-        RuntimeSyntheticSpec::ContractInitAbi { plan } => builder.build_contract_init_abi(plan),
-        RuntimeSyntheticSpec::ContractRecvAbi { plan } => builder.build_contract_recv_abi(plan),
+        } => builder.build_entry_root(callee, &entry_args)?,
+        RuntimeSyntheticSpec::ContractInitAbi { plan } => builder.build_contract_init_abi(plan)?,
+        RuntimeSyntheticSpec::ContractRecvAbi { plan } => builder.build_contract_recv_abi(plan)?,
         RuntimeSyntheticSpec::ContractInitRoot {
             contract,
             init_abi,
@@ -105,7 +103,7 @@ pub(crate) fn lower_synthetic_runtime_body<'db>(
             dispatch, default, ..
         } => builder.build_contract_runtime_root(&dispatch, default),
     }
-    builder.finish()
+    Ok(builder.finish())
 }
 
 struct SyntheticBodyBuilder<'db> {
@@ -306,11 +304,12 @@ impl<'db> SyntheticBodyBuilder<'db> {
         &mut self,
         callee: RuntimeInstance<'db>,
         entry_args: &EntrySemanticArgsPlan<'db>,
-    ) {
+    ) -> Result<(), LowerError> {
         let mut args = Vec::new();
-        self.owner_call_args(RBlockId::from_u32(0), callee, 0, entry_args)
+        self.owner_call_args(RBlockId::from_u32(0), callee, 0, entry_args)?
             .append_to(&mut args);
         self.build_root_call(callee, args);
+        Ok(())
     }
 
     fn build_root_call(&mut self, callee: RuntimeInstance<'db>, args: Vec<RLocalId>) {
@@ -366,7 +365,10 @@ impl<'db> SyntheticBodyBuilder<'db> {
         self.blocks[0].terminator = RTerminator::Stop;
     }
 
-    fn build_contract_init_abi(&mut self, plan: ContractInitAbiPlan<'db>) {
+    fn build_contract_init_abi(
+        &mut self,
+        plan: ContractInitAbiPlan<'db>,
+    ) -> Result<(), LowerError> {
         let zero = self.push_const_word(RBlockId::from_u32(0), 0);
         let mut cont_bb = if plan.payable {
             RBlockId::from_u32(0)
@@ -401,16 +403,14 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 then_bb: revert_bb,
                 else_bb: decode_bb,
             };
-            self.blocks[revert_bb.index()].terminator = RTerminator::Revert {
-                offset: zero,
-                len: zero,
-            };
+            self.blocks[revert_bb.index()].terminator = RTerminator::RevertEmpty;
             cont_bb = decode_bb;
             let tail_len = self.push_binary_word(decode_bb, ArithBinOp::Sub, code_size, self_len);
+            let ptr_ty = TyId::ptr_to(self.db, TyId::u8(self.db));
             let tail_ptr = self.push_builtin_value(
                 decode_bb,
-                TyId::u256(self.db),
-                RuntimeClass::Scalar(word_scalar_class()),
+                ptr_ty,
+                RuntimeClass::raw_addr(AddressSpaceKind::Memory, byte_class()),
                 RuntimeBuiltin::Malloc { size: tail_len },
             );
             self.push_side_effect_builtin(
@@ -422,7 +422,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 },
             );
             let input =
-                self.push_memory_bytes_value(decode_bb, plan.contract.scope(), tail_ptr, tail_len);
+                self.push_memory_span_value(decode_bb, plan.contract.scope(), tail_ptr, tail_len);
             let input_ty = self.locals[input.index()].semantic_ty;
             let decoder_new = resolve_sol_decoder_new(self.db, plan.contract.scope(), input_ty)
                 .expect("decoder_new");
@@ -451,19 +451,15 @@ impl<'db> SyntheticBodyBuilder<'db> {
                     .checked_mul(32)
                     .expect("code-space byte extent was validated by contract layout"),
             );
-            Some(self.push_builtin_value(
-                cont_bb,
-                TyId::u256(self.db),
-                RuntimeClass::Scalar(word_scalar_class()),
-                RuntimeBuiltin::Malloc { size: immut_len },
-            ))
+            let (_, word_ptr) = self.push_malloc_bytes(cont_bb, immut_len);
+            Some(word_ptr)
         };
 
         if let Some(user_init) = plan.user_init {
             let SyntheticOwnerCallArgs {
                 effects,
                 layout_evidence,
-            } = self.owner_call_args(cont_bb, user_init, call_args.len(), &plan.entry_args);
+            } = self.owner_call_args(cont_bb, user_init, call_args.len(), &plan.entry_args)?;
             call_args.extend(effects.iter().copied());
             call_args.extend(layout_evidence);
             let _ = self.push_ignored_call(cont_bb, user_init, call_args);
@@ -490,9 +486,13 @@ impl<'db> SyntheticBodyBuilder<'db> {
             );
         }
         self.blocks[cont_bb.index()].terminator = RTerminator::Return(None);
+        Ok(())
     }
 
-    fn build_contract_recv_abi(&mut self, plan: ContractRecvAbiPlan<'db>) {
+    fn build_contract_recv_abi(
+        &mut self,
+        plan: ContractRecvAbiPlan<'db>,
+    ) -> Result<(), LowerError> {
         let zero = self.push_const_word(RBlockId::from_u32(0), 0);
         let cont_bb = if plan.payable {
             RBlockId::from_u32(0)
@@ -508,7 +508,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
             projected_fields,
         } = plan.input
         {
-            let host = self.emit_target_root_provider(cont_bb, &host);
+            let host = self.emit_target_root_provider(cont_bb, &host)?;
             if let Some(decoded) = self.push_call(cont_bb, decode_args_fn, vec![host]) {
                 call_args.extend(self.extract_selected_tuple_fields(
                     cont_bb,
@@ -519,7 +519,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 ));
             }
         }
-        self.owner_call_args(cont_bb, plan.user_recv, call_args.len(), &plan.entry_args)
+        self.owner_call_args(cont_bb, plan.user_recv, call_args.len(), &plan.entry_args)?
             .append_to(&mut call_args);
 
         let ret = self.push_call(cont_bb, plan.user_recv, call_args);
@@ -544,7 +544,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                         panic!("ContractHost::return_value should only have ordinary parameters")
                     };
                     args.push(match idx {
-                        0 => self.emit_target_root_provider(cont_bb, &host),
+                        0 => self.emit_target_root_provider(cont_bb, &host)?,
                         1 => ret_value,
                         _ => panic!("unexpected ContractHost::return_value parameter {idx}"),
                     });
@@ -561,6 +561,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 };
             }
         }
+        Ok(())
     }
 
     fn build_contract_init_root(
@@ -622,16 +623,11 @@ impl<'db> SyntheticBodyBuilder<'db> {
         );
 
         let out_len = self.push_binary_word(entry, ArithBinOp::Add, runtime_len, immut_len);
-        let out_ptr = self.push_builtin_value(
-            entry,
-            TyId::u256(self.db),
-            RuntimeClass::Scalar(word_scalar_class()),
-            RuntimeBuiltin::Malloc { size: out_len },
-        );
+        let (out_raw, out_ptr) = self.push_malloc_bytes(entry, out_len);
         self.push_side_effect_builtin(
             entry,
             RuntimeBuiltin::CodeCopy {
-                dst: out_ptr,
+                dst: out_raw,
                 offset: runtime_offset,
                 len: runtime_len,
             },
@@ -704,10 +700,8 @@ impl<'db> SyntheticBodyBuilder<'db> {
             let slot_words = self.push_const_word(bb, slot_words);
             let slot_bytes = self.push_binary_word(bb, ArithBinOp::Mul, slot_words, thirty_two);
             let dst_addr = self.push_binary_word(bb, ArithBinOp::Add, buffer_ptr, slot_bytes);
-            let dst_raw_class = RuntimeClass::RawAddr {
-                space: AddressSpaceKind::Memory,
-                target: pointee_class.aggregate_layout(),
-            };
+            let dst_raw_class =
+                RuntimeClass::raw_addr(AddressSpaceKind::Memory, pointee_class.clone());
             let dst_raw_addr = self.push_local(
                 TyId::u256(self.db),
                 RuntimeCarrier::Value(dst_raw_class),
@@ -720,7 +714,6 @@ impl<'db> SyntheticBodyBuilder<'db> {
                     expr: RExpr::WordToRawAddr {
                         value: dst_addr,
                         space: AddressSpaceKind::Memory,
-                        target: pointee_class.aggregate_layout(),
                     },
                 },
             );
@@ -747,7 +740,6 @@ impl<'db> SyntheticBodyBuilder<'db> {
         dispatch: &[crate::runtime::DispatchArm<'db>],
         default: DispatchDefault<'db>,
     ) {
-        let zero = self.push_const_word(RBlockId::from_u32(0), 0);
         let four = self.push_const_word(RBlockId::from_u32(0), 4);
         let calldata_size = self.push_builtin_value(
             RBlockId::from_u32(0),
@@ -775,10 +767,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
             };
         }
         self.blocks[default_bb.index()].terminator = match default {
-            DispatchDefault::RevertEmpty => RTerminator::Revert {
-                offset: zero,
-                len: zero,
-            },
+            DispatchDefault::RevertEmpty => RTerminator::RevertEmpty,
             DispatchDefault::Call { wrapper } => RTerminator::TerminalCall {
                 callee: wrapper,
                 args: Box::default(),
@@ -812,10 +801,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
             then_bb: revert_bb,
             else_bb: cont_bb,
         };
-        self.blocks[revert_bb.index()].terminator = RTerminator::Revert {
-            offset: zero,
-            len: zero,
-        };
+        self.blocks[revert_bb.index()].terminator = RTerminator::RevertEmpty;
         cont_bb
     }
 
@@ -823,11 +809,11 @@ impl<'db> SyntheticBodyBuilder<'db> {
         &mut self,
         bb: RBlockId,
         bindings: &[EntryEffectArgPlan<'db>],
-    ) -> Vec<RLocalId> {
+    ) -> Result<Vec<RLocalId>, LowerError> {
         bindings
             .iter()
             .map(|binding| match binding {
-                EntryEffectArgPlan::ContractField(binding) => self.push_builtin_value(
+                EntryEffectArgPlan::ContractField(binding) => Ok(self.push_builtin_value(
                     bb,
                     binding.declared_ty,
                     binding.class.clone(),
@@ -836,7 +822,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                         class: binding.class.clone(),
                         kind: binding.kind.clone(),
                     },
-                ),
+                )),
                 EntryEffectArgPlan::TargetRootProvider(binding) => {
                     self.emit_target_root_provider(bb, binding)
                 }
@@ -848,20 +834,22 @@ impl<'db> SyntheticBodyBuilder<'db> {
         &mut self,
         bb: RBlockId,
         binding: &TargetRootProviderBinding<'db>,
-    ) -> RLocalId {
+    ) -> Result<RLocalId, LowerError> {
         let root = match binding.materialization {
             TargetRootProviderMaterialization::MemoryObject { layout } => {
                 self.push_zeroed_memory_object_ref(bb, binding.declared_ty, layout)
             }
             TargetRootProviderMaterialization::MemoryRawAddr { layout } => {
-                self.push_zeroed_memory_raw_root(bb, binding.declared_ty, layout)
+                self.push_zeroed_memory_raw_root(bb, binding.declared_ty, layout)?
             }
         };
-        if self.locals[root.index()].carrier.value_class() == Some(&binding.class) {
-            root
-        } else {
-            self.coerce_runtime_value(bb, root, &binding.class, binding.declared_ty)
-        }
+        Ok(
+            if self.locals[root.index()].carrier.value_class() == Some(&binding.class) {
+                root
+            } else {
+                self.coerce_runtime_value(bb, root, &binding.class, binding.declared_ty)
+            },
+        )
     }
 
     fn owner_call_args(
@@ -870,7 +858,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         callee: RuntimeInstance<'db>,
         provided_prefix: usize,
         plan: &EntrySemanticArgsPlan<'db>,
-    ) -> SyntheticOwnerCallArgs {
+    ) -> Result<SyntheticOwnerCallArgs, LowerError> {
         let abi = runtime_abi_plan(self.db, callee.key(self.db));
         let needed = abi.visible_params.len();
         assert!(
@@ -878,7 +866,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
             "synthetic call provided more explicit arguments than the callee accepts"
         );
         let needed = needed - provided_prefix;
-        let effects = self.emit_entry_effect_args(bb, &plan.effects);
+        let effects = self.emit_entry_effect_args(bb, &plan.effects)?;
         assert_eq!(
             effects.len(),
             needed,
@@ -917,10 +905,10 @@ impl<'db> SyntheticBodyBuilder<'db> {
             plan.layout_evidence.len(),
             "synthetic entry plan contains layout evidence absent from the callee ABI"
         );
-        SyntheticOwnerCallArgs {
+        Ok(SyntheticOwnerCallArgs {
             effects,
             layout_evidence,
-        }
+        })
     }
 
     fn emit_layout_evidence_constant(
@@ -1352,14 +1340,9 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 AddressSpaceKind::Memory,
                 false,
             ),
-            PlaceRoot::Ptr { space, class, .. } => (
-                RuntimeClass::RawAddr {
-                    space: *space,
-                    target: class.aggregate_layout(),
-                },
-                *space,
-                true,
-            ),
+            PlaceRoot::Ptr { space, class, .. } => {
+                (RuntimeClass::raw_addr(*space, class.clone()), *space, true)
+            }
             PlaceRoot::Provider(_) => {
                 unreachable!("synthetic runtime locals do not use provider roots")
             }
@@ -1411,6 +1394,32 @@ impl<'db> SyntheticBodyBuilder<'db> {
         dst
     }
 
+    fn push_malloc_bytes(&mut self, bb: RBlockId, size: RLocalId) -> (RLocalId, RLocalId) {
+        let ptr_ty = TyId::ptr_to(self.db, TyId::u8(self.db));
+        let raw_ptr = self.push_builtin_value(
+            bb,
+            ptr_ty,
+            RuntimeClass::raw_addr(AddressSpaceKind::Memory, byte_class()),
+            RuntimeBuiltin::Malloc { size },
+        );
+        let word_ptr = self.push_local(
+            TyId::u256(self.db),
+            RuntimeCarrier::Value(RuntimeClass::Scalar(word_scalar_class())),
+            RuntimeLocalRoot::None,
+        );
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: word_ptr,
+                expr: RExpr::Cast {
+                    value: raw_ptr,
+                    to: word_scalar_class(),
+                },
+            },
+        );
+        (raw_ptr, word_ptr)
+    }
+
     fn push_side_effect_builtin(&mut self, bb: RBlockId, builtin: RuntimeBuiltin<'db>) -> RLocalId {
         let dst = self.push_erased_local(TyId::unit(self.db));
         self.push_stmt(
@@ -1458,37 +1467,14 @@ impl<'db> SyntheticBodyBuilder<'db> {
         dst
     }
 
-    fn push_memory_bytes_value(
+    fn push_memory_span_value(
         &mut self,
         bb: RBlockId,
         scope: hir::hir_def::scope_graph::ScopeId<'db>,
         ptr: RLocalId,
         len: RLocalId,
     ) -> RLocalId {
-        let ptr = if matches!(
-            self.locals[ptr.index()].carrier.value_class(),
-            Some(RuntimeClass::RawAddr { .. })
-        ) {
-            let casted = self.push_local(
-                TyId::u256(self.db),
-                RuntimeCarrier::Value(RuntimeClass::Scalar(word_scalar_class())),
-                RuntimeLocalRoot::None,
-            );
-            self.push_stmt(
-                bb,
-                RStmt::Assign {
-                    dst: casted,
-                    expr: RExpr::Cast {
-                        value: ptr,
-                        to: word_scalar_class(),
-                    },
-                },
-            );
-            casted
-        } else {
-            ptr
-        };
-        let ty = memory_bytes_ty(self.db, scope).expect("MemoryBytes");
+        let ty = memory_span_ty(self.db, scope).expect("MemSpan");
         let class = top_level_class_for_ty_in_env(
             self.db,
             self.runtime_type_env(scope),
@@ -1507,6 +1493,13 @@ impl<'db> SyntheticBodyBuilder<'db> {
             | RuntimeClass::RawAddr { .. }
             | RuntimeClass::AggregateValue { .. } => PlaceRoot::Slot(local),
         };
+        let layout = class.aggregate_layout().expect("MemSpan aggregate layout");
+        let crate::runtime::Layout::Struct(layout) = layout.data(self.db) else {
+            panic!("MemSpan should lower as a struct layout");
+        };
+        let field_tys = ty.field_types(self.db);
+        let ptr = self.coerce_runtime_value(bb, ptr, &layout.fields[0], field_tys[0]);
+        let len = self.coerce_runtime_value(bb, len, &layout.fields[1], field_tys[1]);
         self.push_stmt(
             bb,
             RStmt::Store {
@@ -1537,46 +1530,25 @@ impl<'db> SyntheticBodyBuilder<'db> {
         bb: RBlockId,
         semantic_ty: TyId<'db>,
         layout: crate::LayoutId<'db>,
-    ) -> RLocalId {
+    ) -> Result<RLocalId, LowerError> {
+        let size = RuntimeMemoryLayout::raw(self.db).layout_size(layout)?;
         let size = self.push_const_scalar(
             bb,
             ConstScalar::Int {
                 bits: 256,
                 signed: false,
-                words: layout_size_bytes(self.db, layout, EVM_LAYOUT)
+                words: size
                     .to_be_bytes()
                     .into_iter()
                     .skip_while(|byte| *byte == 0)
                     .collect(),
             },
         );
-        let ptr = self.push_builtin_value(
-            bb,
-            TyId::u256(self.db),
-            RuntimeClass::Scalar(word_scalar_class()),
-            RuntimeBuiltin::Malloc { size },
+        let raw_class = RuntimeClass::raw_addr(
+            AddressSpaceKind::Memory,
+            RuntimeClass::AggregateValue { layout },
         );
-        let raw_class = RuntimeClass::RawAddr {
-            space: AddressSpaceKind::Memory,
-            target: Some(layout),
-        };
-        let raw = self.push_local(
-            semantic_ty,
-            RuntimeCarrier::Value(raw_class.clone()),
-            RuntimeLocalRoot::None,
-        );
-        self.push_stmt(
-            bb,
-            RStmt::Assign {
-                dst: raw,
-                expr: RExpr::WordToRawAddr {
-                    value: ptr,
-                    space: AddressSpaceKind::Memory,
-                    target: Some(layout),
-                },
-            },
-        );
-        raw
+        Ok(self.push_builtin_value(bb, semantic_ty, raw_class, RuntimeBuiltin::Malloc { size }))
     }
 
     fn push_zeroed_memory_object_ref(
@@ -1692,6 +1664,16 @@ fn bool_scalar_class<'db>() -> ScalarClass<'db> {
     }
 }
 
+fn byte_class<'db>() -> RuntimeClass<'db> {
+    RuntimeClass::Scalar(ScalarClass {
+        repr: ScalarRepr::Int {
+            bits: 8,
+            signed: false,
+        },
+        role: ScalarRole::Plain,
+    })
+}
+
 fn word_scalar_class<'db>() -> ScalarClass<'db> {
     ScalarClass {
         repr: ScalarRepr::Int {
@@ -1775,11 +1757,11 @@ fn sol_abi_ty<'db>(
     resolve_lib_type_path(db, scope, "std::abi::Sol")
 }
 
-fn memory_bytes_ty<'db>(
+fn memory_span_ty<'db>(
     db: &'db dyn MirDb,
     scope: hir::hir_def::scope_graph::ScopeId<'db>,
 ) -> Option<TyId<'db>> {
-    resolve_lib_type_path(db, scope, "std::evm::memory_input::MemoryBytes")
+    resolve_lib_type_path(db, scope, "core::ptr::MemSpan")
 }
 
 #[cfg(test)]
@@ -1902,11 +1884,12 @@ pub contract ReturnContract {
             file_url.clone(),
             Some(
                 r#"
+use core::ptr
 use std::evm::RawMem
 
 #[test]
 fn test_raw_mem_root() uses (mem: mut RawMem) {
-    mem.mstore(addr: 0x80, value: 1)
+    mem.mstore(addr: ptr::alloc_bytes(32), value: 1)
 }
 "#
                 .to_string(),
@@ -1948,7 +1931,7 @@ fn test_raw_mem_root() uses (mem: mut RawMem) {
                     expr: RExpr::Placeholder {
                         class: RuntimeClass::RawAddr {
                             space: AddressSpaceKind::Memory,
-                            target: Some(_),
+                            pointee: Some(_),
                         }
                     },
                     ..

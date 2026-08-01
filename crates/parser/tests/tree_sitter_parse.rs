@@ -76,6 +76,36 @@ fn parse_errors(parser: &mut Parser, source: &str) -> Vec<String> {
     errors
 }
 
+fn body_expression_kinds(parser: &mut Parser, source: &str) -> Vec<String> {
+    let tree = parser.parse(source, None).expect("parser returned None");
+    let mut errors = Vec::new();
+    collect_errors(tree.root_node(), source, &mut errors);
+    assert!(
+        errors.is_empty(),
+        "unexpected parse errors:\n{}",
+        errors.join("\n"),
+    );
+
+    let function = tree
+        .root_node()
+        .named_child(0)
+        .expect("source should contain a function");
+    let body = function
+        .child_by_field_name("body")
+        .expect("function should contain a body");
+    (0..body.named_child_count())
+        .filter_map(|index| body.named_child(index))
+        .filter(|statement| statement.kind() == "expression_statement")
+        .map(|statement| {
+            statement
+                .named_child(0)
+                .expect("expression statement should contain an expression")
+                .kind()
+                .to_string()
+        })
+        .collect()
+}
+
 struct SuiteResult {
     label: String,
     total: usize,
@@ -198,6 +228,72 @@ fn tree_sitter_parse_newline_lt_continuations() {
                 errors.join("\n"),
             );
         }
+    }
+}
+
+#[test]
+fn tree_sitter_matches_line_start_star_policy() {
+    let mut parser = new_parser();
+
+    assert_eq!(
+        body_expression_kinds(
+            &mut parser,
+            "fn choose(value: u256, pointer: *u256) -> u256 {\n    value\n    *pointer\n}\n",
+        ),
+        ["identifier", "unary_expression"],
+    );
+    assert_eq!(
+        body_expression_kinds(
+            &mut parser,
+            "fn multiply(value: u256, rhs: u256) -> u256 {\n    value *\n        rhs\n}\n",
+        ),
+        ["binary_expression"],
+    );
+    assert_eq!(
+        body_expression_kinds(
+            &mut parser,
+            "fn update(mut value: u256, rhs: u256) {\n    value\n        *= rhs\n}\n",
+        ),
+        ["augmented_assignment_expression"],
+    );
+    assert_eq!(
+        body_expression_kinds(
+            &mut parser,
+            "fn power(value: u256, rhs: u256) -> u256 {\n    value\n        ** rhs\n}\n",
+        ),
+        ["binary_expression"],
+    );
+}
+
+#[test]
+fn tree_sitter_parse_condition_or_chains() {
+    let mut parser = new_parser();
+    let cases = [
+        (
+            "chained_or",
+            "fn f(a: bool, b: bool, c: bool) {\n    if a || b || c {}\n}\n",
+            false,
+        ),
+        (
+            "let_then_or",
+            "fn f(opt: Option<bool>, ready: bool) {\n    if let Some(value) = opt || ready {}\n}\n",
+            true,
+        ),
+        (
+            "or_then_let",
+            "fn f(opt: Option<bool>, ready: bool) {\n    if ready || let Some(value) = opt {}\n}\n",
+            true,
+        ),
+    ];
+
+    for (name, source, should_error) in cases {
+        let errors = parse_errors(&mut parser, source);
+        assert_eq!(
+            !errors.is_empty(),
+            should_error,
+            "unexpected parse result for {name}: {}",
+            errors.join("\n"),
+        );
     }
 }
 

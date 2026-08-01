@@ -8,8 +8,8 @@ use super::{
 use crate::{
     hir_def::{
         AttrListId, Body, BodyKind, CompBinOp, EffectParamListId, FuncParamListId,
-        GenericParamListId, IdentId, PathId, TraitRefId, TupleTypeId, TypeBound, TypeId,
-        WhereClauseId, item::*,
+        GenericParamListId, IdentId, TraitRefId, TupleTypeId, TypeBound, TypeId, WhereClauseId,
+        item::*,
     },
     lower::msg::lower_msg_as_mod,
     span::HirOrigin,
@@ -561,20 +561,20 @@ pub(super) fn lower_uses_clause_opt<'db>(
             for p in list {
                 let name = p.name().map(|n| IdentId::lower_token(ctxt, n.syntax()));
                 let is_mut = p.mut_token().is_some();
-                let key_path = p.path().map(|path| PathId::lower_ast(ctxt, path)).into();
+                let key_ty = TypeId::lower_ast_partial(ctxt, p.ty());
                 data.push(EffectParam {
                     name,
-                    key_path,
+                    key_ty,
                     is_mut,
                 });
             }
         } else if let Some(p) = uses.param() {
             let name = p.name().map(|n| IdentId::lower_token(ctxt, n.syntax()));
             let is_mut = p.mut_token().is_some();
-            let key_path = p.path().map(|path| PathId::lower_ast(ctxt, path)).into();
+            let key_ty = TypeId::lower_ast_partial(ctxt, p.ty());
             data.push(EffectParam {
                 name,
-                key_path,
+                key_ty,
                 is_mut,
             });
         }

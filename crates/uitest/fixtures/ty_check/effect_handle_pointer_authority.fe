@@ -1,0 +1,30 @@
+use core::effect_ref::{AddressSpace, EffectHandle}
+
+struct StorageFromMemory { raw: *u256 }
+
+impl EffectHandle for StorageFromMemory {
+    type Target = u256
+    type Raw = *u256
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn raw(self) -> *u256 {
+        self.raw
+    }
+}
+
+struct WrongPointee { raw: *u8 }
+
+impl EffectHandle for WrongPointee {
+    type Target = u256
+    type Raw = *u8
+    const SPACE: AddressSpace = AddressSpace::Memory
+
+    fn raw(self) -> *u8 {
+        self.raw
+    }
+}
+
+contract InvalidHandles {
+    mut storage_from_memory: StorageFromMemory,
+    mut wrong_pointee: WrongPointee,
+}

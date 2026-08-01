@@ -1,0 +1,492 @@
+use super::intrinsic::size_of
+use super::marker::Copy
+use super::option::Option
+use super::ops::{Eq, Index, IndexMut}
+use super::panic
+
+/// Dynamic allocation in linear memory.
+///
+/// This is a compiler intrinsic: backend-specific lowering is handled in codegen.
+extern {
+    /// Allocates `size` bytes and returns a pointer to the first byte.
+    pub fn alloc_raw(_ size: u256) -> *u8
+
+    /// Copies `len` bytes between linear-memory regions.
+    pub(ingot) fn copy_mem(_ dest: *u8, _ source: *u8, _ len: u256)
+
+    pub fn offset_bytes<T>(_ ptr: *T, _ offset: u256) -> *T
+
+    fn addr_eq<T>(_ lhs: *T, _ rhs: *T) -> bool
+
+    fn zero_mem(_ ptr: *u8, _ len: u256)
+}
+
+/// A dynamically sized array in linear memory.
+pub struct MemArray<T> {
+    ptr: *T,
+    len: u256,
+}
+
+/// A copyable read-only view over typed values in linear memory.
+///
+/// A slice does not own or allocate its memory. Constructing one from raw parts
+/// asserts that the entire range is valid linear memory for the lifetime of the
+/// operation using it.
+pub struct MemSlice<T> {
+    ptr: *T,
+    len: u256,
+}
+
+/// A read-only byte view over linear memory.
+pub type MemSpan = MemSlice<u8>
+
+/// An owned allocation in linear memory.
+///
+/// `len` is the logical extent and `capacity` is the full writable allocation.
+/// Neither can exceed the original allocation.
+pub struct MemBuffer {
+    ptr: *u8,
+    len: u256,
+    capacity: u256,
+}
+
+/// A fixed-size owned allocation in linear memory.
+///
+/// Keeping the size in the type lets the backend see constant, nonescaping
+/// allocations and place them in its transient static arena.
+pub struct FixedMemBuffer<const N: usize> {
+    ptr: *u8,
+}
+
+impl<T> Copy for *T {}
+impl<T> Copy for MemSlice<T> {}
+
+impl<T> Eq for *T {
+    fn eq(self, _ other: *T) -> bool {
+        addr_eq(self, other)
+    }
+}
+
+impl<T> MemArray<T> {
+    pub fn new_uninit(_ len: u256) -> Self {
+        Self {
+            ptr: cast<u8, T>(alloc_raw(len * size_of<T>())),
+            len,
+        }
+    }
+
+    pub fn new_zeroed(_ len: u256) -> Self {
+        let mut array = Self::new_uninit(len)
+        array.zero()
+        array
+    }
+
+    pub fn ptr(self) -> *T {
+        self.ptr
+    }
+
+    pub fn len(self) -> u256 {
+        self.len
+    }
+
+    pub fn byte_len(self) -> u256 {
+        self.len * size_of<T>()
+    }
+
+    pub fn into_bytes(own self) -> MemArray<u8> {
+        MemArray {
+            ptr: cast<T, u8>(self.ptr),
+            len: self.byte_len(),
+        }
+    }
+
+    pub fn as_slice(self) -> MemSlice<T> {
+        MemSlice::from_raw_parts(ptr: self.ptr, len: self.len)
+    }
+
+    pub fn span(self) -> MemSpan {
+        self.as_slice().as_bytes()
+    }
+
+    pub fn into_buffer(own self) -> MemBuffer {
+        let len = self.byte_len()
+        MemBuffer {
+            ptr: cast<T, u8>(self.ptr),
+            len,
+            capacity: len,
+        }
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.len == 0
+    }
+
+    pub fn ptr_at(self, _ index: usize) -> *T {
+        mem_array_elem(self, index)
+    }
+
+    pub fn zero(mut self) {
+        zero_bytes(cast<T, u8>(self.ptr), self.byte_len())
+    }
+}
+
+impl<T> MemSlice<T> {
+    /// Construct a slice over a raw memory range.
+    ///
+    /// The caller must ensure the complete range is valid for every operation
+    /// that receives the slice.
+    pub fn from_raw_parts(ptr: *T, len: u256) -> Self {
+        Self { ptr, len }
+    }
+
+    pub fn empty() -> Self {
+        Self::from_raw_parts(ptr: cast<u8, T>(alloc_raw(0)), len: 0)
+    }
+
+    pub fn ptr(self) -> *T {
+        self.ptr
+    }
+
+    pub fn len(self) -> u256 {
+        self.len
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.len == 0
+    }
+
+    pub fn byte_len(self) -> u256 {
+        self.len * size_of<T>()
+    }
+
+    pub fn as_bytes(self) -> MemSpan {
+        MemSlice::from_raw_parts(ptr: cast<T, u8>(self.ptr), len: self.byte_len())
+    }
+
+    pub fn try_slice(self, start: u256, len: u256) -> Option<Self> {
+        if start > self.len || len > self.len - start {
+            return Option::None
+        }
+        Option::Some(Self::from_raw_parts(ptr: offset(self.ptr, start), len))
+    }
+
+    pub fn slice(self, offset: u256, len: u256) -> Self {
+        match self.try_slice(start: offset, len) {
+            Option::Some(slice) => slice
+            Option::None => panic()
+        }
+    }
+
+    pub fn split_at(self, offset: u256) -> (Self, Self) {
+        if offset > self.len {
+            panic()
+        }
+        (
+            self.truncate(len: offset),
+            self.slice(offset, len: self.len - offset),
+        )
+    }
+
+    pub fn truncate(self, len: u256) -> Self {
+        self.slice(offset: 0, len)
+    }
+
+    pub fn ptr_at(self, _ index: u256) -> *T {
+        if index >= self.len {
+            panic()
+        }
+        offset(self.ptr, index)
+    }
+
+    pub fn get(self, _ index: u256) -> Option<T>
+        where T: Copy
+    {
+        if index >= self.len() {
+            return Option::None
+        }
+        Option::Some(*self.ptr_at(index))
+    }
+}
+
+impl MemSlice<u8> {
+    pub fn byte_at(self, _ index: u256) -> u8 {
+        match self.get(index) {
+            Option::Some(value) => value
+            Option::None => panic()
+        }
+    }
+}
+
+impl MemBuffer {
+    pub fn alloc(_ len: u256) -> Self {
+        Self {
+            ptr: alloc_raw(len),
+            len,
+            capacity: len,
+        }
+    }
+
+    pub fn with_capacity(_ capacity: u256) -> Self {
+        Self {
+            ptr: alloc_raw(capacity),
+            len: 0,
+            capacity,
+        }
+    }
+
+    pub fn empty() -> Self {
+        Self::with_capacity(0)
+    }
+
+    pub fn from_span(_ source: own MemSpan) -> Self {
+        let mut buffer = Self::with_capacity(source.len())
+        buffer.extend_from(source)
+        buffer
+    }
+
+    pub fn ptr(self) -> *u8 {
+        self.ptr
+    }
+
+    pub fn len(self) -> u256 {
+        self.len
+    }
+
+    pub fn capacity(self) -> u256 {
+        self.capacity
+    }
+
+    pub fn remaining_capacity(self) -> u256 {
+        self.capacity - self.len
+    }
+
+    /// View the logical byte extent.
+    pub fn span(self) -> MemSpan {
+        MemSpan::from_raw_parts(ptr: self.ptr, len: self.len)
+    }
+
+    /// View the full allocation, including bytes beyond the logical extent.
+    ///
+    /// Callers must initialize those additional bytes before reading the span.
+    pub fn capacity_span(self) -> MemSpan {
+        MemSpan::from_raw_parts(ptr: self.ptr, len: self.capacity)
+    }
+
+    pub fn slice(self, offset: u256, len: u256) -> MemSpan {
+        self.span().slice(offset, len)
+    }
+
+    /// Ensure that `additional` bytes fit after the logical extent.
+    ///
+    /// Linear-memory allocations cannot grow in place, so growth allocates a
+    /// larger region and copies the initialized bytes.
+    pub fn reserve(mut self, _ additional: u256) {
+        let needed = self.len + additional
+        if needed <= self.capacity {
+            return
+        }
+
+        let mut capacity = self.capacity
+        if capacity == 0 {
+            capacity = 32
+        }
+        while capacity < needed {
+            capacity *= 2
+        }
+
+        let replacement = alloc_raw(capacity)
+        copy(dest: replacement, source: self.span())
+        self.ptr = replacement
+        self.capacity = capacity
+    }
+
+    /// Append bytes, growing the allocation when necessary.
+    pub fn extend_from(mut self, _ source: own MemSpan) {
+        self.reserve(source.len())
+        copy(dest: offset_bytes(self.ptr, self.len), source)
+        self.len += source.len()
+    }
+
+    /// Copy bytes into an allocation subrange and extend the logical extent.
+    pub fn copy_from(mut self, dest_offset: u256, _ source: own MemSpan) {
+        if dest_offset > self.capacity || source.len() > self.capacity - dest_offset {
+            panic()
+        }
+        if source.is_empty() {
+            return
+        }
+        if dest_offset > self.len {
+            zero_bytes(
+                ptr: offset_bytes(self.ptr, self.len),
+                len: dest_offset - self.len,
+            )
+        }
+        copy(dest: offset_bytes(self.ptr, dest_offset), source)
+        let end = dest_offset + source.len()
+        if end > self.len {
+            self.len = end
+        }
+    }
+
+    /// Set the logical extent after initializing the added bytes.
+    pub fn set_len(mut self, _ len: u256) {
+        if len > self.capacity {
+            panic()
+        }
+        self.len = len
+    }
+
+    pub fn truncate(mut self, _ len: u256) {
+        if len > self.len {
+            panic()
+        }
+        self.len = len
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.len == 0
+    }
+}
+
+impl<const N: usize> FixedMemBuffer<N> {
+    #[inline(always)]
+    pub fn alloc() -> Self {
+        Self {
+            ptr: alloc_raw(N as u256),
+        }
+    }
+
+    #[inline(always)]
+    pub fn ptr(self) -> *u8 {
+        self.ptr
+    }
+
+    #[inline(always)]
+    pub fn len(self) -> u256 {
+        N as u256
+    }
+
+    #[inline(always)]
+    pub fn span(self) -> MemSpan {
+        MemSpan::from_raw_parts(ptr: self.ptr, len: N as u256)
+    }
+
+    pub fn into_buffer(own self) -> MemBuffer {
+        MemBuffer {
+            ptr: self.ptr,
+            len: N as u256,
+            capacity: N as u256,
+        }
+    }
+}
+
+pub fn cast<T, U>(_ ptr: *T) -> *U {
+    ptr as *U
+}
+
+pub fn offset<T>(_ ptr: *T, _ count: u256) -> *T {
+    offset_bytes(ptr, count * size_of<T>())
+}
+
+pub fn byte_ptr<T>(_ ptr: *T) -> *u8 {
+    cast<T, u8>(ptr)
+}
+
+pub fn alloc<T>() -> *T {
+    cast<u8, T>(alloc_raw(size_of<T>()))
+}
+
+pub fn alloc_bytes(_ len: u256) -> *u8 {
+    alloc_raw(len)
+}
+
+pub fn alloc_array<T>(_ len: u256) -> MemArray<T> {
+    MemArray::new_uninit(len)
+}
+
+pub fn zero_bytes(_ ptr: *u8, _ len: u256) {
+    zero_mem(ptr, len)
+}
+
+/// Copy a byte span into a valid destination region.
+///
+/// The caller must ensure that `dest` has room for `source.len()` bytes.
+/// Source and destination may overlap.
+pub fn copy(_ dest: *u8, _ source: own MemSpan) {
+    copy_raw(dest, source: source.ptr(), len: source.len())
+}
+
+/// Copy a raw byte range into a valid destination region.
+///
+/// Prefer `copy` when the source is already represented by a bounded span.
+pub fn copy_raw(_ dest: *u8, _ source: *u8, _ len: u256) {
+    copy_mem(dest, source, len)
+}
+
+#[inline(always)]
+fn array_elem<T, const N: usize>(_ ptr: *[T; N], _ index: usize) -> *T {
+    if index >= N {
+        panic()
+    }
+    elem(cast<[T; N], T>(ptr), index)
+}
+
+#[inline(always)]
+fn mem_array_elem<T>(_ array: MemArray<T>, _ index: usize) -> *T {
+    if index as u256 >= array.len {
+        panic()
+    }
+    elem(array.ptr, index)
+}
+
+#[inline(always)]
+fn elem<T>(_ ptr: *T, _ index: usize) -> *T {
+    offset(ptr, index as u256)
+}
+
+impl<T, const N: usize> Index<usize> for *[T; N] {
+    type Output = T
+
+    #[inline(always)]
+    fn index(self, _ index: usize) -> T {
+        *array_elem(self, index)
+    }
+}
+
+impl<T, const N: usize> IndexMut<usize> for *[T; N] {
+    type Output = T
+
+    #[inline(always)]
+    fn index_mut(self, _ index: usize) -> mut T {
+        mut *array_elem(self, index)
+    }
+}
+
+impl<T> Index<usize> for MemArray<T> {
+    type Output = T
+
+    #[inline(always)]
+    fn index(self, _ index: usize) -> T {
+        *mem_array_elem(self, index)
+    }
+}
+
+impl<T> IndexMut<usize> for MemArray<T> {
+    type Output = T
+
+    #[inline(always)]
+    fn index_mut(self, _ index: usize) -> mut T {
+        mut *mem_array_elem(self, index)
+    }
+}
+
+impl<T> Index<usize> for MemSlice<T>
+    where T: Copy
+{
+    type Output = T
+
+    #[inline(always)]
+    fn index(self, _ index: usize) -> T {
+        *self.ptr_at(index as u256)
+    }
+}

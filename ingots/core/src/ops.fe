@@ -137,6 +137,12 @@ pub trait Index<I> {
     fn index(self, _ index: I) -> Self::Output
 }
 
+pub trait IndexMut<I> {
+    type Output
+
+    fn index_mut(self, _ index: I) -> mut Self::Output
+}
+
 // Augmented assignment operators (return unit)
 pub trait AddAssign<T = Self> {
     fn add_assign(mut self, _ other: own T)

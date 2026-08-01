@@ -799,7 +799,7 @@ fn contract_init_abi_plan<'db>(
                 db,
                 contract.scope(),
                 contract.init_args_ty(db),
-                memory_bytes_ty(db, contract.scope())?,
+                memory_span_ty(db, contract.scope())?,
             )?,
             projected_fields,
         }
@@ -1642,13 +1642,12 @@ fn visible_recv_arg_fields<'db>(
         .into_boxed_slice()
 }
 
-fn memory_bytes_ty<'db>(
+fn memory_span_ty<'db>(
     db: &'db dyn MirDb,
     scope: hir::hir_def::scope_graph::ScopeId<'db>,
 ) -> Result<TyId<'db>, LowerError> {
-    resolve_lib_type_path(db, scope, "std::evm::memory_input::MemoryBytes").ok_or_else(|| {
-        LowerError::Unsupported("missing std::evm::memory_input::MemoryBytes".to_string())
-    })
+    resolve_lib_type_path(db, scope, "core::ptr::MemSpan")
+        .ok_or_else(|| LowerError::Unsupported("missing core::ptr::MemSpan".to_string()))
 }
 
 fn sol_decoder_ty<'db>(
@@ -2187,11 +2186,12 @@ fn runtime_class_sort_key<'db>(db: &'db dyn MirDb, class: &RuntimeClass<'db>) ->
             ref_view_sort_key(db, view),
             runtime_class_sort_key(db, pointee)
         ),
-        RuntimeClass::RawAddr { space, target } => format!(
+        RuntimeClass::RawAddr { space, pointee } => format!(
             "raw:{}:{}",
             address_space_sort_key(*space),
-            target
-                .map(|layout| layout_sort_key(db, layout))
+            pointee
+                .as_deref()
+                .map(|pointee| runtime_class_sort_key(db, pointee))
                 .unwrap_or_default()
         ),
     }

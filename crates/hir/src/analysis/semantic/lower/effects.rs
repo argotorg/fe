@@ -107,8 +107,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 }
             },
             pass_mode: arg.pass_mode,
+            layout_view: arg.layout_view,
             required_mut: arg.required_mut,
-            target_ty: arg.provider_target_ty,
+            provider_target_ty: arg.provider_target_ty,
             provider: self.effect_arg_provider_space(arg),
         }
     }
@@ -163,7 +164,6 @@ pub(super) fn provisional_owner_effect_bindings<'db>(
                         idx: requirement.binding_idx as usize,
                         binding_name: requirement.binding_name,
                         provider_idx,
-                        key_path: requirement.binding_path,
                         is_mut: requirement.is_mut,
                     })
                 })

@@ -16,8 +16,8 @@ impl core::error::ErrorVariant<std::abi::Sol> for InsufficientBalance {
 }
 
 impl core::abi::AbiSize for InsufficientBalance {
-    const HEAD_SIZE: u256 = 0 + u256::HEAD_SIZE + u256::HEAD_SIZE
-    const IS_DYNAMIC: bool = false || u256::IS_DYNAMIC || u256::IS_DYNAMIC
+    const HEAD_SIZE: u256 = 0 + core::abi::abi_field_head_size<u256>() + core::abi::abi_field_head_size<u256>()
+    const IS_DYNAMIC: bool = false || <u256 as core::abi::AbiSize>::IS_DYNAMIC || <u256 as core::abi::AbiSize>::IS_DYNAMIC
 
     #[inline(always)]
     fn payload_size(self) -> u256 {
@@ -26,21 +26,15 @@ impl core::abi::AbiSize for InsufficientBalance {
 }
 
 impl core::abi::Encode<std::abi::Sol> for InsufficientBalance {
-    const DIRECT_ENCODE: bool = true && <u256 as core::abi::Encode<std::abi::Sol> >::DIRECT_ENCODE && <u256 as core::abi::Encode<std::abi::Sol> >::DIRECT_ENCODE
 
     #[inline(always)]
-    fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {
-        let mut __tail = e.base() + <Self as core::abi::AbiSize>::HEAD_SIZE
+    fn encode(own self, _ ptr: *u8) {
+        let mut __tail = <Self as core::abi::AbiSize>::HEAD_SIZE
+        let mut __head_pos = 0
         let __field_0 = self.balance
-        core::abi::encode_field<std::abi::Sol, u256, E>(__field_0, e, mut __tail)
+        __tail = core::abi::encode_field_at<std::abi::Sol, u256>(__field_0, ptr, head_pos: __head_pos, tail: __tail)
+        __head_pos = __head_pos + core::abi::abi_field_head_size<u256>()
         let __field_1 = self.required
-        core::abi::encode_field<std::abi::Sol, u256, E>(__field_1, e, mut __tail)
-    }
-
-    #[inline(always)]
-    fn encode_to_ptr(own self, _ ptr: u256) {
-        self.balance.encode_to_ptr(ptr)
-        let __field_ptr0 = ptr + u256::HEAD_SIZE
-        self.required.encode_to_ptr(__field_ptr0)
+        core::abi::encode_field_at<std::abi::Sol, u256>(__field_1, ptr, head_pos: __head_pos, tail: __tail)
     }
 }

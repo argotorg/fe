@@ -21,8 +21,8 @@ fn long_expr() {
 
 // Nested binary expressions that exceed line width
 fn nested() {
-    let x = (first_long_operand + second_long_operand)
-        * (third_long_operand + fourth_long_operand + fifth_long_operand)
+    let x = (first_long_operand + second_long_operand) *
+        (third_long_operand + fourth_long_operand + fifth_long_operand)
     let y = first_very_long_operand
         + second_very_long_operand * third_very_long_operand
         + fourth_very_long_operand
@@ -32,6 +32,8 @@ fn nested() {
 fn mixed_operators() {
     let cmp = very_long_left_side_expression_name
         == very_long_right_side_expression_name_that_is_even_longer
+    let difference = very_long_left_side_expression_name -
+        very_long_right_side_expression_name_that_is_even_longer
     let logical = first_condition_check && second_condition_check && third_condition_check
         || fourth_condition_check
 }

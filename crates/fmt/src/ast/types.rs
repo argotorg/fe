@@ -859,9 +859,10 @@ impl ToDoc for ast::PtrType {
         let alloc = &ctx.alloc;
 
         if !has_comment_tokens(self.syntax()) {
+            let ptr = if self.star2().is_some() { "**" } else { "*" };
             return match self.inner() {
-                Some(inner) => alloc.text("*").append(inner.to_doc(ctx)),
-                None => alloc.text("*"),
+                Some(inner) => alloc.text(ptr).append(inner.to_doc(ctx)),
+                None => alloc.text(ptr),
             };
         }
 
@@ -873,6 +874,7 @@ impl ToDoc for ast::PtrType {
             |node| ast::Type::cast(node).map(|ty| TokenPiece::new(ty.to_doc(ctx))),
             |token| match token.kind() {
                 SyntaxKind::Star => Some(TokenPiece::new(alloc.text("*"))),
+                SyntaxKind::Star2 => Some(TokenPiece::new(alloc.text("**"))),
                 _ => None,
             },
         )

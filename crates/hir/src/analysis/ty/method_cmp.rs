@@ -652,7 +652,7 @@ fn effect_identity_matches<'db>(
             }
             _ => false,
         },
-        EffectKeyKind::Other => trait_identity.key_path == impl_identity.key_path,
+        EffectKeyKind::Other => trait_identity.key_syntax == impl_identity.key_syntax,
     }
 }
 

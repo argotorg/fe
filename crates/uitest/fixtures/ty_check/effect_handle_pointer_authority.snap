@@ -1,0 +1,20 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/effect_handle_pointer_authority.fe
+---
+error[3-0049]: contract field has an invalid effect-handle transport
+   ┌─ effect_handle_pointer_authority.fe:28:30
+   │
+28 │     mut storage_from_memory: StorageFromMemory,
+   │                              ^^^^^^^^^^^^^^^^^ user-defined handles may only use `*Target` in memory
+   │
+   = `StorageFromMemory` cannot carry address-space authority through this `EffectHandle` implementation
+
+error[3-0049]: contract field has an invalid effect-handle transport
+   ┌─ effect_handle_pointer_authority.fe:29:24
+   │
+29 │     mut wrong_pointee: WrongPointee,
+   │                        ^^^^^^^^^^^^ user-defined handles may only use `*Target` in memory
+   │
+   = `WrongPointee` cannot carry address-space authority through this `EffectHandle` implementation

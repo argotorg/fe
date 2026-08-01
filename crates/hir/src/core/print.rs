@@ -449,33 +449,20 @@ impl<'db> EffectParam<'db> {
     /// Formats: `mut Type`, `Type`, `name: mut Type`, or `name: Type`
     pub fn pretty_print(&self, db: &dyn HirDb) -> String {
         let mut result = String::new();
-
-        // If we have a name binding, print it first
         if let Some(name) = self.name {
             result.push_str(name.data(db));
             result.push_str(": ");
-            if self.is_mut {
-                result.push_str("mut ");
-            }
-            let path = self
-                .key_path
-                .to_opt()
-                .map(|path| path.pretty_print(db))
-                .unwrap_or_else(|| "_".to_string());
-            result.push_str(&path);
-        } else {
-            // No name binding - shorthand form
-            if self.is_mut {
-                result.push_str("mut ");
-            }
-            let path = self
-                .key_path
-                .to_opt()
-                .map(|path| path.pretty_print(db))
-                .unwrap_or_else(|| "_".to_string());
-            result.push_str(&path);
         }
-
+        if self.is_mut {
+            result.push_str("mut ");
+        }
+        result.push_str(
+            &self
+                .key_ty
+                .to_opt()
+                .map(|ty| ty.pretty_print(db))
+                .unwrap_or_else(|| "_".to_string()),
+        );
         result
     }
 }
@@ -957,6 +944,7 @@ impl UnOp {
             UnOp::BitNot => "~",
             UnOp::Mut => "mut",
             UnOp::Ref => "ref",
+            UnOp::Deref => "*",
         }
     }
 }

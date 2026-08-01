@@ -10,8 +10,9 @@ use crate::analysis::{
 };
 
 use super::{
-    canon::{BorrowRoot, CanonPlace, State, address_space_for_borrow_root},
-    check::Borrowck,
+    address_space_rank,
+    canon::{BorrowRoot, CanonPlace, State, address_spaces_for_borrow_root},
+    check::{Borrowck, instance_has_smir_lowering_blocking_diagnostics},
     diagnostics::{normalized_body_internal_diag, operand_origin},
     ir::{
         BorrowDiagnosticId, NExpr, NOperand, NSStmt, NSStmtKind, SemanticBorrowCheckResult,
@@ -41,6 +42,9 @@ pub(super) fn semantic_noesc_check_query<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> SemanticBorrowCheckResult<'db> {
+    if instance_has_smir_lowering_blocking_diagnostics(db, instance) {
+        return SemanticBorrowCheckResult::Ok;
+    }
     match Borrowck::new(db, instance).and_then(NoEsc::check) {
         Ok(()) => SemanticBorrowCheckResult::Ok,
         Err(diag) => SemanticBorrowCheckResult::Err(BorrowDiagnosticId::new(db, diag)),
@@ -53,8 +57,7 @@ struct NoEsc<'db> {
 
 impl<'db> NoEsc<'db> {
     fn check(mut borrowck: Borrowck<'db>) -> Result<(), SemanticBorrowDiagnostic<'db>> {
-        borrowck.compute_entry_states();
-        borrowck.compute_loan_targets()?;
+        borrowck.compute_entry_states_and_loan_targets()?;
         Self { borrowck }.check_body()
     }
 
@@ -62,9 +65,17 @@ impl<'db> NoEsc<'db> {
         for (bb_idx, block) in self.borrowck.body.blocks.iter().enumerate() {
             let mut state =
                 self.borrowck.entry_state[crate::analysis::semantic::SBlockId::new(bb_idx)].clone();
+            if !state.is_reachable() {
+                continue;
+            }
             for stmt in &block.stmts {
                 self.check_stmt(&state, stmt)?;
-                self.borrowck.canon().apply_stmt_state(&mut state, stmt);
+                self.borrowck
+                    .state_transfer()
+                    .apply_stmt(&mut state, stmt)?;
+                if !state.is_reachable() {
+                    break;
+                }
             }
         }
         Ok(())
@@ -72,7 +83,7 @@ impl<'db> NoEsc<'db> {
 
     fn check_stmt(
         &self,
-        state: &State,
+        state: &State<'db>,
         stmt: &NSStmt<'db>,
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
         match &stmt.kind {
@@ -87,7 +98,7 @@ impl<'db> NoEsc<'db> {
 
     fn check_store(
         &self,
-        state: &State,
+        state: &State<'db>,
         origin: SemOrigin<'db>,
         dst: &super::ir::NSPlace<'db>,
         src: NOperand,
@@ -128,7 +139,7 @@ impl<'db> NoEsc<'db> {
 
     fn check_call_args(
         &self,
-        state: &State,
+        state: &State<'db>,
         origin: SemOrigin<'db>,
         callee: SemanticCalleeRef<'db>,
         args: &[NOperand],
@@ -193,21 +204,23 @@ impl<'db> NoEsc<'db> {
     ) -> Result<Vec<ProviderAddressSpace>, SemanticBorrowDiagnostic<'db>> {
         let mut spaces = Vec::with_capacity(targets.len());
         for target in targets {
-            let space = self.address_space_for_root(&target.root, origin)?;
-            if !spaces.contains(&space) {
-                spaces.push(space);
+            let root_spaces = self.address_spaces_for_root(&target.root, origin)?;
+            for space in root_spaces {
+                if !spaces.contains(&space) {
+                    spaces.push(space);
+                }
             }
         }
         spaces.sort_by_key(|space| address_space_rank(*space));
         Ok(spaces)
     }
 
-    fn address_space_for_root(
+    fn address_spaces_for_root(
         &self,
         root: &BorrowRoot<'db>,
         origin: SemOrigin<'db>,
-    ) -> Result<ProviderAddressSpace, SemanticBorrowDiagnostic<'db>> {
-        address_space_for_borrow_root(
+    ) -> Result<Vec<ProviderAddressSpace>, SemanticBorrowDiagnostic<'db>> {
+        address_spaces_for_borrow_root(
             self.borrowck.db,
             self.borrowck.instance,
             &self.borrowck.body,
@@ -244,15 +257,5 @@ impl<'db> NoEsc<'db> {
             origin,
             message,
         )
-    }
-}
-
-fn address_space_rank(space: ProviderAddressSpace) -> u8 {
-    match space {
-        ProviderAddressSpace::Memory => 0,
-        ProviderAddressSpace::Calldata => 1,
-        ProviderAddressSpace::Code => 2,
-        ProviderAddressSpace::Storage => 3,
-        ProviderAddressSpace::Transient => 4,
     }
 }

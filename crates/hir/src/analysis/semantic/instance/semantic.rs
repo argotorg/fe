@@ -901,7 +901,7 @@ impl<'db> SemanticInstance<'db> {
         self.key(db).owner(db).scope()
     }
 
-    fn is_intrinsically_never_returning(self, db: &'db dyn HirAnalysisDb) -> bool {
+    pub(crate) fn is_intrinsically_never_returning(self, db: &'db dyn HirAnalysisDb) -> bool {
         self.is_nonreturning_builtin(db) || self.normalized_result_ty(db).is_never(db)
     }
 
@@ -914,6 +914,7 @@ impl<'db> SemanticInstance<'db> {
             Some(
                 RuntimeBuiltinFuncKind::ReturnData
                     | RuntimeBuiltinFuncKind::Revert
+                    | RuntimeBuiltinFuncKind::RevertEmpty
                     | RuntimeBuiltinFuncKind::SelfDestruct
                     | RuntimeBuiltinFuncKind::Stop
                     | RuntimeBuiltinFuncKind::Panic
@@ -1094,8 +1095,9 @@ pub(crate) fn provisional_provider_idx_for_requirement<'db>(
                 .requirements(db)
                 .into_iter()
                 .find(|requirement| requirement.binding_idx == requirement_idx)?;
-            if requirement.binding_path.len(db) == 1
-                && let Some(name) = requirement.binding_path.ident(db).to_opt()
+            if let Some(binding_path) = requirement.binding_path(db)
+                && binding_path.len(db) == 1
+                && let Some(name) = binding_path.ident(db).to_opt()
                 && let Some(field) = fields.get(&name)
                 && let Some(provider_idx) = field_provider_idx.get(&field.index).copied()
             {
@@ -1291,7 +1293,9 @@ fn requirement_provider_target_ty<'db>(
     let target_ty = requirement.key.binding_ty(db)?;
     let semantics = provider_semantics(db, scope, assumptions, target_ty);
     match semantics.evidence {
-        ProviderLayoutEvidence::ResolvedHandle(_) => semantics.target_ty,
+        ProviderLayoutEvidence::ResolvedHandle(_) | ProviderLayoutEvidence::TraitBoundHandle(_) => {
+            semantics.target_ty
+        }
         ProviderLayoutEvidence::InvalidHandle(_) => None,
         ProviderLayoutEvidence::Capability
         | ProviderLayoutEvidence::NotHandle
@@ -1408,11 +1412,7 @@ fn classify_binding_role<'db>(
         return SemanticLocalRole::PlaceCarrier { provider, value_ty };
     }
     let type_semantics = provider_semantics(db, scope, assumptions, ty);
-    if matches!(
-        type_semantics.evidence,
-        ProviderLayoutEvidence::ResolvedHandle(_)
-    ) && let Some(target_ty) = type_semantics.target_ty
-    {
+    if let Some(target_ty) = type_semantics.binding_target_ty(db, provider.is_some()) {
         return SemanticLocalRole::DirectCarrier {
             provider,
             target_ty,
@@ -1686,7 +1686,6 @@ fn root_owner_effect_providers<'db>(
                         idx: requirement.binding_idx as usize,
                         binding_name: requirement.binding_name,
                         provider_idx: slot.provider_idx,
-                        key_path: requirement.binding_path,
                         is_mut: requirement.is_mut,
                     },
                 },
@@ -1708,6 +1707,7 @@ fn root_provider_satisfies_effect_requirement<'db>(
                 || matches!(
                     provider_semantics(db, func.scope(), assumptions, provider_ty).evidence,
                     ProviderLayoutEvidence::ResolvedHandle(_)
+                        | ProviderLayoutEvidence::TraitBoundHandle(_)
                 )
         }
         EffectRequirementKey::Trait(trait_inst) => {
