@@ -42,6 +42,20 @@ fn bin_op_precedence(op: &BinOp) -> u8 {
     }
 }
 
+/// Returns true for operators the parser refuses to parse as a continuation
+/// when they appear at the start of a line: `-` reads as a new expression
+/// statement starting with unary minus, and `<` / `<<` can begin a qualified
+/// type (`<T as Trait>::...`). For these the line break must be placed after
+/// the operator, never before it. Keep in sync with the line-start operator
+/// rejections in `parser/src/parser/expr.rs`.
+fn op_rejected_at_line_start(op: &BinOp) -> bool {
+    use parser::ast::{ArithBinOp, CompBinOp};
+    matches!(
+        op,
+        BinOp::Arith(ArithBinOp::Sub(_) | ArithBinOp::LShift(_)) | BinOp::Comp(CompBinOp::Lt(_))
+    )
+}
+
 /// If expression is a binary expression with the given precedence, return the BinExpr.
 fn as_bin_expr_with_precedence(expr: &ast::Expr, precedence: u8) -> Option<ast::BinExpr> {
     if let ExprKind::Bin(bin) = expr.kind()
@@ -99,15 +113,17 @@ fn format_bin_expr_inner<'a>(
 
     let precedence = bin_op_precedence(&op);
 
-    // Collect all operands and operators at this precedence level
+    // Collect all operands and operators at this precedence level.
+    // The bool records whether the parser rejects the operator at line start,
+    // in which case the break goes after the operator instead of before it.
     let mut operands: Vec<ast::Expr> = Vec::new();
-    let mut operators: Vec<String> = Vec::new();
+    let mut operators: Vec<(String, bool)> = Vec::new();
 
     fn collect<'a>(
         expr: &ast::BinExpr,
         precedence: u8,
         operands: &mut Vec<ast::Expr>,
-        operators: &mut Vec<String>,
+        operators: &mut Vec<(String, bool)>,
         ctx: &'a RewriteContext<'a>,
     ) {
         if let Some(lhs) = expr.lhs() {
@@ -119,7 +135,10 @@ fn format_bin_expr_inner<'a>(
         }
 
         if let Some(op) = expr.op() {
-            operators.push(ctx.snippet_node_or_token(&op.syntax()));
+            operators.push((
+                ctx.snippet_node_or_token(&op.syntax()),
+                op_rejected_at_line_start(&op),
+            ));
         }
 
         if let Some(rhs) = expr.rhs() {
@@ -141,7 +160,7 @@ fn format_bin_expr_inner<'a>(
     let mut result = first.to_doc(ctx);
 
     for (i, operand) in operands.iter().skip(1).enumerate() {
-        let op_str = &operators[i];
+        let (op_str, break_after_op) = &operators[i];
 
         // Check if operand is a higher-precedence binary expression
         let higher_prec_bin = if let ExprKind::Bin(inner_bin) = operand.kind() {
@@ -153,22 +172,26 @@ fn format_bin_expr_inner<'a>(
             None
         };
 
-        if let Some(inner_bin) = higher_prec_bin {
+        let operand_doc = if let Some(inner_bin) = higher_prec_bin {
             // Format inner chain without its own nesting, we control it here
-            let inner_doc = format_bin_expr_inner(&inner_bin, ctx, false);
-            result = result
-                .append(alloc.line())
-                .append(alloc.text(op_str.clone()))
-                .append(alloc.text(" "))
-                .append(inner_doc.nest(indent));
+            format_bin_expr_inner(&inner_bin, ctx, false).nest(indent)
         } else {
-            let operand_doc = operand.to_doc(ctx);
-            result = result
+            operand.to_doc(ctx)
+        };
+
+        result = if *break_after_op {
+            result
+                .append(alloc.text(" "))
+                .append(alloc.text(op_str.clone()))
+                .append(alloc.line())
+                .append(operand_doc)
+        } else {
+            result
                 .append(alloc.line())
                 .append(alloc.text(op_str.clone()))
                 .append(alloc.text(" "))
-                .append(operand_doc);
-        }
+                .append(operand_doc)
+        };
     }
 
     if apply_outer_nest {

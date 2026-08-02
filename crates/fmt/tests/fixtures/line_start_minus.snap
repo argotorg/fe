@@ -1,0 +1,31 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+expression: output
+input_file: tests/fixtures/line_start_minus.fe
+---
+// Regression tests: the formatter must never break a line *before* an
+// operator that the parser rejects at expression-continuation position
+// (`-`, `<`, `<<`). Breaks go after the operator instead.
+
+// Repro 1: long subtraction wrapped inside an if-arm
+fn balance_of_minus_admin(flag: bool, i: u256) -> u256 {
+    let balance = if flag {
+        some_call_with_a_rather_long_name(first_argument: i, second_argument: i) -
+            another_lookup_with_long_name(key: i)
+    } else {
+        0
+    }
+    balance
+}
+
+// Repro 2: subtraction whose right operand is a mul/div chain, as a labeled
+// call argument
+fn fee_reduction(xp_j: u256, xavg: u256, ys: u256, base: u256, dx: u256) {
+    store_value(
+        index: 0,
+        value: xp_j -
+            compute_dynamic_fee_for_balances(xpi_value: xavg, xpj_value: ys, base_fee: base)
+                * dx
+                / 10000000000,
+    )
+}
