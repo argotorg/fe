@@ -1,0 +1,24 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/dyn_array_static_elements.fe
+---
+error[6-0003]: trait bound is not satisfied
+  ┌─ dyn_array_static_elements.fe:5:13
+  │
+5 │     let _ = values.get(0)
+  │             ^^^^^^^^^^^^^
+  │             │
+  │             `DynArray<DynString>` doesn't implement `DynArrayAccess<DynString>`
+  │             trait bound `DynString: StaticAbiElement` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ dyn_array_static_elements.fe:9:38
+   │
+ 9 │     let _values: MemVec<DynString> = MemVec::zeroed(1)
+   │                                      ^^^^^^^^^^^^^^ `DynString` doesn't implement `StaticAbiElement`
+   │
+   ┌─ src/abi/dyn_array.fe:75:14
+   │
+75 │     where T: StaticAbiElement + Decode<Sol> + Encode<Sol> + AbiSize
+   │              ---------------- required by this bound on `zeroed`

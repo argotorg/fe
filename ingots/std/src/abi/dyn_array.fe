@@ -1,0 +1,160 @@
+use core::abi::{
+    Abi,
+    AbiSize,
+    Decode,
+    DynArray,
+    Encode,
+    MemoryInput,
+    checked_frame_end,
+}
+use ingot::abi::{Sol, StaticAbiElement}
+use ingot::evm::effects::RawMem
+use ingot::evm::mem
+use ingot::evm::panic::{PANIC_INDEX_OUT_OF_BOUNDS, Panic}
+use ingot::evm::revert_error
+
+/// Element access for `DynArray<T>`.
+///
+/// This is an extension trait rather than an inherent method because
+/// `DynArray` is defined in `core`, which cannot name the Solidity ABI
+/// decoder that element access relies on. It is re-exported from the std
+/// prelude, so `arr.get(index)` works without an extra import.
+pub trait DynArrayAccess<T> {
+    /// The element at `index`. Reverts with Solidity `Panic(0x32)` if
+    /// `index >= len()`.
+    ///
+    /// A read past the end fails loudly (like `DynString::byte_at`) instead
+    /// of reading zero: for typed elements a silent zero is indistinguishable
+    /// from real data.
+    ///
+    /// Elements decode through the regular Solidity ABI path, so the same
+    /// canonicalization rules as parameter decoding apply. Decoding the
+    /// containing `DynArray` copies the payload verbatim without inspecting
+    /// static element words, so e.g. an `Address` element with dirty upper
+    /// bits only reverts once it is read here — exactly as it would when
+    /// decoded as a standalone parameter.
+    ///
+    /// Only elements represented by one static ABI word are supported.
+    /// Dynamic elements (`Bytes`, `DynString`, and nested arrays) do not
+    /// implement `StaticAbiElement`, so calling `get` on them does not compile.
+    fn get(self, _ index: u256) -> T
+}
+
+impl<T> DynArrayAccess<T> for DynArray<T>
+    where T: StaticAbiElement + Decode<Sol> + AbiSize
+{
+    fn get(self, _ index: u256) -> T {
+        if index >= self.len {
+            revert_error(Panic::from(PANIC_INDEX_OUT_OF_BOUNDS))
+        }
+
+        let head_pos = 32 + index * 32
+        let input = MemoryInput { base: self.data, len: self.size }
+        checked_frame_end<Sol>(head_pos, 32, self.size)
+        T::decode_from(input, head_pos)
+    }
+}
+
+/// A fixed-length mutable array of static-size ABI elements in linear memory.
+///
+/// This is the builder and scratch counterpart to `DynArray`: allocate with
+/// `zeroed` (or copy an ABI array with `from_dyn_array`), mutate with `set`,
+/// and freeze into an ABI-encodable `DynArray` with `to_dyn_array`.
+///
+/// The length is fixed at creation; there is no `push`/growth API. Element
+/// types must occupy one static ABI word (`u256`, ints, `Address`, `bool`, and
+/// fixed-bytes wrappers). Dynamic values and multi-word composites do not
+/// implement `StaticAbiElement`, so constructing a `MemVec` of them does not
+/// compile.
+pub struct MemVec<T> {
+    ptr: u256,
+    len: u256,
+}
+
+impl<T> MemVec<T>
+    where T: StaticAbiElement + Decode<Sol> + Encode<Sol> + AbiSize
+{
+    /// A zero-initialized array of `len` elements.
+    pub fn zeroed(_ len: u256) -> Self uses (mem: mut RawMem) {
+        let total = len * 32
+        let ptr = mem::alloc(total)
+        let mut offset: u256 = 0
+        while offset < total {
+            mem.mstore(addr: ptr + offset, value: 0)
+            offset += 32
+        }
+        MemVec { ptr, len }
+    }
+
+    /// Copy of an ABI array, for local mutation.
+    ///
+    /// Mutating the copy leaves `source` untouched.
+    pub fn from_dyn_array(_ source: DynArray<T>) -> Self uses (mem: mut RawMem) {
+        let total = source.len * 32
+        let ptr = mem::alloc(total)
+        let mut offset: u256 = 0
+        while offset < total {
+            mem.mstore(addr: ptr + offset, value: mem.mload(source.data + 32 + offset))
+            offset += 32
+        }
+        MemVec { ptr, len: source.len }
+    }
+
+    /// Number of elements.
+    pub fn len(self) -> u256 {
+        self.len
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.len == 0
+    }
+
+    /// The element at `index`. Reverts with Solidity `Panic(0x32)` if
+    /// `index >= len()`.
+    ///
+    /// Elements decode through the regular Solidity ABI path, so words that
+    /// were copied in via `from_dyn_array` are canonicalized exactly like
+    /// `DynArrayAccess::get` would.
+    pub fn get(self, _ index: u256) -> T {
+        if index >= self.len {
+            revert_error(Panic::from(PANIC_INDEX_OUT_OF_BOUNDS))
+        }
+
+        let input = MemoryInput { base: self.ptr, len: self.len * 32 }
+        T::decode_from(input, index * 32)
+    }
+
+    /// Write `value` at `index`. Reverts with Solidity `Panic(0x32)` if
+    /// `index >= len()`.
+    pub fn set(mut self, index: u256, value: own T) {
+        if index >= self.len {
+            revert_error(Panic::from(PANIC_INDEX_OUT_OF_BOUNDS))
+        }
+
+        let at = self.ptr + index * 32
+        if T::DIRECT_ENCODE {
+            value.encode_to_ptr(at)
+            return
+        }
+
+        let mut e = Sol::encoder_at(at)
+        value.encode(mut e)
+    }
+
+    /// Freeze into an ABI-encodable `DynArray`.
+    ///
+    /// This is a fresh allocation holding the length word followed by the
+    /// element words; later `set` calls on the `MemVec` do not affect it.
+    pub fn to_dyn_array(self) -> DynArray<T> uses (mem: mut RawMem) {
+        let payload = self.len * 32
+        let size = 32 + payload
+        let data = mem::alloc(size)
+        mem.mstore(addr: data, value: self.len)
+        let mut offset: u256 = 0
+        while offset < payload {
+            mem.mstore(addr: data + 32 + offset, value: mem.mload(self.ptr + offset))
+            offset += 32
+        }
+        DynArray { data, len: self.len, size }
+    }
+}

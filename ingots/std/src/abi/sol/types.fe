@@ -34,6 +34,14 @@ pub trait SolCompat {
     const SOL_TYPE: Self::S
 }
 
+/// Marker for Solidity ABI values encoded as one static 32-byte word.
+///
+/// This excludes dynamic values (`Bytes`, `DynString`, and arrays) as well as
+/// static composites whose ABI head occupies more than one word.
+pub(ingot) trait StaticAbiElementSeal {}
+
+pub trait StaticAbiElement: StaticAbiElementSeal {}
+
 // Primitive unsigned integer implementations
 impl SolCompat for u8 {
     type S = String<5>
@@ -95,6 +103,39 @@ impl SolCompat for bool {
     type S = String<4>
     const SOL_TYPE: Self::S = "bool"
 }
+
+impl StaticAbiElementSeal for bool {}
+impl StaticAbiElement for bool {}
+impl StaticAbiElementSeal for u8 {}
+impl StaticAbiElement for u8 {}
+impl StaticAbiElementSeal for u16 {}
+impl StaticAbiElement for u16 {}
+impl StaticAbiElementSeal for u32 {}
+impl StaticAbiElement for u32 {}
+impl StaticAbiElementSeal for u64 {}
+impl StaticAbiElement for u64 {}
+impl StaticAbiElementSeal for u128 {}
+impl StaticAbiElement for u128 {}
+impl StaticAbiElementSeal for u256 {}
+impl StaticAbiElement for u256 {}
+impl StaticAbiElementSeal for usize {}
+impl StaticAbiElement for usize {}
+impl StaticAbiElementSeal for i8 {}
+impl StaticAbiElement for i8 {}
+impl StaticAbiElementSeal for i16 {}
+impl StaticAbiElement for i16 {}
+impl StaticAbiElementSeal for i32 {}
+impl StaticAbiElement for i32 {}
+impl StaticAbiElementSeal for i64 {}
+impl StaticAbiElement for i64 {}
+impl StaticAbiElementSeal for i128 {}
+impl StaticAbiElement for i128 {}
+impl StaticAbiElementSeal for i256 {}
+impl StaticAbiElement for i256 {}
+impl StaticAbiElementSeal for isize {}
+impl StaticAbiElement for isize {}
+impl StaticAbiElementSeal for Address {}
+impl StaticAbiElement for Address {}
 
 impl<const N: usize> SolCompat for String<N> {
     type S = String<6>
@@ -161,6 +202,9 @@ pub struct FixedBytes<const N: usize> {
     /// Right-aligned byte value before ABI padding.
     pub val: u256,
 }
+impl<const N: usize> StaticAbiElementSeal for FixedBytes<N> {}
+
+impl<const N: usize> StaticAbiElement for FixedBytes<N> {}
 
 impl<const N: usize> FixedBytes<N> {
     /// Return the canonical ABI word for this fixed-byte value.
