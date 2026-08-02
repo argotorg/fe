@@ -1,3 +1,5 @@
+pub use common::layout::StorageFieldPlacement as FieldPlacement;
+use common::layout::{StorageFieldShape, StorageFieldsLayout, storage_fields_layout};
 use cranelift_entity::{EntityRef, entity_impl};
 use hir::analysis::{
     semantic::{FieldIndex, LayoutEvidenceConstant, SemanticInstance},
@@ -179,6 +181,17 @@ impl<'db> RuntimeClass<'db> {
         }
     }
 
+    pub fn storage_index_stride_words(&self, db: &'db dyn MirDb) -> Option<u64> {
+        match self {
+            RuntimeClass::AggregateValue { layout } => match layout.data(db) {
+                Layout::Array(data) => Some(data.elem.storage_span_words(db)),
+                Layout::Struct(_) | Layout::Enum(_) => None,
+            },
+            RuntimeClass::Ref { pointee, .. } => pointee.storage_index_stride_words(db),
+            RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => None,
+        }
+    }
+
     pub fn field_offset_words(&self, db: &'db dyn MirDb, field: FieldIndex) -> Option<u64> {
         if matches!(self, RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. }) {
             return None;
@@ -188,6 +201,21 @@ impl<'db> RuntimeClass<'db> {
             return None;
         };
         Some(data.field_offset_words(db, field.0 as usize))
+    }
+
+    pub fn storage_field_placement(
+        &self,
+        db: &'db dyn MirDb,
+        field: FieldIndex,
+    ) -> Option<FieldPlacement> {
+        if matches!(self, RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. }) {
+            return None;
+        }
+        let layout = self.aggregate_layout()?;
+        let Layout::Struct(data) = layout.data(db) else {
+            return None;
+        };
+        data.storage_field_placement(db, field.0 as usize)
     }
 
     pub fn span_words(&self, db: &'db dyn MirDb) -> u64 {
@@ -207,6 +235,24 @@ impl<'db> RuntimeClass<'db> {
                                 .map(|field| field.span_words(db))
                                 .sum::<u64>()
                         })
+                        .max()
+                        .unwrap_or(0)
+                }
+            },
+        }
+    }
+
+    pub fn storage_span_words(&self, db: &'db dyn MirDb) -> u64 {
+        match self {
+            RuntimeClass::Scalar(_) | RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => 1,
+            RuntimeClass::AggregateValue { layout } => match layout.data(db) {
+                Layout::Struct(data) => data.storage_span_words(db),
+                Layout::Array(data) => data.elem.storage_span_words(db) * data.len,
+                Layout::Enum(data) => {
+                    1 + data
+                        .variants
+                        .iter()
+                        .map(|variant| variant.storage_span_words(db))
                         .max()
                         .unwrap_or(0)
                 }
@@ -296,6 +342,15 @@ pub enum RefKind<'db> {
 pub enum RefView<'db> {
     Whole,
     EnumVariant(VariantId<'db>),
+    /// The reference carries the containing storage word at runtime; this
+    /// compile-time view identifies the scalar lane within that word.
+    StorageLane(StorageBitLane),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub struct StorageBitLane {
+    pub bit_offset: u16,
+    pub bit_width: u16,
 }
 
 fn layouts_share_runtime_rep<'db>(
@@ -403,6 +458,15 @@ pub struct ScalarClass<'db> {
 impl ScalarClass<'_> {
     pub fn is_signed_int(&self) -> bool {
         matches!(self.repr, ScalarRepr::Int { signed: true, .. })
+    }
+
+    pub fn storage_bit_width(&self) -> u16 {
+        match self.repr {
+            ScalarRepr::Bool => 1,
+            ScalarRepr::Int { bits, .. } => bits,
+            ScalarRepr::FixedBytes { len } => len.saturating_mul(8),
+            ScalarRepr::Address { bits } => bits,
+        }
     }
 }
 
@@ -516,6 +580,10 @@ impl<'db> LayoutId<'db> {
             }),
         }
     }
+
+    pub fn shares_runtime_rep_with(self, db: &'db dyn MirDb, other: Self) -> bool {
+        layouts_share_runtime_rep(db, self, other)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -535,6 +603,34 @@ pub enum Layout<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct StructLayout<'db> {
     pub fields: Box<[RuntimeClass<'db>]>,
+    pub storage_field_packing: StorageFieldPacking,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum StorageFieldPacking {
+    Packed,
+    WordAligned,
+}
+
+impl StorageFieldPacking {
+    pub fn for_struct_fields<'db>(db: &'db dyn MirDb, fields: &[RuntimeClass<'db>]) -> Self {
+        let layout = storage_fields_layout(fields.iter().map(|field| {
+            storage_scalar_bit_width(field).map_or_else(
+                || StorageFieldShape::aggregate(field.storage_span_words(db)),
+                StorageFieldShape::scalar,
+            )
+        }))
+        .expect("runtime storage field layout must be valid");
+        if layout
+            .placements
+            .iter()
+            .any(|placement| placement.requires_read_modify_write)
+        {
+            Self::Packed
+        } else {
+            Self::WordAligned
+        }
+    }
 }
 
 impl<'db> StructLayout<'db> {
@@ -545,6 +641,38 @@ impl<'db> StructLayout<'db> {
             .map(|field| field.span_words(db))
             .sum()
     }
+
+    pub fn storage_field_placement(
+        &self,
+        db: &'db dyn MirDb,
+        idx: usize,
+    ) -> Option<FieldPlacement> {
+        self.storage_layout(db).placements.get(idx).copied()
+    }
+
+    fn storage_layout(&self, db: &'db dyn MirDb) -> StorageFieldsLayout {
+        storage_fields_layout(self.fields.iter().map(|field| {
+            if self.storage_field_packing == StorageFieldPacking::Packed
+                && let Some(bit_width) = storage_scalar_bit_width(field)
+            {
+                StorageFieldShape::scalar(bit_width)
+            } else {
+                StorageFieldShape::aggregate(field.storage_span_words(db))
+            }
+        }))
+        .expect("runtime storage field layout must be valid")
+    }
+
+    pub fn storage_span_words(&self, db: &'db dyn MirDb) -> u64 {
+        self.storage_layout(db).span_words
+    }
+}
+
+fn storage_scalar_bit_width(class: &RuntimeClass<'_>) -> Option<u16> {
+    let RuntimeClass::Scalar(scalar) = class else {
+        return None;
+    };
+    Some(scalar.storage_bit_width())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -577,6 +705,21 @@ impl<'db> EnumVariantLayout<'db> {
             .map(|field| field.span_words(db))
             .sum()
     }
+
+    pub fn storage_payload_field_offset_words(&self, db: &'db dyn MirDb, field: FieldIndex) -> u64 {
+        self.fields
+            .iter()
+            .take(field.0 as usize)
+            .map(|field| field.storage_span_words(db))
+            .sum()
+    }
+
+    pub fn storage_span_words(&self, db: &'db dyn MirDb) -> u64 {
+        self.fields
+            .iter()
+            .map(|field| field.storage_span_words(db))
+            .sum()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
@@ -596,6 +739,11 @@ impl<'db> VariantId<'db> {
     pub fn field_offset_words(self, db: &'db dyn MirDb, field: FieldIndex) -> Option<u64> {
         let layout = self.layout(db)?;
         Some(1 + layout.variants[self.index as usize].payload_field_offset_words(db, field))
+    }
+
+    pub fn storage_field_offset_words(self, db: &'db dyn MirDb, field: FieldIndex) -> Option<u64> {
+        let layout = self.layout(db)?;
+        Some(1 + layout.variants[self.index as usize].storage_payload_field_offset_words(db, field))
     }
 }
 

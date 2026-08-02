@@ -606,6 +606,7 @@ impl<'db> RuntimeConversionPlanner<'db> {
             (
                 RuntimeClass::Ref {
                     kind: RefKind::Provider { .. },
+                    view: RefView::Whole,
                     ..
                 },
                 RuntimeClass::RawAddr { .. },
@@ -695,11 +696,22 @@ mod tests {
         })
     }
 
+    fn u8_class<'db>() -> RuntimeClass<'db> {
+        RuntimeClass::Scalar(ScalarClass {
+            repr: ScalarRepr::Int {
+                bits: 8,
+                signed: false,
+            },
+            role: ScalarRole::Plain,
+        })
+    }
+
     fn test_struct_layout<'db>(db: &'db dyn MirDb) -> LayoutId<'db> {
         LayoutId::new(
             db,
             LayoutKey::Struct(StructLayout {
                 fields: vec![word_class()].into(),
+                storage_field_packing: crate::runtime::StorageFieldPacking::WordAligned,
             }),
         )
     }
@@ -847,6 +859,39 @@ mod tests {
 
         assert!(matches!(
             RuntimeConversionPlanner::plan(&db, source, target),
+            Err(RuntimeConversionError::Unsupported { .. })
+        ));
+    }
+
+    #[test]
+    fn storage_lane_provider_loads_value_without_erasing_to_raw_address() {
+        let db = DriverDataBase::default();
+        let value_class = u8_class();
+        let source = RuntimeClass::Ref {
+            pointee: Box::new(value_class.clone()),
+            kind: RefKind::Provider {
+                provider_ty: TyId::unit(&db),
+                space: AddressSpaceKind::Storage,
+            },
+            view: RefView::StorageLane(crate::runtime::StorageBitLane {
+                bit_offset: 8,
+                bit_width: 8,
+            }),
+        };
+
+        let load =
+            RuntimeConversionPlanner::plan(&db, source.clone(), value_class.clone()).unwrap();
+        assert_eq!(
+            load.steps.as_ref(),
+            &[RuntimeConversionStep::LoadRef { class: value_class }]
+        );
+
+        let raw = RuntimeClass::RawAddr {
+            space: AddressSpaceKind::Storage,
+            target: None,
+        };
+        assert!(matches!(
+            RuntimeConversionPlanner::plan(&db, source, raw),
             Err(RuntimeConversionError::Unsupported { .. })
         ));
     }

@@ -1032,6 +1032,9 @@ fn format_ref_view<'db>(db: &'db dyn MirDb, view: &RefView<'db>) -> String {
     match view {
         RefView::Whole => "whole".to_string(),
         RefView::EnumVariant(variant) => format!("variant {}", format_variant(db, *variant)),
+        RefView::StorageLane(lane) => {
+            format!("storage_lane {}:{}", lane.bit_offset, lane.bit_width)
+        }
     }
 }
 

@@ -1,4 +1,7 @@
-use common::indexmap::IndexMap;
+use common::{
+    indexmap::IndexMap,
+    layout::{StorageFieldShape, storage_fields_layout},
+};
 use num_bigint::BigUint;
 use num_traits::ToPrimitive;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -178,7 +181,14 @@ pub struct ContractLayoutEntry<'db> {
     pub ty: TyId<'db>,
     pub address_space: ProviderAddressSpace,
     pub value: ContractLayoutValue<'db>,
+    pub lane: Option<ContractLayoutLane>,
     pub kind: ContractLayoutEntryKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub struct ContractLayoutLane {
+    pub bit_offset: u16,
+    pub bit_width: u16,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
@@ -1289,6 +1299,37 @@ fn const_ty_to_usize<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<u
     }
 }
 
+fn storage_like_space(space: ProviderAddressSpace) -> bool {
+    matches!(
+        space,
+        ProviderAddressSpace::Storage | ProviderAddressSpace::Transient
+    )
+}
+
+fn storage_scalar_bit_width<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<u16> {
+    match ty.base_ty(db).data(db) {
+        TyData::TyBase(TyBase::Prim(prim)) => match prim {
+            PrimTy::Bool => Some(1),
+            PrimTy::U8 | PrimTy::I8 => Some(8),
+            PrimTy::U16 | PrimTy::I16 => Some(16),
+            PrimTy::U32 | PrimTy::I32 => Some(32),
+            PrimTy::U64 | PrimTy::I64 => Some(64),
+            PrimTy::U128 | PrimTy::I128 => Some(128),
+            PrimTy::U256 | PrimTy::I256 | PrimTy::Usize | PrimTy::Isize | PrimTy::String => {
+                Some(256)
+            }
+            PrimTy::Array
+            | PrimTy::Tuple(_)
+            | PrimTy::Ptr
+            | PrimTy::View
+            | PrimTy::BorrowMut
+            | PrimTy::BorrowRef => None,
+        },
+        TyData::TyBase(TyBase::Contract(_)) => Some(256),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WalkMode {
     Counted,
@@ -1340,6 +1381,7 @@ impl<'db> WalkOutput<'db> {
                 place,
                 ty,
                 offset: 0,
+                lane: None,
                 dimensions: dimensions.to_vec(),
                 strides: vec![0; dimensions.len()],
                 kind: InlineLayoutLeafKind::Field,
@@ -1360,6 +1402,7 @@ struct InlineLayoutLeaf<'db> {
     place: StoragePlace<'db>,
     ty: TyId<'db>,
     offset: usize,
+    lane: Option<ContractLayoutLane>,
     dimensions: Vec<LayoutIndexDimension<'db>>,
     strides: Vec<usize>,
     kind: InlineLayoutLeafKind,
@@ -2040,6 +2083,79 @@ impl<'db> FieldCollector<'db> {
         }
     }
 
+    fn walk_storage_struct_sequence(
+        &mut self,
+        items: impl IntoIterator<Item = (LayoutInstantiation<'db>, StoragePlace<'db>)>,
+        dimensions: &[LayoutIndexDimension<'db>],
+        mode: WalkMode,
+    ) -> WalkOutput<'db> {
+        let mut outputs = Vec::new();
+        let mut shapes = Vec::new();
+
+        for (instantiation, place) in items {
+            let direct_bit_width = storage_scalar_bit_width(self.db, instantiation.ty)
+                .filter(|bit_width| *bit_width < 256);
+            let output = self.walk_instantiation(&instantiation, place, dimensions, mode);
+            let Ok(span_words) = u64::try_from(output.inline_span) else {
+                self.push_error(ContractLayoutError::LayoutExtentOverflow);
+                continue;
+            };
+            let shape = if let Some(bit_width) = direct_bit_width {
+                debug_assert_eq!(output.inline_span, 1);
+                debug_assert_eq!(output.inline_leaves.len(), 1);
+                debug_assert_eq!(output.inline_leaves[0].offset, 0);
+                debug_assert!(output.inline_leaves[0].lane.is_none());
+                debug_assert_eq!(output.inline_leaves[0].kind, InlineLayoutLeafKind::Field);
+                StorageFieldShape::scalar(bit_width)
+            } else {
+                StorageFieldShape::aggregate(span_words)
+            };
+            shapes.push(shape);
+            outputs.push(output);
+        }
+
+        let Ok(layout) = storage_fields_layout(shapes) else {
+            self.push_error(ContractLayoutError::LayoutExtentOverflow);
+            return WalkOutput::empty();
+        };
+        let Ok(inline_span) = usize::try_from(layout.span_words) else {
+            self.push_error(ContractLayoutError::LayoutExtentOverflow);
+            return WalkOutput::empty();
+        };
+
+        let mut inline_leaves = Vec::new();
+        let mut events = Vec::new();
+        for (mut output, placement) in outputs.into_iter().zip(layout.placements) {
+            let Ok(word_offset) = usize::try_from(placement.word_offset) else {
+                self.push_error(ContractLayoutError::LayoutExtentOverflow);
+                continue;
+            };
+            for leaf in &mut output.inline_leaves {
+                let Some(offset) = leaf.offset.checked_add(word_offset) else {
+                    self.push_error(ContractLayoutError::LayoutExtentOverflow);
+                    continue;
+                };
+                leaf.offset = offset;
+                if placement.requires_read_modify_write
+                    && let Some(lane) = placement.lane
+                {
+                    leaf.lane = Some(ContractLayoutLane {
+                        bit_offset: lane.bit_offset,
+                        bit_width: lane.bit_width,
+                    });
+                }
+            }
+            inline_leaves.extend(output.inline_leaves);
+            events.extend(output.events);
+        }
+
+        WalkOutput {
+            inline_span,
+            inline_leaves,
+            events,
+        }
+    }
+
     fn walk_array(
         &mut self,
         ty: TyId<'db>,
@@ -2190,7 +2306,11 @@ impl<'db> FieldCollector<'db> {
                     let field_place = place.with_step(PlaceStep::StructField(field_idx as u32));
                     items.push((inst, field_place));
                 }
-                let mut output = self.walk_sequence(items, dimensions, mode);
+                let mut output = if storage_like_space(self.active_space) {
+                    self.walk_storage_struct_sequence(items, dimensions, mode)
+                } else {
+                    self.walk_sequence(items, dimensions, mode)
+                };
                 direct_events.append(&mut output.events);
                 output.events = direct_events;
                 output
@@ -2201,6 +2321,7 @@ impl<'db> FieldCollector<'db> {
                     place: place.clone(),
                     ty,
                     offset: 0,
+                    lane: None,
                     dimensions: dimensions.to_vec(),
                     strides: vec![0; dimensions.len()],
                     kind: InlineLayoutLeafKind::EnumTag,
@@ -3737,6 +3858,7 @@ fn inferred_parameter_entry<'db>(
         ty: occurrence_placeholder_ty(db, occurrence).unwrap_or(occurrence.placeholder),
         address_space,
         value,
+        lane: None,
         kind: ContractLayoutEntryKind::Parameter(ContractLayoutParameterOrigin::Inferred),
     }
 }
@@ -3778,6 +3900,7 @@ fn allocated_contract_layout_report<'db>(
                 ty: leaf.ty,
                 address_space: field.address_space,
                 value,
+                lane: leaf.lane,
                 kind,
             });
         }
@@ -3792,6 +3915,7 @@ fn allocated_contract_layout_report<'db>(
                 ty: occurrence.ty,
                 address_space: occurrence.space,
                 value: ContractLayoutValue::Scalar(occurrence.value),
+                lane: None,
                 kind: ContractLayoutEntryKind::Parameter(ContractLayoutParameterOrigin::Explicit),
             });
         }
@@ -3930,8 +4054,15 @@ pub fn validate_allocated_contract_layout<'db>(
             let Some(extent) = affine_family_extent(&leaf.dimensions, &leaf.strides) else {
                 return Err(LayoutInvariantError::InvalidFieldExtent { field: field.field });
             };
+            let invalid_lane = leaf.lane.is_some_and(|lane| {
+                lane.bit_width == 0
+                    || u32::from(lane.bit_width) > 256
+                    || u32::from(lane.bit_offset) + u32::from(lane.bit_width) > 256
+            }) || (leaf.lane.is_some()
+                && !storage_like_space(field.address_space));
             if leaf.place.field != field.field
                 || leaf.dimensions.iter().any(|dimension| dimension.len == 0)
+                || invalid_lane
                 || resolve_storage_place_with_dimensions(db, field, &leaf.place, &leaf.dimensions)
                     .is_none()
                 || leaf

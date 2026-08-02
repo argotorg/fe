@@ -208,13 +208,13 @@ impl<'db> BoundaryShapeMatcher<'db> {
                 RuntimeClassShape::Ref {
                     pointee: actual_pointee,
                     kind: RefShapeKind::Provider(space),
-                    view: RefView::Whole,
+                    view: RefView::Whole | RefView::StorageLane(_),
                 } => provider_spaces.contains(space) && **actual_pointee == *pointee,
                 RuntimeClassShape::RawAddr { .. } => *allow_raw_addr,
                 RuntimeClassShape::Scalar(_)
                 | RuntimeClassShape::AggregateValue { .. }
                 | RuntimeClassShape::Ref {
-                    view: RefView::EnumVariant(_),
+                    view: RefView::EnumVariant(_) | RefView::StorageLane(_),
                     ..
                 } => false,
             },
@@ -624,10 +624,10 @@ impl BoundaryMatcher {
                 RuntimeClass::Ref {
                     pointee: actual_pointee,
                     kind: RefKind::Provider { space, .. },
-                    view: RefView::Whole,
+                    view: RefView::Whole | RefView::StorageLane(_),
                 } => allow.provider_spaces.contains(space) && **actual_pointee == *pointee,
                 RuntimeClass::Ref {
-                    view: RefView::EnumVariant(_),
+                    view: RefView::EnumVariant(_) | RefView::StorageLane(_),
                     ..
                 } => false,
                 RuntimeClass::RawAddr { .. } => allow.allow_raw_addr,
@@ -946,6 +946,16 @@ mod tests {
         })
     }
 
+    fn u8_class<'db>() -> RuntimeClass<'db> {
+        RuntimeClass::Scalar(ScalarClass {
+            repr: ScalarRepr::Int {
+                bits: 8,
+                signed: false,
+            },
+            role: ScalarRole::Plain,
+        })
+    }
+
     fn raw_addr_class<'db>(space: AddressSpaceKind) -> RuntimeClass<'db> {
         RuntimeClass::RawAddr {
             space,
@@ -1019,6 +1029,7 @@ mod tests {
             db,
             LayoutKey::Struct(StructLayout {
                 fields: vec![word_class()].into(),
+                storage_field_packing: crate::runtime::StorageFieldPacking::WordAligned,
             }),
         )
     }
@@ -1153,6 +1164,34 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn borrow_like_boundary_accepts_storage_lane_provider_views() {
+        let db = DriverDataBase::default();
+        let pointee = u8_class();
+        let boundary = RuntimeBoundarySpec::BorrowLike {
+            pointee: pointee.clone(),
+            access: BorrowAccess::ReadWrite,
+            allow: default_borrow_transport_set(BorrowAccess::ReadWrite, AddressSpaceKind::Storage),
+        };
+        let class = ref_class(
+            pointee,
+            RefKind::Provider {
+                provider_ty: TyId::unit(&db),
+                space: AddressSpaceKind::Storage,
+            },
+            RefView::StorageLane(crate::runtime::StorageBitLane {
+                bit_offset: 8,
+                bit_width: 8,
+            }),
+        );
+
+        assert!(BoundaryMatcher::class_satisfies_boundary(&class, &boundary));
+        assert!(
+            BoundaryShapeMatcher::for_boundary(&boundary)
+                .matches_shape(&RuntimeClassShape::from_class(&class))
+        );
     }
 
     #[test]
