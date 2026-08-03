@@ -1,0 +1,112 @@
+use core::{AddressSpace, EffectHandle, EffectRef}
+use core::functional::Fn
+use ingot::Copy
+use std::evm::Evm
+
+struct Ptr<T> {
+    addr: u256,
+}
+
+impl<T> Copy for Ptr<T> {}
+
+impl<T> EffectHandle for Ptr<T> {
+    type Target = T
+    const SPACE: AddressSpace = AddressSpace::Memory
+
+    fn from_raw(_ raw: u256) -> Self {
+        Self { addr: raw }
+    }
+
+    fn raw(self) -> u256 {
+        self.addr
+    }
+}
+
+impl<T> EffectRef<T> for Ptr<T> {}
+
+struct Holder<T> {
+    ptr: Ptr<T>,
+}
+
+impl<T> Copy for Holder<T> {}
+
+fn read_target() -> u256 uses (target: u256) {
+    target
+}
+
+fn next_value() -> u256 uses (counter: mut u256) {
+    counter += 1
+    counter
+}
+
+fn read_ptr_raw() -> u256 uses (ptr: Ptr<u256>) {
+    ptr.raw()
+}
+
+fn read_through_value_effect_param() -> u256 uses (ptr: Ptr<u256>) {
+    let read_later = || read_ptr_raw()
+    read_later()
+}
+
+#[test]
+fn closure_retains_named_value_effect_provider() uses (evm: mut Evm) {
+    evm.mstore(addr: 0x100, value: 41)
+    let ptr: Ptr<u256> = Ptr { addr: 0x100 }
+    let read_later = with (ptr) {
+        || read_target()
+    }
+    assert(read_later() == 41)
+}
+
+#[test]
+fn closure_retains_projected_value_effect_provider() uses (evm: mut Evm) {
+    evm.mstore(addr: 0x120, value: 42)
+    let holder: Holder<u256> = Holder { ptr: Ptr { addr: 0x120 } }
+    let read_later = with (holder.ptr) {
+        || read_target()
+    }
+    assert(read_later() == 42)
+}
+
+#[test]
+fn closure_retains_value_effect_parameter() uses (evm: mut Evm) {
+    evm.mstore(addr: 0x140, value: 43)
+    let ptr: Ptr<u256> = Ptr { addr: 0x140 }
+    let raw = with (ptr) {
+        read_through_value_effect_param()
+    }
+    assert(raw == 0x140)
+}
+
+#[test]
+fn nested_closure_forwards_named_value_effect_provider() uses (evm: mut Evm) {
+    evm.mstore(addr: 0x160, value: 44)
+    let ptr: Ptr<u256> = Ptr { addr: 0x160 }
+    let outer = with (ptr) {
+        || {
+            let inner = || read_target()
+            inner()
+        }
+    }
+    assert(outer() == 44)
+}
+
+#[test]
+fn closure_may_create_its_own_temporary_effect_provider() {
+    let read_later = || with (45) {
+        read_target()
+    }
+    assert(read_later() == 45)
+}
+
+#[test]
+fn closure_evaluates_its_own_temporary_provider_per_call() {
+    let mut counter = 40
+    let read_later = with (mut counter) {
+        || with (next_value()) {
+            read_target()
+        }
+    }
+    assert(read_later() == 41)
+    assert(read_later() == 42)
+}

@@ -1,0 +1,13 @@
+struct Esc {
+    h: mut u256,
+    tag: u256,
+}
+
+fn id(e: own Esc) -> Esc {
+    e
+}
+
+pub fn dangle() -> Esc {
+    let mut x: u256 = 5
+    id(Esc { h: mut x, tag: 0 })
+}

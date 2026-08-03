@@ -1,0 +1,18 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/uninitialized_closure_capture.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/uninitialized_closure_capture.fe
+
+error[16-0007]: possibly uninitialized local in `fn capture`
+  ┌─ uninitialized_closure_capture.fe:5:16
+  │
+4 │     let mut value: u256
+  │         --------- `value` is declared without an initial value
+5 │     let read = || value
+  │                ^^^^^^^^ local `value` may be used before it is initialized
+
+
+=== EXIT CODE: 1 ===

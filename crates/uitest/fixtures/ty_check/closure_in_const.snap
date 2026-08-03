@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/closure_in_const.fe
+---
+error[8-0090]: closures cannot be used in const contexts
+  ┌─ closure_in_const.fe:2:14
+  │
+2 │     let _f = |_ value: own u256| -> u256 { value }
+  │              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ closures cannot be evaluated at compile time

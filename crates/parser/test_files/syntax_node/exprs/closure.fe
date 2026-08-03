@@ -1,0 +1,3 @@
+|value: own u256| -> u256 {
+    value + 1
+}

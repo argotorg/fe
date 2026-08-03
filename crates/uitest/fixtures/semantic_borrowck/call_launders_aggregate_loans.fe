@@ -1,0 +1,17 @@
+struct Esc {
+    h: mut u256,
+    tag: u256,
+}
+
+fn id(e: own Esc) -> Esc {
+    e
+}
+
+pub fn call_launders_aggregate_loans() {
+    let mut x: u256 = 0
+    let e2 = id(Esc { h: mut x, tag: 0 })
+    let m = mut x
+    m = 7
+    let hh = e2.h
+    hh = 9
+}

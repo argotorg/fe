@@ -11,7 +11,11 @@ use crate::analysis::{
         consts::demand_concrete_const_ty, enum_const, instance::SemanticInstance,
         reify_runtime_const_for_ty, sem_const_from_ty, struct_const, tuple_const,
     },
-    ty::ty_def::{BorrowKind, CapabilityKind, TyId},
+    ty::{
+        const_ty::CallableInputLayoutHoleOrigin,
+        ty_def::{BorrowKind, TyId},
+        ty_reaches_mut_borrow,
+    },
 };
 
 use super::{eval_const_ref, machine::try_eval_expr_to_const};
@@ -157,13 +161,23 @@ fn canonicalize_stmt<'db>(
             SStmtKind::Assign { dst: *dst, expr }
         }
         SStmtKind::Store { dst, src } => {
-            locals[dst.local.index()] = None;
-            // A store through a mut-borrow carrier also mutates the borrowed
-            // locals, so their cached constants are stale.
             let mut memo = vec![None; body.locals.len()];
             let mut visiting = FxHashSet::default();
-            for root in writable_local_roots(dst.local, local_defs, &mut memo, &mut visiting) {
-                locals[root.index()] = None;
+            // A store through a mut-borrow carrier also mutates the borrowed
+            // locals, so their cached constants are stale.
+            invalidate_writable_local(dst.local, locals, local_defs, &mut memo, &mut visiting);
+            // Rebinding a capability field can install either a capability
+            // directly or an aggregate which contains one. Its pointees then
+            // become reachable through later field reads which are not
+            // represented in `local_defs`. Forget those pointees now so a
+            // subsequent write through the replacement cannot leave a stale
+            // compile-time value for the source local.
+            if body
+                .locals
+                .get(src.value.index())
+                .is_some_and(|local| ty_reaches_mut_borrow(db, local.ty))
+            {
+                invalidate_writable_local(src.value, locals, local_defs, &mut memo, &mut visiting);
             }
             SStmtKind::Store {
                 dst: dst.clone(),
@@ -195,34 +209,60 @@ fn invalidate_mutated_call_locals<'db>(
     body: &SemanticBody<'db>,
     local_defs: &LocalDefs<'db>,
 ) {
-    let SExpr::Call { callee, args, .. } = expr else {
+    let SExpr::Call {
+        callee,
+        args,
+        effect_args,
+        ..
+    } = expr
+    else {
         return;
     };
     let mut memo = vec![None; body.locals.len()];
     let mut visiting = FxHashSet::default();
     for (idx, arg) in args.iter().enumerate() {
-        if !callee_arg_is_mutable(db, *callee, idx) {
+        if !callee_arg_reaches_mut_borrow(db, *callee, idx) {
             continue;
         }
-        for root in writable_local_roots(arg.value, local_defs, &mut memo, &mut visiting) {
-            locals[root.index()] = None;
+        invalidate_writable_local(arg.value, locals, local_defs, &mut memo, &mut visiting);
+    }
+    for arg in effect_args {
+        if !arg.required_mut {
+            continue;
         }
+        let local = match &arg.arg {
+            crate::analysis::semantic::SEffectArgValue::Place(place) => place.local,
+            crate::analysis::semantic::SEffectArgValue::Value(value) => value.value,
+        };
+        invalidate_writable_local(local, locals, local_defs, &mut memo, &mut visiting);
     }
 }
 
-fn callee_arg_is_mutable<'db>(
+fn invalidate_writable_local<'db>(
+    local: crate::analysis::semantic::SLocalId,
+    locals: &mut LocalConstMap<'db>,
+    local_defs: &LocalDefs<'db>,
+    memo: &mut [Option<Vec<crate::analysis::semantic::SLocalId>>],
+    visiting: &mut FxHashSet<crate::analysis::semantic::SLocalId>,
+) {
+    locals[local.index()] = None;
+    for root in writable_local_roots(local, local_defs, memo, visiting) {
+        locals[root.index()] = None;
+    }
+}
+
+fn callee_arg_reaches_mut_borrow<'db>(
     db: &'db dyn HirAnalysisDb,
     callee: SemanticCalleeRef<'db>,
     idx: usize,
 ) -> bool {
     let callee = SemanticInstance::new(db, callee.key);
-    let typed_body = callee.key(db).typed_body(db);
-    typed_body.param_binding(idx).is_some_and(|binding| {
-        matches!(
-            typed_body.binding_ty(db, binding).as_capability(db),
-            Some((CapabilityKind::Mut, _))
-        )
-    })
+    callee
+        .key(db)
+        .callable_body(db)
+        .param_binding(db, idx)
+        .map(|binding| callee.normalized_binding_ty(db, binding))
+        .is_some_and(|ty| ty_reaches_mut_borrow(db, ty))
 }
 
 fn writable_local_roots<'db>(
@@ -241,34 +281,86 @@ fn writable_local_roots<'db>(
     let mut roots = FxHashSet::default();
     for expr in &local_defs[local.index()] {
         match expr {
-            SExpr::Borrow {
-                place,
-                kind: BorrowKind::Mut,
-                ..
-            } => {
-                roots.insert(place.local);
+            SExpr::Borrow { place, kind, .. } => {
+                if *kind == BorrowKind::Mut {
+                    roots.insert(place.local);
+                }
+                // An immutable aggregate borrow can still expose mutable
+                // capabilities stored in the borrowed value. Follow its value
+                // graph so a later write through one of those capabilities
+                // invalidates the pointee's cached constant.
+                roots.extend(writable_local_roots(
+                    place.local,
+                    local_defs,
+                    memo,
+                    visiting,
+                ));
             }
             SExpr::Forward(src) | SExpr::UseValue(src) => {
                 roots.extend(writable_local_roots(src.value, local_defs, memo, visiting));
             }
-            SExpr::ReadPlace { .. } => {}
+            SExpr::ArrayRepeat { value, .. } => {
+                roots.extend(writable_local_roots(
+                    value.value,
+                    local_defs,
+                    memo,
+                    visiting,
+                ));
+            }
+            SExpr::AggregateMake { fields, .. } | SExpr::EnumMake { fields, .. } => {
+                for field in fields {
+                    roots.extend(writable_local_roots(
+                        field.value,
+                        local_defs,
+                        memo,
+                        visiting,
+                    ));
+                }
+            }
+            SExpr::Field { base, .. } | SExpr::Index { base, .. } => {
+                roots.extend(writable_local_roots(base.value, local_defs, memo, visiting));
+            }
+            SExpr::ExtractEnumField { value, .. } => {
+                roots.extend(writable_local_roots(
+                    value.value,
+                    local_defs,
+                    memo,
+                    visiting,
+                ));
+            }
+            SExpr::Call {
+                args,
+                return_sources,
+                ..
+            } => {
+                for source in return_sources {
+                    let arg = match source.origin {
+                        CallableInputLayoutHoleOrigin::Receiver => args.first(),
+                        CallableInputLayoutHoleOrigin::ValueParam(idx) => args.get(idx),
+                        CallableInputLayoutHoleOrigin::Effect(_) => None,
+                    };
+                    if let Some(arg) = arg {
+                        roots.extend(writable_local_roots(arg.value, local_defs, memo, visiting));
+                    }
+                }
+            }
+            SExpr::ReadPlace { place, .. } => {
+                roots.extend(writable_local_roots(
+                    place.local,
+                    local_defs,
+                    memo,
+                    visiting,
+                ));
+            }
             SExpr::CodeRegionRef { .. }
             | SExpr::Const(_)
             | SExpr::Unary { .. }
             | SExpr::Binary { .. }
             | SExpr::Cast { .. }
-            | SExpr::ArrayRepeat { .. }
-            | SExpr::AggregateMake { .. }
-            | SExpr::EnumMake { .. }
-            | SExpr::Field { .. }
-            | SExpr::Index { .. }
-            | SExpr::Borrow { .. }
             | SExpr::GetEnumTag { .. }
             | SExpr::IsEnumVariant { .. }
-            | SExpr::ExtractEnumField { .. }
             | SExpr::CodeRegionOffset { .. }
-            | SExpr::CodeRegionLen { .. }
-            | SExpr::Call { .. } => {}
+            | SExpr::CodeRegionLen { .. } => {}
         }
     }
 

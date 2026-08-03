@@ -6,8 +6,10 @@ use super::{
     const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
     trait_def::{ImplementorId, TraitInstId},
     trait_resolution::{PredicateListId, TraitGoalSolution, TraitSolverQuery},
-    ty_check::{EffectArg, ExprProp, LocalBinding, ResolvedEffectArg},
-    ty_def::{AssocTy, InvalidCause, PrimTy, TyBase, TyData, TyFlags, TyId, TyParam, TyVar},
+    ty_check::{ClosureCapture, ClosureInfo, EffectArg, ExprProp, LocalBinding, ResolvedEffectArg},
+    ty_def::{
+        AssocTy, ClosureTy, InvalidCause, PrimTy, TyBase, TyData, TyFlags, TyId, TyParam, TyVar,
+    },
 };
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::place::{Place, PlaceBase, PlaceProjection};
@@ -66,6 +68,11 @@ pub trait TyVisitor<'db> {
     fn visit_func(&mut self, func: CallableDef<'db>) {}
 
     #[allow(unused_variables)]
+    fn visit_closure(&mut self, closure: ClosureTy<'db>) {
+        walk_closure_ty(self, closure);
+    }
+
+    #[allow(unused_variables)]
     fn visit_const_ty(&mut self, const_ty: &ConstTyId<'db>) {
         walk_const_ty(self, const_ty)
     }
@@ -100,7 +107,18 @@ where
         TyBase::Adt(adt) => visitor.visit_adt(*adt),
         TyBase::Contract(c) => visitor.visit_contract(*c),
         TyBase::Func(func) => visitor.visit_func(*func),
+        TyBase::Closure(closure) => visitor.visit_closure(*closure),
     }
+}
+
+pub fn walk_closure_ty<'db, V>(visitor: &mut V, closure: ClosureTy<'db>)
+where
+    V: TyVisitor<'db> + ?Sized,
+{
+    closure.parent_args(visitor.db()).visit_with(visitor);
+    closure.captures(visitor.db()).visit_with(visitor);
+    closure.params(visitor.db()).visit_with(visitor);
+    closure.ret_ty(visitor.db()).visit_with(visitor);
 }
 
 pub fn walk_const_ty<'db, V>(visitor: &mut V, const_ty: &ConstTyId<'db>)
@@ -153,7 +171,9 @@ where
             }
             ConstExpr::LocalBinding(_) => {}
         },
-        ConstTyData::UnEvaluated { .. } => {}
+        ConstTyData::UnEvaluated { generic_args, .. } => {
+            generic_args.visit_with(visitor);
+        }
     }
 }
 
@@ -279,6 +299,27 @@ impl<'db> TyVisitable<'db> for LocalBinding<'db> {
             LocalBinding::Param { ty, .. } => ty.visit_with(visitor),
             LocalBinding::Local { .. } | LocalBinding::EffectParam { .. } => {}
         }
+    }
+}
+
+impl<'db> TyVisitable<'db> for ClosureCapture<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        self.binding.visit_with(visitor);
+        self.ty.visit_with(visitor);
+    }
+}
+
+impl<'db> TyVisitable<'db> for ClosureInfo<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        self.params.visit_with(visitor);
+        self.captures.visit_with(visitor);
+        TyId::closure(visitor.db(), self.ty).visit_with(visitor);
     }
 }
 

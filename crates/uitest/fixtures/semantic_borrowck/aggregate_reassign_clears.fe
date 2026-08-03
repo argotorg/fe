@@ -1,0 +1,9 @@
+pub fn reassign_clears() {
+    let a: u256 = 0
+    let mut b: u256 = 1
+    let mut t: (ref u256, u256) = (ref b, 0)
+    t = (ref a, 1)
+    let m = mut b
+    m = 2
+    let _k = t
+}

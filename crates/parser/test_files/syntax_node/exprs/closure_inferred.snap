@@ -1,0 +1,494 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/exprs/closure_inferred.fe
+---
+Root@0..652
+  BlockExpr@0..651
+    LBrace@0..1 "{"
+    Newline@1..2 "\n"
+    WhiteSpace@2..6 "    "
+    LetStmt@6..33
+      LetKw@6..9 "let"
+      WhiteSpace@9..10 " "
+      PathPat@10..18
+        Path@10..18
+          PathSegment@10..18
+            Ident@10..18 "inferred"
+      WhiteSpace@18..19 " "
+      Eq@19..20 "="
+      WhiteSpace@20..21 " "
+      ClosureExpr@21..33
+        FuncParamList@21..27
+          Pipe@21..22 "|"
+          FnParam@22..23
+            Ident@22..23 "a"
+          Comma@23..24 ","
+          WhiteSpace@24..25 " "
+          FnParam@25..26
+            Ident@25..26 "b"
+          Pipe@26..27 "|"
+        WhiteSpace@27..28 " "
+        BinExpr@28..33
+          PathExpr@28..29
+            Path@28..29
+              PathSegment@28..29
+                Ident@28..29 "a"
+          WhiteSpace@29..30 " "
+          Plus@30..31 "+"
+          WhiteSpace@31..32 " "
+          PathExpr@32..33
+            Path@32..33
+              PathSegment@32..33
+                Ident@32..33 "b"
+    Newline@33..34 "\n"
+    WhiteSpace@34..38 "    "
+    LetStmt@38..54
+      LetKw@38..41 "let"
+      WhiteSpace@41..42 " "
+      PathPat@42..46
+        Path@42..46
+          PathSegment@42..46
+            Ident@42..46 "zero"
+      WhiteSpace@46..47 " "
+      Eq@47..48 "="
+      WhiteSpace@48..49 " "
+      ClosureExpr@49..54
+        Pipe2@49..51 "||"
+        WhiteSpace@51..52 " "
+        LitExpr@52..54
+          Lit@52..54
+            Int@52..54 "42"
+    Newline@54..55 "\n"
+    WhiteSpace@55..59 "    "
+    LetStmt@59..106
+      LetKw@59..62 "let"
+      WhiteSpace@62..63 " "
+      PathPat@63..68
+        Path@63..68
+          PathSegment@63..68
+            Ident@63..68 "modes"
+      WhiteSpace@68..69 " "
+      Eq@69..70 "="
+      WhiteSpace@70..71 " "
+      ClosureExpr@71..106
+        FuncParamList@71..104
+          Pipe@71..72 "|"
+          FnParam@72..78
+            Ident@72..73 "a"
+            Colon@73..74 ":"
+            WhiteSpace@74..75 " "
+            ModeType@75..78
+              OwnKw@75..78 "own"
+          Comma@78..79 ","
+          WhiteSpace@79..80 " "
+          FnParam@80..86
+            Ident@80..81 "b"
+            Colon@81..82 ":"
+            WhiteSpace@82..83 " "
+            ModeType@83..86
+              RefKw@83..86 "ref"
+          Comma@86..87 ","
+          WhiteSpace@87..88 " "
+          FnParam@88..94
+            Ident@88..89 "c"
+            Colon@89..90 ":"
+            WhiteSpace@90..91 " "
+            ModeType@91..94
+              MutKw@91..94 "mut"
+          Comma@94..95 ","
+          WhiteSpace@95..96 " "
+          FnParam@96..103
+            Ident@96..97 "d"
+            Colon@97..98 ":"
+            WhiteSpace@98..99 " "
+            ModeType@99..103
+              Ident@99..103 "view"
+          Pipe@103..104 "|"
+        WhiteSpace@104..105 " "
+        PathExpr@105..106
+          Path@105..106
+            PathSegment@105..106
+              Ident@105..106 "a"
+    Newline@106..107 "\n"
+    WhiteSpace@107..111 "    "
+    LetStmt@111..168
+      LetKw@111..114 "let"
+      WhiteSpace@114..115 " "
+      PathPat@115..120
+        Path@115..120
+          PathSegment@115..120
+            Ident@115..120 "typed"
+      WhiteSpace@120..121 " "
+      Eq@121..122 "="
+      WhiteSpace@122..123 " "
+      ClosureExpr@123..168
+        FuncParamList@123..150
+          Pipe@123..124 "|"
+          FnParam@124..135
+            Ident@124..125 "a"
+            Colon@125..126 ":"
+            WhiteSpace@126..127 " "
+            ModeType@127..135
+              OwnKw@127..130 "own"
+              WhiteSpace@130..131 " "
+              PathType@131..135
+                Path@131..135
+                  PathSegment@131..135
+                    Ident@131..135 "u256"
+          Comma@135..136 ","
+          WhiteSpace@136..137 " "
+          FnParam@137..149
+            Ident@137..138 "b"
+            Colon@138..139 ":"
+            WhiteSpace@139..140 " "
+            ModeType@140..149
+              Ident@140..144 "view"
+              WhiteSpace@144..145 " "
+              PathType@145..149
+                Path@145..149
+                  PathSegment@145..149
+                    Ident@145..149 "u256"
+          Pipe@149..150 "|"
+        WhiteSpace@150..151 " "
+        Arrow@151..153 "->"
+        WhiteSpace@153..154 " "
+        PathType@154..158
+          Path@154..158
+            PathSegment@154..158
+              Ident@154..158 "u256"
+        WhiteSpace@158..159 " "
+        BlockExpr@159..168
+          LBrace@159..160 "{"
+          WhiteSpace@160..161 " "
+          ExprStmt@161..166
+            BinExpr@161..166
+              PathExpr@161..162
+                Path@161..162
+                  PathSegment@161..162
+                    Ident@161..162 "a"
+              WhiteSpace@162..163 " "
+              Plus@163..164 "+"
+              WhiteSpace@164..165 " "
+              PathExpr@165..166
+                Path@165..166
+                  PathSegment@165..166
+                    Ident@165..166 "b"
+          WhiteSpace@166..167 " "
+          RBrace@167..168 "}"
+    Newline@168..169 "\n"
+    WhiteSpace@169..173 "    "
+    LetStmt@173..206
+      LetKw@173..176 "let"
+      WhiteSpace@176..177 " "
+      PathPat@177..182
+        Path@177..182
+          PathSegment@177..182
+            Ident@177..182 "never"
+      WhiteSpace@182..183 " "
+      Eq@183..184 "="
+      WhiteSpace@184..185 " "
+      ClosureExpr@185..206
+        FuncParamList@185..200
+          Pipe@185..186 "|"
+          FnParam@186..199
+            Ident@186..191 "value"
+            Colon@191..192 ":"
+            WhiteSpace@192..193 " "
+            ModeType@193..199
+              Ident@193..197 "view"
+              WhiteSpace@197..198 " "
+              NeverType@198..199
+                Not@198..199 "!"
+          Pipe@199..200 "|"
+        WhiteSpace@200..201 " "
+        PathExpr@201..206
+          Path@201..206
+            PathSegment@201..206
+              Ident@201..206 "value"
+    Newline@206..207 "\n"
+    WhiteSpace@207..211 "    "
+    LetStmt@211..263
+      LetKw@211..214 "let"
+      WhiteSpace@214..215 " "
+      PathPat@215..228
+        Path@215..228
+          PathSegment@215..228
+            Ident@215..228 "multiline_own"
+      WhiteSpace@228..229 " "
+      Eq@229..230 "="
+      WhiteSpace@230..231 " "
+      ClosureExpr@231..263
+        FuncParamList@231..257
+          Pipe@231..232 "|"
+          Newline@232..233 "\n"
+          WhiteSpace@233..241 "        "
+          FnParam@241..251
+            Ident@241..246 "value"
+            Colon@246..247 ":"
+            WhiteSpace@247..248 " "
+            ModeType@248..251
+              OwnKw@248..251 "own"
+          Newline@251..252 "\n"
+          WhiteSpace@252..256 "    "
+          Pipe@256..257 "|"
+        WhiteSpace@257..258 " "
+        PathExpr@258..263
+          Path@258..263
+            PathSegment@258..263
+              Ident@258..263 "value"
+    Newline@263..264 "\n"
+    WhiteSpace@264..268 "    "
+    LetStmt@268..320
+      LetKw@268..271 "let"
+      WhiteSpace@271..272 " "
+      PathPat@272..285
+        Path@272..285
+          PathSegment@272..285
+            Ident@272..285 "multiline_ref"
+      WhiteSpace@285..286 " "
+      Eq@286..287 "="
+      WhiteSpace@287..288 " "
+      ClosureExpr@288..320
+        FuncParamList@288..314
+          Pipe@288..289 "|"
+          Newline@289..290 "\n"
+          WhiteSpace@290..298 "        "
+          FnParam@298..308
+            Ident@298..303 "value"
+            Colon@303..304 ":"
+            WhiteSpace@304..305 " "
+            ModeType@305..308
+              RefKw@305..308 "ref"
+          Newline@308..309 "\n"
+          WhiteSpace@309..313 "    "
+          Pipe@313..314 "|"
+        WhiteSpace@314..315 " "
+        PathExpr@315..320
+          Path@315..320
+            PathSegment@315..320
+              Ident@315..320 "value"
+    Newline@320..321 "\n"
+    WhiteSpace@321..325 "    "
+    LetStmt@325..377
+      LetKw@325..328 "let"
+      WhiteSpace@328..329 " "
+      PathPat@329..342
+        Path@329..342
+          PathSegment@329..342
+            Ident@329..342 "multiline_mut"
+      WhiteSpace@342..343 " "
+      Eq@343..344 "="
+      WhiteSpace@344..345 " "
+      ClosureExpr@345..377
+        FuncParamList@345..371
+          Pipe@345..346 "|"
+          Newline@346..347 "\n"
+          WhiteSpace@347..355 "        "
+          FnParam@355..365
+            Ident@355..360 "value"
+            Colon@360..361 ":"
+            WhiteSpace@361..362 " "
+            ModeType@362..365
+              MutKw@362..365 "mut"
+          Newline@365..366 "\n"
+          WhiteSpace@366..370 "    "
+          Pipe@370..371 "|"
+        WhiteSpace@371..372 " "
+        PathExpr@372..377
+          Path@372..377
+            PathSegment@372..377
+              Ident@372..377 "value"
+    Newline@377..378 "\n"
+    WhiteSpace@378..382 "    "
+    LetStmt@382..436
+      LetKw@382..385 "let"
+      WhiteSpace@385..386 " "
+      PathPat@386..400
+        Path@386..400
+          PathSegment@386..400
+            Ident@386..400 "multiline_view"
+      WhiteSpace@400..401 " "
+      Eq@401..402 "="
+      WhiteSpace@402..403 " "
+      ClosureExpr@403..436
+        FuncParamList@403..430
+          Pipe@403..404 "|"
+          Newline@404..405 "\n"
+          WhiteSpace@405..413 "        "
+          FnParam@413..424
+            Ident@413..418 "value"
+            Colon@418..419 ":"
+            WhiteSpace@419..420 " "
+            ModeType@420..424
+              Ident@420..424 "view"
+          Newline@424..425 "\n"
+          WhiteSpace@425..429 "    "
+          Pipe@429..430 "|"
+        WhiteSpace@430..431 " "
+        PathExpr@431..436
+          Path@431..436
+            PathSegment@431..436
+              Ident@431..436 "value"
+    Newline@436..437 "\n"
+    WhiteSpace@437..441 "    "
+    LetStmt@441..473
+      LetKw@441..444 "let"
+      WhiteSpace@444..445 " "
+      PathPat@445..452
+        Path@445..452
+          PathSegment@445..452
+            Ident@445..452 "ignored"
+      WhiteSpace@452..453 " "
+      Eq@453..454 "="
+      WhiteSpace@454..455 " "
+      ClosureExpr@455..473
+        FuncParamList@455..467
+          Pipe@455..456 "|"
+          FnParam@456..463
+            Underscore@456..457 "_"
+            WhiteSpace@457..458 " "
+            Ident@458..463 "value"
+          Comma@463..464 ","
+          WhiteSpace@464..465 " "
+          FnParam@465..466
+            Underscore@465..466 "_"
+          Pipe@466..467 "|"
+        WhiteSpace@467..468 " "
+        PathExpr@468..473
+          Path@468..473
+            PathSegment@468..473
+              Ident@468..473 "value"
+    Newline@473..474 "\n"
+    WhiteSpace@474..478 "    "
+    LetStmt@478..520
+      LetKw@478..481 "let"
+      WhiteSpace@481..482 " "
+      PathPat@482..490
+        Path@482..490
+          PathSegment@482..490
+            Ident@482..490 "trailing"
+      WhiteSpace@490..491 " "
+      Eq@491..492 "="
+      WhiteSpace@492..493 " "
+      ClosureExpr@493..520
+        FuncParamList@493..507
+          Pipe@493..494 "|"
+          FnParam@494..498
+            Ident@494..498 "left"
+          Comma@498..499 ","
+          WhiteSpace@499..500 " "
+          FnParam@500..505
+            Ident@500..505 "right"
+          Comma@505..506 ","
+          Pipe@506..507 "|"
+        WhiteSpace@507..508 " "
+        BinExpr@508..520
+          PathExpr@508..512
+            Path@508..512
+              PathSegment@508..512
+                Ident@508..512 "left"
+          WhiteSpace@512..513 " "
+          Plus@513..514 "+"
+          WhiteSpace@514..515 " "
+          PathExpr@515..520
+            Path@515..520
+              PathSegment@515..520
+                Ident@515..520 "right"
+    Newline@520..521 "\n"
+    WhiteSpace@521..525 "    "
+    LetStmt@525..566
+      LetKw@525..528 "let"
+      WhiteSpace@528..529 " "
+      PathPat@529..539
+        Path@529..539
+          PathSegment@529..539
+            Ident@529..539 "suppressed"
+      WhiteSpace@539..540 " "
+      Eq@540..541 "="
+      WhiteSpace@541..542 " "
+      ClosureExpr@542..566
+        FuncParamList@542..560
+          Pipe@542..543 "|"
+          FnParam@543..550
+            Underscore@543..544 "_"
+            WhiteSpace@544..545 " "
+            Ident@545..550 "value"
+          Comma@550..551 ","
+          WhiteSpace@551..552 " "
+          FnParam@552..558
+            Underscore@552..553 "_"
+            Colon@553..554 ":"
+            WhiteSpace@554..555 " "
+            ModeType@555..558
+              OwnKw@555..558 "own"
+          Comma@558..559 ","
+          Pipe@559..560 "|"
+        WhiteSpace@560..561 " "
+        PathExpr@561..566
+          Path@561..566
+            PathSegment@561..566
+              Ident@561..566 "value"
+    Newline@566..567 "\n"
+    WhiteSpace@567..571 "    "
+    LetStmt@571..604
+      LetKw@571..574 "let"
+      WhiteSpace@574..575 " "
+      PathPat@575..585
+        Path@575..585
+          PathSegment@575..585
+            Ident@575..585 "zero_logic"
+      WhiteSpace@585..586 " "
+      Eq@586..587 "="
+      WhiteSpace@587..588 " "
+      ClosureExpr@588..604
+        Pipe2@588..590 "||"
+        WhiteSpace@590..591 " "
+        BinExpr@591..604
+          LitExpr@591..595
+            Lit@591..595
+              TrueKw@591..595 "true"
+          WhiteSpace@595..596 " "
+          Pipe2@596..598 "||"
+          WhiteSpace@598..599 " "
+          LitExpr@599..604
+            Lit@599..604
+              FalseKw@599..604 "false"
+    Newline@604..605 "\n"
+    WhiteSpace@605..609 "    "
+    LetStmt@609..649
+      LetKw@609..612 "let"
+      WhiteSpace@612..613 " "
+      PathPat@613..620
+        Path@613..620
+          PathSegment@613..620
+            Ident@613..620 "bitwise"
+      WhiteSpace@620..621 " "
+      Eq@621..622 "="
+      WhiteSpace@622..623 " "
+      ClosureExpr@623..649
+        FuncParamList@623..636
+          Pipe@623..624 "|"
+          FnParam@624..628
+            Ident@624..628 "left"
+          Comma@628..629 ","
+          WhiteSpace@629..630 " "
+          FnParam@630..635
+            Ident@630..635 "right"
+          Pipe@635..636 "|"
+        WhiteSpace@636..637 " "
+        BinExpr@637..649
+          PathExpr@637..641
+            Path@637..641
+              PathSegment@637..641
+                Ident@637..641 "left"
+          WhiteSpace@641..642 " "
+          Pipe@642..643 "|"
+          WhiteSpace@643..644 " "
+          PathExpr@644..649
+            Path@644..649
+              PathSegment@644..649
+                Ident@644..649 "right"
+    Newline@649..650 "\n"
+    RBrace@650..651 "}"
+  Newline@651..652 "\n"

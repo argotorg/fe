@@ -1,0 +1,17 @@
+struct Inner {
+    h: mut u256,
+}
+
+struct Outer {
+    inner: Inner,
+    tag: u256,
+}
+
+pub fn nested_holds() {
+    let mut x: u256 = 0
+    let i = Inner { h: mut x }
+    let o = Outer { inner: i, tag: 0 }
+    let r = ref x
+    let _k1 = o
+    let _k2 = r
+}

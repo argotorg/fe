@@ -319,3 +319,26 @@ contract EmptyMemorySpaceField {
 contract EmptyCalldataSpaceField {
     ptr: std::evm::CalldataPtr<Empty>
 }
+
+contract InitViaForwardedKnownConditionEffect {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        let known = true
+        let forwarded = known
+        if forwarded {
+            init_effect(v: v)
+        }
+    }
+}
+
+contract InitViaReachableBorrowCarrierDefinition {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        let mut local = 0
+        let known = true
+        let target = if known { mut x } else { mut local }
+        target = v
+    }
+}

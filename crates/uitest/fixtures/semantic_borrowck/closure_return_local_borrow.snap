@@ -1,0 +1,17 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/closure_return_local_borrow.fe
+---
+error[16-0003]: invalid return borrow in `fn <closure>`
+  ┌─ closure_return_local_borrow.fe:1:38
+  │
+1 │   pub fn closure_return_local_borrow() {
+  │ ╭──────────────────────────────────────^
+2 │ │     let g = |_ unit: own ()| -> mut u256 {
+3 │ │         let mut x: u256 = 5
+4 │ │         mut x
+  · │
+7 │ │     m = 7
+8 │ │ }
+  │ ╰─^ cannot return a borrow to local `x`

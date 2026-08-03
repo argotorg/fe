@@ -16,7 +16,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::SmallVec;
 use trait_def::impls_for_trait_def;
 use trait_resolution::constraint::super_trait_cycle;
-use ty_def::{BorrowKind, InvalidCause, TyData, TyId};
+use ty_def::{BorrowKind, CapabilityKind, InvalidCause, TyData, TyId};
 use ty_lower::{collect_generic_params, lower_type_alias};
 
 use crate::analysis::name_resolution::{PathRes, resolve_path};
@@ -31,6 +31,7 @@ pub mod adt_def;
 pub mod assoc_const;
 pub mod binder;
 pub mod canonical;
+pub mod closure;
 pub(crate) mod const_check;
 pub mod const_expr;
 pub mod const_ty;
@@ -110,6 +111,13 @@ pub fn ty_is_copy<'db>(
     // Built-in primitives are always `Copy`, independent of trait solving.
     if ty == TyId::unit(db) || ty.is_bool(db) || ty.is_integral(db) {
         return true;
+    }
+
+    if let Some(closure) = ty.as_closure(db) {
+        return closure
+            .captures(db)
+            .iter()
+            .all(|capture| ty_is_copy(db, scope, *capture, assumptions));
     }
 
     ty_is_copy_query(db, scope, ty, assumptions)
@@ -200,33 +208,75 @@ fn copy_impl_self_may_match<'db>(
     impl_base == target_base
 }
 
-pub fn ty_is_noesc<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+fn ty_contains_capability<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    matches: fn(CapabilityKind) -> bool,
+    descend_through_unmatched_capabilities: bool,
+) -> bool {
     fn inner<'db>(
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
+        matches: fn(CapabilityKind) -> bool,
+        descend_through_unmatched_capabilities: bool,
         visiting: &mut FxHashSet<TyId<'db>>,
     ) -> bool {
         if !visiting.insert(ty) {
             return false;
         }
 
-        let result = if ty.as_capability(db).is_some() {
-            true
+        let result = if let Some((kind, inner_ty)) = ty.as_capability(db) {
+            matches(kind)
+                || descend_through_unmatched_capabilities
+                    && inner(
+                        db,
+                        inner_ty,
+                        matches,
+                        descend_through_unmatched_capabilities,
+                        visiting,
+                    )
         } else if ty.is_tuple(db) {
-            ty.field_types(db)
-                .into_iter()
-                .any(|field_ty| inner(db, field_ty, visiting))
+            ty.field_types(db).into_iter().any(|field_ty| {
+                inner(
+                    db,
+                    field_ty,
+                    matches,
+                    descend_through_unmatched_capabilities,
+                    visiting,
+                )
+            })
+        } else if let Some(closure) = ty.as_closure(db) {
+            closure.captures(db).iter().copied().any(|field_ty| {
+                inner(
+                    db,
+                    field_ty,
+                    matches,
+                    descend_through_unmatched_capabilities,
+                    visiting,
+                )
+            })
         } else if ty.is_array(db) {
             let (_, args) = ty.decompose_ty_app(db);
-            args.first()
-                .copied()
-                .is_some_and(|elem_ty| inner(db, elem_ty, visiting))
+            args.first().copied().is_some_and(|elem_ty| {
+                inner(
+                    db,
+                    elem_ty,
+                    matches,
+                    descend_through_unmatched_capabilities,
+                    visiting,
+                )
+            })
         } else if let Some(adt_def) = ty.adt_def(db) {
             match adt_def.adt_ref(db) {
-                AdtRef::Struct(_) => ty
-                    .field_types(db)
-                    .into_iter()
-                    .any(|field_ty| inner(db, field_ty, visiting)),
+                AdtRef::Struct(_) => ty.field_types(db).into_iter().any(|field_ty| {
+                    inner(
+                        db,
+                        field_ty,
+                        matches,
+                        descend_through_unmatched_capabilities,
+                        visiting,
+                    )
+                }),
                 AdtRef::Enum(_) => {
                     let args = ty.generic_args(db);
                     adt_def
@@ -244,6 +294,8 @@ pub fn ty_is_noesc<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
                                         field_idx,
                                         args,
                                     ),
+                                    matches,
+                                    descend_through_unmatched_capabilities,
                                     visiting,
                                 )
                             })
@@ -260,8 +312,32 @@ pub fn ty_is_noesc<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
 
     match ty.data(db) {
         TyData::TyVar(_) | TyData::Invalid(_) => false,
-        _ => inner(db, ty, &mut FxHashSet::default()),
+        _ => inner(
+            db,
+            ty,
+            matches,
+            descend_through_unmatched_capabilities,
+            &mut FxHashSet::default(),
+        ),
     }
+}
+
+pub fn ty_is_noesc<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    ty_contains_capability(db, ty, |_| true, false)
+}
+
+/// Returns whether `ty` transitively contains a `ref` or `mut` handle. A view
+/// carrier is transparent so aggregates passed through view parameters retain
+/// their nested borrow classification without making an ordinary viewed value
+/// noesc by itself.
+pub fn ty_contains_borrow<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    ty_contains_capability(db, ty, |kind| kind != CapabilityKind::View, true)
+}
+
+/// Returns whether following aggregate fields and capability pointees from
+/// `ty` can reach a mutable borrow.
+pub(crate) fn ty_reaches_mut_borrow<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    ty_contains_capability(db, ty, |kind| kind == CapabilityKind::Mut, true)
 }
 
 /// An analysis pass for type definitions.
@@ -770,7 +846,8 @@ mod tests {
 
     use super::{
         PredicateListId, TraitSolveCx, adt_def::AdtRef, copy_goal_has_possible_impl,
-        corelib::resolve_core_trait, trait_def::TraitInstId, ty_def::TyId, ty_is_copy,
+        corelib::resolve_core_trait, trait_def::TraitInstId, ty_contains_borrow, ty_def::TyId,
+        ty_is_copy, ty_reaches_mut_borrow,
     };
     use crate::{hir_def::ItemKind, test_db::HirAnalysisTestDb};
 
@@ -842,5 +919,18 @@ impl Copy for Explicit {}
 
         assert!(copy_goal_has_possible_impl(&db, solve_cx, copy_explicit));
         assert!(ty_is_copy(&db, top_mod.scope(), explicit, assumptions));
+    }
+
+    #[test]
+    fn capability_search_traverses_views_and_borrow_pointees_as_requested() {
+        let db = HirAnalysisTestDb::default();
+        let mutable = TyId::borrow_mut_of(&db, TyId::u256(&db));
+        let aggregate = TyId::tuple_with_elems(&db, &[mutable]);
+        let viewed = TyId::view_of(&db, aggregate);
+        let referenced = TyId::borrow_ref_of(&db, viewed);
+
+        assert!(ty_contains_borrow(&db, viewed));
+        assert!(ty_reaches_mut_borrow(&db, viewed));
+        assert!(ty_reaches_mut_borrow(&db, referenced));
     }
 }

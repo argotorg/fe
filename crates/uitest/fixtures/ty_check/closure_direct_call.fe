@@ -1,0 +1,4 @@
+fn direct_call_without_callable_trait_import() -> u256 {
+    let add = |left: own u256, right: own u256| -> u256 { left + right }
+    add(20, 22)
+}

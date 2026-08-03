@@ -1,0 +1,16 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/nonregular_polymorphic_recursion.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/nonregular_polymorphic_recursion.fe
+
+error[16-0008]: non-regular polymorphic recursion in `fn step`
+   ┌─ nonregular_polymorphic_recursion.fe:19:9
+   │
+19 │         expand(value: Wrap { inner: self })
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this recursive call nests a caller generic parameter inside a different type or constant, which would create an unbounded family of specialized functions
+
+
+=== EXIT CODE: 1 ===

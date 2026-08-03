@@ -198,7 +198,11 @@ pub(crate) trait RuntimeValueUseEmitter<'db> {
         semantic_ty: TyId<'db>,
     ) -> RLocalId;
 
-    fn alloc_value_slot(&mut self, semantic_ty: TyId<'db>, class: RuntimeClass<'db>) -> RLocalId;
+    fn alloc_heap_value_slot(
+        &mut self,
+        semantic_ty: TyId<'db>,
+        class: RuntimeClass<'db>,
+    ) -> RLocalId;
 
     fn push_value_use(&mut self, bb: RBlockId, dst: RLocalId, src: RLocalId);
 }
@@ -265,32 +269,35 @@ fn emit_runtime_value_materialization<'db>(
     materialization: RuntimeValueMaterialization<'db>,
     semantic_ty: TyId<'db>,
 ) -> RLocalId {
-    match materialization {
-        RuntimeValueMaterialization::ObjectRef(layout) => {
-            emitter.coerce_value_for_use(bb, src, &RuntimeClass::object_ref(layout), semantic_ty)
-        }
+    let (pointee, transport) = match materialization {
+        RuntimeValueMaterialization::ObjectRef(layout) => (
+            RuntimeClass::AggregateValue { layout },
+            RuntimeClass::object_ref(layout),
+        ),
         RuntimeValueMaterialization::RawAddrSlot(pointee) => {
-            let source = emitter
-                .value_class_for_use(src)
-                .unwrap_or_else(|| panic!("cannot materialize erased runtime value {src:?}"));
-            let stored = if source == pointee {
-                src
-            } else {
-                emitter.coerce_value_for_use(bb, src, &pointee, semantic_ty)
-            };
-            let slot = emitter.alloc_value_slot(semantic_ty, pointee.clone());
-            emitter.push_value_use(bb, slot, stored);
-            emitter.emit_addr_of_place_for_use(
-                bb,
-                RuntimePlace {
-                    root: PlaceRoot::Slot(slot),
-                    path: Box::default(),
-                },
-                RuntimeValueMaterialization::RawAddrSlot(pointee).class(),
-                semantic_ty,
-            )
+            let transport = RuntimeValueMaterialization::RawAddrSlot(pointee.clone()).class();
+            (pointee, transport)
         }
-    }
+    };
+    let source = emitter
+        .value_class_for_use(src)
+        .unwrap_or_else(|| panic!("cannot materialize erased runtime value {src:?}"));
+    let stored = if source == pointee {
+        src
+    } else {
+        emitter.coerce_value_for_use(bb, src, &pointee, semantic_ty)
+    };
+    let slot = emitter.alloc_heap_value_slot(semantic_ty, pointee);
+    emitter.push_value_use(bb, slot, stored);
+    emitter.emit_addr_of_place_for_use(
+        bb,
+        RuntimePlace {
+            root: PlaceRoot::Slot(slot),
+            path: Box::default(),
+        },
+        transport,
+        semantic_ty,
+    )
 }
 
 impl<'db> SelectedRuntimeArg<'db> {
@@ -560,7 +567,7 @@ mod tests {
             dst
         }
 
-        fn alloc_value_slot(
+        fn alloc_heap_value_slot(
             &mut self,
             semantic_ty: TyId<'db>,
             class: RuntimeClass<'db>,

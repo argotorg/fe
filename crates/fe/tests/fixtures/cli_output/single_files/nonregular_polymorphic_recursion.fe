@@ -1,0 +1,29 @@
+trait Step {
+    fn step(self) -> u256
+}
+
+struct Seed {}
+
+impl Step for Seed {
+    fn step(self) -> u256 {
+        0
+    }
+}
+
+struct Wrap<T> {
+    inner: T,
+}
+
+impl<T> Step for Wrap<T> {
+    fn step(self) -> u256 {
+        expand(value: Wrap { inner: self })
+    }
+}
+
+fn expand<T: Step>(value: T) -> u256 {
+    value.step()
+}
+
+pub fn main() {
+    expand(value: Wrap { inner: Seed {} })
+}

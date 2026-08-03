@@ -26,6 +26,7 @@ use crate::{
     },
     verify::{VerifyError, verify_const_region},
 };
+use hir::projection::IndexSource;
 
 /// Derive the result class of `expr` when assigned to `dst` (whose declared
 /// class is `dst_class`; `None` for erased destinations).
@@ -99,25 +100,41 @@ pub fn expr_result_class<'db>(
         RExpr::AllocObject { layout } => Some(RuntimeClass::object_ref(*layout)),
         RExpr::MaterializeToObject { src } => {
             let src_class = runtime_value_class(body, *src)?;
-            let Some(RuntimeClass::Ref {
-                pointee,
-                kind: crate::runtime::RefKind::Object,
-                view: crate::runtime::RefView::Whole,
-            }) = &dst_class
+            let Some(
+                target @ RuntimeClass::Ref {
+                    pointee,
+                    kind: crate::runtime::RefKind::Object,
+                    view: target_view,
+                },
+            ) = &dst_class
             else {
                 return Err(VerifyError::InvalidExprClass(dst));
             };
             let RuntimeClass::AggregateValue { layout } = &**pointee else {
                 return Err(VerifyError::InvalidExprClass(dst));
             };
-            match src_class {
-                RuntimeClass::AggregateValue { layout: src_layout } if *src_layout == *layout => {}
+            let valid_source = match src_class {
+                source @ RuntimeClass::AggregateValue { .. } => {
+                    matches!(target_view, crate::runtime::RefView::Whole)
+                        && source
+                            .can_repack_as(db, &RuntimeClass::AggregateValue { layout: *layout })
+                }
                 RuntimeClass::Ref {
-                    pointee: src_pointee,
-                    kind: crate::runtime::RefKind::Const,
-                    view: crate::runtime::RefView::Whole,
-                } if **src_pointee == RuntimeClass::AggregateValue { layout: *layout } => {}
-                _ => return Err(VerifyError::InvalidExprClass(dst)),
+                    kind:
+                        crate::runtime::RefKind::Const
+                        | crate::runtime::RefKind::Object
+                        | crate::runtime::RefKind::Provider {
+                            space: AddressSpaceKind::Memory,
+                            ..
+                        },
+                    ..
+                } => src_class.can_repack_as(db, target),
+                RuntimeClass::Scalar(_)
+                | RuntimeClass::Ref { .. }
+                | RuntimeClass::RawAddr { .. } => false,
+            };
+            if !valid_source {
+                return Err(VerifyError::InvalidExprClass(dst));
             }
             dst_class.clone()
         }
@@ -147,12 +164,15 @@ pub fn expr_result_class<'db>(
             target,
         } => {
             let RuntimeClass::RawAddr {
-                space: raw_space, ..
+                space: raw_space,
+                target: raw_target,
             } = runtime_value_class(body, *raw)?
             else {
                 return Err(VerifyError::InvalidExprClass(dst));
             };
-            if *raw_space != *space {
+            if *raw_space != *space
+                || raw_target.is_some_and(|raw_target| Some(raw_target) != *target)
+            {
                 return Err(VerifyError::InvalidExprClass(dst));
             }
             match &dst_class {
@@ -196,18 +216,46 @@ pub fn expr_result_class<'db>(
         }
         RExpr::AddrOf { place } => {
             let expected = resolve_runtime_place_address_class(db, program, body, place)?;
-            if dst_class.as_ref() != Some(&expected) {
+            let materialized_memory_address = matches!(
+                (&expected, &dst_class),
+                (
+                    RuntimeClass::Ref {
+                        pointee,
+                        kind:
+                            crate::runtime::RefKind::Object
+                            | crate::runtime::RefKind::Provider {
+                                space: AddressSpaceKind::Memory,
+                                ..
+                            },
+                        view: crate::runtime::RefView::Whole,
+                    },
+                    Some(RuntimeClass::RawAddr {
+                        space: AddressSpaceKind::Memory,
+                        target,
+                    }),
+                ) if target.is_none_or(|target| Some(target) == pointee.aggregate_layout())
+            );
+            if dst_class.as_ref() != Some(&expected) && !materialized_memory_address {
                 return Err(VerifyError::InvalidExprClass(dst));
             }
-            Some(expected)
+            dst_class.or(Some(expected))
         }
         RExpr::Load { place } => Some(project_place(db, program, body, place)?),
         RExpr::AggregateExtract { value, index } => {
             let RuntimeClass::AggregateValue { layout } = runtime_value_class(body, *value)? else {
                 return Err(VerifyError::InvalidExprClass(dst));
             };
-            let field = aggregate_index_class(program, *layout, *index as usize)
-                .ok_or(VerifyError::InvalidExprClass(dst))?;
+            let field = match index {
+                IndexSource::Constant(index) => aggregate_index_class(program, *layout, *index),
+                IndexSource::Dynamic(index) => {
+                    verify_word_value(body, *index)?;
+                    match program.layout(*layout) {
+                        Layout::Array(data) => Some(data.elem.clone()),
+                        Layout::Struct(_) | Layout::Enum(_) => None,
+                    }
+                }
+            }
+            .ok_or(VerifyError::InvalidExprClass(dst))?;
             Some(field)
         }
         RExpr::AggregateMake { layout, fields } => {
@@ -222,7 +270,7 @@ pub fn expr_result_class<'db>(
                 body.local(*field)
                     .ok_or(VerifyError::MissingRuntimeLocal(*field))?;
                 match body.value_class(*field) {
-                    Some(actual) if actual.shares_runtime_rep_with(db, &expected) => {}
+                    Some(actual) if actual.shares_runtime_carrier_with(db, &expected) => {}
                     None if expected.span_words(db) == 0 => {}
                     Some(_) | None => return Err(VerifyError::InvalidExprClass(dst)),
                 }
@@ -300,16 +348,29 @@ pub fn expr_result_class<'db>(
         }
         RExpr::Call { callee, .. } => program.interface_signature(*callee).ret.clone(),
         RExpr::ProviderToRaw { value } => {
-            if !matches!(
-                (runtime_value_class(body, *value)?, &dst_class),
-                (
-                    RuntimeClass::Ref {
-                        kind: crate::runtime::RefKind::Provider { .. },
+            let RuntimeClass::Ref {
+                pointee,
+                kind:
+                    crate::runtime::RefKind::Provider {
+                        space: source_space,
                         ..
                     },
-                    Some(RuntimeClass::RawAddr { .. }),
-                )
-            ) {
+                view: crate::runtime::RefView::Whole,
+            } = runtime_value_class(body, *value)?
+            else {
+                return Err(VerifyError::InvalidExprClass(dst));
+            };
+            let Some(RuntimeClass::RawAddr {
+                space: target_space,
+                target,
+            }) = &dst_class
+            else {
+                return Err(VerifyError::InvalidExprClass(dst));
+            };
+            if *source_space == AddressSpaceKind::Memory
+                || source_space != target_space
+                || !target.is_none_or(|target| Some(target) == pointee.aggregate_layout())
+            {
                 return Err(VerifyError::InvalidExprClass(dst));
             }
             dst_class.clone()
@@ -331,22 +392,19 @@ pub fn expr_result_class<'db>(
             else {
                 return Err(VerifyError::InvalidExprClass(dst));
             };
-            let src_view_matches = src_view == *dst_view;
             let src_class = RuntimeClass::Ref {
                 pointee: src_pointee,
                 kind: src_kind,
                 view: src_view,
             };
-            if !src_view_matches
-                || !src_class.shares_runtime_rep_with(
-                    db,
-                    &RuntimeClass::Ref {
-                        pointee: dst_pointee.clone(),
-                        kind: dst_kind.clone(),
-                        view: dst_view.clone(),
-                    },
-                )
-            {
+            if !src_class.shares_runtime_carrier_with(
+                db,
+                &RuntimeClass::Ref {
+                    pointee: dst_pointee.clone(),
+                    kind: dst_kind.clone(),
+                    view: dst_view.clone(),
+                },
+            ) {
                 return Err(VerifyError::InvalidExprClass(dst));
             }
             dst_class.clone()
@@ -795,5 +853,355 @@ fn word_scalar_class<'db>() -> ScalarClass<'db> {
             signed: false,
         },
         role: ScalarRole::Plain,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use common::InputDb;
+    use driver::DriverDataBase;
+    use hir::analysis::ty::ty_def::TyId;
+    use url::Url;
+
+    use super::*;
+    use crate::{
+        build_test_runtime_package,
+        runtime::{
+            EnumLayoutKey, EnumVariantLayout, LayoutId, LayoutKey, PlaceRoot, RLocal, RefKind,
+            RefView, RuntimeCarrier, RuntimeLocalRoot, RuntimePlace, StructLayout, VariantId,
+        },
+    };
+
+    #[test]
+    fn materialize_to_object_preserves_remapped_enum_variant_views() {
+        let mut db = DriverDataBase::default();
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///materialize_variant_view.fe").unwrap(),
+            Some("#[test]\nfn test_probe() {}\n".to_string()),
+        );
+        let top_mod = db.top_mod(file);
+        let package = build_test_runtime_package(&db, top_mod, Some("test_probe"))
+            .expect("test package should build");
+        let mut body = package.functions(&db)[0].instance(&db).body(&db).clone();
+        let payload_layout = LayoutId::new(
+            &db,
+            LayoutKey::Struct(StructLayout {
+                fields: Box::default(),
+            }),
+        );
+        let source_layout = LayoutId::new(
+            &db,
+            LayoutKey::Enum(EnumLayoutKey {
+                variants: vec![EnumVariantLayout {
+                    fields: vec![RuntimeClass::const_ref(payload_layout)].into(),
+                }]
+                .into(),
+            }),
+        );
+        let target_layout = LayoutId::new(
+            &db,
+            LayoutKey::Enum(EnumLayoutKey {
+                variants: vec![EnumVariantLayout {
+                    fields: vec![RuntimeClass::object_ref(payload_layout)].into(),
+                }]
+                .into(),
+            }),
+        );
+        let source_variant = VariantId {
+            enum_layout: source_layout,
+            index: 0,
+        };
+        let target_variant = VariantId {
+            enum_layout: target_layout,
+            index: 0,
+        };
+        let source_class = RuntimeClass::Ref {
+            pointee: Box::new(RuntimeClass::AggregateValue {
+                layout: source_layout,
+            }),
+            kind: RefKind::Const,
+            view: RefView::EnumVariant(source_variant),
+        };
+        let target_class = RuntimeClass::Ref {
+            pointee: Box::new(RuntimeClass::AggregateValue {
+                layout: target_layout,
+            }),
+            kind: RefKind::Object,
+            view: RefView::EnumVariant(target_variant),
+        };
+        let src = RLocalId::from_u32(body.locals.len() as u32);
+        body.locals.push(RLocal {
+            semantic_ty: TyId::unit(&db),
+            carrier: RuntimeCarrier::Value(source_class),
+            root: RuntimeLocalRoot::None,
+        });
+        let dst = RLocalId::from_u32(body.locals.len() as u32);
+        body.locals.push(RLocal {
+            semantic_ty: TyId::unit(&db),
+            carrier: RuntimeCarrier::Value(target_class.clone()),
+            root: RuntimeLocalRoot::None,
+        });
+        let program: &dyn MirDb = &db;
+
+        assert_eq!(
+            expr_result_class(
+                &db,
+                &program,
+                &body,
+                dst,
+                Some(target_class.clone()),
+                &RExpr::MaterializeToObject { src },
+            ),
+            Ok(Some(target_class)),
+        );
+    }
+
+    #[test]
+    fn retag_ref_accepts_matching_variant_views_and_rejects_mismatched_layouts() {
+        let mut db = DriverDataBase::default();
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///retag_variant_view.fe").unwrap(),
+            Some("#[test]\nfn test_probe() {}\n".to_string()),
+        );
+        let top_mod = db.top_mod(file);
+        let package = build_test_runtime_package(&db, top_mod, Some("test_probe"))
+            .expect("test package should build");
+        let mut body = package.functions(&db)[0].instance(&db).body(&db).clone();
+        let source_layout = LayoutId::new(
+            &db,
+            LayoutKey::Enum(EnumLayoutKey {
+                variants: vec![EnumVariantLayout {
+                    fields: Box::default(),
+                }]
+                .into(),
+            }),
+        );
+        let target_layout = source_layout;
+        let mismatched_layout = LayoutId::new(
+            &db,
+            LayoutKey::Enum(EnumLayoutKey {
+                variants: vec![EnumVariantLayout {
+                    fields: vec![RuntimeClass::Scalar(word_scalar_class())].into(),
+                }]
+                .into(),
+            }),
+        );
+        let source_class = RuntimeClass::Ref {
+            pointee: Box::new(RuntimeClass::AggregateValue {
+                layout: source_layout,
+            }),
+            kind: RefKind::Provider {
+                provider_ty: TyId::unit(&db),
+                space: AddressSpaceKind::Storage,
+            },
+            view: RefView::EnumVariant(VariantId {
+                enum_layout: source_layout,
+                index: 0,
+            }),
+        };
+        let target_class = RuntimeClass::Ref {
+            pointee: Box::new(RuntimeClass::AggregateValue {
+                layout: target_layout,
+            }),
+            kind: RefKind::Provider {
+                provider_ty: TyId::unit(&db),
+                space: AddressSpaceKind::Storage,
+            },
+            view: RefView::EnumVariant(VariantId {
+                enum_layout: target_layout,
+                index: 0,
+            }),
+        };
+        let src = RLocalId::from_u32(body.locals.len() as u32);
+        body.locals.push(RLocal {
+            semantic_ty: TyId::unit(&db),
+            carrier: RuntimeCarrier::Value(source_class.clone()),
+            root: RuntimeLocalRoot::None,
+        });
+        let dst = RLocalId::from_u32(body.locals.len() as u32);
+        body.locals.push(RLocal {
+            semantic_ty: TyId::unit(&db),
+            carrier: RuntimeCarrier::Value(target_class.clone()),
+            root: RuntimeLocalRoot::None,
+        });
+        let program: &dyn MirDb = &db;
+
+        assert!(source_class.shares_runtime_rep_with(&db, &target_class));
+        assert_eq!(
+            expr_result_class(
+                &db,
+                &program,
+                &body,
+                dst,
+                Some(target_class.clone()),
+                &RExpr::RetagRef { value: src },
+            ),
+            Ok(Some(target_class)),
+        );
+
+        let source_class = RuntimeClass::Ref {
+            pointee: Box::new(RuntimeClass::AggregateValue {
+                layout: source_layout,
+            }),
+            kind: RefKind::Object,
+            view: RefView::EnumVariant(VariantId {
+                enum_layout: source_layout,
+                index: 0,
+            }),
+        };
+        let target_class = RuntimeClass::Ref {
+            pointee: Box::new(RuntimeClass::AggregateValue {
+                layout: mismatched_layout,
+            }),
+            kind: RefKind::Object,
+            view: RefView::EnumVariant(VariantId {
+                enum_layout: mismatched_layout,
+                index: 0,
+            }),
+        };
+        let src = RLocalId::from_u32(body.locals.len() as u32);
+        body.locals.push(RLocal {
+            semantic_ty: TyId::unit(&db),
+            carrier: RuntimeCarrier::Value(source_class.clone()),
+            root: RuntimeLocalRoot::None,
+        });
+        let dst = RLocalId::from_u32(body.locals.len() as u32);
+        body.locals.push(RLocal {
+            semantic_ty: TyId::unit(&db),
+            carrier: RuntimeCarrier::Value(target_class.clone()),
+            root: RuntimeLocalRoot::None,
+        });
+
+        assert!(!source_class.shares_runtime_rep_with(&db, &target_class));
+        assert_eq!(
+            expr_result_class(
+                &db,
+                &program,
+                &body,
+                dst,
+                Some(target_class),
+                &RExpr::RetagRef { value: src },
+            ),
+            Err(VerifyError::InvalidExprClass(dst)),
+        );
+    }
+
+    #[test]
+    fn addr_of_object_ref_can_materialize_a_memory_address() {
+        let mut db = DriverDataBase::default();
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///object_ref_address.fe").unwrap(),
+            Some("#[test]\nfn test_probe() {}\n".to_string()),
+        );
+        let top_mod = db.top_mod(file);
+        let package = build_test_runtime_package(&db, top_mod, Some("test_probe"))
+            .expect("test package should build");
+        let mut body = package.functions(&db)[0].instance(&db).body(&db).clone();
+        let layout = LayoutId::new(
+            &db,
+            LayoutKey::Struct(StructLayout {
+                fields: Box::default(),
+            }),
+        );
+        let src = RLocalId::from_u32(body.locals.len() as u32);
+        body.locals.push(RLocal {
+            semantic_ty: TyId::unit(&db),
+            carrier: RuntimeCarrier::Value(RuntimeClass::object_ref(layout)),
+            root: RuntimeLocalRoot::None,
+        });
+        let target = RuntimeClass::RawAddr {
+            space: AddressSpaceKind::Memory,
+            target: Some(layout),
+        };
+        let dst = RLocalId::from_u32(body.locals.len() as u32);
+        body.locals.push(RLocal {
+            semantic_ty: TyId::unit(&db),
+            carrier: RuntimeCarrier::Value(target.clone()),
+            root: RuntimeLocalRoot::None,
+        });
+        let program: &dyn MirDb = &db;
+
+        assert_eq!(
+            expr_result_class(
+                &db,
+                &program,
+                &body,
+                dst,
+                Some(target.clone()),
+                &RExpr::AddrOf {
+                    place: RuntimePlace {
+                        root: PlaceRoot::Ref(src),
+                        path: Box::default(),
+                    },
+                },
+            ),
+            Ok(Some(target)),
+        );
+    }
+
+    #[test]
+    fn provider_from_typed_raw_rejects_a_conflicting_target_layout() {
+        let mut db = DriverDataBase::default();
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///provider_from_mismatched_raw.fe").unwrap(),
+            Some("#[test]\nfn test_probe() {}\n".to_string()),
+        );
+        let top_mod = db.top_mod(file);
+        let package = build_test_runtime_package(&db, top_mod, Some("test_probe"))
+            .expect("test package should build");
+        let mut body = package.functions(&db)[0].instance(&db).body(&db).clone();
+        let source_layout = LayoutId::new(
+            &db,
+            LayoutKey::Struct(StructLayout {
+                fields: Box::default(),
+            }),
+        );
+        let target_layout = LayoutId::new(
+            &db,
+            LayoutKey::Struct(StructLayout {
+                fields: vec![RuntimeClass::Scalar(word_scalar_class())].into(),
+            }),
+        );
+        let raw_class = RuntimeClass::RawAddr {
+            space: AddressSpaceKind::Storage,
+            target: Some(source_layout),
+        };
+        let raw = RLocalId::from_u32(body.locals.len() as u32);
+        body.locals.push(RLocal {
+            semantic_ty: TyId::unit(&db),
+            carrier: RuntimeCarrier::Value(raw_class),
+            root: RuntimeLocalRoot::None,
+        });
+        let provider_ty = TyId::unit(&db);
+        let target_class =
+            RuntimeClass::provider_ref(target_layout, provider_ty, AddressSpaceKind::Storage);
+        let dst = RLocalId::from_u32(body.locals.len() as u32);
+        body.locals.push(RLocal {
+            semantic_ty: TyId::unit(&db),
+            carrier: RuntimeCarrier::Value(target_class.clone()),
+            root: RuntimeLocalRoot::None,
+        });
+        let program: &dyn MirDb = &db;
+
+        assert_eq!(
+            expr_result_class(
+                &db,
+                &program,
+                &body,
+                dst,
+                Some(target_class),
+                &RExpr::ProviderFromRaw {
+                    raw,
+                    provider_ty,
+                    space: AddressSpaceKind::Storage,
+                    target: Some(target_layout),
+                },
+            ),
+            Err(VerifyError::InvalidExprClass(dst)),
+        );
     }
 }

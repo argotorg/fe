@@ -1,0 +1,52 @@
+use core::functional::{Fn, FnOnce}
+
+struct Holder<F> {
+    function: F,
+}
+
+struct ValueHolder {
+    value: u256,
+}
+
+struct OnlyMethod {}
+
+impl OnlyMethod {
+    fn call(self, _ value: u256) -> u256 {
+        value
+    }
+}
+
+fn direct_closure_too_few_arguments() {
+    let add = |left: own u256, right: own u256| -> u256 { left + right }
+    add(42)
+}
+
+fn direct_closure_too_many_arguments() {
+    let answer = || -> u256 { 42 }
+    answer(1)
+}
+
+fn concrete_callable_field_needs_parentheses() {
+    let holder = Holder {
+        function: |left: own u256, right: own u256| -> u256 { left + right },
+    }
+    holder.function(20, 22)
+}
+
+fn generic_callable_field_needs_parentheses<F: Fn<(), u256>>(_ holder: Holder<F>) {
+    holder.function()
+}
+
+fn noncallable_field_does_not_get_callable_hint() {
+    let holder = ValueHolder { value: 42 }
+    holder.value()
+}
+
+fn unrelated_inherent_call_method_is_not_callable() {
+    OnlyMethod {}(42)
+}
+
+fn direct_closure_argument_type_mismatch() {
+    let increment = |value: own u256| -> u256 { value + 1 }
+    increment(false)
+}

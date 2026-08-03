@@ -1,0 +1,13 @@
+use core::functional::{Fn, FnOnce}
+
+struct Boxed {
+    value: u256,
+}
+
+pub fn closure_reusable_call_once_consumes() -> u256 {
+    let boxed = Boxed { value: 21 }
+    let read = |_ unit: own ()| -> u256 { boxed.value }
+    let first = read.call_once(())
+    let second = read.call(())
+    first + second
+}

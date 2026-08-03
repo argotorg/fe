@@ -64,7 +64,7 @@ struct Slot<const N: u32> {}
 
 trait ConstSigCtx {
     const N: u32
-    fn take(self, slot: Slot<{ Self::N }>) -> Slot<{ Self::N }>
+    fn take(self, slot: own Slot<{ Self::N }>) -> Slot<{ Self::N }>
 }
 
 struct ConstSigCtxStruct {}
@@ -72,7 +72,7 @@ struct ConstSigCtxStruct {}
 impl ConstSigCtx for ConstSigCtxStruct {
     const N: u32 = 3
 
-    fn take(self, slot: Slot<{ Self::N }>) -> Slot<{ Self::N }> {
+    fn take(self, slot: own Slot<{ Self::N }>) -> Slot<{ Self::N }> {
         slot
     }
 }

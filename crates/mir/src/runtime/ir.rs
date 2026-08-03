@@ -233,7 +233,7 @@ impl<'db> RuntimeClass<'db> {
                     view: desired_view,
                 },
             ) => {
-                actual_view == desired_view
+                ref_views_align(actual_view, actual_pointee, desired_view, desired_pointee)
                     && ref_kinds_share_runtime_rep(actual_kind, desired_kind)
                     && actual_pointee.shares_runtime_rep_with(db, desired_pointee)
             }
@@ -280,6 +280,124 @@ impl<'db> RuntimeClass<'db> {
             ) => false,
         }
     }
+
+    /// Whether the two classes use the same direct SSA carrier type.
+    ///
+    /// Structural representation compatibility is sufficient when recursively
+    /// copying a value, but not when reusing a typed Sonatina aggregate,
+    /// object reference, or constant reference directly. Non-memory provider
+    /// references and raw addresses are untyped machine words, so their
+    /// semantic representation checks remain sufficient.
+    pub fn shares_runtime_carrier_with(
+        &self,
+        db: &'db dyn MirDb,
+        desired: &RuntimeClass<'db>,
+    ) -> bool {
+        if !self.shares_runtime_rep_with(db, desired) {
+            return false;
+        }
+        match (self, desired) {
+            (
+                RuntimeClass::AggregateValue { layout: actual },
+                RuntimeClass::AggregateValue { layout: desired },
+            ) => actual == desired,
+            (
+                RuntimeClass::Ref {
+                    pointee: actual_pointee,
+                    kind: actual_kind,
+                    ..
+                },
+                RuntimeClass::Ref {
+                    pointee: desired_pointee,
+                    kind: desired_kind,
+                    ..
+                },
+            ) => {
+                let untyped_provider = |kind: &RefKind<'_>| {
+                    matches!(
+                        kind,
+                        RefKind::Provider { space, .. } if *space != AddressSpaceKind::Memory
+                    )
+                };
+                untyped_provider(actual_kind) && untyped_provider(desired_kind)
+                    || actual_pointee == desired_pointee
+            }
+            (RuntimeClass::Scalar(_), RuntimeClass::Scalar(_))
+            | (RuntimeClass::RawAddr { .. }, RuntimeClass::RawAddr { .. }) => true,
+            (
+                RuntimeClass::Scalar(_)
+                | RuntimeClass::AggregateValue { .. }
+                | RuntimeClass::Ref { .. }
+                | RuntimeClass::RawAddr { .. },
+                _,
+            ) => false,
+        }
+    }
+
+    /// Whether `self` can be copied into `desired`, recursively rebuilding
+    /// aggregate storage and materializing read-only memory references as
+    /// owned objects where necessary.
+    ///
+    /// This is deliberately stricter than a same-width representation check:
+    /// non-memory providers cannot be changed into memory objects, and owned
+    /// objects cannot be turned into constant-region references.
+    pub fn can_repack_as(&self, db: &'db dyn MirDb, desired: &RuntimeClass<'db>) -> bool {
+        if self == desired || self.shares_runtime_rep_with(db, desired) {
+            return true;
+        }
+        match (self, desired) {
+            (
+                RuntimeClass::AggregateValue { layout: actual },
+                RuntimeClass::AggregateValue { layout: desired },
+            ) => layouts_can_repack(db, *actual, *desired),
+            (
+                RuntimeClass::Ref {
+                    pointee: actual_pointee,
+                    kind:
+                        RefKind::Const
+                        | RefKind::Object
+                        | RefKind::Provider {
+                            space: AddressSpaceKind::Memory,
+                            ..
+                        },
+                    view: actual_view,
+                },
+                RuntimeClass::Ref {
+                    pointee: desired_pointee,
+                    kind: RefKind::Object,
+                    view: desired_view,
+                },
+            ) => {
+                ref_views_align(actual_view, actual_pointee, desired_view, desired_pointee)
+                    && actual_pointee.can_repack_as(db, desired_pointee)
+            }
+            (
+                RuntimeClass::Scalar(_) | RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. },
+                _,
+            )
+            | (RuntimeClass::AggregateValue { .. }, RuntimeClass::Ref { .. })
+            | (_, RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. }) => false,
+        }
+    }
+}
+
+pub(crate) fn ref_views_align(
+    actual: &RefView<'_>,
+    actual_pointee: &RuntimeClass<'_>,
+    desired: &RefView<'_>,
+    desired_pointee: &RuntimeClass<'_>,
+) -> bool {
+    match (actual, desired) {
+        (RefView::Whole, RefView::Whole) => true,
+        (RefView::EnumVariant(actual), RefView::EnumVariant(desired)) => {
+            actual.index == desired.index
+                && actual_pointee.aggregate_layout() == Some(actual.enum_layout)
+                && desired_pointee.aggregate_layout() == Some(desired.enum_layout)
+        }
+        (RefView::Whole, RefView::EnumVariant(_)) | (RefView::EnumVariant(_), RefView::Whole) => {
+            false
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -296,6 +414,19 @@ pub enum RefKind<'db> {
 pub enum RefView<'db> {
     Whole,
     EnumVariant(VariantId<'db>),
+}
+
+pub(crate) fn remap_ref_view_to_pointee<'db>(
+    view: &RefView<'db>,
+    pointee: &RuntimeClass<'db>,
+) -> RefView<'db> {
+    match (view, pointee.aggregate_layout()) {
+        (RefView::EnumVariant(variant), Some(enum_layout)) => RefView::EnumVariant(VariantId {
+            enum_layout,
+            index: variant.index,
+        }),
+        (view, _) => view.clone(),
+    }
 }
 
 fn layouts_share_runtime_rep<'db>(
@@ -335,6 +466,45 @@ fn layouts_share_runtime_rep<'db>(
     }
 }
 
+fn layouts_can_repack<'db>(
+    db: &'db dyn MirDb,
+    actual: LayoutId<'db>,
+    desired: LayoutId<'db>,
+) -> bool {
+    match (actual.data(db), desired.data(db)) {
+        (Layout::Struct(actual), Layout::Struct(desired)) => {
+            actual.fields.len() == desired.fields.len()
+                && actual
+                    .fields
+                    .iter()
+                    .zip(desired.fields.iter())
+                    .all(|(actual, desired)| actual.can_repack_as(db, desired))
+        }
+        (Layout::Array(actual), Layout::Array(desired)) => {
+            actual.len == desired.len && actual.elem.can_repack_as(db, &desired.elem)
+        }
+        (Layout::Enum(actual), Layout::Enum(desired)) => {
+            actual.tag.repr == desired.tag.repr
+                && actual.variants.len() == desired.variants.len()
+                && actual
+                    .variants
+                    .iter()
+                    .zip(desired.variants.iter())
+                    .all(|(actual, desired)| {
+                        actual.fields.len() == desired.fields.len()
+                            && actual
+                                .fields
+                                .iter()
+                                .zip(desired.fields.iter())
+                                .all(|(actual, desired)| actual.can_repack_as(db, desired))
+                    })
+        }
+        (Layout::Struct(_), Layout::Array(_) | Layout::Enum(_))
+        | (Layout::Array(_), Layout::Struct(_) | Layout::Enum(_))
+        | (Layout::Enum(_), Layout::Struct(_) | Layout::Array(_)) => false,
+    }
+}
+
 fn ref_kinds_share_runtime_rep<'db>(actual: &RefKind<'db>, desired: &RefKind<'db>) -> bool {
     match (actual, desired) {
         (RefKind::Const, RefKind::Const) | (RefKind::Object, RefKind::Object) => true,
@@ -364,14 +534,14 @@ fn ref_kinds_share_runtime_rep<'db>(actual: &RefKind<'db>, desired: &RefKind<'db
         ) => true,
         (
             RefKind::Provider {
+                provider_ty: actual_provider_ty,
                 space: actual_space,
-                ..
             },
             RefKind::Provider {
+                provider_ty: desired_provider_ty,
                 space: desired_space,
-                ..
             },
-        ) => actual_space == desired_space,
+        ) => actual_space == desired_space && actual_provider_ty == desired_provider_ty,
         (RefKind::Const, RefKind::Object | RefKind::Provider { .. })
         | (RefKind::Object | RefKind::Provider { .. }, RefKind::Const)
         | (RefKind::Object, RefKind::Provider { .. })
@@ -715,7 +885,12 @@ pub struct RLocal<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum RuntimeLocalRoot<'db> {
     None,
+    /// Function-local storage whose address does not escape its static arena.
     Slot(RuntimeClass<'db>),
+    /// Heap storage allocated whenever the local is defined. Stores through
+    /// the resulting place retain that allocation, while another dynamic
+    /// execution of the defining assignment receives fresh storage.
+    HeapSlot(RuntimeClass<'db>),
     Ref(RuntimeClass<'db>),
     Ptr {
         space: AddressSpaceKind,
@@ -1483,7 +1658,7 @@ pub enum RExpr<'db> {
     },
     AggregateExtract {
         value: RValueId,
-        index: u32,
+        index: IndexSource<RValueId>,
     },
     AggregateMake {
         layout: LayoutId<'db>,

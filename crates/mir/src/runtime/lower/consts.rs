@@ -49,10 +49,13 @@ pub(super) fn collect_const_ref_regions<'db>(
     db: &'db dyn MirDb,
     env: RuntimeTypeEnv<'db>,
     body: &NormalizedSemanticBody<'db>,
+    reachable_blocks: &[bool],
 ) -> HashSet<ConstRegionId<'db>> {
     body.blocks
         .iter()
-        .flat_map(|block| block.stmts.iter())
+        .enumerate()
+        .filter(|(block_idx, _)| reachable_blocks.get(*block_idx) == Some(&true))
+        .flat_map(|(_, block)| block.stmts.iter())
         .filter_map(|stmt| {
             let NSStmtKind::Assign { dst, expr } = &stmt.kind else {
                 return None;

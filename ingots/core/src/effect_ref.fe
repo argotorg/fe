@@ -83,7 +83,7 @@ pub fn read<H: EffectHandle>(_ handle: H) -> H::Target uses (value: H::Target)
 }
 
 /// Writes the value a handle points at.
-pub fn write<H: EffectHandle>(_ handle: H, _ value: H::Target) uses (target: mut H::Target) {
+pub fn write<H: EffectHandle>(_ handle: H, _ value: own H::Target) uses (target: mut H::Target) {
     target = value
 }
 
@@ -129,7 +129,7 @@ impl<T> MemPtr<T> {
     }
 
     /// Writes the pointed-at value.
-    pub fn write(self, _ value: T) {
+    pub fn write(self, _ value: own T) {
         let mut ptr = self
         with (ptr) {
             super::effect_ref::write(ptr, value)
@@ -167,7 +167,7 @@ impl<T> StorPtr<T> {
     }
 
     /// Writes the pointed-at value.
-    pub fn write(self, _ value: T) {
+    pub fn write(self, _ value: own T) {
         let mut ptr = self
         with (ptr) {
             super::effect_ref::write(ptr, value)

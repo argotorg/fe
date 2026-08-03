@@ -1,0 +1,7 @@
+pub fn array_holds_mut() {
+    let mut x: u256 = 0
+    let arr = [mut x]
+    let r = ref x
+    let _k1 = arr
+    let _k2 = r
+}

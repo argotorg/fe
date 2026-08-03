@@ -197,14 +197,14 @@ pub struct LayoutEvidenceBody<'db> {
     pub params: Vec<LayoutEvidenceLocalId>,
     pub output: LayoutBundleInterface<'db>,
     /// Evidence operations indexed by stable semantic statement identity.
-    pub statements: Vec<LayoutEvidenceStatement<'db>>,
+    pub statements: Vec<Option<LayoutEvidenceStatement<'db>>>,
     /// Return evidence indexed by semantic block identity.
     pub terminators: Vec<LayoutEvidenceTerminator<'db>>,
 }
 
 impl<'db> LayoutEvidenceBody<'db> {
     pub fn statement(&self, id: SStmtId) -> Option<&LayoutEvidenceStatement<'db>> {
-        self.statements.get(id.index())
+        self.statements.get(id.index())?.as_ref()
     }
 
     pub fn terminator(&self, id: SBlockId) -> Option<&LayoutEvidenceTerminator<'db>> {
@@ -216,10 +216,6 @@ impl<'db> LayoutEvidenceBody<'db> {
 pub enum LayoutEvidenceError<'db> {
     Normalize(SemanticBorrowDiagnostic<'db>),
     MissingBody(BodyOwner<'db>),
-    TemplateLocalCountMismatch {
-        expected: usize,
-        actual: usize,
-    },
     InvalidStatementIdentity(SStmtId),
     InvalidSchema {
         local: Option<SLocalId>,

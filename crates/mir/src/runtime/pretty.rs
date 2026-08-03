@@ -317,6 +317,7 @@ fn format_local_root<'db>(db: &'db dyn MirDb, root: &RuntimeLocalRoot<'db>) -> S
     match root {
         RuntimeLocalRoot::None => "none".to_string(),
         RuntimeLocalRoot::Slot(class) => format!("slot {}", format_class(db, class)),
+        RuntimeLocalRoot::HeapSlot(class) => format!("heap_slot {}", format_class(db, class)),
         RuntimeLocalRoot::Ref(class) => format!("ref {}", format_class(db, class)),
         RuntimeLocalRoot::Ptr { space, class } => {
             format!("ptr {} {}", format_space(*space), format_class(db, class))
@@ -482,7 +483,11 @@ fn format_expr<'db>(db: &'db dyn MirDb, expr: &RExpr<'db>) -> String {
         RExpr::AddrOf { place } => format!("addr_of {}", format_place(place)),
         RExpr::Load { place } => format!("load {}", format_place(place)),
         RExpr::AggregateExtract { value, index } => {
-            format!("extract_value {}, {}", format_local_id(*value), index)
+            format!(
+                "extract_value {}, {}",
+                format_local_id(*value),
+                format_value_index_source(index)
+            )
         }
         RExpr::AggregateMake { layout, fields } => {
             let fields = fields

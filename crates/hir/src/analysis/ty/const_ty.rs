@@ -1,8 +1,10 @@
 use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::{One, ToPrimitive, Zero};
+use salsa::plumbing::AsId;
+use std::cell::RefCell;
 
 use crate::core::hir_def::{
-    BinOp, Body, Const, Contract, EnumVariant, Expr, ExprId, Func, GenericArgListId,
+    BinOp, Body, ClosureDef, Const, Contract, EnumVariant, Expr, ExprId, Func, GenericArgListId,
     GenericParamOwner, IdentId, IntegerId, LitKind, Partial, PatId, PathId, Stmt,
     TypeAlias as HirTypeAlias, TypeId as HirTypeId,
 };
@@ -16,12 +18,15 @@ use super::{
     diagnostics::{BodyDiag, FuncBodyDiag},
     fold::{AssocTySubst, TyFoldable},
     normalize::normalize_ty,
-    trait_def::{ImplementorId, ImplementorOrigin, ResolvedImplInstance, TraitInstId},
-    trait_resolution::{Selection, TraitSolveCx, constraint::collect_constraints},
+    trait_def::{
+        ImplementorId, ResolvedImplInstance, TraitInstId, assoc_const_body_and_args_from_resolved,
+    },
+    trait_resolution::{Selection, TraitSolveCx},
     ty_check::{check_anon_const_body, check_const_body},
     ty_def::{InvalidCause, TyId, TyParam, TyVar},
     ty_lower::{ConstDefaultCompletion, collect_generic_params},
     unify::UnificationTable,
+    visitor::{TyVisitor, walk_ty},
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -37,6 +42,365 @@ use crate::analysis::{
 use crate::hir_def::{CallableDef, ItemKind, scope_graph::ScopeId};
 use common::indexmap::IndexMap;
 use rustc_hash::{FxHashMap, FxHashSet};
+
+#[derive(Clone)]
+struct ConstSpecializationTyShape {
+    root: salsa::Id,
+    proper_subterms: FxHashSet<salsa::Id>,
+    numeric: Option<ConstSpecializationNumericShape>,
+}
+
+#[derive(Clone)]
+struct ConstSpecializationNumericShape {
+    ty: salsa::Id,
+    value: BigInt,
+}
+
+struct ConstSpecializationTyShapeCollector<'db> {
+    db: &'db dyn HirAnalysisDb,
+    root: TyId<'db>,
+    proper_subterms: FxHashSet<salsa::Id>,
+    visited: FxHashSet<TyId<'db>>,
+}
+
+impl<'db> TyVisitor<'db> for ConstSpecializationTyShapeCollector<'db> {
+    fn db(&self) -> &'db dyn HirAnalysisDb {
+        self.db
+    }
+
+    fn visit_ty(&mut self, ty: TyId<'db>) {
+        if ty != self.root {
+            self.proper_subterms.insert(ty.as_id());
+        }
+        if !self.visited.insert(ty) {
+            return;
+        }
+        walk_ty(self, ty);
+    }
+}
+
+fn const_specialization_ty_shape<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+) -> ConstSpecializationTyShape {
+    // Generic substitution can leave a fully-ground integer expression such
+    // as `{ 3 - 1 }` in abstract form. Comparing that syntax tree with `3`
+    // mistakes a numeric countdown for structural type growth. Fold ground
+    // arithmetic before classifying specialization progress.
+    let ty = match ty.data(db) {
+        TyData::ConstTy(const_ty) => match const_ty.data(db) {
+            ConstTyData::Abstract(expr, expected_ty) => {
+                evaluate_abstract_int_const_expr(db, *expr, *expected_ty)
+                    .map_or(ty, |evaluated| TyId::const_ty(db, evaluated))
+            }
+            _ => ty,
+        },
+        _ => ty,
+    };
+    let mut collector = ConstSpecializationTyShapeCollector {
+        db,
+        root: ty,
+        proper_subterms: FxHashSet::default(),
+        visited: FxHashSet::default(),
+    };
+    collector.visit_ty(ty);
+    let numeric = match ty.data(db) {
+        TyData::ConstTy(const_ty) => match const_ty.data(db) {
+            ConstTyData::Evaluated(EvaluatedConstTy::LitInt(value), expected_ty) => {
+                checked_int_ty_from_ty(db, Some(*expected_ty)).map(|int_ty| {
+                    ConstSpecializationNumericShape {
+                        ty: expected_ty.as_id(),
+                        value: u256_word_to_bigint(value.data(db), int_ty),
+                    }
+                })
+            }
+            _ => None,
+        },
+        _ => None,
+    };
+    ConstSpecializationTyShape {
+        root: ty.as_id(),
+        proper_subterms: collector.proper_subterms,
+        numeric,
+    }
+}
+
+fn const_specialization_shapes_equal_arg(
+    caller: &ConstSpecializationTyShape,
+    callee: &ConstSpecializationTyShape,
+) -> bool {
+    caller.root == callee.root
+        || matches!(
+            (&caller.numeric, &callee.numeric),
+            (Some(caller), Some(callee))
+                if caller.ty == callee.ty && caller.value == callee.value
+        )
+}
+
+fn const_specialization_shape_strictly_decreases(
+    caller: &ConstSpecializationTyShape,
+    callee: &ConstSpecializationTyShape,
+) -> bool {
+    caller.proper_subterms.contains(&callee.root)
+        || matches!(
+            (&caller.numeric, &callee.numeric),
+            (Some(caller), Some(callee))
+                if caller.ty == callee.ty && callee.value < caller.value
+        )
+}
+
+fn const_specialization_shapes_strictly_decrease(
+    caller: &[ConstSpecializationTyShape],
+    callee: &[ConstSpecializationTyShape],
+) -> bool {
+    if caller.is_empty() || caller.len() != callee.len() {
+        return false;
+    }
+
+    fn augment_matching(
+        callee_idx: usize,
+        allowed: &[Vec<bool>],
+        seen_callers: &mut [bool],
+        matched_caller: &mut [Option<usize>],
+    ) -> bool {
+        for caller_idx in 0..allowed.len() {
+            if !allowed[callee_idx][caller_idx] || seen_callers[caller_idx] {
+                continue;
+            }
+            seen_callers[caller_idx] = true;
+            if matched_caller[caller_idx].is_none_or(|previous| {
+                augment_matching(previous, allowed, seen_callers, matched_caller)
+            }) {
+                matched_caller[caller_idx] = Some(callee_idx);
+                return true;
+            }
+        }
+        false
+    }
+
+    let len = caller.len();
+    let mut allowed = vec![vec![false; len]; len];
+    let mut strict = vec![vec![false; len]; len];
+    for (callee_idx, callee_arg) in callee.iter().enumerate() {
+        for (caller_idx, caller_arg) in caller.iter().enumerate() {
+            let equal = const_specialization_shapes_equal_arg(caller_arg, callee_arg);
+            let strictly_smaller =
+                const_specialization_shape_strictly_decreases(caller_arg, callee_arg);
+            allowed[callee_idx][caller_idx] = equal || strictly_smaller;
+            strict[callee_idx][caller_idx] = strictly_smaller;
+        }
+    }
+
+    // Find one perfect matching in O(n^3). If it already contains a strict
+    // edge, the multiset decreases.
+    let mut matched_caller = vec![None; len];
+    for callee_idx in 0..len {
+        if !augment_matching(
+            callee_idx,
+            &allowed,
+            &mut vec![false; len],
+            &mut matched_caller,
+        ) {
+            return false;
+        }
+    }
+    if matched_caller
+        .iter()
+        .enumerate()
+        .any(|(caller_idx, callee_idx)| strict[callee_idx.unwrap()][caller_idx])
+    {
+        return true;
+    }
+
+    // Any other perfect matching differs by alternating cycles. Build the
+    // directed callee graph induced by this matching: an allowed edge from
+    // callee C to a caller currently matched with D becomes C -> D. A strict
+    // edge can appear in another perfect matching exactly when it lies on
+    // such a cycle. Floyd-Warshall keeps this polynomial even for many
+    // duplicate coordinates, where backtracking would be factorial.
+    let mut reachable = vec![vec![false; len]; len];
+    for callee_idx in 0..len {
+        for (caller_idx, matched_callee) in matched_caller.iter().enumerate() {
+            if allowed[callee_idx][caller_idx] {
+                reachable[callee_idx][matched_callee.unwrap()] = true;
+            }
+        }
+    }
+    for via in 0..len {
+        let via_reachable = reachable[via].clone();
+        for from_reachable in &mut reachable {
+            if !from_reachable[via] {
+                continue;
+            }
+            for (to, &can_reach) in via_reachable.iter().enumerate() {
+                from_reachable[to] |= can_reach;
+            }
+        }
+    }
+    strict.iter().enumerate().any(|(callee_idx, row)| {
+        row.iter().enumerate().any(|(caller_idx, &is_strict)| {
+            is_strict && reachable[matched_caller[caller_idx].unwrap()][callee_idx]
+        })
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConstSpecializationRelation {
+    Equal,
+    StrictDecrease,
+    StrictGrowth,
+    Incomparable,
+}
+
+fn const_specialization_shapes_equal(
+    caller: &[ConstSpecializationTyShape],
+    callee: &[ConstSpecializationTyShape],
+) -> bool {
+    if caller.len() != callee.len() {
+        return false;
+    }
+    let mut matched = vec![false; caller.len()];
+    for callee_arg in callee {
+        let Some(caller_idx) = caller.iter().enumerate().find_map(|(idx, caller_arg)| {
+            (!matched[idx] && const_specialization_shapes_equal_arg(caller_arg, callee_arg))
+                .then_some(idx)
+        }) else {
+            return false;
+        };
+        matched[caller_idx] = true;
+    }
+    true
+}
+
+fn const_specialization_shapes_relation(
+    caller: &[ConstSpecializationTyShape],
+    callee: &[ConstSpecializationTyShape],
+) -> ConstSpecializationRelation {
+    if const_specialization_shapes_equal(caller, callee) {
+        return ConstSpecializationRelation::Equal;
+    }
+    if const_specialization_shapes_strictly_decrease(caller, callee) {
+        return ConstSpecializationRelation::StrictDecrease;
+    }
+    if const_specialization_shapes_strictly_decrease(callee, caller) {
+        return ConstSpecializationRelation::StrictGrowth;
+    }
+    ConstSpecializationRelation::Incomparable
+}
+
+pub(crate) fn const_specialization_relation<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: &[TyId<'db>],
+    callee: &[TyId<'db>],
+) -> ConstSpecializationRelation {
+    let caller = caller
+        .iter()
+        .copied()
+        .map(|ty| const_specialization_ty_shape(db, ty))
+        .collect::<Vec<_>>();
+    let callee = callee
+        .iter()
+        .copied()
+        .map(|ty| const_specialization_ty_shape(db, ty))
+        .collect::<Vec<_>>();
+    const_specialization_shapes_relation(&caller, &callee)
+}
+
+struct ActiveConstEvaluation {
+    body: salsa::Id,
+    specialization: Vec<ConstSpecializationTyShape>,
+}
+
+/// No specialization-family proof justifies consuming an unbounded amount of
+/// compiler stack. A specialization frame includes nested query/type-checking
+/// work in addition to its CTFE frame, so keep this below CTFE's ordinary
+/// 64-call limit. Const-item frames are intentionally excluded from that
+/// ordinary limit and receive this separate bound instead. Twenty-four is
+/// safely below the host-stack exhaustion point while preserving the
+/// established 20-specialization finite countdown.
+const MAX_CONST_SPECIALIZATION_DEPTH_PER_BODY: usize = 24;
+
+/// Structural progress catches ordinary type specialization, but projections
+/// can repeatedly deconstruct and rebuild a larger composite so that no prior
+/// type is an exact subtree of the next one. Bound consecutive re-entries for
+/// which no structural descent can be proved, so const evaluation itself
+/// cannot diverge.
+const MAX_UNPROVEN_CONST_SPECIALIZATION_DEPTH_PER_BODY: usize = 12;
+
+pub(crate) fn const_specialization_depth_limit_exceeded(
+    relations: &[ConstSpecializationRelation],
+) -> bool {
+    relations.len() >= MAX_CONST_SPECIALIZATION_DEPTH_PER_BODY
+        || (relations.len() >= MAX_UNPROVEN_CONST_SPECIALIZATION_DEPTH_PER_BODY
+            && !relations.contains(&ConstSpecializationRelation::StrictDecrease))
+}
+
+thread_local! {
+    /// Salsa keys const evaluation by the full specialization. Track the body
+    /// separately so a value dependency that grows its generic arguments
+    /// cannot evade ordinary query-cycle recovery.
+    static ACTIVE_CONST_EVALUATIONS: RefCell<Vec<ActiveConstEvaluation>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+struct ActiveConstEvaluationGuard {
+    body: salsa::Id,
+}
+
+enum ActiveConstEvaluationError {
+    Recursive,
+    RecursionLimit,
+}
+
+impl ActiveConstEvaluationGuard {
+    fn enter<'db>(
+        db: &'db dyn HirAnalysisDb,
+        body: Body<'db>,
+        generic_args: &[TyId<'db>],
+    ) -> Result<Self, ActiveConstEvaluationError> {
+        let body = body.as_id();
+        let specialization = generic_args
+            .iter()
+            .copied()
+            .map(|ty| const_specialization_ty_shape(db, ty))
+            .collect::<Vec<_>>();
+        ACTIVE_CONST_EVALUATIONS.with(|active| {
+            let mut active = active.borrow_mut();
+            let relations = active
+                .iter()
+                .filter(|entry| entry.body == body)
+                .map(|caller| {
+                    const_specialization_shapes_relation(&caller.specialization, &specialization)
+                })
+                .collect::<Vec<_>>();
+            if relations.iter().any(|relation| {
+                matches!(
+                    relation,
+                    ConstSpecializationRelation::Equal | ConstSpecializationRelation::StrictGrowth
+                )
+            }) {
+                return Err(ActiveConstEvaluationError::Recursive);
+            }
+            if const_specialization_depth_limit_exceeded(&relations) {
+                return Err(ActiveConstEvaluationError::RecursionLimit);
+            }
+            active.push(ActiveConstEvaluation {
+                body,
+                specialization,
+            });
+            Ok(Self { body })
+        })
+    }
+}
+
+impl Drop for ActiveConstEvaluationGuard {
+    fn drop(&mut self) {
+        ACTIVE_CONST_EVALUATIONS.with(|active| {
+            let popped = active.borrow_mut().pop();
+            debug_assert!(popped.is_some_and(|entry| entry.body == self.body));
+        });
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub enum LayoutHoleArgSite<'db> {
@@ -241,6 +605,9 @@ pub enum HoleAnchor<'db> {
     /// The declared result position of one callable. Output evidence is a
     /// signature property and must never be keyed by a lowered body.
     CallableOutput { func: Func<'db> },
+    /// The result position of one closure. Like a named callable output, this
+    /// is keyed by the closure definition rather than a lowered return local.
+    ClosureOutput { def: ClosureDef<'db> },
     /// A canonical parent for nested evidence landings in one semantic value.
     /// This identity is local to schema derivation and is never an allocation
     /// identity in a contract root graph.
@@ -270,6 +637,7 @@ pub enum LayoutBoundaryIdentity<'db> {
         origin: CallableInputLayoutHoleOrigin,
     },
     CallableOutput(Func<'db>),
+    ClosureOutput(ClosureDef<'db>),
     SemanticValue {
         body: Body<'db>,
         local: u32,
@@ -1803,7 +2171,7 @@ fn eval_int_expr<'db>(
     }
 }
 
-pub(super) fn try_eval_const_int_expr<'db>(
+pub(crate) fn try_eval_const_int_expr<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
     expr: ExprId,
@@ -1842,6 +2210,9 @@ pub(crate) fn evaluate_const_ty<'db>(
         && let Some(resolved) = const_ty_from_inherent_const_use(db, *use_)
     {
         let evaluated = resolved.evaluate(db, expected_ty.or(Some(*ty)));
+        if is_const_eval_cycle_or_limit(db, evaluated) {
+            return evaluated;
+        }
         if !evaluated.ty(db).has_invalid(db) {
             return evaluated;
         }
@@ -1853,6 +2224,9 @@ pub(crate) fn evaluate_const_ty<'db>(
         if let Some(resolved) = const_ty_from_assoc_const_use(db, *assoc) {
             let evaluated = resolved.evaluate(db, expected_ty.or(Some(*ty)));
             if evaluated.ty(db).has_invalid(db) {
+                if is_const_eval_cycle_or_limit(db, evaluated) {
+                    return evaluated;
+                }
                 return const_ty;
             }
             return evaluated;
@@ -1900,6 +2274,28 @@ pub(crate) fn evaluate_const_ty<'db>(
         expected_ty
     } else {
         const_ty_ty.or(expected_ty)
+    };
+
+    let _active_evaluation = match ActiveConstEvaluationGuard::enter(db, body, &generic_args) {
+        Ok(guard) => guard,
+        Err(ActiveConstEvaluationError::Recursive) => {
+            return ConstTyId::invalid(
+                db,
+                InvalidCause::ConstEvalRecursiveConst {
+                    body,
+                    expr: body.expr(db),
+                },
+            );
+        }
+        Err(ActiveConstEvaluationError::RecursionLimit) => {
+            return ConstTyId::invalid(
+                db,
+                InvalidCause::ConstEvalRecursionLimitExceeded {
+                    body,
+                    expr: body.expr(db),
+                },
+            );
+        }
     };
 
     let Partial::Present(expr) = body.expr(db).data(db, body) else {
@@ -1978,6 +2374,9 @@ pub(crate) fn evaluate_const_ty<'db>(
                     if let Some(const_ty) = const_ty_from_trait_const(db, solve_cx, inst, name) {
                         let evaluated = const_ty.evaluate(db, expected_ty);
                         if evaluated.ty(db).has_invalid(db) {
+                            if is_const_eval_cycle_or_limit(db, evaluated) {
+                                return evaluated;
+                            }
                             return mk_abstract(expected_ty.unwrap_or_else(|| const_ty.ty(db)));
                         }
                         return evaluated;
@@ -2003,6 +2402,9 @@ pub(crate) fn evaluate_const_ty<'db>(
                     if let Some(const_ty) = const_ty_from_inherent_const(db, impl_, recv_ty, name) {
                         let evaluated = const_ty.evaluate(db, expected_ty);
                         if evaluated.ty(db).has_invalid(db) {
+                            if is_const_eval_cycle_or_limit(db, evaluated) {
+                                return evaluated;
+                            }
                             return mk_abstract(expected_ty.unwrap_or_else(|| const_ty.ty(db)));
                         }
                         return evaluated;
@@ -2342,16 +2744,9 @@ pub(crate) fn assumptions_for_body<'db>(
     }
 
     match parent_item {
-        Some(ItemKind::Trait(trait_)) => {
-            PredicateListId::new(db, vec![crate::semantic::trait_self_predicate(db, trait_)])
-                .extend_all_bounds(db)
-        }
-        Some(ItemKind::ImplTrait(impl_trait)) => collect_constraints(db, impl_trait.into())
-            .instantiate_identity()
-            .extend_all_bounds(db),
-        Some(ItemKind::Impl(impl_)) => collect_constraints(db, impl_.into())
-            .instantiate_identity()
-            .extend_all_bounds(db),
+        Some(ItemKind::Trait(trait_)) => crate::semantic::param_env(db, trait_.into()),
+        Some(ItemKind::ImplTrait(impl_trait)) => crate::semantic::param_env(db, impl_trait.into()),
+        Some(ItemKind::Impl(impl_)) => crate::semantic::param_env(db, impl_.into()),
         _ => PredicateListId::empty_list(db),
     }
 }
@@ -2381,18 +2776,23 @@ pub(crate) fn const_ty_from_assoc_const_use<'db>(
     const_ty_from_trait_const(db, assoc.solve_cx(db), assoc.inst(), assoc.name())
 }
 
-/// Whether `start_body`'s value definition can re-enter `start_body` when
-/// its const references (module consts and associated consts through their
-/// selected impls or defaults) are resolved transitively.
+/// Whether a const-reference path re-enters an active body with an equal or
+/// structurally growing generic specialization.
 ///
 /// This detects recursive associated-const definitions on *generic* impls at
 /// the definition site: evaluation under the impl's own binder never errors
 /// (param-dependent consts legitimately stay symbolic, and the recursive
 /// fixpoint in `evaluate_const_ty` recovers with the unevaluated form), so
 /// recursion is invisible to the evaluation result. The typed body's
-/// registered const refs give the same resolution edges lowering will take;
-/// refs whose resolution depends on unknown params (no impl selected) end
-/// the walk — those are deferred to instantiation sites.
+/// registered const refs give the same resolution edges lowering will take.
+/// Re-entering a body with proper-subterm arguments is finite. An incomparable
+/// specialization is also followed: trait dispatch can switch between
+/// unrelated finite receiver types before reaching a concrete base body.
+/// Equal or structurally growing re-entry is recursive. Every active
+/// specialization of the same body is compared so alternating incomparable
+/// steps cannot hide growth relative to an older frame. Refs whose resolution
+/// depends on unknown params (no impl selected) end the walk — those are
+/// deferred to instantiation sites.
 pub(crate) fn const_body_resolution_reenters<'db>(
     db: &'db dyn HirAnalysisDb,
     start_body: Body<'db>,
@@ -2401,30 +2801,38 @@ pub(crate) fn const_body_resolution_reenters<'db>(
 ) -> bool {
     use crate::analysis::ty::ty_check::ConstRef;
 
-    let mut visited = FxHashSet::default();
-    visited.insert(start_body);
-    let mut frontier = vec![(start_body, start_expected, start_args.to_vec())];
-    while let Some((body, expected, args)) = frontier.pop() {
-        let typed_body = &check_anon_const_body(db, body, expected).1;
-        for cref in typed_body.const_refs() {
-            let next = match cref {
-                ConstRef::Const(const_) => const_
-                    .body(db)
-                    .to_opt()
-                    .map(|next_body| (next_body, const_.ty(db), Vec::new())),
-                ConstRef::TraitConst(assoc) => {
-                    // The recorded use is in the owning body's binder terms:
-                    // `Self::B` in a trait default keeps `Self` as a param.
-                    // Instantiate with the args this body is evaluated under
-                    // so impl overrides resolve (a default-body cycle only
-                    // closes through the concrete impl's override).
-                    let assoc = if args.is_empty() {
-                        assoc
-                    } else {
-                        assoc.with_inst(Binder::bind(assoc.inst()).instantiate(db, &args))
-                    };
-                    const_ty_from_assoc_const_use(db, assoc).and_then(|const_ty| {
-                        match const_ty.data(db) {
+    #[derive(Clone, PartialEq, Eq, Hash)]
+    struct ResolutionState<'db> {
+        body: Body<'db>,
+        expected: TyId<'db>,
+        args: Vec<TyId<'db>>,
+    }
+
+    fn successors<'db>(
+        db: &'db dyn HirAnalysisDb,
+        state: &ResolutionState<'db>,
+    ) -> Vec<ResolutionState<'db>> {
+        let typed_body = &check_anon_const_body(db, state.body, state.expected).1;
+        typed_body
+            .const_refs()
+            .filter_map(|cref| {
+                let next = match cref {
+                    ConstRef::Const(const_) => const_
+                        .body(db)
+                        .to_opt()
+                        .map(|body| (body, const_.ty(db), Vec::new())),
+                    ConstRef::TraitConst(assoc) => {
+                        // The recorded use is in the owning body's binder
+                        // terms. Instantiate it with this state's args before
+                        // selecting an impl or default body.
+                        let assoc = if state.args.is_empty() {
+                            assoc
+                        } else {
+                            assoc.with_inst(Binder::bind(assoc.inst()).instantiate(db, &state.args))
+                        };
+                        const_ty_from_assoc_const_use(db, assoc).and_then(|const_ty| match const_ty
+                            .data(db)
+                        {
                             ConstTyData::UnEvaluated {
                                 body,
                                 ty: Some(ty),
@@ -2432,45 +2840,97 @@ pub(crate) fn const_body_resolution_reenters<'db>(
                                 ..
                             } => Some((*body, *ty, generic_args.clone())),
                             _ => None,
-                        }
-                    })
-                }
-                ConstRef::InherentConst(use_) => {
-                    let use_ = if args.is_empty() {
-                        use_
-                    } else {
-                        InherentConstUse::new(
-                            use_.origin_scope(),
-                            use_.assumptions(),
-                            use_.impl_(),
-                            Binder::bind(use_.receiver_ty()).instantiate(db, &args),
-                            use_.name(),
-                        )
-                    };
-                    const_ty_from_inherent_const_use(db, use_).and_then(|const_ty| {
-                        match const_ty.data(db) {
-                            ConstTyData::UnEvaluated {
-                                body,
-                                ty: Some(ty),
-                                generic_args,
-                                ..
-                            } => Some((*body, *ty, generic_args.clone())),
-                            _ => None,
-                        }
-                    })
-                }
-            };
-            let Some((next_body, next_expected, next_args)) = next else {
+                        })
+                    }
+                    ConstRef::InherentConst(use_) => {
+                        let use_ = if state.args.is_empty() {
+                            use_
+                        } else {
+                            InherentConstUse::new(
+                                use_.origin_scope(),
+                                use_.assumptions(),
+                                use_.impl_(),
+                                Binder::bind(use_.receiver_ty()).instantiate(db, &state.args),
+                                use_.name(),
+                            )
+                        };
+                        const_ty_from_inherent_const_use(db, use_).and_then(|const_ty| {
+                            match const_ty.data(db) {
+                                ConstTyData::UnEvaluated {
+                                    body,
+                                    ty: Some(ty),
+                                    generic_args,
+                                    ..
+                                } => Some((*body, *ty, generic_args.clone())),
+                                _ => None,
+                            }
+                        })
+                    }
+                }?;
+                Some(ResolutionState {
+                    body: next.0,
+                    expected: next.1,
+                    args: next.2,
+                })
+            })
+            .collect()
+    }
+
+    struct ResolutionFrame<'db> {
+        state: ResolutionState<'db>,
+        successors: Vec<ResolutionState<'db>>,
+        next: usize,
+    }
+
+    let start = ResolutionState {
+        body: start_body,
+        expected: start_expected,
+        args: start_args.to_vec(),
+    };
+    let mut frames = vec![ResolutionFrame {
+        successors: successors(db, &start),
+        state: start,
+        next: 0,
+    }];
+
+    while !frames.is_empty() {
+        let next = {
+            let frame = frames.last_mut().unwrap();
+            let Some(next) = frame.successors.get(frame.next).cloned() else {
+                frames.pop();
                 continue;
             };
-            if next_body == start_body {
-                return true;
-            }
-            if next_expected.has_invalid(db) || !visited.insert(next_body) {
-                continue;
-            }
-            frontier.push((next_body, next_expected, next_args));
+            frame.next += 1;
+            next
+        };
+        if next.expected.has_invalid(db) {
+            continue;
         }
+        let relations = frames
+            .iter()
+            .filter(|frame| frame.state.body == next.body)
+            .map(|active| const_specialization_relation(db, &active.state.args, &next.args))
+            .collect::<Vec<_>>();
+        if relations.iter().any(|relation| {
+            matches!(
+                relation,
+                ConstSpecializationRelation::Equal | ConstSpecializationRelation::StrictGrowth
+            )
+        }) {
+            return true;
+        }
+        if const_specialization_depth_limit_exceeded(&relations) {
+            // This definition-only walk cannot prove progress through the
+            // specialization chain. Prune it without inventing a recursive
+            // definition diagnostic; concrete evaluation has the matching
+            // recursion-limit guard and can report the actual use site.
+            continue;
+        }
+        frames.push(ResolutionFrame {
+            successors: successors(db, &next),
+            state: next,
+            next: 0,
+        });
     }
     false
 }
@@ -2516,9 +2976,23 @@ fn const_ty_or_abstract<'db>(
     };
     let evaluated = evaluated.evaluate(db, Some(expected_ty));
     if evaluated.ty(db).has_invalid(db) {
+        if is_const_eval_cycle_or_limit(db, evaluated) {
+            return evaluated;
+        }
         return to_abstract(abstract_expr);
     }
     evaluated
+}
+
+fn is_const_eval_cycle_or_limit<'db>(db: &'db dyn HirAnalysisDb, const_ty: ConstTyId<'db>) -> bool {
+    matches!(
+        const_ty.ty(db).invalid_cause(db),
+        Some(
+            InvalidCause::ConstEvalRecursiveConst { .. }
+                | InvalidCause::ConstEvalRecursionLimitExceeded { .. }
+                | InvalidCause::ConstEvalStepLimitExceeded { .. }
+        )
+    )
 }
 
 pub(crate) fn const_ty_or_abstract_from_assoc_const_use<'db>(
@@ -2555,22 +3029,7 @@ pub(super) fn const_ty_from_resolved_trait_const<'db>(
 ) -> Option<ConstTyId<'db>> {
     let inst = resolved.trait_inst();
     let trait_ = inst.def(db);
-    let explicit = match resolved.selected().origin(db) {
-        ImplementorOrigin::Hir(impl_trait) => impl_trait
-            .hir_consts(db)
-            .iter()
-            .find(|const_| const_.name.to_opt() == Some(name))
-            .and_then(|const_| const_.value.to_opt())
-            .map(|body| (body, resolved.impl_args(db).to_vec())),
-        ImplementorOrigin::VirtualContract(_) => None,
-        ImplementorOrigin::Assumption => return None,
-    };
-    let (body, generic_args) = explicit.or_else(|| {
-        trait_
-            .const_(db, name)
-            .and_then(|const_| const_.default_body(db))
-            .map(|body| (body, inst.args(db).to_vec()))
-    })?;
+    let (body, generic_args) = assoc_const_body_and_args_from_resolved(db, resolved, name)?;
 
     let declared_ty = trait_
         .const_(db, name)

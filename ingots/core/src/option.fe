@@ -1,5 +1,6 @@
 use ingot::Default
 use ingot::Fn
+use ingot::FnOnce
 use ingot::Functor
 use ingot::Applicative
 use ingot::Monad
@@ -23,16 +24,16 @@ impl<T> Option<T> {
         !self.is_some()
     }
 
-    pub fn map<U, F: Fn<T, U>>(own self, _ func: F) -> Option<U> {
+    pub fn map<U, F: FnOnce<(T,), U>>(own self, _ func: own F) -> Option<U> {
         match self {
-            Self::Some(value) => Option::Some(func.call(value))
+            Self::Some(value) => Option::Some(func(value))
             Self::None => Option::None
         }
     }
 
-    pub fn and_then<U, F: Fn<T, Option<U>>>(own self, _ func: F) -> Option<U> {
+    pub fn and_then<U, F: FnOnce<(T,), Option<U>>>(own self, _ func: own F) -> Option<U> {
         match self {
-            Self::Some(value) => func.call(value)
+            Self::Some(value) => func(value)
             Self::None => Option::None
         }
     }
@@ -44,10 +45,10 @@ impl<T> Option<T> {
         }
     }
 
-    pub fn ok_or_else<E, F: Fn<(), E>>(own self, _ err_func: F) -> Result<E, T> {
+    pub fn ok_or_else<E, F: FnOnce<(), E>>(own self, _ err_func: own F) -> Result<E, T> {
         match self {
             Self::Some(value) => Result::Ok(value)
-            Self::None => Result::Err(err_func.call(()))
+            Self::None => Result::Err(err_func())
         }
     }
 
@@ -65,10 +66,10 @@ impl<T> Option<T> {
         }
     }
 
-    pub fn unwrap_or_else<F: Fn<(), T>>(own self, _ default_func: F) -> T {
+    pub fn unwrap_or_else<F: FnOnce<(), T>>(own self, _ default_func: own F) -> T {
         match self {
             Self::Some(value) => value
-            Self::None => default_func.call(())
+            Self::None => default_func()
         }
     }
 }
@@ -89,9 +90,9 @@ impl<T> Default for Option<T> {
 }
 
 impl Functor for Option {
-    fn map<T, U, F: Fn<T, U>>(self: own Self<T>, _ func: F) -> Self<U> {
+    fn map<T, U, F: Fn<(T,), U>>(self: own Self<T>, _ func: F) -> Self<U> {
         match self {
-            Option::Some(value) => Option::Some(func.call(value))
+            Option::Some(value) => Option::Some(func(value))
             Option::None => Option::None
         }
     }
@@ -102,18 +103,18 @@ impl Applicative for Option {
         Option::Some(value)
     }
 
-    fn ap<T, U, F: Fn<T, U>>(self: own Self<F>, _ value: own Self<T>) -> Self<U> {
+    fn ap<T, U, F: Fn<(T,), U>>(self: own Self<F>, _ value: own Self<T>) -> Self<U> {
         match (self, value) {
-            (Option::Some(func), Option::Some(arg)) => Option::Some(func.call(arg))
+            (Option::Some(func), Option::Some(arg)) => Option::Some(func(arg))
             _ => Option::None
         }
     }
 }
 
 impl Monad for Option {
-    fn bind<T, U, F: Fn<T, Self<U>>>(self: own Self<T>, _ func: F) -> Self<U> {
+    fn bind<T, U, F: Fn<(T,), Self<U>>>(self: own Self<T>, _ func: F) -> Self<U> {
         match self {
-            Option::Some(value) => func.call(value)
+            Option::Some(value) => func(value)
             Option::None => Option::None
         }
     }

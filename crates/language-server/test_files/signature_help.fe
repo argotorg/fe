@@ -1,0 +1,91 @@
+use core::functional::{Fn, FnOnce}
+
+struct Holder<F> {
+    function: F,
+}
+
+struct AddOne {}
+
+struct Counter {
+    value: u256,
+}
+
+trait Unary: Fn<(u256,), u256> {}
+
+impl Counter {
+    fn add(self, amount: own u256) -> u256 {
+        self.value + amount
+    }
+}
+
+impl FnOnce<(u256,), u256> for AddOne {
+    fn call_once(self: own Self, _ args: own (u256,)) -> u256 {
+        self.call(args.0)
+    }
+}
+
+impl Fn<(u256,), u256> for AddOne {
+    fn call(self, _ args: own (u256,)) -> u256 {
+        args.0 + 1
+    }
+}
+
+fn ordinary(value: own u256, flag: bool) -> u256 {
+    if flag { value } else { 0 }
+}
+
+fn capabilities(shared: ref u256, target: mut u256) -> u256 {
+    shared + target
+}
+
+fn apply<F: Fn<(u256, u256), u256>>(function: F, fallback: own u256) -> u256 {
+    function(20, 22) + fallback
+}
+
+fn generic<F: Fn<(u256,), u256>>(_ function: F) -> u256 {
+    function(<|generic|>41)
+}
+
+fn generic_owned<T, U, F: Fn<(T,), U>>(_ function: F, value: own T) -> U {
+    function(<|generic_owned|>value)
+}
+
+fn implied_callable<F: Unary>(_ function: F) -> u256 {
+    function(<|implied_supertrait|>41)
+}
+
+fn exercise() {
+    ordinary(41, <|ordinary_second|>true)
+    let shared = 1
+    let mut target = 41
+    capabilities(ref shared, <|ordinary_mut|>mut target)
+
+    let add = |value: own u256| -> u256 { value + 1 }
+    add(<|closure|>41)
+    Fn<(u256,), u256>::call(<|ufcs_receiver|>add, 41)
+    Fn<(u256,), u256>::call(add, <|ufcs_argument|>41)
+
+    apply(
+        |left: own u256, <|closure_parameter_list|>right: own u256| -> u256 { left + right },
+        0,
+    )
+
+    let holder = Holder { function: add }
+    (holder.function)(<|projected|>41)
+
+    AddOne {}(<|user_callable|>41)
+    Counter { value: 1 }.add(<|method|>41)
+    (|value: own u256| -> u256 { value + 1 })(<|inline|>41)
+    let answer = || -> u256 { 42 }
+    answer(<|zero_arg|>)
+
+    let nested = |value: own u256| {
+        |other: own u256| -> u256 { value + other }
+    }
+    nested(20)(<|nested_return|>22)
+
+    ordinary(
+        add(<|nested_inner|>41),
+        <|nested_outer|>true,
+    )
+}

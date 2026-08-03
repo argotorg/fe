@@ -1,0 +1,7 @@
+pub fn borrow_ends() {
+    let mut b: u256 = 1
+    let t: (mut u256, u256) = (mut b, 0)
+    let _k = t
+    let m2 = mut b
+    m2 = 3
+}

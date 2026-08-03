@@ -1,0 +1,9 @@
+pub fn closure_return_param_alias() -> u256 {
+    let mut x = 0
+    let borrowed = mut x
+    let pass = |_ unit: own ()| -> mut u256 { borrowed }
+    let returned = pass.call(())
+    let other = mut x
+    other = 1
+    returned
+}

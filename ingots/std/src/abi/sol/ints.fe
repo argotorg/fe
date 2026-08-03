@@ -865,13 +865,13 @@ impl SolWrappingInt for Int248 {
 impl SolInt for Int248 {}
 
 impl<T: SolWrappingInt + SolInt> WrappingAdd for T {
-    fn wrapping_add(self, _ other: T) -> T { sol_wrapping_add(a: self, b: other) }
+    fn wrapping_add(own self, _ other: own T) -> T { sol_wrapping_add(a: self, b: other) }
 }
 impl<T: SolWrappingInt + SolInt> WrappingSub for T {
-    fn wrapping_sub(self, _ other: T) -> T { sol_wrapping_sub(a: self, b: other) }
+    fn wrapping_sub(own self, _ other: own T) -> T { sol_wrapping_sub(a: self, b: other) }
 }
 impl<T: SolWrappingInt + SolInt> WrappingMul for T {
-    fn wrapping_mul(self, _ other: T) -> T { sol_wrapping_mul(a: self, b: other) }
+    fn wrapping_mul(own self, _ other: own T) -> T { sol_wrapping_mul(a: self, b: other) }
 }
 
 impl<T: SolWordRepr + SolInt, A: Abi> Encode<A> for T {

@@ -1,0 +1,8 @@
+fn borrow_params() {
+    let mutate = |value: mut u256| -> () {
+        value += 1
+    }
+    let read = |value: ref u256| -> u256 {
+        value
+    }
+}

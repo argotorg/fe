@@ -1,0 +1,23 @@
+use core::effect_ref::{EffectHandle, EffectRefMut, MemPtr}
+use core::functional::Fn
+use ingot::Copy
+
+fn capture_target() uses (target: mut u256) {
+    let handle = mut target
+    let f = |_ unit: own ()| -> () {
+        let captured = handle
+        captured = 7
+    }
+    f.call(())
+}
+
+fn provide<H: EffectHandle<Target = u256> + EffectRefMut<u256> + Copy>(_ ptr: H) {
+    with (ptr) {
+        capture_target()
+    }
+}
+
+pub fn closure_memory_handle_capture_through_generic() {
+    let ptr: MemPtr<u256> = MemPtr::from_raw(0)
+    provide(ptr)
+}

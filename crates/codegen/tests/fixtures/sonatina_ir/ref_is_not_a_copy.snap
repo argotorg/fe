@@ -42,57 +42,42 @@ func private %main_root() {
 
 func private %test_ref_is_not_a_copy() {
     block0:
-        v0.*i256 = alloca i256;
-        v1.*i256 = alloca i256;
         jump block1;
 
     block1:
-        v4.constref<@layout_0> = const.ref $const_region_0;
-        v5.constref<@layout_0> = const.ref $const_region_0;
-        v6.@layout_1 = call %live_view v5;
-        v7.objref<@layout_1> = obj.alloc @layout_1;
-        v9.objref<constref<i256>> = obj.proj v7 0.i256;
-        v10.constref<i256> = extract_value v6 0.i256;
-        obj.store v9 v10;
-        v12.objref<constref<i256>> = obj.proj v7 1.i256;
-        v13.constref<i256> = extract_value v6 1.i256;
-        obj.store v12 v13;
-        v14.objref<constref<i256>> = obj.proj v7 0.i256;
-        v15.constref<i256> = obj.load v14;
-        v16.objref<constref<i256>> = obj.proj v7 1.i256;
-        v17.constref<i256> = obj.load v16;
-        mstore v0 10.i256 i256;
-        v18.i256 = const.load v15;
-        v19.i256 = mload v0 i256;
-        v20.i1 = eq v18 v19;
-        br v20 block2 block3;
+        v2.constref<@layout_0> = const.ref $const_region_0;
+        v3.constref<@layout_0> = const.ref $const_region_0;
+        v4.@layout_1 = call %live_view v3;
+        v6.constref<i256> = extract_value v4 0.i256;
+        v8.constref<i256> = extract_value v4 1.i256;
+        v9.i256 = const.load v6;
+        v10.i1 = eq v9 10.i256;
+        br v10 block2 block3;
 
     block2:
         jump block4;
 
     block3:
-        v23.*i8 = evm_malloc 64.i256;
-        v24.i256 = ptr_to_int v23 i256;
-        mstore v24 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        (v28.i256, v29.i1) = uaddo v24 32.i256;
-        br v29 block8 block9;
+        v13.*i8 = evm_malloc 64.i256;
+        v14.i256 = ptr_to_int v13 i256;
+        mstore v14 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        (v18.i256, v19.i1) = uaddo v14 32.i256;
+        br v19 block8 block9;
 
     block4:
-        mstore v1 20.i256 i256;
-        v37.i256 = const.load v17;
-        v38.i256 = mload v1 i256;
-        v39.i1 = eq v37 v38;
-        br v39 block5 block6;
+        v27.i256 = const.load v8;
+        v28.i1 = eq v27 20.i256;
+        br v28 block5 block6;
 
     block5:
         jump block7;
 
     block6:
-        v40.*i8 = evm_malloc 64.i256;
-        v41.i256 = ptr_to_int v40 i256;
-        mstore v41 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        (v43.i256, v44.i1) = uaddo v41 32.i256;
-        br v44 block8 block10;
+        v29.*i8 = evm_malloc 64.i256;
+        v30.i256 = ptr_to_int v29 i256;
+        mstore v30 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        (v32.i256, v33.i1) = uaddo v30 32.i256;
+        br v33 block8 block10;
 
     block7:
         return;
@@ -103,12 +88,12 @@ func private %test_ref_is_not_a_copy() {
         evm_revert 0.i256 36.i256;
 
     block9:
-        mstore v28 26959946667150639794667015087019630673637144422540572481103610249216.i256 i256;
-        evm_revert v24 36.i256;
+        mstore v18 26959946667150639794667015087019630673637144422540572481103610249216.i256 i256;
+        evm_revert v14 36.i256;
 
     block10:
-        mstore v43 26959946667150639794667015087019630673637144422540572481103610249216.i256 i256;
-        evm_revert v41 36.i256;
+        mstore v32 26959946667150639794667015087019630673637144422540572481103610249216.i256 i256;
+        evm_revert v30 36.i256;
 }
 
 

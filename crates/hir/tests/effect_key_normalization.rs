@@ -5044,6 +5044,7 @@ fn function_effect_bindings_use_instantiated_provider_bindings() {
                 BodyOwner::Func(_)
                 | BodyOwner::Const(_)
                 | BodyOwner::AnonConstBody { .. }
+                | BodyOwner::Closure { .. }
                 | BodyOwner::ContractInit { .. }
                 | BodyOwner::ContractRecvArm { .. } => None,
             }

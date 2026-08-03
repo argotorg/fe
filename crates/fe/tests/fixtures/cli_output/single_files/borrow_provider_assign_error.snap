@@ -1,20 +1,22 @@
 ---
 source: crates/fe/tests/cli_output.rs
+assertion_line: 2617
 expression: output
 input_file: tests/fixtures/cli_output/single_files/borrow_provider_assign_error.fe
 ---
 === STDERR ===
 errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/borrow_provider_assign_error.fe
 
-error[8-0077]: incompatible borrow providers
-   ┌─ borrow_provider_assign_error.fe:13:22
+error[8-0018]: left-hand side of assignment is immutable
+   ┌─ borrow_provider_assign_error.fe:13:13
    │
 12 │             let target: mut u256 = mut local
-   │                 ------ the previous value here is memory-backed
+   │                 ------ the capability handle `target` cannot be rebound
 13 │             target = mut value
-   │                      ^^^^^^^^^ this borrow is storage-backed
+   │             ^^^^^^ immutable assignment
    │
-   = Fe cannot assign or join `mut`/`ref` values backed by different providers into one value
+   = `mut` and `ref` handle bindings stay attached to their original borrow provider
+   = assign an owned value through the handle instead of replacing the handle
 
 
 === EXIT CODE: 1 ===

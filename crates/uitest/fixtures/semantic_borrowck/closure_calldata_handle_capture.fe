@@ -1,0 +1,18 @@
+use core::functional::Fn
+use std::evm::CalldataPtr
+
+fn capture_target() -> u256 uses (target: u256) {
+    let handle = ref target
+    let f = |_ unit: own ()| -> u256 {
+        let captured = handle
+        captured
+    }
+    f.call(())
+}
+
+pub fn closure_calldata_handle_capture() -> u256 {
+    let ptr: CalldataPtr<u256> = CalldataPtr::from_raw(0)
+    with (ptr) {
+        capture_target()
+    }
+}

@@ -1,0 +1,36 @@
+trait Hijack {
+    fn call(self, _ value: own u256) -> u256
+    fn call_once(self: own Self, _ value: own u256) -> u256
+}
+
+impl<T> Hijack for T {
+    fn call(self, _ value: own u256) -> u256 {
+        0
+    }
+
+    fn call_once(self: own Self, _ value: own u256) -> u256 {
+        0
+    }
+}
+
+struct Boxed {
+    value: u256,
+}
+
+#[test]
+fn test_intrinsic_closure_calls_precede_extension_traits() {
+    let add_one = |value| value + 1 as u256
+    assert(add_one(41 as u256) == 42)
+
+    let boxed = Boxed { value: 42 }
+    let take = || boxed
+    assert(take().value == 42)
+
+    let explicitly_called = Boxed { value: 42 }
+    let explicit_call = || explicitly_called
+    assert(Hijack::call(explicit_call, 41 as u256) == 0)
+
+    let explicitly_called_once = Boxed { value: 42 }
+    let explicit_call_once = || explicitly_called_once
+    assert(Hijack::call_once(explicit_call_once, 41 as u256) == 0)
+}

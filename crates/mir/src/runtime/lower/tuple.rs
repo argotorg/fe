@@ -1,4 +1,4 @@
-use hir::analysis::ty::ty_def::TyId;
+use hir::{analysis::ty::ty_def::TyId, projection::IndexSource};
 
 use crate::{
     db::MirDb,
@@ -67,7 +67,7 @@ where
                         },
                         TupleExtractSource::Value(value) => RExpr::AggregateExtract {
                             value: *value,
-                            index: idx as u32,
+                            index: IndexSource::Constant(idx),
                         },
                     },
                 },
@@ -92,7 +92,9 @@ fn tuple_extract_source<'db>(
     match tuple_class {
         RuntimeClass::Ref { .. } => TupleExtractSource::Place(PlaceRoot::Ref(tuple)),
         RuntimeClass::AggregateValue { layout } => match emitter.tuple_local_root(tuple) {
-            RuntimeLocalRoot::Slot(_) => TupleExtractSource::Place(PlaceRoot::Slot(tuple)),
+            RuntimeLocalRoot::Slot(_) | RuntimeLocalRoot::HeapSlot(_) => {
+                TupleExtractSource::Place(PlaceRoot::Slot(tuple))
+            }
             RuntimeLocalRoot::Ref(_) => TupleExtractSource::Place(PlaceRoot::Ref(tuple)),
             RuntimeLocalRoot::None => TupleExtractSource::Value(tuple),
             RuntimeLocalRoot::Ptr { .. } => {

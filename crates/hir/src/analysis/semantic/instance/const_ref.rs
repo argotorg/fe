@@ -9,17 +9,20 @@ use crate::{
         semantic::{SemOrigin, SemanticConstRef},
         ty::{
             assoc_const::{AssocConstUse, InherentConstUse},
+            closure::{ClosureCallTrait, implemented_closure_call_trait},
             const_ty::inherent_const_body_and_impl_args,
             effects::place_effect_provider_param_index_map,
+            layout_holes::ty_contains_const_hole,
             trait_def::{
                 assoc_const_body_and_impl_args_for_trait_inst, complete_resolved_trait_method_args,
                 resolve_trait_method_instance,
             },
             trait_resolution::{PredicateListId, TraitSolveCx},
             ty_check::{
-                BodyOwner, Callable, ConstRef, EffectParamSite, EffectProviderSpecialization,
+                BodyOwner, Callable, ClosureReceiverMode, ConstRef, EffectParamSite,
+                EffectProviderSpecialization,
             },
-            ty_def::TyId,
+            ty_def::{TyBase, TyData, TyId},
             ty_lower::instantiate_callable_effect_layout_args,
         },
     },
@@ -81,7 +84,36 @@ fn semantic_callee_key_with_assumptions<'db>(
     let (owner, mut subst_args) = match callable.callable_def() {
         CallableDef::Func(func) => {
             let mut subst_args = callable.generic_args().to_vec();
-            let owner = if let Some(inst) = callable.trait_inst()
+            let builtin_closure = callable.trait_inst().and_then(|inst| {
+                let TyData::TyBase(TyBase::Closure(closure)) =
+                    inst.self_ty(db).base_ty(db).data(db)
+                else {
+                    return None;
+                };
+                let call_trait = implemented_closure_call_trait(
+                    db,
+                    func.scope(),
+                    assumptions,
+                    *closure,
+                    inst.def(db),
+                )?;
+                if func.name(db).to_opt()?.data(db).as_str() != call_trait.method_name() {
+                    return None;
+                }
+                let receiver_mode = match call_trait {
+                    ClosureCallTrait::Fn => ClosureReceiverMode::View,
+                    ClosureCallTrait::FnOnce => ClosureReceiverMode::Own,
+                };
+                Some((*closure, receiver_mode))
+            });
+            let owner = if let Some((closure, receiver_mode)) = builtin_closure {
+                subst_args = closure.parent_args(db).clone();
+                BodyOwner::Closure {
+                    ty: closure,
+                    def: closure.def(db),
+                    receiver_mode,
+                }
+            } else if let Some(inst) = callable.trait_inst()
                 && let Some(name) = func.name(db).to_opt()
                 && let Some((impl_func, impl_args)) = resolve_trait_method_instance(
                     db,
@@ -89,7 +121,8 @@ fn semantic_callee_key_with_assumptions<'db>(
                         .with_assumptions(assumptions),
                     inst,
                     name,
-                ) {
+                )
+            {
                 subst_args = complete_resolved_trait_method_args(
                     db,
                     impl_func,
@@ -115,17 +148,51 @@ fn semantic_callee_key_with_assumptions<'db>(
         provider_resolution_mode,
     );
 
-    let impl_env = if let Some(witness) = resolved_trait_witness {
+    let needs_inherited_env = |ty: TyId<'db>| {
+        ty.has_param(db)
+            || ty.has_var(db)
+            || ty.has_projection(db)
+            || ty.has_invalid(db)
+            || ty_contains_const_hole(db, ty)
+    };
+    let inherits_impl_env = subst_args.iter().copied().any(needs_inherited_env)
+        || effect_providers.iter().any(|specialization| {
+            needs_inherited_env(specialization.provider.provider_ty)
+                || specialization
+                    .provider
+                    .semantics
+                    .target_ty
+                    .is_some_and(needs_inherited_env)
+        })
+        || callable.trait_inst().is_some_and(|inst| {
+            inst.args(db).iter().copied().any(needs_inherited_env)
+                || inst
+                    .assoc_type_bindings(db)
+                    .values()
+                    .copied()
+                    .any(needs_inherited_env)
+        });
+    let impl_env = if let Some(witness) = resolved_trait_witness
+        && !inherits_impl_env
+    {
         ImplEnv::for_resolved_trait_method(db, owner, witness)
     } else {
-        let mut witnesses: IndexSet<_> = impl_env.witnesses(db).iter().copied().collect();
+        let mut witnesses: IndexSet<_> = if inherits_impl_env {
+            impl_env.witnesses(db).iter().copied().collect()
+        } else {
+            IndexSet::new()
+        };
         if let Some(witness) = callable.trait_inst() {
             witnesses.insert(witness);
         }
         ImplEnv::new(
             db,
             impl_env.normalization_scope(db),
-            assumptions,
+            if inherits_impl_env {
+                assumptions
+            } else {
+                PredicateListId::empty_list(db)
+            },
             witnesses.into_iter().collect::<Vec<_>>(),
         )
     };

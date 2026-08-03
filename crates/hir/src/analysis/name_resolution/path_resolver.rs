@@ -455,11 +455,13 @@ fn func_not_found_err<'db>(
             primary: span,
             method_name: ident,
             receiver: Either::Left(ty),
+            callable_field: None,
         },
         Some(PathRes::Trait(t)) => PathResDiag::MethodNotFound {
             primary: span,
             method_name: ident,
             receiver: Either::Right(t),
+            callable_field: None,
         },
         _ => PathResDiag::NotFound(span, ident),
     }

@@ -4,7 +4,7 @@ use std::fmt;
 
 use crate::{
     hir_def::{
-        Body, Enum, ExprId, GenericParamOwner, IdentId, IntegerId, ItemKind, PathId,
+        Body, ClosureDef, Enum, ExprId, GenericParamOwner, IdentId, IntegerId, ItemKind, PathId,
         TypeAlias as HirTypeAlias, VariantKind,
         prim_ty::{IntTy as HirIntTy, PrimTy as HirPrimTy, UintTy as HirUintTy},
         scope_graph::ScopeId,
@@ -136,6 +136,7 @@ impl<'db> TyId<'db> {
                         return contract.top_mod(db).ingot(db).into();
                     }
                     TyData::TyBase(TyBase::Func(def)) => return def.ingot(db).into(),
+                    TyData::TyBase(TyBase::Closure(_)) => return None,
                     TyData::TyApp(lhs, _) => {
                         ty = *lhs;
                     }
@@ -148,6 +149,7 @@ impl<'db> TyId<'db> {
             TyData::TyBase(TyBase::Adt(adt)) => adt.ingot(db).into(),
             TyData::TyBase(TyBase::Contract(contract)) => contract.top_mod(db).ingot(db).into(),
             TyData::TyBase(TyBase::Func(def)) => def.ingot(db).into(),
+            TyData::TyBase(TyBase::Closure(_)) => None,
             TyData::TyApp(lhs, _) => lhs.ingot(db),
             // Projection types don't have a single defining ingot, but we still want an ingot
             // that can be used to search for relevant trait impls. Using an ingot that is
@@ -302,7 +304,7 @@ impl<'db> TyId<'db> {
         Self::new(db, TyData::TyBase(TyBase::tuple(n)))
     }
 
-    pub(super) fn tuple_with_elems(db: &'db dyn HirAnalysisDb, elems: &[TyId<'db>]) -> Self {
+    pub(crate) fn tuple_with_elems(db: &'db dyn HirAnalysisDb, elems: &[TyId<'db>]) -> Self {
         let base = TyBase::tuple(elems.len());
         let mut ty = Self::new(db, TyData::TyBase(base));
         for &elem in elems {
@@ -384,8 +386,19 @@ impl<'db> TyId<'db> {
         Self::new(db, TyData::TyBase(TyBase::Func(func)))
     }
 
+    pub fn closure(db: &'db dyn HirAnalysisDb, closure: ClosureTy<'db>) -> Self {
+        Self::new(db, TyData::TyBase(TyBase::Closure(closure)))
+    }
+
     pub fn is_func(self, db: &dyn HirAnalysisDb) -> bool {
         matches!(self.base_ty(db).data(db), TyData::TyBase(TyBase::Func(_)))
+    }
+
+    pub fn as_closure(self, db: &'db dyn HirAnalysisDb) -> Option<ClosureTy<'db>> {
+        match self.base_ty(db).data(db) {
+            TyData::TyBase(TyBase::Closure(closure)) => Some(*closure),
+            _ => None,
+        }
     }
 
     pub(crate) fn is_trait_self(self, db: &dyn HirAnalysisDb) -> bool {
@@ -467,6 +480,12 @@ impl<'db> TyId<'db> {
                 || matches!(ty.base_ty(db).data(db), TyData::TyBase(TyBase::Func(_)))
             {
                 true
+            } else if let Some(closure) = ty.as_closure(db) {
+                closure
+                    .captures(db)
+                    .iter()
+                    .copied()
+                    .all(|field_ty| inner(db, field_ty, visiting))
             } else if ty.is_tuple(db) {
                 ty.field_types(db)
                     .into_iter()
@@ -569,6 +588,7 @@ impl<'db> TyId<'db> {
             TyData::TyBase(TyBase::Adt(adt)) => Some(adt.scope(db)),
             TyData::TyBase(TyBase::Contract(c)) => Some(c.scope()),
             TyData::TyBase(TyBase::Func(func)) => Some(func.scope()),
+            TyData::TyBase(TyBase::Closure(_)) => None,
             TyData::TyBase(TyBase::Prim(..)) => None,
             TyData::ConstTy(const_ty) => match const_ty.data(db) {
                 ConstTyData::TyVar(..) => None,
@@ -595,6 +615,7 @@ impl<'db> TyId<'db> {
             TyData::TyBase(TyBase::Adt(adt)) => Some(adt.name_span(db)),
             TyData::TyBase(TyBase::Contract(c)) => c.scope().name_span(db),
             TyData::TyBase(TyBase::Func(func)) => Some(func.name_span()),
+            TyData::TyBase(TyBase::Closure(_)) => None,
             TyData::TyBase(TyBase::Prim(_)) => None,
 
             TyData::ConstTy(ty) => match ty.data(db) {
@@ -946,6 +967,8 @@ impl<'db> TyId<'db> {
         if self.is_tuple(db) {
             let (_, elems) = self.decompose_ty_app(db);
             elems.len()
+        } else if let Some(closure) = self.as_closure(db) {
+            closure.captures(db).len()
         } else if let Some(adt_def) = self.adt_def(db) {
             match adt_def.adt_ref(db) {
                 AdtRef::Struct(_) => adt_def.fields(db)[0].num_types(),
@@ -961,6 +984,8 @@ impl<'db> TyId<'db> {
         if self.is_tuple(db) {
             let (_, elems) = self.decompose_ty_app(db);
             elems.to_vec()
+        } else if let Some(closure) = self.as_closure(db) {
+            closure.captures(db).to_vec()
         } else if let Some(adt_def) = self.adt_def(db) {
             match adt_def.adt_ref(db) {
                 AdtRef::Struct(_) => {
@@ -1014,6 +1039,254 @@ pub enum TyData<'db> {
     // This type can be unified with any other types.
     // NOTE: For type soundness check in this level, we don't consider trait satisfiability.
     Invalid(InvalidCause<'db>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum ClosureCallMode {
+    Reusable,
+    Consuming,
+}
+
+impl ClosureCallMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Reusable => "reusable",
+            Self::Consuming => "consuming",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum ClosureCaptureAccess {
+    Read,
+    MoveIfNonCopy,
+    Move,
+}
+
+impl ClosureCaptureAccess {
+    pub(crate) fn include(&mut self, access: Self) {
+        *self = match (*self, access) {
+            (Self::Move, _) | (_, Self::Move) => Self::Move,
+            (Self::MoveIfNonCopy, _) | (_, Self::MoveIfNonCopy) => Self::MoveIfNonCopy,
+            (Self::Read, Self::Read) => Self::Read,
+        };
+    }
+
+    pub(crate) fn consumes(self, copy: bool) -> bool {
+        match self {
+            Self::Read => false,
+            Self::MoveIfNonCopy => !copy,
+            Self::Move => true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum ClosureParamMode {
+    Own,
+    View,
+    Ref,
+    Mut,
+}
+
+/// Maximum number of fields in either closure ABI aggregate.
+///
+/// Closure environments and argument packs use `u16` field indices, so indices
+/// `0..=u16::MAX` are representable.
+pub const MAX_CLOSURE_FIELDS: usize = u16::MAX as usize + 1;
+
+pub const fn closure_field_count_is_supported(count: usize) -> bool {
+    count <= MAX_CLOSURE_FIELDS
+}
+
+impl ClosureParamMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Own => "own",
+            Self::View => "view",
+            Self::Ref => "ref",
+            Self::Mut => "mut",
+        }
+    }
+
+    pub fn try_from_carrier<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<Self> {
+        if let Some((kind, _)) = ty.as_capability(db) {
+            return Some(match kind {
+                CapabilityKind::View => Self::View,
+                CapabilityKind::Ref => Self::Ref,
+                CapabilityKind::Mut => Self::Mut,
+            });
+        }
+
+        match ty.base_ty(db).data(db) {
+            TyData::TyVar(_)
+            | TyData::TyParam(_)
+            | TyData::AssocTy(_)
+            | TyData::QualifiedTy(_)
+            | TyData::Invalid(_) => None,
+            _ => Some(Self::Own),
+        }
+    }
+
+    pub fn carrier<'db>(self, db: &'db dyn HirAnalysisDb, payload: TyId<'db>) -> TyId<'db> {
+        match self {
+            Self::Own => payload,
+            Self::View => TyId::view_of(db, payload),
+            Self::Ref => TyId::borrow_ref_of(db, payload),
+            Self::Mut => TyId::borrow_mut_of(db, payload),
+        }
+    }
+
+    pub fn payload<'db>(self, db: &'db dyn HirAnalysisDb, carrier: TyId<'db>) -> TyId<'db> {
+        match self {
+            Self::Own => carrier,
+            Self::View | Self::Ref | Self::Mut => carrier
+                .as_capability(db)
+                .map(|(_, inner)| inner)
+                .unwrap_or(carrier),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub struct ClosureSignature<'db> {
+    params: Vec<TyId<'db>>,
+    param_modes: Vec<ClosureParamMode>,
+    ret_ty: TyId<'db>,
+}
+
+impl<'db> ClosureSignature<'db> {
+    pub fn new(
+        params: Vec<TyId<'db>>,
+        param_modes: Vec<ClosureParamMode>,
+        ret_ty: TyId<'db>,
+    ) -> Self {
+        assert_eq!(
+            params.len(),
+            param_modes.len(),
+            "every closure parameter must have an ownership mode"
+        );
+        Self {
+            params,
+            param_modes,
+            ret_ty,
+        }
+    }
+
+    pub fn params(&self) -> &[TyId<'db>] {
+        &self.params
+    }
+
+    pub fn param_modes(&self) -> &[ClosureParamMode] {
+        &self.param_modes
+    }
+
+    pub fn ret_ty(&self) -> TyId<'db> {
+        self.ret_ty
+    }
+}
+
+/// The type and body access for every captured closure value.
+///
+/// Keeping these parallel slices behind a checked constructor makes their
+/// positional relationship an invariant of [`ClosureTy`], rather than an
+/// assumption each consumer has to re-establish.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub struct ClosureCaptures<'db> {
+    tys: Vec<TyId<'db>>,
+    accesses: Vec<ClosureCaptureAccess>,
+}
+
+impl<'db> ClosureCaptures<'db> {
+    pub fn new(tys: Vec<TyId<'db>>, accesses: Vec<ClosureCaptureAccess>) -> Self {
+        assert_eq!(
+            tys.len(),
+            accesses.len(),
+            "every closure capture must retain its body access"
+        );
+        Self { tys, accesses }
+    }
+
+    pub fn tys(&self) -> &[TyId<'db>] {
+        &self.tys
+    }
+
+    pub fn accesses(&self) -> &[ClosureCaptureAccess] {
+        &self.accesses
+    }
+
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (TyId<'db>, ClosureCaptureAccess)> + '_ {
+        self.tys.iter().copied().zip(self.accesses.iter().copied())
+    }
+}
+
+#[salsa::interned]
+#[derive(Debug)]
+pub struct ClosureTy<'db> {
+    pub def: ClosureDef<'db>,
+    /// Generic arguments of the item whose body defines the closure. Closure
+    /// semantic instances substitute the parent's typed-body template with
+    /// these arguments.
+    #[return_ref]
+    pub parent_args: Vec<TyId<'db>>,
+    #[return_ref]
+    pub capture_data: ClosureCaptures<'db>,
+    #[return_ref]
+    pub signature: ClosureSignature<'db>,
+}
+
+impl<'db> ClosureTy<'db> {
+    pub fn captures(self, db: &'db dyn HirAnalysisDb) -> &'db [TyId<'db>] {
+        self.capture_data(db).tys()
+    }
+
+    /// How the closure body uses each corresponding capture. Whether a move
+    /// access actually consumes the environment depends on the capture's
+    /// resolved `Copy` status and therefore cannot be frozen during initial
+    /// type inference.
+    pub fn capture_accesses(self, db: &'db dyn HirAnalysisDb) -> &'db [ClosureCaptureAccess] {
+        self.capture_data(db).accesses()
+    }
+
+    pub fn captures_with_accesses(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> impl ExactSizeIterator<Item = (TyId<'db>, ClosureCaptureAccess)> + 'db {
+        self.capture_data(db).iter()
+    }
+
+    pub fn params(self, db: &'db dyn HirAnalysisDb) -> &'db [TyId<'db>] {
+        self.signature(db).params()
+    }
+
+    pub fn param_modes(self, db: &'db dyn HirAnalysisDb) -> &'db [ClosureParamMode] {
+        self.signature(db).param_modes()
+    }
+
+    pub fn ret_ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
+        self.signature(db).ret_ty()
+    }
+
+    pub fn args_pack_ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
+        TyId::tuple_with_elems(db, self.params(db))
+    }
+
+    pub fn pretty_print(self, db: &'db dyn HirAnalysisDb) -> String {
+        let params = self
+            .params(db)
+            .iter()
+            .zip(self.param_modes(db))
+            .map(|(&ty, &mode)| {
+                format!(
+                    "{} {}",
+                    mode.as_str(),
+                    mode.payload(db, ty).pretty_print(db),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("|{params}| -> {}", self.ret_ty(db).pretty_print(db))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1557,6 +1830,7 @@ pub enum TyBase<'db> {
     Adt(AdtDef<'db>),
     Contract(crate::hir_def::Contract<'db>),
     Func(CallableDef<'db>),
+    Closure(ClosureTy<'db>),
 }
 
 impl<'db> TyBase<'db> {
@@ -1623,6 +1897,8 @@ impl<'db> TyBase<'db> {
                     .map(|n| n.data(db).to_string())
                     .unwrap_or_else(|| "<unknown>".to_string())
             ),
+
+            Self::Closure(closure) => closure.pretty_print(db),
         }
     }
 
@@ -1697,7 +1973,7 @@ pub enum PrimTy {
     BorrowRef,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BorrowKind {
     Mut,
     Ref,
@@ -1813,6 +2089,7 @@ impl HasKind for TyBase<'_> {
             TyBase::Adt(adt) => adt.kind(db),
             TyBase::Contract(_) => Kind::Star, // Contracts have no generic params
             TyBase::Func(func) => func.kind(db),
+            TyBase::Closure(_) => Kind::Star,
         }
     }
 }
@@ -1956,9 +2233,14 @@ fn pretty_print_ty_app<'db>(
             let mut s = ("(").to_string();
             if let Some(first) = args.next() {
                 s.push_str(&first.pretty_print_with_mode(db, mode));
+                let mut has_more = false;
                 for arg in args {
+                    has_more = true;
                     s.push_str(", ");
                     s.push_str(&arg.pretty_print_with_mode(db, mode));
+                }
+                if !has_more {
+                    s.push(',');
                 }
             }
             s.push(')');

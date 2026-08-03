@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/closure_reusable_call_once_consumes.fe
+---
+error[16-0002]: move conflict in `fn closure_reusable_call_once_consumes`
+   ┌─ closure_reusable_call_once_consumes.fe:11:18
+   │
+10 │     let first = read.call_once(())
+   │                 ---- `read` is moved here
+11 │     let second = read.call(())
+   │                  ^^^^ cannot use a value after it was moved

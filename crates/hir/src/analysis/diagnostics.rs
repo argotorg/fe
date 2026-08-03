@@ -12,9 +12,9 @@ use crate::analysis::{
     ty::{
         ProviderAddressSpace,
         diagnostics::{
-            BodyDiag, CallConstraintDiagInfo, ContractFieldLayoutIssue, DefConflictError,
-            FuncBodyDiag, ImplDiag, MustUseSubject, TraitConstraintDiag, TraitLowerDiag,
-            TyDiagCollection, TyLowerDiag,
+            BodyDiag, CallArgDefinition, CallConstraintDiagInfo, ContractFieldLayoutIssue,
+            DefConflictError, FuncBodyDiag, ImplDiag, MustUseSubject, ReturnTypeContext,
+            TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag,
         },
         trait_def::TraitInstId,
         ty_check::{EffectParamOwner, RecordLike},
@@ -23,7 +23,10 @@ use crate::analysis::{
 };
 use crate::{
     ParserError, SpannedHirDb,
-    hir_def::{CallableDef, FieldIndex, GenericParamOwner, PathKind, Trait, params::FuncParamMode},
+    hir_def::{
+        CallableDef, Expr, FieldIndex, GenericParamOwner, Partial, PathKind, Trait,
+        params::FuncParamMode,
+    },
     span::LazySpan,
 };
 use common::diagnostics::{
@@ -66,7 +69,9 @@ fn pretty_print_ty_for_mismatch<'db>(db: &'db dyn SpannedHirAnalysisDb, ty: TyId
                     .scope()
                     .pretty_path(db)
                     .unwrap_or_else(|| ty.pretty_print(db).to_string()),
-                TyBase::Prim(_) | TyBase::Func(_) => ty.pretty_print(db).to_string(),
+                TyBase::Prim(_) | TyBase::Func(_) | TyBase::Closure(_) => {
+                    ty.pretty_print(db).to_string()
+                }
             }
         }
         TyData::ConstTy(_) => ty.pretty_print(db).to_string(),
@@ -854,6 +859,7 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                 primary,
                 method_name,
                 receiver,
+                callable_field,
             } => {
                 let (recv_name, recv_ty, recv_kind) = match receiver {
                     Either::Left(ty) => (
@@ -874,6 +880,23 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                 if let Some(ty) = recv_ty
                     && let Some(field_ty) = RecordLike::Type(*ty).record_field_ty(db, *method_name)
                 {
+                    let notes = callable_field
+                        .as_ref()
+                        .and_then(|hint| {
+                            let span = hint.receiver.resolve(db)?;
+                            let text = span.file.text(db);
+                            let start = usize::from(span.range.start());
+                            let end = usize::from(span.range.end());
+                            let receiver = text.get(start..end)?.trim();
+                            (!receiver.is_empty() && !receiver.contains('\n')).then(|| {
+                                let args = if hint.arg_count == 0 { "()" } else { "(...)" };
+                                format!(
+                                    "to call the value stored in this field, parenthesize the field access: `({receiver}.{method_str}){args}`"
+                                )
+                            })
+                        })
+                        .into_iter()
+                        .collect();
                     return CompleteDiagnostic {
                         severity: Severity::Error,
                         message,
@@ -887,7 +910,7 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                             ),
                             span: primary.resolve(db),
                         }],
-                        notes: vec![],
+                        notes,
                         error_code,
                     };
                 }
@@ -2967,6 +2990,20 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
+            Self::ClosureEffectProviderMustBeBound { primary } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "effect provider used by a closure must be bound".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "this provider is created outside the closure".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![
+                    "bind the provider to a local before the `with` expression so the closure can capture its value".to_string(),
+                ],
+                error_code,
+            },
+
             Self::EffectMutabilityMismatch {
                 primary,
                 func,
@@ -3207,7 +3244,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 primary,
                 actual,
                 expected,
-                func,
+                context,
             } => {
                 let actual = actual.pretty_print(db);
                 let expected = expected.pretty_print(db);
@@ -3217,33 +3254,68 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     span: primary.resolve(db),
                 }];
 
-                if let Some(func) = func {
-                    let has_explicit = match func {
-                        CallableDef::Func(f) => f.has_explicit_return_ty(db),
-                        CallableDef::VariantCtor(_) => false,
-                    };
+                if let Some(context) = context {
+                    match context {
+                        ReturnTypeContext::Function(func) => {
+                            let has_explicit = match func {
+                                CallableDef::Func(f) => f.has_explicit_return_ty(db),
+                                CallableDef::VariantCtor(_) => false,
+                            };
 
-                    // For explicit return types, point at the return type span;
-                    // otherwise, point at the function name span (where a return
-                    // type could be added).
-                    let name_span = func.name_span();
-                    let span = match (has_explicit, func) {
-                        (true, CallableDef::Func(f)) => f.span().ret_ty().into(),
-                        _ => name_span,
-                    };
+                            // For explicit return types, point at the return type span;
+                            // otherwise, point at the function name span (where a return
+                            // type could be added).
+                            let name_span = func.name_span();
+                            let span = match (has_explicit, func) {
+                                (true, CallableDef::Func(f)) => f.span().ret_ty().into(),
+                                _ => name_span,
+                            };
 
-                    if has_explicit {
-                        sub_diagnostics.push(SubDiagnostic {
-                            style: LabelStyle::Secondary,
-                            message: format!("this function expects `{expected}` to be returned"),
-                            span: span.resolve(db),
-                        });
-                    } else {
-                        sub_diagnostics.push(SubDiagnostic {
-                            style: LabelStyle::Secondary,
-                            message: format!("try adding `-> {actual}`"),
-                            span: span.resolve(db),
-                        });
+                            if has_explicit {
+                                sub_diagnostics.push(SubDiagnostic {
+                                    style: LabelStyle::Secondary,
+                                    message: format!(
+                                        "this function expects `{expected}` to be returned"
+                                    ),
+                                    span: span.resolve(db),
+                                });
+                            } else {
+                                sub_diagnostics.push(SubDiagnostic {
+                                    style: LabelStyle::Secondary,
+                                    message: format!("try adding `-> {actual}`"),
+                                    span: span.resolve(db),
+                                });
+                            }
+                        }
+                        ReturnTypeContext::Closure(def) => {
+                            let has_explicit = matches!(
+                                def.expr.data(db, def.body),
+                                Partial::Present(Expr::Closure {
+                                    ret_ty: Some(_),
+                                    ..
+                                })
+                            );
+                            let closure_span = def.expr.span(def.body).into_closure_expr();
+                            let span = if has_explicit {
+                                closure_span.ret_ty().resolve(db)
+                            } else {
+                                closure_span
+                                    .clone()
+                                    .params()
+                                    .resolve(db)
+                                    .or_else(|| closure_span.empty_params().resolve(db))
+                            };
+                            let message = if has_explicit {
+                                format!("this closure expects `{expected}` to be returned")
+                            } else {
+                                format!("this closure is inferred to return `{expected}`")
+                            };
+                            sub_diagnostics.push(SubDiagnostic {
+                                style: LabelStyle::Secondary,
+                                message,
+                                span,
+                            });
+                        }
                     }
                 }
 
@@ -3508,6 +3580,35 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
+            Self::BorrowMutFromCapturedBinding { primary, binding } => {
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "cannot mutably borrow closure-owned capture storage".to_string(),
+                    span: primary.resolve(db),
+                }];
+
+                if let Some((name, span)) = binding {
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{}` is captured by value here", name.data(db)),
+                        span: span.resolve(db),
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "cannot mutably borrow a binding captured by a closure".to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "reusable closure environments do not expose mutable capture storage"
+                            .to_string(),
+                        "capture an explicit `mut` handle to mutate the referenced value"
+                            .to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
             Self::BorrowArgMustBePlace { primary, kind } => {
                 let kw = match kind {
                     crate::analysis::ty::ty_def::BorrowKind::Mut => "mut",
@@ -3654,7 +3755,11 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
-            Self::ImmutableAssignment { primary, binding } => {
+            Self::ImmutableAssignment {
+                primary,
+                binding,
+                capability_rebind,
+            } => {
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
                     message: "immutable assignment".to_string(),
@@ -3664,7 +3769,11 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 if let Some((name, span)) = binding {
                     sub_diagnostics.push(SubDiagnostic {
                         style: LabelStyle::Secondary,
-                        message: format!("try changing to `mut {}`", name.data(db)),
+                        message: if *capability_rebind {
+                            format!("the capability handle `{}` cannot be rebound", name.data(db))
+                        } else {
+                            format!("try changing to `mut {}`", name.data(db))
+                        },
                         span: span.resolve(db),
                     });
                 }
@@ -3673,7 +3782,16 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     severity: Severity::Error,
                     message: "left-hand side of assignment is immutable".to_string(),
                     sub_diagnostics,
-                    notes: vec![],
+                    notes: if *capability_rebind {
+                        vec![
+                            "`mut` and `ref` handle bindings stay attached to their original borrow provider"
+                                .to_string(),
+                            "assign an owned value through the handle instead of replacing the handle"
+                                .to_string(),
+                        ]
+                    } else {
+                        Vec::new()
+                    },
                     error_code,
                 }
             }
@@ -3783,6 +3901,132 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
+            Self::ClosureFieldLimitExceeded {
+                primary,
+                captures,
+                given,
+                max,
+            } => {
+                let fields = if *captures { "captures" } else { "parameters" };
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!("closure has too many {fields}"),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "closure has {given} {fields}, but at most {max} are supported"
+                        ),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![
+                        "closure environments and argument packs use 16-bit field indices"
+                            .to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
+            Self::ClosureParamNumMismatch {
+                primary,
+                given,
+                expected,
+            } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "closure parameter number mismatch".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "this context expects {expected} closure parameters, but {given} given"
+                    ),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
+            Self::ClosureParamModeMismatch {
+                primary,
+                given,
+                expected,
+            } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "closure parameter ownership mode mismatch".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "this context requires `{}`, but the closure declares `{}`",
+                        expected.as_str(),
+                        given.as_str(),
+                    ),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![
+                    "closure parameter ownership modes are explicit and are never inferred or coerced"
+                        .to_string(),
+                ],
+                error_code,
+            },
+
+            Self::DuplicateClosureParam {
+                primary,
+                conflict_with,
+                name,
+            } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: format!("duplicate closure parameter `{}`", name.data(db)),
+                sub_diagnostics: vec![
+                    SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!("`{}` is defined again here", name.data(db)),
+                        span: primary.resolve(db),
+                    },
+                    SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("first definition of `{}`", name.data(db)),
+                        span: conflict_with.resolve(db),
+                    },
+                ],
+                notes: vec![],
+                error_code,
+            },
+
+            Self::AssignToCapturedBinding { primary, binding } => {
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "cannot assign to a captured binding".to_string(),
+                    span: primary.resolve(db),
+                }];
+                if let Some((ident, def_span)) = binding {
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{}` is captured by the closure here", ident.data(db)),
+                        span: def_span.resolve(db),
+                    });
+                }
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "cannot assign to a binding captured by a closure".to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "closures capture by value; writes would only affect the closure's copy"
+                            .to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
+            Self::ClosureInConstContext { primary } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "closures cannot be used in const contexts".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "closures cannot be evaluated at compile time".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
             Self::TraitNotImplemented {
                 primary,
                 ty,
@@ -3855,25 +4099,61 @@ impl DiagnosticVoucher for BodyDiag<'_> {
 
             Self::CallArgNumMismatch {
                 primary,
-                def_span,
+                definition,
                 given,
                 expected,
-            } => CompleteDiagnostic {
+            } => {
+                let (message, definition_message, definition_span, notes) = match definition {
+                    CallArgDefinition::Function(def_span) => (
+                        "argument number mismatch".to_string(),
+                        "function defined here".to_string(),
+                        def_span.resolve(db),
+                        vec![],
+                    ),
+                    CallArgDefinition::Closure(closure) => {
+                        let def = closure.def(db);
+                        (
+                            "closure argument number mismatch".to_string(),
+                            "closure defined here".to_string(),
+                            def.expr.span(def.body).resolve(db),
+                            vec![format!("closure signature is `{}`", closure.pretty_print(db))],
+                        )
+                    }
+                };
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message,
+                    sub_diagnostics: vec![
+                        SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: format!("expected {expected} arguments, but {given} given"),
+                            span: primary.resolve(db),
+                        },
+                        SubDiagnostic {
+                            style: LabelStyle::Secondary,
+                            message: definition_message,
+                            span: definition_span,
+                        },
+                    ],
+                    notes,
+                    error_code,
+                }
+            }
+
+            Self::CallArgsMustBeTuple { primary, args_ty } => CompleteDiagnostic {
                 severity: Severity::Error,
-                message: "argument number mismatch".to_string(),
-                sub_diagnostics: vec![
-                    SubDiagnostic {
-                        style: LabelStyle::Primary,
-                        message: format!("expected {expected} arguments, but {given} given"),
-                        span: primary.resolve(db),
-                    },
-                    SubDiagnostic {
-                        style: LabelStyle::Secondary,
-                        message: "function defined here".to_string(),
-                        span: def_span.resolve(db),
-                    },
+                message: "`Fn` arguments must be a tuple".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "the callable uses `{}` as its argument pack",
+                        args_ty.pretty_print(db)
+                    ),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![
+                    "use `()` for zero parameters, `(T,)` for one parameter, or `(T, U, ...)` for multiple parameters".to_string(),
                 ],
-                notes: vec![],
                 error_code,
             },
 

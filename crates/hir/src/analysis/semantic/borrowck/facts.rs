@@ -4,7 +4,8 @@ use smallvec::SmallVec;
 use crate::analysis::semantic::{SBlockId, SLocalId};
 
 use super::ir::{
-    NBorrowRoot, NExpr, NSPlace, NSPlaceRoot, NSStmtKind, NSTerminatorKind, NormalizedSemanticBody,
+    NBorrowRoot, NExpr, NSPlace, NSPlaceRoot, NSStmtKind, NSTerminatorKind, NValueOwnershipSource,
+    NormalizedSemanticBody,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -51,7 +52,9 @@ pub struct NormalizedBodyFacts {
     stmt_facts: Vec<Vec<NStmtFacts>>,
     defs_by_local: SecondaryMap<SLocalId, NAssignmentList>,
     assignments_using_local: SecondaryMap<SLocalId, NAssignmentList>,
-    local_source_uses: SecondaryMap<SLocalId, NLocalDependencyList>,
+    local_value_source_uses: SecondaryMap<SLocalId, NLocalDependencyList>,
+    local_layout_source_uses: SecondaryMap<SLocalId, NLocalDependencyList>,
+    local_dependency_uses: SecondaryMap<SLocalId, NLocalDependencyList>,
     dynamic_dependents_by_local: SecondaryMap<SLocalId, NLocalDependencyList>,
     terminator_uses: SecondaryMap<SBlockId, NLocalUseList>,
 }
@@ -89,25 +92,48 @@ impl NormalizedBodyFacts {
             stmt_facts.push(block_stmt_facts);
         }
 
-        let mut local_source_uses = local_dependency_map(body.locals.len());
+        let mut local_value_source_uses = local_dependency_map(body.locals.len());
+        let mut local_layout_source_uses = local_dependency_map(body.locals.len());
         for (idx, local_data) in body.locals.iter().enumerate() {
             let local = SLocalId::new(idx);
             if let Some(place) = local_data.backing_place() {
                 extend_unique(
-                    &mut local_source_uses[local],
+                    &mut local_value_source_uses[local],
                     place_used_locals(body, place),
                 );
             }
             if let Some(place) = local_data.snapshot_source_place() {
                 extend_unique(
-                    &mut local_source_uses[local],
+                    &mut local_value_source_uses[local],
                     place_used_locals(body, place),
+                );
+            }
+            for source in local_data.ownership_sources() {
+                if let NValueOwnershipSource::Place(place) = source {
+                    extend_unique(
+                        &mut local_value_source_uses[local],
+                        place_used_locals(body, place),
+                    );
+                }
+            }
+            for source in local_data.layout_backing_sources() {
+                extend_unique(
+                    &mut local_layout_source_uses[local],
+                    place_used_locals(body, &source.source),
                 );
             }
         }
 
+        let mut local_dependency_uses = local_value_source_uses.clone();
+        for (local, layout_source_uses) in local_layout_source_uses.iter() {
+            extend_unique(
+                &mut local_dependency_uses[local],
+                layout_source_uses.iter().copied(),
+            );
+        }
+
         let mut dynamic_dependents_by_local = local_dependency_map(body.locals.len());
-        for (local, source_uses) in local_source_uses.iter() {
+        for (local, source_uses) in local_dependency_uses.iter() {
             for source in source_uses {
                 push_unique(&mut dynamic_dependents_by_local[*source], local);
             }
@@ -125,7 +151,9 @@ impl NormalizedBodyFacts {
             stmt_facts,
             defs_by_local,
             assignments_using_local,
-            local_source_uses,
+            local_value_source_uses,
+            local_layout_source_uses,
+            local_dependency_uses,
             dynamic_dependents_by_local,
             terminator_uses,
         }
@@ -177,8 +205,22 @@ impl NormalizedBodyFacts {
             .unwrap_or(&[])
     }
 
-    pub fn local_source_uses(&self, local: SLocalId) -> &[SLocalId] {
-        self.local_source_uses
+    pub fn local_value_source_uses(&self, local: SLocalId) -> &[SLocalId] {
+        self.local_value_source_uses
+            .get(local)
+            .map(SmallVec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    pub fn local_layout_source_uses(&self, local: SLocalId) -> &[SLocalId] {
+        self.local_layout_source_uses
+            .get(local)
+            .map(SmallVec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    pub fn local_dependency_uses(&self, local: SLocalId) -> &[SLocalId] {
+        self.local_dependency_uses
             .get(local)
             .map(SmallVec::as_slice)
             .unwrap_or(&[])

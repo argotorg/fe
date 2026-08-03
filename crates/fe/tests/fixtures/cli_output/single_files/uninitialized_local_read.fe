@@ -1,0 +1,4 @@
+pub fn read() {
+    let mut value: u256
+    assert(value == 0)
+}

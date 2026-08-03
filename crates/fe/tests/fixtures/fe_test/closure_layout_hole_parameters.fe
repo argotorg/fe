@@ -1,0 +1,72 @@
+struct Rooted<const ROOT: u256 = _> {
+    value: u256,
+}
+
+struct Independent<const LEFT: u256 = _, const RIGHT: u256 = _> {
+    left: Rooted<LEFT>,
+    right: Rooted<RIGHT>,
+}
+
+fn inferred_identity<const ROOT: u256>(
+    _ value: own Rooted<ROOT>,
+) -> Rooted<ROOT> {
+    let identity = |value: own Rooted| value
+    identity(value)
+}
+
+fn captured<const ROOT: u256>(_ value: own Rooted<ROOT>) -> Rooted<ROOT> {
+    let take = || value
+    take()
+}
+
+fn fresh<const ROOT: u256>() -> Rooted<ROOT> {
+    let make = || Rooted<ROOT> { value: 12 }
+    make()
+}
+
+fn take_right<const LEFT: u256, const RIGHT: u256>(
+    _ value: own Independent<LEFT, RIGHT>,
+) -> Rooted<RIGHT> {
+    let right = |value: own Independent| value.right
+    right(value)
+}
+
+#[test]
+fn test_closure_parameter_layout_holes_are_inferred() {
+    let identity = |value: own Rooted| value
+    let result = identity(Rooted<7> { value: 20 })
+
+    let read = |value: ref Rooted| value.value
+    let rooted = Rooted<8> { value: 10 }
+
+    let read_mut = |value: mut Rooted| value.value
+    let mut mutable = Rooted<9> { value: 5 }
+
+    let sum = |value: Independent| value.left.value + value.right.value
+    let total = sum(Independent<10, 11> {
+        left: Rooted<10> { value: 3 },
+        right: Rooted<11> { value: 4 },
+    })
+
+    assert(
+        result.value
+            + read(ref rooted)
+            + read_mut(mut mutable)
+            + total
+            == 42,
+    )
+}
+
+#[test]
+fn test_closure_layout_outputs_cross_generic_boundaries() {
+    assert(inferred_identity<1>(Rooted<1> { value: 10 }).value == 10)
+    assert(captured<2>(Rooted<2> { value: 11 }).value == 11)
+    assert(fresh<3>().value == 12)
+    assert(
+        take_right<4, 5>(Independent<4, 5> {
+            left: Rooted<4> { value: 0 },
+            right: Rooted<5> { value: 13 },
+        }).value
+            == 13,
+    )
+}

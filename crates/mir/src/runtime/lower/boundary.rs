@@ -16,7 +16,7 @@ use crate::{
     db::MirDb,
     runtime::{
         AddressSpaceKind, BorrowAccess, BorrowTransportSet, LayoutId, RefKind, RefView,
-        RuntimeBoundarySpec, RuntimeCarrier, RuntimeClass, RuntimePlace,
+        RuntimeBoundarySpec, RuntimeCarrier, RuntimeClass, RuntimePlace, remap_ref_view_to_pointee,
     },
 };
 
@@ -138,6 +138,15 @@ impl<'db> RuntimeClassShape<'db> {
             },
         }
     }
+
+    pub(super) fn aggregate_layout(&self) -> Option<LayoutId<'db>> {
+        match self {
+            Self::Scalar(_) => None,
+            Self::AggregateValue { layout } => Some(*layout),
+            Self::Ref { pointee, .. } => pointee.aggregate_layout(),
+            Self::RawAddr { target, .. } => *target,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -210,7 +219,13 @@ impl<'db> BoundaryShapeMatcher<'db> {
                     kind: RefShapeKind::Provider(space),
                     view: RefView::Whole,
                 } => provider_spaces.contains(space) && **actual_pointee == *pointee,
-                RuntimeClassShape::RawAddr { .. } => *allow_raw_addr,
+                RuntimeClassShape::RawAddr { space, target } => raw_address_matches_borrow(
+                    *space,
+                    *target,
+                    pointee.aggregate_layout(),
+                    provider_spaces,
+                    *allow_raw_addr,
+                ),
                 RuntimeClassShape::Scalar(_)
                 | RuntimeClassShape::AggregateValue { .. }
                 | RuntimeClassShape::Ref {
@@ -223,59 +238,76 @@ impl<'db> BoundaryShapeMatcher<'db> {
 }
 
 #[derive(Clone, Debug)]
-pub(super) enum ExactBoundaryShapeMatcher<'db> {
-    Scalar(crate::runtime::ScalarClass<'db>),
-    AggregateValue(LayoutId<'db>),
-    Ref {
-        pointee: RuntimeClassShape<'db>,
-        view: RefView<'db>,
-        raw_addr_target: Option<LayoutId<'db>>,
-    },
-    RawAddr {
-        target: Option<LayoutId<'db>>,
-    },
-}
+pub(super) struct ExactBoundaryShapeMatcher<'db>(RuntimeClassShape<'db>);
 
 impl<'db> ExactBoundaryShapeMatcher<'db> {
     fn for_class(class: &RuntimeClass<'db>) -> Self {
-        match class {
-            RuntimeClass::Scalar(class) => Self::Scalar(class.clone()),
-            RuntimeClass::AggregateValue { layout } => Self::AggregateValue(*layout),
-            RuntimeClass::Ref { pointee, view, .. } => Self::Ref {
-                pointee: RuntimeClassShape::from_class(pointee),
-                view: view.clone(),
-                raw_addr_target: pointee.aggregate_layout(),
-            },
-            RuntimeClass::RawAddr { target, .. } => Self::RawAddr { target: *target },
-        }
+        Self(RuntimeClassShape::from_class(class))
     }
 
     fn matches_shape(&self, actual: &RuntimeClassShape<'db>) -> bool {
-        match (self, actual) {
-            (Self::Scalar(expected), RuntimeClassShape::Scalar(actual)) => actual == expected,
-            (Self::AggregateValue(expected), RuntimeClassShape::AggregateValue { layout }) => {
-                layout == expected
-            }
-            (
-                Self::Ref { pointee, view, .. },
-                RuntimeClassShape::Ref {
-                    pointee: actual_pointee,
-                    view: actual_view,
-                    ..
-                },
-            ) => **actual_pointee == *pointee && actual_view == view,
-            (
-                Self::Ref {
-                    raw_addr_target, ..
-                },
-                RuntimeClassShape::RawAddr { target, .. },
-            ) => target == raw_addr_target,
-            (Self::RawAddr { target: expected }, RuntimeClassShape::RawAddr { target, .. }) => {
-                target == expected
-            }
-            _ => false,
-        }
+        exact_boundary_shapes_match(actual, &self.0)
     }
+}
+
+fn exact_boundary_shapes_match<'db>(
+    actual: &RuntimeClassShape<'db>,
+    expected: &RuntimeClassShape<'db>,
+) -> bool {
+    match (actual, expected) {
+        (RuntimeClassShape::Scalar(actual), RuntimeClassShape::Scalar(expected)) => {
+            actual == expected
+        }
+        (
+            RuntimeClassShape::AggregateValue { layout: actual },
+            RuntimeClassShape::AggregateValue { layout: expected },
+        ) => actual == expected,
+        (
+            RuntimeClassShape::Ref {
+                pointee: actual_pointee,
+                view: actual_view,
+                ..
+            },
+            RuntimeClassShape::Ref {
+                pointee: expected_pointee,
+                view: expected_view,
+                ..
+            },
+        ) => actual_pointee == expected_pointee && actual_view == expected_view,
+        (
+            RuntimeClassShape::Ref {
+                pointee,
+                view: RefView::Whole,
+                ..
+            },
+            RuntimeClassShape::RawAddr { target, .. },
+        )
+        | (
+            RuntimeClassShape::RawAddr { target, .. },
+            RuntimeClassShape::Ref {
+                pointee,
+                view: RefView::Whole,
+                ..
+            },
+        ) => *target == pointee.aggregate_layout(),
+        (
+            RuntimeClassShape::RawAddr { target: actual, .. },
+            RuntimeClassShape::RawAddr {
+                target: expected, ..
+            },
+        ) => actual == expected,
+        _ => false,
+    }
+}
+
+fn raw_address_matches_borrow(
+    space: AddressSpaceKind,
+    target: Option<LayoutId<'_>>,
+    pointee_layout: Option<LayoutId<'_>>,
+    provider_spaces: &[AddressSpaceKind],
+    allow_raw_addr: bool,
+) -> bool {
+    allow_raw_addr && provider_spaces.contains(&space) && target == pointee_layout
 }
 
 pub(super) struct SpecializedBoundary<'a, 'db> {
@@ -290,16 +322,19 @@ pub(super) fn specialize_boundary_for_runtime_source_in_context<'a, 'db>(
     carriers: &[RuntimeCarrier<'db>],
     mut class_cache: Option<&mut InferClassCache<'db>>,
 ) -> SpecializedBoundary<'a, 'db> {
-    let aggregate_layout = class_cache
-        .as_deref_mut()
-        .and_then(|cache| cache.local_dynamic_facts(env, local, carriers))
-        .and_then(|facts| facts.aggregate_layout)
-        .or_else(|| {
-            env.boundary_source_transport_sensitive(local)
-                .then(|| env.actual_aggregate_class_for_source(carriers, local))
-                .flatten()
-                .and_then(|class| class.aggregate_layout())
-        });
+    let aggregate_layout = env
+        .boundary_source_transport_sensitive(local)
+        .then(|| {
+            class_cache
+                .as_deref_mut()
+                .and_then(|cache| cache.local_dynamic_facts(env, local, carriers))
+                .and_then(|facts| facts.aggregate_layout)
+                .or_else(|| {
+                    env.actual_aggregate_class_for_source(carriers, local)
+                        .and_then(|class| class.aggregate_layout())
+                })
+        })
+        .flatten();
     if let (Some(site), Some(cache)) = (
         boundary.site,
         class_cache
@@ -441,10 +476,11 @@ fn specialize_exact_boundary_for_aggregate_layout<'a, 'db>(
             },
             Some(layout),
         ) if pointee.aggregate_layout().is_some() && pointee.aggregate_layout() != Some(layout) => {
+            let pointee = RuntimeClass::AggregateValue { layout };
             Cow::Owned(RuntimeClass::Ref {
-                pointee: Box::new(RuntimeClass::AggregateValue { layout }),
+                view: remap_ref_view_to_pointee(view, &pointee),
+                pointee: Box::new(pointee),
                 kind: kind.clone(),
-                view: view.clone(),
             })
         }
         (RuntimeClass::Ref { .. }, Some(_)) => Cow::Borrowed(desired),
@@ -630,7 +666,13 @@ impl BoundaryMatcher {
                     view: RefView::EnumVariant(_),
                     ..
                 } => false,
-                RuntimeClass::RawAddr { .. } => allow.allow_raw_addr,
+                RuntimeClass::RawAddr { space, target } => raw_address_matches_borrow(
+                    *space,
+                    *target,
+                    pointee.aggregate_layout(),
+                    &allow.provider_spaces,
+                    allow.allow_raw_addr,
+                ),
                 RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. } => false,
             },
         }
@@ -675,38 +717,10 @@ impl BoundaryMatcher {
         actual: &RuntimeClass<'db>,
         expected: &RuntimeClass<'db>,
     ) -> bool {
-        match (actual, expected) {
-            (
-                RuntimeClass::Ref {
-                    pointee: actual_pointee,
-                    view: actual_view,
-                    ..
-                },
-                RuntimeClass::Ref {
-                    pointee: expected_pointee,
-                    view: expected_view,
-                    ..
-                },
-            ) => actual_pointee == expected_pointee && actual_view == expected_view,
-            (
-                RuntimeClass::RawAddr {
-                    target: actual_target,
-                    ..
-                },
-                RuntimeClass::Ref { pointee, .. },
-            ) => actual_target == &pointee.aggregate_layout(),
-            (
-                RuntimeClass::RawAddr {
-                    target: actual_target,
-                    ..
-                },
-                RuntimeClass::RawAddr {
-                    target: expected_target,
-                    ..
-                },
-            ) => actual_target == expected_target,
-            _ => actual == expected,
-        }
+        exact_boundary_shapes_match(
+            &RuntimeClassShape::from_class(actual),
+            &RuntimeClassShape::from_class(expected),
+        )
     }
 }
 
@@ -1023,16 +1037,20 @@ mod tests {
         )
     }
 
-    fn test_enum_variant<'db>(db: &'db dyn MirDb) -> crate::runtime::VariantId<'db> {
-        let enum_layout = LayoutId::new(
+    fn test_enum_layout<'db>(db: &'db dyn MirDb, field: RuntimeClass<'db>) -> LayoutId<'db> {
+        LayoutId::new(
             db,
             LayoutKey::Enum(EnumLayoutKey {
                 variants: vec![EnumVariantLayout {
-                    fields: vec![word_class()].into(),
+                    fields: vec![field].into(),
                 }]
                 .into(),
             }),
-        );
+        )
+    }
+
+    fn test_enum_variant<'db>(db: &'db dyn MirDb) -> crate::runtime::VariantId<'db> {
+        let enum_layout = test_enum_layout(db, word_class());
         crate::runtime::VariantId {
             enum_layout,
             index: 0,
@@ -1104,6 +1122,95 @@ mod tests {
     }
 
     #[test]
+    fn exact_shape_raw_address_matches_typed_ref_with_the_same_target() {
+        let db = DriverDataBase::default();
+        let layout = test_struct_layout(&db);
+        let source = provider_ref(
+            &db,
+            RuntimeClass::AggregateValue { layout },
+            AddressSpaceKind::Storage,
+        );
+        let boundary = RuntimeBoundarySpec::ExactShape(RuntimeClass::RawAddr {
+            space: AddressSpaceKind::Memory,
+            target: Some(layout),
+        });
+
+        assert!(BoundaryMatcher::class_satisfies_boundary(
+            &source, &boundary
+        ));
+        assert!(
+            BoundaryShapeMatcher::for_boundary(&boundary)
+                .matches_shape(&RuntimeClassShape::from_class(&source))
+        );
+    }
+
+    #[test]
+    fn exact_shape_raw_address_does_not_match_enum_variant_view() {
+        let db = DriverDataBase::default();
+        let variant = test_enum_variant(&db);
+        let source = RuntimeClass::RawAddr {
+            space: AddressSpaceKind::Storage,
+            target: Some(variant.enum_layout),
+        };
+        let boundary = RuntimeBoundarySpec::ExactShape(ref_class(
+            RuntimeClass::AggregateValue {
+                layout: variant.enum_layout,
+            },
+            RefKind::Provider {
+                provider_ty: TyId::unit(&db),
+                space: AddressSpaceKind::Memory,
+            },
+            RefView::EnumVariant(variant),
+        ));
+
+        assert!(!BoundaryMatcher::class_satisfies_boundary(
+            &source, &boundary
+        ));
+        assert!(
+            !BoundaryShapeMatcher::for_boundary(&boundary)
+                .matches_shape(&RuntimeClassShape::from_class(&source))
+        );
+    }
+
+    #[test]
+    fn exact_shape_specialization_remaps_enum_variant_view_layout() {
+        let db = DriverDataBase::default();
+        let source_layout = test_enum_layout(&db, word_class());
+        let specialized_layout = test_enum_layout(&db, bool_class());
+        let source_variant = crate::runtime::VariantId {
+            enum_layout: source_layout,
+            index: 0,
+        };
+        let boundary = RuntimeBoundarySpec::ExactShape(ref_class(
+            RuntimeClass::AggregateValue {
+                layout: source_layout,
+            },
+            RefKind::Object,
+            RefView::EnumVariant(source_variant),
+        ));
+
+        let specialized =
+            specialize_boundary_for_aggregate_layout(&boundary, Some(specialized_layout));
+        let RuntimeBoundarySpec::ExactShape(RuntimeClass::Ref {
+            pointee,
+            view: RefView::EnumVariant(specialized_variant),
+            ..
+        }) = specialized.as_ref()
+        else {
+            panic!("unexpected specialized boundary: {specialized:#?}");
+        };
+        assert_eq!(
+            pointee.aggregate_layout(),
+            Some(specialized_layout),
+            "the pointee should use the concrete source layout",
+        );
+        assert_eq!(
+            specialized_variant.enum_layout, specialized_layout,
+            "an enum-variant view must name the rewritten pointee layout",
+        );
+    }
+
+    #[test]
     fn borrow_like_boundary_respects_transport_allowlist() {
         let db = DriverDataBase::default();
         let boundary = scalar_borrow_boundary(BorrowAccess::ReadWrite, AddressSpaceKind::Storage);
@@ -1151,6 +1258,69 @@ mod tests {
                 BoundaryMatcher::class_satisfies_boundary(&class, &boundary),
                 expected,
                 "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn borrow_like_raw_addresses_require_the_pointee_layout_and_allowed_space() {
+        let db = DriverDataBase::default();
+        let expected_layout = test_struct_layout(&db);
+        let other_layout = LayoutId::new(
+            &db,
+            LayoutKey::Struct(StructLayout {
+                fields: vec![bool_class()].into(),
+            }),
+        );
+        let boundary = RuntimeBoundarySpec::BorrowLike {
+            pointee: RuntimeClass::AggregateValue {
+                layout: expected_layout,
+            },
+            access: BorrowAccess::ReadWrite,
+            allow: default_borrow_transport_set(BorrowAccess::ReadWrite, AddressSpaceKind::Memory),
+        };
+        let cases = [
+            (
+                RuntimeClass::RawAddr {
+                    space: AddressSpaceKind::Memory,
+                    target: Some(expected_layout),
+                },
+                true,
+            ),
+            (
+                RuntimeClass::RawAddr {
+                    space: AddressSpaceKind::Memory,
+                    target: Some(other_layout),
+                },
+                false,
+            ),
+            (
+                RuntimeClass::RawAddr {
+                    space: AddressSpaceKind::Memory,
+                    target: None,
+                },
+                false,
+            ),
+            (
+                RuntimeClass::RawAddr {
+                    space: AddressSpaceKind::Calldata,
+                    target: Some(expected_layout),
+                },
+                false,
+            ),
+        ];
+
+        for (class, expected) in cases {
+            assert_eq!(
+                BoundaryMatcher::class_satisfies_boundary(&class, &boundary),
+                expected,
+                "runtime class matcher: {class:#?}",
+            );
+            assert_eq!(
+                BoundaryShapeMatcher::for_boundary(&boundary)
+                    .matches_shape(&RuntimeClassShape::from_class(&class)),
+                expected,
+                "shape matcher: {class:#?}",
             );
         }
     }

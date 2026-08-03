@@ -1,0 +1,8 @@
+use core::functional::Fn
+
+pub fn capture() -> u256 {
+    let mut value: u256
+    let read = || value
+    value = 42
+    read.call()
+}

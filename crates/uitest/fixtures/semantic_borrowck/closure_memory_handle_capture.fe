@@ -1,0 +1,12 @@
+use core::functional::Fn
+
+pub fn closure_memory_handle_capture() -> u256 {
+    let mut value: u256 = 0
+    let handle = mut value
+    let f = |_ unit: own ()| -> () {
+        let captured = handle
+        captured = 7
+    }
+    f.call(())
+    value
+}

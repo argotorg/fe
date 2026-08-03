@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/closure_capture_ref_conflict.fe
+---
+error[16-0001]: borrow conflict in `fn mut_borrow_while_ref_is_captured`
+  ┌─ closure_capture_ref_conflict.fe:6:13
+  │
+4 │     let r = ref x
+  │             ----- borrow created here
+5 │     let f = |_ unit: own ()| -> () { r }
+6 │     let m = mut x
+  │             ^^^^^ cannot mutably borrow this place while an immutable borrow is active

@@ -8,9 +8,11 @@ use super::{
     ErrProof, Parser, Recovery, define_scope,
     expr::{parse_condition_expr, parse_expr, parse_expr_no_struct},
     item::ItemScope,
+    param::ClosureParamListScope,
     parse_list, parse_pat,
     stmt::parse_stmt,
     token_stream::TokenStream,
+    type_::parse_type,
 };
 use crate::{
     ExpectedKind, SyntaxKind, TextRange,
@@ -21,7 +23,7 @@ use crate::{
 pub(super) fn is_expr_atom_head(kind: SyntaxKind) -> bool {
     use SyntaxKind::*;
     match kind {
-        IfKw | MatchKw | LBrace | LParen | LBracket => true,
+        IfKw | MatchKw | LBrace | LParen | LBracket | Pipe | Pipe2 => true,
         kind if lit::is_lit(kind) => true,
         kind if path::is_path_segment(kind) => true,
         _ => false,
@@ -37,6 +39,7 @@ pub(super) fn parse_expr_atom<S: TokenStream>(
     match parser.current_kind() {
         Some(IfKw) => parser.parse_cp(IfExprScope::default(), None),
         Some(MatchKw) => parser.parse_cp(MatchExprScope::default(), None),
+        Some(Pipe | Pipe2) => parser.parse_cp(ClosureExprScope::default(), None),
         Some(SyntaxKind::Ident) => {
             // Contextual 'with': only treat as with-block when:
             // ident text is "with" AND we can parse a WithParamList AND next is '{'
@@ -75,6 +78,28 @@ pub(super) fn parse_expr_atom<S: TokenStream>(
             parser.parse_cp(PathExprScope::new(allow_record_init), None)
         }
         _ => unreachable!(),
+    }
+}
+
+define_scope! { ClosureExprScope, ClosureExpr }
+impl super::Parse for ClosureExprScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        if parser.bump_if(SyntaxKind::Pipe2) {
+            // Empty Rust-style closure parameter list: `||`.
+        } else {
+            parser.set_scope_recovery_stack(&[SyntaxKind::Pipe, SyntaxKind::LBrace]);
+            parser.parse(ClosureParamListScope::default())?;
+            parser.pop_recovery_stack();
+        }
+
+        if parser.bump_if(SyntaxKind::Arrow) {
+            parse_type(parser, None)?;
+        }
+
+        parse_expr(parser)?;
+        Ok(())
     }
 }
 

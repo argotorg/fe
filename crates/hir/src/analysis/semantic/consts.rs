@@ -795,7 +795,7 @@ pub fn runtime_size_bytes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Opt
             Some(0)
         } else if ty.has_param(db) {
             None
-        } else if ty.is_tuple(db) {
+        } else if ty.is_tuple(db) || ty.as_closure(db).is_some() {
             ty.field_types(db)
                 .into_iter()
                 .try_fold(0usize, |size, field| {

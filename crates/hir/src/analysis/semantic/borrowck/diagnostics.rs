@@ -133,6 +133,8 @@ impl DiagnosticVoucher for SemanticBorrowDiagnostic<'_> {
             SemanticBorrowDiagKind::Internal => 4,
             SemanticBorrowDiagKind::NoEscViolation => 5,
             SemanticBorrowDiagKind::ProviderProvenanceConflict => 6,
+            SemanticBorrowDiagKind::UninitializedLocal => 7,
+            SemanticBorrowDiagKind::NonRegularPolymorphicRecursion => 8,
         };
         CompleteDiagnostic::new(
             Severity::Error,
@@ -181,6 +183,18 @@ impl SemanticBorrowDiagKind {
             Self::ProviderProvenanceConflict => {
                 format!(
                     "provider provenance conflict in `fn {}`",
+                    checker_name(db, instance)
+                )
+            }
+            Self::UninitializedLocal => {
+                format!(
+                    "possibly uninitialized local in `fn {}`",
+                    checker_name(db, instance)
+                )
+            }
+            Self::NonRegularPolymorphicRecursion => {
+                format!(
+                    "non-regular polymorphic recursion in `fn {}`",
                     checker_name(db, instance)
                 )
             }
@@ -272,5 +286,6 @@ pub(crate) fn checker_name<'db>(
                 Partial::Absent => "<contract>".to_string(),
             }
         ),
+        BodyOwner::Closure { .. } => "<closure>".to_string(),
     }
 }

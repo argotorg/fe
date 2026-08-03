@@ -18,6 +18,7 @@ impl<'db> TypeId<'db> {
                     Some(ast::TypeMode::Mut(_)) => TypeMode::Mut,
                     Some(ast::TypeMode::Ref(_)) => TypeMode::Ref,
                     Some(ast::TypeMode::Own(_)) => TypeMode::Own,
+                    Some(ast::TypeMode::View(_)) => TypeMode::View,
                     None => TypeMode::Ref,
                 };
                 let inner = Self::lower_ast_partial(ctxt, ty.inner());

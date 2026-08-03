@@ -76,6 +76,7 @@ pub enum TypeMode {
     Mut,
     Ref,
     Own,
+    View,
 }
 
 impl TypeMode {
@@ -84,6 +85,7 @@ impl TypeMode {
             TypeMode::Mut => "mut",
             TypeMode::Ref => "ref",
             TypeMode::Own => "own",
+            TypeMode::View => "view",
         }
     }
 }

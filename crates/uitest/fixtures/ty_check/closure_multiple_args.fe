@@ -1,0 +1,127 @@
+use core::functional::Fn
+
+struct Boxed {
+    value: u256,
+}
+
+struct view {
+    value: u256,
+}
+
+impl Boxed {
+    fn get(self) -> u256 {
+        self.value
+    }
+}
+
+fn read_named_view(_ value: view) -> u256 {
+    value.value
+}
+
+fn apply<T, F: Fn<(view T,), T>>(_ func: F, _ value: own T) -> T {
+    func(value)
+}
+
+fn expect_mixed<F: Fn<(view u256, ref u256, mut u256, Boxed), u256>>(_ func: F) {}
+
+pub fn f() {
+    let zero = || 42 as u256
+    let zero_result: u256 = zero()
+
+    let zero_logic = || true || false
+    let zero_logic_result: bool = zero_logic()
+
+    let add = |a, b| a + b
+    let sum: u256 = add(20 as u256, 22 as u256)
+
+    let trailing = |left, right,| left + right
+    let trailing_result: u256 = trailing(20 as u256, 22 as u256)
+
+    let bitwise = |left, right| left | right
+    let bitwise_result: u256 = bitwise(40 as u256, 2 as u256)
+
+    let suppressed = |_ value, _: own,| value
+    let suppressed_result: u256 = suppressed(42 as u256, 0 as u256)
+
+    let first = |pair: own (u256, u256)| pair.0
+    let first_result: u256 = first((42, 0))
+
+    let identity = |value: view| value
+    let identity_result: u256 = identity(42 as u256)
+
+    let explicit_view = |value: view u256| value
+    let explicit_view_result: u256 = explicit_view(42)
+
+    let field = |value| value.value
+    let field_result: u256 = field(Boxed { value: 42 })
+
+    let method = |value| value.get()
+    let method_result: u256 = method(Boxed { value: 42 })
+
+    let cast = |value| value as u256
+    let cast_result: u256 = cast(42 as u8)
+
+    let invert = |value| !value
+    let inverted: bool = invert(false)
+
+    let at = |values| values[0]
+    let first_element: u256 = at([42 as u256, 0])
+
+    let generic_result: u256 = apply(|value| value, 42 as u256)
+
+    let immediate_result: u256 = (|value| value + 1 as u256)(41 as u256)
+
+    let equals_sum: bool = (|value| value == 20 + 22)(42 as u256)
+    let equals_negative_one: bool = (|value| value == -1)(-1 as i8)
+
+    let call_with = |function, value| function(value)
+    let higher_order_result: u256 =
+        call_with(|value| value + 1 as u256, 41 as u256)
+
+    let sum_values = |values| -> u256 {
+        let mut total: u256 = 0
+        for value in values {
+            total += value
+        }
+        total
+    }
+    let loop_result: u256 = sum_values([20 as u256, 22 as u256])
+
+    let branch = |value| -> u256 { if true { value } else { 0 as u256 } }
+    let branch_result: u256 = branch(42 as u256)
+
+    let match_branch = |value| -> u256 {
+        match true {
+            true => value
+            false => 0 as u256
+        }
+    }
+    let match_branch_result: u256 = match_branch(42 as u256)
+
+    let named_view = |value: view view| value.value
+    let named_view_result: u256 = named_view(view { value: 42 })
+    let ordinary_named_view_result: u256 = read_named_view(view { value: 42 })
+
+    let unpack = |pair| {
+        let (left, right) = pair
+        left + right
+    }
+    let unpacked_result: u256 = unpack((20 as u256, 22 as u256))
+
+    let increment = |mut value: own| {
+        value += 1
+        value
+    }
+    let incremented_result: u256 = increment(41 as u256)
+
+    let outer = |left| {
+        let inner = |right| left + right
+        inner(22 as u256)
+    }
+    let nested_result: u256 = outer(20 as u256)
+
+    expect_mixed(|a, b: ref, c: mut, d: own| -> u256 {
+        c += a
+        b + c + d.value
+    })
+}

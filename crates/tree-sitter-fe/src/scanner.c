@@ -8,6 +8,8 @@ enum TokenType {
   BLOCK_COMMENT_END,
   GENERIC_OPEN,
   COMPARISON_LT,
+  VIEW_MODE_PREFIX,
+  VIEW_MODE_ONLY,
 };
 
 void *tree_sitter_fe_external_scanner_create(void) { return NULL; }
@@ -46,29 +48,224 @@ static bool is_continuation_after_newline(int32_t c) {
   }
 }
 
-// Skip a block comment (after consuming /*). Returns true if successfully skipped.
-static bool skip_block_comment(TSLexer *lexer) {
+// Consume a block comment after `/*`. Lookahead performed after a token's
+// `mark_end` must use `advance`, not `skip`: skipped bytes move the token start
+// and can collapse an already-marked token to a zero-width range.
+static bool consume_block_comment(TSLexer *lexer, bool as_trivia) {
   int depth = 1;
   while (depth > 0 && !lexer->eof(lexer)) {
     if (lexer->lookahead == '*') {
-      skip(lexer);
+      lexer->advance(lexer, as_trivia);
       if (!lexer->eof(lexer) && lexer->lookahead == '/') {
-        skip(lexer);
+        lexer->advance(lexer, as_trivia);
         depth--;
       }
       continue;
     }
     if (lexer->lookahead == '/') {
-      skip(lexer);
+      lexer->advance(lexer, as_trivia);
       if (!lexer->eof(lexer) && lexer->lookahead == '*') {
-        skip(lexer);
+        lexer->advance(lexer, as_trivia);
         depth++;
       }
       continue;
     }
-    skip(lexer);
+    lexer->advance(lexer, as_trivia);
   }
   return depth == 0;
+}
+
+static bool is_identifier_continue(int32_t c) {
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+         (c >= '0' && c <= '9') || c == '_';
+}
+
+static bool skip_quoted_string(TSLexer *lexer) {
+  advance(lexer);
+  while (!lexer->eof(lexer)) {
+    if (lexer->lookahead == '\\') {
+      advance(lexer);
+      if (lexer->eof(lexer)) return false;
+      advance(lexer);
+      continue;
+    }
+    if (lexer->lookahead == '"') {
+      advance(lexer);
+      return true;
+    }
+    advance(lexer);
+  }
+  return false;
+}
+
+static bool skip_type_trivia(TSLexer *lexer) {
+  for (;;) {
+    while (!lexer->eof(lexer) &&
+           (lexer->lookahead == ' ' || lexer->lookahead == '\t' ||
+            lexer->lookahead == '\r' || lexer->lookahead == '\n')) {
+      advance(lexer);
+    }
+    if (lexer->lookahead != '/') return true;
+    advance(lexer);
+    if (lexer->lookahead == '/') {
+      while (!lexer->eof(lexer) && lexer->lookahead != '\n') {
+        advance(lexer);
+      }
+      continue;
+    }
+    if (lexer->lookahead != '*') return false;
+    advance(lexer);
+    if (!consume_block_comment(lexer, false)) return false;
+  }
+}
+
+static bool scan_qualified_type_after_view(TSLexer *lexer) {
+  int angle_depth = 0;
+  int paren_depth = 0;
+  int bracket_depth = 0;
+  int brace_depth = 0;
+  bool previous_was_identifier = false;
+  bool saw_top_level_as = false;
+
+  while (!lexer->eof(lexer)) {
+    int32_t c = lexer->lookahead;
+    bool top_level = angle_depth == 1 && paren_depth == 0 &&
+                     bracket_depth == 0 && brace_depth == 0;
+
+    if (top_level && c == 'a' && !previous_was_identifier) {
+      advance(lexer);
+      if (lexer->lookahead == 's') {
+        advance(lexer);
+        if (!is_identifier_continue(lexer->lookahead)) {
+          saw_top_level_as = true;
+          previous_was_identifier = true;
+          continue;
+        }
+      }
+      previous_was_identifier = is_identifier_continue(lexer->lookahead);
+      continue;
+    }
+
+    switch (c) {
+      case '/':
+        advance(lexer);
+        if (lexer->lookahead == '/') {
+          while (!lexer->eof(lexer) && lexer->lookahead != '\n') {
+            advance(lexer);
+          }
+        } else if (lexer->lookahead == '*') {
+          advance(lexer);
+          if (!consume_block_comment(lexer, false)) return false;
+        }
+        previous_was_identifier = false;
+        break;
+      case '"':
+        if (!skip_quoted_string(lexer)) return false;
+        previous_was_identifier = false;
+        break;
+      case '<':
+        if (paren_depth == 0 && bracket_depth == 0 && brace_depth == 0) {
+          angle_depth++;
+        }
+        previous_was_identifier = false;
+        advance(lexer);
+        break;
+      case '>':
+        if (paren_depth != 0 || bracket_depth != 0 || brace_depth != 0) {
+          previous_was_identifier = false;
+          advance(lexer);
+          break;
+        }
+        angle_depth--;
+        previous_was_identifier = false;
+        advance(lexer);
+        if (angle_depth == 0) {
+          if (!saw_top_level_as || !skip_type_trivia(lexer) ||
+              lexer->lookahead != ':')
+            return false;
+          advance(lexer);
+          return lexer->lookahead == ':';
+        }
+        break;
+      case '(':
+        paren_depth++;
+        previous_was_identifier = false;
+        advance(lexer);
+        break;
+      case ')':
+        if (paren_depth == 0) return false;
+        paren_depth--;
+        previous_was_identifier = false;
+        advance(lexer);
+        break;
+      case '[':
+        bracket_depth++;
+        previous_was_identifier = false;
+        advance(lexer);
+        break;
+      case ']':
+        if (bracket_depth == 0) return false;
+        bracket_depth--;
+        previous_was_identifier = false;
+        advance(lexer);
+        break;
+      case '{':
+        brace_depth++;
+        previous_was_identifier = false;
+        advance(lexer);
+        break;
+      case '}':
+        if (brace_depth == 0) return false;
+        brace_depth--;
+        previous_was_identifier = false;
+        advance(lexer);
+        break;
+      default:
+        previous_was_identifier = is_identifier_continue(c);
+        advance(lexer);
+        break;
+    }
+  }
+  return false;
+}
+
+static bool scan_view_mode(TSLexer *lexer, bool prefix_is_valid,
+                           bool mode_only_is_valid) {
+  while (!lexer->eof(lexer) &&
+         (lexer->lookahead == ' ' || lexer->lookahead == '\t' ||
+          lexer->lookahead == '\r' || lexer->lookahead == '\n')) {
+    skip(lexer);
+  }
+
+  const char *keyword = "view";
+  for (const char *cursor = keyword; *cursor != '\0'; cursor++) {
+    if (lexer->lookahead != *cursor) return false;
+    advance(lexer);
+  }
+  if (is_identifier_continue(lexer->lookahead)) return false;
+  lexer->mark_end(lexer);
+
+  if (!skip_type_trivia(lexer)) return false;
+
+  if (lexer->lookahead == '<') {
+    if (!prefix_is_valid || !scan_qualified_type_after_view(lexer)) return false;
+    lexer->result_symbol = VIEW_MODE_PREFIX;
+    return true;
+  }
+  if (lexer->lookahead == ':' || lexer->lookahead == '\0') return false;
+  if (mode_only_is_valid &&
+      (lexer->lookahead == ',' || lexer->lookahead == '|')) {
+    lexer->result_symbol = VIEW_MODE_ONLY;
+    return true;
+  }
+  if (prefix_is_valid &&
+      (is_identifier_continue(lexer->lookahead) ||
+       lexer->lookahead == '*' || lexer->lookahead == '(' ||
+       lexer->lookahead == '[' || lexer->lookahead == '!')) {
+    lexer->result_symbol = VIEW_MODE_PREFIX;
+    return true;
+  }
+  return false;
 }
 
 // Scan for automatic semicolon insertion.
@@ -125,7 +322,7 @@ static bool scan_automatic_semicolon(TSLexer *lexer) {
       if (lexer->lookahead == '*') {
         // Block comment -- skip through it
         skip(lexer);
-        skip_block_comment(lexer);
+        consume_block_comment(lexer, true);
         continue;
       }
       // Just `/` -- division operator continuation
@@ -182,7 +379,9 @@ bool tree_sitter_fe_external_scanner_scan(void *payload, TSLexer *lexer,
       valid_symbols[BLOCK_COMMENT_CONTENT] &&
       valid_symbols[BLOCK_COMMENT_END] &&
       valid_symbols[GENERIC_OPEN] &&
-      valid_symbols[COMPARISON_LT]) {
+      valid_symbols[COMPARISON_LT] &&
+      valid_symbols[VIEW_MODE_PREFIX] &&
+      valid_symbols[VIEW_MODE_ONLY]) {
     return false;
   }
 
@@ -193,6 +392,12 @@ bool tree_sitter_fe_external_scanner_scan(void *payload, TSLexer *lexer,
       return true;
     }
     // Automatic semicolon not needed -- fall through to check other tokens
+  }
+
+  if ((valid_symbols[VIEW_MODE_PREFIX] || valid_symbols[VIEW_MODE_ONLY]) &&
+      scan_view_mode(lexer, valid_symbols[VIEW_MODE_PREFIX],
+                     valid_symbols[VIEW_MODE_ONLY])) {
+    return true;
   }
 
   // Disambiguate '<': generic open vs comparison less-than.

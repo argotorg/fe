@@ -1,0 +1,16 @@
+fn identity<T>(value: own T) -> T {
+    value
+}
+
+pub fn closure_call_launder() {
+    let mut x: u256 = 0
+    let m = mut x
+    let f = |_ unit: own ()| -> () {
+        let mm = m
+        mm = 1
+    }
+    let g = identity(value: f)
+    let other = mut x
+    g.call(())
+    other = 2
+}

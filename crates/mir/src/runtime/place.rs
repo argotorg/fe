@@ -67,7 +67,7 @@ pub fn resolve_runtime_place<'db>(
                     target: None,
                 }));
             }
-            RuntimeLocalRoot::Slot(class) => class.clone(),
+            RuntimeLocalRoot::Slot(class) | RuntimeLocalRoot::HeapSlot(class) => class.clone(),
         },
         PlaceRoot::Ref(value) => match body
             .place_value_class(*value)
@@ -239,6 +239,20 @@ pub(crate) fn ref_class_for_place_result<'db>(
 ) -> RuntimeClass<'db> {
     if !force_raw {
         match root_class {
+            RuntimeClass::Ref {
+                kind: RefKind::Object,
+                ..
+            } if matches!(value_class, RuntimeClass::AggregateValue { .. }) => {
+                return RuntimeClass::Ref {
+                    pointee: Box::new(value_class.clone()),
+                    kind: RefKind::Object,
+                    view: RefView::Whole,
+                };
+            }
+            RuntimeClass::Ref {
+                kind: RefKind::Object,
+                ..
+            } => {}
             RuntimeClass::Ref { kind, .. } => {
                 return RuntimeClass::Ref {
                     pointee: Box::new(value_class.clone()),
@@ -246,14 +260,18 @@ pub(crate) fn ref_class_for_place_result<'db>(
                     view: RefView::Whole,
                 };
             }
-            RuntimeClass::AggregateValue { .. } => {
+            RuntimeClass::AggregateValue { .. }
+                if matches!(value_class, RuntimeClass::AggregateValue { .. }) =>
+            {
                 return RuntimeClass::Ref {
                     pointee: Box::new(value_class.clone()),
                     kind: RefKind::Object,
                     view: RefView::Whole,
                 };
             }
-            RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => {}
+            RuntimeClass::Scalar(_)
+            | RuntimeClass::AggregateValue { .. }
+            | RuntimeClass::RawAddr { .. } => {}
         }
     }
     RuntimeClass::RawAddr {
@@ -272,7 +290,7 @@ fn runtime_place_transport_root<'db>(
                 .place_local_root(*local)
                 .ok_or(VerifyError::MissingRuntimeLocal(*local))?
             {
-                RuntimeLocalRoot::Slot(class) => class.clone(),
+                RuntimeLocalRoot::Slot(class) | RuntimeLocalRoot::HeapSlot(class) => class.clone(),
                 RuntimeLocalRoot::None
                 | RuntimeLocalRoot::Ref(_)
                 | RuntimeLocalRoot::Ptr { .. } => {

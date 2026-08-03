@@ -1,0 +1,98 @@
+use core::functional::Fn
+
+fn increment() uses (target: mut u256) {
+    target += 1
+}
+
+fn increment_directly() uses (target: mut u256) {
+    let update = || {
+        target += 1
+    }
+    update()
+}
+
+fn increment_through_call() uses (target: mut u256) {
+    let update = || increment()
+    update()
+}
+
+fn read_directly() -> u256 uses (target: u256) {
+    let read = || target
+    read()
+}
+
+fn read_through_call() -> u256 uses (target: u256) {
+    let read = || read_directly()
+    read()
+}
+
+fn increment_through_nested_closures() uses (target: mut u256) {
+    let outer = || {
+        let inner = || increment()
+        inner()
+    }
+    outer()
+}
+
+struct Pair {
+    left: u256,
+    right: u256,
+}
+
+fn increment_projected_effect() uses (pair: mut Pair) {
+    let update = with (mut pair.right) {
+        || increment()
+    }
+    update()
+}
+
+#[test]
+fn test_closure_captures_mut_effect_binding() {
+    let mut value = 40
+    with (mut value) {
+        increment_directly()
+        increment_through_call()
+    }
+    assert(value == 42)
+}
+
+#[test]
+fn test_closure_reads_immutable_effect_binding() {
+    let value = 42
+    with (value) {
+        assert(read_directly() == 42)
+        assert(read_through_call() == 42)
+    }
+}
+
+#[test]
+fn test_closure_retains_effect_provider_after_with_scope() {
+    let mut value = 41
+    let update = with (mut value) {
+        || increment()
+    }
+    update()
+    assert(value == 42)
+}
+
+#[test]
+fn test_nested_closures_forward_mut_effect_binding() {
+    let mut value = 41
+    with (mut value) {
+        increment_through_nested_closures()
+    }
+    assert(value == 42)
+}
+
+#[test]
+fn test_closure_retains_projected_effect_provider() {
+    let mut pair = Pair {
+        left: 7,
+        right: 41,
+    }
+    with (mut pair) {
+        increment_projected_effect()
+    }
+    assert(pair.left == 7)
+    assert(pair.right == 42)
+}

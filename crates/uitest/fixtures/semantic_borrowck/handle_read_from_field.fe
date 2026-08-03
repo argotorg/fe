@@ -1,0 +1,12 @@
+struct Esc {
+    h: mut u256,
+    tag: u256,
+}
+
+pub fn read_handle_field() -> u256 {
+    let mut x: u256 = 5
+    let e = Esc { h: mut x, tag: 0 }
+    let hh = e.h
+    hh = 7
+    x
+}

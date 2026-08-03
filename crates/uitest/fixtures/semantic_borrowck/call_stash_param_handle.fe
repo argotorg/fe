@@ -1,0 +1,20 @@
+struct S {
+    r: mut u256,
+    tag: u256,
+}
+
+fn stash(mut s: own S, m: mut u256) -> S {
+    s.r = m
+    s
+}
+
+pub fn call_stash_param_handle() {
+    let mut x: u256 = 0
+    let mut y: u256 = 1
+    let s0 = S { r: mut y, tag: 0 }
+    let s2 = stash(s0, mut x)
+    let m = mut x
+    m = 7
+    let h = s2.r
+    h = 9
+}

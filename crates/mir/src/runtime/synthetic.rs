@@ -186,11 +186,15 @@ impl<'db> RuntimeValueUseEmitter<'db> for SyntheticBodyBuilder<'db> {
         dst
     }
 
-    fn alloc_value_slot(&mut self, semantic_ty: TyId<'db>, class: RuntimeClass<'db>) -> RLocalId {
+    fn alloc_heap_value_slot(
+        &mut self,
+        semantic_ty: TyId<'db>,
+        class: RuntimeClass<'db>,
+    ) -> RLocalId {
         self.push_local(
             semantic_ty,
             RuntimeCarrier::Value(class.clone()),
-            RuntimeLocalRoot::Slot(class),
+            RuntimeLocalRoot::HeapSlot(class),
         )
     }
 
@@ -1291,7 +1295,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
             RuntimeLocalRoot::None => {
                 self.locals[local.index()].root = RuntimeLocalRoot::Slot(class.clone());
             }
-            RuntimeLocalRoot::Slot(_) => {}
+            RuntimeLocalRoot::Slot(_) | RuntimeLocalRoot::HeapSlot(_) => {}
             RuntimeLocalRoot::Ref(_) | RuntimeLocalRoot::Ptr { .. } => return None,
         }
         let place = self
@@ -1309,7 +1313,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
     fn runtime_place_for_local(&self, local: RLocalId) -> Option<RuntimePlace<'db>> {
         let root = match self.locals.get(local.index())?.root.clone() {
             RuntimeLocalRoot::None => return None,
-            RuntimeLocalRoot::Slot(_) => PlaceRoot::Slot(local),
+            RuntimeLocalRoot::Slot(_) | RuntimeLocalRoot::HeapSlot(_) => PlaceRoot::Slot(local),
             RuntimeLocalRoot::Ref(_) => PlaceRoot::Ref(local),
             RuntimeLocalRoot::Ptr { space, class } => PlaceRoot::Ptr {
                 addr: local,
@@ -1334,7 +1338,9 @@ impl<'db> SyntheticBodyBuilder<'db> {
         let (root_class, root_space, force_raw) = match &place.root {
             PlaceRoot::Slot(_) => (
                 match &self.locals.get(local.index())?.root {
-                    RuntimeLocalRoot::Slot(class) => class.clone(),
+                    RuntimeLocalRoot::Slot(class) | RuntimeLocalRoot::HeapSlot(class) => {
+                        class.clone()
+                    }
                     RuntimeLocalRoot::None
                     | RuntimeLocalRoot::Ref(_)
                     | RuntimeLocalRoot::Ptr { .. } => unreachable!(),
@@ -1347,6 +1353,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                     RuntimeLocalRoot::Ref(class) => class.clone(),
                     RuntimeLocalRoot::None
                     | RuntimeLocalRoot::Slot(_)
+                    | RuntimeLocalRoot::HeapSlot(_)
                     | RuntimeLocalRoot::Ptr { .. } => unreachable!(),
                 },
                 AddressSpaceKind::Memory,

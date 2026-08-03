@@ -5,8 +5,11 @@ use dataflow::{SparseAnalysis, solve_sparse};
 use hir::{
     analysis::{
         semantic::{
-            SLocalId, SemanticLocalKind,
-            borrowck::{NLocalOrigin, NSLocal, NormalizedBindingLowering, NormalizedSemanticBody},
+            SBlockId, SLocalId, SemanticLocalKind,
+            borrowck::{
+                NExpr, NLocalOrigin, NSLocal, NSStmtKind, NSTerminatorKind,
+                NormalizedBindingLowering, NormalizedSemanticBody,
+            },
         },
         ty::{
             trait_resolution::PredicateListId, ty_check::LocalBinding, ty_def::CapabilityKind,
@@ -23,7 +26,8 @@ use crate::{
     runtime::{
         AddressSpaceKind, ArrayLayout, EnumLayoutKey, EnumVariantLayout, Layout, LayoutId,
         LayoutKey, RefKind, RefView, RuntimeCarrier, RuntimeClass, RuntimeLocalRoot,
-        RuntimeProviderBinding, RuntimeProviderBindingId, StructLayout,
+        RuntimeProviderBinding, RuntimeProviderBindingId, StructLayout, ref_views_align,
+        remap_ref_view_to_pointee,
     },
 };
 
@@ -35,8 +39,12 @@ use super::{
         runtime_class_for_effect_binding_provider_in_env, runtime_class_for_provider_binding,
     },
     conversion::RuntimeConversionPlanner,
+    interface::runtime_visible_binding_plans,
+    retention::{
+        RetainedCapabilityInput, retained_capability_inputs, store_carries_borrow_transport,
+    },
     returns::runtime_return_class,
-    source::local_read_places_extractable_from_value,
+    source::{local_read_places_extractable_from_value, place_root_local},
     type_info::{
         RuntimeTypeEnv, effect_handle_transport_class_for_ty_in_env,
         provider_class_for_target_in_env, runtime_repr_ty_in_env, runtime_zero_sized_transport_ty,
@@ -83,6 +91,7 @@ pub(super) trait AssignmentSpace<'db> {
     fn seed_nodes(&self) -> Vec<Self::Node>;
     fn assignment_id(&self, node: Self::Node) -> AssignmentId;
     fn for_each_node_using_local(&self, local: SLocalId, f: &mut dyn FnMut(Self::Node));
+    fn for_each_node_defining_local(&self, local: SLocalId, f: &mut dyn FnMut(Self::Node));
     fn dynamic_dependents(&self, local: SLocalId) -> &[SLocalId];
 }
 
@@ -106,6 +115,12 @@ impl<'db> AssignmentSpace<'db> for FullBodySpace<'_, 'db> {
 
     fn for_each_node_using_local(&self, local: SLocalId, f: &mut dyn FnMut(AssignmentId)) {
         for &assign_id in self.0.assignments_using_local(local) {
+            f(assign_id);
+        }
+    }
+
+    fn for_each_node_defining_local(&self, local: SLocalId, f: &mut dyn FnMut(AssignmentId)) {
+        for &assign_id in self.0.assignments_defining_local(local) {
             f(assign_id);
         }
     }
@@ -161,6 +176,7 @@ impl<'a, 'lookup, 'db> CarrierInferer<'a, 'lookup, 'db, FullBodySpace<'a, 'db>> 
                 self.env.db(),
                 local_data,
                 class.clone(),
+                None,
                 self.env.scope(),
                 self.env.assumptions(),
             );
@@ -180,36 +196,6 @@ impl<'a, 'lookup, 'db> CarrierInferer<'a, 'lookup, 'db, FullBodySpace<'a, 'db>> 
             semantic_locals,
             provider_bindings,
         }
-    }
-
-    fn infer_roots(&mut self) -> Vec<RuntimeLocalRoot<'db>> {
-        let carriers = self.carriers.clone();
-        let cx = self.env.with_carriers(&carriers);
-        let mut roots = Vec::with_capacity(cx.env.body().locals.len());
-        for (idx, local) in cx.env.body().locals.iter().enumerate() {
-            let local_id = SLocalId::from_u32(idx as u32);
-            let mut carrier = carriers[idx].clone();
-            let root = if !local.facts.root_demand.needs_runtime_root() {
-                RuntimeLocalRoot::None
-            } else if let Some(unrooted_carrier) = local_lowers_as_unrooted_read_value(
-                cx.env.db(),
-                cx.env.body(),
-                local_id,
-                local,
-                &carrier,
-                cx.env.scope(),
-                cx.env.assumptions(),
-            ) && (!self.signature_pinned[idx] || unrooted_carrier == carrier)
-            {
-                carrier = unrooted_carrier;
-                RuntimeLocalRoot::None
-            } else {
-                infer_runtime_local_root(cx, local_id, &mut carrier)
-            };
-            self.carriers[idx] = carrier;
-            roots.push(root);
-        }
-        roots
     }
 }
 
@@ -241,7 +227,100 @@ impl<'a, 'lookup, 'db, S: AssignmentSpace<'db>> CarrierInferer<'a, 'lookup, 'db,
     pub(super) fn solve_carriers(mut self) -> Vec<RuntimeCarrier<'db>> {
         seed_root_provider_carriers(self.env, &mut self.carriers);
         solve_sparse(&mut self, &mut ());
+        self.infer_roots();
         self.carriers
+    }
+
+    fn infer_roots(&mut self) -> Vec<RuntimeLocalRoot<'db>> {
+        let carriers = self.carriers.clone();
+        let cx = self.env.with_carriers(&carriers);
+        let mut roots = Vec::with_capacity(cx.env.body().locals.len());
+        for (idx, _) in cx.env.body().locals.iter().enumerate() {
+            let local_id = SLocalId::from_u32(idx as u32);
+            if !cx.env.local_is_reachable(local_id) {
+                self.carriers[idx] = RuntimeCarrier::Erased;
+                roots.push(RuntimeLocalRoot::None);
+                continue;
+            }
+            let (carrier, root) = plan_runtime_local_root(
+                cx,
+                local_id,
+                carriers[idx].clone(),
+                self.signature_pinned[idx],
+            );
+            self.carriers[idx] = carrier;
+            roots.push(root);
+        }
+
+        let (borrow_storage_roots, escaping_store_sources) = borrow_storage_roots(
+            cx.env.db(),
+            cx.env.body(),
+            &self.carriers,
+            cx.env.reachable_blocks(),
+            cx.env.reachable_locals(),
+        );
+        for source in escaping_store_sources {
+            promote_escaping_slot(&mut roots, source);
+            for &backing in &borrow_storage_roots[source.index()] {
+                promote_escaping_slot(&mut roots, backing);
+            }
+        }
+        let mut returned_locals = vec![false; cx.env.body().locals.len()];
+        for (block_idx, block) in cx.env.body().blocks.iter().enumerate() {
+            if !cx.env.block_is_reachable(SBlockId::new(block_idx)) {
+                continue;
+            }
+            if let NSTerminatorKind::Return(Some(value)) = block.terminator.kind {
+                returned_locals[value.local.index()] = true;
+            }
+        }
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for (idx, local) in cx.env.body().locals.iter().enumerate() {
+                if !cx.env.local_is_reachable(SLocalId::new(idx)) {
+                    continue;
+                }
+                let stores_escaping_borrow_transport =
+                    matches!(
+                        &roots[idx],
+                        RuntimeLocalRoot::Slot(_) | RuntimeLocalRoot::HeapSlot(_)
+                    ) || matches!(
+                        self.carriers[idx].value_class(),
+                        Some(RuntimeClass::Ref {
+                            kind: RefKind::Object
+                                | RefKind::Provider {
+                                    space: AddressSpaceKind::Memory,
+                                    ..
+                                },
+                            ..
+                        })
+                    ) || self.carriers[idx].value_class().is_some_and(|class| {
+                        matches!(class, RuntimeClass::AggregateValue { .. })
+                            && class.contains_transport(cx.env.db())
+                    }) || returned_locals[idx]
+                        && matches!(
+                            self.carriers[idx].value_class(),
+                            Some(RuntimeClass::RawAddr {
+                                space: AddressSpaceKind::Memory,
+                                ..
+                            })
+                        );
+                if !stores_escaping_borrow_transport {
+                    continue;
+                }
+                for backing in &local.facts.layout_backing_sources {
+                    let Some(source) = place_root_local(cx.env.body(), &backing.source) else {
+                        continue;
+                    };
+                    changed |= promote_escaping_slot(&mut roots, source);
+                }
+                for &source in &borrow_storage_roots[idx] {
+                    changed |= promote_escaping_slot(&mut roots, source);
+                }
+            }
+        }
+        roots
     }
 
     fn set_carrier(&mut self, local: SLocalId, desired: RuntimeCarrier<'db>) -> bool {
@@ -253,6 +332,9 @@ impl<'a, 'lookup, 'db, S: AssignmentSpace<'db>> CarrierInferer<'a, 'lookup, 'db,
             .get(local.index())
             .cloned()
             .unwrap_or(RuntimeCarrier::Erased);
+        if current == desired {
+            return false;
+        }
         let desired = merge_runtime_carrier(
             self.env.db(),
             &self.env.body().locals[local.index()],
@@ -267,8 +349,8 @@ impl<'a, 'lookup, 'db, S: AssignmentSpace<'db>> CarrierInferer<'a, 'lookup, 'db,
         true
     }
 
-    fn collect_local_change_dependents(&mut self, changed_local: SLocalId) {
-        let mut pending = vec![changed_local];
+    fn collect_local_change_dependents(&mut self, changed_locals: &[SLocalId]) {
+        let mut pending = changed_locals.to_vec();
         let mut seen = vec![false; self.env.body().locals.len()];
         let mut queued = SecondaryMap::with_default(false);
         queued.resize(self.space.node_count());
@@ -286,9 +368,82 @@ impl<'a, 'lookup, 'db, S: AssignmentSpace<'db>> CarrierInferer<'a, 'lookup, 'db,
                     pending_dependents.push(node);
                 }
             });
+            space.for_each_node_defining_local(local, &mut |node| {
+                if !queued[node] {
+                    queued[node] = true;
+                    pending_dependents.push(node);
+                }
+            });
             for dependent in self.space.dynamic_dependents(local).iter().copied() {
                 pending.push(dependent);
             }
+        }
+    }
+
+    fn constrain_aggregate_use_source(
+        &mut self,
+        source: SLocalId,
+        desired: RuntimeClass<'db>,
+        changed_locals: &mut Vec<SLocalId>,
+    ) {
+        let mut pending = vec![(source, desired)];
+        while let Some((local, desired)) = pending.pop() {
+            if self.signature_pinned[local.index()]
+                || !matches!(
+                    self.carriers[local.index()],
+                    RuntimeCarrier::Value(RuntimeClass::AggregateValue { .. })
+                )
+            {
+                continue;
+            }
+            let definitions = self.env.assignments_defining_local(local);
+            if definitions.is_empty() {
+                continue;
+            }
+            let mut forwarded = Vec::new();
+            let adaptable = definitions.iter().copied().all(|assign_id| {
+                let assign = self
+                    .env
+                    .assignment(assign_id)
+                    .unwrap_or_else(|| panic!("missing assignment facts for {assign_id:?}"));
+                let NSStmtKind::Assign { expr, .. } =
+                    &self.env.body().blocks[assign.block_idx].stmts[assign.stmt_idx].kind
+                else {
+                    unreachable!("assignment facts must point to assignments")
+                };
+                match expr {
+                    NExpr::Use(value) => {
+                        forwarded.push(value.local);
+                        true
+                    }
+                    NExpr::Const(_)
+                    | NExpr::ArrayRepeat { .. }
+                    | NExpr::AggregateMake { .. }
+                    | NExpr::EnumMake { .. } => true,
+                    NExpr::ReadPlace { .. }
+                    | NExpr::Unary { .. }
+                    | NExpr::Binary { .. }
+                    | NExpr::Cast { .. }
+                    | NExpr::Borrow { .. }
+                    | NExpr::Call { .. }
+                    | NExpr::GetEnumTag { .. }
+                    | NExpr::IsEnumVariant { .. }
+                    | NExpr::ExtractEnumField { .. }
+                    | NExpr::CodeRegionRef { .. }
+                    | NExpr::CodeRegionOffset { .. }
+                    | NExpr::CodeRegionLen { .. } => false,
+                }
+            });
+            if !adaptable || !self.set_carrier(local, RuntimeCarrier::Value(desired)) {
+                continue;
+            }
+            changed_locals.push(local);
+            let Some(class @ RuntimeClass::AggregateValue { .. }) =
+                self.carriers[local.index()].value_class().cloned()
+            else {
+                continue;
+            };
+            pending.extend(forwarded.into_iter().map(|source| (source, class.clone())));
         }
     }
 }
@@ -341,17 +496,43 @@ impl<'db, S: AssignmentSpace<'db>> SparseAnalysis for CarrierInferer<'_, '_, 'db
         let Some(class) = class else {
             return Ok(false);
         };
+        let source_transport = if matches!(local.facts.interface, SemanticLocalKind::PlaceCarrier)
+            && local.ty.as_borrow(db).is_some()
+            && !class.is_transport()
+        {
+            local
+                .facts
+                .snapshot_source_place
+                .as_ref()
+                .and_then(|place| {
+                    self.env
+                        .normalized_place_address_class(&self.carriers, place)
+                })
+        } else {
+            None
+        };
         let desired = desired_runtime_value_carrier(
             db,
             local,
             class,
+            source_transport,
             self.env.scope(),
             self.env.assumptions(),
         );
-        if !self.set_carrier(assign.dst, desired) {
+        let mut changed_locals = Vec::new();
+        if self.set_carrier(assign.dst, desired) {
+            changed_locals.push(assign.dst);
+        }
+        if let NExpr::Use(value) = expr
+            && let Some(class @ RuntimeClass::AggregateValue { .. }) =
+                self.carriers[assign.dst.index()].value_class().cloned()
+        {
+            self.constrain_aggregate_use_source(value.local, class, &mut changed_locals);
+        }
+        if changed_locals.is_empty() {
             return Ok(false);
         }
-        self.collect_local_change_dependents(assign.dst);
+        self.collect_local_change_dependents(&changed_locals);
         Ok(true)
     }
 
@@ -365,6 +546,9 @@ pub(crate) fn seed_root_provider_carriers<'a, 'db>(
     carriers: &mut [RuntimeCarrier<'db>],
 ) {
     for (idx, local) in env.body().locals.iter().enumerate() {
+        if !env.local_is_reachable(SLocalId::new(idx)) {
+            continue;
+        }
         if !matches!(carriers[idx], RuntimeCarrier::Erased) {
             continue;
         }
@@ -417,6 +601,7 @@ pub(crate) fn desired_runtime_value_carrier<'db>(
     db: &'db dyn MirDb,
     local: &NSLocal<'db>,
     class: RuntimeClass<'db>,
+    source_transport: Option<RuntimeClass<'db>>,
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> RuntimeCarrier<'db> {
@@ -438,6 +623,19 @@ pub(crate) fn desired_runtime_value_carrier<'db>(
         )
     ) {
         return RuntimeCarrier::Erased;
+    }
+    if matches!(local.facts.interface, SemanticLocalKind::PlaceCarrier)
+        && local.ty.as_borrow(db).is_some()
+        && !class.is_transport()
+    {
+        if let Some(source_transport) = source_transport {
+            debug_assert!(source_transport.is_transport());
+            return RuntimeCarrier::Value(source_transport);
+        }
+        if let Some(transport_class) = fallback_root_transport_class(db, local, scope, assumptions)
+        {
+            return RuntimeCarrier::Value(transport_class);
+        }
     }
     if !class.is_transport()
         && matches!(local.facts.interface, SemanticLocalKind::DirectCarrier)
@@ -492,6 +690,9 @@ fn lower_semantic_locals<'db>(
     let mut provider_bindings = Vec::new();
     for (idx, local) in body.locals.iter().enumerate() {
         let local_id = SLocalId::from_u32(idx as u32);
+        if !cx.env.local_is_reachable(local_id) {
+            continue;
+        }
         if local
             .facts
             .origin
@@ -625,7 +826,11 @@ fn lower_semantic_locals<'db>(
         .locals
         .iter()
         .enumerate()
-        .map(|(idx, local)| match (&local.facts.interface, &local.facts.origin) {
+        .map(|(idx, local)| {
+            if !cx.env.local_is_reachable(SLocalId::new(idx)) {
+                return RuntimeLocalLowering::Erased;
+            }
+            match (&local.facts.interface, &local.facts.origin) {
             (SemanticLocalKind::Erased, _) => RuntimeLocalLowering::Erased,
             (_, NLocalOrigin::RootProvider(provider))
                 if provider_erases_runtime_root(db, provider, scope, assumptions) =>
@@ -723,6 +928,7 @@ fn lower_semantic_locals<'db>(
                     place_class,
                 }
             }
+        }
         })
         .collect();
     (lowerings, provider_bindings)
@@ -779,10 +985,9 @@ fn local_lowers_as_direct_read_value<'db>(
         return false;
     }
     match local.facts.interface {
-        SemanticLocalKind::DirectValue => local_direct_value_lowers_as_unrooted(local, db, &class),
+        SemanticLocalKind::DirectValue => local.facts.origin.root_provider().is_none(),
         SemanticLocalKind::PlaceCarrier => {
-            local_is_read_only_view_param(local)
-                && place_carrier_lowers_as_direct_value(db, local, carrier, scope, assumptions)
+            place_carrier_lowers_as_direct_value(db, local, carrier, scope, assumptions)
         }
         SemanticLocalKind::Erased
         | SemanticLocalKind::DirectCarrier
@@ -790,80 +995,223 @@ fn local_lowers_as_direct_read_value<'db>(
     }
 }
 
-fn local_direct_value_lowers_as_unrooted<'db>(
-    local: &NSLocal<'db>,
-    db: &'db dyn MirDb,
-    class: &RuntimeClass<'db>,
-) -> bool {
-    if local.facts.origin.root_provider().is_some() {
-        return false;
+pub(super) fn plan_runtime_local_root<'db>(
+    cx: RuntimeBodyCx<'_, '_, 'db>,
+    local: SLocalId,
+    mut carrier: RuntimeCarrier<'db>,
+    signature_pinned: bool,
+) -> (RuntimeCarrier<'db>, RuntimeLocalRoot<'db>) {
+    let local_data = &cx.env.body().locals[local.index()];
+    if !local_data.facts.root_demand.needs_runtime_root() {
+        return (carrier, RuntimeLocalRoot::None);
     }
-    if !class.contains_transport(db) {
-        return true;
+    if let Some(unrooted_carrier) =
+        local_lowers_as_unrooted_read_value(cx, local, local_data, &carrier)
+        && (!signature_pinned || unrooted_carrier == carrier)
+    {
+        return (unrooted_carrier, RuntimeLocalRoot::None);
     }
-    matches!(
-        local.source,
-        Some(LocalBinding::Param {
-            mode: FuncParamMode::View,
-            ..
-        })
-    )
+    let root = infer_runtime_local_root(cx, local, &mut carrier);
+    (carrier, root)
 }
 
-fn local_is_read_only_view_param<'db>(local: &NSLocal<'db>) -> bool {
-    matches!(
-        local.source,
-        Some(LocalBinding::Param {
-            mode: FuncParamMode::View,
-            ..
-        })
-    )
+pub(super) fn runtime_local_is_signature_pinned(env: BodyEnv<'_, '_>, local: SLocalId) -> bool {
+    runtime_visible_binding_plans(env.db(), env.body().owner)
+        .iter()
+        .any(|entry| entry.local == local)
 }
 
 fn local_lowers_as_unrooted_read_value<'db>(
-    db: &'db dyn MirDb,
-    body: &NormalizedSemanticBody<'db>,
+    cx: RuntimeBodyCx<'_, '_, 'db>,
     local_id: SLocalId,
     local: &NSLocal<'db>,
     carrier: &RuntimeCarrier<'db>,
-    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
-    assumptions: PredicateListId<'db>,
 ) -> Option<RuntimeCarrier<'db>> {
-    let candidate = unrooted_read_value_candidate_carrier(db, local, carrier)?;
-    if !local_lowers_as_direct_read_value(db, local, &candidate, scope, assumptions) {
+    let class = carrier.value_class().cloned()?;
+    let candidate = if matches!(
+        class,
+        RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. }
+    ) {
+        RuntimeCarrier::Value(class)
+    } else if matches!(local.facts.interface, SemanticLocalKind::DirectValue)
+        && matches!(
+            class,
+            RuntimeClass::Ref {
+                kind: RefKind::Object,
+                ..
+            }
+        )
+    {
+        RuntimeCarrier::Value(class.aggregate_value_class()?)
+    } else {
+        return None;
+    };
+    if !local_lowers_as_direct_read_value(
+        cx.env.db(),
+        local,
+        &candidate,
+        cx.env.scope(),
+        cx.env.assumptions(),
+    ) {
         return None;
     }
     let demand = local.facts.root_demand;
     if !demand.permits_unrooted_value_projection_reads() {
         return None;
     }
-    local_read_places_extractable_from_value(body, local_id).then_some(candidate)
+    local_read_places_extractable_from_value(cx.env, cx.carriers, cx.env.body(), local_id)
+        .then_some(candidate)
 }
 
-fn unrooted_read_value_candidate_carrier<'db>(
+fn borrow_storage_roots<'db>(
     db: &'db dyn MirDb,
-    local: &NSLocal<'db>,
-    carrier: &RuntimeCarrier<'db>,
-) -> Option<RuntimeCarrier<'db>> {
-    let class = carrier.value_class().cloned()?;
-    if matches!(
-        class,
-        RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. }
-    ) {
-        return Some(RuntimeCarrier::Value(class));
+    body: &NormalizedSemanticBody<'db>,
+    carriers: &[RuntimeCarrier<'db>],
+    reachable_blocks: &[bool],
+    reachable_locals: &[bool],
+) -> (Vec<Vec<SLocalId>>, Vec<SLocalId>) {
+    let mut dependencies = vec![Vec::new(); body.locals.len()];
+    let mut escaping_store_sources = Vec::new();
+    for (idx, local) in body.locals.iter().enumerate() {
+        if reachable_locals.get(idx) != Some(&true)
+            || !carriers[idx]
+                .value_class()
+                .is_some_and(|class| class.contains_transport(db))
+        {
+            continue;
+        }
+        for source in &local.facts.layout_backing_sources {
+            if let Some(source) = place_root_local(body, &source.source)
+                && !dependencies[idx].contains(&source)
+            {
+                dependencies[idx].push(source);
+            }
+        }
     }
-    if !matches!(local.facts.interface, SemanticLocalKind::DirectValue) {
-        return None;
+    for (block_idx, block) in body.blocks.iter().enumerate() {
+        if reachable_blocks.get(block_idx) != Some(&true) {
+            continue;
+        }
+        for stmt in &block.stmts {
+            if let NSStmtKind::Assign {
+                expr:
+                    NExpr::Call {
+                        callee,
+                        args,
+                        effect_args,
+                        ..
+                    },
+                ..
+            } = &stmt.kind
+            {
+                for retained in retained_capability_inputs(db, callee.key) {
+                    let source =
+                        match retained {
+                            RetainedCapabilityInput::Param(idx) => {
+                                args.get(*idx as usize).map(|arg| arg.local)
+                            }
+                            RetainedCapabilityInput::Effect(binding_idx) => effect_args
+                                .iter()
+                                .find(|effect| effect.binding_idx == *binding_idx)
+                                .and_then(|effect| {
+                                    effect.arg.value_operand().map(|value| value.local).or_else(
+                                        || {
+                                            effect
+                                                .arg
+                                                .place_operand()
+                                                .and_then(|place| place_root_local(body, place))
+                                        },
+                                    )
+                                }),
+                        };
+                    if let Some(source) = source
+                        && !escaping_store_sources.contains(&source)
+                    {
+                        escaping_store_sources.push(source);
+                    }
+                }
+            }
+            match &stmt.kind {
+                NSStmtKind::Assign { dst, expr }
+                    if carriers[dst.index()]
+                        .value_class()
+                        .is_some_and(|class| class.contains_transport(db)) =>
+                {
+                    let mut add_dependency = |source: SLocalId| {
+                        if !dependencies[dst.index()].contains(&source) {
+                            dependencies[dst.index()].push(source);
+                        }
+                    };
+                    match expr {
+                        NExpr::Borrow { place, .. } => {
+                            if let Some(source) = place_root_local(body, place) {
+                                add_dependency(source);
+                            }
+                        }
+                        NExpr::Use(value)
+                        | NExpr::Cast { value, .. }
+                        | NExpr::ArrayRepeat { value, .. }
+                        | NExpr::ExtractEnumField { value, .. } => {
+                            add_dependency(value.local);
+                        }
+                        NExpr::AggregateMake { fields, .. } | NExpr::EnumMake { fields, .. } => {
+                            for field in fields {
+                                add_dependency(field.local);
+                            }
+                        }
+                        NExpr::ReadPlace { .. }
+                        | NExpr::Call { .. }
+                        | NExpr::CodeRegionRef { .. }
+                        | NExpr::Const(_)
+                        | NExpr::Unary { .. }
+                        | NExpr::Binary { .. }
+                        | NExpr::GetEnumTag { .. }
+                        | NExpr::IsEnumVariant { .. }
+                        | NExpr::CodeRegionOffset { .. }
+                        | NExpr::CodeRegionLen { .. } => {}
+                    }
+                }
+                NSStmtKind::Store { dst, src }
+                    if store_carries_borrow_transport(db, body, dst, *src) =>
+                {
+                    if let Some(dst) = place_root_local(body, dst)
+                        && !dependencies[dst.index()].contains(&src.local)
+                    {
+                        dependencies[dst.index()].push(src.local);
+                    }
+                    if !escaping_store_sources.contains(&src.local) {
+                        escaping_store_sources.push(src.local);
+                    }
+                }
+                NSStmtKind::Assign { .. } | NSStmtKind::Store { .. } => {}
+            }
+        }
     }
-    let RuntimeClass::Ref {
-        kind: RefKind::Object,
-        ..
-    } = class
-    else {
-        return None;
+
+    let mut roots = dependencies.clone();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (idx, local_dependencies) in dependencies.iter().enumerate() {
+            for dependency in local_dependencies.iter().copied() {
+                for source in roots[dependency.index()].clone() {
+                    if !roots[idx].contains(&source) {
+                        roots[idx].push(source);
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+    (roots, escaping_store_sources)
+}
+
+fn promote_escaping_slot<'db>(roots: &mut [RuntimeLocalRoot<'db>], source: SLocalId) -> bool {
+    let RuntimeLocalRoot::Slot(class) = &roots[source.index()] else {
+        return false;
     };
-    let aggregate = class.aggregate_value_class()?;
-    (!aggregate.contains_transport(db)).then_some(RuntimeCarrier::Value(aggregate))
+    roots[source.index()] = RuntimeLocalRoot::HeapSlot(class.clone());
+    true
 }
 
 fn runtime_provider_binding_id<'db>(
@@ -1132,7 +1480,9 @@ pub(crate) fn merge_runtime_carrier<'db>(
             RuntimeCarrier::Value(join_runtime_class(db, demand, &current, &desired).unwrap_or_else(
                 || {
                     panic!(
-                        "runtime carrier classes have no common realizable join: local={local:?}; current={current:?}; desired={desired:?}"
+                        "runtime carrier classes have no common realizable join: local={local:?}; current={current:?}; current_layout={:?}; desired={desired:?}; desired_layout={:?}",
+                        current.aggregate_layout().map(|layout| layout.data(db)),
+                        desired.aggregate_layout().map(|layout| layout.data(db)),
                     )
                 },
             ))
@@ -1144,6 +1494,7 @@ pub(crate) fn merge_runtime_carrier<'db>(
 struct RuntimeJoinDemand {
     prefer_owned_object: bool,
     prefer_transport: bool,
+    require_transport: bool,
 }
 
 impl RuntimeJoinDemand {
@@ -1154,6 +1505,10 @@ impl RuntimeJoinDemand {
                 local.facts.interface,
                 SemanticLocalKind::PlaceCarrier | SemanticLocalKind::DirectCarrier
             ) || local.facts.origin.root_provider().is_some(),
+            require_transport: matches!(
+                local.facts.interface,
+                SemanticLocalKind::PlaceCarrier | SemanticLocalKind::DirectCarrier
+            ),
         }
     }
 }
@@ -1165,9 +1520,20 @@ fn join_runtime_class<'db>(
     desired: &RuntimeClass<'db>,
 ) -> Option<RuntimeClass<'db>> {
     if current == desired {
-        return Some(current.clone());
+        return (!demand.require_transport || current.is_transport()).then(|| current.clone());
     }
-    if let Some(merged) = merge_runtime_class(db, current, desired) {
+    if matches!(
+        (current, desired),
+        (
+            RuntimeClass::AggregateValue { .. },
+            RuntimeClass::AggregateValue { .. }
+        )
+    ) && let Some(merged) = merge_runtime_class(db, current, desired)
+    {
+        // Aggregate constructors lower directly into their selected destination
+        // layout. Their natural classes also contain fallback classes for inactive
+        // enum variants, so this merge combines layout constraints rather than
+        // describing a generic value-to-value conversion.
         return Some(merged);
     }
 
@@ -1183,9 +1549,13 @@ fn join_runtime_class<'db>(
         push_join_candidate(&mut candidates, RuntimeClass::AggregateValue { layout });
         push_join_candidate(&mut candidates, RuntimeClass::object_ref(layout));
     }
+    if let Some(merged) = merge_runtime_class(db, current, desired) {
+        push_join_candidate(&mut candidates, merged);
+    }
 
     candidates
         .into_iter()
+        .filter(|candidate| !demand.require_transport || candidate.is_transport())
         .filter(|candidate| can_join_as(db, current, desired, candidate))
         .min_by_key(|candidate| join_candidate_rank(demand, candidate))
 }
@@ -1223,8 +1593,7 @@ fn can_join_as<'db>(
     desired: &RuntimeClass<'db>,
     candidate: &RuntimeClass<'db>,
 ) -> bool {
-    merge_runtime_class(db, current, desired).as_ref() == Some(candidate)
-        || can_realize_as(db, current, candidate) && can_realize_as(db, desired, candidate)
+    can_realize_as(db, current, candidate) && can_realize_as(db, desired, candidate)
 }
 
 fn join_candidate_rank(demand: RuntimeJoinDemand, candidate: &RuntimeClass<'_>) -> u8 {
@@ -1290,11 +1659,14 @@ pub(super) fn merge_runtime_class<'db>(
                 kind: desired_kind,
                 view: desired_view,
             },
-        ) if current_view == desired_view => Some(RuntimeClass::Ref {
-            pointee: Box::new(merge_runtime_class(db, current_pointee, desired_pointee)?),
-            kind: merge_ref_kind(current_kind, desired_kind)?,
-            view: current_view.clone(),
-        }),
+        ) if ref_views_align(current_view, current_pointee, desired_view, desired_pointee) => {
+            let pointee = merge_runtime_class(db, current_pointee, desired_pointee)?;
+            Some(RuntimeClass::Ref {
+                view: remap_ref_view_to_pointee(current_view, &pointee),
+                pointee: Box::new(pointee),
+                kind: merge_ref_kind(current_kind, desired_kind)?,
+            })
+        }
         (
             RuntimeClass::RawAddr {
                 space: current_space,
@@ -1328,18 +1700,10 @@ pub(super) fn merge_runtime_class<'db>(
             },
         ) if pointee.aggregate_layout() == *target => {
             let ref_space = ref_kind_address_space(kind);
-            if ref_space == *space {
-                Some(RuntimeClass::Ref {
-                    pointee: pointee.clone(),
-                    kind: kind.clone(),
-                    view: RefView::Whole,
-                })
-            } else {
-                Some(RuntimeClass::RawAddr {
-                    space: preferred_address_space(ref_space, *space)?,
-                    target: *target,
-                })
-            }
+            Some(RuntimeClass::RawAddr {
+                space: preferred_address_space(ref_space, *space)?,
+                target: *target,
+            })
         }
         _ => None,
     }
@@ -1417,6 +1781,26 @@ fn merge_ref_kind<'db>(current: &RefKind<'db>, desired: &RefKind<'db>) -> Option
     match (current, desired) {
         (RefKind::Object, RefKind::Object) => Some(RefKind::Object),
         (RefKind::Const, RefKind::Const) => Some(RefKind::Const),
+        (RefKind::Const, RefKind::Object) | (RefKind::Object, RefKind::Const) => {
+            Some(RefKind::Object)
+        }
+        (
+            RefKind::Const,
+            RefKind::Provider {
+                provider_ty,
+                space: AddressSpaceKind::Memory,
+            },
+        )
+        | (
+            RefKind::Provider {
+                provider_ty,
+                space: AddressSpaceKind::Memory,
+            },
+            RefKind::Const,
+        ) => Some(RefKind::Provider {
+            provider_ty: *provider_ty,
+            space: AddressSpaceKind::Memory,
+        }),
         (RefKind::Object, RefKind::Provider { provider_ty, space })
         | (RefKind::Provider { provider_ty, space }, RefKind::Object) => Some(RefKind::Provider {
             provider_ty: *provider_ty,
@@ -1537,6 +1921,7 @@ mod tests {
         RuntimeJoinDemand {
             prefer_owned_object: false,
             prefer_transport: false,
+            require_transport: false,
         }
     }
 
@@ -1544,6 +1929,15 @@ mod tests {
         RuntimeJoinDemand {
             prefer_owned_object: true,
             prefer_transport: false,
+            require_transport: false,
+        }
+    }
+
+    fn transport_join_demand() -> RuntimeJoinDemand {
+        RuntimeJoinDemand {
+            prefer_owned_object: false,
+            prefer_transport: true,
+            require_transport: true,
         }
     }
 
@@ -1609,6 +2003,67 @@ mod tests {
     }
 
     #[test]
+    fn join_runtime_class_materializes_nested_const_refs_to_owned_objects() {
+        let db = DriverDataBase::default();
+        let field_layout = test_pair_layout(&db);
+        let object = RuntimeClass::object_ref(field_layout);
+        let const_ = RuntimeClass::const_ref(field_layout);
+        let pair = |left, right| {
+            LayoutId::new(
+                &db,
+                LayoutKey::Struct(StructLayout {
+                    fields: vec![left, right].into(),
+                }),
+            )
+        };
+        let left = RuntimeClass::object_ref(pair(object.clone(), const_.clone()));
+        let right = RuntimeClass::object_ref(pair(const_, object.clone()));
+        let expected = RuntimeClass::object_ref(pair(object.clone(), object));
+
+        assert_eq!(
+            join_runtime_class(&db, owned_object_join_demand(), &left, &right),
+            Some(expected.clone())
+        );
+        assert_eq!(
+            join_runtime_class(&db, owned_object_join_demand(), &right, &left),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn merge_runtime_class_remaps_enum_variant_views_to_the_merged_layout() {
+        let db = DriverDataBase::default();
+        let payload_layout = test_pair_layout(&db);
+        let const_layout = test_enum_layout(&db, RuntimeClass::const_ref(payload_layout));
+        let object_layout = test_enum_layout(&db, RuntimeClass::object_ref(payload_layout));
+        let variant_ref = |layout| RuntimeClass::Ref {
+            pointee: Box::new(RuntimeClass::AggregateValue { layout }),
+            kind: RefKind::Object,
+            view: RefView::EnumVariant(crate::runtime::VariantId {
+                enum_layout: layout,
+                index: 0,
+            }),
+        };
+
+        let merged =
+            merge_runtime_class(&db, &variant_ref(const_layout), &variant_ref(object_layout))
+                .expect("compatible variant references should merge");
+        let RuntimeClass::Ref {
+            pointee,
+            view: RefView::EnumVariant(variant),
+            ..
+        } = merged
+        else {
+            panic!("unexpected merged class: {merged:#?}");
+        };
+        assert_eq!(
+            Some(variant.enum_layout),
+            pointee.aggregate_layout(),
+            "the merged variant view must name its merged pointee layout",
+        );
+    }
+
+    #[test]
     fn join_runtime_class_keeps_matching_const_refs() {
         let db = DriverDataBase::default();
         let const_ref = RuntimeClass::const_ref(test_pair_layout(&db));
@@ -1635,7 +2090,7 @@ mod tests {
     }
 
     #[test]
-    fn join_runtime_class_preserves_structural_aggregate_merge() {
+    fn join_runtime_class_preserves_structural_aggregate_constraints() {
         let db = DriverDataBase::default();
         let (storage_class, memory_class) = provider_enum_classes(&db);
 
@@ -1656,6 +2111,36 @@ mod tests {
                 &storage_class
             ),
             Some(storage_class)
+        );
+    }
+
+    #[test]
+    fn transport_join_normalizes_scalar_object_ref_to_memory_address() {
+        let db = DriverDataBase::default();
+        let scalar = RuntimeClass::Scalar(ScalarClass {
+            repr: ScalarRepr::Int {
+                bits: 256,
+                signed: false,
+            },
+            role: ScalarRole::Plain,
+        });
+        let raw = RuntimeClass::RawAddr {
+            space: AddressSpaceKind::Memory,
+            target: None,
+        };
+        let object = RuntimeClass::Ref {
+            pointee: Box::new(scalar),
+            kind: RefKind::Object,
+            view: RefView::Whole,
+        };
+
+        assert_eq!(
+            join_runtime_class(&db, transport_join_demand(), &raw, &object),
+            Some(raw.clone())
+        );
+        assert_eq!(
+            join_runtime_class(&db, transport_join_demand(), &object, &raw),
+            Some(raw)
         );
     }
 
@@ -1724,6 +2209,32 @@ mod tests {
             Some(storage.clone())
         );
         assert_eq!(merge_runtime_class(&db, &storage, &memory), Some(storage));
+    }
+
+    #[test]
+    fn merge_runtime_class_uses_raw_for_same_space_ref_and_raw_addr() {
+        let db = DriverDataBase::default();
+        let raw = RuntimeClass::RawAddr {
+            space: AddressSpaceKind::Memory,
+            target: None,
+        };
+        let provider = RuntimeClass::Ref {
+            pointee: Box::new(RuntimeClass::Scalar(ScalarClass {
+                repr: ScalarRepr::Int {
+                    bits: 256,
+                    signed: false,
+                },
+                role: ScalarRole::Plain,
+            })),
+            kind: RefKind::Provider {
+                provider_ty: TyId::u256(&db),
+                space: AddressSpaceKind::Memory,
+            },
+            view: RefView::Whole,
+        };
+
+        assert_eq!(merge_runtime_class(&db, &raw, &provider), Some(raw.clone()));
+        assert_eq!(merge_runtime_class(&db, &provider, &raw), Some(raw));
     }
 
     #[test]

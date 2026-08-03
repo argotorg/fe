@@ -1,0 +1,8 @@
+pub fn no_smear() {
+    let a: u256 = 0
+    let mut b: u256 = 1
+    let t = (ref a, mut b)
+    let r2 = ref a
+    let _k1 = t
+    let _k2 = r2
+}

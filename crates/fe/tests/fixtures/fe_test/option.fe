@@ -1,12 +1,18 @@
 use core::option
-use core::functional::Fn
+use core::functional::{Fn, FnOnce}
 
 pub struct A { x: u256 }
 
 struct Doubler {}
-impl Fn<u256, u256> for Doubler {
-    fn call(self, _ x: own u256) -> u256 {
-        x * 2
+impl FnOnce<(u256,), u256> for Doubler {
+    fn call_once(self: own Self, _ args: own (u256,)) -> u256 {
+        self.call(args.0)
+    }
+}
+
+impl Fn<(u256,), u256> for Doubler {
+    fn call(self, _ args: own (u256,)) -> u256 {
+        args.0 * 2
     }
 }
 
@@ -46,6 +52,12 @@ fn option_map() {
 struct MyError { pub code: u256 }
 
 struct MakeMyError {}
+impl FnOnce<(), MyError> for MakeMyError {
+    fn call_once(self: own Self, _ args: own ()) -> MyError {
+        self.call()
+    }
+}
+
 impl Fn<(), MyError> for MakeMyError {
     fn call(self, _ args: own ()) -> MyError {
         MyError { code: 7 }
@@ -53,6 +65,12 @@ impl Fn<(), MyError> for MakeMyError {
 }
 
 struct MakePanic {}
+impl FnOnce<(), Panic> for MakePanic {
+    fn call_once(self: own Self, _ args: own ()) -> Panic {
+        self.call()
+    }
+}
+
 impl Fn<(), Panic> for MakePanic {
     fn call(self, _ args: own ()) -> Panic {
         Panic { code: 0x31 }
@@ -113,8 +131,15 @@ fn option_ok_or_panic_from_chain() uses (evm: mut Evm) {
 // constant struct field in a folding `if` condition triggers codegen bug
 // IR0600 — see BUG_and_then_codegen.md.
 struct HalfIfEven {}
-impl Fn<u256, Option<u256>> for HalfIfEven {
-    fn call(self, _ x: own u256) -> Option<u256> {
+impl FnOnce<(u256,), Option<u256>> for HalfIfEven {
+    fn call_once(self: own Self, _ args: own (u256,)) -> Option<u256> {
+        self.call(args.0)
+    }
+}
+
+impl Fn<(u256,), Option<u256>> for HalfIfEven {
+    fn call(self, _ args: own (u256,)) -> Option<u256> {
+        let x = args.0
         if x % 2 == 0 {
             Option::Some(x / 2)
         } else {
@@ -144,6 +169,12 @@ fn option_and_then() {
 // --- unwrap family ------------------------------------------------------
 
 struct ConstSeven {}
+impl FnOnce<(), u256> for ConstSeven {
+    fn call_once(self: own Self, _ args: own ()) -> u256 {
+        self.call()
+    }
+}
+
 impl Fn<(), u256> for ConstSeven {
     fn call(self, _ args: own ()) -> u256 {
         7

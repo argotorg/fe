@@ -12,6 +12,7 @@ use crate::runtime::{AddressSpaceKind, RuntimeBoundarySpec, RuntimeCarrier, Runt
 use super::{
     boundary::{
         BoundaryMatcher, BoundaryRef, RuntimeValueMaterialization, StagedBoundary,
+        specialize_boundary_for_aggregate_layout,
         specialize_boundary_for_runtime_source_in_context,
     },
     call_input::{
@@ -177,16 +178,6 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         target: &RuntimeClass<'db>,
     ) -> Option<SelectedRuntimeArg<'db>> {
         let local = arg.local;
-        if matches!(target, RuntimeClass::AggregateValue { .. })
-            && self.env.boundary_source_transport_sensitive(local)
-            && let Some(actual) = self
-                .env
-                .actual_aggregate_class_for_source(self.carriers, local)
-        {
-            return Some(SelectedRuntimeArg::aggregate_from_runtime_source(
-                local, actual,
-            ));
-        }
         if !target.is_transport()
             && carrier_value_class(local, self.carriers).is_some_and(|class| !class.is_transport())
         {
@@ -449,7 +440,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
             })
             .or_else(|| {
                 self.env
-                    .source_locals(local)
+                    .value_source_locals(local)
                     .iter()
                     .copied()
                     .find_map(|source| {
@@ -639,10 +630,14 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
             self.env.type_env(),
             semantic_ty,
         )?;
-        let boundary = self.specialized_boundary(arg.local, boundary);
-        if BoundaryMatcher::class_satisfies_boundary(&transport, &boundary) {
+        let transport_boundary = specialize_boundary_for_aggregate_layout(
+            &boundary.boundary,
+            transport.aggregate_layout(),
+        );
+        if BoundaryMatcher::class_satisfies_boundary(&transport, &transport_boundary) {
             return Some(SelectedRuntimeArg::semantic_operand(arg, transport));
         }
+        let boundary = self.specialized_boundary(arg.local, boundary);
         let ordinary = stored_class_for_ty_in_env(self.env.db(), self.env.type_env(), semantic_ty);
         let materialization = RuntimeValueMaterialization::for_boundary(&boundary)?;
         let target = materialization.class();
@@ -748,6 +743,12 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
             CompiledEffectValuePlan::ErasedPlainValue => {
                 self.select_materialized_operand_value(value.local, value)
             }
+            CompiledEffectValuePlan::ByValue(
+                plan @ (CompiledValuePassPlan::ExactShapeRefLike(boundary)
+                | CompiledValuePassPlan::BorrowLike(boundary)),
+            ) => self
+                .select_effect_handle_operand_for_boundary(value, boundary)
+                .or_else(|| self.selected_value_pass_plan(value, plan)),
             CompiledEffectValuePlan::ByValue(plan) => self.selected_value_pass_plan(value, plan),
             CompiledEffectValuePlan::ByValueFallback(fallback) => self
                 .try_selected_semantic_operand_for_class(value, fallback)
@@ -811,7 +812,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
     }
 
     fn select_place_effect_arg(
-        &self,
+        &mut self,
         arg: &NEffectArg<'db>,
         place: &NSPlace<'db>,
         plan: &CompiledEffectPlacePlan<'db>,
@@ -829,11 +830,17 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
     }
 
     fn select_effect_place_for_boundary(
-        &self,
+        &mut self,
         arg: &NEffectArg<'db>,
         place: &NSPlace<'db>,
         boundary: RuntimeBoundarySpec<'db>,
     ) -> SelectedRuntimeArg<'db> {
+        let aggregate_layout = self
+            .env
+            .normalized_place_class(self.carriers, place)
+            .and_then(|class| class.aggregate_layout());
+        let boundary =
+            specialize_boundary_for_aggregate_layout(&boundary, aggregate_layout).into_owned();
         if let Some(selected) = self.select_effect_handle_value_for_boundary(place, &boundary) {
             return selected;
         }

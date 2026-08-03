@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/closure_noncopy_capture_direct_call_twice.fe
+---
+error[16-0002]: move conflict in `fn closure_noncopy_capture_direct_call_twice`
+   ┌─ closure_noncopy_capture_direct_call_twice.fe:10:13
+   │
+ 8 │     let mut a = f()
+   │                 - `f` is moved here
+ 9 │     a.value = 100
+10 │     let b = f()
+   │             ^ cannot use a value after it was moved

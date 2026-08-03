@@ -6,10 +6,10 @@ use hir::{
         ty::{
             trait_def::TraitInstId,
             ty_check::{
-                BodyOwner, EffectParamSite, EffectProviderProvenance, EffectProviderSpecialization,
-                LocalBinding,
+                BodyOwner, ClosureReceiverMode, EffectParamSite, EffectProviderProvenance,
+                EffectProviderSpecialization, LocalBinding,
             },
-            ty_def::{TyBase, TyData, TyId},
+            ty_def::{ClosureTy, TyBase, TyData, TyId},
         },
     },
     hir_def::{CallableDef, ExprId, ItemKind, PatId, TopLevelMod, scope_graph::ScopeId},
@@ -39,6 +39,18 @@ pub fn semantic_instance_symbol_identity<'db>(
     semantic: SemanticInstance<'db>,
 ) -> String {
     semantic_instance_identity_in_mode(db, semantic, IdentityMode::Symbol)
+}
+
+pub fn closure_symbol_base<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: ClosureTy<'db>,
+    receiver_mode: ClosureReceiverMode,
+) -> String {
+    format!(
+        "__closure_{}_{}",
+        stable_identity_hash(&runtime_closure_type_identity(db, ty)),
+        receiver_mode.as_str()
+    )
 }
 
 pub fn semantic_instance_identity_in_mode<'db>(
@@ -78,6 +90,13 @@ fn body_owner_identity<'db>(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -
         } => format!(
             "contract_recv${}${recv_idx}${arm_idx}",
             item_identity(db, contract.into())
+        ),
+        BodyOwner::Closure {
+            ty, receiver_mode, ..
+        } => format!(
+            "closure_body${}${}",
+            runtime_closure_type_identity(db, ty),
+            receiver_mode.as_str()
         ),
     }
 }
@@ -428,6 +447,13 @@ pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
                     variant.name(db).unwrap_or("variant")
                 ),
             },
+            TyBase::Closure(closure) => {
+                let def = closure.def(db);
+                let owner = BodyOwner::from_body(db, def.body)
+                    .map(|owner| body_owner_identity(db, owner))
+                    .unwrap_or_else(|| item_identity(db, def.body.into()));
+                closure_type_identity(db, *closure, &owner)
+            }
         },
         TyData::TyParam(param) => {
             format!(
@@ -455,6 +481,39 @@ pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
         }
         TyData::TyApp(..) => unreachable!("TyApp handled before data match"),
     }
+}
+
+fn closure_type_identity<'db>(
+    db: &'db dyn HirAnalysisDb,
+    closure: ClosureTy<'db>,
+    owner: &str,
+) -> String {
+    let def = closure.def(db);
+    let type_ids = |tys: &[TyId<'db>]| {
+        tys.iter()
+            .map(|ty| type_identity(db, *ty))
+            .collect::<Vec<_>>()
+            .join("$")
+    };
+    let parent_args = type_ids(closure.parent_args(db));
+    let captures = type_ids(closure.captures(db));
+    let params = type_ids(closure.params(db));
+    let call_mode = closure.call_mode(db).as_str();
+    format!(
+        "closure${owner}${}$args${parent_args}$captures${captures}$params${params}$ret${}$mode${call_mode}",
+        expr_id(def.expr),
+        type_identity(db, closure.ret_ty(db))
+    )
+}
+
+fn runtime_closure_type_identity<'db>(
+    db: &'db dyn HirAnalysisDb,
+    closure: ClosureTy<'db>,
+) -> String {
+    let def = closure.def(db);
+    let owner = BodyOwner::from_body(db, def.body)
+        .expect("runtime closure definition must have a stable enclosing body owner");
+    closure_type_identity(db, closure, &body_owner_identity(db, owner))
 }
 
 fn trait_identity<'db>(db: &'db dyn HirAnalysisDb, trait_inst: TraitInstId<'db>) -> String {

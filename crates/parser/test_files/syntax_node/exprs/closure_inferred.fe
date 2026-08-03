@@ -1,0 +1,24 @@
+{
+    let inferred = |a, b| a + b
+    let zero = || 42
+    let modes = |a: own, b: ref, c: mut, d: view| a
+    let typed = |a: own u256, b: view u256| -> u256 { a + b }
+    let never = |value: view !| value
+    let multiline_own = |
+        value: own
+    | value
+    let multiline_ref = |
+        value: ref
+    | value
+    let multiline_mut = |
+        value: mut
+    | value
+    let multiline_view = |
+        value: view
+    | value
+    let ignored = |_ value, _| value
+    let trailing = |left, right,| left + right
+    let suppressed = |_ value, _: own,| value
+    let zero_logic = || true || false
+    let bitwise = |left, right| left | right
+}

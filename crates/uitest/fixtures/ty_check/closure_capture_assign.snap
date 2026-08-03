@@ -1,0 +1,26 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/closure_capture_assign.fe
+---
+error[8-0088]: cannot assign to a binding captured by a closure
+  ┌─ closure_capture_assign.fe:8:9
+  │
+4 │     let mut y: u256 = 1
+  │         ----- `y` is captured by the closure here
+  ·
+8 │         y = 2
+  │         ^ cannot assign to a captured binding
+  │
+  = closures capture by value; writes would only affect the closure's copy
+
+error[8-0088]: cannot assign to a binding captured by a closure
+  ┌─ closure_capture_assign.fe:9:9
+  │
+4 │     let mut y: u256 = 1
+  │         ----- `y` is captured by the closure here
+  ·
+9 │         y += 1
+  │         ^ cannot assign to a captured binding
+  │
+  = closures capture by value; writes would only affect the closure's copy

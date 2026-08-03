@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/closure_capture_move_conflict.fe
+---
+error[16-0002]: move conflict in `fn move_after_capture`
+  ┌─ closure_capture_move_conflict.fe:7:25
+  │
+6 │     let f = |value: own u256| -> u256 { value + boxed.value }
+  │             ------------------------------------------------- value is moved here
+7 │     let after_capture = boxed
+  │                         ^^^^^ cannot use a value after it was moved

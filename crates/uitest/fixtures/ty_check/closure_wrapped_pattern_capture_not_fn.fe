@@ -1,0 +1,88 @@
+use core::functional::Fn
+
+struct Boxed {
+    value: u256,
+}
+
+struct Mixed {
+    copy: u256,
+    owned: Boxed,
+}
+
+trait Marker {}
+
+struct MarkerImpl {}
+
+impl Marker for MarkerImpl {}
+
+enum Choice {
+    Left,
+    Right,
+}
+
+fn invoke<T, U, F: Fn<(T,), U>>(_ func: F, _ value: own T) -> U {
+    func(value)
+}
+
+pub fn block_wrapped_pattern_capture_not_fn() -> Boxed {
+    let mixed = Mixed {
+        copy: 0,
+        owned: Boxed { value: 42 },
+    }
+    let take = |_ unit: own ()| -> Boxed {
+        let Mixed { copy: _, owned } = { mixed }
+        owned
+    }
+    invoke(func: take, value: ())
+}
+
+pub fn with_wrapped_pattern_capture_not_fn() -> Boxed {
+    let mixed = Mixed {
+        copy: 0,
+        owned: Boxed { value: 42 },
+    }
+    let take = |_ unit: own ()| -> Boxed {
+        let Mixed { copy: _, owned } = with (Marker = MarkerImpl {}) { mixed }
+        owned
+    }
+    invoke(func: take, value: ())
+}
+
+pub fn cast_wrapped_pattern_capture_not_fn() -> Boxed {
+    let mixed = Mixed {
+        copy: 0,
+        owned: Boxed { value: 42 },
+    }
+    let take = |_ unit: own ()| -> Boxed {
+        let Mixed { copy: _, owned } = mixed as Mixed
+        owned
+    }
+    invoke(func: take, value: ())
+}
+
+pub fn if_wrapped_pattern_capture_not_fn(_ pick_left: bool) -> Boxed {
+    let mixed = Mixed {
+        copy: 0,
+        owned: Boxed { value: 42 },
+    }
+    let take = |_ unit: own ()| -> Boxed {
+        let Mixed { copy: _, owned } = if pick_left { mixed } else { mixed }
+        owned
+    }
+    invoke(func: take, value: ())
+}
+
+pub fn match_wrapped_pattern_capture_not_fn(_ choice: Choice) -> Boxed {
+    let mixed = Mixed {
+        copy: 0,
+        owned: Boxed { value: 42 },
+    }
+    let take = |_ unit: own ()| -> Boxed {
+        let Mixed { copy: _, owned } = match choice {
+            Choice::Left => mixed,
+            Choice::Right => mixed,
+        }
+        owned
+    }
+    invoke(func: take, value: ())
+}

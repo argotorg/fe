@@ -31,7 +31,7 @@ impl Type {
 
 ast_node! {
     /// A mode type.
-    /// `ref T`, `mut T`, `own T`
+    /// `ref T`, `mut T`, `own T`, `view T`
     pub struct ModeType,
     SK::ModeType,
 }
@@ -40,6 +40,9 @@ impl ModeType {
         support::token(self.syntax(), SK::MutKw)
             .or_else(|| support::token(self.syntax(), SK::RefKw))
             .or_else(|| support::token(self.syntax(), SK::OwnKw))
+            .or_else(|| {
+                support::token(self.syntax(), SK::Ident).filter(|token| token.text() == "view")
+            })
     }
 
     pub fn mode(&self) -> Option<TypeMode> {
@@ -48,6 +51,7 @@ impl ModeType {
             SK::MutKw => Some(TypeMode::Mut(token)),
             SK::RefKw => Some(TypeMode::Ref(token)),
             SK::OwnKw => Some(TypeMode::Own(token)),
+            SK::Ident if token.text() == "view" => Some(TypeMode::View(token)),
             _ => None,
         }
     }
@@ -62,6 +66,7 @@ pub enum TypeMode {
     Mut(SyntaxToken),
     Ref(SyntaxToken),
     Own(SyntaxToken),
+    View(SyntaxToken),
 }
 
 ast_node! {

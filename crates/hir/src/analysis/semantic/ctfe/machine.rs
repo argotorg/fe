@@ -24,7 +24,11 @@ use crate::{
         },
         ty::{
             const_expr::{ConstExpr, ConstExprId},
-            const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy, const_ty_from_sem_const},
+            const_ty::{
+                ConstSpecializationRelation, ConstTyData, ConstTyId, EvaluatedConstTy,
+                const_specialization_depth_limit_exceeded, const_specialization_relation,
+                const_ty_from_sem_const,
+            },
             corelib::{
                 PrimitiveWrapperCallKind, RuntimeBuiltinFuncKind, core_primitive_wrapper_call_kind,
                 runtime_builtin_func_kind,
@@ -1060,8 +1064,33 @@ impl<'db> CtfeMachine<'db> {
             return result.clone();
         }
         let origin = cref.origin(self.db);
-        if self.const_stack.contains(&key) {
+        let referenced_body = key.owner(self.db).body(self.db);
+        let specialization_relations = self
+            .const_stack
+            .iter()
+            .rev()
+            .filter(|active| {
+                referenced_body.is_some() && active.owner(self.db).body(self.db) == referenced_body
+            })
+            .map(|active| {
+                const_specialization_relation(
+                    self.db,
+                    active.subst(self.db).generic_args(self.db),
+                    key.subst(self.db).generic_args(self.db),
+                )
+            })
+            .collect::<Vec<_>>();
+        let repeats_equal_or_growing_body = specialization_relations.iter().any(|relation| {
+            matches!(
+                relation,
+                ConstSpecializationRelation::Equal | ConstSpecializationRelation::StrictGrowth
+            )
+        });
+        if self.const_stack.contains(&key) || repeats_equal_or_growing_body {
             return Err(CtfeError::RecursiveConst { origin });
+        }
+        if const_specialization_depth_limit_exceeded(&specialization_relations) {
+            return Err(CtfeError::RecursionLimitExceeded { origin });
         }
 
         self.const_stack.push(key);
@@ -1111,7 +1140,8 @@ impl<'db> CtfeMachine<'db> {
             BodyOwner::Const(_)
             | BodyOwner::AnonConstBody { .. }
             | BodyOwner::ContractInit { .. }
-            | BodyOwner::ContractRecvArm { .. } => Vec::new(),
+            | BodyOwner::ContractRecvArm { .. }
+            | BodyOwner::Closure { .. } => Vec::new(),
         };
         arg_locals.sort_unstable_by_key(|(idx, _)| *idx);
         if args.len() != arg_locals.len()
@@ -1178,9 +1208,9 @@ impl<'db> CtfeMachine<'db> {
                     Ok(())
                 }
             }
-            BodyOwner::ContractInit { .. } | BodyOwner::ContractRecvArm { .. } => {
-                Err(CtfeError::NotConstEvaluable { origin })
-            }
+            BodyOwner::ContractInit { .. }
+            | BodyOwner::ContractRecvArm { .. }
+            | BodyOwner::Closure { .. } => Err(CtfeError::NotConstEvaluable { origin }),
         }
     }
 
@@ -1325,7 +1355,7 @@ impl<'db> CtfeMachine<'db> {
                     result_ty, variant, fields,
                 )))
             }
-            SExpr::ReadPlace { place } => {
+            SExpr::ReadPlace { place, .. } => {
                 let place = self.resolve_place(frame_idx, &place, origin)?;
                 let r#ref = CtfeRef {
                     frame: place.frame,

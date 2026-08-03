@@ -1,0 +1,15 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_borrowck/closure_transient_handle_capture_through_generic.fe
+---
+error[16-0005]: noesc violation in `fn capture_target`
+   ┌─ closure_transient_handle_capture_through_generic.fe:8:13
+   │
+ 8 │       let f = |_ unit: own ()| -> () {
+   │ ╭─────────────^
+ 9 │ │         let captured = handle
+10 │ │         captured = 7
+11 │ │     }
+   │ ╰─────^ cannot capture `mut u256` from transient storage in closure

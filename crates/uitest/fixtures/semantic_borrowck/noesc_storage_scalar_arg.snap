@@ -1,0 +1,6 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_borrowck/noesc_storage_scalar_arg.fe
+---

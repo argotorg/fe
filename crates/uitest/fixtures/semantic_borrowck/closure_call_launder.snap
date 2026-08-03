@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/closure_call_launder.fe
+---
+error[16-0001]: borrow conflict in `fn closure_call_launder`
+   ┌─ closure_call_launder.fe:13:17
+   │
+ 7 │     let m = mut x
+   │             ----- borrow created here
+   ·
+13 │     let other = mut x
+   │                 ^^^^^ cannot mutably borrow this place while a mut borrow is active

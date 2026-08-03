@@ -1,0 +1,14 @@
+use core::functional::FnOnce
+
+struct Boxed {
+    value: u256,
+}
+
+pub fn closure_noncopy_capture_call_twice() -> u256 {
+    let boxed = Boxed { value: 41 }
+    let f = |_ unit: own ()| -> Boxed { boxed }
+    let mut a = f.call_once(())
+    a.value = 100
+    let b = f.call_once(())
+    b.value
+}

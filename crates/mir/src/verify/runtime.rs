@@ -41,7 +41,9 @@ pub fn verify_runtime_body_detailed<'db>(
         let local_id = crate::runtime::RLocalId::from_u32(idx as u32);
         match &local.root {
             RuntimeLocalRoot::None => {}
-            RuntimeLocalRoot::Slot(class) | RuntimeLocalRoot::Ref(class) => {
+            RuntimeLocalRoot::Slot(class)
+            | RuntimeLocalRoot::HeapSlot(class)
+            | RuntimeLocalRoot::Ref(class) => {
                 verify_class_layouts(db, program, class, &mut visited_layouts).map_err(
                     |error| RuntimeVerifyFailure {
                         error,
@@ -222,7 +224,7 @@ fn verify_assign<'db>(
     if let Some(dst_class) = &dst_class
         && !expr_class
             .as_ref()
-            .is_some_and(|expr_class| expr_class.shares_runtime_rep_with(db, dst_class))
+            .is_some_and(|expr_class| expr_class.shares_runtime_carrier_with(db, dst_class))
     {
         return Err(VerifyError::InvalidExprClass(dst));
     }
@@ -303,7 +305,7 @@ fn verify_copy_into<'db>(
 ) -> Result<(), VerifyError<'db>> {
     let target = crate::runtime::place::project_place(db, program, body, dst)?;
     let source = runtime_value_class(body, src)?;
-    if &target != source && !source.shares_runtime_rep_with(db, &target) {
+    if &target != source {
         return Err(VerifyError::InvalidCopyClass);
     }
     Ok(())

@@ -1,0 +1,14 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/closure_calldata_handle_capture.fe
+---
+error[16-0005]: noesc violation in `fn capture_target`
+  ┌─ closure_calldata_handle_capture.fe:6:13
+  │
+6 │       let f = |_ unit: own ()| -> u256 {
+  │ ╭─────────────^
+7 │ │         let captured = handle
+8 │ │         captured
+9 │ │     }
+  │ ╰─────^ cannot capture `ref u256` from calldata in closure

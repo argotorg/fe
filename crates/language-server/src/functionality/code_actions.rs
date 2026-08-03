@@ -6,13 +6,17 @@ use async_lsp::lsp_types::{
 use common::InputDb;
 use driver::DriverDataBase;
 use hir::{
-    hir_def::{ItemKind, TopLevelMod},
+    core::semantic::LogicalCallableSignature,
+    hir_def::{Expr, ItemKind, Partial, TopLevelMod},
     lower::map_file_to_mod,
     span::LazySpan,
 };
 use std::collections::HashMap;
 
-use crate::{backend::Backend, util::to_offset_from_position};
+use crate::{
+    backend::Backend,
+    util::{to_lsp_range_from_span, to_offset_from_position},
+};
 
 pub async fn handle_code_action(
     backend: &Backend,
@@ -55,6 +59,15 @@ pub async fn handle_code_action(
         &lsp_uri,
         &mut actions,
     );
+    collect_callable_field_parentheses_actions(
+        &backend.db,
+        top_mod,
+        start,
+        end,
+        &lsp_uri,
+        &params.context.diagnostics,
+        &mut actions,
+    );
 
     // Convert CodeAction to CodeActionOrCommand
     let response: Vec<CodeActionOrCommand> = actions
@@ -62,6 +75,109 @@ pub async fn handle_code_action(
         .map(CodeActionOrCommand::CodeAction)
         .collect();
     Ok(Some(response))
+}
+
+fn collect_callable_field_parentheses_actions<'db>(
+    db: &'db DriverDataBase,
+    top_mod: TopLevelMod<'db>,
+    start: parser::TextSize,
+    end: parser::TextSize,
+    uri: &url::Url,
+    diagnostics: &[async_lsp::lsp_types::Diagnostic],
+    actions: &mut Vec<CodeAction>,
+) {
+    for item in top_mod.scope_graph(db).items_dfs(db) {
+        let ItemKind::Body(body) = item else {
+            continue;
+        };
+        let Some(typed_body) = body.typed_body(db) else {
+            continue;
+        };
+        for (expr, data) in body.exprs(db).iter() {
+            let Partial::Present(Expr::MethodCall(receiver, Partial::Present(field_name), _, _)) =
+                data
+            else {
+                continue;
+            };
+            let method_span = expr
+                .span(body)
+                .into_method_call_expr()
+                .method_name()
+                .resolve(db);
+            let Some(method_span) = method_span else {
+                continue;
+            };
+            if !(method_span.range.contains(start)
+                || method_span.range.contains(end)
+                || start <= method_span.range.start() && end >= method_span.range.end())
+            {
+                continue;
+            }
+
+            let receiver_ty = typed_body.expr_ty(db, *receiver);
+            let receiver_ty = receiver_ty
+                .as_capability(db)
+                .map_or(receiver_ty, |(_, payload)| payload);
+            let Some(parent) = receiver_ty.field_parent(db) else {
+                continue;
+            };
+            let field_ty = parent
+                .fields(db)
+                .zip(receiver_ty.field_types(db))
+                .find_map(|(field, ty)| (field.name(db) == Some(*field_name)).then_some(ty));
+            let Some(field_ty) = field_ty else {
+                continue;
+            };
+            if LogicalCallableSignature::for_ty_in_scope(db, field_ty, body.scope()).is_empty() {
+                continue;
+            }
+
+            let Some(receiver_span) = receiver.span(body).resolve(db) else {
+                continue;
+            };
+            let Ok(receiver_range) = to_lsp_range_from_span(receiver_span, db) else {
+                continue;
+            };
+            let Ok(method_range) = to_lsp_range_from_span(method_span, db) else {
+                continue;
+            };
+            let edits = vec![
+                TextEdit {
+                    range: Range::new(receiver_range.start, receiver_range.start),
+                    new_text: "(".to_string(),
+                },
+                TextEdit {
+                    range: Range::new(method_range.end, method_range.end),
+                    new_text: ")".to_string(),
+                },
+            ];
+            let mut changes = HashMap::new();
+            changes.insert(uri.clone(), edits);
+            let matching_diagnostics = diagnostics
+                .iter()
+                .filter(|diagnostic| ranges_overlap(diagnostic.range, method_range))
+                .cloned()
+                .collect::<Vec<_>>();
+            actions.push(CodeAction {
+                title: format!("Call field `{}` with parentheses", field_name.data(db)),
+                kind: Some(CodeActionKind::QUICKFIX),
+                diagnostics: (!matching_diagnostics.is_empty()).then_some(matching_diagnostics),
+                edit: Some(WorkspaceEdit {
+                    changes: Some(changes),
+                    document_changes: None,
+                    change_annotations: None,
+                }),
+                command: None,
+                is_preferred: Some(true),
+                disabled: None,
+                data: None,
+            });
+        }
+    }
+}
+
+fn ranges_overlap(lhs: Range, rhs: Range) -> bool {
+    lhs.start <= rhs.end && rhs.start <= lhs.end
 }
 
 /// Collect code actions for adding return type annotations to functions.
@@ -212,5 +328,49 @@ mod tests {
             assert!(action.title.starts_with("Add return type:"));
             assert!(action.edit.is_some());
         }
+    }
+
+    #[test]
+    fn callable_field_parentheses_quick_fix() {
+        let mut db = DriverDataBase::default();
+        let source = r#"struct Holder<F> { function: F }
+
+fn main() -> u256 {
+    let answer = || -> u256 { 42 }
+    let holder = Holder { function: answer }
+    holder.function()
+}
+"#;
+        let uri = url::Url::parse("file:///test.fe").unwrap();
+        let file = db
+            .workspace()
+            .touch(&mut db, uri.clone(), Some(source.to_string()));
+        let top_mod = map_file_to_mod(&db, file);
+        let start = parser::TextSize::from(source.find("function()").unwrap() as u32);
+        let end = start + parser::TextSize::from("function".len() as u32);
+        let mut actions = Vec::new();
+        collect_callable_field_parentheses_actions(
+            &db,
+            top_mod,
+            start,
+            end,
+            &uri,
+            &[],
+            &mut actions,
+        );
+        assert_eq!(actions.len(), 1);
+        let edits = actions[0]
+            .edit
+            .as_ref()
+            .and_then(|edit| edit.changes.as_ref())
+            .and_then(|changes| changes.get(&uri))
+            .expect("quick-fix edits");
+        assert_eq!(
+            edits
+                .iter()
+                .map(|edit| edit.new_text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["(", ")"],
+        );
     }
 }

@@ -1,0 +1,84 @@
+use core::functional::{Fn, FnOnce}
+
+struct Holder<F> {
+    function: F,
+}
+
+struct AddOne {}
+
+struct Counter {
+    value: u256,
+}
+
+trait Read {
+    fn read(self, amount: own u256) -> u256
+}
+
+trait Unary: Fn<(u256,), u256> {}
+
+impl Counter {
+    fn add(self, amount: own u256) -> u256 {
+        self.value + amount
+    }
+}
+
+impl Read for Counter {
+    fn read(self, amount: own u256) -> u256 {
+        self.value + amount
+    }
+}
+
+fn increment(amount: own u256) -> u256 {
+    amount + 1
+}
+
+fn update(shared: ref u256, target: mut u256) -> u256 {
+    shared + target
+}
+
+impl FnOnce<(u256,), u256> for AddOne {
+    fn call_once(self: own Self, _ args: own (u256,)) -> u256 {
+        self.call(args.0)
+    }
+}
+
+impl Fn<(u256,), u256> for AddOne {
+    fn call(self, _ args: own (u256,)) -> u256 {
+        args.0 + 1
+    }
+}
+
+fn generic_hover<T, U, F: Fn<(T,), U>>(_ function: F, value: own T) {
+    let result = <|generic|>function(value)
+}
+
+fn implied_hover<F: Unary>(_ function: F) {
+    let result = <|implied_supertrait|>function(41)
+}
+
+fn callable_hover() {
+    let offset = 1
+    let add = <|literal|>|value: own u256| -> u256 { value + offset }
+    let answer = <|binding|>add(41)
+
+    let holder = Holder { function: add }
+    let projected = holder.<|projected|>function
+    assert(projected(41) == answer)
+
+    let callable = AddOne {}
+    let user_result = <|user_callable|>callable(41)
+
+    let function = increment
+    let function_result = <|function_item|>function(41)
+
+    let method = Counter::add
+    let method_result = <|ufcs_function_item|>method(Counter { value: 1 }, 41)
+
+    let read = Read::read
+    let read_result = <|trait_function_item|>read(Counter { value: 1 }, 41)
+
+    let update_function = update
+    let shared = 1
+    let mut target = 41
+    let updated = <|capability_function_item|>update_function(ref shared, mut target)
+}

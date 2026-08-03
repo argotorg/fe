@@ -1,7 +1,7 @@
 use cranelift_entity::EntityRef;
 use hir::analysis::{
     semantic::{
-        NBorrowRoot, NBorrowRootId, SLocalId, SemanticLocalKind, VariantIndex,
+        NBorrowRoot, NBorrowRootId, SBlockId, SLocalId, SemanticLocalKind, VariantIndex,
         borrowck::{
             NExpr, NSLocal, NSPlace, NSPlaceRoot, NSStmtKind, NormalizedBindingLowering,
             NormalizedSemanticBody,
@@ -9,7 +9,7 @@ use hir::analysis::{
     },
     ty::ty_def::TyId,
 };
-use hir::projection::{IndexSource, Projection};
+use hir::projection::Projection;
 
 use crate::runtime::{RuntimeCarrier, RuntimeClass, RuntimeLocalRoot};
 
@@ -18,6 +18,7 @@ use super::classify::{
     runtime_class_for_direct_value_provider_in_env,
     runtime_class_for_effect_binding_provider_in_env, snapshot_source_place,
 };
+use super::infer::{plan_runtime_local_root, runtime_local_is_signature_pinned};
 
 #[derive(Clone, Copy, Debug)]
 pub(super) enum RuntimeSourceMode<'roots, 'db> {
@@ -66,6 +67,18 @@ impl<'a, 'carriers, 'roots, 'db> RuntimeSourceQuery<'a, 'carriers, 'roots, 'db> 
         local: SLocalId,
     ) -> Option<SemanticPlaceValueSource<'db>> {
         let local_data = self.env.body().locals.get(local.index())?;
+        if matches!(local_data.facts.interface, SemanticLocalKind::PlaceCarrier)
+            && self.local_has_transport_carrier(local)
+            && let Some(source) = self.place_value_source(
+                NSPlace {
+                    root: NSPlaceRoot::CarrierDerefLocal(local),
+                    path: Default::default(),
+                },
+                local_data.ty,
+            )
+        {
+            return Some(source);
+        }
         [
             snapshot_source_place(self.env.body(), local).cloned(),
             nonself_backing_value_place(self.env.body(), local).cloned(),
@@ -103,9 +116,26 @@ impl<'a, 'carriers, 'roots, 'db> RuntimeSourceQuery<'a, 'carriers, 'roots, 'db> 
         self.concrete_roots()
             .and_then(|roots| roots.get(local.index()))
             .is_some_and(|root| !matches!(root, RuntimeLocalRoot::None))
+            || self.abstract_runtime_root(local)
             || (matches!(local_data.facts.interface, SemanticLocalKind::PlaceCarrier)
                 && self.local_has_transport_carrier(local))
             || self.local_root_provider_is_lowerable(local_data)
+    }
+
+    fn abstract_runtime_root(&self, local: SLocalId) -> bool {
+        if !matches!(self.mode, RuntimeSourceMode::Abstract) {
+            return false;
+        }
+        let Some(carrier) = self.carriers.get(local.index()).cloned() else {
+            return false;
+        };
+        let (_, root) = plan_runtime_local_root(
+            self.env.with_carriers(self.carriers),
+            local,
+            carrier,
+            runtime_local_is_signature_pinned(self.env, local),
+        );
+        !matches!(root, RuntimeLocalRoot::None)
     }
 
     fn provider_place_root_is_lowerable(
@@ -316,20 +346,44 @@ fn provider_borrow_root<'db>(
 }
 
 pub(super) fn local_read_places_extractable_from_value<'db>(
+    env: BodyEnv<'_, 'db>,
+    carriers: &[RuntimeCarrier<'db>],
     body: &NormalizedSemanticBody<'db>,
     local: SLocalId,
 ) -> bool {
-    body.blocks.iter().all(|block| {
-        block.stmts.iter().all(|stmt| match &stmt.kind {
-            NSStmtKind::Assign { expr, .. } => {
-                expr_read_places_extractable_from_value(body, local, expr)
-            }
-            NSStmtKind::Store { .. } => true,
-        })
-    })
+    let snapshot_sources_are_extractable = body
+        .locals
+        .iter()
+        .enumerate()
+        .filter(|(dst, _)| env.local_is_reachable(SLocalId::new(*dst)))
+        .all(|(dst, local_data)| {
+            local_data.snapshot_source_place().is_none_or(|place| {
+                place_root_local(body, place) != Some(local)
+                    || place_is_value_extractable_into(
+                        env,
+                        carriers,
+                        SLocalId::from_u32(dst as u32),
+                        place,
+                    )
+            })
+        });
+    snapshot_sources_are_extractable
+        && body
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|(block_idx, _)| env.block_is_reachable(SBlockId::new(*block_idx)))
+            .all(|(_, block)| {
+                block.stmts.iter().all(|stmt| match &stmt.kind {
+                    NSStmtKind::Assign { dst, expr } => expr_read_places_extractable_from_value(
+                        env, carriers, body, local, *dst, expr,
+                    ),
+                    NSStmtKind::Store { .. } => true,
+                })
+            })
 }
 
-fn place_root_local<'db>(
+pub(super) fn place_root_local<'db>(
     body: &NormalizedSemanticBody<'db>,
     place: &NSPlace<'db>,
 ) -> Option<SLocalId> {
@@ -349,22 +403,44 @@ fn value_extractable_projection<'db>(
 ) -> bool {
     matches!(
         projection,
-        Projection::Field(_)
-            | Projection::VariantField { .. }
-            | Projection::Index(IndexSource::Constant(_))
+        Projection::Field(_) | Projection::VariantField { .. } | Projection::Index(_)
     )
 }
 
 fn expr_read_places_extractable_from_value<'db>(
+    env: BodyEnv<'_, 'db>,
+    carriers: &[RuntimeCarrier<'db>],
     body: &NormalizedSemanticBody<'db>,
     local: SLocalId,
+    dst: SLocalId,
     expr: &NExpr<'db>,
 ) -> bool {
     match expr {
-        NExpr::ReadPlace { place, .. } => {
-            place_root_local(body, place) != Some(local)
-                || place.path.iter().all(value_extractable_projection)
+        NExpr::ReadPlace { place, .. } if place_root_local(body, place) == Some(local) => {
+            place_is_value_extractable_into(env, carriers, dst, place)
         }
         _ => true,
     }
+}
+
+fn place_is_value_extractable_into<'db>(
+    env: BodyEnv<'_, 'db>,
+    carriers: &[RuntimeCarrier<'db>],
+    dst: SLocalId,
+    place: &NSPlace<'db>,
+) -> bool {
+    let projected = env.normalized_place_class(carriers, place);
+    let target = carriers
+        .get(dst.index())
+        .and_then(RuntimeCarrier::value_class);
+    let target_requires_transport = env.body().locals.get(dst.index()).is_some_and(|local| {
+        matches!(
+            local.facts.interface,
+            SemanticLocalKind::PlaceCarrier
+                | SemanticLocalKind::PlaceBoundValue
+                | SemanticLocalKind::DirectCarrier
+        )
+    }) && target.is_some_and(RuntimeClass::is_transport);
+    place.path.iter().all(value_extractable_projection)
+        && (!target_requires_transport || projected.is_some_and(|class| class.is_transport()))
 }

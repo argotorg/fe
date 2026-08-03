@@ -3,8 +3,8 @@ use parser::ast::{self, prelude::*};
 use super::body::BodyCtxt;
 use crate::{
     hir_def::{
-        Body, GenericArgListId, IdentId, IntegerId, ItemKind, LitKind, Pat, PathId, Stmt, TypeId,
-        expr::*,
+        Body, FuncParamListId, GenericArgListId, IdentId, IntegerId, ItemKind, LitKind, Pat,
+        PathId, Stmt, TypeId, expr::*,
     },
     span::HirOrigin,
 };
@@ -37,6 +37,22 @@ impl<'db> Expr<'db> {
 
                 ctxt.f_ctxt.leave_block_scope(expr_id);
                 return expr_id;
+            }
+
+            ast::ExprKind::Closure(closure) => {
+                let params = closure
+                    .params()
+                    .map(|params| FuncParamListId::lower_ast(ctxt.f_ctxt, params))
+                    .unwrap_or_else(|| FuncParamListId::new(ctxt.f_ctxt.db(), Vec::new()));
+                let ret_ty = closure
+                    .ret_ty()
+                    .map(|ret_ty| TypeId::lower_ast(ctxt.f_ctxt, ret_ty));
+                let body = Self::push_to_body_opt(ctxt, closure.body());
+                Self::Closure {
+                    params,
+                    ret_ty,
+                    body,
+                }
             }
 
             ast::ExprKind::Bin(bin) => {

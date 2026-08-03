@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/call_launders_aggregate_loans.fe
+---
+error[16-0001]: borrow conflict in `fn call_launders_aggregate_loans`
+   ┌─ call_launders_aggregate_loans.fe:13:13
+   │
+12 │     let e2 = id(Esc { h: mut x, tag: 0 })
+   │                          ----- borrow created here
+13 │     let m = mut x
+   │             ^^^^^ cannot mutably borrow this place while a mut borrow is active

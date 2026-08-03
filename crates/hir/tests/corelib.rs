@@ -3,7 +3,7 @@ use common::indexmap::IndexMap;
 use common::stdlib::{HasBuiltinCore, HasBuiltinStd};
 use driver::{DriverDataBase, db::DiagnosticsCollection};
 use fe_hir::Ingot;
-use fe_hir::analysis::ty::ty_check::ReturnProvenance;
+use fe_hir::analysis::ty::ty_check::{BodyOwner, ReturnProvenance, TypedCallableBody};
 use fe_hir::analysis::ty::{
     corelib::{resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path},
     trait_resolution::{GoalSatisfiability, TraitSolveCx, is_goal_satisfiable},
@@ -637,6 +637,9 @@ fn implicit_ref_load_returns_are_not_treated_as_forwarded_params() {
         panic!("expected exactly one function");
     };
 
-    let typed_body = check_func_body(&db, *func).1.clone();
-    assert_eq!(typed_body.return_provenance(&db), ReturnProvenance::Fresh);
+    let (_, typed_body) = check_func_body(&db, *func);
+    assert_eq!(
+        TypedCallableBody::new(BodyOwner::Func(*func), typed_body).return_provenance(&db),
+        ReturnProvenance::Fresh
+    );
 }

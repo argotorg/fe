@@ -1,0 +1,183 @@
+---
+source: crates/language-server/src/functionality/hover.rs
+expression: snapshot
+input_file: test_files/callable_hover.fe
+---
+## generic
+range: 51:17..51:25
+
+```fe
+let function: F
+```
+
+### Callable
+
+```fe
+|_: own T| -> U
+```
+
+Capability: **reusable**
+
+---
+
+## implied_supertrait
+range: 55:17..55:25
+
+```fe
+let function: F
+```
+
+### Callable
+
+```fe
+|_: own u256| -> u256
+```
+
+Capability: **reusable**
+
+---
+
+## literal
+range: 60:14..60:58
+
+### Callable
+
+```fe
+|value: own u256| -> u256
+```
+
+Capability: **reusable**
+
+Captures: `u256` (read)
+
+---
+
+## binding
+range: 61:17..61:20
+
+```fe
+let add: |own u256| -> u256
+```
+
+### Callable
+
+```fe
+|value: own u256| -> u256
+```
+
+Capability: **reusable**
+
+Captures: `u256` (read)
+
+---
+
+## projected
+range: 64:27..64:35
+
+```fe
+callable_hover::Holder
+```
+
+```fe
+struct Holder<F> {
+    function: F,
+}
+```
+
+
+### Callable
+
+```fe
+|value: own u256| -> u256
+```
+
+Capability: **reusable**
+
+Captures: `u256` (read)
+
+---
+
+## user_callable
+range: 68:22..68:30
+
+```fe
+let callable: AddOne
+```
+
+### Callable
+
+```fe
+|_: own u256| -> u256
+```
+
+Capability: **reusable**
+
+---
+
+## function_item
+range: 71:26..71:34
+
+```fe
+let function: fn increment
+```
+
+### Callable
+
+```fe
+|amount: own u256| -> u256
+```
+
+Capability: **callable**
+
+---
+
+## ufcs_function_item
+range: 74:24..74:30
+
+```fe
+let method: fn add
+```
+
+### Callable
+
+```fe
+|self: Counter, amount: own u256| -> u256
+```
+
+Capability: **callable**
+
+---
+
+## trait_function_item
+range: 77:22..77:26
+
+```fe
+let read: fn read<Counter>
+```
+
+### Callable
+
+```fe
+|self: Counter, amount: own u256| -> u256
+```
+
+Capability: **callable**
+
+---
+
+## capability_function_item
+range: 82:18..82:33
+
+```fe
+let update_function: fn update
+```
+
+### Callable
+
+```fe
+|shared: ref u256, target: mut u256| -> u256
+```
+
+Capability: **callable**
+
+---

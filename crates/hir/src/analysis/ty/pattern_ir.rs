@@ -4,11 +4,14 @@ use salsa::Update;
 use smallvec1::SmallVec;
 
 use crate::analysis::HirAnalysisDb;
+use crate::analysis::semantic::{SemConstId, SemConstScalar, SemConstValue};
 use crate::analysis::ty::adt_def::{AdtRef, instantiate_adt_field_shape};
 use crate::analysis::ty::fold::{TyFoldable, TyFolder};
 use crate::analysis::ty::ty_def::TyId;
 use crate::analysis::ty::visitor::{TyVisitable, TyVisitor};
-use crate::core::hir_def::{EnumVariant, FieldParent, IdentId, LitKind, PatId, VariantKind};
+use crate::core::hir_def::{
+    EnumVariant, FieldParent, IdentId, IntegerId, LitKind, PatId, VariantKind,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub struct BindingRef<'db> {
@@ -107,6 +110,14 @@ impl<'db> PatternStore<'db> {
         &self.nodes[id.index()]
     }
 
+    pub fn has_binding(&self, id: ValidatedPatId) -> bool {
+        match self.node(id).kind() {
+            ValidatedPatKind::Wildcard { binding } => binding.is_some(),
+            ValidatedPatKind::Constructor { fields, .. } | ValidatedPatKind::Or(fields) => {
+                fields.iter().any(|field| self.has_binding(*field))
+            }
+        }
+    }
     pub fn set_root(&mut self, pat: PatId, root: ValidatedPatId) {
         self.roots_by_pat.insert(pat, root);
     }
@@ -166,6 +177,304 @@ impl<'db> PatternStore<'db> {
                 .find_map(|pat| self.mir_unsupported_reason(*pat)),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KnownScrutineeMatch {
+    Never,
+    Maybe,
+    Always,
+}
+
+/// A statically-known scrutinee shape used to prove pattern reachability.
+///
+/// Constructor children retain the source field order expected by validated
+/// patterns. An unknown child preserves a known outer constructor without
+/// making an optimistic claim about a refutable payload pattern.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum KnownPatternScrutinee<'db> {
+    Unknown,
+    Variant {
+        variant: EnumVariant<'db>,
+        fields: Box<[KnownPatternScrutinee<'db>]>,
+    },
+    Type {
+        ty: TyId<'db>,
+        fields: Box<[KnownPatternScrutinee<'db>]>,
+    },
+    Literal(LitKind<'db>),
+}
+
+impl<'db> KnownPatternScrutinee<'db> {
+    pub(crate) fn variant(
+        variant: EnumVariant<'db>,
+        fields: impl IntoIterator<Item = Self>,
+    ) -> Self {
+        Self::Variant {
+            variant,
+            fields: fields.into_iter().collect(),
+        }
+    }
+
+    pub(crate) fn type_constructor(ty: TyId<'db>, fields: impl IntoIterator<Item = Self>) -> Self {
+        Self::Type {
+            ty,
+            fields: fields.into_iter().collect(),
+        }
+    }
+
+    pub(crate) fn known_bool(&self) -> Option<bool> {
+        match self {
+            Self::Literal(LitKind::Bool(value)) => Some(*value),
+            Self::Unknown | Self::Variant { .. } | Self::Type { .. } | Self::Literal(_) => None,
+        }
+    }
+}
+
+/// Converts an evaluated constant into the same structural vocabulary used
+/// for direct HIR constructors. Unsupported scalar encodings remain unknown.
+pub(crate) fn known_pattern_scrutinee_from_const<'db>(
+    db: &'db dyn HirAnalysisDb,
+    value: SemConstId<'db>,
+) -> KnownPatternScrutinee<'db> {
+    match value.value(db) {
+        SemConstValue::Unit => {
+            KnownPatternScrutinee::type_constructor(TyId::unit(db), std::iter::empty())
+        }
+        SemConstValue::Scalar {
+            value: SemConstScalar::Bool(value),
+            ..
+        } => KnownPatternScrutinee::Literal(LitKind::Bool(value)),
+        SemConstValue::Scalar {
+            value: SemConstScalar::Int { value },
+            ..
+        } => value
+            .to_biguint()
+            .map_or(KnownPatternScrutinee::Unknown, |value| {
+                KnownPatternScrutinee::Literal(LitKind::Int(IntegerId::new(db, value)))
+            }),
+        SemConstValue::Scalar {
+            value: SemConstScalar::Bytes(_),
+            ..
+        }
+        | SemConstValue::TypeLevel { .. } => KnownPatternScrutinee::Unknown,
+        SemConstValue::Tuple { ty, elems } | SemConstValue::Array { ty, elems } => {
+            KnownPatternScrutinee::type_constructor(
+                ty,
+                elems
+                    .iter()
+                    .map(|field| known_pattern_scrutinee_from_const(db, *field)),
+            )
+        }
+        SemConstValue::Struct { ty, fields } => KnownPatternScrutinee::type_constructor(
+            ty,
+            fields
+                .iter()
+                .map(|field| known_pattern_scrutinee_from_const(db, *field)),
+        ),
+        SemConstValue::Enum {
+            ty,
+            variant,
+            fields,
+        } => {
+            let Some(enum_) = ty.as_enum(db) else {
+                return KnownPatternScrutinee::Unknown;
+            };
+            if usize::from(variant.0) >= enum_.len_variants(db) {
+                return KnownPatternScrutinee::Unknown;
+            }
+            KnownPatternScrutinee::variant(
+                EnumVariant::new(enum_, usize::from(variant.0)),
+                fields
+                    .iter()
+                    .map(|field| known_pattern_scrutinee_from_const(db, *field)),
+            )
+        }
+    }
+}
+
+/// Whether a validated single pattern can match or miss its scrutinee.
+///
+/// This is shared by type-checker completion analysis and semantic CFG
+/// lowering so `if let` / `while let` agree about statically unreachable
+/// branches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PatternBranchReachability {
+    pub can_match: bool,
+    pub can_miss: bool,
+}
+
+impl PatternBranchReachability {
+    pub(crate) const MATCH_ONLY: Self = Self {
+        can_match: true,
+        can_miss: false,
+    };
+    pub(crate) const MISS_ONLY: Self = Self {
+        can_match: false,
+        can_miss: true,
+    };
+    pub(crate) const BOTH: Self = Self {
+        can_match: true,
+        can_miss: true,
+    };
+}
+
+/// Returns the statically-known branch reachability for one pattern test.
+///
+/// An irrefutable pattern always matches. For a direct, statically-known enum
+/// variant, the same recursive variant proof used for `match` arms can also
+/// prove that a refutable pattern always matches or always misses. `None`
+/// means the pattern has not been validated yet, so callers must remain
+/// conservative.
+pub(crate) fn single_pattern_branch_reachability<'db>(
+    db: &'db dyn HirAnalysisDb,
+    store: &PatternStore<'db>,
+    pat: PatId,
+    known_scrutinee: Option<&KnownPatternScrutinee<'db>>,
+) -> Option<PatternBranchReachability> {
+    let root = store.root(pat)?;
+    if store.is_irrefutable(db, root) {
+        return Some(PatternBranchReachability::MATCH_ONLY);
+    }
+
+    Some(match known_scrutinee {
+        Some(scrutinee) => match known_scrutinee_matches(db, store, root, scrutinee) {
+            KnownScrutineeMatch::Never => PatternBranchReachability::MISS_ONLY,
+            KnownScrutineeMatch::Maybe => PatternBranchReachability::BOTH,
+            KnownScrutineeMatch::Always => PatternBranchReachability::MATCH_ONLY,
+        },
+        None => PatternBranchReachability::BOTH,
+    })
+}
+
+/// Returns which match arms can be selected, in source order, for a direct,
+/// statically-known scrutinee constructor.
+///
+/// `None` means one of the patterns has not been validated yet, so callers
+/// must conservatively keep every arm. Once an arm always matches, later arms
+/// are unreachable under first-match semantics.
+pub(crate) fn known_scrutinee_arm_reachability<'db>(
+    db: &'db dyn HirAnalysisDb,
+    store: &PatternStore<'db>,
+    pats: impl IntoIterator<Item = PatId>,
+    scrutinee: &KnownPatternScrutinee<'db>,
+) -> Option<Vec<bool>> {
+    let roots = pats
+        .into_iter()
+        .map(|pat| store.root(pat))
+        .collect::<Option<Vec<_>>>()?;
+    let mut still_unmatched = true;
+    Some(
+        roots
+            .into_iter()
+            .map(|root| {
+                if !still_unmatched {
+                    return false;
+                }
+                match known_scrutinee_matches(db, store, root, scrutinee) {
+                    KnownScrutineeMatch::Never => false,
+                    KnownScrutineeMatch::Maybe => true,
+                    KnownScrutineeMatch::Always => {
+                        still_unmatched = false;
+                        true
+                    }
+                }
+            })
+            .collect(),
+    )
+}
+
+fn known_scrutinee_matches<'db>(
+    db: &'db dyn HirAnalysisDb,
+    store: &PatternStore<'db>,
+    pat: ValidatedPatId,
+    scrutinee: &KnownPatternScrutinee<'db>,
+) -> KnownScrutineeMatch {
+    if matches!(scrutinee, KnownPatternScrutinee::Unknown) {
+        return if store.is_irrefutable(db, pat) {
+            KnownScrutineeMatch::Always
+        } else {
+            KnownScrutineeMatch::Maybe
+        };
+    }
+
+    match store.node(pat).kind() {
+        ValidatedPatKind::Wildcard { .. } => KnownScrutineeMatch::Always,
+        ValidatedPatKind::Constructor {
+            ctor: ConstructorKind::Variant(candidate, _),
+            fields,
+        } => match scrutinee {
+            KnownPatternScrutinee::Variant { variant, .. } if candidate != variant => {
+                KnownScrutineeMatch::Never
+            }
+            KnownPatternScrutinee::Variant {
+                fields: known_fields,
+                ..
+            } => known_constructor_fields_match(db, store, fields, known_fields),
+            KnownPatternScrutinee::Type { .. } | KnownPatternScrutinee::Literal(_) => {
+                KnownScrutineeMatch::Never
+            }
+            KnownPatternScrutinee::Unknown => unreachable!("handled above"),
+        },
+        ValidatedPatKind::Constructor {
+            ctor: ConstructorKind::Literal(candidate, _),
+            ..
+        } => match scrutinee {
+            KnownPatternScrutinee::Literal(value) if *candidate == *value => {
+                KnownScrutineeMatch::Always
+            }
+            KnownPatternScrutinee::Literal(_)
+            | KnownPatternScrutinee::Variant { .. }
+            | KnownPatternScrutinee::Type { .. } => KnownScrutineeMatch::Never,
+            KnownPatternScrutinee::Unknown => unreachable!("handled above"),
+        },
+        ValidatedPatKind::Constructor {
+            ctor: ConstructorKind::Type(candidate),
+            fields,
+        } => match scrutinee {
+            KnownPatternScrutinee::Type {
+                ty,
+                fields: known_fields,
+            } if candidate == ty => known_constructor_fields_match(db, store, fields, known_fields),
+            KnownPatternScrutinee::Type { .. } => KnownScrutineeMatch::Never,
+            KnownPatternScrutinee::Variant { .. } | KnownPatternScrutinee::Literal(_) => {
+                KnownScrutineeMatch::Never
+            }
+            KnownPatternScrutinee::Unknown => unreachable!("handled above"),
+        },
+        ValidatedPatKind::Or(pats) => {
+            let mut result = KnownScrutineeMatch::Never;
+            for pat in pats {
+                match known_scrutinee_matches(db, store, *pat, scrutinee) {
+                    KnownScrutineeMatch::Always => return KnownScrutineeMatch::Always,
+                    KnownScrutineeMatch::Maybe => result = KnownScrutineeMatch::Maybe,
+                    KnownScrutineeMatch::Never => {}
+                }
+            }
+            result
+        }
+    }
+}
+
+fn known_constructor_fields_match<'db>(
+    db: &'db dyn HirAnalysisDb,
+    store: &PatternStore<'db>,
+    patterns: &[ValidatedPatId],
+    values: &[KnownPatternScrutinee<'db>],
+) -> KnownScrutineeMatch {
+    if patterns.len() != values.len() {
+        return KnownScrutineeMatch::Maybe;
+    }
+
+    let mut result = KnownScrutineeMatch::Always;
+    for (pattern, value) in patterns.iter().zip(values) {
+        match known_scrutinee_matches(db, store, *pattern, value) {
+            KnownScrutineeMatch::Never => return KnownScrutineeMatch::Never,
+            KnownScrutineeMatch::Maybe => result = KnownScrutineeMatch::Maybe,
+            KnownScrutineeMatch::Always => {}
+        }
+    }
+    result
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]

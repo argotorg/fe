@@ -24,26 +24,25 @@ func private %deeply_nested_wildcard(v0.@layout_2) -> i8 {
         jump block1;
 
     block1:
-        v2.enumtag(@layout_2) = enum.tag v0;
-        br_table v2 (0.enumtag(@layout_2) block3);
+        jump block3;
 
     block2:
-        v4.i8 = phi (0.i8 block5) (1.i8 block6) (0.i8 block7);
-        return v4;
+        v1.i8 = phi (0.i8 block5) (1.i8 block6) (0.i8 block7);
+        return v1;
 
     block3:
         enum.assert_variant v0 #variant_0;
-        v7.@layout_1 = enum.extract v0 #variant_0 0.i256;
-        v8.enumtag(@layout_1) = enum.tag v7;
-        br_table v8 block5 (0.enumtag(@layout_1) block4);
+        v4.@layout_1 = enum.extract v0 #variant_0 0.i256;
+        v5.enumtag(@layout_1) = enum.tag v4;
+        br_table v5 block5 (0.enumtag(@layout_1) block4);
 
     block4:
         enum.assert_variant v0 #variant_0;
-        v11.@layout_1 = enum.extract v0 #variant_0 0.i256;
-        enum.assert_variant v11 #variant_0;
-        v12.@layout_0 = enum.extract v11 #variant_0 0.i256;
-        v13.enumtag(@layout_0) = enum.tag v12;
-        br_table v13 block7 (0.enumtag(@layout_0) block6);
+        v8.@layout_1 = enum.extract v0 #variant_0 0.i256;
+        enum.assert_variant v8 #variant_0;
+        v9.@layout_0 = enum.extract v8 #variant_0 0.i256;
+        v10.enumtag(@layout_0) = enum.tag v9;
+        br_table v10 block7 (0.enumtag(@layout_0) block6);
 
     block5:
         jump block2;

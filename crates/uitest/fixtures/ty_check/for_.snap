@@ -4,12 +4,6 @@ assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/for_.fe
 ---
-error[8-0000]: type mismatch
-   ┌─ for_.fe:16:9
-   │
-16 │     for Bar { x } in foo_arr {
-   │         ^^^^^^^^^ expected `Foo`, but `Bar` is given
-
 error[8-0018]: left-hand side of assignment is immutable
    ┌─ for_.fe:17:9
    │
@@ -27,3 +21,12 @@ error[8-0020]: `Seq` needs to be implemented for Foo
    │              │
    │              `Seq` needs to be implemented for `Foo`
    │              consider implementing `Seq` for `Foo`
+
+error[8-0020]: `Seq` needs to be implemented for [Foo; 10]
+   ┌─ for_.fe:16:22
+   │
+16 │     for Bar { x } in foo_arr {
+   │                      ^^^^^^^
+   │                      │
+   │                      `Seq` needs to be implemented for `[Foo; 10]`
+   │                      consider implementing `Seq` for `[Foo; 10]`

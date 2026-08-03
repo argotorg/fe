@@ -596,6 +596,33 @@ impl<'db> Expr<'db> {
                 result
             }
 
+            Expr::Closure {
+                params,
+                ret_ty,
+                body: closure_body,
+            } => {
+                let body_expr = unwrap_partial_ref(closure_body.data(db, body), "Closure::body");
+                let ret_ty = ret_ty
+                    .map(|ty| format!(" -> {}", ty.pretty_print(db)))
+                    .unwrap_or_default();
+                let params = params.pretty_print(db);
+                let params = if params == "()" {
+                    "||".to_string()
+                } else {
+                    let params = params
+                        .strip_prefix('(')
+                        .and_then(|params| params.strip_suffix(')'))
+                        .unwrap_or(&params);
+                    format!("|{params}|")
+                };
+                format!(
+                    "{}{} {}",
+                    params,
+                    ret_ty,
+                    body_expr.pretty_print(db, body, indent)
+                )
+            }
+
             Expr::Bin(lhs, rhs, op) => {
                 let lhs_expr = unwrap_partial_ref(lhs.data(db, body), "Bin::lhs");
                 let rhs_expr = unwrap_partial_ref(rhs.data(db, body), "Bin::rhs");

@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/closure_match_capture_call_once_twice.fe
+---
+error[16-0002]: move conflict in `fn closure_match_capture_call_once_twice`
+   ┌─ closure_match_capture_call_once_twice.fe:17:18
+   │
+16 │     let first = take.call_once(())
+   │                 ---- `take` is moved here
+17 │     let second = take.call_once(())
+   │                  ^^^^ cannot use a value after it was moved

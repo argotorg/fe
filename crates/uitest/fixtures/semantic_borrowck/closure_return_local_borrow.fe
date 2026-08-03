@@ -1,0 +1,8 @@
+pub fn closure_return_local_borrow() {
+    let g = |_ unit: own ()| -> mut u256 {
+        let mut x: u256 = 5
+        mut x
+    }
+    let m = g.call(())
+    m = 7
+}

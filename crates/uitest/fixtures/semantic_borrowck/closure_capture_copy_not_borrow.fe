@@ -1,0 +1,13 @@
+#[test]
+fn copy_capture_does_not_borrow_source() {
+    let x: u256 = 0
+    let r = ref x
+    let mut y: u256 = 1
+    let f = |_ unit: own ()| -> () {
+        r
+        y
+    }
+    let y_mut = mut y
+    y_mut = 2
+    f.call(())
+}

@@ -9,7 +9,7 @@
 use common::InputDb;
 use dir_test::{Fixture, dir_test};
 use driver::DriverDataBase;
-use fe_codegen::emit_module_sonatina_ir;
+use fe_codegen::{OptLevel, emit_module_sonatina_ir, emit_module_sonatina_ir_optimized};
 use std::{collections::HashSet, path::Path};
 use test_utils::_macro_support::_insta::{self, Settings};
 use tracing::{info, warn};
@@ -79,6 +79,71 @@ pub fn new_empty() -> Empty {
     assert!(
         !ir.contains("data $const_region"),
         "zero-sized const aggregate should not emit section data:\n{ir}"
+    );
+}
+
+#[test]
+fn trait_function_item_values_preserve_runtime_dispatch_witnesses() {
+    let ir = with_top_mod_for_source(
+        "trait_function_item_values_preserve_runtime_dispatch_witnesses.fe",
+        r#"
+trait Read {
+    type Output
+
+    fn read(number: Self) -> Self::Output
+
+    fn default_read(number: Self) -> Self::Output {
+        Self::read(number: number)
+    }
+}
+
+trait Convert<T> {
+    fn convert(number: Self) -> T
+}
+
+struct Number {
+    value: u256,
+}
+
+impl Read for Number {
+    type Output = u256
+
+    fn read(number: Number) -> u256 {
+        number.value
+    }
+}
+
+impl Convert<u256> for Number {
+    fn convert(number: Number) -> u256 {
+        number.value
+    }
+}
+
+fn invoke<T: Read<Output = u256>>(number: T) -> u256 {
+    let function = Read::read
+    function(number: number)
+}
+
+pub fn main() -> u256 {
+    let read = <Number as Read>::read
+    let default_read = <Number as Read>::default_read
+    let convert = <Number as Convert<u256>>::convert
+    let pair = (read, convert)
+    pair.0(number: Number { value: 10 })
+        + pair.1(number: Number { value: 11 })
+        + default_read(number: Number { value: 12 })
+        + invoke(number: Number { value: 13 })
+}
+"#,
+        |db, top_mod| {
+            emit_module_sonatina_ir(db, top_mod)
+                .expect("trait function-item values should preserve their dispatch witnesses")
+        },
+    );
+
+    assert!(
+        ir.contains("call") && ir.contains("read"),
+        "trait function-item calls must lower to the selected implementation:\n{ir}"
     );
 }
 
@@ -489,6 +554,28 @@ fn raw_log_emit_sonatina_ir_lowers_mem_ptr_from_raw() {
 }
 
 #[test]
+fn generic_log_emit_wrapper_is_not_outlined_at_o2() {
+    let ir = with_top_mod_for_source(
+        "generic_log_emit_wrapper_is_not_outlined_at_o2.fe",
+        include_str!("fixtures/event_logging_via_log.fe"),
+        |db, top_mod| {
+            emit_module_sonatina_ir_optimized(db, top_mod, OptLevel::O2, None)
+                .expect("optimized event logging IR should emit")
+        },
+    );
+    let functions = sonatina_function_names(&ir);
+
+    assert!(
+        functions.iter().all(|name| !name.starts_with("emit__")),
+        "the generic Log::emit delegation wrapper must inline before its generated Event::emit body grows it past the optimizer threshold:\nfunctions={functions:#?}\n{ir}",
+    );
+    assert!(
+        ir.contains("evm_log3"),
+        "inlining the wrapper must preserve the event log operation:\n{ir}",
+    );
+}
+
+#[test]
 fn constant_oob_index_terminates_without_continuation_projection() {
     let output = with_top_mod_for_source(
         "constant_oob_index_terminates_without_continuation_projection.fe",
@@ -616,6 +703,75 @@ pub contract Identity {
     );
 }
 
+#[test]
+fn generic_never_returning_callbacks_preserve_declared_call_results() {
+    let source = r#"
+use core::functional::Fn
+
+struct Pair {
+    left: u256,
+    right: u256,
+}
+
+msg Msg {
+    #[selector = 0x01]
+    Scalar -> u256,
+    #[selector = 0x02]
+    Aggregate -> u256,
+}
+
+fn invoke<U, F: Fn<(), U>>(_ func: F) -> U {
+    func.call()
+}
+
+pub contract C {
+    recv Msg {
+        Scalar -> u256 {
+            let fail = || -> u256 { core::panic() }
+            invoke(fail)
+        }
+
+        Aggregate -> u256 {
+            let fail = || -> Pair { core::panic() }
+            let value = invoke(fail)
+            value.left
+        }
+    }
+}
+"#;
+    with_top_mod_for_source(
+        "generic_never_returning_callbacks_preserve_declared_call_results.fe",
+        source,
+        |db, top_mod| {
+            let ir = emit_module_sonatina_ir(db, top_mod)
+                .expect("declared-result terminal calls should emit valid Sonatina IR");
+            assert!(
+                ir.contains("unreachable"),
+                "never-returning callbacks must terminate their callers:\n{ir}"
+            );
+            let invoke_names = sonatina_function_names(&ir)
+                .into_iter()
+                .filter(|name| name.contains("invoke"))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                invoke_names.len(),
+                2,
+                "the scalar and aggregate invoke specializations must both be emitted:\n{ir}"
+            );
+            for name in invoke_names {
+                let body = sonatina_function_body(&ir, &name)
+                    .unwrap_or_else(|| panic!("missing invoke body `{name}`:\n{ir}"));
+                assert!(
+                    body.lines().any(|line| line.contains(" = call "))
+                        && body.contains("unreachable"),
+                    "a declared-result terminal call must retain its typed discarded result before unreachable:\n{body}"
+                );
+            }
+            emit_module_sonatina_ir_optimized(db, top_mod, OptLevel::O0, Some("C"))
+                .expect("declared-result terminal calls should pass O0 Sonatina validation");
+        },
+    );
+}
 // NOTE: `dir_test` discovers fixtures at compile time; new fixture files will be picked up on a
 // clean build (e.g. CI) or whenever this test target is recompiled.
 //

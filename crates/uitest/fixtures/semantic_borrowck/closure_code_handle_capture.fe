@@ -1,0 +1,38 @@
+use core::effect_ref::{AddressSpace, EffectHandle, EffectRef}
+use core::functional::Fn
+
+struct CodePtr<T> {
+    offset: u256,
+}
+
+impl<T> EffectHandle for CodePtr<T> {
+    type Target = T
+
+    const SPACE: AddressSpace = AddressSpace::Code
+
+    fn from_raw(_ raw: u256) -> Self {
+        Self { offset: raw }
+    }
+
+    fn raw(self) -> u256 {
+        self.offset
+    }
+}
+
+impl<T> EffectRef<T> for CodePtr<T> {}
+
+fn capture_target() -> u256 uses (target: u256) {
+    let handle = ref target
+    let f = |_ unit: own ()| -> u256 {
+        let captured = handle
+        captured
+    }
+    f.call(())
+}
+
+pub fn closure_code_handle_capture() -> u256 {
+    let ptr: CodePtr<u256> = CodePtr::from_raw(0)
+    with (ptr) {
+        capture_target()
+    }
+}

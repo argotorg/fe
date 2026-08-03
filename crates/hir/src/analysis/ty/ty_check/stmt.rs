@@ -3,17 +3,24 @@ use salsa::Update;
 use crate::analysis::HirAnalysisDb;
 use crate::core::hir_def::{ExprId, IdentId, Partial, Pat, PatId, Stmt, StmtId};
 
-use super::{Callable, LocalBinding, TyChecker, instantiate_trait_method};
+use super::{
+    Callable, LocalBinding, TyChecker,
+    env::{PendingForLoopSeq, TraitObligation, TraitObligationOrigin},
+    expr::PendingPrimitiveOpResolution,
+    instantiate_trait_method,
+};
 use crate::analysis::ty::{
     LayoutBundlePathStep,
     canonical::Canonical,
     corelib::resolve_core_trait,
-    diagnostics::BodyDiag,
+    diagnostics::{BodyDiag, ReturnTypeContext},
     fold::{TyFoldable, TyFolder},
     trait_def::{TraitInstId, impls_for_ty},
-    trait_resolution::TraitSolveCx,
-    ty_def::{InvalidCause, TyId},
-    visitor::TyVisitable,
+    trait_resolution::{
+        CanonicalGoalQuery, GoalSatisfiability, TraitSolveCx, is_goal_query_satisfiable,
+    },
+    ty_def::{InvalidCause, TyFlags, TyId},
+    visitor::{TyVisitable, collect_flags},
 };
 
 /// Resolved Seq trait methods for a for-loop.
@@ -113,16 +120,14 @@ impl<'db> TyChecker<'db> {
                     .set_local_borrow_provider(pat, prop.borrow_provider);
             }
 
-            match mode {
-                super::PatternDestructureMode::Owned => {
-                    if self.pattern_binds_any(*pat) {
-                        self.record_implicit_move_for_owned_expr(*expr, prop.ty);
-                    }
-                }
-                super::PatternDestructureMode::Borrow(kind) => {
-                    self.retype_pattern_bindings_for_borrow(*pat, kind);
-                }
+            if mode == super::PatternDestructureMode::Owned {
+                let capture_access = self.pattern_value_capture_access(*pat);
+                self.record_pattern_value_use(*expr, capture_access);
             }
+            if let super::PatternDestructureMode::Borrow(kind) = mode {
+                self.retype_pattern_bindings_for_borrow(*pat, kind);
+            }
+            self.record_contextual_closure_binding_origins(*pat, *expr);
         } else {
             let ascription = ascription.unwrap_or_else(|| self.fresh_ty());
             if let Some(diag) = ascription.emit_wf_diag(
@@ -195,7 +200,9 @@ impl<'db> TyChecker<'db> {
 
         // Resolve Seq implementation and get element type
         let (elem_ty, for_loop_seq) = self.resolve_seq_info(expr_ty, *expr, stmt);
-
+        if let Some(seq_info) = for_loop_seq {
+            self.register_resolved_for_loop_seq(stmt, *expr, elem_ty, seq_info);
+        }
         let layout =
             self.pattern_layout_context_for_projection(*expr, &[LayoutBundlePathStep::Index]);
         let layout = layout.filter(|layout| {
@@ -205,10 +212,6 @@ impl<'db> TyChecker<'db> {
                         == crate::analysis::ty::layout_shape_key(self.db, elem_ty)
                 })
         });
-        if let Some(mut seq_info) = for_loop_seq {
-            seq_info.element_layout_backing_source = layout.is_some();
-            self.env.register_for_loop_seq(stmt, seq_info);
-        }
         self.check_pat_with_layout(*pat, elem_ty, layout.as_ref());
 
         self.env.enter_loop(stmt);
@@ -224,6 +227,41 @@ impl<'db> TyChecker<'db> {
         TyId::unit(self.db)
     }
 
+    fn register_resolved_for_loop_seq(
+        &mut self,
+        stmt: StmtId,
+        expr: ExprId,
+        elem_ty: TyId<'db>,
+        mut seq_info: ForLoopSeq<'db>,
+    ) {
+        let layout =
+            self.pattern_layout_context_for_projection(expr, &[LayoutBundlePathStep::Index]);
+        seq_info.element_layout_backing_source = layout
+            .as_ref()
+            .and_then(|layout| self.projected_pattern_layout_ty(layout, &[]))
+            .is_some_and(|projected| {
+                crate::analysis::ty::layout_shape_key(self.db, projected)
+                    == crate::analysis::ty::layout_shape_key(self.db, elem_ty)
+            });
+        self.env.register_for_loop_seq(stmt, seq_info);
+    }
+
+    fn defer_seq_info(
+        &mut self,
+        iterable_ty: TyId<'db>,
+        expr: ExprId,
+        stmt: StmtId,
+    ) -> (TyId<'db>, Option<ForLoopSeq<'db>>) {
+        let elem_ty = self.fresh_ty();
+        self.env.register_pending_for_loop_seq(PendingForLoopSeq {
+            stmt,
+            expr,
+            iterable_ty,
+            elem_ty,
+        });
+        (elem_ty, None)
+    }
+
     /// Resolve the Seq implementation for an iterable type.
     ///
     /// Returns the element type and optionally the resolved Seq methods.
@@ -232,7 +270,7 @@ impl<'db> TyChecker<'db> {
         &mut self,
         iterable_ty: TyId<'db>,
         expr: ExprId,
-        _stmt: StmtId,
+        stmt: StmtId,
     ) -> (TyId<'db>, Option<ForLoopSeq<'db>>) {
         let (base, _args) = iterable_ty.decompose_ty_app(self.db);
 
@@ -246,9 +284,7 @@ impl<'db> TyChecker<'db> {
             return (TyId::invalid(self.db, InvalidCause::Other), None);
         }
         if base.is_ty_var(self.db) {
-            let diag = BodyDiag::TypeMustBeKnown(expr.span(self.body()).into());
-            self.push_diag(diag);
-            return (TyId::invalid(self.db, InvalidCause::Other), None);
+            return self.defer_seq_info(iterable_ty, expr, stmt);
         }
 
         // Look up Seq trait (if missing, treat as invalid).
@@ -278,15 +314,57 @@ impl<'db> TyChecker<'db> {
                     }
 
                     // Instantiate the impl's trait instance (with associated type
-                    // bindings) using fresh type variables, then unify to get concrete types
-                    let raw_trait_inst = impl_id.trait_inst(self.db);
-                    let trait_inst = self.table.instantiate_with_fresh_vars(
-                        crate::analysis::ty::binder::Binder::bind(raw_trait_inst),
-                    );
+                    // bindings) and its constraints with the same fresh type variables.
+                    let implementor = self.table.instantiate_with_fresh_vars(*impl_);
+                    let trait_inst = implementor.trait_inst(self.db);
 
                     // Unify the trait's Self type with the iterable type
                     let self_ty = trait_inst.self_ty(self.db);
                     if self.table.unify(self_ty, iterable_lookup_ty).is_err() {
+                        self.rollback_state(snapshot);
+                        continue;
+                    }
+
+                    // Header unification alone is insufficient: array `Seq`, for example,
+                    // is available only when its element implements `Copy`. Runtime trait
+                    // selection enforces these constraints, so for-loop admission must do
+                    // the same to avoid accepting a call that cannot be lowered.
+                    let solve_cx = TraitSolveCx::new(self.db, self.env.scope())
+                        .with_assumptions(self.env.assumptions());
+                    let mut constraints_viable = true;
+                    for &constraint in implementor.constraints(self.db).list(self.db) {
+                        let constraint = constraint.fold_with(self.db, &mut self.table);
+                        let query =
+                            CanonicalGoalQuery::new(self.db, constraint, self.env.assumptions());
+                        match is_goal_query_satisfiable(self.db, solve_cx, &query) {
+                            GoalSatisfiability::Satisfied(solution) => {
+                                let solved = query.extract_solution(&mut self.table, solution).inst;
+                                if self.table.unify(constraint, solved).is_err() {
+                                    constraints_viable = false;
+                                    break;
+                                }
+                            }
+                            GoalSatisfiability::NeedsConfirmation { .. }
+                                if collect_flags(self.db, constraint)
+                                    .contains(TyFlags::HAS_VAR) =>
+                            {
+                                // Preserve the candidate so the loop body can constrain
+                                // its item type, then confirm the bound after inference.
+                                self.env.register_trait_obligation(TraitObligation {
+                                    goal: constraint,
+                                    origin: TraitObligationOrigin::GenericConfirmation { expr },
+                                    span: expr.span(self.body()).into(),
+                                });
+                            }
+                            GoalSatisfiability::NeedsConfirmation { .. }
+                            | GoalSatisfiability::ContainsInvalid
+                            | GoalSatisfiability::UnSat(_) => {
+                                constraints_viable = false;
+                                break;
+                            }
+                        }
+                    }
+                    if !constraints_viable {
                         self.rollback_state(snapshot);
                         continue;
                     }
@@ -373,6 +451,10 @@ impl<'db> TyChecker<'db> {
             }
         }
 
+        if iterable_ty.has_var(self.db) {
+            return self.defer_seq_info(iterable_ty, expr, stmt);
+        }
+
         // Type doesn't implement Seq
         let diag = BodyDiag::TraitNotImplemented {
             primary: expr.span(self.body()).into(),
@@ -381,6 +463,33 @@ impl<'db> TyChecker<'db> {
         };
         self.push_diag(diag);
         (TyId::invalid(self.db, InvalidCause::Other), None)
+    }
+
+    pub(super) fn resolve_pending_for_loop_seq(
+        &mut self,
+        pending: PendingForLoopSeq<'db>,
+    ) -> PendingPrimitiveOpResolution {
+        let iterable_ty = pending.iterable_ty.fold_with(self.db, &mut self.table);
+        if iterable_ty.has_var(self.db) {
+            return PendingPrimitiveOpResolution::Pending;
+        }
+        let (elem_ty, for_loop_seq) =
+            self.resolve_seq_info(iterable_ty, pending.expr, pending.stmt);
+        if elem_ty.has_invalid(self.db) {
+            return PendingPrimitiveOpResolution::Done;
+        }
+        let elem_ty = self.equate_ty(
+            pending.elem_ty,
+            elem_ty,
+            pending.expr.span(self.body()).into(),
+        );
+        if elem_ty.has_invalid(self.db) {
+            return PendingPrimitiveOpResolution::Done;
+        }
+        if let Some(seq_info) = for_loop_seq {
+            self.register_resolved_for_loop_seq(pending.stmt, pending.expr, elem_ty, seq_info);
+        }
+        PendingPrimitiveOpResolution::Resolved
     }
 
     fn check_while(&mut self, stmt: StmtId, stmt_data: &Stmt<'db>) -> TyId<'db> {
@@ -465,18 +574,28 @@ impl<'db> TyChecker<'db> {
             && self.table.unify(returned_ty, self.expected).is_ok();
 
         if !had_child_err && !returned_ty.has_invalid(self.db) && !ret_ty_ok {
-            let func = self.env.func();
+            let expected = self.expected.fold_with(self.db, &mut self.table);
+            let context = self
+                .env
+                .active_closure()
+                .map(ReturnTypeContext::Closure)
+                .or_else(|| self.env.func().map(ReturnTypeContext::Function));
             let span = stmt.span(self.env.body());
             let diag = BodyDiag::ReturnedTypeMismatch {
                 primary: span.into(),
                 actual: returned_ty,
-                expected: self.expected,
-                func,
+                expected,
+                context,
             };
 
             self.push_diag(diag);
         } else if ret_ty_ok && let Some(expr) = returned_expr {
-            self.record_implicit_move_for_owned_expr(expr, self.expected);
+            if self.env.active_closure().is_some() {
+                self.env.record_active_closure_return_expr(expr);
+                self.record_return_value_use(expr, self.expected);
+            } else {
+                self.record_owned_value_use(expr, self.expected);
+            }
         }
 
         if ret_ty_ok
@@ -484,16 +603,18 @@ impl<'db> TyChecker<'db> {
             && let Some(prop) = returned_prop
             && let Some(provider) = prop.borrow_provider
         {
-            if let Some((ref previous_span, previous_provider)) = self.first_return_borrow_provider
+            if let Some((previous_span, previous_provider)) =
+                self.env.first_return_borrow_provider.clone()
             {
                 self.merge_concrete_borrow_providers(
-                    previous_span.clone(),
+                    previous_span,
                     Some(previous_provider),
                     expr.span(self.body()).into(),
                     Some(provider),
                 );
             } else {
-                self.first_return_borrow_provider = Some((expr.span(self.body()).into(), provider));
+                self.env.first_return_borrow_provider =
+                    Some((expr.span(self.body()).into(), provider));
             }
         }
 

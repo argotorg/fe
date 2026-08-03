@@ -3,13 +3,14 @@ use smallvec1::SmallVec;
 
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::ty::effects::{
-    BarrierReason, EffectFamily, EffectForwarder, EffectQuery, EffectQueryMode, EffectWitness,
-    ForwardedEffectKey, KeyedEffectEntry, StoredEffectKey,
+    BarrierReason, EffectFamily, EffectForwarder, EffectPatternKey, EffectQuery, EffectQueryMode,
+    EffectWitness, ForwardedEffectKey, KeyedEffectEntry, StoredEffectKey,
     elaborate::{contains_projection_or_invalid_query_state, query_contains_unresolved_inference},
     forwarded_trait_key_is_well_formed, forwarded_type_key_is_well_formed,
     match_::{KeyMatchCommit, patterns_overlap, query_matches_forwarder, query_matches_witness},
     stored_trait_key_is_rigid, stored_type_key_is_rigid,
 };
+use crate::analysis::ty::{fold::rewrite_types, ty_def::TyId};
 
 use super::{TyChecker, env::ProvidedEffect};
 
@@ -69,6 +70,33 @@ impl<'db> EffectEnv<'db> {
     pub fn new() -> Self {
         Self {
             frames: vec![EffectFrame::default()],
+        }
+    }
+
+    pub(super) fn rewrite_types(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        replacements: &FxHashMap<TyId<'db>, TyId<'db>>,
+    ) {
+        if replacements.is_empty() {
+            return;
+        }
+        for frame in &mut self.frames {
+            let old_entries = std::mem::take(&mut frame.keyed_by_family);
+            for (mut family, mut entries) in old_entries {
+                rewrite_effect_family(db, &mut family, replacements);
+                for entry in &mut entries {
+                    rewrite_keyed_effect_entry(db, entry, replacements);
+                }
+                frame
+                    .keyed_by_family
+                    .entry(family)
+                    .or_default()
+                    .extend(entries);
+            }
+            for provider in &mut frame.unkeyed {
+                rewrite_provided_effect(db, provider, replacements);
+            }
         }
     }
 
@@ -251,5 +279,120 @@ impl<'db> EffectEnv<'db> {
             }
         }
         out
+    }
+}
+
+fn rewrite_effect_family<'db>(
+    db: &'db dyn HirAnalysisDb,
+    family: &mut EffectFamily<'db>,
+    replacements: &FxHashMap<TyId<'db>, TyId<'db>>,
+) {
+    if let EffectFamily::Type(ty) = family {
+        *ty = rewrite_types(db, *ty, replacements);
+    }
+}
+
+fn rewrite_provided_effect<'db>(
+    db: &'db dyn HirAnalysisDb,
+    provider: &mut ProvidedEffect<'db>,
+    replacements: &FxHashMap<TyId<'db>, TyId<'db>>,
+) {
+    provider.ty = rewrite_types(db, provider.ty, replacements);
+    provider.binding = provider
+        .binding
+        .map(|binding| rewrite_types(db, binding, replacements));
+}
+
+fn rewrite_stored_effect_key<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: &mut StoredEffectKey<'db>,
+    replacements: &FxHashMap<TyId<'db>, TyId<'db>>,
+) {
+    match key {
+        StoredEffectKey::Type(key) => {
+            key.carrier = rewrite_types(db, key.carrier, replacements);
+            rewrite_effect_family(db, &mut key.family, replacements);
+        }
+        StoredEffectKey::Trait(key) => {
+            for arg in &mut key.args_no_self {
+                *arg = rewrite_types(db, *arg, replacements);
+            }
+            for (_, binding) in &mut key.assoc_bindings {
+                *binding = rewrite_types(db, *binding, replacements);
+            }
+            rewrite_effect_family(db, &mut key.family, replacements);
+        }
+    }
+}
+
+fn rewrite_forwarded_effect_key<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: &mut ForwardedEffectKey<'db>,
+    replacements: &FxHashMap<TyId<'db>, TyId<'db>>,
+) {
+    match key {
+        ForwardedEffectKey::Type(key) => {
+            key.carrier = rewrite_types(db, key.carrier, replacements);
+            rewrite_effect_family(db, &mut key.family, replacements);
+        }
+        ForwardedEffectKey::Trait(key) => {
+            for arg in &mut key.args_no_self {
+                *arg = rewrite_types(db, *arg, replacements);
+            }
+            for (_, binding) in &mut key.assoc_bindings {
+                *binding = rewrite_types(db, *binding, replacements);
+            }
+            rewrite_effect_family(db, &mut key.family, replacements);
+        }
+    }
+}
+
+fn rewrite_effect_pattern_key<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: &mut EffectPatternKey<'db>,
+    replacements: &FxHashMap<TyId<'db>, TyId<'db>>,
+) {
+    match key {
+        EffectPatternKey::Type(key) => {
+            key.carrier = rewrite_types(db, key.carrier, replacements);
+            rewrite_effect_family(db, &mut key.family, replacements);
+            for slot in &mut key.slots.entries {
+                slot.placeholder = rewrite_types(db, slot.placeholder, replacements);
+                slot.fallback_ty = rewrite_types(db, slot.fallback_ty, replacements);
+            }
+        }
+        EffectPatternKey::Trait(key) => {
+            for arg in &mut key.args_no_self {
+                *arg = rewrite_types(db, *arg, replacements);
+            }
+            for (_, binding) in &mut key.assoc_bindings {
+                *binding = rewrite_types(db, *binding, replacements);
+            }
+            rewrite_effect_family(db, &mut key.family, replacements);
+            for slot in &mut key.slots.entries {
+                slot.placeholder = rewrite_types(db, slot.placeholder, replacements);
+                slot.fallback_ty = rewrite_types(db, slot.fallback_ty, replacements);
+            }
+        }
+    }
+}
+
+fn rewrite_keyed_effect_entry<'db>(
+    db: &'db dyn HirAnalysisDb,
+    entry: &mut KeyedEffectEntry<'db, ProvidedEffect<'db>>,
+    replacements: &FxHashMap<TyId<'db>, TyId<'db>>,
+) {
+    match entry {
+        KeyedEffectEntry::Witness(witness) => {
+            rewrite_stored_effect_key(db, &mut witness.key, replacements);
+            rewrite_provided_effect(db, &mut witness.provider, replacements);
+        }
+        KeyedEffectEntry::Forwarder(forwarder) => {
+            rewrite_forwarded_effect_key(db, &mut forwarder.key, replacements);
+            rewrite_provided_effect(db, &mut forwarder.provider, replacements);
+        }
+        KeyedEffectEntry::Barrier(barrier) => {
+            rewrite_effect_pattern_key(db, &mut barrier.pattern, replacements);
+        }
     }
 }

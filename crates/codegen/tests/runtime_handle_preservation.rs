@@ -1,7 +1,17 @@
 use common::InputDb;
 use driver::DriverDataBase;
-use fe_codegen::{OptLevel, emit_module_sonatina_ir, emit_runtime_package_sonatina_ir_optimized};
-use hir::hir_def::TopLevelMod;
+use fe_codegen::{
+    OptLevel, SonatinaTestOptions, emit_module_sonatina_ir,
+    emit_runtime_package_sonatina_ir_optimized, emit_test_module_sonatina,
+};
+use hir::{
+    analysis::{
+        semantic::{SemanticLocalKind, normalize_semantic_body},
+        ty::ty_check::LocalBinding,
+    },
+    hir_def::TopLevelMod,
+    projection::IndexSource,
+};
 use mir::runtime::{AddressSpaceKind, RefKind};
 use mir::{
     IntrinsicArithBinOp, Layout, LayoutId, PlaceElem, PlaceRoot, RExpr, RLocalId, RStmt,
@@ -135,7 +145,7 @@ fn body_extracts_param_fields(body: &RuntimeBody<'_>, param: RLocalId, fields: &
                 RStmt::Assign {
                     expr: RExpr::AggregateExtract { value, index },
                     ..
-                } if *value == param && index == field
+                } if *value == param && *index == IndexSource::Constant(*field as usize)
             )
         })
     })
@@ -541,9 +551,9 @@ fn mem_ptr_from_raw_helpers_build_ordinary_values_in_rmir() {
 }
 
 #[test]
-fn object_backed_nested_const_handle_fields_load_carriers_before_const_projection() {
+fn ssa_nested_const_handle_fields_extract_carriers_before_const_projection() {
     let output = sonatina_ir_for_source(
-        "object_backed_nested_const_handle_fields_load_carriers_before_const_projection.fe",
+        "ssa_nested_const_handle_fields_extract_carriers_before_const_projection.fe",
         r#"struct Data {
     x: u256,
 }
@@ -566,8 +576,12 @@ pub fn entry() -> u256 {
     let read = sonatina_function_body(&output, "read");
 
     assert!(
-        contains_op_subsequence(read, &["obj.proj", "obj.load", "const.proj", "const.load"]),
-        "object-backed aggregates may store nested const refs, but field access must load the handle carrier before projecting through the const ref:\n{read}"
+        contains_op_subsequence(read, &["extract_value", "const.proj", "const.load"]),
+        "SSA aggregates should extract a nested const handle before projecting through it:\n{read}"
+    );
+    assert!(
+        !read.contains("obj."),
+        "read-only nested const handles should not require object materialization:\n{read}"
     );
 }
 
@@ -746,6 +760,30 @@ fn entry() -> u256 {
 }
 
 #[test]
+fn scalar_comparison_operands_stay_in_ssa() {
+    let source = r#"
+fn compare(_ value: own u256) -> bool {
+    value == 0
+}
+
+fn entry() -> bool {
+    compare(1)
+}
+"#;
+    let ir = sonatina_ir_for_source("scalar_comparison_operands_stay_in_ssa.fe", source);
+    let compare = sonatina_function_body(&ir, "compare");
+
+    assert!(
+        !compare.contains("alloca"),
+        "scalar comparison operands should not need addressable storage:\n{compare}"
+    );
+    assert!(
+        !compare.contains("mload") && !compare.contains("mstore"),
+        "scalar comparison operands should stay in SSA:\n{compare}"
+    );
+}
+
+#[test]
 fn mutated_scalar_locals_stay_rooted() {
     with_runtime_package!(
         "mutated_scalar_locals_stay_rooted.fe",
@@ -772,8 +810,12 @@ fn entry() -> u256 {
                 .iter()
                 .enumerate()
                 .find_map(|(idx, local)| {
-                    matches!(local.root, RuntimeLocalRoot::Slot(RuntimeClass::Scalar(_)))
-                        .then(|| RLocalId::from_u32(idx as u32))
+                    matches!(
+                        local.root,
+                        RuntimeLocalRoot::Slot(RuntimeClass::Scalar(_))
+                            | RuntimeLocalRoot::HeapSlot(RuntimeClass::Scalar(_))
+                    )
+                    .then(|| RLocalId::from_u32(idx as u32))
                 })
                 .unwrap_or_else(|| {
                     panic!("mutated scalar local should keep runtime storage:\n{body:#?}")
@@ -801,6 +843,60 @@ fn entry() -> u256 {
                 "mutated scalar local should store through the rooted slot pointer:\n{body:#?}"
             );
         }
+    );
+}
+
+#[test]
+fn non_escaping_mut_borrows_keep_stack_storage() {
+    let source = r#"
+fn bump(_ value: mut u256) {
+    value += 1
+}
+
+fn entry() -> u256 {
+    let mut value = 41
+    bump(mut value)
+    value
+}
+"#;
+
+    with_runtime_package!(
+        "non_escaping_mut_borrows_keep_stack_storage.fe",
+        source,
+        |db, package| {
+            let body = runtime_body_for_symbol(&db, package, "entry");
+            let borrowed_root = runtime_body_stmts(&body)
+                .find_map(|stmt| match stmt {
+                    RStmt::Assign {
+                        expr: RExpr::AddrOf { place },
+                        ..
+                    } => match place.root {
+                        PlaceRoot::Slot(local) => Some(local),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("expected a borrowed local slot:\n{body:#?}"));
+
+            assert!(
+                matches!(
+                    body.locals[borrowed_root.as_u32() as usize].root,
+                    RuntimeLocalRoot::Slot(RuntimeClass::Scalar(_))
+                ),
+                "a non-escaping direct borrow should not promote its source to a heap slot:\n{body:#?}"
+            );
+        }
+    );
+
+    let ir = sonatina_ir_for_source("non_escaping_mut_borrows_keep_stack_storage.fe", source);
+    let entry = sonatina_function_body(&ir, "entry");
+    assert!(
+        entry.contains("alloca i256"),
+        "a non-escaping mutable scalar needs only stack storage:\n{entry}"
+    );
+    assert!(
+        !entry.contains("evm_malloc"),
+        "a non-escaping mutable scalar must not allocate heap storage:\n{entry}"
     );
 }
 
@@ -989,6 +1085,1305 @@ fn entry() -> u256 {
 }
 
 #[test]
+fn read_only_transport_aggregate_projection_stays_an_ssa_value() {
+    with_test_runtime_package!(
+        "read_only_transport_aggregate_projection_stays_an_ssa_value.fe",
+        r#"use core::functional::Fn
+
+struct Holder<F> {
+    function: F,
+}
+
+fn write(_ target: mut u256, _ value: u256) {
+    target = value
+}
+
+#[test]
+fn projected_repeated_mut_return() {
+    let mut value = 0
+    let captured = mut value
+    let get = || captured
+    let holder = Holder { function: get }
+    let first = holder.function.call()
+    write(first, 20)
+    let second = holder.function.call()
+    write(second, 42)
+    assert(value == 42)
+}
+"#,
+        |db, package| {
+            let body = runtime_body_for_symbol(&db, package, "projected_repeated_mut_return");
+            let holder_locals = body
+                .locals
+                .iter()
+                .enumerate()
+                .filter_map(|(index, local)| {
+                    let generic_args = local.semantic_ty.generic_args(&db);
+                    let is_holder_of_closure = local
+                        .semantic_ty
+                        .adt_ref(&db)
+                        .and_then(|adt| adt.name(&db))
+                        .is_some_and(|name| name.data(&db) == "Holder")
+                        && generic_args.len() == 1
+                        && generic_args[0].as_closure(&db).is_some();
+
+                    is_holder_of_closure.then_some((index, RLocalId::from_u32(index as u32)))
+                })
+                .collect::<Vec<_>>();
+
+            assert!(
+                !holder_locals.is_empty(),
+                "expected the projected closure holder in the runtime body:\n{body:#?}"
+            );
+            assert!(
+                holder_locals.iter().all(|(index, _)| {
+                    matches!(body.locals[*index].root, RuntimeLocalRoot::None)
+                        && matches!(
+                            body.locals[*index].carrier,
+                            RuntimeCarrier::Value(RuntimeClass::AggregateValue { .. })
+                        )
+                }),
+                "a read-only value-extractable aggregate containing borrow transport should remain an unrooted aggregate value:\n{body:#?}"
+            );
+            assert!(
+                runtime_body_stmts(&body).any(|stmt| {
+                    matches!(
+                        stmt,
+                        RStmt::Assign {
+                            expr: RExpr::AggregateExtract {
+                                value,
+                                index: IndexSource::Constant(0),
+                            },
+                            ..
+                        } if holder_locals.iter().any(|(_, local)| local == value)
+                    )
+                }),
+                "closure field reads should extract the carrier from the holder value:\n{body:#?}"
+            );
+            assert!(
+                !body_has_object_materialization(&body),
+                "read-only carrier aggregates must not materialize an object that lets a stack pointer escape:\n{body:#?}"
+            );
+            assert!(
+                body.locals.iter().any(|local| {
+                    matches!(
+                        local.root,
+                        RuntimeLocalRoot::HeapSlot(RuntimeClass::Scalar(_))
+                    )
+                }),
+                "a captured pointer returned across a closure call must outlive static alloca storage even when its enclosing holder stays in SSA:\n{body:#?}"
+            );
+        }
+    );
+}
+
+#[test]
+fn closure_ref_and_owned_captures_lower_without_an_o0_alloca_escape() {
+    with_top_mod_for_source(
+        "closure_ref_and_owned_captures_lower_without_an_o0_alloca_escape.fe",
+        r#"use core::functional::Fn
+
+struct Boxed {
+    value: u256,
+}
+
+fn call_with_ref_and_owned_capture(_ boxed: own Boxed) -> u256 {
+    let x: u256 = 1
+    let r = ref x
+    let add_both = |value: own u256| -> u256 { value + r + boxed.value }
+    add_both.call(40)
+}
+
+#[test]
+fn ref_and_owned_capture_call() {
+    assert(call_with_ref_and_owned_capture(Boxed { value: 1 }) == 42)
+}
+"#,
+        |db, top_mod| {
+            emit_test_module_sonatina(
+                db,
+                top_mod,
+                OptLevel::O0,
+                SonatinaTestOptions::default(),
+                Some("ref_and_owned_capture_call"),
+            )
+            .expect("mixed ref and owned closure captures must not escape O0 alloca storage");
+        },
+    );
+}
+
+#[test]
+fn nested_capability_rebind_sources_lower_without_an_o0_alloca_escape() {
+    with_top_mod_for_source(
+        "nested_capability_rebind_sources_lower_without_an_o0_alloca_escape.fe",
+        r#"
+struct ScalarHandle {
+    target: mut u256,
+}
+
+struct NestedScalarHandle {
+    target: mut ScalarHandle,
+}
+
+fn forward(value: mut u256) -> mut u256 {
+    value
+}
+
+fn make_handle(value: mut u256) -> ScalarHandle {
+    ScalarHandle { target: value }
+}
+
+#[test]
+fn nested_capability_rebind_sources() {
+    let mut direct_old: u256 = 1
+    let mut direct_new: u256 = 2
+    let mut direct_inner = ScalarHandle { target: mut direct_old }
+    let direct_outer = NestedScalarHandle { target: mut direct_inner }
+    direct_outer.target.target = mut direct_new
+    direct_outer.target.target = 11
+
+    let mut returned_old: u256 = 3
+    let mut returned_new: u256 = 4
+    let mut returned_inner = ScalarHandle { target: mut returned_old }
+    let returned_outer = NestedScalarHandle { target: mut returned_inner }
+    returned_outer.target.target = forward(mut returned_new)
+    returned_outer.target.target = 13
+
+    let mut projected_old: u256 = 5
+    let mut projected_new: u256 = 6
+    let mut projected_inner = ScalarHandle { target: mut projected_old }
+    let projected_outer = NestedScalarHandle { target: mut projected_inner }
+    projected_outer.target.target = make_handle(mut projected_new).target
+    projected_outer.target.target = 17
+
+    assert(direct_old == 1)
+    assert(direct_new == 11)
+    assert(returned_old == 3)
+    assert(returned_new == 13)
+    assert(projected_old == 5)
+    assert(projected_new == 17)
+}
+"#,
+        |db, top_mod| {
+            let package =
+                build_test_runtime_package(db, top_mod, Some("nested_capability_rebind_sources"))
+                    .expect("runtime test package");
+            let body = runtime_body_for_symbol(db, package, "nested_capability_rebind_sources");
+            let escaping_scalar_slots = body
+                .locals
+                .iter()
+                .filter(|local| {
+                    matches!(
+                        local.root,
+                        RuntimeLocalRoot::HeapSlot(RuntimeClass::Scalar(_))
+                    )
+                })
+                .count();
+            assert!(
+                escaping_scalar_slots >= 6,
+                "both the old and replacement targets of each nested handle must use escaping storage:\n{body:#?}"
+            );
+            emit_test_module_sonatina(
+                db,
+                top_mod,
+                OptLevel::O0,
+                SonatinaTestOptions::default(),
+                Some("nested_capability_rebind_sources"),
+            )
+            .expect("nested capability rebinds must not store static allocas into object slots");
+        },
+    );
+}
+
+#[test]
+fn interprocedural_capability_retention_promotes_only_retained_actuals() {
+    with_top_mod_for_source(
+        "interprocedural_capability_retention_promotes_only_retained_actuals.fe",
+        r#"use core::functional::Fn
+
+struct ScalarHandle {
+    target: mut u256,
+}
+
+struct NestedScalarHandle {
+    target: mut ScalarHandle,
+}
+
+fn retain(
+    outer: mut NestedScalarHandle,
+    target: mut u256,
+    ordinary: mut u256,
+) {
+    outer.target.target = mut target
+    ordinary = 41
+}
+
+fn retain_wrapper(
+    outer: mut NestedScalarHandle,
+    target: mut u256,
+    ordinary: mut u256,
+) {
+    retain(outer, target, ordinary)
+}
+
+fn retain_wrapper_twice(
+    outer: mut NestedScalarHandle,
+    target: mut u256,
+    ordinary: mut u256,
+) {
+    retain_wrapper(outer, target, ordinary)
+}
+
+fn identity(target: mut u256) -> mut u256 {
+    target
+}
+
+fn retain_identity_result(outer: mut NestedScalarHandle, target: mut u256) {
+    outer.target.target = identity(target)
+}
+
+fn local_rebind_only(initial: mut u256, replacement: mut u256) {
+    let handle = ScalarHandle { target: initial }
+    handle.target = mut replacement
+    handle.target = 37
+}
+
+fn make_rebound_handle(
+    initial: mut u256,
+    replacement: mut u256,
+) -> ScalarHandle {
+    let handle = ScalarHandle { target: initial }
+    handle.target = mut replacement
+    handle
+}
+
+fn make_target_array(target: mut u256) -> [mut u256; 1] {
+    [target]
+}
+
+fn retain_recursive(
+    direct: bool,
+    outer: mut NestedScalarHandle,
+    target: mut u256,
+) {
+    if direct {
+        outer.target.target = mut target
+    } else {
+        retain_recursive(direct: true, outer, target)
+    }
+}
+
+fn retain_effect(outer: mut NestedScalarHandle) uses (target: mut u256) {
+    outer.target.target = mut target
+}
+
+fn retain_via_closure(outer: mut NestedScalarHandle, target: mut u256) {
+    let retain = || { outer.target.target = mut target }
+    retain.call()
+}
+
+impl NestedScalarHandle {
+    fn retain_method(mut self, target: mut u256) {
+        self.target.target = mut target
+    }
+}
+
+#[test]
+fn retained_call_inputs() {
+    let mut direct_old: u256 = 1
+    let mut direct_new: u256 = 2
+    let mut direct_ordinary: u256 = 3
+    let mut direct_inner = ScalarHandle { target: mut direct_old }
+    let mut direct_outer = NestedScalarHandle { target: mut direct_inner }
+    retain(mut direct_outer, mut direct_new, mut direct_ordinary)
+    direct_outer.target.target = 11
+
+    let mut wrapped_old: u256 = 4
+    let mut wrapped_new: u256 = 5
+    let mut wrapped_ordinary: u256 = 6
+    let mut wrapped_inner = ScalarHandle { target: mut wrapped_old }
+    let mut wrapped_outer = NestedScalarHandle { target: mut wrapped_inner }
+    retain_wrapper_twice(mut wrapped_outer, mut wrapped_new, mut wrapped_ordinary)
+    wrapped_outer.target.target = 13
+
+    let mut identity_old: u256 = 7
+    let mut identity_new: u256 = 8
+    let mut identity_inner = ScalarHandle { target: mut identity_old }
+    let mut identity_outer = NestedScalarHandle { target: mut identity_inner }
+    retain_identity_result(mut identity_outer, mut identity_new)
+    identity_outer.target.target = 17
+
+    let mut returned_old: u256 = 18
+    let mut returned_new: u256 = 20
+    let returned = make_rebound_handle(mut returned_old, mut returned_new)
+    returned.target = 21
+
+    let mut returned_array_value: u256 = 22
+    let returned_array = make_target_array(mut returned_array_value)
+    returned_array[0] = 27
+
+    let mut recursive_old: u256 = 9
+    let mut recursive_new: u256 = 10
+    let mut recursive_inner = ScalarHandle { target: mut recursive_old }
+    let mut recursive_outer = NestedScalarHandle { target: mut recursive_inner }
+    retain_recursive(direct: true, mut recursive_outer, mut recursive_new)
+    recursive_outer.target.target = 19
+
+    let mut effect_old: u256 = 12
+    let mut effect_new: u256 = 14
+    let mut effect_inner = ScalarHandle { target: mut effect_old }
+    let mut effect_outer = NestedScalarHandle { target: mut effect_inner }
+    with (mut effect_new) {
+        retain_effect(mut effect_outer)
+    }
+    effect_outer.target.target = 23
+
+    let mut method_old: u256 = 15
+    let mut method_new: u256 = 16
+    let mut method_inner = ScalarHandle { target: mut method_old }
+    let mut method_outer = NestedScalarHandle { target: mut method_inner }
+    method_outer.retain_method(mut method_new)
+    method_outer.target.target = 29
+
+    let mut closure_old: u256 = 24
+    let mut closure_new: u256 = 25
+    let mut closure_inner = ScalarHandle { target: mut closure_old }
+    let mut closure_outer = NestedScalarHandle { target: mut closure_inner }
+    retain_via_closure(mut closure_outer, mut closure_new)
+    closure_outer.target.target = 31
+
+    assert(direct_old == 1)
+    assert(direct_new == 11)
+    assert(direct_ordinary == 41)
+    assert(wrapped_old == 4)
+    assert(wrapped_new == 13)
+    assert(wrapped_ordinary == 41)
+    assert(identity_old == 7)
+    assert(identity_new == 17)
+    assert(returned_old == 18)
+    assert(returned_new == 21)
+    assert(returned_array_value == 27)
+    assert(recursive_old == 9)
+    assert(recursive_new == 19)
+    assert(effect_old == 12)
+    assert(effect_new == 23)
+    assert(method_old == 15)
+    assert(method_new == 29)
+    assert(closure_old == 24)
+    assert(closure_new == 31)
+}
+
+#[test]
+fn return_only_call_input() {
+    let mut value: u256 = 31
+    let target = identity(mut value)
+    target = 37
+    assert(value == 37)
+}
+
+#[test]
+fn local_only_call_inputs() {
+    let mut initial: u256 = 41
+    let mut replacement: u256 = 43
+    local_rebind_only(mut initial, mut replacement)
+    assert(initial == 41)
+    assert(replacement == 37)
+}
+"#,
+        |db, top_mod| {
+            let package = build_test_runtime_package(db, top_mod, Some("retained_call_inputs"))
+                .expect("runtime test package");
+            let body = runtime_body_for_symbol(db, package, "retained_call_inputs");
+            assert!(
+                body.locals.iter().any(|local| matches!(
+                    local.root,
+                    RuntimeLocalRoot::HeapSlot(RuntimeClass::Scalar(_))
+                )),
+                "retained capability inputs must use escaping storage:\n{body:#?}"
+            );
+            assert!(
+                body.locals.iter().any(|local| matches!(
+                    local.root,
+                    RuntimeLocalRoot::Slot(RuntimeClass::Scalar(_))
+                )),
+                "an unrelated nonretained mutable argument should keep static storage:\n{body:#?}"
+            );
+            emit_test_module_sonatina(
+                db,
+                top_mod,
+                OptLevel::O0,
+                SonatinaTestOptions::default(),
+                Some("retained_call_inputs"),
+            )
+            .expect("retained direct, wrapped, effect, method, and recursive inputs must pass O0");
+
+            let return_package =
+                build_test_runtime_package(db, top_mod, Some("return_only_call_input"))
+                    .expect("return-only runtime test package");
+            let return_body = runtime_body_for_symbol(db, return_package, "return_only_call_input");
+            assert!(
+                return_body.locals.iter().any(|local| matches!(
+                    local.root,
+                    RuntimeLocalRoot::Slot(RuntimeClass::Scalar(_))
+                )),
+                "a capability that is only returned to its caller should remain static storage:\n{return_body:#?}"
+            );
+            assert!(
+                !return_body.locals.iter().any(|local| matches!(
+                    local.root,
+                    RuntimeLocalRoot::HeapSlot(RuntimeClass::Scalar(_))
+                )),
+                "a return-only helper must not be classified as retaining its input:\n{return_body:#?}"
+            );
+            emit_test_module_sonatina(
+                db,
+                top_mod,
+                OptLevel::O0,
+                SonatinaTestOptions::default(),
+                Some("return_only_call_input"),
+            )
+            .expect("return-only capability forwarding must pass O0 without heap promotion");
+
+            let local_package =
+                build_test_runtime_package(db, top_mod, Some("local_only_call_inputs"))
+                    .expect("local-only runtime test package");
+            let local_body = runtime_body_for_symbol(db, local_package, "local_only_call_inputs");
+            assert!(
+                local_body.locals.iter().any(|local| matches!(
+                    local.root,
+                    RuntimeLocalRoot::Slot(RuntimeClass::Scalar(_))
+                )),
+                "locally consumed capability inputs should use static storage:\n{local_body:#?}"
+            );
+            assert!(
+                !local_body.locals.iter().any(|local| matches!(
+                    local.root,
+                    RuntimeLocalRoot::HeapSlot(RuntimeClass::Scalar(_))
+                )),
+                "a local aggregate must not make its input storage externally retained:\n{local_body:#?}"
+            );
+            emit_test_module_sonatina(
+                db,
+                top_mod,
+                OptLevel::O0,
+                SonatinaTestOptions::default(),
+                Some("local_only_call_inputs"),
+            )
+            .expect("local-only capability rebinding must pass O0 without heap promotion");
+        },
+    );
+}
+
+#[test]
+fn aggregate_capability_effect_provider_crosses_the_runtime_boundary() {
+    with_top_mod_for_source(
+        "aggregate_capability_effect_provider_crosses_the_runtime_boundary.fe",
+        r#"
+struct ScalarHandle {
+    target: mut u256,
+}
+
+struct NestedScalarHandle {
+    target: mut ScalarHandle,
+}
+
+fn retain_via_aggregate_effect(_ target: mut u256)
+uses (outer: mut NestedScalarHandle)
+{
+    outer.target.target = mut target
+}
+
+#[test]
+fn aggregate_effect_provider() {
+    let mut old: u256 = 1
+    let mut replacement: u256 = 2
+    let mut inner = ScalarHandle { target: mut old }
+    let mut outer = NestedScalarHandle { target: mut inner }
+    with (mut outer) {
+        retain_via_aggregate_effect(mut replacement)
+    }
+    outer.target.target = 37
+    assert(old == 1)
+    assert(replacement == 37)
+}
+"#,
+        |db, top_mod| {
+            emit_test_module_sonatina(
+                db,
+                top_mod,
+                OptLevel::O0,
+                SonatinaTestOptions::default(),
+                Some("aggregate_effect_provider"),
+            )
+            .expect("aggregate capability effect providers must cross the runtime boundary");
+        },
+    );
+}
+
+#[test]
+fn dynamic_transport_aggregate_projection_does_not_escape_stack_storage() {
+    with_top_mod_for_source(
+        "dynamic_transport_aggregate_projection_does_not_escape_stack_storage.fe",
+        r#"use core::functional::Fn
+
+fn write(_ target: mut u256, _ value: u256) {
+    target = value
+}
+
+fn exercise(_ index: usize) {
+    let mut value = 0
+    let captured = mut value
+    let get = || captured
+    let functions = [get]
+    let first = functions[index].call()
+    write(first, 20)
+    let second = functions[index].call()
+    write(second, 42)
+    assert(value == 42)
+}
+
+#[test]
+fn dynamic_projection_mut_return() {
+    exercise(0)
+}
+"#,
+        |db, top_mod| {
+            let package =
+                build_test_runtime_package(db, top_mod, Some("dynamic_projection_mut_return"))
+                    .expect("runtime test package");
+            let body = runtime_body_for_symbol(db, package, "exercise");
+            assert!(
+                body.locals.iter().any(|local| {
+                    matches!(
+                        local.root,
+                        RuntimeLocalRoot::HeapSlot(RuntimeClass::Scalar(_))
+                    )
+                }),
+                "a local whose borrow transport is stored in an addressable aggregate must use an escaping heap slot:\n{body:#?}"
+            );
+            emit_test_module_sonatina(
+                db,
+                top_mod,
+                OptLevel::O0,
+                SonatinaTestOptions::default(),
+                Some("dynamic_projection_mut_return"),
+            )
+            .expect("dynamic carrier projections must not let stack storage escape");
+        },
+    );
+}
+
+#[test]
+fn addressable_transport_aggregate_does_not_escape_stack_storage() {
+    with_top_mod_for_source(
+        "addressable_transport_aggregate_does_not_escape_stack_storage.fe",
+        r#"use core::functional::Fn
+
+struct Holder<F> {
+    function: F,
+}
+
+fn write(_ target: mut u256, _ value: u256) {
+    target = value
+}
+
+#[test]
+fn borrowed_holder_mut_capture() {
+    let mut value = 0
+    let captured = mut value
+    let get = || captured
+    let mut holder = Holder { function: get }
+    let borrowed = mut holder
+    let first = borrowed.function.call()
+    write(first, 20)
+    let second = borrowed.function.call()
+    write(second, 42)
+    assert(value == 42)
+}
+"#,
+        |db, top_mod| {
+            emit_test_module_sonatina(
+                db,
+                top_mod,
+                OptLevel::O0,
+                SonatinaTestOptions::default(),
+                Some("borrowed_holder_mut_capture"),
+            )
+            .expect("addressable carrier aggregates must not let stack storage escape");
+        },
+    );
+}
+
+#[test]
+fn closure_owned_scalar_return_borrow_uses_escaping_storage() {
+    with_top_mod_for_source(
+        "closure_owned_scalar_return_borrow_uses_escaping_storage.fe",
+        r#"use core::functional::FnOnce
+
+#[test]
+fn owned_scalar_return_borrow() {
+    let borrow = |value: own u256| -> ref u256 { ref value }
+    let returned = borrow.call_once(42)
+    assert(returned == 42)
+}
+"#,
+        |db, top_mod| {
+            emit_test_module_sonatina(
+                db,
+                top_mod,
+                OptLevel::O0,
+                SonatinaTestOptions::default(),
+                Some("owned_scalar_return_borrow"),
+            )
+            .expect("a closure-owned scalar backing a returned borrow must not use an alloca");
+        },
+    );
+}
+
+#[test]
+fn owned_scalar_return_borrow_uses_escaping_storage() {
+    with_top_mod_for_source(
+        "owned_scalar_return_borrow_uses_escaping_storage.fe",
+        r#"
+fn borrow(mut value: own u256) -> mut u256 {
+    mut value
+}
+
+#[test]
+fn returned_owned_scalar_storage_is_distinct() {
+    let left = borrow(value: 0)
+    let right = borrow(value: 0)
+    left = 20
+    right = 22
+    assert(left + right == 42)
+}
+"#,
+        |db, top_mod| {
+            let package = build_test_runtime_package(
+                db,
+                top_mod,
+                Some("returned_owned_scalar_storage_is_distinct"),
+            )
+            .expect("runtime test package");
+            let body = runtime_body_for_symbol(db, package, "borrow");
+            assert!(
+                matches!(
+                    body.signature.ret,
+                    Some(RuntimeClass::RawAddr {
+                        space: AddressSpaceKind::Memory,
+                        ..
+                    })
+                ),
+                "a returned mutable scalar borrow must remain a transport at the function boundary:\n{body:#?}"
+            );
+            assert!(
+                body.locals.iter().any(|local| matches!(
+                    local.root,
+                    RuntimeLocalRoot::HeapSlot(RuntimeClass::Scalar(_))
+                )),
+                "the owned scalar backing a returned borrow must outlive the callee's static arena:\n{body:#?}"
+            );
+            emit_test_module_sonatina(
+                db,
+                top_mod,
+                OptLevel::O0,
+                SonatinaTestOptions::default(),
+                Some("returned_owned_scalar_storage_is_distinct"),
+            )
+            .expect("returned scalar borrow must lower without an escaping alloca");
+        },
+    );
+}
+
+#[test]
+fn closure_owned_aggregate_return_view_uses_escaping_storage() {
+    with_top_mod_for_source(
+        "closure_owned_aggregate_return_view_uses_escaping_storage.fe",
+        r#"use core::functional::FnOnce
+
+struct Boxed {
+    value: u256,
+}
+
+#[test]
+fn owned_aggregate_return_view() {
+    let borrow = |value: own Boxed| -> view Boxed { value }
+    let first = borrow.call(Boxed { value: 20 })
+    let second = borrow.call(Boxed { value: 22 })
+    assert(first.value + second.value == 42)
+
+    let borrow_mut = |mut value: own Boxed| -> mut Boxed { mut value }
+    let first_mut = borrow_mut.call(Boxed { value: 0 })
+    let second_mut = borrow_mut.call(Boxed { value: 0 })
+    first_mut.value = 20
+    second_mut.value = 22
+    assert(first_mut.value + second_mut.value == 42)
+}
+"#,
+        |db, top_mod| {
+            for opt_level in [OptLevel::O0, OptLevel::O1] {
+                emit_test_module_sonatina(
+                    db,
+                    top_mod,
+                    opt_level,
+                    SonatinaTestOptions::default(),
+                    Some("owned_aggregate_return_view"),
+                )
+                .unwrap_or_else(|err| panic!("{opt_level:?} lowering failed: {err}"));
+            }
+        },
+    );
+}
+
+#[test]
+fn closure_view_return_from_rvalue_uses_escaping_argument_storage() {
+    with_top_mod_for_source(
+        "closure_view_return_from_rvalue_uses_escaping_argument_storage.fe",
+        r#"use core::functional::Fn
+
+struct Boxed {
+    value: u256,
+}
+
+fn roundtrip_dynamic_rvalue(_ value: own u256) -> u256 {
+    let identity = |boxed| boxed
+    let returned = identity.call(Boxed { value })
+    returned.value
+}
+
+#[test]
+fn view_return_from_rvalue() {
+    let identity = |value| value
+    let returned = identity.call(Boxed { value: 42 })
+    assert(returned.value == 42)
+    assert(roundtrip_dynamic_rvalue(42) == 42)
+}
+"#,
+        |db, top_mod| {
+            for opt_level in [OptLevel::O0, OptLevel::O1] {
+                emit_test_module_sonatina(
+                    db,
+                    top_mod,
+                    opt_level,
+                    SonatinaTestOptions::default(),
+                    Some("view_return_from_rvalue"),
+                )
+                .unwrap_or_else(|err| panic!("{opt_level:?} lowering failed: {err}"));
+            }
+        },
+    );
+}
+
+#[test]
+fn looped_closure_view_returns_use_fresh_escaping_storage() {
+    with_top_mod_for_source(
+        "looped_closure_view_returns_use_fresh_escaping_storage.fe",
+        r#"use core::functional::Fn
+
+struct Boxed {
+    value: u256,
+}
+
+struct ViewPair {
+    left: view Boxed,
+    right: view Boxed,
+}
+
+#[test]
+fn looped_view_returns() {
+    let identity = |boxed| boxed
+    let mut returned = ViewPair {
+        left: Boxed { value: 0 },
+        right: Boxed { value: 0 },
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let value = if index == 0 { 20 } else { 22 }
+        let next = identity.call(Boxed { value })
+        returned = if index == 0 {
+            ViewPair { left: next, right: returned.right }
+        } else {
+            ViewPair { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    assert(returned.left.value + returned.right.value == 42)
+}
+"#,
+        |db, top_mod| {
+            let package = build_test_runtime_package(db, top_mod, Some("looped_view_returns"))
+                .expect("runtime test package");
+            let body = runtime_body_for_symbol(db, package, "looped_view_returns");
+            assert!(
+                body.locals.iter().any(|local| matches!(
+                    local.root,
+                    RuntimeLocalRoot::HeapSlot(RuntimeClass::AggregateValue { .. })
+                )),
+                "an aggregate materialized for a borrow-like call boundary must use dynamically fresh heap storage:\n{body:#?}"
+            );
+            let output = emit_runtime_package_sonatina_ir_optimized(db, &package, OptLevel::O0)
+                .expect("Sonatina IR");
+            assert!(
+                sonatina_function_body(&output, "looped_view_returns")
+                    .contains("obj.materialize.heap"),
+                "the loop-carried borrowed rvalue must explicitly force heap materialization:\n{output}"
+            );
+            for opt_level in [OptLevel::O0, OptLevel::O1] {
+                emit_test_module_sonatina(
+                    db,
+                    top_mod,
+                    opt_level,
+                    SonatinaTestOptions::default(),
+                    Some("looped_view_returns"),
+                )
+                .unwrap_or_else(|err| panic!("{opt_level:?} lowering failed: {err}"));
+            }
+        },
+    );
+}
+
+#[test]
+fn closure_reborrow_of_captured_mut_handle_loads_the_handle_value() {
+    with_top_mod_for_source(
+        "closure_reborrow_of_captured_mut_handle_loads_the_handle_value.fe",
+        r#"use core::functional::Fn
+
+fn write(_ target: mut u256, _ value: u256) {
+    target = value
+}
+
+#[test]
+fn reborrow_captured_mut_handle() {
+    let mut value: u256 = 0
+    let captured = mut value
+    let borrow = || -> mut u256 { mut captured }
+    let returned = borrow.call()
+    write(returned, 42)
+    assert(value == 42)
+}
+"#,
+        |db, top_mod| {
+            emit_test_module_sonatina(
+                db,
+                top_mod,
+                OptLevel::O0,
+                SonatinaTestOptions::default(),
+                Some("reborrow_captured_mut_handle"),
+            )
+            .expect("reborrowing a captured mutable handle should load the handle value");
+        },
+    );
+}
+
+#[test]
+fn closure_projection_through_captured_mut_aggregate_is_a_valid_place() {
+    with_top_mod_for_source(
+        "closure_projection_through_captured_mut_aggregate_is_a_valid_place.fe",
+        r#"use core::functional::Fn
+
+struct Pair {
+    value: u256,
+}
+
+#[test]
+fn write_through_captured_mut_aggregate() {
+    let mut pair = Pair { value: 0 }
+    let handle = mut pair
+    let write = || {
+        handle.value = 42
+    }
+    write.call()
+    assert(pair.value == 42)
+}
+"#,
+        |db, top_mod| {
+            emit_test_module_sonatina(
+                db,
+                top_mod,
+                OptLevel::O0,
+                SonatinaTestOptions::default(),
+                Some("write_through_captured_mut_aggregate"),
+            )
+            .expect("a projection through a captured mutable aggregate must remain a valid place");
+        },
+    );
+}
+
+#[test]
+fn borrowed_enum_pattern_payload_keeps_addressable_backing() {
+    let source = r#"
+enum Maybe {
+    None,
+    Some(u256),
+}
+
+fn read(value: ref u256) -> u256 {
+    value
+}
+
+fn maybe_code(value: Maybe) -> u256 {
+    match value {
+        Maybe::None => 0,
+        Maybe::Some(payload) => read(value: payload),
+    }
+}
+
+pub fn entry() -> u256 {
+    maybe_code(value: Maybe::Some(42))
+}
+"#;
+    with_runtime_package!(
+        "borrowed_enum_pattern_payload_reads_through_the_enum_carrier.fe",
+        source,
+        |db, package| {
+            let body = runtime_body_for_symbol(&db, package, "maybe_code");
+            assert!(
+                runtime_body_stmts(&body).any(|stmt| {
+                    matches!(
+                        stmt,
+                        RStmt::Assign {
+                            expr: RExpr::AddrOf { place },
+                            ..
+                        } if matches!(place.root, PlaceRoot::Slot(_))
+                    )
+                }),
+                "the borrowed payload must get a real addressable backing slot:\n{body:#?}"
+            );
+            assert!(
+                !runtime_body_stmts(&body).any(|stmt| matches!(
+                    stmt,
+                    RStmt::Assign {
+                        expr: RExpr::WordToRawAddr { .. },
+                        ..
+                    }
+                )),
+                "an extracted payload value must not be reinterpreted as its address:\n{body:#?}"
+            );
+        }
+    );
+}
+
+#[test]
+fn borrowed_enum_pattern_scalar_payload_stays_value_extractable() {
+    with_runtime_package!(
+        "borrowed_enum_pattern_scalar_payload_stays_value_extractable.fe",
+        r#"
+enum Maybe {
+    None,
+    Some(u256),
+}
+
+fn maybe_code(value: Maybe) -> u256 {
+    match value {
+        Maybe::None => 0,
+        Maybe::Some(payload) => payload,
+    }
+}
+
+pub fn entry() -> u256 {
+    maybe_code(value: Maybe::Some(42))
+}
+"#,
+        |db, package| {
+            let body = runtime_body_for_symbol(&db, package, "maybe_code");
+            assert!(
+                matches!(body.locals[0].root, RuntimeLocalRoot::None),
+                "a scalar payload used only as a value should not root its enum:\n{body:#?}"
+            );
+            assert!(
+                runtime_body_stmts(&body).any(|stmt| matches!(
+                    stmt,
+                    RStmt::Assign {
+                        expr: RExpr::EnumExtract { field, .. },
+                        ..
+                    } if field.0 == 0
+                )),
+                "the scalar payload should extract directly from the enum value:\n{body:#?}"
+            );
+            assert!(
+                !runtime_body_stmts(&body).any(|stmt| matches!(
+                    stmt,
+                    RStmt::Assign {
+                        expr: RExpr::WordToRawAddr { .. },
+                        ..
+                    }
+                )),
+                "a scalar payload value must never be reinterpreted as its address:\n{body:#?}"
+            );
+        }
+    );
+}
+
+#[test]
+fn specialized_generic_tuple_uses_the_concrete_field_representation() {
+    with_runtime_package!(
+        "specialized_generic_tuple_uses_the_concrete_field_representation.fe",
+        r#"
+struct Seal {}
+
+struct Maker<K> {
+    seal: Seal,
+}
+
+struct Sink<T> {
+    seal: Seal,
+}
+
+impl<T> Sink<T> {
+    fn consume(self, value: T) -> u256 {
+        0
+    }
+}
+
+impl<K: Copy> Maker<K> {
+    fn use_pair(self, key: K, index: u256) -> u256 {
+        let sink: Sink<(K, u256)> = Sink { seal: Seal {} }
+        sink.consume(value: (key, index))
+    }
+}
+
+pub fn entry() -> u256 {
+    let maker: Maker<u256> = Maker { seal: Seal {} }
+    maker.use_pair(key: 41, index: 1)
+}
+"#,
+        |db, package| {
+            let body = runtime_body_for_symbol(&db, package, "use_pair");
+            assert!(
+                !runtime_body_stmts(&body).any(|stmt| matches!(
+                    stmt,
+                    RStmt::Assign {
+                        expr: RExpr::Placeholder { .. },
+                        ..
+                    }
+                )),
+                "a concrete scalar generic argument must not become a ZST placeholder:\n{body:#?}"
+            );
+        }
+    );
+}
+
+#[test]
+fn nested_borrowed_enum_patterns_keep_projection_proofs_at_the_load() {
+    with_top_mod_for_source(
+        "nested_borrowed_enum_patterns_keep_projection_proofs_at_the_load.fe",
+        r#"
+fn nested(value: Option<Option<usize>>) -> usize {
+    if let Option::Some(inner) = value && let Option::Some(payload) = inner {
+        payload
+    } else {
+        0
+    }
+}
+
+#[test]
+fn test_nested() {
+    assert!(nested(value: Option::Some(Option::Some(42))) == 42)
+}
+"#,
+        |db, top_mod| {
+            let package =
+                build_test_runtime_package(db, top_mod, None).expect("runtime test package");
+            let function = package
+                .functions(db)
+                .iter()
+                .copied()
+                .find(|function| function.symbol(db).contains("nested"))
+                .expect("nested runtime function");
+            let semantic = function
+                .instance(db)
+                .key(db)
+                .semantic(db)
+                .expect("semantic nested function");
+            let normalized =
+                normalize_semantic_body(db, semantic).expect("normalized nested function");
+            assert_eq!(
+                normalized
+                    .locals
+                    .iter()
+                    .filter(|local| {
+                        matches!(local.source, Some(LocalBinding::Local { .. }))
+                            && local.facts.interface == SemanticLocalKind::PlaceBoundValue
+                    })
+                    .count(),
+                2,
+                "both nested pattern bindings should remain aliases of the original enum place"
+            );
+            emit_test_module_sonatina(
+                db,
+                top_mod,
+                OptLevel::O0,
+                SonatinaTestOptions::default(),
+                Some("test_nested"),
+            )
+            .expect("nested borrowed enum patterns should preserve active-variant proofs");
+        },
+    );
+}
+
+#[test]
+fn stored_borrowed_enum_projection_keeps_a_valid_runtime_address() {
+    with_top_mod_for_source(
+        "stored_borrowed_enum_projection_keeps_a_valid_runtime_address.fe",
+        r#"
+struct Holder {
+    value: view Option<usize>,
+}
+
+fn nested(value: Option<Option<usize>>) -> usize {
+    if let Option::Some(inner) = value {
+        let holder = Holder { value: ref inner }
+        if let Option::Some(payload) = holder.value {
+            payload
+        } else {
+            0
+        }
+    } else {
+        0
+    }
+}
+
+#[test]
+fn test_nested() {
+    assert!(nested(value: Option::Some(Option::Some(42))) == 42)
+}
+"#,
+        |db, top_mod| {
+            emit_test_module_sonatina(
+                db,
+                top_mod,
+                OptLevel::O0,
+                SonatinaTestOptions::default(),
+                Some("test_nested"),
+            )
+            .expect("stored enum projections must retain a verifier-valid address");
+        },
+    );
+}
+
+#[test]
+fn stored_mut_enum_projection_writes_back_through_a_valid_runtime_address() {
+    with_top_mod_for_source(
+        "stored_mut_enum_projection_writes_back_through_a_valid_runtime_address.fe",
+        r#"
+struct Holder {
+    value: mut Option<usize>,
+}
+
+fn update(value: mut Option<Option<usize>>) -> usize {
+    if let Option::Some(mut inner) = value {
+        let holder = Holder { value: inner }
+        if let Option::Some(mut payload) = holder.value {
+            payload = 42
+        }
+    }
+    if let Option::Some(inner) = value && let Option::Some(payload) = inner {
+        payload
+    } else {
+        0
+    }
+}
+
+#[test]
+fn test_update() {
+    let mut value = Option::Some(Option::Some(0))
+    assert!(update(value: mut value) == 42)
+}
+"#,
+        |db, top_mod| {
+            emit_test_module_sonatina(
+                db,
+                top_mod,
+                OptLevel::O0,
+                SonatinaTestOptions::default(),
+                Some("test_update"),
+            )
+            .expect("stored mutable enum projections must retain a verifier-valid source address");
+        },
+    );
+}
+
+#[test]
+fn closure_mut_enum_projection_writes_back_through_the_argument_pack() {
+    with_top_mod_for_source(
+        "closure_mut_enum_projection_writes_back_through_the_argument_pack.fe",
+        r#"
+struct Holder {
+    value: mut Option<usize>,
+}
+
+#[test]
+fn test_update() {
+    let mut value = Option::Some(Option::Some(0))
+    let update = |value: mut Option<Option<usize>>| -> usize {
+        if let Option::Some(mut inner) = value {
+            let holder = Holder { value: inner }
+            if let Option::Some(mut payload) = holder.value {
+                payload = 42
+            }
+        }
+        if let Option::Some(inner) = value && let Option::Some(payload) = inner {
+            payload
+        } else {
+            0
+        }
+    }
+    assert!(update.call(mut value) == 42)
+}
+"#,
+        |db, top_mod| {
+            emit_test_module_sonatina(
+                db,
+                top_mod,
+                OptLevel::O0,
+                SonatinaTestOptions::default(),
+                Some("test_update"),
+            )
+            .expect("closure mutable enum projections must preserve the argument-pack address");
+        },
+    );
+}
+
+#[test]
+fn closure_view_enum_projection_reads_through_the_argument_pack() {
+    with_top_mod_for_source(
+        "closure_view_enum_projection_reads_through_the_argument_pack.fe",
+        r#"
+struct Holder {
+    value: view Option<usize>,
+}
+
+#[test]
+fn test_nested() {
+    let nested = |value: Option<Option<usize>>| -> usize {
+        if let Option::Some(inner) = value {
+            let holder = Holder { value: ref inner }
+            if let Option::Some(payload) = holder.value {
+                payload
+            } else {
+                0
+            }
+        } else {
+            0
+        }
+    }
+    assert!(nested.call(Option::Some(Option::Some(42))) == 42)
+}
+"#,
+        |db, top_mod| {
+            emit_test_module_sonatina(
+                db,
+                top_mod,
+                OptLevel::O0,
+                SonatinaTestOptions::default(),
+                Some("test_nested"),
+            )
+            .expect("closure view enum projections must preserve the argument-pack address");
+        },
+    );
+}
+
+#[test]
 fn mutating_mut_own_aggregate_receiver_stays_rooted() {
     with_runtime_package!(
         "mutating_mut_own_aggregate_receiver_stays_rooted.fe",
@@ -1013,7 +2408,10 @@ fn entry() -> Pair {
             let receiver = RLocalId::from_u32(0);
 
             assert!(
-                matches!(body.locals[0].root, RuntimeLocalRoot::Slot(_)),
+                matches!(
+                    body.locals[0].root,
+                    RuntimeLocalRoot::Slot(_) | RuntimeLocalRoot::HeapSlot(_)
+                ),
                 "mutated mut own aggregate receiver should keep object-backed runtime storage:\n{body:#?}"
             );
             assert!(
@@ -1033,7 +2431,8 @@ fn entry() -> Pair {
                 runtime_body_stmts(&body).any(|stmt| {
                     matches!(
                         stmt,
-                        RStmt::Store { dst, .. } if matches!(dst.root, PlaceRoot::Ref(_))
+                        RStmt::Store { dst, .. }
+                            if matches!(dst.root, PlaceRoot::Ref(_) | PlaceRoot::Ptr { .. })
                     )
                 }),
                 "field mutation should store through the rooted receiver field ref:\n{body:#?}"
@@ -1043,9 +2442,9 @@ fn entry() -> Pair {
 }
 
 #[test]
-fn owned_aggregate_values_with_place_style_reads_get_object_backed_runtime_storage() {
+fn read_only_dynamic_array_projection_stays_ssa_backed() {
     with_runtime_package!(
-        "owned_aggregate_values_with_place_style_reads_get_object_backed_runtime_storage.fe",
+        "read_only_dynamic_array_projection_stays_ssa_backed.fe",
         r#"struct Table {
     used: [u8; 4],
 }
@@ -1069,59 +2468,46 @@ fn entry() -> u8 {
                 .find(|function| function.symbol(&db).contains("get"))
                 .expect("generated get runtime function");
             let body = get.instance(&db).body(&db);
-            let used_local = body
-        .locals
-        .iter()
-        .enumerate()
-        .find_map(|(idx, local)| {
-            (idx >= body.signature.params.len()
-                && local.semantic_ty.pretty_print(&db) == "[u8; 4]"
-                && matches!(
-                    local.carrier,
-                    mir::RuntimeCarrier::Value(RuntimeClass::Ref {
-                        kind: RefKind::Object,
-                        ..
-                    })
-                ))
-            .then_some(RLocalId::from_u32(idx as u32))
-        })
-        .unwrap_or_else(|| {
-            panic!(
-                "owned aggregate local with later place-style reads should be object-backed:\n{body:#?}"
-            )
-        });
+            let array_locals = body
+                .locals
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, local)| {
+                    (idx >= body.signature.params.len()
+                        && local.semantic_ty.pretty_print(&db) == "[u8; 4]")
+                        .then_some((RLocalId::from_u32(idx as u32), local))
+                })
+                .collect::<Vec<_>>();
 
             assert!(
-                body.blocks
-                    .iter()
-                    .flat_map(|block| block.stmts.iter())
-                    .any(|stmt| {
-                        matches!(
-                            stmt,
-                            RStmt::Assign {
-                                expr: RExpr::MaterializePlaceToObject { .. }
-                                    | RExpr::MaterializeToObject { .. },
-                                ..
-                            }
-                        )
+                !array_locals.is_empty()
+                    && array_locals.iter().all(|(_, local)| {
+                        matches!(local.root, RuntimeLocalRoot::None)
+                            && matches!(
+                                local.carrier,
+                                RuntimeCarrier::Value(RuntimeClass::AggregateValue { .. })
+                            )
                     }),
-                "owned aggregate local should materialize through object-backed lowering:\n{body:#?}"
+                "read-only dynamically indexed arrays should remain unrooted aggregate values:\n{body:#?}"
             );
             assert!(
-                body.blocks
-                    .iter()
-                    .flat_map(|block| block.stmts.iter())
-                    .any(|stmt| {
-                        matches!(
-                            stmt,
-                            RStmt::Assign {
-                                expr: RExpr::Load { place },
-                                ..
-                            } if place.root == PlaceRoot::Ref(used_local)
-                                && matches!(place.path.as_ref(), [PlaceElem::Index(_)])
-                        )
-                    }),
-                "later projections should read from the owned aggregate local itself:\n{body:#?}"
+                runtime_body_stmts(&body).any(|stmt| {
+                    matches!(
+                        stmt,
+                        RStmt::Assign {
+                            expr: RExpr::AggregateExtract {
+                                value,
+                                index: IndexSource::Dynamic(_),
+                            },
+                            ..
+                        } if array_locals.iter().any(|(local, _)| local == value)
+                    )
+                }),
+                "dynamic array reads should lower to dynamic aggregate extraction:\n{body:#?}"
+            );
+            assert!(
+                !body_has_object_materialization(&body),
+                "read-only dynamic array reads should not materialize object storage:\n{body:#?}"
             );
         }
     );
@@ -2051,20 +3437,33 @@ fn use_returned_array() -> u8 {
                 ),
                 "by-value aggregate helper should keep a visible aggregate return signature:\n{body:#?}"
             );
+            let array_locals = body
+                .locals
+                .iter()
+                .skip(body.signature.params.len())
+                .filter(|local| {
+                    local
+                        .carrier
+                        .value_class()
+                        .and_then(RuntimeClass::aggregate_layout)
+                        .is_some_and(|layout| matches!(layout.data(&db), Layout::Array(_)))
+                })
+                .collect::<Vec<_>>();
             assert!(
-        body.locals
-            .iter()
-            .skip(body.signature.params.len())
-            .any(|local| matches!(
-                &local.carrier,
-                mir::RuntimeCarrier::Value(RuntimeClass::Ref {
-                    kind: RefKind::Object,
-                    pointee,
-                    ..
-                }) if matches!(pointee.as_ref(), RuntimeClass::AggregateValue { layout } if matches!(layout.data(&db), Layout::Array(_)))
-        )),
-        "helper should still be free to use internal object-backed storage for projectable owned aggregates:\n{body:#?}"
-    );
+                !array_locals.is_empty()
+                    && array_locals.iter().all(|local| {
+                        matches!(local.root, RuntimeLocalRoot::None)
+                            && matches!(
+                                local.carrier,
+                                RuntimeCarrier::Value(RuntimeClass::AggregateValue { .. })
+                            )
+                    }),
+                "read-only projected arrays should stay internal SSA values:\n{body:#?}"
+            );
+            assert!(
+                !body_has_object_materialization(&body),
+                "read-only array projections should not require object storage:\n{body:#?}"
+            );
         }
     );
 }
@@ -2135,9 +3534,9 @@ fn use_returned_array() -> u8 {
 }
 
 #[test]
-fn by_value_array_return_materialization_structurally_copies_into_object_storage() {
+fn by_value_array_return_reassignment_stays_ssa_backed() {
     with_runtime_package!(
-        "by_value_array_return_materialization_structurally_copies_into_object_storage.fe",
+        "by_value_array_return_reassignment_stays_ssa_backed.fe",
         r#"
 fn return_array_after_projection(xs: [u256; 3]) -> [u256; 3] {
     let ys = xs
@@ -2158,20 +3557,20 @@ fn use_returned_array() -> u256 {
 
             assert!(
                 body.contains("extract_value"),
-                "by-value aggregate materialization should structurally extract fields instead of whole-object obj.store:\n{body}"
+                "by-value aggregate results should be projected directly:\n{body}"
             );
             assert!(
-                body.contains("obj.load"),
-                "object-backed aggregate copies should load leaf values from the source object before storing them:\n{body}"
+                !body.contains("obj."),
+                "whole-value reassignment followed by a read should stay SSA-backed:\n{body}"
             );
         }
     );
 }
 
 #[test]
-fn fieldless_enum_fields_copy_into_object_storage_via_enum_ops() {
+fn fieldless_enum_fields_stay_values_in_ssa_aggregates() {
     with_test_runtime_package!(
-        "fieldless_enum_fields_copy_into_object_storage_via_enum_ops.fe",
+        "fieldless_enum_fields_stay_values_in_ssa_aggregates.fe",
         r#"
 enum E {
     A,
@@ -2199,9 +3598,82 @@ fn exercise() {
             let output = emit_runtime_package_sonatina_ir_optimized(&db, &package, OptLevel::O0)
                 .expect("Sonatina IR");
             assert!(
-                output.contains("enum.set_tag"),
-                "fieldless enum object copies should set the destination enum tag explicitly:\n{output}"
+                output.contains("enum.make") && output.contains("insert_value"),
+                "fieldless enums should remain typed values inside SSA aggregates:\n{output}"
             );
+            assert!(
+                !output.contains("enum.set_tag"),
+                "SSA enum fields should not be rewritten as object tag stores:\n{output}"
+            );
+        }
+    );
+}
+
+#[test]
+fn enum_variants_can_hold_disjoint_provider_transports() {
+    with_runtime_package!(
+        "enum_variants_can_hold_disjoint_provider_transports.fe",
+        r#"
+enum Handle {
+    Stored(mut u256),
+    Local(mut u256),
+}
+
+fn update(flag: bool, local: mut u256) uses (target: mut u256) {
+    let handle = if flag {
+        Handle::Stored(mut target)
+    } else {
+        Handle::Local(local)
+    }
+    match handle {
+        Handle::Stored(value) => value = 1,
+        Handle::Local(value) => value = 2,
+    }
+}
+
+msg Msg {
+    #[selector = 1]
+    Go
+}
+
+pub contract C {
+    mut target: u256
+
+    recv Msg {
+        Go uses (mut target) {
+            let mut local: u256 = 0
+            update(flag: true, local: mut local)
+        }
+    }
+}
+"#,
+        |db, package| {
+            let body = runtime_body_for_symbol(&db, package, "update");
+            assert!(
+                body.locals
+                    .iter()
+                    .filter_map(|local| local.carrier.value_class())
+                    .filter_map(RuntimeClass::aggregate_layout)
+                    .any(|layout| {
+                        let Layout::Enum(layout) = layout.data(&db) else {
+                            return false;
+                        };
+                        let variant_space = |index: usize| {
+                            layout
+                                .variants
+                                .get(index)
+                                .and_then(|variant| variant.fields.first())
+                                .and_then(RuntimeClass::address_space)
+                        };
+                        variant_space(0) == Some(AddressSpaceKind::Storage)
+                            && variant_space(1) == Some(AddressSpaceKind::Memory)
+                    }),
+                "the joined enum must retain each variant's provider space:\n{body:#?}"
+            );
+            for opt_level in [OptLevel::O0, OptLevel::O1] {
+                emit_runtime_package_sonatina_ir_optimized(&db, &package, opt_level)
+                    .unwrap_or_else(|err| panic!("{opt_level:?} lowering failed: {err}"));
+            }
         }
     );
 }

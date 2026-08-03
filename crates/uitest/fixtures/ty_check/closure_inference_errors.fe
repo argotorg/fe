@@ -1,0 +1,40 @@
+use core::functional::Fn
+
+fn expects_own<F: Fn<(u256,), u256>>(_ func: F) {}
+
+fn expects_view<F: Fn<(view u256,), u256>>(_ func: F) {}
+
+fn expects_two<F: Fn<(view u256, view u256), u256>>(_ func: F) {}
+
+fn non_tuple_args<F: Fn<u256, u256>>(_ func: F) -> u256 {
+    func(1)
+}
+
+fn mode_is_not_inferred() {
+    expects_own(|value| value)
+    expects_view(|value: own| value)
+}
+
+fn mode_is_invariant_after_inference() {
+    let owned = |value: own| value
+    owned(1 as u256)
+    expects_view(owned)
+
+    let view = |value| value
+    view(1 as u256)
+    expects_own(view)
+}
+
+fn arity_must_match_context() {
+    expects_two(|value| value)
+}
+
+fn payload_must_be_constrained() {
+    let identity = |value: own| value
+}
+
+fn one_closure_is_monomorphic() {
+    let identity = |value| value
+    identity(1 as u256)
+    identity(true)
+}

@@ -16,7 +16,7 @@ const fn concrete_bad() -> RuntimeCounter {
     (RuntimeCounter { value: 1 }) + (RuntimeCounter { value: 2 })
 }
 
-const fn generic_bad<T>(lhs: T, rhs: T) -> T
+const fn generic_bad<T>(lhs: own T, rhs: own T) -> T
     where T: Add<Output = T>
 {
     lhs + rhs

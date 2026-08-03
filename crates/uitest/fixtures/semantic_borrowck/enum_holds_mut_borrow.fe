@@ -1,0 +1,7 @@
+pub fn enum_holds_mut() {
+    let mut x: u256 = 0
+    let o = Option::Some(mut x)
+    let r = ref x
+    let _k1 = o
+    let _k2 = r
+}

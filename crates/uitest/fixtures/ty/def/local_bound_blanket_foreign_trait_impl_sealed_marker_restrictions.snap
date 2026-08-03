@@ -7,7 +7,7 @@ error[5-0004]: external trait blanket impl is not anchored by a sealed local mar
    ┌─ local_bound_blanket_foreign_trait_impl_sealed_marker_restrictions.fe:11:1
    │
 11 │ ╭ impl<T: PublicMarker> WrappingAdd for T {
-12 │ │     fn wrapping_add(self, _ other: T) -> Self {
+12 │ │     fn wrapping_add(own self, _ other: own T) -> Self {
 13 │ │         self
 14 │ │     }
 15 │ │ }
@@ -17,7 +17,7 @@ error[5-0004]: external trait blanket impl is not anchored by a sealed local mar
    ┌─ local_bound_blanket_foreign_trait_impl_sealed_marker_restrictions.fe:21:1
    │
 21 │ ╭ impl<T: MethodMarker> WrappingSub for T {
-22 │ │     fn wrapping_sub(self, _ other: T) -> Self {
+22 │ │     fn wrapping_sub(own self, _ other: own T) -> Self {
 23 │ │         self
 24 │ │     }
 25 │ │ }
@@ -27,7 +27,7 @@ error[5-0004]: external trait blanket impl is not anchored by a sealed local mar
    ┌─ local_bound_blanket_foreign_trait_impl_sealed_marker_restrictions.fe:29:1
    │
 29 │ ╭ impl<T: GenericMarker<u256>> WrappingMul for T {
-30 │ │     fn wrapping_mul(self, _ other: T) -> Self {
+30 │ │     fn wrapping_mul(own self, _ other: own T) -> Self {
 31 │ │         self
 32 │ │     }
 33 │ │ }
@@ -37,7 +37,7 @@ error[5-0004]: external trait blanket impl is not anchored by a sealed local mar
    ┌─ local_bound_blanket_foreign_trait_impl_sealed_marker_restrictions.fe:38:1
    │
 38 │ ╭ impl<T: SubMarker> SaturatingAdd for T {
-39 │ │     fn saturating_add(self, _ other: T) -> Self {
+39 │ │     fn saturating_add(own self, _ other: own T) -> Self {
 40 │ │         self
 41 │ │     }
 42 │ │ }
@@ -47,7 +47,7 @@ error[5-0004]: external trait blanket impl is not anchored by a sealed local mar
    ┌─ local_bound_blanket_foreign_trait_impl_sealed_marker_restrictions.fe:48:1
    │
 48 │ ╭ impl<T: BlanketMarker> SaturatingSub for T {
-49 │ │     fn saturating_sub(self, _ other: T) -> Self {
+49 │ │     fn saturating_sub(own self, _ other: own T) -> Self {
 50 │ │         self
 51 │ │     }
 52 │ │ }
@@ -57,7 +57,7 @@ error[5-0004]: external trait blanket impl is not anchored by a sealed local mar
    ┌─ local_bound_blanket_foreign_trait_impl_sealed_marker_restrictions.fe:58:1
    │
 58 │ ╭ impl<T: PrimitiveMarker> SaturatingMul for T {
-59 │ │     fn saturating_mul(self, _ other: T) -> Self {
+59 │ │     fn saturating_mul(own self, _ other: own T) -> Self {
 60 │ │         self
 61 │ │     }
 62 │ │ }

@@ -1,0 +1,17 @@
+use core::functional::Fn
+
+struct Boxed {
+    value: u256,
+}
+
+fn invoke<T, U, F: Fn<(T,), U>>(func: F, value: own T) -> U {
+    func.call(value)
+}
+
+pub fn closure_readonly_noncopy_call_twice() -> u256 {
+    let boxed = Boxed { value: 20 }
+    let f = |_ unit: own ()| -> u256 { boxed.value }
+    let a = f.call(())
+    let b = invoke(func: f, value: ())
+    a + b
+}

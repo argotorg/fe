@@ -8,6 +8,7 @@ use crate::analysis::{
     HirAnalysisDb,
     semantic::{
         NExpr, NSStmtKind, NSTerminatorKind, NormalizedSemanticBody, SBlockId, SConst, SLocalId,
+        normalized_cfg_reachable_blocks, normalized_cfg_successor_indices,
     },
     ty::{
         CallableLayoutParamPort, CallableLayoutPort, LayoutBundleComponent,
@@ -331,21 +332,6 @@ fn verify_const_bindings<'db>(
     Ok(())
 }
 
-fn block_successors(kind: &NSTerminatorKind<'_>) -> Vec<SBlockId> {
-    match kind {
-        NSTerminatorKind::Goto(target) => vec![*target],
-        NSTerminatorKind::Branch {
-            then_bb, else_bb, ..
-        } => vec![*then_bb, *else_bb],
-        NSTerminatorKind::MatchEnum { cases, default, .. } => cases
-            .iter()
-            .map(|(_, target)| *target)
-            .chain(*default)
-            .collect(),
-        NSTerminatorKind::Assert { .. } | NSTerminatorKind::Return(_) => Vec::new(),
-    }
-}
-
 #[derive(Clone, Default, PartialEq, Eq)]
 struct DefinedLocals {
     reached: bool,
@@ -376,12 +362,17 @@ struct DefinitionAnalysis<'a, 'db> {
 }
 
 impl<'a, 'db> DefinitionAnalysis<'a, 'db> {
-    fn new(normalized: &'a NormalizedSemanticBody<'db>, body: &'a LayoutEvidenceBody<'db>) -> Self {
+    fn new(
+        db: &'db dyn HirAnalysisDb,
+        normalized: &'a NormalizedSemanticBody<'db>,
+        body: &'a LayoutEvidenceBody<'db>,
+    ) -> Self {
         let mut successors = SecondaryMap::new();
         successors.resize(normalized.blocks.len());
-        for (idx, block) in normalized.blocks.iter().enumerate() {
-            successors[SBlockId::new(idx)] = block_successors(&block.terminator.kind)
-                .into_iter()
+        for (block, refined) in normalized_cfg_successor_indices(db, normalized).iter() {
+            successors[block] = refined
+                .iter()
+                .copied()
                 .filter(|target| target.index() < normalized.blocks.len())
                 .collect();
         }
@@ -482,21 +473,19 @@ fn verify_expr_definitions(
 }
 
 fn verify_definitions(
+    db: &dyn HirAnalysisDb,
     normalized: &NormalizedSemanticBody<'_>,
     body: &LayoutEvidenceBody<'_>,
 ) -> Result<(), LayoutEvidenceVerifyError> {
     if normalized.blocks.is_empty() {
         return Ok(());
     }
-    let entry_states = solve_forward_cfg(&mut DefinitionAnalysis::new(normalized, body));
-    let unreachable = DefinedLocals {
-        evidence: body.params.iter().copied().collect(),
-        semantic: normalized.entry_locals.iter().copied().collect(),
-        ..DefinedLocals::default()
-    };
+    let entry_states = solve_forward_cfg(&mut DefinitionAnalysis::new(db, normalized, body));
     for (block_idx, block) in normalized.blocks.iter().enumerate() {
         let entry = &entry_states[SBlockId::new(block_idx)];
-        let entry = if entry.reached { entry } else { &unreachable };
+        if !entry.reached {
+            continue;
+        }
         let mut defined_evidence = entry.evidence.clone();
         let mut defined_semantic = entry.semantic.clone();
         for (statement_idx, normalized_statement) in block.stmts.iter().enumerate() {
@@ -579,11 +568,9 @@ fn verify_statement_id_set(
         .iter()
         .map(|block| block.stmts.len())
         .sum();
-    if body.statements.len() != expected {
-        return Err(LayoutEvidenceVerifyError::StatementCount {
-            expected,
-            actual: body.statements.len(),
-        });
+    let actual = body.statements.iter().flatten().count();
+    if actual != expected {
+        return Err(LayoutEvidenceVerifyError::StatementCount { expected, actual });
     }
     let mut seen = FxHashSet::default();
     for (block, normalized_block) in normalized.blocks.iter().enumerate() {
@@ -636,7 +623,11 @@ pub fn verify_layout_evidence_runtime_compatibility<'db>(
         });
     }
     verify_statement_id_set(runtime, body)?;
+    let reachable_blocks = normalized_cfg_reachable_blocks(db, runtime);
     for (block_idx, runtime_block) in runtime.blocks.iter().enumerate() {
+        if !reachable_blocks[block_idx] {
+            continue;
+        }
         for (statement_idx, runtime_statement) in runtime_block.stmts.iter().enumerate() {
             let evidence_statement = body
                 .statement(runtime_statement.id)
@@ -834,7 +825,21 @@ pub fn verify_layout_evidence_body<'db>(
         return Err(LayoutEvidenceVerifyError::OrphanEvidenceLocal(local));
     }
 
+    let reachable_blocks = normalized_cfg_reachable_blocks(db, normalized);
     for (block_idx, normalized_block) in normalized.blocks.iter().enumerate() {
+        if !reachable_blocks[block_idx] {
+            let terminator = body
+                .terminator(SBlockId::new(block_idx))
+                .expect("block count was verified");
+            if !terminator.returns.is_empty() {
+                return Err(LayoutEvidenceVerifyError::ReturnCount {
+                    block: block_idx,
+                    expected: 0,
+                    actual: terminator.returns.len(),
+                });
+            }
+            continue;
+        }
         for (statement_idx, normalized_statement) in normalized_block.stmts.iter().enumerate() {
             let statement = body
                 .statement(normalized_statement.id)
@@ -1051,5 +1056,5 @@ pub fn verify_layout_evidence_body<'db>(
             }
         }
     }
-    verify_definitions(normalized, body)
+    verify_definitions(db, normalized, body)
 }

@@ -43,21 +43,12 @@ func private %from_word(v0.i256) -> i256 {
         return v0;
 }
 
-func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__get__gcbe1_9b00(v0.i256, v1.i256) -> i256 {
+func inline(always) private %get__gcbe1(v0.i256, v1.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v4.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get_unchecked__gcbe1_8bec v0 v1;
-        return v4;
-}
-
-func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__get__gcbe1_9b00_0(v0.i256, v1.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v4.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get_unchecked__gcbe1_8bec_0 v0 v1;
+        v4.i256 = call %get_unchecked__gcbe1 v0 v1;
         return v4;
 }
 
@@ -75,7 +66,7 @@ func private %get_balance(v0.i256, v1.i256) -> i256 {
         jump block1;
 
     block1:
-        v4.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__gcbe1_9b00 v0 v1;
+        v4.i256 = call %get__gcbe1 v0 v1;
         return v4;
 }
 
@@ -93,27 +84,17 @@ func inline(always) private %get_unchecked__g7fdf(v0.i256, v1.i256) -> i256 {
         jump block1;
 
     block1:
-        v4.i256 = call %std__lib__evm__storage_map__storagemap_get_word_with_salt__ge513_a5dc v0 1.i256;
+        v4.i256 = call %storagemap_get_word_with_salt v0 1.i256;
         v5.i256 = call %from_word v4;
         return v5;
 }
 
-func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__get_unchecked__gcbe1_8bec(v0.i256, v1.i256) -> i256 {
+func inline(always) private %get_unchecked__gcbe1(v0.i256, v1.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v4.i256 = call %std__lib__evm__storage_map__storagemap_get_word_with_salt__ge513_a5dc_0 v0 0.i256;
-        v5.i256 = call %from_word v4;
-        return v5;
-}
-
-func inline(always) private %std__lib__evm__storage_map__impl_StorageMap_9f54__get_unchecked__gcbe1_8bec_0(v0.i256, v1.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v4.i256 = call %std__lib__evm__storage_map__storagemap_get_word_with_salt__ge513_a5dc_1 v0 0.i256;
+        v4.i256 = call %storagemap_get_word_with_salt v0 0.i256;
         v5.i256 = call %from_word v4;
         return v5;
 }
@@ -181,7 +162,7 @@ func private %new__g10e6(v0.i256) -> @layout_0 {
         return v6;
 }
 
-func private %new_unchecked__gcbe1(v0.i256) -> @layout_0 {
+func private %new_unchecked__g7fdf(v0.i256) -> @layout_0 {
     block0:
         jump block1;
 
@@ -190,7 +171,7 @@ func private %new_unchecked__gcbe1(v0.i256) -> @layout_0 {
         return v4;
 }
 
-func private %new_unchecked__g7fdf(v0.i256) -> @layout_0 {
+func private %new_unchecked__gcbe1(v0.i256) -> @layout_0 {
     block0:
         jump block1;
 
@@ -321,7 +302,7 @@ func inline(always) private %set_unchecked__gcbe1(v0.i256, v1.i256, v2.i256) {
 
     block1:
         v5.i256 = call %to_word v1;
-        call %std__lib__evm__storage_map__storagemap_set_word_with_salt__ge513_d78d_0 v0 0.i256 v5;
+        call %storagemap_set_word_with_salt v0 0.i256 v5;
         return;
 }
 
@@ -331,139 +312,31 @@ func inline(always) private %set_unchecked__g7fdf(v0.i256, v1.i256, v2.i256) {
 
     block1:
         v5.i256 = call %to_word v1;
-        call %std__lib__evm__storage_map__storagemap_set_word_with_salt__ge513_d78d v0 1.i256 v5;
+        call %storagemap_set_word_with_salt v0 1.i256 v5;
         return;
 }
 
-func inline(always) private %std__lib__evm__storage_map__storagemap_get_word_with_salt__ge513_a5dc(v0.i256, v1.i256) -> i256 {
+func inline(always) private %storagemap_get_word_with_salt(v0.i256, v1.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v4.i256 = call %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d v0 v1;
+        v4.i256 = call %storagemap_storage_slot_with_salt v0 v1;
         v5.i256 = evm_sload v4;
         return v5;
 }
 
-func inline(always) private %std__lib__evm__storage_map__storagemap_get_word_with_salt__ge513_a5dc_0(v0.i256, v1.i256) -> i256 {
+func inline(always) private %storagemap_set_word_with_salt(v0.i256, v1.i256, v2.i256) {
     block0:
         jump block1;
 
     block1:
-        v4.i256 = call %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d_0 v0 v1;
-        v5.i256 = evm_sload v4;
-        return v5;
-}
-
-func inline(always) private %std__lib__evm__storage_map__storagemap_get_word_with_salt__ge513_a5dc_1(v0.i256, v1.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v4.i256 = call %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d_2 v0 v1;
-        v5.i256 = evm_sload v4;
-        return v5;
-}
-
-func inline(always) private %std__lib__evm__storage_map__storagemap_set_word_with_salt__ge513_d78d(v0.i256, v1.i256, v2.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        v5.i256 = call %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d_1 v0 v1;
+        v5.i256 = call %storagemap_storage_slot_with_salt v0 v1;
         evm_sstore v5 v2;
         return;
 }
 
-func inline(always) private %std__lib__evm__storage_map__storagemap_set_word_with_salt__ge513_d78d_0(v0.i256, v1.i256, v2.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        v5.i256 = call %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d_2 v0 v1;
-        evm_sstore v5 v2;
-        return;
-}
-
-func inline(always) private %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d(v0.i256, v1.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.*i8 = evm_malloc 0.i256;
-        v4.i256 = ptr_to_int v3 i256;
-        v6.i256 = call %write_key v4 v0;
-        (v7.i256, v8.i1) = uaddo v4 v6;
-        br v8 block2 block3;
-
-    block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block3:
-        mstore v7 v1 i256;
-        (v17.i256, v18.i1) = uaddo v6 32.i256;
-        br v18 block2 block4;
-
-    block4:
-        v20.i256 = evm_keccak256 v4 v17;
-        return v20;
-}
-
-func inline(always) private %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d_0(v0.i256, v1.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.*i8 = evm_malloc 0.i256;
-        v4.i256 = ptr_to_int v3 i256;
-        v6.i256 = call %write_key v4 v0;
-        (v7.i256, v8.i1) = uaddo v4 v6;
-        br v8 block2 block3;
-
-    block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block3:
-        mstore v7 v1 i256;
-        (v17.i256, v18.i1) = uaddo v6 32.i256;
-        br v18 block2 block4;
-
-    block4:
-        v20.i256 = evm_keccak256 v4 v17;
-        return v20;
-}
-
-func inline(always) private %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d_1(v0.i256, v1.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.*i8 = evm_malloc 0.i256;
-        v4.i256 = ptr_to_int v3 i256;
-        v6.i256 = call %write_key v4 v0;
-        (v7.i256, v8.i1) = uaddo v4 v6;
-        br v8 block2 block3;
-
-    block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block3:
-        mstore v7 v1 i256;
-        (v17.i256, v18.i1) = uaddo v6 32.i256;
-        br v18 block2 block4;
-
-    block4:
-        v20.i256 = evm_keccak256 v4 v17;
-        return v20;
-}
-
-func inline(always) private %std__lib__evm__storage_map__storagemap_storage_slot_with_salt__ge513_f97d_2(v0.i256, v1.i256) -> i256 {
+func inline(always) private %storagemap_storage_slot_with_salt(v0.i256, v1.i256) -> i256 {
     block0:
         jump block1;
 
@@ -502,7 +375,7 @@ func private %transfer(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
         jump block1;
 
     block1:
-        v6.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__gcbe1_9b00_0 v0 v3;
+        v6.i256 = call %get__gcbe1 v0 v3;
         v8.i1 = lt v6 v2;
         br v8 block2 block3;
 
@@ -513,7 +386,7 @@ func private %transfer(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
         jump block4;
 
     block4:
-        v12.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__gcbe1_9b00_0 v1 v3;
+        v12.i256 = call %get__gcbe1 v1 v3;
         (v16.i256, v17.i1) = usubo v6 v2;
         br v17 block5 block6;
 

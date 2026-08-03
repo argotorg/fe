@@ -9,7 +9,9 @@ use crate::{
     SpannedHirDb,
     hir_def::{Body, ExprId},
     span::{
-        LazyLitSpan, LazySpanAtom, params::LazyGenericArgListSpan, path::LazyPathSpan,
+        LazyLitSpan, LazySpanAtom,
+        params::{LazyFuncParamListSpan, LazyGenericArgListSpan},
+        path::LazyPathSpan,
         types::LazyTySpan,
     },
 };
@@ -35,6 +37,10 @@ impl<'db> LazyExprSpan<'db> {
 
     pub fn into_cast_expr(self) -> LazyCastExprSpan<'db> {
         LazyCastExprSpan(self.0)
+    }
+
+    pub fn into_closure_expr(self) -> LazyClosureExprSpan<'db> {
+        LazyClosureExprSpan(self.0)
     }
 
     pub fn into_call_expr(self) -> LazyCallExprSpan<'db> {
@@ -122,6 +128,18 @@ define_lazy_span_node!(
     }
     @node {
         (ty, ty, LazyTySpan),
+    }
+);
+
+define_lazy_span_node!(
+    LazyClosureExprSpan,
+    ast::ClosureExpr,
+    @token {
+        (empty_params, empty_params_token),
+    }
+    @node {
+        (params, params, LazyFuncParamListSpan),
+        (ret_ty, ret_ty, LazyTySpan),
     }
 );
 

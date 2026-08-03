@@ -1,0 +1,33 @@
+use core::Copy
+
+struct Boxed {
+    value: u256,
+}
+
+impl Copy for Boxed {}
+
+#[test]
+fn copy_array_seq_constraint_resolves_directly_and_in_closure() {
+    let direct = [
+        Boxed { value: 20 },
+        Boxed { value: 22 },
+    ]
+    let mut direct_total = 0
+    for boxed in direct {
+        direct_total += boxed.value
+    }
+    assert(direct_total == 42)
+
+    let captured = [
+        Boxed { value: 19 },
+        Boxed { value: 23 },
+    ]
+    let sum = || {
+        let mut total = 0
+        for boxed in captured {
+            total += boxed.value
+        }
+        total
+    }
+    assert(sum.call() == 42)
+}

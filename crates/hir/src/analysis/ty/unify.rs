@@ -12,7 +12,9 @@ use super::{
     const_expr::{ConstExpr, ConstExprId},
     fold::{TyFoldable, TyFolder},
     trait_def::{ImplementorId, TraitInstId},
-    ty_def::{ApplicableTyProp, Kind, TyData, TyId, TyVar, TyVarSort, inference_keys},
+    ty_def::{
+        ApplicableTyProp, ClosureTy, Kind, TyBase, TyData, TyId, TyVar, TyVarSort, inference_keys,
+    },
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -136,6 +138,40 @@ where
             (TyData::TyApp(ty1_1, ty1_2), TyData::TyApp(ty2_1, ty2_2)) => {
                 self.unify_ty(*ty1_1, *ty2_1)?;
                 self.unify_ty(*ty1_2, *ty2_2)
+            }
+
+            (
+                TyData::TyBase(TyBase::Closure(closure1)),
+                TyData::TyBase(TyBase::Closure(closure2)),
+            ) => {
+                if closure1.def(self.db) != closure2.def(self.db)
+                    || closure1.capture_accesses(self.db) != closure2.capture_accesses(self.db)
+                    || closure1.param_modes(self.db) != closure2.param_modes(self.db)
+                    || closure1.parent_args(self.db).len() != closure2.parent_args(self.db).len()
+                    || closure1.captures(self.db).len() != closure2.captures(self.db).len()
+                    || closure1.params(self.db).len() != closure2.params(self.db).len()
+                {
+                    return Err(UnificationError::TypeMismatch);
+                }
+
+                let component_pairs = |c1: &ClosureTy<'db>, c2: &ClosureTy<'db>| {
+                    c1.parent_args(self.db)
+                        .iter()
+                        .chain(c1.captures(self.db))
+                        .chain(c1.params(self.db))
+                        .zip(
+                            c2.parent_args(self.db)
+                                .iter()
+                                .chain(c2.captures(self.db))
+                                .chain(c2.params(self.db)),
+                        )
+                        .map(|(lhs, rhs)| (*lhs, *rhs))
+                        .collect::<Vec<_>>()
+                };
+                for (lhs, rhs) in component_pairs(closure1, closure2) {
+                    self.unify_ty(lhs, rhs)?;
+                }
+                self.unify_ty(closure1.ret_ty(self.db), closure2.ret_ty(self.db))
             }
 
             (TyData::TyParam(_), TyData::TyParam(_)) | (TyData::TyBase(_), TyData::TyBase(_)) => {

@@ -1,0 +1,22 @@
+use core::functional::Fn
+use core::option::Option
+
+struct Boxed {
+    value: u256,
+}
+
+fn invoke<T, U, F: Fn<(T,), U>>(_ func: F, _ value: own T) -> U {
+    func(value)
+}
+
+pub fn closure_if_let_capture_not_fn() -> Boxed {
+    let wrapped: Option<Boxed> = Option::Some(Boxed { value: 42 })
+    let take = |_ unit: own ()| -> Boxed {
+        if let Option::Some(value) = wrapped {
+            value
+        } else {
+            Boxed { value: 0 }
+        }
+    }
+    invoke(func: take, value: ())
+}

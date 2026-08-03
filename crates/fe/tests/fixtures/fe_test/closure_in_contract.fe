@@ -1,0 +1,48 @@
+use core::functional::Fn
+use std::evm::{Ctx, Evm}
+
+struct ClosureStore {
+    init_value: u256,
+}
+
+pub contract ClosureContract uses (ctx: Ctx) {
+    mut store: ClosureStore
+
+    init() uses (ctx, mut store) {
+        let paid = ctx.value()
+        let f = || -> u256 { paid + 11 }
+        store.init_value = f()
+    }
+
+    recv ClosureMsg {
+        InitValue -> u256 uses store {
+            store.init_value
+        }
+
+        SelfFromClosure -> u256 uses ctx {
+            let self_inner = ctx.address().inner
+            let f = || -> u256 { self_inner }
+            f()
+        }
+    }
+}
+
+msg ClosureMsg {
+    #[selector = sol("initValue()")]
+    InitValue -> u256,
+
+    #[selector = sol("selfFromClosure()")]
+    SelfFromClosure -> u256,
+}
+
+#[test]
+fn test_closure_in_contract() uses (evm: mut Evm) {
+    let addr = evm.create2<ClosureContract>(value: 0, args: (), salt: 0)
+    assert(addr.inner != 0)
+
+    let init_value: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: ClosureMsg::InitValue {})
+    assert(init_value == 11)
+
+    let self_value: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: ClosureMsg::SelfFromClosure {})
+    assert(self_value == addr.inner)
+}

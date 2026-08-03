@@ -41,6 +41,15 @@ pub fn typed_body_template<'db>(
         } => check_contract_recv_arm_body(db, contract, recv_idx, arm_idx)
             .1
             .clone(),
+        BodyOwner::Closure { def, .. } => {
+            let Some(parent_owner) = BodyOwner::from_body(db, def.body) else {
+                return TypedBodyTemplate {
+                    owner,
+                    body: TypedBody::empty(db),
+                };
+            };
+            typed_body_template(db, parent_owner).body
+        }
     };
 
     TypedBodyTemplate {

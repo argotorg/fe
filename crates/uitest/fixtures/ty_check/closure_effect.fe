@@ -1,0 +1,5 @@
+fn needs_effect() uses (effect: u256) {}
+
+pub fn f() uses (effect: u256) {
+    let _f = |_ unit: own ()| -> () { needs_effect() }
+}

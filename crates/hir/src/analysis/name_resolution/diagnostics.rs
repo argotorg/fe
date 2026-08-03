@@ -15,6 +15,12 @@ use crate::analysis::{
 use crate::hir_def::CallableDef;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub struct CallableFieldCallHint<'db> {
+    pub receiver: DynLazySpan<'db>,
+    pub arg_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub enum PathResDiag<'db> {
     /// The definition conflicts with other definitions.
     Conflict(IdentId<'db>, ThinVec<DynLazySpan<'db>>),
@@ -26,6 +32,7 @@ pub enum PathResDiag<'db> {
         primary: DynLazySpan<'db>,
         method_name: IdentId<'db>,
         receiver: Either<TyId<'db>, TraitInstId<'db>>,
+        callable_field: Option<CallableFieldCallHint<'db>>,
     },
 
     /// The resolved name is not visible.

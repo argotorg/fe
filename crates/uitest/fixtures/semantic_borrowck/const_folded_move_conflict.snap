@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/const_folded_move_conflict.fe
+---
+error[16-0002]: move conflict in `fn const_folded_move_conflict`
+  ┌─ const_folded_move_conflict.fe:8:18
+  │
+7 │     let first = original
+  │                 -------- value is moved here
+8 │     let second = original
+  │                  ^^^^^^^^ cannot use a value after it was moved

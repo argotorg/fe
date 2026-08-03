@@ -1,15 +1,28 @@
 // Regression: a `mut own` aggregate parameter is passed by value (a direct
-// aggregate carrier fixed by the calling convention), but its body both
-// projects into it and reassigns it whole, which demands projectable owned
-// storage. Carrier inference used to "upgrade" the parameter local to an
-// object-ref carrier to satisfy that demand, contradicting the signature's
-// by-value param class and tripping the runtime verifier with
-// `SlotCarrierMismatch`. The owned storage must instead come from a slot root
-// while the parameter carrier stays the signature aggregate.
+// aggregate carrier fixed by the calling convention). Read-only projections
+// and whole-value reassignment can remain SSA-backed; element mutation needs
+// a slot root. Neither case may widen the parameter carrier into an object
+// reference, which would contradict the signature and trigger
+// `SlotCarrierMismatch`.
 
 struct Pt {
     x: u256,
     y: u256,
+}
+
+struct Counter {
+    value: u256,
+    pad: u256,
+}
+
+impl Counter {
+    fn increment(mut self) {
+        self.value += 1
+    }
+}
+
+struct NestedCounter {
+    counter: Counter,
 }
 
 // Array: projected read, whole reassignment, and returned.
@@ -73,4 +86,14 @@ fn test_rotate() {
     assert(out[0][1] == 4)
     assert(out[1][0] == 1)
     assert(out[1][1] == 2)
+}
+
+#[test]
+fn test_nested_mut_receiver_writes_back_through_parent_object() {
+    let mut nested = NestedCounter {
+        counter: Counter { value: 41, pad: 0 },
+    }
+    nested.counter.increment()
+    assert(nested.counter.value == 42)
+    assert(nested.counter.pad == 0)
 }

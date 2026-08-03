@@ -1,11 +1,15 @@
 use async_lsp::ResponseError;
 use async_lsp::lsp_types::{GotoDefinitionParams, GotoDefinitionResponse, Location};
 use common::InputDb;
-use hir::{core::semantic::reference::Target, hir_def::ItemKind, lower::map_file_to_mod};
+use hir::{
+    core::semantic::{applicable_callable_impls, reference::Target},
+    hir_def::ItemKind,
+    lower::map_file_to_mod,
+};
 
 use crate::{
     backend::Backend,
-    util::{to_lsp_location_from_scope, to_offset_from_position},
+    util::{to_lsp_location_from_lazy_span, to_lsp_location_from_scope, to_offset_from_position},
 };
 
 /// Handle textDocument/implementation request.
@@ -44,9 +48,8 @@ pub async fn handle_goto_implementation(
 
     let locations = match target {
         Target::Scope(scope) => find_implementations(&backend.db, scope.item()),
-        Target::Local { .. } => {
-            // Local variables don't have implementations
-            vec![]
+        Target::Local { ty, body, .. } => {
+            find_callable_value_implementations(&backend.db, *ty, body.scope())
         }
     }
     .into_iter()
@@ -63,6 +66,26 @@ pub async fn handle_goto_implementation(
         ))),
         _ => Ok(Some(GotoDefinitionResponse::Array(locations))),
     }
+}
+
+fn find_callable_value_implementations<'db>(
+    db: &'db driver::DriverDataBase,
+    ty: hir::analysis::ty::ty_def::TyId<'db>,
+    scope: hir::hir_def::scope_graph::ScopeId<'db>,
+) -> Vec<Location> {
+    let payload = ty.as_capability(db).map_or(ty, |(_, payload)| payload);
+    if let Some(closure) = payload.as_closure(db) {
+        let def = closure.def(db);
+        return to_lsp_location_from_lazy_span(db, def.expr.span(def.body).into())
+            .ok()
+            .into_iter()
+            .collect();
+    }
+
+    applicable_callable_impls(db, payload, scope)
+        .into_iter()
+        .filter_map(|impl_trait| to_lsp_location_from_scope(db, impl_trait.scope()).ok())
+        .collect()
 }
 
 /// Find implementations for the given item.
@@ -165,5 +188,105 @@ impl Display for Counter {
                 resolution
             );
         }
+    }
+
+    #[test]
+    fn callable_values_navigate_to_their_implementations() {
+        let mut db = DriverDataBase::default();
+        let code = r#"use core::functional::{Fn, FnOnce}
+
+struct AddOne {}
+
+impl FnOnce<(u256,), u256> for AddOne {
+    fn call_once(self: own Self, _ args: own (u256,)) -> u256 {
+        args.0 + 1
+    }
+}
+
+impl Fn<(u256,), u256> for AddOne {
+    fn call(self, _ args: own (u256,)) -> u256 {
+        args.0 + 1
+    }
+}
+
+struct Specialized<T> {
+    marker: T,
+}
+
+impl FnOnce<(u256,), u256> for Specialized<u256> {
+    fn call_once(self: own Self, _ args: own (u256,)) -> u256 {
+        args.0
+    }
+}
+
+impl Fn<(u256,), u256> for Specialized<u256> {
+    fn call(self, _ args: own (u256,)) -> u256 {
+        args.0
+    }
+}
+
+impl FnOnce<(bool,), bool> for Specialized<bool> {
+    fn call_once(self: own Self, _ args: own (bool,)) -> bool {
+        args.0
+    }
+}
+
+impl Fn<(bool,), bool> for Specialized<bool> {
+    fn call(self, _ args: own (bool,)) -> bool {
+        args.0
+    }
+}
+
+fn main() {
+    let closure = || -> u256 { 42 }
+    closure()
+    let callable = AddOne {}
+    callable(41)
+    let specialized: Specialized<u256> = Specialized { marker: 0 }
+    specialized(41)
+}
+"#;
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///test.fe").unwrap(),
+            Some(code.to_string()),
+        );
+        let top_mod = map_file_to_mod(&db, file);
+
+        let closure_offset = code.find("closure()").unwrap() as u32;
+        let closure_target = top_mod
+            .target_at(&db, parser::TextSize::from(closure_offset))
+            .first()
+            .cloned()
+            .expect("closure target");
+        let Target::Local { ty, body, .. } = closure_target else {
+            panic!("expected closure local");
+        };
+        let closure_locations = find_callable_value_implementations(&db, ty, body.scope());
+        assert_eq!(closure_locations.len(), 1);
+
+        let callable_offset = code.find("callable(41)").unwrap() as u32;
+        let callable_target = top_mod
+            .target_at(&db, parser::TextSize::from(callable_offset))
+            .first()
+            .cloned()
+            .expect("callable target");
+        let Target::Local { ty, body, .. } = callable_target else {
+            panic!("expected callable local");
+        };
+        let callable_locations = find_callable_value_implementations(&db, ty, body.scope());
+        assert_eq!(callable_locations.len(), 2);
+
+        let specialized_offset = code.find("specialized(41)").unwrap() as u32;
+        let specialized_target = top_mod
+            .target_at(&db, parser::TextSize::from(specialized_offset))
+            .first()
+            .cloned()
+            .expect("specialized callable target");
+        let Target::Local { ty, body, .. } = specialized_target else {
+            panic!("expected specialized callable local");
+        };
+        let specialized_locations = find_callable_value_implementations(&db, ty, body.scope());
+        assert_eq!(specialized_locations.len(), 2);
     }
 }

@@ -1,3 +1,5 @@
+use std::collections::hash_map::Entry;
+
 use cranelift_entity::EntityRef;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -5,9 +7,15 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            CallSiteId, PlaceProvenance, SBlockId, SExpr, SStmtKind, STerminatorKind, SemanticBody,
-            SemanticCalleeRef, SemanticLocalRole, ValueProvenance, VariantIndex,
-            borrowck::normalize_semantic_body,
+            CallSiteId, PlaceProvenance, SBlockId, SemanticBody, SemanticCalleeRef,
+            SemanticLocalRole, ValueProvenance, VariantIndex,
+            borrowck::{
+                BorrowDiagnosticId, NExpr, NSStmtKind, NSTerminatorKind, SemanticBorrowDiagKind,
+                SemanticBorrowDiagnostic, SemanticBorrowDiagnosticLabel,
+                SemanticBorrowDiagnosticSpan,
+                normalize_provisional_semantic_body_for_never_return_analysis,
+                normalize_semantic_body, normalized_cfg_successors,
+            },
             effect_param_site,
             lower::{BindingRoleMode, lower_to_smir, lower_to_smir_with_call_sites},
             verify_semantic_body,
@@ -15,6 +23,8 @@ use crate::{
         ty::{
             CallableLayoutBundleInput, CallableLayoutBundleSignature, LayoutBundleInterface,
             adt_def::{AdtDef, AdtRef, instantiate_adt_field_shape},
+            binder::Binder,
+            const_ty::ConstTyData,
             corelib::{RuntimeBuiltinFuncKind, runtime_builtin_func_kind},
             effects::place_effect_provider_param_index_map,
             fold::TyFoldable,
@@ -25,27 +35,39 @@ use crate::{
                 RootProviderRegistration, RootProviderSiteKind, provider_semantics,
                 provider_semantics_for_specialized_call,
             },
+            trait_def::{
+                ImplementorId, TraitInstId, complete_resolved_trait_method_args,
+                impls_for_trait_def,
+            },
             trait_resolution::{
                 GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
             },
             ty_check::{
-                BodyOwner, EffectParamSite, EffectProviderProvenance, EffectProviderSpecialization,
-                LocalBinding, ParamSite, ResolvedEffectArg, SemanticExprLowering, TypedBody,
+                BodyOwner, Callable, EffectParamSite, EffectProviderProvenance,
+                EffectProviderSpecialization, LocalBinding, ParamSite, ResolvedEffectArg,
+                SemanticExprLowering, TypedBody, TypedCallableBody,
             },
-            ty_def::{BorrowKind, CapabilityKind, TyId},
+            ty_def::{BorrowKind, CapabilityKind, TyData, TyFlags, TyId},
             ty_lower::{
-                layout_bundle_schema_for_semantic_value,
+                closure_layout_bundle_signature, layout_bundle_schema_for_semantic_value,
                 specialized_callable_layout_bundle_signature_with_normalizer,
             },
+            unify::UnificationTable,
+            visitor::{TyVisitable, TyVisitor, collect_flags, walk_ty},
         },
     },
-    hir_def::{CallableDef, Expr, ExprId, Partial, scope_graph::ScopeId},
+    hir_def::{
+        ArithBinOp, BinOp, CallableDef, CompBinOp, Expr, ExprId, Func, HirIngot, IdentId, ItemKind,
+        Partial, PathId, Stmt, StmtId, TypeKind, UnOp, scope_graph::ScopeId,
+    },
     semantic::{
         AssignedLayoutBindingEnv, EffectEnvView, EffectRequirement, EffectRequirementKey,
         LayoutViewKind, ProviderBinding, ProviderSource, ResolvedEffectBinding,
     },
+    span::{expr::LazyExprSpan, item::LazyItemSpan, stmt::LazyStmtSpan},
+    visitor::{Visitor, VisitorCtxt, walk_expr, walk_stmt},
 };
-use common::indexmap::IndexMap;
+use common::{indexmap::IndexMap, ingot::Ingot};
 use indexmap::IndexSet;
 use salsa::Update;
 use thin_vec::ThinVec;
@@ -65,6 +87,37 @@ pub struct SemanticInstanceKey<'db> {
     pub impl_env: ImplEnv<'db>,
 }
 
+/// A source call whose recursive specialization would create an unbounded
+/// family of semantic instances.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub struct NonRegularRecursiveCallSite<'db> {
+    pub owner: BodyOwner<'db>,
+    pub call_site: CallSiteId,
+    pub callee: BodyOwner<'db>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Update)]
+struct NonRegularRecursiveCallGraph<'db> {
+    calls: Vec<NonRegularRecursiveCallSite<'db>>,
+    blocked_owners: Vec<BodyOwner<'db>>,
+    component_diagnostic_calls: Vec<(BodyOwner<'db>, NonRegularRecursiveCallSite<'db>)>,
+}
+
+/// Whether a semantic instance is safe to analyze as a finalized
+/// specialization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SemanticInstanceCompleteness {
+    /// Every generic argument, provider, and implementation witness is
+    /// independent of caller-local type parameters.
+    Complete,
+    /// The canonical owner instance intentionally retains its own formal
+    /// parameters and must be analyzed parametrically.
+    Parametric,
+    /// A non-identity specialization still contains caller-local parameters or
+    /// is missing finalized effect providers.
+    Partial,
+}
+
 impl<'db> SemanticInstanceKey<'db> {
     pub fn typed_body(self, db: &'db dyn HirAnalysisDb) -> &'db TypedBody<'db> {
         instantiated_typed_body(db, self)
@@ -74,11 +127,83 @@ impl<'db> SemanticInstanceKey<'db> {
         self.typed_body(db).clone()
     }
 
+    pub fn callable_body(self, db: &'db dyn HirAnalysisDb) -> TypedCallableBody<'db> {
+        TypedCallableBody::new(self.owner(db), self.typed_body(db))
+    }
+
     pub fn layout_bundle_signature(
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> CallableLayoutBundleSignature<'db> {
         semantic_layout_bundle_signature(db, self).clone()
+    }
+
+    /// Classifies the instance boundary used by semantic analyses.
+    ///
+    /// Partial instances arise naturally while traversing a parametric call
+    /// graph. They are valid keys, but final normalization must not treat their
+    /// caller-local parameters as fully resolved provider roots.
+    pub fn completeness(self, db: &'db dyn HirAnalysisDb) -> SemanticInstanceCompleteness {
+        let unresolved = TyFlags::HAS_PARAM | TyFlags::HAS_VAR;
+        let generic_args_are_concrete =
+            !collect_flags(db, self.subst(db).generic_args(db).as_slice()).intersects(unresolved);
+        let providers = self.effect_providers(db).providers(db);
+        let providers_are_concrete =
+            !collect_flags(db, providers.as_slice()).intersects(unresolved);
+        let impl_env = self.impl_env(db);
+        let impl_env_is_concrete = !collect_flags(db, impl_env.assumptions(db))
+            .intersects(unresolved)
+            && !collect_flags(db, impl_env.witnesses(db).as_slice()).intersects(unresolved);
+        let owner_types_are_concrete = match self.owner(db) {
+            BodyOwner::AnonConstBody { expected, .. } => !expected.flags(db).intersects(unresolved),
+            BodyOwner::Closure { ty, .. } => {
+                !TyId::closure(db, ty).flags(db).intersects(unresolved)
+            }
+            BodyOwner::Func(_)
+            | BodyOwner::Const(_)
+            | BodyOwner::ContractInit { .. }
+            | BodyOwner::ContractRecvArm { .. } => true,
+        };
+        let has_all_effect_providers = match self.owner(db) {
+            BodyOwner::Func(func) => {
+                let view = EffectEnvView::new(EffectParamSite::Func(func));
+                let requirements = view.requirements(db);
+                let resolutions = view.resolutions(db);
+                requirements.is_empty()
+                    || (!providers.is_empty()
+                        && requirements.iter().all(|requirement| {
+                            resolutions
+                                .iter()
+                                .find(|resolution| {
+                                    resolution.requirement_idx == requirement.binding_idx
+                                })
+                                .is_some_and(|resolution| {
+                                    providers.iter().any(|specialization| {
+                                        specialization.provider.provider_idx
+                                            == resolution.provider_idx
+                                    })
+                                })
+                        }))
+            }
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::ContractInit { .. }
+            | BodyOwner::ContractRecvArm { .. }
+            | BodyOwner::Closure { .. } => true,
+        };
+
+        if generic_args_are_concrete
+            && providers_are_concrete
+            && impl_env_is_concrete
+            && owner_types_are_concrete
+            && has_all_effect_providers
+        {
+            SemanticInstanceCompleteness::Complete
+        } else if self == identity_semantic_instance_key(db, self.owner(db)) {
+            SemanticInstanceCompleteness::Parametric
+        } else {
+            SemanticInstanceCompleteness::Partial
+        }
     }
 }
 
@@ -114,6 +239,7 @@ pub fn semantic_layout_bundle_signature<'db>(
                         body,
                         local.index() as u32,
                         ty,
+                        local.index() as u32,
                         ty,
                     );
                     (!schema.components.is_empty()).then(|| CallableLayoutBundleInput {
@@ -122,9 +248,13 @@ pub fn semantic_layout_bundle_signature<'db>(
                     })
                 })
                 .collect();
-            CallableLayoutBundleSignature {
-                inputs,
-                ..CallableLayoutBundleSignature::default()
+            if let BodyOwner::Closure { def, .. } = owner {
+                closure_layout_bundle_signature(db, def, inputs, instance.normalized_result_ty(db))
+            } else {
+                CallableLayoutBundleSignature {
+                    inputs,
+                    ..CallableLayoutBundleSignature::default()
+                }
             }
         }
     }
@@ -256,12 +386,13 @@ pub fn instantiated_typed_body<'db>(
 fn receiver_lowering_plan<'db>(
     db: &'db dyn HirAnalysisDb,
     expr_data: &Expr<'db>,
+    callee_is_receiver: bool,
     callable: &crate::analysis::ty::ty_check::Callable<'db>,
     typed_body: &TypedBody<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Option<ReceiverLoweringPlan<'db>> {
-    let receiver = call_like_receiver_expr(expr_data)?;
+    let receiver = call_like_receiver_expr(expr_data, callee_is_receiver)?;
     let borrowed_ty = callable.arg_ty(db, 0)?;
     let borrowed_ty = normalize_ty(db, borrowed_ty, scope, assumptions);
     let receiver_ty = normalize_ty(db, typed_body.expr_ty(db, receiver), scope, assumptions);
@@ -282,14 +413,14 @@ fn receiver_lowering_plan<'db>(
     })
 }
 
-fn call_like_receiver_expr<'db>(expr_data: &Expr<'db>) -> Option<ExprId> {
+fn call_like_receiver_expr<'db>(expr_data: &Expr<'db>, callee_is_receiver: bool) -> Option<ExprId> {
     match expr_data {
         Expr::MethodCall(receiver, ..)
         | Expr::Un(receiver, ..)
         | Expr::Bin(receiver, ..)
         | Expr::AugAssign(receiver, ..) => Some(*receiver),
-        Expr::Call(..)
-        | Expr::Assert(..)
+        Expr::Call(callee, ..) => callee_is_receiver.then_some(*callee),
+        Expr::Assert(..)
         | Expr::Lit(..)
         | Expr::Path(..)
         | Expr::Tuple(..)
@@ -299,6 +430,7 @@ fn call_like_receiver_expr<'db>(expr_data: &Expr<'db>) -> Option<ExprId> {
         | Expr::Field(..)
         | Expr::Cast(..)
         | Expr::Assign(..)
+        | Expr::Closure { .. }
         | Expr::Block(..)
         | Expr::If(..)
         | Expr::Match(..)
@@ -323,7 +455,10 @@ fn provisional_call_sites<'db>(
         let Partial::Present(expr_data) = expr_data else {
             continue;
         };
-        let Some(SemanticExprLowering::Call { callable }) = typed_body.semantic_expr_lowering(expr)
+        let Some(SemanticExprLowering::Call {
+            callable,
+            callee_is_receiver,
+        }) = typed_body.semantic_expr_lowering(expr)
         else {
             continue;
         };
@@ -333,6 +468,7 @@ fn provisional_call_sites<'db>(
             receiver: receiver_lowering_plan(
                 db,
                 expr_data,
+                *callee_is_receiver,
                 callable,
                 typed_body,
                 scope,
@@ -439,7 +575,8 @@ fn final_call_site_data<'db>(
         let Some(site) = call_sites.get_mut(expr.index()).and_then(Option::as_mut) else {
             continue;
         };
-        let Some(SemanticExprLowering::Call { callable }) = typed_body.semantic_expr_lowering(expr)
+        let Some(SemanticExprLowering::Call { callable, .. }) =
+            typed_body.semantic_expr_lowering(expr)
         else {
             continue;
         };
@@ -815,74 +952,86 @@ impl<'db> SemanticInstance<'db> {
 
     #[salsa::tracked]
     pub fn normalized_result_ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
-        self.normalized_ty(db, self.key(db).typed_body(db).result_ty())
+        self.normalized_ty(db, self.key(db).callable_body(db).result_ty(db))
     }
 
-    #[salsa::tracked(
-        cycle_fn=known_never_returns_cycle_recover,
-        cycle_initial=known_never_returns_cycle_initial
-    )]
+    #[salsa::tracked]
     pub fn known_never_returns(self, db: &'db dyn HirAnalysisDb) -> bool {
-        if self.is_intrinsically_never_returning(db) {
-            return true;
-        }
+        let root_key = self.key(db);
+        let mut instances = vec![self];
+        let mut node_by_key = FxHashMap::default();
+        node_by_key.insert(root_key, 0);
+        let mut nodes = vec![None];
+        let mut pending_nodes = vec![0];
 
-        let body = self.body(db);
-        if body.blocks.is_empty() {
-            return false;
-        }
-
-        let mut pending = vec![SBlockId::from_u32(0)];
-        let mut visited = FxHashSet::default();
-        while let Some(block_id) = pending.pop() {
-            if !visited.insert(block_id) {
+        // Materialize the finite reachable call graph without consulting this
+        // query recursively. Calls after another call remain present in this
+        // provisional view, so a callee that later proves able to return cannot
+        // reveal a call-graph edge that was omitted here. Non-regular recursive
+        // source components are rejected before node normalization, so every
+        // remaining recursive substitution ranges over a finite set of formal
+        // permutations, duplications, and caller-independent constants.
+        while let Some(node_idx) = pending_nodes.pop() {
+            if nodes[node_idx].is_some() {
                 continue;
             }
-            let Some(block) = body.block(block_id) else {
+            let instance = instances[node_idx];
+            let analysis = analyze_never_return_node(db, instance);
+            if !matches!(&analysis.node, NeverReturnNode::Body { .. }) {
+                nodes[node_idx] = Some(analysis.node);
                 continue;
-            };
-            let mut terminated_in_stmt = false;
-            for stmt in &block.stmts {
-                let SStmtKind::Assign {
-                    expr: SExpr::Call { callee, .. },
-                    ..
-                } = &stmt.kind
-                else {
+            }
+            for callee_key in analysis.callees {
+                let callee_idx = nodes.len();
+                let Entry::Vacant(entry) = node_by_key.entry(callee_key) else {
                     continue;
                 };
-                let callee = SemanticInstance::new(db, callee.key);
-                if callee.is_intrinsically_never_returning(db)
-                    || (callee.contains_direct_intrinsic_never_returning_call(db)
-                        && callee.known_never_returns(db))
-                {
-                    terminated_in_stmt = true;
-                    break;
-                }
+                entry.insert(callee_idx);
+                let callee = SemanticInstance::new(db, callee_key);
+                instances.push(callee);
+                nodes.push(None);
+                pending_nodes.push(callee_idx);
             }
-            if terminated_in_stmt {
-                continue;
-            }
+            nodes[node_idx] = Some(analysis.node);
+        }
 
-            match &block.terminator.kind {
-                STerminatorKind::Return(_) => return false,
-                STerminatorKind::Assert { .. } => {}
-                STerminatorKind::Goto(next) => pending.push(*next),
-                STerminatorKind::Branch {
-                    then_bb, else_bb, ..
-                } => {
-                    pending.push(*then_bb);
-                    pending.push(*else_bb);
+        let nodes = nodes
+            .into_iter()
+            .map(|node| node.expect("every discovered never-return node must be analyzed"))
+            .collect::<Vec<_>>();
+        let mut never_returns = nodes
+            .iter()
+            .map(|node| !matches!(node, NeverReturnNode::ConservativeMayReturn))
+            .collect::<Vec<_>>();
+
+        // `never_returns` starts at the top element. Repeatedly removing nodes
+        // with an executable normal-return path computes the greatest fixed
+        // point, which is the desired interpretation for pure and mutual
+        // recursion: an infinite call chain has no finite normal return.
+        loop {
+            let mut changed = false;
+            for (node_idx, node) in nodes.iter().enumerate() {
+                if !never_returns[node_idx] {
+                    continue;
                 }
-                STerminatorKind::MatchEnum { cases, default, .. } => {
-                    pending.extend(cases.iter().map(|(_, block)| *block));
-                    if let Some(default) = default {
-                        pending.push(*default);
+                let holds = match node {
+                    NeverReturnNode::Intrinsic => true,
+                    NeverReturnNode::ConservativeMayReturn => false,
+                    NeverReturnNode::Body { body, successors } => {
+                        never_return_body_holds(body, successors, &node_by_key, &never_returns)
                     }
+                };
+                if !holds {
+                    never_returns[node_idx] = false;
+                    changed = true;
                 }
+            }
+            if !changed {
+                break;
             }
         }
 
-        true
+        never_returns[node_by_key[&root_key]]
     }
 
     #[salsa::tracked(return_ref)]
@@ -894,6 +1043,170 @@ impl<'db> SemanticInstance<'db> {
     pub fn callees(self, db: &'db dyn HirAnalysisDb) -> Vec<SemanticCalleeRef<'db>> {
         collect_semantic_callees(db, self)
     }
+}
+
+enum NeverReturnNode<'db> {
+    Intrinsic,
+    ConservativeMayReturn,
+    Body {
+        body: crate::analysis::semantic::borrowck::NormalizedSemanticBody<'db>,
+        successors: Vec<Vec<SBlockId>>,
+    },
+}
+
+struct NeverReturnNodeAnalysis<'db> {
+    node: NeverReturnNode<'db>,
+    callees: Vec<SemanticInstanceKey<'db>>,
+}
+
+fn analyze_never_return_node<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> NeverReturnNodeAnalysis<'db> {
+    if instance.is_intrinsically_never_returning(db) {
+        return NeverReturnNodeAnalysis {
+            node: NeverReturnNode::Intrinsic,
+            callees: Vec::new(),
+        };
+    }
+    if semantic_instance_is_in_non_regular_recursive_component(db, instance) {
+        return NeverReturnNodeAnalysis {
+            node: NeverReturnNode::ConservativeMayReturn,
+            callees: Vec::new(),
+        };
+    }
+    if instance
+        .key(db)
+        .typed_body(db)
+        .has_smir_lowering_blocker(db)
+    {
+        return NeverReturnNodeAnalysis {
+            node: NeverReturnNode::ConservativeMayReturn,
+            callees: Vec::new(),
+        };
+    }
+    let Ok(body) = normalize_provisional_semantic_body_for_never_return_analysis(db, instance)
+    else {
+        return NeverReturnNodeAnalysis {
+            node: NeverReturnNode::ConservativeMayReturn,
+            callees: Vec::new(),
+        };
+    };
+    if body.blocks.is_empty() {
+        return NeverReturnNodeAnalysis {
+            node: NeverReturnNode::ConservativeMayReturn,
+            callees: Vec::new(),
+        };
+    }
+
+    let successors = normalized_cfg_successors(db, &body);
+    let mut callees = Vec::new();
+    let mut pending_blocks = vec![SBlockId::new(0)];
+    let mut visited_blocks = FxHashSet::default();
+    while let Some(block_id) = pending_blocks.pop() {
+        if !visited_blocks.insert(block_id) {
+            continue;
+        }
+        let Some(block) = body.block(block_id) else {
+            return NeverReturnNodeAnalysis {
+                node: NeverReturnNode::ConservativeMayReturn,
+                callees: Vec::new(),
+            };
+        };
+        let mut intrinsically_terminated = false;
+        for stmt in &block.stmts {
+            let NSStmtKind::Assign {
+                expr: NExpr::Call { callee, .. },
+                ..
+            } = &stmt.kind
+            else {
+                continue;
+            };
+            callees.push(callee.key);
+            if SemanticInstance::new(db, callee.key).is_intrinsically_never_returning(db) {
+                intrinsically_terminated = true;
+                break;
+            }
+        }
+        if intrinsically_terminated {
+            continue;
+        }
+        let Some(block_successors) = successors.get(block_id.index()) else {
+            return NeverReturnNodeAnalysis {
+                node: NeverReturnNode::ConservativeMayReturn,
+                callees: Vec::new(),
+            };
+        };
+        pending_blocks.extend(block_successors.iter().copied());
+    }
+    NeverReturnNodeAnalysis {
+        node: NeverReturnNode::Body { body, successors },
+        callees,
+    }
+}
+
+pub fn same_syntactic_callable_owner(lhs: BodyOwner<'_>, rhs: BodyOwner<'_>) -> bool {
+    match (lhs, rhs) {
+        (
+            BodyOwner::Closure {
+                def: lhs_def,
+                receiver_mode: lhs_mode,
+                ..
+            },
+            BodyOwner::Closure {
+                def: rhs_def,
+                receiver_mode: rhs_mode,
+                ..
+            },
+        ) => lhs_def == rhs_def && lhs_mode == rhs_mode,
+        _ => lhs == rhs,
+    }
+}
+
+fn never_return_body_holds<'db>(
+    body: &crate::analysis::semantic::borrowck::NormalizedSemanticBody<'db>,
+    successors: &[Vec<SBlockId>],
+    node_by_key: &FxHashMap<SemanticInstanceKey<'db>, usize>,
+    never_returns: &[bool],
+) -> bool {
+    let mut pending = vec![SBlockId::new(0)];
+    let mut visited = FxHashSet::default();
+    while let Some(block_id) = pending.pop() {
+        if !visited.insert(block_id) {
+            continue;
+        }
+        let Some(block) = body.block(block_id) else {
+            return false;
+        };
+        let mut terminated_in_stmt = false;
+        for stmt in &block.stmts {
+            let NSStmtKind::Assign {
+                expr: NExpr::Call { callee, .. },
+                ..
+            } = &stmt.kind
+            else {
+                continue;
+            };
+            if node_by_key
+                .get(&callee.key)
+                .is_some_and(|callee_idx| never_returns[*callee_idx])
+            {
+                terminated_in_stmt = true;
+                break;
+            }
+        }
+        if terminated_in_stmt {
+            continue;
+        }
+        if matches!(block.terminator.kind, NSTerminatorKind::Return(_)) {
+            return false;
+        }
+        let Some(block_successors) = successors.get(block_id.index()) else {
+            return false;
+        };
+        pending.extend(block_successors.iter().copied());
+    }
+    true
 }
 
 impl<'db> SemanticInstance<'db> {
@@ -921,26 +1234,6 @@ impl<'db> SemanticInstance<'db> {
                     | RuntimeBuiltinFuncKind::Todo
             )
         )
-    }
-
-    fn contains_direct_intrinsic_never_returning_call(self, db: &'db dyn HirAnalysisDb) -> bool {
-        if self.is_intrinsically_never_returning(db) {
-            return true;
-        }
-
-        self.body(db).blocks.iter().any(|block| {
-            block.stmts.iter().any(|stmt| {
-                if let SStmtKind::Assign {
-                    expr: SExpr::Call { callee, .. },
-                    ..
-                } = &stmt.kind
-                {
-                    SemanticInstance::new(db, callee.key).is_intrinsically_never_returning(db)
-                } else {
-                    false
-                }
-            })
-        })
     }
 }
 
@@ -1022,6 +1315,9 @@ pub(crate) fn provisional_provider_binding_for_instance_effect<'db>(
 ) -> Option<ProviderBinding<'db>> {
     let key = instance.key(db);
     let provider_from_subst = |provider_idx| {
+        if key.completeness(db) == SemanticInstanceCompleteness::Partial {
+            return None;
+        }
         key.effect_providers(db)
             .providers(db)
             .iter()
@@ -1365,26 +1661,2189 @@ fn lower_semantic_body<'db>(
     body
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum SyntacticBodyOwner<'db> {
+    Func(crate::hir_def::Func<'db>),
+    Const(crate::hir_def::Const<'db>),
+    AnonConst(crate::hir_def::Body<'db>),
+    ContractInit(crate::hir_def::Contract<'db>),
+    ContractRecvArm {
+        contract: crate::hir_def::Contract<'db>,
+        recv_idx: u32,
+        arm_idx: u32,
+    },
+    Closure {
+        def: crate::hir_def::ClosureDef<'db>,
+        receiver_mode: crate::analysis::ty::ty_check::ClosureReceiverMode,
+    },
+}
+
+impl<'db> From<BodyOwner<'db>> for SyntacticBodyOwner<'db> {
+    fn from(owner: BodyOwner<'db>) -> Self {
+        match owner {
+            BodyOwner::Func(func) => Self::Func(func),
+            BodyOwner::Const(const_) => Self::Const(const_),
+            BodyOwner::AnonConstBody { body, .. } => Self::AnonConst(body),
+            BodyOwner::ContractInit { contract } => Self::ContractInit(contract),
+            BodyOwner::ContractRecvArm {
+                contract,
+                recv_idx,
+                arm_idx,
+            } => Self::ContractRecvArm {
+                contract,
+                recv_idx,
+                arm_idx,
+            },
+            BodyOwner::Closure {
+                def, receiver_mode, ..
+            } => Self::Closure { def, receiver_mode },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SourceCallGraphEdge<'db> {
+    call_site: Option<CallSiteId>,
+    callee_key: SemanticInstanceKey<'db>,
+    target: usize,
+    flow: SourceCallGraphEdgeFlow,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+enum SourceCallGraphEdgeFlow {
+    /// Relate each target coordinate to the caller coordinates that occur in
+    /// its actual specialization.
+    Classify,
+    /// An unresolved blanket implementation deconstructs the dispatched
+    /// aggregate. Carry the aggregate itself, but do not mistake extracting an
+    /// implementation parameter for a size-preserving edge.
+    TraitAggregateCarry { impl_param_count: usize },
+    /// Projection-heavy dispatch could not expose a structural relation.
+    /// Conservatively treat every possible coordinate relation as growth.
+    UnknownGrowth,
+    /// A parent owns a nested closure syntactically. This is a topology edge,
+    /// not a specialization step.
+    ClosureContainment,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Update)]
+struct SourceCallGraphEdgeSeed<'db> {
+    call_site: Option<CallSiteId>,
+    callee_key: SemanticInstanceKey<'db>,
+    flow: SourceCallGraphEdgeFlow,
+}
+
+#[derive(Debug)]
+struct SourceCallGraphNode<'db> {
+    key: SemanticInstanceKey<'db>,
+    edges: Vec<SourceCallGraphEdge<'db>>,
+}
+
+fn source_graph_template_owner<'db>(
+    db: &'db dyn HirAnalysisDb,
+    actual_owner: BodyOwner<'db>,
+) -> BodyOwner<'db> {
+    if let BodyOwner::Closure {
+        def, receiver_mode, ..
+    } = actual_owner
+    {
+        let Some(parent_owner) = BodyOwner::from_body(db, def.body) else {
+            return actual_owner;
+        };
+        let template = typed_body_template(db, parent_owner);
+        let Some(template_ty) = template
+            .body
+            .closure_info(def.expr)
+            .filter(|info| info.def == def)
+            .map(|info| info.ty)
+        else {
+            return actual_owner;
+        };
+        BodyOwner::Closure {
+            ty: template_ty,
+            def,
+            receiver_mode,
+        }
+    } else {
+        actual_owner
+    }
+}
+
+fn source_graph_key_with_context<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: SemanticInstanceKey<'db>,
+    caller_key: Option<SemanticInstanceKey<'db>>,
+    template_key: Option<SemanticInstanceKey<'db>>,
+) -> SemanticInstanceKey<'db> {
+    let owner = source_graph_template_owner(db, key.owner(db));
+    let identity_args = owner_identity_generic_args(db, owner);
+    let actual_args = key.subst(db).generic_args(db);
+    let unresolved = TyFlags::HAS_PARAM | TyFlags::HAS_VAR | TyFlags::HAS_PROJECTION;
+    let template_args = template_key.map(|template| template.subst(db).generic_args(db));
+    let has_caller_context = caller_key.is_some();
+    let caller_ground_args = caller_key
+        .map(|caller| {
+            semantic_instance_primary_state_tys(db, caller)
+                .into_iter()
+                .filter(|ty| !ty.flags(db).intersects(unresolved))
+                .collect::<FxHashSet<_>>()
+        })
+        .unwrap_or_default();
+    // Ground arguments can change trait candidate selection. Retain literals
+    // already ground in the source template and unchanged ground coordinates
+    // carried by the caller. A value made ground only by specializing a
+    // caller-dependent expression is widened to the callee's formal
+    // coordinate. The exact edge still records that specialization for
+    // size-change analysis, while graph construction cannot unroll
+    // `f<3, D> -> f<4, D> -> f<5, D> -> ...`.
+    let generic_args = if actual_args.len() == identity_args.len() {
+        actual_args
+            .iter()
+            .copied()
+            .enumerate()
+            .zip(identity_args.iter().copied())
+            .map(|((idx, actual), identity)| {
+                let source_literal = template_args
+                    .and_then(|args| args.get(idx))
+                    .is_some_and(|template| !template.flags(db).intersects(unresolved));
+                if !actual.flags(db).intersects(unresolved)
+                    && (!has_caller_context
+                        || source_literal
+                        || caller_ground_args.contains(&actual))
+                {
+                    actual
+                } else {
+                    identity
+                }
+            })
+            .collect()
+    } else {
+        identity_args
+    };
+    let owner = if let BodyOwner::Closure {
+        ty,
+        def,
+        receiver_mode,
+    } = owner
+    {
+        let ty = Binder::bind(TyId::closure(db, ty))
+            .instantiate(db, &generic_args)
+            .as_closure(db)
+            .unwrap_or(ty);
+        BodyOwner::Closure {
+            ty,
+            def,
+            receiver_mode,
+        }
+    } else {
+        owner
+    };
+    SemanticInstanceKey::new(
+        db,
+        owner,
+        GenericSubst::new(db, generic_args),
+        EffectProviderSubst::empty(db),
+        ImplEnv::empty(db, owner.scope()),
+    )
+}
+
+fn source_graph_key<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: SemanticInstanceKey<'db>,
+) -> SemanticInstanceKey<'db> {
+    source_graph_key_with_context(db, key, None, None)
+}
+
+fn source_graph_identity_key<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+) -> SemanticInstanceKey<'db> {
+    let owner = source_graph_template_owner(db, owner);
+    identity_semantic_instance_key(db, owner)
+}
+
+#[salsa::tracked(return_ref)]
+fn source_call_graph_edges<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: SemanticInstanceKey<'db>,
+    dispatch_ingot: Ingot<'db>,
+) -> Vec<SourceCallGraphEdgeSeed<'db>> {
+    let instance = SemanticInstance::new(db, key);
+    let typed_body = key.typed_body(db);
+    let Some(body) = typed_body.body() else {
+        return Vec::new();
+    };
+    let Some(root) = key.owner(db).root_expr(db) else {
+        return Vec::new();
+    };
+    let Partial::Present(root_data) = root.data(db, body) else {
+        return Vec::new();
+    };
+    struct OwnerNodeCollector {
+        exprs: FxHashSet<ExprId>,
+        stmts: FxHashSet<StmtId>,
+    }
+    impl<'db> Visitor<'db> for OwnerNodeCollector {
+        fn visit_expr(
+            &mut self,
+            ctxt: &mut VisitorCtxt<'db, LazyExprSpan<'db>>,
+            expr: ExprId,
+            expr_data: &Expr<'db>,
+        ) {
+            self.exprs.insert(expr);
+            if !matches!(expr_data, Expr::Closure { .. }) {
+                walk_expr(self, ctxt, expr);
+            }
+        }
+
+        fn visit_stmt(
+            &mut self,
+            ctxt: &mut VisitorCtxt<'db, LazyStmtSpan<'db>>,
+            stmt: StmtId,
+            _stmt_data: &Stmt<'db>,
+        ) {
+            self.stmts.insert(stmt);
+            walk_stmt(self, ctxt, stmt);
+        }
+
+        fn visit_item(
+            &mut self,
+            _ctxt: &mut VisitorCtxt<'db, LazyItemSpan<'db>>,
+            _item: ItemKind<'db>,
+        ) {
+        }
+    }
+    let mut owner_nodes = OwnerNodeCollector {
+        exprs: FxHashSet::default(),
+        stmts: FxHashSet::default(),
+    };
+    let mut visitor_ctxt = VisitorCtxt::with_expr(db, body.scope(), body, root);
+    owner_nodes.visit_expr(&mut visitor_ctxt, root, root_data);
+
+    let call_sites = provisional_call_sites(db, instance);
+    let for_loop_call_sites = provisional_for_loop_call_sites(db, instance);
+    let mut edges = Vec::new();
+    for (expr, _) in body.exprs(db).iter() {
+        if !owner_nodes.exprs.contains(&expr) {
+            continue;
+        }
+        let Some(callee_key) = call_sites
+            .get(expr.index())
+            .and_then(Option::as_ref)
+            .and_then(|site| site.callee)
+            .map(|callee| callee.key)
+        else {
+            continue;
+        };
+        edges.push(SourceCallGraphEdgeSeed {
+            call_site: Some(CallSiteId::Expr(expr)),
+            callee_key,
+            flow: SourceCallGraphEdgeFlow::Classify,
+        });
+        if let Some(SemanticExprLowering::Call { callable, .. }) =
+            typed_body.semantic_expr_lowering(expr)
+        {
+            edges.extend(
+                source_trait_dispatch_target_keys(db, dispatch_ingot, callable, callee_key)
+                    .into_iter()
+                    .map(|(target, flow)| SourceCallGraphEdgeSeed {
+                        call_site: Some(CallSiteId::Expr(expr)),
+                        callee_key: target,
+                        flow,
+                    }),
+            );
+        }
+    }
+    for (stmt, _) in body.stmts(db).iter() {
+        if !owner_nodes.stmts.contains(&stmt) {
+            continue;
+        }
+        let Some(sites) = for_loop_call_sites
+            .get(stmt.index())
+            .and_then(Option::as_ref)
+        else {
+            continue;
+        };
+        if let Some(callee) = sites.len.callee {
+            edges.push(SourceCallGraphEdgeSeed {
+                call_site: Some(CallSiteId::ForLoopLen(stmt)),
+                callee_key: callee.key,
+                flow: SourceCallGraphEdgeFlow::Classify,
+            });
+            if let Some(seq) = typed_body.for_loop_seq(stmt) {
+                edges.extend(
+                    source_trait_dispatch_target_keys(
+                        db,
+                        dispatch_ingot,
+                        &seq.len_callable,
+                        callee.key,
+                    )
+                    .into_iter()
+                    .map(|(target, flow)| SourceCallGraphEdgeSeed {
+                        call_site: Some(CallSiteId::ForLoopLen(stmt)),
+                        callee_key: target,
+                        flow,
+                    }),
+                );
+            }
+        }
+        if let Some(callee) = sites.get.callee {
+            edges.push(SourceCallGraphEdgeSeed {
+                call_site: Some(CallSiteId::ForLoopGet(stmt)),
+                callee_key: callee.key,
+                flow: SourceCallGraphEdgeFlow::Classify,
+            });
+            if let Some(seq) = typed_body.for_loop_seq(stmt) {
+                edges.extend(
+                    source_trait_dispatch_target_keys(
+                        db,
+                        dispatch_ingot,
+                        &seq.get_callable,
+                        callee.key,
+                    )
+                    .into_iter()
+                    .map(|(target, flow)| SourceCallGraphEdgeSeed {
+                        call_site: Some(CallSiteId::ForLoopGet(stmt)),
+                        callee_key: target,
+                        flow,
+                    }),
+                );
+            }
+        }
+    }
+    // Multiple calls in one body can produce the same topology-only dispatch
+    // edge (notably tuple ABI methods dispatching each field through the same
+    // blanket implementation). The coordinate relation depends only on the
+    // source node, target key, and flow kind; retaining every call-site copy
+    // makes the graph quadratic without adding a distinct termination path.
+    let mut seen = FxHashSet::default();
+    edges.retain(|edge| seen.insert((edge.callee_key, edge.flow)));
+    edges
+}
+
+fn source_trait_dispatch_target_keys<'db>(
+    db: &'db dyn HirAnalysisDb,
+    dispatch_ingot: Ingot<'db>,
+    callable: &Callable<'db>,
+    direct_callee_key: SemanticInstanceKey<'db>,
+) -> Vec<(SemanticInstanceKey<'db>, SourceCallGraphEdgeFlow)> {
+    let Some(inst) = callable.trait_inst() else {
+        return Vec::new();
+    };
+    let CallableDef::Func(trait_method) = callable.callable_def() else {
+        return Vec::new();
+    };
+    if !matches!(
+        direct_callee_key.owner(db),
+        BodyOwner::Func(direct) if direct == trait_method
+    ) {
+        // The provisional instance already selected an explicit implementation.
+        return Vec::new();
+    }
+    let unresolved = TyFlags::HAS_PARAM | TyFlags::HAS_VAR | TyFlags::HAS_PROJECTION;
+    if !inst
+        .args(db)
+        .iter()
+        .chain(inst.assoc_type_bindings(db).values())
+        .any(|ty| ty.flags(db).intersects(unresolved))
+    {
+        // A concrete default method cannot switch to another implementation
+        // as its caller is specialized.
+        return Vec::new();
+    }
+    source_trait_dispatch_target_keys_uncached(
+        db,
+        dispatch_ingot,
+        inst,
+        trait_method,
+        direct_callee_key,
+    )
+}
+
+fn source_trait_dispatch_target_keys_uncached<'db>(
+    db: &'db dyn HirAnalysisDb,
+    dispatch_ingot: Ingot<'db>,
+    inst: TraitInstId<'db>,
+    trait_method: Func<'db>,
+    direct_callee_key: SemanticInstanceKey<'db>,
+) -> Vec<(SemanticInstanceKey<'db>, SourceCallGraphEdgeFlow)> {
+    let Some(name) = trait_method.name(db).to_opt() else {
+        return Vec::new();
+    };
+    // Use the graph root's ingot rather than the generic callee's defining
+    // ingot. A dependency-defined dispatcher can select an implementation
+    // supplied by the application, and that implementation body may be the
+    // edge that closes a growing recursive component.
+    let mut targets = IndexSet::new();
+    for implementor in impls_for_trait_def(db, dispatch_ingot, inst.def(db)) {
+        if !trait_dispatch_impl_may_apply(db, inst, *implementor) {
+            continue;
+        }
+        let candidate = implementor.skip_binder();
+        let Some(target) = candidate.methods(db).get(&name).copied() else {
+            continue;
+        };
+        if target.body(db).is_none() {
+            continue;
+        }
+        let (target_key, flow) = specialized_trait_dispatch_target_key(
+            db,
+            inst,
+            *implementor,
+            target,
+            direct_callee_key,
+        )
+        .unwrap_or_else(|| {
+            (
+                trait_aggregate_carry_target_key(
+                    db,
+                    *candidate,
+                    target,
+                    direct_callee_key,
+                    inst.args(db).len(),
+                ),
+                SourceCallGraphEdgeFlow::TraitAggregateCarry {
+                    impl_param_count: candidate.params(db).len(),
+                },
+            )
+        });
+        targets.insert((target_key, flow));
+    }
+    targets.into_iter().collect()
+}
+
+fn trait_aggregate_carry_target_key<'db>(
+    db: &'db dyn HirAnalysisDb,
+    candidate: ImplementorId<'db>,
+    target: Func<'db>,
+    direct_callee_key: SemanticInstanceKey<'db>,
+    trait_arg_len: usize,
+) -> SemanticInstanceKey<'db> {
+    let generic_args = complete_resolved_trait_method_args(
+        db,
+        target,
+        candidate.params(db).to_vec(),
+        direct_callee_key.subst(db).generic_args(db),
+        trait_arg_len,
+    );
+    let owner = BodyOwner::Func(target);
+    SemanticInstanceKey::new(
+        db,
+        owner,
+        GenericSubst::new(db, generic_args),
+        EffectProviderSubst::empty(db),
+        ImplEnv::empty(db, owner.scope()),
+    )
+}
+
+fn specialized_trait_dispatch_target_key<'db>(
+    db: &'db dyn HirAnalysisDb,
+    dispatch_inst: TraitInstId<'db>,
+    implementor: Binder<ImplementorId<'db>>,
+    target: crate::hir_def::Func<'db>,
+    direct_callee_key: SemanticInstanceKey<'db>,
+) -> Option<(SemanticInstanceKey<'db>, SourceCallGraphEdgeFlow)> {
+    let candidate = implementor.skip_binder();
+    let may_need_normalization = |inst: TraitInstId<'db>| {
+        inst.args(db)
+            .iter()
+            .chain(inst.assoc_type_bindings(db).values())
+            .any(|ty| {
+                ty.flags(db)
+                    .intersects(TyFlags::HAS_PROJECTION | TyFlags::HAS_INVALID)
+            })
+    };
+    if may_need_normalization(dispatch_inst) || may_need_normalization(candidate.trait_inst(db)) {
+        return Some((
+            identity_semantic_instance_key(db, BodyOwner::Func(target)),
+            SourceCallGraphEdgeFlow::UnknownGrowth,
+        ));
+    }
+
+    // Keep the dispatcher's source parameters rigid and instantiate only the
+    // candidate binder. When this succeeds, the solved implementation
+    // parameters are symbolic expressions in the caller coordinates (for
+    // example `P = T` or `P = Wrap<T>`), which is precisely the topology
+    // relation needed by the size-change graph.
+    let mut table = UnificationTable::new(db);
+    let instantiated = table.instantiate_with_fresh_vars(implementor);
+    if !unify_trait_dispatch_candidate_args(
+        db,
+        &mut table,
+        dispatch_inst,
+        instantiated.trait_inst(db),
+    ) {
+        // A blanket pattern such as `Wrap<P>` can still apply to an unresolved
+        // dispatch `Self = T` by deconstructing a future specialization of T.
+        // The aggregate carry is exact; the extracted P is a strict subterm
+        // and intentionally does not retain the caller's size lineage.
+        return None;
+    }
+
+    let impl_args = instantiated
+        .params(db)
+        .iter()
+        .map(|param| param.fold_with(db, &mut table))
+        .collect();
+    let generic_args = complete_resolved_trait_method_args(
+        db,
+        target,
+        impl_args,
+        direct_callee_key.subst(db).generic_args(db),
+        dispatch_inst.args(db).len(),
+    );
+    let owner = BodyOwner::Func(target);
+    Some((
+        SemanticInstanceKey::new(
+            db,
+            owner,
+            GenericSubst::new(db, generic_args),
+            EffectProviderSubst::empty(db),
+            ImplEnv::empty(db, owner.scope()),
+        ),
+        SourceCallGraphEdgeFlow::Classify,
+    ))
+}
+
+fn unify_trait_dispatch_candidate_args<'db>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut UnificationTable<'db>,
+    dispatch_inst: TraitInstId<'db>,
+    candidate_inst: TraitInstId<'db>,
+) -> bool {
+    if dispatch_inst.def(db) != candidate_inst.def(db)
+        || dispatch_inst.args(db).len() != candidate_inst.args(db).len()
+    {
+        return false;
+    }
+    for (&dispatch_arg, &candidate_arg) in
+        dispatch_inst.args(db).iter().zip(candidate_inst.args(db))
+    {
+        if table.unify(dispatch_arg, candidate_arg).is_err() {
+            return false;
+        }
+    }
+    for (&name, &dispatch_binding) in dispatch_inst.assoc_type_bindings(db) {
+        let Some(&candidate_binding) = candidate_inst.assoc_type_bindings(db).get(&name) else {
+            // An absent candidate binding is not evidence of incompatibility:
+            // it may be supplied by a default or remain abstract. The source
+            // topology only needs to reject candidates whose known headers
+            // conflict with the dispatch.
+            continue;
+        };
+        if table.unify(dispatch_binding, candidate_binding).is_err() {
+            return false;
+        }
+    }
+    true
+}
+
+fn trait_dispatch_impl_may_apply<'db>(
+    db: &'db dyn HirAnalysisDb,
+    dispatch_inst: TraitInstId<'db>,
+    implementor: Binder<ImplementorId<'db>>,
+) -> bool {
+    let candidate_inst = implementor.skip_binder().trait_inst(db);
+    let may_need_normalization = |inst: TraitInstId<'db>| {
+        inst.args(db)
+            .iter()
+            .chain(inst.assoc_type_bindings(db).values())
+            .any(|ty| {
+                ty.flags(db)
+                    .intersects(TyFlags::HAS_PROJECTION | TyFlags::HAS_INVALID)
+            })
+    };
+    if may_need_normalization(dispatch_inst) || may_need_normalization(candidate_inst) {
+        // Candidate selection normalizes projection-heavy goals before
+        // unification. Keep those targets in this conservative topology.
+        return true;
+    }
+
+    let mut table = UnificationTable::new(db);
+    let dispatch_inst = table.instantiate_with_fresh_vars(Binder::bind(dispatch_inst));
+    let implementor = table.instantiate_with_fresh_vars(implementor);
+    unify_trait_dispatch_candidate_args(db, &mut table, dispatch_inst, implementor.trait_inst(db))
+}
+
+fn source_contained_closure_keys<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: SemanticInstanceKey<'db>,
+) -> Vec<SemanticInstanceKey<'db>> {
+    if matches!(key.owner(db), BodyOwner::Closure { .. }) {
+        return Vec::new();
+    }
+    let typed_body = key.typed_body(db);
+    typed_body
+        .closure_infos()
+        .filter_map(|(expr, _)| typed_body.expr_ty(db, expr).as_closure(db))
+        .map(|closure_ty| {
+            source_graph_key(
+                db,
+                identity_semantic_instance_key(db, BodyOwner::closure(db, closure_ty)),
+            )
+        })
+        .collect()
+}
+
+fn push_source_graph_root<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: SemanticInstanceKey<'db>,
+    nodes: &mut Vec<SourceCallGraphNode<'db>>,
+    node_by_key: &mut FxHashMap<SemanticInstanceKey<'db>, usize>,
+) {
+    let key = source_graph_key(db, key);
+    let owner = key.owner(db);
+    if owner.body(db).is_none() {
+        return;
+    }
+    if node_by_key.contains_key(&key) {
+        return;
+    }
+    let node_idx = nodes.len();
+    node_by_key.insert(key, node_idx);
+    nodes.push(SourceCallGraphNode {
+        key,
+        edges: Vec::new(),
+    });
+}
+
+fn raw_alias_targets<'db>(
+    db: &'db dyn HirAnalysisDb,
+    name: IdentId<'db>,
+    aliases: &[(IdentId<'db>, IdentId<'db>)],
+) -> FxHashSet<IdentId<'db>> {
+    let mut targets = FxHashSet::default();
+    let mut pending = vec![name];
+    while let Some(name) = pending.pop() {
+        if !targets.insert(name) {
+            continue;
+        }
+        pending.extend(
+            aliases
+                .iter()
+                .filter(|(alias, _)| *alias == name)
+                .map(|(_, target)| *target),
+        );
+    }
+    let _ = db;
+    targets
+}
+
+fn raw_func_qualifier_names<'db>(db: &'db dyn HirAnalysisDb, func: Func<'db>) -> Vec<IdentId<'db>> {
+    fn type_root_name<'db>(
+        db: &'db dyn HirAnalysisDb,
+        ty: Partial<crate::hir_def::TypeId<'db>>,
+    ) -> Option<IdentId<'db>> {
+        let ty = ty.to_opt()?;
+        match ty.data(db) {
+            TypeKind::Path(Partial::Present(path)) => path.ident(db).to_opt(),
+            TypeKind::Mode(_, inner) | TypeKind::Ptr(inner) => type_root_name(db, *inner),
+            TypeKind::Path(Partial::Absent)
+            | TypeKind::Tuple(_)
+            | TypeKind::Array(_, _)
+            | TypeKind::Never => None,
+        }
+    }
+
+    let mut qualifiers = Vec::new();
+    match func.scope().parent_item(db) {
+        Some(ItemKind::TopMod(top_mod)) => qualifiers.push(top_mod.name(db)),
+        Some(ItemKind::Mod(mod_)) => qualifiers.extend(mod_.name(db).to_opt()),
+        Some(ItemKind::Trait(trait_)) => qualifiers.extend(trait_.name(db).to_opt()),
+        Some(ItemKind::Impl(impl_)) => {
+            qualifiers.extend(type_root_name(db, impl_.hir_type_ref(db)));
+        }
+        Some(ItemKind::ImplTrait(impl_trait)) => {
+            qualifiers.extend(
+                impl_trait
+                    .hir_trait_ref(db)
+                    .to_opt()
+                    .and_then(|trait_ref| trait_ref.path(db).to_opt())
+                    .and_then(|path| path.ident(db).to_opt()),
+            );
+            qualifiers.extend(type_root_name(db, impl_trait.hir_type_ref(db)));
+        }
+        Some(
+            ItemKind::Func(_)
+            | ItemKind::Struct(_)
+            | ItemKind::Contract(_)
+            | ItemKind::Enum(_)
+            | ItemKind::TypeAlias(_)
+            | ItemKind::Const(_)
+            | ItemKind::StaticAssert(_)
+            | ItemKind::Use(_)
+            | ItemKind::Body(_),
+        )
+        | None => {}
+    }
+    qualifiers
+}
+
+fn raw_func_generic_param_names<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: Func<'db>,
+) -> FxHashSet<IdentId<'db>> {
+    let mut names = FxHashSet::default();
+    let mut extend = |params: crate::hir_def::GenericParamListId<'db>| {
+        names.extend(
+            params
+                .data(db)
+                .iter()
+                .filter_map(|param| param.name().to_opt()),
+        );
+    };
+    extend(func.hir_generic_params(db));
+    match func.scope().parent_item(db) {
+        Some(ItemKind::Trait(trait_)) => extend(trait_.hir_generic_params(db)),
+        Some(ItemKind::Impl(impl_)) => extend(impl_.hir_generic_params(db)),
+        Some(ItemKind::ImplTrait(impl_trait)) => extend(impl_trait.hir_generic_params(db)),
+        Some(
+            ItemKind::TopMod(_)
+            | ItemKind::Mod(_)
+            | ItemKind::Func(_)
+            | ItemKind::Struct(_)
+            | ItemKind::Contract(_)
+            | ItemKind::Enum(_)
+            | ItemKind::TypeAlias(_)
+            | ItemKind::Const(_)
+            | ItemKind::StaticAssert(_)
+            | ItemKind::Use(_)
+            | ItemKind::Body(_),
+        )
+        | None => {}
+    }
+    names
+}
+
+fn raw_path_may_refer_to_func<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    candidate: Func<'db>,
+    aliases: &[(IdentId<'db>, IdentId<'db>)],
+    type_alias_names: &FxHashSet<IdentId<'db>>,
+    namespace_names: &FxHashSet<IdentId<'db>>,
+    source_generic_names: &FxHashSet<IdentId<'db>>,
+) -> bool {
+    let Some(path_name) = path.ident(db).to_opt() else {
+        return true;
+    };
+    let Some(candidate_name) = candidate.name(db).to_opt() else {
+        return true;
+    };
+    if !raw_alias_targets(db, path_name, aliases).contains(&candidate_name) {
+        return false;
+    }
+    if path.segment_index(db) == 0 {
+        return true;
+    }
+    let Some(actual_qualifier) = path
+        .segment(db, path.segment_index(db) - 1)
+        .and_then(|segment| segment.ident(db).to_opt())
+    else {
+        return true;
+    };
+    if actual_qualifier.is_self_ty(db) {
+        return candidate.is_associated_func(db);
+    }
+    if source_generic_names.contains(&actual_qualifier) {
+        return candidate.is_associated_func(db);
+    }
+    if actual_qualifier.is_self(db)
+        || actual_qualifier.is_super(db)
+        || actual_qualifier.is_ingot(db)
+        || actual_qualifier.is_core(db)
+    {
+        return true;
+    }
+    let actual_qualifiers = raw_alias_targets(db, actual_qualifier, aliases);
+    if actual_qualifiers
+        .iter()
+        .any(|qualifier| type_alias_names.contains(qualifier))
+    {
+        // Resolving an alias target while type checking can introduce a query
+        // cycle. Treat any type alias as a possible associated qualifier.
+        return candidate.is_associated_func(db);
+    }
+    if !actual_qualifiers
+        .iter()
+        .any(|qualifier| namespace_names.contains(qualifier))
+    {
+        // A generic parameter, projection, or unresolved/re-exported name is
+        // not a syntactically definite namespace. A qualifier mismatch is
+        // therefore not evidence that the associated target is different.
+        return candidate.is_associated_func(db);
+    }
+    let expected = raw_func_qualifier_names(db, candidate);
+    expected.is_empty()
+        || expected
+            .into_iter()
+            .any(|expected| actual_qualifiers.contains(&expected))
+}
+
+fn raw_func_matches_core_trait_method<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: Func<'db>,
+    trait_name: &str,
+    method_name: &str,
+    aliases: &[(IdentId<'db>, IdentId<'db>)],
+) -> bool {
+    if func.name(db).to_opt().map(|name| name.data(db).as_str()) != Some(method_name) {
+        return false;
+    }
+    let raw_trait_name = match func.scope().parent_item(db) {
+        Some(ItemKind::Trait(trait_)) => trait_.name(db).to_opt(),
+        Some(ItemKind::ImplTrait(impl_trait)) => impl_trait
+            .hir_trait_ref(db)
+            .to_opt()
+            .and_then(|trait_ref| trait_ref.path(db).to_opt())
+            .and_then(|path| path.ident(db).to_opt()),
+        Some(
+            ItemKind::TopMod(_)
+            | ItemKind::Mod(_)
+            | ItemKind::Func(_)
+            | ItemKind::Struct(_)
+            | ItemKind::Contract(_)
+            | ItemKind::Enum(_)
+            | ItemKind::TypeAlias(_)
+            | ItemKind::Impl(_)
+            | ItemKind::Const(_)
+            | ItemKind::StaticAssert(_)
+            | ItemKind::Use(_)
+            | ItemKind::Body(_),
+        )
+        | None => None,
+    };
+    raw_trait_name.is_some_and(|name| {
+        raw_alias_targets(db, name, aliases)
+            .iter()
+            .any(|name| name.data(db) == trait_name)
+    })
+}
+
+fn raw_bin_trait_method(op: BinOp) -> Option<(&'static str, &'static str)> {
+    Some(match op {
+        BinOp::Arith(ArithBinOp::Add) => ("Add", "add"),
+        BinOp::Arith(ArithBinOp::Sub) => ("Sub", "sub"),
+        BinOp::Arith(ArithBinOp::Mul) => ("Mul", "mul"),
+        BinOp::Arith(ArithBinOp::Div) => ("Div", "div"),
+        BinOp::Arith(ArithBinOp::Rem) => ("Rem", "rem"),
+        BinOp::Arith(ArithBinOp::Pow) => ("Pow", "pow"),
+        BinOp::Arith(ArithBinOp::LShift) => ("Shl", "shl"),
+        BinOp::Arith(ArithBinOp::RShift) => ("Shr", "shr"),
+        BinOp::Arith(ArithBinOp::BitAnd) => ("BitAnd", "bitand"),
+        BinOp::Arith(ArithBinOp::BitOr) => ("BitOr", "bitor"),
+        BinOp::Arith(ArithBinOp::BitXor) => ("BitXor", "bitxor"),
+        BinOp::Comp(CompBinOp::Eq) => ("Eq", "eq"),
+        BinOp::Comp(CompBinOp::NotEq) => ("Eq", "ne"),
+        BinOp::Comp(CompBinOp::Lt) => ("Ord", "lt"),
+        BinOp::Comp(CompBinOp::LtEq) => ("Ord", "le"),
+        BinOp::Comp(CompBinOp::Gt) => ("Ord", "gt"),
+        BinOp::Comp(CompBinOp::GtEq) => ("Ord", "ge"),
+        BinOp::Index => ("Index", "index"),
+        BinOp::Arith(ArithBinOp::Range) | BinOp::Logical(_) => return None,
+    })
+}
+
+fn raw_un_trait_method(op: UnOp) -> Option<(&'static str, &'static str)> {
+    Some(match op {
+        UnOp::Plus => ("UnaryPlus", "add"),
+        UnOp::Minus => ("Neg", "neg"),
+        UnOp::Not => ("Not", "not"),
+        UnOp::BitNot => ("BitNot", "bit_not"),
+        UnOp::Mut | UnOp::Ref => return None,
+    })
+}
+
+fn raw_aug_assign_trait_method(op: ArithBinOp) -> Option<(&'static str, &'static str)> {
+    Some(match op {
+        ArithBinOp::Add => ("AddAssign", "add_assign"),
+        ArithBinOp::Sub => ("SubAssign", "sub_assign"),
+        ArithBinOp::Mul => ("MulAssign", "mul_assign"),
+        ArithBinOp::Div => ("DivAssign", "div_assign"),
+        ArithBinOp::Rem => ("RemAssign", "rem_assign"),
+        ArithBinOp::Pow => ("PowAssign", "pow_assign"),
+        ArithBinOp::LShift => ("ShlAssign", "shl_assign"),
+        ArithBinOp::RShift => ("ShrAssign", "shr_assign"),
+        ArithBinOp::BitAnd => ("BitAndAssign", "bitand_assign"),
+        ArithBinOp::BitOr => ("BitOrAssign", "bitor_assign"),
+        ArithBinOp::BitXor => ("BitXorAssign", "bitxor_assign"),
+        ArithBinOp::Range => return None,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Update)]
+struct RawSourceCallTopology<'db> {
+    component_by_func: FxHashMap<Func<'db>, usize>,
+    cyclic_components: FxHashSet<usize>,
+}
+
+#[salsa::tracked(return_ref)]
+fn raw_source_call_topology<'db>(
+    db: &'db dyn HirAnalysisDb,
+    dispatch_ingot: Ingot<'db>,
+) -> RawSourceCallTopology<'db> {
+    let mut pending_ingots = vec![dispatch_ingot];
+    let mut seen_ingots = FxHashSet::default();
+    let mut aliases = Vec::new();
+    let mut funcs = FxHashSet::default();
+    let mut type_alias_names = FxHashSet::default();
+    let mut namespace_names = FxHashSet::default();
+    while let Some(ingot) = pending_ingots.pop() {
+        if !seen_ingots.insert(ingot) {
+            continue;
+        }
+        pending_ingots.extend(
+            ingot
+                .resolved_external_ingots(db)
+                .iter()
+                .map(|(_, dependency)| *dependency),
+        );
+        for item in ingot.all_items(db) {
+            if let ItemKind::Use(use_) = item
+                && let Some(imported_name) = use_.imported_name(db)
+                && let Some(imported_path_name) =
+                    use_.path(db).to_opt().and_then(|path| path.last_ident(db))
+            {
+                aliases.push((imported_name, imported_path_name));
+            }
+            match item {
+                ItemKind::Func(func) => {
+                    funcs.insert(*func);
+                }
+                ItemKind::TypeAlias(alias) => {
+                    type_alias_names.extend(alias.name(db).to_opt());
+                    namespace_names.extend(alias.name(db).to_opt());
+                }
+                ItemKind::TopMod(top_mod) => {
+                    namespace_names.insert(top_mod.name(db));
+                }
+                ItemKind::Mod(mod_) => {
+                    namespace_names.extend(mod_.name(db).to_opt());
+                }
+                ItemKind::Struct(struct_) => {
+                    namespace_names.extend(struct_.name(db).to_opt());
+                }
+                ItemKind::Contract(contract) => {
+                    namespace_names.extend(contract.name(db).to_opt());
+                }
+                ItemKind::Enum(enum_) => {
+                    namespace_names.extend(enum_.name(db).to_opt());
+                }
+                ItemKind::Trait(trait_) => {
+                    namespace_names.extend(trait_.name(db).to_opt());
+                }
+                ItemKind::Impl(_)
+                | ItemKind::ImplTrait(_)
+                | ItemKind::Const(_)
+                | ItemKind::StaticAssert(_)
+                | ItemKind::Use(_)
+                | ItemKind::Body(_) => {}
+            }
+        }
+    }
+    let funcs = funcs.into_iter().collect::<Vec<_>>();
+    let mut funcs_by_name: FxHashMap<IdentId<'db>, Vec<Func<'db>>> = FxHashMap::default();
+    for &func in &funcs {
+        if let Some(name) = func.name(db).to_opt() {
+            funcs_by_name.entry(name).or_default().push(func);
+        }
+    }
+
+    let func_indices = funcs
+        .iter()
+        .enumerate()
+        .map(|(idx, &func)| (func, idx))
+        .collect::<FxHashMap<_, _>>();
+    let callable_funcs = funcs
+        .iter()
+        .copied()
+        .filter(|&candidate| {
+            raw_func_matches_core_trait_method(db, candidate, "Fn", "call", &aliases)
+                || raw_func_matches_core_trait_method(
+                    db,
+                    candidate,
+                    "FnOnce",
+                    "call_once",
+                    &aliases,
+                )
+        })
+        .collect::<Vec<_>>();
+    let method_arities = funcs
+        .iter()
+        .copied()
+        .filter(|func| func.is_method(db))
+        .map(|func| (func, func.params(db).count().saturating_sub(1)))
+        .collect::<FxHashMap<_, _>>();
+    let mut adjacency = vec![Vec::new(); funcs.len()];
+    for (source, &func) in funcs.iter().enumerate() {
+        let Some(body) = func.body(db) else {
+            continue;
+        };
+        let source_generic_names = raw_func_generic_param_names(db, func);
+        let mut targets = FxHashSet::default();
+        for (_, expr) in body.exprs(db).iter() {
+            let Partial::Present(expr) = expr else {
+                continue;
+            };
+            match expr {
+                Expr::Path(Partial::Present(path)) => {
+                    if let Some(path_name) = path.ident(db).to_opt() {
+                        for name in raw_alias_targets(db, path_name, &aliases) {
+                            for &candidate in funcs_by_name.get(&name).into_iter().flatten() {
+                                if raw_path_may_refer_to_func(
+                                    db,
+                                    *path,
+                                    candidate,
+                                    &aliases,
+                                    &type_alias_names,
+                                    &namespace_names,
+                                    &source_generic_names,
+                                ) {
+                                    targets.insert(candidate);
+                                }
+                            }
+                        }
+                    }
+                }
+                Expr::MethodCall(_, Partial::Present(name), _, args) => {
+                    for &candidate in funcs_by_name.get(name).into_iter().flatten() {
+                        if callable_funcs.contains(&candidate)
+                            || method_arities
+                                .get(&candidate)
+                                .is_some_and(|arity| *arity == args.len())
+                        {
+                            targets.insert(candidate);
+                        }
+                    }
+                }
+                Expr::Call(_, _) => {
+                    // A call through a callable value need not repeat its
+                    // eventual trait-method name in source.
+                    targets.extend(callable_funcs.iter().copied());
+                }
+                Expr::Bin(_, _, op) => {
+                    if let Some((trait_name, method_name)) = raw_bin_trait_method(*op) {
+                        for &candidate in funcs_by_name
+                            .get(&IdentId::new(db, method_name.to_string()))
+                            .into_iter()
+                            .flatten()
+                        {
+                            if raw_func_matches_core_trait_method(
+                                db,
+                                candidate,
+                                trait_name,
+                                method_name,
+                                &aliases,
+                            ) {
+                                targets.insert(candidate);
+                            }
+                        }
+                    }
+                }
+                Expr::Un(_, op) => {
+                    if let Some((trait_name, method_name)) = raw_un_trait_method(*op) {
+                        for &candidate in funcs_by_name
+                            .get(&IdentId::new(db, method_name.to_string()))
+                            .into_iter()
+                            .flatten()
+                        {
+                            if raw_func_matches_core_trait_method(
+                                db,
+                                candidate,
+                                trait_name,
+                                method_name,
+                                &aliases,
+                            ) {
+                                targets.insert(candidate);
+                            }
+                        }
+                    }
+                }
+                Expr::AugAssign(_, _, op) => {
+                    if let Some((trait_name, method_name)) = raw_aug_assign_trait_method(*op) {
+                        for &candidate in funcs_by_name
+                            .get(&IdentId::new(db, method_name.to_string()))
+                            .into_iter()
+                            .flatten()
+                        {
+                            if raw_func_matches_core_trait_method(
+                                db,
+                                candidate,
+                                trait_name,
+                                method_name,
+                                &aliases,
+                            ) {
+                                targets.insert(candidate);
+                            }
+                        }
+                    }
+                }
+                Expr::Lit(_)
+                | Expr::Block(_)
+                | Expr::Closure { .. }
+                | Expr::Cast(_, _)
+                | Expr::Assert(_)
+                | Expr::MethodCall(..)
+                | Expr::Path(Partial::Absent)
+                | Expr::RecordInit(_, _)
+                | Expr::Field(_, _)
+                | Expr::Tuple(_)
+                | Expr::Array(_)
+                | Expr::ArrayRep(_, _)
+                | Expr::If(_, _, _)
+                | Expr::Match(_, _)
+                | Expr::Assign(_, _)
+                | Expr::With(_, _) => {}
+            }
+        }
+        if body
+            .stmts(db)
+            .iter()
+            .any(|(_, stmt)| matches!(stmt, Partial::Present(Stmt::For(..))))
+        {
+            for (trait_name, method_name) in [("Seq", "len"), ("Seq", "get")] {
+                for &candidate in funcs_by_name
+                    .get(&IdentId::new(db, method_name.to_string()))
+                    .into_iter()
+                    .flatten()
+                {
+                    if raw_func_matches_core_trait_method(
+                        db,
+                        candidate,
+                        trait_name,
+                        method_name,
+                        &aliases,
+                    ) {
+                        targets.insert(candidate);
+                    }
+                }
+            }
+        }
+
+        adjacency[source].extend(
+            targets
+                .into_iter()
+                .filter_map(|target| func_indices.get(&target).copied()),
+        );
+    }
+    let components = adjacency_graph_components(&adjacency);
+    let mut component_sizes = FxHashMap::default();
+    for &component in &components {
+        *component_sizes.entry(component).or_insert(0usize) += 1;
+    }
+    let cyclic_components = adjacency
+        .iter()
+        .enumerate()
+        .filter(|(source, targets)| {
+            component_sizes
+                .get(&components[*source])
+                .is_some_and(|size| *size > 1)
+                || targets.contains(source)
+        })
+        .map(|(source, _)| components[source])
+        .collect();
+    RawSourceCallTopology {
+        component_by_func: funcs
+            .into_iter()
+            .zip(components)
+            .collect::<FxHashMap<_, _>>(),
+        cyclic_components,
+    }
+}
+
+fn func_may_participate_in_source_call_cycle<'db>(
+    db: &'db dyn HirAnalysisDb,
+    root: Func<'db>,
+    dispatch_ingot: Ingot<'db>,
+) -> bool {
+    if root.body(db).is_none() || root.name(db).to_opt().is_none() {
+        return false;
+    }
+    let topology = raw_source_call_topology(db, dispatch_ingot);
+    let Some(component) = topology.component_by_func.get(&root) else {
+        return true;
+    };
+    topology.cyclic_components.contains(component)
+}
+
+fn source_graph_template_callee_key<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller_key: SemanticInstanceKey<'db>,
+    edge_seed: SourceCallGraphEdgeSeed<'db>,
+    dispatch_ingot: Ingot<'db>,
+) -> Option<SemanticInstanceKey<'db>> {
+    let template_caller = source_graph_identity_key(db, caller_key.owner(db));
+    let target_owner = SyntacticBodyOwner::from(edge_seed.callee_key.owner(db));
+    let candidates = source_call_graph_edges(db, template_caller, dispatch_ingot)
+        .iter()
+        .copied()
+        .filter(|candidate| {
+            candidate.call_site == edge_seed.call_site
+                && SyntacticBodyOwner::from(candidate.callee_key.owner(db)) == target_owner
+        })
+        .collect::<Vec<_>>();
+    candidates
+        .iter()
+        .find(|candidate| candidate.flow == edge_seed.flow)
+        .or_else(|| candidates.first())
+        .map(|candidate| candidate.callee_key)
+}
+
+fn build_source_call_graph<'db>(
+    db: &'db dyn HirAnalysisDb,
+    root_key: SemanticInstanceKey<'db>,
+    dispatch_ingot: Ingot<'db>,
+) -> Vec<SourceCallGraphNode<'db>> {
+    let mut nodes = Vec::new();
+    let mut node_by_key = FxHashMap::default();
+    let root_owner = root_key.owner(db);
+    push_source_graph_root(db, root_key, &mut nodes, &mut node_by_key);
+    if nodes.is_empty() {
+        return nodes;
+    }
+    let raw_topology = raw_source_call_topology(db, dispatch_ingot);
+    let root_raw_component = match root_owner {
+        BodyOwner::Func(func) => raw_topology.component_by_func.get(&func).copied(),
+        BodyOwner::Const(_)
+        | BodyOwner::AnonConstBody { .. }
+        | BodyOwner::ContractInit { .. }
+        | BodyOwner::ContractRecvArm { .. }
+        | BodyOwner::Closure { .. } => None,
+    };
+    let can_return_to_root = |owner: BodyOwner<'db>| {
+        let Some(root_component) = root_raw_component else {
+            return true;
+        };
+        match owner {
+            BodyOwner::Func(func) => raw_topology
+                .component_by_func
+                .get(&func)
+                .is_none_or(|component| *component == root_component),
+            // Raw bodies include their nested closure expressions, so a
+            // closure-to-function return edge is reflected in the enclosing
+            // function's raw component. Analyze the closure itself to retain
+            // the precise specialization flow.
+            BodyOwner::Closure { .. } => true,
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::ContractInit { .. }
+            | BodyOwner::ContractRecvArm { .. } => true,
+        }
+    };
+
+    let mut pending = vec![0];
+    let mut analyzed = FxHashSet::default();
+    while let Some(node_idx) = pending.pop() {
+        if !analyzed.insert(node_idx) {
+            continue;
+        }
+        let key = nodes[node_idx].key;
+        let mut edges = Vec::new();
+        for &edge_seed in source_call_graph_edges(db, key, dispatch_ingot) {
+            let SourceCallGraphEdgeSeed {
+                call_site,
+                callee_key,
+                flow,
+            } = edge_seed;
+            let template_key = source_graph_template_callee_key(db, key, edge_seed, dispatch_ingot);
+            let source_key = source_graph_key_with_context(db, callee_key, Some(key), template_key);
+            let target = if let Some(target) = node_by_key.get(&source_key).copied() {
+                target
+            } else {
+                let target = nodes.len();
+                node_by_key.insert(source_key, target);
+                nodes.push(SourceCallGraphNode {
+                    key: source_key,
+                    edges: Vec::new(),
+                });
+                target
+            };
+            let edge = SourceCallGraphEdge {
+                call_site,
+                callee_key,
+                target,
+                flow,
+            };
+            let dependency =
+                source_edge_coordinate_flows(db, key, nodes[target].key, callee_key, flow);
+            if can_return_to_root(nodes[target].key.owner(db))
+                && (dependency.structurally_unknown || !dependency.flows.is_empty())
+            {
+                pending.push(target);
+            }
+            edges.push(edge);
+        }
+        for closure_key in source_contained_closure_keys(db, key) {
+            let target = if let Some(target) = node_by_key.get(&closure_key).copied() {
+                target
+            } else {
+                let target = nodes.len();
+                node_by_key.insert(closure_key, target);
+                nodes.push(SourceCallGraphNode {
+                    key: closure_key,
+                    edges: Vec::new(),
+                });
+                target
+            };
+            let edge = SourceCallGraphEdge {
+                call_site: None,
+                callee_key: closure_key,
+                target,
+                flow: SourceCallGraphEdgeFlow::ClosureContainment,
+            };
+            let dependency =
+                source_edge_coordinate_flows(db, key, nodes[target].key, closure_key, edge.flow);
+            if can_return_to_root(nodes[target].key.owner(db))
+                && (dependency.structurally_unknown || !dependency.flows.is_empty())
+            {
+                pending.push(target);
+            }
+            edges.push(edge);
+        }
+        nodes[node_idx].edges = edges;
+    }
+    nodes
+}
+
+fn source_call_graph_components(nodes: &[SourceCallGraphNode<'_>]) -> Vec<usize> {
+    let mut visited = vec![false; nodes.len()];
+    let mut finish_order = Vec::with_capacity(nodes.len());
+    for root in 0..nodes.len() {
+        if visited[root] {
+            continue;
+        }
+        visited[root] = true;
+        let mut pending = vec![(root, 0)];
+        while let Some((node, edge_idx)) = pending.pop() {
+            if let Some(edge) = nodes[node].edges.get(edge_idx) {
+                pending.push((node, edge_idx + 1));
+                if !visited[edge.target] {
+                    visited[edge.target] = true;
+                    pending.push((edge.target, 0));
+                }
+            } else {
+                finish_order.push(node);
+            }
+        }
+    }
+
+    let mut reverse = vec![Vec::new(); nodes.len()];
+    for (source, node) in nodes.iter().enumerate() {
+        for edge in &node.edges {
+            reverse[edge.target].push(source);
+        }
+    }
+    let mut components = vec![usize::MAX; nodes.len()];
+    let mut component = 0;
+    for root in finish_order.into_iter().rev() {
+        if components[root] != usize::MAX {
+            continue;
+        }
+        components[root] = component;
+        let mut pending = vec![root];
+        while let Some(node) = pending.pop() {
+            for predecessor in reverse[node].iter().copied() {
+                if components[predecessor] == usize::MAX {
+                    components[predecessor] = component;
+                    pending.push(predecessor);
+                }
+            }
+        }
+        component += 1;
+    }
+    components
+}
+
+fn adjacency_graph_components(adjacency: &[Vec<usize>]) -> Vec<usize> {
+    let mut visited = vec![false; adjacency.len()];
+    let mut finish_order = Vec::with_capacity(adjacency.len());
+    for root in 0..adjacency.len() {
+        if visited[root] {
+            continue;
+        }
+        visited[root] = true;
+        let mut pending = vec![(root, 0)];
+        while let Some((node, edge_idx)) = pending.pop() {
+            if let Some(target) = adjacency[node].get(edge_idx).copied() {
+                pending.push((node, edge_idx + 1));
+                if !visited[target] {
+                    visited[target] = true;
+                    pending.push((target, 0));
+                }
+            } else {
+                finish_order.push(node);
+            }
+        }
+    }
+
+    let mut reverse = vec![Vec::new(); adjacency.len()];
+    for (source, targets) in adjacency.iter().enumerate() {
+        for target in targets {
+            reverse[*target].push(source);
+        }
+    }
+    let mut components = vec![usize::MAX; adjacency.len()];
+    let mut component = 0;
+    for root in finish_order.into_iter().rev() {
+        if components[root] != usize::MAX {
+            continue;
+        }
+        components[root] = component;
+        let mut pending = vec![root];
+        while let Some(node) = pending.pop() {
+            for predecessor in reverse[node].iter().copied() {
+                if components[predecessor] == usize::MAX {
+                    components[predecessor] = component;
+                    pending.push(predecessor);
+                }
+            }
+        }
+        component += 1;
+    }
+    components
+}
+
+struct ShallowStateTyCollector<'db> {
+    db: &'db dyn HirAnalysisDb,
+    tys: Vec<TyId<'db>>,
+}
+
+impl<'db> TyVisitor<'db> for ShallowStateTyCollector<'db> {
+    fn db(&self) -> &'db dyn HirAnalysisDb {
+        self.db
+    }
+
+    fn visit_ty(&mut self, ty: TyId<'db>) {
+        self.tys.push(ty);
+    }
+}
+
+fn semantic_instance_state_tys<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: SemanticInstanceKey<'db>,
+) -> Vec<TyId<'db>> {
+    let mut collector = ShallowStateTyCollector {
+        db,
+        tys: Vec::new(),
+    };
+    key.subst(db)
+        .generic_args(db)
+        .as_slice()
+        .visit_with(&mut collector);
+    match key.owner(db) {
+        BodyOwner::AnonConstBody { expected, .. } => collector.tys.push(expected),
+        // A closure's signature and captures are derived from its parent
+        // substitution. They can contain a caller parameter structurally
+        // without introducing another independent instance axis; the
+        // substitution above is the state that can actually grow around a
+        // recursive cycle.
+        BodyOwner::Closure { .. } => {}
+        BodyOwner::Func(_)
+        | BodyOwner::Const(_)
+        | BodyOwner::ContractInit { .. }
+        | BodyOwner::ContractRecvArm { .. } => {}
+    }
+    for provider in key.effect_providers(db).providers(db) {
+        provider.visit_with(&mut collector);
+        if let ProviderLayoutEvidence::ResolvedHandle(instance) =
+            provider.provider.semantics.evidence
+        {
+            instance.visit_with(&mut collector);
+        }
+    }
+    let impl_env = key.impl_env(db);
+    impl_env.assumptions(db).visit_with(&mut collector);
+    impl_env.witnesses(db).as_slice().visit_with(&mut collector);
+    collector.tys
+}
+
+fn semantic_instance_primary_state_tys<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: SemanticInstanceKey<'db>,
+) -> Vec<TyId<'db>> {
+    let mut collector = ShallowStateTyCollector {
+        db,
+        tys: Vec::new(),
+    };
+    key.subst(db)
+        .generic_args(db)
+        .as_slice()
+        .visit_with(&mut collector);
+    if let BodyOwner::AnonConstBody { expected, .. } = key.owner(db) {
+        collector.tys.push(expected);
+    }
+    collector.tys
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SourceStateCoordinate<'db> {
+    ty: TyId<'db>,
+    /// An impl/closure aggregate is derived from the actual specialization
+    /// axes. Reconstructing it preserves a lineage but does not itself grow
+    /// the family.
+    derived_aggregate: bool,
+}
+
+fn semantic_instance_state_coordinate_shapes<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: SemanticInstanceKey<'db>,
+) -> Vec<SourceStateCoordinate<'db>> {
+    let mut coordinates = semantic_instance_primary_state_tys(db, key)
+        .into_iter()
+        .map(|ty| SourceStateCoordinate {
+            ty,
+            derived_aggregate: false,
+        })
+        .collect::<Vec<_>>();
+    match key.owner(db) {
+        BodyOwner::Func(func) => {
+            if let Some(ItemKind::ImplTrait(impl_trait)) = func.scope().parent_item(db) {
+                let self_ty =
+                    Binder::bind(impl_trait.ty(db)).instantiate(db, key.subst(db).generic_args(db));
+                coordinates.push(SourceStateCoordinate {
+                    ty: self_ty,
+                    derived_aggregate: true,
+                });
+            }
+        }
+        BodyOwner::Closure { ty, .. } => coordinates.push(SourceStateCoordinate {
+            ty: TyId::closure(db, ty),
+            derived_aggregate: true,
+        }),
+        BodyOwner::Const(_)
+        | BodyOwner::AnonConstBody { .. }
+        | BodyOwner::ContractInit { .. }
+        | BodyOwner::ContractRecvArm { .. } => {}
+    }
+    coordinates
+}
+
+fn source_state_coordinates<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: SemanticInstanceKey<'db>,
+) -> Vec<(usize, SourceStateCoordinate<'db>)> {
+    let expandable = TyFlags::HAS_PARAM | TyFlags::HAS_VAR | TyFlags::HAS_PROJECTION;
+    semantic_instance_state_coordinate_shapes(db, key)
+        .into_iter()
+        .enumerate()
+        .filter(|(_, coordinate)| coordinate.ty.flags(db).intersects(expandable))
+        .collect()
+}
+
+fn source_owner_has_parametric_state<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+) -> bool {
+    !source_state_coordinates(db, identity_semantic_instance_key(db, owner)).is_empty()
+}
+
+fn ty_properly_contains<'db>(
+    db: &'db dyn HirAnalysisDb,
+    haystack: TyId<'db>,
+    needle: TyId<'db>,
+) -> bool {
+    if haystack == needle {
+        return false;
+    }
+    struct Contains<'db> {
+        db: &'db dyn HirAnalysisDb,
+        needle: TyId<'db>,
+        found: bool,
+        visited: FxHashSet<TyId<'db>>,
+    }
+    impl<'db> TyVisitor<'db> for Contains<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_ty(&mut self, ty: TyId<'db>) {
+            if self.found || !self.visited.insert(ty) {
+                return;
+            }
+            if ty == self.needle {
+                self.found = true;
+                return;
+            }
+            walk_ty(self, ty);
+        }
+    }
+    let mut contains = Contains {
+        db,
+        needle,
+        found: false,
+        visited: FxHashSet::default(),
+    };
+    walk_ty(&mut contains, haystack);
+    contains.found
+}
+
+fn ty_is_unconstrained_const_inference_var<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    // Omitted layout-root arguments intentionally remain as bare const
+    // inference variables until layout evidence binds them. They carry no
+    // caller lineage, so unlike an abstract expression or projection they
+    // cannot prove structural growth around a caller coordinate.
+    matches!(
+        ty.data(db),
+        TyData::ConstTy(const_ty)
+            if matches!(const_ty.data(db), ConstTyData::TyVar(..))
+    )
+}
+
+fn unresolved_ty_is_covered_by<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    covered: &FxHashSet<TyId<'db>>,
+) -> bool {
+    struct Coverage<'db, 'a> {
+        db: &'db dyn HirAnalysisDb,
+        covered: &'a FxHashSet<TyId<'db>>,
+        visited: FxHashSet<TyId<'db>>,
+        uncovered: bool,
+    }
+    impl<'db> TyVisitor<'db> for Coverage<'db, '_> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_ty(&mut self, ty: TyId<'db>) {
+            if self.uncovered || !self.visited.insert(ty) || self.covered.contains(&ty) {
+                return;
+            }
+            walk_ty(self, ty);
+        }
+
+        fn visit_var(&mut self, _var: &crate::analysis::ty::ty_def::TyVar<'db>) {
+            self.uncovered = true;
+        }
+
+        fn visit_param(&mut self, _param: &crate::analysis::ty::ty_def::TyParam<'db>) {
+            self.uncovered = true;
+        }
+
+        fn visit_const_param(
+            &mut self,
+            _param: &crate::analysis::ty::ty_def::TyParam<'db>,
+            _const_ty_ty: TyId<'db>,
+        ) {
+            self.uncovered = true;
+        }
+    }
+    let mut coverage = Coverage {
+        db,
+        covered,
+        visited: FxHashSet::default(),
+        uncovered: false,
+    };
+    coverage.visit_ty(ty);
+    !coverage.uncovered
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SourceCoordinateFlow {
+    source: usize,
+    target: usize,
+    growing: bool,
+}
+
+struct SourceEdgeFlowAnalysis {
+    flows: Vec<SourceCoordinateFlow>,
+    structurally_unknown: bool,
+}
+
+fn source_edge_coordinate_flows<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller_key: SemanticInstanceKey<'db>,
+    target_key: SemanticInstanceKey<'db>,
+    actual_target_key: SemanticInstanceKey<'db>,
+    flow_kind: SourceCallGraphEdgeFlow,
+) -> SourceEdgeFlowAnalysis {
+    let caller = source_state_coordinates(db, caller_key);
+    let target = source_state_coordinates(db, target_key);
+    if caller.is_empty() || target.is_empty() {
+        return SourceEdgeFlowAnalysis {
+            flows: Vec::new(),
+            structurally_unknown: matches!(flow_kind, SourceCallGraphEdgeFlow::UnknownGrowth),
+        };
+    }
+
+    let all_to_all = |growing: bool| {
+        caller
+            .iter()
+            .enumerate()
+            .flat_map(|(source, _)| {
+                target
+                    .iter()
+                    .enumerate()
+                    .map(move |(target, _)| SourceCoordinateFlow {
+                        source,
+                        target,
+                        growing,
+                    })
+            })
+            .collect::<Vec<_>>()
+    };
+    let aggregate_carry_impl_params = match flow_kind {
+        SourceCallGraphEdgeFlow::TraitAggregateCarry { impl_param_count } => Some(impl_param_count),
+        SourceCallGraphEdgeFlow::Classify
+        | SourceCallGraphEdgeFlow::UnknownGrowth
+        | SourceCallGraphEdgeFlow::ClosureContainment => None,
+    };
+    let mut flows = Vec::new();
+    match flow_kind {
+        SourceCallGraphEdgeFlow::UnknownGrowth => {
+            return SourceEdgeFlowAnalysis {
+                flows: all_to_all(true),
+                structurally_unknown: false,
+            };
+        }
+        SourceCallGraphEdgeFlow::TraitAggregateCarry { .. } => {
+            let derived_targets = target
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, coordinate))| coordinate.derived_aggregate)
+                .map(|(target, _)| target)
+                .collect::<Vec<_>>();
+            flows.extend(
+                caller
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(source, _)| {
+                        derived_targets
+                            .iter()
+                            .copied()
+                            .map(move |target| SourceCoordinateFlow {
+                                source,
+                                target,
+                                growing: false,
+                            })
+                    })
+                    .collect::<Vec<_>>(),
+            );
+        }
+        SourceCallGraphEdgeFlow::Classify | SourceCallGraphEdgeFlow::ClosureContainment => {}
+    }
+
+    let actual = semantic_instance_state_coordinate_shapes(db, actual_target_key);
+    let canonical = semantic_instance_state_coordinate_shapes(db, target_key);
+    if actual.len() != canonical.len() {
+        return SourceEdgeFlowAnalysis {
+            flows: Vec::new(),
+            structurally_unknown: true,
+        };
+    }
+
+    let force_carry = matches!(flow_kind, SourceCallGraphEdgeFlow::ClosureContainment);
+    let mut structurally_unknown = false;
+    for (target_idx, (slot, target_coordinate)) in target.iter().enumerate() {
+        if aggregate_carry_impl_params.is_some() && target_coordinate.derived_aggregate {
+            continue;
+        }
+        if aggregate_carry_impl_params.is_some_and(|count| *slot < count) {
+            continue;
+        }
+        let actual_ty = actual[*slot].ty;
+        let exact_sources = caller
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, source_coordinate))| source_coordinate.ty == actual_ty)
+            .map(|(source_idx, _)| source_idx)
+            .collect::<Vec<_>>();
+        if !exact_sources.is_empty() {
+            flows.extend(
+                exact_sources
+                    .into_iter()
+                    .map(|source| SourceCoordinateFlow {
+                        source,
+                        target: target_idx,
+                        growing: false,
+                    }),
+            );
+            continue;
+        }
+
+        let containing_sources = caller
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, source_coordinate))| {
+                ty_properly_contains(db, actual_ty, source_coordinate.ty)
+            })
+            .map(|(source_idx, _)| source_idx)
+            .collect::<Vec<_>>();
+        if !containing_sources.is_empty() {
+            flows.extend(
+                containing_sources
+                    .into_iter()
+                    .map(|source| SourceCoordinateFlow {
+                        source,
+                        target: target_idx,
+                        growing: !force_carry && !target_coordinate.derived_aggregate,
+                    }),
+            );
+            continue;
+        }
+
+        let is_proven_descent = caller.iter().any(|(_, source_coordinate)| {
+            ty_properly_contains(db, source_coordinate.ty, actual_ty)
+        });
+        let unresolved = TyFlags::HAS_PARAM | TyFlags::HAS_VAR | TyFlags::HAS_PROJECTION;
+        if !is_proven_descent
+            && actual_ty.flags(db).intersects(unresolved)
+            && !ty_is_unconstrained_const_inference_var(db, actual_ty)
+        {
+            structurally_unknown = true;
+        }
+    }
+    if !matches!(actual_target_key.owner(db), BodyOwner::Closure { .. }) {
+        let primary_len = semantic_instance_primary_state_tys(db, actual_target_key).len();
+        for auxiliary_ty in semantic_instance_state_tys(db, actual_target_key)
+            .into_iter()
+            .skip(primary_len)
+        {
+            // Inherited assumptions often contain a fixed projection such as
+            // `A::Encoder`. It is not an independent specialization axis when
+            // every caller lineage it mentions is also carried unchanged by
+            // a primary callee argument; any change to that state is already
+            // represented by the primary coordinate. Keep the conservative
+            // fallback if the auxiliary state also mentions a lineage dropped
+            // or transformed at this edge.
+            let exactly_carried_lineages = caller
+                .iter()
+                .filter_map(|(_, source_coordinate)| {
+                    actual
+                        .iter()
+                        .any(|coordinate| coordinate.ty == source_coordinate.ty)
+                        .then_some(source_coordinate.ty)
+                })
+                .collect::<FxHashSet<_>>();
+            // A projection over a concrete receiver (for example
+            // `Sol::Encoder`) is fixed even though normalization has not
+            // exposed its result yet. A projection over caller parameters is
+            // likewise derived state when every unresolved leaf is already an
+            // exactly-carried primary lineage. `unresolved_ty_is_covered_by`
+            // deliberately accepts the empty set only when the auxiliary type
+            // has no parameter or inference-variable leaves.
+            let caller_independent_or_derived =
+                unresolved_ty_is_covered_by(db, auxiliary_ty, &exactly_carried_lineages);
+            if caller
+                .iter()
+                .any(|(_, source_coordinate)| source_coordinate.ty == auxiliary_ty)
+                || !auxiliary_ty
+                    .flags(db)
+                    .intersects(TyFlags::HAS_PARAM | TyFlags::HAS_VAR | TyFlags::HAS_PROJECTION)
+                || ty_is_unconstrained_const_inference_var(db, auxiliary_ty)
+                || caller.iter().any(|(_, source_coordinate)| {
+                    ty_properly_contains(db, source_coordinate.ty, auxiliary_ty)
+                })
+                || caller_independent_or_derived
+            {
+                continue;
+            }
+            // Auxiliary provider/evidence state is not a formal source
+            // coordinate of the target node. If it constructs around a caller
+            // lineage (or a projection hides that relation), retain the old
+            // conservative rejection rather than dropping a possible
+            // specialization axis. Closure auxiliary state is derived entirely
+            // from the parent arguments represented above.
+            structurally_unknown = true;
+        }
+    }
+    SourceEdgeFlowAnalysis {
+        flows,
+        structurally_unknown,
+    }
+}
+
+fn source_dispatch_ingot_for_key<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: SemanticInstanceKey<'db>,
+) -> Ingot<'db> {
+    let impl_env = key.impl_env(db);
+    let witnesses = impl_env.witnesses(db);
+    witnesses
+        .iter()
+        .rev()
+        .find_map(|witness| witness.self_ty(db).ingot(db))
+        .unwrap_or_else(|| {
+            if witnesses.is_empty() {
+                // Free generic helpers are analyzed in their defining ingot.
+                // An application-local explicit implementation is guarded by
+                // its own owner query. Resolved/inherited trait bodies carry a
+                // witness and retain the caller's dispatch context below.
+                key.owner(db).scope().ingot(db)
+            } else {
+                impl_env.normalization_scope(db).ingot(db)
+            }
+        })
+}
+
+#[salsa::tracked(return_ref)]
+fn non_regular_recursive_calls_from_owner<'db>(
+    db: &'db dyn HirAnalysisDb,
+    root_key: SemanticInstanceKey<'db>,
+    dispatch_ingot: Ingot<'db>,
+) -> NonRegularRecursiveCallGraph<'db> {
+    if let BodyOwner::Func(func) = root_key.owner(db)
+        && !func_may_participate_in_source_call_cycle(db, func, dispatch_ingot)
+    {
+        return NonRegularRecursiveCallGraph {
+            calls: Vec::new(),
+            blocked_owners: Vec::new(),
+            component_diagnostic_calls: Vec::new(),
+        };
+    }
+    let nodes = build_source_call_graph(db, root_key, dispatch_ingot);
+    let source_components = source_call_graph_components(&nodes);
+    let coordinates = nodes
+        .iter()
+        .map(|node| source_state_coordinates(db, node.key))
+        .collect::<Vec<_>>();
+    let mut coordinate_offsets = Vec::with_capacity(nodes.len() + 1);
+    coordinate_offsets.push(0);
+    for node_coordinates in &coordinates {
+        coordinate_offsets
+            .push(coordinate_offsets.last().copied().unwrap_or_default() + node_coordinates.len());
+    }
+    let mut coordinate_adjacency =
+        vec![Vec::new(); coordinate_offsets.last().copied().unwrap_or_default()];
+    let mut flow_records = Vec::new();
+    let mut calls = IndexSet::new();
+    let mut diagnostic_call_by_source_component = FxHashMap::default();
+    let mut conservatively_invalid_source_components = FxHashSet::default();
+    for (source, node) in nodes.iter().enumerate() {
+        for (edge_idx, edge) in node.edges.iter().enumerate() {
+            let analysis = source_edge_coordinate_flows(
+                db,
+                node.key,
+                nodes[edge.target].key,
+                edge.callee_key,
+                edge.flow,
+            );
+            if analysis.structurally_unknown
+                && source_components[source] == source_components[edge.target]
+            {
+                conservatively_invalid_source_components.insert(source_components[source]);
+                if let Some(call_site) = edge.call_site {
+                    let call = NonRegularRecursiveCallSite {
+                        owner: node.key.owner(db),
+                        call_site,
+                        callee: edge.callee_key.owner(db),
+                    };
+                    calls.insert(call);
+                    diagnostic_call_by_source_component
+                        .entry(source_components[source])
+                        .or_insert(call);
+                }
+            }
+            for flow in analysis.flows {
+                let source_coordinate = coordinate_offsets[source] + flow.source;
+                let target_coordinate = coordinate_offsets[edge.target] + flow.target;
+                coordinate_adjacency[source_coordinate].push(target_coordinate);
+                flow_records.push((
+                    source_coordinate,
+                    target_coordinate,
+                    flow.growing,
+                    source,
+                    edge_idx,
+                ));
+            }
+        }
+    }
+    let coordinate_components = adjacency_graph_components(&coordinate_adjacency);
+    let mut invalid_coordinate_components = FxHashSet::default();
+    for (source_coordinate, target_coordinate, growing, source, edge_idx) in flow_records {
+        if !growing
+            || coordinate_components[source_coordinate] != coordinate_components[target_coordinate]
+        {
+            continue;
+        }
+        invalid_coordinate_components.insert(coordinate_components[source_coordinate]);
+        let edge = nodes[source].edges[edge_idx];
+        if let Some(call_site) = edge.call_site {
+            let call = NonRegularRecursiveCallSite {
+                owner: nodes[source].key.owner(db),
+                call_site,
+                callee: edge.callee_key.owner(db),
+            };
+            calls.insert(call);
+            diagnostic_call_by_source_component
+                .entry(source_components[source])
+                .or_insert(call);
+        }
+    }
+    let mut blocked_owners = Vec::new();
+    let mut component_diagnostic_calls = IndexSet::new();
+    for (node_idx, node) in nodes.iter().enumerate() {
+        let blocked = conservatively_invalid_source_components
+            .contains(&source_components[node_idx])
+            || (coordinate_offsets[node_idx]..coordinate_offsets[node_idx + 1]).any(|coordinate| {
+                invalid_coordinate_components.contains(&coordinate_components[coordinate])
+            });
+        if !blocked {
+            continue;
+        }
+        let owner = node.key.owner(db);
+        blocked_owners.push(owner);
+        if let Some(call) = diagnostic_call_by_source_component.get(&source_components[node_idx]) {
+            component_diagnostic_calls.insert((owner, *call));
+        }
+    }
+    NonRegularRecursiveCallGraph {
+        calls: calls.into_iter().collect(),
+        blocked_owners,
+        component_diagnostic_calls: component_diagnostic_calls.into_iter().collect(),
+    }
+}
+
+fn non_regular_recursive_calls_for_key<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: SemanticInstanceKey<'db>,
+) -> &'db NonRegularRecursiveCallGraph<'db> {
+    let owner = key.owner(db);
+    non_regular_recursive_calls_from_owner(
+        db,
+        identity_semantic_instance_key(db, owner),
+        source_dispatch_ingot_for_key(db, key),
+    )
+}
+
+fn non_regular_recursive_call_sites_for_key<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: SemanticInstanceKey<'db>,
+) -> Vec<NonRegularRecursiveCallSite<'db>> {
+    let owner = key.owner(db);
+    if !source_owner_has_parametric_state(db, owner) {
+        return Vec::new();
+    }
+    non_regular_recursive_calls_for_key(db, key)
+        .calls
+        .iter()
+        .copied()
+        .filter(|call| same_syntactic_callable_owner(call.owner, owner))
+        .collect()
+}
+
+pub fn non_regular_recursive_call_sites<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+) -> Vec<NonRegularRecursiveCallSite<'db>> {
+    non_regular_recursive_call_sites_for_key(db, identity_semantic_instance_key(db, owner))
+}
+
+fn key_is_in_non_regular_recursive_component<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: SemanticInstanceKey<'db>,
+) -> bool {
+    let owner = key.owner(db);
+    if !source_owner_has_parametric_state(db, owner) {
+        return false;
+    }
+    non_regular_recursive_calls_for_key(db, key)
+        .blocked_owners
+        .iter()
+        .copied()
+        .any(|blocked| same_syntactic_callable_owner(blocked, owner))
+}
+
+pub fn semantic_instance_is_in_non_regular_recursive_component<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> bool {
+    key_is_in_non_regular_recursive_component(db, instance.key(db))
+}
+
+pub fn non_regular_recursive_call_diagnostic<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> Option<BorrowDiagnosticId<'db>> {
+    let owner = instance.key(db).owner(db);
+    if !source_owner_has_parametric_state(db, owner) {
+        return None;
+    }
+    let contained_closures = source_contained_closure_keys(db, instance.key(db))
+        .into_iter()
+        .map(|key| SyntacticBodyOwner::from(key.owner(db)))
+        .collect::<FxHashSet<_>>();
+    let graph = non_regular_recursive_calls_for_key(db, instance.key(db));
+    let call = graph
+        .calls
+        .iter()
+        .copied()
+        .find(|call| {
+            same_syntactic_callable_owner(call.owner, owner)
+                || contained_closures.contains(&SyntacticBodyOwner::from(call.owner))
+        })
+        .or_else(|| {
+            graph
+                .component_diagnostic_calls
+                .iter()
+                .find(|(blocked_owner, _)| same_syntactic_callable_owner(*blocked_owner, owner))
+                .map(|(_, call)| *call)
+        })?;
+    let diagnostic_instance = if same_syntactic_callable_owner(call.owner, owner) {
+        instance
+    } else {
+        get_or_build_semantic_instance(db, identity_semantic_instance_key(db, call.owner))
+    };
+    let diagnostic_owner = diagnostic_instance.key(db).owner(db);
+    let origin = match call.call_site {
+        CallSiteId::Expr(expr) => crate::analysis::semantic::SemOrigin::Expr(expr),
+        CallSiteId::ForLoopLen(stmt) | CallSiteId::ForLoopGet(stmt) => {
+            crate::analysis::semantic::SemOrigin::Stmt(stmt)
+        }
+    };
+    Some(BorrowDiagnosticId::new(
+        db,
+        SemanticBorrowDiagnostic {
+            kind: SemanticBorrowDiagKind::NonRegularPolymorphicRecursion,
+            instance: diagnostic_instance,
+            primary: SemanticBorrowDiagnosticLabel {
+                message: "this recursive call nests a caller generic parameter inside a different type or constant, which would create an unbounded family of specialized functions".to_string(),
+                span: SemanticBorrowDiagnosticSpan::Origin {
+                    owner: diagnostic_owner,
+                    origin,
+                },
+            },
+            secondaries: Vec::new(),
+        },
+    ))
+}
+
 fn collect_semantic_callees<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> Vec<SemanticCalleeRef<'db>> {
+    let blocked_sites = non_regular_recursive_call_sites_for_key(db, instance.key(db))
+        .into_iter()
+        .map(|call| call.call_site)
+        .collect::<FxHashSet<_>>();
     let mut seen = FxHashSet::default();
     let mut callees = Vec::new();
-    for site in instance.call_sites(db).iter().flatten() {
+    for (expr_idx, site) in instance.call_sites(db).iter().enumerate() {
+        if blocked_sites.contains(&CallSiteId::Expr(ExprId::new(expr_idx))) {
+            continue;
+        }
+        let Some(site) = site else {
+            continue;
+        };
         if let Some(callee) = site.callee
             && seen.insert(callee.key)
         {
             callees.push(callee);
         }
     }
-    for sites in instance.for_loop_call_sites(db).iter().flatten() {
+    for (stmt_idx, sites) in instance.for_loop_call_sites(db).iter().enumerate() {
+        let Some(sites) = sites else {
+            continue;
+        };
+        let stmt = crate::hir_def::StmtId::new(stmt_idx);
         if let Some(callee) = sites.len.callee
+            && !blocked_sites.contains(&CallSiteId::ForLoopLen(stmt))
             && seen.insert(callee.key)
         {
             callees.push(callee);
         }
         if let Some(callee) = sites.get.callee
+            && !blocked_sites.contains(&CallSiteId::ForLoopGet(stmt))
             && seen.insert(callee.key)
         {
             callees.push(callee);
@@ -1571,7 +4030,8 @@ fn root_owner_generic_args<'db>(
         BodyOwner::Const(_)
         | BodyOwner::AnonConstBody { .. }
         | BodyOwner::ContractInit { .. }
-        | BodyOwner::ContractRecvArm { .. } => Ok(Vec::new()),
+        | BodyOwner::ContractRecvArm { .. }
+        | BodyOwner::Closure { .. } => Ok(Vec::new()),
     }
 }
 
@@ -1581,6 +4041,7 @@ fn owner_identity_generic_args<'db>(
 ) -> Vec<TyId<'db>> {
     match owner {
         BodyOwner::Func(func) => CallableDef::Func(func).params(db).to_vec(),
+        BodyOwner::Closure { ty, .. } => ty.parent_args(db).clone(),
         BodyOwner::Const(_)
         | BodyOwner::AnonConstBody { .. }
         | BodyOwner::ContractInit { .. }
@@ -2012,18 +4473,153 @@ impl<'db> crate::analysis::ty::fold::TyFolder<'db> for CheckedInstantiateFolder<
     }
 }
 
-fn known_never_returns_cycle_initial<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _instance: SemanticInstance<'db>,
-) -> bool {
-    false
+#[cfg(test)]
+mod non_regular_recursion_tests {
+    use rustc_hash::FxHashSet;
+
+    use super::{Binder, TyFlags, unresolved_ty_is_covered_by};
+    use crate::{
+        analysis::ty::{
+            const_ty::{ConstTyData, ConstTyId},
+            ty_def::{TyData, TyId},
+        },
+        hir_def::CallableDef,
+        test_db::{HirAnalysisTestDb, find_func},
+    };
+
+    #[test]
+    fn auxiliary_projection_coverage_requires_every_unresolved_leaf() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "auxiliary_projection_coverage.fe".into(),
+            r#"
+trait Project {
+    type Assoc
 }
 
-fn known_never_returns_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &bool,
-    _count: u32,
-    _instance: SemanticInstance<'db>,
-) -> salsa::CycleRecoveryAction<bool> {
-    salsa::CycleRecoveryAction::Iterate
+struct Ground {}
+struct ConstRoot<const N: u256> {}
+
+impl Project for Ground {
+    type Assoc = u256
+}
+
+fn concrete(_ value: own Ground) {}
+
+fn shapes<T: Project, U: Project, const N: u256>(
+    _ carried_root: own T,
+    _ carried_projection: own <T as Project>::Assoc,
+    _ uncovered_projection: own <U as Project>::Assoc,
+    _ mixed_projection: own (
+        <T as Project>::Assoc,
+        <U as Project>::Assoc,
+    ),
+    _ uncovered_const: own ConstRoot<N>,
+) {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let concrete = find_func(&db, top_mod, "concrete");
+        let ground = concrete
+            .params(&db)
+            .next()
+            .expect("concrete value parameter")
+            .ty(&db);
+        let shapes = find_func(&db, top_mod, "shapes");
+        let generic_params = CallableDef::Func(shapes).params(&db);
+        let [carried, uncovered, const_param] = generic_params else {
+            panic!("expected two type parameters and one const parameter")
+        };
+        let value_params = shapes
+            .params(&db)
+            .map(|param| param.ty(&db))
+            .collect::<Vec<TyId<'_>>>();
+        let [
+            _carried_root,
+            carried_projection,
+            uncovered_projection,
+            mixed_projection,
+            uncovered_const,
+        ] = value_params.as_slice()
+        else {
+            panic!("unexpected shape parameter count")
+        };
+
+        let ground_projection = Binder::bind(*carried_projection).instantiate_with(&db, |_| ground);
+        assert!(
+            ground_projection
+                .flags(&db)
+                .contains(TyFlags::HAS_PROJECTION),
+            "the ground associated type must remain a projection for this regression"
+        );
+        assert!(
+            unresolved_ty_is_covered_by(&db, ground_projection, &FxHashSet::default()),
+            "a projection over a ground receiver is caller-independent"
+        );
+
+        let carried_only = FxHashSet::from_iter([*carried]);
+        assert!(
+            unresolved_ty_is_covered_by(&db, *carried_projection, &carried_only),
+            "a projection wholly derived from an exactly-carried primary coordinate is stable"
+        );
+        assert!(
+            !unresolved_ty_is_covered_by(&db, *uncovered_projection, &carried_only),
+            "a projection rooted in a dropped generic must remain conservative"
+        );
+        assert!(
+            !unresolved_ty_is_covered_by(&db, *mixed_projection, &carried_only),
+            "one carried lineage must not hide another uncovered lineage"
+        );
+        assert!(
+            !unresolved_ty_is_covered_by(&db, *uncovered_const, &carried_only),
+            "an uncovered const parameter must remain conservative"
+        );
+
+        let all_type_lineages = FxHashSet::from_iter([*carried, *uncovered]);
+        assert!(
+            unresolved_ty_is_covered_by(&db, *mixed_projection, &all_type_lineages),
+            "a derived projection aggregate is stable when every lineage is carried"
+        );
+
+        let TyData::ConstTy(const_param_ty) = const_param.data(&db) else {
+            panic!("expected a const parameter")
+        };
+        let body = shapes.body(&db).expect("shapes body");
+        let unevaluated_with = |generic_args| {
+            TyId::const_ty(
+                &db,
+                ConstTyId::new(
+                    &db,
+                    ConstTyData::UnEvaluated {
+                        body,
+                        ty: Some(const_param_ty.ty(&db)),
+                        const_def: None,
+                        generic_args,
+                        preserve_unevaluated: true,
+                        defer_validation: false,
+                    },
+                ),
+            )
+        };
+        let unevaluated_type_arg = unevaluated_with(vec![*uncovered]);
+        let unevaluated_const_arg = unevaluated_with(vec![*const_param]);
+        for hidden_param in [unevaluated_type_arg, unevaluated_const_arg] {
+            assert!(
+                hidden_param.flags(&db).contains(TyFlags::HAS_PARAM),
+                "unevaluated const generic arguments must contribute visitor-derived flags"
+            );
+            assert!(
+                !unresolved_ty_is_covered_by(&db, hidden_param, &FxHashSet::default()),
+                "an unevaluated const must not hide an uncovered generic argument"
+            );
+        }
+        assert!(
+            unresolved_ty_is_covered_by(
+                &db,
+                unevaluated_type_arg,
+                &FxHashSet::from_iter([*uncovered]),
+            ),
+            "an unevaluated const generic argument is stable when its lineage is carried"
+        );
+    }
 }

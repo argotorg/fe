@@ -1,0 +1,24 @@
+use core::functional::Fn
+use core::option::Option::{self, Some}
+
+fn call_closure_method() -> u256 {
+    let offset: u256 = 1
+    let inc = |value: own u256| -> u256 { value + offset }
+    inc.call(41)
+}
+
+fn call_closure_directly() -> u256 {
+    let offset: u256 = 1
+    let inc = |value: own u256| -> u256 { value + offset }
+    inc(41)
+}
+
+fn call_generic_directly<T, U, F: Fn<(T,), U>>(_ func: F, _ value: own T) -> U {
+    func(value)
+}
+
+fn map_option_with_closure() -> u256 {
+    let offset: u256 = 5
+    let input: Option<u256> = Some(37)
+    input.map(|value: own u256| -> u256 { value + offset }).unwrap()
+}

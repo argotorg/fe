@@ -1,0 +1,10 @@
+struct S {
+    r: ref u256,
+    data: u256,
+}
+
+pub fn own_param_case(mut s: own S) -> u256 {
+    let m = mut s.data
+    m = 5
+    s.data
+}

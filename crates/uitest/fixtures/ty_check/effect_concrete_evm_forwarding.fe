@@ -15,12 +15,12 @@ pub struct Writer {
 }
 
 impl Writer {
-    pub fn write<T: Writable>(self, value: T) -> Writer uses (evm: mut Evm) {
+    pub fn write<T: Writable>(own self, value: T) -> Writer uses (evm: mut Evm) {
         value.write_to(ptr: self.ptr)
         self
     }
 
-    pub fn write_u256(self, value: u256) -> Writer uses (evm: mut Evm) {
+    pub fn write_u256(own self, value: u256) -> Writer uses (evm: mut Evm) {
         self.write(value: value)
     }
 }

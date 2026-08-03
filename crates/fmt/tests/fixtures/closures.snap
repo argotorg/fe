@@ -1,0 +1,27 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+expression: output
+input_file: tests/fixtures/closures.fe
+---
+use core::functional::Fn
+
+fn run() {
+    let offset: u256 = 1
+    let inc = |value: own u256| -> u256 {
+        value + offset
+    }
+    let nested = |value: own u256| -> u256 {
+        let inner = |delta: own u256| -> u256 {
+            value + delta
+        }
+        inner.call(1)
+    }
+    inc.call(nested.call(40))
+
+    let inferred = |a, b| a + b
+    let zero = || 42
+    let modes = |a: own, b: ref, c: mut, d: view| a
+    let typed = |a: own u256, b: view u256| -> u256 {
+        a + b
+    }
+}

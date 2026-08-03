@@ -14,16 +14,19 @@ pub use ctfe::*;
 pub use definite_assignment::contract_init_assigned_fields;
 pub(crate) use instance::CallSiteProviderRefinement;
 pub use instance::{
-    EffectProviderSubst, GenericSubst, ImplEnv, InstantiatedEffectEnv, RootSemanticInstanceError,
-    SemanticEffectEnvInstantiationError, SemanticInstance, SemanticInstanceKey, TypedBodyTemplate,
+    EffectProviderSubst, GenericSubst, ImplEnv, InstantiatedEffectEnv, NonRegularRecursiveCallSite,
+    RootSemanticInstanceError, SemanticEffectEnvInstantiationError, SemanticInstance,
+    SemanticInstanceCompleteness, SemanticInstanceKey, TypedBodyTemplate,
     get_or_build_semantic_instance, identity_semantic_instance_key, instantiate_typed_body,
-    instantiate_with_generic_args, instantiated_effect_env,
+    instantiate_with_generic_args, instantiated_effect_env, non_regular_recursive_call_sites,
     resolved_provider_binding_for_instance_effect, root_semantic_instance_key,
-    semantic_layout_bundle_signature, typed_body_template, validate_instantiated_effect_env_key,
+    same_syntactic_callable_owner, semantic_layout_bundle_signature, typed_body_template,
+    validate_instantiated_effect_env_key,
 };
 pub(crate) use instance::{
-    provisional_provider_binding_for_instance_effect, provisional_provider_idx_for_requirement,
-    semantic_instance_base_assumptions_for_key,
+    non_regular_recursive_call_diagnostic, provisional_provider_binding_for_instance_effect,
+    provisional_provider_idx_for_requirement, semantic_instance_base_assumptions_for_key,
+    semantic_instance_is_in_non_regular_recursive_component,
 };
 pub use ir::*;
 pub use layout_evidence::*;

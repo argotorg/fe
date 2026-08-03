@@ -1,0 +1,17 @@
+use core::functional::Fn
+
+pub fn f() -> bool {
+    let g = |x: own u256| -> u256 {
+        if x == 0 { return true }
+        x
+    }
+    g.call(0) == 0
+}
+
+pub fn inferred_zero_arg() -> bool {
+    let g = || {
+        if true { return 1 as u256 }
+        return false
+    }
+    g.call() == 0
+}

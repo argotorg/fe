@@ -7,14 +7,15 @@ use hir::{
     analysis::ty::{
         ProviderAddressSpace,
         ty_check::{EffectParamSite, LocalBinding, ParamSite},
+        ty_def::{ClosureCaptureAccess, TyId},
     },
     core::semantic::{
         ContractFieldId, ContractLayoutEntry, ContractLayoutEntryKind,
         ContractLayoutParameterOrigin, ContractLayoutValue, EffectEnvView, FieldView,
-        ProviderSource,
+        LogicalCallableParamMode, LogicalCallableSignature, LogicalCallableTarget, ProviderSource,
         reference::{ReferenceView, Target},
     },
-    hir_def::{Contract, FieldParent, ItemKind, PathId, scope_graph::ScopeId},
+    hir_def::{Contract, Expr, FieldParent, ItemKind, Partial, PathId, scope_graph::ScopeId},
     lower::map_file_to_mod,
     span::LazySpan,
 };
@@ -403,6 +404,13 @@ fn hover_markdown_for_target<'db>(
         }
     };
 
+    if let Some(ty) = reference.value_ty(db)
+        && let Some(callable) = callable_hover_markdown(db, ty, reference.scope())
+    {
+        body.push_str("\n\n");
+        body.push_str(&callable);
+    }
+
     if let Some(layout_markdown) = layout_markdown_for_target(db, target) {
         body.push('\n');
         body.push_str(&layout_markdown);
@@ -410,6 +418,121 @@ fn hover_markdown_for_target<'db>(
     }
 
     Some(body)
+}
+
+fn callable_hover_markdown(
+    db: &DriverDataBase,
+    ty: TyId<'_>,
+    scope: ScopeId<'_>,
+) -> Option<String> {
+    let signatures = LogicalCallableSignature::for_ty_in_scope(db, ty, scope);
+    if signatures.is_empty() {
+        return None;
+    }
+    Some(
+        signatures
+            .into_iter()
+            .map(|signature| callable_signature_markdown(db, signature))
+            .collect::<Vec<_>>()
+            .join("\n\n---\n\n"),
+    )
+}
+
+fn callable_signature_markdown(
+    db: &DriverDataBase,
+    signature: LogicalCallableSignature<'_>,
+) -> String {
+    let params = signature
+        .params
+        .iter()
+        .map(|param| {
+            let name = param
+                .name
+                .map(|name| name.data(db).to_string())
+                .unwrap_or_else(|| "_".to_string());
+            let mode = match param.mode {
+                LogicalCallableParamMode::View => "",
+                LogicalCallableParamMode::Own => "own ",
+                LogicalCallableParamMode::Ref => "ref ",
+                LogicalCallableParamMode::Mut => "mut ",
+            };
+            format!("{name}: {mode}{}", param.ty.pretty_print(db))
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let capability = signature
+        .capability
+        .map(|capability| capability.as_str())
+        .unwrap_or("callable");
+    let mut markdown = format!(
+        "### Callable\n\n```fe\n|{params}| -> {}\n```\n\nCapability: **{capability}**",
+        signature.ret_ty.pretty_print(db),
+    );
+    if let LogicalCallableTarget::Closure(closure) = signature.target {
+        let captures = closure
+            .captures_with_accesses(db)
+            .map(|(ty, access)| {
+                let access = match access {
+                    ClosureCaptureAccess::Read => "read",
+                    ClosureCaptureAccess::MoveIfNonCopy => "move if non-Copy",
+                    ClosureCaptureAccess::Move => "move",
+                };
+                format!("`{}` ({access})", ty.pretty_print(db))
+            })
+            .collect::<Vec<_>>();
+        if !captures.is_empty() {
+            markdown.push_str("\n\nCaptures: ");
+            markdown.push_str(&captures.join(", "));
+        }
+    }
+    markdown
+}
+
+fn closure_literal_hover(
+    db: &DriverDataBase,
+    top_mod: hir::hir_def::TopLevelMod<'_>,
+    cursor: Cursor,
+) -> Option<Hover> {
+    let mut best: Option<(parser::TextSize, common::diagnostics::Span, String)> = None;
+    for item in top_mod.scope_graph(db).items_dfs(db) {
+        let ItemKind::Body(body) = item else {
+            continue;
+        };
+        let Some(typed_body) = body.typed_body(db) else {
+            continue;
+        };
+        for (expr, data) in body.exprs(db).iter() {
+            if !matches!(data, Partial::Present(Expr::Closure { .. })) {
+                continue;
+            }
+            let Some(span) = expr.span(body).resolve(db) else {
+                continue;
+            };
+            if !span.range.contains(cursor) {
+                continue;
+            }
+            let ty = typed_body.expr_ty(db, expr);
+            let Some(markdown) = callable_hover_markdown(db, ty, body.scope()) else {
+                continue;
+            };
+            if best
+                .as_ref()
+                .is_none_or(|(best_len, ..)| span.range.len() < *best_len)
+            {
+                best = Some((span.range.len(), span, markdown));
+            }
+        }
+    }
+    let (_, span, markdown) = best?;
+    Some(Hover {
+        contents: async_lsp::lsp_types::HoverContents::Markup(
+            async_lsp::lsp_types::MarkupContent {
+                kind: async_lsp::lsp_types::MarkupKind::Markdown,
+                value: markdown,
+            },
+        ),
+        range: to_lsp_range_from_span(span, db).ok(),
+    })
 }
 
 pub fn hover_helper(
@@ -429,7 +552,11 @@ pub fn hover_helper(
 
     // Get the reference at cursor and resolve it
     let Some(r) = top_mod.reference_at(db, cursor) else {
-        return Ok((layout_definition_hover(db, top_mod, cursor), None));
+        return Ok((
+            closure_literal_hover(db, top_mod, cursor)
+                .or_else(|| layout_definition_hover(db, top_mod, cursor)),
+            None,
+        ));
     };
 
     let resolution = r.target_at(db, cursor);
@@ -564,7 +691,7 @@ mod tests {
 
     #[dir_test(
         dir: "$CARGO_MANIFEST_DIR/test_files",
-        glob: "layout_hover.fe"
+        glob: "*_hover.fe"
     )]
     fn layout_hover_snapshot(fixture: Fixture<&str>) {
         let source = normalize_newlines(fixture.content()).into_owned();

@@ -5,7 +5,7 @@ input_file: crates/codegen/tests/fixtures/revert.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %standalone_revert__revert__fail__gcd5c_35c3() {
+func private %standalone_revert__revert__fail__gcd5c_aeb4() {
     block0:
         jump block1;
 
@@ -30,7 +30,7 @@ func private %main() {
         jump block1;
 
     block1:
-        call %standalone_revert__revert__fail__gcd5c_35c3;
+        call %standalone_revert__revert__fail__gcd5c_aeb4;
         unreachable;
 }
 

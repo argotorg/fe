@@ -631,7 +631,8 @@ pub(crate) fn impls_for_ty<'db>(
         .collect()
 }
 
-/// Looks up the HIR body for an associated const defined in the selected trait impl, if unique.
+/// Looks up the HIR body selected for an associated const, including an
+/// inherited trait default, if the trait implementation is unique.
 pub fn assoc_const_body_for_trait_inst<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
@@ -642,11 +643,12 @@ pub fn assoc_const_body_for_trait_inst<'db>(
         .map(|(body, _)| body)
 }
 
-/// Looks up the HIR body for an associated const defined in the selected trait impl, if unique,
-/// returning both the body and the impl's instantiated generic arguments.
+/// Looks up the HIR body selected for an associated const, including an
+/// inherited trait default, if the trait implementation is unique.
 ///
-/// The returned generic args correspond to the impl's own generic parameters (not the trait's),
-/// and are suitable for CTFE/type checking of the impl const body.
+/// An explicit impl const is instantiated with the impl's generic arguments;
+/// an inherited default is instantiated with the trait instance arguments.
+/// Both forms are suitable for CTFE/type checking of the selected body.
 pub fn assoc_const_body_and_impl_args_for_trait_inst<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
@@ -658,18 +660,35 @@ pub fn assoc_const_body_and_impl_args_for_trait_inst<'db>(
         Selection::Ambiguous(_ambiguous) => return None,
         Selection::NotFound => return None,
     };
-    let implementor = resolved.selected();
-    let hir_impl = match implementor.origin(db) {
-        ImplementorOrigin::Hir(impl_trait) => impl_trait,
-        ImplementorOrigin::VirtualContract(_) | ImplementorOrigin::Assumption => return None,
-    };
-    let def = hir_impl
-        .hir_consts(db)
-        .iter()
-        .find(|c| c.name.to_opt() == Some(const_name))?;
-    let body = def.value.to_opt()?;
+    assoc_const_body_and_args_from_resolved(db, resolved, const_name)
+}
 
-    Some((body, resolved.impl_args(db).to_vec()))
+/// Returns the explicit impl body or inherited trait default selected by an
+/// already-resolved trait instance.
+pub(crate) fn assoc_const_body_and_args_from_resolved<'db>(
+    db: &'db dyn HirAnalysisDb,
+    resolved: ResolvedImplInstance<'db>,
+    const_name: IdentId<'db>,
+) -> Option<(crate::hir_def::Body<'db>, Vec<TyId<'db>>)> {
+    let implementor = resolved.selected();
+    let explicit = match implementor.origin(db) {
+        ImplementorOrigin::Hir(impl_trait) => impl_trait
+            .hir_consts(db)
+            .iter()
+            .find(|const_| const_.name.to_opt() == Some(const_name))
+            .and_then(|const_| const_.value.to_opt())
+            .map(|body| (body, resolved.impl_args(db).to_vec())),
+        ImplementorOrigin::VirtualContract(_) => None,
+        ImplementorOrigin::Assumption => return None,
+    };
+
+    explicit.or_else(|| {
+        let inst = resolved.trait_inst();
+        inst.def(db)
+            .const_(db, const_name)
+            .and_then(|const_| const_.default_body(db))
+            .map(|body| (body, inst.args(db).to_vec()))
+    })
 }
 
 /// Whether `inst` is satisfied by a uniquely-selected concrete impl rather than

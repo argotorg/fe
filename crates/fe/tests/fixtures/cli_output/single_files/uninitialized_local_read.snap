@@ -1,0 +1,18 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/uninitialized_local_read.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/uninitialized_local_read.fe
+
+error[16-0007]: possibly uninitialized local in `fn read`
+  ┌─ uninitialized_local_read.fe:3:12
+  │
+2 │     let mut value: u256
+  │         --------- `value` is declared without an initial value
+3 │     assert(value == 0)
+  │            ^^^^^ local `value` may be used before it is initialized
+
+
+=== EXIT CODE: 1 ===

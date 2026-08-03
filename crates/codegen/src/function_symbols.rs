@@ -9,8 +9,8 @@ use hir::analysis::{
 use mir::{
     RuntimeFunctionOwner,
     runtime::stable_key::{
-        generic_args_identity, ingot_component_for_scope, module_path_components_for_scope,
-        semantic_owner_context_identity, stable_identity_hash,
+        closure_symbol_base, generic_args_identity, ingot_component_for_scope,
+        module_path_components_for_scope, semantic_owner_context_identity, stable_identity_hash,
     },
 };
 use rustc_hash::FxHashSet;
@@ -306,6 +306,9 @@ fn semantic_leaf_component<'db>(db: &'db DriverDataBase, owner: BodyOwner<'db>) 
             recv_idx,
             arm_idx
         ),
+        BodyOwner::Closure {
+            ty, receiver_mode, ..
+        } => closure_symbol_base(db, ty, receiver_mode),
     }
 }
 
@@ -353,7 +356,7 @@ fn readable_type_component<'db>(db: &'db DriverDataBase, ty: TyId<'db>) -> Optio
             .name(db)
             .to_opt()
             .map(|name| name.data(db).to_string()),
-        TyData::TyBase(TyBase::Prim(_) | TyBase::Func(_))
+        TyData::TyBase(TyBase::Prim(_) | TyBase::Func(_) | TyBase::Closure(_))
         | TyData::TyParam(_)
         | TyData::QualifiedTy(_) => {
             let component = base.pretty_print(db).to_string();
@@ -392,4 +395,448 @@ fn generic_component<'db>(db: &'db DriverDataBase, args: &[TyId<'db>]) -> Option
         let hash = stable_identity_hash(&generic_args_identity(db, args));
         format!("g{}", &hash[..GENERIC_SUFFIX_HASH_LEN])
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use common::InputDb as _;
+    use hir::analysis::ty::ty_check::ClosureReceiverMode;
+    use url::Url;
+
+    use super::*;
+
+    #[test]
+    fn reusable_closure_call_abis_use_mode_aware_symbols() {
+        let mut db = DriverDataBase::default();
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///reusable_closure_call_abis_use_mode_aware_symbols.fe").unwrap(),
+            Some(
+                r#"
+use core::functional::Fn
+use core::functional::FnOnce
+
+struct Boxed {
+    value: u256,
+}
+
+#[test]
+fn reusable_closure_call_abis_use_mode_aware_symbols() {
+    let boxed = Boxed { value: 21 }
+    let read = |_ unit: own ()| -> u256 { boxed.value }
+    let first = read.call(())
+    let second = read.call_once(())
+    assert(first + second == 42)
+}
+"#
+                .to_string(),
+            ),
+        );
+        let top_mod = db.top_mod(file);
+        let package = mir::build_test_runtime_package(
+            &db,
+            top_mod,
+            Some("reusable_closure_call_abis_use_mode_aware_symbols"),
+        )
+        .expect("test package should build");
+        let functions = package
+            .functions(&db)
+            .iter()
+            .copied()
+            .filter(|function| {
+                let RuntimeFunctionOwner::Semantic(semantic) = function.owner(&db) else {
+                    return false;
+                };
+                matches!(semantic.key(&db).owner(&db), BodyOwner::Closure { .. })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(functions.len(), 2, "expected Fn and FnOnce closure bodies");
+
+        let inputs = functions
+            .iter()
+            .map(|function| FunctionSymbolInput {
+                owner: function.owner(&db).clone(),
+                fallback_symbol: function.symbol(&db).clone(),
+                variant_suffix: String::new(),
+                disambiguator: mir::runtime_instance_symbol_key(&db, function.instance(&db)),
+            })
+            .collect::<Vec<_>>();
+        let codegen_symbols = assign_function_symbols(&db, &inputs);
+
+        let mut saw_view = false;
+        let mut saw_own = false;
+        for (function, codegen_symbol) in functions.iter().zip(codegen_symbols) {
+            let RuntimeFunctionOwner::Semantic(semantic) = function.owner(&db) else {
+                unreachable!("closure function is semantic");
+            };
+            let BodyOwner::Closure {
+                ty, receiver_mode, ..
+            } = semantic.key(&db).owner(&db)
+            else {
+                unreachable!("filtered to closure functions");
+            };
+            let expected = closure_symbol_base(&db, ty, receiver_mode);
+            assert_eq!(function.symbol(&db), expected.clone());
+            assert_eq!(codegen_symbol, expected);
+            match receiver_mode {
+                ClosureReceiverMode::View => saw_view = true,
+                ClosureReceiverMode::Own => saw_own = true,
+            }
+        }
+        assert!(saw_view, "missing reusable Fn body");
+        assert!(saw_own, "missing reusable FnOnce body");
+    }
+
+    #[test]
+    fn closure_symbols_include_their_distinct_body_owners() {
+        let mut db = DriverDataBase::default();
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///closure_symbols_include_their_distinct_body_owners.fe").unwrap(),
+            Some(
+                r#"
+use core::functional::Fn
+
+#[test]
+fn first() {
+    let answer = || 1 as u256
+    assert(answer.call() == 1)
+}
+
+#[test]
+fn second() {
+    let answer = || 2 as u256
+    assert(answer.call() == 2)
+}
+"#
+                .to_string(),
+            ),
+        );
+        let top_mod = db.top_mod(file);
+        let package =
+            mir::build_test_runtime_package(&db, top_mod, None).expect("test package should build");
+        let closures = package
+            .functions(&db)
+            .iter()
+            .filter_map(|function| {
+                let RuntimeFunctionOwner::Semantic(semantic) = function.owner(&db) else {
+                    return None;
+                };
+                let BodyOwner::Closure {
+                    ty,
+                    def,
+                    receiver_mode,
+                } = semantic.key(&db).owner(&db)
+                else {
+                    return None;
+                };
+                let defining_owner = BodyOwner::from_body(&db, def.body)
+                    .expect("runtime closure must have a defining body owner");
+                Some((
+                    def,
+                    defining_owner,
+                    closure_symbol_base(&db, ty, receiver_mode),
+                ))
+            })
+            .collect::<Vec<_>>();
+        let closure_symbols = closures
+            .iter()
+            .map(|(_, _, symbol)| symbol)
+            .collect::<Vec<_>>();
+
+        assert_eq!(closures.len(), 2, "{closure_symbols:#?}");
+        assert_eq!(
+            closures[0].0.expr, closures[1].0.expr,
+            "the regression requires the closures to share a body-local expression index",
+        );
+        assert!(
+            closures
+                .iter()
+                .all(|(_, owner, _)| matches!(owner, BodyOwner::Func(_))),
+            "function closures must resolve to function body owners: {closures:#?}",
+        );
+        assert_ne!(
+            closures[0].1, closures[1].1,
+            "the closures must resolve to distinct function owners",
+        );
+        assert_eq!(
+            closure_symbols.iter().collect::<FxHashSet<_>>().len(),
+            closure_symbols.len(),
+            "same-position closures in distinct body owners must have distinct stable symbols: {closure_symbols:#?}",
+        );
+    }
+
+    #[test]
+    fn receive_arm_closure_symbols_are_unique_and_order_independent() {
+        let mut db = DriverDataBase::default();
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///receive_arm_closure_symbols_are_unique_and_order_independent.fe")
+                .unwrap(),
+            Some(
+                r#"
+use core::functional::Fn
+
+msg Msg {
+    #[selector = 1]
+    First -> u256,
+    #[selector = 2]
+    Second -> u256,
+}
+
+pub contract C {
+    recv Msg {
+        First -> u256 {
+            let answer = || 1 as u256
+            answer.call()
+        }
+
+        Second -> u256 {
+            let answer = || 2 as u256
+            answer.call()
+        }
+    }
+}
+"#
+                .to_string(),
+            ),
+        );
+        let top_mod = db.top_mod(file);
+        let package =
+            mir::build_runtime_package(&db, top_mod).expect("contract package should build");
+        let mut closure_defs = Vec::new();
+        let mut closure_owners = Vec::new();
+        let mut closure_bases = Vec::new();
+        let mut inputs = package
+            .functions(&db)
+            .iter()
+            .filter_map(|function| {
+                let RuntimeFunctionOwner::Semantic(semantic) = function.owner(&db) else {
+                    return None;
+                };
+                let BodyOwner::Closure {
+                    ty,
+                    def,
+                    receiver_mode,
+                } = semantic.key(&db).owner(&db)
+                else {
+                    return None;
+                };
+                let defining_owner = BodyOwner::from_body(&db, def.body)
+                    .expect("runtime closure must have a defining body owner");
+                let base = closure_symbol_base(&db, ty, receiver_mode);
+                assert_eq!(function.symbol(&db), base);
+                closure_defs.push(def);
+                closure_owners.push(defining_owner);
+                closure_bases.push(base);
+                Some(FunctionSymbolInput {
+                    owner: function.owner(&db).clone(),
+                    fallback_symbol: function.symbol(&db).clone(),
+                    variant_suffix: String::new(),
+                    disambiguator: mir::runtime_instance_symbol_key(&db, function.instance(&db)),
+                })
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(inputs.len(), 2);
+        assert_eq!(
+            closure_defs[0].expr, closure_defs[1].expr,
+            "the regression requires the closures to share a body-local expression index",
+        );
+        assert!(
+            closure_owners
+                .iter()
+                .all(|owner| matches!(owner, BodyOwner::ContractRecvArm { .. })),
+            "receive-arm closures must resolve to receive-arm body owners: {closure_owners:#?}",
+        );
+        assert_ne!(
+            closure_owners[0], closure_owners[1],
+            "the closures must resolve to distinct receive-arm owners",
+        );
+        assert_eq!(
+            closure_bases.iter().collect::<FxHashSet<_>>().len(),
+            closure_bases.len(),
+            "same-position closures in distinct receive arms must have distinct stable bases: {closure_bases:#?}",
+        );
+        assert_eq!(
+            inputs
+                .iter()
+                .map(|input| &input.disambiguator)
+                .collect::<FxHashSet<_>>()
+                .len(),
+            inputs.len(),
+            "owner-based closure identities must produce distinct disambiguators",
+        );
+        let assigned = assign_function_symbols(&db, &inputs);
+        assert_eq!(
+            assigned.iter().collect::<FxHashSet<_>>().len(),
+            assigned.len(),
+            "same-position closures in distinct receive arms must have distinct symbols: {assigned:#?}",
+        );
+        let by_instance = inputs
+            .iter()
+            .zip(assigned)
+            .map(|(input, symbol)| (input.disambiguator.clone(), symbol))
+            .collect::<BTreeMap<_, _>>();
+
+        inputs.reverse();
+        let reversed = assign_function_symbols(&db, &inputs);
+        let reversed_by_instance = inputs
+            .iter()
+            .zip(reversed)
+            .map(|(input, symbol)| (input.disambiguator.clone(), symbol))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(by_instance, reversed_by_instance);
+    }
+
+    #[test]
+    fn contract_init_closure_symbol_uses_contract_init_owner() {
+        let mut db = DriverDataBase::default();
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///contract_init_closure_symbol_uses_contract_init_owner.fe").unwrap(),
+            Some(
+                r#"
+use core::functional::Fn
+
+pub contract C {
+    init() {
+        let answer = || 42 as u256
+        assert(answer.call() == 42)
+    }
+}
+"#
+                .to_string(),
+            ),
+        );
+        let top_mod = db.top_mod(file);
+        let package =
+            mir::build_runtime_package(&db, top_mod).expect("contract package should build");
+        let closures = package
+            .functions(&db)
+            .iter()
+            .filter_map(|function| {
+                let RuntimeFunctionOwner::Semantic(semantic) = function.owner(&db) else {
+                    return None;
+                };
+                let BodyOwner::Closure {
+                    ty,
+                    def,
+                    receiver_mode,
+                } = semantic.key(&db).owner(&db)
+                else {
+                    return None;
+                };
+                let defining_owner = BodyOwner::from_body(&db, def.body)
+                    .expect("runtime closure must have a defining body owner");
+                Some((
+                    defining_owner,
+                    closure_symbol_base(&db, ty, receiver_mode),
+                    function.symbol(&db),
+                ))
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(closures.len(), 1, "{closures:#?}");
+        assert!(
+            matches!(closures[0].0, BodyOwner::ContractInit { .. }),
+            "init closure must resolve to its contract-init owner: {closures:#?}",
+        );
+        assert_eq!(closures[0].1.as_str(), closures[0].2.as_str());
+    }
+
+    #[test]
+    fn nested_closure_symbols_include_their_distinct_root_body_owners() {
+        let mut db = DriverDataBase::default();
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///nested_closure_symbols_include_their_distinct_root_body_owners.fe")
+                .unwrap(),
+            Some(
+                r#"
+use core::functional::Fn
+
+#[test]
+fn first() {
+    let outer = || {
+        let inner = || 1 as u256
+        inner.call()
+    }
+    assert(outer.call() == 1)
+}
+
+#[test]
+fn second() {
+    let outer = || {
+        let inner = || 2 as u256
+        inner.call()
+    }
+    assert(outer.call() == 2)
+}
+"#
+                .to_string(),
+            ),
+        );
+        let top_mod = db.top_mod(file);
+        let package =
+            mir::build_test_runtime_package(&db, top_mod, None).expect("test package should build");
+        let closures = package
+            .functions(&db)
+            .iter()
+            .filter_map(|function| {
+                let RuntimeFunctionOwner::Semantic(semantic) = function.owner(&db) else {
+                    return None;
+                };
+                let BodyOwner::Closure {
+                    ty,
+                    def,
+                    receiver_mode,
+                } = semantic.key(&db).owner(&db)
+                else {
+                    return None;
+                };
+                Some((
+                    def,
+                    BodyOwner::from_body(&db, def.body)
+                        .expect("runtime closure must have a defining body owner"),
+                    closure_symbol_base(&db, ty, receiver_mode),
+                ))
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(closures.len(), 4, "{closures:#?}");
+        assert_eq!(
+            closures
+                .iter()
+                .map(|(_, _, symbol)| symbol)
+                .collect::<FxHashSet<_>>()
+                .len(),
+            closures.len(),
+            "every nested closure must have a distinct stable symbol: {closures:#?}",
+        );
+        assert!(
+            closures
+                .iter()
+                .all(|(_, owner, _)| matches!(owner, BodyOwner::Func(_))),
+            "nested closure definitions retain their lexical root function body: {closures:#?}",
+        );
+        assert_eq!(
+            closures
+                .iter()
+                .map(|(_, owner, _)| owner)
+                .collect::<FxHashSet<_>>()
+                .len(),
+            2,
+            "the two root function owners must stay distinct: {closures:#?}",
+        );
+        assert_eq!(
+            closures
+                .iter()
+                .map(|(def, _, _)| def.expr)
+                .collect::<FxHashSet<_>>()
+                .len(),
+            2,
+            "corresponding inner and outer literals must reuse body-local expression indices across owners: {closures:#?}",
+        );
+    }
 }

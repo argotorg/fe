@@ -1,0 +1,14 @@
+use core::functional::Fn
+
+pub fn f() -> u256 {
+    let mut y: u256 = 1
+    let mut x: u256 = 0
+    let m = mut x
+    let g = |_ u: own ()| -> () {
+        y = 2
+        y += 1
+        m = 5
+    }
+    g.call(())
+    y
+}

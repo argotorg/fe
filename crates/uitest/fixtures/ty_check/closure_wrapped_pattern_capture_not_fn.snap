@@ -1,0 +1,49 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/closure_wrapped_pattern_capture_not_fn.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ closure_wrapped_pattern_capture_not_fn.fe:36:5
+   │
+23 │ fn invoke<T, U, F: Fn<(T,), U>>(_ func: F, _ value: own T) -> U {
+   │                    ----------- required by this bound on `invoke`
+   ·
+36 │     invoke(func: take, value: ())
+   │     ^^^^^^ `|own ()| -> Boxed` doesn't implement `Fn<((),), Boxed>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ closure_wrapped_pattern_capture_not_fn.fe:48:5
+   │
+23 │ fn invoke<T, U, F: Fn<(T,), U>>(_ func: F, _ value: own T) -> U {
+   │                    ----------- required by this bound on `invoke`
+   ·
+48 │     invoke(func: take, value: ())
+   │     ^^^^^^ `|own ()| -> Boxed` doesn't implement `Fn<((),), Boxed>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ closure_wrapped_pattern_capture_not_fn.fe:60:5
+   │
+23 │ fn invoke<T, U, F: Fn<(T,), U>>(_ func: F, _ value: own T) -> U {
+   │                    ----------- required by this bound on `invoke`
+   ·
+60 │     invoke(func: take, value: ())
+   │     ^^^^^^ `|own ()| -> Boxed` doesn't implement `Fn<((),), Boxed>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ closure_wrapped_pattern_capture_not_fn.fe:72:5
+   │
+23 │ fn invoke<T, U, F: Fn<(T,), U>>(_ func: F, _ value: own T) -> U {
+   │                    ----------- required by this bound on `invoke`
+   ·
+72 │     invoke(func: take, value: ())
+   │     ^^^^^^ `|own ()| -> Boxed` doesn't implement `Fn<((),), Boxed>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ closure_wrapped_pattern_capture_not_fn.fe:87:5
+   │
+23 │ fn invoke<T, U, F: Fn<(T,), U>>(_ func: F, _ value: own T) -> U {
+   │                    ----------- required by this bound on `invoke`
+   ·
+87 │     invoke(func: take, value: ())
+   │     ^^^^^^ `|own ()| -> Boxed` doesn't implement `Fn<((),), Boxed>`

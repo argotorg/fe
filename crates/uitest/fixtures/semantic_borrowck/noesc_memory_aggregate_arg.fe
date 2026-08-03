@@ -1,0 +1,11 @@
+struct Esc {
+    handle: mut u256,
+}
+
+fn consume(_ value: Esc) {}
+
+pub fn noesc_memory_aggregate_arg() {
+    let mut local: u256 = 0
+    let value = Esc { handle: mut local }
+    consume(value)
+}

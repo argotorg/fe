@@ -68,11 +68,14 @@ fn raw_impl_self_key<'db>(
             HirTyKind::Mode(TypeMode::Mut, _) => Some(ImplSelfKey::Prim(PrimTy::BorrowMut)),
             HirTyKind::Mode(TypeMode::Ref, _) => Some(ImplSelfKey::Prim(PrimTy::BorrowRef)),
             HirTyKind::Mode(TypeMode::Own, inner) => lower(db, inner.to_opt()?, scope),
+            HirTyKind::Mode(TypeMode::View, _) => Some(ImplSelfKey::Prim(PrimTy::View)),
             HirTyKind::Path(path) => match resolve_type_path_definition(db, path.to_opt()?, scope)?
             {
                 NameResKind::Prim(prim) => match TyBase::from(prim) {
                     TyBase::Prim(prim) => Some(ImplSelfKey::Prim(prim)),
-                    TyBase::Adt(_) | TyBase::Contract(_) | TyBase::Func(_) => unreachable!(),
+                    TyBase::Adt(_) | TyBase::Contract(_) | TyBase::Func(_) | TyBase::Closure(_) => {
+                        unreachable!()
+                    }
                 },
                 NameResKind::Scope(
                     scope @ ScopeId::Item(

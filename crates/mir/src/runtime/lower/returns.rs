@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use cranelift_entity::{EntityRef, PrimaryMap, SecondaryMap, entity_impl};
 use hir::analysis::{
     semantic::{
-        SLocalId, SemanticInstance,
+        SBlockId, SLocalId, SemanticInstance,
         borrowck::{NSTerminatorKind, NormalizedSemanticBody, normalize_semantic_body},
     },
     ty::ty_def::TyId,
@@ -20,7 +20,7 @@ use crate::{
 use super::{
     classify::{
         AssignmentId, BodyEnv, BodyStaticFacts, RuntimeVisibleReturnPlan, default_return_class,
-        desired_runtime_return_plan, selected_visible_return_for_local,
+        desired_runtime_return_plan, selected_visible_return_for_local, semantic_return_ty,
     },
     infer::{AssignmentSpace, CarrierInferer, ReturnClassLookup, merge_runtime_class},
     interface::runtime_visible_binding_plans,
@@ -81,7 +81,9 @@ impl<'db> RuntimeReturnSummary<'db> {
         let return_locals = semantic_body
             .blocks
             .iter()
-            .filter_map(|block| match &block.terminator.kind {
+            .enumerate()
+            .filter(|(block_idx, _)| facts.block_is_reachable(SBlockId::new(*block_idx)))
+            .filter_map(|(_, block)| match &block.terminator.kind {
                 NSTerminatorKind::Return(Some(value)) => Some(value.local),
                 NSTerminatorKind::Goto(_)
                 | NSTerminatorKind::Branch { .. }
@@ -122,7 +124,7 @@ impl<'db> RuntimeReturnSummary<'db> {
             if !needed_locals.insert(local) {
                 continue;
             }
-            for dependency in facts.source_locals(local).iter().copied() {
+            for dependency in facts.dependency_locals(local).iter().copied() {
                 pending.push_back(dependency);
             }
             for assign_id in facts.assignments_defining_local(local).iter().copied() {
@@ -156,7 +158,7 @@ impl<'db> RuntimeReturnSummary<'db> {
 
         let mut slice_dynamic_dependents_by_local = vec![Vec::new(); semantic_body.locals.len()];
         for local in needed_locals.iter().copied() {
-            for dependency in facts.source_locals(local).iter().copied() {
+            for dependency in facts.dependency_locals(local).iter().copied() {
                 slice_dynamic_dependents_by_local[dependency.index()].push(local);
             }
         }
@@ -230,7 +232,7 @@ pub(crate) fn static_runtime_return_decision<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
 ) -> StaticRuntimeReturnDecision<'db> {
-    if semantic.key(db).typed_body(db).result_ty() == TyId::unit(db) {
+    if semantic_return_ty(db, semantic) == TyId::unit(db) {
         return StaticRuntimeReturnDecision::Known(None);
     }
     match desired_runtime_return_plan(db, semantic) {
@@ -331,6 +333,15 @@ impl<'db> AssignmentSpace<'db> for ReturnSliceSpace<'_, 'db> {
 
     fn for_each_node_using_local(&self, local: SLocalId, f: &mut dyn FnMut(SliceAssignmentId)) {
         for &assign_id in &self.0.slice_assignments_by_local[local.index()] {
+            let Some(slice_id) = self.0.slice_assignment_positions[assign_id] else {
+                continue;
+            };
+            f(slice_id);
+        }
+    }
+
+    fn for_each_node_defining_local(&self, local: SLocalId, f: &mut dyn FnMut(SliceAssignmentId)) {
+        for &assign_id in self.0.facts.assignments_defining_local(local) {
             let Some(slice_id) = self.0.slice_assignment_positions[assign_id] else {
                 continue;
             };
@@ -565,6 +576,52 @@ fn fail_declared_pair() -> Pair {
     core::panic()
 }
 
+fn sccp_abort() -> u256 {
+    let done = true
+    if done {
+        core::panic()
+    }
+    0
+}
+
+fn leaf_abort() -> u256 {
+    core::panic()
+}
+
+fn middle_abort() -> u256 {
+    leaf_abort()
+}
+
+fn outer_abort() -> u256 {
+    middle_abort()
+}
+
+fn direct_recursive() -> u256 {
+    direct_recursive()
+}
+
+fn mutual_left() -> u256 {
+    mutual_right()
+}
+
+fn mutual_right() -> u256 {
+    mutual_left()
+}
+
+fn maybe_abort(flag: bool) -> u256 {
+    if flag {
+        core::panic()
+    }
+    0
+}
+
+fn recursive_with_base(flag: bool) -> u256 {
+    if flag {
+        return 0
+    }
+    recursive_with_base(flag)
+}
+
 fn caller_unit() {
     fail()
 }
@@ -584,6 +641,30 @@ fn caller_pair_from_declared_pair() -> Pair {
 fn caller_u256_from_extern_never() -> u256 {
     todo()
 }
+
+fn caller_sccp() -> u256 {
+    sccp_abort()
+}
+
+fn caller_outer() -> u256 {
+    outer_abort()
+}
+
+fn caller_direct_recursive() -> u256 {
+    direct_recursive()
+}
+
+fn caller_mutual_recursion() -> u256 {
+    mutual_left()
+}
+
+fn caller_maybe(flag: bool) -> u256 {
+    maybe_abort(flag)
+}
+
+fn caller_recursive_base(flag: bool) -> u256 {
+    recursive_with_base(flag)
+}
 "#
                 .to_string(),
             ),
@@ -599,9 +680,19 @@ fn caller_u256_from_extern_never() -> u256 {
             "caller_u256_from_declared_u256",
             "caller_pair_from_declared_pair",
             "caller_u256_from_extern_never",
+            "caller_sccp",
+            "caller_outer",
+            "caller_direct_recursive",
+            "caller_mutual_recursion",
         ] {
             let caller = semantic_instance_for_named_func(&db, top_mod, caller_name);
-            let body = runtime_instance_for_semantic(&db, caller).body(&db);
+            let runtime = runtime_instance_for_semantic(&db, caller);
+            assert_eq!(
+                runtime.exit_behavior(&db),
+                RuntimeExitBehavior::NeverReturns,
+                "`{caller_name}` exit behavior"
+            );
+            let body = runtime.body(&db);
 
             assert!(
                 body.blocks
@@ -622,6 +713,38 @@ fn caller_u256_from_extern_never() -> u256 {
                     })
                 }),
                 "`{caller_name}` should not lower its nonreturning callee as a normal call:\n{body:#?}"
+            );
+        }
+
+        for caller_name in ["caller_maybe", "caller_recursive_base"] {
+            let caller = semantic_instance_for_named_func(&db, top_mod, caller_name);
+            let runtime = runtime_instance_for_semantic(&db, caller);
+            assert_eq!(
+                runtime.exit_behavior(&db),
+                RuntimeExitBehavior::MayReturn,
+                "`{caller_name}` exit behavior"
+            );
+            let body = runtime.body(&db);
+
+            assert!(
+                body.blocks
+                    .iter()
+                    .all(|block| !matches!(block.terminator, RTerminator::TerminalCall { .. })),
+                "`{caller_name}` has a normal-return path and must not terminal-call:\n{body:#?}"
+            );
+            assert!(
+                body.blocks.iter().any(|block| {
+                    block.stmts.iter().any(|stmt| {
+                        matches!(
+                            stmt,
+                            RStmt::Assign {
+                                expr: RExpr::Call { .. },
+                                ..
+                            }
+                        )
+                    })
+                }),
+                "`{caller_name}` should retain an ordinary runtime call:\n{body:#?}"
             );
         }
     }
@@ -780,6 +903,69 @@ fn choose(_ flag: bool) -> u256 {
         assert_eq!(
             sliced_return_defs, return_defs,
             "return slice should keep every definition of the returned local"
+        );
+    }
+
+    #[test]
+    fn return_summary_excludes_refined_unreachable_returns() {
+        let mut db = DriverDataBase::default();
+        let file_url =
+            Url::parse("file:///return_summary_excludes_refined_unreachable_returns.fe").unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+fn choose() -> u256 {
+    let known = true
+    if known {
+        return 1
+    }
+    2
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let semantic = semantic_instance_for_named_func(&db, top_mod, "choose");
+        let summary = RuntimeReturnSummary::build(&db, semantic);
+        let raw_return_blocks = summary
+            .semantic_body
+            .blocks
+            .iter()
+            .enumerate()
+            .filter_map(|(block_idx, block)| {
+                matches!(&block.terminator.kind, NSTerminatorKind::Return(Some(_)))
+                    .then_some(SBlockId::new(block_idx))
+            })
+            .collect::<Vec<_>>();
+        let reachable_return_locals = summary
+            .semantic_body
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|(block_idx, _)| summary.facts.block_is_reachable(SBlockId::new(*block_idx)))
+            .filter_map(|(_, block)| match &block.terminator.kind {
+                NSTerminatorKind::Return(Some(value)) => Some(value.local),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            raw_return_blocks
+                .iter()
+                .any(|block| !summary.facts.block_is_reachable(*block)),
+            "the fixture must retain a refined-unreachable return"
+        );
+        assert_eq!(
+            summary.return_locals.as_ref(),
+            reachable_return_locals.as_slice(),
+            "return inference must seed only executable return sites"
         );
     }
 
@@ -988,7 +1174,7 @@ fn first(_ arr: [u8; 4]) -> u8 {
         );
         assert!(matches!(
             sliced[local.index()],
-            RuntimeCarrier::Value(RuntimeClass::Ref { .. })
+            RuntimeCarrier::Value(RuntimeClass::AggregateValue { .. })
         ));
     }
 

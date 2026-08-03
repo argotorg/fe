@@ -1,0 +1,186 @@
+use core::functional::{Fn, FnOnce}
+
+struct Boxed {
+    value: u256,
+}
+
+struct Holder<F> {
+    function: F,
+}
+
+enum Wrapped<F> {
+    Function(F),
+    Empty,
+}
+
+struct AddInto {}
+
+struct ArgumentOverloaded {}
+
+struct ReturnOverloaded {}
+
+struct PriorityAndFallback {}
+
+impl FnOnce<(mut u256, view u256), ()> for AddInto {
+    fn call_once(self: own Self, _ args: own (mut u256, view u256)) {
+        self.call(args.0, args.1)
+    }
+}
+
+impl Fn<(mut u256, view u256), ()> for AddInto {
+    fn call(self, mut _ args: own (mut u256, view u256)) {
+        args.0 += args.1
+    }
+}
+
+impl FnOnce<(u256,), u256> for ArgumentOverloaded {
+    fn call_once(self: own Self, _ args: own (u256,)) -> u256 {
+        args.0 + 1
+    }
+}
+
+impl Fn<(u256,), u256> for ArgumentOverloaded {
+    fn call(self, _ args: own (u256,)) -> u256 {
+        args.0 + 1
+    }
+}
+
+impl FnOnce<(bool,), bool> for ArgumentOverloaded {
+    fn call_once(self: own Self, _ args: own (bool,)) -> bool {
+        !args.0
+    }
+}
+
+impl Fn<(bool,), bool> for ArgumentOverloaded {
+    fn call(self, _ args: own (bool,)) -> bool {
+        !args.0
+    }
+}
+
+impl FnOnce<(u256,), u256> for ReturnOverloaded {
+    fn call_once(self: own Self, _ args: own (u256,)) -> u256 {
+        args.0
+    }
+}
+
+impl Fn<(u256,), u256> for ReturnOverloaded {
+    fn call(self, _ args: own (u256,)) -> u256 {
+        args.0
+    }
+}
+
+impl FnOnce<(u256,), bool> for ReturnOverloaded {
+    fn call_once(self: own Self, _ args: own (u256,)) -> bool {
+        args.0 == 42
+    }
+}
+
+impl Fn<(u256,), bool> for ReturnOverloaded {
+    fn call(self, _ args: own (u256,)) -> bool {
+        args.0 == 42
+    }
+}
+
+impl FnOnce<(u256,), u256> for PriorityAndFallback {
+    fn call_once(self: own Self, _ args: own (u256,)) -> u256 {
+        0
+    }
+}
+
+impl Fn<(u256,), u256> for PriorityAndFallback {
+    fn call(self, _ args: own (u256,)) -> u256 {
+        args.0 + 1
+    }
+}
+
+impl FnOnce<(u256,), bool> for PriorityAndFallback {
+    fn call_once(self: own Self, _ args: own (u256,)) -> bool {
+        args.0 == 42
+    }
+}
+
+fn apply_twice<F: Fn<(u256,), u256>>(_ function: F) -> u256 {
+    function(20) + function(20)
+}
+
+fn apply_once<F: FnOnce<(), Boxed>>(_ function: own F) -> Boxed {
+    function()
+}
+
+fn direct_consuming_call_returns_borrow() -> u256 {
+    let boxed = Boxed { value: 42 }
+    let borrow_once = || -> ref u256 { ref boxed.value }
+    let returned = borrow_once()
+    returned
+}
+
+#[test]
+fn direct_closure_calls_cover_inline_nested_and_generic_values() {
+    assert((|value: own u256| -> u256 { value + 1 })(41) == 42)
+
+    let make_adder = |offset: own u256| {
+        |value: own u256| -> u256 { offset + value }
+    }
+    assert(make_adder(20)(22) == 42)
+
+    let offset = 1
+    let increment = |value: own u256| -> u256 { value + offset }
+    assert(apply_twice(increment) == 42)
+
+    let boxed = Boxed { value: 42 }
+    let take = || -> Boxed { boxed }
+    assert(apply_once(take).value == 42)
+}
+
+#[test]
+fn direct_closure_calls_cover_projected_and_borrowed_values() {
+    let answer = || -> u256 { 42 }
+    let holder = Holder { function: answer }
+    assert((holder.function)() == 42)
+
+    let functions = [answer, answer]
+    assert(functions[1]() == 42)
+
+    let pair = (answer, 0 as u256)
+    assert((pair.0)() == 42)
+
+    let wrapped = Wrapped::Function(answer)
+    let selected = match wrapped {
+        Wrapped::Function(function) => function(),
+        Wrapped::Empty => 0,
+    }
+    assert(selected == 42)
+
+    let callable = ArgumentOverloaded {}
+    let borrowed = ref callable
+    assert(borrowed(41 as u256) == 42)
+}
+
+#[test]
+fn direct_user_callable_calls_use_arguments_results_and_trait_priority() {
+    assert(ArgumentOverloaded {}(41 as u256) == 42)
+    assert(ArgumentOverloaded {}(false))
+
+    let number: u256 = ReturnOverloaded {}(42)
+    let predicate: bool = ReturnOverloaded {}(42)
+    assert(number == 42)
+    assert(predicate)
+
+    let reusable: u256 = PriorityAndFallback {}(41)
+    let consuming_fallback: bool = PriorityAndFallback {}(42)
+    assert(reusable == 42)
+    assert(consuming_fallback)
+}
+
+#[test]
+fn direct_user_callable_calls_preserve_mixed_capabilities() {
+    let mut left = 20
+    let right = 22
+    AddInto {}(mut left, right)
+    assert(left == 42)
+}
+
+#[test]
+fn direct_consuming_calls_preserve_returned_borrows() {
+    assert(direct_consuming_call_returns_borrow() == 42)
+}

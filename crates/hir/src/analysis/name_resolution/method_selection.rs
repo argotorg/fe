@@ -9,6 +9,7 @@ use crate::analysis::{
     ty::{
         binder::Binder,
         canonical::{Canonical, Canonicalized, Solution},
+        closure::{ClosureCallTrait, closure_call_trait_for_method},
         fold::TyFoldable as _,
         method_table::{ProbedMethod, probe_method},
         trait_def::{ImplementorId, TraitInstId, impls_for_trait_and_ty, impls_for_ty},
@@ -16,7 +17,7 @@ use crate::analysis::{
             CanonicalGoalQuery, GoalSatisfiability, PredicateListId, TraitSolveCx,
             goal_query_has_solution, is_goal_query_satisfiable,
         },
-        ty_def::{TyData, TyId},
+        ty_def::{ClosureTy, TyBase, TyData, TyId},
         unify::UnificationTable,
     },
 };
@@ -120,9 +121,19 @@ pub(crate) fn select_method_candidate<'db>(
     if receiver_ty.is_ty_var(db) {
         return Err(MethodSelectionError::ReceiverTypeMustBeKnown);
     }
+    if let Some(closure) = receiver_closure(db, receiver_ty)
+        && method_name.data(db) == ClosureCallTrait::Fn.method_name()
+        && closure.fn_capability_depends_on_inference(db, assumptions)
+    {
+        return Err(MethodSelectionError::ReceiverTypeMustBeKnown);
+    }
 
     let candidates =
         assemble_method_candidates(db, receiver, method_name, scope, assumptions, trait_);
+    let reserves_closure_call_method = trait_.is_none()
+        && receiver_closure(db, receiver_ty).is_some()
+        && (method_name.data(db) == ClosureCallTrait::Fn.method_name()
+            || method_name.data(db) == ClosureCallTrait::FnOnce.method_name());
 
     let selector = MethodSelector {
         db,
@@ -130,9 +141,30 @@ pub(crate) fn select_method_candidate<'db>(
         scope,
         candidates,
         assumptions,
+        reserves_closure_call_method,
     };
 
     selector.select()
+}
+
+fn receiver_closure<'db>(
+    db: &'db dyn HirAnalysisDb,
+    mut receiver: TyId<'db>,
+) -> Option<ClosureTy<'db>> {
+    while let Some((_, inner)) = receiver.as_capability(db) {
+        receiver = inner;
+    }
+    receiver.as_closure(db)
+}
+
+fn structurally_contains_closure<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    if ty.base_ty(db).as_closure(db).is_some() {
+        return true;
+    }
+    let (_, args) = ty.decompose_ty_app(db);
+    args.iter()
+        .copied()
+        .any(|arg| structurally_contains_closure(db, arg))
 }
 
 fn assemble_method_candidates<'db>(
@@ -199,6 +231,7 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
 
     fn assemble_trait_method_candidates(&mut self) {
         let scope_ingot = self.scope.ingot(self.db);
+        self.insert_builtin_closure_call_candidate();
 
         // When the receiver is a type parameter (e.g. `D` in `fn f<D: Trait>(d: D)`),
         // we don't know its concrete type yet, so probing impls would pull in many
@@ -254,6 +287,52 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
         });
     }
 
+    fn insert_builtin_closure_call_candidate(&mut self) {
+        let original_receiver = self.receiver.original();
+        let TyData::TyBase(TyBase::Closure(closure)) =
+            original_receiver.base_ty(self.db).data(self.db)
+        else {
+            return;
+        };
+        let Some((_, call_trait)) = closure_call_trait_for_method(
+            self.db,
+            self.scope,
+            self.assumptions,
+            *closure,
+            self.method_name.data(self.db),
+        ) else {
+            return;
+        };
+        if !self.allow_trait(call_trait) {
+            return;
+        }
+
+        // Candidate checking operates in the canonical receiver's inference
+        // universe. Building this intrinsic instance from the original
+        // closure would leak the type checker's inference keys into the
+        // candidate's scratch table.
+        let receiver = self.receiver.canonical().value();
+        let TyData::TyBase(TyBase::Closure(closure)) = receiver.base_ty(self.db).data(self.db)
+        else {
+            return;
+        };
+        let inst = TraitInstId::new(
+            self.db,
+            call_trait,
+            vec![
+                receiver,
+                closure.args_pack_ty(self.db),
+                closure.ret_ty(self.db),
+            ],
+            IndexMap::new(),
+        );
+        let Some(&method) = call_trait.method_defs(self.db).get(&self.method_name) else {
+            return;
+        };
+        self.candidates.builtin_closure_call =
+            Some(AssembledTraitMethodCand::Assumption { inst, method });
+    }
+
     fn allow_trait(&self, trait_def: Trait<'db>) -> bool {
         self.trait_.map(|t| t == trait_def).unwrap_or(true)
     }
@@ -294,12 +373,30 @@ struct MethodSelector<'db, 'a> {
     scope: ScopeId<'db>,
     candidates: AssembledCandidates<'db>,
     assumptions: PredicateListId<'db>,
+    reserves_closure_call_method: bool,
 }
 
 impl<'db, 'a> MethodSelector<'db, 'a> {
     fn select(self) -> Result<MethodCandidate<'db>, MethodSelectionError<'db>> {
         if let Some(res) = self.select_inherent_method() {
             return res;
+        }
+
+        // `call` and `call_once` are intrinsic operations on closure values.
+        // Unrelated blanket extension traits with the same method names must
+        // not hijack closure dispatch or prevent call arguments from
+        // constraining an inferred closure signature. Explicit trait
+        // qualification does not set this reservation, so UFCS remains
+        // available when an extension call is intentional.
+        if self.reserves_closure_call_method {
+            return self
+                .candidates
+                .builtin_closure_call
+                .map(|candidate| Self::finalize_sole_check(self.check_trait_cand(candidate)))
+                .unwrap_or(Err(MethodSelectionError::NotFound));
+        }
+        if let Some(candidate) = self.candidates.builtin_closure_call {
+            return Self::finalize_sole_check(self.check_trait_cand(candidate));
         }
 
         self.select_trait_methods()
@@ -351,6 +448,8 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
     /// * `Err(MethodSelectionError)` - An error indicating the reason for
     ///   failure.
     fn select_trait_methods(&self) -> Result<MethodCandidate<'db>, MethodSelectionError<'db>> {
+        let preserves_contextual_closure_candidates =
+            structurally_contains_closure(self.db, self.receiver.original());
         // For a fully-known receiver, drop trait candidates whose impl is
         // provably inapplicable: either the self type cannot unify
         // (`Rejected`) or the impl's `where`-clause is unsatisfiable
@@ -384,10 +483,9 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                     .iter()
                     .copied()
                     .filter(|(_, check)| {
-                        !matches!(
-                            check,
-                            TraitCandidateCheck::Rejected | TraitCandidateCheck::Unsatisfied(_)
-                        )
+                        !matches!(check, TraitCandidateCheck::Rejected)
+                            && (preserves_contextual_closure_candidates
+                                || !matches!(check, TraitCandidateCheck::Unsatisfied(_)))
                     })
                     .collect();
                 if applicable.is_empty() {
@@ -442,6 +540,11 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                                 .or_insert(true);
                         }
                         TraitCandidateCheck::NeedsConfirmation(cand) => {
+                            selected.entry(cand).or_insert(false);
+                        }
+                        TraitCandidateCheck::Unsatisfied(cand)
+                            if preserves_contextual_closure_candidates =>
+                        {
                             selected.entry(cand).or_insert(false);
                         }
                         TraitCandidateCheck::Unsatisfied(cand) => {
@@ -763,6 +866,7 @@ pub enum MethodSelectionError<'db> {
 #[derive(Default)]
 struct AssembledCandidates<'db> {
     inherent_methods: FxHashSet<ProbedMethod<'db>>,
+    builtin_closure_call: Option<AssembledTraitMethodCand<'db>>,
     traits: IndexSet<AssembledTraitMethodCand<'db>>,
 }
 

@@ -1,0 +1,34 @@
+fn closure_highlights() {
+    let typed = |value: view u256| value
+//               ^^^^^ variable.parameter
+//                      ^^^^ keyword
+    let inferred = |
+        item: view
+//      ^^^^ variable.parameter
+//            ^^^^ keyword
+    | item
+    let modes = |
+        bare,
+//      ^^^^ variable.parameter
+        owned: own,
+//      ^^^^^ variable.parameter
+//             ^^^ keyword
+        shared: ref,
+//      ^^^^^^ variable.parameter
+//              ^^^ keyword
+        exclusive: mut
+//      ^^^^^^^^^ variable.parameter
+//                 ^^^ keyword
+    | bare
+    let block_comment_trivia = |
+        ordinary: view /* editor recovery */ <T as Trait>::Item,
+//      ^^^^^^^^ variable.parameter
+//                ^^^^ keyword
+        nested: view /* outer /* nested */ end */ <T as Trait>::Item,
+//      ^^^^^^ variable.parameter
+//              ^^^^ keyword
+        boundary: view /* before */ <T /* inside */ as Trait> /* after */ ::Item
+//      ^^^^^^^^ variable.parameter
+//                ^^^^ keyword
+    | ordinary
+}

@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/closure_effect_rvalue_capture.fe
+---
+error[8-0089]: effect provider used by a closure must be bound
+   ┌─ closure_effect_rvalue_capture.fe:10:28
+   │
+10 │     let read_later = with (make_value()) {
+   │                            ^^^^^^^^^^^^ this provider is created outside the closure
+   │
+   = bind the provider to a local before the `with` expression so the closure can capture its value

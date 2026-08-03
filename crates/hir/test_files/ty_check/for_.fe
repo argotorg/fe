@@ -21,3 +21,5 @@ fn bar(foo_arr: [Foo; 10]) -> i32 {
     
     res
 }
+
+impl core::marker::Copy for Foo {}

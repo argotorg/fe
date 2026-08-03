@@ -3,12 +3,13 @@ use std::hash::Hash;
 use crate::core::hir_def::IdentId;
 use crate::hir_def::{ItemKind, Trait};
 use common::indexmap::{IndexMap, IndexSet};
+use rustc_hash::FxHashMap;
 
 use super::{
     trait_def::{ImplementorId, TraitInstId},
     trait_resolution::{PredicateListId, TraitGoalSolution, TraitSolverQuery},
-    ty_check::{EffectArg, ExprProp, LocalBinding, ResolvedEffectArg},
-    ty_def::{TyData, TyId},
+    ty_check::{ClosureCapture, ClosureInfo, EffectArg, ExprProp, LocalBinding, ResolvedEffectArg},
+    ty_def::{ClosureCaptures, ClosureSignature, ClosureTy, TyBase as TyBaseData, TyData, TyId},
     visitor::TyVisitable,
 };
 use crate::analysis::{
@@ -45,6 +46,43 @@ pub trait TyFolder<'db> {
     ) -> TyId<'db> {
         TyId::app(db, abs, arg)
     }
+}
+
+pub(crate) struct TyReplacementFolder<'a, 'db> {
+    replacements: &'a FxHashMap<TyId<'db>, TyId<'db>>,
+}
+
+impl<'a, 'db> TyReplacementFolder<'a, 'db> {
+    pub(crate) fn new(replacements: &'a FxHashMap<TyId<'db>, TyId<'db>>) -> Self {
+        Self { replacements }
+    }
+}
+
+impl<'db> TyFolder<'db> for TyReplacementFolder<'_, 'db> {
+    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+        let mut rewritten = ty;
+        for _ in 0..=self.replacements.len() {
+            let Some(next) = self.replacements.get(&rewritten).copied() else {
+                break;
+            };
+            if next == rewritten {
+                break;
+            }
+            rewritten = next;
+        }
+        rewritten.super_fold_with(db, self)
+    }
+}
+
+pub(crate) fn rewrite_types<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    value: T,
+    replacements: &FxHashMap<TyId<'db>, TyId<'db>>,
+) -> T
+where
+    T: TyFoldable<'db>,
+{
+    value.fold_with(db, &mut TyReplacementFolder::new(replacements))
 }
 
 impl<'db> TyFoldable<'db> for TyId<'db> {
@@ -148,6 +186,29 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
             QualifiedTy(trait_inst) => {
                 let folded_trait = trait_inst.fold_with(db, folder);
                 TyId::qualified_ty(db, folded_trait)
+            }
+
+            TyBase(TyBaseData::Closure(closure)) => {
+                let fold_tys = |folder: &mut F, tys: &[TyId<'db>]| -> Vec<TyId<'db>> {
+                    tys.iter()
+                        .copied()
+                        .map(|ty| folder.fold_ty(db, ty))
+                        .collect()
+                };
+                let parent_args = fold_tys(folder, closure.parent_args(db));
+                let captures = fold_tys(folder, closure.captures(db));
+                let params = fold_tys(folder, closure.params(db));
+                let ret_ty = folder.fold_ty(db, closure.ret_ty(db));
+                TyId::closure(
+                    db,
+                    ClosureTy::new(
+                        db,
+                        closure.def(db),
+                        parent_args,
+                        ClosureCaptures::new(captures, closure.capture_accesses(db).to_vec()),
+                        ClosureSignature::new(params, closure.param_modes(db).to_vec(), ret_ty),
+                    ),
+                )
             }
 
             TyVar(_) | TyParam(_) | TyBase(_) | Never | Invalid(_) => self,
@@ -396,6 +457,42 @@ impl<'db> TyFoldable<'db> for ExprProp<'db> {
     }
 }
 
+impl<'db> TyFoldable<'db> for ClosureCapture<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        Self {
+            binding: self.binding.fold_with(db, folder),
+            ty: self.ty.fold_with(db, folder),
+            construction: self.construction,
+            access_without_return: self.access_without_return,
+            access: self.access,
+        }
+    }
+}
+
+impl<'db> TyFoldable<'db> for ClosureInfo<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        Self {
+            def: self.def,
+            body: self.body,
+            return_exprs: self.return_exprs,
+            params: self.params.fold_with(db, folder),
+            captures: self.captures.fold_with(db, folder),
+            capture_expr_accesses: self.capture_expr_accesses,
+            ty: TyId::closure(db, self.ty)
+                .fold_with(db, folder)
+                .as_closure(db)
+                .unwrap_or(self.ty),
+            return_borrow_provider: self.return_borrow_provider,
+        }
+    }
+}
+
 impl<'db> TyFoldable<'db> for Place<'db> {
     fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
     where
@@ -467,6 +564,8 @@ impl<'db> TyFoldable<'db> for ResolvedEffectArg<'db> {
             key: self.key,
             arg: self.arg.fold_with(db, folder),
             pass_mode: self.pass_mode,
+            provider_closure_depth: self.provider_closure_depth,
+            provider_is_external_to_closure: self.provider_is_external_to_closure,
             required_mut: self.required_mut,
             key_kind: self.key_kind,
             instantiated_key_ty: self.instantiated_key_ty.map(|ty| ty.fold_with(db, folder)),

@@ -1,0 +1,14 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/closure_code_handle_capture.fe
+---
+error[16-0005]: noesc violation in `fn capture_target`
+   ┌─ closure_code_handle_capture.fe:26:13
+   │
+26 │       let f = |_ unit: own ()| -> u256 {
+   │ ╭─────────────^
+27 │ │         let captured = handle
+28 │ │         captured
+29 │ │     }
+   │ ╰─────^ cannot capture `ref u256` from code in closure

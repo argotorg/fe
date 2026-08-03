@@ -8,11 +8,11 @@ use hir::analysis::{
         LayoutEvidenceConstant, LayoutEvidenceExpr, LayoutEvidenceIndex, LayoutEvidenceOperand,
         SBlockId, SConst, SLocalId, SStmtId, SemConstId, SemConstScalar, SemConstValue,
         SemanticCalleeRef, SemanticCodeRegionRef, SemanticCodeRegionTarget, SemanticInstance,
-        SemanticInstanceKey, SemanticLocalKind, VariantIndex,
+        SemanticInstanceKey, VariantIndex,
         borrowck::{
-            NBorrowRoot, NEffectArg, NExpr, NLocalOrigin, NOperand, NSPlace, NSPlaceRoot, NSStmt,
-            NSStmtKind, NSTerminator, NSTerminatorKind, NormalizedSemanticBody,
-            normalize_semantic_body,
+            NBorrowRoot, NEffectArg, NExpr, NOperand, NSPlace, NSPlaceRoot, NSStmt, NSStmtKind,
+            NSTerminator, NSTerminatorKind, NormalizedSemanticBody, normalize_semantic_body,
+            store_rebinds_capability,
         },
         get_or_build_semantic_instance, layout_evidence_body, reify_runtime_const_for_ty,
         sem_const_ty, verify_layout_evidence_runtime_compatibility,
@@ -73,7 +73,10 @@ use super::{
         const_scalar_for_class, const_scalar_from_value, enum_tag_scalar,
         evaluated_const_ref_value, lower_const_region,
     },
-    conversion::{RuntimeConversionEmitter, RuntimeConversionError, emit_runtime_coercion},
+    conversion::{
+        RuntimeConversionEmitter, RuntimeConversionError, canonical_aggregate_field_class,
+        canonical_closure_capture_class, emit_runtime_coercion,
+    },
     infer::{InferenceResult, LocalStateInferer, RuntimeLocalLowering, merge_runtime_class},
     interface::{runtime_param_plans, runtime_visible_binding_plans},
     layout::{
@@ -113,8 +116,8 @@ pub fn lower_to_rmir<'db>(
             semantic.key(db)
         ))
     })?;
-    check_runtime_body_supported(db, semantic.key(db), &normalized_body)?;
     let facts = BodyStaticFacts::new(db, &normalized_body);
+    check_runtime_body_supported(db, semantic.key(db), &normalized_body, &facts)?;
     let abi = runtime_abi_plan(db, key);
     let param_locals =
         crate::runtime::lower::interface::runtime_param_locals(db, semantic, key.params(db));
@@ -131,7 +134,9 @@ pub fn lower_to_rmir<'db>(
         let return_locals = normalized_body
             .blocks
             .iter()
-            .filter_map(|block| match &block.terminator.kind {
+            .enumerate()
+            .filter(|(block_idx, _)| facts.block_is_reachable(SBlockId::new(*block_idx)))
+            .filter_map(|(_, block)| match &block.terminator.kind {
                 NSTerminatorKind::Return(Some(value)) => Some(value.local),
                 NSTerminatorKind::Goto(_)
                 | NSTerminatorKind::Branch { .. }
@@ -152,8 +157,12 @@ fn check_runtime_body_supported<'db>(
     db: &'db dyn MirDb,
     key: SemanticInstanceKey<'db>,
     body: &NormalizedSemanticBody<'db>,
+    facts: &BodyStaticFacts<'db>,
 ) -> Result<(), LowerError> {
-    for block in &body.blocks {
+    for (block_idx, block) in body.blocks.iter().enumerate() {
+        if !facts.block_is_reachable(SBlockId::new(block_idx)) {
+            continue;
+        }
         for stmt in &block.stmts {
             if let NSStmtKind::Assign {
                 expr: NExpr::Call { callee, args, .. },
@@ -289,6 +298,8 @@ pub(super) struct RmirEmitter<'db> {
     pub(super) instance: RuntimeInstance<'db>,
     pub(super) key: RuntimeInstanceKey<'db>,
     pub(super) semantic_body: NormalizedSemanticBody<'db>,
+    semantic_successors: Vec<Vec<SBlockId>>,
+    semantic_reachable: Vec<bool>,
     pub(super) layout_evidence: &'db LayoutEvidenceBody<'db>,
     pub(super) facts: BodyStaticFacts<'db>,
     pub(super) abi: RuntimeAbiPlan<'db>,
@@ -313,13 +324,11 @@ enum LoweredBuiltinCall<'db> {
 
 enum ValueExtractStep<'db> {
     Aggregate {
-        index: u32,
-        class: RuntimeClass<'db>,
+        index: IndexSource<RLocalId>,
     },
     EnumField {
         variant: VariantId<'db>,
         field: FieldIndex,
-        class: RuntimeClass<'db>,
     },
 }
 
@@ -363,9 +372,13 @@ impl<'db> RuntimeValueUseEmitter<'db> for RmirEmitter<'db> {
         self.lower_place_addr_of_for_class(semantic_ty, bb, place, class)
     }
 
-    fn alloc_value_slot(&mut self, semantic_ty: TyId<'db>, class: RuntimeClass<'db>) -> RLocalId {
+    fn alloc_heap_value_slot(
+        &mut self,
+        semantic_ty: TyId<'db>,
+        class: RuntimeClass<'db>,
+    ) -> RLocalId {
         let slot = self.alloc_runtime_temp(semantic_ty, RuntimeCarrier::Value(class.clone()));
-        self.locals[slot.index()].root = RuntimeLocalRoot::Slot(class);
+        self.locals[slot.index()].root = RuntimeLocalRoot::HeapSlot(class);
         slot
     }
 
@@ -457,7 +470,10 @@ impl<'db> RmirEmitter<'db> {
                     semantic.key(db)
                 ))
             })?;
-        let const_ref_regions = collect_const_ref_regions(db, env, &semantic_body);
+        let semantic_successors = facts.cfg_successors().to_vec();
+        let semantic_reachable = facts.reachable_blocks().to_vec();
+        let const_ref_regions =
+            collect_const_ref_regions(db, env, &semantic_body, &semantic_reachable);
         let terminated_blocks = vec![false; semantic_body.blocks.len()];
         let mut locals = semantic_body
             .locals
@@ -539,6 +555,8 @@ impl<'db> RmirEmitter<'db> {
             instance,
             key,
             semantic_body,
+            semantic_successors,
+            semantic_reachable,
             layout_evidence,
             facts,
             abi,
@@ -953,6 +971,10 @@ impl<'db> RmirEmitter<'db> {
         let blocks = self.semantic_body.blocks.clone();
         for (idx, block) in blocks.iter().enumerate() {
             let bb = RBlockId::from_u32(idx as u32);
+            if !self.semantic_reachable[idx] {
+                self.blocks[idx].terminator = RTerminator::Goto(bb);
+                continue;
+            }
             for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
                 self.lower_stmt(bb, stmt_idx, stmt);
                 if self.terminated_blocks[bb.index()] {
@@ -981,9 +1003,22 @@ impl<'db> RmirEmitter<'db> {
                     .with_current_body_cx(|cx| cx.env.normalized_place_class(cx.carriers, dst))
                     .is_some()
                 {
-                    let place = self.lower_place(bb, dst);
+                    let place = self.lower_store_place(bb, dst);
                     let target = self.project_place_class(&place);
-                    let value = self.read_semantic_value(bb, src.local);
+                    let value = if store_rebinds_capability(self.db, &self.semantic_body, dst, *src)
+                    {
+                        self.handle_like_semantic_value(src.local).unwrap_or_else(|| {
+                                panic!(
+                                    "capability rebind source has no runtime transport: owner={:?}; src={src:?}; ty={}",
+                                    self.current_semantic_key(),
+                                    self.semantic_body.locals[src.local.index()]
+                                        .ty
+                                        .pretty_print(self.db),
+                                )
+                            })
+                    } else {
+                        self.read_semantic_value(bb, src.local)
+                    };
                     self.write_value_to_place(bb, place, value, &target);
                 }
             }
@@ -1057,7 +1092,11 @@ impl<'db> RmirEmitter<'db> {
                 self.lower_expr_into(bb, stmt_id, sink, expr);
             }
             Some(desired) => {
-                if self.semantic_local_is_derived_place_bound_alias(dst) {
+                if self
+                    .semantic_body
+                    .local(dst)
+                    .is_some_and(|local| local.is_derived_place_bound_alias())
+                {
                     self.lower_derived_place_bound_alias_assign(dst, expr);
                     return;
                 }
@@ -1133,56 +1172,7 @@ impl<'db> RmirEmitter<'db> {
                     return;
                 }
                 let place = self.lower_place(bb, place);
-                let projected = self.project_place_class(&place);
-                if let (
-                    RuntimeClass::AggregateValue { layout },
-                    RuntimeClass::Ref {
-                        pointee,
-                        kind: RefKind::Object,
-                        view: RefView::Whole,
-                    },
-                ) = (&projected, &dst_class)
-                    && **pointee == (RuntimeClass::AggregateValue { layout: *layout })
-                {
-                    self.push_stmt(
-                        bb,
-                        RStmt::Assign {
-                            dst,
-                            expr: RExpr::MaterializePlaceToObject { place },
-                        },
-                    );
-                    return;
-                }
-                if projected == dst_class {
-                    self.push_stmt(
-                        bb,
-                        RStmt::Assign {
-                            dst,
-                            expr: RExpr::Load { place },
-                        },
-                    );
-                    return;
-                }
-
-                let source = self.alloc_runtime_temp(
-                    self.locals[dst.index()].semantic_ty,
-                    RuntimeCarrier::Value(projected),
-                );
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst: source,
-                        expr: RExpr::Load { place },
-                    },
-                );
-                let copied = self.coerce_value(bb, source, &dst_class);
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst,
-                        expr: RExpr::Use(copied),
-                    },
-                );
+                self.lower_runtime_place_read(bb, dst, place);
             }
             NExpr::Const(const_) => {
                 let bindings = self
@@ -1235,13 +1225,28 @@ impl<'db> RmirEmitter<'db> {
                 fields,
             } => self.lower_enum_make(bb, dst, *enum_ty, *variant, fields),
             NExpr::Borrow { place, .. } => {
+                let source_ty = self
+                    .semantic_body
+                    .place_ty(self.db, place)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "cannot determine semantic type of borrowed place: owner={:?}; place={place:?}",
+                            self.current_semantic_key(),
+                        )
+                    });
+                let reborrows_handle = source_ty.as_borrow(self.db).is_some();
                 let place = self.lower_place(bb, place);
-                let value = self.lower_place_addr_of_for_class(
-                    self.locals[dst.index()].semantic_ty,
-                    bb,
-                    place,
-                    dst_class,
-                );
+                let value = if reborrows_handle {
+                    let value = self.load_runtime_place_value(bb, place, source_ty);
+                    self.coerce_value_if_needed(bb, value, &dst_class)
+                } else {
+                    self.lower_place_addr_of_for_class(
+                        self.locals[dst.index()].semantic_ty,
+                        bb,
+                        place,
+                        dst_class,
+                    )
+                };
                 self.push_stmt(
                     bb,
                     RStmt::Assign {
@@ -1456,13 +1461,13 @@ impl<'db> RmirEmitter<'db> {
                 self.coerce_value(bb, value, target)
             };
         }
-        if let Some(scalar) = const_scalar_from_value(self.db, self.env, value) {
-            return self.lower_sem_const_scalar(bb, ty, scalar);
-        }
         if let RuntimeClass::Scalar(class) = target
             && let SemConstValue::Scalar { value, .. } = value.value(self.db)
             && let Some(scalar) = const_scalar_for_class(&value, class)
         {
+            return self.lower_sem_const_scalar_with_class(bb, ty, target.clone(), scalar);
+        }
+        if let Some(scalar) = const_scalar_from_value(self.db, self.env, value) {
             return self.lower_sem_const_scalar(bb, ty, scalar);
         }
         match target {
@@ -1878,7 +1883,13 @@ impl<'db> RmirEmitter<'db> {
     ) -> RLocalId {
         let class = self
             .top_level_class_for_ty(ty, AddressSpaceKind::Memory)
-            .unwrap_or_else(|| panic!("scalar const should have a runtime class: {ty:?}"));
+            .unwrap_or_else(|| {
+                panic!(
+                    "scalar const should have a runtime class: owner={:?}, ty={} ({ty:?})",
+                    self.current_semantic_key(),
+                    ty.pretty_print(self.db),
+                )
+            });
         self.lower_sem_const_scalar_with_class(bb, ty, class, scalar)
     }
 
@@ -2048,10 +2059,17 @@ impl<'db> RmirEmitter<'db> {
         fields: &[NOperand],
     ) {
         let field_tys = self.aggregate_field_tys(ty, fields.len());
+        let canonicalize_captures = ty.as_closure(self.db).is_some();
         let mut field_values = Vec::with_capacity(fields.len());
         let mut field_classes = Vec::with_capacity(fields.len());
         for (field, field_ty) in fields.iter().copied().zip(field_tys.iter().copied()) {
-            let (value, class) = self.lower_ctor_field(bb, field, field_ty);
+            let (mut value, mut class) = self.lower_ctor_field(bb, field, field_ty);
+            class = canonical_aggregate_field_class(self.db, self.env, field_ty, class);
+            value = self.coerce_value_if_needed(bb, value, &class);
+            if canonicalize_captures {
+                class = canonical_closure_capture_class(self.db, class);
+                value = self.coerce_value_if_needed(bb, value, &class);
+            }
             field_values.push(value);
             field_classes.push(class);
         }
@@ -2190,7 +2208,9 @@ impl<'db> RmirEmitter<'db> {
         let mut field_values = Vec::with_capacity(fields.len());
         let mut field_classes = Vec::with_capacity(fields.len());
         for (field, field_ty) in fields.iter().copied().zip(field_tys.iter().copied()) {
-            let (value, class) = self.lower_ctor_field(bb, field, field_ty);
+            let (mut value, mut class) = self.lower_ctor_field(bb, field, field_ty);
+            class = canonical_aggregate_field_class(self.db, self.env, field_ty, class);
+            value = self.coerce_value_if_needed(bb, value, &class);
             field_values.push(value);
             field_classes.push(class);
         }
@@ -2211,10 +2231,6 @@ impl<'db> RmirEmitter<'db> {
         field_ty: TyId<'db>,
     ) -> (RLocalId, RuntimeClass<'db>) {
         let stored = stored_class_for_ty_in_env(self.db, self.env, field_ty);
-        if self.class_is_runtime_zst(&stored) {
-            let value = self.lower_zst_value_placeholder(bb, field_ty, stored.clone());
-            return (value, stored);
-        }
         let value = match boundary_spec_for_ty_in_env(
             self.db,
             self.env,
@@ -2223,7 +2239,18 @@ impl<'db> RmirEmitter<'db> {
         ) {
             Some(boundary) => self.lower_semantic_operand_for_boundary(bb, field, &boundary),
             None => {
-                let class = self
+                let roots = self.runtime_roots();
+                let selected = self.with_current_body_cx(|cx| {
+                    RuntimeArgSelector::new(cx.env, cx.carriers, None)
+                        .with_concrete_roots(&roots)
+                        .selected_materialized_value(field.local)
+                });
+                if let Some(selected) = selected {
+                    self.lower_selected_runtime_arg(bb, field, &selected)
+                } else if self.class_is_runtime_zst(&stored) {
+                    self.lower_zst_value_placeholder(bb, field_ty, stored.clone())
+                } else {
+                    let class = self
                     .top_level_class_for_ty(field_ty, AddressSpaceKind::Memory)
                     .unwrap_or_else(|| {
                         panic!(
@@ -2232,7 +2259,8 @@ impl<'db> RmirEmitter<'db> {
                             field_ty.pretty_print(self.db),
                         )
                     });
-                self.lower_semantic_operand_for_class(bb, field, &class)
+                    self.lower_semantic_operand_for_class(bb, field, &class)
+                }
             }
         };
         let class = self.value_class(value).cloned().unwrap_or(stored);
@@ -2372,11 +2400,31 @@ impl<'db> RmirEmitter<'db> {
             .runtime_place_from_addr_value(base)
             .expect("enum variant field base must be a runtime reference");
         place.path = vec![elem].into_boxed_slice();
+        self.lower_runtime_place_read(bb, dst, place);
+    }
+
+    fn lower_runtime_place_read(&mut self, bb: RBlockId, dst: RLocalId, place: RuntimePlace<'db>) {
         let projected = self.project_place_class(&place);
         let target = self
             .value_class(dst)
             .cloned()
-            .expect("field result must have class");
+            .expect("place read result must have class");
+        if target.is_transport() && !projected.is_transport() {
+            let value = self.lower_place_addr_of_for_class(
+                self.locals[dst.index()].semantic_ty,
+                bb,
+                place,
+                target,
+            );
+            self.push_stmt(
+                bb,
+                RStmt::Assign {
+                    dst,
+                    expr: RExpr::Use(value),
+                },
+            );
+            return;
+        }
         if projected == target {
             self.push_stmt(
                 bb,
@@ -2507,24 +2555,33 @@ impl<'db> RmirEmitter<'db> {
             );
             return true;
         }
-        if !matches!(class, RuntimeClass::AggregateValue { .. }) {
-            return false;
-        }
-        for (path_idx, elem) in path.iter().enumerate() {
-            let step = match elem {
+
+        let mut remaining = path;
+        while let Some((elem, rest)) = remaining.split_first() {
+            if !matches!(class, RuntimeClass::AggregateValue { .. }) {
+                break;
+            }
+            let (step, extracted_class) = match elem {
                 Projection::Field(field) => {
                     let field = FieldIndex((*field).try_into().expect("field index fits in u16"));
-                    ValueExtractStep::Aggregate {
-                        index: u32::from(field.0),
-                        class: project_field_class(self.db, class, field),
-                    }
+                    (
+                        ValueExtractStep::Aggregate {
+                            index: IndexSource::Constant(usize::from(field.0)),
+                        },
+                        project_field_class(self.db, class, field),
+                    )
                 }
-                Projection::Index(IndexSource::Constant(index)) => {
-                    let index = (*index).try_into().expect("constant index fits in u32");
-                    ValueExtractStep::Aggregate {
-                        index,
-                        class: project_index_class(self.db, class),
-                    }
+                Projection::Index(index) => {
+                    let index = match index {
+                        IndexSource::Constant(index) => IndexSource::Constant(*index),
+                        IndexSource::Dynamic(index) => {
+                            IndexSource::Dynamic(self.read_semantic_value(bb, *index))
+                        }
+                    };
+                    (
+                        ValueExtractStep::Aggregate { index },
+                        project_index_class(self.db, class),
+                    )
                 }
                 Projection::VariantField {
                     variant, field_idx, ..
@@ -2537,22 +2594,14 @@ impl<'db> RmirEmitter<'db> {
                             .expect("variant-field value extract should project from enum layout"),
                         index: variant.0,
                     };
-                    ValueExtractStep::EnumField {
-                        variant,
-                        field,
-                        class: project_variant_field_class(self.db, class, variant, field),
-                    }
+                    (
+                        ValueExtractStep::EnumField { variant, field },
+                        project_variant_field_class(self.db, class, variant, field),
+                    )
                 }
-                Projection::Deref
-                | Projection::Index(IndexSource::Dynamic(_))
-                | Projection::Discriminant => return false,
+                Projection::Deref | Projection::Discriminant => break,
             };
-            let extracted_class = match &step {
-                ValueExtractStep::Aggregate { class, .. }
-                | ValueExtractStep::EnumField { class, .. } => class.clone(),
-            };
-            let is_last = path_idx + 1 == path.len();
-            if is_last {
+            if rest.is_empty() {
                 let target = self
                     .value_class(dst)
                     .cloned()
@@ -2583,8 +2632,19 @@ impl<'db> RmirEmitter<'db> {
             self.push_value_extract_step(bb, temp, value, step);
             value = temp;
             class = extracted_class;
+            remaining = rest;
         }
-        false
+
+        if let RuntimeClass::AggregateValue { layout } = class {
+            let target = RuntimeClass::object_ref(layout);
+            value = self.coerce_value(bb, value, &target);
+        }
+        let Some(place) = self.runtime_place_from_addr_value(value) else {
+            return false;
+        };
+        let place = self.append_runtime_place_path(bb, place, remaining);
+        self.lower_runtime_place_read(bb, dst, place);
+        true
     }
 
     fn push_value_extract_step(
@@ -2595,8 +2655,8 @@ impl<'db> RmirEmitter<'db> {
         step: ValueExtractStep<'db>,
     ) {
         let expr = match step {
-            ValueExtractStep::Aggregate { index, .. } => RExpr::AggregateExtract { value, index },
-            ValueExtractStep::EnumField { variant, field, .. } => {
+            ValueExtractStep::Aggregate { index } => RExpr::AggregateExtract { value, index },
+            ValueExtractStep::EnumField { variant, field } => {
                 self.push_stmt(bb, RStmt::EnumAssertVariant { value, variant });
                 RExpr::EnumExtract {
                     value,
@@ -2844,7 +2904,7 @@ impl<'db> RmirEmitter<'db> {
 
     fn current_arithmetic_mode(&self) -> ArithmeticMode {
         self.current_semantic_key()
-            .owner(self.db)
+            .callable_body(self.db)
             .arithmetic_mode(self.db)
     }
 
@@ -3209,7 +3269,7 @@ impl<'db> RmirEmitter<'db> {
                     dst: result,
                     expr: RExpr::AggregateExtract {
                         value: call_result,
-                        index: field,
+                        index: IndexSource::Constant(field as usize),
                     },
                 },
             );
@@ -3244,7 +3304,7 @@ impl<'db> RmirEmitter<'db> {
                     dst: extracted,
                     expr: RExpr::AggregateExtract {
                         value: call_result,
-                        index: field,
+                        index: IndexSource::Constant(field as usize),
                     },
                 },
             );
@@ -3273,7 +3333,7 @@ impl<'db> RmirEmitter<'db> {
         callee: SemanticInstance<'db>,
         args: &[NOperand],
     ) {
-        let typed_body = callee.key(self.db).typed_body(self.db);
+        let callable_body = callee.key(self.db).callable_body(self.db);
         for (idx, (arg, plan)) in args
             .iter()
             .copied()
@@ -3283,7 +3343,7 @@ impl<'db> RmirEmitter<'db> {
             if !matches!(plan, crate::runtime::RuntimeParamPlan::Erased) {
                 continue;
             }
-            let Some(binding) = typed_body.param_binding(idx) else {
+            let Some(binding) = callable_body.param_binding(self.db, idx) else {
                 continue;
             };
             let handle_ty = callee.binding_ty(self.db, binding);
@@ -4437,6 +4497,18 @@ impl<'db> RmirEmitter<'db> {
         bb: RBlockId,
         terminator: &NSTerminator<'db>,
     ) -> RTerminator<'db> {
+        let refined = &self.semantic_successors[bb.index()];
+        if matches!(
+            terminator.kind,
+            NSTerminatorKind::Branch { .. } | NSTerminatorKind::MatchEnum { .. }
+        ) {
+            if refined.is_empty() {
+                return self.lower_assert_terminator(bb, None);
+            }
+            if refined.iter().all(|target| *target == refined[0]) {
+                return RTerminator::Goto(self.runtime_block(refined[0]));
+            }
+        }
         match &terminator.kind {
             NSTerminatorKind::Goto(block) => RTerminator::Goto(self.runtime_block(*block)),
             NSTerminatorKind::Branch {
@@ -4791,7 +4863,7 @@ impl<'db> RmirEmitter<'db> {
                 dst: result,
                 expr: RExpr::AggregateExtract {
                     value: call_result,
-                    index: 0,
+                    index: IndexSource::Constant(0),
                 },
             },
         );
@@ -4907,21 +4979,6 @@ impl<'db> RmirEmitter<'db> {
             RuntimeLocalLowering::PlaceCarrier { .. }
                 | RuntimeLocalLowering::PlaceBoundValue { .. }
         )
-    }
-
-    fn semantic_local_is_derived_place_bound_alias(&self, local: SLocalId) -> bool {
-        self.semantic_body
-            .locals
-            .get(local.index())
-            .is_some_and(|local| {
-                matches!(
-                    (&local.facts.interface, &local.facts.origin),
-                    (
-                        SemanticLocalKind::PlaceBoundValue,
-                        NLocalOrigin::AliasedPlace
-                    )
-                )
-            })
     }
 
     fn lower_derived_place_bound_alias_assign(&self, local: SLocalId, expr: &NExpr<'db>) {
@@ -5089,7 +5146,7 @@ impl<'db> RmirEmitter<'db> {
     }
 
     fn try_lower_place(&mut self, bb: RBlockId, place: &NSPlace<'db>) -> Option<RuntimePlace<'db>> {
-        let mut runtime_place = match place.root {
+        let runtime_place = match place.root {
             NSPlaceRoot::CarrierDerefLocal(local) => self.try_semantic_place(bb, local)?,
             NSPlaceRoot::Root(root) => match self.semantic_body.root(root)? {
                 NBorrowRoot::Param { local, .. } | NBorrowRoot::LocalSlot { local } => {
@@ -5101,12 +5158,22 @@ impl<'db> RmirEmitter<'db> {
                 },
             },
         };
+        let path = place.path.iter().cloned().collect::<Vec<_>>();
+        Some(self.append_runtime_place_path(bb, runtime_place, &path))
+    }
+
+    fn append_runtime_place_path(
+        &mut self,
+        bb: RBlockId,
+        mut runtime_place: RuntimePlace<'db>,
+        path: &[Projection<TyId<'db>, VariantIndex, SLocalId>],
+    ) -> RuntimePlace<'db> {
         let mut current = self.project_place_class(&runtime_place);
-        let mut projected = Vec::new();
-        for (idx, elem) in place.path.iter().enumerate() {
+        let mut projected = runtime_place.path.into_vec();
+        for (idx, elem) in path.iter().enumerate() {
             match elem {
                 Projection::Deref => {
-                    panic!("unexpected deref in normalized runtime place: {place:?}")
+                    panic!("unexpected deref in normalized runtime place path: {path:?}")
                 }
                 Projection::Field(field) => {
                     let field = FieldIndex((*field).try_into().expect("field index fits in u16"));
@@ -5138,10 +5205,10 @@ impl<'db> RmirEmitter<'db> {
                     current = project_index_class(self.db, current);
                 }
                 Projection::Discriminant => {
-                    panic!("discriminant projections are not valid runtime places: {place:?}");
+                    panic!("discriminant projections are not valid runtime places: {path:?}");
                 }
             }
-            if idx + 1 < place.path.len()
+            if idx + 1 < path.len()
                 && let Some(target) = current.deref_target()
             {
                 projected.push(PlaceElem::Deref);
@@ -5149,7 +5216,7 @@ impl<'db> RmirEmitter<'db> {
             }
         }
         runtime_place.path = projected.into_boxed_slice();
-        Some(runtime_place)
+        runtime_place
     }
 
     fn read_semantic_value(&mut self, bb: RBlockId, local: SLocalId) -> RLocalId {
@@ -5493,6 +5560,10 @@ impl<'db> RmirEmitter<'db> {
         })
     }
 
+    fn lower_store_place(&mut self, bb: RBlockId, place: &NSPlace<'db>) -> RuntimePlace<'db> {
+        self.lower_place(bb, place)
+    }
+
     fn project_place_class(&self, place: &RuntimePlace<'db>) -> RuntimeClass<'db> {
         let program = self.db as &dyn MirDb;
         crate::runtime::place::project_place(self.db, &program, self, place)
@@ -5628,7 +5699,9 @@ impl<'db> RmirEmitter<'db> {
     fn local_root_r(&self, local: RLocalId) -> Option<PlaceRoot<'db>> {
         match self.locals.get(local.index())?.root.clone() {
             RuntimeLocalRoot::None => None,
-            RuntimeLocalRoot::Slot(_) => Some(PlaceRoot::Slot(local)),
+            RuntimeLocalRoot::Slot(_) | RuntimeLocalRoot::HeapSlot(_) => {
+                Some(PlaceRoot::Slot(local))
+            }
             RuntimeLocalRoot::Ref(_) => Some(PlaceRoot::Ref(local)),
             RuntimeLocalRoot::Ptr { space, class } => Some(PlaceRoot::Ptr {
                 addr: local,
@@ -5989,7 +6062,153 @@ mod tests {
     };
     use url::Url;
 
-    use crate::{build_test_runtime_package, runtime::package::runtime_instance_for_semantic};
+    use crate::{
+        PlaceElem, PlaceRoot, RStmt, RuntimeClass, RuntimeLocalRoot, build_test_runtime_package,
+        format_runtime_body, runtime::package::runtime_instance_for_semantic,
+    };
+
+    #[test]
+    fn capability_field_rebind_and_write_through_lower_to_distinct_places() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::from_file_path(
+            std::env::temp_dir().join("capability_field_assignment_runtime_lowering.fe"),
+        )
+        .expect("fixture path should be absolute");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+struct Handle {
+    target: mut u256,
+}
+
+struct NestedHandle {
+    target: mut Handle,
+}
+
+fn probe() -> u256 {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+    handle.target = mut second
+    handle.target = 7
+    first * 100 + second
+}
+
+fn nested_probe() -> u256 {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut inner = Handle { target: mut first }
+    let outer = NestedHandle { target: mut inner }
+    outer.target.target = mut second
+    outer.target.target = 9
+    first * 100 + second
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let func = top_mod
+            .all_funcs(&db)
+            .iter()
+            .copied()
+            .find(|func| {
+                func.name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "probe")
+            })
+            .expect("missing probe");
+        let semantic = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+        );
+        let body = runtime_instance_for_semantic(&db, semantic).body(&db);
+        let formatted = format_runtime_body(&db, &body);
+        let stores = body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.stmts)
+            .filter_map(|stmt| {
+                let RStmt::Store { dst, src } = stmt else {
+                    return None;
+                };
+                Some((dst, *src))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(stores.len(), 2, "{formatted}",);
+
+        let (rebind_dst, rebind_src) = stores[0];
+        assert!(
+            matches!(rebind_dst.root, PlaceRoot::Ref(_))
+                && matches!(rebind_dst.path.as_ref(), [PlaceElem::Field(_)])
+                && matches!(
+                    body.value_class(rebind_src),
+                    Some(RuntimeClass::RawAddr { .. })
+                ),
+            "a capability rebind should store the new address in the aggregate field:\n{formatted}",
+        );
+
+        let (write_dst, write_src) = stores[1];
+        assert!(
+            matches!(write_dst.root, PlaceRoot::Ptr { .. })
+                && write_dst.path.is_empty()
+                && matches!(body.value_class(write_src), Some(RuntimeClass::Scalar(_))),
+            "an ordinary assignment should store the payload through the held address:\n{formatted}",
+        );
+
+        let nested_func = top_mod
+            .all_funcs(&db)
+            .iter()
+            .copied()
+            .find(|func| {
+                func.name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "nested_probe")
+            })
+            .expect("missing nested_probe");
+        let nested_semantic = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(nested_func)),
+        );
+        let nested_body = runtime_instance_for_semantic(&db, nested_semantic).body(&db);
+        let nested_formatted = format_runtime_body(&db, &nested_body);
+        let nested_rebind = nested_body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.stmts)
+            .find_map(|stmt| {
+                let RStmt::Store { dst, src } = stmt else {
+                    return None;
+                };
+                matches!(
+                    nested_body.value_class(*src),
+                    Some(RuntimeClass::RawAddr { .. })
+                )
+                .then_some((dst, *src))
+            })
+            .expect("nested rebind store");
+        assert!(
+            matches!(nested_rebind.0.root, PlaceRoot::Ref(_))
+                && matches!(
+                    nested_rebind.0.path.as_ref(),
+                    [PlaceElem::Field(_), PlaceElem::Deref, PlaceElem::Field(_)]
+                ),
+            "a nested rebind must dereference the outer capability but replace the inner field:\n{nested_formatted}",
+        );
+        assert!(
+            matches!(
+                nested_body.locals[1].root,
+                RuntimeLocalRoot::HeapSlot(RuntimeClass::Scalar(_))
+            ),
+            "the local stored into the nested capability slot must not remain static-arena storage:\n{nested_formatted}",
+        );
+    }
 
     #[test]
     fn mixed_compile_time_and_runtime_layout_components_lower_through_calls() {
@@ -6010,11 +6229,11 @@ struct Mixed<const ROOT: u256> {
     dynamic: StorageMap<u256, u256, ROOT>,
 }
 
-fn pass<const ROOT: u256>(value: Mixed<ROOT>) -> Mixed<ROOT> {
+fn pass<const ROOT: u256>(value: own Mixed<ROOT>) -> Mixed<ROOT> {
     value
 }
 
-fn forward<const ROOT: u256>(value: Mixed<ROOT>) -> Mixed<ROOT> {
+fn forward<const ROOT: u256>(value: own Mixed<ROOT>) -> Mixed<ROOT> {
     pass(value: value)
 }
 "#
@@ -6068,6 +6287,140 @@ fn forward<const ROOT: u256>(value: Mixed<ROOT>) -> Mixed<ROOT> {
         assert!(
             package.is_ok(),
             "poseidon_mock should lower through range consts with runtime-zst fields: {package:#?}"
+        );
+    }
+
+    #[test]
+    fn closure_const_generic_lowers_into_runtime_package() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::from_file_path(
+            std::env::temp_dir().join("closure_const_generic_runtime_lowering.fe"),
+        )
+        .expect("fixture path should be absolute");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+use core::functional::Fn
+
+fn closure_const<const N: u256>() -> u256 {
+    let value = |_ unit: own ()| -> u256 { N }
+    value.call(())
+}
+
+#[test]
+fn test_closure_const_generic() {
+    assert(closure_const<11>() == 11)
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let package = build_test_runtime_package(&db, top_mod, Some("test_closure_const_generic"));
+        assert!(
+            package.is_ok(),
+            "const-generic closures should lower into a runtime package: {package:#?}"
+        );
+    }
+
+    #[test]
+    fn closure_captured_view_aggregate_projection_lowers_into_runtime_package() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::from_file_path(
+            std::env::temp_dir().join("closure_captured_view_aggregate_projection.fe"),
+        )
+        .expect("fixture path should be absolute");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+struct Boxed {
+    value: u256,
+}
+
+impl Boxed {
+    fn read_via_closure(self) -> u256 {
+        let read = || self.value
+        read.call()
+    }
+}
+
+#[test]
+fn test_captured_view_aggregate_projection() {
+    assert(Boxed { value: 42 }.read_via_closure() == 42)
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let package = build_test_runtime_package(
+            &db,
+            top_mod,
+            Some("test_captured_view_aggregate_projection"),
+        );
+        assert!(
+            package.is_ok(),
+            "captured view aggregate projections should lower into a runtime package: {package:#?}"
+        );
+    }
+
+    #[test]
+    fn enum_view_field_from_owned_value_lowers_into_runtime_package() {
+        let mut db = DriverDataBase::default();
+        let file_url =
+            Url::from_file_path(std::env::temp_dir().join("enum_view_field_from_owned_value.fe"))
+                .expect("fixture path should be absolute");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+struct Boxed {
+    value: u256,
+}
+
+enum Choice {
+    Value(view Boxed),
+    Empty,
+}
+
+#[test]
+fn test_view_enum_field_from_owned() {
+    let boxed = Boxed { value: 42 }
+    let choice = Choice::Value(boxed)
+    let result = match choice {
+        Choice::Value(value) => value.value
+        Choice::Empty => 0
+    }
+    assert(result == 42)
+    assert(boxed.value == 42)
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let package =
+            build_test_runtime_package(&db, top_mod, Some("test_view_enum_field_from_owned"));
+        assert!(
+            package.is_ok(),
+            "view enum fields initialized from owned values should lower: {package:#?}"
         );
     }
 }

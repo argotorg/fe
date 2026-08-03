@@ -1,0 +1,8 @@
+pub fn tuple_holds_borrows() {
+    let a: u256 = 0
+    let mut b: u256 = 1
+    let t = (ref a, mut b)
+    let m = mut b
+    m = 2
+    let _k = t
+}

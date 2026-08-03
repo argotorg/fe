@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/parser.rs
+expression: diags
+input_file: fixtures/parser/function_mode_only.fe
+---
+error[1-0001]: expected type
+  ┌─ function_mode_only.fe:1:28
+  │
+1 │ fn missing_own(_ value: own) {}
+  │                            ^ expected type
+
+error[1-0001]: expected type
+  ┌─ function_mode_only.fe:3:28
+  │
+3 │ fn missing_ref(_ value: ref) {}
+  │                            ^ expected type
+
+error[1-0001]: expected type
+  ┌─ function_mode_only.fe:5:28
+  │
+5 │ fn missing_mut(_ value: mut) {}
+  │                            ^ expected type

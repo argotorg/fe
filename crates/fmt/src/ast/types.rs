@@ -835,6 +835,9 @@ impl ToDoc for ast::ModeType {
                     SyntaxKind::MutKw | SyntaxKind::RefKw | SyntaxKind::OwnKw => {
                         Some(TokenPiece::new(alloc.text(ctx.token(&token))).space_after())
                     }
+                    SyntaxKind::Ident if token.text() == "view" => {
+                        Some(TokenPiece::new(alloc.text(ctx.token(&token))).space_after())
+                    }
                     _ => None,
                 },
             );
@@ -1142,6 +1145,7 @@ impl ToDoc for ast::Expr {
         match self.kind() {
             ExprKind::Lit(lit) => lit.to_doc(ctx),
             ExprKind::Block(block) => block.to_doc(ctx),
+            ExprKind::Closure(closure) => closure.to_doc(ctx),
             ExprKind::Bin(bin) => bin.to_doc(ctx),
             ExprKind::Un(un) => un.to_doc(ctx),
             ExprKind::Cast(cast) => cast.to_doc(ctx),

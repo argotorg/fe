@@ -97,6 +97,20 @@ pub fn verify_normalized_semantic_body<'db>(
         if let Some(place) = local.snapshot_source_place() {
             verify_rooted_place(place, "snapshot source place for local")?;
         }
+        for source in local.ownership_sources() {
+            if let super::ir::NValueOwnershipSource::Place(place) = source {
+                verify_rooted_place(place, "ownership source place for local")?;
+            }
+        }
+        for source in local.layout_backing_sources() {
+            verify_place(
+                db,
+                instance,
+                body,
+                SemOrigin::Body(body.template_owner),
+                &source.source,
+            )?;
+        }
     }
 
     for block in &body.blocks {

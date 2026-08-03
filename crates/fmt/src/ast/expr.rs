@@ -1386,6 +1386,62 @@ impl ToDoc for ast::ParenExpr {
     }
 }
 
+impl ToDoc for ast::ClosureExpr {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        if !has_comment_tokens(self.syntax()) {
+            let params = self
+                .params()
+                .map(|params| closure_params_doc(ctx, params))
+                .unwrap_or_else(|| alloc.text("||"));
+            let ret_ty = self
+                .ret_ty()
+                .map(|ty| alloc.text(" -> ").append(ty.to_doc(ctx)))
+                .unwrap_or_else(|| alloc.nil());
+            let body = self
+                .body()
+                .map(|body| body.to_doc(ctx))
+                .unwrap_or_else(|| alloc.text("{}"));
+
+            return params.append(ret_ty).append(alloc.text(" ")).append(body);
+        }
+
+        let indent = ctx.config.indent_width as isize;
+        token_doc(
+            ctx,
+            self.syntax(),
+            indent,
+            |node| {
+                if let Some(params) = ast::FuncParamList::cast(node.clone()) {
+                    Some(TokenPiece::new(closure_params_doc(ctx, params)))
+                } else if let Some(ty) = ast::Type::cast(node.clone()) {
+                    Some(TokenPiece::new(ty.to_doc(ctx)))
+                } else {
+                    ast::Expr::cast(node).map(|body| TokenPiece::new(body.to_doc(ctx)))
+                }
+            },
+            |token| match token.kind() {
+                SyntaxKind::Pipe2 => Some(TokenPiece::new(alloc.text("||"))),
+                SyntaxKind::Arrow => Some(TokenPiece::new(alloc.text("->")).spaces()),
+                _ => None,
+            },
+        )
+    }
+}
+
+fn closure_params_doc<'a>(ctx: &'a RewriteContext<'a>, params: ast::FuncParamList) -> Doc<'a> {
+    block_list_auto(
+        ctx,
+        params.syntax(),
+        "|",
+        "|",
+        ast::FuncParam::cast,
+        ctx.config.indent_width as isize,
+        true,
+    )
+}
+
 impl ToDoc for ast::BlockExpr {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         use parser::TextRange;

@@ -161,6 +161,10 @@ impl<'db> ConstFnChecker<'db, '_> {
 
             Expr::Block(stmts) => stmts.iter().for_each(|stmt| self.check_stmt(*stmt)),
 
+            Expr::Closure { body, .. } => {
+                self.check_expr(*body);
+            }
+
             Expr::Bin(lhs, rhs, _) => {
                 self.check_expr(*lhs);
                 self.check_expr(*rhs);

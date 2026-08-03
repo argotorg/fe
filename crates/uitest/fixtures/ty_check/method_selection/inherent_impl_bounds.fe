@@ -34,7 +34,7 @@ fn assoc_ok<T: AssocStrong>(box_: AssocBox<T::Item>) {
     box_.touch()
 }
 
-fn assoc_id<T: AssocStrong>(box_: AssocBox<T::Item>) -> AssocBox<T::Item> {
+fn assoc_id<T: AssocStrong>(box_: own AssocBox<T::Item>) -> AssocBox<T::Item> {
     box_
 }
 

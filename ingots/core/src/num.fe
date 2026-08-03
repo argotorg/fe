@@ -1009,12 +1009,12 @@ impl Rem for u8 {
     }
 }
 impl Pow for u8 { const fn pow(own self, _ other: own u8) -> u8 { pow_checked(self, other) } }
-impl WrappingAdd for u8 { const fn wrapping_add(self, _ other: u8) -> u8 { __add_u8(self, other) } }
-impl WrappingSub for u8 { const fn wrapping_sub(self, _ other: u8) -> u8 { __sub_u8(self, other) } }
-impl WrappingMul for u8 { const fn wrapping_mul(self, _ other: u8) -> u8 { __mul_u8(self, other) } }
-impl SaturatingAdd for u8 { const fn saturating_add(self, _ other: u8) -> u8 { __saturating_add(self, other) } }
-impl SaturatingSub for u8 { const fn saturating_sub(self, _ other: u8) -> u8 { __saturating_sub(self, other) } }
-impl SaturatingMul for u8 { const fn saturating_mul(self, _ other: u8) -> u8 { __saturating_mul(self, other) } }
+impl WrappingAdd for u8 { const fn wrapping_add(own self, _ other: own u8) -> u8 { __add_u8(self, other) } }
+impl WrappingSub for u8 { const fn wrapping_sub(own self, _ other: own u8) -> u8 { __sub_u8(self, other) } }
+impl WrappingMul for u8 { const fn wrapping_mul(own self, _ other: own u8) -> u8 { __mul_u8(self, other) } }
+impl SaturatingAdd for u8 { const fn saturating_add(own self, _ other: own u8) -> u8 { __saturating_add(self, other) } }
+impl SaturatingSub for u8 { const fn saturating_sub(own self, _ other: own u8) -> u8 { __saturating_sub(self, other) } }
+impl SaturatingMul for u8 { const fn saturating_mul(own self, _ other: own u8) -> u8 { __saturating_mul(self, other) } }
 impl Shl for u8 { const fn shl(own self, _ other: own u8) -> u8 { __shl_u8(self, other) } }
 impl Shr for u8 { const fn shr(own self, _ other: own u8) -> u8 { __shr_u8(self, other) } }
 impl BitAnd for u8 { const fn bitand(own self, _ other: own u8) -> u8 { __bitand_u8(self, other) } }
@@ -1077,12 +1077,12 @@ impl Rem for i8 {
     }
 }
 impl Pow for i8 { const fn pow(own self, _ other: own i8) -> i8 { pow_checked(self, other) } }
-impl WrappingAdd for i8 { const fn wrapping_add(self, _ other: i8) -> i8 { __add_i8(self, other) } }
-impl WrappingSub for i8 { const fn wrapping_sub(self, _ other: i8) -> i8 { __sub_i8(self, other) } }
-impl WrappingMul for i8 { const fn wrapping_mul(self, _ other: i8) -> i8 { __mul_i8(self, other) } }
-impl SaturatingAdd for i8 { const fn saturating_add(self, _ other: i8) -> i8 { __saturating_add(self, other) } }
-impl SaturatingSub for i8 { const fn saturating_sub(self, _ other: i8) -> i8 { __saturating_sub(self, other) } }
-impl SaturatingMul for i8 { const fn saturating_mul(self, _ other: i8) -> i8 { __saturating_mul(self, other) } }
+impl WrappingAdd for i8 { const fn wrapping_add(own self, _ other: own i8) -> i8 { __add_i8(self, other) } }
+impl WrappingSub for i8 { const fn wrapping_sub(own self, _ other: own i8) -> i8 { __sub_i8(self, other) } }
+impl WrappingMul for i8 { const fn wrapping_mul(own self, _ other: own i8) -> i8 { __mul_i8(self, other) } }
+impl SaturatingAdd for i8 { const fn saturating_add(own self, _ other: own i8) -> i8 { __saturating_add(self, other) } }
+impl SaturatingSub for i8 { const fn saturating_sub(own self, _ other: own i8) -> i8 { __saturating_sub(self, other) } }
+impl SaturatingMul for i8 { const fn saturating_mul(own self, _ other: own i8) -> i8 { __saturating_mul(self, other) } }
 impl Shl for i8 { const fn shl(own self, _ other: own i8) -> i8 { __shl_i8(self, other) } }
 impl Shr for i8 { const fn shr(own self, _ other: own i8) -> i8 { __shr_i8(self, other) } }
 impl BitAnd for i8 { const fn bitand(own self, _ other: own i8) -> i8 { __bitand_i8(self, other) } }
@@ -1145,12 +1145,12 @@ impl Rem for i16 {
     }
 }
 impl Pow for i16 { const fn pow(own self, _ other: own i16) -> i16 { pow_checked(self, other) } }
-impl WrappingAdd for i16 { const fn wrapping_add(self, _ other: i16) -> i16 { __add_i16(self, other) } }
-impl WrappingSub for i16 { const fn wrapping_sub(self, _ other: i16) -> i16 { __sub_i16(self, other) } }
-impl WrappingMul for i16 { const fn wrapping_mul(self, _ other: i16) -> i16 { __mul_i16(self, other) } }
-impl SaturatingAdd for i16 { const fn saturating_add(self, _ other: i16) -> i16 { __saturating_add(self, other) } }
-impl SaturatingSub for i16 { const fn saturating_sub(self, _ other: i16) -> i16 { __saturating_sub(self, other) } }
-impl SaturatingMul for i16 { const fn saturating_mul(self, _ other: i16) -> i16 { __saturating_mul(self, other) } }
+impl WrappingAdd for i16 { const fn wrapping_add(own self, _ other: own i16) -> i16 { __add_i16(self, other) } }
+impl WrappingSub for i16 { const fn wrapping_sub(own self, _ other: own i16) -> i16 { __sub_i16(self, other) } }
+impl WrappingMul for i16 { const fn wrapping_mul(own self, _ other: own i16) -> i16 { __mul_i16(self, other) } }
+impl SaturatingAdd for i16 { const fn saturating_add(own self, _ other: own i16) -> i16 { __saturating_add(self, other) } }
+impl SaturatingSub for i16 { const fn saturating_sub(own self, _ other: own i16) -> i16 { __saturating_sub(self, other) } }
+impl SaturatingMul for i16 { const fn saturating_mul(own self, _ other: own i16) -> i16 { __saturating_mul(self, other) } }
 impl Shl for i16 { const fn shl(own self, _ other: own i16) -> i16 { __shl_i16(self, other) } }
 impl Shr for i16 { const fn shr(own self, _ other: own i16) -> i16 { __shr_i16(self, other) } }
 impl BitAnd for i16 { const fn bitand(own self, _ other: own i16) -> i16 { __bitand_i16(self, other) } }
@@ -1208,12 +1208,12 @@ impl Rem for u16 {
     }
 }
 impl Pow for u16 { const fn pow(own self, _ other: own u16) -> u16 { pow_checked(self, other) } }
-impl WrappingAdd for u16 { const fn wrapping_add(self, _ other: u16) -> u16 { __add_u16(self, other) } }
-impl WrappingSub for u16 { const fn wrapping_sub(self, _ other: u16) -> u16 { __sub_u16(self, other) } }
-impl WrappingMul for u16 { const fn wrapping_mul(self, _ other: u16) -> u16 { __mul_u16(self, other) } }
-impl SaturatingAdd for u16 { const fn saturating_add(self, _ other: u16) -> u16 { __saturating_add(self, other) } }
-impl SaturatingSub for u16 { const fn saturating_sub(self, _ other: u16) -> u16 { __saturating_sub(self, other) } }
-impl SaturatingMul for u16 { const fn saturating_mul(self, _ other: u16) -> u16 { __saturating_mul(self, other) } }
+impl WrappingAdd for u16 { const fn wrapping_add(own self, _ other: own u16) -> u16 { __add_u16(self, other) } }
+impl WrappingSub for u16 { const fn wrapping_sub(own self, _ other: own u16) -> u16 { __sub_u16(self, other) } }
+impl WrappingMul for u16 { const fn wrapping_mul(own self, _ other: own u16) -> u16 { __mul_u16(self, other) } }
+impl SaturatingAdd for u16 { const fn saturating_add(own self, _ other: own u16) -> u16 { __saturating_add(self, other) } }
+impl SaturatingSub for u16 { const fn saturating_sub(own self, _ other: own u16) -> u16 { __saturating_sub(self, other) } }
+impl SaturatingMul for u16 { const fn saturating_mul(own self, _ other: own u16) -> u16 { __saturating_mul(self, other) } }
 impl Shl for u16 { const fn shl(own self, _ other: own u16) -> u16 { __shl_u16(self, other) } }
 impl Shr for u16 { const fn shr(own self, _ other: own u16) -> u16 { __shr_u16(self, other) } }
 impl BitAnd for u16 { const fn bitand(own self, _ other: own u16) -> u16 { __bitand_u16(self, other) } }
@@ -1277,12 +1277,12 @@ impl Rem for i32 {
     }
 }
 impl Pow for i32 { const fn pow(own self, _ other: own i32) -> i32 { pow_checked(self, other) } }
-impl WrappingAdd for i32 { const fn wrapping_add(self, _ other: i32) -> i32 { __add_i32(self, other) } }
-impl WrappingSub for i32 { const fn wrapping_sub(self, _ other: i32) -> i32 { __sub_i32(self, other) } }
-impl WrappingMul for i32 { const fn wrapping_mul(self, _ other: i32) -> i32 { __mul_i32(self, other) } }
-impl SaturatingAdd for i32 { const fn saturating_add(self, _ other: i32) -> i32 { __saturating_add(self, other) } }
-impl SaturatingSub for i32 { const fn saturating_sub(self, _ other: i32) -> i32 { __saturating_sub(self, other) } }
-impl SaturatingMul for i32 { const fn saturating_mul(self, _ other: i32) -> i32 { __saturating_mul(self, other) } }
+impl WrappingAdd for i32 { const fn wrapping_add(own self, _ other: own i32) -> i32 { __add_i32(self, other) } }
+impl WrappingSub for i32 { const fn wrapping_sub(own self, _ other: own i32) -> i32 { __sub_i32(self, other) } }
+impl WrappingMul for i32 { const fn wrapping_mul(own self, _ other: own i32) -> i32 { __mul_i32(self, other) } }
+impl SaturatingAdd for i32 { const fn saturating_add(own self, _ other: own i32) -> i32 { __saturating_add(self, other) } }
+impl SaturatingSub for i32 { const fn saturating_sub(own self, _ other: own i32) -> i32 { __saturating_sub(self, other) } }
+impl SaturatingMul for i32 { const fn saturating_mul(own self, _ other: own i32) -> i32 { __saturating_mul(self, other) } }
 impl Shl for i32 { const fn shl(own self, _ other: own i32) -> i32 { __shl_i32(self, other) } }
 impl Shr for i32 { const fn shr(own self, _ other: own i32) -> i32 { __shr_i32(self, other) } }
 impl BitAnd for i32 { const fn bitand(own self, _ other: own i32) -> i32 { __bitand_i32(self, other) } }
@@ -1340,12 +1340,12 @@ impl Rem for u32 {
     }
 }
 impl Pow for u32 { const fn pow(own self, _ other: own u32) -> u32 { pow_checked(self, other) } }
-impl WrappingAdd for u32 { const fn wrapping_add(self, _ other: u32) -> u32 { __add_u32(self, other) } }
-impl WrappingSub for u32 { const fn wrapping_sub(self, _ other: u32) -> u32 { __sub_u32(self, other) } }
-impl WrappingMul for u32 { const fn wrapping_mul(self, _ other: u32) -> u32 { __mul_u32(self, other) } }
-impl SaturatingAdd for u32 { const fn saturating_add(self, _ other: u32) -> u32 { __saturating_add(self, other) } }
-impl SaturatingSub for u32 { const fn saturating_sub(self, _ other: u32) -> u32 { __saturating_sub(self, other) } }
-impl SaturatingMul for u32 { const fn saturating_mul(self, _ other: u32) -> u32 { __saturating_mul(self, other) } }
+impl WrappingAdd for u32 { const fn wrapping_add(own self, _ other: own u32) -> u32 { __add_u32(self, other) } }
+impl WrappingSub for u32 { const fn wrapping_sub(own self, _ other: own u32) -> u32 { __sub_u32(self, other) } }
+impl WrappingMul for u32 { const fn wrapping_mul(own self, _ other: own u32) -> u32 { __mul_u32(self, other) } }
+impl SaturatingAdd for u32 { const fn saturating_add(own self, _ other: own u32) -> u32 { __saturating_add(self, other) } }
+impl SaturatingSub for u32 { const fn saturating_sub(own self, _ other: own u32) -> u32 { __saturating_sub(self, other) } }
+impl SaturatingMul for u32 { const fn saturating_mul(own self, _ other: own u32) -> u32 { __saturating_mul(self, other) } }
 impl Shl for u32 { const fn shl(own self, _ other: own u32) -> u32 { __shl_u32(self, other) } }
 impl Shr for u32 { const fn shr(own self, _ other: own u32) -> u32 { __shr_u32(self, other) } }
 impl BitAnd for u32 { const fn bitand(own self, _ other: own u32) -> u32 { __bitand_u32(self, other) } }
@@ -1408,12 +1408,12 @@ impl Rem for i64 {
     }
 }
 impl Pow for i64 { const fn pow(own self, _ other: own i64) -> i64 { pow_checked(self, other) } }
-impl WrappingAdd for i64 { const fn wrapping_add(self, _ other: i64) -> i64 { __add_i64(self, other) } }
-impl WrappingSub for i64 { const fn wrapping_sub(self, _ other: i64) -> i64 { __sub_i64(self, other) } }
-impl WrappingMul for i64 { const fn wrapping_mul(self, _ other: i64) -> i64 { __mul_i64(self, other) } }
-impl SaturatingAdd for i64 { const fn saturating_add(self, _ other: i64) -> i64 { __saturating_add(self, other) } }
-impl SaturatingSub for i64 { const fn saturating_sub(self, _ other: i64) -> i64 { __saturating_sub(self, other) } }
-impl SaturatingMul for i64 { const fn saturating_mul(self, _ other: i64) -> i64 { __saturating_mul(self, other) } }
+impl WrappingAdd for i64 { const fn wrapping_add(own self, _ other: own i64) -> i64 { __add_i64(self, other) } }
+impl WrappingSub for i64 { const fn wrapping_sub(own self, _ other: own i64) -> i64 { __sub_i64(self, other) } }
+impl WrappingMul for i64 { const fn wrapping_mul(own self, _ other: own i64) -> i64 { __mul_i64(self, other) } }
+impl SaturatingAdd for i64 { const fn saturating_add(own self, _ other: own i64) -> i64 { __saturating_add(self, other) } }
+impl SaturatingSub for i64 { const fn saturating_sub(own self, _ other: own i64) -> i64 { __saturating_sub(self, other) } }
+impl SaturatingMul for i64 { const fn saturating_mul(own self, _ other: own i64) -> i64 { __saturating_mul(self, other) } }
 impl Shl for i64 { const fn shl(own self, _ other: own i64) -> i64 { __shl_i64(self, other) } }
 impl Shr for i64 { const fn shr(own self, _ other: own i64) -> i64 { __shr_i64(self, other) } }
 impl BitAnd for i64 { const fn bitand(own self, _ other: own i64) -> i64 { __bitand_i64(self, other) } }
@@ -1476,12 +1476,12 @@ impl Rem for i128 {
     }
 }
 impl Pow for i128 { const fn pow(own self, _ other: own i128) -> i128 { pow_checked(self, other) } }
-impl WrappingAdd for i128 { const fn wrapping_add(self, _ other: i128) -> i128 { __add_i128(self, other) } }
-impl WrappingSub for i128 { const fn wrapping_sub(self, _ other: i128) -> i128 { __sub_i128(self, other) } }
-impl WrappingMul for i128 { const fn wrapping_mul(self, _ other: i128) -> i128 { __mul_i128(self, other) } }
-impl SaturatingAdd for i128 { const fn saturating_add(self, _ other: i128) -> i128 { __saturating_add(self, other) } }
-impl SaturatingSub for i128 { const fn saturating_sub(self, _ other: i128) -> i128 { __saturating_sub(self, other) } }
-impl SaturatingMul for i128 { const fn saturating_mul(self, _ other: i128) -> i128 { __saturating_mul(self, other) } }
+impl WrappingAdd for i128 { const fn wrapping_add(own self, _ other: own i128) -> i128 { __add_i128(self, other) } }
+impl WrappingSub for i128 { const fn wrapping_sub(own self, _ other: own i128) -> i128 { __sub_i128(self, other) } }
+impl WrappingMul for i128 { const fn wrapping_mul(own self, _ other: own i128) -> i128 { __mul_i128(self, other) } }
+impl SaturatingAdd for i128 { const fn saturating_add(own self, _ other: own i128) -> i128 { __saturating_add(self, other) } }
+impl SaturatingSub for i128 { const fn saturating_sub(own self, _ other: own i128) -> i128 { __saturating_sub(self, other) } }
+impl SaturatingMul for i128 { const fn saturating_mul(own self, _ other: own i128) -> i128 { __saturating_mul(self, other) } }
 impl Shl for i128 { const fn shl(own self, _ other: own i128) -> i128 { __shl_i128(self, other) } }
 impl Shr for i128 { const fn shr(own self, _ other: own i128) -> i128 { __shr_i128(self, other) } }
 impl BitAnd for i128 { const fn bitand(own self, _ other: own i128) -> i128 { __bitand_i128(self, other) } }
@@ -1539,12 +1539,12 @@ impl Rem for u64 {
     }
 }
 impl Pow for u64 { const fn pow(own self, _ other: own u64) -> u64 { pow_checked(self, other) } }
-impl WrappingAdd for u64 { const fn wrapping_add(self, _ other: u64) -> u64 { __add_u64(self, other) } }
-impl WrappingSub for u64 { const fn wrapping_sub(self, _ other: u64) -> u64 { __sub_u64(self, other) } }
-impl WrappingMul for u64 { const fn wrapping_mul(self, _ other: u64) -> u64 { __mul_u64(self, other) } }
-impl SaturatingAdd for u64 { const fn saturating_add(self, _ other: u64) -> u64 { __saturating_add(self, other) } }
-impl SaturatingSub for u64 { const fn saturating_sub(self, _ other: u64) -> u64 { __saturating_sub(self, other) } }
-impl SaturatingMul for u64 { const fn saturating_mul(self, _ other: u64) -> u64 { __saturating_mul(self, other) } }
+impl WrappingAdd for u64 { const fn wrapping_add(own self, _ other: own u64) -> u64 { __add_u64(self, other) } }
+impl WrappingSub for u64 { const fn wrapping_sub(own self, _ other: own u64) -> u64 { __sub_u64(self, other) } }
+impl WrappingMul for u64 { const fn wrapping_mul(own self, _ other: own u64) -> u64 { __mul_u64(self, other) } }
+impl SaturatingAdd for u64 { const fn saturating_add(own self, _ other: own u64) -> u64 { __saturating_add(self, other) } }
+impl SaturatingSub for u64 { const fn saturating_sub(own self, _ other: own u64) -> u64 { __saturating_sub(self, other) } }
+impl SaturatingMul for u64 { const fn saturating_mul(own self, _ other: own u64) -> u64 { __saturating_mul(self, other) } }
 impl Shl for u64 { const fn shl(own self, _ other: own u64) -> u64 { __shl_u64(self, other) } }
 impl Shr for u64 { const fn shr(own self, _ other: own u64) -> u64 { __shr_u64(self, other) } }
 impl BitAnd for u64 { const fn bitand(own self, _ other: own u64) -> u64 { __bitand_u64(self, other) } }
@@ -1602,12 +1602,12 @@ impl Rem for u128 {
     }
 }
 impl Pow for u128 { const fn pow(own self, _ other: own u128) -> u128 { pow_checked(self, other) } }
-impl WrappingAdd for u128 { const fn wrapping_add(self, _ other: u128) -> u128 { __add_u128(self, other) } }
-impl WrappingSub for u128 { const fn wrapping_sub(self, _ other: u128) -> u128 { __sub_u128(self, other) } }
-impl WrappingMul for u128 { const fn wrapping_mul(self, _ other: u128) -> u128 { __mul_u128(self, other) } }
-impl SaturatingAdd for u128 { const fn saturating_add(self, _ other: u128) -> u128 { __saturating_add(self, other) } }
-impl SaturatingSub for u128 { const fn saturating_sub(self, _ other: u128) -> u128 { __saturating_sub(self, other) } }
-impl SaturatingMul for u128 { const fn saturating_mul(self, _ other: u128) -> u128 { __saturating_mul(self, other) } }
+impl WrappingAdd for u128 { const fn wrapping_add(own self, _ other: own u128) -> u128 { __add_u128(self, other) } }
+impl WrappingSub for u128 { const fn wrapping_sub(own self, _ other: own u128) -> u128 { __sub_u128(self, other) } }
+impl WrappingMul for u128 { const fn wrapping_mul(own self, _ other: own u128) -> u128 { __mul_u128(self, other) } }
+impl SaturatingAdd for u128 { const fn saturating_add(own self, _ other: own u128) -> u128 { __saturating_add(self, other) } }
+impl SaturatingSub for u128 { const fn saturating_sub(own self, _ other: own u128) -> u128 { __saturating_sub(self, other) } }
+impl SaturatingMul for u128 { const fn saturating_mul(own self, _ other: own u128) -> u128 { __saturating_mul(self, other) } }
 impl Shl for u128 { const fn shl(own self, _ other: own u128) -> u128 { __shl_u128(self, other) } }
 impl Shr for u128 { const fn shr(own self, _ other: own u128) -> u128 { __shr_u128(self, other) } }
 impl BitAnd for u128 { const fn bitand(own self, _ other: own u128) -> u128 { __bitand_u128(self, other) } }
@@ -1665,12 +1665,12 @@ impl Rem for usize {
     }
 }
 impl Pow for usize { const fn pow(own self, _ other: own usize) -> usize { pow_checked(self, other) } }
-impl WrappingAdd for usize { const fn wrapping_add(self, _ other: usize) -> usize { __add_usize(self, other) } }
-impl WrappingSub for usize { const fn wrapping_sub(self, _ other: usize) -> usize { __sub_usize(self, other) } }
-impl WrappingMul for usize { const fn wrapping_mul(self, _ other: usize) -> usize { __mul_usize(self, other) } }
-impl SaturatingAdd for usize { const fn saturating_add(self, _ other: usize) -> usize { __saturating_add(self, other) } }
-impl SaturatingSub for usize { const fn saturating_sub(self, _ other: usize) -> usize { __saturating_sub(self, other) } }
-impl SaturatingMul for usize { const fn saturating_mul(self, _ other: usize) -> usize { __saturating_mul(self, other) } }
+impl WrappingAdd for usize { const fn wrapping_add(own self, _ other: own usize) -> usize { __add_usize(self, other) } }
+impl WrappingSub for usize { const fn wrapping_sub(own self, _ other: own usize) -> usize { __sub_usize(self, other) } }
+impl WrappingMul for usize { const fn wrapping_mul(own self, _ other: own usize) -> usize { __mul_usize(self, other) } }
+impl SaturatingAdd for usize { const fn saturating_add(own self, _ other: own usize) -> usize { __saturating_add(self, other) } }
+impl SaturatingSub for usize { const fn saturating_sub(own self, _ other: own usize) -> usize { __saturating_sub(self, other) } }
+impl SaturatingMul for usize { const fn saturating_mul(own self, _ other: own usize) -> usize { __saturating_mul(self, other) } }
 impl Shl for usize { const fn shl(own self, _ other: own usize) -> usize { __shl_usize(self, other) } }
 impl Shr for usize { const fn shr(own self, _ other: own usize) -> usize { __shr_usize(self, other) } }
 impl BitAnd for usize { const fn bitand(own self, _ other: own usize) -> usize { __bitand_usize(self, other) } }
@@ -1728,12 +1728,12 @@ impl Rem for i256 {
     }
 }
 impl Pow for i256 { const fn pow(own self, _ other: own i256) -> i256 { pow_checked(self, other) } }
-impl WrappingAdd for i256 { const fn wrapping_add(self, _ other: i256) -> i256 { __add_i256(self, other) } }
-impl WrappingSub for i256 { const fn wrapping_sub(self, _ other: i256) -> i256 { __sub_i256(self, other) } }
-impl WrappingMul for i256 { const fn wrapping_mul(self, _ other: i256) -> i256 { __mul_i256(self, other) } }
-impl SaturatingAdd for i256 { const fn saturating_add(self, _ other: i256) -> i256 { __saturating_add(self, other) } }
-impl SaturatingSub for i256 { const fn saturating_sub(self, _ other: i256) -> i256 { __saturating_sub(self, other) } }
-impl SaturatingMul for i256 { const fn saturating_mul(self, _ other: i256) -> i256 { __saturating_mul(self, other) } }
+impl WrappingAdd for i256 { const fn wrapping_add(own self, _ other: own i256) -> i256 { __add_i256(self, other) } }
+impl WrappingSub for i256 { const fn wrapping_sub(own self, _ other: own i256) -> i256 { __sub_i256(self, other) } }
+impl WrappingMul for i256 { const fn wrapping_mul(own self, _ other: own i256) -> i256 { __mul_i256(self, other) } }
+impl SaturatingAdd for i256 { const fn saturating_add(own self, _ other: own i256) -> i256 { __saturating_add(self, other) } }
+impl SaturatingSub for i256 { const fn saturating_sub(own self, _ other: own i256) -> i256 { __saturating_sub(self, other) } }
+impl SaturatingMul for i256 { const fn saturating_mul(own self, _ other: own i256) -> i256 { __saturating_mul(self, other) } }
 impl Shl for i256 { const fn shl(own self, _ other: own i256) -> i256 { __shl_i256(self, other) } }
 impl Shr for i256 { const fn shr(own self, _ other: own i256) -> i256 { __shr_i256(self, other) } }
 impl BitAnd for i256 { const fn bitand(own self, _ other: own i256) -> i256 { __bitand_i256(self, other) } }
@@ -1791,12 +1791,12 @@ impl Rem for u256 {
     }
 }
 impl Pow for u256 { const fn pow(own self, _ other: own u256) -> u256 { pow_checked(self, other) } }
-impl WrappingAdd for u256 { const fn wrapping_add(self, _ other: u256) -> u256 { __add_u256(self, other) } }
-impl WrappingSub for u256 { const fn wrapping_sub(self, _ other: u256) -> u256 { __sub_u256(self, other) } }
-impl WrappingMul for u256 { const fn wrapping_mul(self, _ other: u256) -> u256 { __mul_u256(self, other) } }
-impl SaturatingAdd for u256 { const fn saturating_add(self, _ other: u256) -> u256 { __saturating_add(self, other) } }
-impl SaturatingSub for u256 { const fn saturating_sub(self, _ other: u256) -> u256 { __saturating_sub(self, other) } }
-impl SaturatingMul for u256 { const fn saturating_mul(self, _ other: u256) -> u256 { __saturating_mul(self, other) } }
+impl WrappingAdd for u256 { const fn wrapping_add(own self, _ other: own u256) -> u256 { __add_u256(self, other) } }
+impl WrappingSub for u256 { const fn wrapping_sub(own self, _ other: own u256) -> u256 { __sub_u256(self, other) } }
+impl WrappingMul for u256 { const fn wrapping_mul(own self, _ other: own u256) -> u256 { __mul_u256(self, other) } }
+impl SaturatingAdd for u256 { const fn saturating_add(own self, _ other: own u256) -> u256 { __saturating_add(self, other) } }
+impl SaturatingSub for u256 { const fn saturating_sub(own self, _ other: own u256) -> u256 { __saturating_sub(self, other) } }
+impl SaturatingMul for u256 { const fn saturating_mul(own self, _ other: own u256) -> u256 { __saturating_mul(self, other) } }
 impl Shl for u256 { const fn shl(own self, _ other: own u256) -> u256 { __shl_u256(self, other) } }
 impl Shr for u256 { const fn shr(own self, _ other: own u256) -> u256 { __shr_u256(self, other) } }
 impl BitAnd for u256 { const fn bitand(own self, _ other: own u256) -> u256 { __bitand_u256(self, other) } }
@@ -1859,12 +1859,12 @@ impl Rem for isize {
     }
 }
 impl Pow for isize { const fn pow(own self, _ other: own isize) -> isize { pow_checked(self, other) } }
-impl WrappingAdd for isize { const fn wrapping_add(self, _ other: isize) -> isize { __add_isize(self, other) } }
-impl WrappingSub for isize { const fn wrapping_sub(self, _ other: isize) -> isize { __sub_isize(self, other) } }
-impl WrappingMul for isize { const fn wrapping_mul(self, _ other: isize) -> isize { __mul_isize(self, other) } }
-impl SaturatingAdd for isize { const fn saturating_add(self, _ other: isize) -> isize { __saturating_add(self, other) } }
-impl SaturatingSub for isize { const fn saturating_sub(self, _ other: isize) -> isize { __saturating_sub(self, other) } }
-impl SaturatingMul for isize { const fn saturating_mul(self, _ other: isize) -> isize { __saturating_mul(self, other) } }
+impl WrappingAdd for isize { const fn wrapping_add(own self, _ other: own isize) -> isize { __add_isize(self, other) } }
+impl WrappingSub for isize { const fn wrapping_sub(own self, _ other: own isize) -> isize { __sub_isize(self, other) } }
+impl WrappingMul for isize { const fn wrapping_mul(own self, _ other: own isize) -> isize { __mul_isize(self, other) } }
+impl SaturatingAdd for isize { const fn saturating_add(own self, _ other: own isize) -> isize { __saturating_add(self, other) } }
+impl SaturatingSub for isize { const fn saturating_sub(own self, _ other: own isize) -> isize { __saturating_sub(self, other) } }
+impl SaturatingMul for isize { const fn saturating_mul(own self, _ other: own isize) -> isize { __saturating_mul(self, other) } }
 impl Shl for isize { const fn shl(own self, _ other: own isize) -> isize { __shl_isize(self, other) } }
 impl Shr for isize { const fn shr(own self, _ other: own isize) -> isize { __shr_isize(self, other) } }
 impl BitAnd for isize { const fn bitand(own self, _ other: own isize) -> isize { __bitand_isize(self, other) } }

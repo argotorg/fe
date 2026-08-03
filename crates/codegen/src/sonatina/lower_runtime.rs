@@ -31,7 +31,8 @@ use sonatina_ir::{
             Alloca, ConstIndex, ConstLoad, ConstProj, ConstRef, EnumAssertVariant,
             EnumAssertVariantRef, EnumExtract, EnumGetTag, EnumIsVariant, EnumMake, EnumProj,
             EnumSetTag, EnumTag, EnumWriteVariant, InsertValue, Mload, Mstore, ObjAlloc, ObjIndex,
-            ObjInitConst, ObjLoad, ObjProj, ObjStore, SymAddr, SymSize, SymbolRef,
+            ObjInitConst, ObjLoad, ObjMaterializeHeap, ObjProj, ObjStore, SymAddr, SymSize,
+            SymbolRef,
         },
         evm::{
             EvmAddMod, EvmAddress, EvmBalance, EvmBaseFee, EvmBlobBaseFee, EvmBlobHash,
@@ -595,6 +596,7 @@ fn describe_runtime_instance<'db>(
                     .to_opt()
                     .map(|name| format!("contract-recv {}", name.data(db)))
                     .unwrap_or_else(|| format!("{owner:?}")),
+                BodyOwner::Closure { .. } => format!("{owner:?}"),
             };
             format!("semantic owner={owner_desc} params={:?}", key.params(db))
         }
@@ -612,6 +614,8 @@ fn describe_runtime_instance<'db>(
 enum SlotRoot {
     Ptr(ValueId, Type),
     Object(ValueId, Type),
+    HeapPtr(Variable, Type),
+    HeapObject(Variable, Type),
 }
 
 enum PlaceTerminal<'db> {
@@ -702,7 +706,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             .iter()
             .enumerate()
             .filter_map(|(idx, local)| match local.root {
-                RuntimeLocalRoot::Slot(_) => None,
+                RuntimeLocalRoot::Slot(_) | RuntimeLocalRoot::HeapSlot(_) => None,
                 RuntimeLocalRoot::None
                 | RuntimeLocalRoot::Ref(_)
                 | RuntimeLocalRoot::Ptr { .. } => match &local.carrier {
@@ -856,6 +860,23 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                             },
                             class_ty,
                         ),
+                    };
+                    self.slot_roots.insert(local_id, root);
+                }
+                RuntimeLocalRoot::HeapSlot(class) => {
+                    let class_ty = self.module.ty_for_class(class)?;
+                    let root = match class {
+                        RuntimeClass::AggregateValue { .. } => SlotRoot::HeapObject(
+                            self.fb
+                                .declare_var(self.fb.module_builder.objref_type(class_ty)),
+                            class_ty,
+                        ),
+                        RuntimeClass::Scalar(_)
+                        | RuntimeClass::Ref { .. }
+                        | RuntimeClass::RawAddr { .. } => {
+                            let ptr_ty = self.fb.ptr_type(class_ty);
+                            SlotRoot::HeapPtr(self.fb.declare_var(ptr_ty), class_ty)
+                        }
                     };
                     self.slot_roots.insert(local_id, root);
                 }
@@ -1085,6 +1106,9 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             RExpr::AddrOf { place } => return self.addr_of_place(place, dst),
             RExpr::Load { place } => return self.load_from_place(place),
             RExpr::AggregateExtract { value, index } => {
+                let source_class = self.body.value_class(*value).cloned().ok_or_else(|| {
+                    LowerError::Internal("aggregate extract missing source class".to_string())
+                })?;
                 let value = self.local_value(*value)?;
                 let dst_local = dst.ok_or_else(|| {
                     LowerError::Internal("aggregate extract missing destination".to_string())
@@ -1092,7 +1116,18 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let class = self.body.value_class(dst_local).cloned().ok_or_else(|| {
                     LowerError::Internal("aggregate extract missing destination class".to_string())
                 })?;
-                self.extract_aggregate_field(value, *index as usize, &class)?
+                let index = match index {
+                    IndexSource::Constant(index) => self.index_value(*index as u64),
+                    IndexSource::Dynamic(_) => {
+                        let Lowered::Value(index) =
+                            self.checked_index_value(&source_class, index)?
+                        else {
+                            return Ok(Lowered::Terminated);
+                        };
+                        index
+                    }
+                };
+                self.extract_aggregate_index(value, index, &class)?
             }
             RExpr::AggregateMake { layout, fields } => {
                 self.make_aggregate_value(*layout, fields)?
@@ -2247,15 +2282,25 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 ));
             }
             RTerminator::TerminalCall { callee, args } => {
+                let callee_ref = self.module.func_ref(*callee)?;
                 let args = args
                     .iter()
                     .map(|arg| self.local_value(*arg))
                     .collect::<Result<SmallVec<[ValueId; 8]>, _>>()?;
-                self.fb.insert_inst_no_result(Call::new(
-                    self.module.inst_set(),
-                    self.module.func_ref(*callee)?,
-                    args,
-                ));
+                match callee.body(self.module.db).signature.ret.clone() {
+                    Some(class) => {
+                        let ret_ty = self.module.ty_for_class(&class)?;
+                        self.fb.insert_inst(
+                            Call::new(self.module.inst_set(), callee_ref, args),
+                            ret_ty,
+                        );
+                    }
+                    None => self.fb.insert_inst_no_result(Call::new(
+                        self.module.inst_set(),
+                        callee_ref,
+                        args,
+                    )),
+                }
                 self.fb
                     .insert_inst_no_result(Unreachable::new_unchecked(self.module.inst_set()));
             }
@@ -2341,6 +2386,58 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     object,
                 )
             }
+            Some(SlotRoot::HeapPtr(ptr_var, ty)) => {
+                let class = self.body.value_class(local).cloned().ok_or_else(|| {
+                    LowerError::Internal(format!("missing runtime class for {local:?}"))
+                })?;
+                let bytes = class
+                    .span_words(self.module.db)
+                    .checked_mul(32)
+                    .ok_or_else(|| {
+                        LowerError::Internal(format!("heap slot size overflow for local {local:?}"))
+                    })?;
+                if bytes == 0 {
+                    return Err(LowerError::Internal(format!(
+                        "zero-sized local {local:?} must not require a heap slot"
+                    )));
+                }
+                let size = self.index_value(bytes);
+                let raw_ptr_ty = self.fb.ptr_type(Type::I8);
+                let ptr = self
+                    .fb
+                    .insert_inst(EvmMalloc::new(self.module.inst_set(), size), raw_ptr_ty);
+                let ptr_ty = self.fb.ptr_type(ty);
+                let ptr = self.coerce_value_to_ty(ptr, ptr_ty)?;
+                let value = self.coerce_value_to_ty(value, ty)?;
+                self.fb
+                    .insert_inst_no_result(Mstore::new(self.module.inst_set(), ptr, value, ty));
+                self.fb.def_var(ptr_var, ptr);
+                Ok(())
+            }
+            Some(SlotRoot::HeapObject(object_var, ty)) => {
+                let class = self.body.value_class(local).cloned().ok_or_else(|| {
+                    LowerError::Internal(format!("missing runtime class for {local:?}"))
+                })?;
+                let object = self.fb.insert_inst(
+                    ObjAlloc::new(self.module.inst_set(), ty),
+                    self.fb.module_builder.objref_type(ty),
+                );
+                self.copy_source_into_object(
+                    CopySource::Value {
+                        value,
+                        class: class.clone(),
+                    },
+                    &class,
+                    object,
+                )?;
+                let ptr_ty = self.fb.ptr_type(ty);
+                self.fb.insert_inst(
+                    ObjMaterializeHeap::new(self.module.inst_set(), object),
+                    ptr_ty,
+                );
+                self.fb.def_var(object_var, object);
+                Ok(())
+            }
             None => Err(LowerError::Internal(format!(
                 "missing slot root for {local:?}"
             ))),
@@ -2356,6 +2453,18 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 SlotRoot::Object(object, ty) => Ok(self
                     .fb
                     .insert_inst(ObjLoad::new(self.module.inst_set(), *object), *ty)),
+                SlotRoot::HeapPtr(ptr, ty) => {
+                    let ptr = self.fb.use_var(*ptr);
+                    Ok(self
+                        .fb
+                        .insert_inst(Mload::new(self.module.inst_set(), ptr, *ty), *ty))
+                }
+                SlotRoot::HeapObject(object, ty) => {
+                    let object = self.fb.use_var(*object);
+                    Ok(self
+                        .fb
+                        .insert_inst(ObjLoad::new(self.module.inst_set(), object), *ty))
+                }
             };
         }
         let var = self
@@ -2538,16 +2647,22 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         let result_class = resolved.result_class.clone();
         let mut terminal = match resolved.root_kind {
             ResolvedPlaceRootKind::Slot { local, class } => {
-                match self.slot_roots.get(&local).ok_or_else(|| {
+                match self.slot_roots.get(&local).copied().ok_or_else(|| {
                     LowerError::Internal(format!("missing slot root for {local:?}"))
                 })? {
                     SlotRoot::Ptr(ptr, _) => PlaceTerminal::Ptr {
-                        addr: *ptr,
+                        addr: ptr,
                         space: AddressSpaceKind::Memory,
                         class,
                     },
-                    SlotRoot::Object(value, _) => PlaceTerminal::Object {
-                        value: *value,
+                    SlotRoot::Object(value, _) => PlaceTerminal::Object { value, class },
+                    SlotRoot::HeapPtr(ptr, _) => PlaceTerminal::Ptr {
+                        addr: self.fb.use_var(ptr),
+                        space: AddressSpaceKind::Memory,
+                        class,
+                    },
+                    SlotRoot::HeapObject(value, _) => PlaceTerminal::Object {
+                        value: self.fb.use_var(value),
                         class,
                     },
                 }
@@ -2843,7 +2958,12 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         Ok(match class {
             RuntimeClass::Ref {
                 pointee,
-                kind: RefKind::Object,
+                kind:
+                    RefKind::Object
+                    | RefKind::Provider {
+                        space: AddressSpaceKind::Memory,
+                        ..
+                    },
                 ..
             } => CopySource::Object {
                 value,
@@ -2906,13 +3026,78 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         }
 
         if !matches!(class, RuntimeClass::AggregateValue { .. }) {
-            let value = self.load_copy_source_leaf(&source, class)?;
+            let value = self.repack_copy_source_leaf(source, class)?;
             self.fb
                 .insert_inst_no_result(ObjStore::new(self.module.inst_set(), object, value));
             return Ok(());
         }
 
         self.copy_aggregate_source_into_object(source, class, object)
+    }
+
+    fn repack_copy_source_leaf(
+        &mut self,
+        source: CopySource<'db>,
+        class: &RuntimeClass<'db>,
+    ) -> Result<ValueId, LowerError> {
+        let source_class = self.copy_source_class(&source).clone();
+        if source_class.shares_runtime_carrier_with(self.module.db, class) {
+            return self.load_copy_source_leaf(&source, class);
+        }
+        let (
+            RuntimeClass::Ref {
+                pointee: source_pointee,
+                kind: source_kind,
+                ..
+            },
+            RuntimeClass::Ref {
+                pointee: target_pointee,
+                kind: RefKind::Object,
+                ..
+            },
+        ) = (&source_class, class)
+        else {
+            return Err(LowerError::Internal(format!(
+                "unsupported object-copy leaf repack: source={source_class:?} target={class:?}"
+            )));
+        };
+        if !source_class.can_repack_as(self.module.db, class) {
+            return Err(LowerError::Internal(format!(
+                "incompatible object-copy leaf repack: source={source_class:?} target={class:?}"
+            )));
+        }
+        let source_value = self.load_copy_source_leaf(&source, &source_class)?;
+        let source = match source_kind {
+            RefKind::Const => CopySource::Const {
+                value: source_value,
+                class: source_pointee.as_ref().clone(),
+            },
+            RefKind::Object
+            | RefKind::Provider {
+                space: AddressSpaceKind::Memory,
+                ..
+            } => CopySource::Object {
+                value: source_value,
+                class: source_pointee.as_ref().clone(),
+            },
+            RefKind::Provider { .. } => {
+                return Err(LowerError::Internal(format!(
+                    "cannot materialize a non-memory provider while repacking: source={source_class:?} target={class:?}"
+                )));
+            }
+        };
+        let target_layout = target_pointee.aggregate_layout().ok_or_else(|| {
+            LowerError::Internal(format!(
+                "object-copy leaf target is not aggregate-backed: {class:?}"
+            ))
+        })?;
+        let layout_ty = self.module.ty_for_layout(target_layout)?;
+        let object = self.fb.insert_inst(
+            ObjAlloc::new(self.module.inst_set(), layout_ty),
+            self.fb.module_builder.objref_type(layout_ty),
+        );
+        self.copy_source_into_object(source, target_pointee, object)?;
+        Ok(object)
     }
 
     fn load_copy_source_leaf(
@@ -2994,6 +3179,14 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     "aggregate copy source must retain its source layout".to_string(),
                 )
             })?;
+        if !(RuntimeClass::AggregateValue { layout: src_layout })
+            .can_repack_as(self.module.db, class)
+        {
+            return Err(LowerError::Internal(format!(
+                "aggregate copy source cannot be repacked into target: source={:?} target={class:?}",
+                self.copy_source_class(&source),
+            )));
+        }
         match (
             src_layout.data(self.module.db),
             dst_layout.data(self.module.db),
@@ -3331,7 +3524,28 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             return Ok(Lowered::Terminated);
         };
         match terminal {
-            PlaceTerminal::Object { value, .. } => Ok(Lowered::Value(value)),
+            PlaceTerminal::Object { value, class } => {
+                let Some(dst_class) = dst.and_then(|dst| self.body.value_class(dst)) else {
+                    return Ok(Lowered::Value(value));
+                };
+                if !matches!(
+                    dst_class,
+                    RuntimeClass::RawAddr {
+                        space: AddressSpaceKind::Memory,
+                        ..
+                    }
+                ) {
+                    return Ok(Lowered::Value(value));
+                }
+                let pointee_ty = self.module.ty_for_class(&class)?;
+                let ptr_ty = self.fb.ptr_type(pointee_ty);
+                let ptr = self.fb.insert_inst(
+                    ObjMaterializeHeap::new(self.module.inst_set(), value),
+                    ptr_ty,
+                );
+                let dst_ty = self.module.ty_for_class(dst_class)?;
+                Ok(Lowered::Value(self.coerce_value_to_ty(ptr, dst_ty)?))
+            }
             PlaceTerminal::Const { value, .. } => {
                 if let Some(dst) = dst
                     && matches!(
@@ -3864,13 +4078,22 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
     fn extract_aggregate_field(
         &mut self,
         value: ValueId,
-        idx: usize,
+        index: usize,
         class: &RuntimeClass<'db>,
     ) -> Result<ValueId, LowerError> {
-        let idx = self.index_value(idx as u64);
+        let index = self.index_value(index as u64);
+        self.extract_aggregate_index(value, index, class)
+    }
+
+    fn extract_aggregate_index(
+        &mut self,
+        value: ValueId,
+        index: ValueId,
+        class: &RuntimeClass<'db>,
+    ) -> Result<ValueId, LowerError> {
         self.fb
             .insert_inst(
-                sonatina_ir::inst::data::ExtractValue::new(self.module.inst_set(), value, idx),
+                sonatina_ir::inst::data::ExtractValue::new(self.module.inst_set(), value, index),
                 self.module.ty_for_class(class)?,
             )
             .pipe(Ok)

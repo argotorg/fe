@@ -258,6 +258,8 @@ pub enum SyntaxKind {
     // Expressions. These are non-leaf nodes.
     /// { statement-list }
     BlockExpr,
+    /// `|x: u8| -> u8 { x }`
+    ClosureExpr,
     /// `x + 1`
     BinExpr,
     /// `!x`
@@ -680,6 +682,7 @@ impl SyntaxKind {
             SyntaxKind::RecordFieldDef => "field",
             SyntaxKind::IndexExpr => "index expression",
             SyntaxKind::BlockExpr => "block",
+            SyntaxKind::ClosureExpr => "closure expression",
             SyntaxKind::TypeBound => "type bound",
             SyntaxKind::CallArgList => "function call arguments",
 

@@ -1,0 +1,18 @@
+struct Store {
+    value: u256,
+}
+
+struct Esc {
+    handle: mut u256,
+}
+
+fn consume(_ value: Esc) {}
+
+pub contract NoEscStorageAggregateArg {
+    mut store: Store
+
+    init() uses (mut store) {
+        let value = Esc { handle: mut store.value }
+        consume(value)
+    }
+}

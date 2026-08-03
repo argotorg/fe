@@ -1,0 +1,18 @@
+use core::functional::Fn
+use core::effect_ref::MemPtr
+
+fn capture_target() uses (target: mut u256) {
+    let handle = mut target
+    let f = |_ unit: own ()| -> () {
+        let captured = handle
+        captured = 7
+    }
+    f.call(())
+}
+
+pub fn closure_memory_provider_handle_capture() {
+    let ptr: MemPtr<u256> = MemPtr::from_raw(0)
+    with (ptr) {
+        capture_target()
+    }
+}

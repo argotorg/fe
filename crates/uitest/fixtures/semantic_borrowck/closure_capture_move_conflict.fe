@@ -1,0 +1,9 @@
+struct Boxed {
+    value: u256,
+}
+
+pub fn move_after_capture(boxed: own Boxed) -> u256 {
+    let f = |value: own u256| -> u256 { value + boxed.value }
+    let after_capture = boxed
+    f.call(after_capture.value)
+}

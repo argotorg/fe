@@ -17,9 +17,11 @@ func private %bump(v0.@layout_0) -> @layout_0 {
 
     block1:
         v5.objref<i256> = obj.proj v1 0.i256;
-        v7.i256 = obj.load v5;
-        (v8.i256, v9.i1) = uaddo v7 1.i256;
-        br v9 block2 block3;
+        v6.*i256 = obj.materialize.heap v5;
+        v7.i256 = ptr_to_int v6 i256;
+        v9.i256 = mload v7 i256;
+        (v10.i256, v11.i1) = uaddo v9 1.i256;
+        br v11 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -27,9 +29,9 @@ func private %bump(v0.@layout_0) -> @layout_0 {
         evm_revert 0.i256 36.i256;
 
     block3:
-        obj.store v5 v8;
-        v15.@layout_0 = obj.load v1;
-        return v15;
+        mstore v7 v10 i256;
+        v17.@layout_0 = obj.load v1;
+        return v17;
 }
 
 func private %main() -> i256 {

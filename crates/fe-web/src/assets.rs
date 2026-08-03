@@ -326,13 +326,13 @@ mod tests {
 
     #[test]
     fn styles_css_is_nonempty() {
-        assert!(!STYLES_CSS.is_empty());
+        assert!(!std::hint::black_box(STYLES_CSS).is_empty());
         assert!(STYLES_CSS.contains(":root"));
     }
 
     #[test]
     fn fe_web_js_is_nonempty() {
-        assert!(!FE_WEB_JS.is_empty());
+        assert!(!std::hint::black_box(FE_WEB_JS).is_empty());
         assert!(FE_WEB_JS.contains("render"));
     }
 

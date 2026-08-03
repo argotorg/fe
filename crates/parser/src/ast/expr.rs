@@ -8,6 +8,7 @@ ast_node! {
     /// Use [`Self::kind`] to determine the type of expression.
     pub struct Expr,
     SK::BlockExpr
+    | SK::ClosureExpr
     | SK::BinExpr
     | SK::UnExpr
     | SK::CastExpr
@@ -36,6 +37,7 @@ impl Expr {
     pub fn kind(&self) -> ExprKind {
         match self.syntax().kind() {
             SK::BlockExpr => ExprKind::Block(AstNode::cast(self.syntax().clone()).unwrap()),
+            SK::ClosureExpr => ExprKind::Closure(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::BinExpr => ExprKind::Bin(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::UnExpr => ExprKind::Un(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::CastExpr => ExprKind::Cast(AstNode::cast(self.syntax().clone()).unwrap()),
@@ -81,6 +83,33 @@ impl BlockExpr {
     /// Returns items declared in the block.
     pub fn items(&self) -> impl Iterator<Item = super::Item> {
         support::children(self.syntax())
+    }
+}
+
+ast_node! {
+    /// `|arg: Type| -> Type expr`
+    pub struct ClosureExpr,
+    SK::ClosureExpr
+}
+impl ClosureExpr {
+    /// Returns the parameter list.
+    pub fn params(&self) -> Option<super::FuncParamList> {
+        support::child(self.syntax())
+    }
+
+    /// Returns the return type.
+    pub fn ret_ty(&self) -> Option<super::Type> {
+        support::child(self.syntax())
+    }
+
+    /// Returns the body.
+    pub fn body(&self) -> Option<Expr> {
+        support::child(self.syntax())
+    }
+
+    /// Returns the `||` token for an empty parameter list.
+    pub fn empty_params_token(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::Pipe2)
     }
 }
 
@@ -498,6 +527,7 @@ pub enum ExprKind {
     Lit(LitExpr),
     Let(LetExpr),
     Block(BlockExpr),
+    Closure(ClosureExpr),
     Bin(BinExpr),
     Un(UnExpr),
     Cast(CastExpr),

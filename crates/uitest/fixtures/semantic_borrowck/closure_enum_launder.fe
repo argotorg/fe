@@ -1,0 +1,17 @@
+use core::option::Option
+
+pub fn closure_enum_launder() {
+    let mut x: u256 = 0
+    let m = mut x
+    let f = |_ unit: own ()| -> () {
+        let mm = m
+        mm = 1
+    }
+    let wrapped = Option::Some(f)
+    let other = mut x
+    match wrapped {
+        Option::Some(g) => g.call(()),
+        Option::None => (),
+    }
+    other = 2
+}

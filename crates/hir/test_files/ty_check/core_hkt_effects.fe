@@ -1,17 +1,30 @@
 use core::option::Option::{self, Some, None}
 use core::result::Result::{self, Ok, Err}
-use core::functional::{Fn, Functor, Applicative, Monad}
+use core::functional::{Fn, FnOnce, Functor, Applicative, Monad}
 
 struct AddOne {}
-impl Fn<i32, i32> for AddOne {
-    fn call(self, _ value: own i32) -> i32 {
-        value + 1
+impl FnOnce<(i32,), i32> for AddOne {
+    fn call_once(self: own Self, _ args: own (i32,)) -> i32 {
+        self.call(args.0)
+    }
+}
+
+impl Fn<(i32,), i32> for AddOne {
+    fn call(self, _ args: own (i32,)) -> i32 {
+        args.0 + 1
     }
 }
 
 struct ToPositive {}
-impl Fn<i32, Option<i32>> for ToPositive {
-    fn call(self, _ value: own i32) -> Option<i32> {
+impl FnOnce<(i32,), Option<i32>> for ToPositive {
+    fn call_once(self: own Self, _ args: own (i32,)) -> Option<i32> {
+        self.call(args.0)
+    }
+}
+
+impl Fn<(i32,), Option<i32>> for ToPositive {
+    fn call(self, _ args: own (i32,)) -> Option<i32> {
+        let value = args.0
         if value > 0 {
             Some(value)
         } else {
@@ -21,8 +34,15 @@ impl Fn<i32, Option<i32>> for ToPositive {
 }
 
 struct ToEvenResult {}
-impl Fn<i32, Result<(), i32>> for ToEvenResult {
-    fn call(self, _ value: own i32) -> Result<(), i32> {
+impl FnOnce<(i32,), Result<(), i32>> for ToEvenResult {
+    fn call_once(self: own Self, _ args: own (i32,)) -> Result<(), i32> {
+        self.call(args.0)
+    }
+}
+
+impl Fn<(i32,), Result<(), i32>> for ToEvenResult {
+    fn call(self, _ args: own (i32,)) -> Result<(), i32> {
+        let value = args.0
         if value % 2 == 0 {
             Ok(value)
         } else {
@@ -74,7 +94,7 @@ pub fn log_and_chain(x: i32) -> Result<(), Option<i32>>
 
 pub fn with_logger<R, L: Logger, F: Fn<(), R>>(logger: own L, _ func: F) -> R {
     with (Logger = logger) {
-        func.call(())
+        func.call()
     }
 }
 
@@ -85,6 +105,12 @@ pub fn log_once()
 }
 
 struct RunWithLogger {}
+impl FnOnce<(), Result<(), Option<i32>>> for RunWithLogger {
+    fn call_once(self: own Self, _ unit: own ()) -> Result<(), Option<i32>> {
+        self.call()
+    }
+}
+
 impl Fn<(), Result<(), Option<i32>>> for RunWithLogger {
     fn call(self, _ unit: own ()) -> Result<(), Option<i32>> {
         with (Logger = ConsoleLogger {}) {

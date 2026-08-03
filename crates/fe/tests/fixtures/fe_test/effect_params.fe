@@ -9,6 +9,19 @@ fn bump_non_evm_effect_param() -> u256 uses (value: mut u256) {
     value
 }
 
+fn refined_provider_join() -> u256 uses (x: mut u256, y: mut u256) {
+    let known = true
+    let selected = if known { mut x } else { mut y }
+    selected = 9
+    x * 100 + y
+}
+
+fn dynamic_provider_join(select_x: bool) -> u256 uses (x: mut u256, y: mut u256) {
+    let selected = if select_x { mut x } else { mut y }
+    selected = 9
+    x * 100 + y
+}
+
 #[test]
 fn test_multiple_effect_params() {
     let mut x: u256 = 0
@@ -26,4 +39,28 @@ fn test_non_evm_effect_param() {
         bump_non_evm_effect_param()
     }
     assert!(updated == 1)
+}
+
+#[test]
+fn provider_join_uses_only_executable_sources() {
+    let mut x: u256 = 1
+    let mut y: u256 = 2
+    let refined = with (x, y) {
+        refined_provider_join()
+    }
+    assert!(refined == 902, "refined provider join")
+
+    x = 1
+    y = 2
+    let selected_x = with (x, y) {
+        dynamic_provider_join(select_x: true)
+    }
+    assert!(selected_x == 902, "dynamic provider join x")
+
+    x = 1
+    y = 2
+    let selected_y = with (x, y) {
+        dynamic_provider_join(select_x: false)
+    }
+    assert!(selected_y == 109, "dynamic provider join y")
 }

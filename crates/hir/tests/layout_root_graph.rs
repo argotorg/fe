@@ -15,7 +15,7 @@ use fe_hir::{
             LayoutEvidencePathStep, ProviderAddressSpace,
             const_ty::CallableInputLayoutHoleOrigin,
             ty_check::{
-                BodyOwner, ReturnProjectionStep, ReturnProvenance, ReturnSource,
+                BodyOwner, ReturnProjectionStep, ReturnProvenance, ReturnSource, TypedCallableBody,
                 check_contract_init_body, check_func_body,
             },
             ty_def::TyId,
@@ -32,10 +32,18 @@ use fe_hir::{
         LayoutBindingTarget, LayoutInvariantError, LayoutProjection, LayoutRootFamilyId,
         LayoutViewKind, PlaceStep, RootRole, StoragePlace, validate_allocated_contract_layout,
     },
-    hir_def::{CallableDef, Contract, Expr, IdentId, ItemKind, Partial},
+    hir_def::{CallableDef, Contract, Expr, Func, IdentId, ItemKind, Partial},
     test_db::{HirAnalysisTestDb, find_contract, format_diagnostics},
 };
 use layout_test_support::{parse_module, parse_ok};
+
+fn checked_callable_body<'db>(
+    db: &'db HirAnalysisTestDb,
+    func: Func<'db>,
+) -> TypedCallableBody<'db> {
+    let (_, typed_body) = check_func_body(db, func);
+    TypedCallableBody::new(BodyOwner::Func(func), typed_body)
+}
 
 fn field<'db>(
     db: &'db HirAnalysisTestDb,
@@ -1678,7 +1686,7 @@ fn non_slot_default_holes_do_not_enter_the_layout_evidence_abi() {
         r#"
 struct Ordinary<const VALUE: u8 = _> {}
 
-fn pass<const VALUE: u8>(value: Ordinary<VALUE>) -> Ordinary<VALUE> {
+fn pass<const VALUE: u8>(value: own Ordinary<VALUE>) -> Ordinary<VALUE> {
     value
 }
 "#,
@@ -3235,10 +3243,10 @@ fn unwrap<const ROOT: u256>(
             _ => None,
         })
         .expect("missing unwrap function");
-    let typed_body = &check_func_body(&db, func).1;
+    let callable_body = checked_callable_body(&db, func);
 
     assert_eq!(
-        typed_body.return_provenance(&db),
+        callable_body.return_provenance(&db),
         ReturnProvenance::Forwarded(vec![ReturnSource {
             result_projection: Vec::new(),
             origin: CallableInputLayoutHoleOrigin::ValueParam(0),
@@ -3288,7 +3296,7 @@ fn maybe_map<const ROOT: u256>(
             _ => None,
         })
         .expect("missing maybe_map function");
-    let typed_body = &check_func_body(&db, func).1;
+    let callable_body = checked_callable_body(&db, func);
     let expected = vec![
         ReturnSource {
             result_projection: Vec::new(),
@@ -3306,11 +3314,11 @@ fn maybe_map<const ROOT: u256>(
     ];
 
     assert_eq!(
-        typed_body.return_provenance(&db),
+        callable_body.return_provenance(&db),
         ReturnProvenance::Forwarded(expected.clone()),
         "the empty variant still carries the callable's type-level ROOT identity",
     );
-    assert_eq!(typed_body.forwarded_return_sources(&db), expected);
+    assert_eq!(callable_body.forwarded_return_sources(&db), expected);
 }
 
 #[test]
@@ -3343,11 +3351,14 @@ impl<T> Holder<T> {
                 .is_some_and(|name| name.data(&db) == "maybe_value")
         })
         .expect("missing Holder::maybe_value function");
-    let typed_body = &check_func_body(&db, func).1;
+    let callable_body = checked_callable_body(&db, func);
 
-    assert_eq!(typed_body.return_provenance(&db), ReturnProvenance::Fresh);
     assert_eq!(
-        typed_body.forwarded_return_sources(&db),
+        callable_body.return_provenance(&db),
+        ReturnProvenance::Fresh
+    );
+    assert_eq!(
+        callable_body.forwarded_return_sources(&db),
         [ReturnSource {
             result_projection: vec![ReturnProjectionStep::VariantField {
                 variant: 0,
@@ -3958,7 +3969,7 @@ fn consume_independent<const FIRST: u256, const SECOND: u256>(
         .expect("missing rebuild function");
 
     assert_eq!(
-        check_func_body(&db, rebuild).1.return_provenance(&db),
+        checked_callable_body(&db, rebuild).return_provenance(&db),
         ReturnProvenance::Forwarded(vec![ReturnSource {
             result_projection: Vec::new(),
             origin: CallableInputLayoutHoleOrigin::ValueParam(0),

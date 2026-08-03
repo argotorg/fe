@@ -1,0 +1,10 @@
+struct Boxed {
+    value: u256,
+}
+
+pub fn const_folded_move_conflict() -> u256 {
+    let original = Boxed { value: 21 }
+    let first = original
+    let second = original
+    first.value + second.value
+}

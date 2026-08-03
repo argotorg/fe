@@ -1,0 +1,110 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/closure_inference_errors.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ closure_inference_errors.fe:14:5
+   │
+ 3 │ fn expects_own<F: Fn<(u256,), u256>>(_ func: F) {}
+   │                   ----------------- required by this bound on `expects_own`
+   ·
+14 │     expects_own(|value| value)
+   │     ^^^^^^^^^^^ `|view u256| -> u256` doesn't implement `Fn<(u256,), u256>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ closure_inference_errors.fe:15:5
+   │
+ 5 │ fn expects_view<F: Fn<(view u256,), u256>>(_ func: F) {}
+   │                    ---------------------- required by this bound on `expects_view`
+   ·
+15 │     expects_view(|value: own| value)
+   │     ^^^^^^^^^^^^ `|own u256| -> u256` doesn't implement `Fn<(u256,), u256>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ closure_inference_errors.fe:21:5
+   │
+ 5 │ fn expects_view<F: Fn<(view u256,), u256>>(_ func: F) {}
+   │                    ---------------------- required by this bound on `expects_view`
+   ·
+21 │     expects_view(owned)
+   │     ^^^^^^^^^^^^ `|own u256| -> u256` doesn't implement `Fn<(u256,), u256>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ closure_inference_errors.fe:25:5
+   │
+ 3 │ fn expects_own<F: Fn<(u256,), u256>>(_ func: F) {}
+   │                   ----------------- required by this bound on `expects_own`
+   ·
+25 │     expects_own(view)
+   │     ^^^^^^^^^^^ `|view u256| -> u256` doesn't implement `Fn<(u256,), u256>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ closure_inference_errors.fe:29:5
+   │
+ 7 │ fn expects_two<F: Fn<(view u256, view u256), u256>>(_ func: F) {}
+   │                   -------------------------------- required by this bound on `expects_two`
+   ·
+29 │     expects_two(|value| value)
+   │     ^^^^^^^^^^^ `|view u256| -> u256` doesn't implement `Fn<(u256, u256), u256>`
+
+error[8-0000]: type mismatch
+   ┌─ closure_inference_errors.fe:39:14
+   │
+39 │     identity(true)
+   │              ^^^^ expected `u256`, but `bool` is given
+
+error[8-0031]: type annotation is needed
+   ┌─ closure_inference_errors.fe:33:9
+   │
+33 │     let identity = |value: own| value
+   │         ^^^^^^^^
+   │         │
+   │         type annotation is needed
+   │         consider giving `: |own _| -> _` here
+
+error[8-0092]: closure parameter number mismatch
+   ┌─ closure_inference_errors.fe:29:17
+   │
+29 │     expects_two(|value| value)
+   │                 ^^^^^^^ this context expects 2 closure parameters, but 1 given
+
+error[8-0093]: `Fn` arguments must be a tuple
+   ┌─ closure_inference_errors.fe:10:9
+   │
+10 │     func(1)
+   │         ^^^ the callable uses `u256` as its argument pack
+   │
+   = use `()` for zero parameters, `(T,)` for one parameter, or `(T, U, ...)` for multiple parameters
+
+error[8-0094]: closure parameter ownership mode mismatch
+   ┌─ closure_inference_errors.fe:14:18
+   │
+14 │     expects_own(|value| value)
+   │                  ^^^^^ this context requires `own`, but the closure declares `view`
+   │
+   = closure parameter ownership modes are explicit and are never inferred or coerced
+
+error[8-0094]: closure parameter ownership mode mismatch
+   ┌─ closure_inference_errors.fe:15:19
+   │
+15 │     expects_view(|value: own| value)
+   │                   ^^^^^^^^^^ this context requires `view`, but the closure declares `own`
+   │
+   = closure parameter ownership modes are explicit and are never inferred or coerced
+
+error[8-0094]: closure parameter ownership mode mismatch
+   ┌─ closure_inference_errors.fe:19:18
+   │
+19 │     let owned = |value: own| value
+   │                  ^^^^^^^^^^ this context requires `view`, but the closure declares `own`
+   │
+   = closure parameter ownership modes are explicit and are never inferred or coerced
+
+error[8-0094]: closure parameter ownership mode mismatch
+   ┌─ closure_inference_errors.fe:23:17
+   │
+23 │     let view = |value| value
+   │                 ^^^^^ this context requires `own`, but the closure declares `view`
+   │
+   = closure parameter ownership modes are explicit and are never inferred or coerced

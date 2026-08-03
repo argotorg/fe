@@ -1,0 +1,17 @@
+struct Holder<T> {
+    value: T,
+}
+
+pub fn closure_struct_extract_launder() {
+    let mut x: u256 = 0
+    let m = mut x
+    let f = |_ unit: own ()| -> () {
+        let mm = m
+        mm = 1
+    }
+    let holder = Holder { value: f }
+    let g = holder.value
+    let other = mut x
+    g.call(())
+    other = 2
+}

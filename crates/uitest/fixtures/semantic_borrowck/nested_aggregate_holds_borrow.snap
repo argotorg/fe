@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/nested_aggregate_holds_borrow.fe
+---
+error[16-0001]: borrow conflict in `fn nested_holds`
+   ┌─ nested_aggregate_holds_borrow.fe:14:13
+   │
+12 │     let i = Inner { h: mut x }
+   │                        ----- borrow created here
+13 │     let o = Outer { inner: i, tag: 0 }
+14 │     let r = ref x
+   │             ^^^^^ cannot immutably borrow this place while a mutable borrow is active

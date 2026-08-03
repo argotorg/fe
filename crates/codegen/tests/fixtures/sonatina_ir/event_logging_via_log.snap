@@ -67,7 +67,7 @@ func inline(always) private %emit__gcd5c(v0.@layout_2) {
         return;
 }
 
-func private %emit__g4f95(v0.@layout_2) {
+func inline(always) private %emit__g4f95(v0.@layout_2) {
     block0:
         jump block1;
 

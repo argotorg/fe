@@ -1,0 +1,48 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/exprs/closure.fe
+---
+Root@0..44
+  ClosureExpr@0..43
+    FuncParamList@0..17
+      Pipe@0..1 "|"
+      FnParam@1..16
+        Ident@1..6 "value"
+        Colon@6..7 ":"
+        WhiteSpace@7..8 " "
+        ModeType@8..16
+          OwnKw@8..11 "own"
+          WhiteSpace@11..12 " "
+          PathType@12..16
+            Path@12..16
+              PathSegment@12..16
+                Ident@12..16 "u256"
+      Pipe@16..17 "|"
+    WhiteSpace@17..18 " "
+    Arrow@18..20 "->"
+    WhiteSpace@20..21 " "
+    PathType@21..25
+      Path@21..25
+        PathSegment@21..25
+          Ident@21..25 "u256"
+    WhiteSpace@25..26 " "
+    BlockExpr@26..43
+      LBrace@26..27 "{"
+      Newline@27..28 "\n"
+      WhiteSpace@28..32 "    "
+      ExprStmt@32..41
+        BinExpr@32..41
+          PathExpr@32..37
+            Path@32..37
+              PathSegment@32..37
+                Ident@32..37 "value"
+          WhiteSpace@37..38 " "
+          Plus@38..39 "+"
+          WhiteSpace@39..40 " "
+          LitExpr@40..41
+            Lit@40..41
+              Int@40..41 "1"
+      Newline@41..42 "\n"
+      RBrace@42..43 "}"
+  Newline@43..44 "\n"

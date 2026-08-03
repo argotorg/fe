@@ -1338,6 +1338,24 @@ pub fn walk_expr<'db, V>(
             }
         }
 
+        Expr::Closure {
+            params,
+            ret_ty,
+            body,
+        } => {
+            ctxt.with_new_ctxt(
+                |span| span.into_closure_expr().params(),
+                |ctxt| visitor.visit_func_param_list(ctxt, *params),
+            );
+            if let Some(ret_ty) = ret_ty {
+                ctxt.with_new_ctxt(
+                    |span| span.into_closure_expr().ret_ty(),
+                    |ctxt| visitor.visit_ty(ctxt, *ret_ty),
+                );
+            }
+            visit_node_in_body!(visitor, ctxt, body, expr);
+        }
+
         Expr::Bin(lhs_id, rhs_id, _) => {
             visit_node_in_body!(visitor, ctxt, lhs_id, expr);
             visit_node_in_body!(visitor, ctxt, rhs_id, expr);

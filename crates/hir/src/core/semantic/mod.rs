@@ -20,6 +20,7 @@
 //!   `item.rs` and replace call sites by adding only the minimal semantic
 //!   method(s) here.
 
+pub mod callable;
 pub mod index;
 pub mod reference;
 mod storage_layout;
@@ -34,6 +35,10 @@ use crate::analysis::ty::ty_error::collect_hir_ty_diags;
 use crate::hir_def::params::KindBound as HirKindBound;
 use crate::hir_def::scope_graph::ScopeId;
 use crate::{HirDb, SpannedHirDb};
+pub use callable::{
+    LogicalCallableCapability, LogicalCallableParam, LogicalCallableParamMode,
+    LogicalCallableSignature, LogicalCallableTarget, applicable_callable_impls,
+};
 pub use reference::{
     FieldAccessView, HasReferences, MethodCallView, PathView, ReferenceView, Target, UsePathView,
 };
@@ -625,6 +630,7 @@ fn lower_self_fallback_param_ty<'db>(
                 TypeMode::Mut => TyId::borrow_mut_of(db, inner),
                 TypeMode::Ref => TyId::borrow_ref_of(db, inner),
                 TypeMode::Own => inner,
+                TypeMode::View => TyId::view_of(db, inner),
             }
         }
         _ => lower_hir_ty(db, hir_ty, func.scope(), assumptions),
@@ -900,12 +906,16 @@ pub enum CallSiteKind<'db> {
 impl<'db> CallSiteView<'db> {
     /// Resolve the callee of this call site via type checking.
     pub fn target(&self, db: &'db dyn HirAnalysisDb) -> Option<CallableDef<'db>> {
-        use crate::analysis::ty::ty_check::check_func_body;
-        let func = self.body.containing_func(db)?;
-        let (_, typed_body) = check_func_body(db, func);
-        typed_body
+        self.body
+            .typed_body(db)?
             .callable_expr(self.expr_id)
-            .map(|c| c.callable_def)
+            .map(|callable| callable.callable_def())
+    }
+
+    /// Resolve the source-level target, hiding the internal `Fn`/`FnOnce`
+    /// dispatch method for concrete closures.
+    pub fn logical_target(&self, db: &'db dyn HirAnalysisDb) -> Option<LogicalCallableTarget<'db>> {
+        LogicalCallableSignature::for_call_site(db, self).map(|signature| signature.target)
     }
 
     /// Span of the callee name at the call site (function path or method name).
@@ -4145,7 +4155,7 @@ impl<'db> ImplTrait<'db> {
         Self::impl_trait_local_nominal_root(db, impl_trait).is_some_and(|root| match root {
             TyBase::Adt(adt) => adt.ingot(db) == impl_trait_ingot,
             TyBase::Contract(contract) => contract.top_mod(db).ingot(db) == impl_trait_ingot,
-            TyBase::Prim(_) | TyBase::Func(_) => false,
+            TyBase::Prim(_) | TyBase::Func(_) | TyBase::Closure(_) => false,
         })
     }
 

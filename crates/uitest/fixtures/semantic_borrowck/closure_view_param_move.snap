@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/closure_view_param_move.fe
+---
+error[16-0002]: move conflict in `fn <closure>`
+   ┌─ closure_view_param_move.fe:12:17
+   │
+12 │         let p = w.p
+   │                 ^^^ cannot move out of a view parameter

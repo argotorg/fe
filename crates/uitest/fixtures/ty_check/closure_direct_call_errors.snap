@@ -1,0 +1,58 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/closure_direct_call_errors.fe
+---
+error[2-0010]: no method named `function` found for struct `Holder<|own u256, own u256| -> u256>`
+   ┌─ closure_direct_call_errors.fe:33:12
+   │
+33 │     holder.function(20, 22)
+   │            ^^^^^^^^ field `function` in `Holder<|own u256, own u256| -> u256>` has type `|own u256, own u256| -> u256`
+   │
+   = to call the value stored in this field, parenthesize the field access: `(holder.function)(...)`
+
+error[2-0010]: no method named `function` found for struct `Holder<F>`
+   ┌─ closure_direct_call_errors.fe:37:12
+   │
+37 │     holder.function()
+   │            ^^^^^^^^ field `function` in `Holder<F>` has type `F`
+   │
+   = to call the value stored in this field, parenthesize the field access: `(holder.function)()`
+
+error[2-0010]: no method named `value` found for struct `ValueHolder`
+   ┌─ closure_direct_call_errors.fe:42:12
+   │
+42 │     holder.value()
+   │            ^^^^^ field `value` in `ValueHolder` has type `u256`
+
+error[8-0000]: type mismatch
+   ┌─ closure_direct_call_errors.fe:51:15
+   │
+51 │     increment(false)
+   │               ^^^^^ expected `u256`, but `bool` is given
+
+error[8-0021]: expected function, found `OnlyMethod`
+   ┌─ closure_direct_call_errors.fe:46:5
+   │
+46 │     OnlyMethod {}(42)
+   │     ^^^^^^^^^^^^^ call expression requires function; `OnlyMethod` is not callable
+
+error[8-0023]: closure argument number mismatch
+   ┌─ closure_direct_call_errors.fe:21:8
+   │
+20 │     let add = |left: own u256, right: own u256| -> u256 { left + right }
+   │               ---------------------------------------------------------- closure defined here
+21 │     add(42)
+   │        ^^^^ expected 2 arguments, but 1 given
+   │
+   = closure signature is `|own u256, own u256| -> u256`
+
+error[8-0023]: closure argument number mismatch
+   ┌─ closure_direct_call_errors.fe:26:11
+   │
+25 │     let answer = || -> u256 { 42 }
+   │                  ----------------- closure defined here
+26 │     answer(1)
+   │           ^^^ expected 0 arguments, but 1 given
+   │
+   = closure signature is `|| -> u256`

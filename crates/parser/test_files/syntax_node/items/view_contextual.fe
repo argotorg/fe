@@ -1,0 +1,45 @@
+struct view {}
+
+fn ordinary(value: view) {}
+
+fn explicit_mode(value: view view) {}
+
+fn qualified_mode<T: Trait>(value: view <T as Trait>::Item) {}
+
+fn qualified_mode_with_comment<T: Trait>(
+    value: view <T // > inside trivia
+        as Trait>::Item,
+) {}
+
+fn qualified_mode_with_boundary_comments<T: Trait>(
+    value: view // before the qualified type
+        <T // inside the qualified type
+        as Trait>::Item, // after the completed qualified type
+) {}
+
+fn qualified_mode_with_string<T: Trait>(
+    value: view <Holder<" > as "> as Trait>::Item,
+) {}
+
+fn qualified_mode_with_const_comparison<T: Trait>(
+    value: view <Holder<{ 2 > 1 }> as Trait>::Item,
+) {}
+
+fn closure_modes() {
+    let inferred_mode = |value: view| value
+    let explicit_mode = |value: view view| value
+    let generic_type = |value: view<u256>| value
+    let qualified_type = |value: view::Nested| value
+    let qualified_mode_with_comment =
+        |value: view <T // > inside trivia
+            as Trait>::Item| value
+    let qualified_mode_with_boundary_comments =
+        |value: view // before the qualified type
+            <T // inside the qualified type
+            as Trait>::Item, // after the completed qualified type
+        | value
+    let qualified_mode_with_string =
+        |value: view <Holder<" > as "> as Trait>::Item| value
+    let qualified_mode_with_const_comparison =
+        |value: view <Holder<{ 2 > 1 }> as Trait>::Item| value
+}

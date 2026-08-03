@@ -888,38 +888,35 @@ impl<'db> ImplTrait<'db> {
                 .ty_binder(db)
                 .map(|binder| binder.instantiate(db, inst.args(db)));
             let evaluated = const_ty.evaluate(db, declared_ty);
-            if matches!(evaluated.data(db), ConstTyData::Evaluated(..)) {
-                continue;
-            }
-            if evaluated.ty(db).has_invalid(db) {
+            let recursive = if evaluated.ty(db).has_invalid(db) {
                 // Other invalid causes are reported by the body/header
                 // checks; recursion surfacing as an eval error is this
                 // diagnostic's job.
-                if !matches!(
+                matches!(
                     evaluated.ty(db).invalid_cause(db),
                     Some(ty::ty_def::InvalidCause::ConstEvalRecursiveConst { .. })
-                ) {
-                    continue;
-                }
+                )
+            } else if matches!(evaluated.data(db), ConstTyData::Evaluated(..)) {
+                false
             } else {
-                // A non-evaluated, non-invalid result is only recursion when
-                // the const-ref resolution chain actually loops back to this
-                // body. Anything else — generic-impl deferral, ambiguous or
-                // otherwise erroneous references — is the body checks' job.
-                let ConstTyData::UnEvaluated {
-                    body: start_body,
-                    ty: Some(start_ty),
-                    generic_args: start_args,
-                    ..
-                } = const_ty.data(db)
-                else {
-                    continue;
-                };
-                if start_ty.has_invalid(db)
-                    || !const_body_resolution_reenters(db, *start_body, *start_ty, start_args)
-                {
-                    continue;
+                // A valid unevaluated result is ordinary generic deferral
+                // unless its selected const-reference graph loops. Evaluation
+                // runs first so statically dead recursive references do not
+                // create a false definition-site diagnostic.
+                match const_ty.data(db) {
+                    ConstTyData::UnEvaluated {
+                        body: start_body,
+                        ty: Some(start_ty),
+                        generic_args: start_args,
+                        ..
+                    } if !start_ty.has_invalid(db) => {
+                        const_body_resolution_reenters(db, *start_body, *start_ty, start_args)
+                    }
+                    _ => false,
                 }
+            };
+            if !recursive {
+                continue;
             }
             let primary = match self.const_(db, name) {
                 Some(impl_const) => impl_const.span().name().into(),

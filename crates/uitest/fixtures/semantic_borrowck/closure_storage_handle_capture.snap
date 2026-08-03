@@ -1,0 +1,14 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/closure_storage_handle_capture.fe
+---
+error[16-0005]: noesc violation in `fn ClosureStorageCapture::__init__`
+   ┌─ closure_storage_handle_capture.fe:12:17
+   │
+12 │           let f = |_ unit: own ()| -> () {
+   │ ╭─────────────────^
+13 │ │             let captured = handle
+14 │ │             captured = 7
+15 │ │         }
+   │ ╰─────────^ cannot capture `mut u256` from storage in closure

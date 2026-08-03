@@ -22,7 +22,7 @@ func private %main() -> @layout_0 {
         jump block1;
 
     block1:
-        v0.@layout_0 = call %standalone_caller__caller__who_called__gcd5c_a9cd;
+        v0.@layout_0 = call %standalone_caller__caller__who_called__gcd5c_d637;
         return v0;
 }
 
@@ -44,7 +44,7 @@ func private %standalone_caller__caller__who_called__gcd5c_4c8a() -> @layout_0 {
         return v0;
 }
 
-func private %standalone_caller__caller__who_called__gcd5c_a9cd() -> @layout_0 {
+func private %standalone_caller__caller__who_called__gcd5c_d637() -> @layout_0 {
     block0:
         jump block1;
 

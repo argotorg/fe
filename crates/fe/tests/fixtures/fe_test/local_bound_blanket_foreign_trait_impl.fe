@@ -10,7 +10,7 @@ impl Copy for W {}
 impl Marker for W {}
 
 impl<T: Marker> WrappingAdd for T {
-    fn wrapping_add(self, _ other: T) -> Self {
+    fn wrapping_add(own self, _ other: own T) -> Self {
         self
     }
 }

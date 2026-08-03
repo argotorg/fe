@@ -186,6 +186,109 @@ fn trigger() {
     );
 }
 
+#[test]
+fn test_cli_test_uninitialized_reads_report_before_backend_codegen() {
+    let temp = tempdir().expect("tempdir");
+    let file = temp.path().join("uninitialized_reads.fe");
+    fs::write(
+        &file,
+        r#"
+use core::functional::Fn
+
+#[test]
+fn direct() {
+    let mut direct_value: u256
+    assert(direct_value == 0)
+}
+
+#[test]
+fn captured() {
+    let mut captured_value: u256
+    let read = || captured_value
+    captured_value = 42
+    assert(read.call() == 42)
+}
+"#,
+    )
+    .expect("write fixture");
+
+    let (output, exit_code) = run_fe_main(&[
+        "test",
+        "--jobs",
+        "1",
+        file.to_str().expect("fixture path utf8"),
+    ]);
+    assert_eq!(exit_code, 1, "expected analysis failure:\n{output}");
+    assert!(
+        output.contains("local `direct_value` may be used before it is initialized")
+            && output.contains("local `captured_value` may be used before it is initialized"),
+        "expected direct and captured definite-initialization diagnostics:\n{output}"
+    );
+    assert!(
+        !output.contains("backend panicked")
+            && !output.contains("panicked at")
+            && !output.contains("variable is undefined"),
+        "definite-initialization diagnostics must stop compilation before backend codegen:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_test_rejects_noncopy_array_seq_directly_and_in_a_closure() {
+    let temp = tempdir().expect("tempdir");
+    let file = temp.path().join("noncopy_array_seq.fe");
+    fs::write(
+        &file,
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+#[test]
+fn direct() {
+    let boxes = [
+        Boxed { value: 20 },
+        Boxed { value: 22 },
+    ]
+    for boxed in boxes {}
+}
+
+#[test]
+fn closure() {
+    let boxes = [
+        Boxed { value: 20 },
+        Boxed { value: 22 },
+    ]
+    let consume = || {
+        for boxed in boxes {}
+    }
+    consume.call_once()
+}
+"#,
+    )
+    .expect("write fixture");
+
+    let (output, exit_code) = run_fe_main(&[
+        "test",
+        "--jobs",
+        "1",
+        file.to_str().expect("fixture path utf8"),
+    ]);
+    assert_eq!(exit_code, 1, "expected analysis failure:\n{output}");
+    assert_eq!(
+        output
+            .matches("`Seq` needs to be implemented for [Boxed; 2]")
+            .count(),
+        2,
+        "expected direct and closure array `Seq` diagnostics:\n{output}"
+    );
+    assert!(
+        !output.contains("backend panicked")
+            && !output.contains("panicked at")
+            && !output.contains("Failed to emit test"),
+        "the invalid `Seq` obligations must be rejected before backend codegen:\n{output}"
+    );
+}
+
 struct FeOutput {
     stdout: String,
     stderr: String,

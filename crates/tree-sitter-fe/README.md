@@ -18,6 +18,15 @@ grammar change can rewrite tens of thousands of lines of `parser.c`):
 
 They are regenerated from `grammar.js` automatically.
 
+## Language compatibility
+
+The compiler parser is authoritative for accepted Fe source syntax. In
+particular, Fe currently supports `//` line comments and `///` doc comments,
+but not `/* ... */` block comments. The Tree-sitter grammar's existing
+`block_comment` node is a permissive tooling extension retained for editor
+recovery; it must not be used as accepted-language behavior or in
+compiler-parity tests.
+
 ## Building and testing
 
 `cargo build` / `cargo test` regenerate `src/parser.c` on demand via

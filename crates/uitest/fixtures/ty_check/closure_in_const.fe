@@ -1,0 +1,4 @@
+const F: () = {
+    let _f = |_ value: own u256| -> u256 { value }
+    ()
+}

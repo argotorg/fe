@@ -1,0 +1,5 @@
+fn missing_own(_ value: own) {}
+
+fn missing_ref(_ value: ref) {}
+
+fn missing_mut(_ value: mut) {}

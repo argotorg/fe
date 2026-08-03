@@ -1,0 +1,9 @@
+pub fn closure_mixed_capture_kinds() {
+    let a: u256 = 0
+    let mut b: u256 = 1
+    let r = ref a
+    let m = mut b
+    let f = |_ unit: own ()| -> u256 { r + m }
+    let r2 = ref a
+    let _value = f.call(()) + r2
+}

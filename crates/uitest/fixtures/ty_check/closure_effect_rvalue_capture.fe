@@ -1,0 +1,13 @@
+fn read_target() -> u256 uses (target: u256) {
+    target
+}
+
+fn make_value() -> u256 {
+    41
+}
+
+fn escaping_closure_cannot_re_evaluate_outer_effect_provider() {
+    let read_later = with (make_value()) {
+        || read_target()
+    }
+}

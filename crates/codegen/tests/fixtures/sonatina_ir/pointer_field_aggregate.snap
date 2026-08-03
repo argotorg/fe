@@ -8,7 +8,7 @@ target = "evm-ethereum-osaka"
 type @layout_0 = {i256};
 type @layout_1 = {@layout_0, i256};
 
-func private %standalone_pointer_field_aggregate__pointer_field_aggregate__bump__gef14_c7e6(v0.i256) {
+func private %standalone_pointer_field_aggregate__pointer_field_aggregate__bump__gef14_8c5a(v0.i256) {
     block0:
         jump block1;
 
@@ -27,7 +27,7 @@ func private %standalone_pointer_field_aggregate__pointer_field_aggregate__bump_
         return;
 }
 
-func private %standalone_pointer_field_aggregate__pointer_field_aggregate__bump__gef14_c7e6_0(v0.i256) {
+func private %standalone_pointer_field_aggregate__pointer_field_aggregate__bump__gef14_8c5a_0(v0.i256) {
     block0:
         jump block1;
 
@@ -93,7 +93,7 @@ func private %pointer_field_aggregate() {
         v14.objref<@layout_0> = obj.proj v7 0.i256;
         v15.@layout_0 = obj.load v14;
         v16.i256 = call %raw v15;
-        call %standalone_pointer_field_aggregate__pointer_field_aggregate__bump__gef14_c7e6 v16;
+        call %standalone_pointer_field_aggregate__pointer_field_aggregate__bump__gef14_8c5a v16;
         v19.@layout_0 = call %mem_ptr 288.i256;
         v20.objref<@layout_0> = obj.proj v7 0.i256;
         v21.objref<i256> = obj.proj v20 0.i256;
@@ -102,7 +102,7 @@ func private %pointer_field_aggregate() {
         v23.objref<@layout_0> = obj.proj v7 0.i256;
         v24.@layout_0 = obj.load v23;
         v25.i256 = call %raw v24;
-        call %standalone_pointer_field_aggregate__pointer_field_aggregate__bump__gef14_c7e6_0 v25;
+        call %standalone_pointer_field_aggregate__pointer_field_aggregate__bump__gef14_8c5a_0 v25;
         return;
 }
 

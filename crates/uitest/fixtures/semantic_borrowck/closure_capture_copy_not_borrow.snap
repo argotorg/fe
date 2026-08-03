@@ -1,0 +1,5 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/closure_capture_copy_not_borrow.fe
+---

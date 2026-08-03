@@ -1,0 +1,17 @@
+struct Wrapper {
+    p: Pair,
+}
+
+struct Pair {
+    x: u32,
+    y: u32,
+}
+
+pub fn closure_view_param_move() -> Pair {
+    let f = |w: Wrapper| -> Pair {
+        let p = w.p
+        p
+    }
+    let w = Wrapper { p: Pair { x: 10, y: 20 } }
+    f.call(w)
+}

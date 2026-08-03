@@ -35,6 +35,8 @@ module.exports = grammar({
     $._block_comment_end,
     $._generic_open,
     $._comparison_lt,
+    $._view_mode_prefix,
+    $._view_mode_only,
   ],
 
   word: $ => $.identifier,
@@ -576,9 +578,9 @@ module.exports = grammar({
       $.qualified_path_type,
     ),
 
-    // Mode-prefixed type: ref Foo, mut Foo, own Foo
+    // Mode-prefixed type: ref Foo, mut Foo, own Foo, view Foo
     mode_type: $ => seq(
-      field('mode', choice('ref', 'mut', 'own')),
+      field('mode', choice('ref', 'mut', 'own', alias($._view_mode_prefix, 'view'))),
       field('type', $._type),
     ),
 
@@ -626,6 +628,7 @@ module.exports = grammar({
       $.binary_expression,
       $.unary_expression,
       $.cast_expression,
+      $.closure_expression,
       $.call_expression,
       $.macro_call_expression,
       $.method_call_expression,
@@ -663,6 +666,42 @@ module.exports = grammar({
       field('mode', choice('mut', 'ref', 'own')),
       field('value', $._expression),
     )),
+
+    closure_expression: $ => prec.right(seq(
+      $.closure_parameter_list,
+      optional(seq('->', field('return_type', $._type))),
+      field('body', $._expression),
+    )),
+
+    closure_parameter_list: $ => choice(
+      '||',
+      seq(
+        '|',
+        sepTrailing($.closure_parameter, ','),
+        '|',
+      ),
+    ),
+
+    closure_parameter: $ => seq(
+      optional('mut'),
+      choice(
+        seq(
+          field('label', '_'),
+          field('name', choice($.identifier, '_')),
+        ),
+        field('name', choice($.identifier, '_')),
+      ),
+      optional(seq(
+        ':',
+        field('type', choice(
+          $._type,
+          'ref',
+          'mut',
+          'own',
+          alias($._view_mode_only, 'view'),
+        )),
+      )),
+    ),
 
     // Qualified path in expression context: <T as Trait>::method(args)
     qualified_path_expression: $ => prec.right(seq(

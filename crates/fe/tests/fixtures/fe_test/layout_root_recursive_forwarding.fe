@@ -51,7 +51,7 @@ struct Wrapped {
     maps: [StorageMap<u256, u256>; 2],
 }
 
-fn recursive_wrapped(wrapped: Wrapped, depth: u256) -> Wrapped {
+fn recursive_wrapped(wrapped: own Wrapped, depth: u256) -> Wrapped {
     if depth == 0 {
         return wrapped
     }

@@ -13,6 +13,7 @@ pub(crate) mod layout;
 pub(crate) mod layout_evidence;
 mod provider_space;
 pub(crate) mod realize;
+pub(crate) mod retention;
 pub(crate) mod returns;
 pub(crate) mod source;
 pub(crate) mod tuple;

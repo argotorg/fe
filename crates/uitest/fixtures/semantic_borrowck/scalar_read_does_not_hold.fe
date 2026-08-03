@@ -1,0 +1,12 @@
+struct Esc {
+    h: mut u256,
+    tag: u256,
+}
+
+pub fn scalar_read_no_hold() -> u256 {
+    let mut x: u256 = 5
+    let e = Esc { h: mut x, tag: 9 }
+    let tag = e.tag
+    let _k = e
+    tag
+}

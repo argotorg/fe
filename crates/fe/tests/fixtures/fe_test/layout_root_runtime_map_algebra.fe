@@ -60,11 +60,11 @@ enum MapChoice {
 }
 
 impl MapChoice {
-    fn identity(self) -> Self {
+    fn identity(own self) -> Self {
         self
     }
 
-    fn expanded(mut self) -> Self {
+    fn expanded(mut own self) -> Self {
         match self {
             MapChoice::Scalar(map) => self = MapChoice::Family([map, map, map]),
             MapChoice::Family(_) => {}

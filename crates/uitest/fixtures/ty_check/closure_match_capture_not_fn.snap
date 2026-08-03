@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/closure_match_capture_not_fn.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ closure_match_capture_not_fn.fe:20:5
+   │
+ 8 │ fn invoke<T, U, F: Fn<(T,), U>>(_ func: F, _ value: own T) -> U {
+   │                    ----------- required by this bound on `invoke`
+   ·
+20 │     invoke(func: take, value: ())
+   │     ^^^^^^ `|own ()| -> Boxed` doesn't implement `Fn<((),), Boxed>`

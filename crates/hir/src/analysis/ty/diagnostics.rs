@@ -3,7 +3,7 @@ use super::{
     provider::ProviderAddressSpace,
     trait_def::TraitInstId,
     ty_check::{RecordLike, TraitOps},
-    ty_def::{BorrowKind, CapabilityKind, Kind, TyId},
+    ty_def::{BorrowKind, CapabilityKind, ClosureParamMode, ClosureTy, Kind, TyId},
 };
 use crate::visitor::prelude::*;
 use crate::{analysis::HirAnalysisDb, hir_def::Trait};
@@ -12,8 +12,8 @@ use crate::{analysis::name_resolution::diagnostics::PathResDiag, hir_def::ItemKi
 use crate::{analysis::ty::ty_check::EffectParamOwner, span::DynLazySpan};
 use crate::{
     core::hir_def::{
-        CallableDef, CompBinOp, Enum, FieldIndex, FieldParent, Func, GenericParamOwner, IdentId,
-        ImplTrait, IntegerId,
+        CallableDef, ClosureDef, CompBinOp, Enum, FieldIndex, FieldParent, Func, GenericParamOwner,
+        IdentId, ImplTrait, IntegerId,
     },
     hir_def::TypeAlias,
 };
@@ -340,6 +340,18 @@ pub enum MustUseSubject<'db> {
     Function(CallableDef<'db>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum ReturnTypeContext<'db> {
+    Function(CallableDef<'db>),
+    Closure(ClosureDef<'db>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub enum CallArgDefinition<'db> {
+    Function(DynLazySpan<'db>),
+    Closure(ClosureTy<'db>),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub enum BodyDiag<'db> {
     TypeMismatch {
@@ -444,6 +456,10 @@ pub enum BodyDiag<'db> {
         key: PathId<'db>,
     },
 
+    ClosureEffectProviderMustBeBound {
+        primary: DynLazySpan<'db>,
+    },
+
     EffectMutabilityMismatch {
         primary: DynLazySpan<'db>,
         func: Func<'db>,
@@ -496,7 +512,7 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
         actual: TyId<'db>,
         expected: TyId<'db>,
-        func: Option<CallableDef<'db>>,
+        context: Option<ReturnTypeContext<'db>>,
     },
 
     IncompatibleBorrowProviders {
@@ -544,6 +560,11 @@ pub enum BodyDiag<'db> {
     },
 
     CannotBorrowMut {
+        primary: DynLazySpan<'db>,
+        binding: Option<(IdentId<'db>, DynLazySpan<'db>)>,
+    },
+
+    BorrowMutFromCapturedBinding {
         primary: DynLazySpan<'db>,
         binding: Option<(IdentId<'db>, DynLazySpan<'db>)>,
     },
@@ -602,6 +623,7 @@ pub enum BodyDiag<'db> {
     ImmutableAssignment {
         primary: DynLazySpan<'db>,
         binding: Option<(IdentId<'db>, DynLazySpan<'db>)>,
+        capability_rebind: bool,
     },
 
     ImmutableContractFieldNotInitialized {
@@ -623,6 +645,40 @@ pub enum BodyDiag<'db> {
     LoopControlOutsideOfLoop {
         primary: DynLazySpan<'db>,
         is_break: bool,
+    },
+
+    ClosureFieldLimitExceeded {
+        primary: DynLazySpan<'db>,
+        captures: bool,
+        given: usize,
+        max: usize,
+    },
+
+    ClosureParamNumMismatch {
+        primary: DynLazySpan<'db>,
+        given: usize,
+        expected: usize,
+    },
+
+    ClosureParamModeMismatch {
+        primary: DynLazySpan<'db>,
+        given: ClosureParamMode,
+        expected: ClosureParamMode,
+    },
+
+    DuplicateClosureParam {
+        primary: DynLazySpan<'db>,
+        conflict_with: DynLazySpan<'db>,
+        name: IdentId<'db>,
+    },
+
+    AssignToCapturedBinding {
+        primary: DynLazySpan<'db>,
+        binding: Option<(IdentId<'db>, DynLazySpan<'db>)>,
+    },
+
+    ClosureInConstContext {
+        primary: DynLazySpan<'db>,
     },
 
     TraitNotImplemented {
@@ -649,9 +705,14 @@ pub enum BodyDiag<'db> {
 
     CallArgNumMismatch {
         primary: DynLazySpan<'db>,
-        def_span: DynLazySpan<'db>,
+        definition: CallArgDefinition<'db>,
         given: usize,
         expected: usize,
+    },
+
+    CallArgsMustBeTuple {
+        primary: DynLazySpan<'db>,
+        args_ty: TyId<'db>,
     },
 
     AssertArgNumMismatch {
@@ -920,6 +981,7 @@ impl<'db> BodyDiag<'db> {
             Self::WithEffectTraitUnsatisfied { .. } => 75,
             Self::WithEffectTypeUnsatisfied { .. } => 76,
             Self::AmbiguousEffect { .. } => 40,
+            Self::ClosureEffectProviderMustBeBound { .. } => 89,
             Self::ReturnedTypeMismatch { .. } => 13,
             Self::IncompatibleBorrowProviders { .. } => 77,
             Self::TypeMustBeKnown(..) => 14,
@@ -932,6 +994,7 @@ impl<'db> BodyDiag<'db> {
             Self::IntLiteralOutOfRange { .. } => 74,
             Self::BorrowFromNonPlace { .. } => 65,
             Self::CannotBorrowMut { .. } => 66,
+            Self::BorrowMutFromCapturedBinding { .. } => 96,
             Self::BorrowArgMustBePlace { .. } => 68,
             Self::ExplicitBorrowRequired { .. } => 69,
             Self::OwnParamCannotBeBorrow { .. } => 70,
@@ -945,10 +1008,17 @@ impl<'db> BodyDiag<'db> {
             Self::UnsupportedContractFieldAddressSpace { .. } => 84,
             Self::ImmutableContractFieldMutBinding { .. } => 85,
             Self::LoopControlOutsideOfLoop { .. } => 19,
+            Self::ClosureFieldLimitExceeded { .. } => 97,
+            Self::ClosureParamNumMismatch { .. } => 92,
+            Self::ClosureParamModeMismatch { .. } => 94,
+            Self::DuplicateClosureParam { .. } => 95,
+            Self::AssignToCapturedBinding { .. } => 88,
+            Self::ClosureInConstContext { .. } => 90,
             Self::TraitNotImplemented { .. } => 20,
             Self::NotCallable(..) => 21,
             Self::CallGenericArgNumMismatch { .. } => 22,
             Self::CallArgNumMismatch { .. } => 23,
+            Self::CallArgsMustBeTuple { .. } => 93,
             Self::AssertArgNumMismatch { .. } => 82,
             Self::AssertMessageMustBeStringLiteral { .. } => 83,
             Self::CallArgLabelMismatch { .. } => 24,

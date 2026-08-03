@@ -1,0 +1,6 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_borrowck/closure_memory_handle_capture_through_generic.fe
+---

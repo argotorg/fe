@@ -2456,7 +2456,7 @@ pub trait Greet {
     fn test_impl_block_method_type_params_indexed() {
         let code = r#"pub trait Applicative {
     fn pure<T>(_ value: own T) -> Self<T>
-    fn ap<T, U, F: Fn<T, U>>(self: own Self<F>, _ value: own Self<T>) -> Self<U>
+    fn ap<T, U, F: Fn<(T,), U>>(self: own Self<F>, _ value: own Self<T>) -> Self<U>
 }
 
 pub enum Result<E> {
@@ -2468,7 +2468,7 @@ impl<E> Applicative for Result<E> {
     fn pure<T>(_ value: own T) -> Self<T> {
         Result::Ok
     }
-    fn ap<T, U, F: Fn<T, U>>(self: own Self<F>, _ value: own Self<T>) -> Self<U> {
+    fn ap<T, U, F: Fn<(T,), U>>(self: own Self<F>, _ value: own Self<T>) -> Self<U> {
         Result::Ok
     }
 }

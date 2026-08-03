@@ -634,6 +634,33 @@ pub enum ReferenceView<'db> {
 }
 
 impl<'db> ReferenceView<'db> {
+    pub fn scope(&self) -> ScopeId<'db> {
+        match self {
+            Self::Path(view) => view.scope,
+            Self::FieldAccess(view) => view.body.scope(),
+            Self::MethodCall(view) => view.body.scope(),
+            Self::UsePath(view) => view.use_item.scope(),
+        }
+    }
+
+    /// The instantiated value type at this reference's use site, when this
+    /// reference denotes an expression.
+    pub fn value_ty(&self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
+        match self {
+            Self::Path(view) => {
+                let BodyPathContext::Expr(expr) = view.body_ctx? else {
+                    return None;
+                };
+                let body = view.scope.body()?;
+                Some(typed_body_for_body(db, body)?.expr_ty(db, expr))
+            }
+            Self::FieldAccess(view) => {
+                Some(typed_body_for_body(db, view.body)?.expr_ty(db, view.expr))
+            }
+            Self::MethodCall(_) | Self::UsePath(_) => None,
+        }
+    }
+
     /// Resolve this reference to its target definition(s).
     ///
     /// Returns TargetResolution which can be None, Single, or Ambiguous.

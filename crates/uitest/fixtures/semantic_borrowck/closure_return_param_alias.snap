@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/closure_return_param_alias.fe
+---
+error[16-0001]: borrow conflict in `fn closure_return_param_alias`
+  ┌─ closure_return_param_alias.fe:6:17
+  │
+3 │     let borrowed = mut x
+  │                    ----- borrow created here
+  ·
+6 │     let other = mut x
+  │                 ^^^^^ cannot mutably borrow this place while a mut borrow is active

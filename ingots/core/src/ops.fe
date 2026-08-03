@@ -37,32 +37,32 @@ pub trait Pow<T = Self> {
 // Explicit overflow behavior (opt-in)
 pub trait WrappingAdd<T = Self> {
     type Output = Self
-    fn wrapping_add(self, _ other: T) -> Self::Output
+    fn wrapping_add(own self, _ other: own T) -> Self::Output
 }
 
 pub trait WrappingSub<T = Self> {
     type Output = Self
-    fn wrapping_sub(self, _ other: T) -> Self::Output
+    fn wrapping_sub(own self, _ other: own T) -> Self::Output
 }
 
 pub trait WrappingMul<T = Self> {
     type Output = Self
-    fn wrapping_mul(self, _ other: T) -> Self::Output
+    fn wrapping_mul(own self, _ other: own T) -> Self::Output
 }
 
 pub trait SaturatingAdd<T = Self> {
     type Output = Self
-    fn saturating_add(self, _ other: T) -> Self::Output
+    fn saturating_add(own self, _ other: own T) -> Self::Output
 }
 
 pub trait SaturatingSub<T = Self> {
     type Output = Self
-    fn saturating_sub(self, _ other: T) -> Self::Output
+    fn saturating_sub(own self, _ other: own T) -> Self::Output
 }
 
 pub trait SaturatingMul<T = Self> {
     type Output = Self
-    fn saturating_mul(self, _ other: T) -> Self::Output
+    fn saturating_mul(own self, _ other: own T) -> Self::Output
 }
 
 // Bitwise binary operators

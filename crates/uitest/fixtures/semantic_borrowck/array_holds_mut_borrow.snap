@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/array_holds_mut_borrow.fe
+---
+error[16-0001]: borrow conflict in `fn array_holds_mut`
+  ┌─ array_holds_mut_borrow.fe:4:13
+  │
+3 │     let arr = [mut x]
+  │                ----- borrow created here
+4 │     let r = ref x
+  │             ^^^^^ cannot immutably borrow this place while a mutable borrow is active

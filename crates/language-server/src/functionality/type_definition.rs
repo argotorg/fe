@@ -40,18 +40,7 @@ pub async fn handle_goto_type_definition(
     };
 
     // For local bindings, go to the type definition
-    let location = match target {
-        Target::Local { ty, .. } => {
-            // Get the span of the type's definition
-            ty.name_span(&backend.db)
-                .and_then(|name_span| to_lsp_location_from_lazy_span(&backend.db, name_span).ok())
-        }
-        Target::Scope(_) => {
-            // For scopes, go-to-type-definition doesn't make sense
-            // (you're already on a type/function definition)
-            None
-        }
-    };
+    let location = type_definition_location(&backend.db, target);
 
     Ok(location
         .map(|mut location| {
@@ -59,4 +48,59 @@ pub async fn handle_goto_type_definition(
             location
         })
         .map(async_lsp::lsp_types::GotoDefinitionResponse::Scalar))
+}
+
+fn type_definition_location(
+    db: &driver::DriverDataBase,
+    target: &Target<'_>,
+) -> Option<async_lsp::lsp_types::Location> {
+    match target {
+        Target::Local { ty, .. } => {
+            let payload = ty.as_capability(db).map_or(*ty, |(_, payload)| payload);
+            payload
+                .as_closure(db)
+                .map(|closure| {
+                    let def = closure.def(db);
+                    def.expr.span(def.body).into()
+                })
+                .or_else(|| ty.name_span(db))
+                .and_then(|name_span| to_lsp_location_from_lazy_span(db, name_span).ok())
+        }
+        Target::Scope(_) => {
+            // For scopes, go-to-type-definition doesn't make sense
+            // (you're already on a type/function definition)
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use driver::DriverDataBase;
+    use hir::lower::map_file_to_mod;
+    use url::Url;
+
+    #[test]
+    fn closure_type_definition_is_its_literal() {
+        let mut db = DriverDataBase::default();
+        let source = r#"fn main() -> u256 {
+    let add = |value: own u256| -> u256 { value + 1 }
+    add(41)
+}
+"#;
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///test.fe").unwrap(),
+            Some(source.to_string()),
+        );
+        let top_mod = map_file_to_mod(&db, file);
+        let call_offset = source.rfind("add(41)").unwrap() as u32;
+        let resolution = top_mod.target_at(&db, parser::TextSize::from(call_offset));
+        let location =
+            type_definition_location(&db, resolution.first().expect("closure binding target"))
+                .expect("closure literal location");
+        assert_eq!(location.range.start.line, 1);
+        assert_eq!(location.range.start.character, 14);
+    }
 }

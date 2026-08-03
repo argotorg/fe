@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/closure_consuming_not_fn.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ closure_consuming_not_fn.fe:15:5
+   │
+ 7 │ fn call_twice<T, F: Fn<(), T>>(_ func: F) -> T {
+   │                     --------- required by this bound on `call_twice`
+   ·
+15 │     call_twice(take)
+   │     ^^^^^^^^^^ `|| -> Boxed` doesn't implement `Fn<(), Boxed>`

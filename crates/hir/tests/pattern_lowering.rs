@@ -2,7 +2,7 @@ use cranelift_entity::EntityRef;
 use fe_hir::{
     analysis::{
         semantic::{
-            SExpr, SStmtKind, STerminatorKind, get_or_build_semantic_instance,
+            SExpr, SStmtKind, STerminatorKind, SemOrigin, get_or_build_semantic_instance,
             identity_semantic_instance_key,
         },
         ty::ty_check::{BodyOwner, LocalBinding, check_contract_recv_arm_body, check_func_body},
@@ -151,7 +151,7 @@ fn read(boxed: Boxed) -> u256 {
         .find_map(|stmt| match &stmt.kind {
             SStmtKind::Assign {
                 dst,
-                expr: SExpr::ReadPlace { place },
+                expr: SExpr::ReadPlace { place, .. },
             } if place.path.is_empty() => Some((*dst, place)),
             _ => None,
         })
@@ -266,10 +266,7 @@ fn read(x: Maybe) -> u256 {
     let body = instance.body(&db);
 
     assert_eq!(
-        first_assignment_ty(&db, body, |expr| matches!(
-            expr,
-            SExpr::ExtractEnumField { .. }
-        )),
+        first_assignment_ty(&db, body, |expr| matches!(expr, SExpr::ReadPlace { .. })),
         "ref u256"
     );
 }
@@ -302,4 +299,301 @@ fn eliminate(value: Empty) -> u8 {
         block.terminator.kind,
         STerminatorKind::Assert { message: None }
     )));
+}
+
+#[test]
+fn mut_enum_destructuring_keeps_mut_payload_type() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "pattern_lowering.fe".into(),
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn write(x: mut Option<Boxed>) {
+    match x {
+        Option::Some(value) => value.value = 42,
+        Option::None => (),
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let func = find_func(&db, top_mod, "write");
+    let (diags, _) = check_func_body(&db, func).clone();
+    assert!(diags.is_empty(), "{diags:?}");
+
+    let instance = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+    );
+    let body = instance.body(&db);
+
+    assert_eq!(
+        first_assignment_ty(&db, body, |expr| matches!(expr, SExpr::ReadPlace { .. })),
+        "mut Boxed"
+    );
+}
+
+#[test]
+fn statically_true_while_with_break_keeps_a_reachable_exit() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "pattern_lowering.fe".into(),
+        r#"
+fn completes() -> u256 {
+    while true {
+        break
+    }
+    7
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let func = find_func(&db, top_mod, "completes");
+    let (diags, _) = check_func_body(&db, func).clone();
+    assert!(diags.is_empty(), "{diags:?}");
+
+    let instance = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+    );
+    let body = instance.body(&db);
+    let break_target = body
+        .blocks
+        .iter()
+        .find_map(
+            |block| match (&block.terminator.origin, &block.terminator.kind) {
+                (SemOrigin::Stmt(_), STerminatorKind::Goto(target)) => Some(*target),
+                _ => None,
+            },
+        )
+        .expect("break must branch to the loop exit");
+
+    assert!(
+        matches!(
+            &body
+                .block(break_target)
+                .expect("break target block")
+                .terminator
+                .kind,
+            STerminatorKind::Return(Some(_))
+        ),
+        "the reachable break target must continue to the function return: {:#?}",
+        body.blocks,
+    );
+}
+
+#[test]
+fn statically_known_casted_tuple_pattern_uses_a_direct_edge() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "pattern_lowering.fe".into(),
+        r#"
+fn choose() -> u256 {
+    if let (true, 5) = (true, 5 as u256) {
+        7
+    } else {
+        9
+    }
+}
+
+fn bool_cast_match() -> u256 {
+    if let 1 = (true as u8) { 7 } else { 9 }
+}
+
+fn bool_cast_miss() -> u256 {
+    if let 0 = (true as u8) { 7 } else { 9 }
+}
+
+fn dynamic_narrow(value: u256) -> u256 {
+    if let 1 = ((value >> 248) as u8) { 7 } else { 9 }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    for name in ["choose", "bool_cast_match", "bool_cast_miss"] {
+        let func = find_func(&db, top_mod, name);
+        let (diags, _) = check_func_body(&db, func).clone();
+        assert!(diags.is_empty(), "{name}: {diags:?}");
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+        );
+        let body = instance.body(&db);
+        assert!(
+            body.blocks.iter().all(|block| !matches!(
+                block.terminator.kind,
+                STerminatorKind::Branch { .. } | STerminatorKind::MatchEnum { .. }
+            )),
+            "a fully known casted pattern must not emit a runtime decision in {name}: {:#?}",
+            body.blocks,
+        );
+    }
+
+    let dynamic = find_func(&db, top_mod, "dynamic_narrow");
+    let (diags, _) = check_func_body(&db, dynamic).clone();
+    assert!(diags.is_empty(), "dynamic_narrow: {diags:?}");
+    let dynamic_instance = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(dynamic)),
+    );
+    let dynamic_body = dynamic_instance.body(&db);
+    assert!(
+        dynamic_body
+            .blocks
+            .iter()
+            .any(|block| matches!(block.terminator.kind, STerminatorKind::Branch { .. })),
+        "a dynamic narrowing cast must retain its runtime pattern decision: {:#?}",
+        dynamic_body.blocks,
+    );
+}
+
+#[test]
+fn known_normal_boolean_values_prune_raw_condition_cfg() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "pattern_lowering.fe".into(),
+        r#"
+fn while_or(flag: bool) {
+    while flag || true {}
+}
+
+fn while_and(flag: bool) {
+    while flag && false {}
+}
+
+fn assert_or(flag: bool) {
+    assert!(flag || true)
+}
+
+fn assert_and(flag: bool) {
+    assert!(flag && false)
+}
+
+fn logical_or(flag: bool) -> bool {
+    flag || true
+}
+
+fn logical_and(flag: bool) -> bool {
+    flag && false
+}
+
+fn escape_then_true(escape: bool) {
+    if {
+        if escape {
+            return
+        }
+        true
+    } {}
+}
+
+enum BoolChoice {
+    True,
+    False,
+}
+
+const YES: bool = true
+const NO: bool = false
+const PICK: BoolChoice = BoolChoice::True
+
+fn const_true() {
+    assert!(YES)
+}
+
+fn const_false() {
+    assert!(NO)
+}
+
+fn const_match() {
+    assert!(match PICK {
+        BoolChoice::True => true,
+        BoolChoice::False => false,
+    })
+}
+
+fn match_all_true(choice: BoolChoice) {
+    assert!(match choice {
+        BoolChoice::True => true,
+        BoolChoice::False => true,
+    })
+}
+
+fn match_all_false(choice: BoolChoice) {
+    assert!(match choice {
+        BoolChoice::True => false,
+        BoolChoice::False => false,
+    })
+}
+
+fn match_mixed(choice: BoolChoice) {
+    assert!(match choice {
+        BoolChoice::True => true,
+        BoolChoice::False => false,
+    })
+}
+
+fn match_known() {
+    assert!(match BoolChoice::True {
+        BoolChoice::True => true,
+        BoolChoice::False => false,
+    })
+}
+
+fn match_escape(choice: BoolChoice) {
+    assert!(match choice {
+        BoolChoice::True => true,
+        BoolChoice::False => return,
+    })
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+
+    for (name, expected_branches, expected_asserts) in [
+        ("while_or", 1, 0),
+        ("while_and", 1, 0),
+        ("assert_or", 1, 0),
+        ("assert_and", 1, 1),
+        ("logical_or", 1, 0),
+        ("logical_and", 1, 0),
+        ("escape_then_true", 1, 0),
+        ("const_true", 0, 0),
+        ("const_false", 0, 1),
+        ("const_match", 0, 0),
+        ("match_all_true", 0, 0),
+        ("match_all_false", 0, 1),
+        ("match_mixed", 1, 1),
+        ("match_known", 0, 0),
+        ("match_escape", 0, 0),
+    ] {
+        let func = find_func(&db, top_mod, name);
+        let (diags, _) = check_func_body(&db, func).clone();
+        assert!(diags.is_empty(), "{name}: {diags:?}");
+
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+        );
+        let body = instance.body(&db);
+        let branch_count = body
+            .blocks
+            .iter()
+            .filter(|block| matches!(block.terminator.kind, STerminatorKind::Branch { .. }))
+            .count();
+
+        assert_eq!(
+            branch_count, expected_branches,
+            "{name} has an imprecise normal-result branch: {body:#?}"
+        );
+        assert_eq!(
+            body.blocks
+                .iter()
+                .filter(|block| matches!(block.terminator.kind, STerminatorKind::Assert { .. }))
+                .count(),
+            expected_asserts,
+            "{name} has an imprecise assertion failure edge: {body:#?}"
+        );
+    }
 }

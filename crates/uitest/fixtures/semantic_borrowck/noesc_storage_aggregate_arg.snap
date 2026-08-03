@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/noesc_storage_aggregate_arg.fe
+---
+error[16-0005]: noesc violation in `fn NoEscStorageAggregateArg::__init__`
+   ┌─ noesc_storage_aggregate_arg.fe:16:17
+   │
+16 │         consume(value)
+   │                 ^^^^^ cannot pass `Esc` from storage as function argument

@@ -1,0 +1,12 @@
+struct Boxed {
+    value: u256,
+}
+
+pub fn closure_noncopy_capture_direct_call_twice() -> u256 {
+    let boxed = Boxed { value: 41 }
+    let f = || -> Boxed { boxed }
+    let mut a = f()
+    a.value = 100
+    let b = f()
+    b.value
+}

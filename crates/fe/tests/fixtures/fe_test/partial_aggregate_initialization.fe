@@ -1,0 +1,302 @@
+use core::functional::Fn
+
+struct Pair {
+    first: u256,
+    second: u256,
+}
+
+struct RuntimeAliasHandle {
+    target: mut u256,
+}
+
+struct RuntimeNestedAlias {
+    target: mut RuntimeAliasHandle,
+}
+
+enum InitializationChoice {
+    Initialize,
+    Skip,
+}
+
+fn initialized_closure_scalar() -> u256 {
+    let run = || {
+        let mut value: u256
+        value = 42
+        value
+    }
+    run.call()
+}
+
+fn initialized_closure_dynamic_index(index: usize) -> u256 {
+    let run = || {
+        let mut values: [u256; 2]
+        values[index] = 42
+        values[index]
+    }
+    run.call()
+}
+
+fn bool_later_mutation() -> u256 {
+    let mut cond = true
+    let mut value: u256
+    if cond {
+        value = 42
+    }
+    cond = false
+    value
+}
+
+fn enum_later_mutation() -> u256 {
+    let mut choice = InitializationChoice::Initialize
+    let mut value: u256
+    match choice {
+        InitializationChoice::Initialize => value = 42
+        InitializationChoice::Skip => {}
+    }
+    choice = InitializationChoice::Skip
+    value
+}
+
+fn direct_reassignment_before_branch() -> u256 {
+    let mut cond = false
+    cond = true
+    let mut value: u256
+    if cond {
+        value = 42
+    }
+    value
+}
+
+fn false_loop_backedge() -> u256 {
+    let mut flag = false
+    let mut dead: u256
+    while flag {
+        flag = true
+        let _ = dead
+    }
+    dead = 42
+    dead
+}
+
+fn path_specific_dynamic_write(
+    cond: bool,
+    left: usize,
+    right: usize,
+) -> u256 {
+    let mut index: usize
+    let mut values: [u256; 2]
+    if cond {
+        index = left
+        values[index] = 42
+    } else {
+        index = right
+        values[index] = 42
+    }
+    values[index]
+}
+
+fn path_specific_literal_write(cond: bool) -> u256 {
+    let mut index: usize
+    let mut values: [u256; 2]
+    if cond {
+        index = 0
+        values[index] = 42
+    } else {
+        index = 1
+        values[index] = 42
+    }
+    values[index]
+}
+
+fn index_later_mutation() -> u256 {
+    let mut index: usize = 0
+    let mut values: [u256; 2]
+    values[index] = 42
+    let result = values[index]
+    index = 1
+    result
+}
+
+fn correlated_loop_indices(left: usize, right: usize) -> u256 {
+    let mut values: [u256; 2]
+    let mut write_index = left
+    let mut read_index = left
+    let mut first = true
+    while true {
+        values[write_index] = 42
+        let value = values[read_index]
+        if !first {
+            return value
+        }
+        write_index = right
+        read_index = right
+        first = false
+    }
+    0
+}
+
+fn dynamic_branch(cond: bool) -> u256 {
+    let mut value: u256
+    if cond {
+        value = 20
+    } else {
+        value = 22
+    }
+    value
+}
+
+fn reflexive_identity(index: usize) -> u256 {
+    let mut value: u256
+    if index == index {
+        value = 42
+    }
+    value
+}
+
+fn copied_identity(index: usize) -> u256 {
+    let copied = index
+    let mut value: u256
+    if index == copied {
+        value = 42
+    }
+    value
+}
+
+fn correlated_phi_identity(cond: bool, left: usize, right: usize) -> u256 {
+    let mut lhs: usize
+    let mut rhs: usize
+    if cond {
+        lhs = left
+        rhs = left
+    } else {
+        lhs = right
+        rhs = right
+    }
+    let mut value: u256
+    if lhs == rhs {
+        value = 42
+    }
+    value
+}
+
+fn set_false_alias(_ value: mut bool) {
+    value = false
+}
+
+fn unrelated_alias_constant() -> u256 {
+    let mut cond = true
+    let mut other = true
+    let _cond_alias = mut cond
+    let other_alias = mut other
+    set_false_alias(other_alias)
+    let mut value: u256
+    if cond {
+        value = 42
+    }
+    value
+}
+
+fn set_one_alias(_ value: mut usize) {
+    value = 1
+}
+
+fn unrelated_alias_dynamic_index(mut index: own usize) -> u256 {
+    let mut other: usize = 0
+    let _index_alias = mut index
+    let other_alias = mut other
+    let mut values: [u256; 2]
+    values[index] = 42
+    set_one_alias(other_alias)
+    values[index]
+}
+
+fn initialized_loop_header_phi(initial: usize) -> u256 {
+    let mut values: [u256; 2]
+    let mut index = initial
+    values[index] = 42
+    let mut first = true
+    while true {
+        let result = values[index]
+        if !first {
+            return result
+        }
+        index = 1
+        values[index] = 42
+        first = false
+    }
+    0
+}
+
+fn unchanged_loop_header_index(initial: usize) -> u256 {
+    let mut values: [u256; 2]
+    let index = initial
+    values[index] = 42
+    let mut first = true
+    while true {
+        let result = values[index]
+        if !first {
+            return result
+        }
+        first = false
+    }
+    0
+}
+
+fn nested_alias_replacement_runtime() -> u256 {
+    let mut old = 1
+    let mut next = 2
+    let mut inner = RuntimeAliasHandle { target: mut old }
+    let outer = RuntimeNestedAlias { target: mut inner }
+    outer.target = RuntimeAliasHandle { target: mut next }
+    outer.target.target = 37
+    assert(old == 1)
+    assert(next == 37)
+    old + next + 4
+}
+
+#[test]
+fn partial_aggregate_initialization() {
+    let mut pair: Pair
+    pair.first = 20
+    pair.second = 22
+    assert(pair.first + pair.second == 42)
+    let initialized_pair = pair
+    assert(initialized_pair.first + initialized_pair.second == 42)
+
+    let mut values: [u256; 2]
+    values[0] = 20
+    values[1] = 22
+    let index = 1
+    assert(values[index] == 22)
+    let initialized_values = values
+    assert(initialized_values[0] + initialized_values[1] == 42)
+
+    assert(initialized_closure_scalar() == 42)
+    assert(initialized_closure_dynamic_index(index: 1) == 42)
+
+    assert(bool_later_mutation() == 42)
+    assert(enum_later_mutation() == 42)
+    assert(direct_reassignment_before_branch() == 42)
+    assert(false_loop_backedge() == 42)
+    assert(path_specific_dynamic_write(cond: true, left: 0, right: 1) == 42)
+    assert(path_specific_dynamic_write(cond: false, left: 0, right: 1) == 42)
+    assert(path_specific_literal_write(cond: true) == 42)
+    assert(path_specific_literal_write(cond: false) == 42)
+    assert(index_later_mutation() == 42)
+    assert(correlated_loop_indices(left: 0, right: 1) == 42)
+    assert(correlated_loop_indices(left: 1, right: 0) == 42)
+    assert(dynamic_branch(cond: true) == 20)
+    assert(dynamic_branch(cond: false) == 22)
+    assert(reflexive_identity(index: 0) == 42)
+    assert(copied_identity(index: 1) == 42)
+    assert(correlated_phi_identity(cond: true, left: 0, right: 1) == 42)
+    assert(correlated_phi_identity(cond: false, left: 0, right: 1) == 42)
+    assert(unrelated_alias_constant() == 42)
+    assert(unrelated_alias_dynamic_index(index: 0) == 42)
+    assert(unrelated_alias_dynamic_index(index: 1) == 42)
+    assert(initialized_loop_header_phi(initial: 0) == 42)
+    assert(initialized_loop_header_phi(initial: 1) == 42)
+    assert(unchanged_loop_header_index(initial: 0) == 42)
+    assert(unchanged_loop_header_index(initial: 1) == 42)
+    assert(nested_alias_replacement_runtime() == 42)
+}

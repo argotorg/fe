@@ -1,0 +1,15 @@
+struct Pair {
+    left: u256,
+    right: u256,
+}
+
+fn make_pair(value: own u256) -> Pair {
+    Pair { left: value, right: 0 }
+}
+
+pub fn call_loan_free_aggregate_result() {
+    let mut x: u256 = 0
+    let pair = make_pair(1)
+    let m = mut x
+    m = pair.left
+}

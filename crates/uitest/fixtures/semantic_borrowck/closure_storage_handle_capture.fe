@@ -1,0 +1,18 @@
+use core::functional::Fn
+
+struct Store {
+    value: u256,
+}
+
+pub contract ClosureStorageCapture {
+    mut store: Store
+
+    init() uses (mut store) {
+        let handle = mut store.value
+        let f = |_ unit: own ()| -> () {
+            let captured = handle
+            captured = 7
+        }
+        f.call(())
+    }
+}

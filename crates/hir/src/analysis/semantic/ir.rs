@@ -5,6 +5,7 @@ use crate::{
     analysis::{
         semantic::instance::{SemanticInstance, SemanticInstanceKey},
         ty::{
+            const_ty::CallableInputLayoutHoleOrigin,
             provider::ProviderAddressSpace,
             ty_check::{BodyOwner, EffectPassMode, LocalBinding},
             ty_def::{BorrowKind, TyId},
@@ -62,6 +63,22 @@ unsafe impl<'db> Update for SemanticProjectionPath<'db> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub struct SCallReturnSource {
+    pub result_projection: Vec<SCallReturnProjectionStep>,
+    pub origin: CallableInputLayoutHoleOrigin,
+    pub projection: Vec<SCallReturnProjectionStep>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum SCallReturnProjectionStep {
+    Field(u16),
+    VariantField { variant: u16, field: u16 },
+    ConstantIndex(usize),
+    DynamicIndex(SLocalId),
+    AnyIndex,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct SemanticBody<'db> {
     pub owner: SemanticInstance<'db>,
     pub template_owner: BodyOwner<'db>,
@@ -104,7 +121,23 @@ pub struct SLocal<'db> {
     pub source: Option<LocalBinding<'db>>,
     pub role: SemanticLocalRole<'db>,
     pub snapshot_source: Option<PlaceProvenance<'db>>,
+    /// Possible ownership origins of this local's value.
+    ///
+    /// Synthetic value forwarding can preserve a non-consuming read until a
+    /// later projection decides which fields are actually moved. Control-flow
+    /// joins retain every possible origin so a later move is checked against
+    /// all predecessor values.
+    pub ownership_sources: Vec<ValueOwnershipSource<'db>>,
     pub layout_backing_sources: Vec<LayoutBackingSource<'db>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum ValueOwnershipSource<'db> {
+    /// The assignment materializes an independently owned value in this local.
+    Local,
+    /// The assignment explicitly reads a value whose ownership remains at the
+    /// source place until a later move.
+    Place(PlaceProvenance<'db>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -119,7 +152,14 @@ pub enum PlaceProvenance<'db> {
     Derived(SPlace<'db>),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+/// Identity of one symbolic fixed-array borrow-slot family.
+///
+/// Family ids are local to a single borrow-result traversal. Using the host
+/// collection index width avoids imposing an unrelated field-count limit on
+/// the number of independent array nodes that traversal can represent.
+pub type BorrowSlotFamilyId = usize;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
 pub enum LayoutBackingProjection {
     Field(FieldIndex),
     VariantField {
@@ -127,6 +167,12 @@ pub enum LayoutBackingProjection {
         field: FieldIndex,
     },
     Index(Option<usize>),
+    /// A symbolic member of an indexed borrow-slot family.
+    ///
+    /// `Index(None)` is an uncorrelated/dynamic index. A family id instead
+    /// preserves pointwise identity across a borrow result transform until a
+    /// caller projects a concrete index.
+    IndexFamily(BorrowSlotFamilyId),
 }
 
 /// Physical place provenance for layout-bearing value projections.
@@ -385,9 +431,26 @@ pub enum SOperandOrigin {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum SOperandIntent {
+    /// Preserve the operation mode inferred from the value and its origin.
+    Infer,
+    /// Observe the source without consuming a non-Copy value.
+    Read,
+    /// Consume the source even when the runtime transfer itself is synthetic.
+    Move,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum BorrowActivation {
+    Immediate,
+    AtCall,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
 pub struct SOperand {
     pub value: SValueId,
     pub origin: SOperandOrigin,
+    pub intent: SOperandIntent,
 }
 
 impl SOperand {
@@ -395,6 +458,7 @@ impl SOperand {
         Self {
             value,
             origin: SOperandOrigin::Inherited,
+            intent: SOperandIntent::Infer,
         }
     }
 
@@ -402,6 +466,7 @@ impl SOperand {
         Self {
             value,
             origin: SOperandOrigin::Expr(expr),
+            intent: SOperandIntent::Infer,
         }
     }
 
@@ -409,7 +474,13 @@ impl SOperand {
         Self {
             value,
             origin: SOperandOrigin::Synthetic,
+            intent: SOperandIntent::Infer,
         }
+    }
+
+    pub fn with_intent(mut self, intent: SOperandIntent) -> Self {
+        self.intent = intent;
+        self
     }
 
     pub fn sem_origin<'db>(self, fallback: SemOrigin<'db>) -> SemOrigin<'db> {
@@ -427,6 +498,7 @@ pub enum SExpr<'db> {
     UseValue(SOperand),
     ReadPlace {
         place: SPlace<'db>,
+        intent: SOperandIntent,
     },
     CodeRegionRef {
         region: SemanticCodeRegionRef<'db>,
@@ -470,6 +542,7 @@ pub enum SExpr<'db> {
         place: SPlace<'db>,
         kind: BorrowKind,
         provider: Option<ProviderAddressSpace>,
+        activation: BorrowActivation,
     },
     GetEnumTag {
         value: SOperand,
@@ -494,6 +567,8 @@ pub enum SExpr<'db> {
         callee: SemanticCalleeRef<'db>,
         args: Box<[SOperand]>,
         effect_args: Box<[SEffectArg<'db>]>,
+        return_sources: Box<[SCallReturnSource]>,
+        return_sources_complete: bool,
     },
 }
 

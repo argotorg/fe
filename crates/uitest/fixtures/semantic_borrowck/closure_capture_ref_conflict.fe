@@ -1,0 +1,9 @@
+#[test]
+fn mut_borrow_while_ref_is_captured() {
+    let mut x: u256 = 0
+    let r = ref x
+    let f = |_ unit: own ()| -> () { r }
+    let m = mut x
+    f.call(())
+    m = 1
+}

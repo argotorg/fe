@@ -24,7 +24,7 @@ struct TaggedHolder<T> {
     marker: u256,
 }
 
-fn identity_tagged(_ ptr: TaggedPtr<u256>) -> TaggedPtr<u256> {
+fn identity_tagged(_ ptr: own TaggedPtr<u256>) -> TaggedPtr<u256> {
     ptr
 }
 

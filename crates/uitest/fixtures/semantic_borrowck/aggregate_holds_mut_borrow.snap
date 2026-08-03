@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/aggregate_holds_mut_borrow.fe
+---
+error[16-0001]: borrow conflict in `fn tuple_holds_borrows`
+  ┌─ aggregate_holds_mut_borrow.fe:5:13
+  │
+4 │     let t = (ref a, mut b)
+  │                     ----- borrow created here
+5 │     let m = mut b
+  │             ^^^^^ cannot mutably borrow this place while a mut borrow is active

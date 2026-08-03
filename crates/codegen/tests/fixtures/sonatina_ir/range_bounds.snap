@@ -27,17 +27,13 @@ func private %len() -> i256 {
         jump block1;
 
     block1:
-        br 0.i1 block2 block3;
+        jump block2;
 
     block2:
-        jump block4;
+        jump block3;
 
     block3:
-        jump block4;
-
-    block4:
-        v3.i256 = phi (0.i256 block2) (4.i256 block3);
-        return v3;
+        return 4.i256;
 }
 
 func private %main_root() {

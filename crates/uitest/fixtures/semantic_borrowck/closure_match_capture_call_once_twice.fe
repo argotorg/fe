@@ -1,0 +1,19 @@
+use core::functional::FnOnce
+use core::option::Option
+
+struct Boxed {
+    value: u256,
+}
+
+pub fn closure_match_capture_call_once_twice() -> u256 {
+    let wrapped: Option<Boxed> = Option::Some(Boxed { value: 21 })
+    let take = |_ unit: own ()| -> Boxed {
+        match wrapped {
+            Option::Some(value) => value,
+            Option::None => Boxed { value: 0 },
+        }
+    }
+    let first = take.call_once(())
+    let second = take.call_once(())
+    first.value + second.value
+}

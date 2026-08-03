@@ -1,0 +1,15 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/return_aggregate_holding_local_borrow.fe
+---
+error[16-0003]: invalid return borrow in `fn dangle`
+  ┌─ return_aggregate_holding_local_borrow.fe:6:24
+  │
+6 │   pub fn dangle() -> Esc {
+  │ ╭────────────────────────^
+7 │ │     let mut x: u256 = 5
+8 │ │     Esc { h: mut x, tag: 0 }
+  │ │              ----- borrow created here
+9 │ │ }
+  │ ╰─^ cannot return a value that holds a borrow of local `x`

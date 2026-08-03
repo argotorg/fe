@@ -1,0 +1,21 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/closure_return_ty.fe
+---
+error[8-0013]: returned type mismatch
+  ┌─ closure_return_ty.fe:5:21
+  │
+4 │     let g = |x: own u256| -> u256 {
+  │                              ---- this closure expects `u256` to be returned
+5 │         if x == 0 { return true }
+  │                     ^^^^^^^^^^^ expected `u256`, but `bool` is returned
+
+error[8-0013]: returned type mismatch
+   ┌─ closure_return_ty.fe:14:9
+   │
+12 │     let g = || {
+   │             -- this closure is inferred to return `u256`
+13 │         if true { return 1 as u256 }
+14 │         return false
+   │         ^^^^^^^^^^^^ expected `u256`, but `bool` is returned

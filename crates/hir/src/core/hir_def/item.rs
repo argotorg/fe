@@ -675,6 +675,11 @@ impl<'db> Func<'db> {
         LazyFuncSpan::new(self)
     }
 
+    /// Returns generic parameters exactly as written on this function.
+    pub(crate) fn hir_generic_params(self, db: &'db dyn HirDb) -> GenericParamListId<'db> {
+        self.generic_params(db)
+    }
+
     pub fn scope(self) -> ScopeId<'db> {
         ScopeId::from_item(self.into())
     }
@@ -1102,6 +1107,16 @@ impl<'db> Impl<'db> {
         LazyImplSpan::new(self)
     }
 
+    /// Returns the implementor type exactly as written in HIR.
+    pub(crate) fn hir_type_ref(self, db: &'db dyn HirDb) -> Partial<TypeId<'db>> {
+        self.type_ref(db)
+    }
+
+    /// Returns generic parameters exactly as written on this impl.
+    pub(crate) fn hir_generic_params(self, db: &'db dyn HirDb) -> GenericParamListId<'db> {
+        self.generic_params(db)
+    }
+
     /// Returns the raw associated const definitions from the HIR.
     pub fn hir_consts(self, db: &'db dyn HirDb) -> &'db [AssocConstDef<'db>] {
         self.consts(db)
@@ -1162,6 +1177,11 @@ pub struct Trait<'db> {
 impl<'db> Trait<'db> {
     pub fn span(self) -> LazyTraitSpan<'db> {
         LazyTraitSpan::new(self)
+    }
+
+    /// Returns generic parameters exactly as written on this trait.
+    pub(crate) fn hir_generic_params(self, db: &'db dyn HirDb) -> GenericParamListId<'db> {
+        self.generic_params(db)
     }
 
     pub fn children_non_nested(
@@ -1243,6 +1263,16 @@ impl<'db> ImplTrait<'db> {
     /// Returns the trait reference for this impl.
     pub fn hir_trait_ref(self, db: &'db dyn HirDb) -> Partial<TraitRefId<'db>> {
         self.trait_ref(db)
+    }
+
+    /// Returns the implementor type exactly as written in HIR.
+    pub(crate) fn hir_type_ref(self, db: &'db dyn HirDb) -> Partial<TypeId<'db>> {
+        self.type_ref(db)
+    }
+
+    /// Returns generic parameters exactly as written on this trait impl.
+    pub(crate) fn hir_generic_params(self, db: &'db dyn HirDb) -> GenericParamListId<'db> {
+        self.generic_params(db)
     }
 
     /// Returns the raw associated const definitions from the HIR.

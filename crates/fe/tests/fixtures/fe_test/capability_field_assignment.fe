@@ -1,0 +1,1301 @@
+use core::ops::{Add, Neg}
+
+struct ScalarHandle {
+    target: mut u256,
+}
+
+struct ByteArrayHandle {
+    target: mut [u8; 3],
+}
+
+struct Cell {
+    value: u256,
+}
+
+struct CellHandle {
+    target: mut Cell,
+}
+
+struct NestedScalarHandle {
+    target: mut ScalarHandle,
+}
+
+enum RebindChoice {
+    Second,
+    Abort,
+}
+
+enum KnownChoice {
+    Second,
+    Payload,
+}
+
+enum KnownPayloadChoice {
+    Value(bool),
+    Other,
+}
+
+enum KnownNestedChoice {
+    Flag(bool),
+    Count(u256),
+}
+
+enum KnownOuterChoice {
+    Value(KnownNestedChoice),
+    Other,
+}
+
+struct KnownRecord {
+    flag: bool,
+    count: u256,
+}
+
+const KNOWN_NESTED_PAYLOAD: KnownOuterChoice =
+    KnownOuterChoice::Value(KnownNestedChoice::Flag(true))
+const KNOWN_TRUE: bool = true
+const KNOWN_FALSE: bool = false
+const KNOWN_CHOICE: KnownChoice = KnownChoice::Second
+
+struct Diverger {}
+
+struct NeverWrapper {
+    value: u256,
+}
+
+impl Diverger {
+    fn fail(self) -> ! {
+        core::panic()
+    }
+
+    fn fail_mut(mut self) -> ! {
+        core::panic()
+    }
+}
+
+fn make_diverger() -> Diverger {
+    Diverger {}
+}
+
+fn scalar_rebind_result() -> u256 {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = mut second
+    handle.target = 7
+
+    first * 100 + second
+}
+
+#[test]
+fn scalar_capability_field_rebind_survives_a_function_boundary() {
+    assert!(scalar_rebind_result() == 107)
+}
+
+#[test]
+fn direct_write_through_scalar_capability_field_updates_the_target() {
+    let mut value: u256 = 1
+    let mut handle = ScalarHandle { target: mut value }
+
+    handle.target = 7
+
+    assert!(value == 7)
+}
+
+fn refined_capability_join_result() -> u256 {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let known = true
+    let selected = if known { mut first } else { mut second }
+
+    selected = 9
+    first * 100 + second
+}
+
+fn dynamic_capability_join_result(select_first: bool) -> u256 {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let selected = if select_first { mut first } else { mut second }
+
+    selected = 9
+    first * 100 + second
+}
+
+fn refined_handle_join_result() -> u256 {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let known = true
+    let selected = if known {
+        ScalarHandle { target: mut first }
+    } else {
+        ScalarHandle { target: mut second }
+    }
+
+    selected.target = 9
+    first * 100 + second
+}
+
+fn dynamic_handle_join_result(select_first: bool) -> u256 {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let selected = if select_first {
+        ScalarHandle { target: mut first }
+    } else {
+        ScalarHandle { target: mut second }
+    }
+
+    selected.target = 9
+    first * 100 + second
+}
+
+#[test]
+fn capability_join_uses_only_executable_sources() {
+    assert!(refined_capability_join_result() == 902)
+    assert!(dynamic_capability_join_result(select_first: true) == 902)
+    assert!(dynamic_capability_join_result(select_first: false) == 109)
+    assert!(refined_handle_join_result() == 902)
+    assert!(dynamic_handle_join_result(select_first: true) == 902)
+    assert!(dynamic_handle_join_result(select_first: false) == 109)
+}
+
+#[test]
+fn extracted_scalar_capability_after_field_rebind_updates_the_new_target() {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = mut second
+    let target = handle.target
+    target = 9
+
+    assert!(first == 1, "rebind changed the old scalar target")
+    assert!(second == 9, "extracted handle did not update the new scalar target")
+}
+
+#[test]
+fn direct_write_after_scalar_capability_field_rebind_updates_the_new_target() {
+    let mut first: u256 = 3
+    let mut second: u256 = 4
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = mut second
+    handle.target = 11
+
+    assert!(first == 3, "direct rebind changed the old scalar target")
+    assert!(second == 11, "direct write did not update the new scalar target")
+}
+
+#[test]
+fn projected_write_after_aggregate_capability_field_rebind_updates_the_new_target() {
+    let mut first = Cell { value: 5 }
+    let mut second = Cell { value: 6 }
+    let mut handle = CellHandle { target: mut first }
+
+    handle.target = mut second
+    handle.target.value = 13
+
+    assert!(first.value == 5, "rebind changed the old aggregate target")
+    assert!(
+        second.value == 13,
+        "projected write did not update the new aggregate target",
+    )
+}
+
+fn conditional_scalar_rebind_result(select_second: bool) -> u256 {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut third: u256 = 3
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if select_second { mut second } else { mut third }
+    handle.target = 17
+
+    first * 10000 + second * 100 + third
+}
+
+#[test]
+fn capability_field_rebind_preserves_control_flow_sources() {
+    assert!(conditional_scalar_rebind_result(select_second: true) == 11703)
+    assert!(conditional_scalar_rebind_result(select_second: false) == 10217)
+}
+
+fn diverging_branch_scalar_rebind_result(select_second: bool) -> u256 {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if select_second { mut second } else { core::panic() }
+    handle.target = 23
+
+    first * 100 + second
+}
+
+#[test]
+fn capability_field_rebind_ignores_diverging_control_flow_branches() {
+    assert!(diverging_branch_scalar_rebind_result(select_second: true) == 123)
+}
+
+fn diverging_match_block_scalar_rebind_result(choice: RebindChoice) -> u256 {
+    let mut first: u256 = 3
+    let mut second: u256 = 4
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = match choice {
+        RebindChoice::Second => { mut second }
+        RebindChoice::Abort => {
+            core::panic()
+        }
+    }
+    handle.target = 29
+
+    first * 100 + second
+}
+
+#[test]
+fn capability_field_rebind_ignores_diverging_match_and_block_arms() {
+    assert!(
+        diverging_match_block_scalar_rebind_result(choice: RebindChoice::Second) == 329,
+    )
+}
+
+fn diverging_method_scalar_rebind_result(select_second: bool) -> u256 {
+    let mut first: u256 = 5
+    let mut second: u256 = 6
+    let mut handle = ScalarHandle { target: mut first }
+    let diverger = Diverger {}
+
+    handle.target = if select_second { mut second } else { diverger.fail() }
+    handle.target = 31
+
+    first * 100 + second
+}
+
+#[test]
+fn capability_field_rebind_ignores_diverging_method_arms() {
+    assert!(diverging_method_scalar_rebind_result(select_second: true) == 531)
+}
+
+fn temporary_receiver_diverging_scalar_rebind_result(select_second: bool) -> u256 {
+    let mut first: u256 = 7
+    let mut second: u256 = 8
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if select_second { mut second } else { make_diverger().fail() }
+    handle.target = 37
+
+    first * 100 + second
+}
+
+#[test]
+fn capability_field_rebind_ignores_diverging_temporary_method_receivers() {
+    assert!(temporary_receiver_diverging_scalar_rebind_result(select_second: true) == 737)
+}
+
+fn deferred_method_diverging_scalar_rebind_result(select_second: bool) -> u256 {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let handle = ScalarHandle { target: mut first }
+    let assign = |value, target: mut u256, mut handle: own ScalarHandle| -> ScalarHandle {
+        handle.target = if select_second { mut target } else { value.fail() }
+        handle
+    }
+
+    let returned = assign.call_once(Diverger {}, mut second, handle)
+    returned.target = 83
+    first * 100 + second
+}
+
+#[test]
+fn deferred_method_never_return_rebinds_after_resolution() {
+    assert!(deferred_method_diverging_scalar_rebind_result(select_second: true) == 183)
+}
+
+fn aggregate_wrapped_diverging_scalar_rebind_result(select_second: bool) -> u256 {
+    let mut first: u256 = 10
+    let mut second: u256 = 11
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if select_second {
+        mut second
+    } else {
+        NeverWrapper { value: core::panic() }
+    }
+    handle.target = 41
+
+    first * 100 + second
+}
+
+#[test]
+fn capability_field_rebind_ignores_aggregate_wrapped_divergence() {
+    assert!(
+        aggregate_wrapped_diverging_scalar_rebind_result(select_second: true) == 1041,
+    )
+}
+
+fn eager_prefix_diverging_scalar_rebind_result(select_second: bool) -> u256 {
+    let mut first: u256 = 12
+    let mut second: u256 = 13
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if select_second {
+        mut second
+    } else {
+        assert!(core::panic())
+        let fallback: u256 = 17
+        fallback
+    }
+    handle.target = 43
+
+    first * 100 + second
+}
+
+#[test]
+fn capability_field_rebind_ignores_eager_prefix_divergence() {
+    assert!(eager_prefix_diverging_scalar_rebind_result(select_second: true) == 1243)
+}
+
+fn forced_and_diverging_scalar_rebind_result(select_second: bool) -> u256 {
+    let mut first: u256 = 14
+    let mut second: u256 = 15
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if select_second { mut second } else { true && core::panic() }
+    handle.target = 47
+
+    first * 100 + second
+}
+
+fn forced_or_diverging_scalar_rebind_result(select_second: bool) -> u256 {
+    let mut first: u256 = 16
+    let mut second: u256 = 17
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if select_second { mut second } else { false || core::panic() }
+    handle.target = 53
+
+    first * 100 + second
+}
+
+fn constant_if_diverging_scalar_rebind_result(select_second: bool) -> u256 {
+    let mut first: u256 = 18
+    let mut second: u256 = 19
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if select_second {
+        mut second
+    } else {
+        if true { core::panic() } else { 20 }
+    }
+    handle.target = 59
+
+    first * 100 + second
+}
+
+fn infinite_loop_scalar_rebind_result(select_second: bool) -> u256 {
+    let mut first: u256 = 21
+    let mut second: u256 = 22
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if select_second {
+        mut second
+    } else {
+        while true {}
+        23
+    }
+    handle.target = 61
+
+    first * 100 + second
+}
+
+#[test]
+fn capability_rebind_uses_only_reachable_short_circuit_and_loop_results() {
+    assert!(forced_and_diverging_scalar_rebind_result(select_second: true) == 1447)
+    assert!(forced_or_diverging_scalar_rebind_result(select_second: true) == 1653)
+    assert!(constant_if_diverging_scalar_rebind_result(select_second: true) == 1859)
+    assert!(infinite_loop_scalar_rebind_result(select_second: true) == 2161)
+}
+
+fn assert_false_scalar_rebind_result(select_second: bool) -> u256 {
+    let mut first: u256 = 24
+    let mut second: u256 = 25
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if select_second {
+        mut second
+    } else {
+        assert!(false)
+        26
+    }
+    handle.target = 67
+
+    first * 100 + second
+}
+
+fn known_variant_scalar_rebind_result() -> u256 {
+    let mut first: u256 = 27
+    let mut second: u256 = 28
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = match KnownChoice::Second {
+        KnownChoice::Second => mut second,
+        KnownChoice::Payload => 29,
+    }
+    handle.target = 71
+
+    first * 100 + second
+}
+
+fn block_tail_condition_scalar_rebind_result() -> u256 {
+    let mut first: u256 = 38
+    let mut second: u256 = 39
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if { true } { mut second } else { 40 }
+    handle.target = 83
+
+    first * 100 + second
+}
+
+fn with_body_condition_scalar_rebind_result() -> u256 {
+    let mut first: u256 = 41
+    let mut second: u256 = 42
+    let marker: bool = false
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if with (marker) { true } { mut second } else { 43 }
+    handle.target = 89
+
+    first * 100 + second
+}
+
+fn nested_if_condition_scalar_rebind_result() -> u256 {
+    let mut first: u256 = 44
+    let mut second: u256 = 45
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if (if true { true } else { false }) {
+        mut second
+    } else {
+        46
+    }
+    handle.target = 97
+
+    first * 100 + second
+}
+
+fn irrefutable_if_let_scalar_rebind_result() -> u256 {
+    let mut first: u256 = 50
+    let mut second: u256 = 51
+    let marker: u256 = 0
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if let ignored = marker { mut second } else { 52 }
+    handle.target = 101
+
+    first * 100 + second
+}
+
+fn known_if_let_match_scalar_rebind_result() -> u256 {
+    let mut first: u256 = 52
+    let mut second: u256 = 53
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if let KnownChoice::Second = KnownChoice::Second {
+        mut second
+    } else {
+        54
+    }
+    handle.target = 107
+
+    first * 100 + second
+}
+
+fn known_if_let_miss_scalar_rebind_result() -> u256 {
+    let mut first: u256 = 54
+    let mut second: u256 = 55
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if let KnownChoice::Payload = KnownChoice::Second {
+        56
+    } else {
+        mut second
+    }
+    handle.target = 109
+
+    first * 100 + second
+}
+
+fn irrefutable_while_let_scalar_rebind_result(select_second: bool) -> u256 {
+    let mut first: u256 = 58
+    let mut second: u256 = 59
+    let marker: u256 = 0
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if select_second {
+        mut second
+    } else {
+        while let ignored = marker {}
+        60
+    }
+    handle.target = 127
+
+    first * 100 + second
+}
+
+fn irrefutable_let_and_scalar_rebind_result(select_second: bool) -> u256 {
+    let mut first: u256 = 60
+    let mut second: u256 = 61
+    let marker: u256 = 0
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if select_second {
+        mut second
+    } else {
+        if let ignored = marker && core::panic() { 62 } else { 63 }
+    }
+    handle.target = 131
+
+    first * 100 + second
+}
+
+fn dynamic_if_let_scalar_write_result(choice: KnownChoice) -> u256 {
+    let mut first: u256 = 62
+    let mut second: u256 = 63
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if let KnownChoice::Second = choice { mut second } else { 64 }
+    handle.target = 137
+
+    first * 100 + second
+}
+
+fn absorbing_and_scalar_rebind_result(flag: bool) -> u256 {
+    let mut first: u256 = 64
+    let mut second: u256 = 65
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if flag && false { 66 } else { mut second }
+    handle.target = 139
+
+    first * 100 + second
+}
+
+fn absorbing_or_scalar_rebind_result(flag: bool) -> u256 {
+    let mut first: u256 = 66
+    let mut second: u256 = 67
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if flag || true { mut second } else { 68 }
+    handle.target = 149
+
+    first * 100 + second
+}
+
+fn escape_normal_true_scalar_rebind_result(escape: bool) -> u256 {
+    let mut first: u256 = 68
+    let mut second: u256 = 69
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if {
+        if escape {
+            return 9999
+        }
+        true
+    } {
+        mut second
+    } else {
+        70
+    }
+    handle.target = 151
+
+    first * 100 + second
+}
+
+fn literal_if_let_match_scalar_rebind_result() -> u256 {
+    let mut first: u256 = 70
+    let mut second: u256 = 71
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if let true = true { mut second } else { 72 }
+    handle.target = 157
+
+    first * 100 + second
+}
+
+fn literal_if_let_miss_scalar_rebind_result() -> u256 {
+    let mut first: u256 = 72
+    let mut second: u256 = 73
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if let false = true { 74 } else { mut second }
+    handle.target = 163
+
+    first * 100 + second
+}
+
+fn known_literal_match_scalar_rebind_result() -> u256 {
+    let mut first: u256 = 74
+    let mut second: u256 = 75
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = match true {
+        true => mut second,
+        false => 76,
+    }
+    handle.target = 167
+
+    first * 100 + second
+}
+
+fn known_payload_match_scalar_rebind_result() -> u256 {
+    let mut first: u256 = 76
+    let mut second: u256 = 77
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if let KnownPayloadChoice::Value(true) = KnownPayloadChoice::Value(true) {
+        mut second
+    } else {
+        78
+    }
+    handle.target = 173
+
+    first * 100 + second
+}
+
+fn known_payload_miss_scalar_rebind_result() -> u256 {
+    let mut first: u256 = 78
+    let mut second: u256 = 79
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if let KnownPayloadChoice::Value(false) = KnownPayloadChoice::Value(true) {
+        80
+    } else {
+        mut second
+    }
+    handle.target = 179
+
+    first * 100 + second
+}
+
+fn match_all_true_scalar_rebind_result(choice: KnownChoice) -> u256 {
+    let mut first: u256 = 80
+    let mut second: u256 = 81
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if match choice {
+        KnownChoice::Second => true,
+        KnownChoice::Payload => true,
+    } {
+        mut second
+    } else {
+        82
+    }
+    handle.target = 181
+
+    first * 100 + second
+}
+
+fn match_all_false_scalar_rebind_result(choice: KnownChoice) -> u256 {
+    let mut first: u256 = 82
+    let mut second: u256 = 83
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if match choice {
+        KnownChoice::Second => false,
+        KnownChoice::Payload => false,
+    } {
+        84
+    } else {
+        mut second
+    }
+    handle.target = 191
+
+    first * 100 + second
+}
+
+fn match_mixed_scalar_write_result(choice: KnownChoice) -> u256 {
+    let mut first: u256 = 84
+    let mut second: u256 = 85
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if match choice {
+        KnownChoice::Second => true,
+        KnownChoice::Payload => false,
+    } {
+        mut second
+    } else {
+        86
+    }
+    handle.target = 193
+
+    first * 100 + second
+}
+
+fn match_known_scalar_rebind_result() -> u256 {
+    let mut first: u256 = 86
+    let mut second: u256 = 87
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if match KnownChoice::Second {
+        KnownChoice::Second => true,
+        KnownChoice::Payload => false,
+    } {
+        mut second
+    } else {
+        88
+    }
+    handle.target = 197
+
+    first * 100 + second
+}
+
+fn match_escape_scalar_rebind_result(choice: KnownChoice) -> u256 {
+    let mut first: u256 = 88
+    let mut second: u256 = 89
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if match choice {
+        KnownChoice::Second => true,
+        KnownChoice::Payload => return 9999,
+    } {
+        mut second
+    } else {
+        90
+    }
+    handle.target = 199
+
+    first * 100 + second
+}
+
+#[test]
+fn assertion_and_known_constructor_dead_results_do_not_force_write_through() {
+    assert!(assert_false_scalar_rebind_result(select_second: true) == 2467)
+    assert!(known_variant_scalar_rebind_result() == 2771)
+}
+
+#[test]
+fn statically_known_wrapped_conditions_discard_dead_payload_results() {
+    assert!(block_tail_condition_scalar_rebind_result() == 3883)
+    assert!(with_body_condition_scalar_rebind_result() == 4189)
+    assert!(nested_if_condition_scalar_rebind_result() == 4497)
+}
+
+#[test]
+fn pattern_condition_reachability_selects_rebind_or_write_through() {
+    assert!(irrefutable_if_let_scalar_rebind_result() == 5101)
+    assert!(known_if_let_match_scalar_rebind_result() == 5307)
+    assert!(known_if_let_miss_scalar_rebind_result() == 5509)
+    assert!(irrefutable_while_let_scalar_rebind_result(select_second: true) == 5927)
+    assert!(irrefutable_let_and_scalar_rebind_result(select_second: true) == 6131)
+    assert!(dynamic_if_let_scalar_write_result(choice: KnownChoice::Second) == 13763)
+    assert!(dynamic_if_let_scalar_write_result(choice: KnownChoice::Payload) == 13763)
+    assert!(absorbing_and_scalar_rebind_result(flag: true) == 6539)
+    assert!(absorbing_and_scalar_rebind_result(flag: false) == 6539)
+    assert!(absorbing_or_scalar_rebind_result(flag: true) == 6749)
+    assert!(absorbing_or_scalar_rebind_result(flag: false) == 6749)
+    assert!(escape_normal_true_scalar_rebind_result(escape: false) == 6951)
+    assert!(escape_normal_true_scalar_rebind_result(escape: true) == 9999)
+    assert!(literal_if_let_match_scalar_rebind_result() == 7157)
+    assert!(literal_if_let_miss_scalar_rebind_result() == 7363)
+    assert!(known_literal_match_scalar_rebind_result() == 7567)
+    assert!(known_payload_match_scalar_rebind_result() == 7773)
+    assert!(known_payload_miss_scalar_rebind_result() == 7979)
+    assert!(match_all_true_scalar_rebind_result(choice: KnownChoice::Second) == 8181)
+    assert!(match_all_true_scalar_rebind_result(choice: KnownChoice::Payload) == 8181)
+    assert!(match_all_false_scalar_rebind_result(choice: KnownChoice::Second) == 8391)
+    assert!(match_all_false_scalar_rebind_result(choice: KnownChoice::Payload) == 8391)
+    assert!(match_mixed_scalar_write_result(choice: KnownChoice::Second) == 19385)
+    assert!(match_mixed_scalar_write_result(choice: KnownChoice::Payload) == 19385)
+    assert!(match_known_scalar_rebind_result() == 8797)
+    assert!(match_escape_scalar_rebind_result(choice: KnownChoice::Second) == 8999)
+    assert!(match_escape_scalar_rebind_result(choice: KnownChoice::Payload) == 9999)
+}
+
+fn completing_short_circuit_write_result(use_capability_value: bool, use_and: bool) -> u256 {
+    let mut first: u256 = 30
+    let mut second: u256 = 31
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if use_capability_value {
+        mut second
+    } else if use_and {
+        false && core::panic()
+        32
+    } else {
+        true || core::panic()
+        33
+    }
+    handle.target = 73
+
+    first * 100 + second
+}
+
+fn completing_loop_write_result(use_capability_value: bool) -> u256 {
+    let mut first: u256 = 34
+    let mut second: u256 = 35
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if use_capability_value {
+        mut second
+    } else {
+        while true {
+            break
+        }
+        36
+    }
+    handle.target = 79
+
+    first * 100 + second
+}
+
+#[test]
+fn completing_short_circuits_and_loops_keep_write_through_semantics() {
+    assert!(
+        completing_short_circuit_write_result(
+            use_capability_value: true,
+            use_and: true,
+        ) == 7331,
+    )
+    assert!(
+        completing_short_circuit_write_result(
+            use_capability_value: false,
+            use_and: true,
+        ) == 7331,
+    )
+    assert!(
+        completing_short_circuit_write_result(
+            use_capability_value: true,
+            use_and: false,
+        ) == 7331,
+    )
+    assert!(completing_loop_write_result(use_capability_value: true) == 7935)
+    assert!(completing_loop_write_result(use_capability_value: false) == 7935)
+}
+
+fn mixed_live_branch_scalar_write_result(use_capability_value: bool) -> u256 {
+    let mut first: u256 = 7
+    let mut second: u256 = 8
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if use_capability_value { mut second } else { 9 }
+    handle.target = 37
+
+    first * 100 + second
+}
+
+#[test]
+fn live_mixed_capability_and_payload_arms_remain_write_through() {
+    assert!(mixed_live_branch_scalar_write_result(use_capability_value: true) == 3708)
+    assert!(mixed_live_branch_scalar_write_result(use_capability_value: false) == 3708)
+}
+
+fn mixed_live_branch_array_write_result(use_capability_value: bool) -> u256 {
+    let mut first: [u8; 3] = "abc"
+    let mut second: [u8; 3] = "def"
+    let mut handle = ByteArrayHandle { target: mut first }
+
+    handle.target = if use_capability_value { mut second } else { "ghi" }
+    handle.target = "jkl"
+
+    (first[0] as u256) * 1000 + (second[0] as u256)
+}
+
+#[test]
+fn expected_array_context_reaches_live_mixed_payload_arms() {
+    assert!(mixed_live_branch_array_write_result(use_capability_value: true) == 106100)
+    assert!(mixed_live_branch_array_write_result(use_capability_value: false) == 106100)
+}
+
+#[test]
+fn nested_capability_field_rebind_uses_the_inner_slot() {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut inner = ScalarHandle { target: mut first }
+    let outer = NestedScalarHandle { target: mut inner }
+
+    outer.target.target = mut second
+    outer.target.target = 19
+
+    assert!(first == 1, "nested rebind changed the old scalar target")
+    assert!(second == 19, "nested rebind did not update the new scalar target")
+}
+
+struct CapabilityForwarder {}
+
+impl CapabilityForwarder {
+    fn forward(self, value: mut u256) -> mut u256 {
+        value
+    }
+}
+
+struct OperatorForwarder {
+    target: mut u256,
+}
+
+impl Add<OperatorForwarder> for OperatorForwarder {
+    type Output = mut u256
+
+    fn add(own self, _ other: own OperatorForwarder) -> mut u256 {
+        self.target
+    }
+}
+
+impl Neg for OperatorForwarder {
+    type Output = mut u256
+
+    fn neg(own self) -> mut u256 {
+        self.target
+    }
+}
+
+fn forward_capability(value: mut u256) -> mut u256 {
+    value
+}
+
+fn forward_payload(value: u256) -> u256 {
+    value
+}
+
+fn make_scalar_handle(target: mut u256) -> ScalarHandle {
+    ScalarHandle { target }
+}
+
+#[test]
+fn capability_returning_binary_and_unary_operators_rebind() {
+    let mut binary_old: u256 = 1
+    let mut binary_new: u256 = 2
+    let mut binary_other: u256 = 3
+    let mut binary_handle = ScalarHandle { target: mut binary_old }
+    let left = OperatorForwarder { target: mut binary_new }
+    let right = OperatorForwarder { target: mut binary_other }
+
+    binary_handle.target = left + right
+    binary_handle.target = 107
+
+    assert!(binary_old == 1)
+    assert!(binary_new == 107)
+    assert!(binary_other == 3)
+
+    let mut unary_old: u256 = 4
+    let mut unary_new: u256 = 5
+    let mut unary_handle = ScalarHandle { target: mut unary_old }
+
+    unary_handle.target = -OperatorForwarder { target: mut unary_new }
+    unary_handle.target = 109
+
+    assert!(unary_old == 4)
+    assert!(unary_new == 109)
+}
+
+#[test]
+fn deferred_capability_operator_rebind_preserves_primitive_payload_inference() {
+    let mut old: u256 = 6
+    let mut selected: u256 = 7
+    let mut other: u256 = 8
+    let handle = ScalarHandle { target: mut old }
+    let assign =
+        |left: own, right: own, mut handle: own ScalarHandle| -> ScalarHandle {
+            handle.target = left + right
+            handle
+        }
+    let returned = assign.call_once(
+        OperatorForwarder { target: mut selected },
+        OperatorForwarder { target: mut other },
+        handle,
+    )
+
+    returned.target = 113
+    assert!(old == 6)
+    assert!(selected == 113)
+    assert!(other == 8)
+
+    let mut payload: u256 = 9
+    let mut payload_handle = ScalarHandle { target: mut payload }
+    payload_handle.target = 20 + 22
+    assert!(payload_handle.target == 42)
+    payload_handle.target += 1
+    assert!(payload_handle.target == 43)
+}
+
+#[test]
+fn capability_returning_calls_rebind_while_payload_calls_write_through() {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = forward_capability(value: mut second)
+    handle.target = forward_payload(value: 101)
+
+    assert!(first == 1)
+    assert!(second == 101)
+}
+
+#[test]
+fn capability_returning_methods_and_closure_calls_rebind() {
+    let mut first: u256 = 3
+    let mut second: u256 = 4
+    let mut third: u256 = 5
+    let mut handle = ScalarHandle { target: mut first }
+    let forward = |value: mut u256| -> mut u256 { value }
+
+    handle.target = CapabilityForwarder {}.forward(value: mut second)
+    handle.target = forward.call_once(mut third)
+    handle.target = 103
+
+    assert!(first == 3)
+    assert!(second == 4)
+    assert!(third == 103)
+}
+
+#[test]
+fn inferred_receiver_capability_return_rebinds_after_deferred_resolution() {
+    let mut first: u256 = 6
+    let mut second: u256 = 7
+    let handle = ScalarHandle { target: mut first }
+    let assign =
+        |forwarder, target: mut u256, mut handle: own ScalarHandle| -> ScalarHandle {
+        handle.target = forwarder.forward(value: mut target)
+        handle
+    }
+
+    let returned = assign.call_once(CapabilityForwarder {}, mut second, handle)
+    returned.target = 107
+
+    assert!(first == 6)
+    assert!(second == 107)
+}
+
+#[test]
+fn nonplace_capability_projection_rebinds_but_local_projection_writes_through() {
+    let mut first: u256 = 8
+    let mut second: u256 = 9
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = make_scalar_handle(target: mut second).target
+    handle.target = 109
+    assert!(first == 8)
+    assert!(second == 109)
+
+    let mut third: u256 = 10
+    let mut fourth: u256 = 11
+    let mut destination = ScalarHandle { target: mut third }
+    let source = ScalarHandle { target: mut fourth }
+    destination.target = source.target
+    destination.target = 113
+
+    assert!(third == 113)
+    assert!(fourth == 11)
+}
+
+#[test]
+fn tuple_and_array_capability_slots_support_rebind_and_write_through() {
+    let mut tuple_first: u256 = 12
+    let mut tuple_second: u256 = 13
+    let mut tuple_slots = (mut tuple_first,)
+    tuple_slots.0 = mut tuple_second
+    tuple_slots.0 = 127
+    assert!(tuple_first == 12)
+    assert!(tuple_second == 127)
+
+    let mut array_first: u256 = 14
+    let mut array_second: u256 = 15
+    let mut array_slots: [mut u256; 1] = [mut array_first]
+    array_slots[0] = mut array_second
+    array_slots[0] = 131
+    assert!(array_first == 14)
+    assert!(array_second == 131)
+}
+
+fn nested_payload_match_result() -> u256 {
+    let mut first: u256 = 132
+    let mut second: u256 = 133
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if let KnownOuterChoice::Value(KnownNestedChoice::Count(5)) = KnownOuterChoice::Value(KnownNestedChoice::Count(5)) {
+        mut second
+    } else {
+        134
+    }
+    handle.target = 137
+    first * 100 + second
+}
+
+fn nested_payload_miss_result() -> u256 {
+    let mut first: u256 = 134
+    let mut second: u256 = 135
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if let KnownOuterChoice::Value(KnownNestedChoice::Count(6)) = KnownOuterChoice::Value(KnownNestedChoice::Count(5)) {
+        136
+    } else {
+        mut second
+    }
+    handle.target = 139
+    first * 100 + second
+}
+
+fn unknown_nested_payload_stays_conservative(flag: bool) -> u256 {
+    let mut first: u256 = 136
+    let mut second: u256 = 137
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if let KnownOuterChoice::Value(KnownNestedChoice::Flag(true)) = KnownOuterChoice::Value(KnownNestedChoice::Flag(flag)) {
+        mut second
+    } else {
+        138
+    }
+    handle.target = 149
+    first * 100 + second
+}
+
+fn known_record_payload_match_result() -> u256 {
+    let mut first: u256 = 140
+    let mut second: u256 = 141
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if let KnownRecord { flag: true, count: 5 } = (KnownRecord { count: 5, flag: true }) {
+        mut second
+    } else {
+        142
+    }
+    handle.target = 151
+    first * 100 + second
+}
+
+fn known_tuple_payload_match_result() -> u256 {
+    let mut first: u256 = 142
+    let mut second: u256 = 143
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if let (true, 5) = (true, 5 as u256) {
+        mut second
+    } else {
+        144
+    }
+    handle.target = 157
+    first * 100 + second
+}
+
+fn known_const_payload_match_result() -> u256 {
+    let mut first: u256 = 144
+    let mut second: u256 = 145
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if let KnownOuterChoice::Value(KnownNestedChoice::Flag(true)) = KNOWN_NESTED_PAYLOAD {
+        mut second
+    } else {
+        146
+    }
+    handle.target = 163
+    first * 100 + second
+}
+
+fn known_payload_wildcard_fallback_result() -> u256 {
+    let mut first: u256 = 150
+    let mut second: u256 = 151
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = match KnownNestedChoice::Flag(true) {
+        KnownNestedChoice::Flag(false) => 152,
+        _ => mut second,
+    }
+    handle.target = 179
+    first * 100 + second
+}
+
+fn divergent_if_scrutinee_keeps_sole_normal_shape(abort: bool) -> u256 {
+    let mut first: u256 = 146
+    let mut second: u256 = 147
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if let KnownNestedChoice::Flag(true) = if abort {
+        core::panic()
+    } else {
+        KnownNestedChoice::Flag(true)
+    } {
+        mut second
+    } else {
+        148
+    }
+    handle.target = 167
+    first * 100 + second
+}
+
+fn divergent_match_scrutinee_keeps_sole_normal_shape(abort: bool) -> u256 {
+    let mut first: u256 = 148
+    let mut second: u256 = 149
+    let mut handle = ScalarHandle { target: mut first }
+
+    handle.target = if let KnownNestedChoice::Flag(true) = match abort {
+        true => core::panic(),
+        false => KnownNestedChoice::Flag(true),
+    } {
+        mut second
+    } else {
+        150
+    }
+    handle.target = 173
+    first * 100 + second
+}
+
+fn const_true_rebind_result() -> u256 {
+    let mut first: u256 = 152
+    let mut second: u256 = 153
+    let mut handle = ScalarHandle { target: mut first }
+    handle.target = if KNOWN_TRUE { mut second } else { 154 }
+    handle.target = 181
+    first * 100 + second
+}
+
+fn const_false_rebind_result() -> u256 {
+    let mut first: u256 = 154
+    let mut second: u256 = 155
+    let mut handle = ScalarHandle { target: mut first }
+    handle.target = if KNOWN_FALSE { 156 } else { mut second }
+    handle.target = 191
+    first * 100 + second
+}
+
+fn const_enum_rebind_result() -> u256 {
+    let mut first: u256 = 156
+    let mut second: u256 = 157
+    let mut handle = ScalarHandle { target: mut first }
+    handle.target = match KNOWN_CHOICE {
+        KnownChoice::Second => mut second,
+        KnownChoice::Payload => 158,
+    }
+    handle.target = 193
+    first * 100 + second
+}
+
+#[test]
+fn structural_and_constant_scrutinees_prune_only_proven_pattern_paths() {
+    assert!(nested_payload_match_result() == 13337, "nested payload match")
+    assert!(nested_payload_miss_result() == 13539, "nested payload miss")
+    assert!(
+        unknown_nested_payload_stays_conservative(flag: true) == 15037,
+        "unknown nested payload true",
+    )
+    assert!(
+        unknown_nested_payload_stays_conservative(flag: false) == 15037,
+        "unknown nested payload false",
+    )
+    assert!(known_record_payload_match_result() == 14151, "record payload")
+    assert!(known_tuple_payload_match_result() == 14357, "tuple payload")
+    assert!(known_const_payload_match_result() == 14563, "const payload")
+    assert!(
+        known_payload_wildcard_fallback_result() == 15179,
+        "wildcard fallback",
+    )
+    assert!(
+        divergent_if_scrutinee_keeps_sole_normal_shape(abort: false) == 14767,
+        "divergent if scrutinee",
+    )
+    assert!(
+        divergent_match_scrutinee_keeps_sole_normal_shape(abort: false) == 14973,
+        "divergent match scrutinee",
+    )
+    assert!(const_true_rebind_result() == 15381, "const true")
+    assert!(const_false_rebind_result() == 15591, "const false")
+    assert!(const_enum_rebind_result() == 15793, "const enum")
+}

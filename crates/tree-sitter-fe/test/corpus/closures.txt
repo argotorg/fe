@@ -1,0 +1,396 @@
+==================
+Closure parameter modes
+==================
+
+fn closure_modes<T: Trait>() {
+    let never = |value: view !| value
+    let own_mode = |
+        value: own
+    | value
+    let ref_mode = |
+        value: ref
+    | value
+    let mut_mode = |
+        value: mut
+    | value
+    let view_mode = |
+        value: view
+    | value
+}
+
+---
+
+(source_file
+  (function_definition
+    (identifier)
+    (generic_param_list
+      (type_generic_param
+        (identifier)
+        (type_bound_list
+          (type_bound
+            (path
+              (path_segment
+                (identifier)))))))
+    (parameter_list)
+    (block
+      (let_statement
+        (path_pattern
+          (path
+            (path_segment
+              (identifier))))
+        (closure_expression
+          (closure_parameter_list
+            (closure_parameter
+              (identifier)
+              (mode_type
+                (never_type))))
+          (identifier)))
+      (let_statement
+        (path_pattern
+          (path
+            (path_segment
+              (identifier))))
+        (closure_expression
+          (closure_parameter_list
+            (closure_parameter
+              (identifier)))
+          (identifier)))
+      (let_statement
+        (path_pattern
+          (path
+            (path_segment
+              (identifier))))
+        (closure_expression
+          (closure_parameter_list
+            (closure_parameter
+              (identifier)))
+          (identifier)))
+      (let_statement
+        (path_pattern
+          (path
+            (path_segment
+              (identifier))))
+        (closure_expression
+          (closure_parameter_list
+            (closure_parameter
+              (identifier)))
+          (identifier)))
+      (let_statement
+        (path_pattern
+          (path
+            (path_segment
+              (identifier))))
+        (closure_expression
+          (closure_parameter_list
+            (closure_parameter
+              (identifier)))
+          (identifier))))))
+
+==================
+Contextual view types with trivia (Tree-sitter editor recovery)
+==================
+
+fn contextual_view<T: Trait>() {
+    let line_comment =
+        |value: view <T // > inside trivia
+            as Trait>::Item| value
+    let line_comments_at_boundaries =
+        |value: view // before the qualified type
+            <T // inside the qualified type
+            as Trait> // before the associated item separator
+            ::Item| value
+    let block_comment =
+        |value: view <T /* editor recovery only: > */ as Trait>::Item| value
+    let nested_block_comment =
+        |value: view <T /* outer /* nested > */ end */ as Trait>::Item| value
+    let block_comments_at_boundaries =
+        |value: view /* before */ <T /* inside */ as Trait> /* after */ ::Item| value
+    let string =
+        |value: view <Holder<" > as "> as Trait>::Item| value
+    let const_comparison =
+        |value: view <Holder<{ 2 > 1 }> as Trait>::Item| value
+    let parenthesized_const_comparison =
+        |value: view <Holder<{ (2 > 1) }> as Trait>::Item| value
+    let bracketed_const_comparison =
+        |value: view <Holder<{ [2 > 1] }> as Trait>::Item| value
+    let generic = |value: view<T>| value
+    let qualified = |value: view::Nested| value
+}
+
+---
+
+(source_file
+  (function_definition
+    (identifier)
+    (generic_param_list
+      (type_generic_param
+        (identifier)
+        (type_bound_list
+          (type_bound
+            (path
+              (path_segment
+                (identifier)))))))
+    (parameter_list)
+    (block
+      (let_statement
+        (path_pattern
+          (path
+            (path_segment
+              (identifier))))
+        (closure_expression
+          (closure_parameter_list
+            (closure_parameter
+              (identifier)
+              (mode_type
+                (qualified_path_type
+                  (path_type
+                    (path
+                      (path_segment
+                        (identifier))))
+                  (line_comment)
+                  (trait_ref
+                    (path
+                      (path_segment
+                        (identifier))))
+                  (identifier)))))
+          (identifier)))
+      (let_statement
+        (path_pattern
+          (path
+            (path_segment
+              (identifier))))
+        (closure_expression
+          (closure_parameter_list
+            (closure_parameter
+              (identifier)
+              (mode_type
+                (line_comment)
+                (qualified_path_type
+                  (path_type
+                    (path
+                      (path_segment
+                        (identifier))))
+                  (line_comment)
+                  (trait_ref
+                    (path
+                      (path_segment
+                        (identifier))))
+                  (line_comment)
+                  (identifier)))))
+          (identifier)))
+      (let_statement
+        (path_pattern
+          (path
+            (path_segment
+              (identifier))))
+        (closure_expression
+          (closure_parameter_list
+            (closure_parameter
+              (identifier)
+              (mode_type
+                (qualified_path_type
+                  (path_type
+                    (path
+                      (path_segment
+                        (identifier))))
+                  (block_comment)
+                  (trait_ref
+                    (path
+                      (path_segment
+                        (identifier))))
+                  (identifier)))))
+          (identifier)))
+      (let_statement
+        (path_pattern
+          (path
+            (path_segment
+              (identifier))))
+        (closure_expression
+          (closure_parameter_list
+            (closure_parameter
+              (identifier)
+              (mode_type
+                (qualified_path_type
+                  (path_type
+                    (path
+                      (path_segment
+                        (identifier))))
+                  (block_comment)
+                  (trait_ref
+                    (path
+                      (path_segment
+                        (identifier))))
+                  (identifier)))))
+          (identifier)))
+      (let_statement
+        (path_pattern
+          (path
+            (path_segment
+              (identifier))))
+        (closure_expression
+          (closure_parameter_list
+            (closure_parameter
+              (identifier)
+              (mode_type
+                (block_comment)
+                (qualified_path_type
+                  (path_type
+                    (path
+                      (path_segment
+                        (identifier))))
+                  (block_comment)
+                  (trait_ref
+                    (path
+                      (path_segment
+                        (identifier))))
+                  (block_comment)
+                  (identifier)))))
+          (identifier)))
+      (let_statement
+        (path_pattern
+          (path
+            (path_segment
+              (identifier))))
+        (closure_expression
+          (closure_parameter_list
+            (closure_parameter
+              (identifier)
+              (mode_type
+                (qualified_path_type
+                  (path_type
+                    (path
+                      (path_segment
+                        (identifier)))
+                    (generic_arg_list
+                      (literal
+                        (string_literal))))
+                  (trait_ref
+                    (path
+                      (path_segment
+                        (identifier))))
+                  (identifier)))))
+          (identifier)))
+      (let_statement
+        (path_pattern
+          (path
+            (path_segment
+              (identifier))))
+        (closure_expression
+          (closure_parameter_list
+            (closure_parameter
+              (identifier)
+              (mode_type
+                (qualified_path_type
+                  (path_type
+                    (path
+                      (path_segment
+                        (identifier)))
+                    (generic_arg_list
+                      (block
+                        (expression_statement
+                          (binary_expression
+                            (literal
+                              (integer_literal))
+                            (literal
+                              (integer_literal)))))))
+                  (trait_ref
+                    (path
+                      (path_segment
+                        (identifier))))
+                  (identifier)))))
+          (identifier)))
+      (let_statement
+        (path_pattern
+          (path
+            (path_segment
+              (identifier))))
+        (closure_expression
+          (closure_parameter_list
+            (closure_parameter
+              (identifier)
+              (mode_type
+                (qualified_path_type
+                  (path_type
+                    (path
+                      (path_segment
+                        (identifier)))
+                    (generic_arg_list
+                      (block
+                        (expression_statement
+                          (paren_expression
+                            (binary_expression
+                              (literal
+                                (integer_literal))
+                              (literal
+                                (integer_literal))))))))
+                  (trait_ref
+                    (path
+                      (path_segment
+                        (identifier))))
+                  (identifier)))))
+          (identifier)))
+      (let_statement
+        (path_pattern
+          (path
+            (path_segment
+              (identifier))))
+        (closure_expression
+          (closure_parameter_list
+            (closure_parameter
+              (identifier)
+              (mode_type
+                (qualified_path_type
+                  (path_type
+                    (path
+                      (path_segment
+                        (identifier)))
+                    (generic_arg_list
+                      (block
+                        (expression_statement
+                          (array_expression
+                            (binary_expression
+                              (literal
+                                (integer_literal))
+                              (literal
+                                (integer_literal))))))))
+                  (trait_ref
+                    (path
+                      (path_segment
+                        (identifier))))
+                  (identifier)))))
+          (identifier)))
+      (let_statement
+        (path_pattern
+          (path
+            (path_segment
+              (identifier))))
+        (closure_expression
+          (closure_parameter_list
+            (closure_parameter
+              (identifier)
+              (path_type
+                (path
+                  (path_segment
+                    (identifier)))
+                (generic_arg_list
+                  (path_type
+                    (path
+                      (path_segment
+                        (identifier))))))))
+          (identifier)))
+      (let_statement
+        (path_pattern
+          (path
+            (path_segment
+              (identifier))))
+        (closure_expression
+          (closure_parameter_list
+            (closure_parameter
+              (identifier)
+              (path_type
+                (path
+                  (path_segment
+                    (identifier))
+                  (path_segment
+                    (identifier))))))
+          (identifier))))))

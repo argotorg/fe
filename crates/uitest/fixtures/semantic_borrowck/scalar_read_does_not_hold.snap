@@ -1,0 +1,5 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/scalar_read_does_not_hold.fe
+---

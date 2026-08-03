@@ -4,8 +4,8 @@ use async_lsp::lsp_types::{InlayHint, InlayHintKind, InlayHintLabel};
 use common::InputDb;
 use driver::DriverDataBase;
 use hir::{
-    analysis::ty::ty_check::check_func_body,
-    hir_def::{Body, ItemKind, StmtId, TopLevelMod},
+    core::semantic::LogicalCallableSignature,
+    hir_def::{Body, Expr, ItemKind, Partial, StmtId, TopLevelMod},
     lower::map_file_to_mod,
     visitor::prelude::*,
 };
@@ -37,20 +37,14 @@ pub async fn handle_inlay_hints(
 }
 
 fn collect_hints_from_mod(db: &DriverDataBase, top_mod: TopLevelMod, hints: &mut Vec<InlayHint>) {
-    // Iterate through all items in the module
-    let items = top_mod.scope_graph(db).items_dfs(db);
-
-    for item in items {
-        match item {
-            ItemKind::Func(func) => {
-                // Get the typed body for this function
-                let (_, typed_body) = check_func_body(db, func);
-                if let Some(body) = typed_body.body() {
-                    collect_hints_from_body(db, body, typed_body, hints);
-                }
-            }
-            _ => continue,
-        }
+    for item in top_mod.scope_graph(db).items_dfs(db) {
+        let ItemKind::Body(body) = item else {
+            continue;
+        };
+        let Some(typed_body) = body.typed_body(db) else {
+            continue;
+        };
+        collect_hints_from_body(db, body, typed_body, hints);
     }
 }
 
@@ -68,6 +62,44 @@ fn collect_hints_from_body(
         hints,
     };
     hint_collector.visit_body(&mut visitor_ctxt, body);
+    collect_call_parameter_hints(db, body, hints);
+}
+
+fn collect_call_parameter_hints(db: &DriverDataBase, body: Body<'_>, hints: &mut Vec<InlayHint>) {
+    for site in body.call_sites(db) {
+        let Some(signature) = LogicalCallableSignature::for_call_site(db, &site) else {
+            continue;
+        };
+        let args = match site.expr_id.data(db, body) {
+            Partial::Present(Expr::Call(_, args))
+            | Partial::Present(Expr::MethodCall(_, _, _, args)) => args,
+            _ => continue,
+        };
+        for (arg, param) in args.iter().zip(signature.params) {
+            let Some(name) = param.name else {
+                continue;
+            };
+            if arg.label_eagerly(db, body) == Some(name) {
+                continue;
+            }
+            let Some(span) = arg.expr.span(body).resolve(db) else {
+                continue;
+            };
+            let Ok(range) = to_lsp_range_from_span(span, db) else {
+                continue;
+            };
+            hints.push(InlayHint {
+                position: range.start,
+                label: InlayHintLabel::String(format!("{}:", name.data(db))),
+                kind: Some(InlayHintKind::PARAMETER),
+                text_edits: None,
+                tooltip: None,
+                padding_left: None,
+                padding_right: Some(true),
+                data: None,
+            });
+        }
+    }
 }
 
 struct InlayHintCollector<'a, 'db> {
@@ -114,5 +146,46 @@ impl<'a, 'db> Visitor<'db> for InlayHintCollector<'a, 'db> {
 
         // Continue visiting nested statements
         walk_stmt(self, ctxt, stmt);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::InputDb;
+    use hir::lower::map_file_to_mod;
+    use url::Url;
+
+    #[test]
+    fn call_parameter_hints_use_logical_closure_parameters() {
+        let mut db = DriverDataBase::default();
+        let source = r#"use core::functional::Fn
+
+fn ordinary(value: own u256) -> u256 { value }
+
+fn main() {
+    let add = |amount: own u256| -> u256 { amount + 1 }
+    ordinary(40)
+    add(41)
+    Fn<(u256,), u256>::call(add, 42)
+}
+"#;
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///test.fe").unwrap(),
+            Some(source.to_string()),
+        );
+        let top_mod = map_file_to_mod(&db, file);
+        let mut hints = Vec::new();
+        collect_hints_from_mod(&db, top_mod, &mut hints);
+        let labels = hints
+            .into_iter()
+            .filter(|hint| hint.kind == Some(InlayHintKind::PARAMETER))
+            .map(|hint| match hint.label {
+                InlayHintLabel::String(label) => label,
+                InlayHintLabel::LabelParts(_) => unreachable!(),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(labels, vec!["value:", "amount:", "self:", "amount:"]);
     }
 }

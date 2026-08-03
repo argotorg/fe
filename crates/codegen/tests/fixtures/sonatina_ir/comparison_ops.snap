@@ -11,26 +11,14 @@ global private const @layout_0 $const_region_0 = {1, 1, 1, 1, 1, 1};
 
 func private %comparison_ops() -> @layout_0 {
     block0:
-        v0.*i256 = alloca i256;
-        v1.*i256 = alloca i256;
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
         jump block1;
 
     block1:
-        mstore v0 1.i256 i256;
-        mstore v1 2.i256 i256;
-        mstore v2 2.i256 i256;
-        mstore v3 2.i256 i256;
-        mstore v4 2.i256 i256;
-        mstore v5 3.i256 i256;
-        v10.constref<@layout_0> = const.ref $const_region_0;
-        v11.objref<@layout_0> = obj.alloc @layout_0;
-        obj.init.const v11 v10;
-        v12.@layout_0 = obj.load v11;
-        return v12;
+        v4.constref<@layout_0> = const.ref $const_region_0;
+        v5.objref<@layout_0> = obj.alloc @layout_0;
+        obj.init.const v5 v4;
+        v6.@layout_0 = obj.load v5;
+        return v6;
 }
 
 func private %main_root() {

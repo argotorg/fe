@@ -1,6 +1,10 @@
 #[path = "support/layout.rs"]
 mod layout_test_support;
 
+use common::{
+    InputDb,
+    stdlib::{HasBuiltinCore, HasBuiltinStd},
+};
 use cranelift_entity::EntityRef;
 use fe_hir::{
     analysis::{
@@ -9,10 +13,13 @@ use fe_hir::{
             EffectProviderSubst, GenericSubst, ImplEnv, LayoutEvidenceBase,
             LayoutEvidenceComponentValue, LayoutEvidenceError, LayoutEvidenceExpr,
             LayoutEvidenceIndex, LayoutEvidenceOperand, LayoutEvidenceVerifyError, NExpr,
-            NSStmtKind, SStmtId, SemanticInstanceKey, collect_layout_evidence_diagnostic_vouchers,
-            get_or_build_semantic_instance, identity_semantic_instance_key, layout_evidence_body,
+            NSStmtKind, NSTerminatorKind, SBlockId, SStmtId, SemanticInstanceKey,
+            collect_layout_evidence_diagnostic_vouchers,
+            collect_semantic_borrow_diagnostic_vouchers, get_or_build_semantic_instance,
+            identity_semantic_instance_key, layout_evidence_body, non_regular_recursive_call_sites,
             normalize_semantic_body, normalize_semantic_body_for_layout_evidence,
-            verify_layout_evidence_body, verify_layout_evidence_runtime_compatibility,
+            normalized_cfg_reachable_blocks, verify_layout_evidence_body,
+            verify_layout_evidence_runtime_compatibility,
         },
         ty::{
             CallableLayoutParamPort, CallableLayoutPort, LayoutBundleComponentId,
@@ -22,9 +29,10 @@ use fe_hir::{
     },
     core::semantic::ContractLayoutError,
     hir_def::{CallableDef, IdentId, ItemKind},
-    test_db::{find_contract, find_func},
+    test_db::{HirAnalysisTestDb, find_contract, find_func, format_diagnostics},
 };
 use layout_test_support::{parse_module, parse_ok};
+use url::Url;
 
 fn assert_layoutizes(name: &str, src: &str) {
     parse_ok!(db, top_mod, src);
@@ -94,6 +102,160 @@ fn assert_layoutizes(name: &str, src: &str) {
 }
 
 #[test]
+fn function_item_values_layoutize_as_zero_sized_values() {
+    assert_layoutizes(
+        "function_item_values_layoutize_as_zero_sized_values.fe",
+        r#"
+fn answer(value: u256) -> u256 {
+    value
+}
+
+fn identity<T>(value: own T) -> T {
+    value
+}
+
+struct Number {
+    value: u256,
+}
+
+impl Number {
+    fn read(number: Number) -> u256 {
+        number.value
+    }
+}
+
+trait Read {
+    fn read(number: Self) -> u256
+}
+
+impl Read for Number {
+    fn read(number: Number) -> u256 {
+        number.value
+    }
+}
+
+enum Maybe {
+    Some(u256),
+    None,
+}
+
+fn seed() -> u256 {
+    let answer_value = answer
+    let identity_value = identity
+    let inherent_value = Number::read
+    let trait_value = Read::read
+    let ufcs_value = <Number as Read>::read
+    let constructor_value = Maybe::Some
+    let maybe = constructor_value(6)
+    let constructed = match maybe {
+        Maybe::Some(value) => value
+        Maybe::None => 0
+    }
+    answer_value(value: 1)
+        + identity_value(value: 2)
+        + inherent_value(number: Number { value: 3 })
+        + trait_value(number: Number { value: 4 })
+        + ufcs_value(number: Number { value: 5 })
+        + constructed
+}
+"#,
+    );
+}
+
+#[test]
+fn layout_evidence_preserves_sparse_statement_identities_after_terminal_pruning() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+fn probe(_ stop: bool) {
+    if stop {
+        panic()
+        let dead: u256 = 1
+        let _ = dead
+    }
+    let live: u256 = 2
+    let _ = live
+}
+"#,
+    );
+    let probe = find_func(&db, top_mod, "probe");
+    let instance = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(probe)),
+    );
+    let normalized = normalize_semantic_body(&db, instance).expect("normalization failed");
+    let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
+    verify_layout_evidence_body(&db, &normalized, evidence).expect("evidence must verify");
+    verify_layout_evidence_runtime_compatibility(&db, &normalized, evidence)
+        .expect("evidence must match the runtime body");
+
+    // Lowering now prunes statements after a terminal call before assigning
+    // identities. Synthesize a gap so this test exercises the sparse identity
+    // contract without depending on that obsolete lowering side effect.
+    let mut sparse_normalized = normalized.clone();
+    let mut statement_ids = Vec::new();
+    for statement in sparse_normalized
+        .blocks
+        .iter_mut()
+        .flat_map(|block| &mut block.stmts)
+    {
+        statement.id = SStmtId::from_u32(
+            u32::try_from(statement.id.index() + 1).expect("statement identity overflow"),
+        );
+        statement_ids.push(statement.id);
+    }
+    let mut sparse_evidence = (*evidence).clone();
+    sparse_evidence.statements.insert(0, None);
+
+    assert_eq!(sparse_evidence.statements.first(), Some(&None));
+    assert_eq!(
+        sparse_evidence.statements.iter().flatten().count(),
+        statement_ids.len()
+    );
+    assert!(
+        statement_ids
+            .iter()
+            .all(|statement| sparse_evidence.statement(*statement).is_some())
+    );
+    verify_layout_evidence_body(&db, &sparse_normalized, &sparse_evidence)
+        .expect("sparse evidence must verify");
+    verify_layout_evidence_runtime_compatibility(&db, &sparse_normalized, &sparse_evidence)
+        .expect("sparse evidence must match the runtime body");
+}
+
+#[test]
+fn closure_capture_layout_outputs_cross_the_call_boundary() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+struct Rooted<const ROOT: u256 = _> {
+    value: u256,
+}
+
+fn captured<const ROOT: u256>(_ value: own Rooted<ROOT>) -> Rooted<ROOT> {
+    let take = || value
+    take.call_once()
+}
+"#,
+    );
+    let parent = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "captured"))),
+    );
+    layout_evidence_body(&db, parent).expect("parent layoutization failed");
+    let closure = parent
+        .callees(&db)
+        .iter()
+        .copied()
+        .find(|callee| matches!(callee.key.owner(&db), BodyOwner::Closure { .. }))
+        .expect("missing closure instance");
+    let closure = get_or_build_semantic_instance(&db, closure.key);
+    layout_evidence_body(&db, closure).expect("closure layoutization failed");
+}
+
+#[test]
 fn runtime_const_uses_bind_one_explicit_layout_input_port() {
     parse_ok!(
         db,
@@ -119,6 +281,7 @@ fn root<const ROOT: u256>(map: StorageMap<u256, u256, ROOT>) -> u256 {
     let bindings = evidence
         .statements
         .iter()
+        .flatten()
         .flat_map(|statement| &statement.const_bindings)
         .collect::<Vec<_>>();
     let [binding] = bindings.as_slice() else {
@@ -194,6 +357,7 @@ fn first<const FIRST: u256, const SECOND: u256>(
     let bindings = evidence
         .statements
         .iter()
+        .flatten()
         .flat_map(|statement| &statement.const_bindings)
         .collect::<Vec<_>>();
     let [binding] = bindings.as_slice() else {
@@ -254,6 +418,7 @@ fn forward<const ROOT: u256>(value: Rooted<ROOT>) -> Rooted<ROOT> {
     let call = evidence
         .statements
         .iter()
+        .flatten()
         .find_map(|statement| statement.call.as_ref())
         .expect("missing call evidence");
     assert_eq!(call.args.len(), 2);
@@ -797,19 +962,19 @@ struct Holder<const ROOT: u256> {
     value: A<ROOT>,
 }
 
-fn forward_array<const ROOT: u256>(values: [A<ROOT>; 2]) -> [A<ROOT>; 2] {
+fn forward_array<const ROOT: u256>(values: own [A<ROOT>; 2]) -> [A<ROOT>; 2] {
     values
 }
 
-fn forward_nested<const ROOT: u256>(holder: Holder<ROOT>) -> Holder<ROOT> {
+fn forward_nested<const ROOT: u256>(holder: own Holder<ROOT>) -> Holder<ROOT> {
     holder
 }
 
-fn forward<const ROOT: u256>(value: A<ROOT>) -> A<ROOT> {
+fn forward<const ROOT: u256>(value: own A<ROOT>) -> A<ROOT> {
     value
 }
 
-fn forwarded<const ROOT: u256>(value: A<ROOT>) -> A<ROOT> {
+fn forwarded<const ROOT: u256>(value: own A<ROOT>) -> A<ROOT> {
     forward(value)
 }
 
@@ -1133,7 +1298,7 @@ fn select<const ROOT: u256>(
     assert_eq!(evidence.output.runtime_descriptor_count(), 1);
     assert_eq!(evidence.terminators.len(), normalized.blocks.len());
     assert_eq!(
-        evidence.statements.len(),
+        evidence.statements.iter().flatten().count(),
         normalized
             .blocks
             .iter()
@@ -1143,6 +1308,7 @@ fn select<const ROOT: u256>(
     let (source, indices) = evidence
         .statements
         .iter()
+        .flatten()
         .flat_map(|stmt| stmt.assignments.iter())
         .find_map(|assignment| match &assignment.expr {
             LayoutEvidenceExpr::Project { source, indices } => Some((source, indices)),
@@ -1214,6 +1380,7 @@ pub contract C {
     let (source, indices) = evidence
         .statements
         .iter()
+        .flatten()
         .flat_map(|stmt| stmt.assignments.iter())
         .find_map(|assignment| match &assignment.expr {
             LayoutEvidenceExpr::Project {
@@ -1272,6 +1439,7 @@ fn read<const ROOT: u256>(
     let calls = evidence
         .statements
         .iter()
+        .flatten()
         .filter_map(|stmt| stmt.call.as_ref())
         .collect::<Vec<_>>();
     let family_call = calls
@@ -1282,6 +1450,7 @@ fn read<const ROOT: u256>(
     let assignments = evidence
         .statements
         .iter()
+        .flatten()
         .flat_map(|stmt| stmt.assignments.iter())
         .collect::<Vec<_>>();
     let forwarded = family_call
@@ -1315,6 +1484,7 @@ fn read<const ROOT: u256>(
         evidence
             .statements
             .iter()
+            .flatten()
             .flat_map(|stmt| stmt.assignments.iter())
             .any(|assignment| matches!(assignment.expr, LayoutEvidenceExpr::CallResult { .. }))
     );
@@ -1325,6 +1495,7 @@ fn read<const ROOT: u256>(
     let call = malformed
         .statements
         .iter_mut()
+        .flatten()
         .find_map(|statement| statement.call.as_mut().filter(|call| call.args.len() == 1))
         .expect("missing mutable family call");
     call.args = Box::new([]);
@@ -1351,11 +1522,11 @@ struct Mixed<const ROOT: u256> {
     dynamic: StorageMap<u256, u256, ROOT>,
 }
 
-fn pass<const ROOT: u256>(value: Mixed<ROOT>) -> Mixed<ROOT> {
+fn pass<const ROOT: u256>(value: own Mixed<ROOT>) -> Mixed<ROOT> {
     value
 }
 
-fn forward<const ROOT: u256>(value: Mixed<ROOT>) -> Mixed<ROOT> {
+fn forward<const ROOT: u256>(value: own Mixed<ROOT>) -> Mixed<ROOT> {
     pass(value: value)
 }
 "#,
@@ -1398,6 +1569,7 @@ fn forward<const ROOT: u256>(value: Mixed<ROOT>) -> Mixed<ROOT> {
     let call = evidence
         .statements
         .iter()
+        .flatten()
         .find_map(|statement| statement.call.as_ref())
         .expect("missing call evidence");
     assert_eq!(call.args.len(), 1);
@@ -1480,6 +1652,7 @@ fn pass() -> Rooted<7> {
     let assignment = evidence
         .statements
         .iter()
+        .flatten()
         .inspect(|statement| assert!(statement.call.is_none()))
         .flat_map(|statement| &statement.assignments)
         .find(|assignment| {
@@ -1549,6 +1722,7 @@ fn pass<const ROOT: u256>(anchor: Rooted<ROOT>) -> Rooted<ROOT> {
         evidence
             .statements
             .iter()
+            .flatten()
             .any(|statement| statement.call.is_some())
     );
     verify_layout_evidence_body(&db, &normalized, evidence).expect("evidence must verify");
@@ -1622,6 +1796,7 @@ fn pass<const ROOT: u256>(anchor: Rooted<ROOT>) -> Rooted<ROOT> {
     malformed
         .statements
         .iter_mut()
+        .flatten()
         .find(|statement| statement.call.is_some())
         .expect("missing runtime evidence call")
         .call = None;
@@ -1660,7 +1835,7 @@ fn recursive_runtime_layout_calls_do_not_form_a_signature_cycle() {
         r#"
 struct Rooted<const ROOT: u256 = _> {}
 
-fn recurse<const ROOT: u256>(value: Rooted<ROOT>, depth: u256) -> Rooted<ROOT> {
+fn recurse<const ROOT: u256>(value: own Rooted<ROOT>, depth: u256) -> Rooted<ROOT> {
     if depth == 0 {
         return value
     }
@@ -1676,6 +1851,1460 @@ fn recurse<const ROOT: u256>(value: Rooted<ROOT>, depth: u256) -> Rooted<ROOT> {
     let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
     verify_layout_evidence_runtime_compatibility(&db, &normalized, evidence)
         .expect("recursive call evidence must match the runtime body");
+}
+
+#[test]
+fn recursive_owned_layout_carriers_do_not_cycle_never_return_analysis() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+use std::evm::StorageMap
+
+struct Wrapped {
+    maps: [StorageMap<u256, u256>; 2],
+}
+
+fn recurse(value: own Wrapped, depth: u256) -> Wrapped {
+    if depth == 0 {
+        return value
+    }
+    recurse(value, depth: depth - 1)
+}
+
+msg M {
+    #[selector = 1]
+    Get { depth: u256 } -> u256,
+}
+
+contract C {
+    wrapped: Wrapped,
+
+    recv M {
+        Get { depth } -> u256 uses (wrapped) {
+            recurse(wrapped, depth).maps[0].get(key: 0)
+        }
+    }
+}
+"#,
+    );
+    let recurse = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "recurse"))),
+    );
+    assert!(!recurse.known_never_returns(&db));
+    let recv = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(
+            &db,
+            BodyOwner::ContractRecvArm {
+                contract: find_contract(&db, top_mod, "C"),
+                recv_idx: 0,
+                arm_idx: 0,
+            },
+        ),
+    );
+    normalize_semantic_body(&db, recv).expect("normalization must not form a query cycle");
+}
+
+#[test]
+fn never_return_inference_uses_refined_control_flow_and_recursive_fixed_points() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+use core::functional::Fn
+
+fn sccp_abort() -> u256 {
+    let done = true
+    if done {
+        core::panic()
+    }
+    0
+}
+
+fn maybe_abort(flag: bool) -> u256 {
+    if flag {
+        core::panic()
+    }
+    0
+}
+
+fn leaf_abort() -> u256 {
+    core::panic()
+}
+
+fn middle_abort() -> u256 {
+    leaf_abort()
+}
+
+fn outer_abort() -> u256 {
+    middle_abort()
+}
+
+fn direct_recursive() -> u256 {
+    direct_recursive()
+}
+
+fn mutual_left() -> u256 {
+    mutual_right()
+}
+
+fn mutual_right() -> u256 {
+    mutual_left()
+}
+
+fn recursive_with_base(flag: bool) -> u256 {
+    if flag {
+        return 0
+    }
+    recursive_with_base(flag)
+}
+
+fn polymorphic_recursive<T>(value: T) -> u256 {
+    polymorphic_recursive(value: [value])
+}
+
+fn finite_self_specialization<T>(_ value: T) -> u256 {
+    finite_self_specialization(0 as u256)
+}
+
+fn finite_self_specialization_wrapper() -> u256 {
+    finite_self_specialization(true)
+}
+
+fn mutually_expanding_left<T>(value: T) -> u256 {
+    mutually_expanding_right(value: [value])
+}
+
+fn mutually_expanding_right<T>(value: T) -> u256 {
+    mutually_expanding_left(value: [value])
+}
+
+fn generic_abort<T>(_ value: T) -> u256 {
+    core::panic()
+}
+
+fn finite_generic_siblings(flag: bool) -> u256 {
+    if flag {
+        generic_abort(0 as u256)
+    } else {
+        generic_abort(true)
+    }
+}
+
+fn nested_distinct_closures() -> u256 {
+    let inner = || -> u256 { core::panic() }
+    let outer = || -> u256 { inner.call() }
+    outer.call()
+}
+
+extern {
+    fn ordinary_external() -> u256
+}
+"#,
+    );
+
+    for name in [
+        "sccp_abort",
+        "leaf_abort",
+        "middle_abort",
+        "outer_abort",
+        "direct_recursive",
+        "mutual_left",
+        "mutual_right",
+        "finite_self_specialization_wrapper",
+        "finite_generic_siblings",
+        "nested_distinct_closures",
+    ] {
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, name))),
+        );
+        assert!(
+            instance.known_never_returns(&db),
+            "`{name}` has no executable normal-return path"
+        );
+    }
+
+    for name in ["maybe_abort", "recursive_with_base", "ordinary_external"] {
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, name))),
+        );
+        assert!(
+            !instance.known_never_returns(&db),
+            "`{name}` has an executable normal-return path"
+        );
+    }
+    for name in ["polymorphic_recursive", "mutually_expanding_left"] {
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, name))),
+        );
+        assert!(
+            !instance.known_never_returns(&db),
+            "`{name}` must terminate analysis conservatively instead of expanding unbounded instances"
+        );
+    }
+}
+
+#[test]
+fn non_regular_polymorphic_recursion_is_rejected_before_instance_expansion() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+use core::functional::Fn
+
+struct ConstRoot<const ROOT: u256> {}
+struct ConstPair<const LEFT: u256, const RIGHT: u256> {}
+
+trait Project {
+    type Assoc: Project
+}
+
+extern {
+    fn fabricate<T>() -> T
+}
+
+fn direct_non_regular<T>(value: T) -> u256 {
+    direct_non_regular(value: [value])
+}
+
+fn mutual_non_regular_left<T>(value: T) -> u256 {
+    mutual_non_regular_right(value: [value])
+}
+
+fn mutual_non_regular_right<T>(value: T) -> u256 {
+    mutual_non_regular_left(value: [value])
+}
+
+fn const_non_regular<const ROOT: u256>(_ value: ConstRoot<ROOT>) -> u256 {
+    let next: ConstRoot<{ ROOT + 1 }> = ConstRoot {}
+    const_non_regular(value: next)
+}
+
+fn projection_non_regular<T: Project>(_ value: T) -> u256 {
+    let next: T::Assoc = fabricate()
+    projection_non_regular(value: next)
+}
+
+fn closure_non_regular<T>(value: T) -> u256 {
+    let recurse = || -> u256 { closure_non_regular(value: [value]) }
+    recurse.call()
+}
+
+fn contained_closure_non_regular<T>(value: T) -> u256 {
+    let _recurse = || -> u256 { contained_closure_non_regular(value: [value]) }
+    0
+}
+
+fn nested_contained_closure_non_regular<T>(_ value: T) -> u256 {
+    let _outer = || -> u256 {
+        let _inner = || -> u256 {
+            let next: [T; 1] = fabricate()
+            nested_contained_closure_non_regular(value: next)
+        }
+        0
+    }
+    0
+}
+
+fn upstream_of_non_regular_closure() -> u256 {
+    closure_non_regular(value: true)
+}
+
+fn closure_regular<T>(value: T) -> u256 {
+    let recurse = || -> u256 { closure_regular(value: value) }
+    recurse.call()
+}
+
+fn contained_closure_regular<T>(value: T) -> u256 {
+    let _recurse = || -> u256 { contained_closure_regular(value: value) }
+    0
+}
+
+fn closure_concrete_specialization<T>(_ value: T) -> u256 {
+    let recurse = || -> u256 { closure_concrete_specialization(value: true) }
+    recurse.call()
+}
+
+fn direct_regular_permutation<T, U>(left: T, right: U) -> u256 {
+    direct_regular_permutation(left: right, right: left)
+}
+
+fn mutual_regular_permutation_left<T, U>(left: T, right: U) -> u256 {
+    mutual_regular_permutation_right(left: right, right: left)
+}
+
+fn mutual_regular_permutation_right<T, U>(left: T, right: U) -> u256 {
+    mutual_regular_permutation_left(left: right, right: left)
+}
+
+fn const_regular_permutation<const LEFT: u256, const RIGHT: u256>(
+    _ value: ConstPair<LEFT, RIGHT>,
+) -> u256 {
+    let next: ConstPair<RIGHT, LEFT> = ConstPair {}
+    const_regular_permutation(value: next)
+}
+
+fn direct_concrete_specialization<T>(_ value: T) -> u256 {
+    direct_concrete_specialization(value: true)
+}
+
+fn mutual_concrete_specialization_left<T>(_ value: T) -> u256 {
+    mutual_concrete_specialization_right(value: true)
+}
+
+fn mutual_concrete_specialization_right<T>(_ value: T) -> u256 {
+    mutual_concrete_specialization_left(value: 0 as u256)
+}
+
+fn const_concrete_specialization<const ROOT: u256>(_ value: ConstRoot<ROOT>) -> u256 {
+    let next: ConstRoot<1> = ConstRoot {}
+    const_concrete_specialization(value: next)
+}
+
+fn finite_reset_growth<T>(value: T) -> u256 {
+    finite_reset_bridge(value: [value])
+}
+
+fn finite_reset_bridge<T>(_ value: T) -> u256 {
+    finite_reset_root()
+}
+
+fn finite_reset_root() -> u256 {
+    finite_reset_growth(value: true)
+}
+
+fn finite_partial_reset<T, U>(_ left: T, right: U) -> u256 {
+    finite_partial_reset(left: [right], right: true)
+}
+"#,
+    );
+
+    for name in [
+        "direct_non_regular",
+        "mutual_non_regular_left",
+        "mutual_non_regular_right",
+        "const_non_regular",
+        "projection_non_regular",
+    ] {
+        let owner = BodyOwner::Func(find_func(&db, top_mod, name));
+        assert_eq!(
+            non_regular_recursive_call_sites(&db, owner).len(),
+            1,
+            "`{name}` must have one blocked recursive source edge"
+        );
+    }
+    for name in [
+        "direct_regular_permutation",
+        "mutual_regular_permutation_left",
+        "mutual_regular_permutation_right",
+        "const_regular_permutation",
+        "closure_regular",
+        "contained_closure_regular",
+        "closure_concrete_specialization",
+        "direct_concrete_specialization",
+        "mutual_concrete_specialization_left",
+        "mutual_concrete_specialization_right",
+        "const_concrete_specialization",
+        "finite_reset_growth",
+        "finite_partial_reset",
+    ] {
+        let owner = BodyOwner::Func(find_func(&db, top_mod, name));
+        assert!(
+            non_regular_recursive_call_sites(&db, owner).is_empty(),
+            "`{name}` must retain a finite recursive specialization graph"
+        );
+    }
+    for name in ["finite_reset_root", "finite_partial_reset"] {
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, name))),
+        );
+        assert!(
+            instance.known_never_returns(&db),
+            "`{name}` must materialize its finite reset specialization family"
+        );
+    }
+    let upstream = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(
+            &db,
+            BodyOwner::Func(find_func(&db, top_mod, "upstream_of_non_regular_closure")),
+        ),
+    );
+    assert!(
+        !upstream.known_never_returns(&db),
+        "an upstream never-return query must stop conservatively at the blocked recursive component"
+    );
+
+    let diagnostics = collect_semantic_borrow_diagnostic_vouchers(&db, top_mod);
+    let rendered = format_diagnostics(&db, &diagnostics);
+    assert_eq!(
+        rendered
+            .matches("non-regular polymorphic recursion")
+            .count(),
+        8,
+        "{rendered}"
+    );
+    for name in [
+        "direct_non_regular",
+        "mutual_non_regular_left",
+        "mutual_non_regular_right",
+        "const_non_regular",
+        "projection_non_regular",
+    ] {
+        assert!(
+            rendered.contains(&format!("non-regular polymorphic recursion in `fn {name}`")),
+            "{rendered}"
+        );
+    }
+    assert_eq!(
+        rendered
+            .matches("non-regular polymorphic recursion in `fn <closure>`")
+            .count(),
+        3,
+        "{rendered}"
+    );
+}
+
+#[test]
+fn trait_dispatch_recursion_rejects_growth_but_preserves_stable_and_finite_families() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+trait GrowingStep {
+    fn step(self) -> u256
+}
+
+struct GrowingSeed {}
+struct GrowingWrap<T> {
+    inner: T,
+}
+
+impl GrowingStep for GrowingSeed {
+    fn step(self) -> u256 {
+        0
+    }
+}
+
+impl<T> GrowingStep for GrowingWrap<T> {
+    fn step(self) -> u256 {
+        growing_expand(value: GrowingWrap { inner: self })
+    }
+}
+
+fn growing_expand<T: GrowingStep>(value: T) -> u256 {
+    value.step()
+}
+
+trait StableStep {
+    fn step(self) -> u256
+}
+
+struct StableSeed {}
+struct StableWrap<T> {
+    inner: T,
+}
+
+impl StableStep for StableSeed {
+    fn step(self) -> u256 {
+        0
+    }
+}
+
+impl<T> StableStep for StableWrap<T> {
+    fn step(self) -> u256 {
+        stable_expand(value: self)
+    }
+}
+
+fn stable_expand<T: StableStep>(value: T) -> u256 {
+    value.step()
+}
+
+fn stable_dispatch_root() -> u256 {
+    stable_expand(value: StableWrap { inner: StableSeed {} })
+}
+
+trait FiniteStep {
+    fn step(self) -> u256
+}
+
+struct FiniteA {}
+struct FiniteB {}
+struct FiniteC {}
+
+impl FiniteStep for FiniteA {
+    fn step(self) -> u256 {
+        finite_dispatch(value: FiniteB {})
+    }
+}
+
+impl FiniteStep for FiniteB {
+    fn step(self) -> u256 {
+        finite_dispatch(value: FiniteC {})
+    }
+}
+
+impl FiniteStep for FiniteC {
+    fn step(self) -> u256 {
+        finite_dispatch(value: FiniteC {})
+    }
+}
+
+fn finite_dispatch<T: FiniteStep>(value: T) -> u256 {
+    value.step()
+}
+
+fn finite_dispatch_root() -> u256 {
+    finite_dispatch(value: FiniteA {})
+}
+
+trait RoutedStep<Route> {
+    fn step(self) -> u256
+}
+
+struct ActiveRoute {}
+struct InactiveRoute {}
+struct ActiveWrap<T> {
+    inner: T,
+}
+struct InactiveWrap<T> {
+    inner: T,
+}
+
+impl<T> RoutedStep<ActiveRoute> for ActiveWrap<T> {
+    fn step(self) -> u256 {
+        0
+    }
+}
+
+impl<T> RoutedStep<InactiveRoute> for InactiveWrap<T> {
+    fn step(self) -> u256 {
+        active_dispatch(value: ActiveWrap { inner: self })
+    }
+}
+
+fn active_dispatch<T: RoutedStep<ActiveRoute>>(value: T) -> u256 {
+    value.step()
+}
+
+fn routed_dispatch_root() -> u256 {
+    active_dispatch(value: ActiveWrap { inner: FiniteA {} })
+}
+
+trait DescendingStep {
+    fn step(self) -> u256
+}
+
+struct DescendingSeed {}
+struct DescendingWrap<T> {
+    inner: T,
+}
+
+impl DescendingStep for DescendingSeed {
+    fn step(self) -> u256 {
+        0
+    }
+}
+
+impl<T: DescendingStep> DescendingStep for DescendingWrap<T> {
+    fn step(self) -> u256 {
+        descending_dispatch(value: self.inner)
+    }
+}
+
+fn descending_dispatch<T: DescendingStep>(value: T) -> u256 {
+    value.step()
+}
+
+fn descending_dispatch_root() -> u256 {
+    descending_dispatch(
+        value: DescendingWrap {
+            inner: DescendingWrap { inner: DescendingSeed {} },
+        },
+    )
+}
+
+trait AlternatingFirst {
+    fn first(self) -> u256
+}
+
+trait AlternatingSecond {
+    fn second(self) -> u256
+}
+
+struct AlternatingLeft<T> {
+    inner: T,
+}
+
+struct AlternatingRight<T> {
+    inner: T,
+}
+
+impl<T> AlternatingFirst for AlternatingLeft<T> {
+    fn first(self) -> u256 {
+        alternating_second(value: AlternatingRight { inner: self.inner })
+    }
+}
+
+impl<T> AlternatingSecond for AlternatingRight<T> {
+    fn second(self) -> u256 {
+        alternating_first(value: AlternatingLeft { inner: self.inner })
+    }
+}
+
+fn alternating_first<T: AlternatingFirst>(value: T) -> u256 {
+    value.first()
+}
+
+fn alternating_second<T: AlternatingSecond>(value: T) -> u256 {
+    value.second()
+}
+
+fn alternating_dispatch_root() -> u256 {
+    alternating_first(value: AlternatingLeft { inner: FiniteA {} })
+}
+
+struct DefaultGrowthWrap<T> {
+    inner: T,
+}
+
+trait DefaultGrowthStep {
+    fn step(self) -> u256 {
+        default_growth_expand(value: DefaultGrowthWrap { inner: self })
+    }
+}
+
+impl<T> DefaultGrowthStep for DefaultGrowthWrap<T> {}
+
+struct DefaultGrowthSeed {}
+
+impl DefaultGrowthStep for DefaultGrowthSeed {}
+
+fn default_growth_expand<T: DefaultGrowthStep>(value: T) -> u256 {
+    value.step()
+}
+"#,
+    );
+
+    let growing = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(
+            &db,
+            BodyOwner::Func(find_func(&db, top_mod, "growing_expand")),
+        ),
+    );
+    assert!(
+        !growing.known_never_returns(&db),
+        "an invalid dispatch family must stop never-return analysis conservatively"
+    );
+
+    for name in [
+        "stable_dispatch_root",
+        "finite_dispatch_root",
+        "alternating_dispatch_root",
+    ] {
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, name))),
+        );
+        assert!(
+            instance.known_never_returns(&db),
+            "`{name}` must retain its finite recursive specialization graph"
+        );
+    }
+    for name in [
+        "stable_expand",
+        "finite_dispatch",
+        "alternating_first",
+        "alternating_second",
+    ] {
+        let owner = BodyOwner::Func(find_func(&db, top_mod, name));
+        assert!(
+            non_regular_recursive_call_sites(&db, owner).is_empty(),
+            "`{name}` must not be rejected as a growing recursive family"
+        );
+    }
+    let routed = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(
+            &db,
+            BodyOwner::Func(find_func(&db, top_mod, "routed_dispatch_root")),
+        ),
+    );
+    assert!(
+        !routed.known_never_returns(&db),
+        "an implementation for a different trait argument must not create a dispatch edge"
+    );
+    assert!(
+        non_regular_recursive_call_sites(
+            &db,
+            BodyOwner::Func(find_func(&db, top_mod, "active_dispatch")),
+        )
+        .is_empty(),
+        "trait-argument-incompatible implementations must not form false recursive components"
+    );
+    let descending = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(
+            &db,
+            BodyOwner::Func(find_func(&db, top_mod, "descending_dispatch_root")),
+        ),
+    );
+    assert!(
+        !descending.known_never_returns(&db),
+        "a finite decreasing blanket-impl family must reach its concrete base implementation"
+    );
+    assert!(
+        non_regular_recursive_call_sites(
+            &db,
+            BodyOwner::Func(find_func(&db, top_mod, "descending_dispatch")),
+        )
+        .is_empty(),
+        "deconstructing an impl `Self` to an exact generic coordinate is finite"
+    );
+
+    let diagnostics = collect_semantic_borrow_diagnostic_vouchers(&db, top_mod);
+    let rendered = format_diagnostics(&db, &diagnostics);
+    assert_eq!(
+        rendered
+            .matches("non-regular polymorphic recursion")
+            .count(),
+        2,
+        "{rendered}"
+    );
+}
+
+#[test]
+fn trait_dispatch_preserves_method_generic_argument_flow() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+trait StableRelay {
+    fn relay<U>(self, value: U) -> u256
+}
+
+struct StableRelayImpl {}
+
+impl StableRelay for StableRelayImpl {
+    fn relay<U>(self, value: U) -> u256 {
+        stable_method_dispatch(receiver: self, value: value)
+    }
+}
+
+fn stable_method_dispatch<R: StableRelay, U>(receiver: R, value: U) -> u256 {
+    receiver.relay(value: value)
+}
+
+trait GrowingRelay {
+    fn relay<U>(self, value: U) -> u256
+}
+
+struct GrowingRelayImpl {}
+struct MethodWrap<T> {
+    inner: T,
+}
+
+impl GrowingRelay for GrowingRelayImpl {
+    fn relay<U>(self, value: U) -> u256 {
+        growing_method_dispatch(
+            receiver: self,
+            value: MethodWrap { inner: value },
+        )
+    }
+}
+
+fn growing_method_dispatch<R: GrowingRelay, U>(receiver: R, value: U) -> u256 {
+    receiver.relay(value: value)
+}
+"#,
+    );
+
+    let stable_owner = BodyOwner::Func(find_func(&db, top_mod, "stable_method_dispatch"));
+    assert!(
+        non_regular_recursive_call_sites(&db, stable_owner).is_empty(),
+        "forwarding a trait method's own generic argument must remain finite"
+    );
+    let diagnostics = collect_semantic_borrow_diagnostic_vouchers(&db, top_mod);
+    let rendered = format_diagnostics(&db, &diagnostics);
+    assert_eq!(
+        rendered
+            .matches("non-regular polymorphic recursion")
+            .count(),
+        1,
+        "{rendered}"
+    );
+}
+
+#[test]
+fn concrete_dispatch_arguments_do_not_reopen_unrelated_trait_implementations() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+trait DecodeValue {
+    fn decode<D>(self, decoder: D) -> u256
+}
+
+struct Scalar {}
+struct Message {}
+
+impl DecodeValue for Scalar {
+    fn decode<D>(self, decoder: D) -> u256 {
+        0
+    }
+}
+
+impl DecodeValue for Message {
+    fn decode<D>(self, decoder: D) -> u256 {
+        decode_field(value: Scalar {}, decoder: decoder)
+    }
+}
+
+fn decode_field<T: DecodeValue, D>(value: T, decoder: D) -> u256 {
+    value.decode(decoder: decoder)
+}
+"#,
+    );
+
+    let diagnostics = collect_semantic_borrow_diagnostic_vouchers(&db, top_mod);
+    let rendered = format_diagnostics(&db, &diagnostics);
+    assert!(
+        !rendered.contains("non-regular polymorphic recursion"),
+        "a concrete helper specialization must not dispatch through unrelated implementations: \
+         {rendered}"
+    );
+}
+
+#[test]
+fn computed_ground_arguments_widen_before_source_graph_expansion() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+struct Counter<const N: u256> {}
+
+extern {
+    fn choose() -> bool
+}
+
+fn concrete_const_seed<D>(decoder: D) -> u256 {
+    let seed: Counter<0> = Counter {}
+    evolving_const(value: seed, decoder: decoder)
+}
+
+fn evolving_const<const N: u256, D>(_ value: Counter<N>, decoder: D) -> u256 {
+    if choose() {
+        concrete_const_seed(decoder: decoder)
+    } else {
+        let next: Counter<{ N + 1 }> = Counter {}
+        evolving_const(value: next, decoder: decoder)
+    }
+}
+"#,
+    );
+
+    let seed_owner = BodyOwner::Func(find_func(&db, top_mod, "concrete_const_seed"));
+    assert!(
+        non_regular_recursive_call_sites(&db, seed_owner).is_empty(),
+        "the concrete seed must not be diagnosed as the growing call site"
+    );
+    let diagnostics = collect_semantic_borrow_diagnostic_vouchers(&db, top_mod);
+    let rendered = format_diagnostics(&db, &diagnostics);
+    assert_eq!(
+        rendered
+            .matches("non-regular polymorphic recursion")
+            .count(),
+        1,
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("non-regular polymorphic recursion in `fn evolving_const`"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn projection_bounds_do_not_hide_structural_dispatch_descent() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+trait Backend<A> {}
+
+trait Family {
+    type Encoder: Backend<Self>
+}
+
+trait Encode<A: Family> {
+    fn encode<E: Backend<A>>(self, encoder: E) -> u256
+}
+
+struct Scalar {}
+
+impl<A: Family> Encode<A> for Scalar {
+    fn encode<E: Backend<A>>(self, encoder: E) -> u256 {
+        0
+    }
+}
+
+impl<A: Family, T0, T1> Encode<A> for (T0, T1)
+    where T0: Encode<A>, T1: Encode<A>
+{
+    fn encode<E: Backend<A>>(self, encoder: E) -> u256 {
+        encode_field<A, T0, E>(value: self.0, encoder: encoder)
+    }
+}
+
+fn encode_field<A: Family, T: Encode<A>, E: Backend<A>>(value: T, encoder: E) -> u256 {
+    value.encode(encoder: encoder)
+}
+"#,
+    );
+
+    let diagnostics = collect_semantic_borrow_diagnostic_vouchers(&db, top_mod);
+    let rendered = format_diagnostics(&db, &diagnostics);
+    assert!(
+        !rendered.contains("non-regular polymorphic recursion"),
+        "dispatching from an aggregate to one of its generic fields is structural descent even \
+         when inherited bounds contain associated projections: {rendered}"
+    );
+}
+
+#[test]
+fn ground_associated_projection_state_preserves_stable_abi_dispatch_components() {
+    for (name, source) in [
+        (
+            "msg_array_arg.fe",
+            include_str!("../../fe/tests/fixtures/fe_test/msg_array_arg.fe"),
+        ),
+        (
+            "msg_nested_array_arg.fe",
+            include_str!("../../fe/tests/fixtures/fe_test/msg_nested_array_arg.fe"),
+        ),
+    ] {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(name.into(), source);
+        let (top_mod, _) = db.top_mod(file);
+        let diagnostics = collect_semantic_borrow_diagnostic_vouchers(&db, top_mod);
+        let rendered = format_diagnostics(&db, &diagnostics);
+        assert!(
+            !rendered.contains("non-regular polymorphic recursion"),
+            "ground associated projections such as the ABI encoder/decoder types are stable \
+             auxiliary state in `{name}`: {rendered}"
+        );
+    }
+}
+
+#[test]
+fn trait_dispatch_recursion_includes_local_impls_of_dependency_dispatchers() {
+    fn touch(db: &mut HirAnalysisTestDb, url: &str, content: &str) -> common::file::File {
+        db.workspace().touch(
+            db,
+            Url::parse(url).expect("valid test URL"),
+            Some(content.to_string()),
+        )
+    }
+
+    let mut db = HirAnalysisTestDb::default();
+    db.initialize_builtin_core();
+    db.initialize_builtin_std();
+    touch(
+        &mut db,
+        "file:///nonregular-dispatch-cross-ingot/dispatch/fe.toml",
+        r#"
+[ingot]
+name = "dispatch"
+version = "0.1.0"
+"#,
+    );
+    let dispatch_file = touch(
+        &mut db,
+        "file:///nonregular-dispatch-cross-ingot/dispatch/src/lib.fe",
+        r#"
+pub trait Step {
+    fn step(self) -> u256
+}
+
+pub fn expand<T: Step>(value: T) -> u256 {
+    value.step()
+}
+"#,
+    );
+    touch(
+        &mut db,
+        "file:///nonregular-dispatch-cross-ingot/app/fe.toml",
+        r#"
+[ingot]
+name = "app"
+version = "0.1.0"
+
+[dependencies]
+dispatch = { path = "../dispatch" }
+"#,
+    );
+    let app_file = touch(
+        &mut db,
+        "file:///nonregular-dispatch-cross-ingot/app/src/lib.fe",
+        r#"
+use dispatch::Step
+use dispatch::expand
+
+struct Seed {}
+struct Wrap<T> {
+    inner: T,
+}
+
+impl Step for Seed {
+    fn step(self) -> u256 {
+        0
+    }
+}
+
+impl<T> Step for Wrap<T> {
+    fn step(self) -> u256 {
+        expand(value: Wrap { inner: self })
+    }
+}
+
+fn main() -> u256 {
+    expand(value: Wrap { inner: Seed {} })
+}
+"#,
+    );
+
+    let (dispatch, _) = db.top_mod(dispatch_file);
+    let (app, _) = db.top_mod(app_file);
+    db.assert_no_diags(dispatch);
+
+    let main = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, app, "main"))),
+    );
+    assert!(
+        !main.known_never_returns(&db),
+        "the application graph must stop before specializing the dependency dispatcher without bound"
+    );
+    let diagnostics = collect_semantic_borrow_diagnostic_vouchers(&db, app);
+    let rendered = format_diagnostics(&db, &diagnostics);
+    assert_eq!(
+        rendered
+            .matches("non-regular polymorphic recursion")
+            .count(),
+        1,
+        "{rendered}"
+    );
+}
+
+#[test]
+fn inherited_dependency_defaults_use_the_application_dispatch_context() {
+    fn touch(db: &mut HirAnalysisTestDb, url: &str, content: &str) -> common::file::File {
+        db.workspace().touch(
+            db,
+            Url::parse(url).expect("valid test URL"),
+            Some(content.to_string()),
+        )
+    }
+
+    let mut db = HirAnalysisTestDb::default();
+    db.initialize_builtin_core();
+    db.initialize_builtin_std();
+    touch(
+        &mut db,
+        "file:///nonregular-default-cross-ingot/dispatch/fe.toml",
+        r#"
+[ingot]
+name = "dispatch"
+version = "0.1.0"
+"#,
+    );
+    let dispatch_file = touch(
+        &mut db,
+        "file:///nonregular-default-cross-ingot/dispatch/src/lib.fe",
+        r#"
+pub trait DefaultStep {
+    type Next: DefaultStep
+
+    fn next(own self) -> Self::Next
+
+    fn step(own self) -> u256 {
+        default_expand(value: self.next())
+    }
+}
+
+pub fn default_expand<T: DefaultStep>(value: own T) -> u256 {
+    value.step()
+}
+"#,
+    );
+    touch(
+        &mut db,
+        "file:///nonregular-default-cross-ingot/app/fe.toml",
+        r#"
+[ingot]
+name = "app"
+version = "0.1.0"
+
+[dependencies]
+dispatch = { path = "../dispatch" }
+"#,
+    );
+    let app_file = touch(
+        &mut db,
+        "file:///nonregular-default-cross-ingot/app/src/lib.fe",
+        r#"
+use dispatch::DefaultStep
+use dispatch::default_expand
+
+struct Seed {}
+
+struct LocalWrap<T> {
+    inner: T,
+}
+
+impl<T> DefaultStep for LocalWrap<T> {
+    type Next = LocalWrap<LocalWrap<T>>
+
+    fn next(own self) -> Self::Next {
+        LocalWrap { inner: self }
+    }
+}
+
+fn main() -> u256 {
+    default_expand(value: LocalWrap { inner: Seed {} })
+}
+"#,
+    );
+
+    let (dispatch, _) = db.top_mod(dispatch_file);
+    let (app, _) = db.top_mod(app_file);
+    db.assert_no_diags(dispatch);
+
+    let main = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, app, "main"))),
+    );
+    assert!(
+        !main.known_never_returns(&db),
+        "an inherited dependency default must see application-local dispatch candidates"
+    );
+    let diagnostics = collect_semantic_borrow_diagnostic_vouchers(&db, app);
+    let rendered = format_diagnostics(&db, &diagnostics);
+    assert_eq!(
+        rendered
+            .matches("non-regular polymorphic recursion")
+            .count(),
+        1,
+        "{rendered}"
+    );
+}
+
+#[test]
+fn operator_trait_dispatch_rejects_growing_specialization_families() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+use core::ops::Add
+
+struct OperatorSeed {}
+
+struct OperatorWrap<T> {
+    inner: T,
+}
+
+impl<T> Add for OperatorWrap<T> {
+    fn add(own self, _ other: own OperatorWrap<T>) -> OperatorWrap<T> {
+        let _ = operator_expand(
+            left: OperatorWrap { inner: self },
+            right: OperatorWrap { inner: other },
+        )
+        self
+    }
+}
+
+fn operator_expand<T: Add<T>>(left: own T, right: own T) -> u256 {
+    let _ = left + right
+    0
+}
+
+fn operator_dispatch_root() -> u256 {
+    operator_expand(
+        left: OperatorWrap { inner: OperatorSeed {} },
+        right: OperatorWrap { inner: OperatorSeed {} },
+    )
+}
+"#,
+    );
+
+    let root = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(
+            &db,
+            BodyOwner::Func(find_func(&db, top_mod, "operator_dispatch_root")),
+        ),
+    );
+    assert!(
+        !root.known_never_returns(&db),
+        "a growing operator-dispatch family must stop semantic instance expansion"
+    );
+
+    let diagnostics = collect_semantic_borrow_diagnostic_vouchers(&db, top_mod);
+    let rendered = format_diagnostics(&db, &diagnostics);
+    assert_eq!(
+        rendered
+            .matches("non-regular polymorphic recursion")
+            .count(),
+        1,
+        "{rendered}"
+    );
+}
+
+#[test]
+fn operator_trait_dispatch_preserves_stable_specialization_families() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+use core::ops::Add
+
+struct StableOperatorSeed {}
+
+struct StableOperatorWrap<T> {
+    inner: T,
+}
+
+impl<T> Add for StableOperatorWrap<T> {
+    fn add(own self, _ other: own StableOperatorWrap<T>) -> StableOperatorWrap<T> {
+        let _ = stable_operator_expand(left: self, right: other)
+        self
+    }
+}
+
+fn stable_operator_expand<T: Add<T>>(left: own T, right: own T) -> u256 {
+    let _ = left + right
+    0
+}
+
+fn stable_operator_dispatch_root() -> u256 {
+    stable_operator_expand(
+        left: StableOperatorWrap { inner: StableOperatorSeed {} },
+        right: StableOperatorWrap { inner: StableOperatorSeed {} },
+    )
+}
+"#,
+    );
+
+    assert!(
+        non_regular_recursive_call_sites(
+            &db,
+            BodyOwner::Func(find_func(&db, top_mod, "stable_operator_expand")),
+        )
+        .is_empty(),
+        "a size-preserving operator-dispatch cycle must remain valid"
+    );
+    let root = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(
+            &db,
+            BodyOwner::Func(find_func(&db, top_mod, "stable_operator_dispatch_root")),
+        ),
+    );
+    assert!(
+        root.known_never_returns(&db),
+        "the finite stable specialization graph should retain never-return inference"
+    );
+    let diagnostics = collect_semantic_borrow_diagnostic_vouchers(&db, top_mod);
+    let rendered = format_diagnostics(&db, &diagnostics);
+    assert!(
+        !rendered.contains("non-regular polymorphic recursion"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn raw_cycle_prefilter_preserves_unknown_and_module_qualified_edges() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+// Deliberately collides with the generic parameter below. A global namespace
+// spelling index must not mistake `T::grow` for this concrete `T`.
+struct T {}
+
+trait StaticGrow {
+    fn grow(value: own Self) -> u256
+}
+
+struct StaticWrap<U> {
+    inner: U,
+}
+
+impl<U> StaticGrow for StaticWrap<U> {
+    fn grow(value: own Self) -> u256 {
+        static_expand(value: StaticWrap { inner: value })
+    }
+}
+
+fn static_expand<T: StaticGrow>(value: own T) -> u256 {
+    T::grow(value: value)
+}
+
+struct SelfWrap<T> {
+    inner: T,
+}
+
+fn self_qualified_growth<T>(value: T) -> u256 {
+    self::self_qualified_growth(value: SelfWrap { inner: value })
+}
+"#,
+    );
+
+    let diagnostics = collect_semantic_borrow_diagnostic_vouchers(&db, top_mod);
+    let rendered = format_diagnostics(&db, &diagnostics);
+    assert_eq!(
+        rendered
+            .matches("non-regular polymorphic recursion")
+            .count(),
+        2,
+        "{rendered}"
+    );
+}
+
+#[test]
+fn raw_cycle_prefilter_preserves_ufcs_alias_and_for_loop_edges() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+use AliasGrow as GrowAlias
+use core::Seq
+
+trait AliasGrow {
+    fn grow(value: own Self) -> u256
+}
+
+struct AliasSeed {}
+struct AliasWrap<T> {
+    inner: T,
+}
+
+impl<T> AliasGrow for AliasWrap<T> {
+    fn grow(value: own Self) -> u256 {
+        alias_expand(value: AliasWrap { inner: value })
+    }
+}
+
+fn alias_expand<T: AliasGrow>(value: own T) -> u256 {
+    <T as GrowAlias>::grow(value: value)
+}
+
+struct SeqSeed {}
+struct SeqWrap<T> {
+    inner: T,
+}
+
+impl<T> Seq for SeqWrap<T> {
+    type Item = u256
+
+    fn len(self) -> usize {
+        let _ = seq_expand(value: SeqWrap { inner: self })
+        0
+    }
+
+    fn get(self, _ index: usize) -> u256 {
+        let _ = seq_expand(value: SeqWrap { inner: self })
+        0
+    }
+}
+
+fn seq_expand<T>(value: SeqWrap<T>) -> u256 {
+    for _item in value {}
+    0
+}
+"#,
+    );
+
+    let diagnostics = collect_semantic_borrow_diagnostic_vouchers(&db, top_mod);
+    let rendered = format_diagnostics(&db, &diagnostics);
+    assert_eq!(
+        rendered
+            .matches("non-regular polymorphic recursion")
+            .count(),
+        3,
+        "{rendered}"
+    );
+    for name in ["grow", "len", "get"] {
+        assert!(
+            rendered.contains(&format!("non-regular polymorphic recursion in `fn {name}`")),
+            "{rendered}"
+        );
+    }
+}
+
+#[test]
+fn raw_cycle_prefilter_preserves_tuple_packed_callable_method_edges() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+use core::functional::{Fn, FnOnce}
+
+struct CallableSeed {}
+struct CallableWrap<T> {
+    inner: T,
+}
+
+impl<T> FnOnce<(u256, u256), u256> for CallableWrap<T> {
+    fn call_once(self: own Self, _ args: own (u256, u256)) -> u256 {
+        self.call(args.0, args.1)
+    }
+}
+
+impl<T> Fn<(u256, u256), u256> for CallableWrap<T> {
+    fn call(self, _ args: own (u256, u256)) -> u256 {
+        invoke_callable(
+            func: CallableWrap { inner: self },
+            left: args.0,
+            right: args.1,
+        )
+    }
+}
+
+fn invoke_callable<T: Fn<(u256, u256), u256>>(
+    func: T,
+    left: u256,
+    right: u256,
+) -> u256 {
+    func.call(left, right)
+}
+
+fn callable_root() -> u256 {
+    invoke_callable(
+        func: CallableWrap { inner: CallableSeed {} },
+        left: 1,
+        right: 2,
+    )
+}
+"#,
+    );
+
+    let diagnostics = collect_semantic_borrow_diagnostic_vouchers(&db, top_mod);
+    let rendered = format_diagnostics(&db, &diagnostics);
+    assert_eq!(
+        rendered
+            .matches("non-regular polymorphic recursion")
+            .count(),
+        1,
+        "{rendered}"
+    );
 }
 
 #[test]
@@ -1917,6 +3546,51 @@ fn duplicate<const ROOT: u256>() -> [Rooted<ROOT>; 2] {
 }
 
 #[test]
+fn refined_dead_returns_and_transfers_do_not_add_layout_context() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+struct Rooted<const ROOT: u256 = _> {}
+
+impl<const ROOT: u256> Copy for Rooted<ROOT> {}
+
+fn fresh<const ROOT: u256>() -> Rooted<ROOT> {
+    Rooted {}
+}
+
+fn choose<const ROOT: u256>() -> [Rooted<ROOT>; 2] {
+    let done = false
+    if done {
+        let value = fresh()
+        return [value, value]
+    }
+    [fresh(), fresh()]
+}
+"#,
+    );
+    let instance = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "choose"))),
+    );
+    let normalized =
+        normalize_semantic_body_for_layout_evidence(&db, instance).expect("normalization failed");
+    let reachable = normalized_cfg_reachable_blocks(&db, &normalized);
+    assert!(
+        normalized
+            .blocks
+            .iter()
+            .enumerate()
+            .any(|(block_idx, block)| {
+                !reachable[SBlockId::new(block_idx).index()]
+                    && matches!(&block.terminator.kind, NSTerminatorKind::Return(Some(_)))
+            }),
+        "the fixture must retain a refined-unreachable return"
+    );
+    layout_evidence_body(&db, instance).expect("dead layout context must not contaminate lowering");
+}
+
+#[test]
 fn one_evaluation_satisfies_a_single_element_output_layout_family() {
     assert_layoutizes(
         "one_evaluation_satisfies_a_single_element_output_layout_family.fe",
@@ -2018,6 +3692,29 @@ fn consume<const ROOT: u256>(values: [Rooted<ROOT>; 2], lane: usize) -> u256 {
 }
 
 #[test]
+fn statically_unreachable_predecessors_do_not_erase_layout_evidence_definitions() {
+    assert_layoutizes(
+        "statically_unreachable_layout_predecessor.fe",
+        r#"
+struct Rooted<const ROOT: u256 = _> {}
+
+impl<const ROOT: u256> Copy for Rooted<ROOT> {}
+
+fn consume<const ROOT: u256>(_ value: Rooted<ROOT>) {}
+
+fn known_branch<const ROOT: u256>(value: Rooted<ROOT>) {
+    let known = true
+    let mut selected: Rooted<ROOT>
+    if known {
+        selected = value
+    }
+    consume(value: selected)
+}
+"#,
+    );
+}
+
+#[test]
 fn verifier_requires_branch_definitions_on_every_path() {
     parse_ok!(
         db,
@@ -2045,6 +3742,7 @@ fn branch<const ROOT: u256>(
     let (branch_local, branch_index) = evidence
         .statements
         .iter()
+        .flatten()
         .flat_map(|statement| &statement.assignments)
         .find_map(|assignment| match &assignment.expr {
             LayoutEvidenceExpr::Project { indices, .. } => indices.iter().find_map(|index| {
@@ -2080,6 +3778,8 @@ fn branch<const ROOT: u256>(
 
     let mut malformed = (*evidence).clone();
     malformed.statements[call_id.index()]
+        .as_mut()
+        .expect("statement")
         .call
         .as_mut()
         .expect("missing post-merge layout call")
@@ -2096,6 +3796,8 @@ fn branch<const ROOT: u256>(
 
     let mut malformed = (*evidence).clone();
     malformed.statements[call_id.index()]
+        .as_mut()
+        .expect("statement")
         .call
         .as_mut()
         .expect("missing post-merge layout call")
@@ -2210,6 +3912,8 @@ fn replace<const ROOT: usize>(
     let mut malformed = (*evidence).clone();
     let statement_id = normalized.blocks[block_idx].stmts[statement_idx].id;
     let index = malformed.statements[statement_id.index()]
+        .as_mut()
+        .expect("statement")
         .call
         .as_mut()
         .and_then(|call| {
@@ -2252,13 +3956,13 @@ struct Pair<const LEFT: u256 = _, const RIGHT: u256 = _> {
 }
 
 fn pass<const LEFT: u256, const RIGHT: u256>(
-    value: Pair<LEFT, RIGHT>,
+    value: own Pair<LEFT, RIGHT>,
 ) -> Pair<LEFT, RIGHT> {
     value
 }
 
 fn caller<const LEFT: u256, const RIGHT: u256>(
-    value: Pair<LEFT, RIGHT>,
+    value: own Pair<LEFT, RIGHT>,
 ) -> Pair<LEFT, RIGHT> {
     pass(value: value)
 }
@@ -2292,6 +3996,7 @@ fn caller<const LEFT: u256, const RIGHT: u256>(
     let assignments = malformed
         .statements
         .iter_mut()
+        .flatten()
         .find_map(|statement| {
             statement
                 .call
@@ -2370,6 +4075,7 @@ fn first<const ROOT: u256>(values: [Rooted<ROOT>; 2]) -> Rooted<ROOT> {
     let arg = malformed
         .statements
         .iter_mut()
+        .flatten()
         .find_map(|statement| statement.call.as_mut())
         .and_then(|call| call.args.first_mut())
         .expect("missing layout call argument");
@@ -2383,6 +4089,7 @@ fn first<const ROOT: u256>(values: [Rooted<ROOT>; 2]) -> Rooted<ROOT> {
     let arg = malformed
         .statements
         .iter_mut()
+        .flatten()
         .find_map(|statement| statement.call.as_mut())
         .and_then(|call| call.args.first_mut())
         .expect("missing layout call argument");
@@ -2409,6 +4116,7 @@ fn first<const ROOT: u256>(values: [Rooted<ROOT>; 2]) -> Rooted<ROOT> {
     let index = malformed
         .statements
         .iter_mut()
+        .flatten()
         .flat_map(|statement| &mut statement.assignments)
         .find_map(|assignment| match &mut assignment.expr {
             LayoutEvidenceExpr::Project { indices, .. } => indices.first_mut(),
@@ -2474,6 +4182,7 @@ fn repeat<const ROOT: u256>(value: Rooted<ROOT>) -> [Rooted<ROOT>; 2] {
         repeat
             .statements
             .iter()
+            .flatten()
             .flat_map(|stmt| stmt.assignments.iter())
             .any(|assignment| matches!(
                 &assignment.expr,
@@ -2611,6 +4320,7 @@ fn inspect_views<const PHYSICAL: u256, const LOGICAL: u256>(
         evidence
             .statements
             .iter()
+            .flatten()
             .flat_map(|statement| &statement.assignments)
             .any(|assignment| matches!(
                 assignment.expr,
@@ -2863,6 +4573,7 @@ fn reorder<const ROOT: u256>(
             evidence
                 .statements
                 .iter()
+                .flatten()
                 .flat_map(|statement| &statement.assignments)
                 .any(|assignment| matches!(
                     &assignment.expr,
@@ -2900,6 +4611,7 @@ fn replace<const ROOT: u256>(
         evidence
             .statements
             .iter()
+            .flatten()
             .flat_map(|statement| &statement.assignments)
             .any(|assignment| matches!(
                 &assignment.expr,
@@ -2968,11 +4680,11 @@ enum MapChoice {
 }
 
 impl MapChoice {
-    fn identity(self) -> Self {
+    fn identity(own self) -> Self {
         self
     }
 
-    fn expand(mut self) {
+    fn expand(mut own self) {
         match self {
             MapChoice::Scalar(map) => self = MapChoice::Family([map, map, map]),
             MapChoice::Family(_) => {}
@@ -3051,6 +4763,20 @@ fn layout_evidence_covers_existing_forwarding_matrix() {
 }
 
 #[test]
+fn stable_runtime_recursive_layout_forwarding_is_not_polymorphic_growth() {
+    parse_ok!(
+        db,
+        top_mod,
+        include_str!("../../fe/tests/fixtures/fe_test/layout_root_recursive_forwarding.fe"),
+    );
+    for name in ["direct_dynamic", "mutual_a", "recursive_wrapped"] {
+        let sites =
+            non_regular_recursive_call_sites(&db, BodyOwner::Func(find_func(&db, top_mod, name)));
+        assert!(sites.is_empty(), "{name}: {sites:#?}");
+    }
+}
+
+#[test]
 fn specialized_array_enum_leaf_methods_bind_runtime_layout_consts() {
     parse_ok!(
         db,
@@ -3100,6 +4826,7 @@ fn specialized_array_enum_leaf_methods_bind_runtime_layout_consts() {
                 evidence
                     .statements
                     .iter()
+                    .flatten()
                     .any(|statement| !statement.const_bindings.is_empty()),
                 "specialized Slot::root must bind ROOT from receiver evidence: {evidence:#?}",
             );

@@ -1,0 +1,72 @@
+---
+source: crates/language-server/src/functionality/signature_help.rs
+expression: snapshot
+input_file: test_files/signature_help.fe
+---
+## generic
+function(_: own u256) -> u256 [reusable]
+active: Some(0)
+
+## generic_owned
+function(_: own T) -> U [reusable]
+active: Some(0)
+
+## implied_supertrait
+function(_: own u256) -> u256 [reusable]
+active: Some(0)
+
+## ordinary_second
+fn ordinary(value: own u256, flag: bool) -> u256
+active: Some(1)
+
+## ordinary_mut
+fn capabilities(shared: ref u256, target: mut u256) -> u256
+active: Some(1)
+
+## closure
+add(value: own u256) -> u256 [reusable]
+active: Some(0)
+
+## ufcs_receiver
+call(self: |own u256| -> u256, value: own u256) -> u256 [reusable]
+active: Some(0)
+
+## ufcs_argument
+call(self: |own u256| -> u256, value: own u256) -> u256 [reusable]
+active: Some(1)
+
+## closure_parameter_list
+fn apply(function: |own u256, own u256| -> u256, fallback: own u256) -> u256
+active: Some(0)
+
+## projected
+holder.function(value: own u256) -> u256 [reusable]
+active: Some(0)
+
+## user_callable
+AddOne {}(_: own u256) -> u256 [reusable]
+active: Some(0)
+
+## method
+fn add(amount: own u256) -> u256
+active: Some(0)
+
+## inline
+<closure>(value: own u256) -> u256 [reusable]
+active: Some(0)
+
+## zero_arg
+answer() -> u256 [reusable]
+active: None
+
+## nested_return
+nested(20)(other: own u256) -> u256 [reusable]
+active: Some(0)
+
+## nested_inner
+add(value: own u256) -> u256 [reusable]
+active: Some(0)
+
+## nested_outer
+fn ordinary(value: own u256, flag: bool) -> u256
+active: Some(1)

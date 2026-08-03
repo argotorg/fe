@@ -1,0 +1,14 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/closure_storage_aggregate_capture.fe
+---
+error[16-0005]: noesc violation in `fn ClosureStorageAggregateCapture::__init__`
+   ┌─ closure_storage_aggregate_capture.fe:16:17
+   │
+16 │           let f = |_ unit: own ()| -> () {
+   │ ╭─────────────────^
+17 │ │             let handle = captured.handle
+18 │ │             handle = 7
+19 │ │         }
+   │ ╰─────────^ cannot capture `Captured` from storage in closure

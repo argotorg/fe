@@ -1,0 +1,2197 @@
+use core::functional::{Fn, FnOnce}
+use core::option::Option::{self, Some}
+
+struct Boxed {
+    value: u256,
+}
+
+impl Boxed {
+    fn read_via_closure(self) -> u256 {
+        let read = || self.value
+        read.call()
+    }
+}
+
+struct Borrowed {
+    value: ref u256,
+}
+
+struct MutHolder {
+    value: mut u256,
+}
+
+struct BoxedHolder {
+    boxed: Boxed,
+}
+
+struct ViewPair {
+    left: view Boxed,
+    right: view Boxed,
+}
+
+struct ScalarViewPair {
+    left: view u256,
+    right: view u256,
+}
+
+struct MutBoxedPair {
+    left: mut Boxed,
+    right: mut Boxed,
+}
+
+struct NestedView {
+    boxed: view Boxed,
+}
+
+struct NestedViewPair {
+    left: view NestedView,
+    right: view NestedView,
+}
+
+struct MutableNestedView {
+    boxed: view Boxed,
+    count: u256,
+}
+
+struct TwoMut {
+    left: mut u256,
+    right: mut u256,
+}
+
+struct ScalarPair {
+    left: u256,
+    right: u256,
+}
+
+struct ClosureHolder<F> {
+    function: F,
+}
+
+struct ClosureValueHolder<F> {
+    function: F,
+    value: u256,
+}
+
+struct view {
+    value: u256,
+}
+
+enum Mixed {
+    Value(u256, Boxed),
+}
+
+enum ViewChoice {
+    Pair(view Boxed, view Boxed),
+    Empty,
+}
+
+trait Marker {}
+
+struct MarkerImpl {}
+
+impl Marker for MarkerImpl {}
+
+fn marker_zero<T: Marker>(_ marker: T) -> u256 {
+    0
+}
+
+struct AddPair {}
+
+struct FortyTwo {}
+
+struct AddInto {}
+
+struct TakeBoxed {
+    boxed: Boxed,
+}
+
+struct Overloaded {}
+
+struct ReusableOrOnce {}
+
+impl FnOnce<(u256, u256), u256> for AddPair {
+    fn call_once(self: own Self, _ args: own (u256, u256)) -> u256 {
+        self.call(args.0, args.1)
+    }
+}
+
+impl Fn<(u256, u256), u256> for AddPair {
+    fn call(self, _ args: own (u256, u256)) -> u256 {
+        args.0 + args.1
+    }
+}
+
+impl FnOnce<(), u256> for FortyTwo {
+    fn call_once(self: own Self, _ args: own ()) -> u256 {
+        42
+    }
+}
+
+impl Fn<(), u256> for FortyTwo {
+    fn call(self, _ args: own ()) -> u256 {
+        42
+    }
+}
+
+impl FnOnce<(mut u256, view u256), ()> for AddInto {
+    fn call_once(self: own Self, _ args: own (mut u256, view u256)) {
+        self.call(args.0, args.1)
+    }
+}
+
+impl Fn<(mut u256, view u256), ()> for AddInto {
+    fn call(self, mut _ args: own (mut u256, view u256)) {
+        args.0 += args.1
+    }
+}
+
+impl FnOnce<(), Boxed> for TakeBoxed {
+    fn call_once(self: own Self, _ args: own ()) -> Boxed {
+        self.boxed
+    }
+}
+
+impl FnOnce<(u256,), u256> for Overloaded {
+    fn call_once(self: own Self, _ args: own (u256,)) -> u256 {
+        args.0 + 1
+    }
+}
+
+impl Fn<(u256,), u256> for Overloaded {
+    fn call(self, _ args: own (u256,)) -> u256 {
+        args.0 + 1
+    }
+}
+
+impl FnOnce<(bool,), bool> for Overloaded {
+    fn call_once(self: own Self, _ args: own (bool,)) -> bool {
+        !args.0
+    }
+}
+
+impl Fn<(bool,), bool> for Overloaded {
+    fn call(self, _ args: own (bool,)) -> bool {
+        !args.0
+    }
+}
+
+impl FnOnce<(u256,), u256> for ReusableOrOnce {
+    fn call_once(self: own Self, _ args: own (u256,)) -> u256 {
+        args.0 + 1
+    }
+}
+
+impl Fn<(u256,), u256> for ReusableOrOnce {
+    fn call(self, _ args: own (u256,)) -> u256 {
+        args.0 + 1
+    }
+}
+
+impl FnOnce<(bool,), bool> for ReusableOrOnce {
+    fn call_once(self: own Self, _ args: own (bool,)) -> bool {
+        !args.0
+    }
+}
+
+enum Choice {
+    Left,
+    Right,
+}
+
+fn invoke<T, U, F: Fn<(T,), U>>(_ func: F, _ value: own T) -> U {
+    func.call(value)
+}
+
+fn invoke_once<T, U, F: FnOnce<(T,), U>>(_ func: own F, _ value: own T) -> U {
+    func.call_once(value)
+}
+
+fn invoke_direct<T, U, F: Fn<(T,), U>>(_ func: F, _ value: own T) -> U {
+    func(value)
+}
+
+fn invoke_once_direct<T, U, F: FnOnce<(T,), U>>(_ func: own F, _ value: own T) -> U {
+    func(value)
+}
+
+fn invoke_zero_once<U, F: FnOnce<(), U>>(_ func: own F) -> U {
+    func.call_once()
+}
+
+fn invoke_zero<T, F: Fn<(), T>>(_ func: F) -> T {
+    func.call()
+}
+
+fn invoke_reusable_once<T, U, F: Fn<(T,), U>>(_ func: own F, _ value: own T) -> U {
+    func.call_once(value)
+}
+
+fn apply_view<T, F: Fn<(view T,), T>>(_ func: F, _ value: own T) -> T {
+    func.call(value)
+}
+
+fn read_named_view(_ value: view) -> u256 {
+    value.value
+}
+
+fn write_mut(_ target: mut u256, _ value: u256) {
+    target = value
+}
+
+fn consume_boxed(_ boxed: own Boxed) {}
+
+fn call_with_owned_capture(_ boxed: own Boxed) -> u256 {
+    let add_boxed = |value: own u256| -> u256 { value + boxed.value }
+    add_boxed.call(1)
+}
+
+fn call_with_ref_and_owned_capture(_ boxed: own Boxed) -> u256 {
+    let x: u256 = 1
+    let r = ref x
+    let add_both = |value: own u256| -> u256 { value + r + boxed.value }
+    add_both.call(40)
+}
+
+fn closure_passthrough<T>(_ value: own T) -> T {
+    let passthrough = |_ unit: own ()| -> T { value }
+    passthrough.call_once(())
+}
+
+fn generic_identity_closure<T>(_ value: own T) -> T {
+    let identity = |value: own T| -> T { value }
+    identity.call_once(value)
+}
+
+fn closure_const<const N: u256>() -> u256 {
+    let value = |_ unit: own ()| -> u256 { N }
+    value.call(())
+}
+
+fn call_closure_before_diverging() -> ! {
+    let answer = |_ unit: own ()| -> u256 { 42 }
+    assert(answer.call(()) == 42)
+    core::panic_with_value(0 as u256)
+}
+
+#[arithmetic(unchecked)]
+mod unchecked_parent {
+    use core::functional::Fn
+
+    #[arithmetic(checked)]
+    pub fn checked_closure_overflow() -> u8 {
+        let add_one = |value: own u8| -> u8 { value + 1 }
+        add_one.call(255)
+    }
+}
+
+#[test]
+fn test_closure_call_method() {
+    let offset: u256 = 1
+    let inc = |value: own u256| -> u256 { value + offset }
+    assert(inc.call(41) == 42)
+}
+
+#[test]
+fn test_closure_captured_view_aggregate_projection() {
+    let boxed = Boxed { value: 42 }
+    assert(boxed.read_via_closure() == 42)
+    assert(boxed.value == 42)
+}
+
+#[test]
+fn test_reusable_closure_projected_from_aggregate() {
+    let value: u256 = 21
+    let shared = ref value
+    let read = || -> u256 { shared }
+    let holder = ClosureHolder { function: read }
+    assert(holder.function.call() == 21)
+    assert(holder.function.call() == 21)
+}
+
+#[test]
+fn test_projected_closure_repeated_mut_return_after_last_use() {
+    let mut value = 0
+    let captured = mut value
+    let get = || captured
+    let holder = ClosureHolder { function: get }
+    let first = holder.function.call()
+    write_mut(first, 20)
+    let second = holder.function.call()
+    write_mut(second, 42)
+    assert(value == 42)
+}
+
+fn exercise_dynamic_closure_projection(_ index: usize) {
+    let mut value = 0
+    let captured = mut value
+    let get = || captured
+    let functions = [get]
+    let first = functions[index].call()
+    write_mut(first, 20)
+    let second = functions[index].call()
+    write_mut(second, 42)
+    assert(value == 42)
+}
+
+#[test]
+fn test_dynamic_closure_projection_preserves_mut_capture() {
+    exercise_dynamic_closure_projection(0)
+}
+
+fn exercise_dynamic_projection_of_returned_closures(_ index: usize) -> u256 {
+    let mut left = 0
+    let mut right = 0
+    let make = |target: mut u256| {
+        let project = || -> mut u256 { target }
+        project
+    }
+    let functions = [make.call(mut left), make.call(mut right)]
+    let selected = functions[index].call()
+    selected = 42
+    left + right
+}
+
+#[test]
+fn test_dynamic_projection_of_returned_closures_preserves_each_environment() {
+    assert(exercise_dynamic_projection_of_returned_closures(0) == 42)
+    assert(exercise_dynamic_projection_of_returned_closures(1) == 42)
+}
+
+fn exercise_dynamic_ref_borrowed_closure_projection(_ index: usize) {
+    let mut value = 0
+    let captured = mut value
+    let get = || captured
+    let functions = [get, get]
+    let borrowed = ref functions
+    let first = borrowed[index].call()
+    write_mut(first, 20)
+    let second = borrowed[index].call()
+    write_mut(second, 42)
+    assert(value == 42)
+}
+
+#[test]
+fn test_dynamic_ref_borrowed_closure_projection_preserves_mut_capture() {
+    exercise_dynamic_ref_borrowed_closure_projection(0)
+}
+
+#[test]
+fn test_borrowed_closure_holder_preserves_mut_capture() {
+    let mut value = 0
+    let captured = mut value
+    let get = || captured
+    let mut holder = ClosureHolder { function: get }
+    let borrowed = mut holder
+    let first = borrowed.function.call()
+    write_mut(first, 20)
+    let second = borrowed.function.call()
+    write_mut(second, 42)
+    assert(value == 42)
+}
+
+#[test]
+fn test_captured_mut_handle_can_be_reborrowed() {
+    let mut value: u256 = 0
+    let captured = mut value
+    let borrow = || -> mut u256 { mut captured }
+    let returned = borrow.call()
+    write_mut(returned, 42)
+    assert(value == 42)
+}
+
+#[test]
+fn test_closure_mut_parameter_can_be_reborrowed() {
+    let mut value: u256 = 0
+    let parent = mut value
+    let reborrow = |target: mut u256| -> mut u256 { mut target }
+    let returned = reborrow.call(parent)
+    returned = 42
+    assert(value == 42)
+}
+
+#[test]
+fn test_captured_mut_handle_can_be_written_through() {
+    let mut value: u256 = 0
+    let captured = mut value
+    let write = || {
+        captured = 42
+    }
+    write.call()
+    assert(value == 42)
+}
+
+#[test]
+fn test_captured_mut_handle_field_can_be_written_through() {
+    let mut value: u256 = 0
+    let holder = MutHolder { value: mut value }
+    let write = || {
+        holder.value = 42
+    }
+    write.call()
+    assert(value == 42)
+}
+
+#[test]
+fn test_captured_mut_handle_field_can_be_reborrowed() {
+    let mut value: u256 = 0
+    let holder = MutHolder { value: mut value }
+    let borrow = || -> mut u256 { mut holder.value }
+    let returned = borrow.call()
+    write_mut(returned, 42)
+    assert(value == 42)
+}
+
+#[test]
+fn test_captured_mut_aggregate_handle_can_project_for_write() {
+    let mut boxed = Boxed { value: 0 }
+    let handle = mut boxed
+    let write = || {
+        handle.value = 42
+    }
+    write.call()
+    assert(boxed.value == 42)
+}
+
+#[test]
+fn test_nested_closure_can_write_through_captured_mut_handle() {
+    let mut value: u256 = 0
+    let captured = mut value
+    let outer = || {
+        let inner = || {
+            captured = 42
+        }
+        inner.call()
+    }
+    outer.call()
+    assert(value == 42)
+}
+
+#[test]
+fn test_captured_ref_handle_can_be_reborrowed() {
+    let value: u256 = 42
+    let captured = ref value
+    let borrow = || -> ref u256 { ref captured }
+    let returned = borrow.call()
+    assert(returned == 42)
+}
+
+#[test]
+fn test_captured_array_of_mut_handles_can_project_for_write() {
+    let mut value = 0
+    let handles: [mut u256; 1] = [mut value]
+    let write = || {
+        handles[0] = 42
+    }
+    write.call()
+    assert(value == 42)
+}
+
+#[test]
+fn test_captured_mut_array_handle_can_dynamically_project_for_write() {
+    let mut values = [0 as u256, 0]
+    let handle = mut values
+    let write = |index: own usize| {
+        handle[index] = 42
+    }
+    write.call(1)
+    assert(values[1] == 42)
+}
+
+#[test]
+fn test_inferred_mut_aggregate_parameter_can_project_for_write() {
+    let mut boxed = Boxed { value: 0 }
+    let write = |target: mut| {
+        target.value = 42
+    }
+    write.call(mut boxed)
+    assert(boxed.value == 42)
+}
+
+#[test]
+fn test_deferred_inferred_mut_parameter_stored_in_struct_writes_pointee() {
+    let write = |target: mut| {
+        target = 42
+    }
+    let holder = ClosureHolder { function: write }
+    let mut value: u256 = 0
+    holder.function.call(mut value)
+    assert(value == 42)
+}
+
+#[test]
+fn test_stored_closure_receiver_and_mut_argument_use_disjoint_fields() {
+    let write = |target: mut u256| {
+        target = 42
+    }
+    let mut holder = ClosureValueHolder {
+        function: write,
+        value: 0,
+    }
+    holder.function.call(mut holder.value)
+    assert(holder.value == 42)
+}
+
+#[test]
+fn test_deferred_capability_parameters_through_dynamic_and_nested_closures() {
+    let write = |target: mut| {
+        target = 20
+    }
+    let functions = [write, write]
+    let index: usize = 1
+    let mut value: u256 = 0
+    functions[index].call(mut value)
+
+    let make = |target: mut| {
+        let add = || {
+            target += 22
+        }
+        add
+    }
+    let holder = ClosureHolder { function: make }
+    let add = holder.function.call(mut value)
+    add.call()
+    assert(value == 42)
+}
+
+#[test]
+fn test_inferred_handle_array_parameter_uses_element_capability() {
+    let mut value = 0
+    let handles: [mut u256; 1] = [mut value]
+    let increment = |items| {
+        items[0] += 1
+    }
+    increment.call(handles)
+
+    let handles: [mut u256; 1] = [mut value]
+    let borrow = |items| -> mut u256 { mut items[0] }
+    let returned = borrow.call(handles)
+    returned = 42
+    assert(value == 42)
+}
+
+#[test]
+fn test_inferred_owned_aggregate_parameter_can_return_a_borrow() {
+    let borrow = |boxed: own| -> ref u256 { ref boxed.value }
+    let returned = borrow.call_once(Boxed { value: 42 })
+    assert(returned == 42)
+}
+
+#[test]
+fn test_owned_aggregate_parameter_can_return_a_whole_view() {
+    let borrow = |boxed: own Boxed| -> view Boxed { boxed }
+    let first = borrow.call(Boxed { value: 20 })
+    let second = borrow.call(Boxed { value: 22 })
+    assert(first.value + second.value == 42)
+
+    let borrow_mut = |mut boxed: own Boxed| -> mut Boxed { mut boxed }
+    let first_mut = borrow_mut.call(Boxed { value: 0 })
+    let second_mut = borrow_mut.call(Boxed { value: 0 })
+    first_mut.value = 20
+    second_mut.value = 22
+    assert(first_mut.value + second_mut.value == 42)
+}
+
+#[test]
+fn test_returned_closure_can_borrow_its_owned_environment() {
+    let make = |boxed: own Boxed| {
+        let read = || -> ref u256 { ref boxed.value }
+        read
+    }
+    let read = make.call_once(Boxed { value: 42 })
+    let returned = read.call()
+    assert(returned == 42)
+}
+
+#[test]
+fn test_consuming_closure_can_return_borrow_into_moved_environment() {
+    let borrowed = Boxed { value: 42 }
+    let consumed = Boxed { value: 0 }
+    let borrow_once = || -> ref u256 {
+        consume_boxed(consumed)
+        ref borrowed.value
+    }
+    let returned = borrow_once.call_once()
+    assert(returned == 42)
+}
+
+#[test]
+fn test_returned_closure_preserves_a_mut_parameter_handle() {
+    let mut value = 0
+    let make = |handle: mut u256| {
+        let write = || {
+            handle = 42
+        }
+        write
+    }
+    let write = make.call(mut value)
+    write.call()
+    assert(value == 42)
+}
+
+#[test]
+fn test_returned_closure_preserves_default_view_rvalue_backing_storage() {
+    let make = |boxed| {
+        || boxed.value
+    }
+    let read = make.call(Boxed { value: 42 })
+    assert(read.call() == 42)
+}
+
+#[test]
+fn test_copy_capture_closure_is_copyable() {
+    let offset = 1
+    let add = |value: own u256| value + offset
+    let copied = add
+    assert(add.call(20) + copied.call(20) == 42)
+}
+
+#[test]
+fn test_aggregate_return_preserves_multiple_mut_handles() {
+    let mut left = 0
+    let mut right = 0
+    let borrow_both = |left: mut u256, right: mut u256| -> TwoMut {
+        TwoMut { left, right }
+    }
+    let returned = borrow_both.call(mut left, mut right)
+    returned.left = 20
+    returned.right = 22
+    assert(left + right == 42)
+}
+
+#[test]
+fn test_array_return_preserves_multiple_mut_handles() {
+    let mut left = 0
+    let mut right = 0
+    let borrow_both = |left: mut u256, right: mut u256| -> [mut u256; 2] {
+        [left, right]
+    }
+    let returned = borrow_both.call(mut left, mut right)
+    returned[0] = 20
+    returned[1] = 22
+    assert(left + right == 42)
+}
+
+#[test]
+fn test_option_map_closure_capture() {
+    let offset: u256 = 10
+    let input: Option<u256> = Some(32)
+    let result = input.map(|value: own u256| -> u256 { value + offset }).unwrap()
+    assert(result == 42)
+}
+
+#[test]
+fn test_readonly_noncopy_capture_is_reusable() {
+    let boxed = Boxed { value: 20 }
+    let read = |_ unit: own ()| -> u256 { boxed.value }
+    let first = invoke(func: read, value: ())
+    let second = read.call(())
+    assert(first + second == 40)
+}
+
+#[test]
+fn test_consuming_capture_call_once() {
+    let boxed = Boxed { value: 42 }
+    let take = |_ unit: own ()| -> Boxed { boxed }
+    let result = take.call_once(())
+    assert(result.value == 42)
+}
+
+#[test]
+fn test_consuming_capture_generic_call_once() {
+    let boxed = Boxed { value: 42 }
+    let take = |_ unit: own ()| -> Boxed { boxed }
+    let result = invoke_once(func: take, value: ())
+    assert(result.value == 42)
+}
+
+#[test]
+fn test_match_consuming_capture_call_once() {
+    let wrapped: Option<Boxed> = Some(Boxed { value: 42 })
+    let take = |_ unit: own ()| -> Boxed {
+        match wrapped {
+            Some(value) => value,
+            Option::None => Boxed { value: 0 },
+        }
+    }
+    assert(take.call_once(()).value == 42)
+}
+
+#[test]
+fn test_match_consuming_capture_generic_call_once() {
+    let wrapped: Option<Boxed> = Some(Boxed { value: 42 })
+    let take = |_ unit: own ()| -> Boxed {
+        match wrapped {
+            Some(value) => value,
+            Option::None => Boxed { value: 0 },
+        }
+    }
+    assert(invoke_once(func: take, value: ()).value == 42)
+}
+
+#[test]
+fn test_if_let_consuming_capture_call_once() {
+    let wrapped: Option<Boxed> = Some(Boxed { value: 42 })
+    let take = |_ unit: own ()| -> Boxed {
+        if let Some(value) = wrapped {
+            value
+        } else {
+            Boxed { value: 0 }
+        }
+    }
+    assert(take.call_once(()).value == 42)
+}
+
+#[test]
+fn test_match_without_payload_binding_is_reusable() {
+    let wrapped: Option<Boxed> = Some(Boxed { value: 42 })
+    let is_some = |_ unit: own ()| -> bool {
+        match wrapped {
+            Some(_) => true,
+            Option::None => false,
+        }
+    }
+    assert(is_some.call(()))
+    assert(is_some.call(()))
+}
+
+#[test]
+fn test_match_borrowed_capture_is_reusable() {
+    let wrapped: Option<Boxed> = Some(Boxed { value: 21 })
+    let read = |_ unit: own ()| -> u256 {
+        match ref wrapped {
+            Some(value) => value.value,
+            Option::None => 0,
+        }
+    }
+    assert(read.call(()) + read.call(()) == 42)
+}
+
+#[test]
+fn test_match_copy_scrutinee_capture_is_reusable() {
+    let wrapped: (u256,) = (21,)
+    let take = |_ unit: own ()| -> u256 {
+        match wrapped {
+            (value,) => value,
+        }
+    }
+    assert(take.call(()) + take.call(()) == 42)
+}
+
+#[test]
+fn test_inferred_copy_capture_is_reusable() {
+    let value = 21
+    let read = |_ unit: own ()| -> u256 { value }
+    assert(read.call(()) + read.call(()) == 42)
+}
+
+#[test]
+fn test_copy_pattern_binding_from_noncopy_capture_is_reusable() {
+    let mixed = Mixed::Value(21, Boxed { value: 1 })
+    let read = |_ unit: own ()| -> u256 {
+        match mixed {
+            Mixed::Value(value, _) => value,
+        }
+    }
+    let first = invoke(func: read, value: ())
+    let second = read.call(())
+    assert(first + second == 42)
+}
+
+#[test]
+fn test_block_wrapped_pattern_capture_call_once() {
+    let mixed = Mixed::Value(0, Boxed { value: 42 })
+    let take = |_ unit: own ()| -> Boxed {
+        let Mixed::Value(_, owned) = { mixed }
+        owned
+    }
+    assert(take.call_once(()).value == 42)
+}
+
+#[test]
+fn test_block_wrapped_pattern_capture_generic_call_once() {
+    let mixed = Mixed::Value(0, Boxed { value: 42 })
+    let take = |_ unit: own ()| -> Boxed {
+        let Mixed::Value(_, owned) = { mixed }
+        owned
+    }
+    assert(invoke_once(func: take, value: ()).value == 42)
+}
+
+#[test]
+fn test_with_wrapped_pattern_capture_generic_call_once() {
+    let mixed = Mixed::Value(0, Boxed { value: 42 })
+    let take = |_ unit: own ()| -> Boxed {
+        let Mixed::Value(_, owned) = with (Marker = MarkerImpl {}) { mixed }
+        owned
+    }
+    assert(invoke_once(func: take, value: ()).value == 42)
+}
+
+#[test]
+fn test_cast_wrapped_pattern_capture_generic_call_once() {
+    let mixed = Mixed::Value(0, Boxed { value: 42 })
+    let take = |_ unit: own ()| -> Boxed {
+        let Mixed::Value(_, owned) = mixed as Mixed
+        owned
+    }
+    assert(invoke_once(func: take, value: ()).value == 42)
+}
+
+#[test]
+fn test_if_wrapped_pattern_capture_generic_call_once() {
+    let mixed = Mixed::Value(0, Boxed { value: 42 })
+    let take = |pick_left: own bool| -> Boxed {
+        let Mixed::Value(_, owned) = if pick_left { mixed } else { mixed }
+        owned
+    }
+    assert(invoke_once(func: take, value: true).value == 42)
+}
+
+#[test]
+fn test_match_wrapped_pattern_capture_generic_call_once() {
+    let mixed = Mixed::Value(0, Boxed { value: 42 })
+    let take = |choice: own Choice| -> Boxed {
+        let Mixed::Value(_, owned) = match choice {
+            Choice::Left => mixed,
+            Choice::Right => mixed,
+        }
+        owned
+    }
+    assert(invoke_once(func: take, value: Choice::Left).value == 42)
+}
+
+#[test]
+fn test_block_wrapped_copy_pattern_capture_is_reusable() {
+    let mixed = Mixed::Value(21, Boxed { value: 1 })
+    let read = |_ unit: own ()| -> u256 {
+        let Mixed::Value(value, _) = { mixed }
+        value
+    }
+    let first = invoke(func: read, value: ())
+    let second = read.call(())
+    assert(first + second == 42)
+}
+
+#[test]
+fn test_option_map_consuming_closure() {
+    let boxed = Boxed { value: 42 }
+    let result: Boxed = Some(()).map(|_ unit: own ()| -> Boxed { boxed }).unwrap()
+    assert(result.value == 42)
+}
+
+#[test]
+fn test_option_map_readonly_noncopy_closure() {
+    let boxed = Boxed { value: 42 }
+    let result: u256 = Some(()).map(|_ unit: own ()| -> u256 { boxed.value }).unwrap()
+    assert(result == 42)
+}
+
+#[test]
+fn test_reusable_closure_supports_both_call_abis() {
+    let boxed = Boxed { value: 21 }
+    let read = |_ unit: own ()| -> u256 { boxed.value }
+    let first = read.call(())
+    let second = read.call_once(())
+    assert(first + second == 42)
+}
+
+#[test]
+fn test_direct_closure_invocation_selects_reusable_and_consuming_abis() {
+    let offset: u256 = 1
+    let increment = |value: own u256| -> u256 { value + offset }
+    assert(increment(20) + increment(20) == 42)
+    let borrowed_increment = ref increment
+    assert(borrowed_increment(41) == 42)
+
+    let boxed = Boxed { value: 42 }
+    let take = || -> Boxed { boxed }
+    assert(take().value == 42)
+}
+
+#[test]
+fn test_direct_generic_callable_invocation() {
+    let offset: u256 = 1
+    let increment = |value: own u256| -> u256 { value + offset }
+    assert(invoke_direct(func: increment, value: 41) == 42)
+
+    let boxed = Boxed { value: 42 }
+    let take = |_ unit: own ()| -> Boxed { boxed }
+    assert(invoke_once_direct(func: take, value: ()).value == 42)
+}
+
+#[test]
+fn test_direct_callable_values_support_zero_multi_and_projection_calls() {
+    let answer = || -> u256 { 42 }
+    let holder = ClosureHolder { function: answer }
+    assert((holder.function)() == 42)
+    let functions = [answer, answer]
+    assert(functions[1]() == 42)
+
+    let add = |left: own u256, right: own u256| -> u256 { left + right }
+    assert(add(20, 22) == 42)
+    assert(AddPair {}(20, 22) == 42)
+    assert(FortyTwo {}() == 42)
+    assert(TakeBoxed { boxed: Boxed { value: 42 } }().value == 42)
+    assert((|value: own u256| -> u256 { value + 1 })(41) == 42)
+    assert(Overloaded {}(41 as u256) == 42)
+    assert(Overloaded {}(false))
+    assert(ReusableOrOnce {}(41 as u256) == 42)
+    assert(ReusableOrOnce {}(false))
+    let add = AddPair {}
+    let borrowed_add = ref add
+    assert(borrowed_add(20, 22) == 42)
+}
+
+#[test]
+fn test_direct_closure_call_preserves_mut_capture_returns() {
+    let mut value = 0
+    let captured = mut value
+    let project = || -> mut u256 { captured }
+    let first = project()
+    first = 20
+    let second = project()
+    second += 22
+    assert(value == 42)
+}
+
+#[test]
+fn test_copyable_reusable_mut_capture_supports_both_call_abis() {
+    let mut value = 0
+    let captured = mut value
+    let project = || -> mut u256 { captured }
+    let first = project.call_once()
+    first = 20
+    let second = project.call()
+    second += 22
+
+    assert(value == 42)
+}
+
+#[test]
+fn test_fn_bound_exposes_fn_once_supertrait() {
+    let boxed = Boxed { value: 42 }
+    let read = |_ unit: own ()| -> u256 { boxed.value }
+    let result = invoke_reusable_once(func: read, value: ())
+    assert(result == 42)
+}
+
+#[test]
+fn test_nested_closure_capture() {
+    let base: u256 = 40
+    let outer = |value: own u256| -> u256 {
+        let inner = |delta: own u256| -> u256 { base + value + delta }
+        inner.call(1)
+    }
+    assert(outer.call(1) == 42)
+}
+
+#[test]
+fn test_nested_noncopy_capture_propagates_construction_move() {
+    let boxed = Boxed { value: 42 }
+    let outer = |_ unit: own ()| -> Boxed {
+        let inner = |_ unit: own ()| -> Boxed { boxed }
+        inner.call_once(())
+    }
+    assert(invoke_once(func: outer, value: ()).value == 42)
+}
+
+#[test]
+fn test_discarded_noncopy_capture_call_once() {
+    let boxed = Boxed { value: 42 }
+    let consume = |_ unit: own ()| -> () {
+        boxed
+        ()
+    }
+    invoke_once(func: consume, value: ())
+}
+
+#[test]
+fn test_owned_capture_call() {
+    assert(call_with_owned_capture(Boxed { value: 41 }) == 42)
+}
+
+#[test]
+fn test_ref_and_owned_capture_call() {
+    assert(call_with_ref_and_owned_capture(Boxed { value: 1 }) == 42)
+}
+
+#[test]
+fn test_ref_capture_and_ref_parameter() {
+    let captured_value = 20
+    let argument_value = 22
+    let captured = ref captured_value
+    let add = |argument: ref u256| -> u256 { captured + argument }
+    assert(add.call(ref argument_value) == 42)
+}
+
+#[test]
+fn test_consuming_closure_returns_borrow_from_owned_argument() {
+    let borrow = |value: own Boxed| -> ref u256 { ref value.value }
+    let returned = borrow.call_once(Boxed { value: 42 })
+    assert(returned == 42)
+}
+
+#[test]
+fn test_consuming_closure_returns_aggregate_borrow_from_owned_argument() {
+    let borrow = |value: own Boxed| -> Borrowed {
+        Borrowed { value: ref value.value }
+    }
+    let returned = borrow.call_once(Boxed { value: 42 })
+    assert(returned.value == 42)
+}
+
+#[test]
+fn test_closure_parent_type_substitution() {
+    let value: u256 = closure_passthrough(42)
+    assert(value == 42)
+    assert(closure_passthrough(true))
+    assert(generic_identity_closure(42 as u256) == 42)
+    assert(generic_identity_closure(true))
+}
+
+#[test]
+fn test_closure_parent_const_substitution() {
+    assert(closure_const<11>() == 11)
+    assert(closure_const<22>() == 22)
+}
+
+#[test(should_revert)]
+fn test_closure_result_does_not_inherit_never_parent_result() {
+    call_closure_before_diverging()
+}
+
+#[arithmetic(unchecked)]
+#[test]
+fn test_closure_inherits_function_arithmetic_mode() {
+    let add_one = |value: own u8| -> u8 { value + 1 }
+    assert(add_one.call(255) == 0)
+}
+
+#[test(should_revert)]
+fn test_closure_inherits_checked_function_mode_under_unchecked_module() {
+    unchecked_parent::checked_closure_overflow()
+}
+
+#[test]
+fn test_aggregate_identity_cast_preserves_value() {
+    let Mixed::Value(value, boxed) = Mixed::Value(1, Boxed { value: 41 }) as Mixed
+    assert(value + boxed.value == 42)
+}
+
+#[test]
+fn test_zero_and_multiple_inferred_closure_params() {
+    let answer = || 42 as u256
+    assert(answer.call() == 42)
+
+    let zero_logic = || true || false
+    assert(zero_logic.call())
+
+    let add = |left, right| left + right
+    assert(add.call(20 as u256, 22 as u256) == 42)
+
+    let trailing = |left, right,| left + right
+    assert(trailing.call(20 as u256, 22 as u256) == 42)
+
+    let bitwise = |left, right| left | right
+    assert(bitwise.call(40 as u256, 2 as u256) == 42)
+
+    let suppressed = |_ value, _: own,| value
+    assert(suppressed.call(42 as u256, 0 as u256) == 42)
+}
+
+#[test]
+fn test_mixed_inferred_closure_param_modes() {
+    let read: u256 = 20
+    let mut written: u256 = 1
+    let combine = |viewed, shared: ref, write: mut, boxed: own| -> u256 {
+        write += viewed
+        shared + write + boxed.value
+    }
+    let result = combine.call(
+        1 as u256,
+        ref read,
+        mut written,
+        Boxed { value: 20 },
+    )
+    assert(result == 42)
+    assert(written == 2)
+}
+
+#[test]
+fn test_contextual_and_later_use_closure_inference() {
+    assert(apply_view(|value| value, 42 as u256) == 42)
+
+    assert((|value| value + 1 as u256).call(41 as u256) == 42)
+
+    let add_to = |value| 1 as u256 + value
+    assert(add_to.call(41 as u256) == 42)
+
+    let equals_sum = |value| value == 20 + 22
+    assert(equals_sum.call(42 as u256))
+
+    let equals_negative_one = |value| value == -1
+    assert(equals_negative_one.call(-1 as i8))
+
+    let field = |value| value.value
+    assert(field.call(Boxed { value: 42 }) == 42)
+
+    let cast = |value| value as u256
+    assert(cast.call(42 as u8) == 42)
+
+    let invert = |value| !value
+    assert(invert.call(false))
+
+    let at = |values| values[0]
+    assert(at.call([42 as u256, 0]) == 42)
+
+    let captured = Boxed { value: 1 }
+    let increment = |value| value + captured.value
+    let call_with = |function, value| function.call(value)
+    assert(call_with.call(increment, 41 as u256) == 42)
+
+    let sum_values = |values| -> u256 {
+        let mut total: u256 = 0
+        for value in values {
+            total += value
+        }
+        total
+    }
+    assert(sum_values.call([20 as u256, 22 as u256]) == 42)
+
+    let branch = |value| -> u256 { if true { value } else { 0 as u256 } }
+    assert(branch.call(42 as u256) == 42)
+
+    let match_branch = |value| -> u256 {
+        match true {
+            true => value
+            false => 0 as u256
+        }
+    }
+    assert(match_branch.call(42 as u256) == 42)
+
+    let named_view = |value: view view| value.value
+    assert(named_view.call(view { value: 42 }) == 42)
+    assert(read_named_view(view { value: 42 }) == 42)
+
+    let unpack = |pair| {
+        let (left, right) = pair
+        left + right
+    }
+    assert(unpack.call((20 as u256, 22 as u256)) == 42)
+
+    let increment = |mut value: own| {
+        value += 1
+        value
+    }
+    assert(increment.call_once(41 as u256) == 42)
+
+    let outer = |left| {
+        let inner = |right| left + right
+        inner.call(22 as u256)
+    }
+    assert(outer.call(20 as u256) == 42)
+}
+
+#[test]
+fn test_tuple_value_remains_one_logical_closure_argument() {
+    let first = |pair: own (u256, u256)| pair.0
+    assert(first.call_once((42, 0)) == 42)
+
+    let first_of_two = |left: own u256, right: own u256| left
+    assert(first_of_two.call_once(42, 0) == 42)
+
+    let sum_boxed = |left: own Boxed, right: own Boxed| left.value + right.value
+    assert(
+        sum_boxed.call_once(
+            Boxed { value: 20 },
+            Boxed { value: 22 },
+        ) == 42,
+    )
+
+    assert(AddPair {}.call(20, 22) == 42)
+    assert(FortyTwo {}.call() == 42)
+    assert(FortyTwo {}.call_once() == 42)
+}
+
+#[test]
+fn test_user_defined_callable_mixed_capability_pack() {
+    let mut left = 20
+    let right = 22
+    AddInto {}.call(mut left, right)
+    assert(left == 42)
+}
+
+#[test]
+fn test_inferred_higher_order_consuming_closure() {
+    let call_once_with = |function: own, value: own| function.call_once(value)
+    let boxed = Boxed { value: 42 }
+    let take = |_ unit: own| boxed
+    let result = call_once_with.call_once(take, ())
+    assert(result.value == 42)
+}
+
+#[test]
+fn test_explicit_return_targets_the_closure() {
+    let choose = |flag: own bool| -> u256 {
+        if flag {
+            return 42
+        }
+        0
+    }
+    assert(choose.call(true) == 42)
+    assert(choose.call(false) == 0)
+}
+
+#[test]
+fn test_explicit_return_type_inference_when_all_paths_return() {
+    let choose = |flag| {
+        if flag {
+            return 20 as u256
+        }
+        return 22 as u256
+    }
+    assert(choose.call(true) + choose.call(false) == 42)
+}
+
+#[test]
+fn test_zero_sized_closure_parameters_preserve_pack_indices() {
+    let select =
+        |_ first: own MarkerImpl, value: own u256, _ last: own MarkerImpl| value
+    assert(select.call_once(MarkerImpl {}, 42, MarkerImpl {}) == 42)
+
+    let select_empty_array = |_ empty: own [u256; 0], value: own u256| value
+    assert(select_empty_array.call_once([], 42) == 42)
+}
+
+#[test]
+fn test_zero_sized_capture_preserves_environment_and_parameter_indices() {
+    let left: u256 = 10
+    let marker = MarkerImpl {}
+    let right: u256 = 12
+    let add = |value: own u256| left + marker_zero(marker) + right + value
+    assert(add.call(20) == 42)
+}
+
+#[test]
+fn test_copied_closure_dynamic_array_projection() {
+    let offset = 1
+    let add = |value: own u256| value + offset
+    let functions = [add, add]
+    assert(functions[1].call(41) == 42)
+}
+
+#[test]
+fn test_ref_borrowed_tuple_and_enum_closure_projections_preserve_mut_capture() {
+    let mut tuple_value = 0
+    let tuple_capture = mut tuple_value
+    let tuple_project = || -> mut u256 { tuple_capture }
+    let tuple = (tuple_project, 0 as u256)
+    let (tuple_projected, _) = ref tuple
+    let first = tuple_projected.call()
+    first = 20
+    let second = tuple_projected.call()
+    second = 42
+    assert(tuple_value == 42)
+
+    let mut enum_value = 0
+    let enum_capture = mut enum_value
+    let enum_project = || -> mut u256 { enum_capture }
+    let wrapped = Some(enum_project)
+    let Option::Some(enum_projected) = ref wrapped
+    let first = enum_projected.call()
+    first = 20
+    let second = enum_projected.call()
+    second = 42
+    assert(enum_value == 42)
+}
+
+#[test]
+fn test_copied_mut_capture_closure_returns_are_reusable_after_last_use() {
+    let mut value = 0
+    let captured = mut value
+    let project = || -> mut u256 { captured }
+    let copied = project
+
+    let first = project.call()
+    first = 20
+    let second = copied.call()
+    second = 42
+    assert(value == 42)
+}
+
+#[test]
+fn test_mutable_pattern_bindings_alias_struct_tuple_and_enum_payloads() {
+    let mut holder = BoxedHolder { boxed: Boxed { value: 0 } }
+    let BoxedHolder { boxed } = mut holder
+    boxed.value = 40
+
+    let mut pair = (Boxed { value: 0 }, 2 as u256)
+    let (boxed, _) = mut pair
+    boxed.value = 41
+
+    let mut wrapped: Option<Boxed> = Some(Boxed { value: 0 })
+    match mut wrapped {
+        Option::Some(boxed) => boxed.value = 42,
+        Option::None => (),
+    }
+
+    assert(holder.boxed.value == 40)
+    assert(pair.0.value == 41)
+    let Option::Some(boxed) = wrapped
+    assert(boxed.value == 42)
+}
+
+#[test]
+fn test_stored_mut_handle_pattern_through_ref_container_reaches_pointee() {
+    let mut value = 0
+    let holder = MutHolder { value: mut value }
+    let MutHolder { value: projected } = ref holder
+    projected = 42
+    assert(value == 42)
+}
+
+#[test]
+fn test_closure_capture_reaches_stored_mut_handle_through_ref_container() {
+    let mut value = 0
+    let holder = MutHolder { value: mut value }
+    let borrowed = ref holder
+    let write = || {
+        let MutHolder { value: projected } = borrowed
+        projected = 42
+    }
+    write.call()
+    assert(value == 42)
+}
+
+#[test]
+fn test_closure_returns_stored_mut_handle_through_ref_container() {
+    let mut value = 0
+    let holder = MutHolder { value: mut value }
+    let borrowed = ref holder
+    let project = || -> mut u256 {
+        let MutHolder { value: projected } = borrowed
+        projected
+    }
+
+    let first = project.call()
+    first = 20
+    assert(first == 20)
+
+    let second = project.call()
+    second = 42
+    assert(second == 42)
+    assert(value == 42)
+}
+
+#[test]
+fn test_closure_returns_dynamically_indexed_stored_mut_handle_through_ref_array() {
+    let mut left = 0
+    let mut right = 0
+    let handles = [mut left, mut right]
+    let borrowed = ref handles
+    let project = |index: own usize| -> mut u256 { borrowed[index] }
+
+    let first = project.call(0)
+    first = 20
+    let second = project.call(1)
+    second = 22
+    assert(left + right == 42)
+}
+
+#[test]
+fn test_closures_return_disjoint_stored_mut_fields_through_ref_container() {
+    let mut left = 0
+    let mut right = 0
+    let handles = TwoMut {
+        left: mut left,
+        right: mut right,
+    }
+    let borrowed = ref handles
+    let project_left = || -> mut u256 {
+        let TwoMut { left, right: _ } = borrowed
+        left
+    }
+    let project_right = || -> mut u256 {
+        let TwoMut { left: _, right } = borrowed
+        right
+    }
+
+    let returned_left = project_left.call()
+    let returned_right = project_right.call()
+    returned_left = 20
+    returned_right = 22
+    assert(left + right == 42)
+}
+
+#[test]
+fn test_closure_returns_nested_enum_stored_mut_handle_through_ref_container() {
+    let mut value = 0
+    let wrapped: Option<MutHolder> = Some(MutHolder { value: mut value })
+    let borrowed = ref wrapped
+    let project = || -> mut u256 {
+        let Option::Some(MutHolder { value: projected }) = borrowed
+        projected
+    }
+
+    let first = project.call()
+    first = 20
+    let second = project.call()
+    second = 42
+    assert(value == 42)
+}
+
+#[test]
+fn test_higher_order_call_invalidates_mut_reachable_through_closure_capture() {
+    let mut value = 0
+    let holder = MutHolder { value: mut value }
+    let borrowed = ref holder
+    let write = |_ unit: own ()| {
+        let MutHolder { value: projected } = borrowed
+        projected = 42
+    }
+    invoke(write, ())
+    assert(value == 42)
+}
+
+#[test]
+fn test_closure_mutable_enum_pattern_binding_aliases_captured_payload() {
+    let mut wrapped: Option<Boxed> = Some(Boxed { value: 0 })
+    let handle = mut wrapped
+    let write = || {
+        match handle {
+            Option::Some(boxed) => boxed.value = 42,
+            Option::None => (),
+        }
+    }
+    write.call()
+
+    let Option::Some(boxed) = wrapped
+    assert(boxed.value == 42)
+}
+
+#[test]
+fn test_closure_mutable_enum_argument_pattern_updates_original_payload() {
+    let update = |value: mut Option<Boxed>| {
+        match value {
+            Option::Some(boxed) => boxed.value = 42,
+            Option::None => (),
+        }
+    }
+    let mut wrapped: Option<Boxed> = Some(Boxed { value: 0 })
+    update.call(mut wrapped)
+
+    let Option::Some(boxed) = wrapped
+    assert(boxed.value == 42)
+}
+
+fn closure_view_roundtrip_dynamic_rvalue(_ value: own u256) -> u256 {
+    let identity = |boxed| boxed
+    let returned = identity.call(Boxed { value })
+    returned.value
+}
+
+#[test]
+fn test_closure_view_return_from_rvalue_preserves_backing_storage() {
+    let identity = |boxed| boxed
+    let returned = identity.call(Boxed { value: 20 })
+    assert(returned.value + closure_view_roundtrip_dynamic_rvalue(22) == 42)
+}
+
+#[test]
+fn test_closure_control_flow_joins_views_of_distinct_rvalues() {
+    let choose = |flag: own bool, left, right| if flag { left } else { right }
+    let selected_left =
+        choose.call(true, Boxed { value: 20 }, Boxed { value: 0 })
+    let selected_right =
+        choose.call(false, Boxed { value: 0 }, Boxed { value: 22 })
+    assert(selected_left.value + selected_right.value == 42)
+}
+
+#[test]
+fn test_looped_closure_view_returns_use_fresh_backing_storage() {
+    let identity = |boxed| boxed
+    let mut returned = ViewPair {
+        left: Boxed { value: 0 },
+        right: Boxed { value: 0 },
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let value = if index == 0 { 20 } else { 22 }
+        let next = identity.call(Boxed { value })
+        returned = if index == 0 {
+            ViewPair { left: next, right: returned.right }
+        } else {
+            ViewPair { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    assert(returned.left.value + returned.right.value == 42)
+}
+
+#[test]
+fn test_looped_closure_scalar_views_use_fresh_backing_storage() {
+    let identity = |value| value
+    let mut returned = ScalarViewPair { left: 0, right: 0 }
+    let mut index: usize = 0
+    while index < 2 {
+        let value = if index == 0 { 20 } else { 22 }
+        let next = identity.call(value)
+        returned = if index == 0 {
+            ScalarViewPair { left: next, right: returned.right }
+        } else {
+            ScalarViewPair { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    assert(returned.left + returned.right == 42)
+}
+
+#[test]
+fn test_looped_closure_mut_returns_use_fresh_backing_storage() {
+    let borrow = |mut boxed: own Boxed| -> mut Boxed { mut boxed }
+    let mut returned = MutBoxedPair {
+        left: borrow.call(Boxed { value: 0 }),
+        right: borrow.call(Boxed { value: 0 }),
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let next = borrow.call(Boxed { value: 0 })
+        returned = if index == 0 {
+            MutBoxedPair { left: next, right: returned.right }
+        } else {
+            MutBoxedPair { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left.value = 20
+    returned.right.value = 22
+    assert(returned.left.value + returned.right.value == 42)
+}
+
+#[test]
+fn test_looped_nested_closure_calls_forward_fresh_backing_storage() {
+    let allocate = |mut boxed: own Boxed| -> mut Boxed { mut boxed }
+    let forward = |boxed: mut Boxed| -> mut Boxed { mut boxed }
+    let mut returned = MutBoxedPair {
+        left: allocate.call(Boxed { value: 0 }),
+        right: allocate.call(Boxed { value: 0 }),
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let next = forward.call(allocate.call(Boxed { value: 0 }))
+        returned = if index == 0 {
+            MutBoxedPair { left: next, right: returned.right }
+        } else {
+            MutBoxedPair { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left.value = 20
+    returned.right.value = 22
+    assert(returned.left.value + returned.right.value == 42)
+}
+
+#[test]
+fn test_looped_control_flow_forwarding_preserves_fresh_backing_storage() {
+    let allocate = |mut boxed: own Boxed| -> mut Boxed { mut boxed }
+    let forward = |boxed: mut Boxed| -> mut Boxed { mut boxed }
+    let mut returned = MutBoxedPair {
+        left: allocate.call(Boxed { value: 0 }),
+        right: allocate.call(Boxed { value: 0 }),
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let next = forward.call(if index == 0 {
+            allocate.call(Boxed { value: 0 })
+        } else {
+            allocate.call(Boxed { value: 0 })
+        })
+        returned = if index == 0 {
+            MutBoxedPair { left: next, right: returned.right }
+        } else {
+            MutBoxedPair { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left.value = 20
+    returned.right.value = 22
+    assert(returned.left.value + returned.right.value == 42)
+}
+
+#[test]
+fn test_looped_local_borrows_use_fresh_backing_storage() {
+    let mut initial_left = 0
+    let mut initial_right = 0
+    let mut returned = TwoMut {
+        left: mut initial_left,
+        right: mut initial_right,
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let mut boxed = Boxed { value: 0 }
+        let next = mut boxed.value
+        returned = if index == 0 {
+            TwoMut { left: next, right: returned.right }
+        } else {
+            TwoMut { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left = 20
+    returned.right = 22
+    assert(returned.left + returned.right == 42)
+}
+
+#[test]
+fn test_looped_owned_scalar_closure_arguments_use_fresh_backing_storage() {
+    let borrow = |mut value: own u256| -> mut u256 { mut value }
+    let mut returned = TwoMut {
+        left: borrow.call(0),
+        right: borrow.call(0),
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let next = borrow.call(0)
+        returned = if index == 0 {
+            TwoMut { left: next, right: returned.right }
+        } else {
+            TwoMut { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left = 20
+    returned.right = 22
+    assert(returned.left + returned.right == 42)
+}
+
+#[test]
+fn test_looped_named_copy_arguments_use_fresh_owned_parameter_storage() {
+    let borrow = |mut value: own u256| -> mut u256 { mut value }
+    let seed: u256 = 0
+    let mut returned = TwoMut {
+        left: borrow.call(seed),
+        right: borrow.call(seed),
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let next = borrow.call(seed)
+        returned = if index == 0 {
+            TwoMut { left: next, right: returned.right }
+        } else {
+            TwoMut { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left = 20
+    returned.right = 22
+    assert(returned.left + returned.right == 42)
+    assert(seed == 0)
+}
+
+#[test]
+fn test_looped_projected_copy_arguments_use_fresh_owned_parameter_storage() {
+    let borrow = |mut value: own u256| -> mut u256 { mut value }
+    let seed = ScalarPair { left: 0, right: 1 }
+    let mut returned = TwoMut {
+        left: borrow.call(seed.left),
+        right: borrow.call(seed.left),
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let next = borrow.call(seed.left)
+        returned = if index == 0 {
+            TwoMut { left: next, right: returned.right }
+        } else {
+            TwoMut { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left = 20
+    returned.right = 22
+    assert(returned.left + returned.right == 42)
+    assert(seed.left == 0)
+}
+
+#[test]
+fn test_looped_dynamic_owned_array_arguments_use_fresh_parameter_storage() {
+    let borrow_at = |mut values: own [u256; 2], index: own usize| -> mut u256 {
+        mut values[index]
+    }
+    let mut initial_left = 0
+    let mut initial_right = 0
+    let mut returned = TwoMut {
+        left: mut initial_left,
+        right: mut initial_right,
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let next = borrow_at.call([0 as u256, 0], index)
+        returned = if index == 0 {
+            TwoMut { left: next, right: returned.right }
+        } else {
+            TwoMut { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left = 20
+    returned.right = 22
+    assert(returned.left + returned.right == 42)
+}
+
+#[test]
+fn test_looped_dynamic_array_element_borrows_use_fresh_backing_storage() {
+    let mut initial_left = 0
+    let mut initial_right = 0
+    let mut returned = TwoMut {
+        left: mut initial_left,
+        right: mut initial_right,
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let mut values = [0 as u256, 0]
+        let next = mut values[index]
+        returned = if index == 0 {
+            TwoMut { left: next, right: returned.right }
+        } else {
+            TwoMut { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left = 20
+    returned.right = 22
+    assert(returned.left + returned.right == 42)
+}
+
+#[test]
+fn test_looped_mutually_exclusive_borrows_share_fresh_local_storage() {
+    let mut initial_left = 0
+    let mut initial_right = 0
+    let mut returned = TwoMut {
+        left: mut initial_left,
+        right: mut initial_right,
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let mut boxed = Boxed { value: 0 }
+        let next = if index == 0 {
+            mut boxed.value
+        } else {
+            mut boxed.value
+        }
+        returned = if index == 0 {
+            TwoMut { left: next, right: returned.right }
+        } else {
+            TwoMut { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    returned.left = 20
+    returned.right = 22
+    assert(returned.left + returned.right == 42)
+}
+
+#[test]
+fn test_looped_disjoint_borrows_share_fresh_local_storage() {
+    let mut initial_left = 0
+    let mut initial_right = 0
+    let mut returned = TwoMut {
+        left: mut initial_left,
+        right: mut initial_right,
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let mut pair = ScalarPair { left: 0, right: 0 }
+        let next_left = mut pair.left
+        let next_right = mut pair.right
+        returned = if index == 0 {
+            TwoMut { left: next_left, right: returned.right }
+        } else {
+            TwoMut { left: returned.left, right: next_right }
+        }
+        index += 1
+    }
+    returned.left = 20
+    returned.right = 22
+    assert(returned.left + returned.right == 42)
+}
+
+#[test]
+fn test_looped_multi_argument_closure_calls_keep_fresh_storage_disjoint() {
+    let borrow_both = |mut left: own Boxed, mut right: own Boxed| -> MutBoxedPair {
+        MutBoxedPair { left: mut left, right: mut right }
+    }
+    let mut returned = borrow_both.call(
+        Boxed { value: 0 },
+        Boxed { value: 0 },
+    )
+    let mut index: usize = 0
+    while index < 2 {
+        let next = borrow_both.call(
+            Boxed { value: 0 },
+            Boxed { value: 0 },
+        )
+        returned = if index == 0 {
+            MutBoxedPair { left: next.left, right: returned.right }
+        } else {
+            MutBoxedPair { left: returned.left, right: next.right }
+        }
+        index += 1
+    }
+    returned.left.value = 20
+    returned.right.value = 22
+    assert(returned.left.value + returned.right.value == 42)
+}
+
+#[test]
+fn test_looped_nested_view_aggregates_use_fresh_backing_storage() {
+    let identity = |nested| nested
+    let mut returned = NestedViewPair {
+        left: NestedView { boxed: Boxed { value: 0 } },
+        right: NestedView { boxed: Boxed { value: 0 } },
+    }
+    let mut index: usize = 0
+    while index < 2 {
+        let value = if index == 0 { 20 } else { 22 }
+        let next = identity.call(NestedView { boxed: Boxed { value } })
+        returned = if index == 0 {
+            NestedViewPair { left: next, right: returned.right }
+        } else {
+            NestedViewPair { left: returned.left, right: next }
+        }
+        index += 1
+    }
+    assert(returned.left.boxed.value + returned.right.boxed.value == 42)
+}
+
+#[test]
+fn test_looped_nested_closure_storage_preserves_fresh_owned_parameter_storage() {
+    let make = |mut value: own u256| {
+        let target = mut value
+        let get = || -> mut u256 { target }
+        get
+    }
+    let mut functions = [
+        make.call(0),
+        make.call(0),
+    ]
+    let mut index: usize = 0
+    while index < 2 {
+        let next = make.call(0)
+        if index == 0 {
+            functions[0] = next
+        } else {
+            functions[1] = next
+        }
+        index += 1
+    }
+    let left = functions[0].call()
+    let right = functions[1].call()
+    left = 20
+    right = 22
+    assert(left + right == 42)
+}
+
+#[test]
+fn test_returned_enum_wrapped_closures_preserve_fresh_owned_parameter_storage() {
+    let make = |mut value: own u256| {
+        let target = mut value
+        Some(|| -> mut u256 { target })
+    }
+    let Option::Some(left_function) = make.call(0)
+    let Option::Some(right_function) = make.call(0)
+    let left = left_function.call()
+    let right = right_function.call()
+    left = 20
+    right = 22
+    assert(left + right == 42)
+}
+
+#[test]
+fn test_returned_array_wrapped_closures_preserve_fresh_owned_parameter_storage() {
+    let make = |mut value: own u256| {
+        let target = mut value
+        let get = || -> mut u256 { target }
+        [get, get]
+    }
+    let left_functions = make.call(0)
+    let right_functions = make.call(0)
+    let left = left_functions[0].call()
+    let right = right_functions[1].call()
+    left = 20
+    right = 22
+    assert(left + right == 42)
+}
+
+#[test]
+fn test_returned_closure_control_flow_capture_preserves_each_owned_parameter_storage() {
+    let make =
+        |mut left: own u256, mut right: own u256, choose_left: own bool| {
+            let left_target = mut left
+            let right_target = mut right
+            let target = if choose_left { left_target } else { right_target }
+            let get = || -> mut u256 { target }
+            get
+        }
+    let left_function = make.call(0, 100, true)
+    let right_function = make.call(100, 0, false)
+    let left = left_function.call()
+    let right = right_function.call()
+    left = 20
+    right = 22
+    assert(left + right == 42)
+}
+
+#[test]
+fn test_looped_nested_closure_storage_preserves_default_view_rvalue_storage() {
+    let make = |boxed| {
+        || boxed.value
+    }
+    let mut readers = [
+        make.call(Boxed { value: 0 }),
+        make.call(Boxed { value: 0 }),
+    ]
+    let mut index: usize = 0
+    while index < 2 {
+        let value = if index == 0 { 20 } else { 22 }
+        readers[index] = make.call(Boxed { value })
+        index += 1
+    }
+    assert(readers[0].call() + readers[1].call() == 42)
+}
+
+#[test]
+fn test_looped_nested_closure_storage_preserves_enum_payload_views() {
+    let make = |value: view Option<Boxed>| {
+        let Option::Some(boxed) = value
+        let read = || boxed.value
+        read
+    }
+    let mut readers = [
+        make.call(Some(Boxed { value: 0 })),
+        make.call(Some(Boxed { value: 0 })),
+    ]
+    let mut index: usize = 0
+    while index < 2 {
+        let value = if index == 0 { 20 } else { 22 }
+        readers[index] = make.call(Some(Boxed { value }))
+        index += 1
+    }
+    assert(readers[0].call() + readers[1].call() == 42)
+}
+
+#[test]
+fn test_closure_capture_of_mut_aggregate_with_nested_view_preserves_aliasing() {
+    let mut holder = MutableNestedView {
+        boxed: Boxed { value: 40 },
+        count: 0,
+    }
+    let handle = mut holder
+    let update = || {
+        handle.count += 2
+        handle.boxed.value + handle.count
+    }
+
+    assert(update.call() == 42)
+    assert(holder.count == 2)
+}
+
+#[test]
+fn test_returned_closures_preserve_mut_aliases_across_nested_view_layouts() {
+    let make = |handle: mut MutableNestedView| {
+        let update = || {
+            handle.count += 1
+            handle.boxed.value + handle.count
+        }
+        update
+    }
+    let boxed = Boxed { value: 19 }
+    let mut left_holder = MutableNestedView { boxed, count: 0 }
+    let mut right_holder = MutableNestedView {
+        boxed: Boxed { value: 21 },
+        count: 0,
+    }
+    let updates = [
+        make.call(mut left_holder),
+        make.call(mut right_holder),
+    ]
+
+    assert(updates[0].call() + updates[1].call() == 42)
+    assert(left_holder.count + right_holder.count == 2)
+}
+
+#[test]
+fn test_returned_closure_rebuilds_owned_capture_with_nested_const_views() {
+    let make = |pair: own ViewPair| {
+        let read = || pair.left.value + pair.right.value
+        read
+    }
+    let readers = [
+        make.call(ViewPair {
+            left: Boxed { value: 10 },
+            right: Boxed { value: 11 },
+        }),
+        make.call(ViewPair {
+            left: Boxed { value: 9 },
+            right: Boxed { value: 12 },
+        }),
+    ]
+
+    assert(readers[0].call() + readers[1].call() == 42)
+}
+
+#[test]
+fn test_returned_closure_rebuilds_array_capture_with_nested_const_views() {
+    let make = |values: own [view Boxed; 2]| {
+        let read = || values[0].value + values[1].value
+        read
+    }
+    let reader = make.call([
+        Boxed { value: 20 },
+        Boxed { value: 22 },
+    ])
+
+    assert(reader.call() == 42)
+}
+
+#[test]
+fn test_returned_closure_rebuilds_repeated_array_capture_with_nested_const_views() {
+    let boxed = Boxed { value: 21 }
+    let make = |values: own [view Boxed; 2]| {
+        let read = || values[0].value + values[1].value
+        read
+    }
+    let reader = make.call([boxed; 2])
+
+    assert(reader.call() == 42)
+}
+
+#[test]
+fn test_returned_closure_rebuilds_tuple_capture_with_nested_const_views() {
+    let make = |values: own (view Boxed, view Boxed)| {
+        let read = || values.0.value + values.1.value
+        read
+    }
+    let reader = make.call((
+        Boxed { value: 20 },
+        Boxed { value: 22 },
+    ))
+
+    assert(reader.call() == 42)
+}
+
+#[test]
+fn test_returned_closure_rebuilds_enum_capture_with_nested_const_views() {
+    let make = |choice: own ViewChoice| {
+        let read = || match choice {
+            ViewChoice::Pair(left, right) => left.value + right.value,
+            ViewChoice::Empty => 0,
+        }
+        read
+    }
+    let left = Boxed { value: 20 }
+    let right = Boxed { value: 22 }
+    let reader = make.call(ViewChoice::Pair(
+        ref left,
+        ref right,
+    ))
+
+    assert(reader.call() == 42)
+}
+
+#[test]
+fn test_closure_captures_const_enum_payload_projection() {
+    let wrapped: Option<Boxed> = Some(Boxed { value: 42 })
+    let borrowed = ref wrapped
+    let Option::Some(boxed) = borrowed
+    let read = || boxed.value
+
+    assert(read.call() == 42)
+}
+
+#[test]
+fn test_nested_closure_capture_type_is_resolved_from_the_outer_call() {
+    let make = |boxed: own| {
+        let take = || boxed
+        take
+    }
+    let take = make.call_once(Boxed { value: 42 })
+
+    assert(take.call_once().value == 42)
+}
+
+#[test]
+fn test_nested_copy_capture_is_reusable_after_outer_parameter_inference() {
+    let return_reader = |value: own| {
+        let read = || value
+        read
+    }
+    let read = return_reader.call_once(21 as u256)
+
+    let call_reader = |value: own| {
+        let read = || value
+        read.call() + read.call()
+    }
+    let invoke_reader = |value: own| {
+        let read = || value
+        invoke_zero(read)
+    }
+    assert(
+        read.call()
+            + read.call()
+            + call_reader.call_once(21 as u256)
+            + invoke_reader.call_once(42 as u256)
+            == 126
+    )
+}
+
+#[test]
+fn test_nested_copy_pattern_capture_is_reusable_after_outer_inference() {
+    let make = |pair: own| {
+        let read = || {
+            let (value,) = pair
+            value
+        }
+        read
+    }
+    let read = make.call_once((21 as u256,))
+
+    assert(read.call() + read.call() == 42)
+}
+
+#[test]
+fn test_inferred_copy_capture_reusability_propagates_through_nested_closures() {
+    let make = |value: own| {
+        let outer = || {
+            let inner = || value
+            inner
+        }
+        outer
+    }
+    let outer = make.call_once(21 as u256)
+    let left = outer.call()
+    let right = outer.call()
+
+    assert(left.call() + right.call() == 42)
+}
+
+#[test]
+fn test_generic_fn_once_preserves_a_borrow_into_the_consumed_environment() {
+    let borrowed = Boxed { value: 42 }
+    let consumed = Boxed { value: 0 }
+    let borrow_once = || -> ref u256 {
+        consume_boxed(consumed)
+        ref borrowed.value
+    }
+    let returned = invoke_zero_once(borrow_once)
+
+    assert(returned == 42)
+}
+
+#[test]
+fn test_direct_fn_once_preserves_a_borrow_into_a_noncopy_reusable_environment() {
+    let boxed = Boxed { value: 42 }
+    let borrow_once = || -> ref u256 { ref boxed.value }
+    let returned = borrow_once()
+
+    assert(returned == 42)
+}

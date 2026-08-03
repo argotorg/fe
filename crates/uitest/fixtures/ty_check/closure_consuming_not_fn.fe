@@ -1,0 +1,16 @@
+use core::functional::Fn
+
+struct Boxed {
+    value: u256,
+}
+
+fn call_twice<T, F: Fn<(), T>>(_ func: F) -> T {
+    func()
+    func()
+}
+
+pub fn closure_consuming_not_fn() -> Boxed {
+    let boxed = Boxed { value: 42 }
+    let take = || -> Boxed { boxed }
+    call_twice(take)
+}

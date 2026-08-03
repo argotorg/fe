@@ -88,6 +88,176 @@ fn trigger() {
 }
 
 #[test]
+fn for_loop_rejects_array_seq_impl_with_unsatisfied_copy_constraint() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "noncopy_array_seq.fe".into(),
+        r#"
+use core::Copy
+
+struct Boxed {
+    value: u256,
+}
+
+fn direct() {
+    let boxes = [
+        Boxed { value: 20 },
+        Boxed { value: 22 },
+    ]
+    for boxed in boxes {}
+}
+
+fn closure() {
+    let boxes = [
+        Boxed { value: 20 },
+        Boxed { value: 22 },
+    ]
+    let consume = || {
+        for boxed in boxes {}
+    }
+    consume.call_once()
+}
+
+fn generic_copy_bound<T: Copy>(_ boxes: [T; 2]) {
+    for boxed in boxes {}
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+    let seq_diags = diags
+        .iter()
+        .filter(|diag| diag.message.contains("`Seq` needs to be implemented"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(seq_diags.len(), 2, "{diags:#?}");
+    assert!(
+        seq_diags
+            .iter()
+            .all(|diag| diag.message.contains("[Boxed; 2]")),
+        "{diags:#?}"
+    );
+}
+
+#[test]
+fn for_loop_rejects_generic_array_without_copy_bound() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "generic_noncopy_array_seq.fe".into(),
+        r#"
+fn generic<T>(_ boxes: [T; 2]) {
+    for boxed in boxes {}
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+
+    assert!(
+        diags.iter().any(|diag| {
+            diag.message.contains("`Seq` needs to be implemented")
+                && diag.message.contains("[T; 2]")
+        }),
+        "{diags:#?}"
+    );
+}
+
+#[test]
+fn inferred_closure_array_iteration_confirms_copy_constraint() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "inferred_closure_array_seq.fe".into(),
+        r#"
+struct Boxed {
+    value: u256,
+}
+
+fn inferred_noncopy() {
+    let consume = |boxes| {
+        for boxed in boxes {}
+    }
+    consume.call([
+        Boxed { value: 20 },
+        Boxed { value: 22 },
+    ])
+}
+
+fn inferred_copy() -> u256 {
+    let sum = |values| {
+        let mut total = 0
+        for value in values {
+            total += value
+        }
+        total
+    }
+    sum.call([20 as u256, 22])
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+    let seq_diags = diags
+        .iter()
+        .filter(|diag| diag.message.contains("`Seq` needs to be implemented"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(seq_diags.len(), 1, "{diags:#?}");
+    assert!(seq_diags[0].message.contains("[Boxed; 2]"), "{diags:#?}");
+}
+
+#[test]
+fn rejected_seq_candidate_rolls_back_before_viable_candidate() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "seq_candidate_rollback.fe".into(),
+        r#"
+use core::Seq
+
+trait Blocked {}
+
+struct One<T> {
+    item: T,
+}
+
+impl<T: Blocked> Seq for One<T> {
+    type Item = T
+
+    fn len(self) -> usize {
+        1
+    }
+
+    fn get(self, _ index: usize) -> T {
+        self.item
+    }
+}
+
+impl Seq for One<u256> {
+    type Item = u256
+
+    fn len(self) -> usize {
+        1
+    }
+
+    fn get(self, _ index: usize) -> u256 {
+        self.item
+    }
+}
+
+fn sum_one(value: One<u256>) -> u256 {
+    let mut total = 0
+    for item in value {
+        total += item
+    }
+    total
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
 fn invalid_const_fn_body_diagnostics_do_not_panic_during_const_eval() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
@@ -134,7 +304,7 @@ struct Box<T> {
 impl<T: Copy> Copy for Box<T> {}
 
 impl<T> Box<T> {
-    fn new(value: T) -> Box<T> {
+    fn new(value: own T) -> Box<T> {
         Box { value: value }
     }
 }
@@ -401,6 +571,21 @@ fn probe(e: E) -> u256 {
     }
     value + 1
 }
+
+fn reverse(e: E) -> u256 {
+    let value = match e {
+        E::A => { 1 }
+        E::B => { return 0 }
+    }
+    value + 1
+}
+
+fn all_diverge(e: E) -> ! {
+    match e {
+        E::A => panic()
+        E::B => panic()
+    }
+}
 "#,
     );
     let (top_mod, _) = db.top_mod(file);
@@ -415,9 +600,16 @@ fn option_map_should_infer_the_inner_type_from_closure() {
         "option_map_should_infer_the_inner_type_from_closure.fe".into(),
         r#"
 use core::option
-use core::functional::Fn
+use core::functional::{Fn, FnOnce}
 struct Doubler {}
-impl Fn<u256, u256> for Doubler { fn call(self, _ x: own u256) -> u256 { x * 2 } }
+impl FnOnce<(u256,), u256> for Doubler {
+    fn call_once(self: own Self, _ args: own (u256,)) -> u256 {
+        self.call(args.0)
+    }
+}
+impl Fn<(u256,), u256> for Doubler {
+    fn call(self, _ args: own (u256,)) -> u256 { args.0 * 2 }
+}
 
 fn map_no_annotation() {
     let n = Option::Some(42)
@@ -834,6 +1026,184 @@ fn probe() -> u256 {
         diagnostics_contain(&diags, "expected `u256`, but `bool` is given"),
         "{diags:#?}",
     );
+}
+
+#[test]
+fn statically_unreachable_match_arm_uses_result_only_as_inference_fallback() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "statically_unreachable_match_arm_uses_result_only_as_inference_fallback.fe".into(),
+        r#"
+enum Option<T> {
+    Some(T),
+    None,
+}
+
+fn probe() -> i32 {
+    let result = match Option::Some(42) {
+        Option::Some(value) => value * 2
+        Option::None => 0
+    }
+    result
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn statically_unreachable_match_arm_need_not_match_the_inferred_result() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "statically_unreachable_match_arm_need_not_match_the_inferred_result.fe".into(),
+        r#"
+enum Option<T> {
+    Some(T),
+    None,
+}
+
+fn probe() -> i32 {
+    let result = match Option::Some(42) {
+        Option::Some(value) => value
+        Option::None => false
+    }
+    result
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn statically_unreachable_match_arm_does_not_select_the_live_result_type() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "statically_unreachable_match_arm_does_not_select_the_live_result_type.fe".into(),
+        r#"
+enum Choice {
+    Live,
+    Dead,
+}
+
+enum Option<T> {
+    Some(T),
+    None,
+}
+
+fn probe() {
+    let unresolved = match Choice::Live {
+        Choice::Live => Option::None,
+        Choice::Dead => Option::Some(1 as u256),
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+
+    assert_eq!(diags.len(), 1, "{diags:#?}");
+    assert_eq!(diags[0].message, "type annotation is needed", "{diags:#?}");
+}
+
+#[test]
+fn statically_unreachable_owned_arm_does_not_join_capability_result() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "statically_unreachable_owned_arm_does_not_join_capability_result.fe".into(),
+        r#"
+enum Choice {
+    Live,
+    Dead,
+}
+
+struct Handle {
+    target: mut u256,
+}
+
+fn probe() {
+    let mut first: u256 = 1
+    let mut second: u256 = 2
+    let mut handle = Handle { target: mut first }
+
+    handle.target = match Choice::Live {
+        Choice::Live => mut second,
+        Choice::Dead => 3,
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn recursive_const_used_as_array_index_reports_diagnostic_without_query_cycle() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "recursive_const_used_as_array_index_reports_diagnostic_without_query_cycle.fe".into(),
+        r#"
+const INDEX: usize = INDEX
+
+fn main() {
+    let values: [u8; 1] = [0]
+    values[INDEX]
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+
+    assert_eq!(diags.len(), 1, "{diags:#?}");
+    assert_eq!(
+        diags[0].message, "recursive constant definition",
+        "{diags:#?}"
+    );
+}
+
+#[test]
+fn immutable_fields_are_not_required_when_init_has_no_normal_exit() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "immutable_fields_are_not_required_when_init_has_no_normal_exit.fe".into(),
+        r#"
+fn abort_declared_u256() -> u256 {
+    core::panic()
+}
+
+fn abort_transitively() -> u256 {
+    abort_declared_u256()
+}
+
+contract DirectAbort {
+    value: u256
+
+    init() {
+        core::panic()
+    }
+}
+
+contract TransitiveAbort {
+    value: u256
+
+    init() {
+        abort_transitively()
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+
+    assert!(
+        !diagnostics_contain(&diags, "immutable contract field is not initialized"),
+        "{diags:#?}"
+    );
+    assert!(diags.is_empty(), "{diags:#?}");
 }
 
 fn diagnostics_for<'db>(
