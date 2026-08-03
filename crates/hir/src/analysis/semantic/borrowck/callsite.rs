@@ -50,7 +50,7 @@ impl<'db> CallSiteProviderRefiner<'db> {
             let mut state = self.borrowck.entry_state[SBlockId::new(bb_idx)].clone();
             for stmt in &block.stmts {
                 self.refine_stmt(&state, stmt, &mut out)?;
-                self.borrowck.canon().apply_stmt_state(&mut state, stmt);
+                self.borrowck.apply_stmt_state(&mut state, stmt);
             }
         }
         Ok(out)

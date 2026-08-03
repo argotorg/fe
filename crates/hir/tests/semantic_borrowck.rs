@@ -5,9 +5,10 @@ use fe_hir::test_db::{HirAnalysisTestDb, format_diagnostics};
 use fe_hir::{
     analysis::{
         semantic::{
-            BorrowInputRef, BorrowTransform, NBorrowRoot, NExpr, NLocalOrigin, NSPlaceRoot,
-            NSStmtKind, NormalizedBindingLowering, ReadMode, SStmtKind, SemanticBorrowDiagKind,
-            SemanticInstance, SemanticLocalKind, check_semantic_borrows, check_semantic_noesc,
+            BorrowInput, BorrowResult, BorrowTransform, FieldIndex, LayoutBackingProjection,
+            NBorrowRoot, NExpr, NLocalOrigin, NSPlaceRoot, NSStmtKind, NormalizedBindingLowering,
+            ReadMode, SStmtKind, SemanticBorrowDiagKind, SemanticInstance, SemanticLocalKind,
+            check_semantic_borrows, check_semantic_noesc,
             collect_semantic_borrow_diagnostic_vouchers, get_or_build_semantic_instance,
             identity_semantic_instance_key, normalize_semantic_body, semantic_borrow_summary,
         },
@@ -18,7 +19,7 @@ use fe_hir::{
         },
     },
     hir_def::{ItemKind, Partial},
-    projection::{IndexSource, Projection, ProjectionPath},
+    projection::{IndexSource, Projection},
 };
 
 fn borrow_diags(src: &str) -> String {
@@ -302,12 +303,28 @@ impl Ledger {
         .expect("borrow-returning function should produce a summary");
     assert_eq!(summary.len(), 2, "unexpected summary: {summary:#?}");
     assert!(summary.iter().any(|transform| {
-        matches!(transform.input, BorrowInputRef::Param(0))
-            && transform.proj.iter().cloned().collect::<Vec<_>>() == vec![Projection::Field(2)]
+        transform.result
+            == BorrowResult {
+                kind: BorrowKind::Mut,
+                projection: Vec::new(),
+            }
+            && transform.input
+                == BorrowInput::Place {
+                    param: 0,
+                    projection: vec![LayoutBackingProjection::Field(FieldIndex(2))],
+                }
     }));
     assert!(summary.iter().any(|transform| {
-        matches!(transform.input, BorrowInputRef::Param(0))
-            && transform.proj.iter().cloned().collect::<Vec<_>>() == vec![Projection::Field(0)]
+        transform.result
+            == BorrowResult {
+                kind: BorrowKind::Mut,
+                projection: Vec::new(),
+            }
+            && transform.input
+                == BorrowInput::Place {
+                    param: 0,
+                    projection: vec![LayoutBackingProjection::Field(FieldIndex(0))],
+                }
     }));
     check_semantic_borrows(&db, instance).expect("borrowck should accept branch-returned borrow");
 }
@@ -354,8 +371,14 @@ impl Holder {
     assert_eq!(
         summary,
         vec![BorrowTransform {
-            input: BorrowInputRef::Param(1),
-            proj: ProjectionPath::default(),
+            result: BorrowResult {
+                kind: BorrowKind::Mut,
+                projection: Vec::new(),
+            },
+            input: BorrowInput::Place {
+                param: 1,
+                projection: Vec::new(),
+            },
         }]
     );
     check_semantic_borrows(&db, instance).expect("borrowck should accept forwarded borrows");
@@ -2085,4 +2108,589 @@ fn write(mut tree: Tree, i: usize, h: u256) -> Tree {
     assert!(matches!(path[0], Projection::Field(0)));
     assert!(matches!(path[1], Projection::Index(_)));
     assert!(matches!(path[2], Projection::Field(0)));
+}
+
+#[test]
+fn call_result_aggregate_retains_embedded_borrow_loans() {
+    let diags = borrow_diags(
+        r#"
+struct Wrap {
+    handle: mut u256,
+    tag: u256,
+}
+
+fn wrap(handle: mut u256) -> Wrap {
+    Wrap { handle, tag: 0 }
+}
+
+fn bad() {
+    let mut value = 0
+    let wrapped = wrap(handle: mut value)
+    let alias = mut value
+    alias = 1
+    wrapped.handle = 2
+}
+"#,
+    );
+
+    assert!(diags.contains("borrow conflict in `fn bad`"), "{diags}");
+}
+
+#[test]
+fn aggregate_return_cannot_hide_borrow_of_local() {
+    let diags = borrow_diags(
+        r#"
+struct Wrap {
+    handle: mut u256,
+}
+
+fn bad() -> Wrap {
+    let mut value = 0
+    Wrap { handle: mut value }
+}
+"#,
+    );
+
+    assert!(
+        diags.contains("invalid return borrow in `fn bad`"),
+        "{diags}"
+    );
+    assert!(
+        diags.contains("cannot return a value that holds a borrow of local `value`"),
+        "{diags}"
+    );
+}
+
+#[test]
+fn aggregate_call_arguments_check_embedded_borrow_aliases() {
+    let diags = borrow_diags(
+        r#"
+struct Borrowed {
+    value: mut u256,
+}
+
+fn write_both(mut left: own Borrowed, mut right: own Borrowed) {
+    left.value = 1
+    right.value = 2
+}
+
+fn bad() {
+    let mut value = 0
+    let borrowed = mut value
+    let left = Borrowed { value: borrowed }
+    let right = Borrowed { value: borrowed }
+    write_both(left: left, right: right)
+}
+"#,
+    );
+
+    assert!(diags.contains("borrow conflict in `fn bad`"), "{diags}");
+    assert!(
+        diags.contains("call arguments require conflicting access"),
+        "{diags}"
+    );
+}
+
+#[test]
+fn reading_one_returned_aggregate_borrow_does_not_retain_siblings() {
+    let diags = borrow_diags(
+        r#"
+struct Pair {
+    left: mut u256,
+    right: mut u256,
+}
+
+fn forward(_ pair: own Pair) -> Pair {
+    pair
+}
+
+fn valid() {
+    let mut left = 0
+    let mut right = 0
+    let returned = forward(Pair { left: mut left, right: mut right })
+    let selected = returned.left
+    let other = mut right
+    other = 1
+    selected = 2
+}
+"#,
+    );
+
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn returned_array_family_preserves_constant_and_dynamic_aliasing() {
+    let diags = borrow_diags(
+        r#"
+fn forward(_ values: own [mut u256; 2]) -> [mut u256; 2] {
+    values
+}
+
+fn constant_sibling_is_disjoint() {
+    let mut left = 0
+    let mut right = 0
+    let returned = forward([mut left, mut right])
+    let first = returned[0]
+    let other = mut right
+    other = 1
+    first = 2
+}
+
+fn dynamic_index_overlaps(index: usize) {
+    let mut left = 0
+    let mut right = 0
+    let returned = forward([mut left, mut right])
+    let selected = returned[index]
+    let other = mut right
+    other = 1
+    selected = 2
+}
+"#,
+    );
+
+    assert!(
+        !diags.contains("borrow conflict in `fn constant_sibling_is_disjoint`"),
+        "{diags}"
+    );
+    assert!(
+        diags.contains("borrow conflict in `fn dynamic_index_overlaps`"),
+        "{diags}"
+    );
+}
+
+#[test]
+fn exact_array_overwrites_partition_symbolic_families() {
+    let diags = borrow_diags(
+        r#"
+struct Wrap {
+    handle: mut u256,
+}
+
+fn forward(_ values: own [Wrap; 2]) -> [Wrap; 2] {
+    values
+}
+
+fn replace_first(
+    mut _ values: own [Wrap; 2],
+    replacement: own Wrap,
+) -> [Wrap; 2] {
+    values[0] = replacement
+    values
+}
+
+fn local_replacement_releases_old_member() {
+    let mut old_left = 0
+    let mut right = 0
+    let mut replacement = 0
+    let mut values = forward(
+        [Wrap { handle: mut old_left }, Wrap { handle: mut right }],
+    )
+    values[0] = Wrap { handle: mut replacement }
+    let released = mut old_left
+    released = 1
+    values[0].handle = 2
+    values[1].handle = 3
+}
+
+fn sibling_remains_borrowed() {
+    let mut old_left = 0
+    let mut right = 0
+    let mut replacement = 0
+    let mut values = forward(
+        [Wrap { handle: mut old_left }, Wrap { handle: mut right }],
+    )
+    values[0] = Wrap { handle: mut replacement }
+    let alias = mut right
+    alias = 1
+    values[1].handle = 2
+}
+
+fn helper_return_preserves_override() {
+    let mut old_left = 0
+    let mut right = 0
+    let mut replacement = 0
+    let mut returned = replace_first(
+        [Wrap { handle: mut old_left }, Wrap { handle: mut right }],
+        replacement: Wrap { handle: mut replacement },
+    )
+    let released = mut old_left
+    released = 1
+    returned[0].handle = 2
+    returned[1].handle = 3
+}
+
+fn conditional_replacement_keeps_old(condition: bool) {
+    let mut old_left = 0
+    let mut right = 0
+    let mut replacement = 0
+    let mut values = forward(
+        [Wrap { handle: mut old_left }, Wrap { handle: mut right }],
+    )
+    if condition {
+        values[0] = Wrap { handle: mut replacement }
+    }
+    let alias = mut old_left
+    alias = 1
+    values[0].handle = 2
+}
+
+fn replace_all_local_members(left: mut u256, right: mut u256) -> [Wrap; 2] {
+    let mut old_left = 0
+    let mut old_right = 0
+    let mut values = forward(
+        [Wrap { handle: mut old_left }, Wrap { handle: mut old_right }],
+    )
+    values[0] = Wrap { handle: left }
+    values[1] = Wrap { handle: right }
+    values
+}
+
+fn retain_one_local_member(left: mut u256) -> [Wrap; 2] {
+    let mut old_left = 0
+    let mut old_right = 0
+    let mut values = forward(
+        [Wrap { handle: mut old_left }, Wrap { handle: mut old_right }],
+    )
+    values[0] = Wrap { handle: left }
+    values
+}
+"#,
+    );
+
+    assert!(
+        !diags.contains("borrow conflict in `fn local_replacement_releases_old_member`"),
+        "{diags}"
+    );
+    assert!(
+        !diags.contains("borrow conflict in `fn helper_return_preserves_override`"),
+        "{diags}"
+    );
+    assert!(
+        diags.contains("borrow conflict in `fn sibling_remains_borrowed`"),
+        "{diags}"
+    );
+    assert!(
+        diags.contains("borrow conflict in `fn conditional_replacement_keeps_old`"),
+        "{diags}"
+    );
+    assert!(
+        !diags.contains("invalid return borrow in `fn replace_all_local_members`"),
+        "{diags}"
+    );
+    assert!(
+        diags.contains("invalid return borrow in `fn retain_one_local_member`"),
+        "{diags}"
+    );
+}
+
+#[test]
+fn array_member_reborrow_suspends_only_that_parent_member() {
+    let diags = borrow_diags(
+        r#"
+fn forward(_ values: own [mut u256; 2]) -> [mut u256; 2] {
+    values
+}
+
+fn reborrow(value: mut u256) -> mut u256 {
+    value
+}
+
+fn valid() {
+    let mut left = 0
+    let mut right = 0
+    let mut returned = forward([mut left, mut right])
+    let first = reborrow(value: returned[0])
+    returned[1] = 1
+    first = 2
+}
+
+fn bad() {
+    let mut left = 0
+    let mut right = 0
+    let mut returned = forward([mut left, mut right])
+    let first = reborrow(value: returned[0])
+    let alias = mut right
+    alias = 1
+    returned[1] = 2
+    first = 3
+}
+
+fn transitive_bad() {
+    let mut left = 0
+    let mut right = 0
+    let returned = forward([mut left, mut right])
+    let first = reborrow(value: returned[0])
+    let first_again = reborrow(value: first)
+    let alias = mut right
+    alias = 1
+    returned[1] = 2
+    first_again = 3
+}
+"#,
+    );
+
+    assert!(!diags.contains("borrow conflict in `fn valid`"), "{diags}");
+    assert!(diags.contains("borrow conflict in `fn bad`"), "{diags}");
+    assert!(
+        diags.contains("borrow conflict in `fn transitive_bad`"),
+        "{diags}"
+    );
+}
+
+#[test]
+fn mutually_exclusive_enum_borrow_slots_do_not_conflict() {
+    let diags = borrow_diags(
+        r#"
+enum Choice {
+    A(mut u256),
+    B(mut u256),
+}
+
+struct Pair {
+    left: Choice,
+    right: Choice,
+}
+
+fn consume(_ choice: own Choice) {}
+fn consume_pair(_ pair: own Pair) {}
+
+fn valid(condition: bool) {
+    let mut value = 0
+    let choice = if condition {
+        Choice::A(mut value)
+    } else {
+        Choice::B(mut value)
+    }
+    consume(choice)
+}
+
+fn bad() {
+    let mut value = 0
+    let borrowed = mut value
+    let pair = Pair {
+        left: Choice::A(borrowed),
+        right: Choice::B(borrowed),
+    }
+    consume_pair(pair)
+}
+"#,
+    );
+
+    assert!(!diags.contains("borrow conflict in `fn valid`"), "{diags}");
+    assert!(diags.contains("borrow conflict in `fn bad`"), "{diags}");
+}
+
+#[test]
+fn large_array_borrow_summary_uses_one_symbolic_family() {
+    let src = r#"
+fn forward(_ values: own [mut u256; 1000000]) -> [mut u256; 1000000] {
+    values
+}
+"#;
+    let mut summary = None;
+    for_each_fixture_instance(src, |db, instance| {
+        if owner_name(db, instance.key(db).owner(db)) == "forward" {
+            summary = semantic_borrow_summary(db, instance)
+                .expect("large-array borrow summary")
+                .or(summary.take());
+        }
+    });
+
+    assert_eq!(
+        summary,
+        Some(vec![BorrowTransform {
+            result: BorrowResult {
+                kind: BorrowKind::Mut,
+                projection: vec![LayoutBackingProjection::IndexFamily(0)],
+            },
+            input: BorrowInput::Place {
+                param: 0,
+                projection: vec![LayoutBackingProjection::IndexFamily(0)],
+            },
+        }])
+    );
+}
+
+#[test]
+fn returned_array_literal_materializes_exact_slots() {
+    let src = r#"
+fn pair(left: mut u256, right: mut u256) -> [mut u256; 2] {
+    [left, right]
+}
+"#;
+    let mut summary = None;
+    for_each_fixture_instance(src, |db, instance| {
+        if owner_name(db, instance.key(db).owner(db)) == "pair" {
+            summary = semantic_borrow_summary(db, instance)
+                .expect("array-literal borrow summary")
+                .or(summary.take());
+        }
+    });
+    let summary = summary.expect("pair summary");
+
+    assert_eq!(summary.len(), 2, "{summary:#?}");
+    for (index, param) in [(0, 0), (1, 1)] {
+        assert!(summary.contains(&BorrowTransform {
+            result: BorrowResult {
+                kind: BorrowKind::Mut,
+                projection: vec![LayoutBackingProjection::Index(Some(index))],
+            },
+            input: BorrowInput::Place {
+                param,
+                projection: Vec::new(),
+            },
+        }));
+    }
+}
+
+#[test]
+fn mutable_receiver_reservation_activates_after_argument_evaluation() {
+    let diags = borrow_diags(
+        r#"
+struct Cell {
+    value: u256,
+}
+
+impl Cell {
+    fn read(self) -> u256 {
+        self.value
+    }
+
+    fn write(mut self, value: u256) {
+        self.value = value
+    }
+}
+
+fn valid() {
+    let mut cell = Cell { value: 1 }
+    cell.write(value: cell.read())
+}
+
+fn bad() -> u256 {
+    let mut cell = Cell { value: 1 }
+    let borrowed = ref cell.value
+    cell.write(value: cell.read())
+    borrowed
+}
+"#,
+    );
+
+    assert!(!diags.contains("borrow conflict in `fn valid`"), "{diags}");
+    assert!(diags.contains("borrow conflict in `fn bad`"), "{diags}");
+}
+
+#[test]
+fn noesc_rejects_storage_borrow_inside_aggregate_call_argument() {
+    let diags = borrow_diags(
+        r#"
+struct Store {
+    value: u256,
+}
+
+struct Esc {
+    handle: mut u256,
+}
+
+fn consume(_ value: Esc) {}
+
+pub contract NoEscStorageAggregateArg {
+    mut store: Store
+
+    init() uses (mut store) {
+        let value = Esc { handle: mut store.value }
+        consume(value)
+    }
+}
+"#,
+    );
+
+    assert!(
+        diags.contains("noesc violation in `fn NoEscStorageAggregateArg::__init__`"),
+        "{diags}"
+    );
+    assert!(
+        diags.contains("cannot pass `Esc` from storage as function argument"),
+        "{diags}"
+    );
+}
+
+#[test]
+fn recursive_aggregate_borrow_summary_converges() {
+    let diags = borrow_diags(
+        r#"
+struct Owner {
+    value: u256,
+}
+
+struct Borrowed {
+    value: mut u256,
+}
+
+fn borrow_value(mut owner: Owner, recurse: bool) -> Borrowed {
+    if recurse {
+        borrow_value(owner, recurse: false)
+    } else {
+        Borrowed { value: mut owner.value }
+    }
+}
+
+fn bad() {
+    let mut owner = Owner { value: 0 }
+    let borrowed = borrow_value(owner, recurse: true)
+    let other = mut owner.value
+    other = 1
+    borrowed.value = 2
+}
+"#,
+    );
+
+    assert!(diags.contains("borrow conflict in `fn bad`"), "{diags}");
+}
+
+#[test]
+fn opaque_aggregate_return_summary_is_conservative() {
+    let diags = borrow_diags(
+        r#"
+struct Borrowed {
+    value: mut u256,
+}
+
+trait BorrowValue {
+    fn borrow_value(mut self) -> Borrowed
+}
+
+fn bad<T: BorrowValue>(mut value: T) {
+    let first = value.borrow_value()
+    let second = value.borrow_value()
+    first.value = 1
+    second.value = 2
+}
+"#,
+    );
+
+    assert!(diags.contains("borrow conflict in `fn bad`"), "{diags}");
+}
+
+#[test]
+fn opaque_array_result_does_not_assume_pointwise_family_correlation() {
+    let diags = borrow_diags(
+        r#"
+trait Permute {
+    fn permute(self, values: own [mut u256; 2]) -> [mut u256; 2]
+}
+
+fn bad<T: Permute>(permuter: T) {
+    let mut left = 0
+    let mut right = 0
+    let returned = permuter.permute([mut left, mut right])
+    let selected = returned[0]
+    let alias = mut right
+    alias = 1
+    selected = 2
+}
+"#,
+    );
+
+    assert!(diags.contains("borrow conflict in `fn bad`"), "{diags}");
 }

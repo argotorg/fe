@@ -6,7 +6,9 @@ use crate::analysis::{
     HirAnalysisDb,
     diagnostics::{DiagnosticVoucher, SpannedHirAnalysisDb},
     semantic::{SemOrigin, SemanticCalleeRef, SemanticInstance},
-    ty::{ProviderAddressSpace, ty_check::BodyOwner, ty_def::TyId, ty_is_noesc},
+    ty::{
+        ProviderAddressSpace, ty_check::BodyOwner, ty_contains_borrow, ty_def::TyId, ty_is_noesc,
+    },
 };
 
 use super::{
@@ -64,7 +66,7 @@ impl<'db> NoEsc<'db> {
                 self.borrowck.entry_state[crate::analysis::semantic::SBlockId::new(bb_idx)].clone();
             for stmt in &block.stmts {
                 self.check_stmt(&state, stmt)?;
-                self.borrowck.canon().apply_stmt_state(&mut state, stmt);
+                self.borrowck.apply_stmt_state(&mut state, stmt);
             }
         }
         Ok(())
@@ -134,21 +136,16 @@ impl<'db> NoEsc<'db> {
         args: &[NOperand],
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
         for arg in args.iter().copied().skip(self.receiver_arg_count(callee)) {
-            let ty = self.operand_ty(arg, origin)?;
-            if ty.as_borrow(self.borrowck.db).is_none() {
+            let arg_origin = operand_origin(arg, origin);
+            let ty = self.operand_ty(arg, arg_origin)?;
+            if !ty_contains_borrow(self.borrowck.db, ty) {
                 continue;
             }
-            let targets = self.borrowck.canon().borrow_local_targets(state, arg.local);
-            let spaces = self.address_spaces_for_targets(&targets, operand_origin(arg, origin))?;
-            let Some(space) = spaces
-                .iter()
-                .copied()
-                .find(|space| *space != ProviderAddressSpace::Memory)
-            else {
+            let Some(space) = self.non_memory_operand_space(state, arg, arg_origin)? else {
                 continue;
             };
             return Err(self.noesc_diag(
-                operand_origin(arg, origin),
+                arg_origin,
                 format!(
                     "cannot pass `{}` from {} as function argument",
                     ty.pretty_print(self.borrowck.db),
@@ -157,6 +154,22 @@ impl<'db> NoEsc<'db> {
             ));
         }
         Ok(())
+    }
+
+    fn non_memory_operand_space(
+        &self,
+        state: &State,
+        operand: NOperand,
+        origin: SemOrigin<'db>,
+    ) -> Result<Option<ProviderAddressSpace>, SemanticBorrowDiagnostic<'db>> {
+        let targets = self
+            .borrowck
+            .canon()
+            .borrow_local_targets(state, operand.local);
+        let spaces = self.address_spaces_for_targets(&targets, origin)?;
+        Ok(spaces
+            .into_iter()
+            .find(|space| *space != ProviderAddressSpace::Memory))
     }
 
     fn receiver_arg_count(&self, callee: SemanticCalleeRef<'db>) -> usize {

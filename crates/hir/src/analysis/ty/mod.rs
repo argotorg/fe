@@ -200,33 +200,40 @@ fn copy_impl_self_may_match<'db>(
     impl_base == target_base
 }
 
-pub fn ty_is_noesc<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+fn ty_contains_noesc_capability<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    include_view: bool,
+) -> bool {
     fn inner<'db>(
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
+        include_view: bool,
         visiting: &mut FxHashSet<TyId<'db>>,
     ) -> bool {
         if !visiting.insert(ty) {
             return false;
         }
 
-        let result = if ty.as_capability(db).is_some() {
+        let result = if ty.as_borrow(db).is_some() {
             true
+        } else if let Some(inner_ty) = ty.as_view(db) {
+            include_view || inner(db, inner_ty, include_view, visiting)
         } else if ty.is_tuple(db) {
             ty.field_types(db)
                 .into_iter()
-                .any(|field_ty| inner(db, field_ty, visiting))
+                .any(|field_ty| inner(db, field_ty, include_view, visiting))
         } else if ty.is_array(db) {
             let (_, args) = ty.decompose_ty_app(db);
             args.first()
                 .copied()
-                .is_some_and(|elem_ty| inner(db, elem_ty, visiting))
+                .is_some_and(|elem_ty| inner(db, elem_ty, include_view, visiting))
         } else if let Some(adt_def) = ty.adt_def(db) {
             match adt_def.adt_ref(db) {
                 AdtRef::Struct(_) => ty
                     .field_types(db)
                     .into_iter()
-                    .any(|field_ty| inner(db, field_ty, visiting)),
+                    .any(|field_ty| inner(db, field_ty, include_view, visiting)),
                 AdtRef::Enum(_) => {
                     let args = ty.generic_args(db);
                     adt_def
@@ -244,6 +251,7 @@ pub fn ty_is_noesc<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
                                         field_idx,
                                         args,
                                     ),
+                                    include_view,
                                     visiting,
                                 )
                             })
@@ -260,8 +268,20 @@ pub fn ty_is_noesc<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
 
     match ty.data(db) {
         TyData::TyVar(_) | TyData::Invalid(_) => false,
-        _ => inner(db, ty, &mut FxHashSet::default()),
+        _ => inner(db, ty, include_view, &mut FxHashSet::default()),
     }
+}
+
+pub fn ty_is_noesc<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    ty_contains_noesc_capability(db, ty, true)
+}
+
+/// Returns whether `ty` transitively contains a `ref` or `mut` handle. A view
+/// carrier is transparent so aggregates passed through view parameters retain
+/// their nested borrow classification without making an ordinary viewed value
+/// noesc by itself.
+pub(crate) fn ty_contains_borrow<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    ty_contains_noesc_capability(db, ty, false)
 }
 
 /// An analysis pass for type definitions.
