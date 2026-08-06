@@ -1,0 +1,30 @@
+fn ordinary() -> usize {
+    return 1
+}
+
+const fn identity<const N: usize>() -> usize {
+    return N
+}
+
+fn wrong_type<const N: usize = true>() {}
+
+fn non_const<const N: usize = ordinary()>() {}
+
+fn forward<const N: usize = M, const M: usize = 1>() {}
+
+fn nested_forward<
+    const N: usize = identity<M>(),
+    const M: usize = 1,
+>() {}
+
+fn self_reference<const N: usize = N>() {}
+
+fn nontrailing_fn<const N: usize = 1, const M: usize>() {}
+
+struct NontrailingStruct<const N: usize = 1, const M: usize> {}
+
+trait NontrailingTrait<const N: usize = 1, const M: usize> {}
+
+struct ConstPair<const N: usize, const M: usize> {}
+
+type NontrailingAlias<const N: usize = 1, const M: usize> = ConstPair<N, M>

@@ -3477,6 +3477,7 @@ impl<'db> TyChecker<'db> {
                     }
                 }
                 PathRes::Func(ty) => {
+                    let ty = self.instantiate_to_term(ty);
                     let mut callable =
                         Callable::new(self.db, ty, expr.span(self.body()).into(), None)
                             .expect("function item path should resolve to callable");
@@ -3484,7 +3485,7 @@ impl<'db> TyChecker<'db> {
                         return ExprProp::invalid(self.db);
                     }
 
-                    ExprProp::new(self.instantiate_to_term(callable.ty(self.db)), true)
+                    ExprProp::new(callable.ty(self.db), true)
                 }
                 PathRes::Trait(trait_) => {
                     let diag = BodyDiag::NotValue {

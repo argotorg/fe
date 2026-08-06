@@ -1093,24 +1093,28 @@ mod tests {
     use rustc_hash::FxHashMap;
 
     use super::{
-        LayoutPlaceholderPolicy, collect_unique_app_bound_structural_holes_in_order,
+        LayoutPlaceholderPolicy, collect_layout_placeholders_in_order_with_policy,
+        collect_unique_app_bound_structural_holes_in_order,
         collect_unique_layout_placeholders_in_order, landed_hole, layout_shape_key,
         layout_view_states_are_permutations, merge_equated_layout_holes, reanchor_template_holes,
         structural_hole_id, substitute_layout_placeholders_by_placeholder,
     };
     use crate::analysis::ty::{
         const_ty::{
-            ConstTyData, ConstTyId, HoleAnchor, HoleId, LayoutBoundaryIdentity, LayoutHoleArgSite,
-            LayoutInstantiationContext, LayoutInstantiationId, LayoutIntroSite,
-            LayoutOccurrenceStep, LayoutRootId, StructuralHoleOrigin,
+            BodyHoleSite, ConstTyData, ConstTyId, HoleAnchor, HoleId, HoleMinter,
+            LayoutBoundaryIdentity, LayoutHoleArgSite, LayoutInstantiationContext,
+            LayoutInstantiationId, LayoutIntroSite, LayoutOccurrenceStep, LayoutRootId,
+            StructuralHoleOrigin,
         },
         trait_resolution::PredicateListId,
         ty_def::{Kind, PrimTy, TyBase, TyData, TyId, TyParam},
-        ty_lower::lower_hir_ty,
+        ty_lower::{ConstDefaultCompletion, collect_generic_params, lower_hir_ty},
     };
     use crate::core::semantic::trait_self_predicate;
-    use crate::hir_def::{GenericArgListId, IdentId, ItemKind, PathId, scope_graph::ScopeId};
-    use crate::test_db::HirAnalysisTestDb;
+    use crate::hir_def::{
+        Expr, GenericArgListId, IdentId, ItemKind, Partial, PathId, scope_graph::ScopeId,
+    };
+    use crate::test_db::{HirAnalysisTestDb, find_func};
 
     fn usize_ty<'db>(db: &'db HirAnalysisTestDb) -> TyId<'db> {
         TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::Usize)))
@@ -1241,6 +1245,100 @@ mod tests {
         let second = fields[1].decompose_ty_app(&db).1[1];
         assert_eq!(first, expected_first);
         assert_eq!(second, actual_second);
+    }
+
+    #[test]
+    fn callable_default_holes_are_fresh_per_call() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("callable_default_holes_are_fresh_per_call.fe"),
+            r#"
+struct Slot<const ROOT: usize = _> {}
+
+fn allocate<const ROOT: usize = _>(_ slot: Slot) {}
+
+fn exercise(slot: Slot) {
+    allocate(slot)
+    allocate(slot)
+}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let allocate = find_func(&db, top_mod, "allocate");
+        let body = find_func(&db, top_mod, "exercise")
+            .body(&db)
+            .expect("missing `exercise` body");
+        let calls = body
+            .exprs(&db)
+            .iter()
+            .filter_map(|(expr, data)| {
+                matches!(data, Partial::Present(Expr::Call(..))).then_some(expr)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(calls.len(), 2);
+
+        let param_set = collect_generic_params(&db, allocate.into());
+        let offset = param_set.offset_to_explicit_params_position(&db);
+        assert_eq!(offset, 1);
+        let complete = |expr| {
+            let minter = HoleMinter::new(HoleAnchor::BodySyntax {
+                body,
+                site: BodyHoleSite::Expr(expr),
+            });
+            let completed = param_set.complete_callable_explicit_args(
+                &db,
+                allocate,
+                &param_set.params(&db)[..offset],
+                &[],
+                PredicateListId::empty_list(&db),
+                ConstDefaultCompletion::metadata_at_application(&minter),
+            );
+            assert_eq!(completed.len(), 1);
+            expect_structural_hole(&db, completed[0]).root(&db)
+        };
+
+        assert_ne!(complete(calls[0]), complete(calls[1]));
+    }
+
+    #[test]
+    fn dependent_const_default_visits_captured_layout_hole() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("dependent_const_default_visits_captured_layout_hole.fe"),
+            r#"
+const fn plus_one(_ value: usize) -> usize {
+    value + 1
+}
+
+struct Dependent<const N: usize, const M: usize = plus_one(N)> {}
+
+fn consume(_ value: Dependent<_>) {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let consume = find_func(&db, top_mod, "consume");
+        let hir_ty = consume
+            .params(&db)
+            .next()
+            .and_then(|param| param.hir_ty(&db))
+            .expect("missing `value` parameter type");
+        let ty = lower_hir_ty(
+            &db,
+            hir_ty,
+            consume.scope(),
+            PredicateListId::empty_list(&db),
+        );
+        let placeholders = collect_layout_placeholders_in_order_with_policy(
+            &db,
+            ty,
+            LayoutPlaceholderPolicy::HolesOnly,
+        );
+        assert_eq!(placeholders.len(), 2);
+        let direct = structural_hole_id(&db, placeholders[0])
+            .expect("explicit wildcard should remain structural");
+        let captured = structural_hole_id(&db, placeholders[1])
+            .expect("captured wildcard should remain structural");
+        assert_eq!(direct.root(&db), captured.root(&db));
     }
 
     #[test]

@@ -1068,13 +1068,13 @@ pub fn complete_default_const_args_for_identity<'db>(
     let TyData::TyBase(base_ty) = base.data(db) else {
         return ty;
     };
-    let (param_set, trait_self) = match base_ty {
+    let (param_set, callable) = match base_ty {
         TyBase::Adt(adt) => match adt.as_generic_param_owner(db) {
             Some(owner) => (collect_generic_params(db, owner), None),
             None => return ty,
         },
         TyBase::Func(func) => match *func {
-            CallableDef::Func(def) => (collect_generic_params(db, def.into()), None),
+            CallableDef::Func(def) => (collect_generic_params(db, def.into()), Some(def)),
             CallableDef::VariantCtor(_) => return ty,
         },
         _ => return ty,
@@ -1083,16 +1083,25 @@ pub fn complete_default_const_args_for_identity<'db>(
     if args.len() <= explicit_offset {
         return ty;
     }
-    let completed_args = param_set.complete_explicit_args(
-        db,
-        trait_self,
-        &args[explicit_offset..],
-        assumptions,
-        ConstDefaultCompletion::evaluate(None),
-        // No application path: `= _` defaults complete as opaque holes here,
-        // so there is no structural identity to mint.
-        None,
-    );
+    let completion = ConstDefaultCompletion::evaluate_for_identity();
+    let completed_args = if let Some(func) = callable {
+        param_set.complete_callable_explicit_args(
+            db,
+            func,
+            &args[..explicit_offset],
+            &args[explicit_offset..],
+            assumptions,
+            completion,
+        )
+    } else {
+        param_set.complete_explicit_args(
+            db,
+            None,
+            &args[explicit_offset..],
+            assumptions,
+            completion,
+        )
+    };
     if completed_args.len() == args.len().saturating_sub(explicit_offset) {
         return ty;
     }
@@ -1340,9 +1349,12 @@ pub(crate) fn normalize_const_tys_for_comparison<'db>(
     let TyData::ConstTy(const_ty) = ty.data(db) else {
         return ty;
     };
-    if let Some(env) = display_const_canon_env(db, *const_ty) {
-        return canonicalize_ty_for_mode(db, ty, env, ConstCanonMode::Identity);
-    }
+    let canonicalized = display_const_canon_env(db, *const_ty).map_or(ty, |env| {
+        canonicalize_ty_for_mode(db, ty, env, ConstCanonMode::Identity)
+    });
+    let TyData::ConstTy(const_ty) = canonicalized.data(db) else {
+        return canonicalized;
+    };
 
     match const_ty.data(db) {
         ConstTyData::UnEvaluated {
@@ -1353,7 +1365,7 @@ pub(crate) fn normalize_const_tys_for_comparison<'db>(
             if normalized.ty(db).invalid_cause(db).is_none()
                 && matches!(
                     normalized.data(db),
-                    ConstTyData::Evaluated(..) | ConstTyData::Abstract(..)
+                    ConstTyData::Hole(..) | ConstTyData::Evaluated(..) | ConstTyData::Abstract(..)
                 )
             {
                 if let ConstTyData::Abstract(expr, expected_ty) = normalized.data(db) {
@@ -1365,14 +1377,14 @@ pub(crate) fn normalize_const_tys_for_comparison<'db>(
                     TyId::const_ty(db, normalized)
                 }
             } else {
-                ty
+                canonicalized
             }
         }
         ConstTyData::Abstract(expr, expected_ty) => {
             evaluate_abstract_int_const_expr(db, *expr, *expected_ty)
-                .map_or(ty, |evaluated| TyId::const_ty(db, evaluated))
+                .map_or(canonicalized, |evaluated| TyId::const_ty(db, evaluated))
         }
-        _ => ty,
+        _ => canonicalized,
     }
 }
 
@@ -1912,9 +1924,7 @@ pub(crate) fn evaluate_const_ty<'db>(
 
     let expr = expr.clone();
 
-    if generic_args.is_empty()
-        && let Expr::Path(path) = &expr
-    {
+    if let Expr::Path(path) = &expr {
         let Some(path) = path.to_opt() else {
             return ConstTyId::new(
                 db,
@@ -1930,8 +1940,7 @@ pub(crate) fn evaluate_const_ty<'db>(
             match resolved_path {
                 PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
                     if let TyData::ConstTy(const_ty) = ty.data(db) {
-                        if !generic_args.is_empty()
-                            && let ConstTyData::TyParam(param, _) = const_ty.data(db)
+                        if let ConstTyData::TyParam(param, _) = const_ty.data(db)
                             && let Some(arg) = generic_args.get(param.idx).copied()
                             && let TyData::ConstTy(arg_const) = arg.data(db)
                         {
@@ -2027,7 +2036,7 @@ pub(crate) fn evaluate_const_ty<'db>(
         // unevaluated and assume the expected type if available, avoiding
         // spurious diagnostics here. Downstream checks will validate usage.
         if path.parent(db).is_some() {
-            return ConstTyId::from_body(db, body, expected_ty, None);
+            return expected_ty.map_or(const_ty, |expected_ty| const_ty.with_ty(db, expected_ty));
         }
 
         return ConstTyId::new(

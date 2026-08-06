@@ -1,0 +1,73 @@
+const fn plus_one(_ value: usize) -> usize {
+    value + 1
+}
+
+fn defaulted_type<T = u256>(_ value: T) {}
+
+fn defaulted_const<const N: usize = 2>(_ value: [u8; N]) {}
+
+fn inferred_const_then_default<
+    const N: usize,
+    const M: usize = plus_one(N),
+>(_ value: [u8; N], _ dependent: [u8; M]) {}
+
+fn two_required_then_default<T, U, V = U>() {}
+
+fn bounded_mixed_defaults<T: Copy = u256, const N: usize = 1>(
+    _ value: [T; N],
+) {}
+
+struct LayoutCarrier<const ROOT: u256 = _> {}
+
+fn implicit_layout_prefix<T = u256>(_ carrier: LayoutCarrier, _ value: T) {}
+
+struct Receiver<T> {
+    value: T,
+}
+
+impl<T> Receiver<T> {
+    fn generic_inherent_self_default<U = Self>(self, _ value: U) {}
+}
+
+struct PlainReceiver {}
+
+impl PlainReceiver {
+    fn inherent_self_default<T = Self>(self, _ value: T) {}
+
+    fn associated_self_default<T = Self>(_ value: T) {}
+}
+
+trait TraitDefault {
+    type Value
+
+    fn associated_self_default<U = Self>(_ value: U) {}
+
+    fn associated_projection_default<U = Self::Value>(_ value: U) {}
+}
+
+struct TraitReceiver {}
+
+impl TraitDefault for TraitReceiver {
+    type Value = u256
+}
+
+fn exercise_mismatches(
+    receiver: Receiver<u256>,
+    plain_receiver: PlainReceiver,
+    carrier: LayoutCarrier,
+) {
+    let default_const_mismatch: [u8; 3] = [0, 1, 2]
+    let dependent_const_mismatch: [u8; 3] = [0, 1, 2]
+    defaulted_type(true)
+    defaulted_const(default_const_mismatch)
+    inferred_const_then_default([0], dependent_const_mismatch)
+    two_required_then_default<u256>()
+    defaulted_type<u256, bool>(1)
+    bounded_mixed_defaults([true])
+    implicit_layout_prefix(carrier, true)
+    receiver.generic_inherent_self_default(true)
+    plain_receiver.inherent_self_default(true)
+    PlainReceiver::associated_self_default(true)
+    <TraitReceiver as TraitDefault>::associated_self_default(true)
+    <TraitReceiver as TraitDefault>::associated_projection_default(true)
+}

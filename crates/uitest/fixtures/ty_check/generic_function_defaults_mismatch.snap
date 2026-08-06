@@ -1,0 +1,82 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/generic_function_defaults_mismatch.fe
+---
+error[8-0000]: type mismatch
+   ┌─ generic_function_defaults_mismatch.fe:61:20
+   │
+61 │     defaulted_type(true)
+   │                    ^^^^ expected `u256`, but `bool` is given
+
+error[8-0000]: type mismatch
+   ┌─ generic_function_defaults_mismatch.fe:62:21
+   │
+62 │     defaulted_const(default_const_mismatch)
+   │                     ^^^^^^^^^^^^^^^^^^^^^^ expected `[u8; 2]`, but `[u8; 3]` is given
+
+error[8-0000]: type mismatch
+   ┌─ generic_function_defaults_mismatch.fe:63:38
+   │
+63 │     inferred_const_then_default([0], dependent_const_mismatch)
+   │                                      ^^^^^^^^^^^^^^^^^^^^^^^^ expected `[u8; 2]`, but `[u8; 3]` is given
+
+error[8-0000]: type mismatch
+   ┌─ generic_function_defaults_mismatch.fe:66:28
+   │
+66 │     bounded_mixed_defaults([true])
+   │                            ^^^^^^ expected `[u256; 1]`, but `[bool; 1]` is given
+
+error[8-0000]: type mismatch
+   ┌─ generic_function_defaults_mismatch.fe:67:37
+   │
+67 │     implicit_layout_prefix(carrier, true)
+   │                                     ^^^^ expected `u256`, but `bool` is given
+
+error[8-0000]: type mismatch
+   ┌─ generic_function_defaults_mismatch.fe:68:44
+   │
+68 │     receiver.generic_inherent_self_default(true)
+   │                                            ^^^^ expected `Receiver<u256>`, but `bool` is given
+
+error[8-0000]: type mismatch
+   ┌─ generic_function_defaults_mismatch.fe:69:42
+   │
+69 │     plain_receiver.inherent_self_default(true)
+   │                                          ^^^^ expected `PlainReceiver`, but `bool` is given
+
+error[8-0000]: type mismatch
+   ┌─ generic_function_defaults_mismatch.fe:70:44
+   │
+70 │     PlainReceiver::associated_self_default(true)
+   │                                            ^^^^ expected `PlainReceiver`, but `bool` is given
+
+error[8-0000]: type mismatch
+   ┌─ generic_function_defaults_mismatch.fe:71:62
+   │
+71 │     <TraitReceiver as TraitDefault>::associated_self_default(true)
+   │                                                              ^^^^ expected `TraitReceiver`, but `bool` is given
+
+error[8-0000]: type mismatch
+   ┌─ generic_function_defaults_mismatch.fe:72:68
+   │
+72 │     <TraitReceiver as TraitDefault>::associated_projection_default(true)
+   │                                                                    ^^^^ expected `u256`, but `bool` is given
+
+error[8-0022]: given generic argument number mismatch
+   ┌─ generic_function_defaults_mismatch.fe:64:30
+   │
+14 │ fn two_required_then_default<T, U, V = U>() {}
+   │    ------------------------- function defined here
+   ·
+64 │     two_required_then_default<u256>()
+   │                              ^^^^^^ expected 2 generic arguments, but 1 given
+
+error[8-0022]: given generic argument number mismatch
+   ┌─ generic_function_defaults_mismatch.fe:65:19
+   │
+ 5 │ fn defaulted_type<T = u256>(_ value: T) {}
+   │    -------------- function defined here
+   ·
+65 │     defaulted_type<u256, bool>(1)
+   │                   ^^^^^^^^^^^^ expected 1 generic arguments, but 2 given

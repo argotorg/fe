@@ -1,0 +1,58 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/generic_const_default_declarations.fe
+---
+error[3-0021]: generic parameters with a default must be trailing
+   ┌─ generic_const_default_declarations.fe:22:19
+   │
+22 │ fn nontrailing_fn<const N: usize = 1, const M: usize>() {}
+   │                   ^^^^^^^^^^^^^^^^^^ must not be followed by a parameter with no default
+
+error[3-0021]: generic parameters with a default must be trailing
+   ┌─ generic_const_default_declarations.fe:24:26
+   │
+24 │ struct NontrailingStruct<const N: usize = 1, const M: usize> {}
+   │                          ^^^^^^^^^^^^^^^^^^ must not be followed by a parameter with no default
+
+error[3-0021]: generic parameters with a default must be trailing
+   ┌─ generic_const_default_declarations.fe:26:24
+   │
+26 │ trait NontrailingTrait<const N: usize = 1, const M: usize> {}
+   │                        ^^^^^^^^^^^^^^^^^^ must not be followed by a parameter with no default
+
+error[3-0021]: generic parameters with a default must be trailing
+   ┌─ generic_const_default_declarations.fe:30:23
+   │
+30 │ type NontrailingAlias<const N: usize = 1, const M: usize> = ConstPair<N, M>
+   │                       ^^^^^^^^^^^^^^^^^^ must not be followed by a parameter with no default
+
+error[3-0022]: cannot reference generic parameter before it is declared
+   ┌─ generic_const_default_declarations.fe:13:12
+   │
+13 │ fn forward<const N: usize = M, const M: usize = 1>() {}
+   │            ^^^^^^^^^^^^^^^^^^ cannot reference `M` before it's declared
+
+error[3-0022]: cannot reference generic parameter before it is declared
+   ┌─ generic_const_default_declarations.fe:16:5
+   │
+16 │     const N: usize = identity<M>(),
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot reference `M` before it's declared
+
+error[3-0022]: cannot reference generic parameter before it is declared
+   ┌─ generic_const_default_declarations.fe:20:19
+   │
+20 │ fn self_reference<const N: usize = N>() {}
+   │                   ^^^^^^^^^^^^^^^^^^ cannot reference `N` before it's declared
+
+error[3-0024]: non-const function call in const context
+   ┌─ generic_const_default_declarations.fe:11:31
+   │
+11 │ fn non_const<const N: usize = ordinary()>() {}
+   │                               ^^^^^^^^^^ calls in const context must be `const fn`
+
+error[8-0000]: type mismatch
+  ┌─ generic_const_default_declarations.fe:9:32
+  │
+9 │ fn wrong_type<const N: usize = true>() {}
+  │                                ^^^^ expected `usize`, but `bool` is given

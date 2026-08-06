@@ -621,10 +621,9 @@ pub(crate) fn lower_trait_ref_impl_with_minter<'db>(
         &provided_explicit,
         assumptions,
         match minter.const_bodies() {
-            ConstBodyLowering::Eager => ConstDefaultCompletion::evaluate(Some(path)),
-            ConstBodyLowering::Deferred => ConstDefaultCompletion::metadata(Some(path)),
+            ConstBodyLowering::Eager => ConstDefaultCompletion::evaluate_at_application(minter),
+            ConstBodyLowering::Deferred => ConstDefaultCompletion::metadata_at_application(minter),
         },
-        Some(minter),
     );
 
     if non_self_completed.len() != trait_params.len() - 1 {
