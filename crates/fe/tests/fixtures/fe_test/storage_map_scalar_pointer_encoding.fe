@@ -1,0 +1,84 @@
+use core::EffectHandle
+use std::evm::Evm
+
+msg ScalarMapMsg {
+    #[selector = 1]
+    Set { value: i8 } -> u256,
+
+    #[selector = 2]
+    WritePointer { value: i8 } -> u256,
+
+    #[selector = 3]
+    ReadBoth { expected: i8 } -> u256,
+}
+
+struct Store {
+    values: StorageMap<u256, i8>,
+}
+
+pub contract C {
+    mut store: Store
+
+    init() uses (mut store) {}
+
+    recv ScalarMapMsg {
+        Set { value } -> u256 uses (mut store, evm: Evm) {
+            with (mut store.values) {
+                store.values.set(key: 1, value: value)
+            }
+            let ptr = store.values.ptr(key: 1)
+            evm.sload(ptr.raw())
+        }
+
+        WritePointer { value } -> u256 uses (mut store, evm: Evm) {
+            let ptr = with (mut store.values) {
+                store.values.mut_ptr(key: 1)
+            }
+            ptr.write(value)
+            evm.sload(ptr.raw())
+        }
+
+        ReadBoth { expected } -> u256 uses (store) {
+            let from_get = store.values.get(key: 1)
+            let from_ptr = store.values.ptr(key: 1).read()
+            if from_get == expected && from_ptr == expected { 1 } else { 0 }
+        }
+    }
+}
+
+#[test]
+fn test_storage_map_scalar_pointer_encoding() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 0)
+
+    let from_set: u256 = evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: ScalarMapMsg::Set { value: -1 },
+    )
+    assert!(from_set == u256::max())
+
+    let reads_set_value: u256 = evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: ScalarMapMsg::ReadBoth { expected: -1 },
+    )
+    assert!(reads_set_value == 1)
+
+    let from_pointer: u256 = evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: ScalarMapMsg::WritePointer { value: -1 },
+    )
+    assert!(from_pointer == from_set)
+
+    let reads_pointer_value: u256 = evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: ScalarMapMsg::ReadBoth { expected: -1 },
+    )
+    assert!(reads_pointer_value == 1)
+}

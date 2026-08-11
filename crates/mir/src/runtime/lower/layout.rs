@@ -7,7 +7,7 @@ use crate::{
     db::MirDb,
     runtime::{
         ArrayLayout, EnumLayoutKey, EnumVariantLayout, Layout, LayoutId, LayoutKey, PlaceElem,
-        RuntimeClass, StructLayout,
+        RuntimeClass, StorageFieldPacking, StructLayout,
     },
 };
 
@@ -39,14 +39,22 @@ pub(crate) fn layout_for_ty_in_env<'db>(
             }),
         );
     }
+    let fields = ty
+        .field_types(db)
+        .into_iter()
+        .map(|field| stored_class_for_ty_in_env(db, env, field))
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
+    let storage_field_packing = if ty.is_struct(db) {
+        StorageFieldPacking::for_struct_fields(db, &fields)
+    } else {
+        StorageFieldPacking::WordAligned
+    };
     LayoutId::new(
         db,
         LayoutKey::Struct(StructLayout {
-            fields: ty
-                .field_types(db)
-                .into_iter()
-                .map(|field| stored_class_for_ty_in_env(db, env, field))
-                .collect(),
+            fields,
+            storage_field_packing,
         }),
     )
 }
@@ -94,9 +102,15 @@ pub(crate) fn layout_for_aggregate_instance_in_env<'db>(
         "aggregate instance arity mismatch for struct/tuple type {}",
         ty.pretty_print(db),
     );
+    let storage_field_packing = if ty.is_struct(db) {
+        StorageFieldPacking::for_struct_fields(db, field_classes)
+    } else {
+        StorageFieldPacking::WordAligned
+    };
     LayoutId::new(
         db,
         LayoutKey::Struct(StructLayout {
+            storage_field_packing,
             fields: field_classes.to_vec().into_boxed_slice(),
         }),
     )

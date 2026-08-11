@@ -1364,11 +1364,13 @@ fn merge_layouts<'db>(
             ))
         }
         (Layout::Struct(current), Layout::Struct(desired))
-            if current.fields.len() == desired.fields.len() =>
+            if current.fields.len() == desired.fields.len()
+                && current.storage_field_packing == desired.storage_field_packing =>
         {
             Some(LayoutId::new(
                 db,
                 LayoutKey::Struct(StructLayout {
+                    storage_field_packing: current.storage_field_packing,
                     fields: current
                         .fields
                         .iter()
@@ -1529,6 +1531,7 @@ mod tests {
             db,
             LayoutKey::Struct(StructLayout {
                 fields: vec![word.clone(), word].into(),
+                storage_field_packing: crate::runtime::StorageFieldPacking::WordAligned,
             }),
         )
     }

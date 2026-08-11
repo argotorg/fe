@@ -1,6 +1,6 @@
 use core::EffectHandle
 use core::contracts::ContractHost
-use std::evm::{Evm, MemPtr, RawMem, RawStorage, StorPtr}
+use std::evm::{Evm, MemPtr, RawMem, RawStorage, StorageMutPtr, StorPtr}
 
 struct Empty {}
 
@@ -39,6 +39,12 @@ fn check_runtime_value(_ evm: mut Evm, value: u256) -> u256 {
     value
 }
 
+struct OneWord {
+    value: u256,
+}
+
+impl Copy for OneWord {}
+
 #[test]
 fn test_zst_target_effect_handles_keep_runtime_carriers() uses (evm: Evm) {
     let mp: MemPtr<Empty> = evm.mem_ptr(0x120)
@@ -63,6 +69,17 @@ fn effect_handle_read_write_helpers_delegate_to_the_free_functions() uses (evm: 
     let sp: StorPtr<u256> = evm.stor_ptr(0xabc)
     sp.write(42)
     assert!(sp.read() == 42)
+}
+
+#[test]
+fn one_word_aggregate_effect_handles_keep_provider_transport() uses (evm: Evm) {
+    let sp: StorPtr<OneWord> = evm.stor_ptr(0xabd)
+    sp.write(OneWord { value: 43 })
+    assert!(sp.read().value == 43)
+
+    let map_ptr: StorageMutPtr<OneWord> = StorageMutPtr::from_raw(0xabe)
+    map_ptr.write(OneWord { value: 44 })
+    assert!(map_ptr.read().value == 44)
 }
 
 #[test]

@@ -1,0 +1,126 @@
+use std::evm::Evm
+
+struct Inner {
+    first: u8,
+    second: u8,
+}
+
+struct Outer {
+    inner: Inner,
+    tail: u8,
+}
+
+struct SignedTail {
+    value: i8,
+    next: u256,
+}
+
+enum Choice {
+    Packed(Inner, u8),
+    Unit,
+}
+
+msg M {
+    #[selector = 1]
+    Write,
+
+    #[selector = 2]
+    Raw { slot: u256 } -> u256,
+
+    #[selector = 3]
+    Read -> u256,
+}
+
+pub contract C {
+    mut outer: Outer,
+    mut pair: (u8, u16),
+    mut signed: SignedTail,
+    mut choice: Choice,
+
+    recv M {
+        Write uses (mut outer, mut pair, mut signed, mut choice) {
+            outer.inner.first = 0xaa
+            outer.inner.second = 0xbb
+            outer.tail = 0xcc
+            pair.0 = 0x11
+            pair.1 = 0x2233
+            signed.value = -1
+            signed.next = 0x44
+            choice = Choice::Packed(
+                Inner {
+                    first: 0x55,
+                    second: 0x66,
+                },
+                0x77,
+            )
+        }
+
+        Raw { slot } -> u256 uses (evm: Evm) {
+            evm.sload(slot)
+        }
+
+        Read -> u256 uses (outer, pair, signed, choice) {
+            if outer.inner.first != 0xaa {
+                return 0
+            }
+            if outer.inner.second != 0xbb {
+                return 0
+            }
+            if outer.tail != 0xcc {
+                return 0
+            }
+            if pair.0 != 0x11 {
+                return 0
+            }
+            if pair.1 != 0x2233 {
+                return 0
+            }
+            if signed.value != -1 {
+                return 0
+            }
+            if signed.next != 0x44 {
+                return 0
+            }
+            match choice {
+                Choice::Packed(inner, tail) => {
+                    if inner.first == 0x55 && inner.second == 0x66 && tail == 0x77 {
+                        1
+                    } else {
+                        0
+                    }
+                },
+                Choice::Unit => 0,
+            }
+        }
+    }
+}
+
+#[test]
+fn test_storage_packed_aggregate_boundaries() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 0)
+    evm.call(addr: c, gas: 1000000, value: 0, message: M::Write {})
+
+    for (slot, expected) in [
+        (0, 0xbbaa),
+        (1, 0xcc),
+        (2, 0x11),
+        (3, 0x2233),
+        (4, u256::max()),
+        (5, 0x44),
+        (6, 0),
+        (7, 0x6655),
+        (8, 0x77),
+        (9, 0),
+    ] {
+        let actual: u256 = evm.call(
+            addr: c,
+            gas: 1000000,
+            value: 0,
+            message: M::Raw { slot: slot },
+        )
+        assert!(actual == expected)
+    }
+
+    let valid: u256 = evm.call(addr: c, gas: 1000000, value: 0, message: M::Read {})
+    assert!(valid == 1)
+}

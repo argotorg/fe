@@ -213,8 +213,15 @@ fn layout_entry_markdown(db: &DriverDataBase, entry: &ContractLayoutEntry<'_>) -
             "inferred parameter"
         }
     };
+    let lane = entry.lane.map_or_else(String::new, |lane| {
+        format!(
+            " bits {}..{}",
+            lane.bit_offset,
+            lane.bit_offset + lane.bit_width
+        )
+    });
     format!(
-        "- `{value}`{}: `{}` ({kind}, `{}`)",
+        "- `{value}`{lane}{}: `{}` ({kind}, `{}`)",
         dimensions.unwrap_or_default(),
         entry.path.display(db),
         entry.ty.pretty_print(db),

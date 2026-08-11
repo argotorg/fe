@@ -50,6 +50,7 @@ impl<'db> RuntimeTypeEnv<'db> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
 pub(crate) struct RuntimeEffectHandleInfo<'db> {
+    pub(crate) provider_ty: TyId<'db>,
     pub(crate) target_ty: TyId<'db>,
     pub(crate) space: AddressSpaceKind,
     pub(crate) impl_instance: ResolvedImplInstance<'db>,
@@ -464,12 +465,16 @@ fn effect_handle_transport_class_for_info<'db>(
             ),
         };
     }
-    provider_class_for_target_in_env(
-        db,
-        RuntimeTypeEnv::new(Some(effect_scope), assumptions),
-        Some(info.target_ty),
-        info.space,
-    )
+    let env = RuntimeTypeEnv::new(Some(effect_scope), assumptions);
+    let target_ty = runtime_repr_ty_in_env(db, env, info.target_ty);
+    RuntimeClass::Ref {
+        pointee: Box::new(stored_class_for_ty_in_env(db, env, target_ty)),
+        kind: RefKind::Provider {
+            provider_ty: info.provider_ty,
+            space: info.space,
+        },
+        view: RefView::Whole,
+    }
 }
 
 pub(crate) fn effect_handle_transport_class_for_ty_in_env<'db>(
@@ -559,6 +564,7 @@ pub(crate) fn runtime_effect_handle_info<'db>(
     };
     let target_ty = semantics.target_ty?;
     Some(RuntimeEffectHandleInfo {
+        provider_ty: repr_ty,
         target_ty,
         space: provider_address_space_to_runtime(semantics.address_space?),
         impl_instance,

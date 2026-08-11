@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 610
 expression: output
 input_file: crates/codegen/tests/fixtures/erc20_low_level.fe
 ---
@@ -33,17 +34,6 @@ func private %abi_encode_u256(v0.i256) {
         unreachable;
 }
 
-func private %allowance__g26d5(v0.@layout_0, v1.@layout_0, v2.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v8.@layout_2 = insert_value undef.@layout_2 0.i256 v0;
-        v9.@layout_2 = insert_value v8 1.i256 v1;
-        v10.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__ga15b_ddb0 v9 1.i256;
-        return v10;
-}
-
 func private %allowance__g35d6(v0.i256, v1.@layout_0, v2.@layout_0, v3.i256, v4.i256) -> i256 {
     block0:
         jump block1;
@@ -55,14 +45,15 @@ func private %allowance__g35d6(v0.i256, v1.@layout_0, v2.@layout_0, v3.i256, v4.
         return v13;
 }
 
-func private %approve__g44bd(v0.@layout_0, v1.i256, v2.i256) -> i256 {
+func private %allowance__g26d5(v0.@layout_0, v1.@layout_0, v2.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v6.@layout_0 = call %caller;
-        call %approve__g35d6 v2 v6 v0 v1 0.i256 1.i256;
-        return 1.i256;
+        v8.@layout_2 = insert_value undef.@layout_2 0.i256 v0;
+        v9.@layout_2 = insert_value v8 1.i256 v1;
+        v10.i256 = call %std__lib__evm__storage_map__impl_StorageMap_9f54__get__ga15b_ddb0 v9 1.i256;
+        return v10;
 }
 
 func private %approve__g35d6(v0.i256, v1.@layout_0, v2.@layout_0, v3.i256, v4.i256, v5.i256) {
@@ -76,7 +67,17 @@ func private %approve__g35d6(v0.i256, v1.@layout_0, v2.@layout_0, v3.i256, v4.i2
         return;
 }
 
-func private %standalone_erc20_low_level__erc20_low_level__impl_Erc20_ee5d__balance_of__g35d6_3e9c(v0.i256, v1.@layout_0, v2.i256, v3.i256) -> i256 {
+func private %approve__g44bd(v0.@layout_0, v1.i256, v2.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v6.@layout_0 = call %caller;
+        call %approve__g35d6 v2 v6 v0 v1 0.i256 1.i256;
+        return 1.i256;
+}
+
+func private %standalone_erc20_low_level__erc20_low_level__impl_Erc20_ee5d__balance_of__g35d6_7cc8(v0.i256, v1.@layout_0, v2.i256, v3.i256) -> i256 {
     block0:
         jump block1;
 
@@ -85,7 +86,7 @@ func private %standalone_erc20_low_level__erc20_low_level__impl_Erc20_ee5d__bala
         return v6;
 }
 
-func private %standalone_erc20_low_level__erc20_low_level__impl_Erc20_ee5d__balance_of__g35d6_3e9c_0(v0.i256, v1.@layout_0, v2.i256, v3.i256) -> i256 {
+func private %standalone_erc20_low_level__erc20_low_level__impl_Erc20_ee5d__balance_of__g35d6_7cc8_0(v0.i256, v1.@layout_0, v2.i256, v3.i256) -> i256 {
     block0:
         jump block1;
 
@@ -94,7 +95,7 @@ func private %standalone_erc20_low_level__erc20_low_level__impl_Erc20_ee5d__bala
         return v6;
 }
 
-func private %standalone_erc20_low_level__erc20_low_level__impl_Erc20_ee5d__balance_of__g35d6_3e9c_1(v0.i256, v1.@layout_0, v2.i256, v3.i256) -> i256 {
+func private %standalone_erc20_low_level__erc20_low_level__impl_Erc20_ee5d__balance_of__g35d6_7cc8_1(v0.i256, v1.@layout_0, v2.i256, v3.i256) -> i256 {
     block0:
         jump block1;
 
@@ -150,18 +151,7 @@ func private %do_init(v0.i256) {
         return;
 }
 
-func private %std__lib__evm__effects__impl_trait_Address_3ffb__eq_519f(v0.@layout_0, v1.i256) -> i1 {
-    block0:
-        jump block1;
-
-    block1:
-        v4.i256 = extract_value v0 0.i256;
-        v6.i256 = evm_sload v1;
-        v7.i1 = eq v4 v6;
-        return v7;
-}
-
-func private %std__lib__evm__effects__impl_trait_Address_3ffb__eq_f155(v0.i256, v1.@layout_0) -> i1 {
+func private %std__lib__evm__effects__impl_trait_Address_3ffb__eq_4d27(v0.i256, v1.@layout_0) -> i1 {
     block0:
         jump block1;
 
@@ -169,6 +159,17 @@ func private %std__lib__evm__effects__impl_trait_Address_3ffb__eq_f155(v0.i256, 
         v3.i256 = evm_sload v0;
         v6.i256 = extract_value v1 0.i256;
         v7.i1 = eq v3 v6;
+        return v7;
+}
+
+func private %std__lib__evm__effects__impl_trait_Address_3ffb__eq_fdc4(v0.@layout_0, v1.i256) -> i1 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = extract_value v0 0.i256;
+        v6.i256 = evm_sload v1;
+        v7.i1 = eq v4 v6;
         return v7;
 }
 
@@ -351,7 +352,7 @@ func private %mint__g0502(v0.i256, v1.@layout_0, v2.i256, v3.i256, v4.i256) {
     block1:
         v5.@layout_0 = call %caller;
         v8.i256 = add v0 1.i256;
-        v9.i1 = call %core__lib__ops__trait_Eq__ne__g7528_2614 v5 v8;
+        v9.i1 = call %core__lib__ops__trait_Eq__ne__g7528_7974 v5 v8;
         br v9 block2 block3;
 
     block2:
@@ -362,7 +363,7 @@ func private %mint__g0502(v0.i256, v1.@layout_0, v2.i256, v3.i256, v4.i256) {
         jump block4;
 
     block4:
-        v15.i256 = call %standalone_erc20_low_level__erc20_low_level__impl_Erc20_ee5d__balance_of__g35d6_3e9c v0 v1 v3 v4;
+        v15.i256 = call %standalone_erc20_low_level__erc20_low_level__impl_Erc20_ee5d__balance_of__g35d6_7cc8 v0 v1 v3 v4;
         (v17.i256, v18.i1) = uaddo v15 v2;
         br v18 block5 block6;
 
@@ -400,22 +401,22 @@ func private %mstore(v0.i256, v1.i256) {
         return;
 }
 
-func private %core__lib__ops__trait_Eq__ne__g7528_2614(v0.@layout_0, v1.i256) -> i1 {
+func private %core__lib__ops__trait_Eq__ne__g7528_7974(v0.@layout_0, v1.i256) -> i1 {
     block0:
         jump block1;
 
     block1:
-        v4.i1 = call %std__lib__evm__effects__impl_trait_Address_3ffb__eq_519f v0 v1;
+        v4.i1 = call %std__lib__evm__effects__impl_trait_Address_3ffb__eq_fdc4 v0 v1;
         v5.i1 = is_zero v4;
         return v5;
 }
 
-func private %core__lib__ops__trait_Eq__ne__g7528_ba99(v0.i256, v1.@layout_0) -> i1 {
+func private %core__lib__ops__trait_Eq__ne__g7528_9b98(v0.i256, v1.@layout_0) -> i1 {
     block0:
         jump block1;
 
     block1:
-        v4.i1 = call %std__lib__evm__effects__impl_trait_Address_3ffb__eq_f155 v0 v1;
+        v4.i1 = call %std__lib__evm__effects__impl_trait_Address_3ffb__eq_4d27 v0 v1;
         v5.i1 = is_zero v4;
         return v5;
 }
@@ -636,7 +637,7 @@ func private %set_owner_once(v0.i256, v1.@layout_0, v2.i256, v3.i256) {
         obj.store v13 v14;
         v15.i256 = add v0 1.i256;
         v16.@layout_0 = obj.load v4;
-        v17.i1 = call %core__lib__ops__trait_Eq__ne__g7528_ba99 v15 v16;
+        v17.i1 = call %core__lib__ops__trait_Eq__ne__g7528_9b98 v15 v16;
         br v17 block2 block3;
 
     block2:
@@ -1018,22 +1019,12 @@ func private %to_word(v0.i256) -> i256 {
         return v0;
 }
 
-func private %transfer__g2ee9(v0.@layout_0, v1.i256, v2.i256) -> i256 {
+func private %standalone_erc20_low_level__erc20_low_level__impl_Erc20_ee5d__transfer__g0f37_4ab6(v0.i256, v1.@layout_0, v2.@layout_0, v3.i256, v4.i256, v5.i256) {
     block0:
         jump block1;
 
     block1:
-        v6.@layout_0 = call %caller;
-        call %standalone_erc20_low_level__erc20_low_level__impl_Erc20_ee5d__transfer__g0f37_84af v2 v6 v0 v1 0.i256 1.i256;
-        return 1.i256;
-}
-
-func private %standalone_erc20_low_level__erc20_low_level__impl_Erc20_ee5d__transfer__g0f37_84af(v0.i256, v1.@layout_0, v2.@layout_0, v3.i256, v4.i256, v5.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        v10.i256 = call %standalone_erc20_low_level__erc20_low_level__impl_Erc20_ee5d__balance_of__g35d6_3e9c_0 v0 v1 v4 v5;
+        v10.i256 = call %standalone_erc20_low_level__erc20_low_level__impl_Erc20_ee5d__balance_of__g35d6_7cc8_0 v0 v1 v4 v5;
         v12.i1 = lt v10 v3;
         br v12 block2 block3;
 
@@ -1045,7 +1036,7 @@ func private %standalone_erc20_low_level__erc20_low_level__impl_Erc20_ee5d__tran
         jump block4;
 
     block4:
-        v18.i256 = call %standalone_erc20_low_level__erc20_low_level__impl_Erc20_ee5d__balance_of__g35d6_3e9c_0 v0 v2 v4 v5;
+        v18.i256 = call %standalone_erc20_low_level__erc20_low_level__impl_Erc20_ee5d__balance_of__g35d6_7cc8_0 v0 v2 v4 v5;
         (v22.i256, v23.i1) = usubo v10 v3;
         br v23 block5 block6;
 
@@ -1064,12 +1055,12 @@ func private %standalone_erc20_low_level__erc20_low_level__impl_Erc20_ee5d__tran
         return;
 }
 
-func private %standalone_erc20_low_level__erc20_low_level__impl_Erc20_ee5d__transfer__g0f37_84af_0(v0.i256, v1.@layout_0, v2.@layout_0, v3.i256, v4.i256, v5.i256) {
+func private %standalone_erc20_low_level__erc20_low_level__impl_Erc20_ee5d__transfer__g0f37_4ab6_0(v0.i256, v1.@layout_0, v2.@layout_0, v3.i256, v4.i256, v5.i256) {
     block0:
         jump block1;
 
     block1:
-        v10.i256 = call %standalone_erc20_low_level__erc20_low_level__impl_Erc20_ee5d__balance_of__g35d6_3e9c_1 v0 v1 v4 v5;
+        v10.i256 = call %standalone_erc20_low_level__erc20_low_level__impl_Erc20_ee5d__balance_of__g35d6_7cc8_1 v0 v1 v4 v5;
         v12.i1 = lt v10 v3;
         br v12 block2 block3;
 
@@ -1081,7 +1072,7 @@ func private %standalone_erc20_low_level__erc20_low_level__impl_Erc20_ee5d__tran
         jump block4;
 
     block4:
-        v18.i256 = call %standalone_erc20_low_level__erc20_low_level__impl_Erc20_ee5d__balance_of__g35d6_3e9c_1 v0 v2 v4 v5;
+        v18.i256 = call %standalone_erc20_low_level__erc20_low_level__impl_Erc20_ee5d__balance_of__g35d6_7cc8_1 v0 v2 v4 v5;
         (v22.i256, v23.i1) = usubo v10 v3;
         br v23 block5 block6;
 
@@ -1098,6 +1089,16 @@ func private %standalone_erc20_low_level__erc20_low_level__impl_Erc20_ee5d__tran
     block7:
         call %std__lib__evm__storage_map__impl_StorageMap_9f54__set__g2163_339e_1 v2 v36 v4;
         return;
+}
+
+func private %transfer__g2ee9(v0.@layout_0, v1.i256, v2.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v6.@layout_0 = call %caller;
+        call %standalone_erc20_low_level__erc20_low_level__impl_Erc20_ee5d__transfer__g0f37_4ab6 v2 v6 v0 v1 0.i256 1.i256;
+        return 1.i256;
 }
 
 func private %transfer_from__g2ee9(v0.@layout_0, v1.@layout_0, v2.i256, v3.i256) -> i256 {
@@ -1127,7 +1128,7 @@ func private %transfer_from__g0502(v0.i256, v1.@layout_0, v2.@layout_0, v3.i256,
         jump block4;
 
     block4:
-        call %standalone_erc20_low_level__erc20_low_level__impl_Erc20_ee5d__transfer__g0f37_84af_0 v0 v1 v2 v3 v4 v5;
+        call %standalone_erc20_low_level__erc20_low_level__impl_Erc20_ee5d__transfer__g0f37_4ab6_0 v0 v1 v2 v3 v4 v5;
         v23.@layout_2 = insert_value undef.@layout_2 0.i256 v1;
         v26.@layout_2 = insert_value v23 1.i256 v6;
         (v28.i256, v29.i1) = usubo v11 v3;

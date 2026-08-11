@@ -748,6 +748,14 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
             CompiledEffectValuePlan::ErasedPlainValue => {
                 self.select_materialized_operand_value(value.local, value)
             }
+            CompiledEffectValuePlan::ByValue(
+                plan @ CompiledValuePassPlan::BorrowLike(boundary),
+            ) => {
+                // A handle and a one-word aggregate target can have the same
+                // shape, but effect values must retain the handle transport.
+                self.select_effect_handle_operand_for_boundary(value, boundary)
+                    .or_else(|| self.selected_value_pass_plan(value, plan))
+            }
             CompiledEffectValuePlan::ByValue(plan) => self.selected_value_pass_plan(value, plan),
             CompiledEffectValuePlan::ByValueFallback(fallback) => self
                 .try_selected_semantic_operand_for_class(value, fallback)

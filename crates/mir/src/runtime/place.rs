@@ -17,7 +17,7 @@ use crate::{
         AddressSpaceKind, ConstScalar, Layout, LayoutId, PlaceElem, PlaceRoot, RLocalId, RefKind,
         RefView, ResolvedPlaceElem, ResolvedPlaceRootKind, ResolvedRuntimePlace, RuntimeBody,
         RuntimeClass, RuntimeLocalRoot, RuntimeProgramView, RuntimeProviderBinding,
-        RuntimeProviderBindingId, ScalarClass, ScalarRepr, ScalarRole, VariantId,
+        RuntimeProviderBindingId, ScalarClass, ScalarRepr, ScalarRole, StorageBitLane, VariantId,
     },
     verify::VerifyError,
 };
@@ -204,18 +204,37 @@ pub fn resolve_runtime_place_address_class<'db>(
     let resolved = resolve_runtime_place(db, program, body, place)?;
     let (mut root_class, mut root_space, mut force_raw) =
         runtime_place_transport_root(body, place)?;
+    let mut current = resolved_root_class(&resolved.root_kind).clone();
+    let mut view = transport_ref_view(&root_class);
     for elem in resolved.path.iter() {
-        if let ResolvedPlaceElem::Deref { carrier_class, .. } = elem {
-            root_class = carrier_class.clone();
-            root_space = root_class.address_space().unwrap_or(root_space);
-            force_raw = matches!(root_class, RuntimeClass::RawAddr { .. });
+        match elem {
+            ResolvedPlaceElem::Field { field, class } => {
+                view = projected_field_ref_view(db, &root_class, &current, *field);
+                current = class.clone();
+            }
+            ResolvedPlaceElem::Index { class, .. }
+            | ResolvedPlaceElem::VariantField { class, .. } => {
+                view = RefView::Whole;
+                current = class.clone();
+            }
+            ResolvedPlaceElem::Deref {
+                carrier_class,
+                class,
+            } => {
+                root_class = carrier_class.clone();
+                root_space = root_class.address_space().unwrap_or(root_space);
+                force_raw = matches!(root_class, RuntimeClass::RawAddr { .. });
+                view = transport_ref_view(&root_class);
+                current = class.clone();
+            }
         }
     }
-    Ok(ref_class_for_place_result(
+    Ok(ref_class_for_place_result_with_view(
         &root_class,
         &resolved.result_class,
         root_space,
         force_raw,
+        view,
     ))
 }
 
@@ -237,20 +256,36 @@ pub(crate) fn ref_class_for_place_result<'db>(
     root_space: AddressSpaceKind,
     force_raw: bool,
 ) -> RuntimeClass<'db> {
+    ref_class_for_place_result_with_view(
+        root_class,
+        value_class,
+        root_space,
+        force_raw,
+        RefView::Whole,
+    )
+}
+
+pub(crate) fn ref_class_for_place_result_with_view<'db>(
+    root_class: &RuntimeClass<'db>,
+    value_class: &RuntimeClass<'db>,
+    root_space: AddressSpaceKind,
+    force_raw: bool,
+    view: RefView<'db>,
+) -> RuntimeClass<'db> {
     if !force_raw {
         match root_class {
             RuntimeClass::Ref { kind, .. } => {
                 return RuntimeClass::Ref {
                     pointee: Box::new(value_class.clone()),
                     kind: kind.clone(),
-                    view: RefView::Whole,
+                    view,
                 };
             }
             RuntimeClass::AggregateValue { .. } => {
                 return RuntimeClass::Ref {
                     pointee: Box::new(value_class.clone()),
                     kind: RefKind::Object,
-                    view: RefView::Whole,
+                    view,
                 };
             }
             RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => {}
@@ -259,6 +294,61 @@ pub(crate) fn ref_class_for_place_result<'db>(
     RuntimeClass::RawAddr {
         space: root_class.address_space().unwrap_or(root_space),
         target: value_class.aggregate_layout(),
+    }
+}
+
+pub(crate) fn transport_ref_view<'db>(class: &RuntimeClass<'db>) -> RefView<'db> {
+    match class {
+        RuntimeClass::Ref {
+            view: RefView::StorageLane(lane),
+            ..
+        } => RefView::StorageLane(*lane),
+        RuntimeClass::Scalar(_)
+        | RuntimeClass::AggregateValue { .. }
+        | RuntimeClass::Ref { .. }
+        | RuntimeClass::RawAddr { .. } => RefView::Whole,
+    }
+}
+
+pub(crate) fn projected_field_ref_view<'db>(
+    db: &'db dyn MirDb,
+    transport: &RuntimeClass<'db>,
+    base: &RuntimeClass<'db>,
+    field: FieldIndex,
+) -> RefView<'db> {
+    if !matches!(
+        transport,
+        RuntimeClass::Ref {
+            kind: RefKind::Provider {
+                space: AddressSpaceKind::Storage | AddressSpaceKind::Transient,
+                ..
+            },
+            ..
+        }
+    ) {
+        return RefView::Whole;
+    }
+    let Some(placement) = base.storage_field_placement(db, field) else {
+        return RefView::Whole;
+    };
+    if !placement.requires_read_modify_write {
+        return RefView::Whole;
+    }
+    let lane = placement
+        .lane
+        .expect("read-modify-write storage field must have a bit lane");
+    RefView::StorageLane(StorageBitLane {
+        bit_offset: lane.bit_offset,
+        bit_width: lane.bit_width,
+    })
+}
+
+fn resolved_root_class<'a, 'db>(root: &'a ResolvedPlaceRootKind<'db>) -> &'a RuntimeClass<'db> {
+    match root {
+        ResolvedPlaceRootKind::Slot { class, .. }
+        | ResolvedPlaceRootKind::Ref { class, .. }
+        | ResolvedPlaceRootKind::Provider { class, .. }
+        | ResolvedPlaceRootKind::Ptr { class, .. } => class,
     }
 }
 

@@ -35,12 +35,12 @@ use crate::{
     instance::{RuntimeInstanceKey, RuntimeInstanceSource},
     runtime::place::{
         project_field_class, project_index_class, project_variant_field_class,
-        ref_class_for_place_result,
+        projected_field_ref_view, ref_class_for_place_result_with_view, transport_ref_view,
     },
     runtime::{
-        AddressSpaceKind, BorrowAccess, Layout, LayoutId, RuntimeBoundarySpec, RuntimeCarrier,
-        RuntimeClass, RuntimeCodeRegion, RuntimeCodeRegionKey, RuntimeParamPlan, SaturatingBinOp,
-        ScalarClass, ScalarRepr, ScalarRole, VariantId,
+        AddressSpaceKind, BorrowAccess, Layout, LayoutId, RefView, RuntimeBoundarySpec,
+        RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeCodeRegionKey, RuntimeParamPlan,
+        SaturatingBinOp, ScalarClass, ScalarRepr, ScalarRole, VariantId,
     },
 };
 
@@ -659,64 +659,82 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
         place: &NSPlace<'db>,
     ) -> Option<RuntimeClass<'db>> {
         let root = normalized_place_root_class_in_context(self, place.root.clone(), carriers)?;
-        Some(self.walk_place_path_classes(root, place).0)
+        Some(self.walk_place_path_classes(root, None, place).0)
     }
 
-    /// Projects `root` through the place's path, returning the final class and
-    /// the carrier class crossed by the last `Deref` (if any).
+    /// Projects `root` through the place's path, retaining the transport and
+    /// reference view established by the final carrier.
     fn walk_place_path_classes(
         self,
         root: RuntimeClass<'db>,
+        mut transport: Option<RuntimeClass<'db>>,
         place: &NSPlace<'db>,
-    ) -> (RuntimeClass<'db>, Option<RuntimeClass<'db>>) {
+    ) -> (RuntimeClass<'db>, Option<RuntimeClass<'db>>, RefView<'db>) {
         let mut current = root;
         let mut last_deref_carrier = None;
+        let mut view = transport
+            .as_ref()
+            .map(transport_ref_view)
+            .unwrap_or(RefView::Whole);
         for (idx, projection) in place.path.iter().enumerate() {
-            if matches!(projection, Projection::Deref) {
-                last_deref_carrier = Some(current.clone());
-            }
             current = match projection {
-                Projection::Field(field) => project_field_class(
-                    self.db,
-                    current,
-                    FieldIndex((*field).try_into().expect("field index fits")),
-                ),
-                Projection::Index(_) => project_index_class(self.db, current),
-                Projection::Deref => current
-                    .deref_target()
-                    .unwrap_or_else(|| panic!("invalid deref projection class")),
+                Projection::Field(field) => {
+                    let field = FieldIndex((*field).try_into().expect("field index fits"));
+                    view = transport.as_ref().map_or(RefView::Whole, |transport| {
+                        projected_field_ref_view(self.db, transport, &current, field)
+                    });
+                    project_field_class(self.db, current, field)
+                }
+                Projection::Index(_) => {
+                    view = RefView::Whole;
+                    project_index_class(self.db, current)
+                }
+                Projection::Deref => {
+                    last_deref_carrier = Some(current.clone());
+                    transport = Some(current.clone());
+                    view = transport_ref_view(&current);
+                    current
+                        .deref_target()
+                        .unwrap_or_else(|| panic!("invalid deref projection class"))
+                }
                 Projection::VariantField {
                     variant, field_idx, ..
-                } => project_variant_field_place_class(
-                    self.db,
-                    current,
-                    *variant,
-                    FieldIndex((*field_idx).try_into().expect("field index fits")),
-                ),
-                Projection::Discriminant => match current {
-                    RuntimeClass::Ref { pointee, .. } => match pointee.aggregate_layout() {
-                        Some(layout) => match layout.data(self.db) {
+                } => {
+                    view = RefView::Whole;
+                    project_variant_field_place_class(
+                        self.db,
+                        current,
+                        *variant,
+                        FieldIndex((*field_idx).try_into().expect("field index fits")),
+                    )
+                }
+                Projection::Discriminant => {
+                    view = RefView::Whole;
+                    match current {
+                        RuntimeClass::Ref { pointee, .. } => match pointee.aggregate_layout() {
+                            Some(layout) => match layout.data(self.db) {
+                                Layout::Enum(layout) => RuntimeClass::Scalar(layout.tag),
+                                Layout::Struct(_) | Layout::Array(_) => {
+                                    panic!("invalid discriminant projection class")
+                                }
+                            },
+                            None => panic!("invalid discriminant projection class"),
+                        },
+                        RuntimeClass::AggregateValue { layout }
+                        | RuntimeClass::RawAddr {
+                            target: Some(layout),
+                            ..
+                        } => match layout.data(self.db) {
                             Layout::Enum(layout) => RuntimeClass::Scalar(layout.tag),
                             Layout::Struct(_) | Layout::Array(_) => {
                                 panic!("invalid discriminant projection class")
                             }
                         },
-                        None => panic!("invalid discriminant projection class"),
-                    },
-                    RuntimeClass::AggregateValue { layout }
-                    | RuntimeClass::RawAddr {
-                        target: Some(layout),
-                        ..
-                    } => match layout.data(self.db) {
-                        Layout::Enum(layout) => RuntimeClass::Scalar(layout.tag),
-                        Layout::Struct(_) | Layout::Array(_) => {
+                        RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { target: None, .. } => {
                             panic!("invalid discriminant projection class")
                         }
-                    },
-                    RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { target: None, .. } => {
-                        panic!("invalid discriminant projection class")
                     }
-                },
+                }
             };
             // Mirror `try_lower_place`: projecting onward through a
             // handle-classed element continues in the pointee, which re-roots
@@ -725,10 +743,12 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                 && let Some(target) = current.deref_target()
             {
                 last_deref_carrier = Some(current.clone());
+                transport = Some(current.clone());
+                view = transport_ref_view(&current);
                 current = target;
             }
         }
-        (current, last_deref_carrier)
+        (current, last_deref_carrier, view)
     }
 
     pub(crate) fn normalized_place_address_class(
@@ -736,9 +756,11 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
         carriers: &[RuntimeCarrier<'db>],
         place: &NSPlace<'db>,
     ) -> Option<RuntimeClass<'db>> {
-        let value_class = self.normalized_place_class(carriers, place)?;
         let mut root_class =
             normalized_place_root_transport_class_in_context(self, place.root.clone(), carriers)?;
+        let root = normalized_place_root_class_in_context(self, place.root.clone(), carriers)?;
+        let (value_class, last_deref_carrier, view) =
+            self.walk_place_path_classes(root, Some(root_class.clone()), place);
         let (mut root_space, mut force_raw) = match place.root {
             NSPlaceRoot::CarrierDerefLocal(_) => (AddressSpaceKind::Memory, false),
             NSPlaceRoot::Root(root) => match self.body.root(root)? {
@@ -754,19 +776,17 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
         // carrier's transport (mirroring `resolve_runtime_place_address_class`
         // over lowered places), so a borrow through a handle-typed field keeps
         // the handle's transport rather than the place root's.
-        if let Some(root) =
-            normalized_place_root_class_in_context(self, place.root.clone(), carriers)
-            && let (_, Some(carrier)) = self.walk_place_path_classes(root, place)
-        {
+        if let Some(carrier) = last_deref_carrier {
             root_space = carrier.address_space().unwrap_or(root_space);
             force_raw = matches!(carrier, RuntimeClass::RawAddr { .. });
             root_class = carrier;
         }
-        Some(ref_class_for_place_result(
+        Some(ref_class_for_place_result_with_view(
             &root_class,
             &value_class,
             root_space,
             force_raw,
+            view,
         ))
     }
 
