@@ -396,14 +396,20 @@ msg AlphaMsg {
     Get {} -> u32,
 }
 
-struct AlphaStore {}
+struct AlphaStore {
+    value: u32,
+}
 
 pub contract Alpha {
-    store: AlphaStore
+    mut store: AlphaStore
+
+    init() uses (mut store) {
+        store.value = 1
+    }
 
     recv AlphaMsg {
-        Get {} -> u32 {
-            return 1
+        Get {} -> u32 uses (store) {
+            return store.value
         }
     }
 }
@@ -486,6 +492,28 @@ pub contract Beta {
             "expected runtime code objects for both contracts, got {runtime_owners:?}"
         );
 
+        let creation_owners = bundle
+            .facts
+            .iter()
+            .filter_map(|fact| match fact {
+                trace_facts::TraceFact::CodeObject(code_object)
+                    if code_object.kind == trace_facts::CodeObjectKind::EvmCreationBytecode =>
+                {
+                    Some(code_object.code_object.owner_key().to_string())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            creation_owners
+                .iter()
+                .any(|owner| owner.contains("contract:Alpha"))
+                && creation_owners
+                    .iter()
+                    .any(|owner| owner.contains("contract:Beta")),
+            "expected creation code objects for both contracts, got {creation_owners:?}"
+        );
+
         let source_uris = bundle
             .facts
             .iter()
@@ -498,6 +526,33 @@ pub contract Beta {
             source_uris.iter().any(|uri| uri.ends_with("lib.fe"))
                 && source_uris.iter().any(|uri| uri.ends_with("beta.fe")),
             "expected both module files in the source registry, got {source_uris:?}"
+        );
+
+        let snapshot = TraceSnapshot::new(bundle).unwrap();
+        let debug_bundle = debug_export::DebugBundle::from_snapshot(&snapshot);
+        let artifact = debug_export::emit_ethdebug_artifact(&debug_bundle).unwrap();
+        let environments = artifact
+            .programs
+            .iter()
+            .map(|program| program.environment)
+            .collect::<Vec<_>>();
+        assert!(environments.contains(&debug_export::EthdebugEnvironment::Call));
+        assert!(environments.contains(&debug_export::EthdebugEnvironment::Create));
+        let create_program = artifact
+            .programs
+            .iter()
+            .find(|program| {
+                program.environment == debug_export::EthdebugEnvironment::Create
+                    && program.id.contains("contract:Alpha")
+            })
+            .expect("creation code must become an ethdebug create program");
+        assert!(!create_program.instructions.is_empty());
+        assert!(
+            create_program
+                .instructions
+                .iter()
+                .any(|instruction| instruction.context.is_some()),
+            "the explicit init section should retain source attribution"
         );
 
         std::fs::remove_dir_all(dir).unwrap();

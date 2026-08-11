@@ -10,7 +10,10 @@ use mir::{RuntimePackage, build_runtime_package, build_test_runtime_package};
 use rustc_hash::FxHashSet;
 use sonatina_codegen::{
     EvmCompile, OptLevel as SonatinaOptLevel,
-    object::{ObjectArtifact, SectionArtifact, SectionObservability, SymbolId},
+    object::{
+        OBSERVABILITY_SCHEMA_VERSION, ObjectArtifact, SectionArtifact, SectionObservability,
+        SymbolId,
+    },
 };
 use sonatina_ir::{
     Module,
@@ -59,6 +62,7 @@ impl From<mir::LowerError> for LowerError {
 pub struct SonatinaContractBytecode {
     pub deploy: Vec<u8>,
     pub runtime: Vec<u8>,
+    pub deploy_observability: Option<SectionObservability>,
     pub runtime_observability: Option<SectionObservability>,
 }
 
@@ -385,6 +389,26 @@ fn wrap_as_init_code(runtime: &[u8]) -> Vec<u8> {
     init[off_pos + 1] = (off & 0xff) as u8;
     init.extend_from_slice(runtime);
     init
+}
+
+fn wrapped_init_observability(
+    section_bytes: usize,
+    code_bytes: usize,
+) -> Option<SectionObservability> {
+    let section_bytes = u32::try_from(section_bytes).ok()?;
+    let code_bytes = u32::try_from(code_bytes).ok()?;
+    Some(SectionObservability {
+        schema_version: OBSERVABILITY_SCHEMA_VERSION,
+        section: "init".into(),
+        section_bytes,
+        code_bytes,
+        data_bytes: 0,
+        embed_bytes: section_bytes.saturating_sub(code_bytes),
+        mapped_code_bytes: 0,
+        unmapped_code_bytes: code_bytes,
+        unmapped_reason_coverage: Default::default(),
+        pc_map: Vec::new(),
+    })
 }
 
 pub fn compile_runtime_package_sonatina(
@@ -764,11 +788,20 @@ fn emit_runtime_module_sonatina_bytecode_with_options(
             .sections
             .get(&section_name_for_runtime(&mir::RuntimeSectionName::Runtime));
         let runtime_section_name = mir::RuntimeSectionName::Runtime;
-        let (deploy, runtime, runtime_observability) = match (init, runtime) {
+        let init_section_name = mir::RuntimeSectionName::Init;
+        let (deploy, runtime, deploy_observability, runtime_observability) = match (init, runtime) {
             (Some(init), Some(runtime)) => {
-                let runtime_section = object
-                    .sections(db)
-                    .into_iter()
+                let sections = object.sections(db);
+                let init_section = sections
+                    .iter()
+                    .find(|section| section.name == init_section_name)
+                    .ok_or_else(|| {
+                        LowerError::Internal(format!(
+                            "root object `{object_name}` has init artifact but no init section"
+                        ))
+                    })?;
+                let runtime_section = sections
+                    .iter()
                     .find(|section| section.name == runtime_section_name)
                     .ok_or_else(|| {
                         LowerError::Internal(format!(
@@ -782,8 +815,15 @@ fn emit_runtime_module_sonatina_bytecode_with_options(
                         db,
                         &objects_by_name,
                         &artifacts_by_name,
+                        init,
+                        init_section,
+                    ),
+                    merged_section_observability(
+                        db,
+                        &objects_by_name,
+                        &artifacts_by_name,
                         runtime,
-                        &runtime_section,
+                        runtime_section,
                     ),
                 )
             }
@@ -802,17 +842,19 @@ fn emit_runtime_module_sonatina_bytecode_with_options(
                         ))
                     })?;
                 let runtime = runtime_section.bytes.clone();
-                (
-                    wrap_as_init_code(&runtime),
-                    runtime,
-                    merged_section_observability(
-                        db,
-                        &objects_by_name,
-                        &artifacts_by_name,
-                        runtime_section,
-                        section,
-                    ),
-                )
+                let runtime_observability = merged_section_observability(
+                    db,
+                    &objects_by_name,
+                    &artifacts_by_name,
+                    runtime_section,
+                    section,
+                );
+                let deploy = wrap_as_init_code(&runtime);
+                let deploy_code_bytes = deploy.len().saturating_sub(runtime.len());
+                let deploy_observability = emit_observability
+                    .then(|| wrapped_init_observability(deploy.len(), deploy_code_bytes))
+                    .flatten();
+                (deploy, runtime, deploy_observability, runtime_observability)
             }
         };
         out.insert(
@@ -820,6 +862,7 @@ fn emit_runtime_module_sonatina_bytecode_with_options(
             SonatinaContractBytecode {
                 deploy,
                 runtime,
+                deploy_observability,
                 runtime_observability,
             },
         );
@@ -1057,6 +1100,23 @@ mod tests {
     fn temp_fixture_url(name: &str) -> Url {
         let fixture_path = std::env::temp_dir().join(name);
         Url::from_file_path(&fixture_path).expect("fixture path should be absolute")
+    }
+
+    #[test]
+    fn wrapped_init_observability_stops_before_runtime_payload() {
+        let runtime = [0x60, 0x01, 0x00];
+        let deploy = wrap_as_init_code(&runtime);
+        let code_bytes = deploy.len() - runtime.len();
+        let observability = wrapped_init_observability(deploy.len(), code_bytes)
+            .expect("wrapped init sizes should fit the observability schema");
+
+        assert_eq!(observability.section.0, "init");
+        assert_eq!(observability.section_bytes as usize, deploy.len());
+        assert_eq!(observability.code_bytes as usize, code_bytes);
+        assert_eq!(observability.embed_bytes as usize, runtime.len());
+        assert_eq!(observability.mapped_code_bytes, 0);
+        assert_eq!(observability.unmapped_code_bytes as usize, code_bytes);
+        assert!(observability.pc_map.is_empty());
     }
 
     #[test]

@@ -167,6 +167,14 @@ fn emit_observable_package_trace_facts(
         if let Some(span) = whole_file_source_span(code_object, source_file.clone(), source_text) {
             facts.push(TraceFact::SourceSpan(span));
         }
+        let creation_owner =
+            bytecode_creation_owner_key(input_owner_key, &module_key, contract_name);
+        let creation_code_object = bytecode_creation_code_object_key(&creation_owner);
+        if let Some(span) =
+            whole_file_source_span(creation_code_object, source_file.clone(), source_text)
+        {
+            facts.push(TraceFact::SourceSpan(span));
+        }
     }
     Ok(facts)
 }
@@ -300,6 +308,28 @@ pub fn emit_codegen_facts<'a>(
         .collect()
 }
 
+#[derive(Clone, Copy)]
+enum EvmBytecodeSection {
+    Creation,
+    Runtime,
+}
+
+impl EvmBytecodeSection {
+    fn code_object_kind(self) -> CodeObjectKind {
+        match self {
+            Self::Creation => CodeObjectKind::EvmCreationBytecode,
+            Self::Runtime => CodeObjectKind::EvmRuntimeBytecode,
+        }
+    }
+
+    fn code_object_local_key(self) -> &'static str {
+        match self {
+            Self::Creation => "creation",
+            Self::Runtime => "runtime",
+        }
+    }
+}
+
 /// Emit codegen-owned instruction facts from actual emitted EVM bytecode.
 pub fn emit_bytecode_instruction_facts(
     owner_key: &str,
@@ -335,13 +365,25 @@ pub fn emit_observed_bytecode_trace_facts(
         .collect::<BTreeSet<_>>();
     let mut facts = Vec::new();
     for (contract_name, artifact) in bytecode {
-        let owner_key = bytecode_runtime_owner_key(input_owner_key, module_key, contract_name);
-        facts.extend(emit_bytecode_instruction_facts_with_observability(
-            &owner_key,
+        let runtime_owner = bytecode_runtime_owner_key(input_owner_key, module_key, contract_name);
+        facts.extend(emit_evm_bytecode_instruction_facts_with_observability(
+            &runtime_owner,
             function_local_key,
+            EvmBytecodeSection::Runtime,
             &artifact.runtime,
             Some(sonatina_owner_key),
             artifact.runtime_observability.as_ref(),
+            Some(&postopt_sonatina_nodes),
+        ));
+        let creation_owner =
+            bytecode_creation_owner_key(input_owner_key, module_key, contract_name);
+        facts.extend(emit_evm_bytecode_instruction_facts_with_observability(
+            &creation_owner,
+            "function:creation",
+            EvmBytecodeSection::Creation,
+            &artifact.deploy,
+            Some(sonatina_owner_key),
+            artifact.deploy_observability.as_ref(),
             Some(&postopt_sonatina_nodes),
         ));
     }
@@ -356,8 +398,28 @@ pub fn emit_bytecode_instruction_facts_with_observability(
     observability: Option<&SectionObservability>,
     known_sonatina_endpoint_nodes: Option<&BTreeSet<OriginExportKey>>,
 ) -> Vec<TraceFact> {
+    emit_evm_bytecode_instruction_facts_with_observability(
+        owner_key,
+        function_local_key,
+        EvmBytecodeSection::Runtime,
+        bytecode,
+        sonatina_owner_key,
+        observability,
+        known_sonatina_endpoint_nodes,
+    )
+}
+
+fn emit_evm_bytecode_instruction_facts_with_observability(
+    owner_key: &str,
+    function_local_key: &str,
+    section: EvmBytecodeSection,
+    bytecode: &[u8],
+    sonatina_owner_key: Option<&str>,
+    observability: Option<&SectionObservability>,
+    known_sonatina_endpoint_nodes: Option<&BTreeSet<OriginExportKey>>,
+) -> Vec<TraceFact> {
     let function = bytecode_function_key(owner_key, function_local_key);
-    let code_object = bytecode_code_object_key(owner_key);
+    let code_object = bytecode_code_object_key_for_section(owner_key, section);
     let pc_map = observability
         .map(|observability| build_pc_map(&observability.pc_map))
         .unwrap_or_default();
@@ -375,7 +437,7 @@ pub fn emit_bytecode_instruction_facts_with_observability(
         )),
         TraceFact::CodeObject(CodeObjectFact::new(
             code_object.clone(),
-            CodeObjectKind::EvmRuntimeBytecode,
+            section.code_object_kind(),
             Some(function.clone()),
             "evm/sonatina",
             Some(bytecode_content_hash(bytecode)),
@@ -736,6 +798,14 @@ pub fn bytecode_runtime_owner_key(
     format!("package:{package_key}:module:{module_key}:contract:{contract_name}:section:runtime")
 }
 
+pub fn bytecode_creation_owner_key(
+    package_key: &str,
+    module_key: &str,
+    contract_name: &str,
+) -> String {
+    format!("package:{package_key}:module:{module_key}:contract:{contract_name}:section:creation")
+}
+
 pub fn sonatina_module_owner_key(package_key: &str, module_key: &str) -> String {
     format!("package:{package_key}:module:{module_key}:sonatina")
 }
@@ -746,7 +816,18 @@ pub fn bytecode_function_key(owner_key: &str, function_local_key: &str) -> Origi
 }
 
 pub fn bytecode_code_object_key(owner_key: &str) -> OriginExportKey {
-    OriginExportKey::try_from_raw_parts("code.object", owner_key, "runtime")
+    bytecode_code_object_key_for_section(owner_key, EvmBytecodeSection::Runtime)
+}
+
+pub fn bytecode_creation_code_object_key(owner_key: &str) -> OriginExportKey {
+    bytecode_code_object_key_for_section(owner_key, EvmBytecodeSection::Creation)
+}
+
+fn bytecode_code_object_key_for_section(
+    owner_key: &str,
+    section: EvmBytecodeSection,
+) -> OriginExportKey {
+    OriginExportKey::try_from_raw_parts("code.object", owner_key, section.code_object_local_key())
         .expect("codegen bytecode code object key must be valid")
 }
 
@@ -1282,20 +1363,105 @@ fn evm_static_gas(opcode: u8) -> Option<(u64, Option<DynamicGasKind>)> {
 mod tests {
     use common::origin::OriginExportKey;
     use trace_facts::{
-        CompilerEventKind, CompilerPhase, OriginNodeFact, OriginNodeKind, TraceFact, TraceValidator,
+        CodeObjectKind, CompilerEventKind, CompilerPhase, OriginNodeFact, OriginNodeKind,
+        TraceFact, TraceValidator,
     };
 
     use crate::{
-        BytecodePcRange, BytecodeSourceMapEntry,
+        BytecodePcRange, BytecodeSourceMapEntry, SonatinaContractBytecode,
         trace::{
             EVM_VCODE_INST_KIND, SONATINA_EVM_PREPARED_INST_KIND, SONATINA_POSTOPT_INST_KIND,
-            build_pc_map, bytecode_code_object_key, bytecode_runtime_owner_key,
-            emit_bytecode_instruction_facts, emit_bytecode_instruction_facts_with_observability,
-            emit_codegen_facts, emit_sonatina_trace_view_facts, evm_vcode_inst_key,
+            build_pc_map, bytecode_code_object_key, bytecode_creation_owner_key,
+            bytecode_runtime_owner_key, emit_bytecode_instruction_facts,
+            emit_bytecode_instruction_facts_with_observability, emit_codegen_facts,
+            emit_observed_bytecode_trace_facts, emit_sonatina_trace_view_facts, evm_vcode_inst_key,
             pc_map_entry_for_pc, push_standalone_source_file_facts, sonatina_postopt_inst_key,
             standalone_source_file_facts, trace_source_file_key, whole_file_source_span,
         },
     };
+
+    #[test]
+    fn observed_bytecode_trace_emits_creation_and_runtime_code_objects() {
+        use sonatina_codegen::object::{OBSERVABILITY_SCHEMA_VERSION, SectionObservability};
+
+        let creation_observability = SectionObservability {
+            schema_version: OBSERVABILITY_SCHEMA_VERSION,
+            section: "init".into(),
+            section_bytes: 4,
+            code_bytes: 2,
+            data_bytes: 0,
+            embed_bytes: 2,
+            mapped_code_bytes: 0,
+            unmapped_code_bytes: 2,
+            unmapped_reason_coverage: Default::default(),
+            pc_map: Vec::new(),
+        };
+        let bytecode = std::collections::BTreeMap::from([(
+            "Demo".to_string(),
+            SonatinaContractBytecode {
+                deploy: vec![0x5f, 0xf3, 0x60, 0x01],
+                runtime: vec![0x5f],
+                deploy_observability: Some(creation_observability),
+                runtime_observability: None,
+            },
+        )]);
+
+        let facts = emit_observed_bytecode_trace_facts(
+            "demo",
+            "demo",
+            "function:runtime",
+            "package:demo:module:demo:sonatina",
+            &bytecode,
+            &[],
+        );
+        TraceValidator::validate(&facts).unwrap();
+
+        let code_objects = facts
+            .iter()
+            .filter_map(|fact| match fact {
+                TraceFact::CodeObject(code_object) => Some(code_object),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(code_objects.len(), 2);
+        assert!(
+            code_objects
+                .iter()
+                .any(|code_object| code_object.kind == CodeObjectKind::EvmRuntimeBytecode)
+        );
+        let creation = code_objects
+            .iter()
+            .find(|code_object| code_object.kind == CodeObjectKind::EvmCreationBytecode)
+            .expect("creation code object must be emitted");
+        let creation_owner = bytecode_creation_owner_key("demo", "demo", "Demo");
+        assert_eq!(creation.code_object.owner_key(), creation_owner);
+        assert_eq!(creation.code_object.local_key(), "creation");
+        assert_ne!(
+            code_objects[0].code_hash.as_deref(),
+            code_objects[1].code_hash.as_deref()
+        );
+
+        let creation_extents = facts
+            .iter()
+            .filter_map(|fact| match fact {
+                TraceFact::InstructionExtent(extent)
+                    if extent.code_object == creation.code_object =>
+                {
+                    Some(extent)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(creation_extents.len(), 2);
+        assert_eq!(
+            creation_extents
+                .iter()
+                .map(|extent| extent.pc_range.end)
+                .max(),
+            Some(2),
+            "runtime payload appended after init code must not be decoded as creation instructions"
+        );
+    }
 
     #[test]
     fn codegen_trace_emits_only_bytecode_origin_nodes() {
