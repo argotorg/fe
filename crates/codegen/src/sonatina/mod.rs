@@ -12,7 +12,7 @@ use sonatina_codegen::{
     EvmCompile, OptLevel as SonatinaOptLevel,
     object::{
         OBSERVABILITY_SCHEMA_VERSION, ObjectArtifact, SectionArtifact, SectionObservability,
-        SymbolId,
+        SymbolId, UnmappedReason, UnmappedReasonCoverage,
     },
 };
 use sonatina_ir::{
@@ -387,18 +387,40 @@ fn wrapped_init_observability(
 ) -> Option<SectionObservability> {
     let section_bytes = u32::try_from(section_bytes).ok()?;
     let code_bytes = u32::try_from(code_bytes).ok()?;
-    Some(SectionObservability {
+    // The deploy wrapper is compiler-synthesized copy-and-return scaffolding
+    // with no Fe source, so every code byte is honestly unmapped as Synthetic.
+    Some(all_unmapped_observability(
+        "init",
+        section_bytes,
+        code_bytes,
+        UnmappedReason::Synthetic,
+    ))
+}
+
+/// Build an observability record for a section whose code bytes carry no source
+/// attribution. The reason table is derived from the same `code_bytes` reported
+/// unmapped, so the conservation equation (unmapped bytes == reason totals)
+/// cannot desynchronize here or at any future call site.
+fn all_unmapped_observability(
+    section: &str,
+    section_bytes: u32,
+    code_bytes: u32,
+    reason: UnmappedReason,
+) -> SectionObservability {
+    let mut unmapped_reason_coverage = UnmappedReasonCoverage::default();
+    unmapped_reason_coverage.add_bytes(reason, code_bytes);
+    SectionObservability {
         schema_version: OBSERVABILITY_SCHEMA_VERSION,
-        section: "init".into(),
+        section: section.into(),
         section_bytes,
         code_bytes,
         data_bytes: 0,
         embed_bytes: section_bytes.saturating_sub(code_bytes),
         mapped_code_bytes: 0,
         unmapped_code_bytes: code_bytes,
-        unmapped_reason_coverage: Default::default(),
+        unmapped_reason_coverage,
         pc_map: Vec::new(),
-    })
+    }
 }
 
 pub fn compile_runtime_package_sonatina(

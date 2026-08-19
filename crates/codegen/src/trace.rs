@@ -151,6 +151,14 @@ fn emit_observable_package_trace_facts(
             opt_level,
             &sonatina_owner,
         )?;
+    for (contract_name, artifact) in &bytecode {
+        if let Some(obs) = artifact.runtime_observability.as_ref() {
+            verify_received_observability(&format!("{contract_name}:runtime"), obs)?;
+        }
+        if let Some(obs) = artifact.deploy_observability.as_ref() {
+            verify_received_observability(&format!("{contract_name}:creation"), obs)?;
+        }
+    }
     let observed_bytecode_facts = emit_observed_bytecode_trace_facts(
         input_owner_key,
         &module_key,
@@ -177,6 +185,50 @@ fn emit_observable_package_trace_facts(
         }
     }
     Ok(facts)
+}
+
+/// Re-check on the consumer side the conservation invariants Sonatina enforces
+/// at link time, so trust in the received observability survives every future
+/// backend pin bump instead of being assumed. Failures are hard errors.
+fn verify_received_observability(
+    section: &str,
+    obs: &SectionObservability,
+) -> Result<(), crate::LowerError> {
+    let mapped_plus_unmapped = obs
+        .mapped_code_bytes
+        .saturating_add(obs.unmapped_code_bytes);
+    if mapped_plus_unmapped != obs.code_bytes {
+        return Err(crate::LowerError::Internal(format!(
+            "section `{section}` observability: mapped {} + unmapped {} != code {}",
+            obs.mapped_code_bytes, obs.unmapped_code_bytes, obs.code_bytes
+        )));
+    }
+    let reason_total = obs.unmapped_reason_coverage.total_bytes();
+    if reason_total != obs.unmapped_code_bytes {
+        return Err(crate::LowerError::Internal(format!(
+            "section `{section}` observability: unmapped-reason total {reason_total} != unmapped {}",
+            obs.unmapped_code_bytes
+        )));
+    }
+    let mut ordered: Vec<&PcMapEntry> = obs.pc_map.iter().collect();
+    ordered.sort_by_key(|entry| entry.pc_start);
+    let mut prev_end = 0u32;
+    for entry in ordered {
+        if entry.pc_end < entry.pc_start || entry.pc_end > obs.code_bytes {
+            return Err(crate::LowerError::Internal(format!(
+                "section `{section}` observability: range [{}, {}) out of bounds for code {}",
+                entry.pc_start, entry.pc_end, obs.code_bytes
+            )));
+        }
+        if entry.pc_start < prev_end {
+            return Err(crate::LowerError::Internal(format!(
+                "section `{section}` observability: overlapping range at pc {}",
+                entry.pc_start
+            )));
+        }
+        prev_end = entry.pc_end;
+    }
+    Ok(())
 }
 
 pub fn trace_source_file_key(source_owner: &str) -> OriginExportKey {
@@ -2080,7 +2132,82 @@ mod tests {
     }
 
     #[test]
-    fn bytecode_frontend_provenance_fallback_is_contextual_not_exact() {
+    fn bytecode_observability_missing_provenance_entry_produces_no_join() {
+        use sonatina_codegen::{
+            machinst::vcode::VCodeInst,
+            object::{OBSERVABILITY_SCHEMA_VERSION, PcMapEntry, SectionObservability},
+        };
+        use sonatina_ir::{
+            BlockId, InstId, Linkage, Signature, builder::ModuleBuilder, isa::evm::Evm,
+            module::ModuleCtx,
+        };
+        use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
+
+        let evm = Evm::new(TargetTriple::new(
+            Architecture::Evm,
+            Vendor::Ethereum,
+            OperatingSystem::Evm(EvmVersion::London),
+        ));
+        let mb = ModuleBuilder::new(ModuleCtx::new(&evm));
+        let func = mb
+            .declare_function(Signature::new_unit("runtime", Linkage::Public, &[]))
+            .unwrap();
+
+        let sonatina_owner = "package:fib:module:fib:sonatina";
+        // A machine-IR-backed range with no post-opt provenance is
+        // Unmapped { MissingProvenance } in 0.3.0. The consumer must produce no
+        // Sonatina join for it. This is the exact contract the glue-richness
+        // follow-up will consciously change, so it is pinned here.
+        let observability = SectionObservability {
+            schema_version: OBSERVABILITY_SCHEMA_VERSION,
+            section: "runtime".into(),
+            section_bytes: 1,
+            code_bytes: 1,
+            data_bytes: 0,
+            embed_bytes: 0,
+            mapped_code_bytes: 0,
+            unmapped_code_bytes: 1,
+            unmapped_reason_coverage: Default::default(),
+            pc_map: vec![PcMapEntry {
+                pc_start: 0,
+                pc_end: 1,
+                unit: sonatina_codegen::object::PcMapUnit::Function(func),
+                func_name: "runtime".to_string(),
+                block: BlockId(0),
+                vcode_inst: VCodeInst(0),
+                attribution: sonatina_codegen::object::PcAttribution::Unmapped {
+                    machine_inst: Some(sonatina_codegen::object::MachineInstId(InstId(37))),
+                    reason: sonatina_codegen::object::UnmappedReason::MissingProvenance,
+                },
+            }],
+        };
+
+        let facts = emit_bytecode_instruction_facts_with_observability(
+            "contract:Fib",
+            "runtime",
+            &[0x5f],
+            Some(sonatina_owner),
+            Some(&observability),
+            None,
+        );
+
+        assert!(!facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::OriginNode(node) if node.key.kind() == EVM_VCODE_INST_KIND
+        )));
+        assert!(!facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::OriginEdge(edge) if edge.to.kind() == SONATINA_EVM_PREPARED_INST_KIND
+        )));
+        assert!(!facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::CompilerEvent(event)
+                if event.kind == CompilerEventKind::PreparedLineage
+        )));
+    }
+
+    #[test]
+    fn post_opt_provenance_with_foreign_kind_degrades_to_contextual() {
         use sonatina_codegen::{
             machinst::vcode::VCodeInst,
             object::{OBSERVABILITY_SCHEMA_VERSION, PcMapEntry, SectionObservability},
