@@ -9,7 +9,7 @@ use mir::runtime::ir::RuntimePackagePlan;
 use mir::{RuntimePackage, build_runtime_package, build_test_runtime_package};
 use rustc_hash::FxHashSet;
 use sonatina_codegen::{
-    EvmCompile, OptInstId, OptLevel as SonatinaOptLevel,
+    EvmCompile, OptLevel as SonatinaOptLevel,
     object::{
         OBSERVABILITY_SCHEMA_VERSION, ObjectArtifact, SectionArtifact, SectionObservability,
         SymbolId,
@@ -232,29 +232,12 @@ fn compile_runtime_objects_with_postopt_trace(
 }
 
 fn stamp_postopt_instruction_provenance(owner_key: &str, compile: &mut EvmCompile) {
-    // Collect (func, inst) up front so the optimized-module borrow is released
-    // before we stamp through the sanctioned door.
-    let targets = {
-        let module = compile.optimize();
-        let mut targets = Vec::new();
-        for func_ref in module.funcs() {
-            let insts = module.func_store.view(func_ref, |function| {
-                function.dfg.inst_ids().collect::<Vec<_>>()
-            });
-            for inst in insts {
-                targets.push((func_ref, inst));
-            }
-        }
-        targets
-    };
-    for (func_ref, inst) in targets {
-        let key = crate::trace::sonatina_postopt_inst_key(owner_key, func_ref, inst);
-        let encoded =
-            serde_json::to_string(&key).expect("OriginExportKey serialization cannot fail");
-        compile
-            .stamp_post_opt_provenance(func_ref, OptInstId(inst), encoded)
-            .expect("stamping a valid optimized instruction cannot fail");
-    }
+    // One pass over every function through the sanctioned bulk door; the door
+    // only visits live optimized instructions, so stamping cannot fail here.
+    compile.stamp_all_post_opt_provenance(|func_ref, inst| {
+        let key = crate::trace::sonatina_postopt_inst_key(owner_key, func_ref, inst.raw());
+        Some(serde_json::to_string(&key).expect("OriginExportKey serialization cannot fail"))
+    });
 }
 
 fn merged_section_observability<'db>(
