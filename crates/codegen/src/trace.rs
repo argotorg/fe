@@ -210,6 +210,18 @@ fn verify_received_observability(
             obs.unmapped_code_bytes
         )));
     }
+    // Layout identity: the section is code, then data, then embeds (link.rs), so
+    // the three regions must exactly tile the section.
+    let layout_total = obs
+        .code_bytes
+        .saturating_add(obs.data_bytes)
+        .saturating_add(obs.embed_bytes);
+    if layout_total != obs.section_bytes {
+        return Err(crate::LowerError::Internal(format!(
+            "section `{section}` observability: code {} + data {} + embed {} != section {}",
+            obs.code_bytes, obs.data_bytes, obs.embed_bytes, obs.section_bytes
+        )));
+    }
     // Bounds and overlap. The sort key is the full (pc_start, pc_end) tuple so a
     // zero-length entry sharing a real entry's start does not read as an overlap.
     let mut ordered: Vec<&PcMapEntry> = obs.pc_map.iter().collect();
@@ -244,6 +256,15 @@ fn verify_received_observability(
                     "section"
                 },
             )));
+        }
+        if !in_code_region {
+            let embed_start = obs.code_bytes.saturating_add(obs.data_bytes);
+            if entry.pc_start < embed_start {
+                return Err(crate::LowerError::Internal(format!(
+                    "section `{section}` observability: embed-region range [{}, {}) starts before the embed region at {embed_start}",
+                    entry.pc_start, entry.pc_end
+                )));
+            }
         }
         if entry.pc_start < prev_end {
             return Err(crate::LowerError::Internal(format!(
@@ -429,16 +450,16 @@ pub fn emit_bytecode_instruction_facts(
 /// TRACE_SCHEMA_VERSION bump, deferred to the CoverageFact work. Until then they
 /// are assertable in tests (via the `_counted` emitter) and logged in production.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct ResolveSkips {
+struct ResolveSkips {
     /// post_opt_provenance was present but not decodable as an OriginExportKey.
-    pub provenance_undecodable: u32,
+    provenance_undecodable: u32,
     /// A decoded postopt endpoint was not among the known trace-view nodes
     /// (counted only when a known-node set was supplied).
-    pub postopt_endpoint_unknown: u32,
+    postopt_endpoint_unknown: u32,
 }
 
 impl ResolveSkips {
-    pub fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> bool {
         *self == Self::default()
     }
 

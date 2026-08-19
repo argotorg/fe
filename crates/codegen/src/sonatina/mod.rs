@@ -1128,6 +1128,16 @@ mod tests {
         assert_eq!(observability.embed_bytes as usize, runtime.len());
         assert_eq!(observability.mapped_code_bytes, 0);
         assert_eq!(observability.unmapped_code_bytes as usize, code_bytes);
+        // The deploy-wrapper bytes must bucket as Synthetic (the F2 choice), so a
+        // regression that mis-buckets them fails here, not only on byte totals.
+        assert_eq!(
+            observability.unmapped_reason_coverage.synthetic as usize,
+            code_bytes
+        );
+        assert_eq!(
+            observability.unmapped_reason_coverage.total_bytes() as usize,
+            code_bytes
+        );
         assert!(observability.pc_map.is_empty());
     }
 
