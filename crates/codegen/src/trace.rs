@@ -488,12 +488,14 @@ fn emit_evm_bytecode_instruction_facts_with_observability(
         // contract in the same module, handing this pc an exact chain into the
         // wrong contract's source.
         if let Some(entry) =
-            pc_map_entry_for_pc(&pc_map, pc as u32).filter(|entry| entry.unmapped_reason.is_none())
+            pc_map_entry_for_pc(&pc_map, pc as u32)
+                .filter(|entry| entry.attribution.unmapped_reason().is_none())
         {
             let mut prepared_inst = None;
-            if let Some(sonatina_owner_key) = sonatina_owner_key {
-                let vcode_key =
-                    evm_vcode_inst_key(sonatina_owner_key, entry.func, entry.vcode_inst);
+            if let (Some(sonatina_owner_key), Some(func)) =
+                (sonatina_owner_key, entry.unit.function())
+            {
+                let vcode_key = evm_vcode_inst_key(sonatina_owner_key, func, entry.vcode_inst);
                 if emitted_prepared_nodes.insert(vcode_key.clone()) {
                     facts.push(origin_node(vcode_key.clone(), EVM_VCODE_INST_KIND));
                 }
@@ -503,11 +505,11 @@ fn emit_evm_bytecode_instruction_facts_with_observability(
                     OriginEdgeLabel::EmittedFrom,
                     Some(CompilerPhase::BytecodeEmission),
                 )));
-                if let Some(ir_inst) = entry.ir_inst {
+                if let Some(ir_inst) = entry.attribution.ir_inst() {
                     let key = sonatina_trace_inst_key(
                         SONATINA_EVM_PREPARED_INST_KIND,
                         sonatina_owner_key,
-                        entry.func,
+                        func,
                         ir_inst,
                     );
                     if emitted_prepared_nodes.insert(key.clone()) {
@@ -525,8 +527,8 @@ fn emit_evm_bytecode_instruction_facts_with_observability(
                 }
             }
             if let Some(frontend_origin) = entry
-                .frontend_provenance
-                .as_deref()
+                .attribution
+                .post_opt_provenance()
                 .and_then(|raw| serde_json::from_str::<OriginExportKey>(raw).ok())
             {
                 if frontend_origin.kind() == SONATINA_POSTOPT_INST_KIND {
@@ -1583,16 +1585,15 @@ mod tests {
             pc_map: vec![PcMapEntry {
                 pc_start: 0,
                 pc_end: 1,
-                func,
+                unit: sonatina_codegen::object::PcMapUnit::Function(func),
                 func_name: "runtime".to_string(),
                 block: BlockId(0),
                 vcode_inst: VCodeInst(0),
-                ir_inst: Some(postopt_inst_id),
-                frontend_provenance: Some(
-                    serde_json::to_string(&postopt)
+                attribution: sonatina_codegen::object::PcAttribution::Mapped {
+                    ir_inst: postopt_inst_id,
+                    post_opt_provenance: serde_json::to_string(&postopt)
                         .expect("OriginExportKey serialization cannot fail"),
-                ),
-                unmapped_reason: None,
+                },
             }],
         };
 
@@ -1675,13 +1676,14 @@ mod tests {
         let entry = |pc_start: u32, pc_end: u32| PcMapEntry {
             pc_start,
             pc_end,
-            func,
+            unit: sonatina_codegen::object::PcMapUnit::Function(func),
             func_name: "runtime".to_string(),
             block: BlockId(0),
             vcode_inst: VCodeInst(0),
-            ir_inst: None,
-            frontend_provenance: None,
-            unmapped_reason: None,
+            attribution: sonatina_codegen::object::PcAttribution::Unmapped {
+                ir_inst: None,
+                reason: sonatina_codegen::object::UnmappedReason::NoIrInst,
+            },
         };
 
         // A zero-length entry sharing a real entry's start must not shadow it,
@@ -1755,13 +1757,19 @@ mod tests {
             pc_map: vec![PcMapEntry {
                 pc_start: 0,
                 pc_end: 2,
-                func,
+                unit: sonatina_codegen::object::PcMapUnit::Function(func),
                 func_name: "runtime".to_string(),
                 block: BlockId(0),
                 vcode_inst: VCodeInst(0),
-                ir_inst: Some(InstId(37)),
-                frontend_provenance: None,
-                unmapped_reason: None,
+                attribution: sonatina_codegen::object::PcAttribution::Mapped {
+                    ir_inst: InstId(37),
+                    post_opt_provenance: serde_json::to_string(&sonatina_postopt_inst_key(
+                        sonatina_owner,
+                        func,
+                        InstId(37),
+                    ))
+                    .expect("OriginExportKey serialization cannot fail"),
+                },
             }],
         };
 
@@ -1837,16 +1845,15 @@ mod tests {
             pc_map: vec![PcMapEntry {
                 pc_start: 0,
                 pc_end: 1,
-                func,
+                unit: sonatina_codegen::object::PcMapUnit::Function(func),
                 func_name: "runtime".to_string(),
                 block: BlockId(0),
                 vcode_inst: VCodeInst(0),
-                ir_inst: Some(InstId(37)),
-                frontend_provenance: Some(
-                    serde_json::to_string(&postopt)
+                attribution: sonatina_codegen::object::PcAttribution::Mapped {
+                    ir_inst: InstId(37),
+                    post_opt_provenance: serde_json::to_string(&postopt)
                         .expect("OriginExportKey serialization cannot fail"),
-                ),
-                unmapped_reason: None,
+                },
             }],
         };
 
@@ -1944,16 +1951,15 @@ mod tests {
             pc_map: vec![PcMapEntry {
                 pc_start: 0,
                 pc_end: 1,
-                func,
                 func_name: "runtime".to_string(),
                 block: BlockId(0),
                 vcode_inst: VCodeInst(0),
-                ir_inst: Some(InstId(37)),
-                frontend_provenance: Some(
-                    serde_json::to_string(&alias_postopt)
+                unit: sonatina_codegen::object::PcMapUnit::Function(func),
+                attribution: sonatina_codegen::object::PcAttribution::Mapped {
+                    ir_inst: InstId(37),
+                    post_opt_provenance: serde_json::to_string(&alias_postopt)
                         .expect("OriginExportKey serialization cannot fail"),
-                ),
-                unmapped_reason: None,
+                },
             }],
         };
 
@@ -2021,16 +2027,15 @@ mod tests {
             pc_map: vec![PcMapEntry {
                 pc_start: 0,
                 pc_end: 1,
-                func,
                 func_name: "runtime".to_string(),
                 block: BlockId(0),
                 vcode_inst: VCodeInst(0),
-                ir_inst: Some(InstId(37)),
-                frontend_provenance: Some(
-                    serde_json::to_string(&unknown_postopt)
+                unit: sonatina_codegen::object::PcMapUnit::Function(func),
+                attribution: sonatina_codegen::object::PcAttribution::Mapped {
+                    ir_inst: InstId(37),
+                    post_opt_provenance: serde_json::to_string(&unknown_postopt)
                         .expect("OriginExportKey serialization cannot fail"),
-                ),
-                unmapped_reason: None,
+                },
             }],
         };
 
@@ -2114,16 +2119,15 @@ mod tests {
             pc_map: vec![PcMapEntry {
                 pc_start: 0,
                 pc_end: 1,
-                func,
                 func_name: "runtime".to_string(),
                 block: BlockId(0),
                 vcode_inst: VCodeInst(0),
-                ir_inst: Some(InstId(37)),
-                frontend_provenance: Some(
-                    serde_json::to_string(&frontend_origin)
+                unit: sonatina_codegen::object::PcMapUnit::Function(func),
+                attribution: sonatina_codegen::object::PcAttribution::Mapped {
+                    ir_inst: InstId(37),
+                    post_opt_provenance: serde_json::to_string(&frontend_origin)
                         .expect("OriginExportKey serialization cannot fail"),
-                ),
-                unmapped_reason: None,
+                },
             }],
         };
 

@@ -212,41 +212,48 @@ fn compile_runtime_objects_with_postopt_trace(
     LowerError,
 > {
     let mut compile = evm_compile(module, opt_level, emit_observability);
-    let postopt_trace_facts = {
-        let optimized = compile.optimize_mut();
-        ensure_module_sonatina_ir_valid(optimized)?;
-        if emit_observability && let Some(owner) = postopt_trace_owner {
-            stamp_postopt_instruction_provenance(owner, optimized);
-        }
-        postopt_trace_owner
-            .map(|owner| {
-                crate::trace::emit_sonatina_trace_view_facts(
-                    owner,
-                    optimized,
-                    trace_facts::CompilerPhase::SonatinaPostOpt,
-                )
-            })
-            .unwrap_or_default()
-    };
+    ensure_module_sonatina_ir_valid(compile.optimize())?;
+    if emit_observability && let Some(owner) = postopt_trace_owner {
+        stamp_postopt_instruction_provenance(owner, &mut compile);
+    }
+    let postopt_trace_facts = postopt_trace_owner
+        .map(|owner| {
+            crate::trace::emit_sonatina_trace_view_facts(
+                owner,
+                compile.optimize(),
+                trace_facts::CompilerPhase::SonatinaPostOpt,
+            )
+        })
+        .unwrap_or_default();
     let artifacts = compile
         .compile()
         .map_err(|errors| LowerError::Internal(format_object_compile_errors(&errors)))?;
     Ok((artifacts, postopt_trace_facts))
 }
 
-fn stamp_postopt_instruction_provenance(owner_key: &str, module: &mut Module) {
-    for func_ref in module.funcs() {
-        let insts = module.func_store.view(func_ref, |function| {
-            function.dfg.inst_ids().collect::<Vec<_>>()
-        });
-        module.func_store.modify(func_ref, |function| {
-            for inst in &insts {
-                let key = crate::trace::sonatina_postopt_inst_key(owner_key, func_ref, *inst);
-                let encoded =
-                    serde_json::to_string(&key).expect("OriginExportKey serialization cannot fail");
-                function.set_inst_provenance(*inst, encoded);
+fn stamp_postopt_instruction_provenance(owner_key: &str, compile: &mut EvmCompile) {
+    // Collect (func, inst) up front so the optimized-module borrow is released
+    // before we stamp through the sanctioned door.
+    let targets = {
+        let module = compile.optimize();
+        let mut targets = Vec::new();
+        for func_ref in module.funcs() {
+            let insts = module.func_store.view(func_ref, |function| {
+                function.dfg.inst_ids().collect::<Vec<_>>()
+            });
+            for inst in insts {
+                targets.push((func_ref, inst));
             }
-        });
+        }
+        targets
+    };
+    for (func_ref, inst) in targets {
+        let key = crate::trace::sonatina_postopt_inst_key(owner_key, func_ref, inst);
+        let encoded =
+            serde_json::to_string(&key).expect("OriginExportKey serialization cannot fail");
+        compile
+            .stamp_post_opt_provenance(func_ref, inst, encoded)
+            .expect("stamping a valid optimized instruction cannot fail");
     }
 }
 
