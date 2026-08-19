@@ -398,6 +398,48 @@ pub fn emit_bytecode_instruction_facts(
     )
 }
 
+/// Attribution inputs the emitter received but could not use. Process-local by
+/// design: TraceMetadata is deny_unknown_fields with an exact-match schema
+/// version (trace-facts jsonl.rs), so carrying these counts in the bundle is a
+/// TRACE_SCHEMA_VERSION bump, deferred to the CoverageFact work. Until then they
+/// are assertable in tests (via the `_counted` emitter) and logged in production.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ResolveSkips {
+    /// post_opt_provenance was present but not decodable as an OriginExportKey.
+    pub provenance_undecodable: u32,
+    /// A decoded postopt endpoint was not among the known trace-view nodes
+    /// (counted only when a known-node set was supplied).
+    pub postopt_endpoint_unknown: u32,
+}
+
+impl ResolveSkips {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    fn warn_if_any(&self, owner_key: &str) {
+        if !self.is_empty() {
+            tracing::warn!(
+                owner = owner_key,
+                provenance_undecodable = self.provenance_undecodable,
+                postopt_endpoint_unknown = self.postopt_endpoint_unknown,
+                "trace emission skipped unresolvable attribution inputs"
+            );
+        }
+    }
+
+    /// A decode failure means producer and consumer disagree about the
+    /// provenance encoding: schema drift. Real-compile fixtures run through the
+    /// production emitters and catch it here in debug builds. An unknown
+    /// endpoint is a legitimate runtime condition, not drift, so it is excluded.
+    fn debug_assert_no_decode_failures(&self, owner_key: &str) {
+        debug_assert_eq!(
+            self.provenance_undecodable, 0,
+            "undecodable post-opt provenance for {owner_key}: {self:?}"
+        );
+    }
+}
+
 pub fn emit_observed_bytecode_trace_facts(
     input_owner_key: &str,
     module_key: &str,
@@ -416,6 +458,7 @@ pub fn emit_observed_bytecode_trace_facts(
         })
         .collect::<BTreeSet<_>>();
     let mut facts = Vec::new();
+    let mut skips = ResolveSkips::default();
     for (contract_name, artifact) in bytecode {
         let runtime_owner = bytecode_runtime_owner_key(input_owner_key, module_key, contract_name);
         facts.extend(emit_evm_bytecode_instruction_facts_with_observability(
@@ -426,6 +469,7 @@ pub fn emit_observed_bytecode_trace_facts(
             Some(sonatina_owner_key),
             artifact.runtime_observability.as_ref(),
             Some(&postopt_sonatina_nodes),
+            &mut skips,
         ));
         let creation_owner =
             bytecode_creation_owner_key(input_owner_key, module_key, contract_name);
@@ -437,8 +481,11 @@ pub fn emit_observed_bytecode_trace_facts(
             Some(sonatina_owner_key),
             artifact.deploy_observability.as_ref(),
             Some(&postopt_sonatina_nodes),
+            &mut skips,
         ));
     }
+    skips.debug_assert_no_decode_failures(input_owner_key);
+    skips.warn_if_any(input_owner_key);
     facts
 }
 
@@ -450,7 +497,29 @@ pub fn emit_bytecode_instruction_facts_with_observability(
     observability: Option<&SectionObservability>,
     known_sonatina_endpoint_nodes: Option<&BTreeSet<OriginExportKey>>,
 ) -> Vec<TraceFact> {
-    emit_evm_bytecode_instruction_facts_with_observability(
+    let (facts, skips) = emit_bytecode_instruction_facts_with_observability_counted(
+        owner_key,
+        function_local_key,
+        bytecode,
+        sonatina_owner_key,
+        observability,
+        known_sonatina_endpoint_nodes,
+    );
+    skips.debug_assert_no_decode_failures(owner_key);
+    skips.warn_if_any(owner_key);
+    facts
+}
+
+fn emit_bytecode_instruction_facts_with_observability_counted(
+    owner_key: &str,
+    function_local_key: &str,
+    bytecode: &[u8],
+    sonatina_owner_key: Option<&str>,
+    observability: Option<&SectionObservability>,
+    known_sonatina_endpoint_nodes: Option<&BTreeSet<OriginExportKey>>,
+) -> (Vec<TraceFact>, ResolveSkips) {
+    let mut skips = ResolveSkips::default();
+    let facts = emit_evm_bytecode_instruction_facts_with_observability(
         owner_key,
         function_local_key,
         EvmBytecodeSection::Runtime,
@@ -458,7 +527,9 @@ pub fn emit_bytecode_instruction_facts_with_observability(
         sonatina_owner_key,
         observability,
         known_sonatina_endpoint_nodes,
-    )
+        &mut skips,
+    );
+    (facts, skips)
 }
 
 fn emit_evm_bytecode_instruction_facts_with_observability(
@@ -469,6 +540,7 @@ fn emit_evm_bytecode_instruction_facts_with_observability(
     sonatina_owner_key: Option<&str>,
     observability: Option<&SectionObservability>,
     known_sonatina_endpoint_nodes: Option<&BTreeSet<OriginExportKey>>,
+    skips: &mut ResolveSkips,
 ) -> Vec<TraceFact> {
     let function = bytecode_function_key(owner_key, function_local_key);
     let code_object = bytecode_code_object_key_for_section(owner_key, section);
@@ -577,42 +649,45 @@ fn emit_evm_bytecode_instruction_facts_with_observability(
                     prepared_inst = Some(key);
                 }
             }
-            if let Some(frontend_origin) = entry
-                .attribution
-                .post_opt_provenance()
-                .and_then(|raw| serde_json::from_str::<OriginExportKey>(raw).ok())
-            {
-                if frontend_origin.kind() == SONATINA_POSTOPT_INST_KIND {
-                    if let Some(prepared_inst) = prepared_inst {
-                        let endpoint_is_known = known_sonatina_endpoint_nodes
-                            .is_some_and(|known| known.contains(&frontend_origin));
-                        if endpoint_is_known {
-                            emit_prepared_lineage_event(
-                                &mut facts,
-                                owner_key,
-                                &prepared_inst,
-                                &frontend_origin,
-                                &mut emitted_prepared_lineage_events,
-                            );
-                            if emitted_backend_edges
-                                .insert((prepared_inst.clone(), frontend_origin.clone()))
-                            {
-                                facts.push(TraceFact::OriginEdge(OriginEdgeFact::new(
-                                    prepared_inst,
-                                    frontend_origin,
-                                    OriginEdgeLabel::LoweredFrom,
-                                    Some(CompilerPhase::Backend),
-                                )));
+            if let Some(raw) = entry.attribution.post_opt_provenance() {
+                match serde_json::from_str::<OriginExportKey>(raw) {
+                    Err(_) => skips.provenance_undecodable += 1,
+                    Ok(frontend_origin) => {
+                        if frontend_origin.kind() == SONATINA_POSTOPT_INST_KIND {
+                            if let Some(prepared_inst) = prepared_inst {
+                                let endpoint_is_known = known_sonatina_endpoint_nodes
+                                    .is_some_and(|known| known.contains(&frontend_origin));
+                                if endpoint_is_known {
+                                    emit_prepared_lineage_event(
+                                        &mut facts,
+                                        owner_key,
+                                        &prepared_inst,
+                                        &frontend_origin,
+                                        &mut emitted_prepared_lineage_events,
+                                    );
+                                    if emitted_backend_edges
+                                        .insert((prepared_inst.clone(), frontend_origin.clone()))
+                                    {
+                                        facts.push(TraceFact::OriginEdge(OriginEdgeFact::new(
+                                            prepared_inst,
+                                            frontend_origin,
+                                            OriginEdgeLabel::LoweredFrom,
+                                            Some(CompilerPhase::Backend),
+                                        )));
+                                    }
+                                } else if known_sonatina_endpoint_nodes.is_some() {
+                                    skips.postopt_endpoint_unknown += 1;
+                                }
                             }
+                        } else {
+                            facts.push(TraceFact::OriginEdge(OriginEdgeFact::new(
+                                instruction.clone(),
+                                frontend_origin,
+                                OriginEdgeLabel::BackendPrepared,
+                                Some(CompilerPhase::BytecodeEmission),
+                            )));
                         }
                     }
-                } else {
-                    facts.push(TraceFact::OriginEdge(OriginEdgeFact::new(
-                        instruction.clone(),
-                        frontend_origin,
-                        OriginEdgeLabel::BackendPrepared,
-                        Some(CompilerPhase::BytecodeEmission),
-                    )));
                 }
             }
         }
@@ -773,15 +848,24 @@ pub fn emit_sonatina_trace_view_facts(
                 block_instruction_keys[block_index].push(inst_key.clone());
                 instruction_index += 1;
 
-                if let Some(frontend_origin) =
-                    sonatina_frontend_origin_for_inst(module, function_ref, inst)
-                {
-                    facts.push(TraceFact::OriginEdge(OriginEdgeFact::new(
-                        inst_key,
-                        frontend_origin,
-                        OriginEdgeLabel::LoweredFrom,
-                        Some(phase),
-                    )));
+                match sonatina_frontend_origin_for_inst(module, function_ref, inst) {
+                    FrontendOriginLookup::Key(frontend_origin) => {
+                        facts.push(TraceFact::OriginEdge(OriginEdgeFact::new(
+                            inst_key,
+                            frontend_origin,
+                            OriginEdgeLabel::LoweredFrom,
+                            Some(phase),
+                        )));
+                    }
+                    FrontendOriginLookup::Undecodable(raw) => {
+                        tracing::warn!(
+                            owner = owner_key,
+                            raw = raw.as_str(),
+                            "undecodable frontend origin in trace view"
+                        );
+                        debug_assert!(false, "undecodable frontend origin for {owner_key}: {raw}");
+                    }
+                    FrontendOriginLookup::Absent => {}
                 }
             }
         }
@@ -1052,14 +1136,32 @@ fn sonatina_trace_edge_kind(kind: SonatinaCfgEdgeKind, ordinal: usize) -> CfgEdg
     }
 }
 
+/// Outcome of looking up an instruction's frontend origin. Distinguishing
+/// Undecodable from Absent lets the trace-view emitter treat an origin that is
+/// present but unparseable (schema drift) as loud, not swallowed.
+enum FrontendOriginLookup {
+    Absent,
+    Undecodable(String),
+    Key(OriginExportKey),
+}
+
 fn sonatina_frontend_origin_for_inst(
     module: &sonatina_ir::Module,
     function_ref: sonatina_ir::module::FuncRef,
     inst: sonatina_ir::InstId,
-) -> Option<OriginExportKey> {
-    module.func_store.try_view(function_ref, |function| {
-        serde_json::from_str(function.inst_frontend_origin(inst)?).ok()
-    })?
+) -> FrontendOriginLookup {
+    module
+        .func_store
+        .try_view(function_ref, |function| {
+            match function.inst_frontend_origin(inst) {
+                None => FrontendOriginLookup::Absent,
+                Some(raw) => match serde_json::from_str(raw) {
+                    Ok(key) => FrontendOriginLookup::Key(key),
+                    Err(_) => FrontendOriginLookup::Undecodable(raw.to_owned()),
+                },
+            }
+        })
+        .unwrap_or(FrontendOriginLookup::Absent)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2204,6 +2306,133 @@ mod tests {
             TraceFact::CompilerEvent(event)
                 if event.kind == CompilerEventKind::PreparedLineage
         )));
+    }
+
+    #[test]
+    fn undecodable_post_opt_provenance_is_counted_not_emitted() {
+        use sonatina_codegen::{
+            machinst::vcode::VCodeInst,
+            object::{OBSERVABILITY_SCHEMA_VERSION, PcMapEntry, SectionObservability},
+        };
+        use sonatina_ir::{
+            BlockId, InstId, Linkage, Signature, builder::ModuleBuilder, isa::evm::Evm,
+            module::ModuleCtx,
+        };
+        use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
+
+        let evm = Evm::new(TargetTriple::new(
+            Architecture::Evm,
+            Vendor::Ethereum,
+            OperatingSystem::Evm(EvmVersion::London),
+        ));
+        let mb = ModuleBuilder::new(ModuleCtx::new(&evm));
+        let func = mb
+            .declare_function(Signature::new_unit("runtime", Linkage::Public, &[]))
+            .unwrap();
+
+        // Provenance present but not decodable as an OriginExportKey: counted as
+        // schema drift, never emitted as a contextual or lineage fact.
+        let observability = SectionObservability {
+            schema_version: OBSERVABILITY_SCHEMA_VERSION,
+            section: "runtime".into(),
+            section_bytes: 1,
+            code_bytes: 1,
+            data_bytes: 0,
+            embed_bytes: 0,
+            mapped_code_bytes: 1,
+            unmapped_code_bytes: 0,
+            unmapped_reason_coverage: Default::default(),
+            pc_map: vec![PcMapEntry {
+                pc_start: 0,
+                pc_end: 1,
+                unit: sonatina_codegen::object::PcMapUnit::Function(func),
+                func_name: "runtime".to_string(),
+                block: BlockId(0),
+                vcode_inst: VCodeInst(0),
+                attribution: sonatina_codegen::object::PcAttribution::Mapped {
+                    machine_inst: sonatina_codegen::object::MachineInstId(InstId(37)),
+                    post_opt_provenance: "not json".to_string(),
+                },
+            }],
+        };
+
+        let (facts, skips) = super::emit_bytecode_instruction_facts_with_observability_counted(
+            "contract:Fib",
+            "runtime",
+            &[0x5f],
+            Some("package:fib:module:fib:sonatina"),
+            Some(&observability),
+            None,
+        );
+        assert_eq!(skips.provenance_undecodable, 1);
+        assert!(!facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::OriginEdge(edge)
+                if edge.label == trace_facts::OriginEdgeLabel::BackendPrepared
+        )));
+    }
+
+    #[test]
+    fn unknown_postopt_endpoint_is_counted() {
+        use sonatina_codegen::{
+            machinst::vcode::VCodeInst,
+            object::{OBSERVABILITY_SCHEMA_VERSION, PcMapEntry, SectionObservability},
+        };
+        use sonatina_ir::{
+            BlockId, InstId, Linkage, Signature, builder::ModuleBuilder, isa::evm::Evm,
+            module::ModuleCtx,
+        };
+        use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
+
+        let evm = Evm::new(TargetTriple::new(
+            Architecture::Evm,
+            Vendor::Ethereum,
+            OperatingSystem::Evm(EvmVersion::London),
+        ));
+        let mb = ModuleBuilder::new(ModuleCtx::new(&evm));
+        let func = mb
+            .declare_function(Signature::new_unit("runtime", Linkage::Public, &[]))
+            .unwrap();
+        let sonatina_owner = "package:fib:module:fib:sonatina";
+        let postopt = sonatina_postopt_inst_key(sonatina_owner, func, InstId(37));
+
+        // A well-formed postopt endpoint absent from the known-node set is a
+        // counted skip (counted only because a set was supplied).
+        let observability = SectionObservability {
+            schema_version: OBSERVABILITY_SCHEMA_VERSION,
+            section: "runtime".into(),
+            section_bytes: 1,
+            code_bytes: 1,
+            data_bytes: 0,
+            embed_bytes: 0,
+            mapped_code_bytes: 1,
+            unmapped_code_bytes: 0,
+            unmapped_reason_coverage: Default::default(),
+            pc_map: vec![PcMapEntry {
+                pc_start: 0,
+                pc_end: 1,
+                unit: sonatina_codegen::object::PcMapUnit::Function(func),
+                func_name: "runtime".to_string(),
+                block: BlockId(0),
+                vcode_inst: VCodeInst(0),
+                attribution: sonatina_codegen::object::PcAttribution::Mapped {
+                    machine_inst: sonatina_codegen::object::MachineInstId(InstId(37)),
+                    post_opt_provenance: serde_json::to_string(&postopt)
+                        .expect("OriginExportKey serialization cannot fail"),
+                },
+            }],
+        };
+
+        let known = std::collections::BTreeSet::new();
+        let (_facts, skips) = super::emit_bytecode_instruction_facts_with_observability_counted(
+            "contract:Fib",
+            "runtime",
+            &[0x5f],
+            Some(sonatina_owner),
+            Some(&observability),
+            Some(&known),
+        );
+        assert_eq!(skips.postopt_endpoint_unknown, 1);
     }
 
     #[test]
