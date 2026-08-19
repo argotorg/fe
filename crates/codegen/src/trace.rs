@@ -210,14 +210,39 @@ fn verify_received_observability(
             obs.unmapped_code_bytes
         )));
     }
+    // Bounds and overlap. The sort key is the full (pc_start, pc_end) tuple so a
+    // zero-length entry sharing a real entry's start does not read as an overlap.
     let mut ordered: Vec<&PcMapEntry> = obs.pc_map.iter().collect();
-    ordered.sort_by_key(|entry| entry.pc_start);
+    ordered.sort_by_key(|entry| (entry.pc_start, entry.pc_end));
     let mut prev_end = 0u32;
     for entry in ordered {
-        if entry.pc_end < entry.pc_start || entry.pc_end > obs.code_bytes {
+        if entry.pc_end < entry.pc_start {
             return Err(crate::LowerError::Internal(format!(
-                "section `{section}` observability: range [{}, {}) out of bounds for code {}",
-                entry.pc_start, entry.pc_end, obs.code_bytes
+                "section `{section}` observability: reversed range [{}, {})",
+                entry.pc_start, entry.pc_end
+            )));
+        }
+        // Code-region entries obey Sonatina's per-section contract (bounded by
+        // code_bytes, link.rs). Entries wholly past the code region are Fe's own
+        // embed merge (merge_embeds), which offsets embedded objects' pc maps
+        // into [code_bytes + data_bytes, section_bytes); they may not straddle
+        // the code boundary and may not leave the section.
+        let in_code_region = entry.pc_start < obs.code_bytes;
+        let bound = if in_code_region {
+            obs.code_bytes
+        } else {
+            obs.section_bytes
+        };
+        if entry.pc_end > bound {
+            return Err(crate::LowerError::Internal(format!(
+                "section `{section}` observability: range [{}, {}) exceeds its {} bound {bound}",
+                entry.pc_start,
+                entry.pc_end,
+                if in_code_region {
+                    "code-region"
+                } else {
+                    "section"
+                },
             )));
         }
         if entry.pc_start < prev_end {
@@ -1835,7 +1860,7 @@ mod tests {
             vcode_inst: VCodeInst(0),
             attribution: sonatina_codegen::object::PcAttribution::Unmapped {
                 machine_inst: None,
-                reason: sonatina_codegen::object::UnmappedReason::NoIrInst,
+                reason: sonatina_codegen::object::UnmappedReason::NoMachineInst,
             },
         };
 
@@ -2424,7 +2449,7 @@ mod tests {
         };
 
         let known = std::collections::BTreeSet::new();
-        let (_facts, skips) = super::emit_bytecode_instruction_facts_with_observability_counted(
+        let (facts, skips) = super::emit_bytecode_instruction_facts_with_observability_counted(
             "contract:Fib",
             "runtime",
             &[0x5f],
@@ -2433,6 +2458,79 @@ mod tests {
             Some(&known),
         );
         assert_eq!(skips.postopt_endpoint_unknown, 1);
+        // An unknown endpoint mints no lineage event and no edge to the endpoint.
+        assert!(!facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::CompilerEvent(event)
+                if event.kind == CompilerEventKind::PreparedLineage
+        )));
+        assert!(!facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::OriginEdge(edge) if edge.to == postopt
+        )));
+    }
+
+    #[test]
+    fn received_observability_bounds_split_code_and_embed_regions() {
+        use sonatina_codegen::machinst::vcode::VCodeInst;
+        use sonatina_codegen::object::{
+            MachineInstId, OBSERVABILITY_SCHEMA_VERSION, PcAttribution, PcMapEntry, PcMapUnit,
+            SectionObservability, UnmappedReason, UnmappedReasonCoverage,
+        };
+        use sonatina_ir::{
+            BlockId, InstId, Linkage, Signature, builder::ModuleBuilder, isa::evm::Evm,
+            module::ModuleCtx,
+        };
+        use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
+
+        let evm = Evm::new(TargetTriple::new(
+            Architecture::Evm,
+            Vendor::Ethereum,
+            OperatingSystem::Evm(EvmVersion::London),
+        ));
+        let mb = ModuleBuilder::new(ModuleCtx::new(&evm));
+        let func = mb
+            .declare_function(Signature::new_unit("runtime", Linkage::Public, &[]))
+            .unwrap();
+
+        // code_bytes=4, section_bytes=8: bytes [4, 8) are the embed region that
+        // Fe's merge_embeds splices in past the code. The scalars satisfy the
+        // conservation equation; only the per-entry bound is under test.
+        let make = |pc_start: u32, pc_end: u32| SectionObservability {
+            schema_version: OBSERVABILITY_SCHEMA_VERSION,
+            section: "runtime".into(),
+            section_bytes: 8,
+            code_bytes: 4,
+            data_bytes: 0,
+            embed_bytes: 4,
+            mapped_code_bytes: 0,
+            unmapped_code_bytes: 4,
+            unmapped_reason_coverage: {
+                let mut c = UnmappedReasonCoverage::default();
+                c.add_bytes(UnmappedReason::Unknown, 4);
+                c
+            },
+            pc_map: vec![PcMapEntry {
+                pc_start,
+                pc_end,
+                unit: PcMapUnit::Function(func),
+                func_name: "x".to_string(),
+                block: BlockId(0),
+                vcode_inst: VCodeInst(0),
+                attribution: PcAttribution::Unmapped {
+                    machine_inst: Some(MachineInstId(InstId(0))),
+                    reason: UnmappedReason::Unknown,
+                },
+            }],
+        };
+
+        // Embed-region entry wholly past code_bytes: accepted (bounded by section).
+        super::verify_received_observability("runtime", &make(4, 8))
+            .expect("embed-region entry within the section is valid");
+        // Straddles the code boundary: rejected.
+        assert!(super::verify_received_observability("runtime", &make(2, 6)).is_err());
+        // Past section_bytes: rejected.
+        assert!(super::verify_received_observability("runtime", &make(4, 9)).is_err());
     }
 
     #[test]
