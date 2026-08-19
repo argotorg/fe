@@ -487,9 +487,8 @@ fn emit_evm_bytecode_instruction_facts_with_observability(
         // numbered per section and can collide with real functions of another
         // contract in the same module, handing this pc an exact chain into the
         // wrong contract's source.
-        if let Some(entry) =
-            pc_map_entry_for_pc(&pc_map, pc as u32)
-                .filter(|entry| entry.attribution.unmapped_reason().is_none())
+        if let Some(entry) = pc_map_entry_for_pc(&pc_map, pc as u32)
+            .filter(|entry| entry.attribution.unmapped_reason().is_none())
         {
             let mut prepared_inst = None;
             if let (Some(sonatina_owner_key), Some(func)) =
@@ -505,12 +504,12 @@ fn emit_evm_bytecode_instruction_facts_with_observability(
                     OriginEdgeLabel::EmittedFrom,
                     Some(CompilerPhase::BytecodeEmission),
                 )));
-                if let Some(ir_inst) = entry.attribution.ir_inst() {
+                if let Some(machine_inst) = entry.attribution.machine_inst() {
                     let key = sonatina_trace_inst_key(
                         SONATINA_EVM_PREPARED_INST_KIND,
                         sonatina_owner_key,
                         func,
-                        ir_inst,
+                        machine_inst.raw(),
                     );
                     if emitted_prepared_nodes.insert(key.clone()) {
                         facts.push(origin_node(key.clone(), SONATINA_EVM_PREPARED_INST_KIND));
@@ -1590,7 +1589,7 @@ mod tests {
                 block: BlockId(0),
                 vcode_inst: VCodeInst(0),
                 attribution: sonatina_codegen::object::PcAttribution::Mapped {
-                    ir_inst: postopt_inst_id,
+                    machine_inst: sonatina_codegen::object::MachineInstId(postopt_inst_id),
                     post_opt_provenance: serde_json::to_string(&postopt)
                         .expect("OriginExportKey serialization cannot fail"),
                 },
@@ -1681,7 +1680,7 @@ mod tests {
             block: BlockId(0),
             vcode_inst: VCodeInst(0),
             attribution: sonatina_codegen::object::PcAttribution::Unmapped {
-                ir_inst: None,
+                machine_inst: None,
                 reason: sonatina_codegen::object::UnmappedReason::NoIrInst,
             },
         };
@@ -1762,7 +1761,7 @@ mod tests {
                 block: BlockId(0),
                 vcode_inst: VCodeInst(0),
                 attribution: sonatina_codegen::object::PcAttribution::Mapped {
-                    ir_inst: InstId(37),
+                    machine_inst: sonatina_codegen::object::MachineInstId(InstId(37)),
                     post_opt_provenance: serde_json::to_string(&sonatina_postopt_inst_key(
                         sonatina_owner,
                         func,
@@ -1850,7 +1849,7 @@ mod tests {
                 block: BlockId(0),
                 vcode_inst: VCodeInst(0),
                 attribution: sonatina_codegen::object::PcAttribution::Mapped {
-                    ir_inst: InstId(37),
+                    machine_inst: sonatina_codegen::object::MachineInstId(InstId(37)),
                     post_opt_provenance: serde_json::to_string(&postopt)
                         .expect("OriginExportKey serialization cannot fail"),
                 },
@@ -1956,7 +1955,7 @@ mod tests {
                 vcode_inst: VCodeInst(0),
                 unit: sonatina_codegen::object::PcMapUnit::Function(func),
                 attribution: sonatina_codegen::object::PcAttribution::Mapped {
-                    ir_inst: InstId(37),
+                    machine_inst: sonatina_codegen::object::MachineInstId(InstId(37)),
                     post_opt_provenance: serde_json::to_string(&alias_postopt)
                         .expect("OriginExportKey serialization cannot fail"),
                 },
@@ -2032,7 +2031,7 @@ mod tests {
                 vcode_inst: VCodeInst(0),
                 unit: sonatina_codegen::object::PcMapUnit::Function(func),
                 attribution: sonatina_codegen::object::PcAttribution::Mapped {
-                    ir_inst: InstId(37),
+                    machine_inst: sonatina_codegen::object::MachineInstId(InstId(37)),
                     post_opt_provenance: serde_json::to_string(&unknown_postopt)
                         .expect("OriginExportKey serialization cannot fail"),
                 },
@@ -2124,7 +2123,7 @@ mod tests {
                 vcode_inst: VCodeInst(0),
                 unit: sonatina_codegen::object::PcMapUnit::Function(func),
                 attribution: sonatina_codegen::object::PcAttribution::Mapped {
-                    ir_inst: InstId(37),
+                    machine_inst: sonatina_codegen::object::MachineInstId(InstId(37)),
                     post_opt_provenance: serde_json::to_string(&frontend_origin)
                         .expect("OriginExportKey serialization cannot fail"),
                 },

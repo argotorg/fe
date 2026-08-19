@@ -9,7 +9,7 @@ use mir::runtime::ir::RuntimePackagePlan;
 use mir::{RuntimePackage, build_runtime_package, build_test_runtime_package};
 use rustc_hash::FxHashSet;
 use sonatina_codegen::{
-    EvmCompile, OptLevel as SonatinaOptLevel,
+    EvmCompile, OptInstId, OptLevel as SonatinaOptLevel,
     object::{
         OBSERVABILITY_SCHEMA_VERSION, ObjectArtifact, SectionArtifact, SectionObservability,
         SymbolId,
@@ -252,7 +252,7 @@ fn stamp_postopt_instruction_provenance(owner_key: &str, compile: &mut EvmCompil
         let encoded =
             serde_json::to_string(&key).expect("OriginExportKey serialization cannot fail");
         compile
-            .stamp_post_opt_provenance(func_ref, inst, encoded)
+            .stamp_post_opt_provenance(func_ref, OptInstId(inst), encoded)
             .expect("stamping a valid optimized instruction cannot fail");
     }
 }
