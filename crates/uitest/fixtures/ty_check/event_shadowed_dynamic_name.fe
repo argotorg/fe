@@ -1,0 +1,38 @@
+use core::abi::{Abi, AbiEncoder, AbiSize, Encode, EventAbiEncode}
+use std::abi::SolCompat
+use std::evm::TopicValue
+
+struct Bytes {
+    word: u256,
+}
+
+impl AbiSize for Bytes {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+
+impl<A: Abi> Encode<A> for Bytes {
+    const DIRECT_ENCODE: bool = true
+
+    fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.word) }
+    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.word) }
+}
+
+impl<A: Abi> EventAbiEncode<A> for Bytes {
+    const DIRECT_EVENT_ENCODE: bool = true
+}
+
+impl SolCompat for Bytes {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint256"
+}
+
+impl TopicValue for Bytes {
+    fn as_topic(self) -> u256 { self.word }
+}
+
+#[event]
+struct ShadowedDynamicName {
+    #[indexed]
+    value: Bytes,
+}

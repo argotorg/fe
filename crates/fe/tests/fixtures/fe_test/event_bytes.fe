@@ -1,0 +1,19 @@
+use std::abi::{Bytes, bytes_from_words_prefix}
+use std::evm::{Log, RawMem}
+
+#[event]
+struct BytesEvent {
+    value: Bytes,
+}
+
+#[test]
+fn test_bytes_event() uses (log: mut Log, raw: mut RawMem) {
+    assert!(
+        BytesEvent::TOPIC0
+            == 0x9ee3485561a302141390e6d886e41f4922a82c93c6ab2d9f52c30cbd682994f1,
+    )
+    let value = bytes_from_words_prefix<1, 1>([
+        0xaa00000000000000000000000000000000000000000000000000000000000000,
+    ])
+    log.emit(BytesEvent { value: value })
+}

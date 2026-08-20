@@ -17,14 +17,14 @@ use smallvec1::SmallVec;
 use trait_def::impls_for_trait_def;
 use trait_resolution::constraint::super_trait_cycle;
 use ty_def::{BorrowKind, InvalidCause, TyData, TyId};
-use ty_lower::{collect_generic_params, lower_type_alias};
+use ty_lower::{collect_generic_params, lower_hir_ty, lower_type_alias};
 
 use crate::analysis::name_resolution::{PathRes, resolve_path};
 use crate::analysis::{
     HirAnalysisDb, analysis_pass::ModuleAnalysisPass, diagnostics::DiagnosticVoucher,
 };
 use crate::semantic::diagnostics::Diagnosable;
-use crate::span::{DesugaredOrigin, HirOrigin};
+use crate::span::{DesugaredOrigin, EventDesugared, HirOrigin};
 
 pub mod abi_ty;
 pub mod adt_def;
@@ -368,6 +368,44 @@ fn walk<'db>(
 
 pub struct BodyAnalysisPass {}
 
+fn events_with_indexed_dynamic_fields<'db>(
+    db: &'db dyn HirAnalysisDb,
+    top_mod: TopLevelMod<'db>,
+) -> FxHashSet<EventDesugared> {
+    let mut events = FxHashSet::default();
+
+    for &impl_trait in top_mod.all_impl_traits(db) {
+        let HirOrigin::Desugared(DesugaredOrigin::Event(event_origin)) = impl_trait.origin(db)
+        else {
+            continue;
+        };
+        let Some(self_ty) = impl_trait.type_ref(db).to_opt() else {
+            continue;
+        };
+        let self_ty = lower_hir_ty(
+            db,
+            self_ty,
+            impl_trait.scope(),
+            crate::semantic::constraints_for(db, impl_trait.into()),
+        );
+        let Some(AdtRef::Struct(event_struct)) = self_ty.adt_ref(db) else {
+            continue;
+        };
+        let assumptions = crate::semantic::constraints_for(db, event_struct.into());
+        if event_struct.hir_fields(db).data(db).iter().any(|field| {
+            field.is_event_indexed
+                && field.type_ref().to_opt().is_some_and(|field_ty| {
+                    let field_ty = lower_hir_ty(db, field_ty, event_struct.scope(), assumptions);
+                    abi_ty::is_dynamic_event_ty(db, field_ty)
+                })
+        }) {
+            events.insert(event_origin.clone());
+        }
+    }
+
+    events
+}
+
 impl ModuleAnalysisPass for BodyAnalysisPass {
     fn run_on_module<'db>(
         &mut self,
@@ -376,15 +414,17 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
         // Check function and const bodies; contract-specific analysis is handled separately.
         let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = Vec::new();
+        let indexed_dynamic_events = events_with_indexed_dynamic_fields(db, top_mod);
         for func in top_mod
             .all_funcs(db)
             .iter()
-            // Message field ABI requirements are diagnosed once at their source declarations.
-            .filter(|func| {
-                !matches!(
-                    func.origin(db),
-                    HirOrigin::Desugared(DesugaredOrigin::Msg(_))
-                )
+            // Generated ABI body failures are diagnosed once at their source declarations.
+            .filter(|func| match func.origin(db) {
+                HirOrigin::Desugared(DesugaredOrigin::Msg(_)) => false,
+                HirOrigin::Desugared(DesugaredOrigin::Event(event)) => {
+                    !indexed_dynamic_events.contains(event)
+                }
+                _ => true,
             })
         {
             let (body_diags, _) = ty_check::check_func_body(db, *func);

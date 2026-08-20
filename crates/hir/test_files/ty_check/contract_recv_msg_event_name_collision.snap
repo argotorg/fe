@@ -19,7 +19,7 @@ note:
    · │
 12 │ │     value: u256,
 13 │ │ }
-   │ ╰─^ () | (u256, u256) | Transfer | fn encode_abi_payload<u256> | mut L | u256
+   │ ╰─^ () | (u256) | (u256, u256) | Transfer | fn encode_event_payload<(u256)> | mut L | u256
 
 note:
    ┌─ contract_recv_msg_event_name_collision.fe:17:9
