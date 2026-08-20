@@ -578,6 +578,7 @@ fn emit_bytecode_instruction_facts_with_observability_counted(
     (facts, skips)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_evm_bytecode_instruction_facts_with_observability(
     owner_key: &str,
     function_local_key: &str,
