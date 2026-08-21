@@ -757,7 +757,7 @@ impl DiagnosticVoucher for DefConflictError<'_> {
                 subs.extend(items.map(|item| {
                     SubDiagnostic::new(
                         LabelStyle::Secondary,
-                        format! {"`{name}` is redefined here"},
+                        format!("`{name}` is redefined here"),
                         item.name_span().unwrap().resolve(db),
                     )
                 }));
@@ -813,7 +813,7 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                 for sub_span in spans {
                     diags.push(SubDiagnostic::new(
                         LabelStyle::Secondary,
-                        format! {"`{ident}` is redefined here"},
+                        format!("`{ident}` is redefined here"),
                         Some(sub_span),
                     ));
                 }
@@ -1402,7 +1402,7 @@ impl DiagnosticVoucher for ImportDiag<'_> {
                 for sub_span in spans {
                     diags.push(SubDiagnostic::new(
                         LabelStyle::Secondary,
-                        format! {"`{ident}` is redefined here"},
+                        format!("`{ident}` is redefined here"),
                         Some(sub_span),
                     ));
                 }
@@ -3761,9 +3761,10 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                         span: field_span.resolve(db),
                     },
                 ],
-                notes: vec![format!(
-                    "immutable contract fields can only be assigned in `init`; mark the field `mut` to make it mutable contract state",
-                )],
+                notes: vec![
+                    "immutable contract fields can only be assigned in `init`; mark the field `mut` to make it mutable contract state"
+                        .to_string(),
+                ],
                 error_code,
             },
 

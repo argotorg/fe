@@ -1067,7 +1067,7 @@ impl<'db> TraitInstId<'db> {
         if as_pred {
             let inst = self.pretty_print(db, false);
             let self_ty = self.self_ty(db);
-            format! {"{}: {}", self_ty.pretty_print(db), inst}
+            format!("{}: {}", self_ty.pretty_print(db), inst)
         } else {
             let mut s = self
                 .def(db)

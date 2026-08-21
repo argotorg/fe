@@ -12,7 +12,7 @@ use test_runner::*;
 fn test_item_list(fixture: Fixture<&str>) {
     let runner = TestRunner::item_list(true);
     let (cst, _) = runner.run(fixture.content());
-    let node = format! {"{:#?}", cst};
+    let node = format!("{:#?}", cst);
     assert_eq!(normalize_newlines(fixture.content()), cst.to_string());
     snap_test!(node, fixture.path());
 }
@@ -24,7 +24,7 @@ fn test_item_list(fixture: Fixture<&str>) {
 fn test_struct(fixture: Fixture<&str>) {
     let runner = TestRunner::item_list(true);
     let (cst, _) = runner.run(fixture.content());
-    let node = format! {"{:#?}", cst};
+    let node = format!("{:#?}", cst);
     assert_eq!(normalize_newlines(fixture.content()), cst.to_string());
     snap_test!(node, fixture.path());
 }
@@ -36,7 +36,7 @@ fn test_struct(fixture: Fixture<&str>) {
 fn test_stmt(fixture: Fixture<&str>) {
     let runner = TestRunner::stmt_list(true);
     let (cst, _) = runner.run(fixture.content());
-    let node = format! {"{:#?}", cst};
+    let node = format!("{:#?}", cst);
     assert_eq!(normalize_newlines(fixture.content()), cst.to_string());
     snap_test!(node, fixture.path());
 }
@@ -49,7 +49,7 @@ fn test_stmt(fixture: Fixture<&str>) {
 fn test_expr(fixture: Fixture<&str>) {
     let runner = TestRunner::expr_list(true);
     let (cst, _) = runner.run(fixture.content());
-    let node = format! {"{:#?}", cst};
+    let node = format!("{:#?}", cst);
     assert_eq!(normalize_newlines(fixture.content()), cst.to_string());
     snap_test!(node, fixture.path());
 }
@@ -61,7 +61,7 @@ fn test_expr(fixture: Fixture<&str>) {
 fn test_pat(fixture: Fixture<&str>) {
     let runner = TestRunner::pat_list(true);
     let (cst, _) = runner.run(fixture.content());
-    let node = format! {"{:#?}", cst};
+    let node = format!("{:#?}", cst);
     assert_eq!(normalize_newlines(fixture.content()), cst.to_string());
     snap_test!(node, fixture.path());
 }
