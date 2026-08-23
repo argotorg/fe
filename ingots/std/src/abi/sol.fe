@@ -344,6 +344,14 @@ impl<I> AbiDecoder<Sol> for SolDecoder<I>
         self.cur.pos = new_pos
     }
 
+    fn remaining(self) -> u256 {
+        let total: u256 = self.cur.input.len()
+        if self.cur.pos >= total {
+            return 0
+        }
+        total - self.cur.pos
+    }
+
     fn read_u8(mut self) -> u8 {
         let len = self.cur.input.len()
         let new_pos = self.cur.pos + 1
