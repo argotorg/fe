@@ -1,0 +1,132 @@
+// End-to-end coverage for `StoragePackedArray::get_checked`/`set_checked`.
+//
+// These accessors enforce a statically-known modeled length (`LEN`) that the
+// type itself cannot know: plain `get`/`set` are deliberately unbounded and
+// map indices to slots arithmetically, so an index past a caller's modeled
+// domain (e.g. cell 16 of a 16-cell board packed at 4 bits/lane) silently
+// spills into the next slot word instead of reverting. See issue #1538 for a
+// real-world instance of that footgun.
+//
+// Out-of-domain access must revert with Solidity's standard
+// `Panic(uint256)` payload, code 0x32 (`IndexOutOfBounds`) — the same signal
+// the compiler emits for a failed fixed-array bounds check.
+
+use std::evm::{Evm, RawMem, RawOps, StoragePackedArray, last_returndata, mem}
+
+msg BoardMsg {
+    #[selector = 0x00000001]
+    Set { i: u256, v: u256 } -> u256,
+    #[selector = 0x00000002]
+    Get { i: u256 } -> u256,
+    #[selector = 0x00000003]
+    SetChecked { i: u256, v: u256 } -> u256,
+    #[selector = 0x00000004]
+    GetChecked { i: u256 } -> u256,
+}
+
+struct Store {
+    // 4-bit lanes, 64 per slot — the layout from the #1538 board example.
+    board: StoragePackedArray<4>,
+}
+
+pub contract Board {
+    mut store: Store
+
+    init() uses (mut store) {}
+
+    recv BoardMsg {
+        Set { i, v } -> u256 uses (mut store) {
+            store.board.set(i: i, value: v)
+            let one: u256 = 1
+            one
+        }
+        Get { i } -> u256 uses (mut store) {
+            store.board.get(i: i)
+        }
+        SetChecked { i, v } -> u256 uses (mut store) {
+            store.board.set_checked<16>(i: i, value: v)
+            let one: u256 = 1
+            one
+        }
+        GetChecked { i } -> u256 uses (mut store) {
+            store.board.get_checked<16>(i: i)
+        }
+    }
+}
+
+/// First word of a Solidity `Panic(uint256)` revert payload.
+const PANIC_SELECTOR_WORD: u256 =
+    0x4e487b7100000000000000000000000000000000000000000000000000000000
+
+#[test]
+fn checked_accessors_roundtrip_within_modeled_domain() uses (evm: mut Evm) {
+    let addr = evm.create2<Board>(value: 0, args: (), salt: 0)
+
+    let ack: u256 = evm.call(
+        addr: addr, gas: 100000, value: 0,
+        message: BoardMsg::SetChecked { i: 15, v: 0xA },
+    )
+    assert!(ack == 1)
+
+    let v: u256 = evm.call(
+        addr: addr, gas: 100000, value: 0,
+        message: BoardMsg::GetChecked { i: 15 },
+    )
+    assert!(v == 0xA)
+
+    // Boundary: last valid index vs first rejected index.
+    let zero: u256 = evm.call(
+        addr: addr, gas: 100000, value: 0,
+        message: BoardMsg::GetChecked { i: 0 },
+    )
+    assert!(zero == 0)
+}
+
+#[test]
+fn set_checked_past_domain_reverts_without_touching_storage() uses (evm: mut Evm) {
+    let addr = evm.create2<Board>(value: 0, args: (), salt: 0)
+
+    // Sentinel in lane 63 — the lane the unbounded write would clobber:
+    // set(16, ...) at 4 bits/lane lands at slot word 1, bit offset 64,
+    // which shares the 256-bit word containing lanes 60..63.
+    let _: u256 = evm.call(
+        addr: addr, gas: 100000, value: 0,
+        message: BoardMsg::Set { i: 63, v: 0xE },
+    )
+
+    // Hand-encode SetChecked { i: 16, v: 1 } so we can observe the revert
+    // data instead of bubbling it.
+    let ptr = mem::alloc(68)
+    evm.mstore(addr: ptr, value: 0x00000003 << 224)
+    evm.mstore(addr: ptr + 4, value: 16)
+    evm.mstore(addr: ptr + 36, value: 1)
+    assert!(!evm.raw_call(addr: addr, gas: 100000, value: 0, args_offset: ptr, args_len: 68))
+
+    // Exact Solidity panic payload: selector word, then code 0x32.
+    let ret = last_returndata()
+    assert!(ret.len == 36)
+    assert!(evm.mload(ret.base) == PANIC_SELECTOR_WORD)
+    assert!(evm.mload(ret.base + 4) == 0x32)
+
+    // The failed write must not have touched the sentinel lane.
+    let v63: u256 = evm.call(
+        addr: addr, gas: 100000, value: 0,
+        message: BoardMsg::Get { i: 63 },
+    )
+    assert!(v63 == 0xE)
+}
+
+#[test]
+fn get_checked_past_domain_reverts_with_panic_payload() uses (evm: mut Evm) {
+    let addr = evm.create2<Board>(value: 0, args: (), salt: 0)
+
+    let ptr = mem::alloc(36)
+    evm.mstore(addr: ptr, value: 0x00000004 << 224)
+    evm.mstore(addr: ptr + 4, value: 16)
+    assert!(!evm.raw_call(addr: addr, gas: 100000, value: 0, args_offset: ptr, args_len: 36))
+
+    let ret = last_returndata()
+    assert!(ret.len == 36)
+    assert!(evm.mload(ret.base) == PANIC_SELECTOR_WORD)
+    assert!(evm.mload(ret.base + 4) == 0x32)
+}
