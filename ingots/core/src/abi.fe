@@ -1835,13 +1835,6 @@ impl<A: Abi> Encode<A> for DynString {
 impl<A: Abi> Decode<A> for bool {
     #[inline(always)]
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
-        // A canonical ABI bool return is exactly 32 bytes. Reject buffers with
-        // trailing data instead of silently decoding the first word — a
-        // counterparty returning `(true, <attacker-controlled tail>)` must not
-        // decode as a clean `true`.
-        if d.remaining() != 32 {
-            A::decode_error()
-        }
         A::decode_bool_word(d.read_word())
     }
 
