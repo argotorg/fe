@@ -1,5 +1,4 @@
 use cranelift_entity::EntityRef;
-use rustc_hash::FxHashSet;
 
 use crate::analysis::{
     HirAnalysisDb,
@@ -14,13 +13,15 @@ use crate::analysis::{
 };
 
 use super::{
-    canon::{CanonPlace, State, address_space_for_borrow_root},
+    canon::address_space_for_region_root,
     check::Borrowck,
     diagnostics::operand_origin,
     ir::{
         NEffectArg, NEffectArgValue, NExpr, NOperand, NSStmt, NSStmtKind, SemanticBorrowDiagnostic,
     },
     normalize::normalize_provisional_semantic_body,
+    region::RegionSet,
+    transfer::BorrowState,
 };
 
 pub(crate) fn provisional_call_site_provider_refinements<'db>(
@@ -50,7 +51,7 @@ impl<'db> CallSiteProviderRefiner<'db> {
             let mut state = self.borrowck.entry_state[SBlockId::new(bb_idx)].clone();
             for stmt in &block.stmts {
                 self.refine_stmt(&state, stmt, &mut out)?;
-                self.borrowck.canon().apply_stmt_state(&mut state, stmt);
+                self.borrowck.apply_stmt_state(&mut state, stmt);
             }
         }
         Ok(out)
@@ -58,7 +59,7 @@ impl<'db> CallSiteProviderRefiner<'db> {
 
     fn refine_stmt(
         &self,
-        state: &State,
+        state: &BorrowState<'db>,
         stmt: &NSStmt<'db>,
         out: &mut Vec<CallSiteProviderRefinement>,
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
@@ -95,16 +96,15 @@ impl<'db> CallSiteProviderRefiner<'db> {
 
     fn effect_arg_address_space(
         &self,
-        state: &State,
+        state: &BorrowState<'db>,
         origin: SemOrigin<'db>,
         arg: &NEffectArg<'db>,
     ) -> Result<Option<ProviderAddressSpace>, SemanticBorrowDiagnostic<'db>> {
         let targets = match &arg.arg {
-            NEffectArgValue::Place(place) => self
-                .borrowck
-                .canon()
-                .canonicalize_place(state, place, origin)?,
-            NEffectArgValue::Value(value) => self.value_targets(state, *value),
+            NEffectArgValue::Place(place) => {
+                self.borrowck.canon().resolve_place(state, place, origin)?
+            }
+            NEffectArgValue::Value(value) => self.value_region(state, *value),
         };
         if targets.is_empty() {
             return Ok(arg.provider);
@@ -113,24 +113,22 @@ impl<'db> CallSiteProviderRefiner<'db> {
             .map(Some)
     }
 
-    fn value_targets(&self, state: &State, value: NOperand) -> FxHashSet<CanonPlace<'db>> {
-        self.borrowck
-            .canon()
-            .canonicalize_value_base(state, value.local)
+    fn value_region(&self, state: &BorrowState<'db>, value: NOperand) -> RegionSet<'db> {
+        self.borrowck.canon().value_region(state, value.local)
     }
 
     fn address_space_for_targets(
         &self,
-        targets: &FxHashSet<CanonPlace<'db>>,
+        targets: &RegionSet<'db>,
         origin: SemOrigin<'db>,
     ) -> Result<ProviderAddressSpace, SemanticBorrowDiagnostic<'db>> {
         let mut spaces = Vec::new();
-        for target in targets {
-            let space = address_space_for_borrow_root(
+        for (_, target) in targets.guarded_places() {
+            let space = address_space_for_region_root(
                 self.borrowck.db,
                 self.borrowck.instance,
                 &self.borrowck.body,
-                &target.root,
+                target.root(),
                 origin,
             )?;
             if !spaces.contains(&space) {

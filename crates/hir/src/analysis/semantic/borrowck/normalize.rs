@@ -994,10 +994,12 @@ impl<'db> NormalizeCtxt<'db> {
                 place,
                 kind,
                 provider,
+                activation,
             } => NExpr::Borrow {
                 place: self.normalize_place(place)?,
                 kind: *kind,
                 provider: *provider,
+                activation: *activation,
             },
             SExpr::GetEnumTag { value } => NExpr::GetEnumTag {
                 value: self.normalize_copy_operand(*value, origin),

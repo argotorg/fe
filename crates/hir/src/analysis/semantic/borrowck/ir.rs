@@ -4,12 +4,14 @@ use salsa::Update;
 use crate::{
     analysis::{
         HirAnalysisDb,
+        place::projectable_place_ty,
         semantic::{
-            FieldIndex, LayoutBackingProjection, Mutability, SConst, SLocalId, SStmtId, SemOrigin,
-            SemanticBody, SemanticCalleeRef, SemanticCodeRegionRef, SemanticCodeRegionTarget,
-            SemanticLocalKind, SemanticProjectionPath, VariantIndex,
+            BorrowActivation, FieldIndex, LayoutBackingProjection, Mutability, SConst, SLocalId,
+            SStmtId, SemOrigin, SemanticBody, SemanticCalleeRef, SemanticCodeRegionRef,
+            SemanticCodeRegionTarget, SemanticLocalKind, SemanticProjectionPath, VariantIndex,
         },
         ty::{
+            adt_def::{AdtRef, instantiate_adt_field_shape},
             provider::ProviderAddressSpace,
             ty_check::{BodyOwner, EffectPassMode, LocalBinding},
             ty_def::{BorrowKind, TyId},
@@ -19,6 +21,8 @@ use crate::{
     projection::{IndexSource, Projection},
     semantic::ProviderBinding,
 };
+
+use super::summary::BorrowSummary;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NBorrowRootId(u32);
@@ -65,6 +69,11 @@ impl<'db> NormalizedSemanticBody<'db> {
                 NBorrowRoot::Provider { value_ty, .. } => Some(*value_ty),
             },
         }
+    }
+
+    pub fn place_ty(&self, db: &'db dyn HirAnalysisDb, place: &NSPlace<'db>) -> Option<TyId<'db>> {
+        let root_ty = self.place_root_ty(&place.root)?;
+        semantic_projection_ty(db, root_ty, &place.path).map(|(ty, _)| ty)
     }
 }
 
@@ -165,6 +174,184 @@ pub struct NLocalFacts<'db> {
 pub struct NLayoutBackingSource<'db> {
     pub target: Vec<LayoutBackingProjection>,
     pub source: NSPlace<'db>,
+}
+
+fn layout_backing_projection_matches(
+    pattern: LayoutBackingProjection,
+    candidate: LayoutBackingProjection,
+) -> bool {
+    pattern == candidate
+        || matches!(
+            (pattern, candidate),
+            (
+                LayoutBackingProjection::Index(None) | LayoutBackingProjection::IndexFamily(_),
+                LayoutBackingProjection::Index(_) | LayoutBackingProjection::IndexFamily(_)
+            )
+        )
+}
+
+fn layout_backing_path_is_prefix(
+    prefix: &[LayoutBackingProjection],
+    path: &[LayoutBackingProjection],
+) -> bool {
+    prefix.len() <= path.len()
+        && prefix
+            .iter()
+            .copied()
+            .zip(path.iter().copied())
+            .all(|(pattern, candidate)| layout_backing_projection_matches(pattern, candidate))
+}
+
+fn semantic_layout_query<'db>(
+    path: &SemanticProjectionPath<'db>,
+) -> Option<(Vec<LayoutBackingProjection>, SemanticProjectionPath<'db>)> {
+    let mut target = Vec::new();
+    let mut filtered = SemanticProjectionPath::new();
+    for projection in path.iter() {
+        let step = match projection {
+            Projection::Field(field) => {
+                LayoutBackingProjection::Field(FieldIndex(u16::try_from(*field).ok()?))
+            }
+            Projection::VariantField {
+                variant, field_idx, ..
+            } => LayoutBackingProjection::VariantField {
+                variant: *variant,
+                field: FieldIndex(u16::try_from(*field_idx).ok()?),
+            },
+            Projection::Index(IndexSource::Constant(index)) => {
+                LayoutBackingProjection::Index(Some(*index))
+            }
+            Projection::Index(IndexSource::Dynamic(_)) => LayoutBackingProjection::Index(None),
+            Projection::Deref => continue,
+            Projection::Discriminant => return None,
+        };
+        target.push(step);
+        filtered.push(projection.clone());
+    }
+    Some((target, filtered))
+}
+
+pub(super) fn layout_path_for_semantic_projection<'db>(
+    path: &SemanticProjectionPath<'db>,
+) -> Option<Vec<LayoutBackingProjection>> {
+    semantic_layout_query(path).map(|(target, _)| target)
+}
+
+pub(super) fn semantic_projection_for_layout_path<'db>(
+    db: &'db dyn HirAnalysisDb,
+    mut ty: TyId<'db>,
+    path: &[LayoutBackingProjection],
+) -> Option<SemanticProjectionPath<'db>> {
+    let mut out = SemanticProjectionPath::new();
+    for step in path {
+        ty = projectable_place_ty(db, ty);
+        match *step {
+            LayoutBackingProjection::Field(field) => {
+                ty = *ty.field_types(db).get(field.0 as usize)?;
+                out.push(Projection::Field(field.0 as usize));
+            }
+            LayoutBackingProjection::VariantField { variant, field } => {
+                let adt = ty.adt_def(db)?;
+                if !matches!(adt.adt_ref(db), AdtRef::Enum(_)) {
+                    return None;
+                }
+                let field_ty = instantiate_adt_field_shape(
+                    db,
+                    adt,
+                    variant.0 as usize,
+                    field.0 as usize,
+                    ty.generic_args(db),
+                );
+                out.push(Projection::VariantField {
+                    variant,
+                    enum_ty: ty,
+                    field_idx: field.0 as usize,
+                });
+                ty = field_ty;
+            }
+            LayoutBackingProjection::Index(Some(index)) => {
+                if !ty.is_array(db) || ty.array_len(db).is_some_and(|len| index >= len) {
+                    return None;
+                }
+                ty = *ty.generic_args(db).first()?;
+                out.push(Projection::Index(IndexSource::Constant(index)));
+            }
+            LayoutBackingProjection::Index(None) | LayoutBackingProjection::IndexFamily(_) => {
+                return None;
+            }
+        }
+    }
+    Some(out)
+}
+
+pub(crate) fn semantic_projection_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    mut ty: TyId<'db>,
+    path: &SemanticProjectionPath<'db>,
+) -> Option<(TyId<'db>, bool)> {
+    let mut traverses_capability = false;
+    for projection in path.iter() {
+        if !matches!(projection, Projection::Deref) {
+            while let Some((_, inner)) = ty.as_capability(db) {
+                traverses_capability = true;
+                ty = inner;
+            }
+        }
+        ty = match projection {
+            Projection::Field(field) => *ty.field_types(db).get(*field)?,
+            Projection::VariantField {
+                variant, field_idx, ..
+            } => {
+                let adt = ty.adt_def(db)?;
+                instantiate_adt_field_shape(
+                    db,
+                    adt,
+                    variant.0 as usize,
+                    *field_idx,
+                    ty.generic_args(db),
+                )
+            }
+            Projection::Index(_) => {
+                if !ty.is_array(db) {
+                    return None;
+                }
+                *ty.generic_args(db).first()?
+            }
+            Projection::Deref => {
+                let (_, inner) = ty.as_capability(db)?;
+                traverses_capability = true;
+                inner
+            }
+            Projection::Discriminant => return None,
+        };
+    }
+    traverses_capability |= ty.as_capability(db).is_some();
+    Some((ty, traverses_capability))
+}
+
+pub(super) fn resolved_layout_backing_places<'db>(
+    sources: &[NLayoutBackingSource<'db>],
+    requested: &SemanticProjectionPath<'db>,
+) -> Vec<NSPlace<'db>> {
+    let Some((target, path)) = semantic_layout_query(requested) else {
+        return Vec::new();
+    };
+    let mut resolved = Vec::new();
+    for source in sources {
+        if !layout_backing_path_is_prefix(&source.target, &target) {
+            continue;
+        }
+        let mut suffix = SemanticProjectionPath::new();
+        for projection in path.iter().skip(source.target.len()) {
+            suffix.push(projection.clone());
+        }
+        let mut place = source.source.clone();
+        place.path = place.path.concat(&suffix);
+        if !resolved.contains(&place) {
+            resolved.push(place);
+        }
+    }
+    resolved
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -359,6 +546,7 @@ pub enum NExpr<'db> {
         place: NSPlace<'db>,
         kind: BorrowKind,
         provider: Option<ProviderAddressSpace>,
+        activation: BorrowActivation,
     },
     Const(SConst<'db>),
     Unary {
@@ -564,24 +752,11 @@ pub enum SemanticNormalizeError<'db> {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum BorrowInputRef {
-    Param(u32),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct BorrowTransform<'db> {
-    pub input: BorrowInputRef,
-    pub proj: NSProjectionPath<'db>,
-}
-
-pub type BorrowSummary<'db> = Vec<BorrowTransform<'db>>;
-
 #[salsa::interned]
 #[derive(Debug)]
 pub struct BorrowSummaryId<'db> {
     #[return_ref]
-    pub items: Vec<BorrowTransform<'db>>,
+    pub summary: BorrowSummary,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]

@@ -119,7 +119,12 @@ pub enum PlaceProvenance<'db> {
     Derived(SPlace<'db>),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+/// Identity of one symbolic fixed-array borrow-slot family.
+///
+/// Family ids are local to a single borrow-result traversal.
+pub type BorrowSlotFamilyId = usize;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
 pub enum LayoutBackingProjection {
     Field(FieldIndex),
     VariantField {
@@ -127,6 +132,8 @@ pub enum LayoutBackingProjection {
         field: FieldIndex,
     },
     Index(Option<usize>),
+    /// A symbolic member of an indexed borrow-slot family.
+    IndexFamily(BorrowSlotFamilyId),
 }
 
 /// Physical place provenance for layout-bearing value projections.
@@ -385,6 +392,12 @@ pub enum SOperandOrigin {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum BorrowActivation {
+    Immediate,
+    AtCall,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
 pub struct SOperand {
     pub value: SValueId,
     pub origin: SOperandOrigin,
@@ -470,6 +483,7 @@ pub enum SExpr<'db> {
         place: SPlace<'db>,
         kind: BorrowKind,
         provider: Option<ProviderAddressSpace>,
+        activation: BorrowActivation,
     },
     GetEnumTag {
         value: SOperand,

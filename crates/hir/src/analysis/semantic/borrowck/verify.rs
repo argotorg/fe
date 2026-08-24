@@ -3,7 +3,11 @@ use cranelift_entity::EntityRef;
 use crate::{
     analysis::{
         HirAnalysisDb,
-        semantic::{NOperand, NSLocal, SLocalId, SemOrigin, SemanticInstance, SemanticLocalKind},
+        semantic::{
+            BorrowActivation, NOperand, NSLocal, SLocalId, SemOrigin, SemanticInstance,
+            SemanticLocalKind,
+        },
+        ty::{ty_check::BodyOwner, ty_def::BorrowKind},
     },
     projection::{IndexSource, Projection},
 };
@@ -22,6 +26,24 @@ pub fn verify_normalized_semantic_body<'db>(
     instance: SemanticInstance<'db>,
     body: &NormalizedSemanticBody<'db>,
 ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
+    let receiver_reservations = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.stmts)
+        .filter_map(|stmt| match &stmt.kind {
+            NSStmtKind::Assign {
+                expr: NExpr::Call { callee, args, .. },
+                ..
+            } if matches!(
+                callee.key.owner(db),
+                BodyOwner::Func(func) if func.receiver_ty(db).is_some()
+            ) =>
+            {
+                args.first().map(|receiver| receiver.local)
+            }
+            NSStmtKind::Assign { .. } | NSStmtKind::Store { .. } => None,
+        })
+        .collect::<Vec<_>>();
     for (local_idx, local) in body.locals.iter().enumerate() {
         let local_id = SLocalId::from_u32(local_idx as u32);
         let verify_rooted_place = |place: &NSPlace<'db>, label: &str| {
@@ -104,6 +126,22 @@ pub fn verify_normalized_semantic_body<'db>(
             match &stmt.kind {
                 NSStmtKind::Assign { dst, expr } => {
                     verify_local_exists(db, instance, body, stmt.origin, *dst)?;
+                    if let NExpr::Borrow {
+                        kind,
+                        activation: BorrowActivation::AtCall,
+                        ..
+                    } = expr
+                        && (*kind != BorrowKind::Mut || !receiver_reservations.contains(dst))
+                    {
+                        return Err(normalized_body_internal_diag(
+                            db,
+                            instance,
+                            body,
+                            stmt.origin,
+                            "call-activated borrow is not a mutable receiver reservation"
+                                .to_string(),
+                        ));
+                    }
                     verify_expr(db, instance, body, stmt.origin, expr)?;
                 }
                 NSStmtKind::Store { dst, src } => {

@@ -1,0 +1,13 @@
+struct Store {
+    value: u256,
+}
+
+fn consume(_ value: u256) {}
+
+pub contract NoEscStorageScalarArg {
+    store: Store
+
+    init() uses (store) {
+        consume(store.value)
+    }
+}

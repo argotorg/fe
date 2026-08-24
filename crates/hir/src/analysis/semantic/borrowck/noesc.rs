@@ -1,6 +1,5 @@
 use common::diagnostics::CompleteDiagnostic;
 use cranelift_entity::EntityRef;
-use rustc_hash::FxHashSet;
 
 use crate::analysis::{
     HirAnalysisDb,
@@ -10,13 +9,16 @@ use crate::analysis::{
 };
 
 use super::{
-    canon::{BorrowRoot, CanonPlace, State, address_space_for_borrow_root},
+    canon::address_space_for_region_root,
     check::Borrowck,
     diagnostics::{normalized_body_internal_diag, operand_origin},
     ir::{
         BorrowDiagnosticId, NExpr, NOperand, NSStmt, NSStmtKind, SemanticBorrowCheckResult,
         SemanticBorrowDiagKind, SemanticBorrowDiagnostic, SemanticBorrowDiagnosticSpan,
     },
+    region::{RegionRoot, RegionSet},
+    shape::capability_shape,
+    transfer::BorrowState,
 };
 
 pub fn check_semantic_noesc<'db>(
@@ -64,7 +66,7 @@ impl<'db> NoEsc<'db> {
                 self.borrowck.entry_state[crate::analysis::semantic::SBlockId::new(bb_idx)].clone();
             for stmt in &block.stmts {
                 self.check_stmt(&state, stmt)?;
-                self.borrowck.canon().apply_stmt_state(&mut state, stmt);
+                self.borrowck.apply_stmt_state(&mut state, stmt);
             }
         }
         Ok(())
@@ -72,7 +74,7 @@ impl<'db> NoEsc<'db> {
 
     fn check_stmt(
         &self,
-        state: &State,
+        state: &BorrowState<'db>,
         stmt: &NSStmt<'db>,
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
         match &stmt.kind {
@@ -87,15 +89,12 @@ impl<'db> NoEsc<'db> {
 
     fn check_store(
         &self,
-        state: &State,
+        state: &BorrowState<'db>,
         origin: SemOrigin<'db>,
         dst: &super::ir::NSPlace<'db>,
         src: NOperand,
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
-        let targets = self
-            .borrowck
-            .canon()
-            .canonicalize_place(state, dst, origin)?;
+        let targets = self.borrowck.canon().resolve_place(state, dst, origin)?;
         let spaces = self.address_spaces_for_targets(&targets, origin)?;
         if spaces.contains(&ProviderAddressSpace::Calldata) {
             return Err(self.noesc_diag(origin, "cannot write to calldata".to_string()));
@@ -128,27 +127,22 @@ impl<'db> NoEsc<'db> {
 
     fn check_call_args(
         &self,
-        state: &State,
+        state: &BorrowState<'db>,
         origin: SemOrigin<'db>,
         callee: SemanticCalleeRef<'db>,
         args: &[NOperand],
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
         for arg in args.iter().copied().skip(self.receiver_arg_count(callee)) {
-            let ty = self.operand_ty(arg, origin)?;
-            if ty.as_borrow(self.borrowck.db).is_none() {
+            let arg_origin = operand_origin(arg, origin);
+            let ty = self.operand_ty(arg, arg_origin)?;
+            if !capability_shape(self.borrowck.db, ty).contains_borrow(self.borrowck.db) {
                 continue;
             }
-            let targets = self.borrowck.canon().borrow_local_targets(state, arg.local);
-            let spaces = self.address_spaces_for_targets(&targets, operand_origin(arg, origin))?;
-            let Some(space) = spaces
-                .iter()
-                .copied()
-                .find(|space| *space != ProviderAddressSpace::Memory)
-            else {
+            let Some(space) = self.non_memory_operand_space(state, arg, arg_origin)? else {
                 continue;
             };
             return Err(self.noesc_diag(
-                operand_origin(arg, origin),
+                arg_origin,
                 format!(
                     "cannot pass `{}` from {} as function argument",
                     ty.pretty_print(self.borrowck.db),
@@ -157,6 +151,22 @@ impl<'db> NoEsc<'db> {
             ));
         }
         Ok(())
+    }
+
+    fn non_memory_operand_space(
+        &self,
+        state: &BorrowState<'db>,
+        operand: NOperand,
+        origin: SemOrigin<'db>,
+    ) -> Result<Option<ProviderAddressSpace>, SemanticBorrowDiagnostic<'db>> {
+        let targets = self
+            .borrowck
+            .canon()
+            .borrow_local_region(state, operand.local);
+        let spaces = self.address_spaces_for_targets(&targets, origin)?;
+        Ok(spaces
+            .into_iter()
+            .find(|space| *space != ProviderAddressSpace::Memory))
     }
 
     fn receiver_arg_count(&self, callee: SemanticCalleeRef<'db>) -> usize {
@@ -188,12 +198,12 @@ impl<'db> NoEsc<'db> {
 
     fn address_spaces_for_targets(
         &self,
-        targets: &FxHashSet<CanonPlace<'db>>,
+        targets: &RegionSet<'db>,
         origin: SemOrigin<'db>,
     ) -> Result<Vec<ProviderAddressSpace>, SemanticBorrowDiagnostic<'db>> {
-        let mut spaces = Vec::with_capacity(targets.len());
-        for target in targets {
-            let space = self.address_space_for_root(&target.root, origin)?;
+        let mut spaces = Vec::new();
+        for (_, target) in targets.guarded_places() {
+            let space = self.address_space_for_root(target.root(), origin)?;
             if !spaces.contains(&space) {
                 spaces.push(space);
             }
@@ -204,10 +214,10 @@ impl<'db> NoEsc<'db> {
 
     fn address_space_for_root(
         &self,
-        root: &BorrowRoot<'db>,
+        root: &RegionRoot<'db>,
         origin: SemOrigin<'db>,
     ) -> Result<ProviderAddressSpace, SemanticBorrowDiagnostic<'db>> {
-        address_space_for_borrow_root(
+        address_space_for_region_root(
             self.borrowck.db,
             self.borrowck.instance,
             &self.borrowck.body,

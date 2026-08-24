@@ -1,6 +1,9 @@
+use std::collections::{BTreeMap, VecDeque};
+
 use common::diagnostics::CompleteDiagnostic;
 use cranelift_entity::{EntityRef, SecondaryMap};
 use dataflow::{solve_backward_cfg, solve_forward_cfg, try_solve_forward_cfg, try_solve_sparse};
+use num_traits::ToPrimitive;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
@@ -9,35 +12,49 @@ use crate::{
         analysis_pass::ModuleAnalysisPass,
         diagnostics::{DiagnosticVoucher, SpannedHirAnalysisDb},
         semantic::{
-            SBlockId, SemOrigin, SemanticInstance, get_or_build_semantic_instance,
-            identity_semantic_instance_key,
+            BorrowActivation, LayoutBackingProjection, SBlockId, SConst, SStmtId, SemConstScalar,
+            SemConstValue, SemOrigin, SemanticInstance, SemanticInstanceKey,
+            get_or_build_semantic_instance, identity_semantic_instance_key,
         },
-        ty::{ty_check::BodyOwner, ty_def::BorrowKind},
+        ty::{
+            ty_check::{BodyOwner, EffectParamSite},
+            ty_def::{BorrowKind, TyId},
+            ty_is_borrow,
+        },
     },
+    core::semantic::EffectEnvView,
     hir_def::{Body, Expr, FuncParamMode, ItemKind, Partial, TopLevelMod},
-    projection::{IndexSource, Projection},
 };
 
 use super::{
+    access::{ActiveLoan, CallAccess, MoveSite, MovedPlaces, active_loans_in, effective_loans},
     analyses::{
-        BorrowEntryStateAnalysis, BorrowLivenessAnalysis, BorrowLoanTargetAnalysis,
-        BorrowLoanTargetState, BorrowMovedStateAnalysis, BorrowSummaryMode,
+        BlockAdjacency, BorrowEntryStateAnalysis, BorrowLivenessAnalysis, BorrowLoanTargetAnalysis,
+        BorrowLoanTargetState, BorrowMovedStateAnalysis, BorrowSummaryMode, CfgAdjacency,
     },
-    canon::{
-        BlockAdjacency, BorrowCanonCx, BorrowRoot, CanonPlace, CfgAdjacency, Loan, LoanId,
-        MoveSite, MovedPlaces, State, place_set_overlaps, places_overlap,
-    },
+    canon::BorrowCanonCx,
     diagnostics::operand_origin,
     facts::NormalizedBodyFacts,
+    guard::{ExistentialId, Guard, IndexExpr, IndexParamId, IndexSubst, ResultIndexId},
     ir::{
-        BorrowDiagnosticId, BorrowInputRef, BorrowSummary, BorrowSummaryId, BorrowTransform,
-        NBorrowRoot, NBorrowRootId, NExpr, NOperand, NSPlace, NSPlaceRoot, NSProjectionPath,
-        NSStmtKind, NSTerminatorKind, NormalizedBindingLowering, NormalizedSemanticBody, ReadMode,
-        SemanticBorrowCheckResult, SemanticBorrowDiagKind, SemanticBorrowDiagnostic,
+        BorrowDiagnosticId, BorrowSummaryId, NBorrowRoot, NBorrowRootId, NEffectArgValue, NExpr,
+        NOperand, NSPlace, NSPlaceRoot, NSStmtKind, NSTerminatorKind, NormalizedSemanticBody,
+        ReadMode, SemanticBorrowCheckResult, SemanticBorrowDiagKind, SemanticBorrowDiagnostic,
         SemanticBorrowDiagnosticSpan, SemanticBorrowSummaryResult,
-        local_has_runtime_move_semantics,
+        local_has_runtime_move_semantics, semantic_projection_ty,
     },
+    loan::{AuthoritySet, LoanDef, LoanId, LoanRef, ParentSet},
     normalize::{normalize_provisional_semantic_body, normalize_semantic_body},
+    region::{RegionProjection, RegionRoot, RegionSet, SymbolicPlace},
+    shape::{SlotPath, SlotProjection, capability_shape, capability_slots},
+    summary::{
+        BorrowSource, BorrowSourceClause, BorrowSummary, BorrowSummaryLeaf, SummaryPath,
+        SummaryProjection, validate_borrow_summary,
+    },
+    transfer::{
+        BorrowState, BorrowStateValueId, BorrowTransferCx, SharedBorrowValueInterner,
+        shared_value_interner, slot_loan_value,
+    },
     verify::verify_normalized_semantic_body,
 };
 
@@ -49,10 +66,16 @@ fn semantic_borrow_summary_query<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> SemanticBorrowSummaryResult<'db> {
-    if !instance_returns_borrow(db, instance) {
+    if !instance_returns_borrowing_value(db, instance) {
         return SemanticBorrowSummaryResult::Ok(None);
     }
-    match Borrowck::new(db, instance).and_then(Borrowck::borrow_summary) {
+    if instance.key(db).owner(db).body(db).is_none() {
+        return SemanticBorrowSummaryResult::Ok(Some(BorrowSummaryId::new(
+            db,
+            conservative_signature_borrow_summary(db, instance),
+        )));
+    }
+    match Borrowck::new_for_summary(db, instance).and_then(Borrowck::borrow_summary) {
         Ok(summary) => SemanticBorrowSummaryResult::Ok(
             summary.map(|summary| BorrowSummaryId::new(db, summary)),
         ),
@@ -68,8 +91,14 @@ fn provisional_borrow_summary_query<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> SemanticBorrowSummaryResult<'db> {
-    if !instance_returns_borrow(db, instance) {
+    if !instance_returns_borrowing_value(db, instance) {
         return SemanticBorrowSummaryResult::Ok(None);
+    }
+    if instance.key(db).owner(db).body(db).is_none() {
+        return SemanticBorrowSummaryResult::Ok(Some(BorrowSummaryId::new(
+            db,
+            conservative_signature_borrow_summary(db, instance),
+        )));
     }
     let body = match normalize_provisional_semantic_body(db, instance) {
         Ok(body) => body,
@@ -88,17 +117,17 @@ fn provisional_borrow_summary_query<'db>(
 pub fn semantic_borrow_summary<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     instance: SemanticInstance<'db>,
-) -> Result<Option<BorrowSummary<'db>>, CompleteDiagnostic> {
+) -> Result<Option<BorrowSummary>, CompleteDiagnostic> {
     semantic_borrow_summary_voucher(db, instance).map_err(|diag| diag.to_complete(db))
 }
 
 pub(super) fn semantic_borrow_summary_voucher<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-) -> Result<Option<BorrowSummary<'db>>, SemanticBorrowDiagnostic<'db>> {
+) -> Result<Option<BorrowSummary>, SemanticBorrowDiagnostic<'db>> {
     match semantic_borrow_summary_query(db, instance) {
         SemanticBorrowSummaryResult::Ok(summary) => {
-            Ok(summary.map(|summary| summary.items(db).clone()))
+            Ok(summary.map(|summary| summary.summary(db).clone()))
         }
         SemanticBorrowSummaryResult::Err(diag) => Err(diag.diag(db).clone()),
     }
@@ -107,10 +136,10 @@ pub(super) fn semantic_borrow_summary_voucher<'db>(
 pub(super) fn provisional_borrow_summary_voucher<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-) -> Result<Option<BorrowSummary<'db>>, SemanticBorrowDiagnostic<'db>> {
+) -> Result<Option<BorrowSummary>, SemanticBorrowDiagnostic<'db>> {
     match provisional_borrow_summary_query(db, instance) {
         SemanticBorrowSummaryResult::Ok(summary) => {
-            Ok(summary.map(|summary| summary.items(db).clone()))
+            Ok(summary.map(|summary| summary.summary(db).clone()))
         }
         SemanticBorrowSummaryResult::Err(diag) => Err(diag.diag(db).clone()),
     }
@@ -154,24 +183,23 @@ pub fn collect_semantic_borrow_diagnostic_vouchers<'db>(
     top_mod: TopLevelMod<'db>,
 ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
     let mut diags = Vec::new();
-    let mut seen_owners = FxHashSet::default();
+    let mut pending = VecDeque::new();
     let mut seen_diags = FxHashSet::default();
-    collect_top_mod_semantic_borrow_diagnostic_vouchers(
-        db,
-        top_mod,
-        &mut seen_owners,
-        &mut seen_diags,
-        &mut diags,
-    );
+    collect_top_mod_semantic_borrow_diagnostic_vouchers(db, top_mod, &mut pending);
+    let mut seen_instances = FxHashSet::default();
+    while let Some(instance) = pending.pop_front() {
+        if !seen_instances.insert(instance.key(db)) {
+            continue;
+        }
+        collect_instance(db, instance, &mut pending, &mut seen_diags, &mut diags);
+    }
     diags
 }
 
 fn collect_top_mod_semantic_borrow_diagnostic_vouchers<'db>(
     db: &'db dyn HirAnalysisDb,
     top_mod: TopLevelMod<'db>,
-    seen_owners: &mut FxHashSet<BodyOwner<'db>>,
-    seen_diags: &mut FxHashSet<BorrowDiagnosticId<'db>>,
-    diags: &mut Vec<Box<dyn DiagnosticVoucher + 'db>>,
+    pending: &mut VecDeque<SemanticInstance<'db>>,
 ) {
     for item in top_mod
         .all_items(db)
@@ -179,39 +207,37 @@ fn collect_top_mod_semantic_borrow_diagnostic_vouchers<'db>(
         .filter(|item| item.top_mod(db) == top_mod)
     {
         match item {
-            ItemKind::Func(func) => {
-                collect_owner(db, BodyOwner::Func(*func), seen_owners, seen_diags, diags)
-            }
-            ItemKind::Const(const_) => collect_owner(
+            ItemKind::Func(func) => pending.push_back(get_or_build_semantic_instance(
                 db,
-                BodyOwner::Const(*const_),
-                seen_owners,
-                seen_diags,
-                diags,
-            ),
+                identity_semantic_instance_key(db, BodyOwner::Func(*func)),
+            )),
+            ItemKind::Const(const_) => pending.push_back(get_or_build_semantic_instance(
+                db,
+                identity_semantic_instance_key(db, BodyOwner::Const(*const_)),
+            )),
             ItemKind::Contract(contract) => {
-                collect_owner(
+                pending.push_back(get_or_build_semantic_instance(
                     db,
-                    BodyOwner::ContractInit {
-                        contract: *contract,
-                    },
-                    seen_owners,
-                    seen_diags,
-                    diags,
-                );
+                    identity_semantic_instance_key(
+                        db,
+                        BodyOwner::ContractInit {
+                            contract: *contract,
+                        },
+                    ),
+                ));
                 for (recv_idx, recv) in contract.recvs(db).data(db).iter().enumerate() {
                     for arm_idx in 0..recv.arms.data(db).len() {
-                        collect_owner(
+                        pending.push_back(get_or_build_semantic_instance(
                             db,
-                            BodyOwner::ContractRecvArm {
-                                contract: *contract,
-                                recv_idx: recv_idx as u32,
-                                arm_idx: arm_idx as u32,
-                            },
-                            seen_owners,
-                            seen_diags,
-                            diags,
-                        );
+                            identity_semantic_instance_key(
+                                db,
+                                BodyOwner::ContractRecvArm {
+                                    contract: *contract,
+                                    recv_idx: recv_idx as u32,
+                                    arm_idx: arm_idx as u32,
+                                },
+                            ),
+                        ));
                     }
                 }
             }
@@ -230,18 +256,13 @@ fn collect_top_mod_semantic_borrow_diagnostic_vouchers<'db>(
     }
 }
 
-fn collect_owner<'db>(
+fn collect_instance<'db>(
     db: &'db dyn HirAnalysisDb,
-    owner: BodyOwner<'db>,
-    seen_owners: &mut FxHashSet<BodyOwner<'db>>,
+    instance: SemanticInstance<'db>,
+    pending: &mut VecDeque<SemanticInstance<'db>>,
     seen_diags: &mut FxHashSet<BorrowDiagnosticId<'db>>,
     diags: &mut Vec<Box<dyn DiagnosticVoucher + 'db>>,
 ) {
-    if !seen_owners.insert(owner) {
-        return;
-    }
-    let key = identity_semantic_instance_key(db, owner);
-    let instance = get_or_build_semantic_instance(db, key);
     if let SemanticBorrowCheckResult::Err(diag) = semantic_borrow_check_query(db, instance)
         && seen_diags.insert(diag)
     {
@@ -253,6 +274,50 @@ fn collect_owner<'db>(
     {
         diags.push(Box::new(diag));
     }
+    // Address spaces supplied by effect handles exist only on finalized callee
+    // instances. Walk through every reachable specialization because an ordinary
+    // generic wrapper may sit between the root and a closure-bearing effect call.
+    // Unrelated monomorphizations are left to their parametric identity-owner
+    // check above.
+    pending.extend(
+        instance
+            .callees(db)
+            .iter()
+            .filter(|callee| is_fully_instantiated_key(db, callee.key))
+            .map(|callee| get_or_build_semantic_instance(db, callee.key)),
+    );
+}
+
+fn is_fully_instantiated_key<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: SemanticInstanceKey<'db>,
+) -> bool {
+    let args_are_concrete = key
+        .subst(db)
+        .generic_args(db)
+        .iter()
+        .all(|arg| !arg.has_param(db) && !arg.has_var(db));
+    let providers = key.effect_providers(db).providers(db);
+    let providers_are_concrete = providers.iter().all(|specialization| {
+        let provider = &specialization.provider;
+        [
+            provider.provider_ty,
+            provider.semantics.provider_ty,
+            provider.effective_target_ty(),
+        ]
+        .into_iter()
+        .all(|ty| !ty.has_param(db) && !ty.has_var(db))
+    });
+    let has_all_effect_providers = match key.owner(db) {
+        BodyOwner::Func(func) => {
+            EffectEnvView::new(EffectParamSite::Func(func))
+                .requirements(db)
+                .is_empty()
+                || !providers.is_empty()
+        }
+        _ => true,
+    };
+    args_are_concrete && providers_are_concrete && has_all_effect_providers
 }
 
 pub(super) struct Borrowck<'db> {
@@ -265,9 +330,14 @@ pub(super) struct Borrowck<'db> {
     param_modes: Vec<FuncParamMode>,
     param_index_of_local: FxHashMap<crate::analysis::semantic::SLocalId, u32>,
     pub(super) loan_for_local: FxHashMap<crate::analysis::semantic::SLocalId, LoanId>,
-    pub(super) param_loan_for_local: FxHashMap<crate::analysis::semantic::SLocalId, LoanId>,
-    loans: Vec<Loan<'db>>,
-    pub(super) entry_state: SecondaryMap<SBlockId, State>,
+    pub(super) param_values_for_local:
+        FxHashMap<crate::analysis::semantic::SLocalId, BorrowStateValueId<'db>>,
+    pub(super) value_interner: SharedBorrowValueInterner<'db>,
+    loans: Vec<LoanDef<'db>>,
+    pub(super) entry_state: SecondaryMap<SBlockId, BorrowState<'db>>,
+    call_result_loans: FxHashMap<SStmtId, Vec<(SummaryPath, LoanId)>>,
+    call_loan_sources: FxHashMap<LoanId, Vec<BorrowSourceClause>>,
+    constant_indices: SecondaryMap<crate::analysis::semantic::SLocalId, Option<usize>>,
     moved_entry: SecondaryMap<SBlockId, MovedPlaces<'db>>,
     live_before: Vec<Vec<FxHashSet<crate::analysis::semantic::SLocalId>>>,
     live_before_term: SecondaryMap<SBlockId, FxHashSet<crate::analysis::semantic::SLocalId>>,
@@ -279,7 +349,15 @@ impl<'db> Borrowck<'db> {
         instance: SemanticInstance<'db>,
     ) -> Result<Self, SemanticBorrowDiagnostic<'db>> {
         let body = normalize_semantic_body(db, instance)?;
-        Self::new_with_body(db, instance, body, BorrowSummaryMode::Final)
+        Self::new_with_body(db, instance, body, BorrowSummaryMode::FinalCheck)
+    }
+
+    fn new_for_summary(
+        db: &'db dyn HirAnalysisDb,
+        instance: SemanticInstance<'db>,
+    ) -> Result<Self, SemanticBorrowDiagnostic<'db>> {
+        let body = normalize_semantic_body(db, instance)?;
+        Self::new_with_body(db, instance, body, BorrowSummaryMode::FinalSummary)
     }
 
     pub(super) fn new_with_body(
@@ -305,6 +383,55 @@ impl<'db> Borrowck<'db> {
             }
         }
         let facts = NormalizedBodyFacts::new(&body);
+        let mut constant_candidates = FxHashMap::default();
+        let mut stored_locals = FxHashSet::default();
+        for stmt in body.blocks.iter().flat_map(|block| &block.stmts) {
+            match &stmt.kind {
+                NSStmtKind::Assign { dst, expr } => {
+                    let value = match expr {
+                        NExpr::Const(SConst::Value(value)) => match value.value(db) {
+                            SemConstValue::Scalar {
+                                value: SemConstScalar::Int { value },
+                                ..
+                            } => value.to_usize(),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    constant_candidates
+                        .entry(*dst)
+                        .and_modify(|candidate| {
+                            if *candidate != value {
+                                *candidate = None;
+                            }
+                        })
+                        .or_insert(value);
+                }
+                NSStmtKind::Store {
+                    dst:
+                        NSPlace {
+                            root: NSPlaceRoot::Root(root),
+                            ..
+                        },
+                    ..
+                } => match body.root(*root) {
+                    Some(NBorrowRoot::Param { local, .. })
+                    | Some(NBorrowRoot::LocalSlot { local }) => {
+                        stored_locals.insert(*local);
+                    }
+                    Some(NBorrowRoot::Provider { .. }) | None => {}
+                },
+                NSStmtKind::Store { .. } => {}
+            }
+        }
+        let mut constant_indices = SecondaryMap::new();
+        constant_indices.resize(body.locals.len());
+        for (local, value) in constant_candidates {
+            if !stored_locals.contains(&local) {
+                constant_indices[local] = value;
+            }
+        }
+        let value_interner = shared_value_interner(db);
         let mut checker = Self {
             db,
             instance,
@@ -315,14 +442,18 @@ impl<'db> Borrowck<'db> {
             param_modes,
             param_index_of_local,
             loan_for_local: FxHashMap::default(),
-            param_loan_for_local: FxHashMap::default(),
+            param_values_for_local: FxHashMap::default(),
+            value_interner: value_interner.clone(),
             loans: Vec::new(),
-            entry_state: SecondaryMap::new(),
+            entry_state: SecondaryMap::with_default(BorrowState::new(value_interner)),
+            call_result_loans: FxHashMap::default(),
+            call_loan_sources: FxHashMap::default(),
+            constant_indices,
             moved_entry: SecondaryMap::new(),
             live_before: Vec::new(),
             live_before_term: SecondaryMap::new(),
         };
-        checker.init_loans();
+        checker.init_loans()?;
         Ok(checker)
     }
 
@@ -332,16 +463,15 @@ impl<'db> Borrowck<'db> {
             self.instance,
             &self.body,
             &self.loans,
-            &self.loan_for_local,
+            &self.constant_indices,
         )
     }
 
-    fn borrow_summary(
-        mut self,
-    ) -> Result<Option<BorrowSummary<'db>>, SemanticBorrowDiagnostic<'db>> {
-        let owner = self.instance.key(self.db).owner(self.db);
-        let typed_body = self.instance.key(self.db).instantiate_typed_body(self.db);
-        if typed_body.result_ty().as_borrow(self.db).is_none() || owner.body(self.db).is_none() {
+    fn borrow_summary(mut self) -> Result<Option<BorrowSummary>, SemanticBorrowDiagnostic<'db>> {
+        let key = self.instance.key(self.db);
+        if !instance_returns_borrowing_value(self.db, self.instance)
+            || key.owner(self.db).body(self.db).is_none()
+        {
             return Ok(None);
         }
         self.compute_entry_states();
@@ -355,14 +485,7 @@ impl<'db> Borrowck<'db> {
         self.compute_moved_states()?;
         self.compute_liveness();
         self.check_conflicts()?;
-        if self
-            .instance
-            .key(self.db)
-            .instantiate_typed_body(self.db)
-            .result_ty()
-            .as_borrow(self.db)
-            .is_some()
-        {
+        if instance_returns_borrowing_value(self.db, self.instance) {
             let _ = self.compute_return_summary()?;
         }
         Ok(())
@@ -409,66 +532,159 @@ impl<'db> Borrowck<'db> {
         live
     }
 
-    fn init_loans(&mut self) {
+    fn init_loans(&mut self) -> Result<(), SemanticBorrowDiagnostic<'db>> {
         for local_id in 0..self.body.locals.len() {
             let local_id = crate::analysis::semantic::SLocalId::from_u32(local_id as u32);
             let Some(local) = self.body.local(local_id) else {
                 continue;
             };
-            if let Some((kind, _)) = local.ty.as_borrow(self.db)
-                && let Some(&param_idx) = self.param_index_of_local.get(&local_id)
-                && !matches!(
-                    local.lowering,
-                    NormalizedBindingLowering::CarrierLocal { .. }
-                )
+            let local_ty = local.ty;
+            let Some(&param_idx) = self.param_index_of_local.get(&local_id) else {
+                continue;
+            };
+            let shape = capability_shape(self.db, local_ty);
+            let direct_place = match self.instance.key(self.db).owner(self.db) {
+                BodyOwner::Func(func) => param_idx == 0 && func.receiver_ty(self.db).is_some(),
+                _ => false,
+            };
+            let mut leaves = Vec::new();
+            for slot in capability_slots(self.db, shape, false) {
+                let slot_path = slot.path.map_indices(|param| IndexExpr::LoanParam(*param));
+                let mut loan = LoanDef::for_slot(
+                    slot.kind,
+                    &slot.path,
+                    BorrowActivation::Immediate,
+                    crate::analysis::semantic::SemOrigin::Body(self.body.template_owner),
+                );
+                let root = if direct_place && slot.path.is_empty() {
+                    RegionRoot::ParamPlace(param_idx)
+                } else {
+                    RegionRoot::ParamCapability {
+                        param: param_idx,
+                        slot: slot_path.clone(),
+                    }
+                };
+                loan.extend(
+                    RegionSet::singleton(SymbolicPlace::new(root, [])),
+                    ParentSet::default(),
+                );
+                let loan = self.allocate_loan(loan);
+                leaves.push((slot_path, LoanRef::for_slot(loan, &slot.path)));
+            }
+            if let Some(value) = slot_loan_value(&self.value_interner, shape, leaves)
+                && !self.value_interner.borrow().is_empty(value)
             {
-                let loan = LoanId(self.loans.len() as u32);
-                let mut targets = FxHashSet::default();
-                targets.insert(CanonPlace {
-                    root: BorrowRoot::Param(param_idx),
-                    proj: NSProjectionPath::default(),
-                });
-                self.loans.push(Loan {
-                    kind,
-                    targets,
-                    parents: FxHashSet::default(),
-                    origin: crate::analysis::semantic::SemOrigin::Body(self.body.template_owner),
-                });
-                self.param_loan_for_local.insert(local_id, loan);
+                self.param_values_for_local.insert(local_id, value);
             }
         }
 
-        for block in &self.body.blocks {
-            for stmt in &block.stmts {
-                let NSStmtKind::Assign { dst, expr } = &stmt.kind else {
+        let stmts = self
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.stmts.iter().cloned())
+            .collect::<Vec<_>>();
+        for stmt in stmts {
+            let NSStmtKind::Assign { dst, expr } = &stmt.kind else {
+                continue;
+            };
+            let Some(result_ty) = self.body.local(*dst).map(|local| local.ty) else {
+                continue;
+            };
+            if let NExpr::Call { callee, args, .. } = expr
+                && capability_shape(self.db, result_ty).contains_borrow(self.db)
+            {
+                let Some(summary) = self.call_borrow_summary(callee.key)? else {
                     continue;
                 };
-                if self
-                    .body
-                    .local(*dst)
-                    .is_some_and(|local| local.ty.as_borrow(self.db).is_some())
-                    && matches!(
-                        expr,
-                        NExpr::Borrow { .. } | NExpr::Call { .. } | NExpr::Use(_)
-                    )
-                {
-                    let kind = self
-                        .body
-                        .local(*dst)
-                        .and_then(|local| local.ty.as_borrow(self.db))
-                        .map(|(kind, _)| kind)
-                        .expect("borrow local");
-                    let loan = LoanId(self.loans.len() as u32);
-                    self.loan_for_local.insert(*dst, loan);
-                    self.loans.push(Loan {
-                        kind,
-                        targets: FxHashSet::default(),
-                        parents: FxHashSet::default(),
-                        origin: stmt.origin,
-                    });
+                self.validate_call_borrow_summary(result_ty, args, &summary, stmt.origin)?;
+                for leaf in summary.leaves() {
+                    let loan = self.allocate_loan(LoanDef::for_summary(
+                        leaf.kind,
+                        &leaf.path,
+                        BorrowActivation::Immediate,
+                        stmt.origin,
+                    ));
+                    self.call_loan_sources.insert(loan, leaf.sources.clone());
+                    if ty_is_borrow(self.db, result_ty).is_some() && leaf.path.is_empty() {
+                        self.loan_for_local.insert(*dst, loan);
+                    } else {
+                        self.call_result_loans
+                            .entry(stmt.id)
+                            .or_default()
+                            .push((leaf.path.clone(), loan));
+                    }
                 }
+                continue;
+            }
+
+            let direct_loan = match expr {
+                NExpr::Borrow {
+                    kind, activation, ..
+                } => Some((*kind, *activation)),
+                NExpr::ReadPlace { .. } | NExpr::Use(_) => ty_is_borrow(self.db, result_ty)
+                    .map(|(kind, _)| (kind, BorrowActivation::Immediate)),
+                _ => None,
+            };
+            if let Some((kind, activation)) = direct_loan
+                && !matches!(
+                    expr,
+                    NExpr::ReadPlace { place, .. }
+                        if self.read_place_copies_capability(place)
+                )
+            {
+                let loan = self.allocate_loan(LoanDef::plain(kind, activation, stmt.origin));
+                self.loan_for_local.insert(*dst, loan);
             }
         }
+        Ok(())
+    }
+
+    fn read_place_copies_capability(&self, place: &NSPlace<'db>) -> bool {
+        self.body
+            .place_root_ty(&place.root)
+            .and_then(|ty| semantic_projection_ty(self.db, ty, &place.path))
+            .is_some_and(|(ty, _)| ty.as_capability(self.db).is_some())
+    }
+
+    fn allocate_loan(&mut self, loan: LoanDef<'db>) -> LoanId {
+        let id = LoanId(self.loans.len() as u32);
+        self.loans.push(loan);
+        id
+    }
+
+    fn call_borrow_summary(
+        &self,
+        key: SemanticInstanceKey<'db>,
+    ) -> Result<Option<BorrowSummary>, SemanticBorrowDiagnostic<'db>> {
+        let instance = get_or_build_semantic_instance(self.db, key);
+        match self.summary_mode {
+            BorrowSummaryMode::FinalCheck | BorrowSummaryMode::FinalSummary => {
+                semantic_borrow_summary_voucher(self.db, instance)
+            }
+            BorrowSummaryMode::Provisional => provisional_borrow_summary_voucher(self.db, instance),
+        }
+    }
+
+    fn validate_call_borrow_summary(
+        &self,
+        result_ty: crate::analysis::ty::ty_def::TyId<'db>,
+        args: &[NOperand],
+        summary: &BorrowSummary,
+        origin: SemOrigin<'db>,
+    ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
+        let argument_tys = args
+            .iter()
+            .map(|arg| self.body.local(arg.local).map(|local| local.ty))
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| {
+                self.internal_diag(
+                    origin,
+                    "callee borrow summary argument is missing".to_string(),
+                )
+            })?;
+        validate_borrow_summary(self.db, result_ty, &argument_tys, summary)
+            .map_err(|message| self.internal_diag(origin, message))
     }
 
     pub(super) fn compute_entry_states(&mut self) {
@@ -478,16 +694,35 @@ impl<'db> Borrowck<'db> {
     pub(super) fn compute_loan_targets(&mut self) -> Result<(), SemanticBorrowDiagnostic<'db>> {
         let mut analysis = BorrowLoanTargetAnalysis::new(
             self.db,
-            self.instance,
             &self.body,
             &self.entry_state,
             &self.loan_for_local,
-            self.summary_mode,
+            &self.constant_indices,
+            &self.call_result_loans,
+            &self.call_loan_sources,
         );
         let mut state = BorrowLoanTargetState {
             loans: &mut self.loans,
         };
         try_solve_sparse(&mut analysis, &mut state)
+    }
+
+    pub(super) fn apply_stmt_state(
+        &self,
+        state: &mut BorrowState<'db>,
+        stmt: &super::ir::NSStmt<'db>,
+    ) {
+        BorrowTransferCx::new(
+            self.db,
+            &self.body,
+            &self.loan_for_local,
+            &self.constant_indices,
+        )
+        .apply_stmt(
+            state,
+            stmt,
+            self.call_result_loans.get(&stmt.id).map(Vec::as_slice),
+        );
     }
 
     fn compute_moved_states(&mut self) -> Result<(), SemanticBorrowDiagnostic<'db>> {
@@ -506,7 +741,7 @@ impl<'db> Borrowck<'db> {
             for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
                 self.check_stmt(&state, &moved, &self.live_before[bb_idx][stmt_idx], stmt)?;
                 self.update_moved_for_stmt(&state, &mut moved, stmt)?;
-                self.canon().apply_stmt_state(&mut state, stmt);
+                self.apply_stmt_state(&mut state, stmt);
             }
             self.check_terminator(
                 &state,
@@ -520,91 +755,522 @@ impl<'db> Borrowck<'db> {
 
     fn check_stmt(
         &self,
-        state: &State,
+        state: &BorrowState<'db>,
         moved: &MovedPlaces<'db>,
         live: &FxHashSet<crate::analysis::semantic::SLocalId>,
         stmt: &super::ir::NSStmt<'db>,
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
-        let active = self.effective_loans(state, live);
+        let active = effective_loans(&self.canon(), &self.loans, state, live);
         match &stmt.kind {
-            NSStmtKind::Assign { dst, expr } => match expr {
-                NExpr::ReadPlace { place, mode } => {
-                    let targets = self.canon().canonicalize_place(state, place, stmt.origin)?;
-                    self.check_moved_overlap(
-                        moved,
-                        &targets,
-                        stmt.origin,
-                        "cannot use a value after it was moved",
-                    )?;
-                    if *mode == ReadMode::Move {
-                        self.check_move_out(&active, place, &targets, stmt.origin)?;
+            NSStmtKind::Assign { dst, expr } => {
+                match expr {
+                    NExpr::ReadPlace { place, mode } => {
+                        self.check_place_read(state, moved, &active, place, *mode, stmt.origin)?;
                     }
-                }
-                NExpr::Borrow { place, kind, .. } => {
-                    let targets = self.canon().canonicalize_place(state, place, stmt.origin)?;
-                    self.check_moved_overlap(
-                        moved,
-                        &targets,
-                        stmt.origin,
-                        "cannot borrow a moved value",
-                    )?;
-                    if let Some(conflict) = self.first_loan_conflict(
-                        &active,
-                        self.loan_for_local.get(dst).copied(),
-                        *kind,
-                        &targets,
-                    ) {
-                        return Err(self.borrow_conflict_diag(
+                    NExpr::Borrow { place, kind, .. } => {
+                        let targets = self.canon().resolve_place(state, place, stmt.origin)?;
+                        let authorized = self.canon().authority_for_place(state, place);
+                        self.check_moved_overlap(
+                            moved,
+                            &targets,
+                            &authorized,
                             stmt.origin,
-                            self.overlapping_loans_msg(conflict, *kind),
-                            conflict,
-                        ));
+                            "cannot borrow a moved value",
+                        )?;
+                        let loan = self.loan_for_local.get(dst).copied();
+                        if let Some(kind) =
+                            loan.map_or(Some(*kind), |loan| self.loan_conflict_kind(loan))
+                        {
+                            let reference = loan.map(LoanRef::new);
+                            self.check_loan_conflict(
+                                &active,
+                                reference.as_ref(),
+                                kind,
+                                &targets,
+                                stmt.origin,
+                            )?;
+                        }
+                    }
+                    NExpr::ExtractEnumField {
+                        value,
+                        variant,
+                        field,
+                    } => {
+                        let targets =
+                            self.extract_enum_field_move_region(state, *value, *variant, *field);
+                        let authorized =
+                            self.canon()
+                                .authority_for_value_targets(state, value.local, &targets);
+                        self.check_moved_overlap(
+                            moved,
+                            &targets,
+                            &authorized,
+                            stmt.origin,
+                            "cannot use a value after it was moved",
+                        )?;
+                        if value.mode == ReadMode::Move {
+                            self.check_move_targets_out(
+                                &active,
+                                &authorized,
+                                &targets,
+                                stmt.origin,
+                            )?;
+                        } else {
+                            self.check_read_targets(&active, &authorized, &targets, stmt.origin)?;
+                        }
+                    }
+                    _ => {
+                        let expression_moved =
+                            self.check_expr_operands(state, moved, &active, stmt.origin, expr)?;
+                        let mut call_accesses =
+                            self.check_call_argument_accesses(state, &active, stmt.origin, expr)?;
+                        self.check_effect_place_accesses(
+                            state,
+                            &expression_moved,
+                            &active,
+                            stmt.origin,
+                            expr,
+                            &mut call_accesses,
+                        )?;
                     }
                 }
-                NExpr::ExtractEnumField {
-                    value,
-                    variant,
-                    field,
-                } => {
-                    let targets =
-                        self.extract_enum_field_move_targets(state, *value, *variant, *field);
+                if matches!(expr, NExpr::Call { .. } | NExpr::Use(_)) {
+                    self.check_assigned_loan_conflicts(&active, stmt.id, *dst, stmt.origin)?;
+                }
+                self.check_assignment_write(state, &active, *dst, stmt.origin)?;
+            }
+            NSStmtKind::Store { dst, src } => {
+                self.check_operand(
+                    state,
+                    moved,
+                    &active,
+                    *src,
+                    stmt.origin,
+                    "cannot use a value after it was moved",
+                )?;
+                let targets = self.canon().resolve_place(state, dst, stmt.origin)?;
+                let mut authorized = self
+                    .canon()
+                    .mut_authority_for_place_targets(state, dst, &targets);
+                if src.mode == ReadMode::Move {
+                    authorized.union(
+                        self.canon()
+                            .mut_authority_for_value_targets(state, src.local, &targets),
+                    );
+                }
+                self.check_moved_parent(moved, &targets, &authorized, stmt.origin)?;
+                self.check_write_targets(&active, &authorized, &targets, stmt.origin)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn check_assignment_write(
+        &self,
+        state: &BorrowState<'db>,
+        active: &[ActiveLoan<'db>],
+        dst: crate::analysis::semantic::SLocalId,
+        origin: SemOrigin<'db>,
+    ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
+        let Some(place) = self
+            .body
+            .local(dst)
+            .filter(|local| local.source.is_some_and(|binding| binding.is_mut()))
+            .and_then(|local| local.lowering.place())
+        else {
+            return Ok(());
+        };
+        let targets = self.canon().resolve_place(state, place, origin)?;
+        self.check_write_targets(active, &AuthoritySet::default(), &targets, origin)
+    }
+
+    fn check_place_read(
+        &self,
+        state: &BorrowState<'db>,
+        moved: &MovedPlaces<'db>,
+        active: &[ActiveLoan<'db>],
+        place: &NSPlace<'db>,
+        mode: ReadMode,
+        origin: SemOrigin<'db>,
+    ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
+        let targets = self.canon().resolve_place(state, place, origin)?;
+        let authorized = self.canon().authority_for_place(state, place);
+        self.check_moved_overlap(
+            moved,
+            &targets,
+            &authorized,
+            origin,
+            "cannot use a value after it was moved",
+        )?;
+        if mode == ReadMode::Move {
+            self.check_move_out(active, &authorized, place, &targets, origin)
+        } else {
+            self.check_read_targets(active, &authorized, &targets, origin)
+        }
+    }
+
+    fn check_effect_place_accesses(
+        &self,
+        state: &BorrowState<'db>,
+        moved: &MovedPlaces<'db>,
+        active: &[ActiveLoan<'db>],
+        origin: SemOrigin<'db>,
+        expr: &NExpr<'db>,
+        accesses: &mut Vec<CallAccess<'db>>,
+    ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
+        let NExpr::Call {
+            args, effect_args, ..
+        } = expr
+        else {
+            return Ok(());
+        };
+        for (idx, effect_arg) in effect_args.iter().enumerate() {
+            let group = args.len() + idx;
+            let (targets, authorized, arg_origin) = match &effect_arg.arg {
+                NEffectArgValue::Place(place) => {
+                    let targets = self.canon().resolve_place(state, place, origin)?;
+                    let authorized = if effect_arg.required_mut {
+                        self.canon().mut_authority_for_place(state, place)
+                    } else {
+                        self.canon().authority_for_place(state, place)
+                    };
                     self.check_moved_overlap(
                         moved,
                         &targets,
-                        stmt.origin,
+                        &authorized,
+                        origin,
                         "cannot use a value after it was moved",
                     )?;
-                    if value.mode == ReadMode::Move {
-                        self.check_move_targets_out(&active, &targets, stmt.origin)?;
-                    }
+                    (targets, authorized, origin)
                 }
-                _ => self.check_expr_operands(state, moved, stmt.origin, expr)?,
-            },
-            NSStmtKind::Store { dst, .. } => {
-                let targets = self.canon().canonicalize_place(state, dst, stmt.origin)?;
-                self.check_moved_parent(moved, &targets, stmt.origin)?;
+                NEffectArgValue::Value(value) => {
+                    let targets = self.canon().value_region(state, value.local);
+                    let authorized = if effect_arg.required_mut {
+                        self.canon()
+                            .mut_authority_for_value_targets(state, value.local, &targets)
+                    } else {
+                        self.canon()
+                            .authority_for_value_targets(state, value.local, &targets)
+                    };
+                    (targets, authorized, operand_origin(*value, origin))
+                }
+            };
+            if effect_arg.required_mut {
+                self.check_write_targets(active, &authorized, &targets, arg_origin)?;
+                self.record_call_access(
+                    accesses,
+                    group,
+                    None,
+                    BorrowKind::Mut,
+                    targets,
+                    arg_origin,
+                )?;
+            } else {
+                self.check_read_targets(active, &authorized, &targets, arg_origin)?;
+                self.record_call_access(
+                    accesses,
+                    group,
+                    None,
+                    BorrowKind::Ref,
+                    targets,
+                    arg_origin,
+                )?;
             }
+
+            let target_ty = effect_arg.target_ty.or_else(|| match &effect_arg.arg {
+                NEffectArgValue::Value(value) => self.body.local(value.local).map(|local| local.ty),
+                NEffectArgValue::Place(_) => None,
+            });
+            let Some(target_ty) = target_ty else {
+                continue;
+            };
+            let shape = capability_shape(self.db, target_ty);
+            for slot in capability_slots(self.db, shape, false) {
+                let projection = layout_path_for_slot_template(&slot.path);
+                let targets = match &effect_arg.arg {
+                    NEffectArgValue::Place(place) => {
+                        self.canon()
+                            .place_layout_region(state, place, target_ty, &projection)
+                    }
+                    NEffectArgValue::Value(value) => {
+                        self.canon()
+                            .value_layout_region(state, value.local, &projection)
+                    }
+                };
+                let authorized = match &effect_arg.arg {
+                    NEffectArgValue::Place(place) if slot.kind == BorrowKind::Mut => self
+                        .canon()
+                        .mut_authority_for_place_targets(state, place, &targets),
+                    NEffectArgValue::Place(place) => self
+                        .canon()
+                        .authority_for_place_targets(state, place, &targets),
+                    NEffectArgValue::Value(value) if slot.kind == BorrowKind::Mut => self
+                        .canon()
+                        .mut_authority_for_value_targets(state, value.local, &targets),
+                    NEffectArgValue::Value(value) => {
+                        self.canon()
+                            .authority_for_value_targets(state, value.local, &targets)
+                    }
+                };
+                if slot.kind == BorrowKind::Mut {
+                    self.check_write_targets(active, &authorized, &targets, arg_origin)?;
+                } else {
+                    self.check_read_targets(active, &authorized, &targets, arg_origin)?;
+                }
+                self.record_call_access(
+                    accesses,
+                    group,
+                    Some(&slot.path),
+                    slot.kind,
+                    targets,
+                    arg_origin,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn check_call_argument_accesses(
+        &self,
+        state: &BorrowState<'db>,
+        active: &[ActiveLoan<'db>],
+        origin: SemOrigin<'db>,
+        expr: &NExpr<'db>,
+    ) -> Result<Vec<CallAccess<'db>>, SemanticBorrowDiagnostic<'db>> {
+        let NExpr::Call { callee, args, .. } = expr else {
+            return Ok(Vec::new());
+        };
+        let instance = get_or_build_semantic_instance(self.db, callee.key);
+        let BodyOwner::Func(func) = callee.key.owner(self.db) else {
+            return Ok(Vec::new());
+        };
+        let mut accesses = Vec::with_capacity(args.len());
+        for (idx, arg) in args.iter().copied().enumerate() {
+            let Some(param) = func.params(self.db).nth(idx) else {
+                return Err(
+                    self.internal_diag(origin, format!("callee is missing value parameter {idx}"))
+                );
+            };
+            let ty = instance.normalized_ty(self.db, param.ty(self.db));
+            let moves_value =
+                arg.mode == ReadMode::Move && self.local_has_runtime_move_semantics(arg.local);
+            let arg_origin = operand_origin(arg, origin);
+            let mutably_passed_by_place =
+                param.mode(self.db) != FuncParamMode::Own && param.is_mut(self.db);
+            if ty.as_borrow(self.db).is_none()
+                && (arg.mode != ReadMode::Copy || mutably_passed_by_place)
+            {
+                let kind = if mutably_passed_by_place || moves_value {
+                    BorrowKind::Mut
+                } else {
+                    BorrowKind::Ref
+                };
+                let targets = self.canon().value_region(state, arg.local);
+                if kind == BorrowKind::Mut && !moves_value {
+                    let authorized = self
+                        .canon()
+                        .mut_authority_for_value_targets(state, arg.local, &targets);
+                    self.check_write_targets(active, &authorized, &targets, arg_origin)?;
+                }
+                self.record_call_access(&mut accesses, idx, None, kind, targets, arg_origin)?;
+            }
+            let shape = capability_shape(self.db, ty);
+            for slot in capability_slots(self.db, shape, false) {
+                let projection = layout_path_for_slot_template(&slot.path);
+                let targets = self
+                    .canon()
+                    .value_layout_region(state, arg.local, &projection);
+                let authorized = if slot.kind == BorrowKind::Mut {
+                    self.canon()
+                        .mut_authority_for_value_targets(state, arg.local, &targets)
+                } else {
+                    self.canon()
+                        .authority_for_value_targets(state, arg.local, &targets)
+                };
+                if slot.kind == BorrowKind::Mut {
+                    self.check_write_targets(active, &authorized, &targets, arg_origin)?;
+                } else {
+                    self.check_read_targets(active, &authorized, &targets, arg_origin)?;
+                }
+                self.record_call_access(
+                    &mut accesses,
+                    idx,
+                    Some(&slot.path),
+                    slot.kind,
+                    targets,
+                    arg_origin,
+                )?;
+            }
+        }
+        Ok(accesses)
+    }
+
+    fn record_call_access(
+        &self,
+        accesses: &mut Vec<CallAccess<'db>>,
+        group: usize,
+        projection: Option<&SlotPath<IndexParamId>>,
+        kind: BorrowKind,
+        targets: RegionSet<'db>,
+        origin: SemOrigin<'db>,
+    ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
+        // An argument owns its container and the capability slots stored inside
+        // it, but distinct capability slots must still obey aliasing rules.
+        let conflict = accesses
+            .iter()
+            .find(|access| access.conflicts_with(group, projection, kind, &targets));
+        if let Some(conflict) = conflict {
+            let mut diag = SemanticBorrowDiagnostic::new(
+                self.instance,
+                SemanticBorrowDiagKind::BorrowConflict,
+                "call arguments require conflicting access to the same place".to_string(),
+                SemanticBorrowDiagnosticSpan::Origin {
+                    owner: self.instance.key(self.db).owner(self.db),
+                    origin,
+                },
+            );
+            self.push_secondary_origin(
+                &mut diag,
+                conflict.origin(),
+                "overlapping argument access occurs here".to_string(),
+            );
+            return Err(diag);
+        }
+        if !targets.is_empty() {
+            accesses.push(CallAccess::new(
+                group,
+                projection.cloned(),
+                kind,
+                targets,
+                origin,
+            ));
+        }
+        Ok(())
+    }
+
+    fn check_assigned_loan_conflicts(
+        &self,
+        active: &[ActiveLoan<'db>],
+        stmt: SStmtId,
+        local: crate::analysis::semantic::SLocalId,
+        origin: crate::analysis::semantic::SemOrigin<'db>,
+    ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
+        let mut references = self
+            .loan_for_local
+            .get(&local)
+            .copied()
+            .map(LoanRef::new)
+            .into_iter()
+            .collect::<Vec<_>>();
+        references.extend(
+            self.call_result_loans
+                .get(&stmt)
+                .into_iter()
+                .flatten()
+                .map(|(path, loan)| LoanRef::for_summary(*loan, path)),
+        );
+        for reference in references {
+            let loan = &self.loans[reference.id.0 as usize];
+            let targets = self
+                .canon()
+                .active_region_for_held(&reference, &Guard::always());
+            self.check_loan_conflict(active, Some(&reference), loan.kind(), &targets, origin)?;
+        }
+        Ok(())
+    }
+
+    fn check_loan_conflict(
+        &self,
+        active: &[ActiveLoan<'db>],
+        new_loan: Option<&LoanRef>,
+        kind: BorrowKind,
+        targets: &RegionSet<'db>,
+        origin: crate::analysis::semantic::SemOrigin<'db>,
+    ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
+        if let Some(conflict) = self.first_loan_conflict(active, new_loan, kind, targets) {
+            return Err(self.borrow_conflict_diag(
+                origin,
+                self.overlapping_loans_msg(conflict, kind),
+                conflict,
+            ));
+        }
+        Ok(())
+    }
+
+    fn check_read_targets(
+        &self,
+        active: &[ActiveLoan<'db>],
+        authorized: &AuthoritySet,
+        targets: &RegionSet<'db>,
+        origin: SemOrigin<'db>,
+    ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
+        let conflict = active.iter().find(|loan| {
+            !authorized.matches(loan.reference(), loan.holder_guard())
+                && self.loan_conflict_kind(loan.id()) == Some(BorrowKind::Mut)
+                && loan.overlaps(targets)
+        });
+        if let Some(conflict) = conflict {
+            return Err(self.borrow_conflict_diag(
+                origin,
+                "cannot read this place while a mutable borrow is active".to_string(),
+                conflict.id(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn check_write_targets(
+        &self,
+        active: &[ActiveLoan<'db>],
+        authorized: &AuthoritySet,
+        targets: &RegionSet<'db>,
+        origin: SemOrigin<'db>,
+    ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
+        let conflict = active.iter().find(|loan| {
+            !authorized.matches(loan.reference(), loan.holder_guard())
+                && self.loan_conflict_kind(loan.id()).is_some()
+                && loan.overlaps(targets)
+        });
+        if let Some(conflict) = conflict {
+            return Err(self.borrow_conflict_diag(
+                origin,
+                "cannot write to this place while it is borrowed".to_string(),
+                conflict.id(),
+            ));
         }
         Ok(())
     }
 
     fn check_terminator(
         &self,
-        state: &State,
+        state: &BorrowState<'db>,
         moved: &MovedPlaces<'db>,
         live: &FxHashSet<crate::analysis::semantic::SLocalId>,
         term: &super::ir::NSTerminator<'db>,
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
         match &term.kind {
             NSTerminatorKind::Goto(_) | NSTerminatorKind::Assert { .. } => {}
-            NSTerminatorKind::Branch { cond, .. }
-            | NSTerminatorKind::MatchEnum { value: cond, .. }
-            | NSTerminatorKind::Return(Some(cond)) => {
-                let _ = live;
+            NSTerminatorKind::Branch { cond, .. } | NSTerminatorKind::Return(Some(cond)) => {
+                let active = effective_loans(&self.canon(), &self.loans, state, live);
                 self.check_operand(
                     state,
                     moved,
+                    &active,
                     *cond,
+                    term.origin,
+                    "cannot use a value after it was moved",
+                )?;
+            }
+            NSTerminatorKind::MatchEnum { value, .. } => {
+                let active = effective_loans(&self.canon(), &self.loans, state, live);
+                self.check_operand(
+                    state,
+                    moved,
+                    &active,
+                    NOperand {
+                        mode: ReadMode::Read,
+                        ..*value
+                    },
                     term.origin,
                     "cannot use a value after it was moved",
                 )?;
@@ -615,10 +1281,10 @@ impl<'db> Borrowck<'db> {
             && self
                 .body
                 .local(value.local)
-                .is_some_and(|local| local.ty.as_borrow(self.db).is_some())
+                .is_some_and(|local| ty_is_borrow(self.db, local.ty).is_some())
             && self
                 .canon()
-                .borrow_local_targets(state, value.local)
+                .borrow_local_region(state, value.local)
                 .is_empty()
         {
             return Err(self.internal_diag(
@@ -626,109 +1292,278 @@ impl<'db> Borrowck<'db> {
                 "borrow return local has no tracked loan targets".to_string(),
             ));
         }
+        if let NSTerminatorKind::Return(Some(value)) = term.kind
+            && self
+                .body
+                .local(value.local)
+                .is_some_and(|local| ty_is_borrow(self.db, local.ty).is_none())
+        {
+            for loan in active_loans_in(&self.canon(), state, value.local) {
+                let region = self.resolve_return_region(state, loan.region(), term.origin)?;
+                if let Some(local) = region.guarded_places().find_map(|(_, target)| {
+                    if let RegionRoot::Local(local) = target.root() {
+                        Some(*local)
+                    } else {
+                        None
+                    }
+                }) {
+                    let name = self.pretty_local_name(local);
+                    let mut diag = self.invalid_return_diag(
+                        term.origin,
+                        format!("cannot return a value that holds a borrow of local `{name}`"),
+                    );
+                    self.push_secondary_origin(
+                        &mut diag,
+                        self.loan_origin(loan.id()),
+                        "borrow created here".to_string(),
+                    );
+                    return Err(diag);
+                }
+            }
+        }
         Ok(())
     }
 
-    fn compute_return_summary(&self) -> Result<BorrowSummary<'db>, SemanticBorrowDiagnostic<'db>> {
-        let mut out = Vec::new();
+    fn resolve_return_region(
+        &self,
+        state: &BorrowState<'db>,
+        region: &RegionSet<'db>,
+        origin: SemOrigin<'db>,
+    ) -> Result<RegionSet<'db>, SemanticBorrowDiagnostic<'db>> {
+        let mut pending = region.clauses().collect::<VecDeque<_>>();
+        let mut seen = FxHashSet::default();
+        let mut resolved = RegionSet::empty();
+        while let Some(target) = pending.pop_front() {
+            if !seen.insert(target.clone()) {
+                continue;
+            }
+            let (guard, place) = target
+                .guarded_places()
+                .next()
+                .expect("a split region contains one clause");
+            let RegionRoot::Local(local) = place.root() else {
+                resolved = resolved.union(&target);
+                continue;
+            };
+            let Some(local) = self.body.local(*local) else {
+                resolved = resolved.union(&target);
+                continue;
+            };
+            // Snapshot provenance describes a value's physical source. Layout
+            // backing is deliberately not used here: it can point at the
+            // argument that supplied a fresh aggregate field's layout without
+            // making that freshly allocated field an alias of the argument.
+            let Some(source) = local.snapshot_source_place() else {
+                resolved = resolved.union(&target);
+                continue;
+            };
+            let source = self
+                .canon()
+                .resolve_place(state, source, origin)?
+                .project(place.projection())
+                .with_guard(guard);
+            let mut advanced = false;
+            for source in source.clauses() {
+                if source == target {
+                    continue;
+                }
+                advanced = true;
+                pending.push_back(source);
+            }
+            if !advanced {
+                resolved = resolved.union(&target);
+            }
+        }
+        Ok(resolved)
+    }
+
+    fn compute_return_summary(&self) -> Result<BorrowSummary, SemanticBorrowDiagnostic<'db>> {
+        let mut out = BTreeMap::<(BorrowKind, SummaryPath), Vec<BorrowSourceClause>>::new();
+        let mut families = BTreeMap::new();
         for (bb_idx, block) in self.body.blocks.iter().enumerate() {
             let NSTerminatorKind::Return(Some(value)) = block.terminator.kind else {
                 continue;
             };
             let mut state = self.entry_state[SBlockId::new(bb_idx)].clone();
             for stmt in &block.stmts {
-                self.canon().apply_stmt_state(&mut state, stmt);
+                self.apply_stmt_state(&mut state, stmt);
             }
-            for target in self.canon().borrow_local_targets(&state, value.local) {
-                for proj in target.proj.iter() {
-                    if matches!(proj, Projection::Index(IndexSource::Dynamic(_))) {
-                        return Err(self.invalid_return_diag(
-                            block.terminator.origin,
-                            "return borrows with dynamic indices are not supported".to_string(),
-                        ));
+            let origin = block.terminator.origin;
+            for leaf in state.leaves_in(value.local, super::guard::ValueScope::Summary) {
+                let kind = self.loans[leaf.payload.id.0 as usize].kind();
+                let (path, subst) = summary_path_for_leaf(&leaf.path, &mut families);
+                let held = leaf.payload.substitute(&subst);
+                let Some(guard) = leaf.payload_guard.substitute(&subst) else {
+                    continue;
+                };
+                let region = self.canon().active_region_for_held(&held, &guard);
+                if region.is_empty() {
+                    if self.summary_mode != BorrowSummaryMode::FinalCheck {
+                        out.entry((kind, path)).or_default();
+                        continue;
                     }
+                    return Err(self.internal_diag(
+                        origin,
+                        format!("borrow result slot {:?} has no tracked source", path),
+                    ));
                 }
-                match &target.root {
-                    BorrowRoot::Param(idx) => {
-                        let transform = BorrowTransform {
-                            input: BorrowInputRef::Param(*idx),
-                            proj: target.proj.clone(),
-                        };
-                        if !out.contains(&transform) {
-                            out.push(transform);
+                let region = self.resolve_return_region(&state, &region, origin)?;
+                for (source_guard, target) in region.guarded_places() {
+                    let (source_guard, target) =
+                        self.normalize_summary_source(source_guard, target, origin)?;
+                    match target.root() {
+                        RegionRoot::ParamPlace(idx) => {
+                            let source_path =
+                                summary_path_for_region_projection(target.projection());
+                            out.entry((kind, path.clone()))
+                                .or_default()
+                                .push(BorrowSourceClause {
+                                    guard: source_guard.clone(),
+                                    source: BorrowSource::ParamPlace {
+                                        param: *idx,
+                                        path: source_path,
+                                    },
+                                });
+                        }
+                        RegionRoot::ParamCapability { param, slot } => {
+                            out.entry((kind, path.clone()))
+                                .or_default()
+                                .push(BorrowSourceClause {
+                                    guard: source_guard.clone(),
+                                    source: BorrowSource::ParamCapability {
+                                        param: *param,
+                                        slot: summary_path_for_slot(slot),
+                                    },
+                                });
+                        }
+                        RegionRoot::Provider(_) => {
+                            return Err(self.invalid_return_diag(
+                                origin,
+                                "cannot return a borrow derived from an effect parameter"
+                                    .to_string(),
+                            ));
+                        }
+                        RegionRoot::Local(local) => {
+                            let name = self.pretty_local_name(*local);
+                            return Err(self.invalid_return_diag(
+                                origin,
+                                format!("cannot return a borrow to local `{name}`"),
+                            ));
                         }
                     }
-                    BorrowRoot::Provider(_) => {
-                        return Err(self.invalid_return_diag(
-                            block.terminator.origin,
-                            "cannot return a borrow derived from an effect parameter".to_string(),
-                        ));
-                    }
-                    BorrowRoot::Local(local) => {
-                        let name = self.pretty_local_name(*local);
-                        return Err(self.invalid_return_diag(
-                            block.terminator.origin,
-                            format!("cannot return a borrow to local `{name}`"),
-                        ));
-                    }
                 }
             }
         }
-        Ok(out)
+        Ok(BorrowSummary::new(
+            out.into_iter()
+                .map(|((kind, path), sources)| BorrowSummaryLeaf::new(kind, path, sources))
+                .collect(),
+        ))
     }
 
-    fn effective_loans(
+    fn normalize_summary_source(
         &self,
-        state: &State,
-        live: &FxHashSet<crate::analysis::semantic::SLocalId>,
-    ) -> Vec<LoanId> {
-        let active = state
-            .local_loans
+        guard: &Guard,
+        place: &SymbolicPlace<'db>,
+        origin: SemOrigin<'db>,
+    ) -> Result<(Guard, SymbolicPlace<'db>), SemanticBorrowDiagnostic<'db>> {
+        let mut expressions = guard
+            .index_exprs()
+            .into_iter()
+            .chain(place.index_exprs())
+            .collect::<Vec<_>>();
+        expressions.sort_unstable();
+        expressions.dedup();
+        let mut next_existential = expressions
             .iter()
-            .filter(|(local, _)| live.contains(local))
-            .flat_map(|(_, loans)| loans.iter().copied())
-            .collect::<FxHashSet<_>>();
-        let mut suspended = FxHashSet::default();
-        let mut worklist: Vec<_> = active.iter().copied().collect();
-        while let Some(loan) = worklist.pop() {
-            for parent in &self.loans[loan.0 as usize].parents {
-                if suspended.insert(*parent) {
-                    worklist.push(*parent);
+            .filter_map(|expr| match expr {
+                IndexExpr::Existential(id) => Some(id.0),
+                _ => None,
+            })
+            .max()
+            .and_then(|id| id.checked_add(1))
+            .unwrap_or(0);
+        let mut subst = IndexSubst::new();
+        for expression in expressions {
+            match expression {
+                IndexExpr::Runtime(local) => {
+                    let replacement = self.param_index_of_local.get(&local).copied().map_or_else(
+                        || {
+                            let existential = ExistentialId(next_existential);
+                            next_existential = next_existential
+                                .checked_add(1)
+                                .expect("summary existential space exhausted");
+                            IndexExpr::Existential(existential)
+                        },
+                        IndexExpr::InputParam,
+                    );
+                    subst.insert(expression, replacement);
                 }
+                IndexExpr::ValueParam(_) | IndexExpr::LoanParam(_) => {
+                    return Err(self.internal_diag(
+                        origin,
+                        "borrow summary contains an unbound internal index".to_string(),
+                    ));
+                }
+                IndexExpr::Const(_)
+                | IndexExpr::ResultParam(_)
+                | IndexExpr::InputParam(_)
+                | IndexExpr::Existential(_) => {}
             }
         }
-        let mut active: Vec<_> = active
-            .into_iter()
-            .filter(|loan| !suspended.contains(loan))
-            .collect();
-        active.sort_by_key(|loan| loan.0);
-        active
+        let guard = guard.substitute(&subst).ok_or_else(|| {
+            self.internal_diag(
+                origin,
+                "borrow summary source has contradictory index constraints".to_string(),
+            )
+        })?;
+        Ok((guard, place.substitute(&subst)))
     }
 
     fn first_loan_conflict(
         &self,
-        active: &[LoanId],
-        new_loan: Option<LoanId>,
+        active: &[ActiveLoan<'db>],
+        new_loan: Option<&LoanRef>,
         new_kind: BorrowKind,
-        targets: &FxHashSet<CanonPlace<'db>>,
+        targets: &RegionSet<'db>,
     ) -> Option<LoanId> {
-        let reborrow_parents = new_loan.map(|loan| &self.loans[loan.0 as usize].parents);
+        let reborrow_parents = new_loan.map(|reference| {
+            self.loans[reference.id.0 as usize].instantiate_parents(reference, &Guard::always())
+        });
         active
             .iter()
-            .copied()
-            .filter(|loan| reborrow_parents.is_none_or(|parents| !parents.contains(loan)))
-            .find(|loan| {
-                let loan = &self.loans[loan.0 as usize];
-                !matches!((loan.kind, new_kind), (BorrowKind::Ref, BorrowKind::Ref))
-                    && place_set_overlaps(&loan.targets, targets)
+            .filter(|loan| {
+                reborrow_parents.as_ref().is_none_or(|parents| {
+                    !parents
+                        .iter()
+                        .any(|parent| loan.matches(parent.reference(), parent.guard()).is_some())
+                })
             })
+            .find(|loan| {
+                self.loan_conflict_kind(loan.id()).is_some_and(|kind| {
+                    !matches!((kind, new_kind), (BorrowKind::Ref, BorrowKind::Ref))
+                }) && loan.overlaps(targets)
+            })
+            .map(ActiveLoan::id)
+    }
+
+    fn loan_conflict_kind(&self, loan: LoanId) -> Option<BorrowKind> {
+        let loan = &self.loans[loan.0 as usize];
+        // Receiver reservations remain dormant while later arguments are
+        // evaluated. The call-access checks perform their activation.
+        if loan.activation() == BorrowActivation::AtCall {
+            None
+        } else {
+            Some(loan.kind())
+        }
     }
 
     fn check_move_out(
         &self,
-        active: &[LoanId],
+        active: &[ActiveLoan<'db>],
+        authorized: &AuthoritySet,
         place: &NSPlace<'db>,
-        targets: &FxHashSet<CanonPlace<'db>>,
+        targets: &RegionSet<'db>,
         origin: crate::analysis::semantic::SemOrigin<'db>,
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
         if let NSPlaceRoot::CarrierDerefLocal(local) = place.root {
@@ -754,21 +1589,22 @@ impl<'db> Borrowck<'db> {
                 "cannot move out through a borrow handle".to_string(),
             ));
         }
-        self.check_move_targets_out(active, targets, origin)?;
+        self.check_move_targets_out(active, authorized, targets, origin)?;
         Ok(())
     }
 
     fn check_move_targets_out(
         &self,
-        active: &[LoanId],
-        targets: &FxHashSet<CanonPlace<'db>>,
+        active: &[ActiveLoan<'db>],
+        authorized: &AuthoritySet,
+        targets: &RegionSet<'db>,
         origin: crate::analysis::semantic::SemOrigin<'db>,
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
-        for target in targets {
-            if let BorrowRoot::Param(idx) = target.root
+        for (_, target) in targets.guarded_places() {
+            if let RegionRoot::ParamPlace(idx) = target.root()
                 && self
                     .param_modes
-                    .get(idx as usize)
+                    .get(*idx as usize)
                     .copied()
                     .is_some_and(|mode| mode == FuncParamMode::View)
             {
@@ -778,15 +1614,13 @@ impl<'db> Borrowck<'db> {
                 ));
             }
         }
-        if let Some(loan) = active
-            .iter()
-            .copied()
-            .find(|loan| place_set_overlaps(&self.loans[loan.0 as usize].targets, targets))
-        {
+        if let Some(loan) = active.iter().find(|loan| {
+            !authorized.matches(loan.reference(), loan.holder_guard()) && loan.overlaps(targets)
+        }) {
             return Err(self.borrow_conflict_diag(
                 origin,
                 "cannot move out of a value while it is borrowed".to_string(),
-                loan,
+                loan.id(),
             ));
         }
         Ok(())
@@ -794,7 +1628,7 @@ impl<'db> Borrowck<'db> {
 
     pub(super) fn update_moved_for_stmt(
         &self,
-        state: &State,
+        state: &BorrowState<'db>,
         moved: &mut MovedPlaces<'db>,
         stmt: &super::ir::NSStmt<'db>,
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
@@ -802,9 +1636,9 @@ impl<'db> Borrowck<'db> {
             NSStmtKind::Assign { dst, expr } => {
                 if let Some(root) = self
                     .local_root(*dst)
-                    .and_then(|root| self.canon().root_to_borrow_root(root))
+                    .and_then(|root| self.canon().root_to_region_root(root))
                 {
-                    moved.retain(|place, _| place.root != root);
+                    moved.retain(|region, _| !region.has_root(&root));
                 }
                 if let NExpr::ReadPlace {
                     place,
@@ -815,9 +1649,11 @@ impl<'db> Borrowck<'db> {
                         origin: stmt.origin,
                         note: "value is moved here".to_string(),
                     };
-                    for place in self.canon().canonicalize_place(state, place, stmt.origin)? {
-                        moved.insert(place, site.clone());
-                    }
+                    self.record_move_region(
+                        moved,
+                        self.canon().resolve_place(state, place, stmt.origin)?,
+                        site,
+                    );
                 }
                 if let NExpr::ExtractEnumField {
                     value,
@@ -827,90 +1663,88 @@ impl<'db> Borrowck<'db> {
                 {
                     if value.mode == ReadMode::Move {
                         let site = self.move_site(*value, operand_origin(*value, stmt.origin));
-                        for place in
-                            self.extract_enum_field_move_targets(state, *value, *variant, *field)
-                        {
-                            moved.insert(place, site.clone());
-                        }
+                        self.record_move_region(
+                            moved,
+                            self.extract_enum_field_move_region(state, *value, *variant, *field),
+                            site,
+                        );
                     }
                 } else {
                     self.record_expr_moves(state, moved, stmt.origin, expr)?;
                 }
             }
-            NSStmtKind::Store { dst, .. } => {
-                let written = self.canon().canonicalize_place(state, dst, stmt.origin)?;
-                moved.retain(|place, _| {
-                    !written.iter().any(|written| {
-                        written.root == place.root && written.proj.is_prefix_of(&place.proj)
-                    })
-                });
+            NSStmtKind::Store { dst, src } => {
+                self.record_operand_move(state, moved, *src, stmt.origin)?;
+                let written = self.canon().resolve_place(state, dst, stmt.origin)?;
+                moved.retain(|region, _| !written.provably_covers(region));
             }
         }
         Ok(())
     }
 
-    fn extract_enum_field_move_targets(
+    fn extract_enum_field_move_region(
         &self,
-        state: &State,
+        state: &BorrowState<'db>,
         source: NOperand,
         variant: crate::analysis::semantic::VariantIndex,
         field: crate::analysis::semantic::FieldIndex,
-    ) -> FxHashSet<CanonPlace<'db>> {
-        let Some(source_local) = self.body.local(source.local) else {
-            return FxHashSet::default();
-        };
-        let projection = Projection::VariantField {
-            variant,
-            enum_ty: source_local.ty,
-            field_idx: field.0 as usize,
-        };
+    ) -> RegionSet<'db> {
         self.canon()
-            .canonicalize_value_base(state, source.local)
-            .into_iter()
-            .map(|mut target| {
-                target.proj.push(projection.clone());
-                target
-            })
-            .collect()
+            .value_region(state, source.local)
+            .project(&[super::region::RegionProjection::VariantField { variant, field }])
     }
 
     fn check_expr_operands(
         &self,
-        state: &State,
+        state: &BorrowState<'db>,
         moved: &MovedPlaces<'db>,
+        active: &[ActiveLoan<'db>],
         origin: crate::analysis::semantic::SemOrigin<'db>,
         expr: &NExpr<'db>,
-    ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
+    ) -> Result<MovedPlaces<'db>, SemanticBorrowDiagnostic<'db>> {
+        let mut moved = moved.clone();
         expr.try_for_each_value_operand(|value| {
             self.check_operand(
                 state,
-                moved,
+                &moved,
+                active,
                 value,
                 origin,
                 "cannot use a value after it was moved",
-            )
-        })
+            )?;
+            self.record_operand_move(state, &mut moved, value, origin)
+        })?;
+        Ok(moved)
     }
 
     fn check_operand(
         &self,
-        state: &State,
+        state: &BorrowState<'db>,
         moved: &MovedPlaces<'db>,
+        active: &[ActiveLoan<'db>],
         operand: NOperand,
         origin: crate::analysis::semantic::SemOrigin<'db>,
         message: &str,
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
         let origin = operand_origin(operand, origin);
-        let targets = self.canon().canonicalize_value_base(state, operand.local);
+        let targets = self.canon().value_region(state, operand.local);
         if targets.is_empty() {
             return Ok(());
         }
-        self.check_moved_overlap(moved, &targets, origin, message)
+        let authorized = self
+            .canon()
+            .authority_for_value_targets(state, operand.local, &targets);
+        self.check_moved_overlap(moved, &targets, &authorized, origin, message)?;
+        if operand.mode == ReadMode::Move && self.local_has_runtime_move_semantics(operand.local) {
+            self.check_move_targets_out(active, &authorized, &targets, origin)
+        } else {
+            self.check_read_targets(active, &authorized, &targets, origin)
+        }
     }
 
     fn record_expr_moves(
         &self,
-        state: &State,
+        state: &BorrowState<'db>,
         moved: &mut MovedPlaces<'db>,
         origin: crate::analysis::semantic::SemOrigin<'db>,
         expr: &NExpr<'db>,
@@ -922,7 +1756,7 @@ impl<'db> Borrowck<'db> {
 
     fn record_operand_move(
         &self,
-        state: &State,
+        state: &BorrowState<'db>,
         moved: &mut MovedPlaces<'db>,
         operand: NOperand,
         origin: crate::analysis::semantic::SemOrigin<'db>,
@@ -930,9 +1764,7 @@ impl<'db> Borrowck<'db> {
         let origin = operand_origin(operand, origin);
         if operand.mode == ReadMode::Move && self.local_has_runtime_move_semantics(operand.local) {
             let site = self.move_site(operand, origin);
-            for place in self.canon().canonicalize_value_base(state, operand.local) {
-                moved.insert(place, site.clone());
-            }
+            self.record_move_region(moved, self.canon().value_region(state, operand.local), site);
         }
         Ok(())
     }
@@ -966,14 +1798,16 @@ impl<'db> Borrowck<'db> {
     fn check_moved_overlap(
         &self,
         moved: &MovedPlaces<'db>,
-        accessed: &FxHashSet<CanonPlace<'db>>,
+        accessed: &RegionSet<'db>,
+        authorized: &AuthoritySet,
         origin: crate::analysis::semantic::SemOrigin<'db>,
         message: &str,
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
         if let Some((_, site)) = moved.iter().find(|(moved, _)| {
-            accessed
-                .iter()
-                .any(|accessed| places_overlap(moved, accessed))
+            accessed.clauses().any(|accessed| {
+                moved.may_overlap(&accessed).is_some()
+                    && !self.loan_authorizes_access(authorized, &accessed)
+            })
         }) {
             let mut diag = self.move_conflict_diag(origin, message.to_string());
             self.push_secondary_origin(&mut diag, site.origin, site.note.clone());
@@ -985,14 +1819,15 @@ impl<'db> Borrowck<'db> {
     fn check_moved_parent(
         &self,
         moved: &MovedPlaces<'db>,
-        written: &FxHashSet<CanonPlace<'db>>,
+        written: &RegionSet<'db>,
+        authorized: &AuthoritySet,
         origin: crate::analysis::semantic::SemOrigin<'db>,
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
         if let Some((_, site)) = moved.iter().find(|(moved, _)| {
-            written.iter().any(|written| {
-                written.root == moved.root
-                    && moved.proj.is_prefix_of(&written.proj)
-                    && moved.proj != written.proj
+            written.clauses().any(|written| {
+                moved.provably_covers(&written)
+                    && !written.provably_covers(moved)
+                    && !self.loan_authorizes_access(authorized, &written)
             })
         }) {
             let mut diag =
@@ -1001,6 +1836,26 @@ impl<'db> Borrowck<'db> {
             return Err(diag);
         }
         Ok(())
+    }
+
+    fn loan_authorizes_access(&self, authorized: &AuthoritySet, accessed: &RegionSet<'db>) -> bool {
+        authorized.iter().any(|authority| {
+            self.loans[authority.reference().id.0 as usize]
+                .instantiate(authority.reference())
+                .with_guard(authority.guard())
+                .provably_covers(accessed)
+        })
+    }
+
+    fn record_move_region(
+        &self,
+        moved: &mut MovedPlaces<'db>,
+        region: RegionSet<'db>,
+        site: MoveSite<'db>,
+    ) {
+        for clause in region.clauses() {
+            moved.insert(clause, site.clone());
+        }
     }
 
     fn local_root(&self, local: crate::analysis::semantic::SLocalId) -> Option<NBorrowRootId> {
@@ -1057,10 +1912,25 @@ impl<'db> Borrowck<'db> {
         let mut diag = self.diag(SemanticBorrowDiagKind::BorrowConflict, origin, message);
         self.push_secondary_origin(
             &mut diag,
-            self.loans[loan.0 as usize].origin,
+            self.loan_origin(loan),
             "borrow created here".to_string(),
         );
         diag
+    }
+
+    fn loan_origin(&self, mut loan: LoanId) -> SemOrigin<'db> {
+        let mut seen = FxHashSet::default();
+        while seen.insert(loan) {
+            let data = &self.loans[loan.0 as usize];
+            let Some(parent) = data.parents().iter().next() else {
+                return data.origin();
+            };
+            if data.parents().iter().nth(1).is_some() {
+                return data.origin();
+            }
+            loan = parent.reference().id;
+        }
+        self.loans[loan.0 as usize].origin()
     }
 
     fn move_conflict_diag(
@@ -1120,7 +1990,11 @@ impl<'db> Borrowck<'db> {
     }
 
     fn overlapping_loans_msg(&self, loan: LoanId, new_kind: BorrowKind) -> String {
-        match (new_kind, self.loans[loan.0 as usize].kind) {
+        match (
+            new_kind,
+            self.loan_conflict_kind(loan)
+                .expect("dormant loans do not produce conflicts"),
+        ) {
             (BorrowKind::Mut, BorrowKind::Mut) => {
                 "cannot mutably borrow this place while a mut borrow is active".to_string()
             }
@@ -1147,16 +2021,204 @@ fn semantic_borrow_summary_cycle_initial<'db>(
     instance: SemanticInstance<'db>,
 ) -> SemanticBorrowSummaryResult<'db> {
     SemanticBorrowSummaryResult::Ok(
-        instance_returns_borrow(db, instance).then(|| BorrowSummaryId::new(db, Vec::new())),
+        instance_returns_borrowing_value(db, instance)
+            .then(|| BorrowSummaryId::new(db, empty_signature_borrow_summary(db, instance))),
     )
 }
 
-fn instance_returns_borrow<'db>(
+fn instance_returns_borrowing_value<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> bool {
-    let key = instance.key(db);
-    key.owner(db).body(db).is_some() && key.typed_body(db).result_ty().as_borrow(db).is_some()
+    !capability_slots(
+        db,
+        capability_shape(db, instance.normalized_result_ty(db)),
+        true,
+    )
+    .is_empty()
+}
+
+fn summary_path_for_leaf(
+    path: &SlotPath<IndexExpr>,
+    families: &mut BTreeMap<IndexExpr, ResultIndexId>,
+) -> (SummaryPath, IndexSubst) {
+    let mut subst = IndexSubst::new();
+    let projection = path
+        .as_slice()
+        .iter()
+        .map(|step| match step {
+            SlotProjection::Field(field) => SummaryProjection::Field(field.index()),
+            SlotProjection::VariantField { variant, field } => SummaryProjection::VariantField {
+                variant: *variant,
+                field: *field,
+            },
+            SlotProjection::Index(IndexExpr::Const(index)) => {
+                SummaryProjection::Index(IndexExpr::Const(*index))
+            }
+            SlotProjection::Index(index) => {
+                let next = ResultIndexId(
+                    u32::try_from(families.len()).expect("borrow result family space exhausted"),
+                );
+                let family = *families.entry(*index).or_insert(next);
+                subst.insert(*index, IndexExpr::ResultParam(family));
+                SummaryProjection::Index(IndexExpr::ResultParam(family))
+            }
+        })
+        .collect::<Vec<_>>();
+    (SummaryPath::from_steps(projection), subst)
+}
+
+fn summary_path_for_slot(path: &SlotPath<IndexExpr>) -> SummaryPath {
+    SummaryPath::from_steps(path.as_slice().iter().map(|projection| match projection {
+        SlotProjection::Field(field) => SummaryProjection::Field(field.index()),
+        SlotProjection::VariantField { variant, field } => SummaryProjection::VariantField {
+            variant: *variant,
+            field: *field,
+        },
+        SlotProjection::Index(index) => SummaryProjection::Index(*index),
+    }))
+}
+
+fn summary_path_for_slot_template(
+    path: &SlotPath<super::guard::IndexParamId>,
+    mut index: impl FnMut(super::guard::IndexParamId) -> IndexExpr,
+) -> SummaryPath {
+    SummaryPath::from_steps(path.as_slice().iter().map(|projection| match projection {
+        SlotProjection::Field(field) => SummaryProjection::Field(field.index()),
+        SlotProjection::VariantField { variant, field } => SummaryProjection::VariantField {
+            variant: *variant,
+            field: *field,
+        },
+        SlotProjection::Index(param) => SummaryProjection::Index(index(*param)),
+    }))
+}
+
+fn layout_path_for_slot_template(path: &SlotPath<IndexParamId>) -> Vec<LayoutBackingProjection> {
+    path.as_slice()
+        .iter()
+        .map(|projection| match projection {
+            SlotProjection::Field(field) => LayoutBackingProjection::Field(field.index()),
+            SlotProjection::VariantField { variant, field } => {
+                LayoutBackingProjection::VariantField {
+                    variant: *variant,
+                    field: *field,
+                }
+            }
+            SlotProjection::Index(_) => LayoutBackingProjection::Index(None),
+        })
+        .collect()
+}
+
+fn summary_path_for_region_projection(path: &[RegionProjection]) -> SummaryPath {
+    SummaryPath::from_steps(path.iter().map(|projection| match projection {
+        RegionProjection::Field(field) => SummaryProjection::Field(*field),
+        RegionProjection::VariantField { variant, field } => SummaryProjection::VariantField {
+            variant: *variant,
+            field: *field,
+        },
+        RegionProjection::Index(index) => SummaryProjection::Index(*index),
+    }))
+}
+
+fn empty_signature_borrow_summary<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> BorrowSummary {
+    let shape = capability_shape(db, instance.normalized_result_ty(db));
+    BorrowSummary::new(
+        capability_slots(db, shape, true)
+            .into_iter()
+            .map(|slot| {
+                BorrowSummaryLeaf::new(
+                    slot.kind,
+                    summary_path_for_slot_template(&slot.path, |param| {
+                        IndexExpr::ResultParam(ResultIndexId(param.0))
+                    }),
+                    Vec::new(),
+                )
+            })
+            .collect(),
+    )
+}
+
+fn conservative_signature_borrow_summary<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> BorrowSummary {
+    let results = capability_slots(
+        db,
+        capability_shape(db, instance.normalized_result_ty(db)),
+        true,
+    );
+    let inputs = match instance.key(db).owner(db) {
+        BodyOwner::Func(func) => func
+            .params(db)
+            .filter_map(|param| {
+                u32::try_from(param.index()).ok().map(|idx| {
+                    let ty = instance.normalized_ty(db, param.ty(db));
+                    let slots = capability_slots(db, capability_shape(db, ty), false);
+                    (idx, ty, param.is_mut(db), slots)
+                })
+            })
+            .collect::<Vec<_>>(),
+        _ => Vec::new(),
+    };
+    let mut next_existential = 0_u32;
+    let mut summary = Vec::new();
+    for result in results {
+        let result_path = summary_path_for_slot_template(&result.path, |param| {
+            IndexExpr::ResultParam(ResultIndexId(param.0))
+        });
+        let mut sources = Vec::new();
+        for (idx, ty, is_mut, input_results) in &inputs {
+            if signature_input_is_unresolved(db, *ty) {
+                sources.push(BorrowSourceClause {
+                    guard: super::guard::Guard::always(),
+                    source: BorrowSource::AnyAccessible {
+                        param: *idx,
+                        class: match result.kind {
+                            BorrowKind::Ref => super::summary::AccessClass::Shared,
+                            BorrowKind::Mut => super::summary::AccessClass::Mutable,
+                        },
+                    },
+                });
+                continue;
+            }
+            if result.kind == BorrowKind::Ref || *is_mut {
+                sources.push(BorrowSourceClause {
+                    guard: super::guard::Guard::always(),
+                    source: BorrowSource::ParamPlace {
+                        param: *idx,
+                        path: SummaryPath::new(),
+                    },
+                });
+            }
+            for input in input_results {
+                if result.kind == BorrowKind::Ref || input.kind == BorrowKind::Mut {
+                    let slot = summary_path_for_slot_template(&input.path, |_| {
+                        let existential = ExistentialId(next_existential);
+                        next_existential = next_existential
+                            .checked_add(1)
+                            .expect("summary existential space exhausted");
+                        IndexExpr::Existential(existential)
+                    });
+                    sources.push(BorrowSourceClause {
+                        guard: super::guard::Guard::always(),
+                        source: BorrowSource::ParamCapability { param: *idx, slot },
+                    });
+                }
+            }
+        }
+        summary.push(BorrowSummaryLeaf::new(result.kind, result_path, sources));
+    }
+    BorrowSummary::new(summary)
+}
+
+fn signature_input_is_unresolved(db: &dyn HirAnalysisDb, input_ty: TyId<'_>) -> bool {
+    input_ty.has_param(db)
+        || input_ty.has_var(db)
+        || input_ty.has_projection(db)
+        || input_ty.has_invalid(db)
 }
 
 fn semantic_borrow_summary_cycle_recover<'db>(

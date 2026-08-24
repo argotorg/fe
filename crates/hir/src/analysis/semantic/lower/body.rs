@@ -10,12 +10,12 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            CallSiteId, FieldIndex, LayoutBackingPlace, LayoutBackingSource, Mutability, SBlock,
-            SBlockId, SConst, SExpr, SLocal, SLocalId, SOperand, SPlace, SStmt, SStmtId, SStmtKind,
-            STerminator, STerminatorKind, SValueId, SemConstValue, SemOrigin, SemanticBody,
-            SemanticCodeRegionTarget, SemanticLocalRole, VariantIndex, bool_const, bytes_const,
-            int_const, reify_runtime_const_for_ty, runtime_size_bytes, sem_const_from_ty,
-            unit_const,
+            BorrowActivation, CallSiteId, FieldIndex, LayoutBackingPlace, LayoutBackingSource,
+            Mutability, SBlock, SBlockId, SConst, SExpr, SLocal, SLocalId, SOperand, SPlace, SStmt,
+            SStmtId, SStmtKind, STerminator, STerminatorKind, SValueId, SemConstValue, SemOrigin,
+            SemanticBody, SemanticCodeRegionTarget, SemanticLocalRole, VariantIndex, bool_const,
+            bytes_const, int_const, reify_runtime_const_for_ty, runtime_size_bytes,
+            sem_const_from_ty, unit_const,
         },
         ty::{
             const_ty::{
@@ -560,6 +560,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         place,
                         kind,
                         provider: self.typed_body.expr_prop(self.db, expr).borrow_provider,
+                        activation: BorrowActivation::Immediate,
                     },
                 )
             }
@@ -1147,6 +1148,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     place,
                     kind: plan.kind,
                     provider: receiver_prop.borrow_provider,
+                    activation: if plan.kind == BorrowKind::Mut {
+                        BorrowActivation::AtCall
+                    } else {
+                        BorrowActivation::Immediate
+                    },
                 },
             );
         }

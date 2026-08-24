@@ -1,12 +1,20 @@
+mod access;
 mod analyses;
 mod callsite;
 mod canon;
 mod check;
 mod diagnostics;
 mod facts;
+mod guard;
 mod ir;
+mod loan;
 mod noesc;
 mod normalize;
+mod region;
+mod shape;
+mod summary;
+mod transfer;
+mod value;
 mod verify;
 
 pub(crate) use callsite::provisional_call_site_provider_refinements;
@@ -16,7 +24,9 @@ pub use check::{
 };
 pub(crate) use diagnostics::{checker_name, resolve_local_source_span, span_for_origin_from_body};
 pub use facts::*;
+pub use guard::{ExistentialId, Guard, IndexExpr, IndexParamId, ResultIndexId, ValueIndexId};
 pub use ir::*;
 pub use noesc::{check_semantic_noesc, check_semantic_noesc_voucher};
 pub use normalize::{normalize_semantic_body, normalize_semantic_body_for_layout_evidence};
+pub use summary::*;
 pub use verify::verify_normalized_semantic_body;

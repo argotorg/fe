@@ -200,7 +200,7 @@ fn copy_impl_self_may_match<'db>(
     impl_base == target_base
 }
 
-pub fn ty_is_noesc<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+fn ty_contains_noesc_capability<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
     fn inner<'db>(
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
@@ -262,6 +262,10 @@ pub fn ty_is_noesc<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
         TyData::TyVar(_) | TyData::Invalid(_) => false,
         _ => inner(db, ty, &mut FxHashSet::default()),
     }
+}
+
+pub fn ty_is_noesc<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    ty_contains_noesc_capability(db, ty)
 }
 
 /// An analysis pass for type definitions.
