@@ -59,7 +59,7 @@ use super::{
     },
     consts::{reified_const_ref_value_for_ty, runtime_const_value_class},
     infer::{fallback_root_transport_class, local_place_root_class},
-    interface::runtime_visible_binding_plans,
+    interface::{runtime_visible_binding_local, runtime_visible_binding_plans},
     layout::{
         layout_for_aggregate_instance_in_env, layout_for_enum_variant_instance_in_env,
         layout_for_ty_in_env,
@@ -303,7 +303,7 @@ impl<'db> BodyStaticFacts<'db> {
             });
             debug_assert_eq!(pushed, assign_id);
         }
-        let root_provider_locals = build_runtime_visible_root_provider_locals(db, body.owner);
+        let root_provider_locals = build_runtime_visible_root_provider_locals(db, body);
         Self {
             normalized_facts,
             local_facts,
@@ -859,15 +859,17 @@ fn root_provider_for_runtime_visible_binding<'db>(
 
 fn build_runtime_visible_root_provider_locals<'db>(
     db: &'db dyn MirDb,
-    semantic: SemanticInstance<'db>,
+    body: &NormalizedSemanticBody<'db>,
 ) -> FxHashMap<ProviderBinding<'db>, SLocalId> {
+    let semantic = body.owner;
     let mut locals = FxHashMap::default();
     for entry in runtime_visible_binding_plans(db, semantic) {
         let Some(provider) = root_provider_for_runtime_visible_binding(db, semantic, entry.binding)
         else {
             continue;
         };
-        locals.entry(provider).or_insert(entry.local);
+        let local = runtime_visible_binding_local(body, entry.binding);
+        locals.entry(provider).or_insert(local);
     }
     locals
 }
@@ -1249,7 +1251,6 @@ pub(crate) struct RuntimeBodyCx<'a, 'carriers, 'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub(crate) struct RuntimeVisibleBindingPlan<'db> {
     pub(crate) binding: LocalBinding<'db>,
-    pub(crate) local: SLocalId,
     pub(crate) semantic_ty: TyId<'db>,
     pub(crate) plan: RuntimeParamPlan<'db>,
 }
@@ -2840,7 +2841,7 @@ mod tests {
     use url::Url;
 
     use super::super::{
-        abi::runtime_abi_plan,
+        abi::runtime_declaration_abi_plan,
         arg_selector::RuntimeArgSelector,
         boundary::BoundarySiteAllocator,
         call_input::{
@@ -2855,7 +2856,7 @@ mod tests {
         lower::{
             infer::LocalStateInferer,
             interface::{runtime_param_locals, runtime_param_plans, runtime_visible_binding_plans},
-            returns::runtime_return_class,
+            returns::declaration_runtime_return_class,
         },
         package::runtime_instance_for_semantic,
         package::runtime_instance_for_semantic_with_visible_param_overrides,
@@ -3187,8 +3188,12 @@ mod tests {
         let facts = BodyStaticFacts::new(&db, &normalized);
         let env = BodyEnv::new(&db, &normalized, &facts);
         let params = instance.key(&db).params(&db);
-        let inferred =
-            LocalStateInferer::new(env, params, &runtime_param_locals(&db, semantic, params)).run();
+        let inferred = LocalStateInferer::new(
+            env,
+            params,
+            &runtime_param_locals(&db, semantic, &normalized, params),
+        )
+        .run();
         let return_plan = desired_runtime_return_plan(&db, semantic);
         let selected_returns = normalized
             .blocks
@@ -3282,7 +3287,7 @@ mod tests {
         let self_role = semantic.binding_role(&db, self_binding);
         let param_plans = runtime_param_plans(&db, semantic);
         let plans = runtime_visible_binding_plans(&db, semantic);
-        let abi = runtime_abi_plan(&db, callee.key(&db));
+        let abi = runtime_declaration_abi_plan(&db, callee.key(&db));
         let signature = callee.interface_signature(&db);
 
         assert_eq!(
@@ -3351,6 +3356,8 @@ fn takes_empty(_ host: Empty, value: u256) -> u256 {
                 }
             });
         let params = instance.key(&db).params(&db);
+        let normalized = normalize_semantic_body(&db, semantic)
+            .unwrap_or_else(|err| panic!("failed to normalize takes_empty: {err:?}"));
 
         assert_eq!(
             override_calls, 0,
@@ -3362,7 +3369,7 @@ fn takes_empty(_ host: Empty, value: u256) -> u256 {
             "the zero-width Empty host param must not be reintroduced by the override path:\n{params:#?}"
         );
         assert_eq!(
-            runtime_param_locals(&db, semantic, params).len(),
+            runtime_param_locals(&db, semantic, &normalized, params).len(),
             params.len(),
             "runtime params should remain aligned with visible semantic bindings"
         );
@@ -3590,8 +3597,12 @@ uses (slot: Slot<u256>)
         let facts = BodyStaticFacts::new(&db, &normalized);
         let env = BodyEnv::new(&db, &normalized, &facts);
         let params = instance.key(&db).params(&db);
-        let inferred =
-            LocalStateInferer::new(env, params, &runtime_param_locals(&db, semantic, params)).run();
+        let inferred = LocalStateInferer::new(
+            env,
+            params,
+            &runtime_param_locals(&db, semantic, &normalized, params),
+        )
+        .run();
         let mut checked_calls = Vec::new();
         for (block_idx, block) in normalized.blocks.iter().enumerate() {
             for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
@@ -3661,7 +3672,7 @@ uses (slot: Slot<u256>)
                         selected_classes,
                     )
                 };
-                let selected_return = runtime_return_class(
+                let selected_return = declaration_runtime_return_class(
                     &db,
                     RuntimeInstanceKey::new(
                         &db,
@@ -3755,9 +3766,12 @@ uses (slot: Slot<u256>)
             let facts = BodyStaticFacts::new(&db, &normalized);
             let env = BodyEnv::new(&db, &normalized, &facts);
             let params = instance.key(&db).params(&db);
-            let inferred =
-                LocalStateInferer::new(env, params, &runtime_param_locals(&db, semantic, params))
-                    .run();
+            let inferred = LocalStateInferer::new(
+                env,
+                params,
+                &runtime_param_locals(&db, semantic, &normalized, params),
+            )
+            .run();
 
             for (block_idx, block) in normalized.blocks.iter().enumerate() {
                 for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
@@ -3906,9 +3920,12 @@ uses (slot: Slot<u256>)
             let facts = BodyStaticFacts::new(&db, &normalized);
             let env = BodyEnv::new(&db, &normalized, &facts);
             let params = instance.key(&db).params(&db);
-            let inferred =
-                LocalStateInferer::new(env, params, &runtime_param_locals(&db, semantic, params))
-                    .run();
+            let inferred = LocalStateInferer::new(
+                env,
+                params,
+                &runtime_param_locals(&db, semantic, &normalized, params),
+            )
+            .run();
 
             for (block_idx, block) in normalized.blocks.iter().enumerate() {
                 for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
@@ -4070,8 +4087,12 @@ uses (slot: Slot<u256>)
         let facts = BodyStaticFacts::new(&db, &normalized);
         let env = BodyEnv::new(&db, &normalized, &facts);
         let params = instance.key(&db).params(&db);
-        let inferred =
-            LocalStateInferer::new(env, params, &runtime_param_locals(&db, semantic, params)).run();
+        let inferred = LocalStateInferer::new(
+            env,
+            params,
+            &runtime_param_locals(&db, semantic, &normalized, params),
+        )
+        .run();
         let (call_dst, args, effect_args, call_facts) = normalized
             .blocks
             .iter()
@@ -4149,7 +4170,7 @@ uses (slot: Slot<u256>)
             },
             None => None,
         };
-        let lowered_return_class = runtime_return_class(&db, lowered_take.key(&db));
+        let lowered_return_class = declaration_runtime_return_class(&db, lowered_take.key(&db));
 
         assert_eq!(
             inferred_param_classes,
@@ -4208,8 +4229,12 @@ uses (slot: Slot<u256>)
         let facts = BodyStaticFacts::new(&db, &normalized);
         let env = BodyEnv::new(&db, &normalized, &facts);
         let params = instance.key(&db).params(&db);
-        let inferred =
-            LocalStateInferer::new(env, params, &runtime_param_locals(&db, semantic, params)).run();
+        let inferred = LocalStateInferer::new(
+            env,
+            params,
+            &runtime_param_locals(&db, semantic, &normalized, params),
+        )
+        .run();
         let (args, effect_args, call_facts) = normalized
             .blocks
             .iter()

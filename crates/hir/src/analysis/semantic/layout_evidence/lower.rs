@@ -8,7 +8,7 @@ use crate::analysis::{
     semantic::{
         NBorrowRoot, NEffectArg, NEffectArgValue, NExpr, NOperand, NSPlace, NSPlaceRoot,
         NSStmtKind, NSTerminatorKind, NormalizedSemanticBody, SConst, SLocalId, SemConstId,
-        SemOrigin, SemanticCalleeRef, SemanticInstance,
+        SemOrigin, SemanticCalleeRef, SemanticInstance, SemanticNormalizationFailure,
         borrowck::normalize_semantic_body_for_layout_evidence, get_or_build_semantic_instance,
         identity_semantic_instance_key,
     },
@@ -2423,7 +2423,7 @@ fn layout_evidence_body_query<'db>(
     owner: SemanticInstance<'db>,
 ) -> Result<LayoutEvidenceBody<'db>, LayoutEvidenceError<'db>> {
     let normalized = normalize_semantic_body_for_layout_evidence(db, owner)
-        .map_err(LayoutEvidenceError::Normalize)?;
+        .map_err(layout_normalization_error)?;
     let template_owner = normalized.template_owner;
     let body = template_owner.body(db);
     let identity_key = identity_semantic_instance_key(db, template_owner);
@@ -2433,7 +2433,7 @@ fn layout_evidence_body_query<'db>(
                 db,
                 get_or_build_semantic_instance(db, identity_key),
             )
-            .map_err(LayoutEvidenceError::Normalize)
+            .map_err(layout_normalization_error)
         })
         .transpose()?;
     if let Some(template) = &template_normalized
@@ -2600,6 +2600,15 @@ fn layout_evidence_body_query<'db>(
     };
     verify_layout_evidence_body(db, &normalized, &evidence).map_err(LayoutEvidenceError::Verify)?;
     Ok(evidence)
+}
+
+fn layout_normalization_error<'db>(
+    failure: SemanticNormalizationFailure<'db>,
+) -> LayoutEvidenceError<'db> {
+    match failure {
+        SemanticNormalizationFailure::Blocked(blocked) => LayoutEvidenceError::Blocked(blocked),
+        SemanticNormalizationFailure::InternalFailure(diag) => LayoutEvidenceError::Normalize(diag),
+    }
 }
 
 pub fn layout_evidence_body<'db>(

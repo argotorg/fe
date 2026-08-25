@@ -48,10 +48,12 @@ fn wrap() {
         identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
     );
     assert!(std::ptr::eq(semantic.body(&db), semantic.body(&db)));
-    let body = canonicalize_semantic_consts(&db, semantic);
+    let body = canonicalize_semantic_consts(&db, semantic)
+        .expect("valid semantic body should be canonicalizable");
     assert!(std::ptr::eq(
         body,
         canonicalize_semantic_consts(&db, semantic)
+            .expect("valid semantic body should remain canonicalizable")
     ));
 
     let found = body
@@ -726,7 +728,8 @@ fn contract_init_fixed_array_arg_fixture_has_no_type_level_semantic_consts() {
         if !seen.insert(instance.key(&db)) {
             continue;
         }
-        let body = canonicalize_semantic_consts(&db, instance);
+        let body = canonicalize_semantic_consts(&db, instance)
+            .expect("valid semantic body should be canonicalizable");
         for stmt in body.blocks.iter().flat_map(|block| block.stmts.iter()) {
             if let SStmtKind::Assign {
                 expr: SExpr::Const(SConst::Value(value)),
@@ -792,7 +795,8 @@ fn test_add_overflow_u8() {
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
     );
-    let body = canonicalize_semantic_consts(&db, semantic);
+    let body = canonicalize_semantic_consts(&db, semantic)
+        .expect("valid semantic body should be canonicalizable");
 
     assert!(
         body.blocks
@@ -837,7 +841,8 @@ fn signed_mul_no_overflow_i8_neg_neg() {
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
     );
-    let body = canonicalize_semantic_consts(&db, semantic);
+    let body = canonicalize_semantic_consts(&db, semantic)
+        .expect("valid semantic body should be canonicalizable");
 
     assert!(
         body.blocks
@@ -918,7 +923,8 @@ fn entry() -> u256 {
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
     );
-    let body = canonicalize_semantic_consts(&db, semantic);
+    let body = canonicalize_semantic_consts(&db, semantic)
+        .expect("valid semantic body should be canonicalizable");
     let expected_ty = top_mod
         .all_funcs(&db)
         .iter()
@@ -986,7 +992,8 @@ fn wraps_after_aug_assign() -> bool {
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
     );
-    let body = canonicalize_semantic_consts(&db, semantic);
+    let body = canonicalize_semantic_consts(&db, semantic)
+        .expect("valid semantic body should be canonicalizable");
 
     let mut saw_bool_call = false;
     let mut saw_const_false = false;
@@ -1048,7 +1055,8 @@ fn negated_min_i8_compares_equal() -> bool {
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
     );
-    let body = canonicalize_semantic_consts(&db, semantic);
+    let body = canonicalize_semantic_consts(&db, semantic)
+        .expect("valid semantic body should be canonicalizable");
 
     let mut saw_const_true = false;
     let mut saw_const_false = false;

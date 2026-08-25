@@ -5,11 +5,14 @@ use fe_hir::test_db::{HirAnalysisTestDb, format_diagnostics};
 use fe_hir::{
     analysis::{
         semantic::{
-            BorrowInputRef, BorrowTransform, NBorrowRoot, NExpr, NLocalOrigin, NSPlaceRoot,
-            NSStmtKind, NormalizedBindingLowering, ReadMode, SStmtKind, SemanticBorrowDiagKind,
-            SemanticInstance, SemanticLocalKind, check_semantic_borrows, check_semantic_noesc,
-            collect_semantic_borrow_diagnostic_vouchers, get_or_build_semantic_instance,
-            identity_semantic_instance_key, normalize_semantic_body, semantic_borrow_summary,
+            BorrowInputRef, BorrowTransform, CtfeError, LayoutEvidenceError, NBorrowRoot, NExpr,
+            NLocalOrigin, NSPlaceRoot, NSStmtKind, NormalizedBindingLowering, ReadMode, SStmtKind,
+            SemanticAnalysisError, SemanticBodyAdmission, SemanticBorrowDiagKind, SemanticInstance,
+            SemanticLocalKind, SemanticNormalizationFailure, canonicalize_semantic_consts,
+            check_semantic_borrows, check_semantic_noesc,
+            collect_semantic_borrow_diagnostic_vouchers, contract_init_assigned_fields,
+            get_or_build_semantic_instance, identity_semantic_instance_key, layout_evidence_body,
+            normalize_semantic_body, semantic_body_admission, semantic_borrow_summary,
         },
         ty::{
             ProviderAddressSpace,
@@ -29,6 +32,165 @@ fn borrow_diags(src: &str) -> String {
         &db,
         &collect_semantic_borrow_diagnostic_vouchers(&db, top_mod),
     )
+}
+
+#[test]
+fn blocked_invalid_body_is_not_admitted_by_semantic_consumers() {
+    let source = r#"
+fn invalid(result: mut u256) -> mut u256 uses (values: mut [mut u256; 2]) {
+    values[0] = 1
+    result
+}
+
+fn caller(result: mut u256) -> mut u256 uses (values: mut [mut u256; 2]) {
+    invalid(result)
+}
+"#;
+    assert!(borrow_diags(source).is_empty());
+
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("semantic_borrowck.fe".into(), source);
+    let (top_mod, _) = db.top_mod(file);
+    let instance_for = |name: &str| {
+        top_mod
+            .all_items(&db)
+            .iter()
+            .find_map(|item| match item {
+                ItemKind::Func(func)
+                    if func
+                        .name(&db)
+                        .to_opt()
+                        .is_some_and(|func_name| func_name.data(&db) == name) =>
+                {
+                    Some(get_or_build_semantic_instance(
+                        &db,
+                        identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
+                    ))
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing `{name}` function"))
+    };
+    let instance = instance_for("invalid");
+
+    let SemanticBodyAdmission::Blocked(blocked) = semantic_body_admission(&db, instance) else {
+        panic!("invalid body should be blocked before normalization")
+    };
+    assert_eq!(blocked.instance, instance);
+    assert!(!blocked.causes.is_empty());
+    assert!(matches!(
+        normalize_semantic_body(&db, instance),
+        Err(SemanticNormalizationFailure::Blocked(_))
+    ));
+    assert!(matches!(
+        check_semantic_borrows(&db, instance),
+        Err(SemanticAnalysisError::Blocked(_))
+    ));
+    assert!(matches!(
+        check_semantic_noesc(&db, instance),
+        Err(SemanticAnalysisError::Blocked(_))
+    ));
+    assert!(matches!(
+        semantic_borrow_summary(&db, instance),
+        Err(SemanticAnalysisError::Blocked(_))
+    ));
+    assert!(matches!(
+        layout_evidence_body(&db, instance),
+        Err(LayoutEvidenceError::Blocked(_))
+    ));
+    assert!(matches!(
+        canonicalize_semantic_consts(&db, instance),
+        Err(CtfeError::InvalidBody { .. })
+    ));
+
+    let caller = instance_for("caller");
+    let invalid_owner = instance.key(&db).owner(&db);
+    let caller_owner = caller.key(&db).owner(&db);
+    let Err(SemanticAnalysisError::Blocked(blocked)) = semantic_borrow_summary(&db, caller) else {
+        panic!("blocked callee summary must keep its status through the caller")
+    };
+    assert_eq!(blocked.instance.key(&db).owner(&db), invalid_owner);
+    assert_ne!(blocked.instance.key(&db).owner(&db), caller_owner);
+    let Err(SemanticAnalysisError::Blocked(blocked)) = check_semantic_borrows(&db, caller) else {
+        panic!("blocked callee analysis must keep its status through the caller")
+    };
+    assert_eq!(blocked.instance.key(&db).owner(&db), invalid_owner);
+    assert_ne!(blocked.instance.key(&db).owner(&db), caller_owner);
+}
+
+#[test]
+fn blocked_contract_body_keeps_its_declaration_layout_signature() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_borrowck.fe".into(),
+        r#"
+struct Rooted<const ROOT: u256 = _> {}
+
+pub contract InvalidInit {
+    values: [Rooted; 2]
+
+    init() uses (values) {
+        missing
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let instance = contract_init_instance(&db, top_mod, "InvalidInit");
+    assert!(matches!(
+        semantic_body_admission(&db, instance),
+        SemanticBodyAdmission::Blocked(_)
+    ));
+    let BodyOwner::ContractInit { contract } = instance.key(&db).owner(&db) else {
+        unreachable!()
+    };
+    assert!(matches!(
+        contract_init_assigned_fields(&db, contract),
+        Err(SemanticNormalizationFailure::Blocked(_))
+    ));
+
+    let signature = instance.key(&db).layout_bundle_signature(&db);
+    assert_eq!(signature.inputs.len(), 1);
+    assert!(!signature.inputs[0].interface.schema.components.is_empty());
+}
+
+#[test]
+fn generated_zero_field_abi_bodies_are_admitted() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_borrowck.fe".into(),
+        r#"
+msg Empty {
+    #[selector = 1]
+    Ping,
+}
+
+#[error]
+struct EmptyError {}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let abi_funcs = top_mod
+        .all_funcs(&db)
+        .iter()
+        .copied()
+        .filter(|func| {
+            func.name(&db).to_opt().is_some_and(|name| {
+                matches!(name.data(&db).as_str(), "payload_size" | "encode_to_ptr")
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(abi_funcs.len(), 4);
+    for func in abi_funcs {
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+        );
+        assert!(matches!(
+            semantic_body_admission(&db, instance),
+            SemanticBodyAdmission::Ready(_)
+        ));
+    }
 }
 
 fn contract_init_instance<'db>(
@@ -449,6 +611,9 @@ fn mixed_returned_borrow_provenance_poison_normalization() {
 
     let err = normalize_semantic_body(&db, instance)
         .expect_err("mixed provider provenance must poison normalization");
+    let SemanticNormalizationFailure::InternalFailure(err) = err else {
+        panic!("provider provenance conflict must be an internal normalization failure")
+    };
     assert_eq!(err.kind, SemanticBorrowDiagKind::ProviderProvenanceConflict);
     assert_eq!(
         err.primary.message,
@@ -468,6 +633,9 @@ fn mixed_returned_borrow_provenance_poison_noesc() {
 
     let err = check_semantic_noesc(&db, instance)
         .expect_err("mixed provider provenance must poison noesc");
+    let SemanticAnalysisError::Diagnostic(err) = err else {
+        panic!("provider provenance conflict must produce a diagnostic")
+    };
     assert_eq!(
         err.message,
         "provider provenance conflict in `fn Mixed::__init__`"
@@ -961,6 +1129,9 @@ pub contract GenericNoEsc {
         .expect("specialized store_generic callee");
     let err = check_semantic_noesc(&db, specialized)
         .expect_err("specialized noesc store should be rejected");
+    let SemanticAnalysisError::Diagnostic(err) = err else {
+        panic!("noesc violation must produce a diagnostic")
+    };
     assert!(
         err.message
             .contains("noesc violation in `fn store_generic`"),

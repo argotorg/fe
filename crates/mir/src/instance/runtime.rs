@@ -7,7 +7,7 @@ use crate::{
         LowerError, LoweredRuntimeBody, RuntimeBody, RuntimeCallEdge, RuntimeClass,
         RuntimeExitBehavior, RuntimeInterfaceSignature, RuntimeSyntheticSpec,
         lower::{
-            abi::runtime_abi_plan,
+            abi::runtime_declaration_abi_plan,
             body::lower_to_rmir,
             call::{
                 collect_referenced_code_regions, collect_referenced_const_regions,
@@ -97,7 +97,7 @@ pub(crate) fn runtime_interface_signature_for_key<'db>(
     db: &'db dyn MirDb,
     key: RuntimeInstanceKey<'db>,
 ) -> RuntimeInterfaceSignature<'db> {
-    runtime_abi_plan(db, key).signature()
+    runtime_declaration_abi_plan(db, key).signature()
 }
 
 #[salsa::tracked]
@@ -119,14 +119,14 @@ fn lower_runtime_body<'db>(
                 return Err(LowerError::Unsupported(format!(
                     "semantic borrow checking failed for {:?}: {}",
                     semantic.key(db),
-                    diag.message
+                    diag
                 )));
             }
             if let Err(diag) = check_semantic_noesc(db, semantic) {
                 return Err(LowerError::Unsupported(format!(
                     "semantic noesc checking failed for {:?}: {}",
                     semantic.key(db),
-                    diag.message
+                    diag
                 )));
             }
             lower_to_rmir(db, instance)?

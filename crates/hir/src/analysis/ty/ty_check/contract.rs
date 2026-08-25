@@ -861,14 +861,17 @@ pub fn check_contract_immutable_fields_initialized<'db>(
             FxHashSet::default()
         } else if typed_body.body().is_some() {
             match contract_init_assigned_fields(db, contract) {
-                Some(assigned) => required
+                Ok(Some(assigned)) => required
                     .iter()
                     .copied()
                     .filter(|field| !assigned.contains(field))
                     .collect(),
                 // No normal exit is reachable, so `init` can never complete
                 // and the contract can never be deployed with unset fields.
-                None => FxHashSet::default(),
+                Ok(None) => FxHashSet::default(),
+                // Admission diagnostics are emitted by the semantic analysis
+                // pass; do not duplicate them as missing-field errors.
+                Err(_) => FxHashSet::default(),
             }
         } else {
             required.clone()

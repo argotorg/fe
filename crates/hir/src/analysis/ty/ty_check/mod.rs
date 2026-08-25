@@ -30,9 +30,10 @@ use crate::analysis::ty::visitor::TyVisitable;
 use crate::hir_def::{CallableDef, ImplTrait, Trait};
 use crate::{
     hir_def::{
-        BinOp, Body, Const, Contract, ContractRecvArm, Expr, ExprId, Func, GenericParamOwner,
-        LitKind, ManualContractRootAttr, Partial, Pat, PatId, PathId, StaticAssert,
-        StaticAssertComparison, Stmt, StmtId, StringId, TypeId as HirTyId, WhereClauseOwner,
+        BinOp, Body, CondId, Const, Contract, ContractRecvArm, Expr, ExprId, Func,
+        GenericParamOwner, LitKind, ManualContractRootAttr, Partial, Pat, PatId, PathId,
+        StaticAssert, StaticAssertComparison, Stmt, StmtId, StringId, TypeId as HirTyId,
+        WhereClauseOwner,
     },
     span::{
         DynLazySpan, expr::LazyExprSpan, pat::LazyPatSpan, path::LazyPathSpan, types::LazyTySpan,
@@ -2707,6 +2708,29 @@ impl<'db> TyFoldable<'db> for ConstRef<'db> {
 struct ExprPlaceId(u32);
 entity_impl!(ExprPlaceId);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum SmirLoweringIssue {
+    InvalidExpr(ExprId),
+    IncompleteExpr(ExprId),
+    InvalidStmt(StmtId),
+    IncompleteStmt(StmtId),
+    InvalidCond(CondId),
+}
+
+impl SmirLoweringIssue {
+    pub(crate) fn is_incomplete(self) -> bool {
+        matches!(self, Self::IncompleteExpr(_) | Self::IncompleteStmt(_))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[cfg(test)]
+pub(crate) enum SmirLoweringReadiness {
+    Ready,
+    BlockedByInvalidProgram,
+    IncompletePlan,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypedBody<'db> {
     body: Option<Body<'db>>,
@@ -3149,66 +3173,189 @@ impl<'db> TypedBody<'db> {
         self.result_ty
     }
 
-    pub(crate) fn has_smir_lowering_blocker(&self, db: &'db dyn HirAnalysisDb) -> bool {
-        let Some(body) = self.body else {
-            return false;
-        };
-
-        body.exprs(db)
-            .iter()
-            .any(|(expr, expr_data)| self.expr_has_smir_lowering_blocker(db, expr, expr_data))
-            || body
-                .stmts(db)
-                .iter()
-                .any(|(stmt, stmt_data)| self.stmt_has_smir_lowering_blocker(stmt, stmt_data))
-            || body
-                .conds(db)
-                .iter()
-                .any(|(_, cond_data)| matches!(cond_data, Partial::Absent))
-    }
-
-    fn expr_has_smir_lowering_blocker(
+    pub(crate) fn smir_lowering_issues(
         &self,
         db: &'db dyn HirAnalysisDb,
-        expr: ExprId,
-        expr_data: &Partial<Expr<'db>>,
-    ) -> bool {
-        let Partial::Present(expr_data) = expr_data else {
-            return true;
+    ) -> Vec<SmirLoweringIssue> {
+        let Some(body) = self.body else {
+            return Vec::new();
         };
-        let expr_ty = self.expr_ty(db, expr);
 
-        match expr_data {
-            Expr::Path(_) => {
-                expr_ty.has_invalid(db)
-                    && self.expr_binding(expr).is_none()
-                    && self.expr_const_ref(expr).is_none()
-                    && self.expr_code_region_ref(db, expr).is_none()
-                    && self.value_path_ref(expr).is_none()
-            }
-            Expr::Call(..) | Expr::MethodCall(..) => self.semantic_expr_lowering(expr).is_none(),
-            Expr::Assert(_) => expr_ty.has_invalid(db),
-            Expr::RecordInit(..) => self.record_init_lowering(expr).is_none(),
-            Expr::Un(inner, crate::hir_def::expr::UnOp::Mut | crate::hir_def::expr::UnOp::Ref) => {
-                expr_ty.has_invalid(db) && self.expr_place(*inner).is_none()
-            }
-            Expr::Assign(dst, _) => self.expr_place(*dst).is_none(),
-            Expr::AugAssign(dst, _, _) => {
-                self.semantic_expr_lowering(expr).is_none() && self.expr_place(*dst).is_none()
-            }
-            Expr::Match(_, Partial::Absent) => true,
-            Expr::Match(_, Partial::Present(arms)) => arms
+        let mut issues = body
+            .exprs(db)
+            .iter()
+            .filter_map(|(expr, expr_data)| match expr_data {
+                Partial::Present(expr_data) => self.expr_smir_lowering_issue(db, expr, expr_data),
+                Partial::Absent => Some(SmirLoweringIssue::InvalidExpr(expr)),
+            })
+            .collect::<Vec<_>>();
+        issues.extend(
+            body.stmts(db)
                 .iter()
-                .any(|arm| !self.pattern_status(arm.pat).is_ready()),
-            _ => false,
+                .filter_map(|(stmt, stmt_data)| match stmt_data {
+                    Partial::Present(stmt_data) => {
+                        self.stmt_smir_lowering_issue(db, stmt, stmt_data)
+                    }
+                    Partial::Absent => Some(SmirLoweringIssue::InvalidStmt(stmt)),
+                }),
+        );
+        issues.extend(body.conds(db).iter().filter_map(|(cond, cond_data)| {
+            matches!(cond_data, Partial::Absent).then_some(SmirLoweringIssue::InvalidCond(cond))
+        }));
+        issues
+    }
+
+    #[cfg(test)]
+    pub(crate) fn smir_lowering_readiness(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> SmirLoweringReadiness {
+        let issues = self.smir_lowering_issues(db);
+        if issues.iter().copied().any(SmirLoweringIssue::is_incomplete) {
+            SmirLoweringReadiness::IncompletePlan
+        } else if issues.is_empty() {
+            SmirLoweringReadiness::Ready
+        } else {
+            SmirLoweringReadiness::BlockedByInvalidProgram
         }
     }
 
-    fn stmt_has_smir_lowering_blocker(&self, stmt: StmtId, stmt_data: &Partial<Stmt<'db>>) -> bool {
+    fn expr_smir_lowering_issue(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        expr: ExprId,
+        expr_data: &Expr<'db>,
+    ) -> Option<SmirLoweringIssue> {
+        let expr_ty = self.expr_ty(db, expr);
+        let missing_plan = || {
+            Some(if expr_ty.has_invalid(db) || expr_ty.has_var(db) {
+                SmirLoweringIssue::InvalidExpr(expr)
+            } else {
+                SmirLoweringIssue::IncompleteExpr(expr)
+            })
+        };
+
+        match expr_data {
+            Expr::Path(_)
+                if expr_ty.has_invalid(db)
+                    && self.expr_binding(expr).is_none()
+                    && self.expr_const_ref(expr).is_none()
+                    && self.expr_code_region_ref(db, expr).is_none()
+                    && self.value_path_ref(expr).is_none() =>
+            {
+                Some(SmirLoweringIssue::InvalidExpr(expr))
+            }
+            Expr::Call(..) | Expr::MethodCall(..)
+                if self.semantic_expr_lowering(expr).is_none() =>
+            {
+                missing_plan()
+            }
+            Expr::Assert(_) if expr_ty.has_invalid(db) => {
+                Some(SmirLoweringIssue::InvalidExpr(expr))
+            }
+            Expr::RecordInit(..) if self.record_init_lowering(expr).is_none() => missing_plan(),
+            Expr::Field(..)
+                if self.expr_place(expr).is_none() && self.resolved_field_index(expr).is_none() =>
+            {
+                missing_plan()
+            }
+            Expr::Un(inner, crate::hir_def::expr::UnOp::Mut | crate::hir_def::expr::UnOp::Ref)
+                if self.expr_place(*inner).is_none() =>
+            {
+                missing_plan()
+            }
+            Expr::Assign(dst, _) if self.expr_place(*dst).is_none() => {
+                Some(self.missing_place_issue(db, expr, *dst))
+            }
+            Expr::AugAssign(dst, _, _)
+                if self.semantic_expr_lowering(expr).is_none()
+                    && self.expr_place(*dst).is_none() =>
+            {
+                Some(self.missing_place_issue(db, expr, *dst))
+            }
+            Expr::Match(_, Partial::Absent) => Some(SmirLoweringIssue::InvalidExpr(expr)),
+            Expr::Match(_, Partial::Present(arms)) => {
+                if arms.iter().any(|arm| {
+                    matches!(
+                        self.pattern_status(arm.pat),
+                        PatternAnalysisStatus::Unsupported
+                    )
+                }) {
+                    Some(SmirLoweringIssue::IncompleteExpr(expr))
+                } else if arms.iter().any(|arm| {
+                    matches!(self.pattern_status(arm.pat), PatternAnalysisStatus::Invalid)
+                }) {
+                    Some(SmirLoweringIssue::InvalidExpr(expr))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn stmt_smir_lowering_issue(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        stmt: StmtId,
+        stmt_data: &Stmt<'db>,
+    ) -> Option<SmirLoweringIssue> {
         match stmt_data {
-            Partial::Present(Stmt::For(..)) => self.for_loop_seq(stmt).is_none(),
-            Partial::Present(_) => false,
-            Partial::Absent => true,
+            Stmt::For(pat, expr, ..) if self.for_loop_seq(stmt).is_none() => {
+                let iterable_ty = self.expr_ty(db, *expr);
+                Some(
+                    if iterable_ty.has_invalid(db)
+                        || iterable_ty.has_var(db)
+                        || self.pat_ty(db, *pat).has_invalid(db)
+                    {
+                        SmirLoweringIssue::InvalidStmt(stmt)
+                    } else {
+                        SmirLoweringIssue::IncompleteStmt(stmt)
+                    },
+                )
+            }
+            _ => None,
+        }
+    }
+
+    fn missing_place_issue(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        expr: ExprId,
+        place: ExprId,
+    ) -> SmirLoweringIssue {
+        if self.missing_place_is_explained_by_invalid_program(db, place) {
+            SmirLoweringIssue::InvalidExpr(expr)
+        } else {
+            SmirLoweringIssue::IncompleteExpr(expr)
+        }
+    }
+
+    fn missing_place_is_explained_by_invalid_program(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        expr: ExprId,
+    ) -> bool {
+        let Some(body) = self.body else {
+            return false;
+        };
+        let Partial::Present(expr_data) = expr.data(db, body) else {
+            return true;
+        };
+        if self.expr_ty(db, expr).has_invalid(db) {
+            return true;
+        }
+        match expr_data {
+            Expr::Path(..) => self.expr_binding(expr).is_none(),
+            Expr::Field(base, field) => {
+                field.to_opt().is_none()
+                    || self.missing_place_is_explained_by_invalid_program(db, *base)
+            }
+            Expr::Bin(base, _, crate::hir_def::BinOp::Index) => {
+                self.semantic_expr_lowering(expr).is_some()
+                    || self.missing_place_is_explained_by_invalid_program(db, *base)
+            }
+            _ => true,
         }
     }
 
@@ -4963,6 +5110,137 @@ impl<'db> TyCheckerFinalizer<'db> {
         let solve_cx = TraitSolveCx::new(self.db, self.body.body.unwrap().scope());
         if let Some(diag) = ty.emit_wf_diag(self.db, solve_cx, self.assumptions, span) {
             self.diags.push(diag.into());
+        }
+    }
+}
+
+#[cfg(test)]
+mod smir_lowering_readiness_tests {
+    use camino::Utf8PathBuf;
+
+    use crate::{
+        analysis::ty::pattern_ir::PatternAnalysisStatus,
+        hir_def::{Expr, ItemKind, Partial},
+        test_db::HirAnalysisTestDb,
+    };
+
+    use super::{SmirLoweringReadiness, check_func_body};
+
+    #[test]
+    fn unrelated_diagnostic_does_not_hide_an_incomplete_lowering_plan() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("smir_lowering_readiness.fe"),
+            r#"
+fn callee() -> u256 {
+    1
+}
+
+fn target() -> u256 {
+    let wrong: u256 = true
+    callee()
+}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let target = top_mod
+            .all_items(&db)
+            .iter()
+            .find_map(|item| match item {
+                ItemKind::Func(func)
+                    if func
+                        .name(&db)
+                        .to_opt()
+                        .is_some_and(|name| name.data(&db) == "target") =>
+                {
+                    Some(*func)
+                }
+                _ => None,
+            })
+            .expect("target function");
+        let (diags, checked) = check_func_body(&db, target);
+        assert!(
+            !diags.is_empty(),
+            "fixture must have an unrelated type error"
+        );
+        assert_eq!(
+            checked.smir_lowering_readiness(&db),
+            SmirLoweringReadiness::Ready
+        );
+
+        let mut incomplete = checked.clone();
+        let body = incomplete.body().expect("target body");
+        let call = body
+            .exprs(&db)
+            .iter()
+            .find_map(|(expr, data)| {
+                matches!(data, Partial::Present(Expr::Call(..))).then_some(expr)
+            })
+            .expect("target call");
+        assert!(incomplete.semantic_expr_lowering(call).is_some());
+        incomplete.semantic_expr_lowering[call] = None;
+
+        assert_eq!(
+            incomplete.smir_lowering_readiness(&db),
+            SmirLoweringReadiness::IncompletePlan
+        );
+    }
+
+    #[test]
+    fn incomplete_match_pattern_dominates_invalid_pattern_in_any_arm_order() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("smir_match_readiness.fe"),
+            r#"
+enum Choice {
+    First,
+    Second,
+}
+
+fn target(choice: Choice) -> u256 {
+    match choice {
+        Choice::First => 0,
+        Choice::Second => 1,
+    }
+}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let target = top_mod
+            .all_items(&db)
+            .iter()
+            .find_map(|item| match item {
+                ItemKind::Func(func)
+                    if func
+                        .name(&db)
+                        .to_opt()
+                        .is_some_and(|name| name.data(&db) == "target") =>
+                {
+                    Some(*func)
+                }
+                _ => None,
+            })
+            .expect("target function");
+        let (_, checked) = check_func_body(&db, target);
+        let body = checked.body().expect("target body");
+        let arms = body
+            .exprs(&db)
+            .iter()
+            .find_map(|(_, data)| match data {
+                Partial::Present(Expr::Match(_, Partial::Present(arms))) => Some(arms),
+                _ => None,
+            })
+            .expect("target match");
+        assert_eq!(arms.len(), 2);
+
+        for (invalid, unsupported) in [(0, 1), (1, 0)] {
+            let mut mixed = checked.clone();
+            mixed.pattern_status[arms[invalid].pat] = PatternAnalysisStatus::Invalid;
+            mixed.pattern_status[arms[unsupported].pat] = PatternAnalysisStatus::Unsupported;
+            assert_eq!(
+                mixed.smir_lowering_readiness(&db),
+                SmirLoweringReadiness::IncompletePlan
+            );
         }
     }
 }

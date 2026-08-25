@@ -1,4 +1,3 @@
-use common::diagnostics::CompleteDiagnostic;
 use cranelift_entity::EntityRef;
 use rustc_hash::FxHashSet;
 
@@ -11,28 +10,25 @@ use crate::analysis::{
 
 use super::{
     canon::{BorrowRoot, CanonPlace, State, address_space_for_borrow_root},
-    check::Borrowck,
+    check::{Borrowck, SemanticAnalysisError},
     diagnostics::{normalized_body_internal_diag, operand_origin},
     ir::{
-        BorrowDiagnosticId, NExpr, NOperand, NSStmt, NSStmtKind, SemanticBorrowCheckResult,
-        SemanticBorrowDiagKind, SemanticBorrowDiagnostic, SemanticBorrowDiagnosticSpan,
+        BlockedSemanticBody, BorrowDiagnosticId, NExpr, NOperand, NSStmt, NSStmtKind,
+        SemanticBorrowCheckResult, SemanticBorrowDiagKind, SemanticBorrowDiagnostic,
+        SemanticBorrowDiagnosticSpan, SemanticNormalizationFailure,
     },
 };
 
 pub fn check_semantic_noesc<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     instance: SemanticInstance<'db>,
-) -> Result<(), CompleteDiagnostic> {
-    check_semantic_noesc_voucher(db, instance).map_err(|diag| diag.to_complete(db))
-}
-
-pub fn check_semantic_noesc_voucher<'db>(
-    db: &'db dyn HirAnalysisDb,
-    instance: SemanticInstance<'db>,
-) -> Result<(), SemanticBorrowDiagnostic<'db>> {
+) -> Result<(), SemanticAnalysisError<'db>> {
     match semantic_noesc_check_query(db, instance) {
         SemanticBorrowCheckResult::Ok => Ok(()),
-        SemanticBorrowCheckResult::Err(diag) => Err(diag.diag(db).clone()),
+        SemanticBorrowCheckResult::Blocked(body) => Err(SemanticAnalysisError::Blocked(body)),
+        SemanticBorrowCheckResult::Err(diag) => {
+            Err(SemanticAnalysisError::Diagnostic(diag.to_complete(db)))
+        }
     }
 }
 
@@ -41,8 +37,18 @@ pub(super) fn semantic_noesc_check_query<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> SemanticBorrowCheckResult<'db> {
-    match Borrowck::new(db, instance).and_then(NoEsc::check) {
-        Ok(()) => SemanticBorrowCheckResult::Ok,
+    let borrowck = match Borrowck::new(db, instance) {
+        Ok(borrowck) => borrowck,
+        Err(SemanticNormalizationFailure::Blocked(blocked)) => {
+            return SemanticBorrowCheckResult::Blocked(blocked);
+        }
+        Err(SemanticNormalizationFailure::InternalFailure(diag)) => {
+            return SemanticBorrowCheckResult::Err(BorrowDiagnosticId::new(db, diag));
+        }
+    };
+    match NoEsc::check(borrowck) {
+        Ok(Some(blocked)) => SemanticBorrowCheckResult::Blocked(blocked),
+        Ok(None) => SemanticBorrowCheckResult::Ok,
         Err(diag) => SemanticBorrowCheckResult::Err(BorrowDiagnosticId::new(db, diag)),
     }
 }
@@ -52,10 +58,14 @@ struct NoEsc<'db> {
 }
 
 impl<'db> NoEsc<'db> {
-    fn check(mut borrowck: Borrowck<'db>) -> Result<(), SemanticBorrowDiagnostic<'db>> {
+    fn check(
+        mut borrowck: Borrowck<'db>,
+    ) -> Result<Option<BlockedSemanticBody<'db>>, SemanticBorrowDiagnostic<'db>> {
         borrowck.compute_entry_states();
-        borrowck.compute_loan_targets()?;
-        Self { borrowck }.check_body()
+        if let Some(blocked) = borrowck.compute_loan_targets()? {
+            return Ok(Some(blocked));
+        }
+        Self { borrowck }.check_body().map(|()| None)
     }
 
     fn check_body(&self) -> Result<(), SemanticBorrowDiagnostic<'db>> {

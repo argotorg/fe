@@ -1,5 +1,8 @@
 use cranelift_entity::EntityRef;
-use hir::analysis::ty::{CallableLayoutParamPort, LayoutBundleComponentId, LayoutMapTy};
+use hir::analysis::{
+    semantic::borrowck::NormalizedSemanticBody,
+    ty::{CallableLayoutParamPort, LayoutBundleComponentId, LayoutMapTy},
+};
 
 use crate::{
     db::MirDb,
@@ -11,8 +14,10 @@ use crate::{
 };
 
 use super::{
-    interface::runtime_param_locals, layout_evidence::runtime_layout_map_for_map_ty,
-    returns::runtime_return_class, type_info::RuntimeTypeEnv,
+    interface::runtime_param_locals,
+    layout_evidence::runtime_layout_map_for_map_ty,
+    returns::{declaration_runtime_return_class, runtime_return_class_for_body},
+    type_info::RuntimeTypeEnv,
 };
 
 #[derive(Clone, Debug)]
@@ -58,7 +63,7 @@ impl<'db> RuntimeAbiPlan<'db> {
     }
 }
 
-pub(crate) fn runtime_abi_plan<'db>(
+pub(crate) fn runtime_declaration_abi_plan<'db>(
     db: &'db dyn MirDb,
     key: RuntimeInstanceKey<'db>,
 ) -> RuntimeAbiPlan<'db> {
@@ -79,18 +84,28 @@ pub(crate) fn runtime_abi_plan<'db>(
         };
     };
 
+    let visible = declaration_runtime_return_class(db, key);
+    semantic_runtime_abi_plan(db, key, semantic, visible)
+}
+
+fn semantic_runtime_abi_plan<'db>(
+    db: &'db dyn MirDb,
+    key: RuntimeInstanceKey<'db>,
+    semantic: hir::analysis::semantic::SemanticInstance<'db>,
+    visible: Option<RuntimeClass<'db>>,
+) -> RuntimeAbiPlan<'db> {
     let visible_params = key
         .params(db)
         .iter()
-        .zip(runtime_param_locals(db, semantic, key.params(db)))
-        .map(|(class, local)| RuntimeParam {
-            local: RLocalId::from_u32(local.index() as u32),
+        .enumerate()
+        .map(|(index, class)| RuntimeParam {
+            local: RLocalId::from_u32(index as u32),
             class: class.clone(),
         })
         .collect::<Vec<_>>();
     let signature = semantic.key(db).layout_bundle_signature(db);
     let env = RuntimeTypeEnv::for_semantic(db, semantic);
-    let first_local = semantic.body(db).locals.len();
+    let first_local = visible_params.len();
     let evidence_param_specs = signature
         .runtime_params()
         .map(|param| (param.source, param.component.map_ty()))
@@ -111,7 +126,6 @@ pub(crate) fn runtime_abi_plan<'db>(
         })
         .collect::<Vec<_>>();
 
-    let visible = runtime_return_class(db, key);
     let evidence = signature
         .runtime_results()
         .map(|result| {
@@ -146,4 +160,47 @@ pub(crate) fn runtime_abi_plan<'db>(
             layout,
         },
     }
+}
+
+pub(crate) fn runtime_body_abi_plan<'db>(
+    db: &'db dyn MirDb,
+    key: RuntimeInstanceKey<'db>,
+    body: &NormalizedSemanticBody<'db>,
+) -> RuntimeAbiPlan<'db> {
+    let semantic = key
+        .semantic(db)
+        .expect("runtime body ABI requires a semantic instance");
+    assert_eq!(
+        body.owner, semantic,
+        "runtime ABI body must belong to its semantic instance"
+    );
+    let visible = runtime_return_class_for_body(db, key, body);
+    let declaration_visible = declaration_runtime_return_class(db, key);
+    let body_layout = visible
+        .as_ref()
+        .and_then(RuntimeClass::aggregate_layout)
+        .map(|layout| layout.data(db));
+    let declaration_layout = declaration_visible
+        .as_ref()
+        .and_then(RuntimeClass::aggregate_layout)
+        .map(|layout| layout.data(db));
+    assert_eq!(
+        visible,
+        declaration_visible,
+        "admitted runtime body return ABI must match its declaration contract: semantic={:?}, params={:?}, body_layout={body_layout:#?}, declaration_layout={declaration_layout:#?}",
+        semantic.key(db),
+        key.params(db),
+    );
+    let mut plan = semantic_runtime_abi_plan(db, key, semantic, visible);
+    for (param, local) in
+        plan.visible_params
+            .iter_mut()
+            .zip(runtime_param_locals(db, semantic, body, key.params(db)))
+    {
+        param.local = RLocalId::from_u32(local.index() as u32);
+    }
+    for (index, evidence) in plan.evidence_params.iter_mut().enumerate() {
+        evidence.param.local = RLocalId::from_u32(body.locals.len() as u32 + index as u32);
+    }
+    plan
 }

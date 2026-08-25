@@ -11,7 +11,7 @@ use crate::{
         },
         ty::{
             provider::ProviderAddressSpace,
-            ty_check::{BodyOwner, EffectPassMode, LocalBinding},
+            ty_check::{BodyOwner, EffectPassMode, LocalBinding, SmirLoweringIssue},
             ty_def::{BorrowKind, TyId},
         },
     },
@@ -628,22 +628,55 @@ pub struct NormalizedSemanticBodyId<'db> {
     pub body: NormalizedSemanticBody<'db>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub struct BlockedSemanticBody<'db> {
+    pub instance: crate::analysis::semantic::SemanticInstance<'db>,
+    pub causes: Box<[SmirLoweringIssue]>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum SemanticBorrowSummaryResult<'db> {
     Ok(Option<BorrowSummaryId<'db>>),
+    Blocked {
+        body: BlockedSemanticBody<'db>,
+        summary: Option<BorrowSummaryId<'db>>,
+    },
     Err(BorrowDiagnosticId<'db>),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum SemanticBorrowCheckResult<'db> {
     Ok,
+    Blocked(BlockedSemanticBody<'db>),
     Err(BorrowDiagnosticId<'db>),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
-pub enum SemanticNormalizeResult<'db> {
-    Ok(NormalizedSemanticBodyId<'db>),
-    Err(BorrowDiagnosticId<'db>),
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum SemanticBodyAdmission<'db> {
+    Ready(NormalizedSemanticBodyId<'db>),
+    Blocked(BlockedSemanticBody<'db>),
+    InternalFailure(BorrowDiagnosticId<'db>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum SemanticNormalizationFailure<'db> {
+    Blocked(BlockedSemanticBody<'db>),
+    InternalFailure(SemanticBorrowDiagnostic<'db>),
+}
+
+impl<'db> SemanticNormalizationFailure<'db> {
+    pub fn diagnostic(&self) -> Option<&SemanticBorrowDiagnostic<'db>> {
+        match self {
+            Self::Blocked(_) => None,
+            Self::InternalFailure(diag) => Some(diag),
+        }
+    }
+}
+
+impl<'db> From<SemanticBorrowDiagnostic<'db>> for SemanticNormalizationFailure<'db> {
+    fn from(diag: SemanticBorrowDiagnostic<'db>) -> Self {
+        Self::InternalFailure(diag)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]

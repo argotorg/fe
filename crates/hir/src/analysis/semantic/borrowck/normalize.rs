@@ -9,7 +9,10 @@ use crate::{
             LayoutBackingPlace, LayoutBackingProjection, PlaceProvenance, SExpr, SLocalId,
             SOperand, SPlace, SStmtKind, STerminatorKind, SemanticBody, SemanticInstance,
             SemanticLocalKind, SemanticLocalRole, SemanticProjectionPath, ValueProvenance,
-            ctfe::{canonicalize_semantic_const_refs_from_body, canonicalize_semantic_consts},
+            ctfe::{
+                canonicalize_semantic_const_refs_from_body, canonicalize_semantic_consts_from_body,
+            },
+            instance::SemanticBodyAdmissionError,
             semantic_instance_base_assumptions_for_key,
         },
         ty::{
@@ -23,23 +26,42 @@ use crate::{
     projection::{IndexSource, Projection, ProjectionPath},
 };
 
-use super::diagnostics::normalize_error_to_diag;
+use super::diagnostics::{normalize_error_to_diag, smir_lowering_admission_diag};
 use super::ir::{
-    NBorrowRoot, NBorrowRootId, NEffectArg, NEffectArgValue, NExpr, NLayoutBackingSource,
-    NLocalFacts, NLocalOrigin, NLocalRootDemand, NOperand, NSBlock, NSLocal, NSPlace, NSPlaceRoot,
-    NSStmt, NSStmtKind, NSTerminator, NSTerminatorKind, NormalizedBindingLowering,
-    NormalizedSemanticBody, NormalizedSemanticBodyId, ReadMode, SemanticBorrowDiagnostic,
-    SemanticNormalizeError, SemanticNormalizeResult, empty_normalized_body,
-    local_has_runtime_move_semantics,
+    BlockedSemanticBody, NBorrowRoot, NBorrowRootId, NEffectArg, NEffectArgValue, NExpr,
+    NLayoutBackingSource, NLocalFacts, NLocalOrigin, NLocalRootDemand, NOperand, NSBlock, NSLocal,
+    NSPlace, NSPlaceRoot, NSStmt, NSStmtKind, NSTerminator, NSTerminatorKind,
+    NormalizedBindingLowering, NormalizedSemanticBody, NormalizedSemanticBodyId, ReadMode,
+    SemanticBodyAdmission, SemanticNormalizationFailure, SemanticNormalizeError,
+    empty_normalized_body, local_has_runtime_move_semantics,
 };
 
 pub fn normalize_semantic_body<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-) -> Result<NormalizedSemanticBody<'db>, SemanticBorrowDiagnostic<'db>> {
-    match normalized_semantic_body_query(db, instance) {
-        SemanticNormalizeResult::Ok(body) => Ok(body.body(db).clone()),
-        SemanticNormalizeResult::Err(diag) => Err(diag.diag(db).clone()),
+) -> Result<NormalizedSemanticBody<'db>, SemanticNormalizationFailure<'db>> {
+    normalized_body_from_admission(db, semantic_body_admission(db, instance))
+}
+
+pub fn semantic_body_admission<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> SemanticBodyAdmission<'db> {
+    normalized_semantic_body_query(db, instance)
+}
+
+fn normalized_body_from_admission<'db>(
+    db: &'db dyn HirAnalysisDb,
+    admission: SemanticBodyAdmission<'db>,
+) -> Result<NormalizedSemanticBody<'db>, SemanticNormalizationFailure<'db>> {
+    match admission {
+        SemanticBodyAdmission::Ready(body) => Ok(body.body(db).clone()),
+        SemanticBodyAdmission::Blocked(blocked) => {
+            Err(SemanticNormalizationFailure::Blocked(blocked))
+        }
+        SemanticBodyAdmission::InternalFailure(diag) => Err(
+            SemanticNormalizationFailure::InternalFailure(diag.diag(db).clone()),
+        ),
     }
 }
 
@@ -49,20 +71,37 @@ pub fn normalize_semantic_body<'db>(
 pub fn normalize_semantic_body_for_layout_evidence<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-) -> Result<NormalizedSemanticBody<'db>, SemanticBorrowDiagnostic<'db>> {
-    match layout_normalized_semantic_body_query(db, instance) {
-        SemanticNormalizeResult::Ok(body) => Ok(body.body(db).clone()),
-        SemanticNormalizeResult::Err(diag) => Err(diag.diag(db).clone()),
-    }
+) -> Result<NormalizedSemanticBody<'db>, SemanticNormalizationFailure<'db>> {
+    normalized_body_from_admission(db, layout_normalized_semantic_body_query(db, instance))
 }
 
 pub(crate) fn normalize_provisional_semantic_body<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-) -> Result<NormalizedSemanticBody<'db>, SemanticBorrowDiagnostic<'db>> {
-    match provisional_normalized_semantic_body_query(db, instance) {
-        SemanticNormalizeResult::Ok(body) => Ok(body.body(db).clone()),
-        SemanticNormalizeResult::Err(diag) => Err(diag.diag(db).clone()),
+) -> Result<NormalizedSemanticBody<'db>, SemanticNormalizationFailure<'db>> {
+    normalized_body_from_admission(db, provisional_normalized_semantic_body_query(db, instance))
+}
+
+fn semantic_body_admission_failure<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    error: SemanticBodyAdmissionError<'db>,
+) -> SemanticBodyAdmission<'db> {
+    match error {
+        SemanticBodyAdmissionError::BlockedByUpstreamDiagnostics(causes) => {
+            SemanticBodyAdmission::Blocked(BlockedSemanticBody { instance, causes })
+        }
+        SemanticBodyAdmissionError::IncompleteLoweringPlan(causes) => {
+            SemanticBodyAdmission::InternalFailure(
+                crate::analysis::semantic::BorrowDiagnosticId::new(
+                    db,
+                    smir_lowering_admission_diag(db, instance, &causes),
+                ),
+            )
+        }
+        SemanticBodyAdmissionError::CallSiteFinalization(diag) => {
+            SemanticBodyAdmission::InternalFailure(diag)
+        }
     }
 }
 
@@ -153,11 +192,12 @@ fn resolve_normalized_layout_backing_source<'db>(
 fn normalized_semantic_body_query<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-) -> SemanticNormalizeResult<'db> {
-    if let Some(diag) = instance.call_site_finalization_diagnostic(db) {
-        return SemanticNormalizeResult::Err(diag);
-    }
-    let raw = canonicalize_semantic_consts(db, instance).clone();
+) -> SemanticBodyAdmission<'db> {
+    let raw = match instance.admitted_body(db) {
+        Ok(body) => body,
+        Err(error) => return semantic_body_admission_failure(db, instance, error),
+    };
+    let raw = canonicalize_semantic_consts_from_body(db, instance, raw);
     normalize_semantic_body_result(db, instance, raw, instance.assumptions(db))
 }
 
@@ -165,11 +205,12 @@ fn normalized_semantic_body_query<'db>(
 fn layout_normalized_semantic_body_query<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-) -> SemanticNormalizeResult<'db> {
-    if let Some(diag) = instance.call_site_finalization_diagnostic(db) {
-        return SemanticNormalizeResult::Err(diag);
-    }
-    let raw = canonicalize_semantic_const_refs_from_body(db, instance, instance.body(db));
+) -> SemanticBodyAdmission<'db> {
+    let raw = match instance.admitted_body(db) {
+        Ok(body) => body,
+        Err(error) => return semantic_body_admission_failure(db, instance, error),
+    };
+    let raw = canonicalize_semantic_const_refs_from_body(db, instance, raw);
     normalize_semantic_body_result(db, instance, raw, instance.assumptions(db))
 }
 
@@ -177,9 +218,12 @@ fn layout_normalized_semantic_body_query<'db>(
 fn provisional_normalized_semantic_body_query<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-) -> SemanticNormalizeResult<'db> {
-    let raw =
-        canonicalize_semantic_const_refs_from_body(db, instance, instance.provisional_body(db));
+) -> SemanticBodyAdmission<'db> {
+    let raw = match instance.admitted_provisional_body(db) {
+        Ok(body) => body,
+        Err(error) => return semantic_body_admission_failure(db, instance, error),
+    };
+    let raw = canonicalize_semantic_const_refs_from_body(db, instance, raw);
     let assumptions = semantic_instance_base_assumptions_for_key(db, instance.key(db));
     normalize_semantic_body_result(db, instance, raw, assumptions)
 }
@@ -189,15 +233,15 @@ fn normalize_semantic_body_result<'db>(
     instance: SemanticInstance<'db>,
     raw: SemanticBody<'db>,
     assumptions: crate::analysis::ty::trait_resolution::PredicateListId<'db>,
-) -> SemanticNormalizeResult<'db> {
+) -> SemanticBodyAdmission<'db> {
     match NormalizeCtxt::new(db, instance, raw, assumptions).normalize() {
-        Ok(body) => SemanticNormalizeResult::Ok(NormalizedSemanticBodyId::new(db, body)),
-        Err(err) => {
-            SemanticNormalizeResult::Err(crate::analysis::semantic::BorrowDiagnosticId::new(
+        Ok(body) => SemanticBodyAdmission::Ready(NormalizedSemanticBodyId::new(db, body)),
+        Err(err) => SemanticBodyAdmission::InternalFailure(
+            crate::analysis::semantic::BorrowDiagnosticId::new(
                 db,
                 normalize_error_to_diag(db, instance, err),
-            ))
-        }
+            ),
+        ),
     }
 }
 

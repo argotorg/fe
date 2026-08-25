@@ -2513,6 +2513,8 @@ mod tests {
     use driver::DriverDataBase;
     use url::Url;
 
+    use crate::runtime::RuntimeExitBehavior;
+
     use super::*;
 
     fn recv_wrapper_plan<'db>(
@@ -2604,6 +2606,53 @@ fn ambiguous<const ROOT: u256>(left: Rooted<ROOT>, right: Rooted<ROOT>) -> u256 
                 .contains("layout evidence lowering failed")
         );
         assert!(error.to_string().contains("AmbiguousConstBinding"));
+    }
+
+    #[test]
+    fn blocked_body_keeps_a_declaration_abi_but_cannot_be_lowered() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse("file:///blocked_semantic_body.fe").unwrap();
+        let file = db.workspace().touch(
+            &mut db,
+            file_url,
+            Some(
+                r#"
+fn invalid(result: mut u256) -> mut u256 uses (values: mut [mut u256; 2]) {
+    values[0] = 1
+    result
+}
+"#
+                .to_string(),
+            ),
+        );
+        let top_mod = db.top_mod(file);
+        let func = top_mod
+            .all_funcs(&db)
+            .iter()
+            .copied()
+            .find(|func| {
+                func.name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "invalid")
+            })
+            .expect("invalid function");
+        let semantic = get_or_build_semantic_instance(
+            &db,
+            hir::analysis::semantic::identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+        );
+        let runtime = runtime_instance_for_semantic(&db, semantic);
+
+        let signature = runtime.interface_signature(&db);
+        assert_eq!(signature.params.len(), 1);
+        assert!(signature.ret.is_some());
+        assert_eq!(runtime.exit_behavior(&db), RuntimeExitBehavior::MayReturn);
+
+        let error = runtime_instance_lowered_body(&db, runtime)
+            .expect_err("blocked semantic body must not reach runtime lowering");
+        assert!(
+            error.to_string().contains("semantic body is blocked by"),
+            "{error}"
+        );
     }
 
     #[test]

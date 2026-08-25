@@ -12,10 +12,8 @@
 //! `while true { .. break }`), which is decided per-block without tracking
 //! facts across joins.
 
-use std::convert::Infallible;
-
 use cranelift_entity::{EntityRef, SecondaryMap};
-use dataflow::{JoinSemiLattice, solve_forward_cfg};
+use dataflow::{JoinSemiLattice, try_solve_forward_cfg};
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Update;
 
@@ -23,16 +21,13 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            SBlockId, SConst, SLocalId, SemConstScalar, SemConstValue, SemanticInstance,
+            BlockedSemanticBody, BorrowDiagnosticId, SBlockId, SConst, SLocalId, SemConstScalar,
+            SemConstValue, SemanticBodyAdmission, SemanticInstance, SemanticNormalizationFailure,
             get_or_build_semantic_instance, identity_semantic_instance_key,
-            normalize_semantic_body,
+            semantic_body_admission,
         },
         ty::{
-            ty_check::{
-                BodyOwner, EffectParamSite, EffectPassMode, LocalBinding, ParamSite,
-                check_const_body, check_contract_init_body, check_contract_recv_arm_body,
-                check_func_body,
-            },
+            ty_check::{BodyOwner, EffectParamSite, EffectPassMode, LocalBinding, ParamSite},
             ty_def::{BorrowKind, CapabilityKind},
         },
     },
@@ -69,14 +64,13 @@ enum AssignedTarget<'db> {
 pub fn contract_init_assigned_fields<'db>(
     db: &'db dyn HirAnalysisDb,
     contract: Contract<'db>,
-) -> Option<FxHashSet<u32>> {
+) -> Result<Option<FxHashSet<u32>>, SemanticNormalizationFailure<'db>> {
     let instance = get_or_build_semantic_instance(
         db,
         identity_semantic_instance_key(db, BodyOwner::ContractInit { contract }),
     );
-    instance_assigned_targets(db, instance)
-        .as_ref()
-        .map(|targets| {
+    match instance_assigned_targets(db, instance) {
+        AssignedTargetsResult::Ready(targets) => Ok(targets.as_ref().map(|targets| {
             targets
                 .iter()
                 .filter_map(|target| match target {
@@ -86,11 +80,32 @@ pub fn contract_init_assigned_fields<'db>(
                     _ => None,
                 })
                 .collect()
-        })
+        })),
+        AssignedTargetsResult::Blocked(blocked) => {
+            Err(SemanticNormalizationFailure::Blocked(blocked.clone()))
+        }
+        AssignedTargetsResult::InternalFailure(diag) => Err(
+            SemanticNormalizationFailure::InternalFailure(diag.diag(db).clone()),
+        ),
+    }
 }
 
 /// Targets `instance`'s body definitely assigns on every normal exit.
-/// `None` when no normal exit is reachable or the body fails to normalize.
+/// `Ready(None)` means no normal exit is reachable. Admission failures remain
+/// explicit so callers cannot mistake an unanalyzable body for divergence.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+enum AssignedTargetsResult<'db> {
+    Ready(Option<Vec<AssignedTarget<'db>>>),
+    Blocked(BlockedSemanticBody<'db>),
+    InternalFailure(BorrowDiagnosticId<'db>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum AssignedTargetsFailure<'db> {
+    Blocked(BlockedSemanticBody<'db>),
+    InternalFailure(BorrowDiagnosticId<'db>),
+}
+
 #[salsa::tracked(
     return_ref,
     cycle_fn=assigned_targets_cycle_recover,
@@ -99,70 +114,73 @@ pub fn contract_init_assigned_fields<'db>(
 fn instance_assigned_targets<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-) -> Option<Vec<AssignedTarget<'db>>> {
-    // Bodies with type errors cannot be lowered to semantic MIR; credit no
-    // writes instead of forcing a lowering that would panic.
-    if !owner_body_is_clean(db, instance.key(db).owner(db)) {
-        return Some(Vec::new());
-    }
-    let body = normalize_semantic_body(db, instance).ok()?;
+) -> AssignedTargetsResult<'db> {
+    let body = match semantic_body_admission(db, instance) {
+        SemanticBodyAdmission::Ready(body) => body.body(db).clone(),
+        SemanticBodyAdmission::Blocked(blocked) => return AssignedTargetsResult::Blocked(blocked),
+        SemanticBodyAdmission::InternalFailure(diag) => {
+            return AssignedTargetsResult::InternalFailure(diag);
+        }
+    };
     if body.blocks.is_empty() {
-        return None;
+        return AssignedTargetsResult::Ready(None);
     }
 
     let mut analysis = DefiniteAssignment::new(db, &body);
-    let entry_states = solve_forward_cfg(&mut analysis);
+    let entry_states = match try_solve_forward_cfg(&mut analysis) {
+        Ok(states) => states,
+        Err(AssignedTargetsFailure::Blocked(blocked)) => {
+            return AssignedTargetsResult::Blocked(blocked);
+        }
+        Err(AssignedTargetsFailure::InternalFailure(diag)) => {
+            return AssignedTargetsResult::InternalFailure(diag);
+        }
+    };
 
-    let mut exit_states = body
-        .blocks
-        .iter()
-        .enumerate()
-        .filter(|(_, block)| matches!(block.terminator.kind, NSTerminatorKind::Return(_)))
-        .map(|(idx, _)| SBlockId::new(idx))
-        .filter(|block| entry_states[*block].reached)
-        .map(|block| {
-            let Ok(state) = analysis.transfer_state(block, &entry_states[block]);
-            state
-        });
-
-    let first = exit_states.next()?;
-    let assigned = exit_states.fold(first.assigned, |mut acc, state| {
-        acc.retain(|target| state.assigned.contains(target));
-        acc
-    });
-    Some(assigned.into_iter().collect())
-}
-
-fn owner_body_is_clean<'db>(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -> bool {
-    match owner {
-        BodyOwner::Func(func) => check_func_body(db, func).0.is_empty(),
-        BodyOwner::Const(const_) => check_const_body(db, const_).0.is_empty(),
-        BodyOwner::ContractInit { contract } => check_contract_init_body(db, contract).0.is_empty(),
-        BodyOwner::ContractRecvArm {
-            contract,
-            recv_idx,
-            arm_idx,
-        } => check_contract_recv_arm_body(db, contract, recv_idx, arm_idx)
-            .0
-            .is_empty(),
-        BodyOwner::AnonConstBody { .. } => false,
+    let mut exit_states = Vec::new();
+    for (idx, block) in body.blocks.iter().enumerate() {
+        let block_id = SBlockId::new(idx);
+        if matches!(block.terminator.kind, NSTerminatorKind::Return(_))
+            && entry_states[block_id].reached
+        {
+            match analysis.transfer_state(block_id, &entry_states[block_id]) {
+                Ok(state) => exit_states.push(state),
+                Err(AssignedTargetsFailure::Blocked(blocked)) => {
+                    return AssignedTargetsResult::Blocked(blocked);
+                }
+                Err(AssignedTargetsFailure::InternalFailure(diag)) => {
+                    return AssignedTargetsResult::InternalFailure(diag);
+                }
+            }
+        }
     }
+
+    let Some(first) = exit_states.pop() else {
+        return AssignedTargetsResult::Ready(None);
+    };
+    let assigned = exit_states
+        .into_iter()
+        .fold(first.assigned, |mut acc, state| {
+            acc.retain(|target| state.assigned.contains(target));
+            acc
+        });
+    AssignedTargetsResult::Ready(Some(assigned.into_iter().collect()))
 }
 
 fn assigned_targets_cycle_initial<'db>(
     _db: &'db dyn HirAnalysisDb,
     _instance: SemanticInstance<'db>,
-) -> Option<Vec<AssignedTarget<'db>>> {
+) -> AssignedTargetsResult<'db> {
     // Recursive calls initially contribute no writes; iteration refines.
-    Some(Vec::new())
+    AssignedTargetsResult::Ready(Some(Vec::new()))
 }
 
 fn assigned_targets_cycle_recover<'db>(
     _db: &'db dyn HirAnalysisDb,
-    _value: &Option<Vec<AssignedTarget<'db>>>,
+    _value: &AssignedTargetsResult<'db>,
     _count: u32,
     _instance: SemanticInstance<'db>,
-) -> salsa::CycleRecoveryAction<Option<Vec<AssignedTarget<'db>>>> {
+) -> salsa::CycleRecoveryAction<AssignedTargetsResult<'db>> {
     salsa::CycleRecoveryAction::Iterate
 }
 
@@ -260,7 +278,7 @@ impl<'a, 'db> DefiniteAssignment<'a, 'db> {
         &self,
         block: SBlockId,
         in_state: &MustAssignState<'db>,
-    ) -> Result<MustAssignState<'db>, Infallible> {
+    ) -> Result<MustAssignState<'db>, AssignedTargetsFailure<'db>> {
         let mut state = in_state.clone();
         for stmt in &self.body.blocks[block.index()].stmts {
             match &stmt.kind {
@@ -277,7 +295,7 @@ impl<'a, 'db> DefiniteAssignment<'a, 'db> {
                         ..
                     } = expr
                     {
-                        self.apply_call(callee.key, args, effect_args, &mut state);
+                        self.apply_call(callee.key, args, effect_args, &mut state)?;
                     }
                 }
             }
@@ -342,13 +360,20 @@ impl<'a, 'db> DefiniteAssignment<'a, 'db> {
         args: &[super::borrowck::NOperand],
         effect_args: &[NEffectArg<'db>],
         state: &mut MustAssignState<'db>,
-    ) {
+    ) -> Result<(), AssignedTargetsFailure<'db>> {
         let BodyOwner::Func(callee_func) = callee_key.owner(self.db) else {
-            return;
+            return Ok(());
         };
         let callee = get_or_build_semantic_instance(self.db, callee_key);
-        let Some(summary) = instance_assigned_targets(self.db, callee) else {
-            return;
+        let summary = match instance_assigned_targets(self.db, callee) {
+            AssignedTargetsResult::Ready(Some(summary)) => summary,
+            AssignedTargetsResult::Ready(None) => return Ok(()),
+            AssignedTargetsResult::Blocked(blocked) => {
+                return Err(AssignedTargetsFailure::Blocked(blocked.clone()));
+            }
+            AssignedTargetsResult::InternalFailure(diag) => {
+                return Err(AssignedTargetsFailure::InternalFailure(*diag));
+            }
         };
         for target in summary {
             let mapped = match target {
@@ -381,13 +406,14 @@ impl<'a, 'db> DefiniteAssignment<'a, 'db> {
                 state.assigned.insert(mapped);
             }
         }
+        Ok(())
     }
 }
 
 impl<'db> dataflow::ForwardCfgAnalysis for DefiniteAssignment<'_, 'db> {
     type Block = SBlockId;
     type State = MustAssignState<'db>;
-    type Error = Infallible;
+    type Error = AssignedTargetsFailure<'db>;
 
     fn block_count(&self) -> usize {
         self.body.blocks.len()

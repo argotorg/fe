@@ -58,7 +58,7 @@ use crate::{
 };
 
 use super::{
-    abi::{RuntimeAbiPlan, runtime_abi_plan},
+    abi::{RuntimeAbiPlan, runtime_body_abi_plan, runtime_declaration_abi_plan},
     arg_selector::RuntimeArgSelector,
     boundary::{BoundarySiteAllocator, RuntimeValueUsePlan, boundary_spec_for_ty_in_env},
     call_input::{CompiledCallInputPlan, compile_call_input_plan_for_semantic},
@@ -86,7 +86,7 @@ use super::{
     realize::{
         RuntimeArgSource, RuntimeValueUseEmitter, SelectedRuntimeArg, emit_runtime_value_use_plan,
     },
-    returns::runtime_return_class,
+    returns::declaration_runtime_return_class,
     source::{
         RuntimeSourceMode, RuntimeSourceQuery, SemanticPlaceValueSource,
         alias_source_place_for_local as source_alias_source_place_for_local,
@@ -115,9 +115,13 @@ pub fn lower_to_rmir<'db>(
     })?;
     check_runtime_body_supported(db, semantic.key(db), &normalized_body)?;
     let facts = BodyStaticFacts::new(db, &normalized_body);
-    let abi = runtime_abi_plan(db, key);
-    let param_locals =
-        crate::runtime::lower::interface::runtime_param_locals(db, semantic, key.params(db));
+    let abi = runtime_body_abi_plan(db, key, &normalized_body);
+    let param_locals = crate::runtime::lower::interface::runtime_param_locals(
+        db,
+        semantic,
+        &normalized_body,
+        key.params(db),
+    );
     let mut inferer = LocalStateInferer::new(
         BodyEnv::new(db, &normalized_body, &facts),
         key.params(db),
@@ -1086,7 +1090,7 @@ impl<'db> RmirEmitter<'db> {
         stmt_idx: usize,
         expr: &NExpr<'db>,
     ) -> Option<RuntimeClass<'db>> {
-        let mut lookup_return_class = |key| runtime_return_class(self.db, key);
+        let mut lookup_return_class = |key| declaration_runtime_return_class(self.db, key);
         BodyEnv::new(self.db, &self.semantic_body, &self.facts).expr_direct_class(
             &self.semantic_carriers,
             block_idx,
@@ -3146,7 +3150,7 @@ impl<'db> RmirEmitter<'db> {
             crate::instance::RuntimeInstanceSource::Semantic(semantic),
             runtime_classes,
         );
-        let abi = runtime_abi_plan(self.db, runtime_key);
+        let abi = runtime_declaration_abi_plan(self.db, runtime_key);
         let callee_env = RuntimeTypeEnv::for_semantic(self.db, semantic);
         let layout_args = layout_call.map_or(&[][..], |call| call.args.as_ref());
         assert_eq!(
@@ -4737,7 +4741,7 @@ impl<'db> RmirEmitter<'db> {
             params,
         );
         let callee = get_or_build_runtime_instance(self.db, callee_key);
-        let abi = runtime_abi_plan(self.db, callee_key);
+        let abi = runtime_declaration_abi_plan(self.db, callee_key);
         if !abi.evidence_params.is_empty() {
             let source = layout_source.unwrap_or_else(|| {
                 panic!(

@@ -125,13 +125,19 @@ fn collect_instance<'db>(
     if !seen.insert(instance.key(db)) {
         return;
     }
-    if let Err(error) = layout_evidence_body(db, instance) {
+    if let Err(error) = layout_evidence_body(db, instance)
+        && !matches!(error, LayoutEvidenceError::Blocked(_))
+    {
         diagnostics.push(Box::new(LayoutEvidenceDiagnostic { instance, error }));
     }
 }
 
 impl DiagnosticVoucher for LayoutEvidenceDiagnostic<'_> {
     fn to_complete(&self, db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
+        assert!(
+            !matches!(self.error, LayoutEvidenceError::Blocked(_)),
+            "blocked layout evidence must not be converted into a diagnostic"
+        );
         if let LayoutEvidenceError::Normalize(diagnostic) = &self.error {
             return diagnostic.to_complete(db);
         }
@@ -194,7 +200,7 @@ impl DiagnosticVoucher for LayoutEvidenceDiagnostic<'_> {
                 "one value is required to carry two different runtime layout roots".to_string(),
                 false,
             ),
-            LayoutEvidenceError::Normalize(_) => unreachable!(),
+            LayoutEvidenceError::Blocked(_) | LayoutEvidenceError::Normalize(_) => unreachable!(),
             error => (
                 100,
                 format!("layout-evidence lowering failed: {error:?}"),
@@ -249,7 +255,8 @@ impl LayoutEvidenceDiagnostic<'_> {
             | LayoutEvidenceError::MapTypeMismatch { dst: local, .. } => {
                 resolve_local_source_span(db, self.instance, *local)
             }
-            LayoutEvidenceError::Normalize(_)
+            LayoutEvidenceError::Blocked(_)
+            | LayoutEvidenceError::Normalize(_)
             | LayoutEvidenceError::MissingBody(_)
             | LayoutEvidenceError::TemplateLocalCountMismatch { .. }
             | LayoutEvidenceError::InvalidStatementIdentity(_)
@@ -263,7 +270,12 @@ impl LayoutEvidenceDiagnostic<'_> {
         span.or_else(|| {
             owner
                 .body(db)
-                .or_else(|| self.instance.body(db).template_owner.body(db))
+                .or_else(|| {
+                    self.instance
+                        .admitted_body(db)
+                        .ok()
+                        .and_then(|body| body.template_owner.body(db))
+                })
                 .and_then(|body| body.span().resolve(db))
         })
     }

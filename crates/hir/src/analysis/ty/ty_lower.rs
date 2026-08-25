@@ -14,10 +14,11 @@ use super::{
     adt_def::{AdtDef, AdtRef, instantiate_adt_field_layout, instantiate_adt_field_shape},
     assoc_const::{AssocConstUse, InherentConstUse},
     const_ty::{
-        CallableInputLayoutHoleOrigin, ConstBodyLowering, ConstTyData, ConstTyId, EvaluatedConstTy,
-        HoleAnchor, HoleId, HoleMinter, LayoutBoundaryIdentity, LayoutHoleArgSite,
-        LayoutInstantiationContext, LayoutInstantiationId, LayoutIntroSite, LayoutOccurrencePath,
-        LayoutOccurrenceStep, LayoutRootId, LayoutRootIdentity, StructuralHoleOrigin,
+        CallableInputLayoutHoleOrigin, CallableLayoutOwner, ConstBodyLowering, ConstTyData,
+        ConstTyId, EvaluatedConstTy, HoleAnchor, HoleId, HoleMinter, LayoutBoundaryIdentity,
+        LayoutHoleArgSite, LayoutInstantiationContext, LayoutInstantiationId, LayoutIntroSite,
+        LayoutOccurrencePath, LayoutOccurrenceStep, LayoutRootId, LayoutRootIdentity,
+        StructuralHoleOrigin,
     },
     effects::{ResolvedEffectKey, TraitKeySchema},
     fold::{TyFoldable, TyFolder},
@@ -722,11 +723,11 @@ fn callable_layout_occurrence_descends_from<'db>(
 #[derive(Clone, Copy)]
 enum CallableLayoutSchemaSite<'db> {
     Input {
-        func: crate::hir_def::Func<'db>,
+        owner: CallableLayoutOwner<'db>,
         origin: CallableInputLayoutHoleOrigin,
     },
     Output {
-        func: crate::hir_def::Func<'db>,
+        owner: CallableLayoutOwner<'db>,
     },
     Value {
         body: crate::hir_def::Body<'db>,
@@ -737,7 +738,7 @@ enum CallableLayoutSchemaSite<'db> {
 impl<'db> CallableLayoutSchemaSite<'db> {
     fn func(self, db: &'db dyn HirAnalysisDb) -> Option<crate::hir_def::Func<'db>> {
         match self {
-            Self::Input { func, .. } | Self::Output { func } => Some(func),
+            Self::Input { owner, .. } | Self::Output { owner } => owner.func(),
             Self::Value { body, .. } => body.containing_func(db),
         }
     }
@@ -777,7 +778,7 @@ impl<'db> CallableLayoutSchemaSite<'db> {
 
     fn scope(self) -> ScopeId<'db> {
         match self {
-            Self::Input { func, .. } | Self::Output { func } => func.scope(),
+            Self::Input { owner, .. } | Self::Output { owner } => owner.scope(),
             Self::Value { body, .. } => body.scope(),
         }
     }
@@ -923,12 +924,12 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
             let ordinal = *next_ordinal;
             *next_ordinal += 1;
             let placeholder = match site {
-                CallableLayoutSchemaSite::Input { func, origin } => TyId::const_ty(
+                CallableLayoutSchemaSite::Input { owner, origin } => TyId::const_ty(
                     db,
                     ConstTyId::bound_callable_hole(
                         db,
                         layout_hole_fallback_ty(db, hole_ty),
-                        func,
+                        owner,
                         origin,
                         ordinal,
                     ),
@@ -1449,13 +1450,13 @@ fn callable_layout_projections_for_ty_with_effect_targets<'db>(
     expand_effect_targets: bool,
 ) -> CallableLayoutProjections<'db> {
     let (anchor, boundary) = match site {
-        CallableLayoutSchemaSite::Input { func, origin } => (
-            HoleAnchor::CallableInput { func, origin },
-            LayoutBoundaryIdentity::CallableInput { func, origin },
+        CallableLayoutSchemaSite::Input { owner, origin } => (
+            HoleAnchor::CallableInput { owner, origin },
+            LayoutBoundaryIdentity::CallableInput { owner, origin },
         ),
-        CallableLayoutSchemaSite::Output { func } => (
-            HoleAnchor::CallableOutput { func },
-            LayoutBoundaryIdentity::CallableOutput(func),
+        CallableLayoutSchemaSite::Output { owner } => (
+            HoleAnchor::CallableOutput { owner },
+            LayoutBoundaryIdentity::CallableOutput(owner),
         ),
         CallableLayoutSchemaSite::Value { body, local } => (
             HoleAnchor::SemanticValue { body, local },
@@ -1533,7 +1534,13 @@ where
         ordinals.get(&hole_id.root(db)).map(|ordinal| {
             TyId::const_ty(
                 db,
-                ConstTyId::bound_callable_hole(db, hole_ty, func, origin, *ordinal),
+                ConstTyId::bound_callable_hole(
+                    db,
+                    hole_ty,
+                    CallableLayoutOwner::Func(func),
+                    origin,
+                    *ordinal,
+                ),
             )
         })
     })
@@ -1615,7 +1622,10 @@ fn callable_input_layout_projections<'db>(
                 origin,
                 callable_layout_projections_for_ty(
                     db,
-                    CallableLayoutSchemaSite::Input { func, origin },
+                    CallableLayoutSchemaSite::Input {
+                        owner: CallableLayoutOwner::Func(func),
+                        origin,
+                    },
                     ty,
                 ),
             )
@@ -1637,7 +1647,10 @@ fn callable_input_carrier_projections<'db>(
                 origin,
                 callable_layout_projections_for_ty_with_effect_targets(
                     db,
-                    CallableLayoutSchemaSite::Input { func, origin },
+                    CallableLayoutSchemaSite::Input {
+                        owner: CallableLayoutOwner::Func(func),
+                        origin,
+                    },
                     ty,
                     false,
                 ),
@@ -1850,13 +1863,17 @@ pub fn callable_layout_bundle_signature<'db>(
         .collect::<Vec<_>>();
     let mut output = callable_layout_projections_for_ty(
         db,
-        CallableLayoutSchemaSite::Output { func },
+        CallableLayoutSchemaSite::Output {
+            owner: CallableLayoutOwner::Func(func),
+        },
         func.return_ty(db),
     );
     bind_direct_layout_const_params(db, &mut output.schema);
     bind_projected_component_const_metadata(
         db,
-        CallableLayoutSchemaSite::Output { func },
+        CallableLayoutSchemaSite::Output {
+            owner: CallableLayoutOwner::Func(func),
+        },
         &mut output.schema,
         &output.port_tys,
     );
@@ -2068,12 +2085,18 @@ pub(crate) fn specialized_callable_layout_bundle_signature_with_normalizer<'db>(
             let ty = normalize(ty);
             let projection = callable_layout_projections_for_ty(
                 db,
-                CallableLayoutSchemaSite::Input { func, origin },
+                CallableLayoutSchemaSite::Input {
+                    owner: CallableLayoutOwner::Func(func),
+                    origin,
+                },
                 ty,
             );
             let interface = specialize_callable_input_layout_interface(
                 db,
-                CallableLayoutSchemaSite::Input { func, origin },
+                CallableLayoutSchemaSite::Input {
+                    owner: CallableLayoutOwner::Func(func),
+                    origin,
+                },
                 projection,
                 plan.layout_bundle_interfaces_by_origin.get(&origin),
                 plan.layout_port_tys_by_origin.get(&origin),
@@ -2088,12 +2111,16 @@ pub(crate) fn specialized_callable_layout_bundle_signature_with_normalizer<'db>(
     let output_ty = normalize(output_ty);
     let mut output = callable_layout_projections_for_ty(
         db,
-        CallableLayoutSchemaSite::Output { func },
+        CallableLayoutSchemaSite::Output {
+            owner: CallableLayoutOwner::Func(func),
+        },
         output_ty,
     );
     let mut declared_output = callable_layout_projections_for_ty(
         db,
-        CallableLayoutSchemaSite::Output { func },
+        CallableLayoutSchemaSite::Output {
+            owner: CallableLayoutOwner::Func(func),
+        },
         func.return_ty(db),
     );
     bind_direct_layout_const_params(db, &mut declared_output.schema);
@@ -2112,7 +2139,9 @@ pub(crate) fn specialized_callable_layout_bundle_signature_with_normalizer<'db>(
     let mut output_schema = output.schema;
     preserve_declared_component_metadata(
         db,
-        CallableLayoutSchemaSite::Output { func },
+        CallableLayoutSchemaSite::Output {
+            owner: CallableLayoutOwner::Func(func),
+        },
         &mut output_schema,
         &component_refined_ports,
         &declared_output.schema,
@@ -2131,6 +2160,22 @@ pub(crate) fn specialized_callable_layout_bundle_signature_with_normalizer<'db>(
         inputs,
         output_witnesses,
         output,
+    }
+}
+
+pub(crate) fn callable_layout_bundle_input_interface<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: CallableLayoutOwner<'db>,
+    origin: CallableInputLayoutHoleOrigin,
+    ty: TyId<'db>,
+) -> LayoutBundleInterface<'db> {
+    let site = CallableLayoutSchemaSite::Input { owner, origin };
+    let mut projection = callable_layout_projections_for_ty(db, site, ty);
+    bind_direct_layout_const_params(db, &mut projection.schema);
+    bind_projected_component_const_metadata(db, site, &mut projection.schema, &projection.port_tys);
+    LayoutBundleInterface {
+        schema: projection.schema,
+        transport: projection.transport,
     }
 }
 
@@ -2532,7 +2577,10 @@ pub(crate) fn func_implicit_param_plan<'db>(
             .collect::<FxHashMap<_, _>>();
         let interface = bind_callable_layout_bundle_interface(
             db,
-            CallableLayoutSchemaSite::Input { func, origin },
+            CallableLayoutSchemaSite::Input {
+                owner: CallableLayoutOwner::Func(func),
+                origin,
+            },
             &projection,
             bindings_by_origin.get(&origin).map_or(&[], Vec::as_slice),
         );

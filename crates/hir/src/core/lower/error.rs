@@ -452,12 +452,13 @@ fn lower_error_encode_impl<'db>(
                 FuncModifiers::new(Visibility::Private, false, false, false),
                 |body| {
                     let db = body.db();
-                    let self_expr = body.path_expr(PathId::from_ident(db, IdentId::make_self(db)));
+                    let self_expr = (!field_specs.is_empty())
+                        .then(|| body.path_expr(PathId::from_ident(db, IdentId::make_self(db))));
                     let mut field_ptr_ident = ptr_ident;
 
                     for (index, (field_name, field_ty)) in field_specs.iter().copied().enumerate() {
                         let receiver = body.push_expr(Expr::Field(
-                            self_expr,
+                            self_expr.expect("error encoding fields require a receiver"),
                             Partial::Present(FieldIndex::Ident(field_name)),
                         ));
                         let field_ptr = body.ident_expr(field_ptr_ident);

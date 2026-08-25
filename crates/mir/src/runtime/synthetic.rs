@@ -36,7 +36,7 @@ use crate::{
         RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole, TargetRootProviderBinding,
         TargetRootProviderMaterialization,
         lower::{
-            abi::runtime_abi_plan,
+            abi::runtime_declaration_abi_plan,
             boundary::{RuntimeValueAddress, RuntimeValueSource},
             classify::semantic_return_ty,
             const_scalar_from_value,
@@ -871,7 +871,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         provided_prefix: usize,
         plan: &EntrySemanticArgsPlan<'db>,
     ) -> SyntheticOwnerCallArgs {
-        let abi = runtime_abi_plan(self.db, callee.key(self.db));
+        let abi = runtime_declaration_abi_plan(self.db, callee.key(self.db));
         let needed = abi.visible_params.len();
         assert!(
             provided_prefix <= needed,
@@ -1113,7 +1113,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         RuntimeInterfaceSignature<'db>,
         Vec<RLocalId>,
     ) {
-        let initial_abi = runtime_abi_plan(self.db, callee.key(self.db));
+        let initial_abi = runtime_declaration_abi_plan(self.db, callee.key(self.db));
         let visible_len = initial_abi.visible_params.len();
         assert_eq!(
             args.len(),
@@ -1123,7 +1123,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         let (visible_args, evidence_args) = args.split_at(visible_len);
         let selected = self.select_call_args(callee, visible_args);
         let callee = self.specialize_callee_for_selected_args(callee, &selected);
-        let abi = runtime_abi_plan(self.db, callee.key(self.db));
+        let abi = runtime_declaration_abi_plan(self.db, callee.key(self.db));
         self.assert_selected_args_match_params(callee, &selected, &abi.visible_params);
         assert_eq!(
             initial_abi
@@ -1165,7 +1165,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         callee: RuntimeInstance<'db>,
         args: &[RLocalId],
     ) -> Vec<SelectedRuntimeValueArg<'db>> {
-        let abi = runtime_abi_plan(self.db, callee.key(self.db));
+        let abi = runtime_declaration_abi_plan(self.db, callee.key(self.db));
         if args.is_empty() && abi.visible_params.is_empty() {
             return Vec::new();
         }
@@ -1223,7 +1223,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         let RuntimeInstanceSource::Semantic(semantic) = callee.key(self.db).source(self.db) else {
             return callee;
         };
-        let abi = runtime_abi_plan(self.db, callee.key(self.db));
+        let abi = runtime_declaration_abi_plan(self.db, callee.key(self.db));
         let param_entries = runtime_visible_binding_plans(self.db, semantic);
         assert_eq!(
             param_entries.len(),

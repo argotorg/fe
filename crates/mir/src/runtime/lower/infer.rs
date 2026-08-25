@@ -35,7 +35,7 @@ use super::{
         runtime_class_for_effect_binding_provider_in_env, runtime_class_for_provider_binding,
     },
     conversion::RuntimeConversionPlanner,
-    returns::runtime_return_class,
+    returns::declaration_runtime_return_class,
     source::local_read_places_extractable_from_value,
     type_info::{
         RuntimeTypeEnv, effect_handle_transport_class_for_ty_in_env,
@@ -132,7 +132,7 @@ pub(super) struct CarrierInferer<'a, 'lookup, 'db, S: AssignmentSpace<'db>> {
     signature_pinned: Vec<bool>,
     class_cache: InferClassCache<'db>,
     pending_dependents: Vec<S::Node>,
-    /// Callee return-class lookup; `None` queries `runtime_return_class`
+    /// Callee return-class lookup; `None` queries the declaration contract.
     /// directly. Return-slice inference injects its own so salsa cycle
     /// recovery stays in control of recursion.
     lookup: Option<ReturnClassLookup<'lookup, 'db>>,
@@ -328,7 +328,7 @@ impl<'db, S: AssignmentSpace<'db>> SparseAnalysis for CarrierInferer<'_, '_, 'db
         let lookup = &mut self.lookup;
         let mut lookup_return_class = move |key| match lookup.as_deref_mut() {
             Some(f) => f(key),
-            None => runtime_return_class(db, key),
+            None => declaration_runtime_return_class(db, key),
         };
         let class = self.env.expr_direct_class(
             &self.carriers,

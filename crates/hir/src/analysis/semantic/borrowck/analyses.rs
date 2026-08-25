@@ -16,7 +16,7 @@ use crate::analysis::{
 use super::{
     canon::{BorrowCanonCx, CanonPlace, CfgAdjacency, Loan, LoanId, MovedPlaces, State},
     check::{Borrowck, provisional_borrow_summary_voucher, semantic_borrow_summary_voucher},
-    ir::{BorrowInputRef, NormalizedSemanticBody, SemanticBorrowDiagnostic},
+    ir::{BlockedSemanticBody, BorrowInputRef, NormalizedSemanticBody, SemanticBorrowDiagnostic},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,6 +36,7 @@ pub(super) struct BorrowLoanTargetAnalysis<'a, 'db> {
     entry_state: &'a SecondaryMap<SBlockId, State>,
     loan_for_local: &'a FxHashMap<SLocalId, LoanId>,
     summary_mode: BorrowSummaryMode,
+    blocked: Option<BlockedSemanticBody<'db>>,
 }
 
 impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
@@ -54,7 +55,12 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
             entry_state,
             loan_for_local,
             summary_mode,
+            blocked: None,
         }
+    }
+
+    pub(super) fn blocked_body(&self) -> Option<BlockedSemanticBody<'db>> {
+        self.blocked.clone()
     }
 
     fn canon<'b>(&'b self, loans: &'b [Loan<'db>]) -> BorrowCanonCx<'b, 'db> {
@@ -83,7 +89,7 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
     }
 
     fn update_loan_from_stmt(
-        &self,
+        &mut self,
         loans: &mut [Loan<'db>],
         state: &State,
         stmt: &super::ir::NSStmt<'db>,
@@ -107,7 +113,7 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
             }
             NExpr::Call { callee, args, .. } => {
                 let callee_instance = get_or_build_semantic_instance(self.db, callee.key);
-                let summary = match self.summary_mode {
+                let voucher = match self.summary_mode {
                     BorrowSummaryMode::Final => {
                         semantic_borrow_summary_voucher(self.db, callee_instance)
                     }
@@ -115,6 +121,10 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
                         provisional_borrow_summary_voucher(self.db, callee_instance)
                     }
                 }?;
+                if self.blocked.is_none() {
+                    self.blocked = voucher.blocked;
+                }
+                let summary = voucher.summary;
                 let Some(summary) = summary else {
                     return Ok(false);
                 };

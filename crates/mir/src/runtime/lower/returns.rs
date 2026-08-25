@@ -4,9 +4,12 @@ use cranelift_entity::{EntityRef, PrimaryMap, SecondaryMap, entity_impl};
 use hir::analysis::{
     semantic::{
         SLocalId, SemanticInstance,
-        borrowck::{NSTerminatorKind, NormalizedSemanticBody, normalize_semantic_body},
+        borrowck::{NSTerminatorKind, NormalizedSemanticBody},
     },
-    ty::ty_def::TyId,
+    ty::{
+        ty_check::{ReturnProjectionStep, ReturnProvenance},
+        ty_def::TyId,
+    },
 };
 use rustc_hash::FxHashSet;
 use salsa::Update;
@@ -14,7 +17,9 @@ use salsa::Update;
 use crate::{
     db::MirDb,
     instance::{RuntimeInstanceKey, RuntimeInstanceSource},
-    runtime::{RuntimeClass, RuntimeExitBehavior},
+    runtime::{
+        EnumLayoutKey, Layout, LayoutId, LayoutKey, RefKind, RuntimeClass, RuntimeExitBehavior,
+    },
 };
 
 use super::{
@@ -23,7 +28,7 @@ use super::{
         desired_runtime_return_plan, selected_visible_return_for_local,
     },
     infer::{AssignmentSpace, CarrierInferer, ReturnClassLookup, merge_runtime_class},
-    interface::runtime_visible_binding_plans,
+    interface::{runtime_visible_binding_local, runtime_visible_binding_plans},
 };
 use crate::runtime::synthetic::runtime_synthetic_exit_behavior;
 
@@ -65,17 +70,15 @@ unsafe impl<'db> salsa::Update for RuntimeReturnSummary<'db> {
 }
 
 impl<'db> RuntimeReturnSummary<'db> {
-    fn build(db: &'db dyn MirDb, semantic: SemanticInstance<'db>) -> Self {
-        let semantic_body = normalize_semantic_body(db, semantic).unwrap_or_else(|err| {
-            panic!(
-                "semantic normalization failed for {:?}: {err:?}",
-                semantic.key(db)
-            )
-        });
-        let facts = BodyStaticFacts::new(db, &semantic_body);
+    fn build(
+        db: &'db dyn MirDb,
+        semantic: SemanticInstance<'db>,
+        semantic_body: &NormalizedSemanticBody<'db>,
+    ) -> Self {
+        let facts = BodyStaticFacts::new(db, semantic_body);
         let param_locals = runtime_visible_binding_plans(db, semantic)
             .iter()
-            .map(|entry| entry.local)
+            .map(|entry| runtime_visible_binding_local(semantic_body, entry.binding))
             .collect::<Vec<_>>()
             .into_boxed_slice();
         let return_locals = semantic_body
@@ -91,7 +94,7 @@ impl<'db> RuntimeReturnSummary<'db> {
             })
             .collect::<Vec<_>>()
             .into_boxed_slice();
-        let env = BodyEnv::new(db, &semantic_body, &facts);
+        let env = BodyEnv::new(db, semantic_body, &facts);
         let mut return_plan = desired_runtime_return_plan(db, semantic);
         let mut default_return_class = default_return_class(db, semantic);
         if matches!(return_plan, RuntimeVisibleReturnPlan::Erased) {
@@ -162,7 +165,7 @@ impl<'db> RuntimeReturnSummary<'db> {
         }
 
         Self {
-            semantic_body,
+            semantic_body: semantic_body.clone(),
             facts,
             return_plan,
             default_return_class,
@@ -180,19 +183,23 @@ impl<'db> RuntimeReturnSummary<'db> {
     }
 }
 
-#[salsa::tracked(return_ref)]
-pub(crate) fn runtime_return_summary<'db>(
+pub(crate) fn runtime_return_class_for_body<'db>(
     db: &'db dyn MirDb,
-    semantic: SemanticInstance<'db>,
-) -> RuntimeReturnSummary<'db> {
-    RuntimeReturnSummary::build(db, semantic)
+    key: RuntimeInstanceKey<'db>,
+    body: &NormalizedSemanticBody<'db>,
+) -> Option<RuntimeClass<'db>> {
+    let semantic = key.semantic(db)?;
+    if let StaticRuntimeReturnDecision::Known(class) = static_runtime_return_decision(db, semantic)
+    {
+        return class;
+    }
+    let summary = RuntimeReturnSummary::build(db, semantic, body);
+    evaluate_runtime_return_class(db, &summary, key.params(db), &mut |callee_key| {
+        declaration_runtime_return_class(db, callee_key)
+    })
 }
 
-#[salsa::tracked(
-    cycle_fn=runtime_return_class_cycle_recover,
-    cycle_initial=runtime_return_class_cycle_initial
-)]
-pub(crate) fn runtime_return_class<'db>(
+pub(crate) fn declaration_runtime_return_class<'db>(
     db: &'db dyn MirDb,
     key: RuntimeInstanceKey<'db>,
 ) -> Option<RuntimeClass<'db>> {
@@ -201,10 +208,244 @@ pub(crate) fn runtime_return_class<'db>(
     {
         return class;
     }
-    let summary = runtime_return_summary(db, semantic);
-    evaluate_runtime_return_class(db, summary, key.params(db), &mut |callee_key| {
-        runtime_return_class(db, callee_key)
+
+    let mut class = default_return_class(db, semantic)?;
+    let bindings = runtime_visible_binding_plans(db, semantic);
+    if bindings.len() != key.params(db).len() {
+        return Some(class);
+    }
+    let typed_body = semantic.key(db).typed_body(db);
+    let fully_forwarded = matches!(
+        typed_body.return_provenance(db),
+        ReturnProvenance::Forwarded(_)
+    );
+    let mut replaced = FxHashSet::default();
+    for source in typed_body.forwarded_return_sources(db) {
+        let Some((_, source_class)) = bindings
+            .iter()
+            .zip(key.params(db))
+            .find(|(binding, _)| binding.binding.callable_input_origin(db) == Some(source.origin))
+        else {
+            continue;
+        };
+        let Some(projected) =
+            project_declaration_return_source(db, source_class.clone(), &source.projection)
+        else {
+            continue;
+        };
+        let Some(updated) = merge_declaration_return_source(
+            db,
+            class.clone(),
+            &source.result_projection,
+            source_class,
+            &projected,
+            !fully_forwarded || !replaced.insert(source.result_projection.clone()),
+        ) else {
+            continue;
+        };
+        class = updated;
+    }
+    Some(class)
+}
+
+fn project_declaration_return_source<'db>(
+    db: &'db dyn MirDb,
+    mut class: RuntimeClass<'db>,
+    projection: &[ReturnProjectionStep],
+) -> Option<RuntimeClass<'db>> {
+    for step in projection {
+        let layout = class.aggregate_layout()?.data(db);
+        class = match (*step, layout) {
+            (ReturnProjectionStep::Field(field), Layout::Struct(layout)) => {
+                layout.fields.get(field as usize)?.clone()
+            }
+            (ReturnProjectionStep::VariantField { variant, field }, Layout::Enum(layout)) => layout
+                .variants
+                .get(variant as usize)?
+                .fields
+                .get(field as usize)?
+                .clone(),
+            (
+                ReturnProjectionStep::ConstantIndex(_)
+                | ReturnProjectionStep::ParamIndex(_)
+                | ReturnProjectionStep::AnyIndex,
+                Layout::Array(layout),
+            ) => layout.elem,
+            (ReturnProjectionStep::Field(_), Layout::Array(_) | Layout::Enum(_))
+            | (ReturnProjectionStep::VariantField { .. }, Layout::Struct(_) | Layout::Array(_))
+            | (
+                ReturnProjectionStep::ConstantIndex(_)
+                | ReturnProjectionStep::ParamIndex(_)
+                | ReturnProjectionStep::AnyIndex,
+                Layout::Struct(_) | Layout::Enum(_),
+            ) => return None,
+        };
+    }
+    Some(class)
+}
+
+fn merge_declaration_return_source<'db>(
+    db: &'db dyn MirDb,
+    current: RuntimeClass<'db>,
+    projection: &[ReturnProjectionStep],
+    source_root: &RuntimeClass<'db>,
+    projected_source: &RuntimeClass<'db>,
+    merge_existing: bool,
+) -> Option<RuntimeClass<'db>> {
+    let Some((step, suffix)) = projection.split_first() else {
+        let source =
+            retarget_declaration_return_transport(current.clone(), source_root, projected_source);
+        return if merge_existing {
+            merge_runtime_class(db, &current, &source).or(Some(current))
+        } else {
+            Some(source)
+        };
+    };
+    let layout = current.aggregate_layout()?.data(db);
+    let layout = match (*step, layout) {
+        (ReturnProjectionStep::Field(field), Layout::Struct(mut layout)) => {
+            let field = layout.fields.get_mut(field as usize)?;
+            *field = merge_declaration_return_source(
+                db,
+                field.clone(),
+                suffix,
+                source_root,
+                projected_source,
+                merge_existing,
+            )?;
+            LayoutKey::Struct(layout)
+        }
+        (ReturnProjectionStep::VariantField { variant, field }, Layout::Enum(mut layout)) => {
+            let field = layout
+                .variants
+                .get_mut(variant as usize)?
+                .fields
+                .get_mut(field as usize)?;
+            *field = merge_declaration_return_source(
+                db,
+                field.clone(),
+                suffix,
+                source_root,
+                projected_source,
+                merge_existing,
+            )?;
+            LayoutKey::Enum(EnumLayoutKey {
+                variants: layout.variants,
+            })
+        }
+        (
+            ReturnProjectionStep::ConstantIndex(_)
+            | ReturnProjectionStep::ParamIndex(_)
+            | ReturnProjectionStep::AnyIndex,
+            Layout::Array(mut layout),
+        ) => {
+            layout.elem = merge_declaration_return_source(
+                db,
+                layout.elem,
+                suffix,
+                source_root,
+                projected_source,
+                merge_existing,
+            )?;
+            LayoutKey::Array(layout)
+        }
+        (ReturnProjectionStep::Field(_), Layout::Array(_) | Layout::Enum(_))
+        | (ReturnProjectionStep::VariantField { .. }, Layout::Struct(_) | Layout::Array(_))
+        | (
+            ReturnProjectionStep::ConstantIndex(_)
+            | ReturnProjectionStep::ParamIndex(_)
+            | ReturnProjectionStep::AnyIndex,
+            Layout::Struct(_) | Layout::Enum(_),
+        ) => return None,
+    };
+    Some(RuntimeClass::AggregateValue {
+        layout: LayoutId::new(db, layout),
     })
+}
+
+fn retarget_declaration_return_transport<'db>(
+    target: RuntimeClass<'db>,
+    source_root: &RuntimeClass<'db>,
+    projected_source: &RuntimeClass<'db>,
+) -> RuntimeClass<'db> {
+    let projected_transport = matches!(
+        projected_source,
+        RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. }
+    );
+    // A transport-valued projection carries its concrete pointee identity. A
+    // scalar or aggregate projection only inherits the source root's transport;
+    // its pointee shape remains the declared result projection.
+    let source = if projected_transport {
+        projected_source
+    } else {
+        source_root
+    };
+    match (target, source) {
+        (
+            RuntimeClass::Ref {
+                pointee: target_pointee,
+                view,
+                ..
+            },
+            RuntimeClass::Ref {
+                pointee: source_pointee,
+                kind,
+                ..
+            },
+        ) => RuntimeClass::Ref {
+            pointee: if projected_transport {
+                source_pointee.clone()
+            } else {
+                target_pointee
+            },
+            kind: kind.clone(),
+            view,
+        },
+        (
+            RuntimeClass::Ref { pointee, .. },
+            RuntimeClass::RawAddr {
+                space,
+                target: source_target,
+            },
+        ) => RuntimeClass::RawAddr {
+            space: *space,
+            target: if projected_transport {
+                source_target.or_else(|| pointee.aggregate_layout())
+            } else {
+                pointee.aggregate_layout()
+            },
+        },
+        (
+            RuntimeClass::RawAddr { target, .. },
+            RuntimeClass::Ref {
+                pointee,
+                kind: RefKind::Provider { space, .. },
+                ..
+            },
+        ) => RuntimeClass::RawAddr {
+            space: *space,
+            target: if projected_transport {
+                pointee.aggregate_layout().or(target)
+            } else {
+                target
+            },
+        },
+        (
+            RuntimeClass::RawAddr { target, .. },
+            RuntimeClass::RawAddr {
+                space,
+                target: source_target,
+            },
+        ) => RuntimeClass::RawAddr {
+            space: *space,
+            target: if projected_transport {
+                source_target.or(target)
+            } else {
+                target
+            },
+        },
+        (_, _) => projected_source.clone(),
+    }
 }
 
 pub(crate) fn runtime_exit_behavior<'db>(
@@ -239,29 +480,6 @@ pub(crate) fn static_runtime_return_decision<'db>(
         | RuntimeVisibleReturnPlan::Constrained(_)
         | RuntimeVisibleReturnPlan::PassActual => StaticRuntimeReturnDecision::Dynamic,
     }
-}
-
-fn runtime_return_class_cycle_initial<'db>(
-    db: &'db dyn MirDb,
-    key: RuntimeInstanceKey<'db>,
-) -> Option<RuntimeClass<'db>> {
-    let semantic = key.semantic(db)?;
-    if let StaticRuntimeReturnDecision::Known(class) = static_runtime_return_decision(db, semantic)
-    {
-        return class;
-    }
-    runtime_return_summary(db, semantic)
-        .default_return_class
-        .clone()
-}
-
-fn runtime_return_class_cycle_recover<'db>(
-    _db: &'db dyn MirDb,
-    _value: &Option<RuntimeClass<'db>>,
-    _count: u32,
-    _key: RuntimeInstanceKey<'db>,
-) -> salsa::CycleRecoveryAction<Option<RuntimeClass<'db>>> {
-    salsa::CycleRecoveryAction::Iterate
 }
 
 pub(crate) fn evaluate_runtime_return_class<'db>(
@@ -350,7 +568,8 @@ mod tests {
     use hir::{
         analysis::{
             semantic::{
-                SemanticLocalKind, get_or_build_semantic_instance, root_semantic_instance_key,
+                SemanticLocalKind, borrowck::normalize_semantic_body,
+                get_or_build_semantic_instance, root_semantic_instance_key,
             },
             ty::ty_check::BodyOwner,
         },
@@ -399,12 +618,14 @@ mod tests {
         let semantic = key
             .semantic(db)
             .expect("legacy return-class inference only applies to semantic runtime instances");
-        let summary = RuntimeReturnSummary::build(db, semantic);
+        let semantic_body =
+            normalize_semantic_body(db, semantic).expect("semantic body should normalize");
+        let summary = RuntimeReturnSummary::build(db, semantic, &semantic_body);
         let env = summary.env(db);
         let inferred = LocalStateInferer::new(
             env,
             key.params(db),
-            &runtime_param_locals(db, semantic, key.params(db)),
+            &runtime_param_locals(db, semantic, &summary.semantic_body, key.params(db)),
         )
         .run();
         let mut returned = Vec::new();
@@ -453,7 +674,7 @@ mod tests {
             "`{name}` should use the semantic-level static return decision"
         );
         assert_eq!(
-            runtime_return_class(&db, key),
+            declaration_runtime_return_class(&db, key),
             legacy_return_class_for_key(&db, key),
             "static exact return class should match full-body carrier inference"
         );
@@ -682,7 +903,7 @@ fn helper() {}
             static_runtime_return_decision(&db, semantic),
             StaticRuntimeReturnDecision::Known(None)
         );
-        assert_eq!(runtime_return_class(&db, key), None);
+        assert_eq!(declaration_runtime_return_class(&db, key), None);
     }
 
     #[test]
@@ -751,7 +972,9 @@ fn choose(_ flag: bool) -> u256 {
             .expect("file should be loaded");
         let top_mod = db.top_mod(file);
         let semantic = semantic_instance_for_named_func(&db, top_mod, "choose");
-        let summary = RuntimeReturnSummary::build(&db, semantic);
+        let semantic_body =
+            normalize_semantic_body(&db, semantic).expect("semantic body should normalize");
+        let summary = RuntimeReturnSummary::build(&db, semantic, &semantic_body);
         let return_local = *summary
             .return_locals
             .first()
@@ -840,7 +1063,7 @@ pub contract C {
         let key = function.instance(&db).key(&db);
 
         assert_eq!(
-            runtime_return_class(&db, key),
+            declaration_runtime_return_class(&db, key),
             legacy_return_class_for_key(&db, key),
             "provider-root return slice should match full-body carrier inference:\ninstance={key:#?}"
         );
@@ -947,16 +1170,18 @@ fn first(_ arr: [u8; 4]) -> u8 {
         let semantic = semantic_instance_for_named_func(&db, top_mod, "first");
         let instance = runtime_instance_for_semantic(&db, semantic);
         let key = instance.key(&db);
-        let summary = RuntimeReturnSummary::build(&db, semantic);
+        let semantic_body =
+            normalize_semantic_body(&db, semantic).expect("semantic body should normalize");
+        let summary = RuntimeReturnSummary::build(&db, semantic, &semantic_body);
         let env = summary.env(&db);
 
         let legacy = LocalStateInferer::new(
             env,
             key.params(&db),
-            &runtime_param_locals(&db, semantic, key.params(&db)),
+            &runtime_param_locals(&db, semantic, &summary.semantic_body, key.params(&db)),
         )
         .run();
-        let mut lookup_return_class = |key| runtime_return_class(&db, key);
+        let mut lookup_return_class = |key| declaration_runtime_return_class(&db, key);
         let lookup: ReturnClassLookup<'_, '_> = &mut lookup_return_class;
         let sliced = CarrierInferer::with_space(
             env,

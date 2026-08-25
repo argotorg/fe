@@ -30,10 +30,7 @@ use crate::{
                 runtime_builtin_func_kind,
             },
             normalize::normalize_ty,
-            ty_check::{
-                BodyOwner, LocalBinding, ParamSite, check_anon_const_body, check_const_body,
-                check_func_body,
-            },
+            ty_check::{BodyOwner, LocalBinding, ParamSite},
             ty_def::{PrimTy, TyBase, TyData, TyId},
         },
     },
@@ -312,7 +309,7 @@ fn eval_body_owner_const_with_args_cycle_recover<'db>(
 
 pub(super) fn try_eval_expr_to_const<'db>(
     db: &'db dyn HirAnalysisDb,
-    instance: SemanticInstance<'db>,
+    body: &SemanticBody<'db>,
     result_ty: TyId<'db>,
     expr: &SExpr<'db>,
     locals: &[Option<SemConstId<'db>>],
@@ -320,16 +317,16 @@ pub(super) fn try_eval_expr_to_const<'db>(
 ) -> Option<SemConstId<'db>> {
     let mut machine = CtfeMachine::new(db, CtfeConfig::default());
     machine
-        .eval_expr_with_locals(instance, result_ty, expr.clone(), locals, origin)
+        .eval_expr_with_locals(body, result_ty, expr.clone(), locals, origin)
         .ok()
 }
 
-struct CtfeMachine<'db> {
+struct CtfeMachine<'db, 'body> {
     db: &'db dyn HirAnalysisDb,
     config: CtfeConfig,
     steps: usize,
     instance_cache: FxHashMap<SemanticInstanceKey<'db>, SemanticInstance<'db>>,
-    frames: Vec<CtfeFrame<'db>>,
+    frames: Vec<CtfeFrame<'db, 'body>>,
     /// Memoized results of const-item references evaluated by this machine.
     const_results: FxHashMap<SemanticInstanceKey<'db>, Result<SemConstId<'db>, CtfeError<'db>>>,
     /// Const items currently being evaluated, outermost first. A reference to
@@ -338,8 +335,8 @@ struct CtfeMachine<'db> {
     const_stack: Vec<SemanticInstanceKey<'db>>,
 }
 
-struct CtfeFrame<'db> {
-    body: &'db SemanticBody<'db>,
+struct CtfeFrame<'db, 'body> {
+    body: &'body SemanticBody<'db>,
     locals: Vec<CtfeSlot<'db>>,
     current: usize,
 }
@@ -824,7 +821,7 @@ fn expect_binary_args<'a, 'db>(
 
 fn checked_result<'db>(
     value: BigInt,
-    machine: &CtfeMachine<'db>,
+    machine: &CtfeMachine<'db, '_>,
     result_ty: TyId<'db>,
     origin: SemOrigin<'db>,
 ) -> Result<BigInt, CtfeError<'db>> {
@@ -979,7 +976,7 @@ pub(super) enum CtfePathElem {
     Index(usize),
 }
 
-impl<'db> CtfeMachine<'db> {
+impl<'db, 'body> CtfeMachine<'db, 'body> {
     fn new(db: &'db dyn HirAnalysisDb, config: CtfeConfig) -> Self {
         Self {
             db,
@@ -1016,13 +1013,12 @@ impl<'db> CtfeMachine<'db> {
 
     fn eval_expr_with_locals(
         &mut self,
-        instance: SemanticInstance<'db>,
+        body: &'body SemanticBody<'db>,
         result_ty: TyId<'db>,
         expr: SExpr<'db>,
         locals: &[Option<SemConstId<'db>>],
         origin: SemOrigin<'db>,
     ) -> Result<SemConstId<'db>, CtfeError<'db>> {
-        let body = instance.body(self.db);
         let mut frame_locals = vec![CtfeSlot::Uninit; body.locals.len()];
         for (idx, value) in locals.iter().copied().enumerate() {
             if let Some(value) = value
@@ -1082,7 +1078,7 @@ impl<'db> CtfeMachine<'db> {
         args: Vec<CtfeValue<'db>>,
         origin: SemOrigin<'db>,
     ) -> Result<CtfeValue<'db>, CtfeError<'db>> {
-        self.ensure_const_evaluable(instance, origin)?;
+        let body = self.const_evaluable_body(instance, origin)?;
         // Const-item frames are exempt from the limit: the const stack's
         // cycle check already bounds them (each const is evaluated at most
         // once per path), and a long but finite chain of const definitions
@@ -1091,7 +1087,6 @@ impl<'db> CtfeMachine<'db> {
             return Err(CtfeError::RecursionLimitExceeded { origin });
         }
 
-        let body = instance.body(self.db);
         let mut locals = vec![CtfeSlot::Uninit; body.locals.len()];
         let mut arg_locals = match instance.key(self.db).owner(self.db) {
             BodyOwner::Func(func) => body
@@ -1145,42 +1140,21 @@ impl<'db> CtfeMachine<'db> {
         result
     }
 
-    fn ensure_const_evaluable(
+    fn const_evaluable_body(
         &self,
         instance: SemanticInstance<'db>,
         origin: SemOrigin<'db>,
-    ) -> Result<(), CtfeError<'db>> {
+    ) -> Result<&'body SemanticBody<'db>, CtfeError<'db>> {
         match instance.key(self.db).owner(self.db) {
             BodyOwner::Func(func) if !func.is_const(self.db) => {
                 Err(CtfeError::NonConstCall { origin })
             }
-            BodyOwner::Func(func) => {
-                let (diags, typed_body) = check_func_body(self.db, func);
-                if !diags.is_empty() && typed_body.has_smir_lowering_blocker(self.db) {
-                    Err(CtfeError::InvalidBody { origin })
-                } else {
-                    Ok(())
-                }
-            }
-            BodyOwner::Const(const_) => {
-                let (diags, typed_body) = check_const_body(self.db, const_);
-                if !diags.is_empty() && typed_body.has_smir_lowering_blocker(self.db) {
-                    Err(CtfeError::InvalidBody { origin })
-                } else {
-                    Ok(())
-                }
-            }
-            BodyOwner::AnonConstBody { body, expected } => {
-                let (diags, typed_body) = check_anon_const_body(self.db, body, expected);
-                if !diags.is_empty() && typed_body.has_smir_lowering_blocker(self.db) {
-                    Err(CtfeError::InvalidBody { origin })
-                } else {
-                    Ok(())
-                }
-            }
             BodyOwner::ContractInit { .. } | BodyOwner::ContractRecvArm { .. } => {
                 Err(CtfeError::NotConstEvaluable { origin })
             }
+            BodyOwner::Func(_) | BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => instance
+                .admitted_body(self.db)
+                .map_err(|_| CtfeError::InvalidBody { origin }),
         }
     }
 

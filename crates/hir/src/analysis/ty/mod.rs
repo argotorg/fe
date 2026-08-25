@@ -61,6 +61,7 @@ pub mod ty_lower;
 pub mod unify;
 pub mod visitor;
 
+pub use const_ty::CallableLayoutOwner;
 pub use layout_bundle::{
     CallableLayoutBundleInput, CallableLayoutBundleParam, CallableLayoutBundleResult,
     CallableLayoutBundleSignature, CallableLayoutParamPort, CallableLayoutPort,

@@ -132,6 +132,41 @@ pub enum CallableInputLayoutHoleOrigin {
     Effect(usize),
 }
 
+/// The declaration that owns a callable layout boundary.
+///
+/// Unlike [`Body`], this identity is available without inspecting or lowering
+/// an implementation body, so declaration ABI queries remain body-independent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum CallableLayoutOwner<'db> {
+    Func(Func<'db>),
+    ContractInit {
+        contract: Contract<'db>,
+    },
+    ContractRecvArm {
+        contract: Contract<'db>,
+        recv_idx: u32,
+        arm_idx: u32,
+    },
+}
+
+impl<'db> CallableLayoutOwner<'db> {
+    pub fn func(self) -> Option<Func<'db>> {
+        match self {
+            Self::Func(func) => Some(func),
+            Self::ContractInit { .. } | Self::ContractRecvArm { .. } => None,
+        }
+    }
+
+    pub fn scope(self) -> ScopeId<'db> {
+        match self {
+            Self::Func(func) => func.scope(),
+            Self::ContractInit { contract } | Self::ContractRecvArm { contract, .. } => {
+                contract.scope()
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HoleId<'db> {
     Structural(StructuralHoleId<'db>),
@@ -146,7 +181,7 @@ pub enum BoundHoleId<'db> {
         kind: LayoutShapeHoleKind,
     },
     CallableInput {
-        func: Func<'db>,
+        owner: CallableLayoutOwner<'db>,
         origin: CallableInputLayoutHoleOrigin,
         ordinal: usize,
     },
@@ -235,12 +270,12 @@ pub enum HoleAnchor<'db> {
     /// A unique callable input position used as the parent of structural
     /// projection landings discovered for that input.
     CallableInput {
-        func: Func<'db>,
+        owner: CallableLayoutOwner<'db>,
         origin: CallableInputLayoutHoleOrigin,
     },
     /// The declared result position of one callable. Output evidence is a
     /// signature property and must never be keyed by a lowered body.
-    CallableOutput { func: Func<'db> },
+    CallableOutput { owner: CallableLayoutOwner<'db> },
     /// A canonical parent for nested evidence landings in one semantic value.
     /// This identity is local to schema derivation and is never an allocation
     /// identity in a contract root graph.
@@ -266,10 +301,10 @@ pub enum LayoutBoundaryIdentity<'db> {
     ProviderTarget(ImplementorId<'db>),
     ArrayElement,
     CallableInput {
-        func: Func<'db>,
+        owner: CallableLayoutOwner<'db>,
         origin: CallableInputLayoutHoleOrigin,
     },
-    CallableOutput(Func<'db>),
+    CallableOutput(CallableLayoutOwner<'db>),
     SemanticValue {
         body: Body<'db>,
         local: u32,
@@ -461,12 +496,12 @@ impl<'db> StructuralHoleId<'db> {
 
 impl<'db> HoleId<'db> {
     pub(crate) fn bound_callable(
-        func: Func<'db>,
+        owner: CallableLayoutOwner<'db>,
         origin: CallableInputLayoutHoleOrigin,
         ordinal: usize,
     ) -> Self {
         Self::Bound(BoundHoleId::CallableInput {
-            func,
+            owner,
             origin,
             ordinal,
         })
@@ -2971,11 +3006,11 @@ impl<'db> ConstTyId<'db> {
     pub fn bound_callable_hole(
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
-        func: Func<'db>,
+        owner: CallableLayoutOwner<'db>,
         origin: CallableInputLayoutHoleOrigin,
         ordinal: usize,
     ) -> Self {
-        Self::hole_with_id(db, ty, HoleId::bound_callable(func, origin, ordinal))
+        Self::hole_with_id(db, ty, HoleId::bound_callable(owner, origin, ordinal))
     }
 
     fn swap_ty(self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Self {

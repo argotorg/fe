@@ -14,7 +14,7 @@ use crate::analysis::{
     ty::ty_def::{BorrowKind, CapabilityKind, TyId},
 };
 
-use super::{eval_const_ref, machine::try_eval_expr_to_const};
+use super::{CtfeError, eval_const_ref, machine::try_eval_expr_to_const};
 
 type LocalConstMap<'db> = Vec<Option<SemConstId<'db>>>;
 type LocalDefs<'db> = Vec<Vec<SExpr<'db>>>;
@@ -26,11 +26,27 @@ enum ConstCanonicalizationMode {
 }
 
 #[salsa::tracked(return_ref)]
+fn canonicalize_semantic_consts_query<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> Result<SemanticBody<'db>, CtfeError<'db>> {
+    let original = instance
+        .admitted_body(db)
+        .map_err(|_| CtfeError::InvalidBody {
+            origin: crate::analysis::semantic::SemOrigin::Body(instance.key(db).owner(db)),
+        })?;
+    Ok(canonicalize_semantic_consts_from_body(
+        db, instance, original,
+    ))
+}
+
 pub fn canonicalize_semantic_consts<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-) -> SemanticBody<'db> {
-    canonicalize_semantic_consts_from_body(db, instance, instance.body(db))
+) -> Result<&'db SemanticBody<'db>, CtfeError<'db>> {
+    canonicalize_semantic_consts_query(db, instance)
+        .as_ref()
+        .map_err(Clone::clone)
 }
 
 pub(crate) fn canonicalize_semantic_consts_from_body<'db>(
@@ -150,6 +166,7 @@ fn canonicalize_stmt<'db>(
                 expr,
                 body.locals[dst.index()].ty,
                 locals,
+                body,
                 mode,
             );
             locals[dst.index()] = value;
@@ -284,6 +301,7 @@ fn canonicalize_expr<'db>(
     expr: &SExpr<'db>,
     result_ty: TyId<'db>,
     locals: &LocalConstMap<'db>,
+    body: &SemanticBody<'db>,
     mode: ConstCanonicalizationMode,
 ) -> (SExpr<'db>, Option<SemConstId<'db>>) {
     if let SExpr::Const(SConst::Ref(cref)) = expr {
@@ -308,7 +326,7 @@ fn canonicalize_expr<'db>(
         };
         if !has_runtime_evidence
             && let Some(value) =
-                try_eval_expr_to_const(db, instance, result_ty, expr, locals, synthetic())
+                try_eval_expr_to_const(db, body, result_ty, expr, locals, synthetic())
             && !matches!(value.value(db), SemConstValue::TypeLevel { .. })
         {
             let value = canonicalize_const_value(db, instance, value);

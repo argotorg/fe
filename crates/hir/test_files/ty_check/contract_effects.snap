@@ -124,7 +124,7 @@ note:
    ┌─ contract_effects.fe:36:5
    │
 36 │     Balance -> u256,
-   │     ^^^^^^^ () | Balance | invalid(Other) | u256
+   │     ^^^^^^^ () | Balance | u256
 
 note:
    ┌─ contract_effects.fe:45:1

@@ -43,6 +43,27 @@ pub(super) fn normalized_body_internal_diag<'db>(
     )
 }
 
+pub(super) fn smir_lowering_admission_diag<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    causes: &[crate::analysis::ty::ty_check::SmirLoweringIssue],
+) -> SemanticBorrowDiagnostic<'db> {
+    let owner = instance.key(db).owner(db);
+    SemanticBorrowDiagnostic::new(
+        instance,
+        SemanticBorrowDiagKind::Internal,
+        format!(
+            "semantic body has {} unresolved lowering plan entr{} despite valid typed input",
+            causes.len(),
+            if causes.len() == 1 { "y" } else { "ies" },
+        ),
+        SemanticBorrowDiagnosticSpan::Origin {
+            owner,
+            origin: SemOrigin::Body(owner),
+        },
+    )
+}
+
 pub(super) fn normalize_error_to_diag<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
@@ -53,7 +74,8 @@ pub(super) fn normalize_error_to_diag<'db>(
     let (message, span) = match err {
         SemanticNormalizeError::MissingBorrowRoot { local } => {
             let message = if let Some(body) = hir_body
-                && let Some(raw_local) = instance.body(db).local(local)
+                && let Ok(raw) = instance.admitted_body(db)
+                && let Some(raw_local) = raw.local(local)
                 && let Some(source) = raw_local.source
             {
                 format!(
@@ -218,7 +240,8 @@ pub(crate) fn resolve_local_source_span<'db>(
     hir_body
         .and_then(|body| {
             instance
-                .body(db)
+                .admitted_body(db)
+                .ok()?
                 .local(local)
                 .and_then(|local| local.source)
                 .and_then(|source| source.def_span_in_body(body).resolve(db))

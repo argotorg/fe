@@ -19,6 +19,7 @@ use super::{
     diagnostics::operand_origin,
     ir::{
         NEffectArg, NEffectArgValue, NExpr, NOperand, NSStmt, NSStmtKind, SemanticBorrowDiagnostic,
+        SemanticNormalizationFailure,
     },
     normalize::normalize_provisional_semantic_body,
 };
@@ -26,17 +27,25 @@ use super::{
 pub(crate) fn provisional_call_site_provider_refinements<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-) -> Result<Vec<CallSiteProviderRefinement>, SemanticBorrowDiagnostic<'db>> {
+) -> Result<Vec<CallSiteProviderRefinement>, SemanticNormalizationFailure<'db>> {
     let body = normalize_provisional_semantic_body(db, instance)?;
     let mut borrowck = Borrowck::new_with_body(
         db,
         instance,
         body,
         super::analyses::BorrowSummaryMode::Provisional,
-    )?;
+    )
+    .map_err(SemanticNormalizationFailure::InternalFailure)?;
     borrowck.compute_entry_states();
-    borrowck.compute_loan_targets()?;
-    CallSiteProviderRefiner { borrowck }.refine()
+    if let Some(blocked) = borrowck
+        .compute_loan_targets()
+        .map_err(SemanticNormalizationFailure::InternalFailure)?
+    {
+        return Err(SemanticNormalizationFailure::Blocked(blocked));
+    }
+    CallSiteProviderRefiner { borrowck }
+        .refine()
+        .map_err(SemanticNormalizationFailure::InternalFailure)
 }
 
 struct CallSiteProviderRefiner<'db> {

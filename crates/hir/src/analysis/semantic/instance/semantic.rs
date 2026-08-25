@@ -7,13 +7,13 @@ use crate::{
         semantic::{
             CallSiteId, PlaceProvenance, SBlockId, SExpr, SStmtKind, STerminatorKind, SemanticBody,
             SemanticCalleeRef, SemanticLocalRole, ValueProvenance, VariantIndex,
-            borrowck::normalize_semantic_body,
+            borrowck::SemanticNormalizationFailure,
             effect_param_site,
             lower::{BindingRoleMode, lower_to_smir, lower_to_smir_with_call_sites},
-            verify_semantic_body,
+            owner_effect_bindings, verify_semantic_body,
         },
         ty::{
-            CallableLayoutBundleInput, CallableLayoutBundleSignature, LayoutBundleInterface,
+            CallableLayoutBundleInput, CallableLayoutBundleSignature, CallableLayoutOwner,
             adt_def::{AdtDef, AdtRef, instantiate_adt_field_shape},
             corelib::{RuntimeBuiltinFuncKind, runtime_builtin_func_kind},
             effects::place_effect_provider_param_index_map,
@@ -30,11 +30,12 @@ use crate::{
             },
             ty_check::{
                 BodyOwner, EffectParamSite, EffectProviderProvenance, EffectProviderSpecialization,
-                LocalBinding, ParamSite, ResolvedEffectArg, SemanticExprLowering, TypedBody,
+                LocalBinding, ParamSite, ResolvedEffectArg, SemanticExprLowering,
+                SmirLoweringIssue, TypedBody,
             },
             ty_def::{BorrowKind, CapabilityKind, TyId},
             ty_lower::{
-                layout_bundle_schema_for_semantic_value,
+                callable_layout_bundle_input_interface,
                 specialized_callable_layout_bundle_signature_with_normalizer,
             },
         },
@@ -96,30 +97,36 @@ pub fn semantic_layout_bundle_signature<'db>(
             })
         }
         owner => {
-            let Ok(normalized) = normalize_semantic_body(db, instance) else {
-                return CallableLayoutBundleSignature::default();
+            let layout_owner = match owner {
+                BodyOwner::ContractInit { contract } => {
+                    CallableLayoutOwner::ContractInit { contract }
+                }
+                BodyOwner::ContractRecvArm {
+                    contract,
+                    recv_idx,
+                    arm_idx,
+                } => CallableLayoutOwner::ContractRecvArm {
+                    contract,
+                    recv_idx,
+                    arm_idx,
+                },
+                BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => {
+                    return CallableLayoutBundleSignature::default();
+                }
+                BodyOwner::Func(_) => unreachable!(),
             };
-            let Some(body) = owner.body(db) else {
-                return CallableLayoutBundleSignature::default();
-            };
-            let inputs = normalized
-                .entry_locals
-                .iter()
-                .filter_map(|local| {
-                    let local_data = normalized.local(*local)?;
-                    let origin = local_data.source?.callable_input_origin(db)?;
-                    let ty = local_data.ty;
-                    let schema = layout_bundle_schema_for_semantic_value(
+            let inputs = owner_effect_bindings(db, owner)
+                .into_iter()
+                .filter_map(|binding| {
+                    let origin = binding.callable_input_origin(db)?;
+                    let interface = callable_layout_bundle_input_interface(
                         db,
-                        body,
-                        local.index() as u32,
-                        ty,
-                        ty,
-                    );
-                    (!schema.components.is_empty()).then(|| CallableLayoutBundleInput {
+                        layout_owner,
                         origin,
-                        interface: LayoutBundleInterface::inferred(schema),
-                    })
+                        instance.binding_ty(db, binding),
+                    );
+                    (!interface.schema.components.is_empty())
+                        .then_some(CallableLayoutBundleInput { origin, interface })
                 })
                 .collect();
             CallableLayoutBundleSignature {
@@ -143,6 +150,13 @@ pub struct SemanticEffectEnvInstantiationError<'db> {
     pub offending_ty: TyId<'db>,
     pub param_idx: usize,
     pub args_len: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SemanticBodyAdmissionError<'db> {
+    BlockedByUpstreamDiagnostics(Box<[crate::analysis::ty::ty_check::SmirLoweringIssue]>),
+    IncompleteLoweringPlan(Box<[crate::analysis::ty::ty_check::SmirLoweringIssue]>),
+    CallSiteFinalization(crate::analysis::semantic::BorrowDiagnosticId<'db>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Update)]
@@ -416,7 +430,14 @@ fn final_call_site_data<'db>(
             db, instance,
         ) {
             Ok(refinements) => refinements,
-            Err(diag) => {
+            Err(SemanticNormalizationFailure::Blocked(_)) => {
+                return CallSiteFinalizationData {
+                    call_sites,
+                    for_loop_call_sites,
+                    diagnostic: None,
+                };
+            }
+            Err(SemanticNormalizationFailure::InternalFailure(diag)) => {
                 return CallSiteFinalizationData {
                     call_sites,
                     for_loop_call_sites,
@@ -827,7 +848,9 @@ impl<'db> SemanticInstance<'db> {
             return true;
         }
 
-        let body = self.body(db);
+        let Ok(body) = self.admitted_body(db) else {
+            return false;
+        };
         if body.blocks.is_empty() {
             return false;
         }
@@ -897,6 +920,42 @@ impl<'db> SemanticInstance<'db> {
 }
 
 impl<'db> SemanticInstance<'db> {
+    fn ensure_body_admitted(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Result<(), SemanticBodyAdmissionError<'db>> {
+        let typed_body = self.key(db).typed_body(db);
+        let causes = typed_body.smir_lowering_issues(db).into_boxed_slice();
+        if causes.iter().copied().any(SmirLoweringIssue::is_incomplete) {
+            Err(SemanticBodyAdmissionError::IncompleteLoweringPlan(causes))
+        } else if causes.is_empty() {
+            Ok(())
+        } else {
+            Err(SemanticBodyAdmissionError::BlockedByUpstreamDiagnostics(
+                causes,
+            ))
+        }
+    }
+
+    pub(crate) fn admitted_body(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Result<&'db SemanticBody<'db>, SemanticBodyAdmissionError<'db>> {
+        self.ensure_body_admitted(db)?;
+        if let Some(diag) = self.call_site_finalization_diagnostic(db) {
+            return Err(SemanticBodyAdmissionError::CallSiteFinalization(diag));
+        }
+        Ok(self.body(db))
+    }
+
+    pub(crate) fn admitted_provisional_body(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Result<&'db SemanticBody<'db>, SemanticBodyAdmissionError<'db>> {
+        self.ensure_body_admitted(db)?;
+        Ok(self.provisional_body(db))
+    }
+
     fn normalization_scope(self, db: &'db dyn HirAnalysisDb) -> ScopeId<'db> {
         self.key(db).owner(db).scope()
     }
@@ -928,7 +987,10 @@ impl<'db> SemanticInstance<'db> {
             return true;
         }
 
-        self.body(db).blocks.iter().any(|block| {
+        let Ok(body) = self.admitted_body(db) else {
+            return false;
+        };
+        body.blocks.iter().any(|block| {
             block.stmts.iter().any(|stmt| {
                 if let SStmtKind::Assign {
                     expr: SExpr::Call { callee, .. },
