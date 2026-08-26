@@ -4,17 +4,20 @@ use rustc_hash::FxHashSet;
 use crate::analysis::{
     HirAnalysisDb,
     semantic::{
-        LayoutBackingProjection, SLocalId, SemOrigin, SemanticBody,
+        LayoutBackingProjection, SLocalId, SStmtId, SemOrigin, SemanticBody,
         normalized::{
-            NDataPath, NDataProjection, NIndex, NRootId, NRootKind, NValueId, NormalizedBody,
+            NDataPath, NDataProjection, NExpr, NIndex, NRootId, NRootKind, NStatementKind,
+            NValueDefinition, NValueId, NormalizedBody,
         },
     },
     ty::{
-        adt_def::instantiate_adt_field_shape,
+        adt_def::{AdtRef, instantiate_adt_field_shape},
         normalize::normalize_ty,
         ty_def::{PrimTy, TyBase, TyData, TyId},
     },
 };
+
+use super::normalize::normalized_source_local_value_ty;
 
 /// Runtime-only representation mapping for an admitted normalized body.
 ///
@@ -82,12 +85,19 @@ pub enum NormalizedLayoutPlanVerifyError {
     RootRepresentationCount { expected: usize, actual: usize },
     ValueRepresentationId(NValueId),
     RootRepresentationId(NRootId),
+    ValueType(NValueId),
+    RootType(NRootId),
+    ValueMutability(NValueId),
+    RootMutability(NRootId),
     MissingSourceLocal(SLocalId),
     InvalidRootSource(NRootId),
     MissingBackingValue(NValueId),
     MissingBackingRoot(NRootId),
     DuplicateBackingTarget(NValueId),
     InvalidBackingProjection(NValueId),
+    MissingStatementSource(SStmtId),
+    UnknownStatementSource(SStmtId),
+    DuplicateStatementSource(SStmtId),
 }
 
 pub fn verify_normalized_layout_plan<'db>(
@@ -96,6 +106,39 @@ pub fn verify_normalized_layout_plan<'db>(
     source: &SemanticBody<'db>,
     plan: &NLayoutPlan<'db>,
 ) -> Result<(), NormalizedLayoutPlanVerifyError> {
+    let source_statements = source
+        .blocks
+        .iter()
+        .flat_map(|block| &block.stmts)
+        .map(|statement| statement.id)
+        .collect::<FxHashSet<_>>();
+    let mut normalized_statements = FxHashSet::default();
+    for statement in body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.statements)
+        .filter_map(|statement| statement.source)
+    {
+        if !source_statements.contains(&statement) {
+            return Err(NormalizedLayoutPlanVerifyError::UnknownStatementSource(
+                statement,
+            ));
+        }
+        if !normalized_statements.insert(statement) {
+            return Err(NormalizedLayoutPlanVerifyError::DuplicateStatementSource(
+                statement,
+            ));
+        }
+    }
+    if let Some(statement) = source_statements
+        .into_iter()
+        .find(|statement| !normalized_statements.contains(statement))
+    {
+        return Err(NormalizedLayoutPlanVerifyError::MissingStatementSource(
+            statement,
+        ));
+    }
+
     if plan.value_representations.len() != body.values.len() {
         return Err(NormalizedLayoutPlanVerifyError::ValueRepresentationCount {
             expected: body.values.len(),
@@ -110,6 +153,17 @@ pub fn verify_normalized_layout_plan<'db>(
             ));
         }
         verify_source_local(source, representation.source_local)?;
+        if value_retains_source_type(body, value)
+            && body.values[index].ty
+                != normalized_source_value_ty(db, body, source, representation.source_local)
+        {
+            return Err(NormalizedLayoutPlanVerifyError::ValueType(value));
+        }
+        if body.values[index].mutability
+            != source.locals[representation.source_local.index()].mutability
+        {
+            return Err(NormalizedLayoutPlanVerifyError::ValueMutability(value));
+        }
     }
     if plan.root_representations.len() != body.roots.len() {
         return Err(NormalizedLayoutPlanVerifyError::RootRepresentationCount {
@@ -124,6 +178,13 @@ pub fn verify_normalized_layout_plan<'db>(
         }
         if let Some(local) = representation.source_local {
             verify_source_local(source, local)?;
+            if body.roots[index].ty
+                != body
+                    .owner
+                    .normalized_ty(db, source.locals[local.index()].ty)
+            {
+                return Err(NormalizedLayoutPlanVerifyError::RootType(root));
+            }
         }
         let root_kind = &body.roots[index].kind;
         let valid_source = match root_kind {
@@ -135,6 +196,11 @@ pub fn verify_normalized_layout_plan<'db>(
         };
         if !valid_source {
             return Err(NormalizedLayoutPlanVerifyError::InvalidRootSource(root));
+        }
+        if let Some(local) = representation.source_local
+            && body.roots[index].mutability != source.locals[local.index()].mutability
+        {
+            return Err(NormalizedLayoutPlanVerifyError::RootMutability(root));
         }
     }
 
@@ -182,6 +248,46 @@ pub fn verify_normalized_layout_plan<'db>(
     Ok(())
 }
 
+fn value_retains_source_type(body: &NormalizedBody<'_>, value: NValueId) -> bool {
+    match body.values[value.index()].definition {
+        NValueDefinition::EntryParam { .. } | NValueDefinition::BlockParam { .. } => true,
+        NValueDefinition::Statement { block, statement } => body.blocks[block.index()]
+            .statements
+            .get(statement as usize)
+            .is_some_and(|statement| {
+                statement.source.is_some()
+                    && matches!(
+                        statement.kind,
+                        NStatementKind::Define {
+                            expr: NExpr::CodeRegionRef { .. }
+                                | NExpr::Const(_)
+                                | NExpr::Unary { .. }
+                                | NExpr::Binary { .. }
+                                | NExpr::ArrayRepeat { .. }
+                                | NExpr::AggregateMake { .. }
+                                | NExpr::EnumMake { .. }
+                                | NExpr::GetEnumTag { .. }
+                                | NExpr::IsEnumVariant { .. }
+                                | NExpr::Call { .. }
+                                | NExpr::CodeRegionOffset { .. }
+                                | NExpr::CodeRegionLen { .. }
+                                | NExpr::StructuralRepack { .. },
+                            ..
+                        }
+                    )
+            }),
+    }
+}
+
+fn normalized_source_value_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: &NormalizedBody<'db>,
+    source: &SemanticBody<'db>,
+    local: SLocalId,
+) -> TyId<'db> {
+    normalized_source_local_value_ty(db, body.owner, &source.locals[local.index()])
+}
+
 fn verify_source_local(
     source: &SemanticBody<'_>,
     local: SLocalId,
@@ -205,7 +311,9 @@ fn project_layout_path_ty<'db>(
                 ty.field_types(db).get(field.0 as usize).copied()?
             }
             LayoutBackingProjection::VariantField { variant, field } => {
-                let adt = ty.adt_def(db)?;
+                let adt = ty
+                    .adt_def(db)
+                    .filter(|adt| matches!(adt.adt_ref(db), AdtRef::Enum(_)))?;
                 let variant = variant.0 as usize;
                 let field = field.0 as usize;
                 adt.fields(db)

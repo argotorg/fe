@@ -737,7 +737,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 }
 
-fn enum_tag_ty<'db>(db: &'db dyn HirAnalysisDb, enum_ty: TyId<'db>) -> TyId<'db> {
+pub(crate) fn enum_tag_ty<'db>(db: &'db dyn HirAnalysisDb, enum_ty: TyId<'db>) -> TyId<'db> {
     let variant_count = enum_ty
         .as_enum(db)
         .map(|enum_| enum_.len_variants(db))

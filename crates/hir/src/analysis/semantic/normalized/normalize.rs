@@ -7,8 +7,8 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            FieldIndex, LayoutBackingPlace, PlaceProvenance, SBlockId, SExpr, SLocalId, SOperand,
-            SPlace, SStmtId, SStmtKind, STerminatorKind, SemanticBody, SemanticInstance,
+            FieldIndex, LayoutBackingPlace, PlaceProvenance, SBlockId, SExpr, SLocal, SLocalId,
+            SOperand, SPlace, SStmtId, SStmtKind, STerminatorKind, SemanticBody, SemanticInstance,
             SemanticLocalRole, ValueProvenance, VariantIndex,
             normalized::{
                 NBlock, NBlockId, NDataPath, NDataProjection, NEffectArg, NEffectArgValue, NExpr,
@@ -24,12 +24,13 @@ use crate::{
         },
         ty::{
             adt_def::AdtRef,
+            const_ty::ConstTyData,
             provider::{
                 ProviderAddressSpace, ProviderKind, ProviderLayoutEvidence, provider_semantics,
             },
             trait_resolution::PredicateListId,
             ty_check::{BodyOwner, LocalBinding},
-            ty_def::{CapabilityKind, TyId},
+            ty_def::{CapabilityKind, TyData, TyId},
             ty_is_copy, ty_is_noesc,
         },
     },
@@ -632,8 +633,14 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                         .map(|ty| self.instance.normalized_ty(self.db, ty))
                         .ok_or(NormalizeError::InvalidProjection)?;
                     vec![element_ty; fields.len()]
-                } else {
+                } else if ty.is_tuple(self.db)
+                    || ty.adt_def(self.db).is_some_and(|adt| {
+                        matches!(adt.adt_ref(self.db), AdtRef::Struct(_))
+                    })
+                {
                     self.instance.normalized_field_types(self.db, ty).to_vec()
+                } else {
+                    return Err(NormalizeError::InvalidProjection);
                 };
                 if field_tys.len() != fields.len() {
                     return Err(NormalizeError::InvalidProjection);
@@ -659,6 +666,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 let enum_ty = self.instance.normalized_ty(self.db, *enum_ty);
                 let adt = enum_ty
                     .adt_def(self.db)
+                    .filter(|adt| matches!(adt.adt_ref(self.db), AdtRef::Enum(_)))
                     .ok_or(NormalizeError::InvalidProjection)?;
                 let expected = adt
                     .fields(self.db)
@@ -1446,6 +1454,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         let value = NValueId::new(self.values.len());
         self.values.push(NValue {
             ty,
+            mutability: self.raw.locals[source_local.index()].mutability,
             origin,
             definition,
             source,
@@ -1465,19 +1474,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
     }
 
     fn normalized_local_ty(&self, local: SLocalId) -> TyId<'db> {
-        let local = &self.raw.locals[local.index()];
-        let ty = if matches!(
-            local.role,
-            SemanticLocalRole::DirectValue {
-                provenance: ValueProvenance::Ordinary,
-            }
-        ) && let Some((_, target)) = local.ty.as_capability(self.db)
-        {
-            target
-        } else {
-            local.ty
-        };
-        self.instance.normalized_ty(self.db, ty)
+        normalized_source_local_value_ty(self.db, self.instance, &self.raw.locals[local.index()])
     }
 
     fn call_arg_mode(
@@ -1740,6 +1737,7 @@ struct StructuralRepackCollector<'db> {
     instance: SemanticInstance<'db>,
     mapping: Vec<(NDataPath, NDataPath)>,
     visiting: FxHashSet<(TyId<'db>, TyId<'db>)>,
+    allow_deferred_leaves: bool,
 }
 
 impl<'db> StructuralRepackCollector<'db> {
@@ -1757,7 +1755,28 @@ impl<'db> StructuralRepackCollector<'db> {
         if !self.visiting.insert((source, target)) {
             return true;
         }
-        let result = if source.as_capability(db).is_some() || target.as_capability(db).is_some() {
+        let deferred_runtime_leaf = |ty: TyId<'db>| {
+            matches!(
+                ty.data(db),
+                TyData::TyVar(_) | TyData::TyParam(_) | TyData::AssocTy(_) | TyData::QualifiedTy(_)
+            )
+        };
+        let deferred_const_leaf = |ty: TyId<'db>| {
+            matches!(
+                ty.data(db),
+                TyData::ConstTy(const_ty)
+                    if matches!(const_ty.data(db), ConstTyData::Hole(..))
+                        || ty.has_param(db)
+                        || ty.has_var(db)
+            )
+        };
+        let result = if deferred_const_leaf(source)
+            || deferred_const_leaf(target)
+            || self.allow_deferred_leaves
+                && (deferred_runtime_leaf(source) || deferred_runtime_leaf(target))
+        {
+            true
+        } else if source.as_capability(db).is_some() || target.as_capability(db).is_some() {
             if source == target {
                 self.mapping.push((target_path, source_path));
                 true
@@ -1834,6 +1853,20 @@ impl<'db> StructuralRepackCollector<'db> {
                     self.mapping.push((target_path, source_path));
                 }
                 true
+            } else if source.base_ty(db) == target.base_ty(db) {
+                let source_args = source.generic_args(db);
+                let target_args = target.generic_args(db);
+                let mapping_len = self.mapping.len();
+                let compatible = !source_args.is_empty()
+                    && source_args.len() == target_args.len()
+                    && source_args.iter().zip(target_args).all(|(source, target)| {
+                        self.collect(*source, *target, source_path.clone(), target_path.clone())
+                    });
+                self.mapping.truncate(mapping_len);
+                if compatible && !source.is_zero_sized(db) {
+                    self.mapping.push((target_path, source_path));
+                }
+                compatible
             } else {
                 source.is_zero_sized(db)
                     && target.is_zero_sized(db)
@@ -1863,7 +1896,7 @@ impl<'db> StructuralRepackCollector<'db> {
     }
 }
 
-fn structural_repack_mapping<'db>(
+pub(super) fn structural_repack_mapping<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
     source: TyId<'db>,
@@ -1874,12 +1907,29 @@ fn structural_repack_mapping<'db>(
         instance,
         mapping: Vec::new(),
         visiting: FxHashSet::default(),
+        allow_deferred_leaves: false,
     };
     collector
         .collect(source, target, NDataPath::empty(), NDataPath::empty())
         .then(|| StructuralRepack {
             fields: collector.mapping.into_boxed_slice(),
         })
+}
+
+pub(super) fn structural_types_are_boundary_compatible<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    source: TyId<'db>,
+    target: TyId<'db>,
+) -> bool {
+    StructuralRepackCollector {
+        db,
+        instance,
+        mapping: Vec::new(),
+        visiting: FxHashSet::default(),
+        allow_deferred_leaves: true,
+    }
+    .collect(source, target, NDataPath::empty(), NDataPath::empty())
 }
 
 struct RawCfg {
@@ -2131,6 +2181,25 @@ fn block_uses_and_defs(
     (uses, defs)
 }
 
+pub(super) fn normalized_source_local_value_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    local: &SLocal<'db>,
+) -> TyId<'db> {
+    let ty = if matches!(
+        local.role,
+        SemanticLocalRole::DirectValue {
+            provenance: ValueProvenance::Ordinary,
+        }
+    ) && let Some((_, target)) = local.ty.as_capability(db)
+    {
+        target
+    } else {
+        local.ty
+    };
+    instance.normalized_ty(db, ty)
+}
+
 fn expr_used_locals(expr: &SExpr<'_>) -> Vec<SLocalId> {
     let mut locals = Vec::new();
     match expr {
@@ -2211,16 +2280,24 @@ mod tests {
     use crate::{
         analysis::{
             semantic::{
+                FieldIndex, Mutability, SConst, SStmtId, VariantIndex,
                 get_or_build_semantic_instance, identity_semantic_instance_key,
                 normalized::{
-                    NDataPath, NDataProjection, NExpr, NIndex, NStatementKind,
-                    NormalizedBodyVerifyError, StructuralRepack, normalize_raw_body,
-                    verify_normalized_body,
+                    NDataPath, NDataProjection, NEffectArgValue, NExpr, NIndex, NPlace, NPlaceBase,
+                    NRootId, NRootKind, NStatementKind, NTerminatorKind, NValueDefinition,
+                    NValueId, NormalizedBodyVerifyError, NormalizedLayoutPlanVerifyError, ReadMode,
+                    StructuralRepack, normalize_raw_body, verify_normalized_body,
+                    verify_normalized_layout_plan,
                 },
+                unit_const,
             },
-            ty::{ty_check::BodyOwner, ty_def::TyId, ty_is_noesc},
+            ty::{
+                ty_check::{BodyOwner, EffectPassMode},
+                ty_def::{BorrowKind, CapabilityKind, TyId},
+                ty_is_noesc,
+            },
         },
-        hir_def::ItemKind,
+        hir_def::{ArithBinOp, BinOp, ItemKind, LogicalBinOp, UnOp},
         test_db::HirAnalysisTestDb,
     };
 
@@ -2504,6 +2581,933 @@ fn widen(_ value: own u8) -> u256 {
         assert_eq!(
             verify_normalized_body(&db, &invalid_repack),
             Err(NormalizedBodyVerifyError::InvalidRepack)
+        );
+    }
+
+    #[test]
+    fn scalar_expressions_require_runtime_scalar_operator_signatures() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "normalized.fe".into(),
+            r#"
+struct Wide {
+    left: u256,
+    right: u256,
+}
+
+fn unary(wide: own Wide, value: u256) -> u256 {
+    +value
+}
+
+fn compare(flag: bool, value: u256) -> u8 {
+    match value {
+        0 => 0,
+        _ => 1,
+    }
+}
+
+fn widen(wide: own Wide, value: u8) -> u256 {
+    value as u256
+}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+
+        let unary = normalized_func(&db, top_mod, "unary").body;
+        verify_normalized_body(&db, &unary).expect("primitive unary expression should verify");
+        let (unary_result, wide_value) = {
+            let unary_result = unary
+                .blocks
+                .iter()
+                .flat_map(|block| &block.statements)
+                .find_map(|statement| match statement.kind {
+                    NStatementKind::Define {
+                        result,
+                        expr: NExpr::Unary { op: UnOp::Plus, .. },
+                    } => Some(result),
+                    _ => None,
+                })
+                .expect("unary plus expression");
+            let wide_value = unary
+                .values
+                .iter()
+                .enumerate()
+                .find_map(|(index, value)| {
+                    matches!(value.definition, NValueDefinition::EntryParam { param: 0 })
+                        .then_some(NValueId::new(index))
+                })
+                .expect("wide entry value");
+            (unary_result, wide_value)
+        };
+
+        let mut aggregate_operand = unary.clone();
+        let unary_value = aggregate_operand
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .find_map(|statement| match &mut statement.kind {
+                NStatementKind::Define {
+                    expr: NExpr::Unary { value, .. },
+                    ..
+                } => Some(value),
+                _ => None,
+            })
+            .expect("unary expression");
+        unary_value.value = wide_value;
+        assert_eq!(
+            verify_normalized_body(&db, &aggregate_operand),
+            Err(NormalizedBodyVerifyError::ExpressionType)
+        );
+
+        let mut borrow_operator = unary.clone();
+        let unary_op = borrow_operator
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .find_map(|statement| match &mut statement.kind {
+                NStatementKind::Define {
+                    expr: NExpr::Unary { op, .. },
+                    ..
+                } => Some(op),
+                _ => None,
+            })
+            .expect("unary expression");
+        *unary_op = UnOp::Ref;
+        assert_eq!(
+            verify_normalized_body(&db, &borrow_operator),
+            Err(NormalizedBodyVerifyError::ExpressionType)
+        );
+
+        let mut unary_result_mismatch = unary.clone();
+        unary_result_mismatch.values[unary_result.index()].ty = TyId::bool(&db);
+        assert_eq!(
+            verify_normalized_body(&db, &unary_result_mismatch),
+            Err(NormalizedBodyVerifyError::ExpressionType)
+        );
+
+        let comparison = normalized_func(&db, top_mod, "compare").body;
+        verify_normalized_body(&db, &comparison).expect("literal comparison should verify");
+        let comparison_result = comparison
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .find_map(|statement| match statement.kind {
+                NStatementKind::Define {
+                    result,
+                    expr:
+                        NExpr::Binary {
+                            op: BinOp::Comp(_), ..
+                        },
+                } => Some(result),
+                _ => None,
+            })
+            .expect("literal comparison expression");
+
+        let mut arithmetic_result_mismatch = comparison.clone();
+        let comparison_op = arithmetic_result_mismatch
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .find_map(|statement| match &mut statement.kind {
+                NStatementKind::Define {
+                    expr: NExpr::Binary { op, .. },
+                    ..
+                } if matches!(op, BinOp::Comp(_)) => Some(op),
+                _ => None,
+            })
+            .expect("literal comparison expression");
+        *comparison_op = BinOp::Arith(ArithBinOp::Add);
+        assert_eq!(
+            verify_normalized_body(&db, &arithmetic_result_mismatch),
+            Err(NormalizedBodyVerifyError::ExpressionType)
+        );
+
+        let mut comparison_result_mismatch = comparison.clone();
+        comparison_result_mismatch.values[comparison_result.index()].ty = TyId::u256(&db);
+        assert_eq!(
+            verify_normalized_body(&db, &comparison_result_mismatch),
+            Err(NormalizedBodyVerifyError::ExpressionType)
+        );
+
+        let mut logical_node = comparison.clone();
+        let comparison_op = logical_node
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .find_map(|statement| match &mut statement.kind {
+                NStatementKind::Define {
+                    expr: NExpr::Binary { op, .. },
+                    ..
+                } if matches!(op, BinOp::Comp(_)) => Some(op),
+                _ => None,
+            })
+            .expect("literal comparison expression");
+        *comparison_op = BinOp::Logical(LogicalBinOp::And);
+        assert_eq!(
+            verify_normalized_body(&db, &logical_node),
+            Err(NormalizedBodyVerifyError::ExpressionType)
+        );
+
+        let mut aggregate_cast = normalized_func(&db, top_mod, "widen").body;
+        let wide_value = aggregate_cast
+            .values
+            .iter()
+            .enumerate()
+            .find_map(|(index, value)| {
+                matches!(value.definition, NValueDefinition::EntryParam { param: 0 })
+                    .then_some(NValueId::new(index))
+            })
+            .expect("wide entry value");
+        let cast_value = aggregate_cast
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .find_map(|statement| match &mut statement.kind {
+                NStatementKind::Define {
+                    expr: NExpr::ScalarCast { value, .. },
+                    ..
+                } => Some(value),
+                _ => None,
+            })
+            .expect("scalar cast expression");
+        cast_value.value = wide_value;
+        assert_eq!(
+            verify_normalized_body(&db, &aggregate_cast),
+            Err(NormalizedBodyVerifyError::ExpressionType)
+        );
+    }
+
+    #[test]
+    fn verifier_rejects_boundary_type_and_mutability_mismatches() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "normalized.fe".into(),
+            r#"
+enum Choice {
+    A,
+    B,
+}
+
+enum One {
+    A,
+}
+
+struct Empty {}
+
+struct Pair {
+    first: u256,
+}
+
+fn constant() -> u256 {
+    1
+}
+
+fn identity(value: u256) -> u256 {
+    value
+}
+
+fn read_effect() -> u256 uses (value: u256) {
+    value
+}
+
+fn call_effect() -> u256 uses (value: u256) {
+    read_effect()
+}
+
+fn call_identity() -> u256 {
+    identity(value: 1)
+}
+
+fn call_identity_from(flag: bool) -> u256 {
+    identity(value: 1)
+}
+
+fn return_value(flag: bool, value: u256) -> u256 {
+    value
+}
+
+fn borrow_owned(mut _ value: own u256) -> mut u256 {
+    mut value
+}
+
+fn borrow_ref(value: ref Pair, mut decoy: Pair) -> ref u256 {
+    ref value.first
+}
+
+fn classify(choice: Choice) -> u8 {
+    match choice {
+        Choice::A => 0,
+        Choice::B => 1,
+    }
+}
+
+fn make_one() -> One {
+    One::A
+}
+
+fn classify_one(choice: One) -> u8 {
+    match choice {
+        One::A => 0,
+    }
+}
+
+fn empty() -> Empty {
+    Empty {}
+}
+
+fn project_pair(value: own Pair) -> u256 {
+    value.first
+}
+
+fn generic_boundaries<T>(pair: (T, T), array: [T; 2]) -> (T, T) {
+    pair
+}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+
+        let mut borrowed_const = normalized_func(&db, top_mod, "constant").body;
+        let borrowed_const_result = borrowed_const
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .find_map(|statement| match statement.kind {
+                NStatementKind::Define {
+                    result,
+                    expr: NExpr::Const(_),
+                } => Some(result),
+                _ => None,
+            })
+            .expect("constant expression");
+        borrowed_const.values[borrowed_const_result.index()].ty =
+            TyId::view_of(&db, TyId::u256(&db));
+        verify_normalized_body(&db, &borrowed_const)
+            .expect("canonical constants may back view-typed operands");
+
+        let mut invalid_mutable_const = borrowed_const.clone();
+        invalid_mutable_const.values[borrowed_const_result.index()].ty =
+            TyId::borrow_mut_of(&db, TyId::u256(&db));
+        assert_eq!(
+            verify_normalized_body(&db, &invalid_mutable_const),
+            Err(NormalizedBodyVerifyError::ExpressionType)
+        );
+
+        let mut invalid_provider_move = normalized_func(&db, top_mod, "read_effect").body;
+        let provider_root = invalid_provider_move
+            .roots
+            .iter()
+            .position(|root| matches!(root.kind, NRootKind::Provider { .. }))
+            .map(NRootId::new)
+            .expect("provider root");
+        let provider_load = invalid_provider_move
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .find_map(|statement| match &mut statement.kind {
+                NStatementKind::Define {
+                    expr:
+                        NExpr::Load {
+                            place:
+                                NPlace {
+                                    base: NPlaceBase::Root(root),
+                                    ..
+                                },
+                            mode,
+                        },
+                    ..
+                } if *root == provider_root => Some(mode),
+                _ => None,
+            })
+            .expect("provider load");
+        *provider_load = ReadMode::Move;
+        assert_eq!(
+            verify_normalized_body(&db, &invalid_provider_move),
+            Err(NormalizedBodyVerifyError::InvalidReadMode)
+        );
+
+        let mut invalid_const = normalized_func(&db, top_mod, "constant").body;
+        let const_value = invalid_const
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .find_map(|statement| match &mut statement.kind {
+                NStatementKind::Define {
+                    expr: NExpr::Const(value),
+                    ..
+                } => Some(value),
+                _ => None,
+            })
+            .expect("constant expression");
+        *const_value = SConst::Value(unit_const(&db));
+        assert_eq!(
+            verify_normalized_body(&db, &invalid_const),
+            Err(NormalizedBodyVerifyError::ExpressionType)
+        );
+
+        let mut invalid_call = normalized_func(&db, top_mod, "call_identity").body;
+        let call_result = invalid_call
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .find_map(|statement| match &statement.kind {
+                NStatementKind::Define {
+                    result,
+                    expr: NExpr::Call { .. },
+                } => Some(*result),
+                _ => None,
+            })
+            .expect("call expression");
+        invalid_call.values[call_result.index()].ty = TyId::bool(&db);
+        assert_eq!(
+            verify_normalized_body(&db, &invalid_call),
+            Err(NormalizedBodyVerifyError::ExpressionType)
+        );
+
+        let mut invalid_call_arg = normalized_func(&db, top_mod, "call_identity_from").body;
+        let bool_value = invalid_call_arg
+            .values
+            .iter()
+            .enumerate()
+            .find_map(|(index, value)| {
+                matches!(value.definition, NValueDefinition::EntryParam { param: 0 })
+                    .then_some(NValueId::new(index))
+            })
+            .expect("bool entry value");
+        let call_args = invalid_call_arg
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .find_map(|statement| match &mut statement.kind {
+                NStatementKind::Define {
+                    expr: NExpr::Call { args, .. },
+                    ..
+                } => Some(args),
+                _ => None,
+            })
+            .expect("call expression");
+        call_args[0].value = bool_value;
+        assert_eq!(
+            verify_normalized_body(&db, &invalid_call_arg),
+            Err(NormalizedBodyVerifyError::ExpressionType)
+        );
+
+        let mut invalid_call_arity = normalized_func(&db, top_mod, "call_identity").body;
+        let call_args = invalid_call_arity
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .find_map(|statement| match &mut statement.kind {
+                NStatementKind::Define {
+                    expr: NExpr::Call { args, .. },
+                    ..
+                } => Some(args),
+                _ => None,
+            })
+            .expect("call expression");
+        *call_args = Box::new([]);
+        assert_eq!(
+            verify_normalized_body(&db, &invalid_call_arity),
+            Err(NormalizedBodyVerifyError::ExpressionType)
+        );
+
+        let mut invalid_generic_boundary = normalized_func(&db, top_mod, "generic_boundaries").body;
+        let array_value = invalid_generic_boundary
+            .values
+            .iter()
+            .enumerate()
+            .find_map(|(index, value)| {
+                matches!(value.definition, NValueDefinition::EntryParam { param: 1 })
+                    .then_some(NValueId::new(index))
+            })
+            .expect("generic array entry value");
+        let return_operand = invalid_generic_boundary
+            .blocks
+            .iter_mut()
+            .find_map(|block| match &mut block.terminator.kind {
+                NTerminatorKind::Return(Some(value)) => Some(value),
+                _ => None,
+            })
+            .expect("generic return operand");
+        return_operand.value = array_value;
+        assert_eq!(
+            verify_normalized_body(&db, &invalid_generic_boundary),
+            Err(NormalizedBodyVerifyError::OperandType)
+        );
+
+        let mut invalid_effect_binding = normalized_func(&db, top_mod, "call_effect").body;
+        let effect_args = invalid_effect_binding
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .find_map(|statement| match &mut statement.kind {
+                NStatementKind::Define {
+                    expr: NExpr::Call { effect_args, .. },
+                    ..
+                } => Some(effect_args),
+                _ => None,
+            })
+            .expect("effectful call");
+        assert_eq!(effect_args.len(), 1);
+        effect_args[0].binding_idx = u32::MAX;
+        assert_eq!(
+            verify_normalized_body(&db, &invalid_effect_binding),
+            Err(NormalizedBodyVerifyError::ExpressionType)
+        );
+
+        let mut missing_effect_arg = normalized_func(&db, top_mod, "call_effect").body;
+        let effect_args = missing_effect_arg
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .find_map(|statement| match &mut statement.kind {
+                NStatementKind::Define {
+                    expr: NExpr::Call { effect_args, .. },
+                    ..
+                } => Some(effect_args),
+                _ => None,
+            })
+            .expect("effectful call");
+        *effect_args = Box::new([]);
+        assert_eq!(
+            verify_normalized_body(&db, &missing_effect_arg),
+            Err(NormalizedBodyVerifyError::ExpressionType)
+        );
+
+        let mut invalid_effect_shape = normalized_func(&db, top_mod, "call_effect").body;
+        let effect_arg = invalid_effect_shape
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .find_map(|statement| match &mut statement.kind {
+                NStatementKind::Define {
+                    expr: NExpr::Call { effect_args, .. },
+                    ..
+                } => effect_args.first_mut(),
+                _ => None,
+            })
+            .expect("effectful call argument");
+        effect_arg.pass_mode = match effect_arg.arg {
+            NEffectArgValue::Place(_) => EffectPassMode::ByValue,
+            NEffectArgValue::Value(_) => EffectPassMode::ByPlace,
+        };
+        assert_eq!(
+            verify_normalized_body(&db, &invalid_effect_shape),
+            Err(NormalizedBodyVerifyError::ExpressionType)
+        );
+
+        let mut unknown_effect_mode = normalized_func(&db, top_mod, "call_effect").body;
+        let effect_arg = unknown_effect_mode
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .find_map(|statement| match &mut statement.kind {
+                NStatementKind::Define {
+                    expr: NExpr::Call { effect_args, .. },
+                    ..
+                } => effect_args.first_mut(),
+                _ => None,
+            })
+            .expect("effectful call argument");
+        effect_arg.pass_mode = EffectPassMode::Unknown;
+        assert_eq!(
+            verify_normalized_body(&db, &unknown_effect_mode),
+            Err(NormalizedBodyVerifyError::ExpressionType)
+        );
+
+        let mut invalid_effect_target = normalized_func(&db, top_mod, "call_effect").body;
+        let effect_arg = invalid_effect_target
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .find_map(|statement| match &mut statement.kind {
+                NStatementKind::Define {
+                    expr: NExpr::Call { effect_args, .. },
+                    ..
+                } => effect_args.first_mut(),
+                _ => None,
+            })
+            .expect("effectful call argument");
+        effect_arg.target_ty = Some(TyId::bool(&db));
+        assert_eq!(
+            verify_normalized_body(&db, &invalid_effect_target),
+            Err(NormalizedBodyVerifyError::ExpressionType)
+        );
+
+        let mut invalid_return = normalized_func(&db, top_mod, "return_value").body;
+        let bool_value = invalid_return
+            .values
+            .iter()
+            .enumerate()
+            .find_map(|(index, value)| {
+                matches!(value.definition, NValueDefinition::EntryParam { param: 0 })
+                    .then_some(NValueId::new(index))
+            })
+            .expect("bool entry value");
+        let return_operand = invalid_return
+            .blocks
+            .iter_mut()
+            .find_map(|block| match &mut block.terminator.kind {
+                NTerminatorKind::Return(Some(value)) => Some(value),
+                _ => None,
+            })
+            .expect("return operand");
+        return_operand.value = bool_value;
+        assert_eq!(
+            verify_normalized_body(&db, &invalid_return),
+            Err(NormalizedBodyVerifyError::OperandType)
+        );
+
+        let mut missing_return = normalized_func(&db, top_mod, "return_value").body;
+        let return_terminator = missing_return
+            .blocks
+            .iter_mut()
+            .find_map(|block| match &mut block.terminator.kind {
+                terminator @ NTerminatorKind::Return(Some(_)) => Some(terminator),
+                _ => None,
+            })
+            .expect("return terminator");
+        *return_terminator = NTerminatorKind::Return(None);
+        assert_eq!(
+            verify_normalized_body(&db, &missing_return),
+            Err(NormalizedBodyVerifyError::OperandType)
+        );
+
+        let mut invalid_borrow = normalized_func(&db, top_mod, "borrow_owned").body;
+        let borrow_root = invalid_borrow
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .find_map(|statement| match &statement.kind {
+                NStatementKind::Define {
+                    expr:
+                        NExpr::Borrow {
+                            place:
+                                NPlace {
+                                    base: NPlaceBase::Root(root),
+                                    ..
+                                },
+                            ..
+                        },
+                    ..
+                } => Some(*root),
+                _ => None,
+            })
+            .expect("mutable borrow root");
+        invalid_borrow.roots[borrow_root.index()].mutability = Mutability::Immutable;
+        assert!(matches!(
+            verify_normalized_body(&db, &invalid_borrow),
+            Err(NormalizedBodyVerifyError::ImmutableMutation {
+                place: NPlaceBase::Root(root),
+                ..
+            }) if root == borrow_root
+        ));
+
+        let mut invalid_ref_borrow = normalized_func(&db, top_mod, "borrow_ref").body;
+        let (borrow_result, borrow_carrier, borrow_ty, borrow_kind) = invalid_ref_borrow
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .find_map(|statement| match &mut statement.kind {
+                NStatementKind::Define {
+                    result,
+                    expr:
+                        NExpr::Borrow {
+                            place:
+                                NPlace {
+                                    base: NPlaceBase::CapabilityTarget { carrier },
+                                    ty,
+                                    ..
+                                },
+                            kind,
+                            ..
+                        },
+                } => Some((*result, *carrier, *ty, kind)),
+                _ => None,
+            })
+            .expect("reference field borrow");
+        *borrow_kind = BorrowKind::Mut;
+        invalid_ref_borrow.values[borrow_result.index()].ty = TyId::borrow_mut_of(&db, borrow_ty);
+        let decoy_source = invalid_ref_borrow
+            .values
+            .iter()
+            .find(|value| {
+                value.mutability == Mutability::Mutable
+                    && value
+                        .ty
+                        .as_capability(&db)
+                        .is_some_and(|(kind, _)| kind == CapabilityKind::View)
+            })
+            .and_then(|value| value.source)
+            .expect("mutable decoy binding");
+        invalid_ref_borrow.values[borrow_carrier.index()].source = Some(decoy_source);
+        assert!(matches!(
+            verify_normalized_body(&db, &invalid_ref_borrow),
+            Err(NormalizedBodyVerifyError::ImmutableMutation {
+                capability: Some(CapabilityKind::Ref),
+                ..
+            })
+        ));
+
+        let mut invalid_variant_test = normalized_func(&db, top_mod, "classify").body;
+        let enum_value = invalid_variant_test
+            .blocks
+            .iter()
+            .find_map(|block| match block.terminator.kind {
+                NTerminatorKind::MatchEnum { value, .. } => Some(value),
+                _ => None,
+            })
+            .expect("enum match value");
+        let replaced = invalid_variant_test
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .find_map(|statement| match &mut statement.kind {
+                NStatementKind::Define {
+                    expr: expr @ NExpr::Const(_),
+                    ..
+                } => {
+                    *expr = NExpr::IsEnumVariant {
+                        value: enum_value,
+                        variant: VariantIndex(0),
+                    };
+                    Some(())
+                }
+                _ => None,
+            });
+        assert!(replaced.is_some(), "enum arm constant");
+        assert_eq!(
+            verify_normalized_body(&db, &invalid_variant_test),
+            Err(NormalizedBodyVerifyError::ExpressionType)
+        );
+
+        let empty_ty = normalized_func(&db, top_mod, "empty")
+            .body
+            .values
+            .iter()
+            .find_map(|value| {
+                matches!(value.definition, NValueDefinition::Statement { .. }).then_some(value.ty)
+            })
+            .expect("empty aggregate type");
+
+        let mut invalid_aggregate = normalized_func(&db, top_mod, "empty").body;
+        let (aggregate_result, aggregate_ty) = invalid_aggregate
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .find_map(|statement| match &mut statement.kind {
+                NStatementKind::Define {
+                    result,
+                    expr: NExpr::AggregateMake { ty, .. },
+                } => Some((*result, ty)),
+                _ => None,
+            })
+            .expect("empty aggregate construction");
+        *aggregate_ty = TyId::u256(&db);
+        invalid_aggregate.values[aggregate_result.index()].ty = TyId::u256(&db);
+        assert_eq!(
+            verify_normalized_body(&db, &invalid_aggregate),
+            Err(NormalizedBodyVerifyError::ExpressionType)
+        );
+
+        let mut invalid_enum_make = normalized_func(&db, top_mod, "make_one").body;
+        let (make_result, enum_ty) = invalid_enum_make
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .find_map(|statement| match &mut statement.kind {
+                NStatementKind::Define {
+                    result,
+                    expr: NExpr::EnumMake { enum_ty, .. },
+                } => Some((*result, enum_ty)),
+                _ => None,
+            })
+            .expect("enum construction");
+        *enum_ty = empty_ty;
+        invalid_enum_make.values[make_result.index()].ty = empty_ty;
+        assert_eq!(
+            verify_normalized_body(&db, &invalid_enum_make),
+            Err(NormalizedBodyVerifyError::ExpressionType)
+        );
+
+        let mut invalid_enum_match = normalized_func(&db, top_mod, "classify_one").body;
+        let (match_value, enum_ty) = invalid_enum_match
+            .blocks
+            .iter_mut()
+            .find_map(|block| match &mut block.terminator.kind {
+                NTerminatorKind::MatchEnum { value, enum_ty, .. } => Some((value.value, enum_ty)),
+                _ => None,
+            })
+            .expect("enum match");
+        *enum_ty = empty_ty;
+        invalid_enum_match.values[match_value.index()].ty = empty_ty;
+        assert_eq!(
+            verify_normalized_body(&db, &invalid_enum_match),
+            Err(NormalizedBodyVerifyError::OperandType)
+        );
+
+        let mut invalid_variant_projection = normalized_func(&db, top_mod, "project_pair").body;
+        let path = invalid_variant_projection
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .find_map(|statement| match &mut statement.kind {
+                NStatementKind::Define {
+                    expr: NExpr::ProjectValue { path, .. },
+                    ..
+                } => Some(path),
+                _ => None,
+            })
+            .expect("struct field projection");
+        path.0 = NDataPath::new(
+            vec![NDataProjection::VariantField {
+                variant: VariantIndex(0),
+                field: FieldIndex(0),
+            }]
+            .into_boxed_slice(),
+        );
+        assert_eq!(
+            verify_normalized_body(&db, &invalid_variant_projection),
+            Err(NormalizedBodyVerifyError::InvalidProjection)
+        );
+    }
+
+    #[test]
+    fn layout_plan_verifier_requires_exact_statement_provenance() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "normalized.fe".into(),
+            r#"
+fn identity(value: u256) -> u256 {
+    value
+}
+
+fn caller() -> u256 {
+    identity(value: 1)
+}
+
+fn mutate(mut _ value: own u256) {
+    value = 1
+}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let artifacts = normalized_func(&db, top_mod, "caller");
+        let source = artifacts
+            .body
+            .owner
+            .admitted_body(&db)
+            .expect("test body should be admitted");
+        let mut invalid_value_mutability = artifacts.body.clone();
+        invalid_value_mutability.values[0].mutability = Mutability::Mutable;
+        assert_eq!(
+            verify_normalized_layout_plan(
+                &db,
+                &invalid_value_mutability,
+                source,
+                &artifacts.layout_plan,
+            ),
+            Err(NormalizedLayoutPlanVerifyError::ValueMutability(
+                NValueId::new(0),
+            ))
+        );
+
+        let call_result = artifacts
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .find_map(|statement| match statement.kind {
+                NStatementKind::Define {
+                    result,
+                    expr: NExpr::Call { .. },
+                } => Some(result),
+                _ => None,
+            })
+            .expect("call result");
+        let mut invalid_value_type = artifacts.body.clone();
+        invalid_value_type.values[call_result.index()].ty = TyId::view_of(&db, TyId::u256(&db));
+        verify_normalized_body(&db, &invalid_value_type)
+            .expect("copy-view call results are valid semantic boundary representations");
+        assert_eq!(
+            verify_normalized_layout_plan(&db, &invalid_value_type, source, &artifacts.layout_plan,),
+            Err(NormalizedLayoutPlanVerifyError::ValueType(call_result))
+        );
+
+        let mut invalid_root_mutability = normalized_func(&db, top_mod, "mutate");
+        let root = NRootId::new(0);
+        invalid_root_mutability.body.roots[root.index()].mutability = Mutability::Immutable;
+        let root_source = invalid_root_mutability
+            .body
+            .owner
+            .admitted_body(&db)
+            .expect("test body should be admitted");
+        assert_eq!(
+            verify_normalized_layout_plan(
+                &db,
+                &invalid_root_mutability.body,
+                root_source,
+                &invalid_root_mutability.layout_plan,
+            ),
+            Err(NormalizedLayoutPlanVerifyError::RootMutability(root))
+        );
+
+        let mut invalid_root_type = normalized_func(&db, top_mod, "mutate");
+        invalid_root_type.body.roots[root.index()].ty = TyId::bool(&db);
+        assert_eq!(
+            verify_normalized_layout_plan(
+                &db,
+                &invalid_root_type.body,
+                root_source,
+                &invalid_root_type.layout_plan,
+            ),
+            Err(NormalizedLayoutPlanVerifyError::RootType(root))
+        );
+
+        let mut missing = artifacts.body.clone();
+        let statement = missing
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .find_map(|statement| match &mut statement.kind {
+                NStatementKind::Define {
+                    expr: NExpr::Call { .. },
+                    ..
+                } => statement.source.take(),
+                _ => None,
+            })
+            .expect("call statement source");
+        assert_eq!(
+            verify_normalized_layout_plan(&db, &missing, source, &artifacts.layout_plan),
+            Err(NormalizedLayoutPlanVerifyError::MissingStatementSource(
+                statement,
+            ))
+        );
+
+        let mut unknown = artifacts.body.clone();
+        let unknown_id = SStmtId::new(source.blocks.iter().flat_map(|block| &block.stmts).count());
+        unknown.blocks[0].statements[0].source = Some(unknown_id);
+        assert_eq!(
+            verify_normalized_layout_plan(&db, &unknown, source, &artifacts.layout_plan),
+            Err(NormalizedLayoutPlanVerifyError::UnknownStatementSource(
+                unknown_id,
+            ))
+        );
+
+        let mut duplicate = artifacts.body.clone();
+        let mut sourced = duplicate
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .filter(|statement| statement.source.is_some())
+            .take(2)
+            .collect::<Vec<_>>();
+        let first = sourced[0].source.expect("first statement source");
+        sourced[1].source = Some(first);
+        assert_eq!(
+            verify_normalized_layout_plan(&db, &duplicate, source, &artifacts.layout_plan),
+            Err(NormalizedLayoutPlanVerifyError::DuplicateStatementSource(
+                first,
+            ))
         );
     }
 }

@@ -117,6 +117,7 @@ impl<'db> NormalizedBody<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct NValue<'db> {
     pub ty: TyId<'db>,
+    pub mutability: Mutability,
     pub origin: SemOrigin<'db>,
     pub definition: NValueDefinition,
     /// Source binding identity is diagnostic metadata, never value identity.
